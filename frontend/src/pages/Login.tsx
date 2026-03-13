@@ -4,6 +4,7 @@ import { useAppDispatch } from '../store'
 import { setAuth } from '../store/authSlice'
 import api from '../api/client'
 import { decryptMasterKey, decryptPrivateKey, toBase64, fromBase64 } from '../crypto'
+import { KutupLogo } from '../components/KutupLogo'
 
 type Step = 'credentials' | 'deriving' | 'totp' | 'decrypting'
 
@@ -170,7 +171,10 @@ export default function Login() {
   return (
     <div style={styles.container}>
       <div style={styles.card}>
-        <h1 style={styles.logo}>Depo</h1>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 8 }}>
+          <KutupLogo size={36} />
+          <h1 style={styles.logo}>Kutup</h1>
+        </div>
         <h2 style={styles.title}>Sign in</h2>
         <form onSubmit={handleLogin}>
           <div style={styles.field}>
@@ -232,16 +236,16 @@ function deriveInWorker(
 
 const styles: Record<string, React.CSSProperties> = {
   container: { display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: 16 },
-  card: { background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 12, padding: 40, width: '100%', maxWidth: 440 },
-  logo: { margin: '0 0 8px', fontSize: 32, fontWeight: 700, color: '#7c3aed', letterSpacing: -1 },
-  title: { margin: '0 0 8px', fontSize: 20, fontWeight: 600, color: '#e8e8ea' },
-  subtitle: { margin: '0 0 24px', fontSize: 14, color: '#8888aa' },
+  card: { background: '#0c1a27', border: '1px solid #1a3045', borderRadius: 12, padding: 40, width: '100%', maxWidth: 440 },
+  logo: { margin: 0, fontSize: 32, fontWeight: 700, color: '#38bdf8', letterSpacing: -1 },
+  title: { margin: '0 0 8px', fontSize: 20, fontWeight: 600, color: '#d4ecf7' },
+  subtitle: { margin: '0 0 24px', fontSize: 14, color: '#4e7a97' },
   field: { marginBottom: 16 },
-  label: { display: 'block', marginBottom: 6, fontSize: 13, color: '#8888aa', fontWeight: 500 },
-  input: { width: '100%', padding: '10px 12px', background: '#0f0f11', border: '1px solid #2a2a30', borderRadius: 8, color: '#e8e8ea', fontSize: 14, outline: 'none' },
-  button: { width: '100%', padding: '12px', background: '#7c3aed', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', marginTop: 8 },
+  label: { display: 'block', marginBottom: 6, fontSize: 13, color: '#4e7a97', fontWeight: 500 },
+  input: { width: '100%', padding: '10px 12px', background: '#060d14', border: '1px solid #1a3045', borderRadius: 8, color: '#d4ecf7', fontSize: 14, outline: 'none' },
+  button: { width: '100%', padding: '12px', background: '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', marginTop: 8 },
   error: { color: '#ef4444', fontSize: 13, margin: '8px 0' },
-  link: { textAlign: 'center', marginTop: 12, fontSize: 13, color: '#8888aa' },
-  a: { color: '#7c3aed', textDecoration: 'none' },
-  spinner: { width: 32, height: 32, border: '3px solid #2a2a30', borderTop: '3px solid #7c3aed', borderRadius: '50%', margin: '24px auto', animation: 'spin 1s linear infinite' },
+  link: { textAlign: 'center', marginTop: 12, fontSize: 13, color: '#4e7a97' },
+  a: { color: '#0ea5e9', textDecoration: 'none' },
+  spinner: { width: 32, height: 32, border: '3px solid #1a3045', borderTop: '3px solid #0ea5e9', borderRadius: '50%', margin: '24px auto', animation: 'spin 1s linear infinite' },
 }

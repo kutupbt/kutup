@@ -8,6 +8,7 @@ import {
   wrapKeyForRecipient, unwrapKeyFromSender,
   toBase64, fromBase64,
 } from '../crypto'
+import { KutupLogo } from '../components/KutupLogo'
 
 interface Collection {
   id: string
@@ -31,13 +32,13 @@ interface Collection {
 }
 
 const FOLDER_COLORS = [
-  { label: 'Purple', value: 'purple', hex: '#7c3aed' },
-  { label: 'Blue',   value: 'blue',   hex: '#3b82f6' },
-  { label: 'Green',  value: 'green',  hex: '#10b981' },
-  { label: 'Amber',  value: 'amber',  hex: '#f59e0b' },
-  { label: 'Red',    value: 'red',    hex: '#ef4444' },
+  { label: 'Ice',   value: 'purple', hex: '#38bdf8' },
+  { label: 'Ocean', value: 'blue',   hex: '#0284c7' },
+  { label: 'Teal',  value: 'green',  hex: '#0d9488' },
+  { label: 'Amber', value: 'amber',  hex: '#f59e0b' },
+  { label: 'Red',   value: 'red',    hex: '#ef4444' },
 ]
-const DEFAULT_FOLDER_COLOR = '#6366f1'
+const DEFAULT_FOLDER_COLOR = '#0284c7'
 
 function folderHex(color?: string) {
   return FOLDER_COLORS.find(c => c.value === color)?.hex ?? DEFAULT_FOLDER_COLOR
@@ -694,9 +695,12 @@ export default function Drive() {
     <div style={styles.layout}>
       {/* Sidebar */}
       <aside style={styles.sidebar}>
-        <h1 style={styles.logo}>Depo</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <KutupLogo size={28} />
+          <h1 style={styles.logo}>Kutup</h1>
+        </div>
         {auth.username && (
-          <div style={{ fontSize: 12, color: '#8888aa', marginBottom: 4, marginTop: -12 }}>@{auth.username}</div>
+          <div style={{ fontSize: 12, color: '#4e7a97', marginBottom: 4, marginTop: -12 }}>@{auth.username}</div>
         )}
 
         <div style={styles.quota}>
@@ -844,8 +848,8 @@ export default function Drive() {
 
         {/* Upload quota bar — shown when folder has a per-share quota */}
         {currentFolder?.uploadQuotaBytes != null && currentFolder.uploadQuotaBytes > 0 && (
-          <div style={{ marginBottom: 16, padding: '10px 14px', background: '#13131a', border: '1px solid #2a2a30', borderRadius: 8 }}>
-            <div style={{ fontSize: 11, color: '#8888aa', marginBottom: 6, display: 'flex', justifyContent: 'space-between' }}>
+          <div style={{ marginBottom: 16, padding: '10px 14px', background: '#08111b', border: '1px solid #1a3045', borderRadius: 8 }}>
+            <div style={{ fontSize: 11, color: '#4e7a97', marginBottom: 6, display: 'flex', justifyContent: 'space-between' }}>
               <span>Upload quota</span>
               <span>
                 {formatBytes(files.reduce((acc, f: any) => acc + (f.decryptedSize ?? 0), 0))}
@@ -853,10 +857,10 @@ export default function Drive() {
                 {formatBytes(currentFolder.uploadQuotaBytes)}
               </span>
             </div>
-            <div style={{ height: 4, background: '#2a2a30', borderRadius: 4, overflow: 'hidden' }}>
+            <div style={{ height: 4, background: '#1a3045', borderRadius: 4, overflow: 'hidden' }}>
               <div style={{
                 height: '100%',
-                background: '#7c3aed',
+                background: '#0ea5e9',
                 borderRadius: 4,
                 width: `${Math.min(
                   (files.reduce((acc, f: any) => acc + (f.decryptedSize ?? 0), 0) / currentFolder.uploadQuotaBytes) * 100,
@@ -878,8 +882,8 @@ export default function Drive() {
               >
                 <div style={styles.emptyDropIcon}>⬆</div>
                 {canUploadToCurrentFolder()
-                  ? <div>Drop files here or <span style={{ color: '#7c3aed', cursor: 'pointer' }}>click to upload</span></div>
-                  : <div style={{ color: '#8888aa' }}>This folder is read-only</div>
+                  ? <div>Drop files here or <span style={{ color: '#0ea5e9', cursor: 'pointer' }}>click to upload</span></div>
+                  : <div style={{ color: '#4e7a97' }}>This folder is read-only</div>
                 }
               </div>
             ) : (
@@ -1029,8 +1033,8 @@ export default function Drive() {
         <div style={styles.modalOverlay} onClick={() => { setShareModal(null); setShareCanUpload(false); setShareCanDelete(false); setShareQuotaGB('') }}>
           <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
             <h3 style={styles.modalTitle}>Share "{shareModal.decryptedName}"</h3>
-            <p style={{ margin: '0 0 16px', fontSize: 13, color: '#8888aa' }}>
-              Enter an email for a local user, or <code style={{ color: '#a78bfa' }}>username@server.com</code> for a federated user.
+            <p style={{ margin: '0 0 16px', fontSize: 13, color: '#4e7a97' }}>
+              Enter an email for a local user, or <code style={{ color: '#7dd3fc' }}>username@server.com</code> for a federated user.
             </p>
             <form onSubmit={handleShare}>
               <div style={{ marginBottom: 12 }}>
@@ -1045,13 +1049,13 @@ export default function Drive() {
                   placeholder="email@example.com or alice@other-server.com"
                 />
                 {isFederatedAddress(shareEmail) && (
-                  <div style={{ fontSize: 11, color: '#a78bfa', marginTop: 4 }}>🌐 Federated share — will generate an invite link</div>
+                  <div style={{ fontSize: 11, color: '#7dd3fc', marginTop: 4 }}>🌐 Federated share — will generate an invite link</div>
                 )}
               </div>
-              <div style={{ marginBottom: 8, fontSize: 13, color: '#8888aa', fontWeight: 500 }}>Privileges</div>
+              <div style={{ marginBottom: 8, fontSize: 13, color: '#4e7a97', fontWeight: 500 }}>Privileges</div>
               <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <input type="checkbox" checked disabled style={{ opacity: 0.5 }} />
-                <span style={{ fontSize: 13, color: '#8888aa' }}>Download (always on)</span>
+                <span style={{ fontSize: 13, color: '#4e7a97' }}>Download (always on)</span>
               </div>
               <div style={{ marginBottom: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1061,7 +1065,7 @@ export default function Drive() {
                     checked={shareCanUpload}
                     onChange={e => { setShareCanUpload(e.target.checked); if (!e.target.checked) setShareQuotaGB('') }}
                   />
-                  <label htmlFor="share-upload" style={{ fontSize: 13, color: '#c8c8da', cursor: 'pointer' }}>Upload</label>
+                  <label htmlFor="share-upload" style={{ fontSize: 13, color: '#93c0d8', cursor: 'pointer' }}>Upload</label>
                   {shareCanUpload && (
                     <input
                       type="number"
@@ -1082,10 +1086,10 @@ export default function Drive() {
                   checked={shareCanDelete}
                   onChange={e => setShareCanDelete(e.target.checked)}
                 />
-                <label htmlFor="share-delete" style={{ fontSize: 13, color: '#c8c8da', cursor: 'pointer' }}>Delete own uploads</label>
+                <label htmlFor="share-delete" style={{ fontSize: 13, color: '#93c0d8', cursor: 'pointer' }}>Delete own uploads</label>
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button type="submit" style={{ ...styles.actionBtn, background: '#7c3aed', flex: 1 }}>
+                <button type="submit" style={{ ...styles.actionBtn, background: '#0ea5e9', flex: 1 }}>
                   {isFederatedAddress(shareEmail) ? 'Share & get invite link' : 'Share'}
                 </button>
                 <button type="button" style={{ ...styles.actionBtn, flex: 1 }} onClick={() => { setShareModal(null); setShareCanUpload(false); setShareCanDelete(false); setShareQuotaGB('') }}>
@@ -1111,7 +1115,7 @@ export default function Drive() {
               style={styles.input}
             />
             <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-              <button onClick={createFolderFromModal} style={{ ...styles.actionBtn, background: '#7c3aed', flex: 1 }}>Create</button>
+              <button onClick={createFolderFromModal} style={{ ...styles.actionBtn, background: '#0ea5e9', flex: 1 }}>Create</button>
               <button onClick={() => { setShowNewFolderModal(false); setNewFolderName('') }} style={{ ...styles.actionBtn, flex: 1 }}>Cancel</button>
             </div>
           </div>
@@ -1138,7 +1142,7 @@ export default function Drive() {
             <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
               <button
                 onClick={() => { handleRenameFolder(renameFolderTarget, renameValue); setRenameFolderTarget(null) }}
-                style={{ ...styles.actionBtn, background: '#7c3aed', flex: 1 }}
+                style={{ ...styles.actionBtn, background: '#0ea5e9', flex: 1 }}
               >Rename</button>
               <button onClick={() => setRenameFolderTarget(null)} style={{ ...styles.actionBtn, flex: 1 }}>Cancel</button>
             </div>
@@ -1151,7 +1155,7 @@ export default function Drive() {
         <div style={styles.uploadPanel}>
           <div style={styles.uploadPanelTitle}>
             Uploading&nbsp;
-            <span style={{ color: '#e8e8ea' }}>{uploadState.currentFile} / {uploadState.totalFiles}</span>
+            <span style={{ color: '#d4ecf7' }}>{uploadState.currentFile} / {uploadState.totalFiles}</span>
           </div>
           <div style={styles.uploadBarTrack}>
             <div style={{ ...styles.uploadBarFill, width: `${uploadState.overallPercent}%` }} />
@@ -1168,15 +1172,15 @@ export default function Drive() {
         <div style={styles.modalOverlay} onClick={() => setInviteUrlModal(null)}>
           <div style={styles.modal} onClick={e => e.stopPropagation()}>
             <h3 style={styles.modalTitle}>Invite link ready</h3>
-            <p style={{ margin: '0 0 12px', fontSize: 13, color: '#8888aa' }}>
+            <p style={{ margin: '0 0 12px', fontSize: 13, color: '#4e7a97' }}>
               Copy this link and send it to the recipient. They'll paste it in "Add remote share".
             </p>
-            <div style={{ background: '#0f0f11', border: '1px solid #2a2a30', borderRadius: 8, padding: '10px 12px', fontSize: 12, color: '#a78bfa', wordBreak: 'break-all', fontFamily: 'monospace', marginBottom: 16 }}>
+            <div style={{ background: '#060d14', border: '1px solid #1a3045', borderRadius: 8, padding: '10px 12px', fontSize: 12, color: '#7dd3fc', wordBreak: 'break-all', fontFamily: 'monospace', marginBottom: 16 }}>
               {inviteUrlModal}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <button
-                style={{ ...styles.actionBtn, background: '#7c3aed', flex: 1 }}
+                style={{ ...styles.actionBtn, background: '#0ea5e9', flex: 1 }}
                 onClick={() => { copyText(inviteUrlModal); }}
               >
                 Copy link
@@ -1192,8 +1196,8 @@ export default function Drive() {
         <div style={styles.modalOverlay} onClick={() => setAddRemoteShareModal(false)}>
           <div style={styles.modal} onClick={e => e.stopPropagation()}>
             <h3 style={styles.modalTitle}>Add remote share</h3>
-            <p style={{ margin: '0 0 12px', fontSize: 13, color: '#8888aa' }}>
-              Paste the invite link you received from someone on another Depo server.
+            <p style={{ margin: '0 0 12px', fontSize: 13, color: '#4e7a97' }}>
+              Paste the invite link you received from someone on another Kutup server.
             </p>
             <form onSubmit={handleAddRemoteShare}>
               <input
@@ -1208,7 +1212,7 @@ export default function Drive() {
                 <button
                   type="submit"
                   disabled={addRemoteShareLoading}
-                  style={{ ...styles.actionBtn, background: '#7c3aed', flex: 1, opacity: addRemoteShareLoading ? 0.6 : 1 }}
+                  style={{ ...styles.actionBtn, background: '#0ea5e9', flex: 1, opacity: addRemoteShareLoading ? 0.6 : 1 }}
                 >
                   {addRemoteShareLoading ? 'Adding…' : 'Add share'}
                 </button>
@@ -1285,57 +1289,57 @@ function formatSpeed(bps: number): string {
 
 const styles: Record<string, React.CSSProperties> = {
   layout: { display: 'flex', minHeight: '100vh' },
-  sidebar: { width: 240, background: '#13131a', borderRight: '1px solid #2a2a30', display: 'flex', flexDirection: 'column', padding: 16, gap: 8 },
-  logo: { fontSize: 24, fontWeight: 700, color: '#7c3aed', margin: '0 0 16px', letterSpacing: -1 },
+  sidebar: { width: 240, background: '#08111b', borderRight: '1px solid #1a3045', display: 'flex', flexDirection: 'column', padding: 16, gap: 8 },
+  logo: { fontSize: 24, fontWeight: 700, color: '#38bdf8', margin: 0, letterSpacing: -1 },
   quota: { marginBottom: 8 },
-  quotaLabel: { fontSize: 11, color: '#8888aa', marginBottom: 4 },
-  quotaBar: { height: 4, background: '#2a2a30', borderRadius: 4, overflow: 'hidden' },
-  quotaFill: { height: '100%', background: '#7c3aed', borderRadius: 4, transition: 'width 0.3s' },
+  quotaLabel: { fontSize: 11, color: '#4e7a97', marginBottom: 4 },
+  quotaBar: { height: 4, background: '#1a3045', borderRadius: 4, overflow: 'hidden' },
+  quotaFill: { height: '100%', background: '#0ea5e9', borderRadius: 4, transition: 'width 0.3s' },
   sidenavSection: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 8, marginBottom: 8 },
-  sidenavItem: { padding: '8px 10px', background: 'transparent', border: 'none', color: '#8888aa', cursor: 'pointer', textAlign: 'left', fontSize: 13, borderRadius: 6, width: '100%' },
-  sidenavItemActive: { padding: '8px 10px', background: '#1e1a2e', border: 'none', color: '#c8c8da', cursor: 'pointer', textAlign: 'left', fontSize: 13, borderRadius: 6, width: '100%' },
-  adminBtn: { padding: '8px', background: '#1e1e2a', border: '1px solid #2a2a30', color: '#8888aa', borderRadius: 6, cursor: 'pointer', fontSize: 12 },
-  logoutBtn: { padding: '8px', background: 'transparent', border: '1px solid #2a2a30', color: '#8888aa', borderRadius: 6, cursor: 'pointer', fontSize: 12 },
+  sidenavItem: { padding: '8px 10px', background: 'transparent', border: 'none', color: '#4e7a97', cursor: 'pointer', textAlign: 'left', fontSize: 13, borderRadius: 6, width: '100%' },
+  sidenavItemActive: { padding: '8px 10px', background: '#0c2030', border: 'none', color: '#93c0d8', cursor: 'pointer', textAlign: 'left', fontSize: 13, borderRadius: 6, width: '100%' },
+  adminBtn: { padding: '8px', background: '#112030', border: '1px solid #1a3045', color: '#4e7a97', borderRadius: 6, cursor: 'pointer', fontSize: 12 },
+  logoutBtn: { padding: '8px', background: 'transparent', border: '1px solid #1a3045', color: '#4e7a97', borderRadius: 6, cursor: 'pointer', fontSize: 12 },
   main: { flex: 1, padding: 32, overflow: 'auto', position: 'relative' },
-  breadcrumb: { display: 'flex', alignItems: 'center', gap: 4, marginBottom: 16, fontSize: 13, color: '#8888aa' },
-  breadcrumbItem: { background: 'transparent', border: 'none', color: '#8888aa', cursor: 'pointer', padding: '2px 4px', borderRadius: 4 },
-  breadcrumbCurrent: { color: '#e8e8ea', fontWeight: 500, padding: '2px 4px' },
-  breadcrumbSep: { color: '#2a2a30' },
+  breadcrumb: { display: 'flex', alignItems: 'center', gap: 4, marginBottom: 16, fontSize: 13, color: '#4e7a97' },
+  breadcrumbItem: { background: 'transparent', border: 'none', color: '#4e7a97', cursor: 'pointer', padding: '2px 4px', borderRadius: 4 },
+  breadcrumbCurrent: { color: '#d4ecf7', fontWeight: 500, padding: '2px 4px' },
+  breadcrumbSep: { color: '#1a3045' },
   folderGrid: { display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 24 },
-  folderCard: { width: 120, padding: '16px 12px', background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 10, cursor: 'pointer', textAlign: 'center', userSelect: 'none' },
-  folderCardDragOver: { border: '1px solid #7c3aed', background: '#1e1a2e' },
-  folderCardName: { fontSize: 12, color: '#c8c8da', wordBreak: 'break-word', marginTop: 8 },
+  folderCard: { width: 120, padding: '16px 12px', background: '#0c1a27', border: '1px solid #1a3045', borderRadius: 10, cursor: 'pointer', textAlign: 'center', userSelect: 'none' },
+  folderCardDragOver: { border: '1px solid #0ea5e9', background: '#0c2030' },
+  folderCardName: { fontSize: 12, color: '#93c0d8', wordBreak: 'break-word', marginTop: 8 },
   folderDots: { position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,0.4)', border: 'none', color: '#fff', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 } as React.CSSProperties,
   contextMenuColorRow: { display: 'flex', gap: 6, padding: '6px 14px', alignItems: 'center' },
   colorSwatch: { width: 20, height: 20, borderRadius: '50%', border: 'none', cursor: 'pointer', padding: 0, outlineOffset: 2 },
-  contextMenu: { position: 'fixed', background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 8, zIndex: 300, minWidth: 180, padding: '4px 0', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' },
-  contextMenuItem: { width: '100%', padding: '8px 14px', background: 'transparent', border: 'none', color: '#c8c8da', cursor: 'pointer', textAlign: 'left', fontSize: 13, display: 'block' },
-  contextMenuDivider: { height: 1, background: '#2a2a30', margin: '4px 0' },
-  actionBtn: { padding: '8px 14px', background: '#1e1e2a', border: '1px solid #2a2a30', color: '#e8e8ea', borderRadius: 6, cursor: 'pointer', fontSize: 13 },
+  contextMenu: { position: 'fixed', background: '#0c1a27', border: '1px solid #1a3045', borderRadius: 8, zIndex: 300, minWidth: 180, padding: '4px 0', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' },
+  contextMenuItem: { width: '100%', padding: '8px 14px', background: 'transparent', border: 'none', color: '#93c0d8', cursor: 'pointer', textAlign: 'left', fontSize: 13, display: 'block' },
+  contextMenuDivider: { height: 1, background: '#1a3045', margin: '4px 0' },
+  actionBtn: { padding: '8px 14px', background: '#112030', border: '1px solid #1a3045', color: '#d4ecf7', borderRadius: 6, cursor: 'pointer', fontSize: 13 },
   table: { width: '100%', borderCollapse: 'collapse' },
-  th: { padding: '8px 12px', textAlign: 'left', fontSize: 12, color: '#8888aa', borderBottom: '1px solid #2a2a30', fontWeight: 500 },
-  tr: { borderBottom: '1px solid #1e1e2a' },
-  td: { padding: '10px 12px', fontSize: 13, color: '#c8c8da' },
-  fileBtn: { padding: '4px 10px', background: 'transparent', border: '1px solid #2a2a30', color: '#8888aa', borderRadius: 4, cursor: 'pointer', fontSize: 14, marginRight: 4 },
-  empty: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', color: '#8888aa' },
-  emptyDropZone: { border: '2px dashed #2a2a30', borderRadius: 12, padding: '60px 20px', textAlign: 'center', color: '#8888aa', cursor: 'pointer', fontSize: 14, marginTop: 24 },
-  emptyDropIcon: { fontSize: 32, marginBottom: 12, color: '#7c3aed' },
-  dropOverlay: { position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(124,58,237,0.15)', border: '2px dashed #7c3aed', pointerEvents: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  th: { padding: '8px 12px', textAlign: 'left', fontSize: 12, color: '#4e7a97', borderBottom: '1px solid #1a3045', fontWeight: 500 },
+  tr: { borderBottom: '1px solid #0c2030' },
+  td: { padding: '10px 12px', fontSize: 13, color: '#93c0d8' },
+  fileBtn: { padding: '4px 10px', background: 'transparent', border: '1px solid #1a3045', color: '#4e7a97', borderRadius: 4, cursor: 'pointer', fontSize: 14, marginRight: 4 },
+  empty: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', color: '#4e7a97' },
+  emptyDropZone: { border: '2px dashed #1a3045', borderRadius: 12, padding: '60px 20px', textAlign: 'center', color: '#4e7a97', cursor: 'pointer', fontSize: 14, marginTop: 24 },
+  emptyDropIcon: { fontSize: 32, marginBottom: 12, color: '#0ea5e9' },
+  dropOverlay: { position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(14,165,233,0.15)', border: '2px dashed #0ea5e9', pointerEvents: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   dropOverlayText: { fontSize: 24, fontWeight: 600, color: '#fff' },
   errorBanner: { background: '#2d1a1a', border: '1px solid #ef444440', borderRadius: 8, padding: '12px 16px', marginBottom: 16, color: '#ef4444', fontSize: 13, display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   errorClose: { background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 18, padding: 0 },
   modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 },
-  modal: { background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 12, padding: 32, width: '100%', maxWidth: 400 },
+  modal: { background: '#0c1a27', border: '1px solid #1a3045', borderRadius: 12, padding: 32, width: '100%', maxWidth: 400 },
   modalTitle: { margin: '0 0 20px', fontSize: 18, fontWeight: 600 },
-  label: { display: 'block', marginBottom: 6, fontSize: 13, color: '#8888aa', fontWeight: 500 },
-  input: { width: '100%', padding: '10px 12px', background: '#0f0f11', border: '1px solid #2a2a30', borderRadius: 8, color: '#e8e8ea', fontSize: 14, outline: 'none', boxSizing: 'border-box' },
-  uploadPanel: { position: 'fixed', bottom: 104, right: 32, width: 240, background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 10, padding: '12px 14px', zIndex: 210, boxShadow: '0 8px 24px rgba(0,0,0,0.5)' },
-  uploadPanelTitle: { fontSize: 12, color: '#8888aa', marginBottom: 8 },
-  uploadBarTrack: { height: 4, background: '#2a2a30', borderRadius: 4, overflow: 'hidden', marginBottom: 6 },
-  uploadBarFill: { height: '100%', background: '#7c3aed', borderRadius: 4, transition: 'width 0.2s' },
-  uploadPanelMeta: { display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#8888aa' },
+  label: { display: 'block', marginBottom: 6, fontSize: 13, color: '#4e7a97', fontWeight: 500 },
+  input: { width: '100%', padding: '10px 12px', background: '#060d14', border: '1px solid #1a3045', borderRadius: 8, color: '#d4ecf7', fontSize: 14, outline: 'none', boxSizing: 'border-box' },
+  uploadPanel: { position: 'fixed', bottom: 104, right: 32, width: 240, background: '#0c1a27', border: '1px solid #1a3045', borderRadius: 10, padding: '12px 14px', zIndex: 210, boxShadow: '0 8px 24px rgba(0,0,0,0.5)' },
+  uploadPanelTitle: { fontSize: 12, color: '#4e7a97', marginBottom: 8 },
+  uploadBarTrack: { height: 4, background: '#1a3045', borderRadius: 4, overflow: 'hidden', marginBottom: 6 },
+  uploadBarFill: { height: '100%', background: '#0ea5e9', borderRadius: 4, transition: 'width 0.2s' },
+  uploadPanelMeta: { display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#4e7a97' },
   fab: { position: 'fixed', bottom: 32, right: 32, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, zIndex: 200 },
-  fabBtn: { width: 56, height: 56, borderRadius: '50%', background: '#7c3aed', border: 'none', color: '#fff', fontSize: 28, cursor: 'pointer', boxShadow: '0 4px 16px rgba(124,58,237,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 },
-  fabMenu: { display: 'flex', flexDirection: 'column', gap: 4, background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 8, padding: '4px 0', boxShadow: '0 8px 24px rgba(0,0,0,0.4)', minWidth: 160 },
-  fabMenuItem: { padding: '10px 16px', background: 'transparent', border: 'none', color: '#c8c8da', cursor: 'pointer', textAlign: 'left', fontSize: 13, whiteSpace: 'nowrap' },
+  fabBtn: { width: 56, height: 56, borderRadius: '50%', background: '#0ea5e9', border: 'none', color: '#fff', fontSize: 28, cursor: 'pointer', boxShadow: '0 4px 16px rgba(14,165,233,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 },
+  fabMenu: { display: 'flex', flexDirection: 'column', gap: 4, background: '#0c1a27', border: '1px solid #1a3045', borderRadius: 8, padding: '4px 0', boxShadow: '0 8px 24px rgba(0,0,0,0.4)', minWidth: 160 },
+  fabMenuItem: { padding: '10px 16px', background: 'transparent', border: 'none', color: '#93c0d8', cursor: 'pointer', textAlign: 'left', fontSize: 13, whiteSpace: 'nowrap' },
 }
