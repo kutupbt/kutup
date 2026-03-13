@@ -79,7 +79,14 @@ export default function Drive() {
   const [files, setFiles] = useState<FileItem[]>([])
   const [newFolderName, setNewFolderName] = useState('')
   const [uploading, setUploading] = useState(false)
-  const [uploadProgress, setUploadProgress] = useState('')
+  const [uploadState, setUploadState] = useState<{
+    active: boolean
+    currentFile: number
+    totalFiles: number
+    filePercent: number
+    overallPercent: number
+    speedBps: number
+  } | null>(null)
   const [shareEmail, setShareEmail] = useState('')
   const [shareModal, setShareModal] = useState<Collection | null>(null)
   const [error, setError] = useState('')
@@ -311,7 +318,11 @@ export default function Drive() {
     }
   }
 
-  async function uploadFile(file: File, collection: Collection): Promise<void> {
+  async function uploadFile(
+    file: File,
+    collection: Collection,
+    onProgress?: (loaded: number, total: number) => void,
+  ): Promise<void> {
     const fileKey = await generateKey()
     const buffer = await file.arrayBuffer()
     const plaintext = new Uint8Array(buffer)
@@ -330,17 +341,51 @@ export default function Drive() {
     form.append('fileKeyNonce', toBase64(encFileKey.nonce))
     form.append('file', new Blob([encryptedData.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'encrypted')
 
-    await api.post('/files/upload', form)
+    await api.post('/files/upload', form, {
+      onUploadProgress: (e) => {
+        if (e.total && onProgress) onProgress(e.loaded, e.total)
+      },
+    })
   }
 
   async function uploadFiles(files: File[], targetFolder?: Collection) {
     const folder = targetFolder ?? currentFolder
     if (!folder?.collectionKey) return
     setUploading(true)
+
+    let speedSample = { time: Date.now(), loaded: 0 }
+    let speedBps = 0
+
     try {
       for (let i = 0; i < files.length; i++) {
-        setUploadProgress(files.length > 1 ? `Uploading ${i + 1} / ${files.length}…` : 'Uploading…')
-        await uploadFile(files[i], folder)
+        setUploadState({
+          active: true,
+          currentFile: i + 1,
+          totalFiles: files.length,
+          filePercent: 0,
+          overallPercent: Math.round((i / files.length) * 100),
+          speedBps: 0,
+        })
+
+        await uploadFile(files[i], folder, (loaded, total) => {
+          const now = Date.now()
+          const dt = (now - speedSample.time) / 1000
+          const db = loaded - speedSample.loaded
+          if (dt > 0.5) {
+            speedBps = Math.round(db / dt)
+            speedSample = { time: now, loaded }
+          }
+          const filePercent = Math.round((loaded / total) * 100)
+          const overallPercent = Math.round(((i + filePercent / 100) / files.length) * 100)
+          setUploadState({
+            active: true,
+            currentFile: i + 1,
+            totalFiles: files.length,
+            filePercent,
+            overallPercent,
+            speedBps,
+          })
+        })
       }
     } catch (err: any) {
       setError(err.response?.data?.error || 'Upload failed')
@@ -350,7 +395,7 @@ export default function Drive() {
         dispatch(updateStorageUsed(meRes.data.storageUsedBytes))
       } catch {}
       setUploading(false)
-      setUploadProgress('')
+      setUploadState(null)
       if (folder.id === currentFolder?.id) await loadFiles(folder)
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
@@ -669,10 +714,6 @@ export default function Drive() {
           </>
         )}
 
-        {/* Upload status */}
-        {uploading && (
-          <div style={{ marginTop: 12, fontSize: 13, color: '#8888aa' }}>{uploadProgress}</div>
-        )}
       </main>
 
       {/* Context menu */}
@@ -850,6 +891,23 @@ export default function Drive() {
         </div>
       )}
 
+      {/* Upload progress panel */}
+      {uploadState?.active && (
+        <div style={styles.uploadPanel}>
+          <div style={styles.uploadPanelTitle}>
+            Uploading&nbsp;
+            <span style={{ color: '#e8e8ea' }}>{uploadState.currentFile} / {uploadState.totalFiles}</span>
+          </div>
+          <div style={styles.uploadBarTrack}>
+            <div style={{ ...styles.uploadBarFill, width: `${uploadState.overallPercent}%` }} />
+          </div>
+          <div style={styles.uploadPanelMeta}>
+            <span>{uploadState.overallPercent}%</span>
+            <span>{formatSpeed(uploadState.speedBps)}</span>
+          </div>
+        </div>
+      )}
+
       {/* Floating action button */}
       <div style={styles.fab}>
         {showFabMenu && (
@@ -901,6 +959,13 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
+function formatSpeed(bps: number): string {
+  if (bps <= 0) return ''
+  if (bps < 1024) return `${bps} B/s`
+  if (bps < 1024 * 1024) return `${(bps / 1024).toFixed(1)} KB/s`
+  return `${(bps / 1024 / 1024).toFixed(1)} MB/s`
+}
+
 const styles: Record<string, React.CSSProperties> = {
   layout: { display: 'flex', minHeight: '100vh' },
   sidebar: { width: 240, background: '#13131a', borderRight: '1px solid #2a2a30', display: 'flex', flexDirection: 'column', padding: 16, gap: 8 },
@@ -947,6 +1012,11 @@ const styles: Record<string, React.CSSProperties> = {
   modalTitle: { margin: '0 0 20px', fontSize: 18, fontWeight: 600 },
   label: { display: 'block', marginBottom: 6, fontSize: 13, color: '#8888aa', fontWeight: 500 },
   input: { width: '100%', padding: '10px 12px', background: '#0f0f11', border: '1px solid #2a2a30', borderRadius: 8, color: '#e8e8ea', fontSize: 14, outline: 'none', boxSizing: 'border-box' },
+  uploadPanel: { position: 'fixed', bottom: 104, right: 32, width: 240, background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 10, padding: '12px 14px', zIndex: 210, boxShadow: '0 8px 24px rgba(0,0,0,0.5)' },
+  uploadPanelTitle: { fontSize: 12, color: '#8888aa', marginBottom: 8 },
+  uploadBarTrack: { height: 4, background: '#2a2a30', borderRadius: 4, overflow: 'hidden', marginBottom: 6 },
+  uploadBarFill: { height: '100%', background: '#7c3aed', borderRadius: 4, transition: 'width 0.2s' },
+  uploadPanelMeta: { display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#8888aa' },
   fab: { position: 'fixed', bottom: 32, right: 32, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, zIndex: 200 },
   fabBtn: { width: 56, height: 56, borderRadius: '50%', background: '#7c3aed', border: 'none', color: '#fff', fontSize: 28, cursor: 'pointer', boxShadow: '0 4px 16px rgba(124,58,237,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 },
   fabMenu: { display: 'flex', flexDirection: 'column', gap: 4, background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 8, padding: '4px 0', boxShadow: '0 8px 24px rgba(0,0,0,0.4)', minWidth: 160 },
