@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import api from '../api/client'
 import { decrypt, decryptStream, fromBase64 } from '../crypto'
+import { KutupLogo } from '../components/KutupLogo'
 
 interface ShareData {
   id: string
@@ -157,7 +158,10 @@ export default function PublicShare() {
   return (
     <div style={styles.container}>
       <div style={styles.header}>
-        <h1 style={styles.logo}>Depo</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+          <KutupLogo size={28} />
+          <h1 style={styles.logo}>Kutup</h1>
+        </div>
         <p style={styles.badge}>🔒 End-to-end encrypted — decrypted in your browser</p>
       </div>
 
@@ -204,16 +208,16 @@ const styles: Record<string, React.CSSProperties> = {
   center: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' },
   container: { maxWidth: 860, margin: '0 auto', padding: 32 },
   header: { marginBottom: 32 },
-  logo: { fontSize: 28, fontWeight: 700, color: '#7c3aed', margin: '0 0 6px', letterSpacing: -1 },
+  logo: { fontSize: 28, fontWeight: 700, color: '#38bdf8', margin: 0, letterSpacing: -1 },
   badge: { fontSize: 13, color: '#22c55e', margin: 0 },
-  card: { background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 12, padding: 40, textAlign: 'center' },
+  card: { background: '#0c1a27', border: '1px solid #1a3045', borderRadius: 12, padding: 40, textAlign: 'center' },
   title: { margin: '0 0 12px', fontSize: 20, fontWeight: 600 },
-  sub: { color: '#8888aa', fontSize: 14, margin: 0 },
-  spinner: { width: 32, height: 32, border: '3px solid #2a2a30', borderTop: '3px solid #7c3aed', borderRadius: '50%', marginBottom: 16, animation: 'spin 1s linear infinite' },
+  sub: { color: '#4e7a97', fontSize: 14, margin: 0 },
+  spinner: { width: 32, height: 32, border: '3px solid #1a3045', borderTop: '3px solid #0ea5e9', borderRadius: '50%', marginBottom: 16, animation: 'spin 1s linear infinite' },
   table: { width: '100%', borderCollapse: 'collapse' },
-  th: { padding: '10px 12px', textAlign: 'left', fontSize: 12, color: '#8888aa', borderBottom: '1px solid #2a2a30', fontWeight: 500 },
-  tr: { borderBottom: '1px solid #1e1e2a' },
-  td: { padding: '12px', fontSize: 13, color: '#c8c8da' },
-  emptyCell: { padding: '32px', textAlign: 'center', color: '#8888aa' },
-  dlBtn: { padding: '6px 14px', background: '#7c3aed', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 },
+  th: { padding: '10px 12px', textAlign: 'left', fontSize: 12, color: '#4e7a97', borderBottom: '1px solid #1a3045', fontWeight: 500 },
+  tr: { borderBottom: '1px solid #0c2030' },
+  td: { padding: '12px', fontSize: 13, color: '#93c0d8' },
+  emptyCell: { padding: '32px', textAlign: 'center', color: '#4e7a97' },
+  dlBtn: { padding: '6px 14px', background: '#0ea5e9', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 },
 }

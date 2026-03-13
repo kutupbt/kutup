@@ -88,7 +88,7 @@ export default function Settings() {
               Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.)
             </p>
             <div style={styles.qrWrap}>
-              <QRCodeSVG value={totpSetup.qrUri} size={180} bgColor="#1a1a1f" fgColor="#e8e8ea" />
+              <QRCodeSVG value={totpSetup.qrUri} size={180} bgColor="#0c1a27" fgColor="#d4ecf7" />
             </div>
             <p style={styles.secretLabel}>Manual entry key:</p>
             <code style={styles.secretCode}>{totpSetup.secret}</code>
@@ -142,22 +142,22 @@ const styles: Record<string, React.CSSProperties> = {
   container: { maxWidth: 640, margin: '0 auto', padding: 32 },
   header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 32 },
   title: { margin: 0, fontSize: 24, fontWeight: 700 },
-  backBtn: { padding: '8px 16px', background: '#1e1e2a', border: '1px solid #2a2a30', color: '#e8e8ea', borderRadius: 8, cursor: 'pointer', fontSize: 13 },
-  section: { background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 12, padding: 24, marginBottom: 20 },
+  backBtn: { padding: '8px 16px', background: '#112030', border: '1px solid #1a3045', color: '#d4ecf7', borderRadius: 8, cursor: 'pointer', fontSize: 13 },
+  section: { background: '#0c1a27', border: '1px solid #1a3045', borderRadius: 12, padding: 24, marginBottom: 20 },
   sectionTitle: { margin: '0 0 16px', fontSize: 16, fontWeight: 600 },
-  row: { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #1e1e2a' },
-  rowLabel: { fontSize: 13, color: '#8888aa' },
-  rowValue: { fontSize: 13, color: '#e8e8ea' },
-  sub: { fontSize: 13, color: '#8888aa', margin: '0 0 16px', lineHeight: 1.6 },
+  row: { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #0c2030' },
+  rowLabel: { fontSize: 13, color: '#4e7a97' },
+  rowValue: { fontSize: 13, color: '#d4ecf7' },
+  sub: { fontSize: 13, color: '#4e7a97', margin: '0 0 16px', lineHeight: 1.6 },
   statusOn: { color: '#22c55e', fontSize: 14, marginBottom: 12 },
-  label: { display: 'block', marginBottom: 6, fontSize: 13, color: '#8888aa', fontWeight: 500 },
-  input: { width: '100%', padding: '10px 12px', background: '#0f0f11', border: '1px solid #2a2a30', borderRadius: 8, color: '#e8e8ea', fontSize: 14, outline: 'none', marginBottom: 12 },
-  primaryBtn: { padding: '10px 20px', background: '#7c3aed', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 },
+  label: { display: 'block', marginBottom: 6, fontSize: 13, color: '#4e7a97', fontWeight: 500 },
+  input: { width: '100%', padding: '10px 12px', background: '#060d14', border: '1px solid #1a3045', borderRadius: 8, color: '#d4ecf7', fontSize: 14, outline: 'none', marginBottom: 12 },
+  primaryBtn: { padding: '10px 20px', background: '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 },
   dangerBtn: { padding: '10px 20px', background: 'transparent', color: '#ef4444', border: '1px solid #ef444440', borderRadius: 8, cursor: 'pointer', fontSize: 14 },
   error: { background: '#2d1a1a', border: '1px solid #ef444440', borderRadius: 8, padding: '12px 16px', marginBottom: 16, color: '#ef4444', fontSize: 13 },
   success: { background: '#1a2d1a', border: '1px solid #22c55e40', borderRadius: 8, padding: '12px 16px', marginBottom: 16, color: '#22c55e', fontSize: 13 },
-  qrWrap: { background: '#1a1a1f', padding: 16, borderRadius: 8, display: 'inline-block', marginBottom: 16 },
-  secretLabel: { fontSize: 12, color: '#8888aa', margin: '0 0 4px' },
-  secretCode: { display: 'block', background: '#0f0f11', padding: '8px 12px', borderRadius: 6, fontSize: 13, fontFamily: 'monospace', color: '#a78bfa', letterSpacing: 2 },
-  a: { color: '#7c3aed' },
+  qrWrap: { background: '#0c1a27', padding: 16, borderRadius: 8, display: 'inline-block', marginBottom: 16 },
+  secretLabel: { fontSize: 12, color: '#4e7a97', margin: '0 0 4px' },
+  secretCode: { display: 'block', background: '#060d14', padding: '8px 12px', borderRadius: 6, fontSize: 13, fontFamily: 'monospace', color: '#7dd3fc', letterSpacing: 2 },
+  a: { color: '#0ea5e9' },
 }

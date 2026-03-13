@@ -6,6 +6,7 @@ import api from '../api/client'
 import { toBase64 } from '../crypto'
 import type { RegistrationKeys } from '../crypto'
 import zxcvbn from 'zxcvbn'
+import { KutupLogo } from '../components/KutupLogo'
 
 type Step = 'form' | 'generating' | 'mnemonic' | 'confirm' | 'submitting'
 
@@ -95,7 +96,7 @@ export default function FirstLogin() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = 'depo-recovery-phrase.txt'
+    a.download = 'kutup-recovery-phrase.txt'
     a.click()
     URL.revokeObjectURL(url)
   }, [keys])
@@ -243,11 +244,14 @@ export default function FirstLogin() {
   return (
     <div style={styles.container}>
       <div style={styles.card}>
-        <h1 style={styles.logo}>Depo</h1>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 8 }}>
+          <KutupLogo size={36} />
+          <h1 style={styles.logo}>Kutup</h1>
+        </div>
         <h2 style={styles.title}>Set your password</h2>
         <p style={styles.subtitle}>
           Welcome! Choose a strong password and you'll be shown a 24-word recovery phrase.
-          {email && <><br /><span style={{ color: '#a78bfa' }}>{email}</span></>}
+          {email && <><br /><span style={{ color: '#7dd3fc' }}>{email}</span></>}
         </p>
         <form onSubmit={handleSetPassword}>
           <div style={styles.field}>
@@ -295,23 +299,23 @@ export default function FirstLogin() {
 
 const styles: Record<string, React.CSSProperties> = {
   container: { display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: 16 },
-  card: { background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 12, padding: 40, width: '100%', maxWidth: 440 },
-  logo: { margin: '0 0 8px', fontSize: 32, fontWeight: 700, color: '#7c3aed', letterSpacing: -1 },
-  title: { margin: '0 0 8px', fontSize: 20, fontWeight: 600, color: '#e8e8ea' },
-  subtitle: { margin: '0 0 24px', fontSize: 14, color: '#8888aa' },
+  card: { background: '#0c1a27', border: '1px solid #1a3045', borderRadius: 12, padding: 40, width: '100%', maxWidth: 440 },
+  logo: { margin: 0, fontSize: 32, fontWeight: 700, color: '#38bdf8', letterSpacing: -1 },
+  title: { margin: '0 0 8px', fontSize: 20, fontWeight: 600, color: '#d4ecf7' },
+  subtitle: { margin: '0 0 24px', fontSize: 14, color: '#4e7a97' },
   field: { marginBottom: 16 },
-  label: { display: 'block', marginBottom: 6, fontSize: 13, color: '#8888aa', fontWeight: 500 },
-  input: { width: '100%', padding: '10px 12px', background: '#0f0f11', border: '1px solid #2a2a30', borderRadius: 8, color: '#e8e8ea', fontSize: 14, outline: 'none' },
-  textarea: { width: '100%', padding: '10px 12px', background: '#0f0f11', border: '1px solid #2a2a30', borderRadius: 8, color: '#e8e8ea', fontSize: 14, outline: 'none', resize: 'vertical', fontFamily: 'monospace' },
-  button: { width: '100%', padding: '12px', background: '#7c3aed', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', marginTop: 8 },
-  secondaryButton: { flex: 1, padding: '9px 12px', background: 'transparent', color: '#8888aa', border: '1px solid #2a2a30', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' },
+  label: { display: 'block', marginBottom: 6, fontSize: 13, color: '#4e7a97', fontWeight: 500 },
+  input: { width: '100%', padding: '10px 12px', background: '#060d14', border: '1px solid #1a3045', borderRadius: 8, color: '#d4ecf7', fontSize: 14, outline: 'none' },
+  textarea: { width: '100%', padding: '10px 12px', background: '#060d14', border: '1px solid #1a3045', borderRadius: 8, color: '#d4ecf7', fontSize: 14, outline: 'none', resize: 'vertical', fontFamily: 'monospace' },
+  button: { width: '100%', padding: '12px', background: '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', marginTop: 8 },
+  secondaryButton: { flex: 1, padding: '9px 12px', background: 'transparent', color: '#4e7a97', border: '1px solid #1a3045', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' },
   error: { color: '#ef4444', fontSize: 13, margin: '8px 0' },
-  spinner: { width: 32, height: 32, border: '3px solid #2a2a30', borderTop: '3px solid #7c3aed', borderRadius: '50%', margin: '24px auto', animation: 'spin 1s linear infinite' },
-  strengthBar: { marginTop: 6, background: '#2a2a30', borderRadius: 4, height: 4, overflow: 'hidden', position: 'relative' },
+  spinner: { width: 32, height: 32, border: '3px solid #1a3045', borderTop: '3px solid #0ea5e9', borderRadius: '50%', margin: '24px auto', animation: 'spin 1s linear infinite' },
+  strengthBar: { marginTop: 6, background: '#1a3045', borderRadius: 4, height: 4, overflow: 'hidden', position: 'relative' },
   strengthFill: { height: '100%', borderRadius: 4, transition: 'width 0.3s, background 0.3s' },
-  strengthLabel: { position: 'absolute', right: 0, top: 6, fontSize: 11, color: '#8888aa' },
-  mnemonicGrid: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 12, background: '#0f0f11', padding: 16, borderRadius: 8 },
+  strengthLabel: { position: 'absolute', right: 0, top: 6, fontSize: 11, color: '#4e7a97' },
+  mnemonicGrid: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 12, background: '#060d14', padding: 16, borderRadius: 8 },
   mnemonicActions: { display: 'flex', gap: 8, marginBottom: 16 },
-  mnemonicWord: { padding: '6px 8px', background: '#1a1a1f', borderRadius: 6, fontSize: 13, color: '#e8e8ea', fontFamily: 'monospace' },
-  mnemonicNum: { color: '#8888aa', fontSize: 11 },
+  mnemonicWord: { padding: '6px 8px', background: '#0c1a27', borderRadius: 6, fontSize: 13, color: '#d4ecf7', fontFamily: 'monospace' },
+  mnemonicNum: { color: '#4e7a97', fontSize: 11 },
 }
