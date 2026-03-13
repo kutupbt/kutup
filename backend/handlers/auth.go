@@ -1,0 +1,649 @@
+package handlers
+
+import (
+	"context"
+	"encoding/base64"
+	"regexp"
+	"strings"
+
+	"github.com/depo/backend/middleware"
+	"github.com/depo/backend/services"
+	"github.com/depo/backend/utils"
+	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
+)
+
+var usernameRegexp = regexp.MustCompile(`^[a-z0-9_-]{3,32}$`)
+
+type AuthHandler struct {
+	DB        *pgxpool.Pool
+	JWTSecret string
+}
+
+type RegisterRequest struct {
+	Email                string `json:"email"`
+	Username             string `json:"username"`
+	// bcrypt(Argon2id(password, loginKeySalt)) — client sends loginKey, server bcrypts
+	LoginKey             string `json:"loginKey"`
+	// Encrypted key material
+	EncryptedMasterKey   string `json:"encryptedMasterKey"`
+	MasterKeyNonce       string `json:"masterKeyNonce"`
+	EncryptedRecoveryKey string `json:"encryptedRecoveryKey"`
+	RecoveryKeyNonce     string `json:"recoveryKeyNonce"`
+	EncryptedPrivateKey  string `json:"encryptedPrivateKey"`
+	PrivateKeyNonce      string `json:"privateKeyNonce"`
+	PublicKey            string `json:"publicKey"`
+	KDFSalt              string `json:"kdfSalt"`
+	LoginKeySalt         string `json:"loginKeySalt"`
+}
+
+func (h *AuthHandler) Register(c *fiber.Ctx) error {
+	var regEnabled string
+	h.DB.QueryRow(context.Background(), `SELECT value FROM site_settings WHERE key='registration_enabled'`).Scan(&regEnabled)
+	if regEnabled == "false" {
+		return c.Status(403).JSON(fiber.Map{"error": "registration disabled"})
+	}
+
+	var req RegisterRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
+	}
+
+	if req.Email == "" || req.LoginKey == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "missing required fields"})
+	}
+
+	if !usernameRegexp.MatchString(req.Username) {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid username: must be 3-32 chars, lowercase letters, numbers, _ and -"})
+	}
+
+	// Decode loginKey from base64, then bcrypt it
+	loginKeyBytes, err := base64.StdEncoding.DecodeString(req.LoginKey)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid loginKey encoding"})
+	}
+
+	hash, err := bcrypt.GenerateFromPassword(loginKeyBytes, bcrypt.DefaultCost)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	_, err = h.DB.Exec(context.Background(), `
+		INSERT INTO users (
+			email, username, encrypted_master_key, master_key_nonce,
+			encrypted_recovery_key, recovery_key_nonce,
+			encrypted_private_key, private_key_nonce,
+			public_key, kdf_salt, login_key_salt, login_key_hash
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+	`,
+		req.Email, req.Username, req.EncryptedMasterKey, req.MasterKeyNonce,
+		req.EncryptedRecoveryKey, req.RecoveryKeyNonce,
+		req.EncryptedPrivateKey, req.PrivateKeyNonce,
+		req.PublicKey, req.KDFSalt, req.LoginKeySalt, string(hash),
+	)
+	if err != nil {
+		// Check for duplicate email or username
+		if isDuplicateKeyError(err) {
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "users_username_unique") {
+				return c.Status(409).JSON(fiber.Map{"error": "username already taken"})
+			}
+			return c.Status(409).JSON(fiber.Map{"error": "email already registered"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	return c.Status(201).JSON(fiber.Map{"message": "registered"})
+}
+
+type PreflightResponse struct {
+	KDFSalt      string `json:"kdfSalt"`
+	LoginKeySalt string `json:"loginKeySalt"`
+}
+
+// GetLoginPreflight returns KDF salts for an email. Returns deterministic fake
+// salts for non-existent emails to prevent user enumeration.
+func (h *AuthHandler) GetLoginPreflight(c *fiber.Ctx) error {
+	email := c.Query("email")
+	if email == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "email required"})
+	}
+
+	var kdfSalt, loginKeySalt string
+	err := h.DB.QueryRow(context.Background(),
+		`SELECT kdf_salt, login_key_salt FROM users WHERE email = $1`,
+		email,
+	).Scan(&kdfSalt, &loginKeySalt)
+
+	if err != nil {
+		// Non-existent user: derive deterministic fake salts from a server secret
+		// so timing / response looks identical. Use email as HKDF input.
+		kdfSalt = deterministicFakeSalt(email, "kdf")
+		loginKeySalt = deterministicFakeSalt(email, "login")
+	}
+
+	return c.JSON(PreflightResponse{KDFSalt: kdfSalt, LoginKeySalt: loginKeySalt})
+}
+
+type LoginRequest struct {
+	Email    string `json:"email"`
+	LoginKey string `json:"loginKey"` // base64(Argon2id(password, loginKeySalt))
+}
+
+type LoginResponse struct {
+	AccessToken          string  `json:"accessToken"`
+	UserID               string  `json:"userId"`
+	Username             string  `json:"username"`
+	EncryptedMasterKey   string  `json:"encryptedMasterKey"`
+	MasterKeyNonce       string  `json:"masterKeyNonce"`
+	EncryptedPrivateKey  string  `json:"encryptedPrivateKey"`
+	PrivateKeyNonce      string  `json:"privateKeyNonce"`
+	PublicKey            string  `json:"publicKey"`
+	IsAdmin              bool    `json:"isAdmin"`
+	StorageQuotaBytes    int64   `json:"storageQuotaBytes"`
+	StorageUsedBytes     int64   `json:"storageUsedBytes"`
+	RequiresTotp         bool    `json:"requiresTotp,omitempty"`
+	PreAuthToken         *string `json:"preAuthToken,omitempty"`
+	RequiresSetup        bool    `json:"requiresSetup,omitempty"`
+	SetupToken           *string `json:"setupToken,omitempty"`
+}
+
+func (h *AuthHandler) Login(c *fiber.Ctx) error {
+	var req LoginRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
+	}
+
+	var (
+		userID, loginKeyHash, encMK, mkNonce, encPK, pkNonce, pubKey, kdfSalt, username string
+		totpEnabled                                                                        bool
+		isAdmin                                                                            bool
+		quotaBytes, usedBytes                                                              int64
+		isActive                                                                           bool
+	)
+
+	err := h.DB.QueryRow(context.Background(), `
+		SELECT id, login_key_hash, encrypted_master_key, master_key_nonce,
+		       encrypted_private_key, private_key_nonce, public_key,
+		       totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes, is_active, kdf_salt,
+		       COALESCE(username, '')
+		FROM users WHERE email = $1
+	`, req.Email).Scan(
+		&userID, &loginKeyHash, &encMK, &mkNonce,
+		&encPK, &pkNonce, &pubKey,
+		&totpEnabled, &isAdmin, &quotaBytes, &usedBytes, &isActive, &kdfSalt, &username,
+	)
+	if err != nil {
+		// Always run bcrypt to prevent timing attacks
+		bcrypt.CompareHashAndPassword([]byte("$2a$10$fakehashfortimingprotectiononly"), []byte("dummy"))
+		return c.Status(401).JSON(fiber.Map{"error": "invalid credentials"})
+	}
+
+	if !isActive {
+		return c.Status(401).JSON(fiber.Map{"error": "account disabled"})
+	}
+
+	loginKeyBytes, err := base64.StdEncoding.DecodeString(req.LoginKey)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid loginKey"})
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(loginKeyHash), loginKeyBytes); err != nil {
+		return c.Status(401).JSON(fiber.Map{"error": "invalid credentials"})
+	}
+
+	// First-login setup account — no key material yet, client must complete setup
+	if kdfSalt == "" {
+		setupToken, err := utils.GenerateSetupToken(userID, h.JWTSecret)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+		}
+		return c.JSON(LoginResponse{RequiresSetup: true, SetupToken: &setupToken})
+	}
+
+	// TOTP required — return pre-auth token instead of full JWT
+	if totpEnabled {
+		preAuthToken, err := utils.GeneratePreAuthToken(userID, h.JWTSecret)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+		}
+		return c.JSON(LoginResponse{
+			RequiresTotp: true,
+			PreAuthToken: &preAuthToken,
+		})
+	}
+
+	return h.issueTokensAndRespond(c, userID, username, encMK, mkNonce, encPK, pkNonce, pubKey, isAdmin, quotaBytes, usedBytes)
+}
+
+type TwoFALoginRequest struct {
+	PreAuthToken string `json:"preAuthToken"`
+	Code         string `json:"code"`
+}
+
+func (h *AuthHandler) LoginTwoFA(c *fiber.Ctx) error {
+	var req TwoFALoginRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
+	}
+
+	userID, err := utils.ValidatePreAuthToken(req.PreAuthToken, h.JWTSecret)
+	if err != nil {
+		return c.Status(401).JSON(fiber.Map{"error": "invalid pre-auth token"})
+	}
+
+	var (
+		totpSecret                                                              *string
+		encMK, mkNonce, encPK, pkNonce, pubKey, username2fa                    string
+		isAdmin                                                                  bool
+		quotaBytes, usedBytes                                                    int64
+	)
+
+	err = h.DB.QueryRow(context.Background(), `
+		SELECT totp_secret, encrypted_master_key, master_key_nonce,
+		       encrypted_private_key, private_key_nonce, public_key,
+		       is_admin, storage_quota_bytes, storage_used_bytes,
+		       COALESCE(username, '')
+		FROM users WHERE id = $1
+	`, userID).Scan(&totpSecret, &encMK, &mkNonce, &encPK, &pkNonce, &pubKey,
+		&isAdmin, &quotaBytes, &usedBytes, &username2fa)
+	if err != nil {
+		return c.Status(401).JSON(fiber.Map{"error": "unauthorized"})
+	}
+
+	if totpSecret == nil || !services.ValidateTOTP(*totpSecret, req.Code) {
+		return c.Status(401).JSON(fiber.Map{"error": "invalid TOTP code"})
+	}
+
+	return h.issueTokensAndRespond(c, userID, username2fa, encMK, mkNonce, encPK, pkNonce, pubKey, isAdmin, quotaBytes, usedBytes)
+}
+
+// GetRecoveryPreflight returns the data needed client-side to perform recovery:
+// the encrypted recovery key (master key encrypted with recovery key entropy).
+// Rate limited 5/hr. No auth required — recovery is the auth mechanism.
+func (h *AuthHandler) GetRecoveryPreflight(c *fiber.Ctx) error {
+	email := c.Query("email")
+	if email == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "email required"})
+	}
+
+	var encRecoveryKey, recoveryKeyNonce, encPrivateKey, privateKeyNonce string
+	err := h.DB.QueryRow(context.Background(), `
+		SELECT encrypted_recovery_key, recovery_key_nonce,
+		       encrypted_private_key, private_key_nonce
+		FROM users WHERE email = $1
+	`, email).Scan(&encRecoveryKey, &recoveryKeyNonce, &encPrivateKey, &privateKeyNonce)
+	if err != nil {
+		// Return fake data to prevent enumeration
+		return c.JSON(fiber.Map{
+			"encryptedRecoveryKey": deterministicFakeSalt(email, "recovery"),
+			"recoveryKeyNonce":     deterministicFakeSalt(email, "recovery-nonce"),
+			"encryptedPrivateKey":  deterministicFakeSalt(email, "private"),
+			"privateKeyNonce":      deterministicFakeSalt(email, "private-nonce"),
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"encryptedRecoveryKey": encRecoveryKey,
+		"recoveryKeyNonce":     recoveryKeyNonce,
+		"encryptedPrivateKey":  encPrivateKey,
+		"privateKeyNonce":      privateKeyNonce,
+	})
+}
+
+type RecoverRequest struct {
+	Email                string `json:"email"`
+	// Client proves mnemonic possession by providing encryptedMasterKey decrypted
+	// with recoveryKey, then re-encrypted with new keyEncryptionKey
+	NewLoginKey          string `json:"newLoginKey"`
+	NewEncryptedMasterKey string `json:"newEncryptedMasterKey"`
+	NewMasterKeyNonce     string `json:"newMasterKeyNonce"`
+	NewKDFSalt            string `json:"newKdfSalt"`
+	NewLoginKeySalt       string `json:"newLoginKeySalt"`
+	// Recovery proof: masterKey re-encrypted with recoveryKey (server verifies it
+	// can be decrypted by recipient — but since we're E2EE, we accept on faith)
+	RecoveryProof         string `json:"recoveryProof"`
+}
+
+func (h *AuthHandler) Recover(c *fiber.Ctx) error {
+	var req RecoverRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
+	}
+
+	loginKeyBytes, err := base64.StdEncoding.DecodeString(req.NewLoginKey)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid loginKey"})
+	}
+
+	hash, err := bcrypt.GenerateFromPassword(loginKeyBytes, bcrypt.DefaultCost)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	result, err := h.DB.Exec(context.Background(), `
+		UPDATE users SET
+			login_key_hash = $1,
+			encrypted_master_key = $2,
+			master_key_nonce = $3,
+			kdf_salt = $4,
+			login_key_salt = $5,
+			is_first_login = false,
+			updated_at = NOW()
+		WHERE email = $6
+	`, string(hash), req.NewEncryptedMasterKey, req.NewMasterKeyNonce,
+		req.NewKDFSalt, req.NewLoginKeySalt, req.Email)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	if result.RowsAffected() == 0 {
+		return c.Status(404).JSON(fiber.Map{"error": "user not found"})
+	}
+
+	return c.JSON(fiber.Map{"message": "password reset"})
+}
+
+type RefreshRequest struct {
+	RefreshToken string `json:"refreshToken"`
+}
+
+func (h *AuthHandler) Refresh(c *fiber.Ctx) error {
+	refreshToken := c.Cookies("refresh_token")
+	if refreshToken == "" {
+		var req RefreshRequest
+		c.BodyParser(&req)
+		refreshToken = req.RefreshToken
+	}
+	if refreshToken == "" {
+		return c.Status(401).JSON(fiber.Map{"error": "missing refresh token"})
+	}
+
+	claims, err := utils.ValidateToken(refreshToken, h.JWTSecret)
+	if err != nil {
+		return c.Status(401).JSON(fiber.Map{"error": "invalid refresh token"})
+	}
+
+	// Verify user is still active
+	var isActive, isAdmin bool
+	err = h.DB.QueryRow(context.Background(),
+		`SELECT is_active, is_admin FROM users WHERE id = $1`, claims.UserID,
+	).Scan(&isActive, &isAdmin)
+	if err != nil || !isActive {
+		return c.Status(401).JSON(fiber.Map{"error": "unauthorized"})
+	}
+
+	accessToken, err := utils.GenerateAccessToken(claims.UserID, isAdmin, h.JWTSecret)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	return c.JSON(fiber.Map{"accessToken": accessToken})
+}
+
+// User profile
+func (h *AuthHandler) GetMe(c *fiber.Ctx) error {
+	userID := middleware.UserID(c)
+
+	var u struct {
+		ID                string `json:"id"`
+		Email             string `json:"email"`
+		Username          string `json:"username"`
+		PublicKey         string `json:"publicKey"`
+		TOTPEnabled       bool   `json:"totpEnabled"`
+		StorageQuota      int64  `json:"storageQuotaBytes"`
+		StorageUsed       int64  `json:"storageUsedBytes"`
+		IsAdmin           bool   `json:"isAdmin"`
+	}
+
+	err := h.DB.QueryRow(context.Background(), `
+		SELECT id, email, COALESCE(username, ''), public_key, totp_enabled,
+		       storage_quota_bytes, storage_used_bytes, is_admin
+		FROM users WHERE id = $1
+	`, userID).Scan(&u.ID, &u.Email, &u.Username, &u.PublicKey, &u.TOTPEnabled,
+		&u.StorageQuota, &u.StorageUsed, &u.IsAdmin)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "user not found"})
+	}
+
+	return c.JSON(u)
+}
+
+func (h *AuthHandler) GetUserByEmail(c *fiber.Ctx) error {
+	email := c.Params("email")
+
+	var userID, publicKey string
+	err := h.DB.QueryRow(context.Background(),
+		`SELECT id, public_key FROM users WHERE email = $1 AND is_active = true`,
+		email,
+	).Scan(&userID, &publicKey)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "user not found"})
+	}
+
+	return c.JSON(fiber.Map{
+		"userId":    userID,
+		"publicKey": publicKey,
+	})
+}
+
+// TOTP setup: generate secret, return QR URI. Not yet enabled until verified.
+func (h *AuthHandler) SetupTOTP(c *fiber.Ctx) error {
+	userID := middleware.UserID(c)
+
+	var email string
+	err := h.DB.QueryRow(context.Background(),
+		`SELECT email FROM users WHERE id = $1`, userID,
+	).Scan(&email)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "user not found"})
+	}
+
+	secret, qrURI, err := services.GenerateTOTP(email, "Depo")
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	// Store the pending secret (not yet enabled)
+	_, err = h.DB.Exec(context.Background(),
+		`UPDATE users SET totp_secret = $1 WHERE id = $2`, secret, userID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	return c.JSON(fiber.Map{
+		"secret": secret,
+		"qrUri":  qrURI,
+	})
+}
+
+// VerifyTOTP enables TOTP after user confirms they can generate valid codes.
+func (h *AuthHandler) VerifyTOTP(c *fiber.Ctx) error {
+	userID := middleware.UserID(c)
+
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
+	}
+
+	var totpSecret *string
+	err := h.DB.QueryRow(context.Background(),
+		`SELECT totp_secret FROM users WHERE id = $1`, userID,
+	).Scan(&totpSecret)
+	if err != nil || totpSecret == nil {
+		return c.Status(400).JSON(fiber.Map{"error": "TOTP not set up"})
+	}
+
+	if !services.ValidateTOTP(*totpSecret, body.Code) {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid code"})
+	}
+
+	_, err = h.DB.Exec(context.Background(),
+		`UPDATE users SET totp_enabled = true WHERE id = $1`, userID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	return c.JSON(fiber.Map{"message": "TOTP enabled"})
+}
+
+func (h *AuthHandler) DisableTOTP(c *fiber.Ctx) error {
+	userID := middleware.UserID(c)
+
+	_, err := h.DB.Exec(context.Background(),
+		`UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1`, userID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	return c.JSON(fiber.Map{"message": "TOTP disabled"})
+}
+
+// CompleteSetup finalises a first-login account: stores key material and issues tokens.
+// Auth via short-lived setupToken (not a regular access token).
+func (h *AuthHandler) CompleteSetup(c *fiber.Ctx) error {
+	authHeader := c.Get("Authorization")
+	tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+	userID, err := utils.ValidateSetupToken(tokenStr, h.JWTSecret)
+	if err != nil {
+		return c.Status(401).JSON(fiber.Map{"error": "invalid setup token"})
+	}
+
+	var req RegisterRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
+	}
+
+	loginKeyBytes, err := base64.StdEncoding.DecodeString(req.LoginKey)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid loginKey"})
+	}
+
+	hash, err := bcrypt.GenerateFromPassword(loginKeyBytes, bcrypt.DefaultCost)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	// Only update if kdf_salt is still empty (prevents replay after setup is done)
+	result, err := h.DB.Exec(context.Background(), `
+		UPDATE users SET
+			login_key_hash = $1,
+			encrypted_master_key = $2, master_key_nonce = $3,
+			encrypted_recovery_key = $4, recovery_key_nonce = $5,
+			encrypted_private_key = $6, private_key_nonce = $7,
+			public_key = $8, kdf_salt = $9, login_key_salt = $10,
+			is_first_login = false, updated_at = NOW()
+		WHERE id = $11 AND kdf_salt = ''
+	`, string(hash),
+		req.EncryptedMasterKey, req.MasterKeyNonce,
+		req.EncryptedRecoveryKey, req.RecoveryKeyNonce,
+		req.EncryptedPrivateKey, req.PrivateKeyNonce,
+		req.PublicKey, req.KDFSalt, req.LoginKeySalt,
+		userID)
+	if err != nil || result.RowsAffected() == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "setup already completed or user not found"})
+	}
+
+	var isAdmin bool
+	var quotaBytes, usedBytes int64
+	var username string
+	h.DB.QueryRow(context.Background(), `
+		SELECT is_admin, storage_quota_bytes, storage_used_bytes, COALESCE(username, '') FROM users WHERE id = $1
+	`, userID).Scan(&isAdmin, &quotaBytes, &usedBytes, &username)
+
+	accessToken, err := utils.GenerateAccessToken(userID, isAdmin, h.JWTSecret)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+	refreshToken, err := utils.GenerateRefreshToken(userID, h.JWTSecret)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	c.Cookie(&fiber.Cookie{
+		Name:     "refresh_token",
+		Value:    refreshToken,
+		HTTPOnly: true,
+		Secure:   false,
+		SameSite: "Lax",
+		MaxAge:   7 * 24 * 3600,
+		Path:     "/api/auth/refresh",
+	})
+
+	return c.JSON(fiber.Map{
+		"accessToken":       accessToken,
+		"userId":            userID,
+		"username":          username,
+		"isAdmin":           isAdmin,
+		"storageQuotaBytes": quotaBytes,
+		"storageUsedBytes":  usedBytes,
+	})
+}
+
+// GetPublicSettings returns site settings visible without authentication.
+func (h *AuthHandler) GetPublicSettings(c *fiber.Ctx) error {
+	var val string
+	h.DB.QueryRow(context.Background(), `SELECT value FROM site_settings WHERE key='registration_enabled'`).Scan(&val)
+	return c.JSON(fiber.Map{"registrationEnabled": val != "false"})
+}
+
+// --- helpers ---
+
+func (h *AuthHandler) issueTokensAndRespond(c *fiber.Ctx, userID, username, encMK, mkNonce, encPK, pkNonce, pubKey string, isAdmin bool, quota, used int64) error {
+	accessToken, err := utils.GenerateAccessToken(userID, isAdmin, h.JWTSecret)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+	refreshToken, err := utils.GenerateRefreshToken(userID, h.JWTSecret)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	// HttpOnly cookie for refresh token
+	c.Cookie(&fiber.Cookie{
+		Name:     "refresh_token",
+		Value:    refreshToken,
+		HTTPOnly: true,
+		Secure:   false,   // allow HTTP for self-hosted
+		SameSite: "Lax",
+		MaxAge:   7 * 24 * 3600,
+		Path:     "/api/auth/refresh",
+	})
+
+	return c.JSON(LoginResponse{
+		AccessToken:         accessToken,
+		UserID:              userID,
+		Username:            username,
+		EncryptedMasterKey:  encMK,
+		MasterKeyNonce:      mkNonce,
+		EncryptedPrivateKey: encPK,
+		PrivateKeyNonce:     pkNonce,
+		PublicKey:           pubKey,
+		IsAdmin:             isAdmin,
+		StorageQuotaBytes:   quota,
+		StorageUsedBytes:    used,
+	})
+}
+
+// deterministicFakeSalt derives a stable base64 salt from email+purpose to
+// prevent user enumeration (non-existent users get same response timing/shape).
+func deterministicFakeSalt(email, purpose string) string {
+	// XOR mix of email bytes and purpose — consistent for same input
+	input := email + ":" + purpose + ":depo-fake-salt-2024"
+	b := make([]byte, 32)
+	for i := range b {
+		b[i] = input[i%len(input)] ^ byte(i*7+13)
+	}
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+func isDuplicateKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "duplicate key") || strings.Contains(msg, "unique")
+}

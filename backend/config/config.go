@@ -1,0 +1,46 @@
+package config
+
+import (
+	"os"
+)
+
+type Config struct {
+	DatabaseURL   string
+	JWTSecret     string
+	S3Endpoint    string
+	S3AccessKey   string
+	S3SecretKey   string
+	S3Bucket      string
+	S3Region      string
+	AppEnv        string
+	AdminAccounts string
+}
+
+func Load() *Config {
+	return &Config{
+		DatabaseURL:   mustEnv("DATABASE_URL"),
+		JWTSecret:     mustEnv("JWT_SECRET"),
+		S3Endpoint:    mustEnv("S3_ENDPOINT"),
+		S3AccessKey:   mustEnv("S3_ACCESS_KEY"),
+		S3SecretKey:   mustEnv("S3_SECRET_KEY"),
+		S3Bucket:      getEnv("S3_BUCKET", "depo-files"),
+		S3Region:      getEnv("S3_REGION", "us-east-1"),
+		AppEnv:        getEnv("APP_ENV", "development"),
+		AdminAccounts: getEnv("ADMIN_ACCOUNTS", ""),
+	}
+}
+
+func mustEnv(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		panic("required environment variable not set: " + key)
+	}
+	return v
+}
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}

@@ -92,21 +92,52 @@ func (h *FilesHandler) Upload(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "missing required fields"})
 	}
 
-	// Verify write access
-	if !h.canWriteCollection(c.Context(), userID, collID) {
-		return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
-	}
-
-	// Get file from multipart
+	// Get file from multipart first so we know the size
 	files := form.File["file"]
 	if len(files) == 0 {
 		return c.Status(400).JSON(fiber.Map{"error": "no file provided"})
 	}
 	fileHeader := files[0]
+	fileSize := fileHeader.Size
+
+	// Verify write access — owner or share with can_upload
+	isOwner := false
+	var ownerCheckCount int
+	h.DB.QueryRow(c.Context(),
+		`SELECT COUNT(*) FROM collections WHERE id = $1 AND owner_user_id = $2`,
+		collID, userID,
+	).Scan(&ownerCheckCount)
+	if ownerCheckCount > 0 {
+		isOwner = true
+	}
+
+	if !isOwner {
+		// Check share with can_upload
+		var canUpload bool
+		var uploadQuotaBytes *int64
+		err := h.DB.QueryRow(c.Context(),
+			`SELECT can_upload, upload_quota_bytes FROM collection_shares
+			 WHERE collection_id = $1 AND recipient_user_id = $2`,
+			collID, userID,
+		).Scan(&canUpload, &uploadQuotaBytes)
+		if err != nil || !canUpload {
+			return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
+		}
+		// Check share quota
+		if uploadQuotaBytes != nil {
+			var usedBytes int64
+			h.DB.QueryRow(c.Context(),
+				`SELECT COALESCE(SUM(encrypted_size_bytes), 0) FROM files WHERE collection_id = $1 AND uploader_user_id = $2`,
+				collID, userID,
+			).Scan(&usedBytes)
+			if usedBytes+fileSize > *uploadQuotaBytes {
+				return c.Status(413).JSON(fiber.Map{"error": "share upload quota exceeded"})
+			}
+		}
+	}
 
 	fileID := uuid.New().String()
 	storagePath := fmt.Sprintf("%s/%s/%s", userID, collID, fileID)
-	fileSize := fileHeader.Size
 
 	// Atomic quota check + reserve
 	tx, err := h.DB.Begin(c.Context())
@@ -221,14 +252,25 @@ func (h *FilesHandler) Delete(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "not found"})
 	}
 
-	// Only owner of collection or file uploader can delete
+	// Only owner of collection, or uploader with can_delete share permission can delete
 	var ownerID string
 	h.DB.QueryRow(context.Background(),
 		`SELECT owner_user_id FROM collections WHERE id = $1`, collID,
 	).Scan(&ownerID)
 
-	if ownerID != userID && uploaderID != userID {
-		return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
+	if ownerID != userID {
+		// Check if user is uploader AND has can_delete share
+		if uploaderID != userID {
+			return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
+		}
+		var canDelete bool
+		h.DB.QueryRow(context.Background(),
+			`SELECT can_delete FROM collection_shares WHERE collection_id = $1 AND recipient_user_id = $2`,
+			collID, userID,
+		).Scan(&canDelete)
+		if !canDelete {
+			return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
+		}
 	}
 
 	_, err = h.DB.Exec(context.Background(), `DELETE FROM files WHERE id = $1`, fileID)
@@ -268,24 +310,6 @@ func (h *FilesHandler) canAccessCollection(ctx context.Context, userID, collID s
 	return count > 0
 }
 
-func (h *FilesHandler) canWriteCollection(ctx context.Context, userID, collID string) bool {
-	var count int
-	// Owner always has write
-	h.DB.QueryRow(ctx,
-		`SELECT COUNT(*) FROM collections WHERE id = $1 AND owner_user_id = $2`,
-		collID, userID,
-	).Scan(&count)
-	if count > 0 {
-		return true
-	}
-	// Share with write permission
-	h.DB.QueryRow(ctx,
-		`SELECT COUNT(*) FROM collection_shares
-		 WHERE collection_id = $1 AND recipient_user_id = $2 AND can_write = true`,
-		collID, userID,
-	).Scan(&count)
-	return count > 0
-}
 
 func firstField(m map[string][]string, key string) string {
 	if v, ok := m[key]; ok && len(v) > 0 {

@@ -20,6 +20,14 @@ interface Collection {
   color?: string
   decryptedName?: string
   collectionKey?: Uint8Array
+  // Share privilege fields (set for collections shared with this user)
+  isShared?: boolean
+  canUpload?: boolean
+  canDelete?: boolean
+  uploadQuotaBytes?: number | null
+  // Remote (federated) share fields
+  isRemote?: boolean
+  remoteShareId?: string
 }
 
 const FOLDER_COLORS = [
@@ -98,6 +106,15 @@ export default function Drive() {
   const [showFabMenu, setShowFabMenu] = useState(false)
   const [myFilesCollection, setMyFilesCollection] = useState<Collection | null>(null)
   const [viewMode, setViewMode] = useState<'myfiles' | 'shared'>('myfiles')
+  // Share privilege state
+  const [shareCanUpload, setShareCanUpload] = useState(false)
+  const [shareCanDelete, setShareCanDelete] = useState(false)
+  const [shareQuotaGB, setShareQuotaGB] = useState('')
+  // Federated share state
+  const [inviteUrlModal, setInviteUrlModal] = useState<string | null>(null)
+  const [addRemoteShareModal, setAddRemoteShareModal] = useState(false)
+  const [addRemoteShareUrl, setAddRemoteShareUrl] = useState('')
+  const [addRemoteShareLoading, setAddRemoteShareLoading] = useState(false)
   const [hoveredFolder, setHoveredFolder] = useState<string | null>(null)
   const [renameFolderTarget, setRenameFolderTarget] = useState<Collection | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -209,6 +226,51 @@ export default function Drive() {
         setMyFilesCollection(created)
         setCollections(prev => [...prev, created])
       }
+
+      // Load federated incoming shares
+      try {
+        const remoteRes = await api.get('/fed-proxy/incoming')
+        const remoteDecrypted: Collection[] = await Promise.all(
+          remoteRes.data.map(async (share: any) => {
+            try {
+              const collectionKey = await unwrapKeyFromSender(
+                fromBase64(share.encryptedCollectionKey),
+                fromBase64(auth.publicKey!),
+                privateKey!,
+              )
+              const nameBytes = await decrypt(
+                fromBase64(share.encryptedName),
+                fromBase64(share.nameNonce),
+                collectionKey,
+              )
+              const decryptedName = new TextDecoder().decode(nameBytes)
+              return {
+                id: share.id,
+                ownerUserId: '',
+                encryptedName: share.encryptedName,
+                nameNonce: share.nameNonce,
+                encryptedKey: share.encryptedCollectionKey,
+                encryptedKeyNonce: '',
+                decryptedName,
+                collectionKey,
+                isRemote: true,
+                remoteShareId: share.id,
+                canUpload: share.canUpload,
+                canDelete: share.canDelete,
+                uploadQuotaBytes: share.uploadQuotaBytes ?? null,
+              } as Collection
+            } catch {
+              return null
+            }
+          })
+        )
+        const validRemote = remoteDecrypted.filter(Boolean) as Collection[]
+        if (validRemote.length > 0) {
+          setCollections(prev => [...prev.filter(c => !c.isRemote), ...validRemote])
+        }
+      } catch {
+        // Remote shares not available or none yet
+      }
     } catch (err) {
       setError('Failed to load collections')
     }
@@ -217,7 +279,9 @@ export default function Drive() {
   async function loadFiles(collection: Collection) {
     if (!collection.collectionKey) return
     try {
-      const res = await api.get(`/collections/${collection.id}/files`)
+      const res = collection.isRemote
+        ? await api.get(`/fed-proxy/${collection.remoteShareId}/files`)
+        : await api.get(`/collections/${collection.id}/files`)
       const decrypted = await Promise.all(
         res.data.map(async (file: FileItem) => {
           try {
@@ -341,7 +405,10 @@ export default function Drive() {
     form.append('fileKeyNonce', toBase64(encFileKey.nonce))
     form.append('file', new Blob([encryptedData.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'encrypted')
 
-    await api.post('/files/upload', form, {
+    const uploadUrl = collection.isRemote
+      ? `/fed-proxy/${collection.remoteShareId}/upload`
+      : '/files/upload'
+    await api.post(uploadUrl, form, {
       onUploadProgress: (e) => {
         if (e.total && onProgress) onProgress(e.loaded, e.total)
       },
@@ -404,7 +471,7 @@ export default function Drive() {
   async function handleDrop(e: React.DragEvent) {
     e.preventDefault()
     setIsDragging(false)
-    if (!currentFolder?.collectionKey) return
+    if (!currentFolder?.collectionKey || !canUploadToCurrentFolder()) return
     const droppedFiles = Array.from(e.dataTransfer.files).filter(f => f.size > 0)
     if (droppedFiles.length) await uploadFiles(droppedFiles)
   }
@@ -420,7 +487,10 @@ export default function Drive() {
   async function handleDownload(file: FileItem & { _fileKey?: Uint8Array }) {
     if (!file._fileKey) return
     try {
-      const res = await api.get(`/files/${file.id}/download`, { responseType: 'arraybuffer' })
+      const downloadUrl = currentFolder?.isRemote
+        ? `/fed-proxy/${currentFolder.remoteShareId}/files/${file.id}/download`
+        : `/files/${file.id}/download`
+      const res = await api.get(downloadUrl, { responseType: 'arraybuffer' })
       const encryptedData = new Uint8Array(res.data)
       const plaintext = await decryptStream(encryptedData, file._fileKey)
       const blob = new Blob([plaintext.buffer as ArrayBuffer], { type: file.decryptedMimeType || 'application/octet-stream' })
@@ -438,29 +508,106 @@ export default function Drive() {
   async function handleDelete(file: FileItem) {
     if (!confirm(`Delete "${file.decryptedName || 'this file'}"?`)) return
     try {
-      await api.delete(`/files/${file.id}`)
+      if (currentFolder?.isRemote) {
+        await api.delete(`/fed-proxy/${currentFolder.remoteShareId}/files/${file.id}`)
+      } else {
+        await api.delete(`/files/${file.id}`)
+      }
       setFiles((prev) => prev.filter((f) => f.id !== file.id))
     } catch {
       setError('Delete failed')
     }
   }
 
+  // Detect federated: username@server.com where domain contains a dot
+  function isFederatedAddress(val: string): boolean {
+    const atIdx = val.lastIndexOf('@')
+    if (atIdx < 0) return false
+    const domain = val.slice(atIdx + 1)
+    return domain.includes('.')
+  }
+
   async function handleShare(e: React.FormEvent) {
     e.preventDefault()
     if (!shareModal?.collectionKey || !shareEmail.trim()) return
+    const email = shareEmail.trim()
+    const quotaBytes = shareQuotaGB.trim() ? Math.round(parseFloat(shareQuotaGB) * 1024 * 1024 * 1024) : null
+
     try {
-      const res = await api.get(`/users/by-email/${encodeURIComponent(shareEmail.trim())}`)
-      const recipientPublicKey = fromBase64(res.data.publicKey)
-      const sealedKey = await wrapKeyForRecipient(shareModal.collectionKey, recipientPublicKey)
-      await api.post(`/collections/${shareModal.id}/share`, {
-        recipientUserId: res.data.userId,
-        encryptedCollectionKey: toBase64(sealedKey),
-        canWrite: false,
-      })
-      setShareModal(null)
-      setShareEmail('')
+      if (isFederatedAddress(email)) {
+        // Federated share
+        const atIdx = email.lastIndexOf('@')
+        const username = email.slice(0, atIdx)
+        const server = email.slice(atIdx + 1)
+        const serverUrl = server.startsWith('http') ? server : `https://${server}`
+
+        // Fetch remote public key via server proxy
+        const pkRes = await api.get(`/collections/fed-pubkey?username=${encodeURIComponent(username)}&server=${encodeURIComponent(serverUrl)}`)
+        const recipientPublicKey = fromBase64(pkRes.data.publicKey)
+        const sealedKey = await wrapKeyForRecipient(shareModal.collectionKey, recipientPublicKey)
+        const res = await api.post(`/collections/${shareModal.id}/share-federated`, {
+          recipientUsername: username,
+          recipientServer: serverUrl,
+          encryptedCollectionKey: toBase64(sealedKey),
+          canUpload: shareCanUpload,
+          canDelete: shareCanDelete,
+          uploadQuotaBytes: shareCanUpload && quotaBytes ? quotaBytes : null,
+        })
+        setShareModal(null)
+        setShareEmail('')
+        setShareCanUpload(false)
+        setShareCanDelete(false)
+        setShareQuotaGB('')
+        setInviteUrlModal(res.data.inviteUrl)
+      } else {
+        // Local share
+        const res = await api.get(`/users/by-email/${encodeURIComponent(email)}`)
+        const recipientPublicKey = fromBase64(res.data.publicKey)
+        const sealedKey = await wrapKeyForRecipient(shareModal.collectionKey, recipientPublicKey)
+        await api.post(`/collections/${shareModal.id}/share`, {
+          recipientUserId: res.data.userId,
+          encryptedCollectionKey: toBase64(sealedKey),
+          canUpload: shareCanUpload,
+          canDelete: shareCanDelete,
+          uploadQuotaBytes: shareCanUpload && quotaBytes ? quotaBytes : null,
+        })
+        setShareModal(null)
+        setShareEmail('')
+        setShareCanUpload(false)
+        setShareCanDelete(false)
+        setShareQuotaGB('')
+      }
     } catch (err: any) {
       setError(err.response?.data?.error || 'Share failed')
+    }
+  }
+
+  async function handleAddRemoteShare(e: React.FormEvent) {
+    e.preventDefault()
+    if (!addRemoteShareUrl.trim()) return
+    setAddRemoteShareLoading(true)
+    try {
+      await api.post('/fed-proxy/incoming', { inviteUrl: addRemoteShareUrl.trim() })
+      setAddRemoteShareModal(false)
+      setAddRemoteShareUrl('')
+      await loadCollections()
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to add remote share')
+    } finally {
+      setAddRemoteShareLoading(false)
+    }
+  }
+
+  async function handleRevokeRemoteShare(col: Collection) {
+    if (!confirm(`Remove remote share "${col.decryptedName || 'this folder'}"?`)) return
+    try {
+      await api.delete(`/fed-proxy/incoming/${col.remoteShareId}`)
+      setCollections(prev => prev.filter(c => c.id !== col.id))
+      if (currentFolder?.id === col.id) {
+        goToShared()
+      }
+    } catch {
+      setError('Failed to remove remote share')
     }
   }
 
@@ -519,7 +666,21 @@ export default function Drive() {
     ? Math.round((auth.storageUsedBytes / auth.storageQuotaBytes) * 100)
     : 0
 
-  const sharedCollections = collections.filter(c => c.ownerUserId !== auth.userId)
+  function canUploadToCurrentFolder(): boolean {
+    if (!currentFolder) return false
+    if (!currentFolder.isShared && !currentFolder.isRemote) return true  // owner
+    if (currentFolder.canUpload === true) return true
+    return false
+  }
+
+  function canDeleteFile(): boolean {
+    if (!currentFolder) return false
+    if (!currentFolder.isShared && !currentFolder.isRemote) return true  // owner
+    if (currentFolder.canDelete === true) return true
+    return false
+  }
+
+  const sharedCollections = collections.filter(c => c.ownerUserId !== auth.userId || c.isRemote)
 
   const subFolders = viewMode === 'shared'
     ? (currentFolder
@@ -534,6 +695,9 @@ export default function Drive() {
       {/* Sidebar */}
       <aside style={styles.sidebar}>
         <h1 style={styles.logo}>Depo</h1>
+        {auth.username && (
+          <div style={{ fontSize: 12, color: '#8888aa', marginBottom: 4, marginTop: -12 }}>@{auth.username}</div>
+        )}
 
         <div style={styles.quota}>
           <div style={styles.quotaLabel}>
@@ -665,7 +829,10 @@ export default function Drive() {
                   >⋮</button>
                 )}
                 <FolderIcon color={col.color} size={48} />
-                <div style={styles.folderCardName}>{col.decryptedName}</div>
+                <div style={styles.folderCardName}>
+                  {col.isRemote && <span title="Remote share" style={{ marginRight: 2 }}>🌐</span>}
+                  {col.decryptedName}
+                </div>
               </div>
             ))}
           </div>
@@ -675,16 +842,45 @@ export default function Drive() {
           </div>
         ) : null}
 
+        {/* Upload quota bar — shown when folder has a per-share quota */}
+        {currentFolder?.uploadQuotaBytes != null && currentFolder.uploadQuotaBytes > 0 && (
+          <div style={{ marginBottom: 16, padding: '10px 14px', background: '#13131a', border: '1px solid #2a2a30', borderRadius: 8 }}>
+            <div style={{ fontSize: 11, color: '#8888aa', marginBottom: 6, display: 'flex', justifyContent: 'space-between' }}>
+              <span>Upload quota</span>
+              <span>
+                {formatBytes(files.reduce((acc, f: any) => acc + (f.decryptedSize ?? 0), 0))}
+                {' / '}
+                {formatBytes(currentFolder.uploadQuotaBytes)}
+              </span>
+            </div>
+            <div style={{ height: 4, background: '#2a2a30', borderRadius: 4, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%',
+                background: '#7c3aed',
+                borderRadius: 4,
+                width: `${Math.min(
+                  (files.reduce((acc, f: any) => acc + (f.decryptedSize ?? 0), 0) / currentFolder.uploadQuotaBytes) * 100,
+                  100
+                )}%`,
+                transition: 'width 0.3s',
+              }} />
+            </div>
+          </div>
+        )}
+
         {/* File table (only when inside a folder) */}
         {currentFolder && (
           <>
             {files.length === 0 ? (
               <div
                 style={styles.emptyDropZone}
-                onClick={() => !uploading && fileInputRef.current?.click()}
+                onClick={() => !uploading && canUploadToCurrentFolder() && fileInputRef.current?.click()}
               >
                 <div style={styles.emptyDropIcon}>⬆</div>
-                <div>Drop files here or <span style={{ color: '#7c3aed', cursor: 'pointer' }}>click to upload</span></div>
+                {canUploadToCurrentFolder()
+                  ? <div>Drop files here or <span style={{ color: '#7c3aed', cursor: 'pointer' }}>click to upload</span></div>
+                  : <div style={{ color: '#8888aa' }}>This folder is read-only</div>
+                }
               </div>
             ) : (
               <table style={styles.table}>
@@ -704,7 +900,9 @@ export default function Drive() {
                       <td style={styles.td}>{new Date(file.createdAt).toLocaleDateString()}</td>
                       <td style={styles.td}>
                         <button style={styles.fileBtn} onClick={() => handleDownload(file)}>↓</button>
-                        <button style={{ ...styles.fileBtn, color: '#ef4444' }} onClick={() => handleDelete(file)}>×</button>
+                        {canDeleteFile() && (
+                          <button style={{ ...styles.fileBtn, color: '#ef4444' }} onClick={() => handleDelete(file)}>×</button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -739,76 +937,88 @@ export default function Drive() {
           {folderContextTarget && (
             <>
               <div style={styles.contextMenuDivider} />
-              <button
-                style={styles.contextMenuItem}
-                onClick={() => {
-                  setRenameFolderTarget(folderContextTarget)
-                  setRenameValue(folderContextTarget.decryptedName ?? '')
-                  setContextMenu(null)
-                }}
-              >
-                ✏ Rename
-              </button>
-              <div style={styles.contextMenuColorRow}>
-                {FOLDER_COLORS.map(fc => (
+              {!folderContextTarget.isRemote && (
+                <>
                   <button
-                    key={fc.value}
-                    title={fc.label}
-                    style={{
-                      ...styles.colorSwatch,
-                      background: fc.hex,
-                      outline: folderContextTarget.color === fc.value ? '2px solid #fff' : 'none',
+                    style={styles.contextMenuItem}
+                    onClick={() => {
+                      setRenameFolderTarget(folderContextTarget)
+                      setRenameValue(folderContextTarget.decryptedName ?? '')
+                      setContextMenu(null)
                     }}
-                    onClick={e => { e.stopPropagation(); handleColorFolder(folderContextTarget, fc.value); setContextMenu(null) }}
-                  />
-                ))}
+                  >
+                    ✏ Rename
+                  </button>
+                  <div style={styles.contextMenuColorRow}>
+                    {FOLDER_COLORS.map(fc => (
+                      <button
+                        key={fc.value}
+                        title={fc.label}
+                        style={{
+                          ...styles.colorSwatch,
+                          background: fc.hex,
+                          outline: folderContextTarget.color === fc.value ? '2px solid #fff' : 'none',
+                        }}
+                        onClick={e => { e.stopPropagation(); handleColorFolder(folderContextTarget, fc.value); setContextMenu(null) }}
+                      />
+                    ))}
+                    <button
+                      title="Default"
+                      style={{
+                        ...styles.colorSwatch,
+                        background: DEFAULT_FOLDER_COLOR,
+                        outline: !folderContextTarget.color ? '2px solid #fff' : 'none',
+                      }}
+                      onClick={e => { e.stopPropagation(); handleColorFolder(folderContextTarget, null); setContextMenu(null) }}
+                    />
+                  </div>
+                  <div style={styles.contextMenuDivider} />
+                  <button
+                    style={styles.contextMenuItem}
+                    onClick={() => {
+                      const target = folderContextTarget
+                      setContextMenu(null)
+                      setFolderContextTarget(null)
+                      const input = document.createElement('input')
+                      input.type = 'file'
+                      input.multiple = true
+                      input.onchange = e => {
+                        const files = Array.from((e.target as HTMLInputElement).files ?? [])
+                        if (files.length) uploadFiles(files, target)
+                      }
+                      input.click()
+                    }}
+                  >
+                    ⬆ Upload here
+                  </button>
+                  <button
+                    style={styles.contextMenuItem}
+                    onClick={() => { setShareModal(folderContextTarget); setContextMenu(null) }}
+                  >
+                    👤 Share
+                  </button>
+                  <button
+                    style={styles.contextMenuItem}
+                    onClick={() => { createPublicLink(folderContextTarget); setContextMenu(null) }}
+                  >
+                    🔗 Copy link
+                  </button>
+                  <button
+                    style={{ ...styles.contextMenuItem, color: '#ef4444' }}
+                    onClick={() => { handleDeleteFolder(folderContextTarget); setContextMenu(null) }}
+                  >
+                    🗑 Delete folder
+                  </button>
+                </>
+              )}
+              {folderContextTarget.isRemote && (
                 <button
-                  title="Default"
-                  style={{
-                    ...styles.colorSwatch,
-                    background: DEFAULT_FOLDER_COLOR,
-                    outline: !folderContextTarget.color ? '2px solid #fff' : 'none',
-                  }}
-                  onClick={e => { e.stopPropagation(); handleColorFolder(folderContextTarget, null); setContextMenu(null) }}
-                />
-              </div>
-              <div style={styles.contextMenuDivider} />
-              <button
-                style={styles.contextMenuItem}
-                onClick={() => {
-                  const target = folderContextTarget
-                  setContextMenu(null)
-                  setFolderContextTarget(null)
-                  const input = document.createElement('input')
-                  input.type = 'file'
-                  input.multiple = true
-                  input.onchange = e => {
-                    const files = Array.from((e.target as HTMLInputElement).files ?? [])
-                    if (files.length) uploadFiles(files, target)
-                  }
-                  input.click()
-                }}
-              >
-                ⬆ Upload here
-              </button>
-              <button
-                style={styles.contextMenuItem}
-                onClick={() => { setShareModal(folderContextTarget); setContextMenu(null) }}
-              >
-                👤 Share
-              </button>
-              <button
-                style={styles.contextMenuItem}
-                onClick={() => { createPublicLink(folderContextTarget); setContextMenu(null) }}
-              >
-                🔗 Copy link
-              </button>
-              <button
-                style={{ ...styles.contextMenuItem, color: '#ef4444' }}
-                onClick={() => { handleDeleteFolder(folderContextTarget); setContextMenu(null) }}
-              >
-                🗑 Delete folder
-              </button>
+                  style={{ ...styles.contextMenuItem, color: '#ef4444' }}
+                  onClick={() => { handleRevokeRemoteShare(folderContextTarget); setContextMenu(null) }}
+                >
+                  🗑 Remove share
+                </button>
+              )}
             </>
           )}
         </div>
@@ -816,24 +1026,69 @@ export default function Drive() {
 
       {/* Share modal */}
       {shareModal && (
-        <div style={styles.modalOverlay} onClick={() => setShareModal(null)}>
+        <div style={styles.modalOverlay} onClick={() => { setShareModal(null); setShareCanUpload(false); setShareCanDelete(false); setShareQuotaGB('') }}>
           <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
             <h3 style={styles.modalTitle}>Share "{shareModal.decryptedName}"</h3>
+            <p style={{ margin: '0 0 16px', fontSize: 13, color: '#8888aa' }}>
+              Enter an email for a local user, or <code style={{ color: '#a78bfa' }}>username@server.com</code> for a federated user.
+            </p>
             <form onSubmit={handleShare}>
-              <label style={styles.label}>Recipient email</label>
-              <input
-                type="email"
-                value={shareEmail}
-                onChange={(e) => setShareEmail(e.target.value)}
-                style={styles.input}
-                required
-                autoFocus
-              />
-              <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+              <div style={{ marginBottom: 12 }}>
+                <label style={styles.label}>Recipient</label>
+                <input
+                  type="text"
+                  value={shareEmail}
+                  onChange={(e) => setShareEmail(e.target.value)}
+                  style={styles.input}
+                  required
+                  autoFocus
+                  placeholder="email@example.com or alice@other-server.com"
+                />
+                {isFederatedAddress(shareEmail) && (
+                  <div style={{ fontSize: 11, color: '#a78bfa', marginTop: 4 }}>🌐 Federated share — will generate an invite link</div>
+                )}
+              </div>
+              <div style={{ marginBottom: 8, fontSize: 13, color: '#8888aa', fontWeight: 500 }}>Privileges</div>
+              <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input type="checkbox" checked disabled style={{ opacity: 0.5 }} />
+                <span style={{ fontSize: 13, color: '#8888aa' }}>Download (always on)</span>
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    id="share-upload"
+                    checked={shareCanUpload}
+                    onChange={e => { setShareCanUpload(e.target.checked); if (!e.target.checked) setShareQuotaGB('') }}
+                  />
+                  <label htmlFor="share-upload" style={{ fontSize: 13, color: '#c8c8da', cursor: 'pointer' }}>Upload</label>
+                  {shareCanUpload && (
+                    <input
+                      type="number"
+                      value={shareQuotaGB}
+                      onChange={e => setShareQuotaGB(e.target.value)}
+                      placeholder="Quota GB (blank = unlimited)"
+                      style={{ ...styles.input, width: 180, padding: '4px 8px', fontSize: 12 }}
+                      min="0"
+                      step="any"
+                    />
+                  )}
+                </div>
+              </div>
+              <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  id="share-delete"
+                  checked={shareCanDelete}
+                  onChange={e => setShareCanDelete(e.target.checked)}
+                />
+                <label htmlFor="share-delete" style={{ fontSize: 13, color: '#c8c8da', cursor: 'pointer' }}>Delete own uploads</label>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
                 <button type="submit" style={{ ...styles.actionBtn, background: '#7c3aed', flex: 1 }}>
-                  Share (read-only)
+                  {isFederatedAddress(shareEmail) ? 'Share & get invite link' : 'Share'}
                 </button>
-                <button type="button" style={{ ...styles.actionBtn, flex: 1 }} onClick={() => setShareModal(null)}>
+                <button type="button" style={{ ...styles.actionBtn, flex: 1 }} onClick={() => { setShareModal(null); setShareCanUpload(false); setShareCanDelete(false); setShareQuotaGB('') }}>
                   Cancel
                 </button>
               </div>
@@ -908,11 +1163,67 @@ export default function Drive() {
         </div>
       )}
 
+      {/* Federated invite URL modal */}
+      {inviteUrlModal && (
+        <div style={styles.modalOverlay} onClick={() => setInviteUrlModal(null)}>
+          <div style={styles.modal} onClick={e => e.stopPropagation()}>
+            <h3 style={styles.modalTitle}>Invite link ready</h3>
+            <p style={{ margin: '0 0 12px', fontSize: 13, color: '#8888aa' }}>
+              Copy this link and send it to the recipient. They'll paste it in "Add remote share".
+            </p>
+            <div style={{ background: '#0f0f11', border: '1px solid #2a2a30', borderRadius: 8, padding: '10px 12px', fontSize: 12, color: '#a78bfa', wordBreak: 'break-all', fontFamily: 'monospace', marginBottom: 16 }}>
+              {inviteUrlModal}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                style={{ ...styles.actionBtn, background: '#7c3aed', flex: 1 }}
+                onClick={() => { copyText(inviteUrlModal); }}
+              >
+                Copy link
+              </button>
+              <button style={{ ...styles.actionBtn, flex: 1 }} onClick={() => setInviteUrlModal(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add remote share modal */}
+      {addRemoteShareModal && (
+        <div style={styles.modalOverlay} onClick={() => setAddRemoteShareModal(false)}>
+          <div style={styles.modal} onClick={e => e.stopPropagation()}>
+            <h3 style={styles.modalTitle}>Add remote share</h3>
+            <p style={{ margin: '0 0 12px', fontSize: 13, color: '#8888aa' }}>
+              Paste the invite link you received from someone on another Depo server.
+            </p>
+            <form onSubmit={handleAddRemoteShare}>
+              <input
+                autoFocus
+                value={addRemoteShareUrl}
+                onChange={e => setAddRemoteShareUrl(e.target.value)}
+                placeholder="https://other-server.com/invite/..."
+                style={styles.input}
+                required
+              />
+              <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                <button
+                  type="submit"
+                  disabled={addRemoteShareLoading}
+                  style={{ ...styles.actionBtn, background: '#7c3aed', flex: 1, opacity: addRemoteShareLoading ? 0.6 : 1 }}
+                >
+                  {addRemoteShareLoading ? 'Adding…' : 'Add share'}
+                </button>
+                <button type="button" style={{ ...styles.actionBtn, flex: 1 }} onClick={() => setAddRemoteShareModal(false)}>Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Floating action button */}
       <div style={styles.fab}>
         {showFabMenu && (
           <div style={styles.fabMenu}>
-            {(viewMode === 'myfiles' || currentFolder) && (
+            {(viewMode === 'myfiles' || currentFolder) && canUploadToCurrentFolder() && (
               <button style={styles.fabMenuItem}
                 onClick={() => { fileInputRef.current?.click(); setShowFabMenu(false) }}>
                 ⬆ Upload files
@@ -923,6 +1234,12 @@ export default function Drive() {
               onClick={() => { setShowNewFolderModal(true); setShowFabMenu(false) }}
             >
               📁 New folder
+            </button>
+            <button
+              style={styles.fabMenuItem}
+              onClick={() => { setAddRemoteShareModal(true); setShowFabMenu(false) }}
+            >
+              🌐 Add remote share
             </button>
           </div>
         )}
