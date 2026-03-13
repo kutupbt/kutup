@@ -46,7 +46,7 @@ func main() {
 
 	// Handlers
 	authH := &handlers.AuthHandler{DB: pool, JWTSecret: cfg.JWTSecret}
-	collectionsH := &handlers.CollectionsHandler{DB: pool}
+	collectionsH := &handlers.CollectionsHandler{DB: pool, ServerURL: cfg.ServerURL}
 	filesH := &handlers.FilesHandler{DB: pool, Storage: storage}
 	sharesH := &handlers.SharesHandler{DB: pool, Storage: storage}
 	adminH := &handlers.AdminHandler{DB: pool}

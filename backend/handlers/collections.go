@@ -14,7 +14,8 @@ import (
 )
 
 type CollectionsHandler struct {
-	DB *pgxpool.Pool
+	DB        *pgxpool.Pool
+	ServerURL string // base URL of this server, e.g. https://kutup.example.com
 }
 
 func (h *CollectionsHandler) ListCollections(c *fiber.Ctx) error {
@@ -310,8 +311,11 @@ func (h *CollectionsHandler) ShareFederated(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
 
-	// Get the server's own base URL from request host (or env var)
-	serverURL := fmt.Sprintf("%s://%s", fedScheme(c), c.Hostname())
+	// Build invite URL from configured SERVER_URL (falls back to request host)
+	serverURL := h.ServerURL
+	if serverURL == "" {
+		serverURL = fmt.Sprintf("%s://%s", fedScheme(c), c.Hostname())
+	}
 	inviteURL := fmt.Sprintf("%s/invite/%s", serverURL, accessToken)
 
 	return c.Status(201).JSON(fiber.Map{

@@ -14,6 +14,7 @@ type Config struct {
 	S3Region      string
 	AppEnv        string
 	AdminAccounts string
+	ServerURL     string // e.g. https://kutup.example.com — used for federation invite links
 }
 
 func Load() *Config {
@@ -27,6 +28,7 @@ func Load() *Config {
 		S3Region:      getEnv("S3_REGION", "us-east-1"),
 		AppEnv:        getEnv("APP_ENV", "development"),
 		AdminAccounts: getEnv("ADMIN_ACCOUNTS", ""),
+		ServerURL:     getEnv("SERVER_URL", "http://kutup.local"),
 	}
 }
 
