@@ -17,8 +17,32 @@ interface Collection {
   encryptedKey: string
   encryptedKeyNonce: string
   parentCollectionId?: string
+  color?: string
   decryptedName?: string
   collectionKey?: Uint8Array
+}
+
+const FOLDER_COLORS = [
+  { label: 'Purple', value: 'purple', hex: '#7c3aed' },
+  { label: 'Blue',   value: 'blue',   hex: '#3b82f6' },
+  { label: 'Green',  value: 'green',  hex: '#10b981' },
+  { label: 'Amber',  value: 'amber',  hex: '#f59e0b' },
+  { label: 'Red',    value: 'red',    hex: '#ef4444' },
+]
+const DEFAULT_FOLDER_COLOR = '#6366f1'
+
+function folderHex(color?: string) {
+  return FOLDER_COLORS.find(c => c.value === color)?.hex ?? DEFAULT_FOLDER_COLOR
+}
+
+function FolderIcon({ color, size = 48 }: { color?: string; size?: number }) {
+  const fill = folderHex(color)
+  return (
+    <svg width={size} height={size * 0.8} viewBox="0 0 48 38" fill="none">
+      <path d="M2 10 C2 8.9 2.9 8 4 8 L20 8 L23 4 H44 C45.1 4 46 4.9 46 6 V10 Z" fill={fill} />
+      <rect x="2" y="10" width="44" height="24" rx="3" fill={fill} opacity="0.85" />
+    </svg>
+  )
 }
 
 interface FileItem {
@@ -67,6 +91,9 @@ export default function Drive() {
   const [showFabMenu, setShowFabMenu] = useState(false)
   const [myFilesCollection, setMyFilesCollection] = useState<Collection | null>(null)
   const [viewMode, setViewMode] = useState<'myfiles' | 'shared'>('myfiles')
+  const [hoveredFolder, setHoveredFolder] = useState<string | null>(null)
+  const [renameFolderTarget, setRenameFolderTarget] = useState<Collection | null>(null)
+  const [renameValue, setRenameValue] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
 
@@ -392,6 +419,38 @@ export default function Drive() {
     }
   }
 
+  async function handleRenameFolder(col: Collection, newName: string) {
+    if (!col.collectionKey || !newName.trim()) return
+    try {
+      const nameBytes = new TextEncoder().encode(newName.trim())
+      const encName = await encrypt(nameBytes, col.collectionKey)
+      await api.put(`/collections/${col.id}`, {
+        encryptedName: toBase64(encName.ciphertext),
+        nameNonce: toBase64(encName.nonce),
+      })
+      setCollections(prev => prev.map(c =>
+        c.id === col.id ? { ...c, decryptedName: newName.trim() } : c
+      ))
+      if (myFilesCollection?.id === col.id) setMyFilesCollection(prev => prev ? { ...prev, decryptedName: newName.trim() } : prev)
+      if (currentFolder?.id === col.id) setCurrentFolder(prev => prev ? { ...prev, decryptedName: newName.trim() } : prev)
+    } catch {
+      setError('Failed to rename folder')
+    }
+  }
+
+  async function handleColorFolder(col: Collection, colorValue: string | null) {
+    try {
+      await api.patch(`/collections/${col.id}/color`, { color: colorValue })
+      setCollections(prev => prev.map(c =>
+        c.id === col.id ? { ...c, color: colorValue ?? undefined } : c
+      ))
+      if (currentFolder?.id === col.id) setCurrentFolder(prev => prev ? { ...prev, color: colorValue ?? undefined } : prev)
+      if (myFilesCollection?.id === col.id) setMyFilesCollection(prev => prev ? { ...prev, color: colorValue ?? undefined } : prev)
+    } catch {
+      setError('Failed to update folder color')
+    }
+  }
+
   async function createPublicLink(collection: Collection) {
     if (!collection.collectionKey) return
     try {
@@ -533,8 +592,11 @@ export default function Drive() {
                 style={{
                   ...styles.folderCard,
                   ...(dragOverFolder === col.id ? styles.folderCardDragOver : {}),
+                  position: 'relative',
                 }}
                 onClick={() => enterFolder(col)}
+                onMouseEnter={() => setHoveredFolder(col.id)}
+                onMouseLeave={() => setHoveredFolder(null)}
                 onContextMenu={e => {
                   e.preventDefault()
                   e.stopPropagation()
@@ -546,7 +608,18 @@ export default function Drive() {
                 onDragLeave={e => { e.stopPropagation(); setDragOverFolder(null) }}
                 onDrop={e => handleDropOnFolder(e, col)}
               >
-                <div style={styles.folderCardIcon}>📁</div>
+                {hoveredFolder === col.id && (
+                  <button
+                    style={styles.folderDots}
+                    onClick={e => {
+                      e.stopPropagation()
+                      setFolderContextTarget(col)
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      setContextMenu({ x: rect.right, y: rect.bottom })
+                    }}
+                  >⋮</button>
+                )}
+                <FolderIcon color={col.color} size={48} />
                 <div style={styles.folderCardName}>{col.decryptedName}</div>
               </div>
             ))}
@@ -624,6 +697,40 @@ export default function Drive() {
           )}
           {folderContextTarget && (
             <>
+              <div style={styles.contextMenuDivider} />
+              <button
+                style={styles.contextMenuItem}
+                onClick={() => {
+                  setRenameFolderTarget(folderContextTarget)
+                  setRenameValue(folderContextTarget.decryptedName ?? '')
+                  setContextMenu(null)
+                }}
+              >
+                ✏ Rename
+              </button>
+              <div style={styles.contextMenuColorRow}>
+                {FOLDER_COLORS.map(fc => (
+                  <button
+                    key={fc.value}
+                    title={fc.label}
+                    style={{
+                      ...styles.colorSwatch,
+                      background: fc.hex,
+                      outline: folderContextTarget.color === fc.value ? '2px solid #fff' : 'none',
+                    }}
+                    onClick={e => { e.stopPropagation(); handleColorFolder(folderContextTarget, fc.value); setContextMenu(null) }}
+                  />
+                ))}
+                <button
+                  title="Default"
+                  style={{
+                    ...styles.colorSwatch,
+                    background: DEFAULT_FOLDER_COLOR,
+                    outline: !folderContextTarget.color ? '2px solid #fff' : 'none',
+                  }}
+                  onClick={e => { e.stopPropagation(); handleColorFolder(folderContextTarget, null); setContextMenu(null) }}
+                />
+              </div>
               <div style={styles.contextMenuDivider} />
               <button
                 style={styles.contextMenuItem}
@@ -715,6 +822,34 @@ export default function Drive() {
         </div>
       )}
 
+      {/* Rename folder modal */}
+      {renameFolderTarget && (
+        <div style={styles.modalOverlay} onClick={() => setRenameFolderTarget(null)}>
+          <div style={styles.modal} onClick={e => e.stopPropagation()}>
+            <h3 style={styles.modalTitle}>Rename folder</h3>
+            <input
+              autoFocus
+              value={renameValue}
+              onChange={e => setRenameValue(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  handleRenameFolder(renameFolderTarget, renameValue)
+                  setRenameFolderTarget(null)
+                }
+              }}
+              style={styles.input}
+            />
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+              <button
+                onClick={() => { handleRenameFolder(renameFolderTarget, renameValue); setRenameFolderTarget(null) }}
+                style={{ ...styles.actionBtn, background: '#7c3aed', flex: 1 }}
+              >Rename</button>
+              <button onClick={() => setRenameFolderTarget(null)} style={{ ...styles.actionBtn, flex: 1 }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Floating action button */}
       <div style={styles.fab}>
         {showFabMenu && (
@@ -787,8 +922,10 @@ const styles: Record<string, React.CSSProperties> = {
   folderGrid: { display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 24 },
   folderCard: { width: 120, padding: '16px 12px', background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 10, cursor: 'pointer', textAlign: 'center', userSelect: 'none' },
   folderCardDragOver: { border: '1px solid #7c3aed', background: '#1e1a2e' },
-  folderCardIcon: { fontSize: 28, marginBottom: 8 },
-  folderCardName: { fontSize: 12, color: '#c8c8da', wordBreak: 'break-word' },
+  folderCardName: { fontSize: 12, color: '#c8c8da', wordBreak: 'break-word', marginTop: 8 },
+  folderDots: { position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,0.4)', border: 'none', color: '#fff', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 } as React.CSSProperties,
+  contextMenuColorRow: { display: 'flex', gap: 6, padding: '6px 14px', alignItems: 'center' },
+  colorSwatch: { width: 20, height: 20, borderRadius: '50%', border: 'none', cursor: 'pointer', padding: 0, outlineOffset: 2 },
   contextMenu: { position: 'fixed', background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 8, zIndex: 300, minWidth: 180, padding: '4px 0', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' },
   contextMenuItem: { width: '100%', padding: '8px 14px', background: 'transparent', border: 'none', color: '#c8c8da', cursor: 'pointer', textAlign: 'left', fontSize: 13, display: 'block' },
   contextMenuDivider: { height: 1, background: '#2a2a30', margin: '4px 0' },
