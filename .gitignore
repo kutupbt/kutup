@@ -1,0 +1,14 @@
+data/
+.env
+frontend/dist/
+frontend/node_modules/
+frontend/package-lock.json
+nginx/certs/
+docker-compose.override.yml
+
+# Optional OnlyOffice integration assets — populated by ./install-onlyoffice.sh.
+# AGPL-3.0-or-later (upstream), kept out of the kutup repo because they are
+# vendored binary builds, not source we maintain.
+frontend/public/onlyoffice/dist/
+frontend/public/onlyoffice/templates/
+test-results/

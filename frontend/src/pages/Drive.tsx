@@ -1,0 +1,817 @@
+import { useState, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { useAppSelector, useAppDispatch } from '../store'
+import { selectMasterKey, selectPrivateKey, selectIsLoggedIn, logout, updateStorageUsed, updateStorageQuota } from '../store/authSlice'
+import api from '../api/client'
+import {
+  encrypt, decrypt, generateKey, encryptStream, decryptStream,
+  wrapKeyForRecipient, unwrapKeyFromSender,
+  toBase64, fromBase64,
+} from '../crypto'
+
+interface Collection {
+  id: string
+  ownerUserId: string
+  encryptedName: string
+  nameNonce: string
+  encryptedKey: string
+  encryptedKeyNonce: string
+  parentCollectionId?: string
+  decryptedName?: string
+  collectionKey?: Uint8Array
+}
+
+interface FileItem {
+  id: string
+  collectionId: string
+  encryptedMetadata: string
+  metadataNonce: string
+  encryptedFileKey: string
+  fileKeyNonce: string
+  encryptedSizeBytes: number
+  createdAt: string
+  decryptedName?: string
+  decryptedMimeType?: string
+  decryptedSize?: number
+}
+
+interface FileMetadata {
+  name: string
+  mimeType: string
+  size: number
+}
+
+export default function Drive() {
+  const navigate = useNavigate()
+  const dispatch = useAppDispatch()
+  const isLoggedIn = useAppSelector(selectIsLoggedIn)
+  const masterKey = useAppSelector(selectMasterKey)
+  const privateKey = useAppSelector(selectPrivateKey)
+  const auth = useAppSelector((s) => s.auth)
+
+  const [collections, setCollections] = useState<Collection[]>([])
+  const [currentFolder, setCurrentFolder] = useState<Collection | null>(null)
+  const [navigationStack, setNavigationStack] = useState<Collection[]>([])
+  const [files, setFiles] = useState<FileItem[]>([])
+  const [newFolderName, setNewFolderName] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState('')
+  const [shareEmail, setShareEmail] = useState('')
+  const [shareModal, setShareModal] = useState<Collection | null>(null)
+  const [error, setError] = useState('')
+  const [showNewFolderModal, setShowNewFolderModal] = useState(false)
+  const [isDragging, setIsDragging] = useState(false)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
+  const [folderContextTarget, setFolderContextTarget] = useState<Collection | null>(null)
+  const [dragOverFolder, setDragOverFolder] = useState<string | null>(null)
+  const [showFabMenu, setShowFabMenu] = useState(false)
+  const [myFilesCollection, setMyFilesCollection] = useState<Collection | null>(null)
+  const [viewMode, setViewMode] = useState<'myfiles' | 'shared'>('myfiles')
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const contextMenuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!isLoggedIn) navigate('/login')
+  }, [isLoggedIn])
+
+  useEffect(() => {
+    if (masterKey) loadCollections()
+  }, [masterKey])
+
+  useEffect(() => {
+    if (currentFolder?.collectionKey) loadFiles(currentFolder)
+  }, [currentFolder])
+
+  // Auto-navigate to My Files on first load
+  useEffect(() => {
+    if (myFilesCollection && !currentFolder) {
+      setCurrentFolder(myFilesCollection)
+      setNavigationStack([])
+    }
+  }, [myFilesCollection])
+
+  // Close context menu on outside click
+  useEffect(() => {
+    function handleMouseDown(e: MouseEvent) {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu(null)
+      }
+    }
+    document.addEventListener('mousedown', handleMouseDown)
+    return () => document.removeEventListener('mousedown', handleMouseDown)
+  }, [])
+
+  async function autoCreateMyFiles(): Promise<Collection> {
+    const collectionKey = await generateKey()
+    const encKey = await encrypt(collectionKey, masterKey!)
+    const nameBytes = new TextEncoder().encode('My Files')
+    const encName = await encrypt(nameBytes, collectionKey)
+    const res = await api.post('/collections/', {
+      encryptedName: toBase64(encName.ciphertext),
+      nameNonce: toBase64(encName.nonce),
+      encryptedKey: toBase64(encKey.ciphertext),
+      encryptedKeyNonce: toBase64(encKey.nonce),
+      parentCollectionId: null,
+    })
+    return {
+      id: res.data.id,
+      ownerUserId: auth.userId!,
+      encryptedName: toBase64(encName.ciphertext),
+      nameNonce: toBase64(encName.nonce),
+      encryptedKey: toBase64(encKey.ciphertext),
+      encryptedKeyNonce: toBase64(encKey.nonce),
+      parentCollectionId: undefined,
+      decryptedName: 'My Files',
+      collectionKey,
+    }
+  }
+
+  async function loadCollections() {
+    if (!masterKey) return
+    try {
+      const meRes = await api.get('/user/me')
+      if (meRes.status === 404) { dispatch(logout()); navigate('/login'); return }
+      dispatch(updateStorageUsed(meRes.data.storageUsedBytes))
+      dispatch(updateStorageQuota(meRes.data.storageQuotaBytes))
+      const res = await api.get('/collections/')
+      const decrypted = await Promise.all(
+        res.data.map(async (col: Collection) => {
+          try {
+            let collectionKey: Uint8Array
+            if (col.ownerUserId !== auth.userId) {
+              collectionKey = await unwrapKeyFromSender(
+                fromBase64(col.encryptedKey),
+                fromBase64(auth.publicKey!),
+                privateKey!,
+              )
+            } else {
+              collectionKey = await decrypt(
+                fromBase64(col.encryptedKey),
+                fromBase64(col.encryptedKeyNonce),
+                masterKey,
+              )
+            }
+            const nameBytes = await decrypt(
+              fromBase64(col.encryptedName),
+              fromBase64(col.nameNonce),
+              collectionKey,
+            )
+            const decryptedName = new TextDecoder().decode(nameBytes)
+            return { ...col, decryptedName, collectionKey }
+          } catch {
+            return { ...col, decryptedName: '[encrypted]' }
+          }
+        }),
+      )
+      setCollections(decrypted)
+
+      const myFiles = decrypted.find(
+        (c: Collection) => !c.parentCollectionId && c.ownerUserId === auth.userId && c.decryptedName === 'My Files'
+      )
+      if (myFiles) {
+        setMyFilesCollection(myFiles)
+      } else {
+        const created = await autoCreateMyFiles()
+        setMyFilesCollection(created)
+        setCollections(prev => [...prev, created])
+      }
+    } catch (err) {
+      setError('Failed to load collections')
+    }
+  }
+
+  async function loadFiles(collection: Collection) {
+    if (!collection.collectionKey) return
+    try {
+      const res = await api.get(`/collections/${collection.id}/files`)
+      const decrypted = await Promise.all(
+        res.data.map(async (file: FileItem) => {
+          try {
+            const fileKey = await decrypt(
+              fromBase64(file.encryptedFileKey),
+              fromBase64(file.fileKeyNonce),
+              collection.collectionKey!,
+            )
+            const metaBytes = await decrypt(
+              fromBase64(file.encryptedMetadata),
+              fromBase64(file.metadataNonce),
+              fileKey,
+            )
+            const meta: FileMetadata = JSON.parse(new TextDecoder().decode(metaBytes))
+            return {
+              ...file,
+              decryptedName: meta.name,
+              decryptedMimeType: meta.mimeType,
+              decryptedSize: meta.size,
+              _fileKey: fileKey,
+            }
+          } catch {
+            return { ...file, decryptedName: '[encrypted]' }
+          }
+        }),
+      )
+      setFiles(decrypted)
+    } catch (err) {
+      setError('Failed to load files')
+    }
+  }
+
+  function enterFolder(col: Collection) {
+    setNavigationStack(prev => currentFolder ? [...prev, currentFolder] : prev)
+    setCurrentFolder(col)
+    setFiles([])
+  }
+
+  function goHome() {
+    setCurrentFolder(myFilesCollection)
+    setNavigationStack([])
+    setFiles([])
+    setViewMode('myfiles')
+  }
+
+  function goToShared() {
+    setCurrentFolder(null)
+    setNavigationStack([])
+    setFiles([])
+    setViewMode('shared')
+  }
+
+  function navigateTo(index: number) {
+    if (index === -1) {
+      goHome()
+    } else {
+      const target = navigationStack[index]
+      setNavigationStack(prev => prev.slice(0, index))
+      setCurrentFolder(target)
+      setFiles([])
+    }
+  }
+
+  async function createFolderFromModal() {
+    if (!masterKey || !newFolderName.trim()) return
+    try {
+      const collectionKey = await generateKey()
+      const encKey = await encrypt(collectionKey, masterKey)
+      const nameBytes = new TextEncoder().encode(newFolderName.trim())
+      const encName = await encrypt(nameBytes, collectionKey)
+
+      await api.post('/collections/', {
+        encryptedName: toBase64(encName.ciphertext),
+        nameNonce: toBase64(encName.nonce),
+        encryptedKey: toBase64(encKey.ciphertext),
+        encryptedKeyNonce: toBase64(encKey.nonce),
+        parentCollectionId: currentFolder?.id ?? null,
+      })
+
+      setNewFolderName('')
+      setShowNewFolderModal(false)
+      await loadCollections()
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to create folder')
+    }
+  }
+
+  async function handleDeleteFolder(col: Collection) {
+    if (!confirm(`Delete folder "${col.decryptedName || 'this folder'}"?`)) return
+    try {
+      await api.delete(`/collections/${col.id}`)
+      await loadCollections()
+      if (currentFolder?.id === col.id) {
+        navigateTo(-1)
+      }
+    } catch {
+      setError('Failed to delete folder')
+    }
+  }
+
+  async function uploadFile(file: File, collection: Collection): Promise<void> {
+    const fileKey = await generateKey()
+    const buffer = await file.arrayBuffer()
+    const plaintext = new Uint8Array(buffer)
+    const encryptedData = await encryptStream(plaintext, fileKey)
+
+    const meta: FileMetadata = { name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size }
+    const metaBytes = new TextEncoder().encode(JSON.stringify(meta))
+    const encMeta = await encrypt(metaBytes, fileKey)
+    const encFileKey = await encrypt(fileKey, collection.collectionKey!)
+
+    const form = new FormData()
+    form.append('collectionId', collection.id)
+    form.append('encryptedMetadata', toBase64(encMeta.ciphertext))
+    form.append('metadataNonce', toBase64(encMeta.nonce))
+    form.append('encryptedFileKey', toBase64(encFileKey.ciphertext))
+    form.append('fileKeyNonce', toBase64(encFileKey.nonce))
+    form.append('file', new Blob([encryptedData.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'encrypted')
+
+    await api.post('/files/upload', form)
+  }
+
+  async function uploadFiles(files: File[], targetFolder?: Collection) {
+    const folder = targetFolder ?? currentFolder
+    if (!folder?.collectionKey) return
+    setUploading(true)
+    try {
+      for (let i = 0; i < files.length; i++) {
+        setUploadProgress(files.length > 1 ? `Uploading ${i + 1} / ${files.length}…` : 'Uploading…')
+        await uploadFile(files[i], folder)
+      }
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Upload failed')
+    } finally {
+      try {
+        const meRes = await api.get('/user/me')
+        dispatch(updateStorageUsed(meRes.data.storageUsedBytes))
+      } catch {}
+      setUploading(false)
+      setUploadProgress('')
+      if (folder.id === currentFolder?.id) await loadFiles(folder)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  async function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setIsDragging(false)
+    if (!currentFolder?.collectionKey) return
+    const droppedFiles = Array.from(e.dataTransfer.files).filter(f => f.size > 0)
+    if (droppedFiles.length) await uploadFiles(droppedFiles)
+  }
+
+  async function handleDropOnFolder(e: React.DragEvent, col: Collection) {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOverFolder(null)
+    const droppedFiles = Array.from(e.dataTransfer.files).filter(f => f.size > 0)
+    if (droppedFiles.length && col.collectionKey) await uploadFiles(droppedFiles, col)
+  }
+
+  async function handleDownload(file: FileItem & { _fileKey?: Uint8Array }) {
+    if (!file._fileKey) return
+    try {
+      const res = await api.get(`/files/${file.id}/download`, { responseType: 'arraybuffer' })
+      const encryptedData = new Uint8Array(res.data)
+      const plaintext = await decryptStream(encryptedData, file._fileKey)
+      const blob = new Blob([plaintext.buffer as ArrayBuffer], { type: file.decryptedMimeType || 'application/octet-stream' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = file.decryptedName || 'file'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setError('Download failed')
+    }
+  }
+
+  async function handleDelete(file: FileItem) {
+    if (!confirm(`Delete "${file.decryptedName || 'this file'}"?`)) return
+    try {
+      await api.delete(`/files/${file.id}`)
+      setFiles((prev) => prev.filter((f) => f.id !== file.id))
+    } catch {
+      setError('Delete failed')
+    }
+  }
+
+  async function handleShare(e: React.FormEvent) {
+    e.preventDefault()
+    if (!shareModal?.collectionKey || !shareEmail.trim()) return
+    try {
+      const res = await api.get(`/users/by-email/${encodeURIComponent(shareEmail.trim())}`)
+      const recipientPublicKey = fromBase64(res.data.publicKey)
+      const sealedKey = await wrapKeyForRecipient(shareModal.collectionKey, recipientPublicKey)
+      await api.post(`/collections/${shareModal.id}/share`, {
+        recipientUserId: res.data.userId,
+        encryptedCollectionKey: toBase64(sealedKey),
+        canWrite: false,
+      })
+      setShareModal(null)
+      setShareEmail('')
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Share failed')
+    }
+  }
+
+  async function createPublicLink(collection: Collection) {
+    if (!collection.collectionKey) return
+    try {
+      const linkKey = await generateKey()
+      const encCollKey = await encrypt(collection.collectionKey, linkKey)
+      const res = await api.post('/share/', {
+        shareType: 'collection',
+        targetId: collection.id,
+        encryptedCollectionKey: toBase64(encCollKey.ciphertext),
+        encryptedCollectionKeyNonce: toBase64(encCollKey.nonce),
+      })
+      const link = `${window.location.origin}/s/${res.data.token}#key=${toBase64(linkKey)}`
+      await copyText(link)
+      alert(`Link copied to clipboard!\n\nRemember: anyone with this link can access the files.`)
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to create link')
+    }
+  }
+
+  const quotaPercent = auth.storageQuotaBytes > 0
+    ? Math.round((auth.storageUsedBytes / auth.storageQuotaBytes) * 100)
+    : 0
+
+  const sharedCollections = collections.filter(c => c.ownerUserId !== auth.userId)
+
+  const subFolders = viewMode === 'shared'
+    ? (currentFolder
+        ? collections.filter(c => c.parentCollectionId === currentFolder.id)
+        : sharedCollections)
+    : currentFolder
+      ? collections.filter(c => c.parentCollectionId === currentFolder.id)
+      : []
+
+  return (
+    <div style={styles.layout}>
+      {/* Sidebar */}
+      <aside style={styles.sidebar}>
+        <h1 style={styles.logo}>Depo</h1>
+
+        <div style={styles.quota}>
+          <div style={styles.quotaLabel}>
+            {formatBytes(auth.storageUsedBytes)} / {formatBytes(auth.storageQuotaBytes)}
+          </div>
+          <div style={styles.quotaBar}>
+            <div style={{ ...styles.quotaFill, width: `${Math.min(quotaPercent, 100)}%` }} />
+          </div>
+        </div>
+
+        <div style={styles.sidenavSection}>
+          <button
+            style={viewMode === 'myfiles' ? styles.sidenavItemActive : styles.sidenavItem}
+            onClick={goHome}
+          >
+            📁 My Files
+          </button>
+          <button
+            style={viewMode === 'shared' ? styles.sidenavItemActive : styles.sidenavItem}
+            onClick={goToShared}
+          >
+            👥 Shared with me
+          </button>
+        </div>
+
+        <div style={{ flex: 1 }} />
+
+        {auth.isAdmin && (
+          <button style={styles.adminBtn} onClick={() => navigate('/admin')}>
+            Admin
+          </button>
+        )}
+
+        <button style={styles.adminBtn} onClick={() => navigate('/settings')}>
+          Settings
+        </button>
+
+        <button style={styles.logoutBtn} onClick={() => { dispatch(logout()); navigate('/login') }}>
+          Sign out
+        </button>
+      </aside>
+
+      {/* Main content */}
+      <main
+        style={styles.main}
+        onContextMenu={e => { e.preventDefault(); setFolderContextTarget(null); setContextMenu({ x: e.clientX, y: e.clientY }) }}
+        onDragOver={e => { e.preventDefault(); if (currentFolder?.collectionKey) setIsDragging(true) }}
+        onDragEnter={e => { e.preventDefault(); if (currentFolder?.collectionKey) setIsDragging(true) }}
+        onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsDragging(false) }}
+        onDrop={handleDrop}
+      >
+        {isDragging && currentFolder && (
+          <div style={styles.dropOverlay}>
+            <div style={styles.dropOverlayText}>
+              Drop to upload to "{currentFolder.decryptedName}"
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div style={styles.errorBanner}>
+            {error}
+            <button onClick={() => setError('')} style={styles.errorClose}>×</button>
+          </div>
+        )}
+
+        {/* Hidden file input (multi) */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          style={{ display: 'none' }}
+          onChange={e => uploadFiles(Array.from(e.target.files ?? []))}
+        />
+
+        {/* Breadcrumb */}
+        <div style={styles.breadcrumb}>
+          <button style={styles.breadcrumbItem} onClick={viewMode === 'shared' ? goToShared : goHome}>
+            {viewMode === 'shared' ? 'Shared with me' : 'My Files'}
+          </button>
+          {navigationStack.map((col, i) => (
+            <span key={col.id} style={{ display: 'contents' }}>
+              <span style={styles.breadcrumbSep}>/</span>
+              <button style={styles.breadcrumbItem} onClick={() => navigateTo(i)}>{col.decryptedName}</button>
+            </span>
+          ))}
+          {currentFolder && currentFolder.id !== myFilesCollection?.id && (
+            <>
+              <span style={styles.breadcrumbSep}>/</span>
+              <span style={styles.breadcrumbCurrent}>{currentFolder.decryptedName}</span>
+            </>
+          )}
+        </div>
+
+        {/* Subfolder grid */}
+        {subFolders.length > 0 ? (
+          <div style={styles.folderGrid}>
+            {subFolders.map(col => (
+              <div
+                key={col.id}
+                style={{
+                  ...styles.folderCard,
+                  ...(dragOverFolder === col.id ? styles.folderCardDragOver : {}),
+                }}
+                onClick={() => enterFolder(col)}
+                onContextMenu={e => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setFolderContextTarget(col)
+                  setContextMenu({ x: e.clientX, y: e.clientY })
+                }}
+                onDragOver={e => { e.preventDefault(); e.stopPropagation(); setDragOverFolder(col.id) }}
+                onDragEnter={e => { e.preventDefault(); e.stopPropagation(); setDragOverFolder(col.id) }}
+                onDragLeave={e => { e.stopPropagation(); setDragOverFolder(null) }}
+                onDrop={e => handleDropOnFolder(e, col)}
+              >
+                <div style={styles.folderCardIcon}>📁</div>
+                <div style={styles.folderCardName}>{col.decryptedName}</div>
+              </div>
+            ))}
+          </div>
+        ) : viewMode === 'shared' && !currentFolder ? (
+          <div style={styles.empty}>
+            <p>No folders have been shared with you yet.</p>
+          </div>
+        ) : null}
+
+        {/* File table (only when inside a folder) */}
+        {currentFolder && (
+          <>
+            {files.length === 0 ? (
+              <div
+                style={styles.emptyDropZone}
+                onClick={() => !uploading && fileInputRef.current?.click()}
+              >
+                <div style={styles.emptyDropIcon}>⬆</div>
+                <div>Drop files here or <span style={{ color: '#7c3aed', cursor: 'pointer' }}>click to upload</span></div>
+              </div>
+            ) : (
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Name</th>
+                    <th style={styles.th}>Size</th>
+                    <th style={styles.th}>Uploaded</th>
+                    <th style={styles.th}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {files.map((file: any) => (
+                    <tr key={file.id} style={styles.tr}>
+                      <td style={styles.td}>{file.decryptedName || '[encrypted]'}</td>
+                      <td style={styles.td}>{file.decryptedSize ? formatBytes(file.decryptedSize) : '—'}</td>
+                      <td style={styles.td}>{new Date(file.createdAt).toLocaleDateString()}</td>
+                      <td style={styles.td}>
+                        <button style={styles.fileBtn} onClick={() => handleDownload(file)}>↓</button>
+                        <button style={{ ...styles.fileBtn, color: '#ef4444' }} onClick={() => handleDelete(file)}>×</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </>
+        )}
+
+        {/* Upload status */}
+        {uploading && (
+          <div style={{ marginTop: 12, fontSize: 13, color: '#8888aa' }}>{uploadProgress}</div>
+        )}
+      </main>
+
+      {/* Context menu */}
+      {contextMenu && (
+        <div
+          ref={contextMenuRef}
+          style={{ ...styles.contextMenu, left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            style={styles.contextMenuItem}
+            onClick={() => { setShowNewFolderModal(true); setContextMenu(null) }}
+          >
+            📁 New folder
+          </button>
+          {currentFolder && (
+            <button
+              style={styles.contextMenuItem}
+              onClick={() => { fileInputRef.current?.click(); setContextMenu(null) }}
+            >
+              ⬆ Upload files
+            </button>
+          )}
+          {folderContextTarget && (
+            <>
+              <div style={styles.contextMenuDivider} />
+              <button
+                style={styles.contextMenuItem}
+                onClick={() => {
+                  const target = folderContextTarget
+                  setContextMenu(null)
+                  setFolderContextTarget(null)
+                  const input = document.createElement('input')
+                  input.type = 'file'
+                  input.multiple = true
+                  input.onchange = e => {
+                    const files = Array.from((e.target as HTMLInputElement).files ?? [])
+                    if (files.length) uploadFiles(files, target)
+                  }
+                  input.click()
+                }}
+              >
+                ⬆ Upload here
+              </button>
+              <button
+                style={styles.contextMenuItem}
+                onClick={() => { setShareModal(folderContextTarget); setContextMenu(null) }}
+              >
+                👤 Share
+              </button>
+              <button
+                style={styles.contextMenuItem}
+                onClick={() => { createPublicLink(folderContextTarget); setContextMenu(null) }}
+              >
+                🔗 Copy link
+              </button>
+              <button
+                style={{ ...styles.contextMenuItem, color: '#ef4444' }}
+                onClick={() => { handleDeleteFolder(folderContextTarget); setContextMenu(null) }}
+              >
+                🗑 Delete folder
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Share modal */}
+      {shareModal && (
+        <div style={styles.modalOverlay} onClick={() => setShareModal(null)}>
+          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <h3 style={styles.modalTitle}>Share "{shareModal.decryptedName}"</h3>
+            <form onSubmit={handleShare}>
+              <label style={styles.label}>Recipient email</label>
+              <input
+                type="email"
+                value={shareEmail}
+                onChange={(e) => setShareEmail(e.target.value)}
+                style={styles.input}
+                required
+                autoFocus
+              />
+              <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                <button type="submit" style={{ ...styles.actionBtn, background: '#7c3aed', flex: 1 }}>
+                  Share (read-only)
+                </button>
+                <button type="button" style={{ ...styles.actionBtn, flex: 1 }} onClick={() => setShareModal(null)}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* New folder modal */}
+      {showNewFolderModal && (
+        <div style={styles.modalOverlay} onClick={() => setShowNewFolderModal(false)}>
+          <div style={styles.modal} onClick={e => e.stopPropagation()}>
+            <h3 style={styles.modalTitle}>New folder</h3>
+            <input
+              autoFocus
+              value={newFolderName}
+              onChange={e => setNewFolderName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') createFolderFromModal() }}
+              placeholder="Folder name"
+              style={styles.input}
+            />
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+              <button onClick={createFolderFromModal} style={{ ...styles.actionBtn, background: '#7c3aed', flex: 1 }}>Create</button>
+              <button onClick={() => { setShowNewFolderModal(false); setNewFolderName('') }} style={{ ...styles.actionBtn, flex: 1 }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating action button */}
+      <div style={styles.fab}>
+        {showFabMenu && (
+          <div style={styles.fabMenu}>
+            {(viewMode === 'myfiles' || currentFolder) && (
+              <button style={styles.fabMenuItem}
+                onClick={() => { fileInputRef.current?.click(); setShowFabMenu(false) }}>
+                ⬆ Upload files
+              </button>
+            )}
+            <button
+              style={styles.fabMenuItem}
+              onClick={() => { setShowNewFolderModal(true); setShowFabMenu(false) }}
+            >
+              📁 New folder
+            </button>
+          </div>
+        )}
+        <button
+          style={styles.fabBtn}
+          onClick={() => setShowFabMenu(v => !v)}
+          title="New"
+        >
+          {showFabMenu ? '×' : '+'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function copyText(text: string): Promise<void> {
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text)
+  }
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.style.cssText = 'position:fixed;opacity:0'
+  document.body.appendChild(ta)
+  ta.focus(); ta.select()
+  document.execCommand('copy')
+  document.body.removeChild(ta)
+  return Promise.resolve()
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  layout: { display: 'flex', minHeight: '100vh' },
+  sidebar: { width: 240, background: '#13131a', borderRight: '1px solid #2a2a30', display: 'flex', flexDirection: 'column', padding: 16, gap: 8 },
+  logo: { fontSize: 24, fontWeight: 700, color: '#7c3aed', margin: '0 0 16px', letterSpacing: -1 },
+  quota: { marginBottom: 8 },
+  quotaLabel: { fontSize: 11, color: '#8888aa', marginBottom: 4 },
+  quotaBar: { height: 4, background: '#2a2a30', borderRadius: 4, overflow: 'hidden' },
+  quotaFill: { height: '100%', background: '#7c3aed', borderRadius: 4, transition: 'width 0.3s' },
+  sidenavSection: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 8, marginBottom: 8 },
+  sidenavItem: { padding: '8px 10px', background: 'transparent', border: 'none', color: '#8888aa', cursor: 'pointer', textAlign: 'left', fontSize: 13, borderRadius: 6, width: '100%' },
+  sidenavItemActive: { padding: '8px 10px', background: '#1e1a2e', border: 'none', color: '#c8c8da', cursor: 'pointer', textAlign: 'left', fontSize: 13, borderRadius: 6, width: '100%' },
+  adminBtn: { padding: '8px', background: '#1e1e2a', border: '1px solid #2a2a30', color: '#8888aa', borderRadius: 6, cursor: 'pointer', fontSize: 12 },
+  logoutBtn: { padding: '8px', background: 'transparent', border: '1px solid #2a2a30', color: '#8888aa', borderRadius: 6, cursor: 'pointer', fontSize: 12 },
+  main: { flex: 1, padding: 32, overflow: 'auto', position: 'relative' },
+  breadcrumb: { display: 'flex', alignItems: 'center', gap: 4, marginBottom: 16, fontSize: 13, color: '#8888aa' },
+  breadcrumbItem: { background: 'transparent', border: 'none', color: '#8888aa', cursor: 'pointer', padding: '2px 4px', borderRadius: 4 },
+  breadcrumbCurrent: { color: '#e8e8ea', fontWeight: 500, padding: '2px 4px' },
+  breadcrumbSep: { color: '#2a2a30' },
+  folderGrid: { display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 24 },
+  folderCard: { width: 120, padding: '16px 12px', background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 10, cursor: 'pointer', textAlign: 'center', userSelect: 'none' },
+  folderCardDragOver: { border: '1px solid #7c3aed', background: '#1e1a2e' },
+  folderCardIcon: { fontSize: 28, marginBottom: 8 },
+  folderCardName: { fontSize: 12, color: '#c8c8da', wordBreak: 'break-word' },
+  contextMenu: { position: 'fixed', background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 8, zIndex: 300, minWidth: 180, padding: '4px 0', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' },
+  contextMenuItem: { width: '100%', padding: '8px 14px', background: 'transparent', border: 'none', color: '#c8c8da', cursor: 'pointer', textAlign: 'left', fontSize: 13, display: 'block' },
+  contextMenuDivider: { height: 1, background: '#2a2a30', margin: '4px 0' },
+  actionBtn: { padding: '8px 14px', background: '#1e1e2a', border: '1px solid #2a2a30', color: '#e8e8ea', borderRadius: 6, cursor: 'pointer', fontSize: 13 },
+  table: { width: '100%', borderCollapse: 'collapse' },
+  th: { padding: '8px 12px', textAlign: 'left', fontSize: 12, color: '#8888aa', borderBottom: '1px solid #2a2a30', fontWeight: 500 },
+  tr: { borderBottom: '1px solid #1e1e2a' },
+  td: { padding: '10px 12px', fontSize: 13, color: '#c8c8da' },
+  fileBtn: { padding: '4px 10px', background: 'transparent', border: '1px solid #2a2a30', color: '#8888aa', borderRadius: 4, cursor: 'pointer', fontSize: 14, marginRight: 4 },
+  empty: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', color: '#8888aa' },
+  emptyDropZone: { border: '2px dashed #2a2a30', borderRadius: 12, padding: '60px 20px', textAlign: 'center', color: '#8888aa', cursor: 'pointer', fontSize: 14, marginTop: 24 },
+  emptyDropIcon: { fontSize: 32, marginBottom: 12, color: '#7c3aed' },
+  dropOverlay: { position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(124,58,237,0.15)', border: '2px dashed #7c3aed', pointerEvents: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  dropOverlayText: { fontSize: 24, fontWeight: 600, color: '#fff' },
+  errorBanner: { background: '#2d1a1a', border: '1px solid #ef444440', borderRadius: 8, padding: '12px 16px', marginBottom: 16, color: '#ef4444', fontSize: 13, display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  errorClose: { background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 18, padding: 0 },
+  modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 },
+  modal: { background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 12, padding: 32, width: '100%', maxWidth: 400 },
+  modalTitle: { margin: '0 0 20px', fontSize: 18, fontWeight: 600 },
+  label: { display: 'block', marginBottom: 6, fontSize: 13, color: '#8888aa', fontWeight: 500 },
+  input: { width: '100%', padding: '10px 12px', background: '#0f0f11', border: '1px solid #2a2a30', borderRadius: 8, color: '#e8e8ea', fontSize: 14, outline: 'none', boxSizing: 'border-box' },
+  fab: { position: 'fixed', bottom: 32, right: 32, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, zIndex: 200 },
+  fabBtn: { width: 56, height: 56, borderRadius: '50%', background: '#7c3aed', border: 'none', color: '#fff', fontSize: 28, cursor: 'pointer', boxShadow: '0 4px 16px rgba(124,58,237,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 },
+  fabMenu: { display: 'flex', flexDirection: 'column', gap: 4, background: '#1a1a1f', border: '1px solid #2a2a30', borderRadius: 8, padding: '4px 0', boxShadow: '0 8px 24px rgba(0,0,0,0.4)', minWidth: 160 },
+  fabMenuItem: { padding: '10px 16px', background: 'transparent', border: 'none', color: '#c8c8da', cursor: 'pointer', textAlign: 'left', fontSize: 13, whiteSpace: 'nowrap' },
+}
