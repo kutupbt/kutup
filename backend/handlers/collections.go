@@ -2,6 +2,11 @@ package handlers
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
 
 	"github.com/depo/backend/middleware"
 	"github.com/gofiber/fiber/v2"
@@ -35,6 +40,11 @@ func (h *CollectionsHandler) ListCollections(c *fiber.Ctx) error {
 		EncryptedKeyNonce  string  `json:"encryptedKeyNonce"`
 		ParentCollectionID *string `json:"parentCollectionId,omitempty"`
 		Color              *string `json:"color,omitempty"`
+		CanUpload          *bool   `json:"canUpload,omitempty"`
+		CanDelete          *bool   `json:"canDelete,omitempty"`
+		UploadQuotaBytes   *int64  `json:"uploadQuotaBytes,omitempty"`
+		UploadUsedBytes    *int64  `json:"uploadUsedBytes,omitempty"`
+		IsShared           bool    `json:"isShared,omitempty"`
 	}
 
 	var collections []CollectionRow
@@ -53,7 +63,7 @@ func (h *CollectionsHandler) ListCollections(c *fiber.Ctx) error {
 	sharedRows, err := h.DB.Query(context.Background(), `
 		SELECT c.id, c.owner_user_id, c.encrypted_name, c.name_nonce,
 		       c.encrypted_key, c.encrypted_key_nonce, c.parent_collection_id, c.color,
-		       cs.encrypted_collection_key, cs.can_write
+		       cs.encrypted_collection_key, cs.can_upload, cs.can_delete, cs.upload_quota_bytes
 		FROM collections c
 		JOIN collection_shares cs ON cs.collection_id = c.id
 		WHERE cs.recipient_user_id = $1
@@ -64,16 +74,32 @@ func (h *CollectionsHandler) ListCollections(c *fiber.Ctx) error {
 		for sharedRows.Next() {
 			var col CollectionRow
 			var sharedKey string
-			var canWrite bool
+			var canUpload, canDelete bool
+			var uploadQuotaBytes *int64
 			if err := sharedRows.Scan(
 				&col.ID, &col.OwnerUserID, &col.EncryptedName, &col.NameNonce,
 				&col.EncryptedKey, &col.EncryptedKeyNonce, &col.ParentCollectionID, &col.Color,
-				&sharedKey, &canWrite,
+				&sharedKey, &canUpload, &canDelete, &uploadQuotaBytes,
 			); err != nil {
 				continue
 			}
 			// For shared collections, override the key with the recipient-specific one
 			col.EncryptedKey = sharedKey
+			col.CanUpload = &canUpload
+			col.CanDelete = &canDelete
+			col.UploadQuotaBytes = uploadQuotaBytes
+			col.IsShared = true
+
+			// Compute upload_used_bytes for this user in this shared collection
+			if canUpload && uploadQuotaBytes != nil {
+				var usedBytes int64
+				h.DB.QueryRow(context.Background(),
+					`SELECT COALESCE(SUM(encrypted_size_bytes), 0) FROM files WHERE collection_id = $1 AND uploader_user_id = $2`,
+					col.ID, userID,
+				).Scan(&usedBytes)
+				col.UploadUsedBytes = &usedBytes
+			}
+
 			collections = append(collections, col)
 		}
 	}
@@ -209,7 +235,9 @@ func (h *CollectionsHandler) ShareCollection(c *fiber.Ctx) error {
 	var req struct {
 		RecipientUserID        string `json:"recipientUserId"`
 		EncryptedCollectionKey string `json:"encryptedCollectionKey"` // crypto_box_sealed with recipient pubkey
-		CanWrite               bool   `json:"canWrite"`
+		CanUpload              bool   `json:"canUpload"`
+		CanDelete              bool   `json:"canDelete"`
+		UploadQuotaBytes       *int64 `json:"uploadQuotaBytes"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
@@ -226,14 +254,100 @@ func (h *CollectionsHandler) ShareCollection(c *fiber.Ctx) error {
 
 	_, err = h.DB.Exec(context.Background(), `
 		INSERT INTO collection_shares (collection_id, sharer_user_id, recipient_user_id,
-		                               encrypted_collection_key, can_write)
-		VALUES ($1,$2,$3,$4,$5)
+		                               encrypted_collection_key, can_upload, can_delete, upload_quota_bytes)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
 		ON CONFLICT (collection_id, recipient_user_id)
-		DO UPDATE SET encrypted_collection_key = $4, can_write = $5
-	`, collID, sharerID, req.RecipientUserID, req.EncryptedCollectionKey, req.CanWrite)
+		DO UPDATE SET encrypted_collection_key = $4, can_upload = $5, can_delete = $6, upload_quota_bytes = $7
+	`, collID, sharerID, req.RecipientUserID, req.EncryptedCollectionKey, req.CanUpload, req.CanDelete, req.UploadQuotaBytes)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
 
 	return c.Status(201).JSON(fiber.Map{"message": "shared"})
+}
+
+// POST /api/collections/{id}/share-federated
+func (h *CollectionsHandler) ShareFederated(c *fiber.Ctx) error {
+	sharerID := middleware.UserID(c)
+	collID := c.Params("id")
+
+	var req struct {
+		RecipientUsername      string `json:"recipientUsername"`
+		RecipientServer        string `json:"recipientServer"`
+		EncryptedCollectionKey string `json:"encryptedCollectionKey"`
+		CanUpload              bool   `json:"canUpload"`
+		CanDelete              bool   `json:"canDelete"`
+		UploadQuotaBytes       *int64 `json:"uploadQuotaBytes"`
+	}
+	if err := c.BodyParser(&req); err != nil || req.RecipientUsername == "" || req.RecipientServer == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
+	}
+
+	// Verify sharer owns collection
+	var ownerID string
+	if err := h.DB.QueryRow(context.Background(),
+		`SELECT owner_user_id FROM collections WHERE id = $1`, collID,
+	).Scan(&ownerID); err != nil || ownerID != sharerID {
+		return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
+	}
+
+	// Generate 32-byte random access token
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+	accessToken := hex.EncodeToString(tokenBytes)
+
+	_, err := h.DB.Exec(context.Background(), `
+		INSERT INTO federated_outgoing_shares (collection_id, sharer_user_id,
+			recipient_username, recipient_server, encrypted_collection_key,
+			access_token, can_upload, can_delete, upload_quota_bytes)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+	`, collID, sharerID, req.RecipientUsername, req.RecipientServer,
+		req.EncryptedCollectionKey, accessToken,
+		req.CanUpload, req.CanDelete, req.UploadQuotaBytes)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	// Get the server's own base URL from request host (or env var)
+	serverURL := fmt.Sprintf("%s://%s", fedScheme(c), c.Hostname())
+	inviteURL := fmt.Sprintf("%s/invite/%s", serverURL, accessToken)
+
+	return c.Status(201).JSON(fiber.Map{
+		"inviteToken": accessToken,
+		"inviteUrl":   inviteURL,
+	})
+}
+
+func fedScheme(c *fiber.Ctx) string {
+	if c.Protocol() == "https" {
+		return "https"
+	}
+	return "http"
+}
+
+// GET /api/collections/fed-pubkey?username=alice&server=https://server-a.com
+func (h *CollectionsHandler) FetchRemotePubkey(c *fiber.Ctx) error {
+	username := c.Query("username")
+	server := c.Query("server")
+	if username == "" || server == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "username and server required"})
+	}
+
+	url := fmt.Sprintf("%s/api/fed/users?username=%s", server, username)
+	resp, err := http.Get(url) //nolint:gosec
+	if err != nil || resp.StatusCode != 200 {
+		return c.Status(502).JSON(fiber.Map{"error": "failed to fetch pubkey from remote server"})
+	}
+	defer resp.Body.Close()
+
+	var data struct {
+		PublicKey string `json:"publicKey"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil || data.PublicKey == "" {
+		return c.Status(502).JSON(fiber.Map{"error": "invalid response from remote server"})
+	}
+
+	return c.JSON(fiber.Map{"publicKey": data.PublicKey})
 }

@@ -50,6 +50,8 @@ func main() {
 	filesH := &handlers.FilesHandler{DB: pool, Storage: storage}
 	sharesH := &handlers.SharesHandler{DB: pool, Storage: storage}
 	adminH := &handlers.AdminHandler{DB: pool}
+	fedH := &handlers.FederationHandler{DB: pool, Storage: storage}
+	fedProxyH := &handlers.FedProxyHandler{DB: pool}
 
 	// Middleware
 	authMW := middleware.NewAuth(cfg.JWTSecret)
@@ -96,12 +98,33 @@ func main() {
 	collections := api.Group("/collections", authMW.Required())
 	collections.Get("/", collectionsH.ListCollections)
 	collections.Post("/", collectionsH.CreateCollection)
+	collections.Get("/fed-pubkey", collectionsH.FetchRemotePubkey)
 	collections.Get("/:id", collectionsH.GetCollection)
 	collections.Put("/:id", collectionsH.UpdateCollection)
 	collections.Delete("/:id", collectionsH.DeleteCollection)
 	collections.Patch("/:id/color", collectionsH.UpdateCollectionColor)
 	collections.Post("/:id/share", collectionsH.ShareCollection)
+	collections.Post("/:id/share-federated", collectionsH.ShareFederated)
 	collections.Get("/:id/files", filesH.ListFiles)
+
+	// Federation public endpoints (no auth — token is the auth mechanism)
+	fed := api.Group("/fed")
+	fed.Get("/users", middleware.FedUsersRateLimit(), fedH.GetUserByUsername)
+	fed.Get("/invites/:token", fedH.GetInvite)
+	fed.Get("/shares/:token/files", fedH.ListShareFiles)
+	fed.Get("/shares/:token/files/:fileId/download", fedH.DownloadShareFile)
+	fed.Post("/shares/:token/files", fedH.UploadShareFile)
+	fed.Delete("/shares/:token/files/:fileId", fedH.DeleteShareFile)
+
+	// Federation proxy endpoints (authenticated)
+	fedProxy := api.Group("/fed-proxy", authMW.Required())
+	fedProxy.Post("/incoming", fedProxyH.AddIncomingShare)
+	fedProxy.Get("/incoming", fedProxyH.ListIncomingShares)
+	fedProxy.Delete("/incoming/:shareId", fedProxyH.RemoveIncomingShare)
+	fedProxy.Get("/:shareId/files", fedProxyH.ProxyListFiles)
+	fedProxy.Get("/:shareId/files/:fileId/download", fedProxyH.ProxyDownload)
+	fedProxy.Post("/:shareId/upload", fedProxyH.ProxyUpload)
+	fedProxy.Delete("/:shareId/files/:fileId", fedProxyH.ProxyDelete)
 
 	// Files routes (authenticated)
 	files := api.Group("/files", authMW.Required())
@@ -132,19 +155,24 @@ func main() {
 	}
 }
 
+// bootstrapAdmins seeds admin accounts from ADMIN_ACCOUNTS env var.
+// Format: comma-separated email:username:password triples.
+// Accounts are created on first server start; admins must complete setup on first login.
 func bootstrapAdmins(pool *pgxpool.Pool, accountsEnv string) {
 	if accountsEnv == "" {
 		return
 	}
 	ctx := context.Background()
-	for _, pair := range strings.Split(accountsEnv, ",") {
-		parts := strings.SplitN(strings.TrimSpace(pair), ":", 2)
-		if len(parts) != 2 {
+	for _, triple := range strings.Split(accountsEnv, ",") {
+		parts := strings.SplitN(strings.TrimSpace(triple), ":", 3)
+		if len(parts) != 3 {
+			log.Printf("bootstrapAdmins: skipping malformed entry (expected email:username:password)")
 			continue
 		}
 		email := strings.TrimSpace(parts[0])
-		pass := strings.TrimSpace(parts[1])
-		if email == "" || pass == "" {
+		username := strings.TrimSpace(parts[1])
+		pass := strings.TrimSpace(parts[2])
+		if email == "" || username == "" || pass == "" {
 			continue
 		}
 
@@ -162,18 +190,18 @@ func bootstrapAdmins(pool *pgxpool.Pool, accountsEnv string) {
 
 		_, err = pool.Exec(ctx, `
 			INSERT INTO users (
-				email, login_key_hash,
+				email, username, login_key_hash,
 				encrypted_master_key, master_key_nonce,
 				encrypted_recovery_key, recovery_key_nonce,
 				encrypted_private_key, private_key_nonce,
 				public_key, kdf_salt, login_key_salt,
 				is_admin, is_first_login
-			) VALUES ($1,$2,'','','','','','','','','',true,true)
-		`, email, string(hash))
+			) VALUES ($1,$2,$3,'','','','','','','','','',true,true)
+		`, email, username, string(hash))
 		if err != nil {
 			log.Printf("bootstrapAdmins: insert error for %s: %v", email, err)
 		} else {
-			log.Printf("bootstrapAdmins: created admin account %s", email)
+			log.Printf("bootstrapAdmins: created admin account %s (@%s)", email, username)
 		}
 	}
 }

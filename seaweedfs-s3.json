@@ -1,0 +1,20 @@
+{
+  "identities": [
+    {
+      "name": "depo",
+      "credentials": [
+        {
+          "accessKey": "depo",
+          "secretKey": "depo_dev_s3_secret"
+        }
+      ],
+      "actions": [
+        "Admin",
+        "Read",
+        "Write",
+        "List",
+        "Tagging"
+      ]
+    }
+  ]
+}
