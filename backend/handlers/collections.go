@@ -204,7 +204,9 @@ func (h *CollectionsHandler) UpdateCollectionColor(c *fiber.Ctx) error {
 	var req struct {
 		Color *string `json:"color"`
 	}
-	c.BodyParser(&req)
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
+	}
 
 	result, err := h.DB.Exec(context.Background(), `
 		UPDATE collections SET color = $1, updated_at = NOW()

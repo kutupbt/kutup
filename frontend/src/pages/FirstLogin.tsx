@@ -64,6 +64,7 @@ export default function FirstLogin() {
     worker.onerror = (e) => {
       setError(e.message)
       setStep('form')
+      worker.terminate()
     }
     worker.postMessage({ type: 'register', password })
   }
