@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/depo/backend/middleware"
+	"github.com/depo/backend/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -16,6 +17,7 @@ import (
 type CollectionsHandler struct {
 	DB        *pgxpool.Pool
 	ServerURL string // base URL of this server, e.g. https://kutup.example.com
+	AppEnv    string
 }
 
 func (h *CollectionsHandler) ListCollections(c *fiber.Ctx) error {
@@ -339,8 +341,14 @@ func (h *CollectionsHandler) FetchRemotePubkey(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "username and server required"})
 	}
 
+	// S1-5: Validate the server URL to prevent SSRF via ?server= parameter
+	allowHTTP := h.AppEnv != "production"
+	if err := utils.ValidateFederationURL(server, allowHTTP); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid server URL: " + err.Error()})
+	}
+
 	url := fmt.Sprintf("%s/api/fed/users?username=%s", server, username)
-	resp, err := http.Get(url) //nolint:gosec
+	resp, err := http.Get(url) //nolint:gosec — URL validated above
 	if err != nil || resp.StatusCode != 200 {
 		return c.Status(502).JSON(fiber.Map{"error": "failed to fetch pubkey from remote server"})
 	}

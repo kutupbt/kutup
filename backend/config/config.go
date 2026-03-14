@@ -18,7 +18,7 @@ type Config struct {
 }
 
 func Load() *Config {
-	return &Config{
+	cfg := &Config{
 		DatabaseURL:   mustEnv("DATABASE_URL"),
 		JWTSecret:     mustEnv("JWT_SECRET"),
 		S3Endpoint:    mustEnv("S3_ENDPOINT"),
@@ -30,6 +30,10 @@ func Load() *Config {
 		AdminAccounts: getEnv("ADMIN_ACCOUNTS", ""),
 		ServerURL:     getEnv("SERVER_URL", "http://kutup.local"),
 	}
+	if len(cfg.JWTSecret) < 32 {
+		panic("JWT_SECRET must be at least 32 characters long")
+	}
+	return cfg
 }
 
 func mustEnv(key string) string {

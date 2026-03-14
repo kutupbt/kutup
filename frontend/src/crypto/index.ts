@@ -34,6 +34,7 @@ export interface RegistrationKeys {
   kdfSalt: string               // base64
   loginKeySalt: string          // base64
   loginKey: string              // base64 — sent to server for bcrypt storage
+  recoveryKey: string           // base64 — sent to server as recovery proof at registration (S1-2 fix)
   // For display to user (NEVER sent to server)
   mnemonic: string              // 24-word BIP39
   // In-memory only — held in Redux, never persisted
@@ -86,6 +87,7 @@ export async function generateRegistrationKeys(
     kdfSalt: toBase64(kdfSalt),
     loginKeySalt: toBase64(loginKeySalt),
     loginKey: toBase64(loginKey),
+    recoveryKey: toBase64(recoveryKeyEntropy),
     mnemonic,
     masterKey,
     privateKey: keypair.privateKey,
