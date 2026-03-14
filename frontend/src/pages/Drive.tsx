@@ -47,9 +47,18 @@ function folderHex(color?: string) {
 function FolderIcon({ color, size = 48 }: { color?: string; size?: number }) {
   const fill = folderHex(color)
   return (
-    <svg width={size} height={size * 0.8} viewBox="0 0 48 38" fill="none">
-      <path d="M2 10 C2 8.9 2.9 8 4 8 L20 8 L23 4 H44 C45.1 4 46 4.9 46 6 V10 Z" fill={fill} />
-      <rect x="2" y="10" width="44" height="24" rx="3" fill={fill} opacity="0.85" />
+    <svg width={size} height={Math.round(size * 0.834)} viewBox="0 0 48 40" fill="none">
+      {/* Single unified path — tab and body in one stroke, no seam */}
+      <path
+        d="M5,6 L20,6 L24,11 L44,11 Q46,11 46,13 L46,36 Q46,38 44,38 L4,38 Q2,38 2,36 L2,9 Q2,6 5,6 Z"
+        fill={fill}
+      />
+      {/* Subtle white highlight on tab only, gives visual depth */}
+      <path
+        d="M5,6 L20,6 L24,11 L2,11 L2,9 Q2,6 5,6 Z"
+        fill="white"
+        fillOpacity="0.18"
+      />
     </svg>
   )
 }
@@ -316,7 +325,11 @@ export default function Drive() {
   }
 
   function enterFolder(col: Collection) {
-    setNavigationStack(prev => currentFolder ? [...prev, currentFolder] : prev)
+    setNavigationStack(prev =>
+      currentFolder && currentFolder.id !== myFilesCollection?.id
+        ? [...prev, currentFolder]
+        : prev
+    )
     setCurrentFolder(col)
     setFiles([])
   }
