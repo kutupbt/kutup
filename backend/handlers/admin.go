@@ -152,20 +152,27 @@ func (h *AdminHandler) UpdateUser(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
 	}
 
+	ctx := context.Background()
 	if req.StorageQuotaBytes != nil {
-		h.DB.Exec(context.Background(),
+		if _, err := h.DB.Exec(ctx,
 			`UPDATE users SET storage_quota_bytes = $1 WHERE id = $2`,
-			*req.StorageQuotaBytes, targetID)
+			*req.StorageQuotaBytes, targetID); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+		}
 	}
 	if req.IsActive != nil {
-		h.DB.Exec(context.Background(),
+		if _, err := h.DB.Exec(ctx,
 			`UPDATE users SET is_active = $1 WHERE id = $2`,
-			*req.IsActive, targetID)
+			*req.IsActive, targetID); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+		}
 	}
 	if req.IsAdmin != nil {
-		h.DB.Exec(context.Background(),
+		if _, err := h.DB.Exec(ctx,
 			`UPDATE users SET is_admin = $1 WHERE id = $2`,
-			*req.IsAdmin, targetID)
+			*req.IsAdmin, targetID); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+		}
 	}
 
 	return c.JSON(fiber.Map{"message": "updated"})

@@ -20,7 +20,7 @@ Contributions are welcome. This guide covers local development setup for both th
 ### 1. Clone and configure
 
 ```sh
-git clone https://github.com/alperenbabagil/kutup.git
+git clone https://github.com/alperen-albayrak/kutup.git
 cd kutup
 cp .env.example .env
 # Fill in required values — see README for the configuration table
@@ -176,9 +176,9 @@ kutup/
 
 ## Submitting Changes
 
-1. Fork the repository and create a feature branch from `main`.
+1. Fork the repository and create a feature branch from `master`.
 2. Make focused, well-described commits. Each commit should be buildable and leave tests passing.
-3. Open a pull request against `main`. Describe **why** the change is needed, not just what it does.
+3. Open a pull request against `master`. Describe **why** the change is needed, not just what it does.
 4. For security-related changes (cryptography, authentication, federation), include a brief explanation of the security model impact.
 
 For bug reports and feature requests, open a GitHub issue.
