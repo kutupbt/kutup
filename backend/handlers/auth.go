@@ -425,7 +425,7 @@ func (h *AuthHandler) Refresh(c *fiber.Ctx) error {
 	}
 
 	claims, err := utils.ValidateToken(refreshToken, h.JWTSecret)
-	if err != nil {
+	if err != nil || claims.Subject != "" {
 		return c.Status(401).JSON(fiber.Map{"error": "invalid refresh token"})
 	}
 
@@ -557,7 +557,26 @@ func (h *AuthHandler) VerifyTOTP(c *fiber.Ctx) error {
 func (h *AuthHandler) DisableTOTP(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 
-	_, err := h.DB.Exec(context.Background(),
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := c.BodyParser(&req); err != nil || req.Code == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "totp code required"})
+	}
+
+	var secret string
+	err := h.DB.QueryRow(context.Background(),
+		`SELECT totp_secret FROM users WHERE id = $1 AND totp_enabled = true`, userID,
+	).Scan(&secret)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "TOTP not enabled"})
+	}
+
+	if !services.ValidateTOTP(secret, req.Code) {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid code"})
+	}
+
+	_, err = h.DB.Exec(context.Background(),
 		`UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1`, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})

@@ -25,6 +25,12 @@ func (a *AuthMiddleware) Required() fiber.Handler {
 		if err != nil {
 			return c.Status(401).JSON(fiber.Map{"error": "unauthorized"})
 		}
+		// Reject special-purpose tokens (setup, pre-auth) — only plain access tokens
+		// have an empty Subject. Prevents a pre-auth/setup token from being used
+		// as a full access token on protected endpoints.
+		if claims.Subject != "" {
+			return c.Status(401).JSON(fiber.Map{"error": "unauthorized"})
+		}
 		c.Locals("userId", claims.UserID)
 		c.Locals("isAdmin", claims.IsAdmin)
 		return c.Next()
