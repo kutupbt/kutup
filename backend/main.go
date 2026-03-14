@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"log"
 	"strings"
 
@@ -45,13 +47,13 @@ func main() {
 	}
 
 	// Handlers
-	authH := &handlers.AuthHandler{DB: pool, JWTSecret: cfg.JWTSecret}
-	collectionsH := &handlers.CollectionsHandler{DB: pool, ServerURL: cfg.ServerURL}
+	authH := &handlers.AuthHandler{DB: pool, JWTSecret: cfg.JWTSecret, AppEnv: cfg.AppEnv}
+	collectionsH := &handlers.CollectionsHandler{DB: pool, ServerURL: cfg.ServerURL, AppEnv: cfg.AppEnv}
 	filesH := &handlers.FilesHandler{DB: pool, Storage: storage}
 	sharesH := &handlers.SharesHandler{DB: pool, Storage: storage}
 	adminH := &handlers.AdminHandler{DB: pool}
 	fedH := &handlers.FederationHandler{DB: pool, Storage: storage}
-	fedProxyH := &handlers.FedProxyHandler{DB: pool}
+	fedProxyH := &handlers.FedProxyHandler{DB: pool, AppEnv: cfg.AppEnv}
 
 	// Middleware
 	authMW := middleware.NewAuth(cfg.JWTSecret)
@@ -76,8 +78,8 @@ func main() {
 	auth := api.Group("/auth")
 	auth.Get("/settings", authH.GetPublicSettings)
 	auth.Post("/register", authH.Register)
-	auth.Get("/login/preflight", authH.GetLoginPreflight)
-	auth.Post("/login", authH.Login)
+	auth.Get("/login/preflight", middleware.PreflightRateLimit(), authH.GetLoginPreflight)
+	auth.Post("/login", middleware.LoginRateLimit(), authH.Login)
 	auth.Post("/login/2fa", authH.LoginTwoFA)
 	auth.Get("/recover/preflight", middleware.RecoveryRateLimit(), authH.GetRecoveryPreflight)
 	auth.Post("/recover", middleware.RecoveryRateLimit(), authH.Recover)
@@ -156,23 +158,23 @@ func main() {
 }
 
 // bootstrapAdmins seeds admin accounts from ADMIN_ACCOUNTS env var.
-// Format: comma-separated email:username:password triples.
-// Accounts are created on first server start; admins must complete setup on first login.
+// Format: comma-separated email:username pairs (no password).
+// A random one-time password is generated and printed to stdout on first creation.
+// Admins must complete setup on first login to establish their E2EE key material.
 func bootstrapAdmins(pool *pgxpool.Pool, accountsEnv string) {
 	if accountsEnv == "" {
 		return
 	}
 	ctx := context.Background()
-	for _, triple := range strings.Split(accountsEnv, ",") {
-		parts := strings.SplitN(strings.TrimSpace(triple), ":", 3)
-		if len(parts) != 3 {
-			log.Printf("bootstrapAdmins: skipping malformed entry (expected email:username:password)")
+	for _, pair := range strings.Split(accountsEnv, ",") {
+		parts := strings.SplitN(strings.TrimSpace(pair), ":", 2)
+		if len(parts) != 2 {
+			log.Printf("bootstrapAdmins: skipping malformed entry (expected email:username)")
 			continue
 		}
 		email := strings.TrimSpace(parts[0])
 		username := strings.TrimSpace(parts[1])
-		pass := strings.TrimSpace(parts[2])
-		if email == "" || username == "" || pass == "" {
+		if email == "" || username == "" {
 			continue
 		}
 
@@ -182,7 +184,15 @@ func bootstrapAdmins(pool *pgxpool.Pool, accountsEnv string) {
 			continue
 		}
 
-		hash, err := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
+		// Generate a cryptographically random one-time password (never stored in env)
+		tokenBytes := make([]byte, 16)
+		if _, err := rand.Read(tokenBytes); err != nil {
+			log.Printf("bootstrapAdmins: failed to generate password for %s: %v", email, err)
+			continue
+		}
+		tempPass := hex.EncodeToString(tokenBytes)
+
+		hash, err := bcrypt.GenerateFromPassword([]byte(tempPass), bcrypt.DefaultCost)
 		if err != nil {
 			log.Printf("bootstrapAdmins: bcrypt error for %s: %v", email, err)
 			continue
@@ -202,6 +212,8 @@ func bootstrapAdmins(pool *pgxpool.Pool, accountsEnv string) {
 			log.Printf("bootstrapAdmins: insert error for %s: %v", email, err)
 		} else {
 			log.Printf("bootstrapAdmins: created admin account %s (@%s)", email, username)
+			log.Printf("bootstrapAdmins: ONE-TIME PASSWORD for %s: %s", email, tempPass)
+			log.Printf("bootstrapAdmins: Sign in with this password once to complete account setup. It cannot be recovered.")
 		}
 	}
 }

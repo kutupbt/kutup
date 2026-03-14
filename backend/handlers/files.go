@@ -111,10 +111,10 @@ func (h *FilesHandler) Upload(c *fiber.Ctx) error {
 		isOwner = true
 	}
 
+	// For non-owners, fetch share permission (but defer quota check to inside transaction)
+	var canUpload bool
+	var uploadQuotaBytes *int64
 	if !isOwner {
-		// Check share with can_upload
-		var canUpload bool
-		var uploadQuotaBytes *int64
 		err := h.DB.QueryRow(c.Context(),
 			`SELECT can_upload, upload_quota_bytes FROM collection_shares
 			 WHERE collection_id = $1 AND recipient_user_id = $2`,
@@ -122,17 +122,6 @@ func (h *FilesHandler) Upload(c *fiber.Ctx) error {
 		).Scan(&canUpload, &uploadQuotaBytes)
 		if err != nil || !canUpload {
 			return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
-		}
-		// Check share quota
-		if uploadQuotaBytes != nil {
-			var usedBytes int64
-			h.DB.QueryRow(c.Context(),
-				`SELECT COALESCE(SUM(encrypted_size_bytes), 0) FROM files WHERE collection_id = $1 AND uploader_user_id = $2`,
-				collID, userID,
-			).Scan(&usedBytes)
-			if usedBytes+fileSize > *uploadQuotaBytes {
-				return c.Status(413).JSON(fiber.Map{"error": "share upload quota exceeded"})
-			}
 		}
 	}
 
@@ -157,6 +146,19 @@ func (h *FilesHandler) Upload(c *fiber.Ctx) error {
 
 	if used+fileSize > quota {
 		return c.Status(413).JSON(fiber.Map{"error": "storage quota exceeded"})
+	}
+
+	// S3-6: Check share quota inside the transaction to prevent race conditions.
+	// Re-read the current SUM inside the TX so concurrent uploads see each other.
+	if !isOwner && uploadQuotaBytes != nil {
+		var usedShareBytes int64
+		tx.QueryRow(c.Context(),
+			`SELECT COALESCE(SUM(encrypted_size_bytes), 0) FROM files WHERE collection_id = $1 AND uploader_user_id = $2`,
+			collID, userID,
+		).Scan(&usedShareBytes)
+		if usedShareBytes+fileSize > *uploadQuotaBytes {
+			return c.Status(413).JSON(fiber.Map{"error": "share upload quota exceeded"})
+		}
 	}
 
 	// Open file for streaming

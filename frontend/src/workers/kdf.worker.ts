@@ -13,6 +13,15 @@ export type KDFWorkerResponse =
   | { type: 'error'; message: string }
 
 self.onmessage = async (e: MessageEvent<KDFWorkerRequest>) => {
+  // S2-10 fix: Reject messages from unexpected origins to prevent cross-origin
+  // abuse (e.g. triggering expensive Argon2id from an embedded iframe).
+  // e.origin is '' for same-origin dedicated worker messages in most browsers,
+  // and non-empty for cross-origin postMessage — block those.
+  if (e.origin !== '' && e.origin !== self.location.origin) {
+    self.postMessage({ type: 'error', message: 'Unauthorized origin' } satisfies KDFWorkerResponse)
+    return
+  }
+
   try {
     const req = e.data
     if (req.type === 'register') {

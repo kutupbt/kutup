@@ -11,12 +11,14 @@ import (
 	"time"
 
 	"github.com/depo/backend/middleware"
+	"github.com/depo/backend/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type FedProxyHandler struct {
-	DB *pgxpool.Pool
+	DB     *pgxpool.Pool
+	AppEnv string
 }
 
 type IncomingShare struct {
@@ -57,9 +59,15 @@ func (h *FedProxyHandler) AddIncomingShare(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "invalid invite URL"})
 	}
 
+	// S1-4: Validate remote server URL to prevent SSRF
+	allowHTTP := h.AppEnv != "production"
+	if err := utils.ValidateFederationURL(remoteServer, allowHTTP); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid server URL: " + err.Error()})
+	}
+
 	// Fetch invite from remote server
 	fetchURL := fmt.Sprintf("%s/api/fed/invites/%s", remoteServer, token)
-	resp, err := http.Get(fetchURL) //nolint:gosec
+	resp, err := http.Get(fetchURL) //nolint:gosec — URL validated above
 	if err != nil || resp.StatusCode != 200 {
 		return c.Status(502).JSON(fiber.Map{"error": "failed to fetch invite from remote server"})
 	}
@@ -158,7 +166,7 @@ func (h *FedProxyHandler) ProxyListFiles(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "share not found"})
 	}
 	url := fmt.Sprintf("%s/api/fed/shares/%s/files", remoteServer, remoteToken)
-	resp, err := http.Get(url) //nolint:gosec
+	resp, err := http.Get(url) //nolint:gosec — remoteServer validated at insert time
 	if err != nil {
 		return c.Status(502).JSON(fiber.Map{"error": "remote error"})
 	}
@@ -178,7 +186,7 @@ func (h *FedProxyHandler) ProxyDownload(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "share not found"})
 	}
 	url := fmt.Sprintf("%s/api/fed/shares/%s/files/%s/download", remoteServer, remoteToken, fileID)
-	resp, err := http.Get(url) //nolint:gosec
+	resp, err := http.Get(url) //nolint:gosec — remoteServer validated at insert time
 	if err != nil || resp.StatusCode != 200 {
 		return c.Status(502).JSON(fiber.Map{"error": "remote error"})
 	}

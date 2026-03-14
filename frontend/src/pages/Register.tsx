@@ -150,6 +150,7 @@ export default function Register() {
         publicKey: keys.publicKey,
         kdfSalt: keys.kdfSalt,
         loginKeySalt: keys.loginKeySalt,
+        recoveryProof: keys.recoveryKey,
       })
       setStep('done')
     } catch (err: any) {

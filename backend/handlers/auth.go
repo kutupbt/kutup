@@ -19,6 +19,7 @@ var usernameRegexp = regexp.MustCompile(`^[a-z0-9_-]{3,32}$`)
 type AuthHandler struct {
 	DB        *pgxpool.Pool
 	JWTSecret string
+	AppEnv    string
 }
 
 type RegisterRequest struct {
@@ -36,6 +37,8 @@ type RegisterRequest struct {
 	PublicKey            string `json:"publicKey"`
 	KDFSalt              string `json:"kdfSalt"`
 	LoginKeySalt         string `json:"loginKeySalt"`
+	// Recovery proof: base64(recoveryKeyEntropy) — server bcrypts and stores as verifier (S1-2 fix)
+	RecoveryProof        string `json:"recoveryProof"`
 }
 
 func (h *AuthHandler) Register(c *fiber.Ctx) error {
@@ -69,18 +72,35 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
 
+	// Generate recovery key verifier (S1-2 fix): bcrypt the recovery key entropy
+	// so the server can verify mnemonic possession during account recovery.
+	recoveryVerifier := ""
+	if req.RecoveryProof != "" {
+		proofBytes, err := base64.StdEncoding.DecodeString(req.RecoveryProof)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid recoveryProof encoding"})
+		}
+		verifierHash, err := bcrypt.GenerateFromPassword(proofBytes, bcrypt.DefaultCost)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+		}
+		recoveryVerifier = string(verifierHash)
+	}
+
 	_, err = h.DB.Exec(context.Background(), `
 		INSERT INTO users (
 			email, username, encrypted_master_key, master_key_nonce,
 			encrypted_recovery_key, recovery_key_nonce,
 			encrypted_private_key, private_key_nonce,
-			public_key, kdf_salt, login_key_salt, login_key_hash
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+			public_key, kdf_salt, login_key_salt, login_key_hash,
+			recovery_key_verifier
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 	`,
 		req.Email, req.Username, req.EncryptedMasterKey, req.MasterKeyNonce,
 		req.EncryptedRecoveryKey, req.RecoveryKeyNonce,
 		req.EncryptedPrivateKey, req.PrivateKeyNonce,
 		req.PublicKey, req.KDFSalt, req.LoginKeySalt, string(hash),
+		recoveryVerifier,
 	)
 	if err != nil {
 		// Check for duplicate email or username
@@ -228,6 +248,11 @@ func (h *AuthHandler) LoginTwoFA(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
 	}
 
+	// S2-1: Check if this pre-auth token has been blocked due to too many failed attempts
+	if middleware.IsTOTPBlocked(req.PreAuthToken) {
+		return c.Status(429).JSON(fiber.Map{"error": "too many failed attempts, please log in again"})
+	}
+
 	userID, err := utils.ValidatePreAuthToken(req.PreAuthToken, h.JWTSecret)
 	if err != nil {
 		return c.Status(401).JSON(fiber.Map{"error": "invalid pre-auth token"})
@@ -238,23 +263,35 @@ func (h *AuthHandler) LoginTwoFA(c *fiber.Ctx) error {
 		encMK, mkNonce, encPK, pkNonce, pubKey, username2fa                    string
 		isAdmin                                                                  bool
 		quotaBytes, usedBytes                                                    int64
+		isActive                                                                  bool
 	)
 
+	// S2-7: Include is_active check so disabled accounts cannot complete TOTP login
 	err = h.DB.QueryRow(context.Background(), `
 		SELECT totp_secret, encrypted_master_key, master_key_nonce,
 		       encrypted_private_key, private_key_nonce, public_key,
 		       is_admin, storage_quota_bytes, storage_used_bytes,
-		       COALESCE(username, '')
+		       COALESCE(username, ''), is_active
 		FROM users WHERE id = $1
 	`, userID).Scan(&totpSecret, &encMK, &mkNonce, &encPK, &pkNonce, &pubKey,
-		&isAdmin, &quotaBytes, &usedBytes, &username2fa)
+		&isAdmin, &quotaBytes, &usedBytes, &username2fa, &isActive)
 	if err != nil {
 		return c.Status(401).JSON(fiber.Map{"error": "unauthorized"})
 	}
 
+	if !isActive {
+		return c.Status(401).JSON(fiber.Map{"error": "account disabled"})
+	}
+
 	if totpSecret == nil || !services.ValidateTOTP(*totpSecret, req.Code) {
+		// Record failed attempt; if now blocked, return 429
+		if !middleware.RecordTOTPAttempt(req.PreAuthToken, false) {
+			return c.Status(429).JSON(fiber.Map{"error": "too many failed attempts, please log in again"})
+		}
 		return c.Status(401).JSON(fiber.Map{"error": "invalid TOTP code"})
 	}
+
+	middleware.RecordTOTPAttempt(req.PreAuthToken, true)
 
 	return h.issueTokensAndRespond(c, userID, username2fa, encMK, mkNonce, encPK, pkNonce, pubKey, isAdmin, quotaBytes, usedBytes)
 }
@@ -301,8 +338,7 @@ type RecoverRequest struct {
 	NewMasterKeyNonce     string `json:"newMasterKeyNonce"`
 	NewKDFSalt            string `json:"newKdfSalt"`
 	NewLoginKeySalt       string `json:"newLoginKeySalt"`
-	// Recovery proof: masterKey re-encrypted with recoveryKey (server verifies it
-	// can be decrypted by recipient — but since we're E2EE, we accept on faith)
+	// Recovery proof: base64(recoveryKeyEntropy) — verified against stored bcrypt verifier
 	RecoveryProof         string `json:"recoveryProof"`
 }
 
@@ -311,6 +347,34 @@ func (h *AuthHandler) Recover(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
 	}
+
+	if req.RecoveryProof == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "recoveryProof is required"})
+	}
+
+	// Fetch stored recovery key verifier (S1-2 fix)
+	var storedVerifier string
+	err := h.DB.QueryRow(context.Background(),
+		`SELECT recovery_key_verifier FROM users WHERE email = $1`, req.Email,
+	).Scan(&storedVerifier)
+	if err != nil {
+		// Run a fake bcrypt to prevent timing-based email enumeration
+		bcrypt.CompareHashAndPassword([]byte("$2a$10$fakehashfortimingprotectiononly"), []byte("dummy"))
+		return c.Status(404).JSON(fiber.Map{"error": "user not found"})
+	}
+
+	// If the account has a stored verifier, validate the proof
+	if storedVerifier != "" {
+		proofBytes, err := base64.StdEncoding.DecodeString(req.RecoveryProof)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid recoveryProof encoding"})
+		}
+		if err := bcrypt.CompareHashAndPassword([]byte(storedVerifier), proofBytes); err != nil {
+			return c.Status(401).JSON(fiber.Map{"error": "invalid recovery proof"})
+		}
+	}
+	// Accounts without a verifier (created before this migration) are allowed through.
+	// A future migration can enforce this for all accounts.
 
 	loginKeyBytes, err := base64.StdEncoding.DecodeString(req.NewLoginKey)
 	if err != nil {
@@ -512,6 +576,13 @@ func (h *AuthHandler) CompleteSetup(c *fiber.Ctx) error {
 		return c.Status(401).JSON(fiber.Map{"error": "invalid setup token"})
 	}
 
+	// S2-7: Ensure account is still active before completing setup
+	var isActive bool
+	h.DB.QueryRow(context.Background(), `SELECT is_active FROM users WHERE id = $1`, userID).Scan(&isActive)
+	if !isActive {
+		return c.Status(401).JSON(fiber.Map{"error": "account disabled"})
+	}
+
 	var req RegisterRequest
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
@@ -567,7 +638,7 @@ func (h *AuthHandler) CompleteSetup(c *fiber.Ctx) error {
 		Name:     "refresh_token",
 		Value:    refreshToken,
 		HTTPOnly: true,
-		Secure:   false,
+		Secure:   h.AppEnv == "production",
 		SameSite: "Lax",
 		MaxAge:   7 * 24 * 3600,
 		Path:     "/api/auth/refresh",
@@ -602,12 +673,12 @@ func (h *AuthHandler) issueTokensAndRespond(c *fiber.Ctx, userID, username, encM
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
 
-	// HttpOnly cookie for refresh token
+	// S2-8: Secure cookie flag — enable Secure in production
 	c.Cookie(&fiber.Cookie{
 		Name:     "refresh_token",
 		Value:    refreshToken,
 		HTTPOnly: true,
-		Secure:   false,   // allow HTTP for self-hosted
+		Secure:   h.AppEnv == "production",
 		SameSite: "Lax",
 		MaxAge:   7 * 24 * 3600,
 		Path:     "/api/auth/refresh",

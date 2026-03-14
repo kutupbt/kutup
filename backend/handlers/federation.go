@@ -194,18 +194,6 @@ func (h *FederationHandler) UploadShareFile(c *fiber.Ctx) error {
 	fileHeader := fileHeaders[0]
 	fileSize := fileHeader.Size
 
-	// Check federated quota
-	if uploadQuotaBytes != nil {
-		var used int64
-		h.DB.QueryRow(context.Background(),
-			`SELECT COALESCE(upload_used_bytes, 0) FROM federated_outgoing_shares WHERE id = $1`,
-			shareID,
-		).Scan(&used)
-		if used+fileSize > *uploadQuotaBytes {
-			return c.Status(413).JSON(fiber.Map{"error": "share quota exceeded"})
-		}
-	}
-
 	fileID := uuid.New().String()
 	storagePath := fmt.Sprintf("fed/%s/%s/%s", shareID, collectionID, fileID)
 
@@ -219,8 +207,29 @@ func (h *FederationHandler) UploadShareFile(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "storage error"})
 	}
 
+	// S3-5: Use a transaction with FOR UPDATE to atomically check and update
+	// the federated quota, preventing concurrent uploads from bypassing it.
+	tx, err := h.DB.Begin(c.Context())
+	if err != nil {
+		h.Storage.Delete(context.Background(), storagePath)
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+	defer tx.Rollback(c.Context())
+
+	if uploadQuotaBytes != nil {
+		var used int64
+		tx.QueryRow(c.Context(),
+			`SELECT COALESCE(upload_used_bytes, 0) FROM federated_outgoing_shares WHERE id = $1 FOR UPDATE`,
+			shareID,
+		).Scan(&used)
+		if used+fileSize > *uploadQuotaBytes {
+			h.Storage.Delete(context.Background(), storagePath)
+			return c.Status(413).JSON(fiber.Map{"error": "share quota exceeded"})
+		}
+	}
+
 	// Insert file record (uploader is the sharer user - best proxy; actual remote user unknown)
-	_, err = h.DB.Exec(c.Context(), `
+	_, err = tx.Exec(c.Context(), `
 		INSERT INTO files (id, collection_id, uploader_user_id,
 		                   encrypted_metadata, metadata_nonce,
 		                   encrypted_file_key, file_key_nonce,
@@ -236,14 +245,19 @@ func (h *FederationHandler) UploadShareFile(c *fiber.Ctx) error {
 	}
 
 	// Update upload_used_bytes on the share
-	h.DB.Exec(context.Background(),
+	tx.Exec(c.Context(),
 		`UPDATE federated_outgoing_shares SET upload_used_bytes = upload_used_bytes + $1 WHERE id = $2`,
 		fileSize, shareID)
 
 	// Update sharer's storage quota
-	h.DB.Exec(context.Background(),
+	tx.Exec(c.Context(),
 		`UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2`,
 		fileSize, sharerUserID)
+
+	if err := tx.Commit(c.Context()); err != nil {
+		h.Storage.Delete(context.Background(), storagePath)
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
 
 	return c.Status(201).JSON(fiber.Map{"id": fileID})
 }
