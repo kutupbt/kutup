@@ -16,6 +16,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// fedHTTPClient never follows redirects, preventing a malicious federation
+// server from issuing a 301/302 redirect to an internal address and bypassing
+// the SSRF validation that was applied to the original hostname.
+var fedHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 type FedProxyHandler struct {
 	DB     *pgxpool.Pool
 	AppEnv string
@@ -67,7 +77,7 @@ func (h *FedProxyHandler) AddIncomingShare(c *fiber.Ctx) error {
 
 	// Fetch invite from remote server
 	fetchURL := fmt.Sprintf("%s/api/fed/invites/%s", remoteServer, token)
-	resp, err := http.Get(fetchURL) //nolint:gosec — URL validated above
+	resp, err := fedHTTPClient.Get(fetchURL) //nolint:gosec — URL validated above
 	if err != nil || resp.StatusCode != 200 {
 		return c.Status(502).JSON(fiber.Map{"error": "failed to fetch invite from remote server"})
 	}
@@ -166,7 +176,7 @@ func (h *FedProxyHandler) ProxyListFiles(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "share not found"})
 	}
 	url := fmt.Sprintf("%s/api/fed/shares/%s/files", remoteServer, remoteToken)
-	resp, err := http.Get(url) //nolint:gosec — remoteServer validated at insert time
+	resp, err := fedHTTPClient.Get(url) //nolint:gosec — remoteServer validated at insert time
 	if err != nil {
 		return c.Status(502).JSON(fiber.Map{"error": "remote error"})
 	}
@@ -186,7 +196,7 @@ func (h *FedProxyHandler) ProxyDownload(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "share not found"})
 	}
 	url := fmt.Sprintf("%s/api/fed/shares/%s/files/%s/download", remoteServer, remoteToken, fileID)
-	resp, err := http.Get(url) //nolint:gosec — remoteServer validated at insert time
+	resp, err := fedHTTPClient.Get(url) //nolint:gosec — remoteServer validated at insert time
 	if err != nil || resp.StatusCode != 200 {
 		return c.Status(502).JSON(fiber.Map{"error": "remote error"})
 	}
@@ -215,7 +225,7 @@ func (h *FedProxyHandler) ProxyUpload(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
 	req.Header.Set("Content-Type", c.Get("Content-Type"))
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := fedHTTPClient.Do(req)
 	if err != nil {
 		return c.Status(502).JSON(fiber.Map{"error": "remote error"})
 	}
@@ -239,7 +249,7 @@ func (h *FedProxyHandler) ProxyDelete(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := fedHTTPClient.Do(req)
 	if err != nil {
 		return c.Status(502).JSON(fiber.Map{"error": "remote error"})
 	}

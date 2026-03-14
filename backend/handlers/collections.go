@@ -350,7 +350,7 @@ func (h *CollectionsHandler) FetchRemotePubkey(c *fiber.Ctx) error {
 	}
 
 	url := fmt.Sprintf("%s/api/fed/users?username=%s", server, username)
-	resp, err := http.Get(url) //nolint:gosec — URL validated above
+	resp, err := fedHTTPClient.Get(url) //nolint:gosec — URL validated above
 	if err != nil || resp.StatusCode != 200 {
 		return c.Status(502).JSON(fiber.Map{"error": "failed to fetch pubkey from remote server"})
 	}

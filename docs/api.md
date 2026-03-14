@@ -249,9 +249,16 @@ Confirm TOTP setup by providing the first valid code.
 
 ### DELETE /api/user/2fa
 
-Disable TOTP for the current user.
+Disable TOTP for the current user. Requires a valid TOTP code to prevent a stolen session from silently removing 2FA.
 
 **Auth:** Bearer JWT
+
+**Request body:**
+```json
+{
+  "code": "123456"
+}
+```
 
 ---
 
