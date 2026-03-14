@@ -119,12 +119,33 @@ func PreflightRateLimit() fiber.Handler {
 // totpTracker tracks failed TOTP attempts per pre-auth token.
 // After maxTOTPAttempts failures, the token is blacklisted for the remainder of its TTL.
 var totpTracker = struct {
-	mu       sync.Mutex
-	attempts map[string]int
-	blocked  map[string]bool
+	mu          sync.Mutex
+	attempts    map[string]int
+	blocked     map[string]bool
+	blockedAt   map[string]time.Time
 }{
-	attempts: make(map[string]int),
-	blocked:  make(map[string]bool),
+	attempts:  make(map[string]int),
+	blocked:   make(map[string]bool),
+	blockedAt: make(map[string]time.Time),
+}
+
+const totpBlockTTL = 15 * time.Minute
+
+func init() {
+	go func() {
+		for range time.Tick(5 * time.Minute) {
+			totpTracker.mu.Lock()
+			cutoff := time.Now().Add(-totpBlockTTL)
+			for key, t := range totpTracker.blockedAt {
+				if t.Before(cutoff) {
+					delete(totpTracker.blocked, key)
+					delete(totpTracker.blockedAt, key)
+					delete(totpTracker.attempts, key)
+				}
+			}
+			totpTracker.mu.Unlock()
+		}
+	}()
 }
 
 const maxTOTPAttempts = 5
@@ -161,6 +182,7 @@ func RecordTOTPAttempt(preAuthToken string, success bool) bool {
 	totpTracker.attempts[key]++
 	if totpTracker.attempts[key] >= maxTOTPAttempts {
 		totpTracker.blocked[key] = true
+		totpTracker.blockedAt[key] = time.Now()
 		return false
 	}
 	return true

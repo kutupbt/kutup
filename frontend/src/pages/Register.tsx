@@ -74,6 +74,7 @@ export default function Register() {
     worker.onerror = (e) => {
       setError(e.message)
       setStep('form')
+      worker.terminate()
     }
 
     worker.postMessage({ type: 'register', password })

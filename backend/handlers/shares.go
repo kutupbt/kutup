@@ -202,6 +202,9 @@ func (h *SharesHandler) DownloadPublicShareFile(c *fiber.Ctx) error {
 	if shareType == "collection" && collID != targetID {
 		return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
 	}
+	if shareType == "file" && fileID != targetID {
+		return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
+	}
 
 	url, err := h.Storage.PresignedDownload(c.Context(), storagePath)
 	if err != nil {
