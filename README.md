@@ -44,7 +44,7 @@ Kutup (also known internally as "Depo") is a privacy-first file storage platform
 
 ```sh
 # 1. Clone
-git clone https://github.com/alperenbabagil/kutup.git
+git clone https://github.com/alperen-albayrak/kutup.git
 cd kutup
 
 # 2. Configure
@@ -93,10 +93,10 @@ Kutup uses a layered key hierarchy where the server is entirely zero-knowledge:
 mnemonic → recovery key → encrypted master key
                                   ↓ (decrypt)
                             master key
-                                  ↓ (derives)
-                    per-collection key (NaCl secretbox)
-                                  ↓ (derives)
-                         per-file key → encrypted file content
+                                  ↓ (encrypts)
+                    per-collection key (random, NaCl secretbox)
+                                  ↓ (encrypts)
+                         per-file key (random) → encrypted file content
 ```
 
 For collection sharing, a NaCl box keypair is generated per user. The sharer encrypts the collection key to the recipient's public key.

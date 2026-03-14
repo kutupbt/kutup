@@ -15,7 +15,7 @@ This guide covers a production Kutup deployment using Docker Compose.
 ## Step 1: Clone and Configure
 
 ```sh
-git clone https://github.com/alperenbabagil/kutup.git
+git clone https://github.com/alperen-albayrak/kutup.git
 cd kutup
 cp .env.example .env
 ```
@@ -39,8 +39,8 @@ S3_BUCKET=depo-files
 # Must be the address users (and remote servers) reach this instance at
 SERVER_URL=https://kutup.example.com
 
-# Admin bootstrap: email:username:password
-# Accounts are created on first start; must complete setup on first login
+# Admin bootstrap: email:username:password triples, comma-separated
+# Accounts are created on first start; admins must complete setup on first login
 ADMIN_ACCOUNTS=admin@example.com:admin:<strong-admin-password>
 ```
 
@@ -112,7 +112,21 @@ The recovery phrase is the only way to recover your account if you forget your p
 
 ## TLS / HTTPS
 
-Kutup's Nginx container listens on port 443 and reads certificates from `./nginx/certs/`. Place your certificates there:
+The bundled `nginx/nginx.conf` listens on port 80 only. To add HTTPS, add a second server block to `nginx/nginx.conf`:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name kutup.example.com;
+
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+
+    # copy all location blocks from the port-80 server block here
+}
+```
+
+Place your certificate files in `./nginx/certs/` (volume-mounted into the container):
 
 ```
 nginx/certs/
@@ -120,7 +134,7 @@ nginx/certs/
 └── privkey.pem      # Private key
 ```
 
-Then update `nginx/nginx.conf` to enable the HTTPS server block (the config includes a commented-out HTTPS block). Reload Nginx:
+Then reload Nginx:
 
 ```sh
 docker compose exec nginx nginx -s reload
@@ -128,13 +142,11 @@ docker compose exec nginx nginx -s reload
 
 ### Using Certbot (Let's Encrypt)
 
-If you want automated certificates, run Certbot on the host and mount the certificate files into the container, or use a Caddy/Traefik reverse proxy in front (see below).
-
 ```sh
 # On the host (not inside Docker)
 certbot certonly --standalone -d kutup.example.com
 
-# Then symlink or copy into nginx/certs/
+# Copy into nginx/certs/
 cp /etc/letsencrypt/live/kutup.example.com/fullchain.pem nginx/certs/
 cp /etc/letsencrypt/live/kutup.example.com/privkey.pem nginx/certs/
 ```

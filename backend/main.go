@@ -158,23 +158,23 @@ func main() {
 }
 
 // bootstrapAdmins seeds admin accounts from ADMIN_ACCOUNTS env var.
-// Format: comma-separated email:username pairs (no password).
-// A random one-time password is generated and printed to stdout on first creation.
+// Format: comma-separated email:username:password triples.
 // Admins must complete setup on first login to establish their E2EE key material.
 func bootstrapAdmins(pool *pgxpool.Pool, accountsEnv string) {
 	if accountsEnv == "" {
 		return
 	}
 	ctx := context.Background()
-	for _, pair := range strings.Split(accountsEnv, ",") {
-		parts := strings.SplitN(strings.TrimSpace(pair), ":", 2)
-		if len(parts) != 2 {
-			log.Printf("bootstrapAdmins: skipping malformed entry (expected email:username)")
+	for _, entry := range strings.Split(accountsEnv, ",") {
+		parts := strings.SplitN(strings.TrimSpace(entry), ":", 3)
+		if len(parts) != 3 {
+			log.Printf("bootstrapAdmins: skipping malformed entry (expected email:username:password)")
 			continue
 		}
 		email := strings.TrimSpace(parts[0])
 		username := strings.TrimSpace(parts[1])
-		if email == "" || username == "" {
+		password := strings.TrimSpace(parts[2])
+		if email == "" || username == "" || password == "" {
 			continue
 		}
 
@@ -184,15 +184,7 @@ func bootstrapAdmins(pool *pgxpool.Pool, accountsEnv string) {
 			continue
 		}
 
-		// Generate a cryptographically random one-time password (never stored in env)
-		tokenBytes := make([]byte, 16)
-		if _, err := rand.Read(tokenBytes); err != nil {
-			log.Printf("bootstrapAdmins: failed to generate password for %s: %v", email, err)
-			continue
-		}
-		tempPass := hex.EncodeToString(tokenBytes)
-
-		hash, err := bcrypt.GenerateFromPassword([]byte(tempPass), bcrypt.DefaultCost)
+		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 		if err != nil {
 			log.Printf("bootstrapAdmins: bcrypt error for %s: %v", email, err)
 			continue
@@ -212,8 +204,6 @@ func bootstrapAdmins(pool *pgxpool.Pool, accountsEnv string) {
 			log.Printf("bootstrapAdmins: insert error for %s: %v", email, err)
 		} else {
 			log.Printf("bootstrapAdmins: created admin account %s (@%s)", email, username)
-			log.Printf("bootstrapAdmins: ONE-TIME PASSWORD for %s: %s", email, tempPass)
-			log.Printf("bootstrapAdmins: Sign in with this password once to complete account setup. It cannot be recovered.")
 		}
 	}
 }
