@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/http"
 
 	"github.com/depo/backend/middleware"
 	"github.com/depo/backend/utils"
@@ -20,6 +19,13 @@ type CollectionsHandler struct {
 	AppEnv    string
 }
 
+// @Summary      List collections
+// @Tags         Collections
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {array}   CollectionRow
+// @Failure      401  {object}  ErrorResponse
+// @Router       /collections [get]
 func (h *CollectionsHandler) ListCollections(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 
@@ -113,6 +119,16 @@ func (h *CollectionsHandler) ListCollections(c *fiber.Ctx) error {
 	return c.JSON(collections)
 }
 
+// @Summary      Create a collection
+// @Tags         Collections
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      CreateCollectionRequest  true  "Encrypted collection name and key"
+// @Success      201   {object}  CreateCollectionResult
+// @Failure      400   {object}  ErrorResponse
+// @Failure      401   {object}  ErrorResponse
+// @Router       /collections [post]
 func (h *CollectionsHandler) CreateCollection(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 
@@ -143,6 +159,15 @@ func (h *CollectionsHandler) CreateCollection(c *fiber.Ctx) error {
 	return c.Status(201).JSON(fiber.Map{"id": id})
 }
 
+// @Summary      Get a collection
+// @Tags         Collections
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id   path      string  true  "Collection UUID"
+// @Success      200  {object}  CollectionRow
+// @Failure      401  {object}  ErrorResponse
+// @Failure      404  {object}  ErrorResponse
+// @Router       /collections/{id} [get]
 func (h *CollectionsHandler) GetCollection(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 	collID := c.Params("id")
@@ -174,6 +199,18 @@ func (h *CollectionsHandler) GetCollection(c *fiber.Ctx) error {
 	return c.JSON(col)
 }
 
+// @Summary      Rename a collection
+// @Tags         Collections
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id    path      string                   true  "Collection UUID"
+// @Param        body  body      UpdateCollectionRequest  true  "New encrypted name"
+// @Success      200   {object}  MessageResponse
+// @Failure      400   {object}  ErrorResponse
+// @Failure      401   {object}  ErrorResponse
+// @Failure      404   {object}  ErrorResponse
+// @Router       /collections/{id} [put]
 func (h *CollectionsHandler) UpdateCollection(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 	collID := c.Params("id")
@@ -197,6 +234,17 @@ func (h *CollectionsHandler) UpdateCollection(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "updated"})
 }
 
+// @Summary      Set collection color
+// @Tags         Collections
+// @Accept       json
+// @Security     BearerAuth
+// @Param        id    path  string             true  "Collection UUID"
+// @Param        body  body  UpdateColorRequest  true  "Color name"
+// @Success      204
+// @Failure      400  {object}  ErrorResponse
+// @Failure      401  {object}  ErrorResponse
+// @Failure      404  {object}  ErrorResponse
+// @Router       /collections/{id}/color [patch]
 func (h *CollectionsHandler) UpdateCollectionColor(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 	collID := c.Params("id")
@@ -219,6 +267,14 @@ func (h *CollectionsHandler) UpdateCollectionColor(c *fiber.Ctx) error {
 	return c.SendStatus(204)
 }
 
+// @Summary      Delete a collection and all its files
+// @Tags         Collections
+// @Security     BearerAuth
+// @Param        id  path  string  true  "Collection UUID"
+// @Success      204
+// @Failure      401  {object}  ErrorResponse
+// @Failure      404  {object}  ErrorResponse
+// @Router       /collections/{id} [delete]
 func (h *CollectionsHandler) DeleteCollection(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 	collID := c.Params("id")
@@ -233,6 +289,19 @@ func (h *CollectionsHandler) DeleteCollection(c *fiber.Ctx) error {
 	return c.SendStatus(204)
 }
 
+// @Summary      Share a collection with a local user
+// @Description  The client encrypts the collection key to the recipient's NaCl box public key before submitting.
+// @Tags         Collections
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id    path      string                  true  "Collection UUID"
+// @Param        body  body      ShareCollectionRequest  true  "Share details"
+// @Success      201   {object}  MessageResponse
+// @Failure      400   {object}  ErrorResponse
+// @Failure      401   {object}  ErrorResponse
+// @Failure      403   {object}  ErrorResponse
+// @Router       /collections/{id}/share [post]
 func (h *CollectionsHandler) ShareCollection(c *fiber.Ctx) error {
 	sharerID := middleware.UserID(c)
 	collID := c.Params("id")
@@ -272,6 +341,18 @@ func (h *CollectionsHandler) ShareCollection(c *fiber.Ctx) error {
 }
 
 // POST /api/collections/{id}/share-federated
+// @Summary      Share a collection with a user on a remote Kutup instance
+// @Tags         Collections
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id    path      string                 true  "Collection UUID"
+// @Param        body  body      ShareFederatedRequest  true  "Federated share details"
+// @Success      201   {object}  ShareFederatedResult
+// @Failure      400   {object}  ErrorResponse
+// @Failure      401   {object}  ErrorResponse
+// @Failure      403   {object}  ErrorResponse
+// @Router       /collections/{id}/share-federated [post]
 func (h *CollectionsHandler) ShareFederated(c *fiber.Ctx) error {
 	sharerID := middleware.UserID(c)
 	collID := c.Params("id")
@@ -336,6 +417,17 @@ func fedScheme(c *fiber.Ctx) string {
 }
 
 // GET /api/collections/fed-pubkey?username=alice&server=https://server-a.com
+// @Summary      Fetch a remote user's public key (for federated sharing)
+// @Tags         Collections
+// @Produce      json
+// @Security     BearerAuth
+// @Param        username  query     string  true  "Remote username"
+// @Param        server    query     string  true  "Remote Kutup server base URL"
+// @Success      200       {object}  PubkeyResponse
+// @Failure      400       {object}  ErrorResponse
+// @Failure      401       {object}  ErrorResponse
+// @Failure      502       {object}  ErrorResponse
+// @Router       /collections/fed-pubkey [get]
 func (h *CollectionsHandler) FetchRemotePubkey(c *fiber.Ctx) error {
 	username := c.Query("username")
 	server := c.Query("server")

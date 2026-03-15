@@ -19,6 +19,17 @@ type SharesHandler struct {
 // CreatePublicShare creates a public share link.
 // CRITICAL: The linkKey is NEVER sent here — it lives only in the URL #fragment.
 // We only store the collection key already encrypted with that linkKey by the client.
+// @Summary      Create a public share link
+// @Tags         Public Shares
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      CreateShareRequest  true  "Share details"
+// @Success      201   {object}  CreateShareResult
+// @Failure      400   {object}  ErrorResponse
+// @Failure      401   {object}  ErrorResponse
+// @Failure      403   {object}  ErrorResponse
+// @Router       /share [post]
 func (h *SharesHandler) CreatePublicShare(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 
@@ -73,6 +84,14 @@ func (h *SharesHandler) CreatePublicShare(c *fiber.Ctx) error {
 // GetPublicShare returns encrypted key material for a public share.
 // No auth required — anyone with the token can get the ciphertext.
 // Without the linkKey (URL fragment), the ciphertext is useless.
+// @Summary      Get public share metadata
+// @Tags         Public Shares
+// @Produce      json
+// @Param        token  path      string  true  "Share token"
+// @Success      200    {object}  PublicShareResponse
+// @Failure      404    {object}  ErrorResponse
+// @Failure      410    {object}  ErrorResponse  "Link expired"
+// @Router       /share/{token} [get]
 func (h *SharesHandler) GetPublicShare(c *fiber.Ctx) error {
 	token := c.Params("token")
 
@@ -108,6 +127,15 @@ func (h *SharesHandler) GetPublicShare(c *fiber.Ctx) error {
 }
 
 // ListPublicShareFiles lists files in a public share (no auth, no decryption).
+// @Summary      List files in a public share
+// @Tags         Public Shares
+// @Produce      json
+// @Param        token  path      string  true  "Share token"
+// @Success      200    {array}   FileRow
+// @Failure      400    {object}  ErrorResponse
+// @Failure      404    {object}  ErrorResponse
+// @Failure      410    {object}  ErrorResponse  "Link expired"
+// @Router       /share/{token}/files [get]
 func (h *SharesHandler) ListPublicShareFiles(c *fiber.Ctx) error {
 	token := c.Params("token")
 
@@ -169,6 +197,16 @@ func (h *SharesHandler) ListPublicShareFiles(c *fiber.Ctx) error {
 }
 
 // DownloadPublicShareFile returns a presigned URL for a public share file.
+// @Summary      Get presigned download URL for a public share file
+// @Tags         Public Shares
+// @Produce      json
+// @Param        token   path      string  true  "Share token"
+// @Param        fileId  path      string  true  "File UUID"
+// @Success      200     {object}  DownloadURLResponse
+// @Failure      403     {object}  ErrorResponse
+// @Failure      404     {object}  ErrorResponse
+// @Failure      410     {object}  ErrorResponse  "Link expired"
+// @Router       /share/{token}/download/{fileId} [get]
 func (h *SharesHandler) DownloadPublicShareFile(c *fiber.Ctx) error {
 	token := c.Params("token")
 	fileID := c.Params("fileId")

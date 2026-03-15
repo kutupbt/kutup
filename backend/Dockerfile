@@ -6,7 +6,10 @@ WORKDIR /app
 COPY go.mod go.sum* ./
 RUN go mod download
 
+RUN go install github.com/swaggo/swag/cmd/swag@v1.8.1
+
 COPY . .
+RUN swag init -g main.go
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /depo-server .
 
 FROM scratch

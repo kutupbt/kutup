@@ -1,0 +1,2076 @@
+basePath: /api
+definitions:
+  handlers.AddIncomingShareRequest:
+    properties:
+      inviteUrl:
+        type: string
+    type: object
+  handlers.CollectionRow:
+    properties:
+      canDelete:
+        type: boolean
+      canUpload:
+        type: boolean
+      color:
+        type: string
+      encryptedKey:
+        type: string
+      encryptedKeyNonce:
+        type: string
+      encryptedName:
+        type: string
+      id:
+        type: string
+      isShared:
+        type: boolean
+      nameNonce:
+        type: string
+      ownerUserId:
+        type: string
+      parentCollectionId:
+        type: string
+      uploadQuotaBytes:
+        type: integer
+      uploadUsedBytes:
+        type: integer
+    type: object
+  handlers.CreateAdminUserRequest:
+    properties:
+      email:
+        type: string
+      storageQuotaBytes:
+        type: integer
+      tempPassword:
+        type: string
+      username:
+        type: string
+    type: object
+  handlers.CreateCollectionRequest:
+    properties:
+      encryptedKey:
+        type: string
+      encryptedKeyNonce:
+        type: string
+      encryptedName:
+        type: string
+      nameNonce:
+        type: string
+      parentCollectionId:
+        type: string
+    type: object
+  handlers.CreateCollectionResult:
+    properties:
+      id:
+        type: string
+    type: object
+  handlers.CreateShareRequest:
+    properties:
+      encryptedCollectionKey:
+        type: string
+      encryptedCollectionKeyNonce:
+        type: string
+      expiresInHours:
+        type: integer
+      shareType:
+        type: string
+      targetId:
+        type: string
+    type: object
+  handlers.CreateShareResult:
+    properties:
+      id:
+        type: string
+      token:
+        type: string
+    type: object
+  handlers.DownloadURLResponse:
+    properties:
+      url:
+        type: string
+    type: object
+  handlers.ErrorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  handlers.FedInviteResponse:
+    properties:
+      canDelete:
+        type: boolean
+      canUpload:
+        type: boolean
+      encryptedName:
+        type: string
+      nameNonce:
+        type: string
+      uploadQuotaBytes:
+        type: integer
+      wrappedKey:
+        type: string
+    type: object
+  handlers.FileRow:
+    properties:
+      collectionId:
+        type: string
+      createdAt:
+        type: string
+      encryptedFileKey:
+        type: string
+      encryptedMetadata:
+        type: string
+      encryptedSizeBytes:
+        type: integer
+      fileKeyNonce:
+        type: string
+      id:
+        type: string
+      metadataNonce:
+        type: string
+      updatedAt:
+        type: string
+      uploaderUserId:
+        type: string
+    type: object
+  handlers.IncomingShare:
+    properties:
+      canDelete:
+        type: boolean
+      canUpload:
+        type: boolean
+      createdAt:
+        type: string
+      encryptedCollectionKey:
+        type: string
+      encryptedName:
+        type: string
+      id:
+        type: string
+      nameNonce:
+        type: string
+      remoteServer:
+        type: string
+      uploadQuotaBytes:
+        type: integer
+    type: object
+  handlers.LoginRequest:
+    properties:
+      email:
+        type: string
+      loginKey:
+        description: base64(Argon2id(password, loginKeySalt))
+        type: string
+    type: object
+  handlers.LoginResponse:
+    properties:
+      accessToken:
+        type: string
+      encryptedMasterKey:
+        type: string
+      encryptedPrivateKey:
+        type: string
+      isAdmin:
+        type: boolean
+      masterKeyNonce:
+        type: string
+      preAuthToken:
+        type: string
+      privateKeyNonce:
+        type: string
+      publicKey:
+        type: string
+      requiresSetup:
+        type: boolean
+      requiresTotp:
+        type: boolean
+      setupToken:
+        type: string
+      storageQuotaBytes:
+        type: integer
+      storageUsedBytes:
+        type: integer
+      userId:
+        type: string
+      username:
+        type: string
+    type: object
+  handlers.MeResponse:
+    properties:
+      email:
+        type: string
+      id:
+        type: string
+      isAdmin:
+        type: boolean
+      publicKey:
+        type: string
+      storageQuotaBytes:
+        type: integer
+      storageUsedBytes:
+        type: integer
+      totpEnabled:
+        type: boolean
+      username:
+        type: string
+    type: object
+  handlers.MessageResponse:
+    properties:
+      message:
+        type: string
+    type: object
+  handlers.PreflightLoginResponse:
+    properties:
+      kdfSalt:
+        type: string
+      loginKeySalt:
+        type: string
+    type: object
+  handlers.PreflightRecoverResponse:
+    properties:
+      encryptedPrivateKey:
+        type: string
+      encryptedRecoveryKey:
+        type: string
+      privateKeyNonce:
+        type: string
+      recoveryKeyNonce:
+        type: string
+    type: object
+  handlers.PubkeyResponse:
+    properties:
+      publicKey:
+        type: string
+    type: object
+  handlers.PublicShareResponse:
+    properties:
+      encryptedCollectionKey:
+        type: string
+      encryptedCollectionKeyNonce:
+        type: string
+      expiresAt:
+        type: string
+      id:
+        type: string
+      shareType:
+        type: string
+      targetId:
+        type: string
+    type: object
+  handlers.RecoverRequest:
+    properties:
+      email:
+        type: string
+      newEncryptedMasterKey:
+        type: string
+      newKdfSalt:
+        type: string
+      newLoginKey:
+        description: |-
+          Client proves mnemonic possession by providing encryptedMasterKey decrypted
+          with recoveryKey, then re-encrypted with new keyEncryptionKey
+        type: string
+      newLoginKeySalt:
+        type: string
+      newMasterKeyNonce:
+        type: string
+      recoveryProof:
+        description: 'Recovery proof: base64(recoveryKeyEntropy) — verified against
+          stored bcrypt verifier'
+        type: string
+    type: object
+  handlers.RefreshRequest:
+    properties:
+      refreshToken:
+        type: string
+    type: object
+  handlers.RefreshResponse:
+    properties:
+      accessToken:
+        type: string
+    type: object
+  handlers.RegisterRequest:
+    properties:
+      email:
+        type: string
+      encryptedMasterKey:
+        description: Encrypted key material
+        type: string
+      encryptedPrivateKey:
+        type: string
+      encryptedRecoveryKey:
+        type: string
+      kdfSalt:
+        type: string
+      loginKey:
+        description: bcrypt(Argon2id(password, loginKeySalt)) — client sends loginKey,
+          server bcrypts
+        type: string
+      loginKeySalt:
+        type: string
+      masterKeyNonce:
+        type: string
+      privateKeyNonce:
+        type: string
+      publicKey:
+        type: string
+      recoveryKeyNonce:
+        type: string
+      recoveryProof:
+        description: 'Recovery proof: base64(recoveryKeyEntropy) — server bcrypts
+          and stores as verifier (S1-2 fix)'
+        type: string
+      username:
+        type: string
+    type: object
+  handlers.SettingsResponse:
+    properties:
+      registrationEnabled:
+        type: boolean
+    type: object
+  handlers.ShareCollectionRequest:
+    properties:
+      canDelete:
+        type: boolean
+      canUpload:
+        type: boolean
+      encryptedCollectionKey:
+        type: string
+      recipientUserId:
+        type: string
+      uploadQuotaBytes:
+        type: integer
+    type: object
+  handlers.ShareFederatedRequest:
+    properties:
+      canDelete:
+        type: boolean
+      canUpload:
+        type: boolean
+      encryptedCollectionKey:
+        type: string
+      recipientServer:
+        type: string
+      recipientUsername:
+        type: string
+      uploadQuotaBytes:
+        type: integer
+    type: object
+  handlers.ShareFederatedResult:
+    properties:
+      inviteToken:
+        type: string
+      inviteUrl:
+        type: string
+    type: object
+  handlers.StatsResponse:
+    properties:
+      activeUsers:
+        type: integer
+      totalCollections:
+        type: integer
+      totalFiles:
+        type: integer
+      totalStorageUsedBytes:
+        type: integer
+      totalUsers:
+        type: integer
+    type: object
+  handlers.TOTPCodeRequest:
+    properties:
+      code:
+        type: string
+    type: object
+  handlers.TOTPSetupResponse:
+    properties:
+      qrUri:
+        type: string
+      secret:
+        type: string
+    type: object
+  handlers.TwoFALoginRequest:
+    properties:
+      code:
+        type: string
+      preAuthToken:
+        type: string
+    type: object
+  handlers.UpdateAdminSettingsRequest:
+    properties:
+      registrationEnabled:
+        type: boolean
+    type: object
+  handlers.UpdateAdminUserRequest:
+    properties:
+      isActive:
+        type: boolean
+      isAdmin:
+        type: boolean
+      storageQuotaBytes:
+        type: integer
+    type: object
+  handlers.UpdateCollectionRequest:
+    properties:
+      encryptedName:
+        type: string
+      nameNonce:
+        type: string
+    type: object
+  handlers.UpdateColorRequest:
+    properties:
+      color:
+        type: string
+    type: object
+  handlers.UploadResult:
+    properties:
+      id:
+        type: string
+    type: object
+  handlers.UserLookupResponse:
+    properties:
+      publicKey:
+        type: string
+      userId:
+        type: string
+    type: object
+  handlers.UserRow:
+    properties:
+      createdAt:
+        type: string
+      email:
+        type: string
+      id:
+        type: string
+      isActive:
+        type: boolean
+      isAdmin:
+        type: boolean
+      storageQuotaBytes:
+        type: integer
+      storageUsedBytes:
+        type: integer
+      totpEnabled:
+        type: boolean
+      username:
+        type: string
+    type: object
+host: localhost
+info:
+  contact: {}
+  description: Self-hosted, end-to-end encrypted file storage with federation. All
+    file content and metadata are encrypted client-side; the server stores only ciphertext.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  title: Kutup API
+  version: 1.0.0
+paths:
+  /admin/settings:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.SettingsResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get server settings
+      tags:
+      - Admin
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Settings
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.UpdateAdminSettingsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.SettingsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Update server settings
+      tags:
+      - Admin
+  /admin/stats:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.StatsResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get aggregate server statistics
+      tags:
+      - Admin
+  /admin/users:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/handlers.UserRow'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List all users
+      tags:
+      - Admin
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: User details
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.CreateAdminUserRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Email or username already taken
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Create a user account (admin)
+      tags:
+      - Admin
+  /admin/users/{id}:
+    delete:
+      parameters:
+      - description: User UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: ""
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete a user and all their data
+      tags:
+      - Admin
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: User UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Fields to update (all optional)
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.UpdateAdminUserRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Update a user (quota, active, admin flag)
+      tags:
+      - Admin
+  /auth/complete-setup:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Full key bundle
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.RegisterRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.LoginResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Complete first-login setup
+      tags:
+      - Auth
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Returns full tokens on success, or a preAuthToken when 2FA is required
+        (requiresTotp=true), or a setupToken when first login (requiresSetup=true).
+      parameters:
+      - description: Email and derived login key
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.LoginResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "429":
+          description: Rate limited (10/min per IP)
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Login
+      tags:
+      - Auth
+  /auth/login/2fa:
+    post:
+      consumes:
+      - application/json
+      description: Submit TOTP code with the preAuthToken from the login response.
+        Locked after 5 failed attempts.
+      parameters:
+      - description: Pre-auth token and TOTP code
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.TwoFALoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.LoginResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "429":
+          description: Too many failed TOTP attempts
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Complete 2FA login
+      tags:
+      - Auth
+  /auth/login/preflight:
+    get:
+      parameters:
+      - description: Email address
+        in: query
+        name: email
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PreflightLoginResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "429":
+          description: Rate limited (20/min per IP)
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Fetch KDF salts before login
+      tags:
+      - Auth
+  /auth/recover:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Recovery proof and new key material
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.RecoverRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "429":
+          description: Rate limited (5/hr per IP)
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Recover account using mnemonic recovery key
+      tags:
+      - Auth
+  /auth/recover/preflight:
+    get:
+      parameters:
+      - description: Email address
+        in: query
+        name: email
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PreflightRecoverResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "429":
+          description: Rate limited (5/hr per IP)
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Fetch encrypted recovery data before account recovery
+      tags:
+      - Auth
+  /auth/refresh:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Refresh token (or pass via refresh_token cookie)
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/handlers.RefreshRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.RefreshResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Refresh access token
+      tags:
+      - Auth
+  /auth/register:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Encrypted key bundle and credentials
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.RegisterRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Registration disabled
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Email or username already taken
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Register a new account
+      tags:
+      - Auth
+  /auth/settings:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.SettingsResponse'
+      summary: Get public server settings
+      tags:
+      - Auth
+  /collections:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/handlers.CollectionRow'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List collections
+      tags:
+      - Collections
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Encrypted collection name and key
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.CreateCollectionRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.CreateCollectionResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Create a collection
+      tags:
+      - Collections
+  /collections/{id}:
+    delete:
+      parameters:
+      - description: Collection UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: ""
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete a collection and all its files
+      tags:
+      - Collections
+    get:
+      parameters:
+      - description: Collection UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.CollectionRow'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get a collection
+      tags:
+      - Collections
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Collection UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: New encrypted name
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.UpdateCollectionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Rename a collection
+      tags:
+      - Collections
+  /collections/{id}/color:
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Collection UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Color name
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.UpdateColorRequest'
+      responses:
+        "204":
+          description: ""
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Set collection color
+      tags:
+      - Collections
+  /collections/{id}/files:
+    get:
+      parameters:
+      - description: Collection UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/handlers.FileRow'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List files in a collection
+      tags:
+      - Files
+  /collections/{id}/share:
+    post:
+      consumes:
+      - application/json
+      description: The client encrypts the collection key to the recipient's NaCl
+        box public key before submitting.
+      parameters:
+      - description: Collection UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Share details
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.ShareCollectionRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Share a collection with a local user
+      tags:
+      - Collections
+  /collections/{id}/share-federated:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Collection UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Federated share details
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.ShareFederatedRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.ShareFederatedResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Share a collection with a user on a remote Kutup instance
+      tags:
+      - Collections
+  /collections/fed-pubkey:
+    get:
+      parameters:
+      - description: Remote username
+        in: query
+        name: username
+        required: true
+        type: string
+      - description: Remote Kutup server base URL
+        in: query
+        name: server
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PubkeyResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Fetch a remote user's public key (for federated sharing)
+      tags:
+      - Collections
+  /fed-proxy/{shareId}/files:
+    get:
+      parameters:
+      - description: Incoming share UUID
+        in: path
+        name: shareId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/handlers.FileRow'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List files in a federated share (proxied)
+      tags:
+      - Federation Proxy
+  /fed-proxy/{shareId}/files/{fileId}:
+    delete:
+      parameters:
+      - description: Incoming share UUID
+        in: path
+        name: shareId
+        required: true
+        type: string
+      - description: File UUID
+        in: path
+        name: fileId
+        required: true
+        type: string
+      responses:
+        "204":
+          description: ""
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete a file in a federated share (proxied)
+      tags:
+      - Federation Proxy
+  /fed-proxy/{shareId}/files/{fileId}/download:
+    get:
+      parameters:
+      - description: Incoming share UUID
+        in: path
+        name: shareId
+        required: true
+        type: string
+      - description: File UUID
+        in: path
+        name: fileId
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: ""
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Download a file from a federated share (proxied)
+      tags:
+      - Federation Proxy
+  /fed-proxy/{shareId}/upload:
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: Incoming share UUID
+        in: path
+        name: shareId
+        required: true
+        type: string
+      - description: Encrypted metadata (base64)
+        in: formData
+        name: encryptedMetadata
+        required: true
+        type: string
+      - description: Metadata nonce (base64)
+        in: formData
+        name: metadataNonce
+        required: true
+        type: string
+      - description: Encrypted file key (base64)
+        in: formData
+        name: encryptedFileKey
+        required: true
+        type: string
+      - description: File key nonce (base64)
+        in: formData
+        name: fileKeyNonce
+        required: true
+        type: string
+      - description: Encrypted file content
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.MessageResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Upload a file to a federated share (proxied)
+      tags:
+      - Federation Proxy
+  /fed-proxy/incoming:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/handlers.IncomingShare'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List incoming federated shares
+      tags:
+      - Federation Proxy
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Invite URL
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.AddIncomingShareRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.IncomingShare'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Accept a federated share invite
+      tags:
+      - Federation Proxy
+  /fed-proxy/incoming/{shareId}:
+    delete:
+      parameters:
+      - description: Share UUID
+        in: path
+        name: shareId
+        required: true
+        type: string
+      responses:
+        "204":
+          description: ""
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Remove an incoming federated share
+      tags:
+      - Federation Proxy
+  /fed/invites/{token}:
+    get:
+      parameters:
+      - description: Invite token
+        in: path
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.FedInviteResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Get federated invite metadata
+      tags:
+      - Federation
+  /fed/shares/{token}/files:
+    get:
+      parameters:
+      - description: Share access token
+        in: path
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/handlers.FileRow'
+            type: array
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: List files in a federated share
+      tags:
+      - Federation
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: Share access token
+        in: path
+        name: token
+        required: true
+        type: string
+      - description: Encrypted metadata (base64)
+        in: formData
+        name: encryptedMetadata
+        required: true
+        type: string
+      - description: Metadata nonce (base64)
+        in: formData
+        name: metadataNonce
+        required: true
+        type: string
+      - description: Encrypted file key (base64)
+        in: formData
+        name: encryptedFileKey
+        required: true
+        type: string
+      - description: File key nonce (base64)
+        in: formData
+        name: fileKeyNonce
+        required: true
+        type: string
+      - description: Encrypted file content
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.UploadResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Upload a file to a federated share
+      tags:
+      - Federation
+  /fed/shares/{token}/files/{fileId}:
+    delete:
+      parameters:
+      - description: Share access token
+        in: path
+        name: token
+        required: true
+        type: string
+      - description: File UUID
+        in: path
+        name: fileId
+        required: true
+        type: string
+      responses:
+        "204":
+          description: ""
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Delete a file from a federated share
+      tags:
+      - Federation
+  /fed/shares/{token}/files/{fileId}/download:
+    get:
+      parameters:
+      - description: Share access token
+        in: path
+        name: token
+        required: true
+        type: string
+      - description: File UUID
+        in: path
+        name: fileId
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: ""
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Download a file from a federated share
+      tags:
+      - Federation
+  /fed/users:
+    get:
+      description: Called by remote Kutup servers during federated sharing. Rate-limited
+        to 60/min per IP.
+      parameters:
+      - description: Username to look up
+        in: query
+        name: username
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PubkeyResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "429":
+          description: Rate limited
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Look up a local user (federation)
+      tags:
+      - Federation
+  /files/{id}:
+    delete:
+      parameters:
+      - description: File UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: ""
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete a file
+      tags:
+      - Files
+  /files/{id}/download:
+    get:
+      parameters:
+      - description: File UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: ""
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Download an encrypted file
+      tags:
+      - Files
+  /files/upload:
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: Target collection UUID
+        in: formData
+        name: collectionId
+        required: true
+        type: string
+      - description: Encrypted filename/size/MIME (base64)
+        in: formData
+        name: encryptedMetadata
+        required: true
+        type: string
+      - description: Metadata nonce (base64)
+        in: formData
+        name: metadataNonce
+        required: true
+        type: string
+      - description: Per-file key encrypted with collection key (base64)
+        in: formData
+        name: encryptedFileKey
+        required: true
+        type: string
+      - description: File key nonce (base64)
+        in: formData
+        name: fileKeyNonce
+        required: true
+        type: string
+      - description: Encrypted file content
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.UploadResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "413":
+          description: Storage quota exceeded
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Upload an encrypted file
+      tags:
+      - Files
+  /share:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Share details
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.CreateShareRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.CreateShareResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Create a public share link
+      tags:
+      - Public Shares
+  /share/{token}:
+    get:
+      parameters:
+      - description: Share token
+        in: path
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PublicShareResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "410":
+          description: Link expired
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Get public share metadata
+      tags:
+      - Public Shares
+  /share/{token}/download/{fileId}:
+    get:
+      parameters:
+      - description: Share token
+        in: path
+        name: token
+        required: true
+        type: string
+      - description: File UUID
+        in: path
+        name: fileId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.DownloadURLResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "410":
+          description: Link expired
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Get presigned download URL for a public share file
+      tags:
+      - Public Shares
+  /share/{token}/files:
+    get:
+      parameters:
+      - description: Share token
+        in: path
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/handlers.FileRow'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "410":
+          description: Link expired
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: List files in a public share
+      tags:
+      - Public Shares
+  /user/2fa:
+    delete:
+      consumes:
+      - application/json
+      description: Requires a valid TOTP code to prevent a stolen session from silently
+        removing 2FA.
+      parameters:
+      - description: 6-digit TOTP code
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.TOTPCodeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Disable TOTP
+      tags:
+      - User
+  /user/2fa/setup:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.TOTPSetupResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Generate TOTP secret
+      tags:
+      - User
+  /user/2fa/verify:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 6-digit TOTP code
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.TOTPCodeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Confirm TOTP setup
+      tags:
+      - User
+  /user/me:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.MeResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get current user profile and key bundle
+      tags:
+      - User
+  /users/by-email/{email}:
+    get:
+      parameters:
+      - description: URL-encoded email address
+        in: path
+        name: email
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.UserLookupResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Look up another user's public key by email
+      tags:
+      - User
+securityDefinitions:
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

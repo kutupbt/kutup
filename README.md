@@ -113,7 +113,9 @@ For production deployment with TLS, reverse proxies, and backup strategies, see 
 
 ## API Reference
 
-Full REST API reference for all 35+ endpoints grouped by category, see [docs/api.md](docs/api.md).
+Full REST API reference: [docs/api.md](docs/api.md).
+
+Interactive Swagger UI is served at `http://localhost/swagger/index.html` when the stack is running. Click **Authorize** and paste a Bearer token from `POST /api/auth/login` to test authenticated endpoints. See [docs/contributing.md](docs/contributing.md#swagger-ui) for how to regenerate the spec after changing an endpoint.
 
 ---
 

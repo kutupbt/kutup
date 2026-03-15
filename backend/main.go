@@ -2,11 +2,10 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"log"
 	"strings"
 
+	_ "github.com/depo/backend/docs"
 	"github.com/depo/backend/config"
 	"github.com/depo/backend/db"
 	"github.com/depo/backend/handlers"
@@ -16,9 +15,20 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/jackc/pgx/v5/pgxpool"
+	fiberSwagger "github.com/swaggo/fiber-swagger"
 	"golang.org/x/crypto/bcrypt"
 )
 
+// @title          Kutup API
+// @version        1.0.0
+// @description    Self-hosted, end-to-end encrypted file storage with federation. All file content and metadata are encrypted client-side; the server stores only ciphertext.
+// @license.name   MIT
+// @license.url    https://opensource.org/licenses/MIT
+// @host           localhost
+// @BasePath       /api
+// @securityDefinitions.apikey BearerAuth
+// @in             header
+// @name           Authorization
 func main() {
 	cfg := config.Load()
 
@@ -63,6 +73,8 @@ func main() {
 		StreamRequestBody:     true,
 		DisableStartupMessage: cfg.AppEnv == "production",
 	})
+
+	app.Get("/swagger/*", fiberSwagger.WrapHandler)
 
 	app.Use(recover.New())
 	app.Use(cors.New(cors.Config{

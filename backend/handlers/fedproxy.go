@@ -44,6 +44,17 @@ type IncomingShare struct {
 }
 
 // POST /api/fed-proxy/incoming  — add incoming share by pasting invite URL
+// @Summary      Accept a federated share invite
+// @Tags         Federation Proxy
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      AddIncomingShareRequest  true  "Invite URL"
+// @Success      201   {object}  IncomingShare
+// @Failure      400   {object}  ErrorResponse
+// @Failure      401   {object}  ErrorResponse
+// @Failure      502   {object}  ErrorResponse
+// @Router       /fed-proxy/incoming [post]
 func (h *FedProxyHandler) AddIncomingShare(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 	var req struct {
@@ -126,6 +137,13 @@ func (h *FedProxyHandler) AddIncomingShare(c *fiber.Ctx) error {
 }
 
 // GET /api/fed-proxy/incoming  — list all incoming shares
+// @Summary      List incoming federated shares
+// @Tags         Federation Proxy
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {array}   IncomingShare
+// @Failure      401  {object}  ErrorResponse
+// @Router       /fed-proxy/incoming [get]
 func (h *FedProxyHandler) ListIncomingShares(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 	rows, err := h.DB.Query(context.Background(), `
@@ -155,6 +173,14 @@ func (h *FedProxyHandler) ListIncomingShares(c *fiber.Ctx) error {
 }
 
 // DELETE /api/fed-proxy/incoming/{shareId}  — remove incoming share
+// @Summary      Remove an incoming federated share
+// @Tags         Federation Proxy
+// @Security     BearerAuth
+// @Param        shareId  path  string  true  "Share UUID"
+// @Success      204
+// @Failure      401  {object}  ErrorResponse
+// @Failure      404  {object}  ErrorResponse
+// @Router       /fed-proxy/incoming/{shareId} [delete]
 func (h *FedProxyHandler) RemoveIncomingShare(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 	shareID := c.Params("shareId")
@@ -168,6 +194,16 @@ func (h *FedProxyHandler) RemoveIncomingShare(c *fiber.Ctx) error {
 }
 
 // GET /api/fed-proxy/{shareId}/files  — proxy list files
+// @Summary      List files in a federated share (proxied)
+// @Tags         Federation Proxy
+// @Produce      json
+// @Security     BearerAuth
+// @Param        shareId  path      string  true  "Incoming share UUID"
+// @Success      200      {array}   FileRow
+// @Failure      401      {object}  ErrorResponse
+// @Failure      404      {object}  ErrorResponse
+// @Failure      502      {object}  ErrorResponse
+// @Router       /fed-proxy/{shareId}/files [get]
 func (h *FedProxyHandler) ProxyListFiles(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 	shareID := c.Params("shareId")
@@ -187,6 +223,17 @@ func (h *FedProxyHandler) ProxyListFiles(c *fiber.Ctx) error {
 }
 
 // GET /api/fed-proxy/{shareId}/files/{fileId}/download  — proxy download
+// @Summary      Download a file from a federated share (proxied)
+// @Tags         Federation Proxy
+// @Produce      octet-stream
+// @Security     BearerAuth
+// @Param        shareId  path  string  true  "Incoming share UUID"
+// @Param        fileId   path  string  true  "File UUID"
+// @Success      200
+// @Failure      401  {object}  ErrorResponse
+// @Failure      404  {object}  ErrorResponse
+// @Failure      502  {object}  ErrorResponse
+// @Router       /fed-proxy/{shareId}/files/{fileId}/download [get]
 func (h *FedProxyHandler) ProxyDownload(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 	shareID := c.Params("shareId")
@@ -209,6 +256,23 @@ func (h *FedProxyHandler) ProxyDownload(c *fiber.Ctx) error {
 }
 
 // POST /api/fed-proxy/{shareId}/upload  — proxy upload
+// @Summary      Upload a file to a federated share (proxied)
+// @Tags         Federation Proxy
+// @Accept       mpfd
+// @Produce      json
+// @Security     BearerAuth
+// @Param        shareId            path      string  true  "Incoming share UUID"
+// @Param        encryptedMetadata  formData  string  true  "Encrypted metadata (base64)"
+// @Param        metadataNonce      formData  string  true  "Metadata nonce (base64)"
+// @Param        encryptedFileKey   formData  string  true  "Encrypted file key (base64)"
+// @Param        fileKeyNonce       formData  string  true  "File key nonce (base64)"
+// @Param        file               formData  file    true  "Encrypted file content"
+// @Success      201  {object}  MessageResponse
+// @Failure      401  {object}  ErrorResponse
+// @Failure      403  {object}  ErrorResponse
+// @Failure      404  {object}  ErrorResponse
+// @Failure      502  {object}  ErrorResponse
+// @Router       /fed-proxy/{shareId}/upload [post]
 func (h *FedProxyHandler) ProxyUpload(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 	shareID := c.Params("shareId")
@@ -236,6 +300,16 @@ func (h *FedProxyHandler) ProxyUpload(c *fiber.Ctx) error {
 }
 
 // DELETE /api/fed-proxy/{shareId}/files/{fileId}  — proxy delete
+// @Summary      Delete a file in a federated share (proxied)
+// @Tags         Federation Proxy
+// @Security     BearerAuth
+// @Param        shareId  path  string  true  "Incoming share UUID"
+// @Param        fileId   path  string  true  "File UUID"
+// @Success      204
+// @Failure      401  {object}  ErrorResponse
+// @Failure      404  {object}  ErrorResponse
+// @Failure      502  {object}  ErrorResponse
+// @Router       /fed-proxy/{shareId}/files/{fileId} [delete]
 func (h *FedProxyHandler) ProxyDelete(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 	shareID := c.Params("shareId")

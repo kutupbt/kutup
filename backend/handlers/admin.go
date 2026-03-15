@@ -17,6 +17,14 @@ type AdminHandler struct {
 	DB *pgxpool.Pool
 }
 
+// @Summary      List all users
+// @Tags         Admin
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {array}   UserRow
+// @Failure      401  {object}  ErrorResponse
+// @Failure      403  {object}  ErrorResponse
+// @Router       /admin/users [get]
 func (h *AdminHandler) ListUsers(c *fiber.Ctx) error {
 	rows, err := h.DB.Query(context.Background(), `
 		SELECT id, email, COALESCE(username, ''), storage_quota_bytes, storage_used_bytes,
@@ -58,6 +66,18 @@ func (h *AdminHandler) ListUsers(c *fiber.Ctx) error {
 	return c.JSON(users)
 }
 
+// @Summary      Create a user account (admin)
+// @Tags         Admin
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      CreateAdminUserRequest  true  "User details"
+// @Success      201   {object}  MessageResponse
+// @Failure      400   {object}  ErrorResponse
+// @Failure      401   {object}  ErrorResponse
+// @Failure      403   {object}  ErrorResponse
+// @Failure      409   {object}  ErrorResponse  "Email or username already taken"
+// @Router       /admin/users [post]
 func (h *AdminHandler) CreateUser(c *fiber.Ctx) error {
 	var req struct {
 		Email             string `json:"email"`
@@ -110,12 +130,31 @@ func (h *AdminHandler) CreateUser(c *fiber.Ctx) error {
 	return c.Status(201).JSON(fiber.Map{"message": "user created"})
 }
 
+// @Summary      Get server settings
+// @Tags         Admin
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  SettingsResponse
+// @Failure      401  {object}  ErrorResponse
+// @Failure      403  {object}  ErrorResponse
+// @Router       /admin/settings [get]
 func (h *AdminHandler) GetSettings(c *fiber.Ctx) error {
 	var val string
 	h.DB.QueryRow(context.Background(), `SELECT value FROM site_settings WHERE key='registration_enabled'`).Scan(&val)
 	return c.JSON(fiber.Map{"registrationEnabled": val != "false"})
 }
 
+// @Summary      Update server settings
+// @Tags         Admin
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      UpdateAdminSettingsRequest  true  "Settings"
+// @Success      200   {object}  SettingsResponse
+// @Failure      400   {object}  ErrorResponse
+// @Failure      401   {object}  ErrorResponse
+// @Failure      403   {object}  ErrorResponse
+// @Router       /admin/settings [put]
 func (h *AdminHandler) UpdateSettings(c *fiber.Ctx) error {
 	var req struct {
 		RegistrationEnabled bool `json:"registrationEnabled"`
@@ -140,6 +179,18 @@ func (h *AdminHandler) UpdateSettings(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"registrationEnabled": req.RegistrationEnabled})
 }
 
+// @Summary      Update a user (quota, active, admin flag)
+// @Tags         Admin
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id    path      string                 true  "User UUID"
+// @Param        body  body      UpdateAdminUserRequest  true  "Fields to update (all optional)"
+// @Success      200   {object}  MessageResponse
+// @Failure      400   {object}  ErrorResponse
+// @Failure      401   {object}  ErrorResponse
+// @Failure      403   {object}  ErrorResponse
+// @Router       /admin/users/{id} [put]
 func (h *AdminHandler) UpdateUser(c *fiber.Ctx) error {
 	targetID := c.Params("id")
 
@@ -178,6 +229,15 @@ func (h *AdminHandler) UpdateUser(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "updated"})
 }
 
+// @Summary      Delete a user and all their data
+// @Tags         Admin
+// @Security     BearerAuth
+// @Param        id  path  string  true  "User UUID"
+// @Success      204
+// @Failure      401  {object}  ErrorResponse
+// @Failure      403  {object}  ErrorResponse
+// @Failure      404  {object}  ErrorResponse
+// @Router       /admin/users/{id} [delete]
 func (h *AdminHandler) DeleteUser(c *fiber.Ctx) error {
 	targetID := c.Params("id")
 
@@ -190,6 +250,14 @@ func (h *AdminHandler) DeleteUser(c *fiber.Ctx) error {
 	return c.SendStatus(204)
 }
 
+// @Summary      Get aggregate server statistics
+// @Tags         Admin
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  StatsResponse
+// @Failure      401  {object}  ErrorResponse
+// @Failure      403  {object}  ErrorResponse
+// @Router       /admin/stats [get]
 func (h *AdminHandler) GetStats(c *fiber.Ctx) error {
 	var stats struct {
 		TotalUsers       int64 `json:"totalUsers"`
