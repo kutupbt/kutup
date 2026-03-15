@@ -84,6 +84,52 @@ migrate create -ext sql -dir backend/db/migrations -seq <migration_name>
 
 This creates two files: `<N>_<name>.up.sql` and `<N>_<name>.down.sql`. Write the forward migration in `.up.sql` and the rollback in `.down.sql`.
 
+### Swagger UI
+
+The API spec is generated from `// @` annotations in the handler files using [swaggo/swag](https://github.com/swaggo/swag). The generated files live in `backend/docs/` and are committed to the repo.
+
+**Viewing the UI locally**
+
+Start the stack, then open:
+
+```
+http://localhost/swagger/index.html
+```
+
+To authenticate, click **Authorize** and paste a Bearer token (obtain one from `POST /api/auth/login`).
+
+**Regenerating the spec after changing an endpoint**
+
+```sh
+# Install the swag CLI (one-time)
+go install github.com/swaggo/swag/cmd/swag@v1.8.1
+
+# Regenerate from the handler annotations
+cd backend
+swag init -g main.go
+```
+
+Commit the updated `backend/docs/` files alongside your handler changes. The Dockerfile also runs `swag init` during `docker build`, so the image always reflects the current annotations.
+
+**Adding annotations to a new handler**
+
+Place the comment block immediately above the `func` signature:
+
+```go
+// @Summary      Brief description shown in the UI
+// @Tags         Auth
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      MyRequestType  true  "Description"
+// @Success      200   {object}  MyResponseType
+// @Failure      400   {object}  ErrorResponse
+// @Router       /auth/my-endpoint [post]
+func (h *AuthHandler) MyEndpoint(c *fiber.Ctx) error {
+```
+
+Define any new request/response types at package level in `backend/handlers/models.go` so swag can resolve them. Types defined inside function bodies are invisible to the generator.
+
 ### Running tests
 
 ```sh
@@ -136,6 +182,8 @@ kutup/
 │   │   ├── db.go            # Connection pool, migration runner
 │   │   └── migrations/      # SQL migration files
 │   ├── handlers/            # HTTP handlers (one file per domain)
+│   │   └── models.go        # Exported request/response types for Swagger
+│   ├── docs/                # Generated OpenAPI spec (swag init output)
 │   ├── middleware/          # JWT auth, admin check, rate limiting
 │   ├── services/            # Business logic (S3, quotas, TOTP)
 │   └── utils/               # JWT helpers, token gen, SSRF check

@@ -41,6 +41,16 @@ type RegisterRequest struct {
 	RecoveryProof        string `json:"recoveryProof"`
 }
 
+// @Summary      Register a new account
+// @Tags         Auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      RegisterRequest  true  "Encrypted key bundle and credentials"
+// @Success      201   {object}  MessageResponse
+// @Failure      400   {object}  ErrorResponse
+// @Failure      403   {object}  ErrorResponse  "Registration disabled"
+// @Failure      409   {object}  ErrorResponse  "Email or username already taken"
+// @Router       /auth/register [post]
 func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	var regEnabled string
 	h.DB.QueryRow(context.Background(), `SELECT value FROM site_settings WHERE key='registration_enabled'`).Scan(&regEnabled)
@@ -124,6 +134,14 @@ type PreflightResponse struct {
 
 // GetLoginPreflight returns KDF salts for an email. Returns deterministic fake
 // salts for non-existent emails to prevent user enumeration.
+// @Summary      Fetch KDF salts before login
+// @Tags         Auth
+// @Produce      json
+// @Param        email  query     string  true  "Email address"
+// @Success      200    {object}  PreflightLoginResponse
+// @Failure      400    {object}  ErrorResponse
+// @Failure      429    {object}  ErrorResponse  "Rate limited (20/min per IP)"
+// @Router       /auth/login/preflight [get]
 func (h *AuthHandler) GetLoginPreflight(c *fiber.Ctx) error {
 	email := c.Query("email")
 	if email == "" {
@@ -169,6 +187,17 @@ type LoginResponse struct {
 	SetupToken           *string `json:"setupToken,omitempty"`
 }
 
+// @Summary      Login
+// @Description  Returns full tokens on success, or a preAuthToken when 2FA is required (requiresTotp=true), or a setupToken when first login (requiresSetup=true).
+// @Tags         Auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      LoginRequest  true  "Email and derived login key"
+// @Success      200   {object}  LoginResponse
+// @Failure      400   {object}  ErrorResponse
+// @Failure      401   {object}  ErrorResponse
+// @Failure      429   {object}  ErrorResponse  "Rate limited (10/min per IP)"
+// @Router       /auth/login [post]
 func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	var req LoginRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -242,6 +271,17 @@ type TwoFALoginRequest struct {
 	Code         string `json:"code"`
 }
 
+// @Summary      Complete 2FA login
+// @Description  Submit TOTP code with the preAuthToken from the login response. Locked after 5 failed attempts.
+// @Tags         Auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      TwoFALoginRequest  true  "Pre-auth token and TOTP code"
+// @Success      200   {object}  LoginResponse
+// @Failure      400   {object}  ErrorResponse
+// @Failure      401   {object}  ErrorResponse
+// @Failure      429   {object}  ErrorResponse  "Too many failed TOTP attempts"
+// @Router       /auth/login/2fa [post]
 func (h *AuthHandler) LoginTwoFA(c *fiber.Ctx) error {
 	var req TwoFALoginRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -299,6 +339,14 @@ func (h *AuthHandler) LoginTwoFA(c *fiber.Ctx) error {
 // GetRecoveryPreflight returns the data needed client-side to perform recovery:
 // the encrypted recovery key (master key encrypted with recovery key entropy).
 // Rate limited 5/hr. No auth required — recovery is the auth mechanism.
+// @Summary      Fetch encrypted recovery data before account recovery
+// @Tags         Auth
+// @Produce      json
+// @Param        email  query     string  true  "Email address"
+// @Success      200    {object}  PreflightRecoverResponse
+// @Failure      400    {object}  ErrorResponse
+// @Failure      429    {object}  ErrorResponse  "Rate limited (5/hr per IP)"
+// @Router       /auth/recover/preflight [get]
 func (h *AuthHandler) GetRecoveryPreflight(c *fiber.Ctx) error {
 	email := c.Query("email")
 	if email == "" {
@@ -342,6 +390,17 @@ type RecoverRequest struct {
 	RecoveryProof         string `json:"recoveryProof"`
 }
 
+// @Summary      Recover account using mnemonic recovery key
+// @Tags         Auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      RecoverRequest  true  "Recovery proof and new key material"
+// @Success      200   {object}  MessageResponse
+// @Failure      400   {object}  ErrorResponse
+// @Failure      401   {object}  ErrorResponse
+// @Failure      404   {object}  ErrorResponse
+// @Failure      429   {object}  ErrorResponse  "Rate limited (5/hr per IP)"
+// @Router       /auth/recover [post]
 func (h *AuthHandler) Recover(c *fiber.Ctx) error {
 	var req RecoverRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -413,6 +472,14 @@ type RefreshRequest struct {
 	RefreshToken string `json:"refreshToken"`
 }
 
+// @Summary      Refresh access token
+// @Tags         Auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      RefreshRequest  false  "Refresh token (or pass via refresh_token cookie)"
+// @Success      200   {object}  RefreshResponse
+// @Failure      401   {object}  ErrorResponse
+// @Router       /auth/refresh [post]
 func (h *AuthHandler) Refresh(c *fiber.Ctx) error {
 	refreshToken := c.Cookies("refresh_token")
 	if refreshToken == "" {
@@ -446,7 +513,14 @@ func (h *AuthHandler) Refresh(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"accessToken": accessToken})
 }
 
-// User profile
+// @Summary      Get current user profile and key bundle
+// @Tags         User
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  MeResponse
+// @Failure      401  {object}  ErrorResponse
+// @Failure      404  {object}  ErrorResponse
+// @Router       /user/me [get]
 func (h *AuthHandler) GetMe(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 
@@ -474,6 +548,15 @@ func (h *AuthHandler) GetMe(c *fiber.Ctx) error {
 	return c.JSON(u)
 }
 
+// @Summary      Look up another user's public key by email
+// @Tags         User
+// @Produce      json
+// @Security     BearerAuth
+// @Param        email  path      string  true  "URL-encoded email address"
+// @Success      200    {object}  UserLookupResponse
+// @Failure      401    {object}  ErrorResponse
+// @Failure      404    {object}  ErrorResponse
+// @Router       /users/by-email/{email} [get]
 func (h *AuthHandler) GetUserByEmail(c *fiber.Ctx) error {
 	email := c.Params("email")
 
@@ -493,6 +576,13 @@ func (h *AuthHandler) GetUserByEmail(c *fiber.Ctx) error {
 }
 
 // TOTP setup: generate secret, return QR URI. Not yet enabled until verified.
+// @Summary      Generate TOTP secret
+// @Tags         User
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  TOTPSetupResponse
+// @Failure      401  {object}  ErrorResponse
+// @Router       /user/2fa/setup [post]
 func (h *AuthHandler) SetupTOTP(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 
@@ -523,6 +613,16 @@ func (h *AuthHandler) SetupTOTP(c *fiber.Ctx) error {
 }
 
 // VerifyTOTP enables TOTP after user confirms they can generate valid codes.
+// @Summary      Confirm TOTP setup
+// @Tags         User
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      TOTPCodeRequest  true  "6-digit TOTP code"
+// @Success      200   {object}  MessageResponse
+// @Failure      400   {object}  ErrorResponse
+// @Failure      401   {object}  ErrorResponse
+// @Router       /user/2fa/verify [post]
 func (h *AuthHandler) VerifyTOTP(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 
@@ -554,6 +654,17 @@ func (h *AuthHandler) VerifyTOTP(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "TOTP enabled"})
 }
 
+// @Summary      Disable TOTP
+// @Description  Requires a valid TOTP code to prevent a stolen session from silently removing 2FA.
+// @Tags         User
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      TOTPCodeRequest  true  "6-digit TOTP code"
+// @Success      200   {object}  MessageResponse
+// @Failure      400   {object}  ErrorResponse
+// @Failure      401   {object}  ErrorResponse
+// @Router       /user/2fa [delete]
 func (h *AuthHandler) DisableTOTP(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 
@@ -587,6 +698,16 @@ func (h *AuthHandler) DisableTOTP(c *fiber.Ctx) error {
 
 // CompleteSetup finalises a first-login account: stores key material and issues tokens.
 // Auth via short-lived setupToken (not a regular access token).
+// @Summary      Complete first-login setup
+// @Tags         Auth
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      RegisterRequest  true  "Full key bundle"
+// @Success      200   {object}  LoginResponse
+// @Failure      400   {object}  ErrorResponse
+// @Failure      401   {object}  ErrorResponse
+// @Router       /auth/complete-setup [post]
 func (h *AuthHandler) CompleteSetup(c *fiber.Ctx) error {
 	authHeader := c.Get("Authorization")
 	tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
@@ -674,6 +795,11 @@ func (h *AuthHandler) CompleteSetup(c *fiber.Ctx) error {
 }
 
 // GetPublicSettings returns site settings visible without authentication.
+// @Summary      Get public server settings
+// @Tags         Auth
+// @Produce      json
+// @Success      200  {object}  SettingsResponse
+// @Router       /auth/settings [get]
 func (h *AuthHandler) GetPublicSettings(c *fiber.Ctx) error {
 	var val string
 	h.DB.QueryRow(context.Background(), `SELECT value FROM site_settings WHERE key='registration_enabled'`).Scan(&val)

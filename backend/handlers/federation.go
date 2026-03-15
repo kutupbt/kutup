@@ -17,6 +17,16 @@ type FederationHandler struct {
 }
 
 // GET /api/fed/users?username=alice  (no auth, public)
+// @Summary      Look up a local user (federation)
+// @Description  Called by remote Kutup servers during federated sharing. Rate-limited to 60/min per IP.
+// @Tags         Federation
+// @Produce      json
+// @Param        username  query     string  true  "Username to look up"
+// @Success      200       {object}  PubkeyResponse
+// @Failure      400       {object}  ErrorResponse
+// @Failure      404       {object}  ErrorResponse
+// @Failure      429       {object}  ErrorResponse  "Rate limited"
+// @Router       /fed/users [get]
 func (h *FederationHandler) GetUserByUsername(c *fiber.Ctx) error {
 	username := c.Query("username")
 	if username == "" {
@@ -34,6 +44,13 @@ func (h *FederationHandler) GetUserByUsername(c *fiber.Ctx) error {
 }
 
 // GET /api/fed/invites/{token}  (no auth - token is the auth)
+// @Summary      Get federated invite metadata
+// @Tags         Federation
+// @Produce      json
+// @Param        token  path      string  true  "Invite token"
+// @Success      200    {object}  FedInviteResponse
+// @Failure      404    {object}  ErrorResponse
+// @Router       /fed/invites/{token} [get]
 func (h *FederationHandler) GetInvite(c *fiber.Ctx) error {
 	token := c.Params("token")
 	var row struct {
@@ -69,6 +86,13 @@ func (h *FederationHandler) GetInvite(c *fiber.Ctx) error {
 }
 
 // GET /api/fed/shares/{token}/files  (token is auth)
+// @Summary      List files in a federated share
+// @Tags         Federation
+// @Produce      json
+// @Param        token  path      string  true  "Share access token"
+// @Success      200    {array}   FileRow
+// @Failure      403    {object}  ErrorResponse
+// @Router       /fed/shares/{token}/files [get]
 func (h *FederationHandler) ListShareFiles(c *fiber.Ctx) error {
 	token := c.Params("token")
 	var collectionID string
@@ -123,6 +147,15 @@ func (h *FederationHandler) ListShareFiles(c *fiber.Ctx) error {
 }
 
 // GET /api/fed/shares/{token}/files/{fileId}/download
+// @Summary      Download a file from a federated share
+// @Tags         Federation
+// @Produce      octet-stream
+// @Param        token   path  string  true  "Share access token"
+// @Param        fileId  path  string  true  "File UUID"
+// @Success      200
+// @Failure      403  {object}  ErrorResponse
+// @Failure      404  {object}  ErrorResponse
+// @Router       /fed/shares/{token}/files/{fileId}/download [get]
 func (h *FederationHandler) DownloadShareFile(c *fiber.Ctx) error {
 	token := c.Params("token")
 	fileID := c.Params("fileId")
@@ -159,6 +192,21 @@ func (h *FederationHandler) DownloadShareFile(c *fiber.Ctx) error {
 }
 
 // POST /api/fed/shares/{token}/files  (upload via federation)
+// @Summary      Upload a file to a federated share
+// @Tags         Federation
+// @Accept       mpfd
+// @Produce      json
+// @Param        token              path      string  true  "Share access token"
+// @Param        encryptedMetadata  formData  string  true  "Encrypted metadata (base64)"
+// @Param        metadataNonce      formData  string  true  "Metadata nonce (base64)"
+// @Param        encryptedFileKey   formData  string  true  "Encrypted file key (base64)"
+// @Param        fileKeyNonce       formData  string  true  "File key nonce (base64)"
+// @Param        file               formData  file    true  "Encrypted file content"
+// @Success      201  {object}  UploadResult
+// @Failure      400  {object}  ErrorResponse
+// @Failure      403  {object}  ErrorResponse
+// @Failure      413  {object}  ErrorResponse
+// @Router       /fed/shares/{token}/files [post]
 func (h *FederationHandler) UploadShareFile(c *fiber.Ctx) error {
 	token := c.Params("token")
 
@@ -263,6 +311,14 @@ func (h *FederationHandler) UploadShareFile(c *fiber.Ctx) error {
 }
 
 // DELETE /api/fed/shares/{token}/files/{fileId}
+// @Summary      Delete a file from a federated share
+// @Tags         Federation
+// @Param        token   path  string  true  "Share access token"
+// @Param        fileId  path  string  true  "File UUID"
+// @Success      204
+// @Failure      403  {object}  ErrorResponse
+// @Failure      404  {object}  ErrorResponse
+// @Router       /fed/shares/{token}/files/{fileId} [delete]
 func (h *FederationHandler) DeleteShareFile(c *fiber.Ctx) error {
 	token := c.Params("token")
 	fileID := c.Params("fileId")

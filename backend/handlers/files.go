@@ -17,6 +17,15 @@ type FilesHandler struct {
 	Storage *services.StorageService
 }
 
+// @Summary      List files in a collection
+// @Tags         Files
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id   path      string  true  "Collection UUID"
+// @Success      200  {array}   FileRow
+// @Failure      401  {object}  ErrorResponse
+// @Failure      403  {object}  ErrorResponse
+// @Router       /collections/{id}/files [get]
 func (h *FilesHandler) ListFiles(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 	collID := c.Params("id")
@@ -73,6 +82,23 @@ func (h *FilesHandler) ListFiles(c *fiber.Ctx) error {
 	return c.JSON(files)
 }
 
+// @Summary      Upload an encrypted file
+// @Tags         Files
+// @Accept       mpfd
+// @Produce      json
+// @Security     BearerAuth
+// @Param        collectionId       formData  string  true  "Target collection UUID"
+// @Param        encryptedMetadata  formData  string  true  "Encrypted filename/size/MIME (base64)"
+// @Param        metadataNonce      formData  string  true  "Metadata nonce (base64)"
+// @Param        encryptedFileKey   formData  string  true  "Per-file key encrypted with collection key (base64)"
+// @Param        fileKeyNonce       formData  string  true  "File key nonce (base64)"
+// @Param        file               formData  file    true  "Encrypted file content"
+// @Success      201  {object}  UploadResult
+// @Failure      400  {object}  ErrorResponse
+// @Failure      401  {object}  ErrorResponse
+// @Failure      403  {object}  ErrorResponse
+// @Failure      413  {object}  ErrorResponse  "Storage quota exceeded"
+// @Router       /files/upload [post]
 func (h *FilesHandler) Upload(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 
@@ -209,6 +235,16 @@ func (h *FilesHandler) Upload(c *fiber.Ctx) error {
 	return c.Status(201).JSON(fiber.Map{"id": fileID})
 }
 
+// @Summary      Download an encrypted file
+// @Tags         Files
+// @Produce      octet-stream
+// @Security     BearerAuth
+// @Param        id   path  string  true  "File UUID"
+// @Success      200
+// @Failure      401  {object}  ErrorResponse
+// @Failure      403  {object}  ErrorResponse
+// @Failure      404  {object}  ErrorResponse
+// @Router       /files/{id}/download [get]
 func (h *FilesHandler) Download(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 	fileID := c.Params("id")
@@ -238,6 +274,15 @@ func (h *FilesHandler) Download(c *fiber.Ctx) error {
 	return c.SendStream(body, int(size))
 }
 
+// @Summary      Delete a file
+// @Tags         Files
+// @Security     BearerAuth
+// @Param        id  path  string  true  "File UUID"
+// @Success      204
+// @Failure      401  {object}  ErrorResponse
+// @Failure      403  {object}  ErrorResponse
+// @Failure      404  {object}  ErrorResponse
+// @Router       /files/{id} [delete]
 func (h *FilesHandler) Delete(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 	fileID := c.Params("id")
