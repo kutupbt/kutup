@@ -1,373 +1,365 @@
-import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useAppSelector } from '../store'
-import { selectIsAdmin, selectIsLoggedIn } from '../store/authSlice'
-import api from '../api/client'
+import { useState } from 'react'
+import { useForm, type Resolver } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+import { Loader2, Plus, Check, X } from 'lucide-react'
+import { useAppSelector } from '@/store'
+import { selectIsLoggedIn, selectIsAdmin } from '@/store/authSlice'
+import {
+  useAdminUsers, useAdminStats, useAdminSettings,
+  useCreateUser, useUpdateUser, useDeleteUser, useUpdateAdminSettings,
+} from '@/api/hooks/useAdmin'
+import { formatBytes } from '@/lib/format'
+import { Navigate } from 'react-router-dom'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from '@/components/ui/form'
+import { Card, CardContent } from '@/components/ui/card'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 
-interface User {
-  id: string
-  email: string
-  username: string
-  storageQuotaBytes: number
-  storageUsedBytes: number
-  isAdmin: boolean
-  isActive: boolean
-  totpEnabled: boolean
-  createdAt: string
-}
-
-interface Stats {
-  totalUsers: number
-  activeUsers: number
-  totalFiles: number
-  totalStorageUsedBytes: number
-  totalCollections: number
-}
+const createUserSchema = z.object({
+  email: z.string().email('Invalid email'),
+  username: z
+    .string()
+    .min(3, 'At least 3 characters')
+    .max(32)
+    .regex(/^[a-z0-9_-]+$/, 'Lowercase letters, numbers, _ and - only'),
+  tempPassword: z.string().min(1, 'Required'),
+  quotaGB: z.coerce.number().min(1, 'At least 1 GB'),
+})
+type CreateUserForm = z.infer<typeof createUserSchema>
 
 export default function Admin() {
-  const navigate = useNavigate()
   const isLoggedIn = useAppSelector(selectIsLoggedIn)
   const isAdmin = useAppSelector(selectIsAdmin)
 
-  const [users, setUsers] = useState<User[]>([])
-  const [stats, setStats] = useState<Stats | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  if (!isLoggedIn) return <Navigate to="/login" replace />
+  if (!isAdmin) return <Navigate to="/drive" replace />
+
+  return <AdminContent />
+}
+
+function AdminContent() {
+  const { data: users, isLoading: usersLoading } = useAdminUsers()
+  const { data: stats } = useAdminStats()
+  const { data: settings } = useAdminSettings()
+  const createUser = useCreateUser()
+  const updateUser = useUpdateUser()
+  const deleteUser = useDeleteUser()
+  const updateSettings = useUpdateAdminSettings()
+
+  const [createOpen, setCreateOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; email: string } | null>(null)
   const [editQuota, setEditQuota] = useState<{ userId: string; gb: string } | null>(null)
 
-  // Registration toggle
-  const [registrationEnabled, setRegistrationEnabled] = useState(true)
+  const form = useForm<CreateUserForm>({
+    resolver: zodResolver(createUserSchema) as Resolver<CreateUserForm>,
+    defaultValues: { email: '', username: '', tempPassword: '', quotaGB: 10 },
+  })
 
-  // Create user modal
-  const [showCreateUser, setShowCreateUser] = useState(false)
-  const [createEmail, setCreateEmail] = useState('')
-  const [createUsername, setCreateUsername] = useState('')
-  const [createPassword, setCreatePassword] = useState('')
-  const [createQuotaGB, setCreateQuotaGB] = useState('10')
-  const [createLoading, setCreateLoading] = useState(false)
-  const [createError, setCreateError] = useState('')
-
-  useEffect(() => {
-    if (!isLoggedIn) navigate('/login')
-    else if (!isAdmin) navigate('/drive')
-    else loadData()
-  }, [isLoggedIn, isAdmin])
-
-  async function loadData() {
-    setLoading(true)
-    try {
-      const [usersRes, statsRes, settingsRes] = await Promise.all([
-        api.get('/admin/users'),
-        api.get('/admin/stats'),
-        api.get('/admin/settings'),
-      ])
-      setUsers(usersRes.data)
-      setStats(statsRes.data)
-      setRegistrationEnabled(settingsRes.data.registrationEnabled)
-    } catch (err) {
-      setError('Failed to load admin data')
-    } finally {
-      setLoading(false)
-    }
+  async function onCreateUser(data: CreateUserForm) {
+    await createUser.mutateAsync({
+      email: data.email,
+      username: data.username,
+      tempPassword: data.tempPassword,
+      storageQuotaBytes: data.quotaGB * 1024 * 1024 * 1024,
+    })
+    form.reset()
+    setCreateOpen(false)
   }
 
-  async function toggleActive(user: User) {
-    try {
-      await api.put(`/admin/users/${user.id}`, { isActive: !user.isActive })
-      setUsers((prev) =>
-        prev.map((u) => u.id === user.id ? { ...u, isActive: !u.isActive } : u),
-      )
-    } catch {
-      setError('Update failed')
-    }
+  async function handleSaveQuota(userId: string, gb: string) {
+    const n = parseFloat(gb)
+    if (isNaN(n) || n <= 0) return
+    await updateUser.mutateAsync({ id: userId, body: { storageQuotaBytes: n * 1024 * 1024 * 1024 } })
+    setEditQuota(null)
   }
 
-  async function updateQuota(userId: string, gb: number) {
-    try {
-      await api.put(`/admin/users/${userId}`, { storageQuotaBytes: gb * 1024 * 1024 * 1024 })
-      setUsers((prev) =>
-        prev.map((u) => u.id === userId ? { ...u, storageQuotaBytes: gb * 1024 * 1024 * 1024 } : u),
-      )
-      setEditQuota(null)
-    } catch {
-      setError('Quota update failed')
-    }
-  }
-
-  async function deleteUser(user: User) {
-    if (!confirm(`Permanently delete ${user.email}? This cannot be undone.`)) return
-    try {
-      await api.delete(`/admin/users/${user.id}`)
-      setUsers((prev) => prev.filter((u) => u.id !== user.id))
-    } catch {
-      setError('Delete failed')
-    }
-  }
-
-  async function toggleRegistration() {
-    const newVal = !registrationEnabled
-    try {
-      await api.put('/admin/settings', { registrationEnabled: newVal })
-      setRegistrationEnabled(newVal)
-    } catch {
-      setError('Settings update failed')
-    }
-  }
-
-  async function handleCreateUser(e: React.FormEvent) {
-    e.preventDefault()
-    setCreateError('')
-    if (!/^[a-z0-9_-]{3,32}$/.test(createUsername)) {
-      setCreateError('Invalid username: 3-32 chars, lowercase letters, numbers, _ and -')
-      return
-    }
-    setCreateLoading(true)
-    try {
-      await api.post('/admin/users', {
-        email: createEmail,
-        username: createUsername,
-        tempPassword: createPassword,
-        storageQuotaBytes: parseFloat(createQuotaGB) * 1024 * 1024 * 1024,
-      })
-      setShowCreateUser(false)
-      setCreateEmail('')
-      setCreateUsername('')
-      setCreatePassword('')
-      setCreateQuotaGB('10')
-      await loadData()
-    } catch (err: any) {
-      setCreateError(err.response?.data?.error || 'Failed to create user')
-    } finally {
-      setCreateLoading(false)
-    }
-  }
-
-  if (loading) {
-    return (
-      <div style={styles.container}>
-        <div style={styles.spinner} />
-      </div>
-    )
-  }
+  const statItems = stats
+    ? [
+        { label: 'Total users', value: stats.totalUsers },
+        { label: 'Active users', value: stats.activeUsers },
+        { label: 'Total files', value: stats.totalFiles },
+        { label: 'Collections', value: stats.totalCollections },
+        { label: 'Storage used', value: formatBytes(stats.totalStorageUsedBytes) },
+      ]
+    : []
 
   return (
-    <div style={styles.container}>
-      <div style={styles.header}>
-        <h1 style={styles.title}>Admin Panel</h1>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button style={styles.backBtn} onClick={() => setShowCreateUser(true)}>+ Create user</button>
-          <button style={styles.backBtn} onClick={() => navigate('/drive')}>← Drive</button>
-        </div>
+    <div className="max-w-6xl mx-auto p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Admin Panel</h1>
+        <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Plus className="h-4 w-4 mr-2" />
+          Create user
+        </Button>
       </div>
 
-      {error && <div style={styles.error}>{error}</div>}
-
-      {stats && (
-        <div style={styles.statsGrid}>
-          <div style={styles.stat}><div style={styles.statNum}>{stats.totalUsers}</div><div style={styles.statLabel}>Total users</div></div>
-          <div style={styles.stat}><div style={styles.statNum}>{stats.activeUsers}</div><div style={styles.statLabel}>Active users</div></div>
-          <div style={styles.stat}><div style={styles.statNum}>{stats.totalFiles}</div><div style={styles.statLabel}>Total files</div></div>
-          <div style={styles.stat}><div style={styles.statNum}>{stats.totalCollections}</div><div style={styles.statLabel}>Collections</div></div>
-          <div style={styles.stat}><div style={styles.statNum}>{formatBytes(stats.totalStorageUsedBytes)}</div><div style={styles.statLabel}>Storage used</div></div>
-        </div>
-      )}
-
-      <div style={styles.settingsRow}>
-        <span style={styles.settingsLabel}>Public registration</span>
-        <button
-          style={{
-            ...styles.toggleBtn,
-            background: registrationEnabled ? '#22c55e20' : '#ef444420',
-            color: registrationEnabled ? '#22c55e' : '#ef4444',
-            border: `1px solid ${registrationEnabled ? '#22c55e40' : '#ef444440'}`,
-          }}
-          onClick={toggleRegistration}
-        >
-          {registrationEnabled ? 'Enabled' : 'Disabled'}
-        </button>
-      </div>
-
-      <div style={styles.note}>
-        Note: File names and contents are encrypted. Admins cannot see user data.
-      </div>
-
-      <table style={styles.table}>
-        <thead>
-          <tr>
-            <th style={styles.th}>Email</th>
-            <th style={styles.th}>Username</th>
-            <th style={styles.th}>Quota</th>
-            <th style={styles.th}>Used</th>
-            <th style={styles.th}>Status</th>
-            <th style={styles.th}>TOTP</th>
-            <th style={styles.th}>Joined</th>
-            <th style={styles.th}>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {users.map((user) => (
-            <tr key={user.id} style={styles.tr}>
-              <td style={styles.td}>
-                {user.email}
-                {user.isAdmin && <span style={styles.badge}>admin</span>}
-              </td>
-              <td style={styles.td}>{user.username}</td>
-              <td style={styles.td}>
-                {editQuota?.userId === user.id ? (
-                  <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                    <input
-                      type="number"
-                      value={editQuota.gb}
-                      onChange={(e) => setEditQuota({ ...editQuota, gb: e.target.value })}
-                      style={{ ...styles.input, width: 60 }}
-                    />
-                    GB
-                    <button style={styles.smallBtn} onClick={() => updateQuota(user.id, parseFloat(editQuota.gb))}>✓</button>
-                    <button style={styles.smallBtn} onClick={() => setEditQuota(null)}>×</button>
-                  </span>
-                ) : (
-                  <span
-                    style={{ cursor: 'pointer', textDecoration: 'underline dotted' }}
-                    onClick={() => setEditQuota({ userId: user.id, gb: String(user.storageQuotaBytes / 1024 / 1024 / 1024) })}
-                  >
-                    {formatBytes(user.storageQuotaBytes)}
-                  </span>
-                )}
-              </td>
-              <td style={styles.td}>{formatBytes(user.storageUsedBytes)}</td>
-              <td style={styles.td}>
-                <span style={{ color: user.isActive ? '#22c55e' : '#ef4444' }}>
-                  {user.isActive ? 'Active' : 'Disabled'}
-                </span>
-              </td>
-              <td style={styles.td}>{user.totpEnabled ? '✓' : '—'}</td>
-              <td style={styles.td}>{new Date(user.createdAt).toLocaleDateString()}</td>
-              <td style={styles.td}>
-                <button style={styles.smallBtn} onClick={() => toggleActive(user)}>
-                  {user.isActive ? 'Disable' : 'Enable'}
-                </button>
-                <button style={{ ...styles.smallBtn, color: '#ef4444' }} onClick={() => deleteUser(user)}>
-                  Delete
-                </button>
-              </td>
-            </tr>
+      {/* Stats */}
+      {statItems.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          {statItems.map((s) => (
+            <Card key={s.label}>
+              <CardContent className="pt-4 pb-4">
+                <div className="text-2xl font-bold text-primary">{s.value}</div>
+                <div className="text-xs text-muted-foreground mt-1">{s.label}</div>
+              </CardContent>
+            </Card>
           ))}
-        </tbody>
-      </table>
-
-      {showCreateUser && (
-        <div style={styles.modalOverlay} onClick={() => setShowCreateUser(false)}>
-          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
-            <h3 style={styles.modalTitle}>Create user</h3>
-            <p style={styles.modalSubtitle}>
-              The user will set their own password and recovery phrase on first login.
-            </p>
-            <form onSubmit={handleCreateUser}>
-              <div style={styles.field}>
-                <label style={styles.label}>Email</label>
-                <input
-                  type="email"
-                  value={createEmail}
-                  onChange={(e) => setCreateEmail(e.target.value)}
-                  style={styles.input}
-                  required
-                  autoFocus
-                />
-              </div>
-              <div style={styles.field}>
-                <label style={styles.label}>Username</label>
-                <input
-                  type="text"
-                  value={createUsername}
-                  onChange={(e) => setCreateUsername(e.target.value.toLowerCase())}
-                  style={styles.input}
-                  required
-                  placeholder="3-32 chars: a-z, 0-9, _ and -"
-                />
-              </div>
-              <div style={styles.field}>
-                <label style={styles.label}>Temporary password</label>
-                <input
-                  type="text"
-                  value={createPassword}
-                  onChange={(e) => setCreatePassword(e.target.value)}
-                  style={styles.input}
-                  required
-                  placeholder="Share this with the user to let them log in"
-                />
-              </div>
-              <div style={styles.field}>
-                <label style={styles.label}>Storage quota (GB)</label>
-                <input
-                  type="number"
-                  value={createQuotaGB}
-                  onChange={(e) => setCreateQuotaGB(e.target.value)}
-                  style={styles.input}
-                  min="1"
-                  step="1"
-                />
-              </div>
-              {createError && <p style={styles.errorText}>{createError}</p>}
-              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                <button
-                  type="button"
-                  style={styles.cancelBtn}
-                  onClick={() => setShowCreateUser(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  style={{ ...styles.submitBtn, opacity: createLoading ? 0.6 : 1 }}
-                  disabled={createLoading}
-                >
-                  {createLoading ? 'Creating…' : 'Create user'}
-                </button>
-              </div>
-            </form>
-          </div>
         </div>
       )}
+
+      {/* Registration toggle */}
+      <div className="flex items-center justify-between p-3 bg-card border border-border rounded-lg">
+        <span className="text-sm">Public registration</span>
+        <Button
+          variant="outline"
+          size="sm"
+          className={settings?.registrationEnabled
+            ? 'border-green-500/50 text-green-400 hover:bg-green-500/10'
+            : 'border-destructive/50 text-destructive hover:bg-destructive/10'}
+          onClick={() => updateSettings.mutate({ registrationEnabled: !settings?.registrationEnabled })}
+          disabled={updateSettings.isPending || !settings}
+        >
+          {settings?.registrationEnabled ? 'Enabled' : 'Disabled'}
+        </Button>
+      </div>
+
+      <Alert className="border-green-500/30 text-green-400 bg-green-500/5">
+        <AlertDescription className="text-xs">
+          File names and contents are encrypted. Admins cannot see user data.
+        </AlertDescription>
+      </Alert>
+
+      {/* Users table */}
+      {usersLoading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+        </div>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Email</TableHead>
+              <TableHead>Username</TableHead>
+              <TableHead>Quota</TableHead>
+              <TableHead>Used</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>TOTP</TableHead>
+              <TableHead>Joined</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {users?.map((user) => (
+              <TableRow key={user.id}>
+                <TableCell>
+                  <div className="flex items-center gap-2">
+                    {user.email}
+                    {user.isAdmin && <Badge variant="secondary" className="text-xs">admin</Badge>}
+                  </div>
+                </TableCell>
+                <TableCell className="text-muted-foreground">@{user.username}</TableCell>
+                <TableCell>
+                  {editQuota?.userId === user.id ? (
+                    <div className="flex items-center gap-1">
+                      <Input
+                        type="number"
+                        value={editQuota.gb}
+                        onChange={(e) => setEditQuota({ ...editQuota, gb: e.target.value })}
+                        className="h-7 w-16 text-xs"
+                        autoFocus
+                      />
+                      <span className="text-xs text-muted-foreground">GB</span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => handleSaveQuota(user.id, editQuota.gb)}
+                      >
+                        <Check className="h-3.5 w-3.5 text-green-400" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => setEditQuota(null)}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <button
+                      className="text-sm underline decoration-dotted text-muted-foreground hover:text-foreground"
+                      onClick={() => setEditQuota({ userId: user.id, gb: String(user.storageQuotaBytes / 1024 / 1024 / 1024) })}
+                    >
+                      {formatBytes(user.storageQuotaBytes)}
+                    </button>
+                  )}
+                </TableCell>
+                <TableCell className="text-muted-foreground">{formatBytes(user.storageUsedBytes)}</TableCell>
+                <TableCell>
+                  <Badge
+                    variant="outline"
+                    className={user.isActive
+                      ? 'border-green-500/50 text-green-400'
+                      : 'border-destructive/50 text-destructive'}
+                  >
+                    {user.isActive ? 'Active' : 'Disabled'}
+                  </Badge>
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  {user.totpEnabled ? <Check className="h-4 w-4 text-green-400" /> : '—'}
+                </TableCell>
+                <TableCell className="text-muted-foreground text-xs">
+                  {new Date(user.createdAt).toLocaleDateString()}
+                </TableCell>
+                <TableCell>
+                  <div className="flex gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => updateUser.mutate({ id: user.id, body: { isActive: !user.isActive } })}
+                    >
+                      {user.isActive ? 'Disable' : 'Enable'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs text-destructive hover:text-destructive"
+                      onClick={() => setDeleteTarget({ id: user.id, email: user.email })}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      {/* Create user dialog */}
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create user</DialogTitle>
+            <DialogDescription>
+              The user will set their own password and recovery phrase on first login.
+            </DialogDescription>
+          </DialogHeader>
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onCreateUser)} className="space-y-4">
+              <FormField control={form.control} name="email" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Email</FormLabel>
+                  <FormControl><Input type="email" autoComplete="email" autoFocus {...field} /></FormControl>
+                  <FormMessage />
+                </FormItem>
+              )} />
+              <FormField control={form.control} name="username" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Username</FormLabel>
+                  <FormControl>
+                    <Input
+                      placeholder="3-32 chars: a-z, 0-9, _ and -"
+                      {...field}
+                      onChange={(e) => field.onChange(e.target.value.toLowerCase())}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )} />
+              <FormField control={form.control} name="tempPassword" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Temporary password</FormLabel>
+                  <FormControl>
+                    <Input
+                      placeholder="Share this with the user"
+                      autoComplete="off"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )} />
+              <FormField control={form.control} name="quotaGB" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Storage quota (GB)</FormLabel>
+                  <FormControl><Input type="number" min="1" step="1" {...field} /></FormControl>
+                  <FormMessage />
+                </FormItem>
+              )} />
+              <DialogFooter>
+                <Button variant="outline" type="button" onClick={() => { form.reset(); setCreateOpen(false) }}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={form.formState.isSubmitting}>
+                  {form.formState.isSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                  Create user
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation */}
+      <AlertDialog open={deleteTarget !== null} onOpenChange={() => setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {deleteTarget?.email}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes the account and all associated data. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => { if (deleteTarget) deleteUser.mutate(deleteTarget.id); setDeleteTarget(null) }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  container: { padding: 32, maxWidth: 1100, margin: '0 auto' },
-  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 32 },
-  title: { margin: 0, fontSize: 24, fontWeight: 700 },
-  backBtn: { padding: '8px 16px', background: '#112030', border: '1px solid #1a3045', color: '#d4ecf7', borderRadius: 8, cursor: 'pointer', fontSize: 13 },
-  statsGrid: { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 24 },
-  stat: { background: '#0c1a27', border: '1px solid #1a3045', borderRadius: 10, padding: '16px 20px' },
-  statNum: { fontSize: 24, fontWeight: 700, color: '#0ea5e9' },
-  statLabel: { fontSize: 12, color: '#4e7a97', marginTop: 4 },
-  settingsRow: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: '12px 16px', background: '#0c1a27', border: '1px solid #1a3045', borderRadius: 8 },
-  settingsLabel: { fontSize: 13, color: '#93c0d8', flex: 1 },
-  toggleBtn: { padding: '4px 14px', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s' },
-  note: { background: '#1a1f1a', border: '1px solid #22c55e40', borderRadius: 8, padding: '10px 16px', fontSize: 13, color: '#22c55e', marginBottom: 24 },
-  table: { width: '100%', borderCollapse: 'collapse' },
-  th: { padding: '10px 12px', textAlign: 'left', fontSize: 12, color: '#4e7a97', borderBottom: '1px solid #1a3045', fontWeight: 500 },
-  tr: { borderBottom: '1px solid #0c2030' },
-  td: { padding: '10px 12px', fontSize: 13, color: '#93c0d8' },
-  badge: { marginLeft: 6, padding: '1px 6px', background: '#0ea5e940', color: '#7dd3fc', borderRadius: 4, fontSize: 11 },
-  smallBtn: { padding: '3px 8px', background: 'transparent', border: '1px solid #1a3045', color: '#4e7a97', borderRadius: 4, cursor: 'pointer', fontSize: 12, marginRight: 4 },
-  input: { width: '100%', padding: '10px 12px', background: '#060d14', border: '1px solid #1a3045', borderRadius: 8, color: '#d4ecf7', fontSize: 14, outline: 'none' },
-  error: { background: '#2d1a1a', border: '1px solid #ef444440', borderRadius: 8, padding: '12px 16px', marginBottom: 16, color: '#ef4444', fontSize: 13 },
-  spinner: { width: 32, height: 32, border: '3px solid #1a3045', borderTop: '3px solid #0ea5e9', borderRadius: '50%', margin: '80px auto', animation: 'spin 1s linear infinite' },
-  modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 },
-  modal: { background: '#0c1a27', border: '1px solid #1a3045', borderRadius: 12, padding: 32, width: '100%', maxWidth: 440 },
-  modalTitle: { margin: '0 0 6px', fontSize: 18, fontWeight: 600, color: '#d4ecf7' },
-  modalSubtitle: { margin: '0 0 20px', fontSize: 13, color: '#4e7a97' },
-  field: { marginBottom: 16 },
-  label: { display: 'block', marginBottom: 6, fontSize: 13, color: '#4e7a97', fontWeight: 500 },
-  errorText: { color: '#ef4444', fontSize: 13, margin: '8px 0' },
-  cancelBtn: { flex: 1, padding: '10px', background: 'transparent', border: '1px solid #1a3045', color: '#4e7a97', borderRadius: 8, fontSize: 14, cursor: 'pointer' },
-  submitBtn: { flex: 1, padding: '10px', background: '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' },
 }

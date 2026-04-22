@@ -1,14 +1,16 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [tailwindcss(), react()],
   worker: {
     format: 'es',
   },
   resolve: {
     alias: {
+      '@': path.resolve(__dirname, './src'),
       // Force Vite to use the CJS build — the ESM build has a broken relative
       // import for libsodium-sumo.mjs that Rollup cannot resolve.
       'libsodium-wrappers-sumo': path.resolve(
