@@ -1,127 +1,100 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAppDispatch } from '../store'
-import { setAuth } from '../store/authSlice'
-import api from '../api/client'
-import { toBase64 } from '../crypto'
-import type { RegistrationKeys } from '../crypto'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+import { Loader2 } from 'lucide-react'
 import zxcvbn from 'zxcvbn'
-import { KutupLogo } from '../components/KutupLogo'
+import { useAppDispatch } from '@/store'
+import { setAuth } from '@/store/authSlice'
+import api from '@/api/client'
+import type { RegistrationKeys } from '@/crypto'
+import { KutupLogo } from '@/components/KutupLogo'
+import MnemonicDisplay from '@/components/MnemonicDisplay'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Progress } from '@/components/ui/progress'
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from '@/components/ui/form'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
+const STRENGTH_LABELS = ['Very weak', 'Weak', 'Fair', 'Strong', 'Very strong']
+
+const formSchema = z
+  .object({
+    password: z.string().min(1, 'Password is required'),
+    passwordConfirm: z.string(),
+  })
+  .refine((d) => d.password === d.passwordConfirm, {
+    path: ['passwordConfirm'],
+    message: 'Passwords do not match',
+  })
+
+type FormData = z.infer<typeof formSchema>
 type Step = 'form' | 'generating' | 'mnemonic' | 'confirm' | 'submitting'
 
 export default function FirstLogin() {
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const [step, setStep] = useState<Step>('form')
-  const [password, setPassword] = useState('')
-  const [passwordConfirm, setPasswordConfirm] = useState('')
-  const [mnemonicConfirm, setMnemonicConfirm] = useState('')
   const [keys, setKeys] = useState<RegistrationKeys | null>(null)
+  const [mnemonicConfirm, setMnemonicConfirm] = useState('')
   const [error, setError] = useState('')
-  const [copied, setCopied] = useState(false)
 
-  const email = sessionStorage.getItem('setup_email') || ''
-  const setupToken = sessionStorage.getItem('setup_token') || ''
-
-  const passwordStrength = zxcvbn(password)
-  const strengthLabel = ['Very weak', 'Weak', 'Fair', 'Strong', 'Very strong']
+  const email = sessionStorage.getItem('setup_email') ?? ''
+  const setupToken = sessionStorage.getItem('setup_token') ?? ''
 
   useEffect(() => {
     if (!setupToken) navigate('/login')
   }, [setupToken, navigate])
 
-  async function handleSetPassword(e: React.FormEvent) {
-    e.preventDefault()
-    setError('')
+  const form = useForm<FormData>({
+    resolver: zodResolver(formSchema),
+    defaultValues: { password: '', passwordConfirm: '' },
+  })
 
-    if (password !== passwordConfirm) {
-      setError('Passwords do not match')
+  const password = form.watch('password')
+  const strength = zxcvbn(password ?? '')
+
+  async function onSubmit(data: FormData) {
+    if (strength.score < 2) {
+      form.setError('password', { message: 'Password is too weak — choose a stronger one' })
       return
     }
-    if (passwordStrength.score < 2) {
-      setError('Password is too weak')
-      return
-    }
-
     setStep('generating')
-
-    const worker = new Worker(new URL('../workers/kdf.worker.ts', import.meta.url), { type: 'module' })
-    worker.onmessage = (e) => {
-      const data = e.data
-      if (data.type === 'error') {
-        setError(data.message)
-        setStep('form')
-        worker.terminate()
-        return
+    await new Promise<void>((resolve, reject) => {
+      const worker = new Worker(new URL('../workers/kdf.worker.ts', import.meta.url), { type: 'module' })
+      worker.onmessage = (e) => {
+        const d = e.data
+        if (d.type === 'error') { worker.terminate(); reject(new Error(d.message)); return }
+        if (d.type === 'register') { setKeys(d.keys); setStep('mnemonic'); worker.terminate(); resolve() }
       }
-      if (data.type === 'register') {
-        setKeys(data.keys)
-        setStep('mnemonic')
-        worker.terminate()
-      }
-    }
-    worker.onerror = (e) => {
-      setError(e.message)
+      worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message)) }
+      worker.postMessage({ type: 'register', password: data.password })
+    }).catch((err) => {
+      setError(err.message ?? 'Key generation failed')
       setStep('form')
-      worker.terminate()
-    }
-    worker.postMessage({ type: 'register', password })
+    })
   }
-
-  const handleCopy = useCallback(() => {
-    if (!keys) return
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(keys.mnemonic).then(() => {
-        setCopied(true)
-        setTimeout(() => setCopied(false), 2000)
-      })
-    } else {
-      const ta = document.createElement('textarea')
-      ta.value = keys.mnemonic
-      ta.style.position = 'fixed'
-      ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.focus()
-      ta.select()
-      document.execCommand('copy')
-      document.body.removeChild(ta)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }
-  }, [keys])
-
-  const handleDownload = useCallback(() => {
-    if (!keys) return
-    const blob = new Blob([keys.mnemonic], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'kutup-recovery-phrase.txt'
-    a.click()
-    URL.revokeObjectURL(url)
-  }, [keys])
 
   async function handleConfirmMnemonic(e: React.FormEvent) {
     e.preventDefault()
     if (!keys) return
-
-    const normalizedInput = mnemonicConfirm
-      .trim()
-      .toLowerCase()
-      .replace(/\b\d+\.\s*/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-    const normalizedExpected = keys.mnemonic.trim().toLowerCase()
-
-    if (normalizedInput !== normalizedExpected) {
-      setError('Mnemonic does not match. Please check each word carefully.')
+    const normalized = mnemonicConfirm
+      .trim().toLowerCase().replace(/\b\d+\.\s*/g, '').replace(/\s+/g, ' ').trim()
+    if (normalized !== keys.mnemonic.trim().toLowerCase()) {
+      setError('Recovery phrase does not match. Check each word carefully.')
       return
     }
-
     setStep('submitting')
     setError('')
-
     try {
       const res = await api.post(
         '/auth/complete-setup',
@@ -140,10 +113,8 @@ export default function FirstLogin() {
         },
         { headers: { Authorization: `Bearer ${setupToken}` } },
       )
-
       sessionStorage.removeItem('setup_token')
       sessionStorage.removeItem('setup_email')
-
       dispatch(setAuth({
         userId: res.data.userId,
         email,
@@ -156,167 +127,145 @@ export default function FirstLogin() {
         storageQuotaBytes: res.data.storageQuotaBytes,
         storageUsedBytes: res.data.storageUsedBytes,
       }))
-
       navigate('/drive')
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Setup failed')
+      setError(err.response?.data?.error ?? 'Setup failed')
       setStep('mnemonic')
     }
   }
 
-  if (step === 'generating') {
+  if (step === 'generating' || step === 'submitting') {
     return (
-      <div style={styles.container}>
-        <div style={styles.card}>
-          <h2 style={styles.title}>Generating your keys…</h2>
-          <p style={styles.subtitle}>This takes a moment (Argon2id key derivation)</p>
-          <div style={styles.spinner} />
-        </div>
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <Card className="w-full max-w-sm">
+          <CardContent className="pt-8 pb-8 flex flex-col items-center gap-3">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <p className="text-sm font-medium">
+              {step === 'generating' ? 'Generating your keys…' : 'Finishing setup…'}
+            </p>
+            {step === 'generating' && (
+              <p className="text-xs text-muted-foreground">Argon2id key derivation (this takes a moment)</p>
+            )}
+          </CardContent>
+        </Card>
       </div>
     )
   }
 
   if (step === 'mnemonic' && keys) {
     return (
-      <div style={styles.container}>
-        <div style={{ ...styles.card, maxWidth: 600 }}>
-          <h2 style={styles.title}>Save your Recovery Phrase</h2>
-          <p style={{ ...styles.subtitle, color: '#f59e0b' }}>
-            This 24-word phrase is shown ONCE. Write it down and store it safely.
-            It is the only way to recover your account if you forget your password.
-          </p>
-          <div style={styles.mnemonicGrid}>
-            {keys.mnemonic.split(' ').map((word, i) => (
-              <div key={i} style={styles.mnemonicWord}>
-                <span style={styles.mnemonicNum}>{i + 1}.</span> {word}
-              </div>
-            ))}
-          </div>
-          <div style={styles.mnemonicActions}>
-            <button style={styles.secondaryButton} onClick={handleCopy}>
-              {copied ? 'Copied!' : 'Copy to clipboard'}
-            </button>
-            <button style={styles.secondaryButton} onClick={handleDownload}>
-              Download as file
-            </button>
-          </div>
-          <button style={styles.button} onClick={() => setStep('confirm')}>
-            I've saved my recovery phrase
-          </button>
-        </div>
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <Card className="w-full max-w-xl">
+          <CardHeader><CardTitle>Save your recovery phrase</CardTitle></CardHeader>
+          <CardContent className="space-y-4">
+            <Alert className="border-yellow-500/50 text-yellow-400 bg-yellow-500/10">
+              <AlertDescription>
+                This 24-word phrase is shown <strong>once</strong>. Write it down and store it safely.
+                It is the only way to recover your account if you forget your password.
+              </AlertDescription>
+            </Alert>
+            <MnemonicDisplay mnemonic={keys.mnemonic} />
+            <Button className="w-full" onClick={() => setStep('confirm')}>
+              I've saved my recovery phrase
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     )
   }
 
   if (step === 'confirm') {
     return (
-      <div style={styles.container}>
-        <div style={{ ...styles.card, maxWidth: 600 }}>
-          <h2 style={styles.title}>Confirm Recovery Phrase</h2>
-          <p style={styles.subtitle}>Type all 24 words to confirm you've saved them.</p>
-          <form onSubmit={handleConfirmMnemonic}>
-            <textarea
-              style={styles.textarea}
-              value={mnemonicConfirm}
-              onChange={(e) => setMnemonicConfirm(e.target.value)}
-              placeholder="Enter all 24 words separated by spaces..."
-              rows={5}
-              required
-            />
-            {error && <p style={styles.error}>{error}</p>}
-            <button type="submit" style={styles.button}>Complete setup</button>
-          </form>
-        </div>
-      </div>
-    )
-  }
-
-  if (step === 'submitting') {
-    return (
-      <div style={styles.container}>
-        <div style={styles.card}>
-          <h2 style={styles.title}>Finishing setup…</h2>
-          <div style={styles.spinner} />
-        </div>
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <Card className="w-full max-w-xl">
+          <CardHeader><CardTitle>Confirm recovery phrase</CardTitle></CardHeader>
+          <CardContent>
+            <form onSubmit={handleConfirmMnemonic} className="space-y-4">
+              <p className="text-sm text-muted-foreground">Type all 24 words to confirm you've saved them.</p>
+              <textarea
+                className="w-full min-h-[100px] rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-ring"
+                value={mnemonicConfirm}
+                onChange={(e) => setMnemonicConfirm(e.target.value)}
+                placeholder="Enter all 24 words separated by spaces…"
+                autoComplete="off"
+                required
+              />
+              {error && (
+                <Alert variant="destructive">
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+              <Button type="submit" className="w-full">Complete setup</Button>
+            </form>
+          </CardContent>
+        </Card>
       </div>
     )
   }
 
   return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 8 }}>
-          <KutupLogo size={36} />
-          <h1 style={styles.logo}>Kutup</h1>
-        </div>
-        <h2 style={styles.title}>Set your password</h2>
-        <p style={styles.subtitle}>
-          Welcome! Choose a strong password and you'll be shown a 24-word recovery phrase.
-          {email && <><br /><span style={{ color: '#7dd3fc' }}>{email}</span></>}
-        </p>
-        <form onSubmit={handleSetPassword}>
-          <div style={styles.field}>
-            <label style={styles.label}>New password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              style={styles.input}
-              required
-              autoComplete="new-password"
-              autoFocus
-            />
-            {password && (
-              <div style={styles.strengthBar}>
-                <div
-                  style={{
-                    ...styles.strengthFill,
-                    width: `${(passwordStrength.score + 1) * 20}%`,
-                    background: ['#ef4444', '#f97316', '#eab308', '#22c55e', '#16a34a'][passwordStrength.score],
-                  }}
-                />
-                <span style={styles.strengthLabel}>{strengthLabel[passwordStrength.score]}</span>
-              </div>
-            )}
+    <div className="flex min-h-screen items-center justify-center p-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <div className="flex items-center gap-2.5 justify-center mb-2">
+            <KutupLogo size={34} />
+            <span className="text-3xl font-bold text-primary tracking-tight">Kutup</span>
           </div>
-          <div style={styles.field}>
-            <label style={styles.label}>Confirm password</label>
-            <input
-              type="password"
-              value={passwordConfirm}
-              onChange={(e) => setPasswordConfirm(e.target.value)}
-              style={styles.input}
-              required
-              autoComplete="new-password"
-            />
-          </div>
-          {error && <p style={styles.error}>{error}</p>}
-          <button type="submit" style={styles.button}>Continue</button>
-        </form>
-      </div>
+          <CardTitle className="text-center">Set your password</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {email && (
+            <p className="text-sm text-muted-foreground mb-4">
+              Welcome! Setting up account for{' '}
+              <span className="text-primary">{email}</span>
+            </p>
+          )}
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+              <FormField
+                control={form.control}
+                name="password"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>New password</FormLabel>
+                    <FormControl>
+                      <Input type="password" autoComplete="new-password" autoFocus {...field} />
+                    </FormControl>
+                    {password && (
+                      <div className="space-y-1">
+                        <Progress value={(strength.score + 1) * 20} className="h-1" />
+                        <p className="text-xs text-muted-foreground">{STRENGTH_LABELS[strength.score]}</p>
+                      </div>
+                    )}
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="passwordConfirm"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Confirm password</FormLabel>
+                    <FormControl>
+                      <Input type="password" autoComplete="new-password" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              {error && (
+                <Alert variant="destructive">
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+              <Button type="submit" className="w-full" disabled={form.formState.isSubmitting}>
+                Continue
+              </Button>
+            </form>
+          </Form>
+        </CardContent>
+      </Card>
     </div>
   )
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  container: { display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: 16 },
-  card: { background: '#0c1a27', border: '1px solid #1a3045', borderRadius: 12, padding: 40, width: '100%', maxWidth: 440 },
-  logo: { margin: 0, fontSize: 32, fontWeight: 700, color: '#38bdf8', letterSpacing: -1 },
-  title: { margin: '0 0 8px', fontSize: 20, fontWeight: 600, color: '#d4ecf7' },
-  subtitle: { margin: '0 0 24px', fontSize: 14, color: '#4e7a97' },
-  field: { marginBottom: 16 },
-  label: { display: 'block', marginBottom: 6, fontSize: 13, color: '#4e7a97', fontWeight: 500 },
-  input: { width: '100%', padding: '10px 12px', background: '#060d14', border: '1px solid #1a3045', borderRadius: 8, color: '#d4ecf7', fontSize: 14, outline: 'none' },
-  textarea: { width: '100%', padding: '10px 12px', background: '#060d14', border: '1px solid #1a3045', borderRadius: 8, color: '#d4ecf7', fontSize: 14, outline: 'none', resize: 'vertical', fontFamily: 'monospace' },
-  button: { width: '100%', padding: '12px', background: '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', marginTop: 8 },
-  secondaryButton: { flex: 1, padding: '9px 12px', background: 'transparent', color: '#4e7a97', border: '1px solid #1a3045', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' },
-  error: { color: '#ef4444', fontSize: 13, margin: '8px 0' },
-  spinner: { width: 32, height: 32, border: '3px solid #1a3045', borderTop: '3px solid #0ea5e9', borderRadius: '50%', margin: '24px auto', animation: 'spin 1s linear infinite' },
-  strengthBar: { marginTop: 6, background: '#1a3045', borderRadius: 4, height: 4, overflow: 'hidden', position: 'relative' },
-  strengthFill: { height: '100%', borderRadius: 4, transition: 'width 0.3s, background 0.3s' },
-  strengthLabel: { position: 'absolute', right: 0, top: 6, fontSize: 11, color: '#4e7a97' },
-  mnemonicGrid: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 12, background: '#060d14', padding: 16, borderRadius: 8 },
-  mnemonicActions: { display: 'flex', gap: 8, marginBottom: 16 },
-  mnemonicWord: { padding: '6px 8px', background: '#0c1a27', borderRadius: 6, fontSize: 13, color: '#d4ecf7', fontFamily: 'monospace' },
-  mnemonicNum: { color: '#4e7a97', fontSize: 11 },
 }

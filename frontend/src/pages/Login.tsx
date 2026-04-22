@@ -1,219 +1,40 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { useAppDispatch } from '../store'
-import { setAuth } from '../store/authSlice'
-import api from '../api/client'
-import { decryptMasterKey, decryptPrivateKey, toBase64, fromBase64 } from '../crypto'
-import { KutupLogo } from '../components/KutupLogo'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+import { Loader2 } from 'lucide-react'
+import { useAppDispatch } from '@/store'
+import { setAuth } from '@/store/authSlice'
+import api from '@/api/client'
+import { decryptMasterKey, decryptPrivateKey, toBase64 } from '@/crypto'
+import { KutupLogo } from '@/components/KutupLogo'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from '@/components/ui/form'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 type Step = 'credentials' | 'deriving' | 'totp' | 'decrypting'
 
-export default function Login() {
-  const navigate = useNavigate()
-  const dispatch = useAppDispatch()
-  const [step, setStep] = useState<Step>('credentials')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [totpCode, setTotpCode] = useState('')
-  const [preAuthToken, setPreAuthToken] = useState('')
-  const [error, setError] = useState('')
+const credSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(1, 'Password is required'),
+})
+const totpSchema = z.object({
+  code: z.string().length(6, 'Code must be 6 digits').regex(/^\d+$/, 'Digits only'),
+})
 
-  async function handleLogin(e: React.FormEvent) {
-    e.preventDefault()
-    setError('')
-    setStep('deriving')
+type CredForm = z.infer<typeof credSchema>
+type TotpForm = z.infer<typeof totpSchema>
 
-    try {
-      // 1. Fetch KDF salts
-      const preflightRes = await api.get(`/auth/login/preflight?email=${encodeURIComponent(email)}`)
-      const { kdfSalt, loginKeySalt } = preflightRes.data
-
-      let loginKeyB64: string
-      let keyEncryptionKey: Uint8Array | null = null
-
-      if (kdfSalt === '') {
-        // Setup-mode account: no KDF, send raw password bytes as loginKey
-        loginKeyB64 = toBase64(new TextEncoder().encode(password))
-      } else {
-        // Normal: derive keys via Argon2id
-        const derived = await deriveInWorker(password, kdfSalt, loginKeySalt)
-        keyEncryptionKey = derived.keyEncryptionKey
-        loginKeyB64 = toBase64(derived.loginKey)
-      }
-
-      // 2. Login — send loginKey, server checks bcrypt
-      const loginRes = await api.post('/auth/login', { email, loginKey: loginKeyB64 })
-
-      if (loginRes.data.requiresSetup) {
-        sessionStorage.setItem('setup_token', loginRes.data.setupToken)
-        sessionStorage.setItem('setup_email', email)
-        navigate('/first-login')
-        return
-      }
-
-      if (loginRes.data.requiresTotp) {
-        setPreAuthToken(loginRes.data.preAuthToken)
-        setStep('totp')
-        return
-      }
-
-      await finalizeLogin(loginRes.data, keyEncryptionKey!)
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Login failed')
-      setStep('credentials')
-    }
-  }
-
-  async function handleTOTP(e: React.FormEvent) {
-    e.preventDefault()
-    setError('')
-    setStep('decrypting')
-
-    try {
-      // Re-derive keys (still needed to decrypt masterKey after TOTP)
-      const preflightRes = await api.get(`/auth/login/preflight?email=${encodeURIComponent(email)}`)
-      const { kdfSalt } = preflightRes.data
-      const { keyEncryptionKey } = await deriveInWorker(password, kdfSalt, preflightRes.data.loginKeySalt)
-
-      const res = await api.post('/auth/login/2fa', {
-        preAuthToken,
-        code: totpCode,
-      })
-
-      await finalizeLogin(res.data, keyEncryptionKey)
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Invalid code')
-      setStep('totp')
-    }
-  }
-
-  async function finalizeLogin(
-    data: any,
-    keyEncryptionKey: Uint8Array,
-  ) {
-    setStep('decrypting')
-
-    // Decrypt masterKey client-side — server never sees it
-    const masterKey = await decryptMasterKey(
-      data.encryptedMasterKey,
-      data.masterKeyNonce,
-      keyEncryptionKey,
-    )
-
-    // Decrypt privateKey with masterKey
-    const privateKey = await decryptPrivateKey(
-      data.encryptedPrivateKey,
-      data.privateKeyNonce,
-      masterKey,
-    )
-
-    dispatch(setAuth({
-      userId: data.userId,
-      email,
-      username: data.username,
-      accessToken: data.accessToken,
-      masterKey,
-      privateKey,
-      publicKey: data.publicKey,
-      isAdmin: data.isAdmin,
-      storageQuotaBytes: data.storageQuotaBytes,
-      storageUsedBytes: data.storageUsedBytes,
-    }))
-
-    navigate('/drive')
-  }
-
-  if (step === 'deriving' || step === 'decrypting') {
-    return (
-      <div style={styles.container}>
-        <div style={styles.card}>
-          <h2 style={styles.title}>
-            {step === 'deriving' ? 'Deriving keys…' : 'Decrypting vault…'}
-          </h2>
-          <p style={styles.subtitle}>
-            {step === 'deriving'
-              ? 'Running Argon2id key derivation (this takes a moment)'
-              : 'Decrypting your keys locally'}
-          </p>
-          <div style={styles.spinner} />
-        </div>
-      </div>
-    )
-  }
-
-  if (step === 'totp') {
-    return (
-      <div style={styles.container}>
-        <div style={styles.card}>
-          <h2 style={styles.title}>Two-factor authentication</h2>
-          <p style={styles.subtitle}>Enter the 6-digit code from your authenticator app.</p>
-          <form onSubmit={handleTOTP}>
-            <input
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9]{6}"
-              maxLength={6}
-              value={totpCode}
-              onChange={(e) => setTotpCode(e.target.value)}
-              style={{ ...styles.input, textAlign: 'center', letterSpacing: 8, fontSize: 24 }}
-              placeholder="000000"
-              autoFocus
-              required
-            />
-            {error && <p style={styles.error}>{error}</p>}
-            <button type="submit" style={styles.button}>Verify</button>
-          </form>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 8 }}>
-          <KutupLogo size={36} />
-          <h1 style={styles.logo}>Kutup</h1>
-        </div>
-        <h2 style={styles.title}>Sign in</h2>
-        <form onSubmit={handleLogin}>
-          <div style={styles.field}>
-            <label style={styles.label}>Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              style={styles.input}
-              required
-              autoComplete="email"
-            />
-          </div>
-          <div style={styles.field}>
-            <label style={styles.label}>Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              style={styles.input}
-              required
-              autoComplete="current-password"
-            />
-          </div>
-          {error && <p style={styles.error}>{error}</p>}
-          <button type="submit" style={styles.button}>Sign in</button>
-        </form>
-        <p style={styles.link}>
-          <Link to="/recover" style={styles.a}>Forgot password?</Link>
-        </p>
-        <p style={styles.link}>
-          No account? <Link to="/register" style={styles.a}>Create one</Link>
-        </p>
-      </div>
-    </div>
-  )
-}
-
-// Run KDF in worker, return as Uint8Arrays
 function deriveInWorker(
   password: string,
   kdfSalt: string,
@@ -224,28 +45,241 @@ function deriveInWorker(
     worker.onmessage = (e) => {
       worker.terminate()
       if (e.data.type === 'error') reject(new Error(e.data.message))
-      else resolve({
-        keyEncryptionKey: new Uint8Array(Object.values(e.data.keyEncryptionKey)),
-        loginKey: new Uint8Array(Object.values(e.data.loginKey)),
-      })
+      else
+        resolve({
+          keyEncryptionKey: new Uint8Array(Object.values(e.data.keyEncryptionKey)),
+          loginKey: new Uint8Array(Object.values(e.data.loginKey)),
+        })
     }
     worker.onerror = (e) => { worker.terminate(); reject(e) }
     worker.postMessage({ type: 'deriveKeys', password, kdfSalt, loginKeySalt })
   })
 }
 
-const styles: Record<string, React.CSSProperties> = {
-  container: { display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: 16 },
-  card: { background: '#0c1a27', border: '1px solid #1a3045', borderRadius: 12, padding: 40, width: '100%', maxWidth: 440 },
-  logo: { margin: 0, fontSize: 32, fontWeight: 700, color: '#38bdf8', letterSpacing: -1 },
-  title: { margin: '0 0 8px', fontSize: 20, fontWeight: 600, color: '#d4ecf7' },
-  subtitle: { margin: '0 0 24px', fontSize: 14, color: '#4e7a97' },
-  field: { marginBottom: 16 },
-  label: { display: 'block', marginBottom: 6, fontSize: 13, color: '#4e7a97', fontWeight: 500 },
-  input: { width: '100%', padding: '10px 12px', background: '#060d14', border: '1px solid #1a3045', borderRadius: 8, color: '#d4ecf7', fontSize: 14, outline: 'none' },
-  button: { width: '100%', padding: '12px', background: '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', marginTop: 8 },
-  error: { color: '#ef4444', fontSize: 13, margin: '8px 0' },
-  link: { textAlign: 'center', marginTop: 12, fontSize: 13, color: '#4e7a97' },
-  a: { color: '#0ea5e9', textDecoration: 'none' },
-  spinner: { width: 32, height: 32, border: '3px solid #1a3045', borderTop: '3px solid #0ea5e9', borderRadius: '50%', margin: '24px auto', animation: 'spin 1s linear infinite' },
+export default function Login() {
+  const navigate = useNavigate()
+  const dispatch = useAppDispatch()
+  const [step, setStep] = useState<Step>('credentials')
+  const [error, setError] = useState('')
+  const [preAuthToken, setPreAuthToken] = useState('')
+  const [savedEmail, setSavedEmail] = useState('')
+  const [savedPassword, setSavedPassword] = useState('')
+
+  const credForm = useForm<CredForm>({ resolver: zodResolver(credSchema) })
+  const totpForm = useForm<TotpForm>({ resolver: zodResolver(totpSchema) })
+
+  async function onCredSubmit({ email, password }: CredForm) {
+    setError('')
+    setStep('deriving')
+    try {
+      const preflightRes = await api.get(`/auth/login/preflight?email=${encodeURIComponent(email)}`)
+      const { kdfSalt, loginKeySalt } = preflightRes.data
+
+      let loginKeyB64: string
+      let keyEncryptionKey: Uint8Array | null = null
+
+      if (kdfSalt === '') {
+        loginKeyB64 = toBase64(new TextEncoder().encode(password))
+      } else {
+        const derived = await deriveInWorker(password, kdfSalt, loginKeySalt)
+        keyEncryptionKey = derived.keyEncryptionKey
+        loginKeyB64 = toBase64(derived.loginKey)
+      }
+
+      const loginRes = await api.post('/auth/login', { email, loginKey: loginKeyB64 })
+
+      if (loginRes.data.requiresSetup) {
+        sessionStorage.setItem('setup_token', loginRes.data.setupToken)
+        sessionStorage.setItem('setup_email', email)
+        navigate('/first-login')
+        return
+      }
+
+      if (loginRes.data.requiresTotp) {
+        setSavedEmail(email)
+        setSavedPassword(password)
+        setPreAuthToken(loginRes.data.preAuthToken)
+        setStep('totp')
+        return
+      }
+
+      await finalizeLogin(loginRes.data, keyEncryptionKey!)
+    } catch (err: any) {
+      setError(err.response?.data?.error ?? 'Login failed')
+      setStep('credentials')
+    }
+  }
+
+  async function onTotpSubmit({ code }: TotpForm) {
+    setError('')
+    setStep('decrypting')
+    try {
+      const preflightRes = await api.get(`/auth/login/preflight?email=${encodeURIComponent(savedEmail)}`)
+      const { kdfSalt, loginKeySalt } = preflightRes.data
+      const { keyEncryptionKey } = await deriveInWorker(savedPassword, kdfSalt, loginKeySalt)
+
+      const res = await api.post('/auth/login/2fa', { preAuthToken, code })
+      await finalizeLogin(res.data, keyEncryptionKey)
+    } catch (err: any) {
+      setError(err.response?.data?.error ?? 'Invalid code')
+      setStep('totp')
+    }
+  }
+
+  async function finalizeLogin(data: any, keyEncryptionKey: Uint8Array) {
+    setStep('decrypting')
+    const masterKey = await decryptMasterKey(data.encryptedMasterKey, data.masterKeyNonce, keyEncryptionKey)
+    const privateKey = await decryptPrivateKey(data.encryptedPrivateKey, data.privateKeyNonce, masterKey)
+    dispatch(setAuth({
+      userId: data.userId,
+      email: savedEmail || credForm.getValues('email'),
+      username: data.username,
+      accessToken: data.accessToken,
+      masterKey,
+      privateKey,
+      publicKey: data.publicKey,
+      isAdmin: data.isAdmin,
+      storageQuotaBytes: data.storageQuotaBytes,
+      storageUsedBytes: data.storageUsedBytes,
+    }))
+    navigate('/drive')
+  }
+
+  const isBusy = step === 'deriving' || step === 'decrypting'
+
+  if (isBusy) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <Card className="w-full max-w-sm">
+          <CardContent className="pt-8 pb-8 flex flex-col items-center gap-3">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <p className="text-sm font-medium">
+              {step === 'deriving' ? 'Deriving keys…' : 'Decrypting vault…'}
+            </p>
+            <p className="text-xs text-muted-foreground text-center">
+              {step === 'deriving'
+                ? 'Running Argon2id key derivation (this takes a moment)'
+                : 'Decrypting your keys locally'}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  if (step === 'totp') {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <Card className="w-full max-w-sm">
+          <CardHeader>
+            <CardTitle>Two-factor authentication</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground mb-4">
+              Enter the 6-digit code from your authenticator app.
+            </p>
+            <Form {...totpForm}>
+              <form onSubmit={totpForm.handleSubmit(onTotpSubmit)} className="space-y-4">
+                <FormField
+                  control={totpForm.control}
+                  name="code"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormControl>
+                        <Input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]{6}"
+                          maxLength={6}
+                          className="text-center text-2xl tracking-widest"
+                          placeholder="000000"
+                          autoFocus
+                          autoComplete="one-time-code"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                {error && (
+                  <Alert variant="destructive">
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+                <Button type="submit" className="w-full" disabled={totpForm.formState.isSubmitting}>
+                  {totpForm.formState.isSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                  Verify
+                </Button>
+              </form>
+            </Form>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex min-h-screen items-center justify-center p-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <div className="flex items-center gap-2.5 justify-center mb-2">
+            <KutupLogo size={34} />
+            <span className="text-3xl font-bold text-primary tracking-tight">Kutup</span>
+          </div>
+          <CardTitle className="text-center">Sign in</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Form {...credForm}>
+            <form onSubmit={credForm.handleSubmit(onCredSubmit)} className="space-y-4">
+              <FormField
+                control={credForm.control}
+                name="email"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Email</FormLabel>
+                    <FormControl>
+                      <Input type="email" autoComplete="email" autoFocus {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={credForm.control}
+                name="password"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Password</FormLabel>
+                    <FormControl>
+                      <Input type="password" autoComplete="current-password" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              {error && (
+                <Alert variant="destructive">
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+              <Button type="submit" className="w-full" disabled={credForm.formState.isSubmitting}>
+                {credForm.formState.isSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Sign in
+              </Button>
+            </form>
+          </Form>
+          <div className="mt-4 space-y-1 text-center text-sm text-muted-foreground">
+            <p>
+              <Link to="/recover" className="text-primary hover:underline">Forgot password?</Link>
+            </p>
+            <p>
+              No account?{' '}
+              <Link to="/register" className="text-primary hover:underline">Create one</Link>
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
 }

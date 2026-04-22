@@ -1,163 +1,269 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useAppSelector, useAppDispatch } from '../store'
-import { updateTotpEnabled } from '../store/authSlice'
-import api from '../api/client'
+import { Link } from 'react-router-dom'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+import { Loader2, Shield, KeyRound } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
+import { useAppSelector, useAppDispatch } from '@/store'
+import { updateTotpEnabled } from '@/store/authSlice'
+import api from '@/api/client'
+import { formatBytes } from '@/lib/format'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from '@/components/ui/form'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Progress } from '@/components/ui/progress'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
+import { Separator } from '@/components/ui/separator'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import { toast } from 'sonner'
+
+const totpVerifySchema = z.object({
+  code: z.string().length(6, 'Code must be 6 digits').regex(/^\d+$/, 'Digits only'),
+})
+type TotpVerifyForm = z.infer<typeof totpVerifySchema>
 
 export default function Settings() {
-  const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const auth = useAppSelector((s) => s.auth)
 
   const [totpSetup, setTotpSetup] = useState<{ secret: string; qrUri: string } | null>(null)
-  const [totpCode, setTotpCode] = useState('')
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
+  const [totpDialogOpen, setTotpDialogOpen] = useState(false)
+  const [setupLoading, setSetupLoading] = useState(false)
+
+  const quotaPercent =
+    auth.storageQuotaBytes > 0
+      ? Math.min(Math.round((auth.storageUsedBytes / auth.storageQuotaBytes) * 100), 100)
+      : 0
+
+  const totpForm = useForm<TotpVerifyForm>({ resolver: zodResolver(totpVerifySchema) })
 
   async function startTOTPSetup() {
+    setSetupLoading(true)
     try {
       const res = await api.post('/user/2fa/setup')
       setTotpSetup(res.data)
-      setError('')
+      setTotpDialogOpen(true)
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to start TOTP setup')
+      toast.error(err.response?.data?.error ?? 'Failed to start TOTP setup')
+    } finally {
+      setSetupLoading(false)
     }
   }
 
-  async function verifyTOTP(e: React.FormEvent) {
-    e.preventDefault()
-    setError('')
+  async function onVerifyTOTP({ code }: TotpVerifyForm) {
     try {
-      await api.post('/user/2fa/verify', { code: totpCode })
+      await api.post('/user/2fa/verify', { code })
       dispatch(updateTotpEnabled(true))
+      setTotpDialogOpen(false)
       setTotpSetup(null)
-      setTotpCode('')
-      setSuccess('Two-factor authentication enabled')
+      totpForm.reset()
+      toast.success('Two-factor authentication enabled')
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Invalid code')
+      totpForm.setError('code', { message: err.response?.data?.error ?? 'Invalid code' })
     }
   }
 
   async function disableTOTP() {
-    if (!confirm('Disable two-factor authentication? This reduces account security.')) return
     try {
       await api.delete('/user/2fa')
       dispatch(updateTotpEnabled(false))
-      setSuccess('Two-factor authentication disabled')
+      toast.success('Two-factor authentication disabled')
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to disable TOTP')
+      toast.error(err.response?.data?.error ?? 'Failed to disable TOTP')
     }
   }
 
   return (
-    <div style={styles.container}>
-      <div style={styles.header}>
-        <h1 style={styles.title}>Settings</h1>
-        <button style={styles.backBtn} onClick={() => navigate('/drive')}>← Drive</button>
-      </div>
+    <div className="max-w-2xl mx-auto p-6 space-y-4">
+      <h1 className="text-2xl font-bold">Settings</h1>
 
-      {error && <div style={styles.error}>{error}</div>}
-      {success && <div style={styles.success}>{success}</div>}
-
-      <div style={styles.section}>
-        <h2 style={styles.sectionTitle}>Account</h2>
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Email</span>
-          <span style={styles.rowValue}>{auth.email}</span>
-        </div>
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Storage</span>
-          <span style={styles.rowValue}>
-            {formatBytes(auth.storageUsedBytes)} / {formatBytes(auth.storageQuotaBytes)}
-          </span>
-        </div>
-      </div>
-
-      <div style={styles.section}>
-        <h2 style={styles.sectionTitle}>Two-Factor Authentication</h2>
-
-        {auth.totpEnabled ? (
-          <div>
-            <p style={styles.statusOn}>TOTP is enabled</p>
-            <button style={styles.dangerBtn} onClick={disableTOTP}>Disable TOTP</button>
+      {/* Account info */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Account</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex justify-between items-center py-1">
+            <span className="text-sm text-muted-foreground">Email</span>
+            <span className="text-sm">{auth.email}</span>
           </div>
-        ) : totpSetup ? (
-          <div>
-            <p style={styles.sub}>
-              Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.)
-            </p>
-            <div style={styles.qrWrap}>
-              <QRCodeSVG value={totpSetup.qrUri} size={180} bgColor="#0c1a27" fgColor="#d4ecf7" />
+          <Separator />
+          <div className="flex justify-between items-center py-1">
+            <span className="text-sm text-muted-foreground">Username</span>
+            <span className="text-sm">@{auth.username}</span>
+          </div>
+          <Separator />
+          <div className="space-y-2 py-1">
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Storage</span>
+              <span>{formatBytes(auth.storageUsedBytes)} / {formatBytes(auth.storageQuotaBytes)}</span>
             </div>
-            <p style={styles.secretLabel}>Manual entry key:</p>
-            <code style={styles.secretCode}>{totpSetup.secret}</code>
-            <form onSubmit={verifyTOTP} style={{ marginTop: 20 }}>
-              <label style={styles.label}>Enter the 6-digit code to confirm</label>
-              <input
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]{6}"
-                maxLength={6}
-                value={totpCode}
-                onChange={(e) => setTotpCode(e.target.value)}
-                style={{ ...styles.input, letterSpacing: 8, textAlign: 'center', fontSize: 20 }}
-                placeholder="000000"
-                autoFocus
-                required
-              />
-              <button type="submit" style={styles.primaryBtn}>Enable TOTP</button>
-            </form>
+            <Progress value={quotaPercent} className="h-1.5" />
           </div>
-        ) : (
-          <div>
-            <p style={styles.sub}>Add an extra layer of security with an authenticator app.</p>
-            <button style={styles.primaryBtn} onClick={startTOTPSetup}>Set up TOTP</button>
-          </div>
-        )}
-      </div>
+        </CardContent>
+      </Card>
 
-      <div style={styles.section}>
-        <h2 style={styles.sectionTitle}>Encryption</h2>
-        <p style={styles.sub}>
-          All files are encrypted client-side using XChaCha20-Poly1305. Your master key and private key
-          are derived from your password using Argon2id and are never sent to the server in plaintext.
-          The server stores only ciphertext it cannot decrypt.
-        </p>
-        <p style={styles.sub}>
-          To change your password, use the <a href="/recover" style={styles.a}>account recovery</a> flow
-          with your 24-word mnemonic.
-        </p>
-      </div>
+      {/* TOTP */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Shield className="h-4 w-4" />
+            Two-Factor Authentication
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {auth.totpEnabled ? (
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="border-green-500/50 text-green-400">Enabled</Badge>
+                <span className="text-sm text-muted-foreground">TOTP is active on this account</span>
+              </div>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive" size="sm">Disable TOTP</Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Disable two-factor authentication?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This reduces your account security. You will no longer be asked for a code when signing in.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      onClick={disableTOTP}
+                    >
+                      Disable
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-muted-foreground">
+                Add an extra layer of security with an authenticator app.
+              </p>
+              <Button size="sm" onClick={startTOTPSetup} disabled={setupLoading}>
+                {setupLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Set up TOTP
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Encryption info */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <KeyRound className="h-4 w-4" />
+            Encryption
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm text-muted-foreground">
+          <p>
+            All files are encrypted client-side using XChaCha20-Poly1305. Your master key and private
+            key are derived from your password using Argon2id and are never sent to the server.
+            The server stores only ciphertext it cannot decrypt.
+          </p>
+          <p>
+            To change your password, use the{' '}
+            <Link to="/recover" className="text-primary hover:underline">account recovery</Link>{' '}
+            flow with your 24-word mnemonic.
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* TOTP setup dialog */}
+      <Dialog open={totpDialogOpen} onOpenChange={setTotpDialogOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Set up two-factor authentication</DialogTitle>
+          </DialogHeader>
+          {totpSetup && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.)
+              </p>
+              <div className="flex justify-center bg-white rounded-lg p-3">
+                <QRCodeSVG value={totpSetup.qrUri} size={160} />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Manual entry key:</p>
+                <code className="block bg-muted px-3 py-2 rounded text-xs font-mono tracking-widest text-primary">
+                  {totpSetup.secret}
+                </code>
+              </div>
+              <Form {...totpForm}>
+                <form onSubmit={totpForm.handleSubmit(onVerifyTOTP)} className="space-y-3">
+                  <FormField
+                    control={totpForm.control}
+                    name="code"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Enter the 6-digit code to confirm</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]{6}"
+                            maxLength={6}
+                            className="text-center text-xl tracking-widest"
+                            placeholder="000000"
+                            autoFocus
+                            autoComplete="one-time-code"
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <DialogFooter>
+                    <Button variant="outline" type="button" onClick={() => setTotpDialogOpen(false)}>
+                      Cancel
+                    </Button>
+                    <Button type="submit" disabled={totpForm.formState.isSubmitting}>
+                      {totpForm.formState.isSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                      Enable TOTP
+                    </Button>
+                  </DialogFooter>
+                </form>
+              </Form>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(0)} MB`
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  container: { maxWidth: 640, margin: '0 auto', padding: 32 },
-  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 32 },
-  title: { margin: 0, fontSize: 24, fontWeight: 700 },
-  backBtn: { padding: '8px 16px', background: '#112030', border: '1px solid #1a3045', color: '#d4ecf7', borderRadius: 8, cursor: 'pointer', fontSize: 13 },
-  section: { background: '#0c1a27', border: '1px solid #1a3045', borderRadius: 12, padding: 24, marginBottom: 20 },
-  sectionTitle: { margin: '0 0 16px', fontSize: 16, fontWeight: 600 },
-  row: { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #0c2030' },
-  rowLabel: { fontSize: 13, color: '#4e7a97' },
-  rowValue: { fontSize: 13, color: '#d4ecf7' },
-  sub: { fontSize: 13, color: '#4e7a97', margin: '0 0 16px', lineHeight: 1.6 },
-  statusOn: { color: '#22c55e', fontSize: 14, marginBottom: 12 },
-  label: { display: 'block', marginBottom: 6, fontSize: 13, color: '#4e7a97', fontWeight: 500 },
-  input: { width: '100%', padding: '10px 12px', background: '#060d14', border: '1px solid #1a3045', borderRadius: 8, color: '#d4ecf7', fontSize: 14, outline: 'none', marginBottom: 12 },
-  primaryBtn: { padding: '10px 20px', background: '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 },
-  dangerBtn: { padding: '10px 20px', background: 'transparent', color: '#ef4444', border: '1px solid #ef444440', borderRadius: 8, cursor: 'pointer', fontSize: 14 },
-  error: { background: '#2d1a1a', border: '1px solid #ef444440', borderRadius: 8, padding: '12px 16px', marginBottom: 16, color: '#ef4444', fontSize: 13 },
-  success: { background: '#1a2d1a', border: '1px solid #22c55e40', borderRadius: 8, padding: '12px 16px', marginBottom: 16, color: '#22c55e', fontSize: 13 },
-  qrWrap: { background: '#0c1a27', padding: 16, borderRadius: 8, display: 'inline-block', marginBottom: 16 },
-  secretLabel: { fontSize: 12, color: '#4e7a97', margin: '0 0 4px' },
-  secretCode: { display: 'block', background: '#060d14', padding: '8px 12px', borderRadius: 6, fontSize: 13, fontFamily: 'monospace', color: '#7dd3fc', letterSpacing: 2 },
-  a: { color: '#0ea5e9' },
 }
