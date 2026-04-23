@@ -116,6 +116,8 @@
     "selected_other": "{{count}} items selected",
     "downloadFiles_one": "Download file",
     "downloadFiles_other": "Download {{count}} files",
+    "downloadFolders_one": "Download folder as ZIP",
+    "downloadFolders_other": "Download {{count}} folders as ZIP",
     "noSharedFolders": "No folders have been shared with you yet.",
     "uploadFiles": "Upload files",
     "newFolder": "New folder",
@@ -138,7 +140,13 @@
       "deleteFailed": "Delete failed",
       "folderDeleted": "Folder deleted",
       "folderDeleteFailed": "Failed to delete folder",
-      "loadFailed": "Failed to load collections"
+      "loadFailed": "Failed to load collections",
+      "zipPreparing": "Preparing ZIP…",
+      "zipProgress": "Downloading {{done}} / {{total}} files…",
+      "zipDone": "Download complete",
+      "zipFailed": "Download failed",
+      "zipSelectDir": "Select a folder to save the parts",
+      "zipNoFsa": "Large downloads require Chrome or Edge"
     },
     "deleteFile": {
       "title": "Delete “{{name}}”?",
@@ -196,6 +204,7 @@
     "copyPublicLink": "Copy public link",
     "deleteFolder": "Delete folder",
     "download": "Download",
+    "downloadFolder": "Download as ZIP",
     "delete": "Delete"
   },
   "upload": {

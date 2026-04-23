@@ -1,0 +1,182 @@
+import { Zip, ZipPassThrough } from 'fflate'
+import api from '@/api/client'
+import { decryptStream } from '@/crypto'
+
+// 2 GB — ZIP32 max; Windows Explorer and most real-world readers cap here.
+const SPLIT_BYTES = 2 * 1024 * 1024 * 1024
+// Below this threshold, non-FSA browsers get an in-memory blob fallback.
+const BLOB_FALLBACK_LIMIT = 500 * 1024 * 1024
+
+export class FsaRequiredError extends Error {
+  code = 'NO_FSA'
+  constructor() { super('File System Access API required for large downloads') }
+}
+
+export interface ZipFile {
+  id: string
+  name: string
+  size: number
+  fileKey: Uint8Array
+  isRemote?: boolean
+  remoteShareId?: string
+}
+
+export type ProgressCallback = (done: number, total: number, part: number, parts: number) => void
+
+const hasFSA = () => typeof (window as any).showSaveFilePicker === 'function'
+
+function partition(files: ZipFile[]): ZipFile[][] {
+  const parts: ZipFile[][] = [[]]
+  let current = 0
+  for (const f of files) {
+    if (current + f.size > SPLIT_BYTES && current > 0) {
+      parts.push([])
+      current = 0
+    }
+    parts[parts.length - 1].push(f)
+    current += f.size
+  }
+  return parts
+}
+
+function toBuffer(chunk: Uint8Array): ArrayBuffer {
+  return chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer
+}
+
+async function buildPart(
+  files: ZipFile[],
+  partDone: number,
+  total: number,
+  onProgress: ProgressCallback,
+  partIdx: number,
+  parts: number,
+  signal?: AbortSignal,
+): Promise<Uint8Array[]> {
+  const chunks: Uint8Array[] = []
+  const zip = new Zip((err, chunk) => {
+    if (err) throw err
+    chunks.push(chunk)
+  })
+
+  for (let i = 0; i < files.length; i++) {
+    signal?.throwIfAborted()
+    const f = files[i]
+    const path = f.isRemote
+      ? `/fed-proxy/${f.remoteShareId}/files/${f.id}/download`
+      : `/files/${f.id}/download`
+
+    const res = await api.get(path, { responseType: 'arraybuffer', signal })
+    const plain = await decryptStream(new Uint8Array(res.data), f.fileKey)
+
+    const entry = new ZipPassThrough(f.name)
+    zip.add(entry)
+    entry.push(plain, true)
+
+    onProgress(partDone + i + 1, total, partIdx + 1, parts)
+  }
+
+  zip.end()
+  return chunks
+}
+
+async function streamPartToWritable(
+  files: ZipFile[],
+  writable: FileSystemWritableFileStream,
+  partDone: number,
+  total: number,
+  onProgress: ProgressCallback,
+  partIdx: number,
+  parts: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  const pending: Uint8Array[] = []
+  const zip = new Zip((err, chunk) => {
+    if (err) throw err
+    pending.push(chunk)
+  })
+
+  try {
+    for (let i = 0; i < files.length; i++) {
+      signal?.throwIfAborted()
+      const f = files[i]
+      const path = f.isRemote
+        ? `/fed-proxy/${f.remoteShareId}/files/${f.id}/download`
+        : `/files/${f.id}/download`
+
+      const res = await api.get(path, { responseType: 'arraybuffer', signal })
+      const plain = await decryptStream(new Uint8Array(res.data), f.fileKey)
+
+      const entry = new ZipPassThrough(f.name)
+      zip.add(entry)
+      entry.push(plain, true)
+
+      for (const chunk of pending) await writable.write(toBuffer(chunk))
+      pending.length = 0
+
+      onProgress(partDone + i + 1, total, partIdx + 1, parts)
+    }
+
+    zip.end()
+    for (const chunk of pending) await writable.write(toBuffer(chunk))
+    await writable.close()
+  } catch (e) {
+    await writable.close().catch(() => {})
+    throw e
+  }
+}
+
+function triggerBlobDownload(chunks: Uint8Array[], filename: string): void {
+  const total = chunks.reduce((n, c) => n + c.byteLength, 0)
+  const merged = new Uint8Array(total)
+  let offset = 0
+  for (const c of chunks) { merged.set(c, offset); offset += c.byteLength }
+  const blob = new Blob([merged.buffer], { type: 'application/zip' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+export async function downloadAsZip(
+  files: ZipFile[],
+  folderName: string,
+  onProgress: ProgressCallback,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (files.length === 0) return
+
+  const totalSize = files.reduce((n, f) => n + f.size, 0)
+  const groups = partition(files)
+  const total = files.length
+
+  if (!hasFSA()) {
+    if (totalSize > BLOB_FALLBACK_LIMIT) throw new FsaRequiredError()
+    // Small download — collect in memory and trigger blob download
+    const chunks = await buildPart(files, 0, total, onProgress, 0, 1, signal)
+    triggerBlobDownload(chunks, `${folderName}.zip`)
+    return
+  }
+
+  let partDone = 0
+
+  if (groups.length === 1) {
+    const handle = await (window as any).showSaveFilePicker({
+      suggestedName: `${folderName}.zip`,
+      types: [{ description: 'ZIP archive', accept: { 'application/zip': ['.zip'] } }],
+    })
+    const writable = await handle.createWritable()
+    await streamPartToWritable(groups[0], writable, 0, total, onProgress, 0, 1, signal)
+  } else {
+    const dir = await (window as any).showDirectoryPicker({ mode: 'readwrite' })
+    for (let i = 0; i < groups.length; i++) {
+      signal?.throwIfAborted()
+      const name = `${folderName}_part${i + 1}.zip`
+      const handle = await dir.getFileHandle(name, { create: true })
+      const writable = await handle.createWritable()
+      await streamPartToWritable(groups[i], writable, partDone, total, onProgress, i, groups.length, signal)
+      partDone += groups[i].length
+    }
+  }
+}

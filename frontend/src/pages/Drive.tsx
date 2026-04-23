@@ -12,6 +12,7 @@ import {
 import { toast } from 'sonner'
 import { formatBytes } from '@/lib/format'
 import { copyText } from '@/lib/format'
+import { downloadAsZip, FsaRequiredError } from '@/lib/zipDownload'
 
 import Sidebar from '@/components/layout/Sidebar'
 import DriveBreadcrumb from '@/components/drive/DriveBreadcrumb'
@@ -85,6 +86,7 @@ export default function Drive() {
   const [fedInviteUrl, setFedInviteUrl] = useState<string | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const downloadAbortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     if (masterKey) loadCollections()
@@ -300,6 +302,51 @@ export default function Drive() {
     toast.info(t('drive.toast.downloading', { count: selected.length }))
     for (const file of selected) {
       await handleDownload(file)
+    }
+  }
+
+  async function handleFolderDownload(col: Collection) {
+    if (!col.collectionKey) return
+    const ac = new AbortController()
+    downloadAbortRef.current = ac
+    const tid = toast.loading(t('drive.toast.zipPreparing'))
+    try {
+      const res = col.isRemote
+        ? await api.get(`/fed-proxy/${col.remoteShareId}/files`, { signal: ac.signal })
+        : await api.get(`/collections/${col.id}/files`, { signal: ac.signal })
+
+      const zipFiles = (
+        await Promise.all(
+          res.data.map(async (f: any) => {
+            try {
+              const fileKey = await decrypt(fromBase64(f.encryptedFileKey), fromBase64(f.fileKeyNonce), col.collectionKey!)
+              const metaBytes = await decrypt(fromBase64(f.encryptedMetadata), fromBase64(f.metadataNonce), fileKey)
+              const meta = JSON.parse(new TextDecoder().decode(metaBytes))
+              return { id: f.id, name: meta.name, size: meta.size, fileKey, isRemote: col.isRemote, remoteShareId: col.remoteShareId }
+            } catch { return null }
+          }),
+        )
+      ).filter(Boolean)
+
+      if (zipFiles.length === 0) { toast.dismiss(tid); return }
+
+      await downloadAsZip(zipFiles as any, col.decryptedName ?? 'folder', (done, total) => {
+        toast.loading(t('drive.toast.zipProgress', { done, total }), { id: tid })
+      }, ac.signal)
+      toast.success(t('drive.toast.zipDone'), { id: tid })
+    } catch (err: any) {
+      if (err?.name === 'AbortError') { toast.dismiss(tid); return }
+      if (err instanceof FsaRequiredError) { toast.error(t('drive.toast.zipNoFsa'), { id: tid }); return }
+      toast.error(t('drive.toast.zipFailed'), { id: tid })
+    } finally {
+      downloadAbortRef.current = null
+    }
+  }
+
+  async function handleBatchFolderDownload() {
+    const selected = collections.filter((c) => selectedFolderIds.has(c.id))
+    for (const col of selected) {
+      await handleFolderDownload(col)
     }
   }
 
@@ -625,6 +672,12 @@ export default function Drive() {
                   {t('drive.downloadFiles', { count: selectedFileIds.size })}
                 </Button>
               )}
+              {selectedFolderIds.size > 0 && (
+                <Button size="sm" variant="outline" onClick={handleBatchFolderDownload}>
+                  <Download className="h-4 w-4 mr-1.5" />
+                  {t('drive.downloadFolders', { count: selectedFolderIds.size })}
+                </Button>
+              )}
               <Button size="sm" variant="destructive" onClick={() => setBatchDeleteOpen(true)}>
                 <Trash2 className="h-4 w-4 mr-1.5" />
                 {t('common.delete')}
@@ -732,6 +785,7 @@ export default function Drive() {
         }
         onClose={() => setDetailItem(null)}
         onDownload={handleDownload}
+        onDownloadFolder={handleFolderDownload}
         onDelete={(item) => {
           if ('ownerUserId' in item) setDeleteFolder(item as Collection)
           else setDeleteFile(item as DecryptedFile)

@@ -16,6 +16,7 @@ interface Props {
   canDelete: boolean
   onClose: () => void
   onDownload?: (file: DecryptedFile) => void
+  onDownloadFolder?: (col: Collection) => void
   onDelete?: (item: Collection | DecryptedFile) => void
   onRename?: (col: Collection) => void
   onShare?: (col: Collection) => void
@@ -28,6 +29,7 @@ export default function DetailsPanel({
   canDelete,
   onClose,
   onDownload,
+  onDownloadFolder,
   onDelete,
   onRename,
   onShare,
@@ -97,6 +99,9 @@ export default function DetailsPanel({
             <>
               <Button className="w-full" onClick={() => { onEnter?.(item as Collection); onClose() }}>
                 {t('details.openFolder')}
+              </Button>
+              <Button variant="outline" className="w-full" onClick={() => { onDownloadFolder?.(item as Collection); onClose() }}>
+                <Download className="h-4 w-4 mr-2" /> {t('details.downloadFolder')}
               </Button>
               {!(item as Collection).isRemote && (
                 <>
