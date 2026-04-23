@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate, Link } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -57,6 +58,7 @@ function deriveInWorker(
 }
 
 export default function Login() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const [step, setStep] = useState<Step>('credentials')
@@ -154,12 +156,12 @@ export default function Login() {
           <CardContent className="pt-8 pb-8 flex flex-col items-center gap-3">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
             <p className="text-sm font-medium">
-              {step === 'deriving' ? 'Deriving keys…' : 'Decrypting vault…'}
+              {step === 'deriving' ? t('auth.derivingKeys') : t('auth.decryptingVault')}
             </p>
             <p className="text-xs text-muted-foreground text-center">
               {step === 'deriving'
-                ? 'Running Argon2id key derivation (this takes a moment)'
-                : 'Decrypting your keys locally'}
+                ? t('auth.argon2idNote')
+                : t('auth.decryptingLocally')}
             </p>
           </CardContent>
         </Card>
@@ -172,11 +174,11 @@ export default function Login() {
       <div className="flex min-h-screen items-center justify-center p-4">
         <Card className="w-full max-w-sm">
           <CardHeader>
-            <CardTitle>Two-factor authentication</CardTitle>
+            <CardTitle>{t('auth.totp.title')}</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground mb-4">
-              Enter the 6-digit code from your authenticator app.
+              {t('auth.totp.enterCode')}
             </p>
             <Form {...totpForm}>
               <form onSubmit={totpForm.handleSubmit(onTotpSubmit)} className="space-y-4">
@@ -209,7 +211,7 @@ export default function Login() {
                 )}
                 <Button type="submit" className="w-full" disabled={totpForm.formState.isSubmitting}>
                   {totpForm.formState.isSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                  Verify
+                  {t('auth.totp.verify')}
                 </Button>
               </form>
             </Form>
@@ -227,7 +229,7 @@ export default function Login() {
             <KutupLogo size={34} />
             <span className="text-3xl font-bold text-primary tracking-tight">Kutup</span>
           </div>
-          <CardTitle className="text-center">Sign in</CardTitle>
+          <CardTitle className="text-center">{t('auth.signIn')}</CardTitle>
         </CardHeader>
         <CardContent>
           <Form {...credForm}>
@@ -237,7 +239,7 @@ export default function Login() {
                 name="email"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Email</FormLabel>
+                    <FormLabel>{t('auth.email')}</FormLabel>
                     <FormControl>
                       <Input type="email" autoComplete="email" autoFocus {...field} />
                     </FormControl>
@@ -250,7 +252,7 @@ export default function Login() {
                 name="password"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Password</FormLabel>
+                    <FormLabel>{t('auth.password')}</FormLabel>
                     <FormControl>
                       <Input type="password" autoComplete="current-password" {...field} />
                     </FormControl>
@@ -265,17 +267,17 @@ export default function Login() {
               )}
               <Button type="submit" className="w-full" disabled={credForm.formState.isSubmitting}>
                 {credForm.formState.isSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                Sign in
+                {t('auth.signIn')}
               </Button>
             </form>
           </Form>
           <div className="mt-4 space-y-1 text-center text-sm text-muted-foreground">
             <p>
-              <Link to="/recover" className="text-primary hover:underline">Forgot password?</Link>
+              <Link to="/recover" className="text-primary hover:underline">{t('auth.forgotPassword')}</Link>
             </p>
             <p>
-              No account?{' '}
-              <Link to="/register" className="text-primary hover:underline">Create one</Link>
+              {t('auth.noAccount')}{' '}
+              <Link to="/register" className="text-primary hover:underline">{t('auth.createOne')}</Link>
             </p>
           </div>
         </CardContent>

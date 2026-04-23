@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -32,6 +33,7 @@ interface Props {
 }
 
 export default function NewFolderDialog({ open, onOpenChange, onConfirm }: Props) {
+  const { t } = useTranslation()
   const form = useForm<FormData>({ resolver: zodResolver(schema), defaultValues: { name: '' } })
 
   useEffect(() => {
@@ -47,7 +49,7 @@ export default function NewFolderDialog({ open, onOpenChange, onConfirm }: Props
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>New folder</DialogTitle>
+          <DialogTitle>{t('dialogs.newFolder.title')}</DialogTitle>
         </DialogHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -56,9 +58,9 @@ export default function NewFolderDialog({ open, onOpenChange, onConfirm }: Props
               name="name"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Folder name</FormLabel>
+                  <FormLabel>{t('dialogs.newFolder.nameLabel')}</FormLabel>
                   <FormControl>
-                    <Input autoFocus placeholder="Untitled folder" {...field} />
+                    <Input autoFocus placeholder={t('dialogs.newFolder.placeholder')} {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -66,10 +68,10 @@ export default function NewFolderDialog({ open, onOpenChange, onConfirm }: Props
             />
             <DialogFooter>
               <Button variant="outline" type="button" onClick={() => onOpenChange(false)}>
-                Cancel
+                {t('dialogs.newFolder.cancel')}
               </Button>
               <Button type="submit" disabled={form.formState.isSubmitting}>
-                Create
+                {t('dialogs.newFolder.create')}
               </Button>
             </DialogFooter>
           </form>

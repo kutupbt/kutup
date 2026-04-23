@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import {
   Dialog,
   DialogContent,
@@ -18,6 +19,7 @@ interface Props {
 }
 
 export default function PublicShareDialog({ url, onOpenChange, title = 'Link ready', description }: Props) {
+  const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
 
   async function handleCopy() {
@@ -43,18 +45,18 @@ export default function PublicShareDialog({ url, onOpenChange, title = 'Link rea
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Close
+            {t('dialogs.publicShare.close')}
           </Button>
           <Button onClick={handleCopy}>
             {copied ? (
               <>
                 <Check className="h-4 w-4 mr-2" />
-                Copied!
+                {t('dialogs.publicShare.copied')}
               </>
             ) : (
               <>
                 <Copy className="h-4 w-4 mr-2" />
-                Copy link
+                {t('dialogs.publicShare.copyLink')}
               </>
             )}
           </Button>

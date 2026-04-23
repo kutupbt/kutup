@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -50,6 +51,7 @@ interface Props {
 }
 
 export default function ShareDialog({ collection, onOpenChange, onShare }: Props) {
+  const { t } = useTranslation()
   const form = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: { recipient: '', canUpload: false, canDelete: false, quotaGB: '' },
@@ -78,7 +80,7 @@ export default function ShareDialog({ collection, onOpenChange, onShare }: Props
     <Dialog open={collection !== null} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Share "{collection?.decryptedName}"</DialogTitle>
+          <DialogTitle>{t('dialogs.share.title', { name: collection?.decryptedName })}</DialogTitle>
         </DialogHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -87,11 +89,11 @@ export default function ShareDialog({ collection, onOpenChange, onShare }: Props
               name="recipient"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Recipient</FormLabel>
+                  <FormLabel>{t('dialogs.share.recipient')}</FormLabel>
                   <FormControl>
                     <Input
                       autoFocus
-                      placeholder="email@example.com or alice@other-server.com"
+                      placeholder={t('dialogs.share.recipientPlaceholder')}
                       autoComplete="email"
                       {...field}
                     />
@@ -99,7 +101,7 @@ export default function ShareDialog({ collection, onOpenChange, onShare }: Props
                   {federated && (
                     <div className="flex items-center gap-1.5 text-xs text-primary mt-1">
                       <Globe className="h-3.5 w-3.5" />
-                      Federated share — will generate an invite link
+                      {t('dialogs.share.federatedNote')}
                     </div>
                   )}
                   <FormMessage />
@@ -108,10 +110,10 @@ export default function ShareDialog({ collection, onOpenChange, onShare }: Props
             />
 
             <div className="space-y-2">
-              <p className="text-sm font-medium">Permissions</p>
+              <p className="text-sm font-medium">{t('dialogs.share.permissions')}</p>
               <label className="flex items-center gap-2 text-sm text-muted-foreground">
                 <input type="checkbox" checked disabled className="opacity-50" />
-                Download (always on)
+                {t('dialogs.share.downloadAlways')}
               </label>
               <div className="space-y-2">
                 <FormField
@@ -129,7 +131,7 @@ export default function ShareDialog({ collection, onOpenChange, onShare }: Props
                         }}
                       />
                       <label htmlFor="share-upload" className="text-sm cursor-pointer">
-                        Upload
+                        {t('dialogs.share.uploadLabel')}
                       </label>
                       {field.value && (
                         <FormField
@@ -138,7 +140,7 @@ export default function ShareDialog({ collection, onOpenChange, onShare }: Props
                           render={({ field: qf }) => (
                             <Input
                               type="number"
-                              placeholder="Quota GB (blank = unlimited)"
+                              placeholder={t('dialogs.share.quotaPlaceholder')}
                               className="h-7 w-44 text-xs"
                               min="0"
                               step="any"
@@ -162,7 +164,7 @@ export default function ShareDialog({ collection, onOpenChange, onShare }: Props
                         onChange={field.onChange}
                       />
                       <label htmlFor="share-delete" className="text-sm cursor-pointer">
-                        Delete own uploads
+                        {t('dialogs.share.deleteOwn')}
                       </label>
                     </div>
                   )}
@@ -172,10 +174,10 @@ export default function ShareDialog({ collection, onOpenChange, onShare }: Props
 
             <DialogFooter>
               <Button variant="outline" type="button" onClick={() => { form.reset(); onOpenChange(false) }}>
-                Cancel
+                {t('dialogs.share.cancel')}
               </Button>
               <Button type="submit" disabled={form.formState.isSubmitting}>
-                {federated ? 'Share & get invite link' : 'Share'}
+                {federated ? t('dialogs.share.shareAndInvite') : t('dialogs.share.share')}
               </Button>
             </DialogFooter>
           </form>

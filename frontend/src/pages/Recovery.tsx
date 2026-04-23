@@ -1,6 +1,7 @@
 // Account recovery via BIP39 mnemonic.
 // TOTP bypass is intentional: mnemonic IS the second factor.
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate, Link } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -29,8 +30,6 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
-const STRENGTH_LABELS = ['Very weak', 'Weak', 'Fair', 'Strong', 'Very strong']
-
 const schema = z
   .object({
     email: z.string().email('Invalid email address'),
@@ -51,6 +50,7 @@ const schema = z
 type FormData = z.infer<typeof schema>
 
 export default function Recovery() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const [step, setStep] = useState<'form' | 'deriving' | 'done'>('form')
   const [error, setError] = useState('')
@@ -62,10 +62,17 @@ export default function Recovery() {
 
   const newPassword = form.watch('newPassword')
   const strength = zxcvbn(newPassword ?? '')
+  const strengthLabels = [
+    t('auth.strength.veryWeak'),
+    t('auth.strength.weak'),
+    t('auth.strength.fair'),
+    t('auth.strength.strong'),
+    t('auth.strength.veryStrong'),
+  ]
 
   async function onSubmit(data: FormData) {
     if (strength.score < 2) {
-      form.setError('newPassword', { message: 'Password is too weak — choose a stronger one' })
+      form.setError('newPassword', { message: t('register.passwordTooWeak') })
       return
     }
     setError('')
@@ -105,8 +112,8 @@ export default function Recovery() {
         <Card className="w-full max-w-sm">
           <CardContent className="pt-8 pb-8 flex flex-col items-center gap-3">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            <p className="text-sm font-medium">Recovering account…</p>
-            <p className="text-xs text-muted-foreground">Deriving keys and re-encrypting vault</p>
+            <p className="text-sm font-medium">{t('recovery.recovering')}</p>
+            <p className="text-xs text-muted-foreground">{t('recovery.derivingNote')}</p>
           </CardContent>
         </Card>
       </div>
@@ -117,12 +124,10 @@ export default function Recovery() {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
         <Card className="w-full max-w-sm text-center">
-          <CardHeader><CardTitle>Account recovered!</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t('recovery.success.title')}</CardTitle></CardHeader>
           <CardContent className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Your password has been reset. Sign in with your new password.
-            </p>
-            <Button className="w-full" onClick={() => navigate('/login')}>Sign in</Button>
+            <p className="text-sm text-muted-foreground">{t('recovery.success.desc')}</p>
+            <Button className="w-full" onClick={() => navigate('/login')}>{t('recovery.success.signIn')}</Button>
           </CardContent>
         </Card>
       </div>
@@ -137,12 +142,11 @@ export default function Recovery() {
             <KutupLogo size={34} />
             <span className="text-3xl font-bold text-primary tracking-tight">Kutup</span>
           </div>
-          <CardTitle className="text-center">Recover account</CardTitle>
+          <CardTitle className="text-center">{t('recovery.title')}</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground mb-4">
-            Enter your 24-word recovery phrase and a new password. 2FA is bypassed during recovery —
-            the recovery phrase is your second factor.
+            {t('recovery.description')}
           </p>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -151,7 +155,7 @@ export default function Recovery() {
                 name="email"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Email</FormLabel>
+                    <FormLabel>{t('auth.email')}</FormLabel>
                     <FormControl>
                       <Input type="email" autoComplete="email" {...field} />
                     </FormControl>
@@ -164,11 +168,11 @@ export default function Recovery() {
                 name="mnemonic"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Recovery phrase (24 words)</FormLabel>
+                    <FormLabel>{t('recovery.recoveryPhrase')}</FormLabel>
                     <FormControl>
                       <textarea
                         className="w-full min-h-[80px] rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-ring"
-                        placeholder="word1 word2 word3 … word24"
+                        placeholder={t('recovery.phrasePlaceholder')}
                         autoComplete="off"
                         {...field}
                       />
@@ -182,14 +186,14 @@ export default function Recovery() {
                 name="newPassword"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>New password</FormLabel>
+                    <FormLabel>{t('recovery.newPassword')}</FormLabel>
                     <FormControl>
                       <Input type="password" autoComplete="new-password" {...field} />
                     </FormControl>
                     {newPassword && (
                       <div className="space-y-1">
                         <Progress value={(strength.score + 1) * 20} className="h-1" />
-                        <p className="text-xs text-muted-foreground">{STRENGTH_LABELS[strength.score]}</p>
+                        <p className="text-xs text-muted-foreground">{strengthLabels[strength.score]}</p>
                       </div>
                     )}
                     <FormMessage />
@@ -201,7 +205,7 @@ export default function Recovery() {
                 name="newPasswordConfirm"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Confirm new password</FormLabel>
+                    <FormLabel>{t('recovery.confirmNewPassword')}</FormLabel>
                     <FormControl>
                       <Input type="password" autoComplete="new-password" {...field} />
                     </FormControl>
@@ -216,12 +220,12 @@ export default function Recovery() {
               )}
               <Button type="submit" className="w-full" disabled={form.formState.isSubmitting}>
                 {form.formState.isSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                Recover account
+                {t('recovery.submit')}
               </Button>
             </form>
           </Form>
           <p className="mt-4 text-center text-sm text-muted-foreground">
-            <Link to="/login" className="text-primary hover:underline">Back to sign in</Link>
+            <Link to="/login" className="text-primary hover:underline">{t('recovery.backToSignIn')}</Link>
           </p>
         </CardContent>
       </Card>

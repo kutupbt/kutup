@@ -1,6 +1,7 @@
 // Public share viewer — no auth required.
 // The linkKey lives ONLY in the URL #fragment (never sent to server).
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useParams } from 'react-router-dom'
 import { Download, Lock, Loader2, FileText } from 'lucide-react'
 import api from '@/api/client'
@@ -40,6 +41,7 @@ type State = 'loading' | 'ready' | 'error' | 'expired'
 
 export default function PublicShare() {
   const { token } = useParams<{ token: string }>()
+  const { t } = useTranslation()
   const [state, setState] = useState<State>('loading')
   const [error, setError] = useState('')
   const [files, setFiles] = useState<DecryptedFile[]>([])
@@ -55,7 +57,7 @@ export default function PublicShare() {
     const linkKeyB64 = params.get('key')
 
     if (!linkKeyB64) {
-      setError('Missing decryption key — the URL may be incomplete. The key must be in the #fragment.')
+      setError(t('publicShare.missingKey'))
       setState('error')
       return
     }
@@ -115,7 +117,7 @@ export default function PublicShare() {
       a.click()
       URL.revokeObjectURL(url)
     } catch {
-      setError('Download failed')
+      setError(t('publicShare.downloadFailed'))
     } finally {
       setDownloading(null)
     }
@@ -125,7 +127,7 @@ export default function PublicShare() {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-3">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        <p className="text-sm text-muted-foreground">Decrypting…</p>
+        <p className="text-sm text-muted-foreground">{t('publicShare.decrypting')}</p>
       </div>
     )
   }
@@ -134,9 +136,9 @@ export default function PublicShare() {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
         <Card className="w-full max-w-sm text-center">
-          <CardHeader><CardTitle>Link expired</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t('publicShare.expired.title')}</CardTitle></CardHeader>
           <CardContent>
-            <p className="text-sm text-muted-foreground">This share link is no longer valid.</p>
+            <p className="text-sm text-muted-foreground">{t('publicShare.expired.desc')}</p>
           </CardContent>
         </Card>
       </div>
@@ -147,7 +149,7 @@ export default function PublicShare() {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
         <Card className="w-full max-w-sm text-center">
-          <CardHeader><CardTitle>Cannot access share</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t('publicShare.error.title')}</CardTitle></CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">{error}</p>
           </CardContent>
@@ -164,7 +166,7 @@ export default function PublicShare() {
       </div>
       <Badge variant="outline" className="border-green-500/50 text-green-400 mb-6 flex items-center gap-1.5 w-fit">
         <Lock className="h-3 w-3" />
-        End-to-end encrypted — decrypted in your browser
+        {t('publicShare.e2e')}
       </Badge>
 
       {error && (
@@ -176,9 +178,9 @@ export default function PublicShare() {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Name</TableHead>
-            <TableHead className="w-24">Size</TableHead>
-            <TableHead className="w-32">Date</TableHead>
+            <TableHead>{t('publicShare.name')}</TableHead>
+            <TableHead className="w-24">{t('publicShare.size')}</TableHead>
+            <TableHead className="w-32">{t('publicShare.date')}</TableHead>
             <TableHead className="w-28" />
           </TableRow>
         </TableHeader>
@@ -186,7 +188,7 @@ export default function PublicShare() {
           {files.length === 0 ? (
             <TableRow>
               <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
-                No files in this share
+                {t('publicShare.noFiles')}
               </TableCell>
             </TableRow>
           ) : (
@@ -216,7 +218,7 @@ export default function PublicShare() {
                     ) : (
                       <Download className="h-3.5 w-3.5 mr-2" />
                     )}
-                    Download
+                    {t('publicShare.download')}
                   </Button>
                 </TableCell>
               </TableRow>

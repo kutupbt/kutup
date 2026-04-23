@@ -1,0 +1,357 @@
+{
+  "common": {
+    "cancel": "İptal",
+    "delete": "Sil",
+    "rename": "Yeniden adlandır",
+    "download": "İndir",
+    "upload": "Yükle",
+    "share": "Paylaş",
+    "enable": "Etkinleştir",
+    "disable": "Devre dışı bırak",
+    "close": "Kapat",
+    "back": "Geri",
+    "create": "Oluştur",
+    "copyLink": "Bağlantıyı kopyala",
+    "copied": "Kopyalandı!",
+    "clear": "Temizle",
+    "drive": "Sürücü"
+  },
+  "nav": {
+    "myFiles": "Dosyalarım",
+    "sharedWithMe": "Benimle paylaşılanlar",
+    "admin": "Yönetici",
+    "settings": "Ayarlar",
+    "signOut": "Çıkış yap",
+    "switchToLight": "Açık temaya geç",
+    "switchToDark": "Koyu temaya geç"
+  },
+  "auth": {
+    "signIn": "Giriş yap",
+    "email": "E-posta",
+    "password": "Şifre",
+    "forgotPassword": "Şifremi unuttum?",
+    "noAccount": "Hesabınız yok mu?",
+    "createOne": "Oluşturun",
+    "alreadyHaveAccount": "Zaten hesabınız var mı?",
+    "derivingKeys": "Anahtarlar türetiliyor…",
+    "decryptingVault": "Kasa çözümleniyor…",
+    "argon2idNote": "Argon2id anahtar türetme çalışıyor (bu biraz zaman alabilir)",
+    "decryptingLocally": "Anahtarlarınız yerel olarak çözümleniyor",
+    "totp": {
+      "title": "İki faktörlü kimlik doğrulama",
+      "enterCode": "Kimlik doğrulama uygulamanızdaki 6 haneli kodu girin.",
+      "verify": "Doğrula"
+    },
+    "strength": {
+      "veryWeak": "Çok zayıf",
+      "weak": "Zayıf",
+      "fair": "Orta",
+      "strong": "Güçlü",
+      "veryStrong": "Çok güçlü"
+    }
+  },
+  "register": {
+    "title": "Hesap oluştur",
+    "username": "Kullanıcı adı",
+    "usernamePlaceholder": "ör. ali_42",
+    "usernameDesc": "3-32 karakter: küçük harf, rakam, _ ve -",
+    "confirmPassword": "Şifreyi onayla",
+    "passwordTooWeak": "Şifre çok zayıf — daha güçlü bir şifre seçin",
+    "generatingKeys": "Anahtarlarınız oluşturuluyor…",
+    "creatingAccount": "Hesap oluşturuluyor…",
+    "mnemonic": {
+      "title": "Kurtarma ifadenizi kaydedin",
+      "warning": "Bu 24 kelimelik ifade <1>yalnızca bir kez</1> gösterilir. Yazın ve güvenli bir yerde saklayın. Şifrenizi unutursanız hesabınızı kurtarmanın tek yolu budur.",
+      "saved": "Kurtarma ifademi kaydettim"
+    },
+    "confirm": {
+      "title": "Kurtarma ifadesini onaylayın",
+      "instruction": "Kaydettiğinizi onaylamak için tüm 24 kelimeyi yazın.",
+      "placeholder": "Tüm 24 kelimeyi boşluklarla ayırarak girin…",
+      "mismatch": "Kurtarma ifadesi eşleşmiyor. Her kelimeyi dikkatlice kontrol edin.",
+      "submit": "Kaydı tamamla"
+    },
+    "success": {
+      "title": "Hesap oluşturuldu!",
+      "desc": "Şifrelenmiş hesabınız hazır.",
+      "signIn": "Giriş yap"
+    },
+    "disabled": {
+      "title": "Kayıt devre dışı",
+      "desc": "Genel kayıt şu anda devre dışı. Erişim için yöneticinizle iletişime geçin.",
+      "backToSignIn": "Girişe geri dön"
+    }
+  },
+  "firstLogin": {
+    "title": "Şifrenizi belirleyin",
+    "welcomeDesc": "Hoş geldiniz! Hesap kuruluyor:",
+    "newPassword": "Yeni şifre",
+    "confirmPassword": "Şifreyi onayla",
+    "continue": "Devam et",
+    "generatingKeys": "Anahtarlarınız oluşturuluyor…",
+    "finishingSetup": "Kurulum tamamlanıyor…",
+    "completeSetup": "Kurulumu tamamla"
+  },
+  "recovery": {
+    "title": "Hesabı kurtar",
+    "description": "24 kelimelik kurtarma ifadenizi ve yeni şifrenizi girin. Kurtarma sırasında 2FA atlanır — kurtarma ifadesi ikinci faktörünüzdür.",
+    "recoveryPhrase": "Kurtarma ifadesi (24 kelime)",
+    "phrasePlaceholder": "kelime1 kelime2 kelime3 … kelime24",
+    "newPassword": "Yeni şifre",
+    "confirmNewPassword": "Yeni şifreyi onayla",
+    "submit": "Hesabı kurtar",
+    "recovering": "Hesap kurtarılıyor…",
+    "derivingNote": "Anahtarlar türetiliyor ve kasa yeniden şifreleniyor",
+    "backToSignIn": "Girişe geri dön",
+    "success": {
+      "title": "Hesap kurtarıldı!",
+      "desc": "Şifreniz sıfırlandı. Yeni şifrenizle giriş yapın.",
+      "signIn": "Giriş yap"
+    }
+  },
+  "drive": {
+    "dropToUpload": "“{{name}}” klasörüne yüklemek için bırakın",
+    "uploadQuota": "Yükleme kotası",
+    "selected_one": "{{count}} öğe seçildi",
+    "selected_other": "{{count}} öğe seçildi",
+    "downloadFiles_one": "Dosyayı indir",
+    "downloadFiles_other": "{{count}} dosyayı indir",
+    "noSharedFolders": "Henüz sizinle paylaşılan klasör yok.",
+    "uploadFiles": "Dosya yükle",
+    "newFolder": "Yeni klasör",
+    "addRemoteShare": "Uzak paylaşım ekle",
+    "clear": "Temizle",
+    "toast": {
+      "uploaded_one": "{{count}} dosya yüklendi",
+      "uploaded_other": "{{count}} dosya yüklendi",
+      "downloading_one": "{{count}} dosya indiriliyor…",
+      "downloading_other": "{{count}} dosya indiriliyor…",
+      "deleted_one": "{{count}} öğe silindi",
+      "deleted_other": "{{count}} öğe silindi",
+      "someFailed": "Bazı öğeler silinemedi",
+      "remoteAdded": "Uzak paylaşım eklendi",
+      "remoteRemoved": "Uzak paylaşım kaldırıldı",
+      "folderShared": "Klasör paylaşıldı",
+      "uploadFailed": "Yükleme başarısız",
+      "downloadFailed": "İndirme başarısız",
+      "fileDeleted": "Dosya silindi",
+      "deleteFailed": "Silme başarısız",
+      "folderDeleted": "Klasör silindi",
+      "folderDeleteFailed": "Klasör silinemedi",
+      "loadFailed": "Koleksiyonlar yüklenemedi"
+    },
+    "deleteFile": {
+      "title": "“{{name}}” silinsin mi?",
+      "desc": "Bu işlem geri alınamaz."
+    },
+    "deleteFolder": {
+      "title": "“{{name}}” klasörü silinsin mi?",
+      "desc": "Tüm dosyalar ve alt klasörler kalıcı olarak silinecek."
+    },
+    "batchDelete": {
+      "title_one": "{{count}} öğe silinsin mi?",
+      "title_other": "{{count}} öğe silinsin mi?",
+      "files_one": "{{count}} dosya",
+      "files_other": "{{count}} dosya",
+      "folders_one": "{{count}} klasör",
+      "folders_other": "{{count}} klasör",
+      "and": "ve",
+      "willBeDeleted": "kalıcı olarak silinecek. Bu işlem geri alınamaz.",
+      "deleteAll": "Tümünü sil"
+    },
+    "publicLink": {
+      "title": "Genel bağlantı hazır",
+      "desc": "Bu bağlantıya sahip olan herkes dosyalara erişebilir. Şifre çözme anahtarı fragment'tadır ve sunucuya asla gönderilmez."
+    },
+    "inviteLink": {
+      "title": "Davet bağlantısı hazır",
+      "desc": "Bu bağlantıyı alıcıya gönderin. 'Uzak paylaşım ekle' bölümüne yapıştıracak."
+    }
+  },
+  "folders": {
+    "details": "Ayrıntılar",
+    "rename": "Yeniden adlandır",
+    "uploadHere": "Buraya yükle",
+    "share": "Paylaş",
+    "copyPublicLink": "Genel bağlantıyı kopyala",
+    "deleteFolder": "Klasörü sil",
+    "removeShare": "Paylaşımı kaldır"
+  },
+  "files": {
+    "name": "Ad",
+    "size": "Boyut",
+    "uploaded": "Yüklendi",
+    "download": "İndir",
+    "delete": "Sil"
+  },
+  "details": {
+    "title": "Ayrıntılar",
+    "size": "Boyut",
+    "created": "Oluşturuldu",
+    "type": "Tür",
+    "federatedShare": "Federasyon paylaşımı",
+    "openFolder": "Klasörü aç",
+    "rename": "Yeniden adlandır",
+    "share": "Paylaş",
+    "copyPublicLink": "Genel bağlantıyı kopyala",
+    "deleteFolder": "Klasörü sil",
+    "download": "İndir",
+    "delete": "Sil"
+  },
+  "upload": {
+    "progress": "Yükleniyor",
+    "dropOrClick": "Dosyaları buraya bırakın veya",
+    "clickToUpload": "tıklayarak yükleyin",
+    "readOnly": "Bu klasör salt okunurdur"
+  },
+  "dialogs": {
+    "newFolder": {
+      "title": "Yeni klasör",
+      "nameLabel": "Klasör adı",
+      "placeholder": "Adsız klasör",
+      "cancel": "İptal",
+      "create": "Oluştur"
+    },
+    "rename": {
+      "title": "Klasörü yeniden adlandır",
+      "newName": "Yeni ad",
+      "cancel": "İptal",
+      "rename": "Yeniden adlandır"
+    },
+    "share": {
+      "title": "“{{name}}” paylaşılıyor",
+      "recipient": "Alıcı",
+      "recipientPlaceholder": "eposta@ornek.com veya ali@baska-sunucu.com",
+      "federatedNote": "Federasyon paylaşımı — davet bağlantısı oluşturulacak",
+      "permissions": "İzinler",
+      "downloadAlways": "İndirme (her zaman açık)",
+      "uploadLabel": "Yükleme",
+      "quotaPlaceholder": "Kota GB (boş = sınırsız)",
+      "deleteOwn": "Kendi yüklemelerini silebilir",
+      "cancel": "İptal",
+      "shareAndInvite": "Paylaş ve davet bağlantısı al",
+      "share": "Paylaş"
+    },
+    "publicShare": {
+      "close": "Kapat",
+      "copyLink": "Bağlantıyı kopyala",
+      "copied": "Kopyalandı!"
+    },
+    "addRemote": {
+      "title": "Uzak paylaşım ekle",
+      "description": "Başka bir Kutup sunucusundaki birinden aldığınız davet bağlantısını yapıştırın.",
+      "inviteLink": "Davet bağlantısı",
+      "placeholder": "https://baska-sunucu.com/invite/…",
+      "cancel": "İptal",
+      "adding": "Ekleniyor…",
+      "addShare": "Paylaşım ekle"
+    }
+  },
+  "settings": {
+    "title": "Ayarlar",
+    "account": {
+      "title": "Hesap",
+      "email": "E-posta",
+      "username": "Kullanıcı adı",
+      "storage": "Depolama"
+    },
+    "totp": {
+      "title": "İki Faktörlü Kimlik Doğrulama",
+      "enabled": "Etkin",
+      "active": "TOTP bu hesapta etkin",
+      "disable": "TOTP'yi devre dışı bırak",
+      "disableTitle": "İki faktörlü kimlik doğrulama devre dışı bırakılsın mı?",
+      "disableDesc": "Bu hesabınızın güvenliğini azaltır. Giriş yaparken artık kod istenmeyecek.",
+      "disableConfirm": "Devre dışı bırak",
+      "addSecurity": "Kimlik doğrulama uygulamasıyla ekstra güvenlik katmanı ekleyin.",
+      "setUp": "TOTP'yi kur",
+      "setupTitle": "İki faktörlü kimlik doğrulamayı kur",
+      "scanQr": "Bu QR kodunu kimlik doğrulama uygulamanızla tarayın (Google Authenticator, Authy vb.)",
+      "manualKey": "Manuel giriş anahtarı:",
+      "confirmCode": "Onaylamak için 6 haneli kodu girin",
+      "enableButton": "TOTP'yi etkinleştir",
+      "enabledToast": "İki faktörlü kimlik doğrulama etkinleştirildi",
+      "disabledToast": "İki faktörlü kimlik doğrulama devre dışı bırakıldı",
+      "setupFailed": "TOTP kurulumu başlatılamadı",
+      "disableFailed": "TOTP devre dışı bırakılamadı"
+    },
+    "encryption": {
+      "title": "Şifreleme",
+      "desc1": "Tüm dosyalar XChaCha20-Poly1305 kullanılarak istemci tarafında şifrelenir. Ana anahtarınız ve özel anahtarınız Argon2id ile şifrenizden türetilir ve asla sunucuya gönderilmez. Sunucu yalnızca çözemediği şifreli metni saklar.",
+      "desc2": "Şifrenizi değiştirmek için",
+      "recoveryLink": "hesap kurtarma",
+      "desc2end": "akışını 24 kelimelik anımsatıcınızla kullanın."
+    },
+    "language": {
+      "title": "Dil",
+      "desc": "Görüntüleme dilinizi seçin"
+    }
+  },
+  "admin": {
+    "title": "Yönetici Paneli",
+    "createUser": "Kullanıcı oluştur",
+    "notice": "Dosya adları ve içerikleri şifrelidir. Yöneticiler kullanıcı verilerini göremez.",
+    "stats": {
+      "totalUsers": "Toplam kullanıcı",
+      "activeUsers": "Aktif kullanıcı",
+      "totalFiles": "Toplam dosya",
+      "collections": "Koleksiyonlar",
+      "storageUsed": "Kullanılan depolama"
+    },
+    "registration": {
+      "public": "Genel kayıt",
+      "enabled": "Etkin",
+      "disabled": "Devre dışı"
+    },
+    "table": {
+      "email": "E-posta",
+      "username": "Kullanıcı adı",
+      "quota": "Kota",
+      "used": "Kullanılan",
+      "status": "Durum",
+      "totp": "TOTP",
+      "joined": "Katıldı",
+      "active": "Aktif",
+      "inactive": "Devre dışı",
+      "disable": "Devre dışı bırak",
+      "enable": "Etkinleştir",
+      "delete": "Sil"
+    },
+    "createDialog": {
+      "title": "Kullanıcı oluştur",
+      "desc": "Kullanıcı ilk girişte kendi şifresini ve kurtarma ifadesini belirleyecek.",
+      "email": "E-posta",
+      "username": "Kullanıcı adı",
+      "usernamePlaceholder": "3-32 karakter: a-z, 0-9, _ ve -",
+      "tempPassword": "Geçici şifre",
+      "tempPasswordPlaceholder": "Bunu kullanıcıyla paylaşın",
+      "quotaLabel": "Depolama kotası (GB)",
+      "cancel": "İptal",
+      "create": "Kullanıcı oluştur"
+    },
+    "deleteDialog": {
+      "title": "{{email}} silinsin mi?",
+      "desc": "Bu işlem hesabı ve tüm ilgili verileri kalıcı olarak siler. Bu işlem geri alınamaz.",
+      "cancel": "İptal",
+      "confirm": "Sil"
+    }
+  },
+  "publicShare": {
+    "decrypting": "Çözümleniyor…",
+    "missingKey": "Şifre çözme anahtarı eksik — URL eksik olabilir. Anahtar #fragment içinde olmalıdır.",
+    "e2e": "Uçtan uca şifrelenmiş — tarayıcınızda çözümlendi",
+    "name": "Ad",
+    "size": "Boyut",
+    "date": "Tarih",
+    "noFiles": "Bu paylaşımda dosya yok",
+    "download": "İndir",
+    "downloadFailed": "İndirme başarısız",
+    "expired": {
+      "title": "Bağlantı süresi doldu",
+      "desc": "Bu paylaşım bağlantısı artık geçerli değil."
+    },
+    "error": {
+      "title": "Paylaşıma erişilemiyor"
+    }
+  }
+}

@@ -1,4 +1,5 @@
 import './polyfills'
+import './i18n'
 import './index.css'
 import React from 'react'
 import ReactDOM from 'react-dom/client'
@@ -20,7 +21,8 @@ const queryClient = new QueryClient({
   },
 })
 
-document.documentElement.classList.add('dark')
+import { getTheme, applyTheme } from './lib/theme'
+applyTheme(getTheme())
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

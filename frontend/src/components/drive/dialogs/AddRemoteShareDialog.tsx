@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -33,6 +34,7 @@ interface Props {
 }
 
 export default function AddRemoteShareDialog({ open, onOpenChange, onConfirm }: Props) {
+  const { t } = useTranslation()
   const form = useForm<FormData>({ resolver: zodResolver(schema), defaultValues: { inviteUrl: '' } })
 
   useEffect(() => {
@@ -48,9 +50,9 @@ export default function AddRemoteShareDialog({ open, onOpenChange, onConfirm }: 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Add remote share</DialogTitle>
+          <DialogTitle>{t('dialogs.addRemote.title')}</DialogTitle>
           <DialogDescription>
-            Paste the invite link you received from someone on another Kutup server.
+            {t('dialogs.addRemote.description')}
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
@@ -60,11 +62,11 @@ export default function AddRemoteShareDialog({ open, onOpenChange, onConfirm }: 
               name="inviteUrl"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Invite link</FormLabel>
+                  <FormLabel>{t('dialogs.addRemote.inviteLink')}</FormLabel>
                   <FormControl>
                     <Input
                       autoFocus
-                      placeholder="https://other-server.com/invite/…"
+                      placeholder={t('dialogs.addRemote.placeholder')}
                       autoComplete="off"
                       {...field}
                     />
@@ -75,10 +77,10 @@ export default function AddRemoteShareDialog({ open, onOpenChange, onConfirm }: 
             />
             <DialogFooter>
               <Button variant="outline" type="button" onClick={() => onOpenChange(false)}>
-                Cancel
+                {t('dialogs.addRemote.cancel')}
               </Button>
               <Button type="submit" disabled={form.formState.isSubmitting}>
-                {form.formState.isSubmitting ? 'Adding…' : 'Add share'}
+                {form.formState.isSubmitting ? t('dialogs.addRemote.adding') : t('dialogs.addRemote.addShare')}
               </Button>
             </DialogFooter>
           </form>
