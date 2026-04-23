@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate, Link } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -25,7 +26,6 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
-const STRENGTH_LABELS = ['Very weak', 'Weak', 'Fair', 'Strong', 'Very strong']
 const STRENGTH_COLORS = ['bg-red-500', 'bg-orange-500', 'bg-yellow-500', 'bg-green-500', 'bg-green-600']
 
 const formSchema = z
@@ -48,6 +48,7 @@ type FormData = z.infer<typeof formSchema>
 type Step = 'form' | 'generating' | 'mnemonic' | 'confirm' | 'submitting' | 'done'
 
 export default function Register() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const [step, setStep] = useState<Step>('form')
   const [registrationEnabled, setRegistrationEnabled] = useState<boolean | null>(null)
@@ -71,9 +72,17 @@ export default function Register() {
       .catch(() => setRegistrationEnabled(true))
   }, [])
 
+  const strengthLabels = [
+    t('auth.strength.veryWeak'),
+    t('auth.strength.weak'),
+    t('auth.strength.fair'),
+    t('auth.strength.strong'),
+    t('auth.strength.veryStrong'),
+  ]
+
   async function onSubmit(data: FormData) {
     if (strength.score < 2) {
-      form.setError('password', { message: 'Password is too weak — choose a stronger one' })
+      form.setError('password', { message: t('register.passwordTooWeak') })
       return
     }
     setEmail(data.email)
@@ -147,13 +156,13 @@ export default function Register() {
               <KutupLogo size={34} />
               <span className="text-3xl font-bold text-primary tracking-tight">Kutup</span>
             </div>
-            <CardTitle>Registration disabled</CardTitle>
+            <CardTitle>{t('register.disabled.title')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Public registration is currently disabled. Contact your administrator to get access.
+              {t('register.disabled.desc')}
             </p>
-            <Link to="/login" className="text-primary hover:underline text-sm">Back to sign in</Link>
+            <Link to="/login" className="text-primary hover:underline text-sm">{t('register.disabled.backToSignIn')}</Link>
           </CardContent>
         </Card>
       </div>
@@ -167,10 +176,10 @@ export default function Register() {
           <CardContent className="pt-8 pb-8 flex flex-col items-center gap-3">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
             <p className="text-sm font-medium">
-              {step === 'generating' ? 'Generating your keys…' : 'Creating account…'}
+              {step === 'generating' ? t('register.generatingKeys') : t('register.creatingAccount')}
             </p>
             {step === 'generating' && (
-              <p className="text-xs text-muted-foreground">Argon2id key derivation (this takes a moment)</p>
+              <p className="text-xs text-muted-foreground">{t('auth.argon2idNote')}</p>
             )}
           </CardContent>
         </Card>
@@ -183,7 +192,7 @@ export default function Register() {
       <div className="flex min-h-screen items-center justify-center p-4">
         <Card className="w-full max-w-xl">
           <CardHeader>
-            <CardTitle>Save your recovery phrase</CardTitle>
+            <CardTitle>{t('register.mnemonic.title')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <Alert className="border-yellow-500/50 text-yellow-400 bg-yellow-500/10">
@@ -194,7 +203,7 @@ export default function Register() {
             </Alert>
             <MnemonicDisplay mnemonic={keys.mnemonic} />
             <Button className="w-full" onClick={() => setStep('confirm')}>
-              I've saved my recovery phrase
+              {t('register.mnemonic.saved')}
             </Button>
           </CardContent>
         </Card>
@@ -207,16 +216,16 @@ export default function Register() {
       <div className="flex min-h-screen items-center justify-center p-4">
         <Card className="w-full max-w-xl">
           <CardHeader>
-            <CardTitle>Confirm recovery phrase</CardTitle>
+            <CardTitle>{t('register.confirm.title')}</CardTitle>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleConfirmMnemonic} className="space-y-4">
-              <p className="text-sm text-muted-foreground">Type all 24 words to confirm you've saved them.</p>
+              <p className="text-sm text-muted-foreground">{t('register.confirm.instruction')}</p>
               <textarea
                 className="w-full min-h-[100px] rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-ring"
                 value={mnemonicConfirm}
                 onChange={(e) => setMnemonicConfirm(e.target.value)}
-                placeholder="Enter all 24 words separated by spaces…"
+                placeholder={t('register.confirm.placeholder')}
                 autoComplete="off"
                 required
               />
@@ -225,7 +234,7 @@ export default function Register() {
                   <AlertDescription>{error}</AlertDescription>
                 </Alert>
               )}
-              <Button type="submit" className="w-full">Complete registration</Button>
+              <Button type="submit" className="w-full">{t('register.confirm.submit')}</Button>
             </form>
           </CardContent>
         </Card>
@@ -237,10 +246,10 @@ export default function Register() {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
         <Card className="w-full max-w-sm text-center">
-          <CardHeader><CardTitle>Account created!</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t('register.success.title')}</CardTitle></CardHeader>
           <CardContent className="space-y-4">
-            <p className="text-sm text-muted-foreground">Your encrypted account is ready.</p>
-            <Button className="w-full" onClick={() => navigate('/login')}>Sign in</Button>
+            <p className="text-sm text-muted-foreground">{t('register.success.desc')}</p>
+            <Button className="w-full" onClick={() => navigate('/login')}>{t('register.success.signIn')}</Button>
           </CardContent>
         </Card>
       </div>
@@ -255,7 +264,7 @@ export default function Register() {
             <KutupLogo size={34} />
             <span className="text-3xl font-bold text-primary tracking-tight">Kutup</span>
           </div>
-          <CardTitle className="text-center">Create account</CardTitle>
+          <CardTitle className="text-center">{t('register.title')}</CardTitle>
         </CardHeader>
         <CardContent>
           <Form {...form}>
@@ -265,7 +274,7 @@ export default function Register() {
                 name="email"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Email</FormLabel>
+                    <FormLabel>{t('auth.email')}</FormLabel>
                     <FormControl>
                       <Input type="email" autoComplete="email" {...field} />
                     </FormControl>
@@ -278,16 +287,16 @@ export default function Register() {
                 name="username"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Username</FormLabel>
+                    <FormLabel>{t('register.username')}</FormLabel>
                     <FormControl>
                       <Input
                         autoComplete="username"
-                        placeholder="e.g. alice_42"
+                        placeholder={t('register.usernamePlaceholder')}
                         {...field}
                         onChange={(e) => field.onChange(e.target.value.toLowerCase())}
                       />
                     </FormControl>
-                    <FormDescription>3-32 chars: lowercase letters, numbers, _ and -</FormDescription>
+                    <FormDescription>{t('register.usernameDesc')}</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -297,7 +306,7 @@ export default function Register() {
                 name="password"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Password</FormLabel>
+                    <FormLabel>{t('auth.password')}</FormLabel>
                     <FormControl>
                       <Input type="password" autoComplete="new-password" {...field} />
                     </FormControl>
@@ -308,7 +317,7 @@ export default function Register() {
                           className={`h-1 [&>div]:${STRENGTH_COLORS[strength.score]}`}
                         />
                         <p className="text-xs text-muted-foreground">
-                          {STRENGTH_LABELS[strength.score]}
+                          {strengthLabels[strength.score]}
                         </p>
                       </div>
                     )}
@@ -321,7 +330,7 @@ export default function Register() {
                 name="passwordConfirm"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Confirm password</FormLabel>
+                    <FormLabel>{t('register.confirmPassword')}</FormLabel>
                     <FormControl>
                       <Input type="password" autoComplete="new-password" {...field} />
                     </FormControl>
@@ -335,13 +344,13 @@ export default function Register() {
                 </Alert>
               )}
               <Button type="submit" className="w-full" disabled={form.formState.isSubmitting}>
-                Create account
+                {t('register.title')}
               </Button>
             </form>
           </Form>
           <p className="mt-4 text-center text-sm text-muted-foreground">
-            Already have an account?{' '}
-            <Link to="/login" className="text-primary hover:underline">Sign in</Link>
+            {t('auth.alreadyHaveAccount')}{' '}
+            <Link to="/login" className="text-primary hover:underline">{t('auth.signIn')}</Link>
           </p>
         </CardContent>
       </Card>

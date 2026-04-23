@@ -1,4 +1,5 @@
 import { ChevronRight } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import type { Collection } from '@/types/drive'
 
@@ -21,7 +22,8 @@ export default function DriveBreadcrumb({
   onGoHome,
   onGoShared,
 }: Props) {
-  const rootLabel = viewMode === 'shared' ? 'Shared with me' : 'My Files'
+  const { t } = useTranslation()
+  const rootLabel = viewMode === 'shared' ? t('nav.sharedWithMe') : t('nav.myFiles')
   const isAtRoot =
     !currentFolder ||
     (viewMode === 'myfiles' && currentFolder.id === myFilesCollection?.id)

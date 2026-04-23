@@ -1,4 +1,5 @@
 import { Progress } from '@/components/ui/progress'
+import { useTranslation } from 'react-i18next'
 import { formatSpeed } from '@/lib/format'
 import type { UploadState } from '@/types/drive'
 
@@ -7,12 +8,13 @@ interface Props {
 }
 
 export default function UploadPanel({ state }: Props) {
+  const { t } = useTranslation()
   if (!state.active) return null
 
   return (
     <div className="fixed bottom-24 right-8 w-60 bg-card border border-border rounded-xl p-3 shadow-2xl z-50">
       <p className="text-xs text-muted-foreground mb-2">
-        Uploading{' '}
+        {t('upload.progress')}{' '}
         <span className="text-foreground">
           {state.currentFile} / {state.totalFiles}
         </span>

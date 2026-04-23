@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { Plus, FolderPlus, Upload, Globe } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
+import { Plus, FolderPlus, Upload, Globe, Download, Trash2 } from 'lucide-react'
 import { useAppSelector, useAppDispatch } from '@/store'
-import { selectMasterKey, selectPrivateKey, logout, updateStorageUsed, updateStorageQuota } from '@/store/authSlice'
+import { selectMasterKey, selectPrivateKey, updateStorageUsed, updateStorageQuota } from '@/store/authSlice'
 import api from '@/api/client'
 import {
   encrypt, decrypt, generateKey, encryptStream, decryptStream,
@@ -18,6 +19,7 @@ import CollectionGrid from '@/components/drive/CollectionGrid'
 import FileTable from '@/components/drive/FileTable'
 import UploadPanel from '@/components/drive/UploadPanel'
 import EmptyState from '@/components/drive/EmptyState'
+import DetailsPanel from '@/components/drive/DetailsPanel'
 import NewFolderDialog from '@/components/drive/dialogs/NewFolderDialog'
 import RenameDialog from '@/components/drive/dialogs/RenameDialog'
 import ShareDialog from '@/components/drive/dialogs/ShareDialog'
@@ -49,6 +51,7 @@ import type { Collection, DecryptedFile, UploadState } from '@/types/drive'
 interface FileMetadata { name: string; mimeType: string; size: number }
 
 export default function Drive() {
+  const { t } = useTranslation()
   const dispatch = useAppDispatch()
   const masterKey = useAppSelector(selectMasterKey)
   const privateKey = useAppSelector(selectPrivateKey)
@@ -62,6 +65,14 @@ export default function Drive() {
   const [viewMode, setViewMode] = useState<'myfiles' | 'shared'>('myfiles')
   const [uploadState, setUploadState] = useState<UploadState | null>(null)
   const [isDragging, setIsDragging] = useState(false)
+
+  // Details panel
+  const [detailItem, setDetailItem] = useState<Collection | DecryptedFile | null>(null)
+
+  // Selection
+  const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set())
+  const [selectedFolderIds, setSelectedFolderIds] = useState<Set<string>>(new Set())
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
 
   // Dialog states
   const [newFolderOpen, setNewFolderOpen] = useState(false)
@@ -88,7 +99,13 @@ export default function Drive() {
   useEffect(() => {
     if (currentFolder?.collectionKey) loadFiles(currentFolder)
     else setFiles([])
+    clearSelection()
   }, [currentFolder?.id])
+
+  function clearSelection() {
+    setSelectedFileIds(new Set())
+    setSelectedFolderIds(new Set())
+  }
 
   async function autoCreateMyFiles(): Promise<Collection> {
     const collectionKey = await generateKey()
@@ -193,7 +210,7 @@ export default function Drive() {
         // No remote shares yet
       }
     } catch {
-      toast.error('Failed to load collections')
+      toast.error(t('drive.toast.loadFailed'))
     }
   }
 
@@ -217,7 +234,7 @@ export default function Drive() {
       )
       setFiles(decrypted)
     } catch {
-      toast.error('Failed to load files')
+      toast.error(t('drive.toast.loadFailed'))
     }
   }
 
@@ -234,6 +251,7 @@ export default function Drive() {
     setNavigationStack([])
     setFiles([])
     setViewMode('myfiles')
+    clearSelection()
   }
 
   function goToShared() {
@@ -241,6 +259,7 @@ export default function Drive() {
     setNavigationStack([])
     setFiles([])
     setViewMode('shared')
+    clearSelection()
   }
 
   function navigateTo(index: number) {
@@ -250,7 +269,65 @@ export default function Drive() {
     setFiles([])
   }
 
-  // Upload logic
+  // --- Selection handlers ---
+
+  function toggleFileSelect(id: string) {
+    setSelectedFileIds((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  function toggleAllFiles() {
+    const allSelected = files.every((f) => selectedFileIds.has(f.id))
+    setSelectedFileIds(allSelected ? new Set() : new Set(files.map((f) => f.id)))
+  }
+
+  function toggleFolderSelect(id: string) {
+    setSelectedFolderIds((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  // --- Batch actions ---
+
+  async function handleBatchDownload() {
+    const selected = files.filter((f) => selectedFileIds.has(f.id))
+    if (selected.length === 0) return
+    toast.info(t('drive.toast.downloading', { count: selected.length }))
+    for (const file of selected) {
+      await handleDownload(file)
+    }
+  }
+
+  async function handleBatchDelete() {
+    const fileCount = selectedFileIds.size
+    const folderCount = selectedFolderIds.size
+    const selectedFiles = files.filter((f) => selectedFileIds.has(f.id))
+    const selectedFolders = collections.filter((c) => selectedFolderIds.has(c.id))
+
+    try {
+      await Promise.all([
+        ...selectedFiles.map((f) => handleDeleteFile(f, true)),
+        ...selectedFolders.map((c) => handleDeleteFolder(c, true)),
+      ])
+      const total = fileCount + folderCount
+      toast.success(t('drive.toast.deleted', { count: total }))
+    } catch {
+      toast.error(t('drive.toast.someFailed'))
+    } finally {
+      clearSelection()
+      setBatchDeleteOpen(false)
+      if (currentFolder) await loadFiles(currentFolder)
+      await loadCollections()
+    }
+  }
+
+  // --- File/folder operations ---
+
   async function uploadFile(file: File, collection: Collection, onProgress?: (loaded: number, total: number) => void) {
     const fileKey = await generateKey()
     const buffer = await file.arrayBuffer()
@@ -286,9 +363,9 @@ export default function Drive() {
           setUploadState({ active: true, currentFile: i + 1, totalFiles: filesToUpload.length, filePercent, overallPercent: Math.round(((i + filePercent / 100) / filesToUpload.length) * 100), speedBps })
         })
       }
-      toast.success(`Uploaded ${filesToUpload.length} file${filesToUpload.length > 1 ? 's' : ''}`)
+      toast.success(t('drive.toast.uploaded', { count: filesToUpload.length }))
     } catch (err: any) {
-      toast.error(err.response?.data?.error ?? 'Upload failed')
+      toast.error(err.response?.data?.error ?? t('drive.toast.uploadFailed'))
     } finally {
       try { const meRes = await api.get('/user/me'); dispatch(updateStorageUsed(meRes.data.storageUsedBytes)) } catch {}
       setUploadState(null)
@@ -313,11 +390,11 @@ export default function Drive() {
       a.click()
       URL.revokeObjectURL(url)
     } catch {
-      toast.error('Download failed')
+      toast.error(t('drive.toast.downloadFailed'))
     }
   }
 
-  async function handleDeleteFile(file: DecryptedFile) {
+  async function handleDeleteFile(file: DecryptedFile, silent = false) {
     try {
       if (currentFolder?.isRemote) {
         await api.delete(`/fed-proxy/${currentFolder.remoteShareId}/files/${file.id}`)
@@ -325,9 +402,10 @@ export default function Drive() {
         await api.delete(`/files/${file.id}`)
       }
       setFiles((prev) => prev.filter((f) => f.id !== file.id))
-      toast.success('File deleted')
+      if (!silent) toast.success(t('drive.toast.fileDeleted'))
     } catch {
-      toast.error('Delete failed')
+      if (!silent) toast.error(t('drive.toast.deleteFailed'))
+      throw new Error('Delete failed')
     }
   }
 
@@ -346,14 +424,17 @@ export default function Drive() {
     await loadCollections()
   }
 
-  async function handleDeleteFolder(col: Collection) {
+  async function handleDeleteFolder(col: Collection, silent = false) {
     try {
       await api.delete(`/collections/${col.id}`)
-      await loadCollections()
-      if (currentFolder?.id === col.id) goHome()
-      toast.success('Folder deleted')
+      if (!silent) {
+        await loadCollections()
+        if (currentFolder?.id === col.id) goHome()
+        toast.success(t('drive.toast.folderDeleted'))
+      }
     } catch {
-      toast.error('Failed to delete folder')
+      if (!silent) toast.error(t('drive.toast.folderDeleteFailed'))
+      throw new Error('Delete failed')
     }
   }
 
@@ -400,7 +481,7 @@ export default function Drive() {
         canDelete: params.canDelete,
         uploadQuotaBytes: params.canUpload && params.quotaBytes ? params.quotaBytes : null,
       })
-      toast.success('Folder shared')
+      toast.success(t('drive.toast.folderShared'))
     }
   }
 
@@ -421,14 +502,14 @@ export default function Drive() {
   async function handleAddRemoteShare(inviteUrl: string) {
     await api.post('/fed-proxy/incoming', { inviteUrl })
     await loadCollections()
-    toast.success('Remote share added')
+    toast.success(t('drive.toast.remoteAdded'))
   }
 
   async function handleRevokeRemoteShare(col: Collection) {
     await api.delete(`/fed-proxy/incoming/${col.remoteShareId}`)
     setCollections((prev) => prev.filter((c) => c.id !== col.id))
     if (currentFolder?.id === col.id) goToShared()
-    toast.success('Remote share removed')
+    toast.success(t('drive.toast.remoteRemoved'))
   }
 
   function canUploadToCurrentFolder(): boolean {
@@ -470,6 +551,8 @@ export default function Drive() {
     }
   }
 
+  const totalSelected = selectedFileIds.size + selectedFolderIds.size
+
   return (
     <div className="flex min-h-screen">
       <Sidebar viewMode={viewMode} onGoHome={goHome} onGoShared={goToShared} />
@@ -490,8 +573,8 @@ export default function Drive() {
         {/* Drag overlay */}
         {isDragging && currentFolder && (
           <div className="fixed inset-0 z-50 bg-primary/15 border-2 border-dashed border-primary pointer-events-none flex items-center justify-center">
-            <p className="text-2xl font-semibold text-white">
-              Drop to upload to "{currentFolder.decryptedName}"
+            <p className="text-2xl font-semibold text-primary">
+              {t('drive.dropToUpload', { name: currentFolder.decryptedName })}
             </p>
           </div>
         )}
@@ -512,7 +595,7 @@ export default function Drive() {
         {currentFolder?.uploadQuotaBytes != null && currentFolder.uploadQuotaBytes > 0 && (
           <div className="mb-4 p-3 bg-card border border-border rounded-lg">
             <div className="flex justify-between text-xs text-muted-foreground mb-2">
-              <span>Upload quota</span>
+              <span>{t('drive.uploadQuota')}</span>
               <span>
                 {formatBytes(files.reduce((acc, f) => acc + (f.decryptedSize ?? 0), 0))}
                 {' / '}
@@ -529,11 +612,38 @@ export default function Drive() {
           </div>
         )}
 
+        {/* Selection toolbar — always reserves space to avoid layout shift */}
+        <div className="h-10 mb-4 flex items-center">
+          {totalSelected > 0 && (
+            <div className="flex items-center gap-3 w-full px-3 py-1.5 bg-primary/10 border border-primary/30 rounded-lg">
+              <span className="text-sm font-medium">
+                {t('drive.selected', { count: totalSelected })}
+              </span>
+              {selectedFileIds.size > 0 && (
+                <Button size="sm" variant="outline" onClick={handleBatchDownload}>
+                  <Download className="h-4 w-4 mr-1.5" />
+                  {t('drive.downloadFiles', { count: selectedFileIds.size })}
+                </Button>
+              )}
+              <Button size="sm" variant="destructive" onClick={() => setBatchDeleteOpen(true)}>
+                <Trash2 className="h-4 w-4 mr-1.5" />
+                {t('common.delete')}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={clearSelection} className="ml-auto">
+                {t('drive.clear')}
+              </Button>
+            </div>
+          )}
+        </div>
+
         {/* Folders */}
         <CollectionGrid
           collections={subFolders}
           currentUserId={auth.userId}
+          selectedIds={selectedFolderIds}
           onEnter={enterFolder}
+          onDetails={setDetailItem}
+          onToggleSelect={toggleFolderSelect}
           onRename={(col) => setRenameTarget(col)}
           onColor={handleColorFolder}
           onShare={(col) => setShareTarget(col)}
@@ -550,7 +660,7 @@ export default function Drive() {
         {/* Shared empty state */}
         {viewMode === 'shared' && !currentFolder && sharedCollections.length === 0 && (
           <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-            <p>No folders have been shared with you yet.</p>
+            <p>{t('drive.noSharedFolders')}</p>
           </div>
         )}
 
@@ -566,6 +676,10 @@ export default function Drive() {
               <FileTable
                 files={files}
                 canDelete={canDeleteFile()}
+                selectedIds={selectedFileIds}
+                onSelect={setDetailItem}
+                onToggleSelect={toggleFileSelect}
+                onToggleSelectAll={toggleAllFiles}
                 onDownload={handleDownload}
                 onDelete={(file) => setDeleteFile(file)}
               />
@@ -589,17 +703,17 @@ export default function Drive() {
             {canUploadToCurrentFolder() && (
               <DropdownMenuItem onSelect={() => triggerUpload()}>
                 <Upload className="h-4 w-4 mr-2" />
-                Upload files
+                {t('drive.uploadFiles')}
               </DropdownMenuItem>
             )}
             <DropdownMenuItem onSelect={() => setNewFolderOpen(true)}>
               <FolderPlus className="h-4 w-4 mr-2" />
-              New folder
+              {t('drive.newFolder')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => setAddRemoteOpen(true)}>
               <Globe className="h-4 w-4 mr-2" />
-              Add remote share
+              {t('drive.addRemoteShare')}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -607,6 +721,26 @@ export default function Drive() {
 
       {/* Upload progress */}
       {uploadState && <UploadPanel state={uploadState} />}
+
+      {/* Details panel */}
+      <DetailsPanel
+        item={detailItem}
+        canDelete={
+          'ownerUserId' in (detailItem ?? {})
+            ? true
+            : canDeleteFile()
+        }
+        onClose={() => setDetailItem(null)}
+        onDownload={handleDownload}
+        onDelete={(item) => {
+          if ('ownerUserId' in item) setDeleteFolder(item as Collection)
+          else setDeleteFile(item as DecryptedFile)
+        }}
+        onRename={(col) => setRenameTarget(col)}
+        onShare={(col) => setShareTarget(col)}
+        onPublicLink={handleCreatePublicLink}
+        onEnter={enterFolder}
+      />
 
       {/* Dialogs */}
       <NewFolderDialog
@@ -630,15 +764,15 @@ export default function Drive() {
       <PublicShareDialog
         url={publicShareUrl}
         onOpenChange={(open) => { if (!open) setPublicShareUrl(null) }}
-        title="Public link ready"
-        description="Anyone with this link can access the files. The decryption key is in the fragment and is never sent to the server."
+        title={t('drive.publicLink.title')}
+        description={t('drive.publicLink.desc')}
       />
 
       <PublicShareDialog
         url={fedInviteUrl}
         onOpenChange={(open) => { if (!open) setFedInviteUrl(null) }}
-        title="Invite link ready"
-        description="Send this link to the recipient. They'll paste it in 'Add remote share'."
+        title={t('drive.inviteLink.title')}
+        description={t('drive.inviteLink.desc')}
       />
 
       <AddRemoteShareDialog
@@ -651,16 +785,16 @@ export default function Drive() {
       <AlertDialog open={deleteFile !== null} onOpenChange={() => setDeleteFile(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete "{deleteFile?.decryptedName}"?</AlertDialogTitle>
-            <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+            <AlertDialogTitle>{t('drive.deleteFile.title', { name: deleteFile?.decryptedName })}</AlertDialogTitle>
+            <AlertDialogDescription>{t('drive.deleteFile.desc')}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => { if (deleteFile) handleDeleteFile(deleteFile); setDeleteFile(null) }}
             >
-              Delete
+              {t('common.delete')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -670,18 +804,40 @@ export default function Drive() {
       <AlertDialog open={deleteFolder !== null} onOpenChange={() => setDeleteFolder(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete folder "{deleteFolder?.decryptedName}"?</AlertDialogTitle>
-            <AlertDialogDescription>
-              All files and subfolders will be permanently deleted.
-            </AlertDialogDescription>
+            <AlertDialogTitle>{t('drive.deleteFolder.title', { name: deleteFolder?.decryptedName })}</AlertDialogTitle>
+            <AlertDialogDescription>{t('drive.deleteFolder.desc')}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => { if (deleteFolder) handleDeleteFolder(deleteFolder); setDeleteFolder(null) }}
             >
-              Delete
+              {t('common.delete')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Batch delete confirmation */}
+      <AlertDialog open={batchDeleteOpen} onOpenChange={setBatchDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('drive.batchDelete.title', { count: totalSelected })}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {selectedFileIds.size > 0 && t('drive.batchDelete.files', { count: selectedFileIds.size })}
+              {selectedFileIds.size > 0 && selectedFolderIds.size > 0 && ` ${t('drive.batchDelete.and')} `}
+              {selectedFolderIds.size > 0 && t('drive.batchDelete.folders', { count: selectedFolderIds.size })}
+              {' '}{t('drive.batchDelete.willBeDeleted')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={handleBatchDelete}
+            >
+              {t('drive.batchDelete.deleteAll')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

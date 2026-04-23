@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -25,8 +26,6 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
-const STRENGTH_LABELS = ['Very weak', 'Weak', 'Fair', 'Strong', 'Very strong']
-
 const formSchema = z
   .object({
     password: z.string().min(1, 'Password is required'),
@@ -41,6 +40,7 @@ type FormData = z.infer<typeof formSchema>
 type Step = 'form' | 'generating' | 'mnemonic' | 'confirm' | 'submitting'
 
 export default function FirstLogin() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const [step, setStep] = useState<Step>('form')
@@ -62,10 +62,17 @@ export default function FirstLogin() {
 
   const password = form.watch('password')
   const strength = zxcvbn(password ?? '')
+  const strengthLabels = [
+    t('auth.strength.veryWeak'),
+    t('auth.strength.weak'),
+    t('auth.strength.fair'),
+    t('auth.strength.strong'),
+    t('auth.strength.veryStrong'),
+  ]
 
   async function onSubmit(data: FormData) {
     if (strength.score < 2) {
-      form.setError('password', { message: 'Password is too weak — choose a stronger one' })
+      form.setError('password', { message: t('register.passwordTooWeak') })
       return
     }
     setStep('generating')
@@ -141,10 +148,10 @@ export default function FirstLogin() {
           <CardContent className="pt-8 pb-8 flex flex-col items-center gap-3">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
             <p className="text-sm font-medium">
-              {step === 'generating' ? 'Generating your keys…' : 'Finishing setup…'}
+              {step === 'generating' ? t('firstLogin.generatingKeys') : t('firstLogin.finishingSetup')}
             </p>
             {step === 'generating' && (
-              <p className="text-xs text-muted-foreground">Argon2id key derivation (this takes a moment)</p>
+              <p className="text-xs text-muted-foreground">{t('auth.argon2idNote')}</p>
             )}
           </CardContent>
         </Card>
@@ -156,7 +163,7 @@ export default function FirstLogin() {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
         <Card className="w-full max-w-xl">
-          <CardHeader><CardTitle>Save your recovery phrase</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t('register.mnemonic.title')}</CardTitle></CardHeader>
           <CardContent className="space-y-4">
             <Alert className="border-yellow-500/50 text-yellow-400 bg-yellow-500/10">
               <AlertDescription>
@@ -166,7 +173,7 @@ export default function FirstLogin() {
             </Alert>
             <MnemonicDisplay mnemonic={keys.mnemonic} />
             <Button className="w-full" onClick={() => setStep('confirm')}>
-              I've saved my recovery phrase
+              {t('register.mnemonic.saved')}
             </Button>
           </CardContent>
         </Card>
@@ -178,15 +185,15 @@ export default function FirstLogin() {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
         <Card className="w-full max-w-xl">
-          <CardHeader><CardTitle>Confirm recovery phrase</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t('register.confirm.title')}</CardTitle></CardHeader>
           <CardContent>
             <form onSubmit={handleConfirmMnemonic} className="space-y-4">
-              <p className="text-sm text-muted-foreground">Type all 24 words to confirm you've saved them.</p>
+              <p className="text-sm text-muted-foreground">{t('register.confirm.instruction')}</p>
               <textarea
                 className="w-full min-h-[100px] rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-ring"
                 value={mnemonicConfirm}
                 onChange={(e) => setMnemonicConfirm(e.target.value)}
-                placeholder="Enter all 24 words separated by spaces…"
+                placeholder={t('register.confirm.placeholder')}
                 autoComplete="off"
                 required
               />
@@ -195,7 +202,7 @@ export default function FirstLogin() {
                   <AlertDescription>{error}</AlertDescription>
                 </Alert>
               )}
-              <Button type="submit" className="w-full">Complete setup</Button>
+              <Button type="submit" className="w-full">{t('firstLogin.completeSetup')}</Button>
             </form>
           </CardContent>
         </Card>
@@ -211,12 +218,12 @@ export default function FirstLogin() {
             <KutupLogo size={34} />
             <span className="text-3xl font-bold text-primary tracking-tight">Kutup</span>
           </div>
-          <CardTitle className="text-center">Set your password</CardTitle>
+          <CardTitle className="text-center">{t('firstLogin.title')}</CardTitle>
         </CardHeader>
         <CardContent>
           {email && (
             <p className="text-sm text-muted-foreground mb-4">
-              Welcome! Setting up account for{' '}
+              {t('firstLogin.welcomeDesc')}{' '}
               <span className="text-primary">{email}</span>
             </p>
           )}
@@ -227,14 +234,14 @@ export default function FirstLogin() {
                 name="password"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>New password</FormLabel>
+                    <FormLabel>{t('firstLogin.newPassword')}</FormLabel>
                     <FormControl>
                       <Input type="password" autoComplete="new-password" autoFocus {...field} />
                     </FormControl>
                     {password && (
                       <div className="space-y-1">
                         <Progress value={(strength.score + 1) * 20} className="h-1" />
-                        <p className="text-xs text-muted-foreground">{STRENGTH_LABELS[strength.score]}</p>
+                        <p className="text-xs text-muted-foreground">{strengthLabels[strength.score]}</p>
                       </div>
                     )}
                     <FormMessage />
@@ -246,7 +253,7 @@ export default function FirstLogin() {
                 name="passwordConfirm"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Confirm password</FormLabel>
+                    <FormLabel>{t('firstLogin.confirmPassword')}</FormLabel>
                     <FormControl>
                       <Input type="password" autoComplete="new-password" {...field} />
                     </FormControl>
@@ -260,7 +267,7 @@ export default function FirstLogin() {
                 </Alert>
               )}
               <Button type="submit" className="w-full" disabled={form.formState.isSubmitting}>
-                Continue
+                {t('firstLogin.continue')}
               </Button>
             </form>
           </Form>

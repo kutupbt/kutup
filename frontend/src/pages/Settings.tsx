@@ -1,9 +1,10 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Loader2, Shield, KeyRound } from 'lucide-react'
+import { Loader2, Shield, KeyRound, ArrowLeft, Globe, Check, ChevronDown } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { useAppSelector, useAppDispatch } from '@/store'
 import { updateTotpEnabled } from '@/store/authSlice'
@@ -43,14 +44,28 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { toast } from 'sonner'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 
 const totpVerifySchema = z.object({
   code: z.string().length(6, 'Code must be 6 digits').regex(/^\d+$/, 'Digits only'),
 })
 type TotpVerifyForm = z.infer<typeof totpVerifySchema>
 
+const LANGUAGES = [
+  { code: 'en', label: 'English' },
+  { code: 'tr', label: 'Türkçe' },
+]
+
 export default function Settings() {
+  const { t, i18n } = useTranslation()
   const dispatch = useAppDispatch()
+  const lang = i18n.language.startsWith('tr') ? 'tr' : 'en'
+  const currentLang = LANGUAGES.find((l) => l.code === lang)
   const auth = useAppSelector((s) => s.auth)
 
   const [totpSetup, setTotpSetup] = useState<{ secret: string; qrUri: string } | null>(null)
@@ -71,7 +86,7 @@ export default function Settings() {
       setTotpSetup(res.data)
       setTotpDialogOpen(true)
     } catch (err: any) {
-      toast.error(err.response?.data?.error ?? 'Failed to start TOTP setup')
+      toast.error(err.response?.data?.error ?? t('settings.totp.setupFailed'))
     } finally {
       setSetupLoading(false)
     }
@@ -84,7 +99,7 @@ export default function Settings() {
       setTotpDialogOpen(false)
       setTotpSetup(null)
       totpForm.reset()
-      toast.success('Two-factor authentication enabled')
+      toast.success(t('settings.totp.enabledToast'))
     } catch (err: any) {
       totpForm.setError('code', { message: err.response?.data?.error ?? 'Invalid code' })
     }
@@ -94,35 +109,40 @@ export default function Settings() {
     try {
       await api.delete('/user/2fa')
       dispatch(updateTotpEnabled(false))
-      toast.success('Two-factor authentication disabled')
+      toast.success(t('settings.totp.disabledToast'))
     } catch (err: any) {
-      toast.error(err.response?.data?.error ?? 'Failed to disable TOTP')
+      toast.error(err.response?.data?.error ?? t('settings.totp.disableFailed'))
     }
   }
 
   return (
     <div className="max-w-2xl mx-auto p-6 space-y-4">
-      <h1 className="text-2xl font-bold">Settings</h1>
+      <div className="flex items-center gap-3">
+        <Button variant="ghost" size="sm" asChild>
+          <Link to="/drive"><ArrowLeft className="h-4 w-4 mr-1" />{t('common.drive')}</Link>
+        </Button>
+        <h1 className="text-2xl font-bold">{t('settings.title')}</h1>
+      </div>
 
       {/* Account info */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Account</CardTitle>
+          <CardTitle className="text-base">{t('settings.account.title')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex justify-between items-center py-1">
-            <span className="text-sm text-muted-foreground">Email</span>
+            <span className="text-sm text-muted-foreground">{t('settings.account.email')}</span>
             <span className="text-sm">{auth.email}</span>
           </div>
           <Separator />
           <div className="flex justify-between items-center py-1">
-            <span className="text-sm text-muted-foreground">Username</span>
+            <span className="text-sm text-muted-foreground">{t('settings.account.username')}</span>
             <span className="text-sm">@{auth.username}</span>
           </div>
           <Separator />
           <div className="space-y-2 py-1">
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Storage</span>
+              <span className="text-muted-foreground">{t('settings.account.storage')}</span>
               <span>{formatBytes(auth.storageUsedBytes)} / {formatBytes(auth.storageQuotaBytes)}</span>
             </div>
             <Progress value={quotaPercent} className="h-1.5" />
@@ -135,34 +155,34 @@ export default function Settings() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Shield className="h-4 w-4" />
-            Two-Factor Authentication
+            {t('settings.totp.title')}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           {auth.totpEnabled ? (
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Badge variant="outline" className="border-green-500/50 text-green-400">Enabled</Badge>
-                <span className="text-sm text-muted-foreground">TOTP is active on this account</span>
+                <Badge variant="outline" className="border-green-500/50 text-green-400">{t('settings.totp.enabled')}</Badge>
+                <span className="text-sm text-muted-foreground">{t('settings.totp.active')}</span>
               </div>
               <AlertDialog>
                 <AlertDialogTrigger asChild>
-                  <Button variant="destructive" size="sm">Disable TOTP</Button>
+                  <Button variant="destructive" size="sm">{t('settings.totp.disable')}</Button>
                 </AlertDialogTrigger>
                 <AlertDialogContent>
                   <AlertDialogHeader>
-                    <AlertDialogTitle>Disable two-factor authentication?</AlertDialogTitle>
+                    <AlertDialogTitle>{t('settings.totp.disableTitle')}</AlertDialogTitle>
                     <AlertDialogDescription>
-                      This reduces your account security. You will no longer be asked for a code when signing in.
+                      {t('settings.totp.disableDesc')}
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
                     <AlertDialogAction
                       className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                       onClick={disableTOTP}
                     >
-                      Disable
+                      {t('settings.totp.disableConfirm')}
                     </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
@@ -171,14 +191,50 @@ export default function Settings() {
           ) : (
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
-                Add an extra layer of security with an authenticator app.
+                {t('settings.totp.addSecurity')}
               </p>
               <Button size="sm" onClick={startTOTPSetup} disabled={setupLoading}>
                 {setupLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                Set up TOTP
+                {t('settings.totp.setUp')}
               </Button>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Language */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Globe className="h-4 w-4" />
+            {t('settings.language.title')}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">{t('settings.language.desc')}</p>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-2">
+                  <Globe className="h-3.5 w-3.5" />
+                  {currentLang?.label}
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {LANGUAGES.map((l) => (
+                  <DropdownMenuItem
+                    key={l.code}
+                    onClick={() => i18n.changeLanguage(l.code)}
+                    className="gap-2"
+                  >
+                    <Check className={`h-3.5 w-3.5 ${lang === l.code ? 'opacity-100' : 'opacity-0'}`} />
+                    {l.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </CardContent>
       </Card>
 
@@ -187,19 +243,15 @@ export default function Settings() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <KeyRound className="h-4 w-4" />
-            Encryption
+            {t('settings.encryption.title')}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm text-muted-foreground">
+          <p>{t('settings.encryption.desc1')}</p>
           <p>
-            All files are encrypted client-side using XChaCha20-Poly1305. Your master key and private
-            key are derived from your password using Argon2id and are never sent to the server.
-            The server stores only ciphertext it cannot decrypt.
-          </p>
-          <p>
-            To change your password, use the{' '}
-            <Link to="/recover" className="text-primary hover:underline">account recovery</Link>{' '}
-            flow with your 24-word mnemonic.
+            {t('settings.encryption.desc2')}{' '}
+            <Link to="/recover" className="text-primary hover:underline">{t('settings.encryption.recoveryLink')}</Link>{' '}
+            {t('settings.encryption.desc2end')}
           </p>
         </CardContent>
       </Card>
@@ -208,18 +260,18 @@ export default function Settings() {
       <Dialog open={totpDialogOpen} onOpenChange={setTotpDialogOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Set up two-factor authentication</DialogTitle>
+            <DialogTitle>{t('settings.totp.setupTitle')}</DialogTitle>
           </DialogHeader>
           {totpSetup && (
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
-                Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.)
+                {t('settings.totp.scanQr')}
               </p>
               <div className="flex justify-center bg-white rounded-lg p-3">
                 <QRCodeSVG value={totpSetup.qrUri} size={160} />
               </div>
               <div>
-                <p className="text-xs text-muted-foreground mb-1">Manual entry key:</p>
+                <p className="text-xs text-muted-foreground mb-1">{t('settings.totp.manualKey')}</p>
                 <code className="block bg-muted px-3 py-2 rounded text-xs font-mono tracking-widest text-primary">
                   {totpSetup.secret}
                 </code>
@@ -231,7 +283,7 @@ export default function Settings() {
                     name="code"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Enter the 6-digit code to confirm</FormLabel>
+                        <FormLabel>{t('settings.totp.confirmCode')}</FormLabel>
                         <FormControl>
                           <Input
                             type="text"
@@ -251,11 +303,11 @@ export default function Settings() {
                   />
                   <DialogFooter>
                     <Button variant="outline" type="button" onClick={() => setTotpDialogOpen(false)}>
-                      Cancel
+                      {t('common.cancel')}
                     </Button>
                     <Button type="submit" disabled={totpForm.formState.isSubmitting}>
                       {totpForm.formState.isSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                      Enable TOTP
+                      {t('settings.totp.enableButton')}
                     </Button>
                   </DialogFooter>
                 </form>

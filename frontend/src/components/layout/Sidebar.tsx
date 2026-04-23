@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Folder, Users, Settings, LogOut, ShieldCheck } from 'lucide-react'
+import { Folder, Users, Settings, LogOut, ShieldCheck, Sun, Moon } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { useAppSelector, useAppDispatch } from '@/store'
 import { logout } from '@/store/authSlice'
 import { KutupLogo } from '@/components/KutupLogo'
@@ -8,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 import { formatBytes } from '@/lib/format'
+import { getTheme, toggleTheme, type Theme } from '@/lib/theme'
 
 interface SidebarProps {
   viewMode: 'myfiles' | 'shared'
@@ -19,6 +22,8 @@ export default function Sidebar({ viewMode, onGoHome, onGoShared }: SidebarProps
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const auth = useAppSelector((s) => s.auth)
+  const [theme, setTheme] = useState<Theme>(getTheme)
+  const { t } = useTranslation()
 
   const quotaPercent =
     auth.storageQuotaBytes > 0
@@ -28,6 +33,10 @@ export default function Sidebar({ viewMode, onGoHome, onGoShared }: SidebarProps
   function handleLogout() {
     dispatch(logout())
     navigate('/login')
+  }
+
+  function handleThemeToggle() {
+    setTheme(toggleTheme())
   }
 
   return (
@@ -60,7 +69,7 @@ export default function Sidebar({ viewMode, onGoHome, onGoShared }: SidebarProps
           onClick={onGoHome}
         >
           <Folder className="h-4 w-4" />
-          My Files
+          {t('nav.myFiles')}
         </Button>
         <Button
           variant="ghost"
@@ -71,7 +80,7 @@ export default function Sidebar({ viewMode, onGoHome, onGoShared }: SidebarProps
           onClick={onGoShared}
         >
           <Users className="h-4 w-4" />
-          Shared with me
+          {t('nav.sharedWithMe')}
         </Button>
       </nav>
 
@@ -87,7 +96,7 @@ export default function Sidebar({ viewMode, onGoHome, onGoShared }: SidebarProps
             onClick={() => navigate('/admin')}
           >
             <ShieldCheck className="h-4 w-4" />
-            Admin
+            {t('nav.admin')}
           </Button>
         )}
         <Button
@@ -96,16 +105,27 @@ export default function Sidebar({ viewMode, onGoHome, onGoShared }: SidebarProps
           onClick={() => navigate('/settings')}
         >
           <Settings className="h-4 w-4" />
-          Settings
+          {t('nav.settings')}
         </Button>
-        <Button
-          variant="ghost"
-          className="justify-start gap-2 h-9 text-muted-foreground"
-          onClick={handleLogout}
-        >
-          <LogOut className="h-4 w-4" />
-          Sign out
-        </Button>
+        <div className="flex gap-1 items-center">
+          <Button
+            variant="ghost"
+            className="flex-1 justify-start gap-2 h-9 text-muted-foreground"
+            onClick={handleLogout}
+          >
+            <LogOut className="h-4 w-4" />
+            {t('nav.signOut')}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 text-muted-foreground shrink-0"
+            onClick={handleThemeToggle}
+            title={theme === 'dark' ? t('nav.switchToLight') : t('nav.switchToDark')}
+          >
+            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </Button>
+        </div>
       </div>
     </aside>
   )

@@ -1,8 +1,10 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useForm, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Loader2, Plus, Check, X } from 'lucide-react'
+import { Loader2, Plus, Check, X, ArrowLeft } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { useAppSelector } from '@/store'
 import { selectIsLoggedIn, selectIsAdmin } from '@/store/authSlice'
 import {
@@ -75,6 +77,7 @@ export default function Admin() {
 }
 
 function AdminContent() {
+  const { t } = useTranslation()
   const { data: users, isLoading: usersLoading } = useAdminUsers()
   const { data: stats } = useAdminStats()
   const { data: settings } = useAdminSettings()
@@ -112,21 +115,26 @@ function AdminContent() {
 
   const statItems = stats
     ? [
-        { label: 'Total users', value: stats.totalUsers },
-        { label: 'Active users', value: stats.activeUsers },
-        { label: 'Total files', value: stats.totalFiles },
-        { label: 'Collections', value: stats.totalCollections },
-        { label: 'Storage used', value: formatBytes(stats.totalStorageUsedBytes) },
+        { label: t('admin.stats.totalUsers'), value: stats.totalUsers },
+        { label: t('admin.stats.activeUsers'), value: stats.activeUsers },
+        { label: t('admin.stats.totalFiles'), value: stats.totalFiles },
+        { label: t('admin.stats.collections'), value: stats.totalCollections },
+        { label: t('admin.stats.storageUsed'), value: formatBytes(stats.totalStorageUsedBytes) },
       ]
     : []
 
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Admin Panel</h1>
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="sm" asChild>
+            <Link to="/drive"><ArrowLeft className="h-4 w-4 mr-1" />{t('common.drive')}</Link>
+          </Button>
+          <h1 className="text-2xl font-bold">{t('admin.title')}</h1>
+        </div>
         <Button size="sm" onClick={() => setCreateOpen(true)}>
           <Plus className="h-4 w-4 mr-2" />
-          Create user
+          {t('admin.createUser')}
         </Button>
       </div>
 
@@ -146,7 +154,7 @@ function AdminContent() {
 
       {/* Registration toggle */}
       <div className="flex items-center justify-between p-3 bg-card border border-border rounded-lg">
-        <span className="text-sm">Public registration</span>
+        <span className="text-sm">{t('admin.registration.public')}</span>
         <Button
           variant="outline"
           size="sm"
@@ -156,13 +164,13 @@ function AdminContent() {
           onClick={() => updateSettings.mutate({ registrationEnabled: !settings?.registrationEnabled })}
           disabled={updateSettings.isPending || !settings}
         >
-          {settings?.registrationEnabled ? 'Enabled' : 'Disabled'}
+          {settings?.registrationEnabled ? t('admin.registration.enabled') : t('admin.registration.disabled')}
         </Button>
       </div>
 
       <Alert className="border-green-500/30 text-green-400 bg-green-500/5">
         <AlertDescription className="text-xs">
-          File names and contents are encrypted. Admins cannot see user data.
+          {t('admin.notice')}
         </AlertDescription>
       </Alert>
 
@@ -175,13 +183,13 @@ function AdminContent() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Email</TableHead>
-              <TableHead>Username</TableHead>
-              <TableHead>Quota</TableHead>
-              <TableHead>Used</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>TOTP</TableHead>
-              <TableHead>Joined</TableHead>
+              <TableHead>{t('admin.table.email')}</TableHead>
+              <TableHead>{t('admin.table.username')}</TableHead>
+              <TableHead>{t('admin.table.quota')}</TableHead>
+              <TableHead>{t('admin.table.used')}</TableHead>
+              <TableHead>{t('admin.table.status')}</TableHead>
+              <TableHead>{t('admin.table.totp')}</TableHead>
+              <TableHead>{t('admin.table.joined')}</TableHead>
               <TableHead />
             </TableRow>
           </TableHeader>
@@ -240,7 +248,7 @@ function AdminContent() {
                       ? 'border-green-500/50 text-green-400'
                       : 'border-destructive/50 text-destructive'}
                   >
-                    {user.isActive ? 'Active' : 'Disabled'}
+                    {user.isActive ? t('admin.table.active') : t('admin.table.inactive')}
                   </Badge>
                 </TableCell>
                 <TableCell className="text-muted-foreground">
@@ -257,7 +265,7 @@ function AdminContent() {
                       className="h-7 text-xs"
                       onClick={() => updateUser.mutate({ id: user.id, body: { isActive: !user.isActive } })}
                     >
-                      {user.isActive ? 'Disable' : 'Enable'}
+                      {user.isActive ? t('admin.table.disable') : t('admin.table.enable')}
                     </Button>
                     <Button
                       variant="ghost"
@@ -265,7 +273,7 @@ function AdminContent() {
                       className="h-7 text-xs text-destructive hover:text-destructive"
                       onClick={() => setDeleteTarget({ id: user.id, email: user.email })}
                     >
-                      Delete
+                      {t('admin.table.delete')}
                     </Button>
                   </div>
                 </TableCell>
@@ -279,26 +287,26 @@ function AdminContent() {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Create user</DialogTitle>
+            <DialogTitle>{t('admin.createDialog.title')}</DialogTitle>
             <DialogDescription>
-              The user will set their own password and recovery phrase on first login.
+              {t('admin.createDialog.desc')}
             </DialogDescription>
           </DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onCreateUser)} className="space-y-4">
               <FormField control={form.control} name="email" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Email</FormLabel>
+                  <FormLabel>{t('admin.createDialog.email')}</FormLabel>
                   <FormControl><Input type="email" autoComplete="email" autoFocus {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
               )} />
               <FormField control={form.control} name="username" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Username</FormLabel>
+                  <FormLabel>{t('admin.createDialog.username')}</FormLabel>
                   <FormControl>
                     <Input
-                      placeholder="3-32 chars: a-z, 0-9, _ and -"
+                      placeholder={t('admin.createDialog.usernamePlaceholder')}
                       {...field}
                       onChange={(e) => field.onChange(e.target.value.toLowerCase())}
                     />
@@ -308,10 +316,10 @@ function AdminContent() {
               )} />
               <FormField control={form.control} name="tempPassword" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Temporary password</FormLabel>
+                  <FormLabel>{t('admin.createDialog.tempPassword')}</FormLabel>
                   <FormControl>
                     <Input
-                      placeholder="Share this with the user"
+                      placeholder={t('admin.createDialog.tempPasswordPlaceholder')}
                       autoComplete="off"
                       {...field}
                     />
@@ -321,18 +329,18 @@ function AdminContent() {
               )} />
               <FormField control={form.control} name="quotaGB" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Storage quota (GB)</FormLabel>
+                  <FormLabel>{t('admin.createDialog.quotaLabel')}</FormLabel>
                   <FormControl><Input type="number" min="1" step="1" {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
               )} />
               <DialogFooter>
                 <Button variant="outline" type="button" onClick={() => { form.reset(); setCreateOpen(false) }}>
-                  Cancel
+                  {t('admin.createDialog.cancel')}
                 </Button>
                 <Button type="submit" disabled={form.formState.isSubmitting}>
                   {form.formState.isSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                  Create user
+                  {t('admin.createDialog.create')}
                 </Button>
               </DialogFooter>
             </form>
@@ -344,18 +352,18 @@ function AdminContent() {
       <AlertDialog open={deleteTarget !== null} onOpenChange={() => setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {deleteTarget?.email}?</AlertDialogTitle>
+            <AlertDialogTitle>{t('admin.deleteDialog.title', { email: deleteTarget?.email })}</AlertDialogTitle>
             <AlertDialogDescription>
-              This permanently deletes the account and all associated data. This cannot be undone.
+              {t('admin.deleteDialog.desc')}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t('admin.deleteDialog.cancel')}</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => { if (deleteTarget) deleteUser.mutate(deleteTarget.id); setDeleteTarget(null) }}
             >
-              Delete
+              {t('admin.deleteDialog.confirm')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

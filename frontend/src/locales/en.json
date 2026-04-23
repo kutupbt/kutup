@@ -1,0 +1,357 @@
+{
+  "common": {
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "rename": "Rename",
+    "download": "Download",
+    "upload": "Upload",
+    "share": "Share",
+    "enable": "Enable",
+    "disable": "Disable",
+    "close": "Close",
+    "back": "Back",
+    "create": "Create",
+    "copyLink": "Copy link",
+    "copied": "Copied!",
+    "clear": "Clear",
+    "drive": "Drive"
+  },
+  "nav": {
+    "myFiles": "My Files",
+    "sharedWithMe": "Shared with me",
+    "admin": "Admin",
+    "settings": "Settings",
+    "signOut": "Sign out",
+    "switchToLight": "Switch to light mode",
+    "switchToDark": "Switch to dark mode"
+  },
+  "auth": {
+    "signIn": "Sign in",
+    "email": "Email",
+    "password": "Password",
+    "forgotPassword": "Forgot password?",
+    "noAccount": "No account?",
+    "createOne": "Create one",
+    "alreadyHaveAccount": "Already have an account?",
+    "derivingKeys": "Deriving keys…",
+    "decryptingVault": "Decrypting vault…",
+    "argon2idNote": "Running Argon2id key derivation (this takes a moment)",
+    "decryptingLocally": "Decrypting your keys locally",
+    "totp": {
+      "title": "Two-factor authentication",
+      "enterCode": "Enter the 6-digit code from your authenticator app.",
+      "verify": "Verify"
+    },
+    "strength": {
+      "veryWeak": "Very weak",
+      "weak": "Weak",
+      "fair": "Fair",
+      "strong": "Strong",
+      "veryStrong": "Very strong"
+    }
+  },
+  "register": {
+    "title": "Create account",
+    "username": "Username",
+    "usernamePlaceholder": "e.g. alice_42",
+    "usernameDesc": "3-32 chars: lowercase letters, numbers, _ and -",
+    "confirmPassword": "Confirm password",
+    "passwordTooWeak": "Password is too weak — choose a stronger one",
+    "generatingKeys": "Generating your keys…",
+    "creatingAccount": "Creating account…",
+    "mnemonic": {
+      "title": "Save your recovery phrase",
+      "warning": "This 24-word phrase is shown <1>once</1>. Write it down and store it safely. It is the only way to recover your account if you forget your password.",
+      "saved": "I've saved my recovery phrase"
+    },
+    "confirm": {
+      "title": "Confirm recovery phrase",
+      "instruction": "Type all 24 words to confirm you've saved them.",
+      "placeholder": "Enter all 24 words separated by spaces…",
+      "mismatch": "Recovery phrase does not match. Check each word carefully.",
+      "submit": "Complete registration"
+    },
+    "success": {
+      "title": "Account created!",
+      "desc": "Your encrypted account is ready.",
+      "signIn": "Sign in"
+    },
+    "disabled": {
+      "title": "Registration disabled",
+      "desc": "Public registration is currently disabled. Contact your administrator to get access.",
+      "backToSignIn": "Back to sign in"
+    }
+  },
+  "firstLogin": {
+    "title": "Set your password",
+    "welcomeDesc": "Welcome! Setting up account for",
+    "newPassword": "New password",
+    "confirmPassword": "Confirm password",
+    "continue": "Continue",
+    "generatingKeys": "Generating your keys…",
+    "finishingSetup": "Finishing setup…",
+    "completeSetup": "Complete setup"
+  },
+  "recovery": {
+    "title": "Recover account",
+    "description": "Enter your 24-word recovery phrase and a new password. 2FA is bypassed during recovery — the recovery phrase is your second factor.",
+    "recoveryPhrase": "Recovery phrase (24 words)",
+    "phrasePlaceholder": "word1 word2 word3 … word24",
+    "newPassword": "New password",
+    "confirmNewPassword": "Confirm new password",
+    "submit": "Recover account",
+    "recovering": "Recovering account…",
+    "derivingNote": "Deriving keys and re-encrypting vault",
+    "backToSignIn": "Back to sign in",
+    "success": {
+      "title": "Account recovered!",
+      "desc": "Your password has been reset. Sign in with your new password.",
+      "signIn": "Sign in"
+    }
+  },
+  "drive": {
+    "dropToUpload": "Drop to upload to “{{name}}”",
+    "uploadQuota": "Upload quota",
+    "selected_one": "{{count}} item selected",
+    "selected_other": "{{count}} items selected",
+    "downloadFiles_one": "Download file",
+    "downloadFiles_other": "Download {{count}} files",
+    "noSharedFolders": "No folders have been shared with you yet.",
+    "uploadFiles": "Upload files",
+    "newFolder": "New folder",
+    "addRemoteShare": "Add remote share",
+    "clear": "Clear",
+    "toast": {
+      "uploaded_one": "Uploaded {{count}} file",
+      "uploaded_other": "Uploaded {{count}} files",
+      "downloading_one": "Downloading {{count}} file…",
+      "downloading_other": "Downloading {{count}} files…",
+      "deleted_one": "Deleted {{count}} item",
+      "deleted_other": "Deleted {{count}} items",
+      "someFailed": "Some items could not be deleted",
+      "remoteAdded": "Remote share added",
+      "remoteRemoved": "Remote share removed",
+      "folderShared": "Folder shared",
+      "uploadFailed": "Upload failed",
+      "downloadFailed": "Download failed",
+      "fileDeleted": "File deleted",
+      "deleteFailed": "Delete failed",
+      "folderDeleted": "Folder deleted",
+      "folderDeleteFailed": "Failed to delete folder",
+      "loadFailed": "Failed to load collections"
+    },
+    "deleteFile": {
+      "title": "Delete “{{name}}”?",
+      "desc": "This cannot be undone."
+    },
+    "deleteFolder": {
+      "title": "Delete folder “{{name}}”?",
+      "desc": "All files and subfolders will be permanently deleted."
+    },
+    "batchDelete": {
+      "title_one": "Delete {{count}} item?",
+      "title_other": "Delete {{count}} items?",
+      "files_one": "{{count}} file",
+      "files_other": "{{count}} files",
+      "folders_one": "{{count}} folder",
+      "folders_other": "{{count}} folders",
+      "and": "and",
+      "willBeDeleted": "will be permanently deleted. This cannot be undone.",
+      "deleteAll": "Delete all"
+    },
+    "publicLink": {
+      "title": "Public link ready",
+      "desc": "Anyone with this link can access the files. The decryption key is in the fragment and is never sent to the server."
+    },
+    "inviteLink": {
+      "title": "Invite link ready",
+      "desc": "Send this link to the recipient. They’ll paste it in ‘Add remote share’."
+    }
+  },
+  "folders": {
+    "details": "Details",
+    "rename": "Rename",
+    "uploadHere": "Upload here",
+    "share": "Share",
+    "copyPublicLink": "Copy public link",
+    "deleteFolder": "Delete folder",
+    "removeShare": "Remove share"
+  },
+  "files": {
+    "name": "Name",
+    "size": "Size",
+    "uploaded": "Uploaded",
+    "download": "Download",
+    "delete": "Delete"
+  },
+  "details": {
+    "title": "Details",
+    "size": "Size",
+    "created": "Created",
+    "type": "Type",
+    "federatedShare": "Federated share",
+    "openFolder": "Open folder",
+    "rename": "Rename",
+    "share": "Share",
+    "copyPublicLink": "Copy public link",
+    "deleteFolder": "Delete folder",
+    "download": "Download",
+    "delete": "Delete"
+  },
+  "upload": {
+    "progress": "Uploading",
+    "dropOrClick": "Drop files here or",
+    "clickToUpload": "click to upload",
+    "readOnly": "This folder is read-only"
+  },
+  "dialogs": {
+    "newFolder": {
+      "title": "New folder",
+      "nameLabel": "Folder name",
+      "placeholder": "Untitled folder",
+      "cancel": "Cancel",
+      "create": "Create"
+    },
+    "rename": {
+      "title": "Rename folder",
+      "newName": "New name",
+      "cancel": "Cancel",
+      "rename": "Rename"
+    },
+    "share": {
+      "title": "Share “{{name}}”",
+      "recipient": "Recipient",
+      "recipientPlaceholder": "email@example.com or alice@other-server.com",
+      "federatedNote": "Federated share — will generate an invite link",
+      "permissions": "Permissions",
+      "downloadAlways": "Download (always on)",
+      "uploadLabel": "Upload",
+      "quotaPlaceholder": "Quota GB (blank = unlimited)",
+      "deleteOwn": "Delete own uploads",
+      "cancel": "Cancel",
+      "shareAndInvite": "Share & get invite link",
+      "share": "Share"
+    },
+    "publicShare": {
+      "close": "Close",
+      "copyLink": "Copy link",
+      "copied": "Copied!"
+    },
+    "addRemote": {
+      "title": "Add remote share",
+      "description": "Paste the invite link you received from someone on another Kutup server.",
+      "inviteLink": "Invite link",
+      "placeholder": "https://other-server.com/invite/…",
+      "cancel": "Cancel",
+      "adding": "Adding…",
+      "addShare": "Add share"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "account": {
+      "title": "Account",
+      "email": "Email",
+      "username": "Username",
+      "storage": "Storage"
+    },
+    "totp": {
+      "title": "Two-Factor Authentication",
+      "enabled": "Enabled",
+      "active": "TOTP is active on this account",
+      "disable": "Disable TOTP",
+      "disableTitle": "Disable two-factor authentication?",
+      "disableDesc": "This reduces your account security. You will no longer be asked for a code when signing in.",
+      "disableConfirm": "Disable",
+      "addSecurity": "Add an extra layer of security with an authenticator app.",
+      "setUp": "Set up TOTP",
+      "setupTitle": "Set up two-factor authentication",
+      "scanQr": "Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.)",
+      "manualKey": "Manual entry key:",
+      "confirmCode": "Enter the 6-digit code to confirm",
+      "enableButton": "Enable TOTP",
+      "enabledToast": "Two-factor authentication enabled",
+      "disabledToast": "Two-factor authentication disabled",
+      "setupFailed": "Failed to start TOTP setup",
+      "disableFailed": "Failed to disable TOTP"
+    },
+    "encryption": {
+      "title": "Encryption",
+      "desc1": "All files are encrypted client-side using XChaCha20-Poly1305. Your master key and private key are derived from your password using Argon2id and are never sent to the server. The server stores only ciphertext it cannot decrypt.",
+      "desc2": "To change your password, use the",
+      "recoveryLink": "account recovery",
+      "desc2end": "flow with your 24-word mnemonic."
+    },
+    "language": {
+      "title": "Language",
+      "desc": "Choose your display language"
+    }
+  },
+  "admin": {
+    "title": "Admin Panel",
+    "createUser": "Create user",
+    "notice": "File names and contents are encrypted. Admins cannot see user data.",
+    "stats": {
+      "totalUsers": "Total users",
+      "activeUsers": "Active users",
+      "totalFiles": "Total files",
+      "collections": "Collections",
+      "storageUsed": "Storage used"
+    },
+    "registration": {
+      "public": "Public registration",
+      "enabled": "Enabled",
+      "disabled": "Disabled"
+    },
+    "table": {
+      "email": "Email",
+      "username": "Username",
+      "quota": "Quota",
+      "used": "Used",
+      "status": "Status",
+      "totp": "TOTP",
+      "joined": "Joined",
+      "active": "Active",
+      "inactive": "Disabled",
+      "disable": "Disable",
+      "enable": "Enable",
+      "delete": "Delete"
+    },
+    "createDialog": {
+      "title": "Create user",
+      "desc": "The user will set their own password and recovery phrase on first login.",
+      "email": "Email",
+      "username": "Username",
+      "usernamePlaceholder": "3-32 chars: a-z, 0-9, _ and -",
+      "tempPassword": "Temporary password",
+      "tempPasswordPlaceholder": "Share this with the user",
+      "quotaLabel": "Storage quota (GB)",
+      "cancel": "Cancel",
+      "create": "Create user"
+    },
+    "deleteDialog": {
+      "title": "Delete {{email}}?",
+      "desc": "This permanently deletes the account and all associated data. This cannot be undone.",
+      "cancel": "Cancel",
+      "confirm": "Delete"
+    }
+  },
+  "publicShare": {
+    "decrypting": "Decrypting…",
+    "missingKey": "Missing decryption key — the URL may be incomplete. The key must be in the #fragment.",
+    "e2e": "End-to-end encrypted — decrypted in your browser",
+    "name": "Name",
+    "size": "Size",
+    "date": "Date",
+    "noFiles": "No files in this share",
+    "download": "Download",
+    "downloadFailed": "Download failed",
+    "expired": {
+      "title": "Link expired",
+      "desc": "This share link is no longer valid."
+    },
+    "error": {
+      "title": "Cannot access share"
+    }
+  }
+}
