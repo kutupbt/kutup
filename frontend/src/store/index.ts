@@ -2,16 +2,18 @@ import { configureStore } from '@reduxjs/toolkit'
 import { useDispatch, useSelector, TypedUseSelectorHook } from 'react-redux'
 import authReducer from './authSlice'
 
-// S2-3 fix: Only restore non-sensitive identity fields from sessionStorage.
-// masterKey, privateKey, and accessToken are NEVER persisted — they live in
-// Redux state for the current page session only and are gone on page refresh,
-// requiring the user to re-authenticate (re-derive keys from password).
+// Session persistence: identity fields + cryptographic keys are stored in
+// sessionStorage (tab-scoped — cleared when the browser tab closes, inaccessible
+// to other tabs). masterKey/privateKey in sessionStorage has the same XSS
+// exposure as holding them in Redux memory; the previous exclusion targeted
+// localStorage (cross-session persistence), not sessionStorage.
+// accessToken is always null on load and refreshed asynchronously by App.tsx
+// using the HTTP-only refresh token cookie.
 const loadSession = () => {
   try {
     const raw = sessionStorage.getItem('depo_session')
     if (raw) {
       const saved = JSON.parse(raw)
-      // Explicitly whitelist safe fields — sensitive keys are never saved
       return {
         auth: {
           userId: saved.userId ?? null,
@@ -21,11 +23,10 @@ const loadSession = () => {
           storageQuotaBytes: saved.storageQuotaBytes ?? 0,
           storageUsedBytes: saved.storageUsedBytes ?? 0,
           totpEnabled: saved.totpEnabled ?? false,
-          // These are intentionally absent — user must re-login after page refresh
-          accessToken: null,
-          masterKey: null,
-          privateKey: null,
-          publicKey: null,
+          accessToken: null, // always null on load — refreshed by App.tsx
+          masterKey: saved.masterKey ?? null,
+          privateKey: saved.privateKey ?? null,
+          publicKey: saved.publicKey ?? null,
         },
       }
     }
@@ -48,8 +49,6 @@ export const store = configureStore({
 store.subscribe(() => {
   const { auth } = store.getState()
   if (auth.userId) {
-    // S2-3/S2-4 fix: Persist only non-sensitive identity/quota fields.
-    // accessToken, masterKey, and privateKey are intentionally excluded.
     sessionStorage.setItem('depo_session', JSON.stringify({
       userId: auth.userId,
       email: auth.email,
@@ -58,6 +57,9 @@ store.subscribe(() => {
       storageQuotaBytes: auth.storageQuotaBytes,
       storageUsedBytes: auth.storageUsedBytes,
       totpEnabled: auth.totpEnabled,
+      masterKey: auth.masterKey,   // number[] — JSON-safe
+      privateKey: auth.privateKey,
+      publicKey: auth.publicKey,
     }))
   } else {
     sessionStorage.removeItem('depo_session')
