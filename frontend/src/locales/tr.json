@@ -116,6 +116,8 @@
     "selected_other": "{{count}} öğe seçildi",
     "downloadFiles_one": "Dosyayı indir",
     "downloadFiles_other": "{{count}} dosyayı indir",
+    "downloadFolders_one": "Klasörü ZIP olarak indir",
+    "downloadFolders_other": "{{count}} klasörü ZIP olarak indir",
     "noSharedFolders": "Henüz sizinle paylaşılan klasör yok.",
     "uploadFiles": "Dosya yükle",
     "newFolder": "Yeni klasör",
@@ -138,7 +140,13 @@
       "deleteFailed": "Silme başarısız",
       "folderDeleted": "Klasör silindi",
       "folderDeleteFailed": "Klasör silinemedi",
-      "loadFailed": "Koleksiyonlar yüklenemedi"
+      "loadFailed": "Koleksiyonlar yüklenemedi",
+      "zipPreparing": "ZIP hazırlanıyor…",
+      "zipProgress": "{{done}} / {{total}} dosya indiriliyor…",
+      "zipDone": "İndirme tamamlandı",
+      "zipFailed": "İndirme başarısız",
+      "zipSelectDir": "Parçaları kaydetmek için bir klasör seçin",
+      "zipNoFsa": "Büyük indirmeler Chrome veya Edge gerektirir"
     },
     "deleteFile": {
       "title": "“{{name}}” silinsin mi?",
@@ -196,6 +204,7 @@
     "copyPublicLink": "Genel bağlantıyı kopyala",
     "deleteFolder": "Klasörü sil",
     "download": "İndir",
+    "downloadFolder": "ZIP olarak indir",
     "delete": "Sil"
   },
   "upload": {
