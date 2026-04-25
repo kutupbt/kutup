@@ -1,0 +1,41 @@
+version: 2
+
+project_name: kutup
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: .
+    binary: kutup
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: alperen-albayrak
+    name: kutup
+  name_template: "{{ .ProjectName }} v{{ .Version }}"
