@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/alperen-albayrak/kutup/cli/internal/session"
 	kutupSync "github.com/alperen-albayrak/kutup/cli/internal/sync"
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/cobra"
@@ -37,7 +36,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 		return doSync(localDir, collectionID)
 	}
 
-	// Watch mode: initial sync then watch for changes
+	// Initial sync before entering watch loop
 	if err := doSync(localDir, collectionID); err != nil {
 		fmt.Fprintf(os.Stderr, "sync error: %v\n", err)
 	}
@@ -54,7 +53,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Watching %s for changes… (Ctrl+C to stop)\n", localDir)
 
-	// Debounce: wait 2s after last event before syncing
+	// Debounce: wait 2s after the last event before syncing again
 	var debounce *time.Timer
 	for {
 		select {
@@ -62,10 +61,9 @@ func runSync(cmd *cobra.Command, args []string) error {
 			if !ok {
 				return nil
 			}
-			// Skip hidden files and temp files
 			base := filepath.Base(event.Name)
 			if len(base) > 0 && (base[0] == '.' || base[len(base)-1] == '~') {
-				continue
+				continue // skip hidden/temp files
 			}
 			if debounce != nil {
 				debounce.Stop()
@@ -86,17 +84,13 @@ func runSync(cmd *cobra.Command, args []string) error {
 }
 
 func doSync(localDir, collectionID string) error {
-	client, sess, cleanup, err := requireSessionFull()
+	// requireSessionWithStore opens BoltDB once; we pass the same store to the
+	// sync engine to avoid a second open (BoltDB is single-writer).
+	client, sess, store, cleanup, err := requireSessionWithStore()
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-
-	store, err := session.Open(profile)
-	if err != nil {
-		return err
-	}
-	defer store.Close()
 
 	result, err := kutupSync.Sync(client, store, sess, localDir, collectionID)
 	if err != nil {
