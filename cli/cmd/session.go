@@ -10,40 +10,43 @@ import (
 )
 
 func requireSessionFull() (*api.Client, *session.Session, func(), error) {
+	client, sess, _, cleanup, err := requireSessionWithStore()
+	return client, sess, cleanup, err
+}
+
+// requireSessionWithStore is like requireSessionFull but also returns the open
+// store. The caller is responsible for closing it via the cleanup func.
+// Use this when you need to pass the store to another package (e.g. sync engine)
+// to avoid opening BoltDB twice — BoltDB allows only one writer at a time.
+func requireSessionWithStore() (*api.Client, *session.Session, *session.Store, func(), error) {
 	store, err := session.Open(profile)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("open store: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("open store: %w", err)
 	}
 
 	sess, err := store.LoadSession()
 	if err != nil {
 		store.Close()
-		return nil, nil, nil, fmt.Errorf("load session: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("load session: %w", err)
 	}
 	if sess == nil {
 		store.Close()
-		return nil, nil, nil, fmt.Errorf("not logged in — run 'kutup login' first")
+		return nil, nil, nil, nil, fmt.Errorf("not logged in — run 'kutup login' first")
 	}
 
 	client := api.New(sess.Server, sess.AccessToken)
 
-	// Transparently refresh the access token if it looks expired.
-	// We attempt a refresh proactively every time rather than parsing the JWT,
-	// which avoids clock skew issues and keeps the token fresh.
+	// Proactively refresh the access token on every command to avoid clock skew issues.
 	if sess.RefreshToken != "" {
-		refreshed, err := client.RefreshToken(sess.RefreshToken)
-		if err == nil && refreshed.AccessToken != "" {
+		if refreshed, err := client.RefreshToken(sess.RefreshToken); err == nil && refreshed.AccessToken != "" {
 			sess.AccessToken = refreshed.AccessToken
 			client.SetToken(refreshed.AccessToken)
 			_ = store.SaveSession(profile, sess)
 		}
 	}
 
-	cleanup := func() {
-		store.Close()
-	}
-
-	return client, sess, cleanup, nil
+	cleanup := func() { store.Close() }
+	return client, sess, store, cleanup, nil
 }
 
 func formatTime(ts string) string {
