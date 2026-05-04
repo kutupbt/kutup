@@ -46,5 +46,11 @@ describe('envelope', () => {
     expect(f.senderDeviceId).toBe(1234n)
     expect(f.sequence).toBe(1n)
     expect(new TextDecoder().decode(f.ciphertext)).toBe('hello world')
+    for (let i = 0; i < 24; i++) {
+      expect(f.nonce[i]).toBe(i + 1)
+    }
+    for (let i = 0; i < 64; i++) {
+      expect(f.signature[i]).toBe(i)
+    }
   })
 })

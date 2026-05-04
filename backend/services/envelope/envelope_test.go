@@ -75,6 +75,18 @@ func TestKnownVector(t *testing.T) {
 	if f.SenderDeviceID != 1234 || f.Sequence != 1 {
 		t.Fatalf("sender/seq mismatch: %+v", f)
 	}
+	wantNonce := [24]byte{}
+	for i := range wantNonce {
+		wantNonce[i] = byte(i + 1)
+	}
+	if f.Nonce != wantNonce {
+		t.Fatalf("nonce mismatch: got %x want %x", f.Nonce, wantNonce)
+	}
+	for i, b := range f.Signature {
+		if b != byte(i) {
+			t.Fatalf("signature[%d] = %x, want %x", i, b, byte(i))
+		}
+	}
 	if string(f.Ciphertext) != "hello world" {
 		t.Fatalf("ciphertext mismatch: %q", f.Ciphertext)
 	}
