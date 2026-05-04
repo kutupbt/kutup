@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"strings"
+
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/kutup/backend/middleware"
 )
 
 // CollabHandler handles WebSocket upgrades for the collaborative-edit feature.
@@ -30,11 +33,50 @@ func (h *CollabHandler) Upgrade() fiber.Handler {
 	})
 }
 
-// PreUpgrade is the Fiber middleware that authenticates the request and confirms
-// file access BEFORE upgrading. Stub for D1; real implementation in D2.
-func (h *CollabHandler) PreUpgrade() fiber.Handler {
+// PreUpgrade authenticates the request and confirms file access BEFORE the
+// WebSocket upgrade. Browsers can't set custom headers on `new WebSocket(url)`,
+// so the token may arrive either via the standard `Authorization: Bearer ...`
+// header (server-to-server tests) or via a `?token=...` query param (browser).
+// On success, sets c.Locals("userID"|"fileID"|"collectionID") for the upgrade
+// handler. Read-only share recipients are admitted here — frame-level
+// can_upload/can_delete enforcement is the relay's job (D4).
+func (h *CollabHandler) PreUpgrade(authMW *middleware.AuthMiddleware) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		c.Locals("placeholder", true)
+		// Token from Authorization header or ?token= query.
+		tok := c.Get("Authorization")
+		if strings.HasPrefix(tok, "Bearer ") {
+			tok = tok[7:]
+		} else {
+			tok = c.Query("token")
+		}
+		if tok == "" {
+			return c.Status(401).JSON(fiber.Map{"error": "missing token"})
+		}
+		userID, _, err := authMW.ValidateTokenString(tok)
+		if err != nil {
+			return c.Status(401).JSON(fiber.Map{"error": "invalid token"})
+		}
+
+		// Confirm user has access to this file's collection.
+		fileID := c.Params("fileId")
+		var ownerID, collID string
+		var sharedWith bool
+		err = h.DB.QueryRow(c.Context(), `
+			SELECT c.owner_user_id::text, c.id::text,
+			       EXISTS(SELECT 1 FROM collection_shares cs
+			              WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2)
+			FROM files f JOIN collections c ON c.id = f.collection_id
+			WHERE f.id = $1
+		`, fileID, userID).Scan(&ownerID, &collID, &sharedWith)
+		if err != nil {
+			return c.Status(404).JSON(fiber.Map{"error": "file not found"})
+		}
+		if ownerID != userID && !sharedWith {
+			return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
+		}
+		c.Locals("userID", userID)
+		c.Locals("fileID", fileID)
+		c.Locals("collectionID", collID)
 		return c.Next()
 	}
 }
