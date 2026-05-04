@@ -64,6 +64,7 @@ func main() {
 	adminH := &handlers.AdminHandler{DB: pool}
 	fedH := &handlers.FederationHandler{DB: pool, Storage: storage}
 	fedProxyH := &handlers.FedProxyHandler{DB: pool, AppEnv: cfg.AppEnv}
+	devicesH := &handlers.DevicesHandler{DB: pool}
 
 	// Middleware
 	authMW := middleware.NewAuth(cfg.JWTSecret)
@@ -139,6 +140,12 @@ func main() {
 	fedProxy.Get("/:shareId/files/:fileId/download", fedProxyH.ProxyDownload)
 	fedProxy.Post("/:shareId/upload", fedProxyH.ProxyUpload)
 	fedProxy.Delete("/:shareId/files/:fileId", fedProxyH.ProxyDelete)
+
+	// Device-key routes (authenticated) — collab-edit v1
+	devices := api.Group("/devices", authMW.Required())
+	devices.Post("/", devicesH.Register)
+	devices.Get("/", devicesH.List)
+	devices.Delete("/:id", devicesH.Revoke)
 
 	// Files routes (authenticated)
 	files := api.Group("/files", authMW.Required())
