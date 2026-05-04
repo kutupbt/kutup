@@ -35,7 +35,8 @@ Create a new account with an encrypted key bundle.
 ```json
 {
   "email": "user@example.com",
-  "loginKeyHash": "<base64>",
+  "username": "alice",
+  "loginKey": "<base64>",
   "encryptedMasterKey": "<base64>",
   "masterKeyNonce": "<base64>",
   "encryptedRecoveryKey": "<base64>",
@@ -44,13 +45,16 @@ Create a new account with an encrypted key bundle.
   "privateKeyNonce": "<base64>",
   "publicKey": "<base64>",
   "kdfSalt": "<base64>",
-  "loginKeySalt": "<base64>"
+  "loginKeySalt": "<base64>",
+  "recoveryProof": "<base64>"
 }
 ```
 
-All key material is encrypted client-side before being sent. `loginKeyHash` is the result of hashing the Argon2id-derived login key — the raw password is never transmitted.
+All key material is encrypted client-side before being sent. `loginKey` is the Argon2id-derived login key (base64); the server bcrypts it and stores only the bcrypt hash — the raw password is never transmitted. `recoveryProof` is the base64 of the recovery-key entropy; the server bcrypts it into a verifier so it can later prove mnemonic possession during account recovery.
 
 **Response:** `201 Created`
+
+**Errors:** `403` if registration is disabled, `409` if the email or username is already taken.
 
 ---
 
@@ -73,7 +77,7 @@ Fetch the KDF salts needed to derive the login key before submitting credentials
 
 ### POST /api/auth/login
 
-Exchange a login key hash for tokens. Rate-limited.
+Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP).
 
 **Auth:** None
 
@@ -81,7 +85,7 @@ Exchange a login key hash for tokens. Rate-limited.
 ```json
 {
   "email": "user@example.com",
-  "loginKeyHash": "<base64>"
+  "loginKey": "<base64>"
 }
 ```
 
@@ -89,39 +93,48 @@ Exchange a login key hash for tokens. Rate-limited.
 ```json
 {
   "accessToken": "<jwt>",
-  "refreshToken": "<jwt>",
+  "userId": "<uuid>",
+  "username": "alice",
   "encryptedMasterKey": "<base64>",
   "masterKeyNonce": "<base64>",
   "encryptedPrivateKey": "<base64>",
-  "privateKeyNonce": "<base64>"
+  "privateKeyNonce": "<base64>",
+  "publicKey": "<base64>",
+  "isAdmin": false,
+  "storageQuotaBytes": 5368709120,
+  "storageUsedBytes": 104857600
 }
 ```
 
-**Response (2FA enabled):** `200` with `{"twoFactorRequired": true, "partialToken": "<jwt>"}` — proceed to `/api/auth/login/2fa`.
+The refresh token is delivered via an HTTP-only cookie named `refresh_token` (scoped to `Path=/api/auth/refresh`) — it is not present in the JSON body.
+
+**Response (2FA enabled):** `200` with `{"requiresTotp": true, "preAuthToken": "<jwt>"}` — proceed to `/api/auth/login/2fa`.
+
+**Response (first login, account created via `ADMIN_ACCOUNTS` and not yet set up):** `200` with `{"requiresSetup": true, "setupToken": "<jwt>"}` — proceed to `/api/auth/complete-setup`.
 
 ---
 
 ### POST /api/auth/login/2fa
 
-Complete login when 2FA is enabled.
+Complete login when 2FA is enabled. Locked after 5 failed attempts.
 
-**Auth:** None (uses `partialToken` from the login response)
+**Auth:** None (uses `preAuthToken` from the login response)
 
 **Request body:**
 ```json
 {
-  "partialToken": "<jwt>",
+  "preAuthToken": "<jwt>",
   "code": "123456"
 }
 ```
 
-**Response:** Same full token response as `/api/auth/login`.
+**Response:** Same full token response as `/api/auth/login` (no 2FA branch).
 
 ---
 
 ### GET /api/auth/recover/preflight
 
-Fetch KDF parameters for account recovery. Rate-limited.
+Fetch the encrypted recovery key bundle so the client can decrypt the master key with the mnemonic-derived recovery key. Rate-limited (5/hr/IP). Returns deterministic fake data for non-existent emails to prevent user enumeration.
 
 **Auth:** None
 **Query:** `?email=user@example.com`
@@ -129,7 +142,10 @@ Fetch KDF parameters for account recovery. Rate-limited.
 **Response:**
 ```json
 {
-  "kdfSalt": "<base64>"
+  "encryptedRecoveryKey": "<base64>",
+  "recoveryKeyNonce": "<base64>",
+  "encryptedPrivateKey": "<base64>",
+  "privateKeyNonce": "<base64>"
 }
 ```
 
@@ -137,7 +153,7 @@ Fetch KDF parameters for account recovery. Rate-limited.
 
 ### POST /api/auth/recover
 
-Recover an account using a mnemonic-derived recovery key. Rate-limited.
+Recover an account using a mnemonic-derived recovery key. The client proves possession of the mnemonic with `recoveryProof` and submits a fresh key bundle derived from a new password. Rate-limited (5/hr/IP).
 
 **Auth:** None
 
@@ -145,23 +161,26 @@ Recover an account using a mnemonic-derived recovery key. Rate-limited.
 ```json
 {
   "email": "user@example.com",
-  "recoveryKeyHash": "<base64>",
-  "newLoginKeyHash": "<base64>",
-  "newLoginKeySalt": "<base64>",
-  "encryptedMasterKey": "<base64>",
-  "masterKeyNonce": "<base64>"
+  "recoveryProof": "<base64>",
+  "newLoginKey": "<base64>",
+  "newEncryptedMasterKey": "<base64>",
+  "newMasterKeyNonce": "<base64>",
+  "newKdfSalt": "<base64>",
+  "newLoginKeySalt": "<base64>"
 }
 ```
+
+`recoveryProof` is the base64 of the recovery-key entropy. The server bcrypt-compares it to the verifier stored at registration.
 
 ---
 
 ### POST /api/auth/refresh
 
-Exchange a refresh token for a new access token.
+Exchange a refresh token for a new access token. The refresh token is normally read from the HTTP-only `refresh_token` cookie set at login; for clients that cannot rely on cookies, it may instead be passed in the JSON body.
 
-**Auth:** None
+**Auth:** None (the refresh token itself is the credential)
 
-**Request body:**
+**Request body (optional, only if no cookie is sent):**
 ```json
 {
   "refreshToken": "<jwt>"
@@ -171,8 +190,7 @@ Exchange a refresh token for a new access token.
 **Response:**
 ```json
 {
-  "accessToken": "<jwt>",
-  "refreshToken": "<jwt>"
+  "accessToken": "<jwt>"
 }
 ```
 
@@ -180,11 +198,23 @@ Exchange a refresh token for a new access token.
 
 ### POST /api/auth/complete-setup
 
-Called after first login to mark setup as complete (after saving the recovery phrase).
+Called after first login by accounts created via `ADMIN_ACCOUNTS` that haven't yet generated a recovery phrase. The client derives a full key bundle (mnemonic, master key, recovery key, NaCl box keypair) and submits it here.
 
-**Auth:** Bearer JWT
+**Auth:** Bearer `setupToken` (returned by `/api/auth/login` when `requiresSetup` is true)
 
-**Request body:** `{}` (empty)
+**Request body:** Same shape as `POST /api/auth/register` (encrypted key bundle, salts, public key).
+
+**Response:** issues an access token (JSON) and the refresh token (cookie) — the encrypted key bundle just submitted is **not** echoed back.
+```json
+{
+  "accessToken": "<jwt>",
+  "userId": "<uuid>",
+  "username": "alice",
+  "isAdmin": false,
+  "storageQuotaBytes": 5368709120,
+  "storageUsedBytes": 0
+}
+```
 
 ---
 
@@ -192,7 +222,7 @@ Called after first login to mark setup as complete (after saving the recovery ph
 
 ### GET /api/user/me
 
-Return the current user's profile and key bundle.
+Return the current user's profile (public key + storage stats). The encrypted key bundle is **not** returned here — it is delivered as part of the `/api/auth/login` response.
 
 **Auth:** Bearer JWT
 
@@ -203,14 +233,9 @@ Return the current user's profile and key bundle.
   "email": "user@example.com",
   "username": "alice",
   "publicKey": "<base64>",
-  "encryptedMasterKey": "<base64>",
-  "masterKeyNonce": "<base64>",
-  "encryptedPrivateKey": "<base64>",
-  "privateKeyNonce": "<base64>",
-  "storageUsed": 104857600,
-  "storageQuota": 5368709120,
-  "twoFactorEnabled": false,
-  "setupComplete": true,
+  "totpEnabled": false,
+  "storageQuotaBytes": 5368709120,
+  "storageUsedBytes": 104857600,
   "isAdmin": false
 }
 ```
@@ -226,9 +251,12 @@ Generate a TOTP secret and return a QR code URI.
 **Response:**
 ```json
 {
-  "totpUri": "otpauth://totp/Kutup:user@example.com?secret=BASE32&issuer=Kutup"
+  "secret": "BASE32SECRET",
+  "qrUri": "otpauth://totp/Kutup:user@example.com?secret=BASE32SECRET&issuer=Kutup"
 }
 ```
+
+The secret is stored as *pending* and only becomes active after `POST /api/user/2fa/verify` succeeds.
 
 ---
 
@@ -272,8 +300,7 @@ Look up another user's public key (used when sharing a collection).
 **Response:**
 ```json
 {
-  "id": "<uuid>",
-  "username": "bob",
+  "userId": "<uuid>",
   "publicKey": "<base64>"
 }
 ```
@@ -288,22 +315,29 @@ List all collections accessible to the current user (owned and shared).
 
 **Auth:** Bearer JWT
 
-**Response:** Array of collection objects:
+**Response:** Array of collection objects. Owned and shared collections are returned in the same array; for shared collections `encryptedKey` is the recipient-specific copy and `isShared` is `true`.
+
 ```json
 [
   {
     "id": "<uuid>",
+    "ownerUserId": "<uuid>",
     "encryptedName": "<base64>",
     "nameNonce": "<base64>",
     "encryptedKey": "<base64>",
     "encryptedKeyNonce": "<base64>",
     "parentCollectionId": null,
     "color": "blue",
-    "permission": "delete",
-    "isOwner": true
+    "canUpload": true,
+    "canDelete": false,
+    "uploadQuotaBytes": null,
+    "uploadUsedBytes": null,
+    "isShared": true
   }
 ]
 ```
+
+`canUpload`, `canDelete`, `uploadQuotaBytes`, `uploadUsedBytes`, and `isShared` are present only on shared collections (the owner has full rights implicitly).
 
 ---
 
@@ -326,15 +360,34 @@ Create a new collection.
 
 `encryptedKey` is the collection key encrypted with the owner's master key.
 
-**Response:** `201 Created` with the created collection object.
+**Response:** `201 Created`
+```json
+{
+  "id": "<uuid>"
+}
+```
 
 ---
 
 ### GET /api/collections/:id
 
-Get a single collection by ID.
+Get a single collection by ID. Owner-only — returns `404` for collections owned by other users (even if shared with you; use `GET /api/collections/` for those).
 
 **Auth:** Bearer JWT
+
+**Response:**
+```json
+{
+  "id": "<uuid>",
+  "ownerUserId": "<uuid>",
+  "encryptedName": "<base64>",
+  "nameNonce": "<base64>",
+  "encryptedKey": "<base64>",
+  "encryptedKeyNonce": "<base64>",
+  "parentCollectionId": null,
+  "color": "blue"
+}
+```
 
 ---
 
@@ -352,6 +405,8 @@ Rename a collection (client re-encrypts the name with the collection key).
 }
 ```
 
+**Response:** `200 OK` `{"message": "updated"}`.
+
 ---
 
 ### DELETE /api/collections/:id
@@ -359,6 +414,8 @@ Rename a collection (client re-encrypts the name with the collection key).
 Delete a collection and all files within it.
 
 **Auth:** Bearer JWT
+
+**Response:** `204 No Content`.
 
 ---
 
@@ -375,6 +432,8 @@ Set the display color of a folder.
 }
 ```
 
+**Response:** `204 No Content`.
+
 ---
 
 ### POST /api/collections/:id/share
@@ -388,14 +447,15 @@ Share a collection with another user on this server.
 {
   "recipientUserId": "<uuid>",
   "encryptedCollectionKey": "<base64>",
-  "encryptedCollectionKeyNonce": "<base64>",
-  "permission": "read"
+  "canUpload": false,
+  "canDelete": false,
+  "uploadQuotaBytes": null
 }
 ```
 
-`permission` is one of `read`, `upload`, `delete`.
+`encryptedCollectionKey` is the collection key encrypted with the recipient's public key (NaCl box, sealed). All recipients have read access; `canUpload` and `canDelete` are independent boolean grants. `uploadQuotaBytes` optionally caps how much the recipient may upload to this share — omit (or `null`) for no per-share cap.
 
-`encryptedCollectionKey` is the collection key encrypted with the recipient's public key (NaCl box).
+**Response:** `201 Created` `{"message": "shared"}`. Re-sharing with the same recipient updates the existing grant (upsert).
 
 ---
 
@@ -411,17 +471,23 @@ Share a collection with a user on a remote Kutup instance.
   "recipientUsername": "bob",
   "recipientServer": "https://other.kutup.example.com",
   "encryptedCollectionKey": "<base64>",
-  "encryptedCollectionKeyNonce": "<base64>",
-  "permission": "upload"
+  "canUpload": true,
+  "canDelete": false,
+  "uploadQuotaBytes": null
 }
 ```
 
-**Response:**
+`encryptedCollectionKey` is the collection key sealed to the recipient's public key (fetched via `GET /api/collections/fed-pubkey`).
+
+**Response:** `201 Created`
 ```json
 {
-  "inviteUrl": "https://other.kutup.example.com/accept?token=..."
+  "inviteToken": "<hex32>",
+  "inviteUrl": "https://this.kutup.example.com/invite/<hex32>"
 }
 ```
+
+`inviteUrl` is built from the **sharer's** `SERVER_URL` (this server). The recipient hands the `inviteToken` to their own server via `POST /api/fed-proxy/incoming` to accept.
 
 ---
 
@@ -480,15 +546,20 @@ List files in a collection.
 [
   {
     "id": "<uuid>",
+    "collectionId": "<uuid>",
+    "uploaderUserId": "<uuid>",
     "encryptedMetadata": "<base64>",
     "metadataNonce": "<base64>",
     "encryptedFileKey": "<base64>",
     "fileKeyNonce": "<base64>",
-    "size": 4096,
-    "uploadedAt": "2026-03-14T12:00:00Z"
+    "encryptedSizeBytes": 4096,
+    "createdAt": "2026-03-14T12:00:00Z",
+    "updatedAt": "2026-03-14T12:00:00Z"
   }
 ]
 ```
+
+`encryptedSizeBytes` is the size of the ciphertext blob on disk (slightly larger than the plaintext due to per-chunk auth tags from the secretstream wrapping).
 
 ---
 
@@ -514,34 +585,54 @@ Delete a file.
 
 ### POST /api/share/
 
-Create a public share link for a collection.
+Create a public share link for a collection or file. The link key (used to decrypt the wrapped collection key) lives only in the URL fragment — the server never sees it.
 
 **Auth:** Bearer JWT
 
 **Request body:**
 ```json
 {
-  "collectionId": "<uuid>"
+  "shareType": "collection",
+  "targetId": "<uuid>",
+  "encryptedCollectionKey": "<base64>",
+  "encryptedCollectionKeyNonce": "<base64>",
+  "expiresInHours": 48
 }
 ```
 
-**Response:**
+`shareType` is `"collection"` or `"file"`. `expiresInHours` is optional — omit (or `null`) for no expiry. `encryptedCollectionKey` is the collection key wrapped under a randomly-generated link key that the client keeps in the URL fragment.
+
+**Response:** `201 Created`
 ```json
 {
-  "token": "<random-token>",
-  "shareUrl": "https://kutup.example.com/s/<token>"
+  "id": "<uuid>",
+  "token": "<random-token>"
 }
 ```
+
+The client builds the share URL as `<SERVER_URL>/s/<token>#<linkKey>` — the server returns only the token.
 
 ---
 
 ### GET /api/share/:token
 
-Get metadata for a public share (encrypted collection info).
+Get metadata for a public share. The wrapped collection key is included; the link key needed to unwrap it lives only in the URL fragment held by the recipient.
 
 **Auth:** None
 
-**Response:** Collection metadata (ciphertext only — no decryption key is available without the owner's credentials).
+**Response:**
+```json
+{
+  "id": "<uuid>",
+  "shareType": "collection",
+  "targetId": "<uuid>",
+  "encryptedCollectionKey": "<base64>",
+  "encryptedCollectionKeyNonce": "<base64>",
+  "expiresAt": "2026-04-01T00:00:00Z"
+}
+```
+
+`expiresAt` is `null` when the share has no expiry. Returns `410 Gone` if the share has expired.
 
 ---
 
@@ -551,17 +642,40 @@ List files in a public share.
 
 **Auth:** None
 
-**Response:** Array of encrypted file objects (same shape as `GET /api/collections/:id/files`).
+**Response:** Array of file objects. Note: shape is similar to `GET /api/collections/:id/files` but **omits** `uploaderUserId` and `updatedAt`, and `createdAt` is serialized as a string (matches the database `TIMESTAMP` text form).
+```json
+[
+  {
+    "id": "<uuid>",
+    "collectionId": "<uuid>",
+    "encryptedMetadata": "<base64>",
+    "metadataNonce": "<base64>",
+    "encryptedFileKey": "<base64>",
+    "fileKeyNonce": "<base64>",
+    "encryptedSizeBytes": 4096,
+    "createdAt": "2026-03-14T12:00:00Z"
+  }
+]
+```
+
+Returns `400` if the share targets a single file (use `/download/:fileId` instead), `410` if the share has expired.
 
 ---
 
 ### GET /api/share/:token/download/:fileId
 
-Download a file from a public share.
+Get a presigned S3 URL for downloading a file from a public share. The client follows the URL to fetch the encrypted bytes directly from the storage backend.
 
 **Auth:** None
 
-**Response:** Raw binary (`application/octet-stream`).
+**Response:**
+```json
+{
+  "url": "<presigned-s3-url>"
+}
+```
+
+Returns `410 Gone` if the share has expired, `403` if the file does not belong to the shared target.
 
 ---
 
@@ -571,7 +685,7 @@ These endpoints are called by remote Kutup servers as part of the federation pro
 
 ### GET /api/fed/users
 
-Look up a user on this server by username. Rate-limited.
+Look up a user on this server by username and return their public key. Rate-limited (60/min/IP).
 
 **Auth:** None
 **Query:** `?username=alice`
@@ -579,20 +693,33 @@ Look up a user on this server by username. Rate-limited.
 **Response:**
 ```json
 {
-  "username": "alice",
   "publicKey": "<base64>"
 }
 ```
+
+Returns `404` for unknown or inactive users.
 
 ---
 
 ### GET /api/fed/invites/:token
 
-Retrieve federated share invite metadata by token.
+Retrieve federated share invite metadata by token. The token itself is the credential — there is no auth header.
 
 **Auth:** None
 
-**Response:** Invite details (sender server, encrypted collection key, permissions).
+**Response:**
+```json
+{
+  "wrappedKey": "<base64>",
+  "encryptedName": "<base64>",
+  "nameNonce": "<base64>",
+  "canUpload": true,
+  "canDelete": false,
+  "uploadQuotaBytes": null
+}
+```
+
+`wrappedKey` is the collection key sealed to the recipient's NaCl box public key by the original sharer. The recipient unseals it with their own private key.
 
 ---
 
@@ -635,19 +762,32 @@ These endpoints are called by the local Kutup client to interact with collection
 
 ### POST /api/fed-proxy/incoming
 
-Register a federated share invite (accept an invite from a remote server).
+Accept a federated share invite. The client only needs to paste the invite URL — this server parses out the remote host + token, calls the remote `GET /api/fed/invites/{token}`, and persists the resulting wrapped key.
 
 **Auth:** Bearer JWT
 
 **Request body:**
 ```json
 {
-  "inviteToken": "<token>",
-  "remoteServer": "https://other.kutup.example.com",
-  "encryptedCollectionKey": "<base64>",
-  "encryptedCollectionKeyNonce": "<base64>"
+  "inviteUrl": "https://other.kutup.example.com/invite/<token>"
 }
 ```
+
+**Response:** `201 Created`
+```json
+{
+  "id": "<uuid>",
+  "remoteServer": "https://other.kutup.example.com",
+  "encryptedCollectionKey": "<base64>",
+  "encryptedName": "<base64>",
+  "nameNonce": "<base64>",
+  "canUpload": true,
+  "canDelete": false,
+  "uploadQuotaBytes": null
+}
+```
+
+`502` if the remote server is unreachable or returns invalid invite data.
 
 ---
 
@@ -709,13 +849,28 @@ List all registered users.
 
 **Auth:** Bearer JWT (admin)
 
-**Response:** Array of user objects with storage usage.
+**Response:** Array of user objects:
+```json
+[
+  {
+    "id": "<uuid>",
+    "email": "alice@example.com",
+    "username": "alice",
+    "storageQuotaBytes": 10737418240,
+    "storageUsedBytes": 524288000,
+    "isAdmin": false,
+    "isActive": true,
+    "totpEnabled": false,
+    "createdAt": "2026-03-14T12:00:00Z"
+  }
+]
+```
 
 ---
 
 ### POST /api/admin/users
 
-Create a user account (admin-initiated, bypasses registration settings).
+Create a user account (admin-initiated, bypasses registration settings). The user logs in with `tempPassword` and is then forced through the first-login setup flow to generate their own key bundle and recovery phrase.
 
 **Auth:** Bearer JWT (admin)
 
@@ -724,19 +879,31 @@ Create a user account (admin-initiated, bypasses registration settings).
 {
   "email": "newuser@example.com",
   "username": "newuser",
-  "password": "temporaryPassword"
+  "tempPassword": "temporaryPassword",
+  "storageQuotaBytes": 10737418240
 }
 ```
+
+`storageQuotaBytes` is optional and defaults to 10 GB. Returns `201 Created` `{"message": "user created"}`. `409` if the email or username is already taken.
 
 ---
 
 ### PUT /api/admin/users/:id
 
-Update a user (quota, admin flag, etc.).
+Update a user. All fields are optional; only the ones present in the request are applied.
 
 **Auth:** Bearer JWT (admin)
 
-**Request body:** Fields to update (e.g. `storageQuota`, `isAdmin`).
+**Request body:**
+```json
+{
+  "storageQuotaBytes": 21474836480,
+  "isActive": true,
+  "isAdmin": false
+}
+```
+
+**Response:** `200 OK` `{"message": "updated"}`.
 
 ---
 
@@ -750,7 +917,7 @@ Delete a user and all their data.
 
 ### GET /api/admin/stats
 
-Return aggregate storage statistics.
+Return aggregate server statistics.
 
 **Auth:** Bearer JWT (admin)
 
@@ -758,8 +925,10 @@ Return aggregate storage statistics.
 ```json
 {
   "totalUsers": 42,
-  "totalStorageUsed": 107374182400,
-  "totalFiles": 1234
+  "activeUsers": 39,
+  "totalFiles": 1234,
+  "totalStorageUsedBytes": 107374182400,
+  "totalCollections": 87
 }
 ```
 
@@ -771,6 +940,13 @@ Return current global server settings.
 
 **Auth:** Bearer JWT (admin)
 
+**Response:**
+```json
+{
+  "registrationEnabled": true
+}
+```
+
 ---
 
 ### PUT /api/admin/settings
@@ -779,4 +955,11 @@ Update global server settings.
 
 **Auth:** Bearer JWT (admin)
 
-**Request body:** Key-value settings map (e.g. `registrationEnabled`, `defaultStorageQuota`).
+**Request body:**
+```json
+{
+  "registrationEnabled": false
+}
+```
+
+**Response:** Same shape as `GET /api/admin/settings`.

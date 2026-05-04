@@ -1,6 +1,9 @@
-// XChaCha20-Poly1305 symmetric encryption (192-bit nonce, random per message).
-// Used for: masterKey, privateKey, collectionKey, fileKey, metadata.
-// File content uses secretstream for chunked streaming.
+// Symmetric encryption (libsodium):
+//   encrypt/decrypt           — XSalsa20-Poly1305 via crypto_secretbox_easy
+//                               (192-bit nonce). Used for masterKey, privateKey,
+//                               collectionKey, fileKey, metadata.
+//   encryptStream/decryptStream — XChaCha20-Poly1305 via crypto_secretstream
+//                               (5 MB chunks). Used for file content.
 import { getSodium } from './sodium'
 
 export interface Encrypted {

@@ -20,11 +20,14 @@ mnemonic (BIP39, 24 words)
                           ┌─────────────┴───────────────┐
                           │                             │
               per-collection key               NaCl keypair
-              (XSalsa20-Poly1305)         (asymmetric, for sharing)
-                          │                             │
-              per-file key (random)         publicKey  encryptedPrivateKey
-                          │                (stored     (stored encrypted,
-              XSalsa20-Poly1305             plaintext)  nonce = privateKeyNonce)
+              (XSalsa20-Poly1305 via      (asymmetric, for sharing)
+               crypto_secretbox)                        │
+                          │                  publicKey  encryptedPrivateKey
+              per-file key (random)         (stored     (stored encrypted,
+                          │                 plaintext)  nonce = privateKeyNonce)
+                XChaCha20-Poly1305
+              (crypto_secretstream,
+                  5 MB chunks)
                           │
               encrypted file content
               (stored in SeaweedFS)
@@ -37,25 +40,27 @@ Every cryptographic primitive is from **libsodium** (`libsodium-wrappers-sumo`),
 ## Registration Flow
 
 1. Client generates a random 32-byte **master key**.
-2. Client derives a **login key** from the user's password using Argon2id (`kdfSalt`), then hashes it once more to produce `loginKeyHash`. Only `loginKeyHash` is sent to the server — the server stores this hash and uses it to verify login. The raw password never leaves the browser.
+2. Client derives a **login key** from the user's password using Argon2id (`loginKeySalt`). Only the base64-encoded `loginKey` is sent to the server, which then bcrypts it and stores `login_key_hash`. The raw password never leaves the browser.
 3. Client generates a NaCl box **keypair** (`publicKey`, `privateKey`).
-4. Client derives a **recovery key** from a freshly generated BIP39 mnemonic using Argon2id.
+4. Client derives a **recovery key** from a freshly generated BIP39 mnemonic using Argon2id (`kdfSalt`).
 5. Client encrypts:
    - `masterKey` with the recovery key → `encryptedRecoveryKey` + `recoveryKeyNonce`
    - `masterKey` with the login key → `encryptedMasterKey` + `masterKeyNonce`
    - `privateKey` with the master key → `encryptedPrivateKey` + `privateKeyNonce`
-6. Client POSTs the encrypted bundle to `POST /api/auth/register`. The server stores all ciphertext and the public key. The mnemonic is shown to the user once and never stored anywhere.
+6. Client also sends a **recovery proof** — base64 of the recovery-key entropy. The server bcrypts it into `recovery_key_verifier` so it can later confirm the client really holds the mnemonic during account recovery (no plaintext recovery key is ever transmitted).
+7. Client POSTs the encrypted bundle to `POST /api/auth/register`. The server stores all ciphertext, the public key, and the recovery verifier. The mnemonic is shown to the user once and never stored anywhere.
 
 ---
 
 ## Login Flow
 
 1. Client fetches `GET /api/auth/login/preflight?email=...` to retrieve `loginKeySalt` and `kdfSalt`.
-2. Client recomputes the login key from the password + `loginKeySalt` via Argon2id (in a Web Worker to avoid blocking the UI), then hashes it to `loginKeyHash`.
-3. Client POSTs `loginKeyHash` to `POST /api/auth/login`. Server verifies the hash.
-4. On success the server returns an **access token** (short-lived JWT) and a **refresh token**.
-5. Client uses the access token's payload to retrieve `encryptedMasterKey` + `masterKeyNonce` from the server response, then decrypts the master key locally. The master key lives only in browser memory.
-6. If 2FA is enabled, the server returns a partial token; the client must complete login at `POST /api/auth/login/2fa` with a TOTP code before receiving the full JWT.
+2. Client recomputes the login key from the password + `loginKeySalt` via Argon2id (in a Web Worker to avoid blocking the UI).
+3. Client POSTs the base64 `loginKey` to `POST /api/auth/login`. Server bcrypt-compares it against the stored `login_key_hash`.
+4. On success the server returns an **access token** (short-lived JWT) in the JSON body and sets the **refresh token** as an HTTP-only `refresh_token` cookie scoped to `/api/auth/refresh`.
+5. The login response also carries `encryptedMasterKey` + `masterKeyNonce` (and the encrypted private key); the client decrypts the master key locally with the login key. The master key lives only in browser memory.
+6. If 2FA is enabled, the server returns `{requiresTotp: true, preAuthToken: ...}` instead of full tokens. The client completes login at `POST /api/auth/login/2fa` with a TOTP code before receiving the full JWT.
+7. For accounts created via `ADMIN_ACCOUNTS` that have not yet generated a recovery phrase, the server returns `{requiresSetup: true, setupToken: ...}`. The client derives a fresh key bundle and submits it to `POST /api/auth/complete-setup`.
 
 ---
 
@@ -79,9 +84,9 @@ On download, the client receives the blob and all encrypted fields, then reverse
 Sharing a collection with another user:
 
 1. Sharer fetches the recipient's `publicKey` from `GET /api/users/by-email/:email`.
-2. Sharer encrypts the **collection key** to the recipient's public key using NaCl box (`crypto_box_easy`). The sharer's private key is used as the sender key.
-3. Sharer POSTs the encrypted collection key + nonce to `POST /api/collections/:id/share` along with the recipient's user ID and the desired permission level (`read`, `upload`, or `delete`).
-4. Recipient sees the shared collection on next list. They decrypt the collection key using their own private key (decrypted from `encryptedPrivateKey` using their master key).
+2. Sharer seals the **collection key** to the recipient's public key using NaCl crypto_box (sender-anonymous via sealed-box; recipient decrypts with their own private key alone).
+3. Sharer POSTs the sealed collection key to `POST /api/collections/:id/share` along with the recipient's user ID and two boolean grants — `canUpload` and `canDelete`. Read access is implicit; an optional `uploadQuotaBytes` caps how much the recipient may upload to this share.
+4. Recipient sees the shared collection on next list. They unseal the collection key using their own private key (decrypted from `encryptedPrivateKey` using their master key).
 
 The server stores the encrypted collection key — it cannot read it.
 
@@ -121,7 +126,7 @@ Server A (sharer)                          Server B (recipient)
 
 **SSRF protection:** Before proxying requests to the remote server URL, the backend validates that the target hostname is not a private/loopback address.
 
-**Cross-server upload/delete** is gated by the permission level set at share time (`upload` or `delete` flags).
+**Cross-server upload/delete** is gated by the `canUpload` and `canDelete` boolean grants set at share time.
 
 ---
 

@@ -6,9 +6,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/depo/backend/middleware"
-	"github.com/depo/backend/services"
-	"github.com/depo/backend/utils"
+	"github.com/kutup/backend/middleware"
+	"github.com/kutup/backend/services"
+	"github.com/kutup/backend/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
@@ -594,7 +594,7 @@ func (h *AuthHandler) SetupTOTP(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "user not found"})
 	}
 
-	secret, qrURI, err := services.GenerateTOTP(email, "Depo")
+	secret, qrURI, err := services.GenerateTOTP(email, "Kutup")
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
@@ -848,7 +848,7 @@ func (h *AuthHandler) issueTokensAndRespond(c *fiber.Ctx, userID, username, encM
 // prevent user enumeration (non-existent users get same response timing/shape).
 func deterministicFakeSalt(email, purpose string) string {
 	// XOR mix of email bytes and purpose — consistent for same input
-	input := email + ":" + purpose + ":depo-fake-salt-2024"
+	input := email + ":" + purpose + ":kutup-fake-salt-2024"
 	b := make([]byte, 32)
 	for i := range b {
 		b[i] = input[i%len(input)] ^ byte(i*7+13)

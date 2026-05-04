@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/depo/backend/middleware"
-	"github.com/depo/backend/services"
-	"github.com/depo/backend/utils"
+	"github.com/kutup/backend/middleware"
+	"github.com/kutup/backend/services"
+	"github.com/kutup/backend/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

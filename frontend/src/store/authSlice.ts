@@ -75,7 +75,7 @@ const authSlice = createSlice({
       state.totpEnabled = action.payload
     },
     logout(state) {
-      sessionStorage.removeItem('depo_session')
+      sessionStorage.removeItem('kutup_session')
       // Zero out sensitive material before clearing
       if (state.masterKey) state.masterKey.fill(0)
       if (state.privateKey) state.privateKey.fill(0)

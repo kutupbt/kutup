@@ -1,11 +1,11 @@
 {
   "identities": [
     {
-      "name": "depo",
+      "name": "kutup",
       "credentials": [
         {
-          "accessKey": "depo",
-          "secretKey": "depo_dev_s3_secret"
+          "accessKey": "kutup",
+          "secretKey": "kutup_dev_s3_secret"
         }
       ],
       "actions": [
