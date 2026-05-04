@@ -369,10 +369,11 @@ func TestUnpackTooShort(t *testing.T) {
 
 func TestUnpackBadCiphertextLen(t *testing.T) {
 	bs := Pack(Frame{Ciphertext: []byte("abc")})
-	bs[26] = 0xff
-	bs[27] = 0xff
-	bs[28] = 0xff
-	bs[29] = 0xff
+	// Corrupt the ciphertext_len field at offset 46..49 (after 30-byte header + 16-byte nonce remainder).
+	bs[46] = 0xff
+	bs[47] = 0xff
+	bs[48] = 0xff
+	bs[49] = 0xff
 	if _, err := Unpack(bs); err == nil {
 		t.Fatal("expected error for bogus ciphertext length")
 	}
