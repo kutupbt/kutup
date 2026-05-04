@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/kutup/backend/utils"
@@ -35,6 +36,21 @@ func (a *AuthMiddleware) Required() fiber.Handler {
 		c.Locals("isAdmin", claims.IsAdmin)
 		return c.Next()
 	}
+}
+
+// ValidateTokenString validates a JWT and returns userID + isAdmin.
+// Used by the WebSocket upgrade path which gets the token via ?token= query
+// (browsers can't set custom headers on the initial WS handshake).
+// Rejects setup/pre-auth tokens for the same reason Required() does.
+func (a *AuthMiddleware) ValidateTokenString(token string) (string, bool, error) {
+	claims, err := utils.ValidateToken(token, a.JWTSecret)
+	if err != nil {
+		return "", false, err
+	}
+	if claims.Subject != "" {
+		return "", false, errors.New("not an access token")
+	}
+	return claims.UserID, claims.IsAdmin, nil
 }
 
 func extractToken(c *fiber.Ctx) string {
