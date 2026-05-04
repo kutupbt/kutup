@@ -86,11 +86,3 @@ func Unpack(bs []byte) (Frame, error) {
 	copy(f.Signature[:], bs[50+clen:50+clen+64])
 	return f, nil
 }
-
-// SignatureBody returns the bytes that get signed: everything except the trailing signature.
-func SignatureBody(bs []byte) []byte {
-	if len(bs) < 64 {
-		return nil
-	}
-	return bs[:len(bs)-64]
-}
