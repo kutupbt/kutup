@@ -63,8 +63,8 @@ func (h *DevicesHandler) Register(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "timestamp skew"})
 	}
 	// AuthSig verification deferred to a future hardening pass — the JWT itself
-	// is the v1 trust anchor; AuthSig is recorded for forward compat but not
-	// validated. (Spec §14 question 6.)
+	// is the v1 trust anchor; AuthSig is recorded for forward compat (v2) but
+	// not validated.
 	_ = req.AuthSig
 
 	var id int64
@@ -132,7 +132,7 @@ func (h *DevicesHandler) Revoke(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "invalid id"})
 	}
 	tag, err := h.DB.Exec(context.Background(),
-		`UPDATE user_devices SET is_active = false WHERE id = $1 AND user_id = $2`,
+		`UPDATE user_devices SET is_active = false WHERE id = $1 AND user_id = $2 AND is_active = true`,
 		id, userID,
 	)
 	if err != nil || tag.RowsAffected() == 0 {
