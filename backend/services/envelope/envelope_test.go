@@ -2,6 +2,7 @@ package envelope
 
 import (
 	"bytes"
+	"os"
 	"testing"
 )
 
@@ -56,5 +57,25 @@ func TestUnpackBadCiphertextLen(t *testing.T) {
 	bs[49] = 0xff
 	if _, err := Unpack(bs); err == nil {
 		t.Fatal("expected error for bogus ciphertext length")
+	}
+}
+
+func TestKnownVector(t *testing.T) {
+	bs, err := os.ReadFile("testdata/vector_v1.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := Unpack(bs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Version != 1 || f.Kind != KindYjsUpdate || f.DocKeyID != 42 {
+		t.Fatalf("vector header mismatch: %+v", f)
+	}
+	if f.SenderDeviceID != 1234 || f.Sequence != 1 {
+		t.Fatalf("sender/seq mismatch: %+v", f)
+	}
+	if string(f.Ciphertext) != "hello world" {
+		t.Fatalf("ciphertext mismatch: %q", f.Ciphertext)
 	}
 }

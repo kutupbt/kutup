@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { pack, unpack, KIND, type Frame } from './envelope'
 
 const sigBytes = new Uint8Array(64)
@@ -32,5 +34,17 @@ describe('envelope', () => {
 
   it('rejects too-short input', () => {
     expect(() => unpack(new Uint8Array(5))).toThrow()
+  })
+
+  it('decodes the canonical vector_v1.bin', () => {
+    const p = path.resolve(__dirname, '../../../backend/services/envelope/testdata/vector_v1.bin')
+    const bs = new Uint8Array(fs.readFileSync(p))
+    const f = unpack(bs)
+    expect(f.version).toBe(1)
+    expect(f.kind).toBe(KIND.YJS_UPDATE)
+    expect(f.docKeyId).toBe(42)
+    expect(f.senderDeviceId).toBe(1234n)
+    expect(f.sequence).toBe(1n)
+    expect(new TextDecoder().decode(f.ciphertext)).toBe('hello world')
   })
 })
