@@ -1,0 +1,13 @@
+{
+  "Rules": [
+    {
+      "ID": "kutup-version-retention",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "files/" },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 30,
+        "NewerNoncurrentVersions": 50
+      }
+    }
+  ]
+}
