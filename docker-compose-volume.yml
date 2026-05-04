@@ -3,13 +3,13 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-depo}
-      POSTGRES_USER: ${POSTGRES_USER:-depo}
+      POSTGRES_DB: ${POSTGRES_DB:-kutup}
+      POSTGRES_USER: ${POSTGRES_USER:-kutup}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-depo}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kutup}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -42,8 +42,8 @@ services:
     image: chrislusf/seaweedfs:latest
     restart: unless-stopped
     environment:
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-depo}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-depoSecret}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-kutup}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-kutupSecret}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -51,7 +51,7 @@ services:
         cat > /etc/seaweedfs/s3.json <<EOF
         {
           "identities": [{
-            "name": "depo",
+            "name": "kutup",
             "credentials": [{"accessKey": "$$S3_ACCESS_KEY", "secretKey": "$$S3_SECRET_KEY"}],
             "actions": ["Admin", "Read", "Write", "List", "Tagging"]
           }]
@@ -66,8 +66,8 @@ services:
     image: amazon/aws-cli:latest
     restart: "no"
     environment:
-      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-depo}
-      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-depoSecret}
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-kutup}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-kutupSecret}
       AWS_DEFAULT_REGION: us-east-1
     entrypoint: >
       sh -c "
@@ -75,7 +75,7 @@ services:
         until aws --endpoint-url http://seaweedfs-s3:8333 s3 ls 2>/dev/null; do
           echo 'Retrying in 3s...' && sleep 3;
         done &&
-        aws --endpoint-url http://seaweedfs-s3:8333 s3 mb s3://${S3_BUCKET:-depo-files} --region us-east-1 2>/dev/null || true &&
+        aws --endpoint-url http://seaweedfs-s3:8333 s3 mb s3://${S3_BUCKET:-kutup-files} --region us-east-1 2>/dev/null || true &&
         echo 'Bucket ready.'
       "
     depends_on:
@@ -87,12 +87,12 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-depo}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-depo}?sslmode=disable
+      DATABASE_URL: postgres://${POSTGRES_USER:-kutup}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kutup}?sslmode=disable
       JWT_SECRET: ${JWT_SECRET}
       S3_ENDPOINT: http://seaweedfs-s3:8333
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-depo}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-depoSecret}
-      S3_BUCKET: ${S3_BUCKET:-depo-files}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-kutup}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-kutupSecret}
+      S3_BUCKET: ${S3_BUCKET:-kutup-files}
       S3_REGION: ${S3_REGION:-us-east-1}
       APP_ENV: ${APP_ENV:-production}
       ADMIN_ACCOUNTS: ${ADMIN_ACCOUNTS:-}

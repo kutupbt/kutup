@@ -52,12 +52,12 @@ The backend is a Go 1.22 application in `backend/`.
 cd backend
 
 # Export env vars (or use a tool like direnv)
-export DATABASE_URL="postgres://depo:<POSTGRES_PASSWORD>@localhost:5432/depo?sslmode=disable"
+export DATABASE_URL="postgres://kutup:<POSTGRES_PASSWORD>@localhost:5432/kutup?sslmode=disable"
 export JWT_SECRET="<your-jwt-secret>"
 export S3_ENDPOINT="http://localhost:8333"
-export S3_ACCESS_KEY="depo"
+export S3_ACCESS_KEY="kutup"
 export S3_SECRET_KEY="<your-s3-secret>"
-export S3_BUCKET="depo-files"
+export S3_BUCKET="kutup-files"
 export S3_REGION="us-east-1"
 export APP_ENV="development"
 
@@ -195,6 +195,13 @@ kutup/
 │   │   ├── store/           # Redux slices (auth state)
 │   │   └── workers/         # Web Worker for Argon2id KDF
 │   └── vite.config.ts       # Dev server proxy config
+├── cli/                      # Go CLI (Cobra) — login, ls, upload, download, sync, share
+│   ├── cmd/                 # One file per command
+│   └── internal/
+│       ├── api/             # HTTP client to the backend
+│       ├── crypto/          # Mirrors the frontend crypto for E2E ops
+│       ├── session/         # BoltDB session store, device key in OS keyring
+│       └── sync/            # Bidirectional folder sync
 ├── nginx/nginx.conf          # Production Nginx config
 ├── docs/                     # Documentation
 └── docker-compose.yml

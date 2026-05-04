@@ -3,7 +3,7 @@ package middleware
 import (
 	"strings"
 
-	"github.com/depo/backend/utils"
+	"github.com/kutup/backend/utils"
 	"github.com/gofiber/fiber/v2"
 )
 

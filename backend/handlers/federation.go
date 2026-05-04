@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/depo/backend/services"
+	"github.com/kutup/backend/services"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"

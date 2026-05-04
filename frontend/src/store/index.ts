@@ -11,7 +11,7 @@ import authReducer from './authSlice'
 // using the HTTP-only refresh token cookie.
 const loadSession = () => {
   try {
-    const raw = sessionStorage.getItem('depo_session')
+    const raw = sessionStorage.getItem('kutup_session')
     if (raw) {
       const saved = JSON.parse(raw)
       return {
@@ -49,7 +49,7 @@ export const store = configureStore({
 store.subscribe(() => {
   const { auth } = store.getState()
   if (auth.userId) {
-    sessionStorage.setItem('depo_session', JSON.stringify({
+    sessionStorage.setItem('kutup_session', JSON.stringify({
       userId: auth.userId,
       email: auth.email,
       username: auth.username,
@@ -62,7 +62,7 @@ store.subscribe(() => {
       publicKey: auth.publicKey,
     }))
   } else {
-    sessionStorage.removeItem('depo_session')
+    sessionStorage.removeItem('kutup_session')
   }
 })
 

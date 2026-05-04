@@ -24,7 +24,7 @@ func Load() *Config {
 		S3Endpoint:    mustEnv("S3_ENDPOINT"),
 		S3AccessKey:   mustEnv("S3_ACCESS_KEY"),
 		S3SecretKey:   mustEnv("S3_SECRET_KEY"),
-		S3Bucket:      getEnv("S3_BUCKET", "depo-files"),
+		S3Bucket:      getEnv("S3_BUCKET", "kutup-files"),
 		S3Region:      getEnv("S3_REGION", "us-east-1"),
 		AppEnv:        getEnv("APP_ENV", "development"),
 		AdminAccounts: getEnv("ADMIN_ACCOUNTS", ""),

@@ -1,4 +1,4 @@
-module github.com/depo/backend
+module github.com/kutup/backend
 
 go 1.22
 

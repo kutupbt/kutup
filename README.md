@@ -7,7 +7,7 @@
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-Kutup (also known internally as "Depo") is a privacy-first file storage platform where the server never sees your data. All encryption and decryption happens in the browser using [libsodium](https://libsodium.org/). You own your keys; the server stores only ciphertext.
+Kutup is a privacy-first file storage platform where the server never sees your data. All encryption and decryption happens in the browser using [libsodium](https://libsodium.org/). You own your keys; the server stores only ciphertext.
 
 ---
 
@@ -40,7 +40,7 @@ Kutup (also known internally as "Depo") is a privacy-first file storage platform
 
 ## Quick Start
 
-**Requirements:** Docker and Docker Compose v2.
+**Requirements:** Docker 24+ and Docker Compose v2.
 
 ```sh
 # 1. Clone
@@ -69,13 +69,14 @@ All configuration is done via environment variables. Copy `.env.example` to `.en
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
-| `POSTGRES_DB` | PostgreSQL database name | `depo` | No |
-| `POSTGRES_USER` | PostgreSQL username | `depo` | No |
+| `POSTGRES_DB` | PostgreSQL database name | `kutup` | No |
+| `POSTGRES_USER` | PostgreSQL username | `kutup` | No |
 | `POSTGRES_PASSWORD` | PostgreSQL password | — | **Yes** |
 | `JWT_SECRET` | Secret for signing JWTs. Generate with `openssl rand -hex 64` | — | **Yes** |
-| `S3_ACCESS_KEY` | SeaweedFS S3 access key | `depo` | No |
+| `S3_ENDPOINT` | URL of the S3 gateway (set automatically inside Docker; only needed when running the backend natively) | `http://seaweedfs-s3:8333` | For native dev |
+| `S3_ACCESS_KEY` | SeaweedFS S3 access key | `kutup` | No |
 | `S3_SECRET_KEY` | SeaweedFS S3 secret key | — | **Yes** |
-| `S3_BUCKET` | S3 bucket name | `depo-files` | No |
+| `S3_BUCKET` | S3 bucket name | `kutup-files` | No |
 | `S3_REGION` | S3 region (cosmetic for SeaweedFS) | `us-east-1` | No |
 | `APP_ENV` | Application environment | `production` | No |
 | `SERVER_URL` | Public base URL of this server — **required for federation** | `http://kutup.local` | For federation |
@@ -94,7 +95,7 @@ mnemonic → recovery key → encrypted master key
                                   ↓ (decrypt)
                             master key
                                   ↓ (encrypts)
-                    per-collection key (random, NaCl secretbox)
+                    per-collection key (random, XSalsa20-Poly1305 via NaCl secretbox)
                                   ↓ (encrypts)
                          per-file key (random) → encrypted file content
 ```

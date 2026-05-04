@@ -31,9 +31,9 @@ POSTGRES_PASSWORD=<strong-random-password>
 JWT_SECRET=<64-byte-hex-string>
 
 # SeaweedFS S3 credentials — must match seaweedfs-s3.json
-S3_ACCESS_KEY=depo
+S3_ACCESS_KEY=kutup
 S3_SECRET_KEY=<strong-random-secret>
-S3_BUCKET=depo-files
+S3_BUCKET=kutup-files
 
 # Public URL — used to build federation invite links
 # Must be the address users (and remote servers) reach this instance at
@@ -54,10 +54,10 @@ ADMIN_ACCOUNTS=admin@example.com:admin:<strong-admin-password>
 {
   "identities": [
     {
-      "name": "depo",
+      "name": "kutup",
       "credentials": [
         {
-          "accessKey": "depo",
+          "accessKey": "kutup",
           "secretKey": "<same-S3_SECRET_KEY-as-in-.env>"
         }
       ],
@@ -89,7 +89,7 @@ This builds the backend and frontend images, then starts all services:
 | `seaweedfs-init` | One-shot: creates the S3 bucket |
 | `backend` | Go API server (internal port 3000) |
 | `frontend` | Compiled React app (served by Nginx) |
-| `nginx` | Reverse proxy — listens on ports 80/443 |
+| `nginx` | Reverse proxy — listens on port 80; 443 requires the manual TLS setup below |
 
 ---
 
@@ -183,7 +183,7 @@ All persistent data lives in Docker volumes and bind-mounted directories:
 
 ```sh
 # PostgreSQL
-docker compose exec postgres pg_dump -U depo depo | gzip > backup-$(date +%F).sql.gz
+docker compose exec postgres pg_dump -U "${POSTGRES_USER:-kutup}" "${POSTGRES_DB:-kutup}" | gzip > backup-$(date +%F).sql.gz
 
 # SeaweedFS data
 tar -czf seaweedfs-$(date +%F).tar.gz data/

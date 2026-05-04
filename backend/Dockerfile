@@ -10,11 +10,11 @@ RUN go install github.com/swaggo/swag/cmd/swag@v1.8.1
 
 COPY . .
 RUN swag init -g main.go
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /depo-server .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /kutup-server .
 
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /depo-server /depo-server
+COPY --from=builder /kutup-server /kutup-server
 
 EXPOSE 3000
-ENTRYPOINT ["/depo-server"]
+ENTRYPOINT ["/kutup-server"]
