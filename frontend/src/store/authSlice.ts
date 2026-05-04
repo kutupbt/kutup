@@ -16,6 +16,7 @@ interface AuthState {
   masterKey: number[] | null   // stored as number[] to be Redux-serializable
   privateKey: number[] | null
   publicKey: string | null
+  currentDeviceId: number | null
 }
 
 const initialState: AuthState = {
@@ -30,6 +31,7 @@ const initialState: AuthState = {
   masterKey: null,
   privateKey: null,
   publicKey: null,
+  currentDeviceId: null,
 }
 
 const authSlice = createSlice({
@@ -74,6 +76,9 @@ const authSlice = createSlice({
     updateTotpEnabled(state, action: PayloadAction<boolean>) {
       state.totpEnabled = action.payload
     },
+    setDeviceId(state, action: PayloadAction<number | null>) {
+      state.currentDeviceId = action.payload
+    },
     logout(state) {
       sessionStorage.removeItem('kutup_session')
       // Zero out sensitive material before clearing
@@ -84,7 +89,7 @@ const authSlice = createSlice({
   },
 })
 
-export const { setAuth, updateAccessToken, updateStorageUsed, updateStorageQuota, updateTotpEnabled, logout } = authSlice.actions
+export const { setAuth, updateAccessToken, updateStorageUsed, updateStorageQuota, updateTotpEnabled, setDeviceId, logout } = authSlice.actions
 
 // Typed selectors that reconstruct Uint8Array from stored number[]
 export const selectMasterKey = (state: { auth: AuthState }): Uint8Array | null =>
