@@ -20,6 +20,7 @@ import { generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64 } from
 import { registerDevice } from '../../api/collab'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { setDeviceId } from '../../store/authSlice'
+import VersionHistoryPanel from '../VersionHistory/VersionHistoryPanel'
 
 // Module-level cache: dedupes concurrent registerDevice() calls within the same
 // browser session (prevents StrictMode double-mount from creating two rows).
@@ -48,6 +49,7 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
   const [status, setStatus] = useState<'connecting' | 'ready' | 'error'>('connecting')
   const [trigger, setTrigger] = useState<SnapshotTrigger | null>(null)
   const [savingVersion, setSavingVersion] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const accessToken = useAppSelector(s => s.auth.accessToken)
   const username = useAppSelector(s => s.auth.username)
   const storedDeviceId = useAppSelector(s => s.auth.currentDeviceId)
@@ -234,8 +236,25 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
         >
           {savingVersion ? 'Saving…' : 'Save version'}
         </button>
+        <button
+          type="button"
+          onClick={() => setHistoryOpen(v => !v)}
+          className="rounded border px-2 py-0.5 hover:bg-muted"
+        >
+          {historyOpen ? 'Hide history' : 'History'}
+        </button>
       </div>
-      <div ref={ref} className="flex-1 overflow-auto" />
+      <div className="flex flex-1 overflow-hidden">
+        <div ref={ref} className="flex-1 overflow-auto" />
+        {historyOpen && (
+          <aside className="w-80 shrink-0 overflow-y-auto border-l">
+            <VersionHistoryPanel fileId={fileId} onRestore={(vid) => {
+              // G4 will implement actual restore. For G3 just log.
+              console.log('TODO G4: restore version', vid)
+            }} />
+          </aside>
+        )}
+      </div>
     </div>
   )
 }
