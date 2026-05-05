@@ -19,10 +19,25 @@ import { registerDevice } from '../../api/collab'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { setDeviceId } from '../../store/authSlice'
 
+// Module-level cache: dedupes concurrent registerDevice() calls within the same
+// browser session (prevents StrictMode double-mount from creating two rows).
+const _devicePromiseCache = new Map<string, Promise<number>>()
+
+function ensureRegistered(pubKeyB64: string, label: string): Promise<number> {
+  let p = _devicePromiseCache.get(pubKeyB64)
+  if (!p) {
+    p = registerDevice(pubKeyB64, label).then(r => r.deviceId)
+    _devicePromiseCache.set(pubKeyB64, p)
+  }
+  return p
+}
+
 interface Props {
   fileId: string
   filename: string
-  /** Collection master key (32 bytes). Caller is responsible for fetching it. */
+  /** Collection master key (32 bytes). MUST be referentially stable across renders —
+   *  otherwise the editor tears down and reconnects every parent re-render. The G1
+   *  caller is responsible for memoizing or pulling from a stable Redux selector. */
   collectionMaster: Uint8Array
 }
 
@@ -52,8 +67,9 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
       }
       let deviceId = storedDeviceId
       if (!deviceId) {
-        const r = await registerDevice(encodePubKeyB64(kp.publicKey), navigator.userAgent.slice(0, 80))
-        deviceId = r.deviceId
+        const pubB64 = encodePubKeyB64(kp.publicKey)
+        deviceId = await ensureRegistered(pubB64, navigator.userAgent.slice(0, 80))
+        if (!alive) return
         dispatch(setDeviceId(deviceId))
       }
       if (!alive) return
@@ -83,6 +99,11 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
       const onLocalUpdate = (update: Uint8Array, origin: unknown) => {
         if (origin === 'remote') return
         ;(async () => {
+          // Per-device sequence is incremented synchronously to guarantee uniqueness; the
+          // encrypt → sign → send chain is async, so wire-arrival order may differ from
+          // generation order. The server's UNIQUE (file_id, sender_device, sender_seq)
+          // index in migration 013 deduplicates either way; Yjs convergence handles
+          // out-of-order application.
           outboundSeq++
           const f = await encryptYjsUpdate(update, fileId, docKeyId, BigInt(deviceId!), outboundSeq, collectionMaster)
           await signAndSend(f)
@@ -91,7 +112,11 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
       ydoc.on('update', onLocalUpdate)
 
       // 5. Local awareness change -> encrypt + send (no persistence server-side).
-      const onAwarenessChange = ({ added, updated, removed }: { added: number[]; updated: number[]; removed: number[] }) => {
+      const onAwarenessChange = (
+        { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
+        origin: unknown,
+      ) => {
+        if (origin === 'remote') return
         const changed = [...added, ...updated, ...removed]
         if (changed.length === 0) return
         ;(async () => {
