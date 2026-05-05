@@ -2,6 +2,7 @@
 // Mounts in place of the existing file preview when the file extension matches a
 // CodeMirror language (see ../components/editors/dispatch.tsx, written in G1).
 import { useEffect, useRef, useState } from 'react'
+import _sodium from 'libsodium-wrappers-sumo'
 import * as Y from 'yjs'
 import { yCollab } from 'y-codemirror.next'
 import { Awareness, encodeAwarenessUpdate, applyAwarenessUpdate } from 'y-protocols/awareness'
@@ -12,7 +13,8 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { langForExtension } from './lang'
 import { CollabTransport, type HelloMsg } from '../../collab/transport'
 import { pack, unpack, KIND, type Frame } from '../../collab/envelope'
-import { encryptYjsUpdate, decryptYjsUpdate, encryptAwareness, decryptAwareness } from '../../collab/cryptoFrame'
+import { encryptYjsUpdate, decryptYjsUpdate, encryptAwareness, decryptAwareness, deriveContentKey } from '../../collab/cryptoFrame'
+import { SnapshotTrigger } from '../../collab/snapshot'
 import { ed25519Sign } from '../../collab/sign'
 import { generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64 } from '../../collab/devices'
 import { registerDevice } from '../../api/collab'
@@ -44,6 +46,8 @@ interface Props {
 export default function TextCollabEditor({ fileId, filename, collectionMaster }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<'connecting' | 'ready' | 'error'>('connecting')
+  const [trigger, setTrigger] = useState<SnapshotTrigger | null>(null)
+  const [savingVersion, setSavingVersion] = useState(false)
   const accessToken = useAppSelector(s => s.auth.accessToken)
   const username = useAppSelector(s => s.auth.username)
   const storedDeviceId = useAppSelector(s => s.auth.currentDeviceId)
@@ -84,6 +88,26 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
       let lastSeenSeq = 0
       let docKeyId = 1
       let outboundSeq = 0n
+
+      // 2.5 Snapshot trigger.
+      const trig = new SnapshotTrigger({
+        fileId,
+        ydoc,
+        getSeq: () => Number(outboundSeq),
+        encryptSnapshot: async (bytes: Uint8Array) => {
+          await _sodium.ready
+          const key = await deriveContentKey(collectionMaster, fileId)
+          const nonce = _sodium.randombytes_buf(24)
+          const ct = _sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(bytes, null, null, nonce, key)
+          // Self-contained snapshot: nonce(24) || aead(state).
+          // Decrypter must split: nonce = blob[:24], aead_ct = blob[24:].
+          const out = new Uint8Array(24 + ct.length)
+          out.set(nonce, 0)
+          out.set(ct, 24)
+          return { ciphertext: out, storageHints: { docKeyId, sizeBytes: out.length } }
+        },
+      })
+      if (alive) setTrigger(trig)
 
       // 3. Sign-and-send helper.
       const signAndSend = async (f: Frame) => {
@@ -174,6 +198,7 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
 
       // 8. Cleanup on unmount.
       cleanup = () => {
+        trig.destroy()
         ydoc?.off('update', onLocalUpdate)
         awareness?.off('change', onAwarenessChange)
         view?.destroy()
@@ -190,8 +215,25 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
 
   return (
     <div className="flex h-full w-full flex-col">
-      <div className="border-b px-3 py-1 text-xs text-muted-foreground">
-        {filename} · {status}
+      <div className="flex items-center justify-between border-b px-3 py-1 text-xs">
+        <span className="text-muted-foreground">{filename} · {status}</span>
+        <button
+          type="button"
+          disabled={!trigger || savingVersion}
+          onClick={async () => {
+            if (!trigger) return
+            const name = window.prompt('Name this version (optional):') ?? undefined
+            setSavingVersion(true)
+            try {
+              await trigger.forceSave(name && name.trim() !== '' ? name.trim() : undefined, !!name)
+            } finally {
+              setSavingVersion(false)
+            }
+          }}
+          className="rounded border px-2 py-0.5 hover:bg-muted disabled:opacity-50"
+        >
+          {savingVersion ? 'Saving…' : 'Save version'}
+        </button>
       </div>
       <div ref={ref} className="flex-1 overflow-auto" />
     </div>
