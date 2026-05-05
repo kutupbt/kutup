@@ -18,6 +18,7 @@ import { SnapshotTrigger } from '../../collab/snapshot'
 import { ed25519Sign } from '../../collab/sign'
 import { generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64 } from '../../collab/devices'
 import { registerDevice } from '../../api/collab'
+import api from '../../api/client'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { setDeviceId } from '../../store/authSlice'
 import VersionHistoryPanel from '../VersionHistory/VersionHistoryPanel'
@@ -50,6 +51,7 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
   const [trigger, setTrigger] = useState<SnapshotTrigger | null>(null)
   const [savingVersion, setSavingVersion] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [restoreHandler, setRestoreHandler] = useState<((vid: string) => Promise<void>) | null>(null)
   const accessToken = useAppSelector(s => s.auth.accessToken)
   const username = useAppSelector(s => s.auth.username)
   const storedDeviceId = useAppSelector(s => s.auth.currentDeviceId)
@@ -110,6 +112,39 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
         },
       })
       if (alive) setTrigger(trig)
+
+      // Restore handler. Wired into VersionHistoryPanel via onRestore prop.
+      const handleRestore = async (versionId: string) => {
+        try {
+          const url = `/api/files/${fileId}/versions/${versionId}/download`
+          const r = await api.get(url, { responseType: 'arraybuffer' })
+          const blob = new Uint8Array(r.data as ArrayBuffer)
+          if (blob.length < 24 + 17) throw new Error('snapshot blob too short')
+          const nonce = blob.subarray(0, 24)
+          const ct = blob.subarray(24)
+          await _sodium.ready
+          const key = await deriveContentKey(collectionMaster, fileId)
+          const stateBytes = _sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ct, null, nonce, key)
+          // Materialize the old state in a throwaway doc, extract the plaintext.
+          const oldDoc = new Y.Doc()
+          Y.applyUpdateV2(oldDoc, stateBytes)
+          const oldText = oldDoc.getText('content').toString()
+          oldDoc.destroy()
+          // Pre-save the current state so the restore doesn't clobber unsaved work.
+          await trig.forceSave(`Pre-restore @ ${new Date().toLocaleString()}`)
+          // Replace live content. CodeMirror sees this as a delete + insert.
+          ydoc!.transact(() => {
+            ytext.delete(0, ytext.length)
+            ytext.insert(0, oldText)
+          })
+          // Save a named snapshot so the restore is itself a milestone.
+          await trig.forceSave(`Restored from ${new Date().toLocaleString()}`, true)
+        } catch (e) {
+          console.error('restore failed', e)
+          alert('Restore failed: ' + (e instanceof Error ? e.message : String(e)))
+        }
+      }
+      if (alive) setRestoreHandler(() => handleRestore)
 
       // 3. Sign-and-send helper.
       const signAndSend = async (f: Frame) => {
@@ -250,10 +285,14 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
         <div ref={ref} className="flex-1 overflow-auto" />
         {historyOpen && (
           <aside className="w-80 shrink-0 overflow-y-auto border-l">
-            <VersionHistoryPanel fileId={fileId} onRestore={(vid) => {
-              // G4 will implement actual restore. For G3 just log.
-              console.log('TODO G4: restore version', vid)
-            }} />
+            <VersionHistoryPanel
+              fileId={fileId}
+              onRestore={async (vid) => {
+                if (!restoreHandler) return
+                if (!window.confirm('Restore this version? Current state will be saved as a new version first.')) return
+                await restoreHandler(vid)
+              }}
+            />
           </aside>
         )}
       </div>
