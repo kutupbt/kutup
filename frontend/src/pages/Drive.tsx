@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, Suspense } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, FolderPlus, Upload, Globe, Download, Trash2 } from 'lucide-react'
+import { Plus, FolderPlus, Upload, Globe, Download, Trash2, X } from 'lucide-react'
 import { useAppSelector, useAppDispatch } from '@/store'
 import { selectMasterKey, selectPrivateKey, updateStorageUsed, updateStorageQuota } from '@/store/authSlice'
 import api from '@/api/client'
@@ -26,6 +26,7 @@ import RenameDialog from '@/components/drive/dialogs/RenameDialog'
 import ShareDialog from '@/components/drive/dialogs/ShareDialog'
 import PublicShareDialog from '@/components/drive/dialogs/PublicShareDialog'
 import AddRemoteShareDialog from '@/components/drive/dialogs/AddRemoteShareDialog'
+import { chooseEditor } from '@/components/editors/dispatch'
 
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
@@ -84,6 +85,11 @@ export default function Drive() {
   const [deleteFile, setDeleteFile] = useState<DecryptedFile | null>(null)
   const [deleteFolder, setDeleteFolder] = useState<Collection | null>(null)
   const [fedInviteUrl, setFedInviteUrl] = useState<string | null>(null)
+
+  // Collab editor state: when set, opens an in-place modal editor. The collectionMaster
+  // here is the file's parent collection key (already-decrypted on collection load),
+  // NOT the user's masterKey — the editor derives per-file content keys from it.
+  const [editorOpen, setEditorOpen] = useState<{ fileId: string; filename: string; collectionMaster: Uint8Array } | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const downloadAbortRef = useRef<AbortController | null>(null)
@@ -421,6 +427,15 @@ export default function Drive() {
     }
   }
 
+  function handleFileClick(file: DecryptedFile) {
+    const name = file.decryptedName
+    if (name && currentFolder?.collectionKey && chooseEditor(name)) {
+      setEditorOpen({ fileId: file.id, filename: name, collectionMaster: currentFolder.collectionKey })
+      return
+    }
+    setDetailItem(file)
+  }
+
   async function handleDownload(file: DecryptedFile) {
     if (!file._fileKey) return
     try {
@@ -730,7 +745,7 @@ export default function Drive() {
                 files={files}
                 canDelete={canDeleteFile()}
                 selectedIds={selectedFileIds}
-                onSelect={setDetailItem}
+                onSelect={handleFileClick}
                 onToggleSelect={toggleFileSelect}
                 onToggleSelectAll={toggleAllFiles}
                 onDownload={handleDownload}
@@ -795,6 +810,36 @@ export default function Drive() {
         onPublicLink={handleCreatePublicLink}
         onEnter={enterFolder}
       />
+
+      {/* Collab editor overlay */}
+      {editorOpen && (() => {
+        const Editor = chooseEditor(editorOpen.filename)
+        if (!Editor) return null
+        return (
+          <div className="fixed inset-0 z-50 flex flex-col bg-background">
+            <div className="flex items-center justify-between border-b px-4 py-2">
+              <span className="text-sm font-medium truncate">{editorOpen.filename}</span>
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label={t('common.close')}
+                onClick={() => setEditorOpen(null)}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="flex-1 min-h-0">
+              <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading editor…</div>}>
+                <Editor
+                  fileId={editorOpen.fileId}
+                  filename={editorOpen.filename}
+                  collectionMaster={editorOpen.collectionMaster}
+                />
+              </Suspense>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Dialogs */}
       <NewFolderDialog
