@@ -158,6 +158,8 @@ func main() {
 	files.Delete("/:id", filesH.Delete)
 
 	api.Get("/files/:fileId/versions", authMW.Required(), fvH.List)
+	api.Post("/files/:fileId/versions", authMW.Required(), fvH.Record)
+	api.Post("/files/:fileId/snapshot-blob", authMW.Required(), fvH.UploadSnapshotBlob)
 	api.Get("/files/:fileId/versions/:vid/download", authMW.Required(), fvH.Download)
 	api.Patch("/files/:fileId/versions/:vid", authMW.Required(), fvH.Patch)
 
