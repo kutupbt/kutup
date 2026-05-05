@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Download, Trash2, MoreVertical, ArrowUp, ArrowDown } from 'lucide-react'
+import { Download, Trash2, MoreVertical, ArrowUp, ArrowDown, ExternalLink } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
   Table,
@@ -15,6 +15,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -182,63 +189,92 @@ export default function FileTable({
           {sorted.map((file) => {
             const isSelected = selectedIds.has(file.id)
             return (
-              <TableRow
-                key={file.id}
-                className={cn('group cursor-pointer', isSelected && 'bg-primary/5')}
-                onClick={() => onSelect(file)}
-              >
-                <TableCell
-                  className="cursor-pointer"
-                  onClick={(e) => { e.stopPropagation(); onToggleSelect(file.id) }}
-                >
-                  <Checkbox
-                    checked={isSelected}
-                    className="h-5 w-5 pointer-events-none"
-                  />
-                </TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-3 min-w-0">
-                    <FileIcon filename={file.decryptedName ?? 'file'} size="sm" />
-                    <span className="truncate">
-                      {file.decryptedName ?? '[encrypted]'}
-                    </span>
-                  </div>
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {formatModified(file.createdAt)}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {file.decryptedSize ? formatBytes(file.decryptedSize) : '—'}
-                </TableCell>
-                <TableCell onClick={(e) => e.stopPropagation()}>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+              <ContextMenu key={file.id}>
+                <ContextMenuTrigger asChild>
+                  <TableRow
+                    className={cn('group cursor-pointer', isSelected && 'bg-primary/5')}
+                    onClick={() => onSelect(file)}
+                  >
+                    <TableCell
+                      className="cursor-pointer"
+                      onClick={(e) => { e.stopPropagation(); onToggleSelect(file.id) }}
+                    >
+                      <Checkbox
+                        checked={isSelected}
+                        className="h-5 w-5 pointer-events-none"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-3 min-w-0">
+                        <FileIcon filename={file.decryptedName ?? 'file'} size="sm" />
+                        <span className="truncate">
+                          {file.decryptedName ?? '[encrypted]'}
+                        </span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {formatModified(file.createdAt)}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {file.decryptedSize ? formatBytes(file.decryptedSize) : '—'}
+                    </TableCell>
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <MoreVertical className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onSelect={() => onSelect(file)}>
+                            <ExternalLink className="h-4 w-4 mr-2" />
+                            Open
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => onDownload(file)}>
+                            <Download className="h-4 w-4 mr-2" />
+                            {t('files.download')}
+                          </DropdownMenuItem>
+                          {canDelete && (
+                            <DropdownMenuItem
+                              className="text-destructive focus:text-destructive"
+                              onSelect={() => onDelete(file)}
+                            >
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              {t('files.delete')}
+                            </DropdownMenuItem>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                </ContextMenuTrigger>
+                <ContextMenuContent className="w-44">
+                  <ContextMenuItem onSelect={() => onSelect(file)}>
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    Open
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => onDownload(file)}>
+                    <Download className="h-4 w-4 mr-2" />
+                    {t('files.download')}
+                  </ContextMenuItem>
+                  {canDelete && (
+                    <>
+                      <ContextMenuSeparator />
+                      <ContextMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onSelect={() => onDelete(file)}
                       >
-                        <MoreVertical className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onSelect={() => onDownload(file)}>
-                        <Download className="h-4 w-4 mr-2" />
-                        {t('files.download')}
-                      </DropdownMenuItem>
-                      {canDelete && (
-                        <DropdownMenuItem
-                          className="text-destructive focus:text-destructive"
-                          onSelect={() => onDelete(file)}
-                        >
-                          <Trash2 className="h-4 w-4 mr-2" />
-                          {t('files.delete')}
-                        </DropdownMenuItem>
-                      )}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </TableCell>
-              </TableRow>
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        {t('files.delete')}
+                      </ContextMenuItem>
+                    </>
+                  )}
+                </ContextMenuContent>
+              </ContextMenu>
             )
           })}
         </TableBody>

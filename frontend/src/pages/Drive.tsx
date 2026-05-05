@@ -17,6 +17,14 @@ import { downloadAsZip, FsaRequiredError } from '@/lib/zipDownload'
 import Sidebar from '@/components/layout/Sidebar'
 import DriveBreadcrumb from '@/components/drive/DriveBreadcrumb'
 import DriveTopBar from '@/components/drive/DriveTopBar'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu'
+import { FolderPlus, FileText as FileTextIcon, Upload as UploadIcon, RefreshCw } from 'lucide-react'
 import ShortcutsDialog from '@/components/drive/ShortcutsDialog'
 import CollectionGrid from '@/components/drive/CollectionGrid'
 import FileTable from '@/components/drive/FileTable'
@@ -724,6 +732,8 @@ export default function Drive() {
           onNewMenuOpenChange={setNewMenuOpen}
         />
 
+        <ContextMenu>
+        <ContextMenuTrigger asChild>
         <main
           className="flex-1 p-8 overflow-auto relative"
           onDragOver={(e) => { e.preventDefault(); if (currentFolder?.collectionKey) setIsDragging(true) }}
@@ -866,6 +876,42 @@ export default function Drive() {
           </>
         )}
         </main>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="w-52">
+          <ContextMenuItem
+            onSelect={() => setNewFolderOpen(true)}
+            disabled={!canUploadToCurrentFolder()}
+          >
+            <FolderPlus className="h-4 w-4 mr-2" />
+            New folder
+          </ContextMenuItem>
+          <ContextMenuItem
+            onSelect={() => setNewNoteOpen(true)}
+            disabled={!canUploadToCurrentFolder()}
+          >
+            <FileTextIcon className="h-4 w-4 mr-2" />
+            New note (.md)
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            onSelect={() => triggerUpload()}
+            disabled={!canUploadToCurrentFolder()}
+          >
+            <UploadIcon className="h-4 w-4 mr-2" />
+            Upload files
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            onSelect={() => {
+              loadCollections()
+              if (currentFolder) loadFiles(currentFolder)
+            }}
+          >
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Refresh
+          </ContextMenuItem>
+        </ContextMenuContent>
+        </ContextMenu>
       </div>
 
       {/* Upload progress */}
