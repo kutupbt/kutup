@@ -22,13 +22,8 @@ import api from '../../api/client'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { setDeviceId } from '../../store/authSlice'
 import VersionHistoryPanel from '../VersionHistory/VersionHistoryPanel'
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-} from '@/components/ui/sheet'
+import { Button } from '@/components/ui/button'
+import { Save, BookmarkPlus, History, X, Check } from 'lucide-react'
 import CursorColorPicker from './CursorColorPicker'
 import {
   buildAwarenessName,
@@ -364,27 +359,32 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
     persistCursorColor(hex)
   }
 
+  const statusDot = status === 'ready'
+    ? 'bg-emerald-500'
+    : status === 'connecting'
+      ? 'bg-amber-500 animate-pulse'
+      : 'bg-destructive'
+
   return (
     <div className="flex h-full w-full flex-col">
-      <div className="flex items-center justify-between border-b px-3 py-1 text-xs">
-        <span className="text-muted-foreground">{filename} · {status}</span>
-        <div className="flex items-center gap-2">
+      <div className="flex h-12 items-center gap-3 border-b border-border bg-background/95 px-4">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className={`inline-block h-2 w-2 rounded-full ${statusDot}`} aria-hidden />
+          <span className="truncate text-sm font-medium">{filename}</span>
+          <span className="text-xs text-muted-foreground capitalize">· {status}</span>
+        </div>
+
+        <div className="ml-auto flex items-center gap-2">
           <CursorColorPicker color={cursorColor} onChange={handleCursorColorChange} />
-          <button
+          <Button
             type="button"
+            size="sm"
+            variant="outline"
             disabled={!trigger || savingPlain || savingVersion}
             onClick={async () => {
               if (!trigger) return
               setSavingPlain(true)
               try {
-                // Force a snapshot but force=true so an empty-but-no-label call
-                // still goes through (matches "I just want my work persisted now").
-                // We pass a non-empty marker label internally and immediately
-                // null it out — but actually the simpler way is to pass label=''
-                // which doesn't pin. Looking at SnapshotTrigger.snapshot():
-                //   if (this.updatesSince === 0 && !label) return
-                // So if updatesSince==0 and we want a no-op, we get one. Otherwise
-                // we snapshot with no name and no keepForever.
                 await trigger.forceSave(undefined, false)
                 setJustSaved(true)
                 setTimeout(() => setJustSaved(false), 1200)
@@ -392,19 +392,22 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
                 setSavingPlain(false)
               }
             }}
-            className="rounded border px-2 py-0.5 hover:bg-muted disabled:opacity-50"
-            title="Save current state (Cmd/Ctrl+S)"
+            title="Save current state (⌘/Ctrl+S)"
+            className="gap-1.5"
           >
-            {savingPlain ? 'Saving…' : justSaved ? 'Saved ✓' : 'Save'}
-          </button>
-          <button
+            {justSaved ? <Check className="h-4 w-4 text-emerald-500" /> : <Save className="h-4 w-4" />}
+            {savingPlain ? 'Saving…' : justSaved ? 'Saved' : 'Save'}
+          </Button>
+          <Button
             type="button"
+            size="sm"
+            variant="outline"
             disabled={!trigger || savingVersion || savingPlain}
             onClick={async () => {
               if (!trigger) return
               const name = window.prompt('Name this version:')
               const trimmed = name?.trim() ?? ''
-              if (!trimmed) return  // canceled or empty — do nothing
+              if (!trimmed) return
               setSavingVersion(true)
               try {
                 await trigger.forceSave(trimmed, true)
@@ -412,47 +415,56 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
                 setSavingVersion(false)
               }
             }}
-            className="rounded border px-2 py-0.5 hover:bg-muted disabled:opacity-50"
             title="Save a named, kept-forever milestone"
+            className="gap-1.5"
           >
-            {savingVersion ? 'Saving…' : 'Save version…'}
-          </button>
-          <button
+            <BookmarkPlus className="h-4 w-4" />
+            {savingVersion ? 'Saving…' : 'Save version'}
+          </Button>
+          <Button
             type="button"
-            onClick={() => setHistoryOpen(v => !v)}
-            className="rounded border px-2 py-0.5 hover:bg-muted"
+            size="sm"
+            variant={historyOpen ? 'default' : 'outline'}
+            onClick={() => setHistoryOpen((v) => !v)}
+            className="gap-1.5"
           >
-            {historyOpen ? 'Hide history' : 'History'}
-          </button>
+            <History className="h-4 w-4" />
+            History
+          </Button>
         </div>
       </div>
+
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <div ref={ref} className="flex-1 overflow-auto" />
-      </div>
 
-      <Sheet open={historyOpen} onOpenChange={setHistoryOpen}>
-        <SheetContent
-          side="right"
-          className="flex w-full flex-col gap-0 p-0 sm:max-w-md"
-        >
-          <SheetHeader className="border-b px-4 py-3">
-            <SheetTitle>Version history</SheetTitle>
-            <SheetDescription className="sr-only">
-              Browse and restore previous versions of this file.
-            </SheetDescription>
-          </SheetHeader>
-          <div className="flex-1 min-h-0 overflow-y-auto">
-            <VersionHistoryPanel
-              fileId={fileId}
-              onRestore={async (vid) => {
-                if (!restoreHandler) return
-                if (!window.confirm('Restore this version? Current state will be saved as a new version first.')) return
-                await restoreHandler(vid)
-              }}
-            />
-          </div>
-        </SheetContent>
-      </Sheet>
+        {historyOpen && (
+          <aside className="flex w-[360px] shrink-0 flex-col border-l border-border bg-card">
+            <header className="flex h-12 items-center justify-between border-b border-border px-4">
+              <h2 className="text-sm font-semibold">Version history</h2>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={() => setHistoryOpen(false)}
+                aria-label="Close history"
+                className="h-7 w-7"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </header>
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <VersionHistoryPanel
+                fileId={fileId}
+                onRestore={async (vid) => {
+                  if (!restoreHandler) return
+                  if (!window.confirm('Restore this version? Current state will be saved as a new version first.')) return
+                  await restoreHandler(vid)
+                }}
+              />
+            </div>
+          </aside>
+        )}
+      </div>
     </div>
   )
 }
