@@ -1,6 +1,13 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Download, Trash2 } from 'lucide-react'
+import {
+  Download,
+  Trash2,
+  FolderPlus,
+  FileText as FileTextIcon,
+  Upload as UploadIcon,
+  RefreshCw,
+} from 'lucide-react'
 import { useAppSelector, useAppDispatch } from '@/store'
 import { selectMasterKey, selectPrivateKey, updateStorageUsed, updateStorageQuota } from '@/store/authSlice'
 import api from '@/api/client'
@@ -11,7 +18,6 @@ import {
 } from '@/crypto'
 import { toast } from 'sonner'
 import { formatBytes } from '@/lib/format'
-import { copyText } from '@/lib/format'
 import { downloadAsZip, FsaRequiredError } from '@/lib/zipDownload'
 
 import Sidebar from '@/components/layout/Sidebar'
@@ -24,7 +30,6 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
-import { FolderPlus, FileText as FileTextIcon, Upload as UploadIcon, RefreshCw } from 'lucide-react'
 import ShortcutsDialog from '@/components/drive/ShortcutsDialog'
 import CollectionGrid from '@/components/drive/CollectionGrid'
 import FileTable from '@/components/drive/FileTable'
