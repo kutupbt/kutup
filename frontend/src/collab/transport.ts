@@ -6,6 +6,11 @@ export interface HelloMsg {
   fileId: string
   currentDocKeyId: number
   headSeq: number
+  /** Highest sender_seq this device has already persisted for this file.
+   * The client resumes its outbound counter from here + 1 so refresh /
+   * remount doesn't replay sequence numbers. 0 means this device has no
+   * prior frames for this file. */
+  mySenderSeqHigh: number
   peers: { deviceId: number; userId: string }[]
 }
 
