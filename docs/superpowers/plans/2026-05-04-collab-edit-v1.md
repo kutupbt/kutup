@@ -1415,9 +1415,13 @@ In `backend/middleware/auth.go`, add:
 ```go
 // ValidateTokenString validates a JWT and returns the user ID.
 // Used by the WS upgrade path which gets the token via query string.
-func (a *Auth) ValidateTokenString(token string) (string, bool, error) {
-	claims, err := utils.ValidateToken(token, a.jwtSecret)
+// Rejects setup/pre-auth tokens (claims.Subject != "") for parity with Required().
+func (a *AuthMiddleware) ValidateTokenString(token string) (string, bool, error) {
+	claims, err := utils.ValidateToken(token, a.JWTSecret)
 	if err != nil { return "", false, err }
+	if claims.Subject != "" {
+		return "", false, errors.New("setup or pre-auth tokens not allowed here")
+	}
 	return claims.UserID, claims.IsAdmin, nil
 }
 ```
@@ -1429,7 +1433,7 @@ func (a *Auth) ValidateTokenString(token string) (string, bool, error) {
 Replace the stub in `backend/handlers/collab.go`:
 
 ```go
-func (h *CollabHandler) PreUpgrade(authMW *middleware.Auth) fiber.Handler {
+func (h *CollabHandler) PreUpgrade(authMW *middleware.AuthMiddleware) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		// Token from Authorization header or ?token= query.
 		tok := c.Get("Authorization")
@@ -1463,9 +1467,9 @@ func (h *CollabHandler) PreUpgrade(authMW *middleware.Auth) fiber.Handler {
 		if ownerID != userID && !sharedWith {
 			return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
 		}
-		c.Locals("userID", userID)
-		c.Locals("fileID", fileID)
-		c.Locals("collectionID", collID)
+		c.Locals("userId", userID)
+		c.Locals("fileId", fileID)
+		c.Locals("collectionId", collID)
 		return c.Next()
 	}
 }
