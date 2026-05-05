@@ -17,7 +17,7 @@ import { encryptYjsUpdate, decryptYjsUpdate, encryptAwareness, decryptAwareness,
 import { SnapshotTrigger } from '../../collab/snapshot'
 import { ed25519Sign } from '../../collab/sign'
 import { generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64 } from '../../collab/devices'
-import { registerDevice } from '../../api/collab'
+import { registerDevice, listVersions } from '../../api/collab'
 import api from '../../api/client'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { setDeviceId } from '../../store/authSlice'
@@ -188,6 +188,39 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
         })()
       }
       awareness.on('change', onAwarenessChange)
+
+      // 5.5 Load the latest snapshot from S3 (if any) so the editor shows the
+      // current state on open. The relay can't help here — when a snapshot was
+      // taken the file_update_log was truncated up to seq_at_snapshot, so a
+      // resume(0) would replay nothing. We load the snapshot blob, decrypt,
+      // applyUpdateV2 to seed the Y.Doc, then set lastSeenSeq so the WS resume
+      // only fetches post-snapshot deltas.
+      try {
+        const versions = await listVersions(fileId)
+        if (versions.length > 0) {
+          const latest = versions[0] // newest-first ordering
+          const r = await api.get(`/files/${fileId}/versions/${latest.id}/download`, {
+            responseType: 'arraybuffer',
+          })
+          const blob = new Uint8Array(r.data as ArrayBuffer)
+          if (blob.length >= 24 + 17) {
+            const nonce = blob.subarray(0, 24)
+            const ct = blob.subarray(24)
+            await _sodium.ready
+            const key = await deriveContentKey(collectionMaster, fileId)
+            const stateBytes = _sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+              null, ct, null, nonce, key,
+            )
+            // Apply with a synthetic 'remote' origin so onLocalUpdate doesn't
+            // re-emit the snapshot bytes back through the relay.
+            Y.applyUpdateV2(ydoc, stateBytes, 'remote')
+            lastSeenSeq = latest.seqAtSnapshot
+          }
+        }
+      } catch (e) {
+        console.warn('collab: failed to load latest snapshot, starting empty', e)
+      }
+      if (!alive) return
 
       // 6. Build transport.
       const wsUrl = `${location.origin.replace(/^http/, 'ws')}/api/files/${fileId}/collab/ws?token=${encodeURIComponent(accessToken)}&deviceId=${deviceId}`
