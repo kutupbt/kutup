@@ -121,3 +121,13 @@ func (s *StorageService) Delete(ctx context.Context, path string) error {
 	})
 	return err
 }
+
+// DeleteObjectVersion deletes a specific S3 (SeaweedFS) noncurrent version of an object.
+func (s *StorageService) DeleteObjectVersion(ctx context.Context, key, versionID string) error {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket:    aws.String(s.bucket),
+		Key:       aws.String(key),
+		VersionId: aws.String(versionID),
+	})
+	return err
+}
