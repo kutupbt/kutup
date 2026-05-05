@@ -85,31 +85,14 @@ func (c *wsConn) writePump() {
 }
 
 // Upgrade returns a Fiber handler that performs the WebSocket handshake and
-// hands control to HandleConnection. The deviceId comes from the query string
-// (browsers can't set custom headers on `new WebSocket(url)`); we look up its
-// pubkey + verify it belongs to userID + is_active before admitting the conn.
+// hands control to HandleConnection. All auth/access/device checks have been
+// performed by PreUpgrade — this handler trusts c.Locals values.
 func (h *CollabHandler) Upgrade() fiber.Handler {
 	return websocket.New(func(ws *websocket.Conn) {
 		userID, _ := ws.Locals("userId").(string)
 		fileID, _ := ws.Locals("fileId").(string)
-		deviceIDStr := ws.Query("deviceId")
-		var deviceID int64
-		if _, err := fmt.Sscan(deviceIDStr, &deviceID); err != nil || deviceID == 0 {
-			_ = ws.WriteJSON(fiber.Map{"error": "missing or invalid deviceId"})
-			return
-		}
-		// Look up the device's pubkey + verify it belongs to userID + is_active.
-		var pub []byte
-		var active bool
-		var ownerID string
-		err := h.DB.QueryRow(context.Background(), `
-			SELECT public_signing, is_active, user_id::text
-			FROM user_devices WHERE id = $1
-		`, deviceID).Scan(&pub, &active, &ownerID)
-		if err != nil || !active || ownerID != userID {
-			_ = ws.WriteJSON(fiber.Map{"error": "device not registered or revoked"})
-			return
-		}
+		deviceID, _ := ws.Locals("deviceId").(int64)
+		pub, _ := ws.Locals("devicePubKey").([]byte)
 		h.HandleConnection(ws, userID, fileID, deviceID, ed25519.PublicKey(pub))
 	})
 }
@@ -329,6 +312,25 @@ func (h *CollabHandler) PreUpgrade(authMW *middleware.AuthMiddleware) fiber.Hand
 		c.Locals("userId", userID)
 		c.Locals("fileId", fileID)
 		c.Locals("collectionId", collID)
+
+		// Device validation: deviceId from query, must belong to userID + be active.
+		deviceIDStr := c.Query("deviceId")
+		var deviceID int64
+		if _, err := fmt.Sscan(deviceIDStr, &deviceID); err != nil || deviceID == 0 {
+			return c.Status(401).JSON(fiber.Map{"error": "missing or invalid deviceId"})
+		}
+		var pub []byte
+		var active bool
+		var devOwnerID string
+		err = h.DB.QueryRow(c.Context(), `
+			SELECT public_signing, is_active, user_id::text
+			FROM user_devices WHERE id = $1
+		`, deviceID).Scan(&pub, &active, &devOwnerID)
+		if err != nil || !active || devOwnerID != userID {
+			return c.Status(401).JSON(fiber.Map{"error": "device not registered or revoked"})
+		}
+		c.Locals("deviceId", deviceID)
+		c.Locals("devicePubKey", pub)
 		return c.Next()
 	}
 }
