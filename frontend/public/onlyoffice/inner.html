@@ -229,9 +229,11 @@
                 return []
               },
               getImageURL: function (_name) {
-                // Phase 7 will resolve embedded image refs. For 2c there
-                // shouldn't be any (empty doc).
-                return null
+                // OnlyOffice calls .then() on the return value, so it MUST
+                // be a Promise (CryptPad's getImageURL at inner.js:2342
+                // returns a Promise too). Phase 7 will resolve embedded
+                // image refs; for 2c the empty doc has no images.
+                return Promise.resolve('')
               },
             })
             setStatus('editor mounted + mockServer connected')
