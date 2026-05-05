@@ -89,7 +89,7 @@ export default function Drive() {
   // Collab editor state: when set, opens an in-place modal editor. The collectionMaster
   // here is the file's parent collection key (already-decrypted on collection load),
   // NOT the user's masterKey — the editor derives per-file content keys from it.
-  const [editorOpen, setEditorOpen] = useState<{ fileId: string; filename: string; collectionMaster: Uint8Array } | null>(null)
+  const [editorOpen, setEditorOpen] = useState<{ fileId: string; filename: string; collectionMaster: Uint8Array; initialContent?: string } | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const downloadAbortRef = useRef<AbortController | null>(null)
@@ -427,10 +427,30 @@ export default function Drive() {
     }
   }
 
-  function handleFileClick(file: DecryptedFile) {
+  async function handleFileClick(file: DecryptedFile) {
     const name = file.decryptedName
-    if (name && currentFolder?.collectionKey && chooseEditor(name)) {
-      setEditorOpen({ fileId: file.id, filename: name, collectionMaster: currentFolder.collectionKey })
+    if (name && currentFolder?.collectionKey && chooseEditor(name) && file._fileKey) {
+      // Pre-fetch + decrypt the file's original plaintext so the editor can seed
+      // Y.Text on cold-start (no Yjs snapshot yet). Once a snapshot exists, the
+      // editor uses that instead and ignores initialContent.
+      let initialContent: string | undefined
+      try {
+        const downloadUrl = currentFolder.isRemote
+          ? `/fed-proxy/${currentFolder.remoteShareId}/files/${file.id}/download`
+          : `/files/${file.id}/download`
+        const res = await api.get(downloadUrl, { responseType: 'arraybuffer' })
+        const plain = await decryptStream(new Uint8Array(res.data), file._fileKey)
+        initialContent = new TextDecoder().decode(plain)
+      } catch (e) {
+        console.warn('failed to preload file content for editor', e)
+        // Open editor anyway — it'll start empty and the user can edit from scratch.
+      }
+      setEditorOpen({
+        fileId: file.id,
+        filename: name,
+        collectionMaster: currentFolder.collectionKey,
+        initialContent,
+      })
       return
     }
     setDetailItem(file)
@@ -834,6 +854,7 @@ export default function Drive() {
                   fileId={editorOpen.fileId}
                   filename={editorOpen.filename}
                   collectionMaster={editorOpen.collectionMaster}
+                  initialContent={editorOpen.initialContent}
                 />
               </Suspense>
             </div>
