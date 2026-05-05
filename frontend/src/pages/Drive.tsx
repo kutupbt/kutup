@@ -38,6 +38,7 @@ import ShareDialog from '@/components/drive/dialogs/ShareDialog'
 import PublicShareDialog from '@/components/drive/dialogs/PublicShareDialog'
 import AddRemoteShareDialog from '@/components/drive/dialogs/AddRemoteShareDialog'
 import { chooseEditor } from '@/components/editors/dispatch'
+import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
@@ -712,6 +713,36 @@ export default function Drive() {
   }
 
   const totalSelected = selectedFileIds.size + selectedFolderIds.size
+
+  useKeyboardShortcuts({
+    onUpload: () => {
+      if (canUploadToCurrentFolder()) triggerUpload()
+    },
+    onNew: () => {
+      // Open the topbar's "+ New" dropdown
+      setNewMenuOpen(true)
+    },
+    onFocusSearch: () => {
+      searchInputRef.current?.focus()
+      searchInputRef.current?.select()
+    },
+    onClearOrClose: () => {
+      if (searchQuery) {
+        setSearchQuery('')
+        searchInputRef.current?.blur()
+      }
+    },
+    onSelectAll: () => {
+      if (visibleFiles.length === 0) return
+      setSelectedFileIds(new Set(visibleFiles.map((f) => f.id)))
+    },
+    onDelete: () => {
+      if (totalSelected > 0) setBatchDeleteOpen(true)
+    },
+    onToggleHelp: () => {
+      setShortcutsOpen((o) => !o)
+    },
+  })
 
   return (
     <div className="flex min-h-screen">
