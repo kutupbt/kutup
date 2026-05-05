@@ -10,7 +10,7 @@ import {
   fromBase64,
   unwrapKeyFromSender,
 } from '@/crypto'
-import { chooseEditor } from '@/components/editors/dispatch'
+import { chooseEditor, chooseOfficeEditor } from '@/components/editors/dispatch'
 import { chooseViewer } from '@/components/viewers/dispatch'
 import { Button } from '@/components/ui/button'
 
@@ -46,7 +46,9 @@ export default function FileEditorPage() {
   // Pick the right component eagerly so the load step knows whether it needs
   // the bytes as text (editor) or as a blob URL (viewer).
   const Editor = useMemo(() => (filename ? chooseEditor(filename) : null), [filename])
+  const Office = useMemo(() => (filename ? chooseOfficeEditor(filename) : null), [filename])
   const viewer = useMemo(() => (filename ? chooseViewer(filename) : null), [filename])
+  const [officeBytes, setOfficeBytes] = useState<Uint8Array | null>(null)
 
   useEffect(() => {
     if (!cid || !fid) return
@@ -102,22 +104,26 @@ export default function FileEditorPage() {
         document.title = `${meta.name} — Kutup`
 
         // Decrypt the original blob. Editors need it as text; viewers need it
-        // as a blob: URL. We always do the network + decrypt; the only
-        // difference is how we hand the bytes to the renderer.
+        // as a blob: URL; office editor wants raw bytes (Phase 3 forwards them
+        // to x2t for OOXML→bin conversion). We always do the network + decrypt
+        // once; the only difference is how we hand the bytes to the renderer.
         const editorTarget = chooseEditor(meta.name)
+        const officeTarget = chooseOfficeEditor(meta.name)
         const viewerTarget = chooseViewer(meta.name)
-        if ((editorTarget || viewerTarget) && meta.size > MAX_PREVIEW_BYTES) {
+        if ((editorTarget || officeTarget || viewerTarget) && meta.size > MAX_PREVIEW_BYTES) {
           throw new Error(
             `File is too large to preview in the browser (${Math.round(meta.size / 1024 / 1024)} MB; cap is ${MAX_PREVIEW_BYTES / 1024 / 1024} MB). Download it from Drive instead.`,
           )
         }
-        if (editorTarget || viewerTarget) {
+        if (editorTarget || officeTarget || viewerTarget) {
           try {
             const dlRes = await api.get(`/files/${fid}/download`, { responseType: 'arraybuffer' })
             if (cancelled) return
             const plain = await decryptStream(new Uint8Array(dlRes.data), fileKey)
             if (editorTarget) {
               setInitialContent(new TextDecoder().decode(plain))
+            } else if (officeTarget) {
+              setOfficeBytes(plain)
             } else if (viewerTarget) {
               const blob = new Blob([plain.buffer as ArrayBuffer], { type: viewerTarget.mimeType })
               createdUrl = URL.createObjectURL(blob)
@@ -158,12 +164,14 @@ export default function FileEditorPage() {
     )
   }
 
-  // Determine which renderer wins. Editor takes precedence for text; viewer
-  // for binary content; otherwise we render an unsupported notice.
+  // Determine which renderer wins. Office takes precedence for OOXML; editor
+  // for text/markdown/code; viewer for static binary content; otherwise we
+  // render an unsupported notice.
   const editorReady = !!Editor && collectionMasterReady && !!collectionMasterRef.current
+  const officeReady = !!Office && collectionMasterReady && !!collectionMasterRef.current
   const viewerReady = !!viewer && !!blobUrl
 
-  if (phase === 'error' || (!editorReady && !viewerReady)) {
+  if (phase === 'error' || (!editorReady && !officeReady && !viewerReady)) {
     return (
       <div className="flex min-h-screen items-center justify-center p-6">
         <div className="max-w-md text-center space-y-4">
@@ -206,7 +214,15 @@ export default function FileEditorPage() {
               initialContent={initialContent}
             />
           )}
-          {!editorReady && viewerReady && viewer && blobUrl && (
+          {!editorReady && officeReady && Office && (
+            <Office
+              fileId={fid!}
+              filename={filename}
+              collectionMaster={collectionMasterRef.current!}
+              initialBytes={officeBytes ?? undefined}
+            />
+          )}
+          {!editorReady && !officeReady && viewerReady && viewer && blobUrl && (
             <viewer.Component
               filename={filename}
               blobUrl={blobUrl}

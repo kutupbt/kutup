@@ -1,0 +1,1027 @@
+<!doctype html>
+<!--
+  SPDX-FileCopyrightText: 2026 kutup contributors
+  SPDX-License-Identifier: AGPL-3.0-or-later
+
+  Part of kutup's optional OnlyOffice integration. This file is licensed
+  AGPL-3.0-or-later because it loads and calls the AGPL OnlyOffice client.
+  Kutup itself is AGPL-3.0-only; this subtree carries the upstream
+  "or-later" suffix to stay compatible with the OnlyOffice client's
+  license terms. See frontend/public/onlyoffice/LICENSE.md.
+
+  kutup ↔ OnlyOffice bridge page.
+  Loaded by OfficeEditor.tsx in an <iframe>; hosts the OnlyOffice editor and
+  relays postMessage between the kutup React parent and the editor's mock
+  server. Architecturally a 1:1 port of CryptPad's www/common/onlyoffice/
+  inner.html + inner.js (AGPL), narrowed to what kutup needs.
+
+  Phase 2b: loads OnlyOffice's api.js + instantiates DocsAPI.DocEditor with a
+  blank template and a stub config. No connectMockServer yet — auth hangs,
+  but the editor's chrome (toolbar, ribbon, blank canvas) should render.
+  Phase 2c adds the mockServer callbacks.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OnlyOffice — Kutup</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        width: 100%;
+        overflow: hidden;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      /* Layout pattern copied 1:1 from CryptPad's app-oo.less:
+         OnlyOffice's DocsAPI does NOT mount its iframe inside the
+         placeholder — it inserts the iframe as a SIBLING of the placeholder
+         (the placeholder div is just a positional marker DocsAPI uses for
+         the constructor argument). The recipe is a flex-column container
+         with `flex: 1` on any descendant iframe, which is how CryptPad makes
+         the editor fill its host across all builds. */
+      body {
+        display: flex;
+        flex-flow: column;
+      }
+      #editor-host {
+        flex: 1;
+        min-height: 0;
+        position: relative;
+        display: flex;
+        flex-flow: column;
+      }
+      #editor-host iframe {
+        flex: 1;
+        border: 0;
+        margin: 0;
+        padding: 0;
+      }
+      /* Status pill is hidden by default — kutup parent shows the bridge
+         state in its own navbar; the floating pill is just a debug helper
+         the bridge can re-enable on errors via #status:not(:empty). */
+      #status {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="editor-host">
+      <div id="placeholder"></div>
+    </div>
+    <!-- Hidden sibling iframe that runs the x2t WASM converter. Loaded once
+         at boot; conversions go through `x2tConvert(input, fileName, format)`
+         (defined in the script below). Phase 3a wires the bridge; Phase 3b
+         calls it on first OOXML open. -->
+    <iframe
+      id="x2t-frame"
+      src="/onlyoffice/x2t.html"
+      style="display:none"
+      title="x2t bridge"
+    ></iframe>
+    <div id="status">bridge: idle</div>
+
+    <script>
+      (function () {
+        'use strict'
+
+        var EXPECTED_ORIGIN = window.location.origin
+        var docType = null
+        var fileId = null
+
+        // userId → hex color map. Populated from init payload (self) and
+        // oo-peers entries (peers). OO's foreign-cursor / lock-highlight
+        // renderer checks `window.parent.APP.getUserColor(userId)` (see
+        // sdkjs/cell/sdk-all-min.js _getUserColorById ~line 23527 of the
+        // beautified bundle); we expose APP.getUserColor here so OO can
+        // resolve per-user colors instead of falling back to its
+        // deterministic palette.
+        var userColors = Object.create(null)
+        window.APP = window.APP || {}
+        window.APP.getUserColor = function (userId) {
+          var hex = userColors[userId]
+          if (!hex || typeof hex !== 'string' || hex.charAt(0) !== '#' || hex.length !== 7) return null
+          return {
+            r: parseInt(hex.slice(1, 3), 16),
+            g: parseInt(hex.slice(3, 5), 16),
+            b: parseInt(hex.slice(5, 7), 16),
+            a: 255,
+          }
+        }
+
+        // CSS injected into the OnlyOffice editor iframe at onAppReady to
+        // hide stock branding + chrome that doesn't fit kutup's surface.
+        // Lifted verbatim from CryptPad's `www/common/onlyoffice/inner.js`
+        // (~line 2002-2024). v9-compatible — re-check upstream when bumping
+        // the OnlyOffice build, since selectors are private API.
+        var KUTUP_HIDE_BRANDING_CSS = [
+          // Title bar (top centre): document name + user name pill.
+          '#title-doc-name { display: none !important; }',
+          '#title-user-name { display: none !important; }',
+          // Insert tab: equation slot + the trailing separator before it.
+          'section[data-tab="ins"] .separator:nth-last-child(2) { display: none !important; }',
+          '#slot-btn-insequation { display: none !important; }',
+          // File menu: "Document info" entry + its panel (carries the
+          // OnlyOffice About / build version — primary branding hide).
+          '#fm-btn-info { display: none !important; }',
+          '#panel-info { display: none !important; }',
+          // Image / textart "from URL": kutup is E2EE, no remote fetch.
+          '#image-button-from-url { display: none !important; }',
+          '.cp-from-url, #textart-button-from-url { display: none !important; }',
+          // Status bar (bottom): language selector + spell-check toggle.
+          // No backend for either in kutup.
+          '.statusbar .cnt-lang { display: none !important; }',
+          '.statusbar #btn-doc-spell { display: none !important; }',
+          // File menu: dividers + spell-check / about sidebar entries.
+          '#file-menu-panel .devider { display: none !important; }',
+          '#left-btn-spellcheck, #left-btn-about { display: none !important; }',
+          // Toolbar Users dropdown — kutup renders its own cursor presence,
+          // OnlyOffice's peer list is redundant.
+          'div.btn-users.dropdown-toggle { display: none !important; }',
+        ].join('\n')
+
+        // Map kutup file extension → OnlyOffice template script + DocsAPI types.
+        var DOC_TYPES = {
+          docx: { template: 'oodoc_base.js',   documentType: 'word',  fileType: 'docx' },
+          xlsx: { template: 'oocell_base.js',  documentType: 'cell',  fileType: 'xlsx' },
+          pptx: { template: 'ooslide_base.js', documentType: 'slide', fileType: 'pptx' },
+        }
+
+        var setStatus = function (text) {
+          var el = document.getElementById('status')
+          if (el) el.textContent = 'bridge: ' + text
+        }
+
+        var send = function (target, msg) {
+          target.postMessage(msg, EXPECTED_ORIGIN)
+        }
+
+        // ---------- x2t bridge ------------------------------------------------
+        // Tracks pending convert calls by requestId. `x2tConvert(input,
+        // fileName, format)` returns a Promise resolved with { output: Uint8,
+        // images: [{name,data}] } or rejected with a JS error.
+        var x2tReady = false
+        var x2tReadyResolvers = []
+        var x2tNextRequestId = 1
+        var x2tPending = {}
+
+        var x2tWaitReady = function () {
+          if (x2tReady) return Promise.resolve()
+          return new Promise(function (resolve) { x2tReadyResolvers.push(resolve) })
+        }
+
+        var x2tConvert = function (input, fileName, outputFormat, extra) {
+          return x2tWaitReady().then(function () {
+            var iframe = document.getElementById('x2t-frame')
+            if (!iframe || !iframe.contentWindow) {
+              return Promise.reject(new Error('x2t iframe missing'))
+            }
+            var requestId = x2tNextRequestId++
+            return new Promise(function (resolve, reject) {
+              x2tPending[requestId] = { resolve: resolve, reject: reject }
+              var msg = {
+                type: 'convert',
+                requestId: requestId,
+                input: input,
+                fileName: fileName,
+                outputFormat: outputFormat,
+              }
+              if (extra && extra.images) msg.images = extra.images
+              if (extra && extra.mediasSources) msg.mediasSources = extra.mediasSources
+              if (extra && extra.mediasData) msg.mediasData = extra.mediasData
+              iframe.contentWindow.postMessage(msg, EXPECTED_ORIGIN)
+            })
+          })
+        }
+
+        // Surface x2tConvert globally so debugging from devtools is easy and
+        // future phases (3b/4a/4c) can call it without re-deriving the
+        // request/response plumbing.
+        window.x2tConvert = x2tConvert
+
+        // ---------- AMD shim --------------------------------------------------
+        // The CryptPad templates (oodoc_base.js, oocell_base.js, ooslide_base.js)
+        // are AMD modules: `define(function () { return function (newOO) { return
+        // 'DOCY;v5;…'; }; })`. We're not pulling in RequireJS for one shim, so
+        // implement a single-use `define` that captures the factory result, plus
+        // a `define.amd` so other AMD-aware scripts that might end up here
+        // detect us.
+        var capturedFactory = null
+        window.define = function (factory) {
+          capturedFactory = factory
+        }
+        window.define.amd = {}
+
+        var loadScript = function (src) {
+          return new Promise(function (resolve, reject) {
+            var s = document.createElement('script')
+            s.src = src
+            s.onload = function () { resolve() }
+            s.onerror = function () { reject(new Error('script load failed: ' + src)) }
+            document.head.appendChild(s)
+          })
+        }
+
+        var loadTemplate = function (filename) {
+          capturedFactory = null
+          return loadScript('/onlyoffice/templates/' + filename).then(function () {
+            if (typeof capturedFactory !== 'function') {
+              throw new Error('template did not call define()')
+            }
+            // Factory returns a function which, called with newOO=true, returns
+            // the DOCY/XLSY/PPTY string.
+            var maker = capturedFactory()
+            if (typeof maker !== 'function') {
+              throw new Error('template factory did not return a function')
+            }
+            return maker(true)
+          })
+        }
+
+        // ---------- DocsAPI bootstrap ----------------------------------------
+        var ooConfigBuilt = false
+
+        // ---------- Mock-server callbacks (Phase 2c stub) ---------------------
+        // CryptPad-fork's connectMockServer is the auth gateway: when we
+        // supply these callbacks, the OO fork handles the auth handshake
+        // internally using their results. fromOO() additionally handles a
+        // few non-auth message kinds. Phase 5+ will replace stubs with real
+        // collab plumbing; Phase 6+ adds lock state.
+        var docEditor = null
+        // OnlyOffice's chainpad-style commit index — CryptPad's ooChannel.cpIndex.
+        // Incremented for BOTH outbound saveChanges (after we send to peers)
+        // and inbound saveChanges (after applying a remote op). The current
+        // value goes out on every outbound saveChanges as `changesIndex` so
+        // peers know "this op applies on top of N committed messages", and
+        // back to OO via unSaveLock so it releases its commit lock and lets
+        // the user keep typing.
+        var cpIndex = 0
+        // Stable per-tab identity. CONFIRMED by reading OO's compiled cell
+        // SDK (sdkjs/cell/sdk-all-min.js):
+        //   _onAuth:    _userId = editorConfig.user.id + getParticipants().index
+        //   _onGetLock: lock granted iff lock.user === _userId  (strict eq)
+        //   _getUserColorById: if window.parent.APP.getUserColor(id) returns
+        //                      {r,g,b,a}, OO uses it; else auto-palette.
+        //
+        // Scheme: myUniqueOOId = "<userId>--<deviceId>" (separator avoids
+        // ambiguous concat of two numeric strings — userId is a UUID so the
+        // separator is just for readability).
+        //   - user.id            = userId       (UUID; same across user's tabs)
+        //   - indexUser          = deviceId     (per-tab; unique)
+        //   - _userId            = userId + String(deviceId)
+        //   - participant.id     = peerUserId + "--" + String(peerDeviceId)
+        //                                       — wait: must EQUAL _userId
+        //                                         on receivers, so use direct
+        //                                         concat, not separator.
+        //
+        // Final: ooUserIdFor(uid, did) = String(uid) + String(did). matches
+        // _userId because OO does string concat with no separator.
+        // idOriginal = userId so OO's per-USER color cache is keyed per-user.
+        var myOOId = null            // = selfUserId (UUID string)
+        var myIndex = null           // = selfDeviceId (number)
+        var myUniqueOOId = null      // = ooUserIdFor(myOOId, myIndex)
+        function ooUserIdFor(userId, deviceId) { return String(userId) + String(deviceId) }
+        // Self-held cell-edit locks. Cleared on releaseLock or
+        // unLockDocument {releaseLocks: true}. See fromOO 'getLock'.
+        var selfLocks = Object.create(null)
+
+        var sendToOO = function (obj) {
+          if (!docEditor) return
+          docEditor.sendMessageToOO(obj)
+        }
+
+        var nextRandomId = function (prefix) {
+          return prefix + Math.random().toString(36).slice(2, 10)
+        }
+
+        // History-keeper presence (constant id=1) prevents OnlyOffice's
+        // "you're alone in this document" UI from confusing users.
+        var HISTORY_KEEPER_INDEX_USER = 1
+        var SELF_INDEX_USER = 2
+
+        // Live peer list. Keyed by deviceId so every wire-format peer
+        // entry maps to a stable {id, indexUser, username, connectionId}
+        // that OnlyOffice expects in its connectState message.
+        // peerByDevice[deviceId] = oo participant entry (see makePeer).
+        var peerByDevice = Object.create(null)
+        var lastConnectStateTs = 0
+        var selfDeviceId = null  // set in oo-self handler from msg.deviceId
+        var selfUserId   = null  // set in oo-self handler from msg.userId
+
+        // Per-peer cursor identity, keyed by deviceId (string). Captured from
+        // each oo-remote-cursor frame so we can address the right user when
+        // a peer leaves and we need to clear their foreign-selection rect.
+        // peerCursorIdentity[deviceId] = { user: '<myUniqueOOId>', useridoriginal: '<myOOId>' }.
+        var peerCursorIdentity = Object.create(null)
+
+        // Allocate a per-device indexUser starting from SELF_INDEX_USER+1.
+        // OO requires every peer to have a distinct positive integer index.
+        // We assign on first sight and remember (so the same device keeps
+        // its index across leave/rejoin within the same session).
+        var nextIndex = SELF_INDEX_USER + 1
+        var indexByDevice = Object.create(null)
+        function indexFor(deviceId) {
+          if (deviceId === selfDeviceId) return SELF_INDEX_USER
+          var k = String(deviceId)
+          if (!(k in indexByDevice)) {
+            indexByDevice[k] = nextIndex++
+          }
+          return indexByDevice[k]
+        }
+
+        // Tab differentiator suffix — last 4 hex chars of deviceId. Mirrors
+        // notes' "<username> #<tabId>" pattern (TextCollabEditor uses
+        // buildAwarenessName) so two tabs of the same user have visually
+        // distinct labels in OO's peer chrome — color is intentionally
+        // per-user / shared across tabs (like the user's display name).
+        function tabSuffix(deviceId) {
+          return Number(deviceId).toString(16).slice(-4)
+        }
+        function withTabSuffix(name, deviceId) {
+          if (!name) return 'user-' + deviceId
+          return name + ' #' + tabSuffix(deviceId)
+        }
+
+        function makePeer(deviceId, userId, username) {
+          // Identity must satisfy:
+          //   participant.id     = ooUserIdFor(peerUserId, peerDeviceId)
+          //                        — equals sender's myUniqueOOId so cross-tab
+          //                        change.user attribution and lock-grant
+          //                        lookups resolve to this entry.
+          //   participant.idOriginal = String(peerUserId)
+          //                        — keys per-USER color in
+          //                        window.APP.getUserColor and OO's color cache.
+          return {
+            id: ooUserIdFor(userId, deviceId),
+            idOriginal: String(userId),
+            username: withTabSuffix(username, deviceId),
+            indexUser: deviceId,
+            connectionId: 'dev-' + deviceId,
+            isCloseCoAuthoring: false,
+            view: false,
+          }
+        }
+
+        var historyKeeperPeer = {
+          id: '0',
+          idOriginal: '0',
+          username: 'History',
+          indexUser: HISTORY_KEEPER_INDEX_USER,
+          connectionId: 'hk',
+          isCloseCoAuthoring: false,
+          view: false,
+        }
+
+        // Self entry — populated lazily once selfDeviceId arrives, since the
+        // identity scheme derives all four ID fields from deviceId.
+        // Display name comes from the React parent's auth slice via init payload.
+        var selfPlaceholder = null
+        var selfUsername = null
+        function buildSelfPlaceholder() {
+          var raw = selfUsername || 'You'
+          return {
+            id: myUniqueOOId,
+            idOriginal: String(myOOId),
+            username: selfDeviceId != null ? withTabSuffix(raw, selfDeviceId) : raw,
+            indexUser: myIndex,
+            connectionId: 'self',
+            isCloseCoAuthoring: false,
+            view: false,
+          }
+        }
+
+        function buildParticipantList() {
+          var peers = [historyKeeperPeer]
+          if (selfPlaceholder) peers.push(selfPlaceholder)
+          var keys = Object.keys(peerByDevice)
+          for (var i = 0; i < keys.length; i++) peers.push(peerByDevice[keys[i]])
+          return peers
+        }
+
+        var getParticipants = function () {
+          // index MUST equal myIndex (= deviceId) — the fork's
+          // connectMockServer pipes this into the synthetic auth response
+          // as `indexUser`, and OO builds _userId = user.id + indexUser.
+          // lock.user equality + cross-tab participant lookup both depend
+          // on this matching myUniqueOOId / makePeer's id field.
+          return {
+            index: myIndex == null ? HISTORY_KEEPER_INDEX_USER : myIndex,
+            list: buildParticipantList(),
+          }
+        }
+
+        // Push the current peer list into OO via connectState. Bumps a
+        // monotonic timestamp so OO can dedupe stale messages. Mirrors
+        // CryptPad's handleNewIds (inner.js:1100-1106).
+        function emitConnectState() {
+          var ts = Date.now()
+          if (ts <= lastConnectStateTs) ts = lastConnectStateTs + 1
+          lastConnectStateTs = ts
+          sendToOO({
+            type: 'connectState',
+            participantsTimestamp: ts,
+            participants: buildParticipantList(),
+            waitAuth: false,
+          })
+        }
+
+        var fromOO = function (obj) {
+          if (!obj || !obj.type) return
+          switch (obj.type) {
+            case 'auth':
+              // Handled internally by OO fork now. No-op.
+              break
+            case 'isSaveLock':
+              sendToOO({ type: 'saveLock', saveLock: false })
+              break
+            case 'getMessages':
+              sendToOO({ type: 'message' })
+              break
+            case 'getLock':
+              // OO emits getLock when about to apply a cell-level operation
+              // (formatting, fill color, even some typing paths). It expects
+              // the bridge to respond with the granted lock list. The match
+              // is strict: OO sets _userId = user.id + indexUser (from auth)
+              // and grants iff lock.user === _userId. Our identity scheme
+              // up top arranges myUniqueOOId === _userId, so echoing the
+              // self-locks list resolves to "granted".
+              //
+              // For excel, OO indexes locks by lock.block.guid (cell SDK
+              // _onGetLock at sdkjs/cell/sdk-all-min.js:7102), so we echo
+              // the requested block object verbatim.
+              var requestedBlock = (obj.block && obj.block[0]) || null
+              var lockUid = 'lk-' + Math.random().toString(36).slice(2, 10)
+              selfLocks[lockUid] = {
+                time: Date.now(),
+                user: myUniqueOOId,
+                block: requestedBlock,
+              }
+              sendToOO({
+                type: 'getLock',
+                locks: Object.keys(selfLocks).map(function (k) { return selfLocks[k] }),
+              })
+              break
+            case 'releaseLock':
+              // OO is done with its locks; clear self-held entries.
+              selfLocks = Object.create(null)
+              break
+            case 'saveChanges':
+              // 1:1 port of CryptPad's parseChanges + handleChanges
+              // (inner.js:1340 + :1357). OnlyOffice emits obj.changes as a
+              // JSON-encoded STRING (e.g. `'["AgAA…","AgAB…"]'`), not as a
+              // JS array — so we must JSON.parse before mapping. The earlier
+              // `Array.isArray(obj.changes)` check fell through to `[]` for
+              // every commit, producing the empty-heartbeat symptom that
+              // blocked Phase 5. Each parsed string is then wrapped in the
+              // {docid, change, time, user, useridoriginal} envelope OO's
+              // _onSaveChanges → _updateChanges path expects.
+              try {
+                var rawChanges
+                try {
+                  rawChanges = typeof obj.changes === 'string' ? JSON.parse(obj.changes) : obj.changes
+                } catch (_) {
+                  rawChanges = []
+                }
+                if (!Array.isArray(rawChanges)) rawChanges = []
+                var wrapped = rawChanges.map(function (m) {
+                  return {
+                    docid: 'fresh',
+                    change: '"' + m + '"',
+                    time: Date.now(),
+                    user: myUniqueOOId,
+                    useridoriginal: String(myOOId),
+                  }
+                })
+                var outboundMsg = {
+                  type: 'saveChanges',
+                  changes: wrapped,
+                  changesIndex: cpIndex,
+                  locks: [],
+                  excelAdditionalInfo: obj.excelAdditionalInfo,
+                  startSaveChanges: obj.startSaveChanges,
+                  endSaveChanges: obj.endSaveChanges,
+                }
+                console.log('[kutup-bridge] outbound saveChanges raw=' + rawChanges.length + ' wrapped=' + wrapped.length + ' cpIndex=' + cpIndex)
+                if (window.parent && window.parent !== window && rawChanges.length > 0) {
+                  // Skip empty (heartbeat) saveChanges — peers don't need them.
+                  window.parent.postMessage(
+                    { type: 'oo-local-op', payload: JSON.stringify(outboundMsg) },
+                    EXPECTED_ORIGIN,
+                  )
+                }
+              } catch (err) {
+                console.warn('[kutup-bridge] saveChanges wrap failed', err)
+              }
+              // Tell OO the server has committed THROUGH the cpIndex value
+              // we just sent in changesIndex. CryptPad does it in this order
+              // (inner.js:1427-1434): send unSaveLock with the CURRENT
+              // cpIndex first, THEN increment. Doing the ++ before the
+              // unSaveLock advances OO's "what's committed" pointer one
+              // step ahead of what peers actually saw — the result is
+              // OnlyOffice's state machine refusing the next remote frame
+              // (the user-reported "second-direction sync stalls" bug).
+              if (obj.endSaveChanges === false) {
+                sendToOO({ type: 'savePartChanges', changesIndex: -1, time: Date.now() })
+              } else {
+                sendToOO({ type: 'unSaveLock', index: cpIndex, time: Date.now() })
+              }
+              cpIndex++
+              break
+            case 'cursor':
+              // OO emits 'cursor' whenever the local user changes selection
+              // (a single cell, a multi-cell range, an in-cell caret, etc.).
+              // obj.cursor is OO's opaque serialized blob — pass through to
+              // peers verbatim wrapped in CryptPad's message envelope shape
+              // (mirrors www/common/onlyoffice/inner.js:1562-1574). Peers
+              // re-emit verbatim into their OO via sendToOO; OO's
+              // _onCursor → WorkbookView.Update_ForeignCursor decodes the
+              // ranges and renders the translucent foreign-selection
+              // rectangle in the auto-assigned color for useridoriginal.
+              if (window.parent && window.parent !== window) {
+                var cursorMsg = {
+                  type: 'cursor',
+                  messages: [{
+                    cursor: obj.cursor,
+                    time: Date.now(),
+                    user: myUniqueOOId,
+                    useridoriginal: String(myOOId),
+                  }],
+                }
+                window.parent.postMessage(
+                  { type: 'oo-local-cursor', payload: JSON.stringify(cursorMsg) },
+                  EXPECTED_ORIGIN,
+                )
+              }
+              break
+            case 'unLockDocument':
+              // After saveChanges, OnlyOffice fires unLockDocument with
+              // isSave:true and waits for a sentinel unSaveLock {time:-1,
+              // index:-1} before it'll allow another local edit to commit.
+              // Without this ack, OO stays in "saving" state and refuses
+              // to emit the next saveChanges — manifesting as the user-
+              // reported "second tab can't send after applying a remote op".
+              // Mirrors CryptPad inner.js:1663-1669.
+              if (obj.isSave) {
+                sendToOO({ type: 'unSaveLock', time: -1, index: -1 })
+              }
+              if (obj.releaseLocks) {
+                selfLocks = Object.create(null)
+              }
+              break
+            default:
+              console.log('[kutup-bridge] unhandled OO msg type=' + obj.type, obj)
+              break
+          }
+        }
+
+        var startEditor = function (cfg) {
+          if (!window.DocsAPI || typeof window.DocsAPI.DocEditor !== 'function') {
+            throw new Error('window.DocsAPI.DocEditor not found after api.js load')
+          }
+          docEditor = new window.DocsAPI.DocEditor('placeholder', cfg)
+          // The CryptPad-fork's connectMockServer assigns its callbacks onto
+          // window.APP (CryptPad's global state container) — e.g.
+          // `window.APP.getImageURL = e.getImageURL ? ... : ...`. Without a
+          // seeded APP object we crash with "Cannot set properties of
+          // undefined (setting 'getImageURL')". Seed it minimally; the fork
+          // only ever sets keys, never reads ours.
+          window.APP = window.APP || {}
+          // CryptPad's pattern: connectMockServer immediately after
+          // instantiation (inner.js:2631). The fork only exposes this method
+          // when the editor build supports it (v7+).
+          if (typeof docEditor.connectMockServer === 'function') {
+            docEditor.connectMockServer({
+              onMessage: fromOO,
+              getParticipants: getParticipants,
+              onAuth: function () {
+                setStatus('editor: auth')
+              },
+              getInitialChanges: function () {
+                // Phase 5b returns queued ops since last checkpoint. For 2c
+                // there are no ops yet — empty array is correct.
+                return []
+              },
+              getImageURL: function (_name) {
+                // OnlyOffice calls .then() on the return value, so it MUST
+                // be a Promise (CryptPad's getImageURL at inner.js:2342
+                // returns a Promise too). Phase 7 will resolve embedded
+                // image refs; for 2c the empty doc has no images.
+                return Promise.resolve('')
+              },
+            })
+            setStatus('editor mounted + mockServer connected')
+          } else {
+            setStatus('editor mounted (no connectMockServer on this build)')
+          }
+        }
+
+        // Detect kutup's 1-byte "+ New" placeholder — anything that isn't a
+        // ZIP archive (PK\x03\x04) is treated as the template-fallback case.
+        var isOoxml = function (bytes) {
+          if (!bytes || bytes.length < 4) return false
+          return bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04
+        }
+
+        var pendingInitPayload = null
+        var maybeStart = function () {
+          if (selfDeviceId == null || selfUserId == null || pendingInitPayload == null) return
+          // Bind OO identity from (selfUserId, selfDeviceId). Must happen
+          // before the editor mounts because user.id is read from the config
+          // at construction time.
+          if (myOOId == null) {
+            myOOId = selfUserId
+            myIndex = selfDeviceId
+            myUniqueOOId = ooUserIdFor(selfUserId, selfDeviceId)
+            selfUsername = pendingInitPayload.username || null
+            if (pendingInitPayload.color) userColors[selfUserId] = pendingInitPayload.color
+            selfPlaceholder = buildSelfPlaceholder()
+          }
+          var p = pendingInitPayload
+          pendingInitPayload = null
+          buildAndStart(p)
+        }
+
+        var buildAndStart = function (payload) {
+          if (ooConfigBuilt) return
+          ooConfigBuilt = true
+
+          var t = DOC_TYPES[payload.type]
+          if (!t) {
+            setStatus('unsupported type: ' + payload.type)
+            return
+          }
+
+          var initialBytes = payload.initialBytes
+          // initialBytes arrives as a Uint8Array from postMessage's
+          // structured clone; some older browsers deliver it as a plain
+          // ArrayBuffer-like object, so coerce defensively.
+          if (initialBytes && !(initialBytes instanceof Uint8Array)) {
+            try { initialBytes = new Uint8Array(initialBytes) } catch (e) { initialBytes = null }
+          }
+          var useExisting = isOoxml(initialBytes)
+
+          var docPromise
+          if (useExisting) {
+            // Existing OOXML file: convert to OnlyOffice's .bin via x2t.
+            setStatus('converting ' + payload.type + ' via x2t…')
+            docPromise = x2tConvert(initialBytes, 'input.' + t.fileType, 'bin')
+              .then(function (res) {
+                setStatus('converted (' + res.output.length + ' bytes), loading api.js…')
+                return new Blob([res.output], { type: 'application/octet-stream' })
+              })
+              .catch(function (err) {
+                console.error('[kutup-bridge] x2t convert failed:', err)
+                setStatus('x2t convert failed; falling back to empty doc')
+                // Fall back to template if conversion fails.
+                return loadTemplate(t.template).then(function (templateString) {
+                  return new Blob([templateString], { type: 'text/plain' })
+                })
+              })
+          } else {
+            setStatus('loading template ' + t.template + '…')
+            docPromise = loadTemplate(t.template).then(function (templateString) {
+              setStatus('template loaded (' + templateString.length + ' chars), loading api.js…')
+              // OnlyOffice expects the document.url to fetch the binary. The
+              // CryptPad templates are stored as text in DOCY/XLSY/PPTY format;
+              // OnlyOffice parses that header. text/plain MIME matches CryptPad's
+              // saveToServer (line ~596 in CP's inner.js).
+              return new Blob([templateString], { type: 'text/plain' })
+            })
+          }
+
+          return docPromise
+            .then(function (blob) {
+              var url = URL.createObjectURL(blob)
+
+              return loadScript('/onlyoffice/dist/v9/web-apps/apps/api/documents/api.js')
+                .then(function () {
+                  setStatus('api.js loaded, mounting editor…')
+                  var cfg = {
+                    // OnlyOffice's createIframe (api-orig.js:1262) sets
+                    // iframe.width = config.width / iframe.height = config.height.
+                    // Without these the iframe falls back to the browser's
+                    // 300x150 default. '100%' makes it fill the host.
+                    width: '100%',
+                    height: '100%',
+                    document: {
+                      fileType: t.fileType,
+                      key: 'fresh',  // hardcoded per CryptPad — we manage doc identity ourselves
+                      title: payload.filename || ('Untitled.' + t.fileType),
+                      url: url,
+                      permissions: {
+                        edit: true,        // explicit
+                        comment: false,
+                        review: false,
+                        download: true,
+                        print: true,
+                        // protect: false on xlsx — `protect: true` locks all
+                        // cells from editing, which silently disabled
+                        // saveChanges emission for collab.
+                        protect: false,
+                        chat: false,
+                      },
+                    },
+                    documentType: t.documentType,
+                    editorConfig: {
+                      customization: {
+                        compactHeader: true,
+                        // chat moved to permissions per OO deprecation warning.
+                        comments: false,
+                        hideRightMenu: true,
+                        uiTheme: 'theme-classic-light',
+                      },
+                      // Force fast coediting mode so each cell commit
+                      // emits saveChanges immediately instead of buffering
+                      // for the next strict-mode flush.
+                      coEditing: { mode: 'fast', change: true },
+                      user: {
+                        // MUST equal String(myOOId). OO computes
+                        //   _userId = user.id + getParticipants().index
+                        // and checks lock.user === _userId for self-vs-other.
+                        id: String(myOOId),
+                        firstname: withTabSuffix(selfUsername || 'You', selfDeviceId),
+                        name: withTabSuffix(selfUsername || 'You', selfDeviceId),
+                      },
+                      mode: 'edit',  // mockServer is wired in 2c — full edit mode.
+                      lang: (navigator.language || 'en').slice(0, 2),
+                    },
+                    events: {
+                      onAppReady: function () {
+                        setStatus('editor: app ready')
+                        // Hide OnlyOffice's stock branding/chrome. injectCSS
+                        // is OnlyOffice's documented API for landing rules in
+                        // the editor's nested iframe — used for theme switch
+                        // upstream too. No-op if the editor build doesn't
+                        // expose it (older v6/v7 forks); v9 has it.
+                        try {
+                          if (docEditor && typeof docEditor.injectCSS === 'function') {
+                            docEditor.injectCSS(KUTUP_HIDE_BRANDING_CSS)
+                          }
+                        } catch (err) {
+                          console.warn('[kutup-bridge] injectCSS failed', err)
+                        }
+                      },
+                      onDocumentReady: function () { setStatus('editor: document ready') },
+                      onError: function (e) {
+                        console.error('OO error:', e)
+                        setStatus('editor error — see console')
+                      },
+                    },
+                  }
+                  startEditor(cfg)
+                })
+            })
+            .catch(function (err) {
+              console.error('inner.html startup failed:', err)
+              setStatus('error: ' + (err && err.message ? err.message : String(err)))
+            })
+        }
+
+        // ---------- postMessage protocol -------------------------------------
+        var params = new URLSearchParams(window.location.search)
+        docType = params.get('type')
+        fileId = params.get('fileId')
+        setStatus('idle (type=' + docType + ')')
+
+        window.addEventListener('message', function (e) {
+          if (e.origin !== EXPECTED_ORIGIN) return
+          var msg = e.data
+          if (!msg || typeof msg !== 'object') return
+
+          // ---- x2t iframe → us ----
+          if (msg.type === 'x2t-ready') {
+            x2tReady = true
+            x2tReadyResolvers.splice(0).forEach(function (r) { r() })
+            console.log('[kutup-bridge] x2t ready')
+            return
+          }
+          if (msg.type === 'x2t-error') {
+            console.error('[kutup-bridge] x2t bootstrap error:', msg.error)
+            return
+          }
+          if (msg.type === 'convert-result') {
+            var p = x2tPending[msg.requestId]
+            if (p) {
+              delete x2tPending[msg.requestId]
+              p.resolve({ output: msg.output, images: msg.images || [] })
+            }
+            return
+          }
+          if (msg.type === 'convert-error') {
+            var pe = x2tPending[msg.requestId]
+            if (pe) {
+              delete x2tPending[msg.requestId]
+              pe.reject(new Error(msg.error || 'x2t convert failed'))
+            }
+            return
+          }
+
+          // ---- kutup parent → us ----
+          switch (msg.type) {
+            case 'ping':
+              send(e.source, { type: 'pong' })
+              return
+            case 'init':
+              // Stash the payload; actual start happens once selfDeviceId
+              // arrives via 'oo-self' (myOOId/myUniqueOOId derive from it).
+              pendingInitPayload = msg.payload || {}
+              maybeStart()
+              send(e.source, { type: 'init-ack' })
+              return
+            case 'save-request':
+              handleSaveRequest(e.source, msg.requestId)
+              return
+            case 'oo-remote-op':
+              // A saveChanges payload from another peer. Re-emit it to
+              // OnlyOffice via sendMessageToOO so the editor applies it,
+              // and bump our local cpIndex so the next outbound saveChanges
+              // carries the correct changesIndex (CryptPad does this in the
+              // MESSAGE handler at inner.js:1000-1002).
+              try {
+                var payload = JSON.parse(msg.payload)
+                var changesLen = payload && payload.changes ? payload.changes.length : 0
+                if (changesLen === 0) return  // ignore heartbeat-shaped echoes
+                console.log('[kutup-bridge] applying remote op changes=' + changesLen + ' cpIndex=' + cpIndex)
+                sendToOO(payload)
+                cpIndex++
+              } catch (err) {
+                console.warn('[kutup-bridge] bad oo-remote-op payload', err)
+              }
+              return
+            case 'oo-remote-cursor':
+              // A peer's selection-presence frame. Pass-through to OO; the
+              // payload is already in the {type:'cursor', messages:[...]}
+              // shape OO's _onCursor expects. OO renders the translucent
+              // foreign-selection rectangle from the binary cell-range data
+              // in messages[].cursor and the userid in messages[].user.
+              try {
+                var cursorPayload = JSON.parse(msg.payload)
+                // Track the senderDeviceId → user identity so we can clear
+                // the rectangle when this peer leaves the room (see
+                // 'oo-peers' below).
+                if (typeof msg.senderDeviceId === 'number'
+                    && cursorPayload && cursorPayload.messages && cursorPayload.messages[0]) {
+                  var first = cursorPayload.messages[0]
+                  peerCursorIdentity[String(msg.senderDeviceId)] = {
+                    user: first.user,
+                    useridoriginal: first.useridoriginal,
+                  }
+                }
+                sendToOO(cursorPayload)
+              } catch (err) {
+                console.warn('[kutup-bridge] bad oo-remote-cursor payload', err)
+              }
+              return
+            case 'oo-color-update':
+              // Live color picker update. Parent re-asserts the userId →
+              // color mapping; bridge updates userColors so OO's next
+              // foreign-cursor / lock render via window.APP.getUserColor
+              // picks up the new value. No re-mount needed.
+              if (typeof msg.userId === 'string' && msg.userId) {
+                if (msg.color) {
+                  userColors[msg.userId] = msg.color
+                } else {
+                  delete userColors[msg.userId]
+                }
+              }
+              return
+            case 'oo-self':
+              // Parent tells us which (deviceId, userId) is OUR tab. Used
+              // to filter self out of peer rosters AND to derive our OO
+              // identity (myUniqueOOId = userId+deviceId, idOriginal = userId
+              // for stable per-user color). The init flow waits on this
+              // — see maybeStart().
+              if (typeof msg.deviceId === 'number') {
+                selfDeviceId = msg.deviceId
+              }
+              if (typeof msg.userId === 'string') {
+                selfUserId = msg.userId
+              }
+              console.log('[kutup-bridge] self set deviceId=' + selfDeviceId + ' userId=' + selfUserId)
+              maybeStart()
+              return
+            case 'oo-peers':
+              // Server pushed the current peer roster (relay's Hub fires
+              // this on join + leave). Rebuild our peer index, then emit
+              // connectState into OO so subsequent remote saveChanges from
+              // those peers aren't rejected as "unknown user". Mirrors
+              // CryptPad's handleNewIds (inner.js:1097-1106) — the missing
+              // piece that was causing the second-direction stall in xlsx.
+              try {
+                var list = Array.isArray(msg.list) ? msg.list : []
+                var nextById = Object.create(null)
+                for (var i = 0; i < list.length; i++) {
+                  var entry = list[i]
+                  if (!entry || typeof entry.deviceId === 'undefined') continue
+                  var did = entry.deviceId
+                  // Skip self — we render at SELF_INDEX_USER (selfPlaceholder).
+                  // If selfDeviceId hasn't been received yet (parent's
+                  // oo-self message arrives async), include the entry — it
+                  // will be re-emitted on the next oo-peers after oo-self
+                  // arrives.
+                  if (selfDeviceId !== null && did === selfDeviceId) continue
+                  // userId is the per-USER color key. If the backend wire
+                  // dropped it (shouldn't — collab.go peerSummaries always
+                  // includes it), fall back to a deviceId-derived key so
+                  // we still get a participant entry and OO renders peer
+                  // cell-edit cursors with auto-palette colors.
+                  var entryUserId = (typeof entry.userId === 'string' && entry.userId)
+                    ? entry.userId
+                    : 'dev-' + did
+                  nextById[String(did)] = makePeer(did, entryUserId, entry.username)
+                  if (entry.color) userColors[entryUserId] = entry.color
+                }
+                peerByDevice = nextById
+                console.log('[kutup-bridge] peers updated count=' + (Object.keys(nextById).length + 1))
+                emitConnectState()
+                // Clear foreign-selection rectangles for peers that have
+                // left the room. CryptPad sends a hardcoded "empty cursor"
+                // blob (inner.js:3714); we mirror that — passing it through
+                // sendToOO with the peer's identity tells OO to wipe their
+                // entry from m_aForeignCursorsData and redraw without their
+                // rectangle.
+                var idKeys = Object.keys(peerCursorIdentity)
+                for (var pi = 0; pi < idKeys.length; pi++) {
+                  if (nextById[idKeys[pi]]) continue
+                  var ident = peerCursorIdentity[idKeys[pi]]
+                  sendToOO({
+                    type: 'cursor',
+                    messages: [{
+                      cursor: '10;AgAAADIAAAAAAA==',
+                      time: Date.now(),
+                      user: ident.user,
+                      useridoriginal: ident.useridoriginal,
+                    }],
+                  })
+                  delete peerCursorIdentity[idKeys[pi]]
+                }
+              } catch (err) {
+                console.warn('[kutup-bridge] bad oo-peers payload', err)
+              }
+              return
+          }
+        })
+
+        // The OnlyOffice editor instance lives inside the editor iframe at
+        // window.editor (word + slide builds). The cell (xlsx) build aliases
+        // it as window.editorCell when window.editor is undefined — see
+        // sdkjs/cell/sdk-all-min.js: `window.editor==undefined)window.editorCell=this`.
+        // CryptPad's getEditor (inner.js:376) only checked .editor; that
+        // worked for older versions or because they set window.editor
+        // upstream. We probe both names for v9.
+        var getInnerEditor = function () {
+          if (!docEditor || typeof docEditor.getIframe !== 'function') return null
+          var ifr = docEditor.getIframe()
+          if (!ifr || !ifr.contentWindow) return null
+          var w = ifr.contentWindow
+          return w.editor || w.editorCell || w.editorDoc || w.editorSlide || null
+        }
+
+        var handleSaveRequest = function (replyTo, requestId) {
+          if (!docEditor || !docType) {
+            replyTo.postMessage({
+              type: 'save-result', requestId: requestId,
+              error: 'editor not ready',
+            }, EXPECTED_ORIGIN)
+            return
+          }
+          try {
+            var inner = getInnerEditor()
+            if (!inner || typeof inner.asc_nativeGetFile !== 'function') {
+              throw new Error('asc_nativeGetFile not available on this OO build')
+            }
+            var bin = inner.asc_nativeGetFile()
+            // bin is a Uint8Array of OnlyOffice's .bin format. Convert to
+            // the original OOXML extension via x2t so kutup stores the
+            // file in the user-visible format.
+            var outFmt = docType  // 'docx' | 'xlsx' | 'pptx'
+            x2tConvert(bin, 'out.bin', outFmt)
+              .then(function (res) {
+                replyTo.postMessage({
+                  type: 'save-result', requestId: requestId,
+                  bytes: res.output,
+                  format: outFmt,
+                }, EXPECTED_ORIGIN)
+              })
+              .catch(function (err) {
+                replyTo.postMessage({
+                  type: 'save-result', requestId: requestId,
+                  error: 'x2t convert failed: ' + (err && err.message || err),
+                }, EXPECTED_ORIGIN)
+              })
+          } catch (err) {
+            replyTo.postMessage({
+              type: 'save-result', requestId: requestId,
+              error: (err && err.message) || String(err),
+            }, EXPECTED_ORIGIN)
+          }
+        }
+
+        if (window.parent && window.parent !== window) {
+          send(window.parent, { type: 'ready', docType: docType })
+        }
+      })()
+    </script>
+  </body>
+</html>

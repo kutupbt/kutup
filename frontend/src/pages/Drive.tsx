@@ -42,7 +42,7 @@ import RenameDialog from '@/components/drive/dialogs/RenameDialog'
 import ShareDialog from '@/components/drive/dialogs/ShareDialog'
 import PublicShareDialog from '@/components/drive/dialogs/PublicShareDialog'
 import AddRemoteShareDialog from '@/components/drive/dialogs/AddRemoteShareDialog'
-import { chooseEditor } from '@/components/editors/dispatch'
+import { chooseEditor, chooseOfficeEditor } from '@/components/editors/dispatch'
 import { chooseViewer } from '@/components/viewers/dispatch'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 
@@ -450,11 +450,14 @@ export default function Drive() {
 
   function handleFileClick(file: DecryptedFile) {
     const name = file.decryptedName
-    const previewable = !!name && (chooseEditor(name) !== null || chooseViewer(name) !== null)
+    const previewable = !!name && (
+      chooseEditor(name) !== null ||
+      chooseOfficeEditor(name) !== null ||
+      chooseViewer(name) !== null
+    )
     if (name && currentFolder && !currentFolder.isRemote && previewable) {
-      // Open in a new tab — the editor page handles decryption + cross-tab
-      // session sync via BroadcastChannel, and dispatches to either an
-      // editor (text/markdown/code) or a viewer (image/pdf/video/audio).
+      // Open in a new tab — FileEditorPage dispatches to text-collab editor,
+      // OnlyOffice office editor, or static viewer based on extension.
       window.open(`/file/${currentFolder.id}/${file.id}`, '_blank', 'noopener')
       return
     }
