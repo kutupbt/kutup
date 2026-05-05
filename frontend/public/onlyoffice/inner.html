@@ -121,13 +121,116 @@
         // ---------- DocsAPI bootstrap ----------------------------------------
         var ooConfigBuilt = false
 
+        // ---------- Mock-server callbacks (Phase 2c stub) ---------------------
+        // CryptPad-fork's connectMockServer is the auth gateway: when we
+        // supply these callbacks, the OO fork handles the auth handshake
+        // internally using their results. fromOO() additionally handles a
+        // few non-auth message kinds. Phase 5+ will replace stubs with real
+        // collab plumbing; Phase 6+ adds lock state.
+        var docEditor = null
+        var sendToOO = function (obj) {
+          if (!docEditor) return
+          docEditor.sendMessageToOO(obj)
+        }
+
+        var nextRandomId = function (prefix) {
+          return prefix + Math.random().toString(36).slice(2, 10)
+        }
+
+        // History-keeper presence (constant id=1) prevents OnlyOffice's
+        // "you're alone in this document" UI from confusing users.
+        var HISTORY_KEEPER_INDEX_USER = 1
+        var SELF_INDEX_USER = 2
+
+        var getParticipants = function () {
+          return {
+            index: SELF_INDEX_USER,
+            list: [
+              {
+                id: '0',
+                idOriginal: '0',
+                username: 'History',
+                indexUser: HISTORY_KEEPER_INDEX_USER,
+                connectionId: nextRandomId('hk-'),
+                isCloseCoAuthoring: false,
+                view: false,
+              },
+              {
+                id: String(SELF_INDEX_USER),
+                idOriginal: String(SELF_INDEX_USER),
+                username: 'You',
+                indexUser: SELF_INDEX_USER,
+                connectionId: nextRandomId('self-'),
+                isCloseCoAuthoring: false,
+                view: false,
+              },
+            ],
+          }
+        }
+
+        var fromOO = function (obj) {
+          if (!obj || !obj.type) return
+          switch (obj.type) {
+            case 'auth':
+              // Handled internally by OO fork now. No-op.
+              break
+            case 'isSaveLock':
+              sendToOO({ type: 'saveLock', saveLock: false })
+              break
+            case 'getMessages':
+              sendToOO({ type: 'message' })
+              break
+            case 'getLock':
+              // Phase 6a will gate by shared state; for 2c grant immediately.
+              sendToOO({ type: 'getLock', locks: [] })
+              break
+            case 'releaseLock':
+              // Phase 6a; no-op for 2c.
+              break
+            case 'saveChanges':
+              // Phase 5a routes to relay. For 2c just ack so the lock clears
+              // and OnlyOffice doesn't hang on "saving".
+              sendToOO({ type: 'unSaveLock', index: 0, time: Date.now() })
+              break
+            case 'cursor':
+              // Phase 5c forwards cursor presence; no-op for 2c.
+              break
+            default:
+              // Quiet by default — too many DEBUG message types to enumerate.
+              break
+          }
+        }
+
         var startEditor = function (cfg) {
           if (!window.DocsAPI || typeof window.DocsAPI.DocEditor !== 'function') {
             throw new Error('window.DocsAPI.DocEditor not found after api.js load')
           }
-          // eslint-disable-next-line no-new
-          new window.DocsAPI.DocEditor('placeholder', cfg)
-          setStatus('editor mounted (no mockServer yet, auth will hang)')
+          docEditor = new window.DocsAPI.DocEditor('placeholder', cfg)
+          // CryptPad's pattern: connectMockServer immediately after
+          // instantiation (inner.js:2631). The fork only exposes this method
+          // when the editor build supports it (v7+).
+          if (typeof docEditor.connectMockServer === 'function') {
+            docEditor.connectMockServer({
+              onMessage: fromOO,
+              getParticipants: getParticipants,
+              onAuth: function () {
+                setStatus('editor: auth')
+              },
+              getInitialChanges: function () {
+                // Phase 5b returns queued ops since last checkpoint. For 2c
+                // there are no ops yet — empty array is correct.
+                return []
+              },
+              getImageURL: function (_name) {
+                // Phase 7 will resolve embedded image refs. For 2c there
+                // shouldn't be any (empty doc).
+                return null
+              },
+            })
+            setStatus('editor mounted + mockServer connected')
+          } else {
+            setStatus('editor mounted (no connectMockServer on this build)')
+          }
         }
 
         var buildAndStart = function (payload) {
@@ -180,7 +283,7 @@
                         firstname: 'You',
                         name: 'You',
                       },
-                      mode: 'view',  // Phase 2b: read-only until mockServer lands in 2c.
+                      mode: 'edit',  // mockServer is wired in 2c — full edit mode.
                       lang: (navigator.language || 'en').slice(0, 2),
                     },
                     events: {
