@@ -963,3 +963,58 @@ Update global server settings.
 ```
 
 **Response:** Same shape as `GET /api/admin/settings`.
+
+---
+
+## Devices
+
+Per-device Ed25519 signing keys for collaborative-edit frame signing. Each browser tab session creates one device row; CLI sessions persist across runs.
+
+### POST /api/devices
+Register a device signing key. Required before opening any collaborative-edit WebSocket.
+**Auth:** Bearer JWT.
+**Body:** `{publicSigning: <base64-32>, label?: string, authSig: <base64>, timestamp: <unix-seconds>}`. AuthSig is recorded but not validated in v1; the JWT is the trust anchor.
+**Response 201:** `{deviceId, label, createdAt}`
+
+### GET /api/devices
+List the user's devices.
+**Response:** array of `{deviceId, label, isActive, createdAt, lastSeenAt}`.
+
+### DELETE /api/devices/:id
+Revoke a device. Closes any open WebSocket connections from that device. Returns 404 if the device is already inactive (idempotent state-transition semantics).
+**Response:** `204`.
+
+---
+
+## Collaborative Editing
+
+### GET /api/files/:fileId/collab/ws
+WebSocket upgrade. Auth via `Authorization: Bearer ...` header **or** `?token=...&deviceId=N` query (browsers can't set custom headers on the initial WS handshake).
+
+PreUpgrade validates: JWT (rejects setup/pre-auth tokens), file access (owner OR collection-share recipient), device registration (must belong to user, must be active). Failures return HTTP 401/403/404 BEFORE the WS handshake completes.
+
+On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{deviceId, userId}]}`. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then enters bidirectional binary mode. See `docs/superpowers/specs/2026-05-04-collab-edit-design.md` §5 for the wire envelope.
+
+---
+
+## Version History
+
+### GET /api/files/:fileId/versions
+List all versions newest-first.
+**Response:** array of `{id, s3VersionId, storagePath, seqAtSnapshot, docKeyId, authorUserId, sizeBytes, label, keepForever, createdAt}`.
+
+### GET /api/files/:fileId/versions/:vid/download
+Get the encrypted snapshot bytes for a specific version. Returns `application/octet-stream`. Headers: `X-Kutup-Doc-Key-Id`, `X-Kutup-Seq`, `X-Kutup-S3-Version`. The blob format is `nonce(24) || aead_ciphertext` encrypted under the per-file content key (HKDF-derived as documented above).
+
+### PATCH /api/files/:fileId/versions/:vid
+**Body:** `{label?: string, keepForever?: boolean}` — set or unset.
+**Response:** updated version row.
+
+### POST /api/files/:fileId/versions
+Record a new snapshot. Server inserts the row and truncates `file_update_log` up to `seqAtSnapshot`.
+**Body:** `{s3VersionId, storagePath, seqAtSnapshot, docKeyId, sizeBytes, label?, keepForever?}`
+**Response 201:** `{id}` — the version row id.
+
+### POST /api/files/:fileId/snapshot-blob
+Multipart `file` upload of the encrypted snapshot bytes. Companion to POST /versions; uploads the actual blob to S3 (with versioning enabled), returns the S3 metadata for the client to hand to /versions.
+**Response:** `{storagePath, s3VersionId}`.

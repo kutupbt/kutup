@@ -253,3 +253,22 @@ kutup.example.com {
 - **ADMIN_ACCOUNTS:** Remove or rotate the bootstrap admin credentials after first login.
 - **Quotas:** Set default storage quotas in the admin dashboard to prevent abuse.
 - **Updates:** Keep Docker images and the application updated.
+
+---
+
+## SeaweedFS Bucket Versioning (required for collaborative editing)
+
+The collaborative-edit feature uses S3 object versioning to store file snapshots. The `seaweedfs-init` Compose service enables versioning and applies a lifecycle policy automatically on stack startup.
+
+The compose stack has been updated to:
+1. Mount `seaweedfs-init.sh` and `lifecycle.json` into the init container.
+2. The script waits for SeaweedFS S3, creates the bucket (idempotent), enables versioning, applies the lifecycle.
+
+**Lifecycle defaults:** 30-day or 50-version retention for noncurrent versions, whichever yields more. Named (`keep_forever=true`) versions are kept indefinitely (the kutup backend's cleanup job filters them out — they don't rely on the SeaweedFS lifecycle alone).
+
+To customize retention, edit `lifecycle.json` and re-run the init container:
+```sh
+docker compose run --rm seaweedfs-init
+```
+
+If you migrate an existing pre-collab-edit deployment, run `seaweedfs-init.sh` once after upgrading. The script is idempotent.
