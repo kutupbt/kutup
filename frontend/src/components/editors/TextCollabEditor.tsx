@@ -219,30 +219,32 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
     <div className="flex h-full w-full flex-col">
       <div className="flex items-center justify-between border-b px-3 py-1 text-xs">
         <span className="text-muted-foreground">{filename} · {status}</span>
-        <button
-          type="button"
-          disabled={!trigger || savingVersion}
-          onClick={async () => {
-            if (!trigger) return
-            const name = window.prompt('Name this version (optional):') ?? undefined
-            setSavingVersion(true)
-            try {
-              await trigger.forceSave(name && name.trim() !== '' ? name.trim() : undefined, !!name)
-            } finally {
-              setSavingVersion(false)
-            }
-          }}
-          className="rounded border px-2 py-0.5 hover:bg-muted disabled:opacity-50"
-        >
-          {savingVersion ? 'Saving…' : 'Save version'}
-        </button>
-        <button
-          type="button"
-          onClick={() => setHistoryOpen(v => !v)}
-          className="rounded border px-2 py-0.5 hover:bg-muted"
-        >
-          {historyOpen ? 'Hide history' : 'History'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={!trigger || savingVersion}
+            onClick={async () => {
+              if (!trigger) return
+              const name = window.prompt('Name this version (optional):') ?? undefined
+              setSavingVersion(true)
+              try {
+                await trigger.forceSave(name && name.trim() !== '' ? name.trim() : undefined, !!name)
+              } finally {
+                setSavingVersion(false)
+              }
+            }}
+            className="rounded border px-2 py-0.5 hover:bg-muted disabled:opacity-50"
+          >
+            {savingVersion ? 'Saving…' : 'Save version'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setHistoryOpen(v => !v)}
+            className="rounded border px-2 py-0.5 hover:bg-muted"
+          >
+            {historyOpen ? 'Hide history' : 'History'}
+          </button>
+        </div>
       </div>
       <div className="flex flex-1 overflow-hidden">
         <div ref={ref} className="flex-1 overflow-auto" />
