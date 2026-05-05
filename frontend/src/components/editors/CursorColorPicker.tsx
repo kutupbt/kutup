@@ -1,5 +1,6 @@
 import { useRef } from 'react'
 import { Palette } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,18 +21,21 @@ export default function CursorColorPicker({ color, onChange }: Props) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
+        <Button
           type="button"
+          size="sm"
+          variant="outline"
           title="Cursor color"
           aria-label="Cursor color"
-          className="inline-flex items-center gap-1.5 rounded border px-2 py-0.5 text-xs hover:bg-muted"
+          className="gap-1.5"
         >
           <span
-            className="inline-block h-3 w-3 rounded-full border border-border"
+            className="inline-block h-3.5 w-3.5 rounded-full border border-border"
             style={{ background: color }}
+            aria-hidden
           />
-          <Palette className="h-3 w-3" />
-        </button>
+          <Palette className="h-4 w-4" />
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
         <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
