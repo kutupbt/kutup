@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
-import { FolderIcon } from './FolderIcon'
+import { FolderIcon, FOLDER_COLORS, DEFAULT_FOLDER_COLOR } from './FolderIcon'
 import { formatBytes } from '@/lib/format'
 import type { Collection, DecryptedFile } from '@/types/drive'
 
@@ -19,6 +19,7 @@ interface Props {
   onDownloadFolder?: (col: Collection) => void
   onDelete?: (item: Collection | DecryptedFile) => void
   onRename?: (col: Collection) => void
+  onColor?: (col: Collection, color: string | null) => void
   onShare?: (col: Collection) => void
   onPublicLink?: (col: Collection) => void
   onEnter?: (col: Collection) => void
@@ -32,6 +33,7 @@ export default function DetailsPanel({
   onDownloadFolder,
   onDelete,
   onRename,
+  onColor,
   onShare,
   onPublicLink,
   onEnter,
@@ -108,6 +110,40 @@ export default function DetailsPanel({
                   <Button variant="outline" className="w-full" onClick={() => { onRename?.(item as Collection); onClose() }}>
                     <Pencil className="h-4 w-4 mr-2" /> {t('details.rename')}
                   </Button>
+                  {onColor && (
+                    <div className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-md border border-input">
+                      <span className="text-sm">Color</span>
+                      <div className="flex items-center gap-1.5">
+                        {FOLDER_COLORS.map((fc) => (
+                          <button
+                            key={fc.value}
+                            type="button"
+                            title={fc.label}
+                            aria-label={`Set color to ${fc.label}`}
+                            className="h-5 w-5 rounded-full transition-transform hover:scale-110"
+                            style={{
+                              background: fc.hex,
+                              outline: (item as Collection).color === fc.value ? '2px solid var(--ring)' : 'none',
+                              outlineOffset: 2,
+                            }}
+                            onClick={() => onColor(item as Collection, fc.value)}
+                          />
+                        ))}
+                        <button
+                          type="button"
+                          title="Default"
+                          aria-label="Reset to default color"
+                          className="h-5 w-5 rounded-full transition-transform hover:scale-110"
+                          style={{
+                            background: DEFAULT_FOLDER_COLOR,
+                            outline: !(item as Collection).color ? '2px solid var(--ring)' : 'none',
+                            outlineOffset: 2,
+                          }}
+                          onClick={() => onColor(item as Collection, null)}
+                        />
+                      </div>
+                    </div>
+                  )}
                   <Button variant="outline" className="w-full" onClick={() => { onShare?.(item as Collection); onClose() }}>
                     <Share2 className="h-4 w-4 mr-2" /> {t('details.share')}
                   </Button>

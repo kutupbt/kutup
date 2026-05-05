@@ -594,6 +594,11 @@ export default function Drive() {
     await api.patch(`/collections/${col.id}/color`, { color })
     setCollections((prev) => prev.map((c) => c.id === col.id ? { ...c, color } : c))
     if (currentFolder?.id === col.id) setCurrentFolder((prev) => prev ? { ...prev, color } : prev)
+    setDetailItem((prev) =>
+      prev && 'ownerUserId' in prev && (prev as Collection).id === col.id
+        ? { ...(prev as Collection), color }
+        : prev,
+    )
   }
 
   async function handleShare(params: { recipient: string; canUpload: boolean; canDelete: boolean; quotaBytes: number | null; isFederated: boolean }) {
@@ -933,6 +938,7 @@ export default function Drive() {
           else setDeleteFile(item as DecryptedFile)
         }}
         onRename={(col) => setRenameTarget(col)}
+        onColor={handleColorFolder}
         onShare={(col) => setShareTarget(col)}
         onPublicLink={handleCreatePublicLink}
         onEnter={enterFolder}
