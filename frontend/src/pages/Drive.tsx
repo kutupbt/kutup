@@ -249,6 +249,7 @@ export default function Drive() {
   }
 
   function enterFolder(col: Collection) {
+    if (currentFolder?.id === col.id) return
     if (currentFolder && currentFolder.id !== myFilesCollection?.id) {
       setNavigationStack((prev) => [...prev, currentFolder])
     }
@@ -257,26 +258,33 @@ export default function Drive() {
   }
 
   function goHome() {
-    setCurrentFolder(myFilesCollection)
     setNavigationStack([])
-    setFiles([])
     setViewMode('myfiles')
     clearSelection()
+    // Only swap folder + clear file cache if we're actually navigating away.
+    if (currentFolder?.id !== myFilesCollection?.id) {
+      setCurrentFolder(myFilesCollection)
+      setFiles([])
+    }
   }
 
   function goToShared() {
-    setCurrentFolder(null)
     setNavigationStack([])
-    setFiles([])
     setViewMode('shared')
     clearSelection()
+    if (currentFolder !== null) {
+      setCurrentFolder(null)
+      setFiles([])
+    }
   }
 
   function navigateTo(index: number) {
     const target = navigationStack[index]
     setNavigationStack((prev) => prev.slice(0, index))
-    setCurrentFolder(target)
-    setFiles([])
+    if (currentFolder?.id !== target?.id) {
+      setCurrentFolder(target)
+      setFiles([])
+    }
   }
 
   // --- Selection handlers ---
