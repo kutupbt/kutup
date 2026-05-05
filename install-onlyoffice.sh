@@ -26,6 +26,12 @@ OO_SHA512="1f1184fb04cf72a7eb2a49a9740074b5419486c79e1fd713e1f8c09b8594a826050ae
 X2T_VERSION="v7.3+1"
 X2T_SHA512="ab0c05b0e4c81071acea83f0c6a8e75f5870c360ec4abc4af09105dd9b52264af9711ec0b7020e87095193ac9b6e20305e446f2321a541f743626a598e5318c1"
 
+# CryptPad source tree commit that hosts the three "empty document" templates
+# (oodoc_base.js / oocell_base.js / ooslide_base.js). These template JS files
+# are NOT in the cryptpad/onlyoffice-editor release tarball — they live in
+# cryptpad/cryptpad. Pinning by commit so reinstalls are reproducible.
+CRYPTPAD_TEMPLATES_COMMIT="2025.6.0"  # latest stable tag at time of writing
+
 CHECK=0
 ASSUME_YES=0
 for arg in "$@"; do
@@ -139,11 +145,39 @@ install_x2t() {
     cd "$SCRIPT_DIR"
 }
 
+install_templates() {
+    local TMPL_DIR="$DEST/../templates"
+    local actual="not installed"
+    if [ -e "$TMPL_DIR/.version" ]; then
+        actual=$(cat "$TMPL_DIR/.version")
+    fi
+
+    if [ "$actual" = "$CRYPTPAD_TEMPLATES_COMMIT" ]; then
+        echo "OnlyOffice empty-doc templates @ $CRYPTPAD_TEMPLATES_COMMIT already installed."
+        return 0
+    fi
+
+    if [ "$CHECK" = 1 ]; then
+        echo "Templates version drift. Expected: $CRYPTPAD_TEMPLATES_COMMIT. Found: $actual" >&2
+        return 1
+    fi
+
+    echo "Installing OnlyOffice empty-doc templates @ $CRYPTPAD_TEMPLATES_COMMIT → $TMPL_DIR"
+    rm -rf "$TMPL_DIR"
+    mkdir -p "$TMPL_DIR"
+    local BASE="https://raw.githubusercontent.com/cryptpad/cryptpad/$CRYPTPAD_TEMPLATES_COMMIT/www/common/onlyoffice"
+    for tmpl in oodoc_base.js oocell_base.js ooslide_base.js; do
+        curl -fL "$BASE/$tmpl" --output "$TMPL_DIR/$tmpl"
+    done
+    echo "$CRYPTPAD_TEMPLATES_COMMIT" > "$TMPL_DIR/.version"
+}
+
 mkdir -p "$DEST"
 
 agree_to_agpl
 install_oo
 install_x2t
+install_templates
 
 echo
 echo "Done. OnlyOffice client JS + x2t are installed at:"
