@@ -1,0 +1,102 @@
+<!doctype html>
+<!--
+  kutup ↔ OnlyOffice bridge page.
+  This page is loaded by OfficeEditor.tsx in an <iframe> and is responsible
+  for hosting the OnlyOffice editor instance + relaying postMessage between
+  the kutup React parent and the editor.
+
+  Phase 2a: scaffold only. Sends a `ready` heartbeat to the parent and waits
+  for `init`. Phases 2b/2c/2d add DocsAPI mounting, mockServer callbacks,
+  and template loading. Phase 3 adds the x2t sibling iframe.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OnlyOffice — Kutup</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        width: 100%;
+        font-family: system-ui, -apple-system, sans-serif;
+        background: #fafafa;
+        color: #1a1a1a;
+      }
+      #root {
+        height: 100%;
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      #status {
+        font-size: 14px;
+        color: #666;
+      }
+      #placeholder-a {
+        height: 100%;
+        width: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div id="placeholder-a"></div>
+      <div id="status">Bridge ready · waiting for kutup…</div>
+    </div>
+
+    <script>
+      (function () {
+        'use strict'
+
+        // Strict origin check — only accept messages from our React parent.
+        var EXPECTED_ORIGIN = window.location.origin
+
+        var docType = null  // "docx" | "xlsx" | "pptx"
+
+        function setStatus(text) {
+          var el = document.getElementById('status')
+          if (el) el.textContent = text
+        }
+
+        function send(parent, msg) {
+          parent.postMessage(msg, EXPECTED_ORIGIN)
+        }
+
+        // Parse type from query string for the parent's convenience.
+        var params = new URLSearchParams(window.location.search)
+        docType = params.get('type')
+        if (docType) {
+          setStatus('Bridge ready · type=' + docType + ' · waiting for kutup init…')
+        }
+
+        window.addEventListener('message', function (e) {
+          if (e.origin !== EXPECTED_ORIGIN) return
+          var msg = e.data
+          if (!msg || typeof msg !== 'object') return
+
+          switch (msg.type) {
+            case 'ping':
+              send(e.source, { type: 'pong' })
+              return
+            case 'init':
+              // Phase 2b will pick up here: mount DocsAPI.DocEditor with the
+              // payload. For 2a we just acknowledge.
+              setStatus('Init received · type=' + (msg.payload && msg.payload.type) +
+                ' (editor mount lands in phase 2b)')
+              send(e.source, { type: 'init-ack' })
+              return
+          }
+        })
+
+        if (window.parent && window.parent !== window) {
+          send(window.parent, { type: 'ready', docType: docType })
+        }
+      })()
+    </script>
+  </body>
+</html>
