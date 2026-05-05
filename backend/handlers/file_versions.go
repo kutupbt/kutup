@@ -175,7 +175,7 @@ func (h *FileVersionsHandler) Patch(c *fiber.Ctx) error {
 // @Produce json
 // @Param   fileId path string true "File UUID"
 // @Param   file formData file true "Encrypted snapshot bytes"
-// @Success 200 {object} fiber.Map
+// @Success 200
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
@@ -223,7 +223,7 @@ type recordSnapshotRequest struct {
 // @Produce json
 // @Param   fileId path string true "File UUID"
 // @Param   body body recordSnapshotRequest true "Snapshot metadata"
-// @Success 201 {object} fiber.Map
+// @Success 201
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse

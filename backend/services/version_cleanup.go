@@ -56,7 +56,7 @@ func (v *VersionCleanup) tick(ctx context.Context) {
 		FROM ranked
 		WHERE keep_forever = false
 		  AND rn > $1
-		  AND created_at < now() - ($2 || ' days')::interval
+		  AND created_at < now() - make_interval(days => $2)
 	`, v.KeepN, v.KeepDays)
 	if err != nil {
 		log.Printf("version cleanup: query failed: %v", err)
