@@ -55,6 +55,8 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
   const [status, setStatus] = useState<'connecting' | 'ready' | 'error'>('connecting')
   const [trigger, setTrigger] = useState<SnapshotTrigger | null>(null)
   const [savingVersion, setSavingVersion] = useState(false)
+  const [savingPlain, setSavingPlain] = useState(false)
+  const [justSaved, setJustSaved] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [restoreHandler, setRestoreHandler] = useState<((vid: string) => Promise<void>) | null>(null)
   const accessToken = useAppSelector(s => s.auth.accessToken)
@@ -267,7 +269,25 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
       // 7. Build the CodeMirror editor.
       const ext = filename.split('.').pop()?.toLowerCase() ?? ''
       const langExt = langForExtension(ext)
+      // Cmd/Ctrl+S → force-save snapshot. Wires to the same `trig.forceSave()`
+      // the Save button calls; `triggerRef.current` lets the closure see the
+      // latest trigger instance even though it's captured at editor build time.
+      const saveKeymap = keymap.of([{
+        key: 'Mod-s',
+        preventDefault: true,
+        run: () => {
+          ;(async () => {
+            try {
+              await trig.forceSave(undefined, false)
+              setJustSaved(true)
+              setTimeout(() => setJustSaved(false), 1200)
+            } catch (e) { console.warn('save shortcut failed', e) }
+          })()
+          return true
+        },
+      }])
       const exts: Extension[] = [
+        saveKeymap,
         keymap.of([...defaultKeymap, ...historyKeymap]),
         history(),
         ...(langExt ? [langExt] : []),
@@ -304,20 +324,50 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
         <div className="flex items-center gap-2">
           <button
             type="button"
-            disabled={!trigger || savingVersion}
+            disabled={!trigger || savingPlain || savingVersion}
             onClick={async () => {
               if (!trigger) return
-              const name = window.prompt('Name this version (optional):') ?? undefined
+              setSavingPlain(true)
+              try {
+                // Force a snapshot but force=true so an empty-but-no-label call
+                // still goes through (matches "I just want my work persisted now").
+                // We pass a non-empty marker label internally and immediately
+                // null it out — but actually the simpler way is to pass label=''
+                // which doesn't pin. Looking at SnapshotTrigger.snapshot():
+                //   if (this.updatesSince === 0 && !label) return
+                // So if updatesSince==0 and we want a no-op, we get one. Otherwise
+                // we snapshot with no name and no keepForever.
+                await trigger.forceSave(undefined, false)
+                setJustSaved(true)
+                setTimeout(() => setJustSaved(false), 1200)
+              } finally {
+                setSavingPlain(false)
+              }
+            }}
+            className="rounded border px-2 py-0.5 hover:bg-muted disabled:opacity-50"
+            title="Save current state (Cmd/Ctrl+S)"
+          >
+            {savingPlain ? 'Saving…' : justSaved ? 'Saved ✓' : 'Save'}
+          </button>
+          <button
+            type="button"
+            disabled={!trigger || savingVersion || savingPlain}
+            onClick={async () => {
+              if (!trigger) return
+              const name = window.prompt('Name this version:')
+              const trimmed = name?.trim() ?? ''
+              if (!trimmed) return  // canceled or empty — do nothing
               setSavingVersion(true)
               try {
-                await trigger.forceSave(name && name.trim() !== '' ? name.trim() : undefined, !!name)
+                await trigger.forceSave(trimmed, true)
               } finally {
                 setSavingVersion(false)
               }
             }}
             className="rounded border px-2 py-0.5 hover:bg-muted disabled:opacity-50"
+            title="Save a named, kept-forever milestone"
           >
-            {savingVersion ? 'Saving…' : 'Save version'}
+            {savingVersion ? 'Saving…' : 'Save version…'}
           </button>
           <button
             type="button"
