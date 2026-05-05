@@ -155,11 +155,15 @@ func main() {
 	devices.Get("/", devicesH.List)
 	devices.Delete("/:id", devicesH.Revoke)
 
-	// Files routes (authenticated)
-	files := api.Group("/files", authMW.Required())
-	files.Post("/upload", filesH.Upload)
-	files.Get("/:id/download", filesH.Download)
-	files.Delete("/:id", filesH.Delete)
+	// Files routes (authenticated). NOTE: we do NOT apply authMW.Required() at
+	// the group level. Fiber's Group(prefix, handlers...) registers handlers as
+	// `app.Use(prefix, handlers...)` — i.e. as PATH-PREFIX middleware. That would
+	// gate every /api/files/* request including the collab WS route below
+	// (which has its own auth via PreUpgrade and accepts ?token= query).
+	files := api.Group("/files")
+	files.Post("/upload", authMW.Required(), filesH.Upload)
+	files.Get("/:id/download", authMW.Required(), filesH.Download)
+	files.Delete("/:id", authMW.Required(), filesH.Delete)
 
 	api.Get("/files/:fileId/versions", authMW.Required(), fvH.List)
 	api.Post("/files/:fileId/versions", authMW.Required(), fvH.Record)
