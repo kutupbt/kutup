@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, Suspense } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, FolderPlus, Upload, Globe, Download, Trash2 } from 'lucide-react'
+import { Plus, FolderPlus, Upload, Globe, Download, Trash2, X } from 'lucide-react'
 import { useAppSelector, useAppDispatch } from '@/store'
 import { selectMasterKey, selectPrivateKey, updateStorageUsed, updateStorageQuota } from '@/store/authSlice'
 import api from '@/api/client'
@@ -26,6 +26,7 @@ import RenameDialog from '@/components/drive/dialogs/RenameDialog'
 import ShareDialog from '@/components/drive/dialogs/ShareDialog'
 import PublicShareDialog from '@/components/drive/dialogs/PublicShareDialog'
 import AddRemoteShareDialog from '@/components/drive/dialogs/AddRemoteShareDialog'
+import { chooseEditor } from '@/components/editors/dispatch'
 
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
@@ -84,6 +85,11 @@ export default function Drive() {
   const [deleteFile, setDeleteFile] = useState<DecryptedFile | null>(null)
   const [deleteFolder, setDeleteFolder] = useState<Collection | null>(null)
   const [fedInviteUrl, setFedInviteUrl] = useState<string | null>(null)
+
+  // Collab editor state: when set, opens an in-place modal editor. The collectionMaster
+  // here is the file's parent collection key (already-decrypted on collection load),
+  // NOT the user's masterKey — the editor derives per-file content keys from it.
+  const [editorOpen, setEditorOpen] = useState<{ fileId: string; filename: string; collectionMaster: Uint8Array; initialContent?: string } | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const downloadAbortRef = useRef<AbortController | null>(null)
@@ -421,6 +427,35 @@ export default function Drive() {
     }
   }
 
+  async function handleFileClick(file: DecryptedFile) {
+    const name = file.decryptedName
+    if (name && currentFolder?.collectionKey && chooseEditor(name) && file._fileKey) {
+      // Pre-fetch + decrypt the file's original plaintext so the editor can seed
+      // Y.Text on cold-start (no Yjs snapshot yet). Once a snapshot exists, the
+      // editor uses that instead and ignores initialContent.
+      let initialContent: string | undefined
+      try {
+        const downloadUrl = currentFolder.isRemote
+          ? `/fed-proxy/${currentFolder.remoteShareId}/files/${file.id}/download`
+          : `/files/${file.id}/download`
+        const res = await api.get(downloadUrl, { responseType: 'arraybuffer' })
+        const plain = await decryptStream(new Uint8Array(res.data), file._fileKey)
+        initialContent = new TextDecoder().decode(plain)
+      } catch (e) {
+        console.warn('failed to preload file content for editor', e)
+        // Open editor anyway — it'll start empty and the user can edit from scratch.
+      }
+      setEditorOpen({
+        fileId: file.id,
+        filename: name,
+        collectionMaster: currentFolder.collectionKey,
+        initialContent,
+      })
+      return
+    }
+    setDetailItem(file)
+  }
+
   async function handleDownload(file: DecryptedFile) {
     if (!file._fileKey) return
     try {
@@ -730,7 +765,7 @@ export default function Drive() {
                 files={files}
                 canDelete={canDeleteFile()}
                 selectedIds={selectedFileIds}
-                onSelect={setDetailItem}
+                onSelect={handleFileClick}
                 onToggleSelect={toggleFileSelect}
                 onToggleSelectAll={toggleAllFiles}
                 onDownload={handleDownload}
@@ -795,6 +830,37 @@ export default function Drive() {
         onPublicLink={handleCreatePublicLink}
         onEnter={enterFolder}
       />
+
+      {/* Collab editor overlay */}
+      {editorOpen && (() => {
+        const Editor = chooseEditor(editorOpen.filename)
+        if (!Editor) return null
+        return (
+          <div className="fixed inset-0 z-50 flex flex-col bg-background">
+            <div className="flex items-center justify-between border-b px-4 py-2">
+              <span className="text-sm font-medium truncate">{editorOpen.filename}</span>
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label={t('common.close')}
+                onClick={() => setEditorOpen(null)}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="flex-1 min-h-0">
+              <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading editor…</div>}>
+                <Editor
+                  fileId={editorOpen.fileId}
+                  filename={editorOpen.filename}
+                  collectionMaster={editorOpen.collectionMaster}
+                  initialContent={editorOpen.initialContent}
+                />
+              </Suspense>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Dialogs */}
       <NewFolderDialog
