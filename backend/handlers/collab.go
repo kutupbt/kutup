@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
@@ -33,22 +32,30 @@ type wsConn struct {
 	userID    string
 	pubKey    ed25519.PublicKey
 	out       chan []byte
-	closed    atomic.Bool
+	done      chan struct{}
 	closeOnce sync.Once
 }
 
 func (c *wsConn) DeviceID() int64 { return c.deviceID }
 func (c *wsConn) UserID() string  { return c.userID }
 
-// WriteFrame is non-blocking — drops the frame and closes the conn on backpressure.
-// (See HubConn doc on the interface for why this contract is mandatory.)
+// WriteFrame is non-blocking. Drops + closes on backpressure. Returns error
+// if the conn is already closed.
+//
+// Uses `done` (closed in Close) as the synchronization point so we never
+// risk a send-on-closed-channel panic. c.out itself is never closed —
+// writePump exits via `done`.
 func (c *wsConn) WriteFrame(b []byte) error {
-	if c.closed.Load() {
+	select {
+	case <-c.done:
 		return errors.New("conn closed")
+	default:
 	}
 	select {
 	case c.out <- b:
 		return nil
+	case <-c.done:
+		return errors.New("conn closed")
 	default:
 		c.Close()
 		return errors.New("backpressure")
@@ -57,17 +64,21 @@ func (c *wsConn) WriteFrame(b []byte) error {
 
 func (c *wsConn) Close() {
 	c.closeOnce.Do(func() {
-		c.closed.Store(true)
-		close(c.out)
+		close(c.done)
 		_ = c.ws.Close()
 	})
 }
 
-// writePump fans frames from c.out to the WebSocket as binary messages.
+// writePump drains c.out to the WebSocket as binary messages. Exits on done.
 func (c *wsConn) writePump() {
-	for b := range c.out {
-		if err := c.ws.WriteMessage(websocket.BinaryMessage, b); err != nil {
-			c.Close()
+	for {
+		select {
+		case b := <-c.out:
+			if err := c.ws.WriteMessage(websocket.BinaryMessage, b); err != nil {
+				c.Close()
+				return
+			}
+		case <-c.done:
 			return
 		}
 	}
@@ -110,7 +121,8 @@ func (h *CollabHandler) HandleConnection(
 ) {
 	c := &wsConn{
 		ws: ws, deviceID: deviceID, userID: userID, pubKey: pubKey,
-		out: make(chan []byte, wsOutBuf),
+		out:  make(chan []byte, wsOutBuf),
+		done: make(chan struct{}),
 	}
 	defer func() {
 		h.Hub.Leave(fileID, c)
@@ -203,6 +215,18 @@ func (h *CollabHandler) handleFrame(c *wsConn, fileID string, data []byte) {
 		return
 	}
 
+	// Epoch check: reject frames signed under an older doc_key_id than the file's current.
+	// (Rotation isn't implemented in v1, but enforcing now closes the door before D5/E lands.)
+	var currentEpoch int64
+	if err := h.DB.QueryRow(context.Background(),
+		`SELECT current_doc_key_id FROM files WHERE id = $1`, fileID,
+	).Scan(&currentEpoch); err != nil {
+		return
+	}
+	if int64(f.DocKeyID) < currentEpoch {
+		return
+	}
+
 	// Awareness frames: broadcast only, no persistence.
 	if f.Kind == envelope.KindYjsAwareness {
 		h.Hub.Broadcast(fileID, c, data)
@@ -228,14 +252,14 @@ func (h *CollabHandler) handleFrame(c *wsConn, fileID string, data []byte) {
 func (h *CollabHandler) persistFrame(fileID string, deviceID int64, f envelope.Frame, raw []byte) (int64, error) {
 	var seq int64
 	err := h.DB.QueryRow(context.Background(), `
-		INSERT INTO file_update_log (file_id, seq, sender_device, doc_key_id, kind, frame)
+		INSERT INTO file_update_log (file_id, seq, sender_device, sender_seq, doc_key_id, kind, frame)
 		VALUES (
 		  $1,
 		  COALESCE((SELECT MAX(seq) FROM file_update_log WHERE file_id = $1), 0) + 1,
-		  $2, $3, $4, $5
+		  $2, $3, $4, $5, $6
 		)
 		RETURNING seq
-	`, fileID, deviceID, int64(f.DocKeyID), int16(f.Kind), raw).Scan(&seq)
+	`, fileID, deviceID, int64(f.Sequence), int64(f.DocKeyID), int16(f.Kind), raw).Scan(&seq)
 	return seq, err
 }
 
