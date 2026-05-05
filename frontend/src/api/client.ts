@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { store } from '../store'
 import { updateAccessToken, logout } from '../store/authSlice'
+import { broadcastLogout } from '../lib/sessionSync'
 
 const api = axios.create({
   baseURL: '/api',
@@ -55,6 +56,9 @@ api.interceptors.response.use(
         return api(originalRequest)
       } catch (refreshError) {
         processQueue(refreshError, null)
+        // Refresh failed → server-side session is gone. Tell every tab to
+        // clear local state too, then redirect this tab to /login.
+        broadcastLogout()
         store.dispatch(logout())
         window.location.href = '/login'
         return Promise.reject(refreshError)

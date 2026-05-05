@@ -9,7 +9,7 @@ import RouteErrorBoundary from '@/components/layout/RouteErrorBoundary'
 import { useAppDispatch, useAppSelector } from '@/store'
 import { store } from '@/store'
 import { selectMasterKey, setAuth, updateAccessToken, logout } from '@/store/authSlice'
-import { broadcastSession, requestSession, startSessionResponder, type SessionPayload } from '@/lib/sessionSync'
+import { broadcastSession, requestSession, startSessionResponder, startLogoutListener, type SessionPayload } from '@/lib/sessionSync'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import FirstLogin from './pages/FirstLogin'
@@ -90,6 +90,11 @@ export default function App() {
   useEffect(() => {
     return startSessionResponder(() => snapshotFromState())
   }, [])
+
+  // BroadcastChannel logout listener — when any tab signs out, all tabs do.
+  useEffect(() => {
+    return startLogoutListener(() => dispatch(logout()))
+  }, [dispatch])
 
   // Re-broadcast whenever auth state materially changes so passive listeners
   // (e.g. a tab that joined just before we logged in) get the fresh snapshot.

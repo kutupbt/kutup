@@ -4,6 +4,7 @@ import { Home, Users, Settings, LogOut, ShieldCheck, Sun, Moon, HardDrive } from
 import { useTranslation } from 'react-i18next'
 import { useAppSelector, useAppDispatch } from '@/store'
 import { logout } from '@/store/authSlice'
+import { broadcastLogout } from '@/lib/sessionSync'
 import { KutupLogo } from '@/components/KutupLogo'
 import { Progress } from '@/components/ui/progress'
 import { cn } from '@/lib/utils'
@@ -66,6 +67,9 @@ export default function Sidebar({ viewMode, sharedCount, onGoHome, onGoShared }:
       : 0
 
   function handleLogout() {
+    // Tell every other tab to log out too — otherwise a sibling editor tab
+    // (or the BroadcastChannel session-sync) would re-hydrate the session.
+    broadcastLogout()
     dispatch(logout())
     navigate('/login')
   }
