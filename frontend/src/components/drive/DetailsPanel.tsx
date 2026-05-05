@@ -44,6 +44,13 @@ export default function DetailsPanel({
 
   const isFolder = isCollection(item)
 
+  const showSize = !isFolder && (item as DecryptedFile).decryptedSize != null
+  const showCreated = 'createdAt' in item && !!(item as DecryptedFile).createdAt
+  const showRemoteBadge = isFolder && (item as Collection).isRemote
+  const showColorRow = isFolder && !(item as Collection).isRemote && !!onColor
+  const hasDl = showSize || showCreated || showRemoteBadge
+  const hasMeta = hasDl || showColorRow
+
   return (
     <Dialog open={!!item} onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogContent className="sm:max-w-sm flex flex-col">
@@ -67,31 +74,68 @@ export default function DetailsPanel({
           </p>
         </div>
 
-        <Separator />
-
-        {/* Metadata */}
-        <dl className="grid grid-cols-2 gap-x-4 gap-y-2 py-4 text-sm">
-          {!isFolder && (item as DecryptedFile).decryptedSize != null && (
-            <>
-              <dt className="text-muted-foreground">{t('details.size')}</dt>
-              <dd>{formatBytes((item as DecryptedFile).decryptedSize!)}</dd>
-            </>
-          )}
-          {'createdAt' in item && (
-            <>
-              <dt className="text-muted-foreground">{t('details.created')}</dt>
-              <dd>{new Date(item.createdAt).toLocaleDateString()}</dd>
-            </>
-          )}
-          {isFolder && (item as Collection).isRemote && (
-            <>
-              <dt className="text-muted-foreground">{t('details.type')}</dt>
-              <dd className="flex items-center gap-1">
-                <Globe className="h-3 w-3 text-primary" /> {t('details.federatedShare')}
-              </dd>
-            </>
-          )}
-        </dl>
+        {hasMeta && (
+          <>
+            <Separator />
+            <div className="py-4 space-y-3">
+              {hasDl && (
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                  {showSize && (
+                    <>
+                      <dt className="text-muted-foreground">{t('details.size')}</dt>
+                      <dd>{formatBytes((item as DecryptedFile).decryptedSize!)}</dd>
+                    </>
+                  )}
+                  {showCreated && (
+                    <>
+                      <dt className="text-muted-foreground">{t('details.created')}</dt>
+                      <dd>{new Date((item as DecryptedFile).createdAt).toLocaleDateString()}</dd>
+                    </>
+                  )}
+                  {showRemoteBadge && (
+                    <>
+                      <dt className="text-muted-foreground">{t('details.type')}</dt>
+                      <dd className="flex items-center gap-1">
+                        <Globe className="h-3 w-3 text-primary" /> {t('details.federatedShare')}
+                      </dd>
+                    </>
+                  )}
+                </dl>
+              )}
+              {showColorRow && onColor && (
+                <div className="flex items-center justify-center gap-2">
+                  {FOLDER_COLORS.map((fc) => (
+                    <button
+                      key={fc.value}
+                      type="button"
+                      title={fc.label}
+                      aria-label={`Set color to ${fc.label}`}
+                      className="h-6 w-6 rounded-full transition-transform hover:scale-110"
+                      style={{
+                        background: fc.hex,
+                        outline: (item as Collection).color === fc.value ? '2px solid var(--ring)' : 'none',
+                        outlineOffset: 2,
+                      }}
+                      onClick={() => onColor(item as Collection, fc.value)}
+                    />
+                  ))}
+                  <button
+                    type="button"
+                    title="Default"
+                    aria-label="Reset to default color"
+                    className="h-6 w-6 rounded-full transition-transform hover:scale-110"
+                    style={{
+                      background: DEFAULT_FOLDER_COLOR,
+                      outline: !(item as Collection).color ? '2px solid var(--ring)' : 'none',
+                      outlineOffset: 2,
+                    }}
+                    onClick={() => onColor(item as Collection, null)}
+                  />
+                </div>
+              )}
+            </div>
+          </>
+        )}
 
         <Separator />
 
@@ -110,40 +154,6 @@ export default function DetailsPanel({
                   <Button variant="outline" className="w-full" onClick={() => { onRename?.(item as Collection); onClose() }}>
                     <Pencil className="h-4 w-4 mr-2" /> {t('details.rename')}
                   </Button>
-                  {onColor && (
-                    <div className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-md border border-input">
-                      <span className="text-sm">Color</span>
-                      <div className="flex items-center gap-1.5">
-                        {FOLDER_COLORS.map((fc) => (
-                          <button
-                            key={fc.value}
-                            type="button"
-                            title={fc.label}
-                            aria-label={`Set color to ${fc.label}`}
-                            className="h-5 w-5 rounded-full transition-transform hover:scale-110"
-                            style={{
-                              background: fc.hex,
-                              outline: (item as Collection).color === fc.value ? '2px solid var(--ring)' : 'none',
-                              outlineOffset: 2,
-                            }}
-                            onClick={() => onColor(item as Collection, fc.value)}
-                          />
-                        ))}
-                        <button
-                          type="button"
-                          title="Default"
-                          aria-label="Reset to default color"
-                          className="h-5 w-5 rounded-full transition-transform hover:scale-110"
-                          style={{
-                            background: DEFAULT_FOLDER_COLOR,
-                            outline: !(item as Collection).color ? '2px solid var(--ring)' : 'none',
-                            outlineOffset: 2,
-                          }}
-                          onClick={() => onColor(item as Collection, null)}
-                        />
-                      </div>
-                    </div>
-                  )}
                   <Button variant="outline" className="w-full" onClick={() => { onShare?.(item as Collection); onClose() }}>
                     <Share2 className="h-4 w-4 mr-2" /> {t('details.share')}
                   </Button>
