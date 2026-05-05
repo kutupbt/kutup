@@ -537,6 +537,56 @@ export default function Drive() {
     }
   }
 
+  async function handleCreateOffice(kind: 'docx' | 'xlsx' | 'pptx') {
+    if (!currentFolder?.collectionKey) {
+      toast.error(t('drive.toast.uploadFailed'))
+      return
+    }
+    if (!canUploadToCurrentFolder()) {
+      toast.error(t('drive.toast.uploadFailed'))
+      return
+    }
+    // Auto-name "Untitled.docx", "Untitled (2).docx", … to dodge collisions.
+    let base = 'Untitled'
+    let suffix = 0
+    let filename = `${base}.${kind}`
+    while (files.some((f) => f.decryptedName === filename)) {
+      suffix += 1
+      filename = `${base} (${suffix}).${kind}`
+    }
+    const mimeByKind: Record<string, string> = {
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    }
+    const tid = toast.loading(`Creating ${kind}…`)
+    try {
+      // Phase 2d: empty placeholder (1 byte, otherwise the encrypt-stream
+      // header math choke on 0-length plaintext). The OfficeEditor renders
+      // the template instead. Phase 4's first save replaces this with real
+      // OOXML, after which the placeholder is never seen again.
+      const placeholder = new Uint8Array([0])
+      const officeFile = new File([new Blob([placeholder], { type: mimeByKind[kind] })], filename, {
+        type: mimeByKind[kind],
+      })
+      await uploadFile(officeFile, currentFolder)
+      const fresh = await loadFiles(currentFolder)
+      const created = fresh.find((f) => f.decryptedName === filename)
+      if (!created) {
+        toast.error('File uploaded, but could not be opened — refresh the page.', { id: tid })
+        return
+      }
+      window.open(`/file/${currentFolder.id}/${created.id}`, '_blank', 'noopener')
+      try {
+        const meRes = await api.get('/user/me')
+        dispatch(updateStorageUsed(meRes.data.storageUsedBytes))
+      } catch {}
+      toast.success(`${filename} created`, { id: tid })
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error ?? `Failed to create ${kind}`, { id: tid })
+    }
+  }
+
   async function handleCreateFolder(name: string) {
     if (!masterKey) throw new Error('Not logged in')
     const collectionKey = await generateKey()
@@ -747,6 +797,7 @@ export default function Drive() {
           onUpload={() => triggerUpload()}
           onNewFolder={() => setNewFolderOpen(true)}
           onNewNote={() => setNewNoteOpen(true)}
+          onNewOffice={(kind) => handleCreateOffice(kind)}
           onAddRemote={() => setAddRemoteOpen(true)}
           newMenuOpen={newMenuOpen}
           onNewMenuOpenChange={setNewMenuOpen}

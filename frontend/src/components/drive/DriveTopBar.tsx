@@ -27,6 +27,7 @@ const DriveTopBar = forwardRef<HTMLInputElement, DriveTopBarProps>(function Driv
     onUpload,
     onNewFolder,
     onNewNote,
+    onNewOffice,
     onAddRemote,
     newMenuOpen,
     onNewMenuOpenChange,
@@ -78,8 +79,10 @@ const DriveTopBar = forwardRef<HTMLInputElement, DriveTopBarProps>(function Driv
             <NewMenuItems
               onNewFolder={onNewFolder}
               onNewNote={onNewNote}
+              onNewOffice={onNewOffice}
               onAddRemote={onAddRemote}
               showAddRemote={!!onAddRemote}
+              showOffice={!!onNewOffice}
             />
           </DropdownMenuContent>
         </DropdownMenu>
