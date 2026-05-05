@@ -17,7 +17,14 @@
 // iframes; this React wrapper owns the user-facing chrome (status text,
 // errors) and is the only side that talks to kutup state via Redux.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useImperativeHandle, useRef, useState, forwardRef, type Ref } from 'react'
+
+export interface OfficeEditorHandle {
+  /** Asks inner.html to extract the doc binary, run x2t to OOXML, and
+   *  return the bytes. Resolves with the converted bytes + format
+   *  ('docx'|'xlsx'|'pptx') so callers know what extension to encode. */
+  save: () => Promise<{ bytes: Uint8Array; format: 'docx' | 'xlsx' | 'pptx' }>
+}
 
 interface Props {
   fileId: string
@@ -43,9 +50,11 @@ type FromBridge =
   | { type: 'ready'; docType: string | null }
   | { type: 'pong' }
   | { type: 'init-ack' }
+  | { type: 'save-result'; requestId: number; bytes?: Uint8Array; format?: DocType; error?: string }
 type ToBridge =
   | { type: 'ping' }
   | { type: 'init'; payload: InitPayload }
+  | { type: 'save-request'; requestId: number }
 
 interface InitPayload {
   type: DocType
@@ -58,11 +67,41 @@ interface InitPayload {
   initialBytes?: Uint8Array
 }
 
-export default function OfficeEditor({ fileId, filename, initialBytes }: Props) {
+function OfficeEditorBase(
+  { fileId, filename, initialBytes }: Props,
+  ref: Ref<OfficeEditorHandle>,
+) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [bridgeReady, setBridgeReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const docType = detectType(filename)
+  // requestId → resolver/rejecter for in-flight save() calls.
+  const pendingSavesRef = useRef<Map<number, {
+    resolve: (v: { bytes: Uint8Array; format: DocType }) => void
+    reject: (e: Error) => void
+  }>>(new Map())
+  const nextSaveIdRef = useRef(1)
+
+  useImperativeHandle(ref, () => ({
+    save: () =>
+      new Promise((resolve, reject) => {
+        const iframe = iframeRef.current
+        if (!iframe || !iframe.contentWindow) {
+          reject(new Error('editor iframe not mounted'))
+          return
+        }
+        if (!docType) {
+          reject(new Error('unsupported file extension'))
+          return
+        }
+        const requestId = nextSaveIdRef.current++
+        pendingSavesRef.current.set(requestId, { resolve, reject })
+        iframe.contentWindow.postMessage(
+          { type: 'save-request', requestId } satisfies ToBridge,
+          window.location.origin,
+        )
+      }),
+  }), [docType])
 
   useEffect(() => {
     if (!docType) {
@@ -99,6 +138,20 @@ export default function OfficeEditor({ fileId, filename, initialBytes }: Props) 
         case 'init-ack':
           // Phase 2b will start the actual editor mount in response.
           return
+        case 'save-result': {
+          const pending = pendingSavesRef.current.get(msg.requestId)
+          if (!pending) return
+          pendingSavesRef.current.delete(msg.requestId)
+          if (msg.error) {
+            pending.reject(new Error(msg.error))
+          } else if (msg.bytes && msg.format) {
+            const u8 = msg.bytes instanceof Uint8Array ? msg.bytes : new Uint8Array(msg.bytes)
+            pending.resolve({ bytes: u8, format: msg.format })
+          } else {
+            pending.reject(new Error('save returned no bytes'))
+          }
+          return
+        }
       }
     }
 
@@ -127,3 +180,6 @@ export default function OfficeEditor({ fileId, filename, initialBytes }: Props) 
     />
   )
 }
+
+const OfficeEditor = forwardRef<OfficeEditorHandle, Props>(OfficeEditorBase)
+export default OfficeEditor

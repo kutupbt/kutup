@@ -474,8 +474,61 @@
               buildAndStart(msg.payload || {})
               send(e.source, { type: 'init-ack' })
               return
+            case 'save-request':
+              handleSaveRequest(e.source, msg.requestId)
+              return
           }
         })
+
+        // CryptPad's getEditor (inner.js:376): the OnlyOffice editor
+        // instance is at docEditor.getIframe().contentWindow.editor.
+        // asc_nativeGetFile() returns OnlyOffice's binary .bin format.
+        var getInnerEditor = function () {
+          if (!docEditor || typeof docEditor.getIframe !== 'function') return null
+          var ifr = docEditor.getIframe()
+          if (!ifr || !ifr.contentWindow) return null
+          return ifr.contentWindow.editor || null
+        }
+
+        var handleSaveRequest = function (replyTo, requestId) {
+          if (!docEditor || !docType) {
+            replyTo.postMessage({
+              type: 'save-result', requestId: requestId,
+              error: 'editor not ready',
+            }, EXPECTED_ORIGIN)
+            return
+          }
+          try {
+            var inner = getInnerEditor()
+            if (!inner || typeof inner.asc_nativeGetFile !== 'function') {
+              throw new Error('asc_nativeGetFile not available on this OO build')
+            }
+            var bin = inner.asc_nativeGetFile()
+            // bin is a Uint8Array of OnlyOffice's .bin format. Convert to
+            // the original OOXML extension via x2t so kutup stores the
+            // file in the user-visible format.
+            var outFmt = docType  // 'docx' | 'xlsx' | 'pptx'
+            x2tConvert(bin, 'out.bin', outFmt)
+              .then(function (res) {
+                replyTo.postMessage({
+                  type: 'save-result', requestId: requestId,
+                  bytes: res.output,
+                  format: outFmt,
+                }, EXPECTED_ORIGIN)
+              })
+              .catch(function (err) {
+                replyTo.postMessage({
+                  type: 'save-result', requestId: requestId,
+                  error: 'x2t convert failed: ' + (err && err.message || err),
+                }, EXPECTED_ORIGIN)
+              })
+          } catch (err) {
+            replyTo.postMessage({
+              type: 'save-result', requestId: requestId,
+              error: (err && err.message) || String(err),
+            }, EXPECTED_ORIGIN)
+          }
+        }
 
         if (window.parent && window.parent !== window) {
           send(window.parent, { type: 'ready', docType: docType })
