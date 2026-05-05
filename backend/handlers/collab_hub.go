@@ -11,6 +11,10 @@ import (
 type HubConn interface {
 	DeviceID() int64
 	UserID() string
+	// WriteFrame enqueues b for delivery. MUST be non-blocking — the Hub calls
+	// WriteFrame while holding a roomState read lock, so a blocking implementation
+	// would head-of-line-block the entire room. Implementations should drop the
+	// frame and Close() on backpressure rather than block.
 	WriteFrame(b []byte) error
 	Close()
 }
@@ -52,17 +56,23 @@ func (h *Hub) Join(fileID string, c HubConn) {
 	r.mu.Unlock()
 }
 
-// Leave removes a connection from the file's room. Cleans up the room if empty.
+// Leave removes a connection from the file's room. Cleans up the room when empty.
+//
+// Lock order: outer Hub.mu held throughout; inner roomState.mu nested inside.
+// Strict outer→inner ordering avoids the join-during-leave ghosting race.
 func (h *Hub) Leave(fileID string, c HubConn) {
-	r := h.room(fileID)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	r, ok := h.rooms[fileID]
+	if !ok {
+		return
+	}
 	r.mu.Lock()
 	delete(r.peers, c)
 	empty := len(r.peers) == 0
 	r.mu.Unlock()
 	if empty {
-		h.mu.Lock()
 		delete(h.rooms, fileID)
-		h.mu.Unlock()
 	}
 }
 
@@ -95,6 +105,10 @@ func (h *Hub) Broadcast(fileID string, sender HubConn, frame []byte) {
 
 // CloseDevice forces all connections from a given device to close, across all rooms.
 // Used when a device is revoked (Phase D5).
+//
+// Note: this does NOT update the rooms/peers state. The wsConn's own teardown
+// must call Leave() when its read loop exits — this is the contract D4's
+// HandleConnection follows via `defer h.Hub.Leave(fileID, c)`.
 func (h *Hub) CloseDevice(deviceID int64) {
 	h.mu.RLock()
 	rooms := make([]*roomState, 0, len(h.rooms))
