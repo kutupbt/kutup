@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+
+# OnlyOffice integration assets are too large for the docker image (~1GB v9
+# editor + 55MB x2t). Mount them via a volume from the host instead — see
+# docker-compose.override.yml in test stacks.
+public/onlyoffice/dist
+public/onlyoffice/templates
