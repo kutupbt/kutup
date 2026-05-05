@@ -48,6 +48,24 @@ func (s *StorageService) Upload(ctx context.Context, path string, body io.Reader
 	return nil
 }
 
+// PutObjectVersioned puts an object and returns the SeaweedFS version id.
+// Bucket must have versioning enabled (see seaweedfs-init.sh / lifecycle.json).
+func (s *StorageService) PutObjectVersioned(ctx context.Context, key string, body io.Reader, size int64) (string, error) {
+	out, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(s.bucket),
+		Key:           aws.String(key),
+		Body:          body,
+		ContentLength: aws.Int64(size),
+	})
+	if err != nil {
+		return "", err
+	}
+	if out.VersionId == nil {
+		return "", nil // bucket might not have versioning enabled
+	}
+	return *out.VersionId, nil
+}
+
 // PresignedDownload generates a presigned URL valid for 15 minutes.
 func (s *StorageService) PresignedDownload(ctx context.Context, path string) (string, error) {
 	presigner := s3.NewPresignClient(s.client)

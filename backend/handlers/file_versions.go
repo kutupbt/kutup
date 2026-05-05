@@ -167,6 +167,100 @@ func (h *FileVersionsHandler) Patch(c *fiber.Ctx) error {
 	return c.JSON(v)
 }
 
+// @Summary Upload a snapshot blob (multipart). Companion to POST /versions.
+// @Tags    Files
+// @Security BearerAuth
+// @Accept  multipart/form-data
+// @Produce json
+// @Param   fileId path string true "File UUID"
+// @Param   file formData file true "Encrypted snapshot bytes"
+// @Success 200 {object} fiber.Map
+// @Failure 400 {object} ErrorResponse
+// @Failure 403 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
+// @Router  /files/{fileId}/snapshot-blob [post]
+func (h *FileVersionsHandler) UploadSnapshotBlob(c *fiber.Ctx) error {
+	userID := middleware.UserID(c)
+	fileID := c.Params("fileId")
+	if !h.canAccessFile(c.Context(), userID, fileID) {
+		return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
+	}
+	fh, err := c.FormFile("file")
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "missing file"})
+	}
+	f, err := fh.Open()
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+	defer f.Close()
+	storagePath := fmt.Sprintf("files/%s/snapshot", fileID)
+	versionID, err := h.Storage.PutObjectVersioned(c.Context(), storagePath, f, fh.Size)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+	return c.JSON(fiber.Map{
+		"storagePath": storagePath,
+		"s3VersionId": versionID,
+	})
+}
+
+type recordSnapshotRequest struct {
+	S3VersionID   string `json:"s3VersionId"`
+	StoragePath   string `json:"storagePath"`
+	SeqAtSnapshot int64  `json:"seqAtSnapshot"`
+	DocKeyID      int64  `json:"docKeyId"`
+	SizeBytes     int64  `json:"sizeBytes"`
+	Label         string `json:"label,omitempty"`
+	KeepForever   bool   `json:"keepForever,omitempty"`
+}
+
+// @Summary Record a snapshot version + truncate the update log up to seqAtSnapshot.
+// @Tags    Files
+// @Security BearerAuth
+// @Accept  json
+// @Produce json
+// @Param   fileId path string true "File UUID"
+// @Param   body body recordSnapshotRequest true "Snapshot metadata"
+// @Success 201 {object} fiber.Map
+// @Failure 400 {object} ErrorResponse
+// @Failure 403 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
+// @Router  /files/{fileId}/versions [post]
+func (h *FileVersionsHandler) Record(c *fiber.Ctx) error {
+	userID := middleware.UserID(c)
+	fileID := c.Params("fileId")
+	if !h.canAccessFile(c.Context(), userID, fileID) {
+		return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
+	}
+	var req recordSnapshotRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
+	}
+	if req.S3VersionID == "" || req.StoragePath == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "s3VersionId and storagePath are required"})
+	}
+	var id string
+	err := h.DB.QueryRow(c.Context(), `
+		INSERT INTO file_versions (file_id, s3_version_id, storage_path, seq_at_snapshot,
+		                           doc_key_id, author_user_id, size_bytes, label, keep_forever)
+		VALUES ($1,$2,$3,$4,$5,$6,$7, NULLIF($8, ''),$9)
+		RETURNING id::text
+	`, fileID, req.S3VersionID, req.StoragePath, req.SeqAtSnapshot,
+		req.DocKeyID, userID, req.SizeBytes, req.Label, req.KeepForever).Scan(&id)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+	// Truncate the log up to seq_at_snapshot.
+	if _, err := h.DB.Exec(c.Context(),
+		`DELETE FROM file_update_log WHERE file_id = $1 AND seq <= $2`,
+		fileID, req.SeqAtSnapshot); err != nil {
+		// Snapshot already committed; log truncation is best-effort. Don't 500 the caller.
+		// (A future cleanup job would catch up if this drops.)
+	}
+	return c.Status(201).JSON(fiber.Map{"id": id})
+}
+
 // canAccessFile returns true if the user owns the collection or is a share recipient.
 // Same shape as the existing canAccessCollection in files.go but joins through files.
 func (h *FileVersionsHandler) canAccessFile(ctx context.Context, userID, fileID string) bool {
