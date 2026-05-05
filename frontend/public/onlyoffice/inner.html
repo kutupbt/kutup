@@ -33,13 +33,13 @@
         overflow: hidden;
         font-family: system-ui, -apple-system, sans-serif;
       }
-      /* Anchor the placeholder with absolute positioning — DocsAPI sizes
-         its iframe relative to the placeholder's bounding box, and a flex
-         child sometimes resolves to 0 height during mount before its
-         siblings settle. Absolute + 100% sidesteps that race. */
+      /* OnlyOffice's DocsAPI mounts its editor as a child <iframe> inside
+         #placeholder with its OWN width/height attributes (default 300x150).
+         CSS-force every descendant to fill so the editor matches the viewport. */
       #placeholder {
-        position: absolute;
-        inset: 0;
+        position: relative;
+        width: 100vw;
+        height: 100vh;
       }
       #placeholder iframe,
       #placeholder > * {
@@ -47,6 +47,8 @@
         height: 100% !important;
         border: 0 !important;
         display: block !important;
+        position: absolute !important;
+        inset: 0 !important;
       }
       #status {
         position: fixed;
@@ -212,11 +214,41 @@
           }
         }
 
+        // Watch for OnlyOffice mounting its iframe(s) and force-fill them.
+        // CSS alone isn't enough on some builds because OnlyOffice writes
+        // explicit width="..." height="..." attributes that beat plain CSS;
+        // these attribute writes don't get re-applied so resetting them once
+        // sticks.
+        var forceFill = function () {
+          var ph = document.getElementById('placeholder')
+          if (!ph) return
+          var nodes = ph.querySelectorAll('iframe, div')
+          nodes.forEach(function (n) {
+            n.style.width = '100%'
+            n.style.height = '100%'
+            n.style.maxWidth = '100%'
+            n.style.maxHeight = '100%'
+            n.removeAttribute('width')
+            n.removeAttribute('height')
+          })
+        }
+        if (typeof MutationObserver === 'function') {
+          var mo = new MutationObserver(forceFill)
+          mo.observe(document.getElementById('placeholder'), { childList: true, subtree: true })
+        }
+
         var startEditor = function (cfg) {
           if (!window.DocsAPI || typeof window.DocsAPI.DocEditor !== 'function') {
             throw new Error('window.DocsAPI.DocEditor not found after api.js load')
           }
           docEditor = new window.DocsAPI.DocEditor('placeholder', cfg)
+          forceFill()
+          // Sometimes OnlyOffice resizes itself after mount based on the
+          // initial placeholder dims; an extra pass after the editor settles
+          // catches those.
+          setTimeout(forceFill, 100)
+          setTimeout(forceFill, 500)
+          setTimeout(forceFill, 1500)
           // The CryptPad-fork's connectMockServer assigns its callbacks onto
           // window.APP (CryptPad's global state container) — e.g.
           // `window.APP.getImageURL = e.getImageURL ? ... : ...`. Without a
