@@ -69,6 +69,16 @@
     <div id="editor-host">
       <div id="placeholder"></div>
     </div>
+    <!-- Hidden sibling iframe that runs the x2t WASM converter. Loaded once
+         at boot; conversions go through `x2tConvert(input, fileName, format)`
+         (defined in the script below). Phase 3a wires the bridge; Phase 3b
+         calls it on first OOXML open. -->
+    <iframe
+      id="x2t-frame"
+      src="/onlyoffice/x2t.html"
+      style="display:none"
+      title="x2t bridge"
+    ></iframe>
     <div id="status">bridge: idle</div>
 
     <script>
@@ -94,6 +104,49 @@
         var send = function (target, msg) {
           target.postMessage(msg, EXPECTED_ORIGIN)
         }
+
+        // ---------- x2t bridge ------------------------------------------------
+        // Tracks pending convert calls by requestId. `x2tConvert(input,
+        // fileName, format)` returns a Promise resolved with { output: Uint8,
+        // images: [{name,data}] } or rejected with a JS error.
+        var x2tReady = false
+        var x2tReadyResolvers = []
+        var x2tNextRequestId = 1
+        var x2tPending = {}
+
+        var x2tWaitReady = function () {
+          if (x2tReady) return Promise.resolve()
+          return new Promise(function (resolve) { x2tReadyResolvers.push(resolve) })
+        }
+
+        var x2tConvert = function (input, fileName, outputFormat, extra) {
+          return x2tWaitReady().then(function () {
+            var iframe = document.getElementById('x2t-frame')
+            if (!iframe || !iframe.contentWindow) {
+              return Promise.reject(new Error('x2t iframe missing'))
+            }
+            var requestId = x2tNextRequestId++
+            return new Promise(function (resolve, reject) {
+              x2tPending[requestId] = { resolve: resolve, reject: reject }
+              var msg = {
+                type: 'convert',
+                requestId: requestId,
+                input: input,
+                fileName: fileName,
+                outputFormat: outputFormat,
+              }
+              if (extra && extra.images) msg.images = extra.images
+              if (extra && extra.mediasSources) msg.mediasSources = extra.mediasSources
+              if (extra && extra.mediasData) msg.mediasData = extra.mediasData
+              iframe.contentWindow.postMessage(msg, EXPECTED_ORIGIN)
+            })
+          })
+        }
+
+        // Surface x2tConvert globally so debugging from devtools is easy and
+        // future phases (3b/4a/4c) can call it without re-deriving the
+        // request/response plumbing.
+        window.x2tConvert = x2tConvert
 
         // ---------- AMD shim --------------------------------------------------
         // The CryptPad templates (oodoc_base.js, oocell_base.js, ooslide_base.js)
@@ -346,6 +399,35 @@
           var msg = e.data
           if (!msg || typeof msg !== 'object') return
 
+          // ---- x2t iframe → us ----
+          if (msg.type === 'x2t-ready') {
+            x2tReady = true
+            x2tReadyResolvers.splice(0).forEach(function (r) { r() })
+            console.log('[kutup-bridge] x2t ready')
+            return
+          }
+          if (msg.type === 'x2t-error') {
+            console.error('[kutup-bridge] x2t bootstrap error:', msg.error)
+            return
+          }
+          if (msg.type === 'convert-result') {
+            var p = x2tPending[msg.requestId]
+            if (p) {
+              delete x2tPending[msg.requestId]
+              p.resolve({ output: msg.output, images: msg.images || [] })
+            }
+            return
+          }
+          if (msg.type === 'convert-error') {
+            var pe = x2tPending[msg.requestId]
+            if (pe) {
+              delete x2tPending[msg.requestId]
+              pe.reject(new Error(msg.error || 'x2t convert failed'))
+            }
+            return
+          }
+
+          // ---- kutup parent → us ----
           switch (msg.type) {
             case 'ping':
               send(e.source, { type: 'pong' })
