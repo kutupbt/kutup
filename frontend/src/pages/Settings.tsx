@@ -1,14 +1,15 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Loader2, Shield, KeyRound, ArrowLeft, Globe, Check, ChevronDown } from 'lucide-react'
+import { Loader2, Shield, KeyRound, ArrowLeft, Globe, Check, ChevronDown, Smartphone } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { useAppSelector, useAppDispatch } from '@/store'
 import { updateTotpEnabled } from '@/store/authSlice'
 import api from '@/api/client'
+import { listDevices, revokeDevice, type DeviceRow } from '@/api/collab'
 import { formatBytes } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -60,6 +61,104 @@ const LANGUAGES = [
   { code: 'en', label: 'English' },
   { code: 'tr', label: 'Türkçe' },
 ]
+
+function DevicesSection() {
+  const [devs, setDevs] = useState<DeviceRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const refresh = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const list = await listDevices()
+      setDevs(list)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'load failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    refresh()
+  }, [])
+
+  const onRevoke = async (id: number) => {
+    try {
+      await revokeDevice(id)
+      setDevs((arr) => arr.map((x) => (x.deviceId === id ? { ...x, isActive: false } : x)))
+      toast.success('Device revoked')
+    } catch (e) {
+      toast.error('Revoke failed: ' + (e instanceof Error ? e.message : String(e)))
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2">
+          <Smartphone className="h-4 w-4" />
+          Devices
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Browser tabs and CLI sessions register here when you start a collaborative edit.
+          Revoke a device to disconnect it and reject future signed updates from it.
+        </p>
+        {loading && <div className="text-sm text-muted-foreground">Loading…</div>}
+        {error && <div className="text-sm text-destructive">Error: {error}</div>}
+        {!loading && !error && devs.length === 0 && (
+          <div className="text-sm text-muted-foreground">No devices yet.</div>
+        )}
+        {devs.length > 0 && (
+          <ul className="divide-y rounded border">
+            {devs.map((d) => (
+              <li key={d.deviceId} className="flex items-center justify-between gap-2 p-3">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm">{d.label || `Device #${d.deviceId}`}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {d.isActive ? 'Active' : 'Revoked'} · created{' '}
+                    {new Date(d.createdAt).toLocaleString()}
+                    {d.lastSeenAt && ` · last seen ${new Date(d.lastSeenAt).toLocaleString()}`}
+                  </div>
+                </div>
+                {d.isActive && (
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button variant="outline" size="sm">
+                        Revoke
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Revoke this device?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Any active editing session from {d.label || `Device #${d.deviceId}`} will
+                          be disconnected, and future signed updates from it will be rejected.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          onClick={() => onRevoke(d.deviceId)}
+                        >
+                          Revoke
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
 
 export default function Settings() {
   const { t, i18n } = useTranslation()
@@ -201,6 +300,9 @@ export default function Settings() {
           )}
         </CardContent>
       </Card>
+
+      {/* Devices */}
+      <DevicesSection />
 
       {/* Language */}
       <Card>
