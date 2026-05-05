@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/kutup/backend/middleware"
@@ -257,6 +258,8 @@ func (h *FileVersionsHandler) Record(c *fiber.Ctx) error {
 		fileID, req.SeqAtSnapshot); err != nil {
 		// Snapshot already committed; log truncation is best-effort. Don't 500 the caller.
 		// (A future cleanup job would catch up if this drops.)
+		log.Printf("WARN: file_update_log truncate failed for file=%s seq<=%d: %v",
+			fileID, req.SeqAtSnapshot, err)
 	}
 	return c.Status(201).JSON(fiber.Map{"id": id})
 }
