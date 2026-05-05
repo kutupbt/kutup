@@ -14,7 +14,7 @@ import (
 type CollabHandler struct {
 	DB        *pgxpool.Pool
 	JWTSecret string
-	Hub       any // populated in D3 (will be retyped to *Hub once the type lands)
+	Hub       *Hub
 }
 
 // Upgrade returns a Fiber middleware that performs the WebSocket handshake.
