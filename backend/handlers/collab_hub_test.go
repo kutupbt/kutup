@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -63,4 +64,26 @@ func TestHubCloseDevice(t *testing.T) {
 	if got := h.Peers("f2"); len(got) != 1 {
 		t.Fatalf("device 2 should still be in f2, got %d", len(got))
 	}
+}
+
+func TestHubConcurrency(t *testing.T) {
+	h := NewHub(nil)
+	const G, N = 16, 500
+	files := []string{"f1", "f2", "f3"}
+	var wg sync.WaitGroup
+	for g := 0; g < G; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			c := &fakeConn{deviceID: int64(id)}
+			for i := 0; i < N; i++ {
+				f := files[(id+i)%len(files)]
+				h.Join(f, c)
+				_ = h.Peers(f)
+				h.Broadcast(f, c, []byte("x"))
+				h.Leave(f, c)
+			}
+		}(g)
+	}
+	wg.Wait()
 }
