@@ -637,7 +637,12 @@ export default function Drive() {
 
   return (
     <div className="flex min-h-screen">
-      <Sidebar viewMode={viewMode} onGoHome={goHome} onGoShared={goToShared} />
+      <Sidebar
+        viewMode={viewMode}
+        sharedCount={sharedCollections.length}
+        onGoHome={goHome}
+        onGoShared={goToShared}
+      />
 
       <main
         className="flex-1 p-8 overflow-auto relative"
