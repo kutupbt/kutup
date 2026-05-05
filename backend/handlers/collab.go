@@ -74,9 +74,9 @@ func (h *CollabHandler) PreUpgrade(authMW *middleware.AuthMiddleware) fiber.Hand
 		if ownerID != userID && !sharedWith {
 			return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
 		}
-		c.Locals("userID", userID)
-		c.Locals("fileID", fileID)
-		c.Locals("collectionID", collID)
+		c.Locals("userId", userID)
+		c.Locals("fileId", fileID)
+		c.Locals("collectionId", collID)
 		return c.Next()
 	}
 }
