@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
@@ -23,7 +25,10 @@ type CollabHandler struct {
 	Hub       *Hub
 }
 
-const wsOutBuf = 64
+const (
+	wsOutBuf            = 256
+	backpressureTimeout = 2 * time.Second
+)
 
 // wsConn is the production HubConn implementation backed by a real WebSocket.
 type wsConn struct {
@@ -39,8 +44,11 @@ type wsConn struct {
 func (c *wsConn) DeviceID() int64 { return c.deviceID }
 func (c *wsConn) UserID() string  { return c.userID }
 
-// WriteFrame is non-blocking. Drops + closes on backpressure. Returns error
-// if the conn is already closed.
+// WriteFrame waits up to backpressureTimeout for c.out to have room before
+// closing the conn. Original v1 was strictly non-blocking with default close
+// on full buffer — under fast typing bursts this evicted healthy peers from
+// the room mid-session. A short bounded wait absorbs typical bursts while
+// still detecting genuinely-stuck writers.
 //
 // Uses `done` (closed in Close) as the synchronization point so we never
 // risk a send-on-closed-channel panic. c.out itself is never closed —
@@ -51,14 +59,16 @@ func (c *wsConn) WriteFrame(b []byte) error {
 		return errors.New("conn closed")
 	default:
 	}
+	t := time.NewTimer(backpressureTimeout)
+	defer t.Stop()
 	select {
 	case c.out <- b:
 		return nil
 	case <-c.done:
 		return errors.New("conn closed")
-	default:
+	case <-t.C:
 		c.Close()
-		return errors.New("backpressure")
+		return errors.New("backpressure timeout")
 	}
 }
 
@@ -140,6 +150,13 @@ func (h *CollabHandler) HandleConnection(
 
 	go c.writePump()
 	h.Hub.Join(fileID, c)
+	log.Printf("collab: device=%d joined fileId=%s, peers=%d", deviceID, fileID, len(h.Hub.Peers(fileID)))
+	defer func() {
+		// Logged via defer-stack ordering: Hub.Leave runs first (the outer
+		// defer) and removes us from peers, so this print reflects the
+		// post-leave state.
+		log.Printf("collab: device=%d left fileId=%s, peers=%d", deviceID, fileID, len(h.Hub.Peers(fileID)))
+	}()
 
 	// Read loop.
 	for {
@@ -212,14 +229,19 @@ func (h *CollabHandler) handleFrame(c *wsConn, fileID string, data []byte) {
 
 	// Awareness frames: broadcast only, no persistence.
 	if f.Kind == envelope.KindYjsAwareness {
+		peers := len(h.Hub.Peers(fileID))
+		log.Printf("collab: bcast awareness file=%s sender=%d peers=%d", fileID, c.deviceID, peers)
 		h.Hub.Broadcast(fileID, c, data)
 		return
 	}
 
 	// All other persisted kinds (yjs_update, snapshot_announce, oo_op/lock/checkpoint_meta).
 	if _, err := h.persistFrame(fileID, c.deviceID, f, data); err != nil {
+		log.Printf("collab: persist failed file=%s sender=%d err=%v", fileID, c.deviceID, err)
 		return
 	}
+	peers := len(h.Hub.Peers(fileID))
+	log.Printf("collab: bcast yjs_update file=%s sender=%d kind=%d peers=%d", fileID, c.deviceID, f.Kind, peers)
 	h.Hub.Broadcast(fileID, c, data)
 }
 
