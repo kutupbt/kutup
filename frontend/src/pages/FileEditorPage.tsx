@@ -13,6 +13,7 @@ import {
 import { chooseEditor, chooseOfficeEditor } from '@/components/editors/dispatch'
 import { chooseViewer } from '@/components/viewers/dispatch'
 import { Button } from '@/components/ui/button'
+import { KutupLogo } from '@/components/KutupLogo'
 
 interface FileMetadata {
   name: string
@@ -190,9 +191,19 @@ export default function FileEditorPage() {
   return (
     <div className="flex h-screen flex-col overflow-hidden">
       <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
-        <Button variant="ghost" size="icon" onClick={() => navigate('/drive')} aria-label="Back to Drive">
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
+        {/* Kutup logo opens Drive in a NEW tab — Google-Docs style: this
+            tab IS the document, you exit by closing it. */}
+        <a
+          href="/drive"
+          target="_blank"
+          rel="noopener"
+          className="flex items-center gap-2 rounded px-1 py-1 hover:bg-accent"
+          title="Open Kutup Drive (new tab)"
+        >
+          <KutupLogo size={22} />
+          <span className="text-sm font-semibold tracking-tight">Kutup</span>
+        </a>
+        <span className="text-sm text-muted-foreground">·</span>
         <span className="text-sm font-medium truncate">{filename}</span>
         {viewerReady && blobUrl && (
           <a
