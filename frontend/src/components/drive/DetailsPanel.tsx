@@ -44,12 +44,27 @@ export default function DetailsPanel({
 
   const isFolder = isCollection(item)
 
-  const showSize = !isFolder && (item as DecryptedFile).decryptedSize != null
-  const showCreated = 'createdAt' in item && !!(item as DecryptedFile).createdAt
-  const showRemoteBadge = isFolder && (item as Collection).isRemote
   const showColorRow = isFolder && !(item as Collection).isRemote && !!onColor
-  const hasDl = showSize || showCreated || showRemoteBadge
-  const hasMeta = hasDl || showColorRow
+
+  // One-line centered meta strip. Files show "size · date"; remote folders
+  // show a federation badge; owned folders have nothing here (color row
+  // below carries their meta).
+  const metaParts: React.ReactNode[] = []
+  if (!isFolder) {
+    const f = item as DecryptedFile
+    if (f.decryptedSize != null) metaParts.push(formatBytes(f.decryptedSize))
+    if (f.createdAt) metaParts.push(new Date(f.createdAt).toLocaleDateString())
+  } else if ((item as Collection).isRemote) {
+    metaParts.push(
+      <span key="fed" className="inline-flex items-center gap-1">
+        <Globe className="h-3 w-3 text-primary" />
+        {t('details.federatedShare')}
+      </span>,
+    )
+  }
+
+  const hasMetaText = metaParts.length > 0
+  const hasMeta = hasMetaText || showColorRow
 
   return (
     <Dialog open={!!item} onOpenChange={(open) => { if (!open) onClose() }}>
@@ -77,30 +92,16 @@ export default function DetailsPanel({
         {hasMeta && (
           <>
             <Separator />
-            <div className="py-4 space-y-3">
-              {hasDl && (
-                <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                  {showSize && (
-                    <>
-                      <dt className="text-muted-foreground">{t('details.size')}</dt>
-                      <dd>{formatBytes((item as DecryptedFile).decryptedSize!)}</dd>
-                    </>
-                  )}
-                  {showCreated && (
-                    <>
-                      <dt className="text-muted-foreground">{t('details.created')}</dt>
-                      <dd>{new Date((item as DecryptedFile).createdAt).toLocaleDateString()}</dd>
-                    </>
-                  )}
-                  {showRemoteBadge && (
-                    <>
-                      <dt className="text-muted-foreground">{t('details.type')}</dt>
-                      <dd className="flex items-center gap-1">
-                        <Globe className="h-3 w-3 text-primary" /> {t('details.federatedShare')}
-                      </dd>
-                    </>
-                  )}
-                </dl>
+            <div className="py-4 flex flex-col items-center gap-3">
+              {hasMetaText && (
+                <p className="text-xs text-muted-foreground flex items-center gap-2">
+                  {metaParts.map((part, i) => (
+                    <span key={i} className="inline-flex items-center gap-2">
+                      {i > 0 && <span aria-hidden>·</span>}
+                      {part}
+                    </span>
+                  ))}
+                </p>
               )}
               {showColorRow && onColor && (
                 <div className="flex items-center justify-center gap-2">
