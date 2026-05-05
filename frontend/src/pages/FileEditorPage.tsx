@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Loader2, ArrowLeft } from 'lucide-react'
+import { Loader2, ArrowLeft, Download } from 'lucide-react'
 import { useAppSelector } from '@/store'
 import { selectMasterKey, selectPrivateKey } from '@/store/authSlice'
 import api from '@/api/client'
@@ -11,6 +11,7 @@ import {
   unwrapKeyFromSender,
 } from '@/crypto'
 import { chooseEditor } from '@/components/editors/dispatch'
+import { chooseViewer } from '@/components/viewers/dispatch'
 import { Button } from '@/components/ui/button'
 
 interface FileMetadata {
@@ -18,6 +19,11 @@ interface FileMetadata {
   mimeType: string
   size: number
 }
+
+// Decrypted blob lives entirely in tab memory. A 2 GB video would OOM the
+// renderer; cap previews at 100 MB and route the user to the Drive download
+// path for anything larger.
+const MAX_PREVIEW_BYTES = 100 * 1024 * 1024
 
 export default function FileEditorPage() {
   const { cid, fid } = useParams<{ cid: string; fid: string }>()
@@ -31,10 +37,16 @@ export default function FileEditorPage() {
   const [error, setError] = useState('')
   const [filename, setFilename] = useState('')
   const [initialContent, setInitialContent] = useState<string | undefined>(undefined)
+  const [blobUrl, setBlobUrl] = useState<string | null>(null)
   // Stable Uint8Array reference for the editor — recreating it would cause
   // TextCollabEditor to tear down its provider on every parent render.
   const collectionMasterRef = useRef<Uint8Array | null>(null)
   const [collectionMasterReady, setCollectionMasterReady] = useState(false)
+
+  // Pick the right component eagerly so the load step knows whether it needs
+  // the bytes as text (editor) or as a blob URL (viewer).
+  const Editor = useMemo(() => (filename ? chooseEditor(filename) : null), [filename])
+  const viewer = useMemo(() => (filename ? chooseViewer(filename) : null), [filename])
 
   useEffect(() => {
     if (!cid || !fid) return
@@ -45,6 +57,7 @@ export default function FileEditorPage() {
     }
 
     let cancelled = false
+    let createdUrl: string | null = null
 
     ;(async () => {
       try {
@@ -88,15 +101,32 @@ export default function FileEditorPage() {
         setFilename(meta.name)
         document.title = `${meta.name} — Kutup`
 
-        // Pre-fetch + decrypt original plaintext for the editor's cold-start
-        // seed. If a Yjs snapshot already exists, the editor ignores this.
-        try {
-          const dlRes = await api.get(`/files/${fid}/download`, { responseType: 'arraybuffer' })
-          if (cancelled) return
-          const plain = await decryptStream(new Uint8Array(dlRes.data), fileKey)
-          setInitialContent(new TextDecoder().decode(plain))
-        } catch {
-          // Editor handles missing initial content.
+        // Decrypt the original blob. Editors need it as text; viewers need it
+        // as a blob: URL. We always do the network + decrypt; the only
+        // difference is how we hand the bytes to the renderer.
+        const editorTarget = chooseEditor(meta.name)
+        const viewerTarget = chooseViewer(meta.name)
+        if ((editorTarget || viewerTarget) && meta.size > MAX_PREVIEW_BYTES) {
+          throw new Error(
+            `File is too large to preview in the browser (${Math.round(meta.size / 1024 / 1024)} MB; cap is ${MAX_PREVIEW_BYTES / 1024 / 1024} MB). Download it from Drive instead.`,
+          )
+        }
+        if (editorTarget || viewerTarget) {
+          try {
+            const dlRes = await api.get(`/files/${fid}/download`, { responseType: 'arraybuffer' })
+            if (cancelled) return
+            const plain = await decryptStream(new Uint8Array(dlRes.data), fileKey)
+            if (editorTarget) {
+              setInitialContent(new TextDecoder().decode(plain))
+            } else if (viewerTarget) {
+              const blob = new Blob([plain.buffer as ArrayBuffer], { type: viewerTarget.mimeType })
+              createdUrl = URL.createObjectURL(blob)
+              setBlobUrl(createdUrl)
+            }
+          } catch {
+            // Editor handles missing initial content; viewer will show the
+            // unsupported-state UI below.
+          }
         }
 
         collectionMasterRef.current = collectionKey
@@ -111,10 +141,11 @@ export default function FileEditorPage() {
       }
     })()
 
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      if (createdUrl) URL.revokeObjectURL(createdUrl)
+    }
   }, [cid, fid, masterKey, privateKey, userId, publicKey, navigate])
-
-  const Editor = useMemo(() => (filename ? chooseEditor(filename) : null), [filename])
 
   if (phase === 'loading') {
     return (
@@ -127,13 +158,18 @@ export default function FileEditorPage() {
     )
   }
 
-  if (phase === 'error' || !Editor || !collectionMasterReady || !collectionMasterRef.current) {
+  // Determine which renderer wins. Editor takes precedence for text; viewer
+  // for binary content; otherwise we render an unsupported notice.
+  const editorReady = !!Editor && collectionMasterReady && !!collectionMasterRef.current
+  const viewerReady = !!viewer && !!blobUrl
+
+  if (phase === 'error' || (!editorReady && !viewerReady)) {
     return (
       <div className="flex min-h-screen items-center justify-center p-6">
         <div className="max-w-md text-center space-y-4">
           <h1 className="text-lg font-semibold">Could not open this file</h1>
           <p className="text-sm text-muted-foreground">
-            {error || (Editor ? 'Editor failed to mount.' : 'This file type is not supported in the collaborative editor yet.')}
+            {error || 'This file type isn\'t previewable yet — download it from the Drive details panel.'}
           </p>
           <Button variant="outline" onClick={() => navigate('/drive')}>
             <ArrowLeft className="h-4 w-4 mr-2" /> Back to Drive
@@ -150,15 +186,33 @@ export default function FileEditorPage() {
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <span className="text-sm font-medium truncate">{filename}</span>
+        {viewerReady && blobUrl && (
+          <a
+            href={blobUrl}
+            download={filename}
+            className="ml-auto inline-flex items-center gap-1.5 rounded border border-input bg-background px-2.5 py-1 text-xs hover:bg-accent"
+          >
+            <Download className="h-3.5 w-3.5" /> Download
+          </a>
+        )}
       </header>
       <div className="flex-1 min-h-0">
-        <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading editor…</div>}>
-          <Editor
-            fileId={fid!}
-            filename={filename}
-            collectionMaster={collectionMasterRef.current!}
-            initialContent={initialContent}
-          />
+        <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading…</div>}>
+          {editorReady && Editor && (
+            <Editor
+              fileId={fid!}
+              filename={filename}
+              collectionMaster={collectionMasterRef.current!}
+              initialContent={initialContent}
+            />
+          )}
+          {!editorReady && viewerReady && viewer && blobUrl && (
+            <viewer.Component
+              filename={filename}
+              blobUrl={blobUrl}
+              mimeType={viewer.mimeType}
+            />
+          )}
         </Suspense>
       </div>
     </div>
