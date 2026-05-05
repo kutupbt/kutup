@@ -172,10 +172,15 @@ struct CollabFrame {
 ```
 content_key = HKDF-SHA256(
   ikm  = collection_master_key,
-  salt = "kutup/file-content/v1",
-  info = file_id (UUID bytes)
+  salt = "kutup/file-content/v1" (UTF-8 bytes, no NUL terminator),
+  info = utf8(file_id_string)    // canonical lowercase hyphenated UUID,
+                                 // e.g. "01234567-89ab-cdef-0123-456789abcdef"
+                                 // — NOT the 16 raw UUID bytes
 )
+content_key_length = 32 bytes (the AEAD key length)
 ```
+
+**Cross-language byte-encoding contract:** `info` is the UTF-8 bytes of the canonical UUID *string* form (36 bytes for a standard UUID), not the 16 binary UUID bytes. Any future Go/Rust implementation deriving the same key MUST use this exact form or it will produce a different content_key and silently fail to decrypt. Pinned 2026-05-04 after the F4 implementation.
 
 `collection_master_key` already exists in kutup's data model; recipients of a shared collection already receive it via `crypto_box_seal`. Hence: **no new key wrapping, no new key distribution.** Anyone with collection access can derive the per-file key for any file in that collection.
 
