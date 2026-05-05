@@ -242,6 +242,12 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
         onHello: (h: HelloMsg) => {
           docKeyId = h.currentDocKeyId
           lastSeenSeq = h.headSeq
+          // Resume per-device outbound counter from the server's record so
+          // we don't replay sender_seqs and trip the unique index after a
+          // refresh / remount.
+          if (typeof h.mySenderSeqHigh === 'number' && h.mySenderSeqHigh > 0) {
+            outboundSeq = BigInt(h.mySenderSeqHigh)
+          }
           setStatus('ready')
         },
         onFrame: async (bs) => {

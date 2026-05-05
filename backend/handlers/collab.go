@@ -135,14 +135,26 @@ func (h *CollabHandler) HandleConnection(
 	_ = h.DB.QueryRow(context.Background(),
 		`SELECT COALESCE(MAX(seq), 0) FROM file_update_log WHERE file_id = $1`, fileID,
 	).Scan(&headSeq)
+	// Highest sender_seq this device has already used for this file. The
+	// client uses this to resume its per-device outbound counter so a
+	// refresh / remount doesn't replay sequence numbers and 23505 every
+	// frame against the (file_id, sender_device, sender_seq) UNIQUE index.
+	var mySenderSeq int64
+	_ = h.DB.QueryRow(context.Background(),
+		`SELECT COALESCE(MAX(sender_seq), 0)
+		   FROM file_update_log
+		  WHERE file_id = $1 AND sender_device = $2`,
+		fileID, deviceID,
+	).Scan(&mySenderSeq)
 
 	// Send hello.
 	hello := fiber.Map{
-		"type":            "hello",
-		"fileId":          fileID,
-		"currentDocKeyId": docKeyID,
-		"headSeq":         headSeq,
-		"peers":           h.peerSummaries(fileID),
+		"type":             "hello",
+		"fileId":           fileID,
+		"currentDocKeyId":  docKeyID,
+		"headSeq":          headSeq,
+		"mySenderSeqHigh":  mySenderSeq,
+		"peers":            h.peerSummaries(fileID),
 	}
 	if err := ws.WriteJSON(hello); err != nil {
 		return
