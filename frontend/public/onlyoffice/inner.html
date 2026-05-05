@@ -57,17 +57,11 @@
         margin: 0;
         padding: 0;
       }
+      /* Status pill is hidden by default — kutup parent shows the bridge
+         state in its own navbar; the floating pill is just a debug helper
+         the bridge can re-enable on errors via #status:not(:empty). */
       #status {
-        position: fixed;
-        top: 8px;
-        right: 12px;
-        font-size: 11px;
-        color: #999;
-        background: rgba(255, 255, 255, 0.85);
-        padding: 2px 8px;
-        border-radius: 4px;
-        z-index: 9999;
-        pointer-events: none;
+        display: none;
       }
     </style>
   </head>
@@ -289,6 +283,12 @@
                 .then(function () {
                   setStatus('api.js loaded, mounting editor…')
                   var cfg = {
+                    // OnlyOffice's createIframe (api-orig.js:1262) sets
+                    // iframe.width = config.width / iframe.height = config.height.
+                    // Without these the iframe falls back to the browser's
+                    // 300x150 default. '100%' makes it fill the host.
+                    width: '100%',
+                    height: '100%',
                     document: {
                       fileType: t.fileType,
                       key: 'fresh',  // hardcoded per CryptPad — we manage doc identity ourselves

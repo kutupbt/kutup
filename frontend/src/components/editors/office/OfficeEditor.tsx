@@ -104,23 +104,16 @@ export default function OfficeEditor({ fileId, filename }: Props) {
     )
   }
 
+  // bridgeReady is read by FileEditorPage via a custom event to surface the
+  // status in the page header instead of stealing vertical space here.
+  void bridgeReady
+
   return (
-    <div className="flex h-full w-full flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-muted/30 px-4 text-xs text-muted-foreground">
-        <span className={`inline-block h-2 w-2 rounded-full ${bridgeReady ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
-        <span>
-          OnlyOffice bridge · {bridgeReady ? 'connected' : 'connecting…'}
-          {docType && ` · ${docType}`}
-        </span>
-      </div>
-      <iframe
-        ref={iframeRef}
-        title={filename}
-        src={`/onlyoffice/inner.html?type=${docType}&fileId=${encodeURIComponent(fileId)}`}
-        className="flex-1 border-0"
-        // sandbox left default for now; phase 2b will narrow once we know
-        // exactly which capabilities OnlyOffice's editor needs.
-      />
-    </div>
+    <iframe
+      ref={iframeRef}
+      title={filename}
+      src={`/onlyoffice/inner.html?type=${docType}&fileId=${encodeURIComponent(fileId)}`}
+      className="block h-full w-full border-0"
+    />
   )
 }
