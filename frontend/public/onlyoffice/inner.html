@@ -1,13 +1,15 @@
 <!doctype html>
 <!--
   kutup ↔ OnlyOffice bridge page.
-  This page is loaded by OfficeEditor.tsx in an <iframe> and is responsible
-  for hosting the OnlyOffice editor instance + relaying postMessage between
-  the kutup React parent and the editor.
+  Loaded by OfficeEditor.tsx in an <iframe>; hosts the OnlyOffice editor and
+  relays postMessage between the kutup React parent and the editor's mock
+  server. Architecturally a 1:1 port of CryptPad's www/common/onlyoffice/
+  inner.html + inner.js (AGPL), narrowed to what kutup needs.
 
-  Phase 2a: scaffold only. Sends a `ready` heartbeat to the parent and waits
-  for `init`. Phases 2b/2c/2d add DocsAPI mounting, mockServer callbacks,
-  and template loading. Phase 3 adds the x2t sibling iframe.
+  Phase 2b: loads OnlyOffice's api.js + instantiates DocsAPI.DocEditor with a
+  blank template and a stub config. No connectMockServer yet — auth hangs,
+  but the editor's chrome (toolbar, ribbon, blank canvas) should render.
+  Phase 2c adds the mockServer callbacks.
 -->
 <html lang="en">
   <head>
@@ -20,59 +22,182 @@
         padding: 0;
         height: 100%;
         width: 100%;
+        overflow: hidden;
         font-family: system-ui, -apple-system, sans-serif;
-        background: #fafafa;
-        color: #1a1a1a;
       }
-      #root {
+      #placeholder {
         height: 100%;
         width: 100%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-direction: column;
-        gap: 0.5rem;
       }
       #status {
-        font-size: 14px;
-        color: #666;
-      }
-      #placeholder-a {
-        height: 100%;
-        width: 100%;
+        position: fixed;
+        top: 8px;
+        right: 12px;
+        font-size: 11px;
+        color: #999;
+        background: rgba(255, 255, 255, 0.85);
+        padding: 2px 8px;
+        border-radius: 4px;
+        z-index: 9999;
+        pointer-events: none;
       }
     </style>
   </head>
   <body>
-    <div id="root">
-      <div id="placeholder-a"></div>
-      <div id="status">Bridge ready · waiting for kutup…</div>
-    </div>
+    <div id="placeholder"></div>
+    <div id="status">bridge: idle</div>
 
     <script>
       (function () {
         'use strict'
 
-        // Strict origin check — only accept messages from our React parent.
         var EXPECTED_ORIGIN = window.location.origin
+        var docType = null
+        var fileId = null
 
-        var docType = null  // "docx" | "xlsx" | "pptx"
+        // Map kutup file extension → OnlyOffice template script + DocsAPI types.
+        var DOC_TYPES = {
+          docx: { template: 'oodoc_base.js',   documentType: 'word',  fileType: 'docx' },
+          xlsx: { template: 'oocell_base.js',  documentType: 'cell',  fileType: 'xlsx' },
+          pptx: { template: 'ooslide_base.js', documentType: 'slide', fileType: 'pptx' },
+        }
 
-        function setStatus(text) {
+        var setStatus = function (text) {
           var el = document.getElementById('status')
-          if (el) el.textContent = text
+          if (el) el.textContent = 'bridge: ' + text
         }
 
-        function send(parent, msg) {
-          parent.postMessage(msg, EXPECTED_ORIGIN)
+        var send = function (target, msg) {
+          target.postMessage(msg, EXPECTED_ORIGIN)
         }
 
-        // Parse type from query string for the parent's convenience.
+        // ---------- AMD shim --------------------------------------------------
+        // The CryptPad templates (oodoc_base.js, oocell_base.js, ooslide_base.js)
+        // are AMD modules: `define(function () { return function (newOO) { return
+        // 'DOCY;v5;…'; }; })`. We're not pulling in RequireJS for one shim, so
+        // implement a single-use `define` that captures the factory result, plus
+        // a `define.amd` so other AMD-aware scripts that might end up here
+        // detect us.
+        var capturedFactory = null
+        window.define = function (factory) {
+          capturedFactory = factory
+        }
+        window.define.amd = {}
+
+        var loadScript = function (src) {
+          return new Promise(function (resolve, reject) {
+            var s = document.createElement('script')
+            s.src = src
+            s.onload = function () { resolve() }
+            s.onerror = function () { reject(new Error('script load failed: ' + src)) }
+            document.head.appendChild(s)
+          })
+        }
+
+        var loadTemplate = function (filename) {
+          capturedFactory = null
+          return loadScript('/onlyoffice/templates/' + filename).then(function () {
+            if (typeof capturedFactory !== 'function') {
+              throw new Error('template did not call define()')
+            }
+            // Factory returns a function which, called with newOO=true, returns
+            // the DOCY/XLSY/PPTY string.
+            var maker = capturedFactory()
+            if (typeof maker !== 'function') {
+              throw new Error('template factory did not return a function')
+            }
+            return maker(true)
+          })
+        }
+
+        // ---------- DocsAPI bootstrap ----------------------------------------
+        var ooConfigBuilt = false
+
+        var startEditor = function (cfg) {
+          if (!window.DocsAPI || typeof window.DocsAPI.DocEditor !== 'function') {
+            throw new Error('window.DocsAPI.DocEditor not found after api.js load')
+          }
+          // eslint-disable-next-line no-new
+          new window.DocsAPI.DocEditor('placeholder', cfg)
+          setStatus('editor mounted (no mockServer yet, auth will hang)')
+        }
+
+        var buildAndStart = function (payload) {
+          if (ooConfigBuilt) return
+          ooConfigBuilt = true
+
+          var t = DOC_TYPES[payload.type]
+          if (!t) {
+            setStatus('unsupported type: ' + payload.type)
+            return
+          }
+
+          setStatus('loading template ' + t.template + '…')
+          return loadTemplate(t.template)
+            .then(function (templateString) {
+              setStatus('template loaded (' + templateString.length + ' chars), loading api.js…')
+              // OnlyOffice expects the document.url to fetch the binary. The
+              // CryptPad templates are stored as text in DOCY/XLSY/PPTY format;
+              // OnlyOffice parses that header. text/plain MIME matches CryptPad's
+              // saveToServer (line ~596 in CP's inner.js).
+              var blob = new Blob([templateString], { type: 'text/plain' })
+              var url = URL.createObjectURL(blob)
+
+              return loadScript('/onlyoffice/dist/v9/web-apps/apps/api/documents/api.js')
+                .then(function () {
+                  setStatus('api.js loaded, mounting editor…')
+                  var cfg = {
+                    document: {
+                      fileType: t.fileType,
+                      key: 'fresh',  // hardcoded per CryptPad — we manage doc identity ourselves
+                      title: payload.filename || ('Untitled.' + t.fileType),
+                      url: url,
+                      permissions: {
+                        download: false,
+                        print: true,
+                        protect: t.fileType === 'xlsx',
+                      },
+                    },
+                    documentType: t.documentType,
+                    editorConfig: {
+                      customization: {
+                        compactHeader: true,
+                        chat: false,
+                        comments: false,
+                        hideRightMenu: true,
+                        uiTheme: 'theme-classic-light',
+                      },
+                      user: {
+                        id: '1',
+                        firstname: 'You',
+                        name: 'You',
+                      },
+                      mode: 'view',  // Phase 2b: read-only until mockServer lands in 2c.
+                      lang: (navigator.language || 'en').slice(0, 2),
+                    },
+                    events: {
+                      onAppReady: function () { setStatus('editor: app ready') },
+                      onDocumentReady: function () { setStatus('editor: document ready') },
+                      onError: function (e) {
+                        console.error('OO error:', e)
+                        setStatus('editor error — see console')
+                      },
+                    },
+                  }
+                  startEditor(cfg)
+                })
+            })
+            .catch(function (err) {
+              console.error('inner.html startup failed:', err)
+              setStatus('error: ' + (err && err.message ? err.message : String(err)))
+            })
+        }
+
+        // ---------- postMessage protocol -------------------------------------
         var params = new URLSearchParams(window.location.search)
         docType = params.get('type')
-        if (docType) {
-          setStatus('Bridge ready · type=' + docType + ' · waiting for kutup init…')
-        }
+        fileId = params.get('fileId')
+        setStatus('idle (type=' + docType + ')')
 
         window.addEventListener('message', function (e) {
           if (e.origin !== EXPECTED_ORIGIN) return
@@ -84,10 +209,7 @@
               send(e.source, { type: 'pong' })
               return
             case 'init':
-              // Phase 2b will pick up here: mount DocsAPI.DocEditor with the
-              // payload. For 2a we just acknowledge.
-              setStatus('Init received · type=' + (msg.payload && msg.payload.type) +
-                ' (editor mount lands in phase 2b)')
+              buildAndStart(msg.payload || {})
               send(e.source, { type: 'init-ack' })
               return
           }
