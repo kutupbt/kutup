@@ -5,3 +5,7 @@ frontend/node_modules/
 frontend/package-lock.json
 nginx/certs/
 docker-compose.override.yml
+
+# Optional OnlyOffice integration assets — populated by ./install-onlyoffice.sh.
+# AGPL-3.0-or-later, kept out of the kutup repo to preserve our MIT boundary.
+frontend/public/onlyoffice/dist/

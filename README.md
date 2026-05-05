@@ -112,6 +112,18 @@ For production deployment with TLS, reverse proxies, and backup strategies, see 
 
 ---
 
+## Optional: OnlyOffice for `.docx` / `.xlsx` / `.pptx`
+
+The collaborative office-document editor uses OnlyOffice client JS, which is **AGPL-3.0-or-later** (kutup itself stays MIT). The AGPL assets are not committed to this repo — opt in with:
+
+```sh
+./install-onlyoffice.sh
+```
+
+That populates `frontend/public/onlyoffice/dist/` (gitignored). Rebuild the frontend afterwards. Without this step, kutup still runs — `.docx` / `.xlsx` / `.pptx` files just remain download-only. Design + footguns: [docs/superpowers/specs/2026-05-05-office-collab-design.md](docs/superpowers/specs/2026-05-05-office-collab-design.md).
+
+---
+
 ## API Reference
 
 Full REST API reference: [docs/api.md](docs/api.md).
