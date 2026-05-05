@@ -43,6 +43,7 @@ import ShareDialog from '@/components/drive/dialogs/ShareDialog'
 import PublicShareDialog from '@/components/drive/dialogs/PublicShareDialog'
 import AddRemoteShareDialog from '@/components/drive/dialogs/AddRemoteShareDialog'
 import { chooseEditor } from '@/components/editors/dispatch'
+import { chooseViewer } from '@/components/viewers/dispatch'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 
 import { Button } from '@/components/ui/button'
@@ -449,9 +450,11 @@ export default function Drive() {
 
   function handleFileClick(file: DecryptedFile) {
     const name = file.decryptedName
-    if (name && currentFolder && !currentFolder.isRemote && chooseEditor(name)) {
+    const previewable = !!name && (chooseEditor(name) !== null || chooseViewer(name) !== null)
+    if (name && currentFolder && !currentFolder.isRemote && previewable) {
       // Open in a new tab — the editor page handles decryption + cross-tab
-      // session sync via BroadcastChannel.
+      // session sync via BroadcastChannel, and dispatches to either an
+      // editor (text/markdown/code) or a viewer (image/pdf/video/audio).
       window.open(`/file/${currentFolder.id}/${file.id}`, '_blank', 'noopener')
       return
     }
