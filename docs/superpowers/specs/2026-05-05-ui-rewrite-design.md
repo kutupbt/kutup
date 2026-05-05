@@ -17,7 +17,7 @@ The redesign delivers a familiar, intuitive interface centered on visual hierarc
 
 - **Trash sidebar item + soft-delete.** No backend support today; ship together with v2 OnlyOffice integration.
 - **Spreadsheet / Document / Presentation / Drawing in "+ New".** Wait for OnlyOffice (deferred per `docs/research/2026-05-04-collab-edit-research.md`).
-- **Global cross-collection search.** v1 search filters the **current view only** (folders + files in the current collection).
+- **Global cross-collection search.** v1 search filters the **current view only** (folders + files in the current collection). User confirmed 2026-05-05 that this is acceptable for v1 — global search is a v2 follow-up. Implementing it requires either decrypting metadata for every collection on demand (expensive — multiplies the per-collection key derivation across the whole vault) or maintaining a client-side encrypted-metadata index that the search input queries. To revisit when adding more navigation polish.
 - **Settings page redesign.** Devices section already redesigned; rest stays.
 - **Collection breadcrumb redesign.** The existing `DriveBreadcrumb` is reused as-is.
 
