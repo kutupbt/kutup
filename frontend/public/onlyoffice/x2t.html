@@ -20,11 +20,28 @@
   <head>
     <meta charset="utf-8" />
     <title>x2t bridge — Kutup</title>
-    <script src="/onlyoffice/dist/x2t/x2t.js"></script>
     <script>
       ;(function () {
         'use strict'
         var EXPECTED_ORIGIN = window.location.origin
+
+        // x2t.js's pre-js does `new URL(document.currentScript.getAttribute('src'))`,
+        // which throws on relative URLs. Inject the script tag with an
+        // absolute src so the URL constructor is happy.
+        var s = document.createElement('script')
+        s.src = EXPECTED_ORIGIN + '/onlyoffice/dist/x2t/x2t.js'
+        s.onload = bootstrap
+        s.onerror = function () {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage(
+              { type: 'x2t-error', error: 'failed to load x2t.js' },
+              EXPECTED_ORIGIN,
+            )
+          }
+        }
+        document.head.appendChild(s)
+
+        function bootstrap () {
         // x2t.js is an Emscripten module that sets `window.Module`.
         var Mod = window.Module
         if (!Mod) {
@@ -164,6 +181,7 @@
             )
           }
         })
+        }  // end bootstrap()
       })()
     </script>
   </head>
