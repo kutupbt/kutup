@@ -14,6 +14,7 @@ import { KutupLogo } from '@/components/KutupLogo'
 import MnemonicDisplay from '@/components/MnemonicDisplay'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { PasswordInput } from '@/components/ui/password-input'
 import { Progress } from '@/components/ui/progress'
 import {
   Form,
@@ -236,7 +237,7 @@ export default function FirstLogin() {
                   <FormItem>
                     <FormLabel>{t('firstLogin.newPassword')}</FormLabel>
                     <FormControl>
-                      <Input type="password" autoComplete="new-password" autoFocus {...field} />
+                      <PasswordInput autoComplete="new-password" autoFocus {...field} />
                     </FormControl>
                     {password && (
                       <div className="space-y-1">
@@ -255,7 +256,7 @@ export default function FirstLogin() {
                   <FormItem>
                     <FormLabel>{t('firstLogin.confirmPassword')}</FormLabel>
                     <FormControl>
-                      <Input type="password" autoComplete="new-password" {...field} />
+                      <PasswordInput autoComplete="new-password" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

@@ -13,6 +13,7 @@ import { decryptMasterKey, decryptPrivateKey, toBase64 } from '@/crypto'
 import { KutupLogo } from '@/components/KutupLogo'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { PasswordInput } from '@/components/ui/password-input'
 import {
   Form,
   FormControl,
@@ -257,7 +258,7 @@ export default function Login() {
                   <FormItem>
                     <FormLabel>{t('auth.password')}</FormLabel>
                     <FormControl>
-                      <Input type="password" autoComplete="current-password" {...field} />
+                      <PasswordInput autoComplete="current-password" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
