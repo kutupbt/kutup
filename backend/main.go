@@ -56,6 +56,10 @@ func main() {
 		log.Fatalf("storage init: %v", err)
 	}
 
+	// Background retention job for file_versions (30d / 50ver / keep_forever exempt).
+	cleanup := &services.VersionCleanup{DB: pool, Storage: storage}
+	go cleanup.Run(context.Background())
+
 	// Handlers
 	authH := &handlers.AuthHandler{DB: pool, JWTSecret: cfg.JWTSecret, AppEnv: cfg.AppEnv}
 	collectionsH := &handlers.CollectionsHandler{DB: pool, ServerURL: cfg.ServerURL, AppEnv: cfg.AppEnv}
