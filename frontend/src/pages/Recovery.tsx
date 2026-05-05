@@ -18,6 +18,7 @@ import {
 } from '@/crypto'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { PasswordInput } from '@/components/ui/password-input'
 import { Progress } from '@/components/ui/progress'
 import {
   Form,
@@ -188,7 +189,7 @@ export default function Recovery() {
                   <FormItem>
                     <FormLabel>{t('recovery.newPassword')}</FormLabel>
                     <FormControl>
-                      <Input type="password" autoComplete="new-password" {...field} />
+                      <PasswordInput autoComplete="new-password" {...field} />
                     </FormControl>
                     {newPassword && (
                       <div className="space-y-1">
@@ -207,7 +208,7 @@ export default function Recovery() {
                   <FormItem>
                     <FormLabel>{t('recovery.confirmNewPassword')}</FormLabel>
                     <FormControl>
-                      <Input type="password" autoComplete="new-password" {...field} />
+                      <PasswordInput autoComplete="new-password" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
