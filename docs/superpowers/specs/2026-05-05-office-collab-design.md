@@ -78,19 +78,57 @@ The encrypted OOXML lives in SeaweedFS S3 versioning. The kutup `file_versions` 
 
 ## 6. Phases
 
-Each phase is a separate commit that produces a testable artifact (or, for foundations, a verified build). Per the testable-checkpoints rule, the assistant pauses at each "Yes" boundary and says "you can test …".
+After a deeper read of CryptPad's `inner.js` (3400 LOC, every callback signature mapped), the original 7-phase plan compressed too much into Phase 2. Each major phase below is split into sub-phases that each produce a single browser-testable artifact. Pauses at every "Yes" boundary per the testable-checkpoints rule.
+
+### Reference for everything below
+
+The Explore agent's deep-read of CryptPad lives in this conversation's summary; canonical line numbers come from `cryptpad/www/common/onlyoffice/`. The three-iframe topology is fixed:
+
+```
+[1] FileEditorPage (kutup React)
+      ↓ src=/onlyoffice/inner.html?type=docx&fileId=…
+[2] inner.html (bridge — postMessage protocol)
+      ↓ DocsAPI.DocEditor() creates iframe internally
+[3] OnlyOffice editor (CryptPad-fork build, AGPL)
+
+Plus a sibling iframe:
+[2b] x2t.html (WASM converter, web worker)
+```
+
+`connectMockServer({ onMessage, getParticipants, onAuth, getInitialChanges, getImageURL })` is the integration heart; it's a CryptPad-fork patch on top of OnlyOffice — undocumented officially.
+
+### Sub-phases
 
 | # | Phase | Output | Testable? |
 |---|---|---|---|
-| **1** | License + bundling | `install-onlyoffice.sh` (kutup-flavored, v9-only fork of CryptPad's), `frontend/public/onlyoffice/dist/v9/`, `frontend/public/onlyoffice/dist/x2t/`, README "Optional: enable OnlyOffice" section, `LICENSES/AGPL-3.0-or-later.txt` reference | Build passes (no UI yet) |
-| **2** | Empty editor mount | `OfficeEditor.tsx` + `frontend/public/onlyoffice/inner.html` bridge page; Drive's "+ New" gains "Document (.docx)" / "Spreadsheet (.xlsx)" / "Presentation (.pptx)" entries that create empty files and open them | **Yes** — see OnlyOffice render an empty doc, type locally |
-| **3** | x2t bootstrap + load existing docs | x2t iframe + `Q_OO_CONVERT` bridge; uploaded `.docx/.xlsx/.pptx` decrypt → x2t → OnlyOffice loads them | **Yes** — open an uploaded doc, see its real contents |
-| **4** | Save / checkpoint | `asc_nativeGetFile` + x2t-to-OOXML + existing snapshot endpoints; integrates with the version-history sidebar we already have | **Yes** — edit, save, reload → changes persist |
-| **5** | Real-time collab (the meat) | Wrap `saveChanges` postMessage in `KindOfficeOp`; existing relay routes; remote ops flow back into OnlyOffice via `ooChannel.send` | **Yes** — two tabs, edits sync within a second |
-| **6** | Locking | New `KindOfficeLock` frame; OnlyOffice's native cell-range / paragraph lock UI lights up across peers; `deleteOfflineLocks` on disconnect | **Yes** — two tabs, lock prevents conflicts |
-| **7** | Polish | Hide branding via CSS, `TOO_LARGE` checkpoint error UX, idle-debounce checkpoint, `mediasData` cleanup, version-history compatibility with the new snapshots | **Yes** — full regression sweep |
+| **1** | License + bundling | `install-onlyoffice.sh` (v9 + x2t + 3 templates from cryptpad@2025.6.0), `frontend/public/onlyoffice/{dist,templates}/`, README opt-in section | Build passes |
+| **2a** | Bridge HTML scaffold | `inner.html` skeleton served from `/onlyoffice/inner.html`; nginx + CSP allow the editor's nested iframes (frame-src already set); no JS yet beyond a `postMessage('ready')` heartbeat. Wire FileEditorPage to mount the iframe for `.docx/.xlsx/.pptx` via a new `OfficeEditor.tsx` stub | **Yes** — open a .docx file → blank inner page renders inside the editor route, console shows the ready handshake |
+| **2b** | Empty DocsAPI mount | `inner.html` loads `dist/v9/web-apps/apps/api/documents/api.js` and instantiates `DocsAPI.DocEditor` with a stub config (`mode: 'view'`, `documentType: 'word'`, hardcoded URL pointing at one of the templates fetched in phase 1). No `connectMockServer` yet — OnlyOffice will hang waiting for auth, but the editor *chrome* should appear | **Yes** — open .docx → see OnlyOffice's editor UI render |
+| **2c** | Stub mockServer | Implement minimum `connectMockServer({ onMessage: noop, getParticipants: returns self + history-keeper, onAuth: noop, getInitialChanges: returns [], getImageURL: noop })`. OnlyOffice's auth handshake completes; an empty editable doc renders | **Yes** — open .docx → OnlyOffice's auth completes, can type into the empty doc (changes don't persist) |
+| **2d** | "+ New" entries + real file creation | Drive's "+ New" gains Document / Spreadsheet / Presentation entries. They each create a file in kutup with a placeholder body (the unconverted template binary) then open it. Each opens with the appropriate `documentType` mapped from extension | **Yes** — "+ New → Document" creates Untitled.docx, opens, OnlyOffice editor loads with empty doc |
+| **3a** | x2t iframe bootstrap | `x2t.html` page that loads `dist/x2t/x2t.js` and exposes a `postMessage` API: `{type:'convert', input:Uint8Array, from:'docx', to:'bin'}` → returns `{output:Uint8Array, images:{}}`. Mounted as a sibling iframe of the OnlyOffice editor inside `inner.html` | **Yes** — open the editor → x2t iframe loads; manual postMessage from devtools converts a hardcoded test docx blob to bin |
+| **3b** | OOXML→bin on first open | When opening an existing `.docx/.xlsx/.pptx` upload: kutup decrypts the blob (existing flow), inner.html receives bytes via postMessage, ships them to x2t iframe (`from:'docx', to:'bin'`), feeds the resulting bin to OnlyOffice via `document.url` blob URL | **Yes** — upload an existing .docx, open it, see its real contents in the editor |
+| **4a** | bin→OOXML round-trip | Implement `asc_nativeGetFile()` → x2t iframe (`from:'bin', to:'docx'`) → OOXML bytes. Trigger only on user-initiated Save button (manual). Upload via existing `/files/:fid/snapshot-blob` + `/files/:fid/versions` endpoints | **Yes** — edit a .docx, click Save, reload → see edits |
+| **4b** | Auto-checkpoint trigger | Op-count: every 100 ops force a save (CryptPad's `CHECKPOINT_INTERVAL`). Idle: 30s after last op fires save. Both deduped by op count to prevent double-saves | **Yes** — edit a .docx for ~100 keystrokes, see version-history sidebar gain an entry without clicking Save |
+| **4c** | Version history compatibility | The history sidebar shows OnlyOffice snapshots alongside Yjs ones; restoring an OnlyOffice version downloads the OOXML, x2t-converts to bin, re-feeds OnlyOffice via destroyEditor + reinit | **Yes** — save a few versions, restore one → editor reloads with that version's content |
+| **5a** | Wire saveChanges → relay | Catch `saveChanges` postMessage in inner.html → forward to kutup parent (postMessage) → existing WS path in OfficeEditor.tsx encrypts in our libsodium AEAD envelope (new `KindOfficeOp` constant) → relay broadcasts unchanged. Add `KindOfficeOp` in `backend/services/envelope/` and treat it identically to `KindYjsUpdate` for persist + broadcast | **Yes** — only one tab; verify backend logs show `bcast yjs_update` analog for office ops |
+| **5b** | Receive remote ops | When a `KindOfficeOp` frame arrives, kutup decrypts → postMessage to inner.html → `ooChannel.send({type:'saveChanges', changes: [op]})` → OnlyOffice applies the change | **Yes** — two tabs, edits in tab A appear in tab B |
+| **5c** | Multi-user (different accounts) | Same path, with a second account in a shared folder. Verify per-user cursors render with the OnlyOffice native cursor list (we already populate `getParticipants` with the right user IDs in 2c) | **Yes** — two accounts, both see each other's edits + cursors |
+| **6a** | getLock / releaseLock plumbing | Catch `getLock` and `releaseLock` postMessages, wrap in a new `KindOfficeLock` envelope, broadcast. On receive: `ooChannel.send({type:'getLock', locks: …})` so OnlyOffice greys out the locked range. Lock state in a per-file Y.Map (or a Postgres `office_locks` table; pick simpler) | **Yes** — two tabs editing same .xlsx, click on a cell in tab A → tab B sees it as locked |
+| **6b** | Offline lock cleanup | `deleteOfflineLocks()` analog: when a peer disconnects (we know via the Hub's `Leave`), drop their locks from the shared state and broadcast `releaseLock` to remaining peers | **Yes** — close tab A → tab B sees its cell locks released |
+| **6c** | Save-lock | Single global save-lock per file (`content.saveLock`) so two tabs don't double-checkpoint. 20-40s timeout if the holder disconnects without releasing | **Yes** — both tabs hit Save simultaneously → only one snapshot lands |
+| **7a** | CSS branding hides | Inject the same `injectCSS` rules CryptPad uses (line ~2002-2024 in their inner.js) — hide title-doc-name, file-info, branding logos, etc. Light/dark theme follows kutup's | **Yes** — open an office doc → no OnlyOffice branding visible |
+| **7b** | Error / edge cases | TOO_LARGE → "Cannot save — file too large" banner, editor stays read-only (`APP.cantCheckpoint = true` analog). x2t conversion failure → toast + retry button. mediasData cleanup on unmount | **Yes** — manually upload a >10 MB .docx to trip TOO_LARGE; see the banner |
+| **7c** | Final regression | All formats: edit, save, reload, share, restore, federation-deferral notice. Build clean, type-check clean. Push. | **Yes** — full sweep |
 
-Phase-5 is the hardest by far (multi-iframe `postMessage` choreography + OnlyOffice's "single docid" expectation); phase-6 is genuinely tricky lock-state coordination. Phases 1–4 are mostly mechanical.
+**Estimated complexity by phase:**
+- Phases 1, 2a, 2b, 2c, 2d: small-medium each (each is a couple of careful files)
+- Phase 3a, 3b, 4a, 4c: medium (involves x2t WASM behavior + binary handling)
+- Phase 5a, 5b: medium (postMessage choreography + envelope)
+- **Phase 5c, 6a, 6b: hardest** — multi-user state machines, lock state coordination, OnlyOffice's "single docid" expectations
+- Phase 7: small-medium polish
+
+That's 17 sub-phases. Realistic total: **2-3 weeks of careful work** with browser testing at each boundary.
 
 ---
 
