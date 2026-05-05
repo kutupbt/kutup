@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, useSearchParams, Link } from 'react-router-dom'
+import { sanitizeNext } from '@/lib/sessionSync'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -60,6 +61,8 @@ function deriveInWorker(
 export default function Login() {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const nextParam = sanitizeNext(searchParams.get('next')) ?? '/drive'
   const dispatch = useAppDispatch()
   const [step, setStep] = useState<Step>('credentials')
   const [error, setError] = useState('')
@@ -144,7 +147,7 @@ export default function Login() {
       storageQuotaBytes: data.storageQuotaBytes,
       storageUsedBytes: data.storageUsedBytes,
     }))
-    navigate('/drive')
+    navigate(nextParam)
   }
 
   const isBusy = step === 'deriving' || step === 'decrypting'
