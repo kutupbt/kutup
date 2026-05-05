@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, Suspense } from 'react'
+import { useState, useEffect, useMemo, useRef, Suspense } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, FolderPlus, Upload, Globe, Download, Trash2, X } from 'lucide-react'
+import { Download, Trash2, X } from 'lucide-react'
 import { useAppSelector, useAppDispatch } from '@/store'
 import { selectMasterKey, selectPrivateKey, updateStorageUsed, updateStorageQuota } from '@/store/authSlice'
 import api from '@/api/client'
@@ -16,12 +16,15 @@ import { downloadAsZip, FsaRequiredError } from '@/lib/zipDownload'
 
 import Sidebar from '@/components/layout/Sidebar'
 import DriveBreadcrumb from '@/components/drive/DriveBreadcrumb'
+import DriveTopBar from '@/components/drive/DriveTopBar'
+import ShortcutsDialog from '@/components/drive/ShortcutsDialog'
 import CollectionGrid from '@/components/drive/CollectionGrid'
 import FileTable from '@/components/drive/FileTable'
 import UploadPanel from '@/components/drive/UploadPanel'
 import EmptyState from '@/components/drive/EmptyState'
 import DetailsPanel from '@/components/drive/DetailsPanel'
 import NewFolderDialog from '@/components/drive/dialogs/NewFolderDialog'
+import NewNoteDialog from '@/components/drive/dialogs/NewNoteDialog'
 import RenameDialog from '@/components/drive/dialogs/RenameDialog'
 import ShareDialog from '@/components/drive/dialogs/ShareDialog'
 import PublicShareDialog from '@/components/drive/dialogs/PublicShareDialog'
@@ -40,14 +43,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-
 import type { Collection, DecryptedFile, UploadState } from '@/types/drive'
 
 interface FileMetadata { name: string; mimeType: string; size: number }
@@ -78,6 +73,10 @@ export default function Drive() {
 
   // Dialog states
   const [newFolderOpen, setNewFolderOpen] = useState(false)
+  const [newNoteOpen, setNewNoteOpen] = useState(false)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [newMenuOpen, setNewMenuOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
   const [renameTarget, setRenameTarget] = useState<Collection | null>(null)
   const [shareTarget, setShareTarget] = useState<Collection | null>(null)
   const [publicShareUrl, setPublicShareUrl] = useState<string | null>(null)
@@ -93,6 +92,7 @@ export default function Drive() {
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const downloadAbortRef = useRef<AbortController | null>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (masterKey) loadCollections()
@@ -222,8 +222,8 @@ export default function Drive() {
     }
   }
 
-  async function loadFiles(collection: Collection) {
-    if (!collection.collectionKey) return
+  async function loadFiles(collection: Collection): Promise<DecryptedFile[]> {
+    if (!collection.collectionKey) return []
     try {
       const res = collection.isRemote
         ? await api.get(`/fed-proxy/${collection.remoteShareId}/files`)
@@ -241,8 +241,10 @@ export default function Drive() {
         }),
       )
       setFiles(decrypted)
+      return decrypted
     } catch {
       toast.error(t('drive.toast.loadFailed'))
+      return []
     }
   }
 
@@ -491,6 +493,49 @@ export default function Drive() {
     }
   }
 
+  async function handleCreateNote(filename: string) {
+    if (!currentFolder?.collectionKey) {
+      toast.error(t('drive.toast.uploadFailed'))
+      return
+    }
+    if (!canUploadToCurrentFolder()) {
+      toast.error(t('drive.toast.uploadFailed'))
+      return
+    }
+    if (files.some((f) => f.decryptedName === filename)) {
+      toast.error(`A file named "${filename}" already exists`)
+      return
+    }
+    const tid = toast.loading('Creating note…')
+    try {
+      const baseName = filename.replace(/\.md$/i, '')
+      const initialContent = `# ${baseName}\n\n`
+      const noteFile = new File([new Blob([initialContent], { type: 'text/markdown' })], filename, {
+        type: 'text/markdown',
+      })
+      await uploadFile(noteFile, currentFolder)
+      const fresh = await loadFiles(currentFolder)
+      const created = fresh.find((f) => f.decryptedName === filename)
+      if (!created) {
+        toast.error('Note uploaded, but could not be opened — refresh the page.', { id: tid })
+        return
+      }
+      setEditorOpen({
+        fileId: created.id,
+        filename,
+        collectionMaster: currentFolder.collectionKey,
+        initialContent,
+      })
+      try {
+        const meRes = await api.get('/user/me')
+        dispatch(updateStorageUsed(meRes.data.storageUsedBytes))
+      } catch {}
+      toast.success('Note created', { id: tid })
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error ?? 'Failed to create note', { id: tid })
+    }
+  }
+
   async function handleCreateFolder(name: string) {
     if (!masterKey) throw new Error('Not logged in')
     const collectionKey = await generateKey()
@@ -616,6 +661,18 @@ export default function Drive() {
         ? collections.filter((c) => c.parentCollectionId === currentFolder.id)
         : []
 
+  const visibleFolders = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return subFolders
+    return subFolders.filter((c) => (c.decryptedName ?? '').toLowerCase().includes(q))
+  }, [subFolders, searchQuery])
+
+  const visibleFiles = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return files
+    return files.filter((f) => (f.decryptedName ?? '').toLowerCase().includes(q))
+  }, [files, searchQuery])
+
   function triggerUpload(targetFolder?: Collection) {
     if (fileInputRef.current) {
       if (targetFolder) {
@@ -644,31 +701,46 @@ export default function Drive() {
         onGoShared={goToShared}
       />
 
-      <main
-        className="flex-1 p-8 overflow-auto relative"
-        onDragOver={(e) => { e.preventDefault(); if (currentFolder?.collectionKey) setIsDragging(true) }}
-        onDragEnter={(e) => { e.preventDefault(); if (currentFolder?.collectionKey) setIsDragging(true) }}
-        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsDragging(false) }}
-        onDrop={(e) => {
-          e.preventDefault()
-          setIsDragging(false)
-          if (!currentFolder?.collectionKey || !canUploadToCurrentFolder()) return
-          const dropped = Array.from(e.dataTransfer.files).filter((f) => f.size > 0)
-          if (dropped.length) uploadFiles(dropped)
-        }}
-      >
-        {/* Drag overlay */}
-        {isDragging && currentFolder && (
-          <div className="fixed inset-0 z-50 bg-primary/15 border-2 border-dashed border-primary pointer-events-none flex items-center justify-center">
-            <p className="text-2xl font-semibold text-primary">
-              {t('drive.dropToUpload', { name: currentFolder.decryptedName })}
-            </p>
-          </div>
-        )}
+      <div className="flex-1 flex flex-col min-w-0">
+        <DriveTopBar
+          ref={searchInputRef}
+          searchValue={searchQuery}
+          onSearchChange={setSearchQuery}
+          canUpload={canUploadToCurrentFolder()}
+          onShowHelp={() => setShortcutsOpen(true)}
+          onUpload={() => triggerUpload()}
+          onNewFolder={() => setNewFolderOpen(true)}
+          onNewNote={() => setNewNoteOpen(true)}
+          onAddRemote={() => setAddRemoteOpen(true)}
+          newMenuOpen={newMenuOpen}
+          onNewMenuOpenChange={setNewMenuOpen}
+        />
 
-        <input ref={fileInputRef} type="file" multiple className="hidden" />
+        <main
+          className="flex-1 p-8 overflow-auto relative"
+          onDragOver={(e) => { e.preventDefault(); if (currentFolder?.collectionKey) setIsDragging(true) }}
+          onDragEnter={(e) => { e.preventDefault(); if (currentFolder?.collectionKey) setIsDragging(true) }}
+          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsDragging(false) }}
+          onDrop={(e) => {
+            e.preventDefault()
+            setIsDragging(false)
+            if (!currentFolder?.collectionKey || !canUploadToCurrentFolder()) return
+            const dropped = Array.from(e.dataTransfer.files).filter((f) => f.size > 0)
+            if (dropped.length) uploadFiles(dropped)
+          }}
+        >
+          {/* Drag overlay */}
+          {isDragging && currentFolder && (
+            <div className="fixed inset-0 z-50 bg-primary/15 border-2 border-dashed border-primary pointer-events-none flex items-center justify-center">
+              <p className="text-2xl font-semibold text-primary">
+                {t('drive.dropToUpload', { name: currentFolder.decryptedName })}
+              </p>
+            </div>
+          )}
 
-        <DriveBreadcrumb
+          <input ref={fileInputRef} type="file" multiple className="hidden" />
+
+          <DriveBreadcrumb
           viewMode={viewMode}
           currentFolder={currentFolder}
           myFilesCollection={myFilesCollection}
@@ -731,7 +803,7 @@ export default function Drive() {
 
         {/* Folders */}
         <CollectionGrid
-          collections={subFolders}
+          collections={visibleFolders}
           currentUserId={auth.userId}
           selectedIds={selectedFolderIds}
           onEnter={enterFolder}
@@ -760,14 +832,20 @@ export default function Drive() {
         {/* Files */}
         {currentFolder && (
           <>
-            {files.length === 0 ? (
-              <EmptyState
-                canUpload={canUploadToCurrentFolder()}
-                onClick={() => canUploadToCurrentFolder() && triggerUpload()}
-              />
+            {visibleFiles.length === 0 ? (
+              searchQuery.trim() ? (
+                <div className="flex flex-col items-center justify-center h-48 text-muted-foreground text-sm">
+                  <p>No matches for &ldquo;{searchQuery}&rdquo; in this folder.</p>
+                </div>
+              ) : (
+                <EmptyState
+                  canUpload={canUploadToCurrentFolder()}
+                  onClick={() => canUploadToCurrentFolder() && triggerUpload()}
+                />
+              )
             ) : (
               <FileTable
-                files={files}
+                files={visibleFiles}
                 canDelete={canDeleteFile()}
                 selectedIds={selectedFileIds}
                 onSelect={handleFileClick}
@@ -779,37 +857,7 @@ export default function Drive() {
             )}
           </>
         )}
-      </main>
-
-      {/* FAB */}
-      <div className="fixed bottom-8 right-8 z-40">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              size="icon"
-              className="h-14 w-14 rounded-full shadow-lg shadow-primary/30"
-            >
-              <Plus className="h-6 w-6" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="mb-2">
-            {canUploadToCurrentFolder() && (
-              <DropdownMenuItem onSelect={() => triggerUpload()}>
-                <Upload className="h-4 w-4 mr-2" />
-                {t('drive.uploadFiles')}
-              </DropdownMenuItem>
-            )}
-            <DropdownMenuItem onSelect={() => setNewFolderOpen(true)}>
-              <FolderPlus className="h-4 w-4 mr-2" />
-              {t('drive.newFolder')}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => setAddRemoteOpen(true)}>
-              <Globe className="h-4 w-4 mr-2" />
-              {t('drive.addRemoteShare')}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        </main>
       </div>
 
       {/* Upload progress */}
@@ -873,6 +921,14 @@ export default function Drive() {
         onOpenChange={setNewFolderOpen}
         onConfirm={handleCreateFolder}
       />
+
+      <NewNoteDialog
+        open={newNoteOpen}
+        onOpenChange={setNewNoteOpen}
+        onConfirm={handleCreateNote}
+      />
+
+      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
 
       <RenameDialog
         collection={renameTarget}
