@@ -144,8 +144,8 @@ export default function FileEditorPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="flex h-12 items-center gap-3 border-b border-border px-4">
+    <div className="flex h-screen flex-col overflow-hidden">
+      <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
         <Button variant="ghost" size="icon" onClick={() => navigate('/drive')} aria-label="Back to Drive">
           <ArrowLeft className="h-4 w-4" />
         </Button>

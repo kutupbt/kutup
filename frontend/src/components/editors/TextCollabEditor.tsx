@@ -452,10 +452,7 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
                 <X className="h-4 w-4" />
               </Button>
             </header>
-            <div
-              className="flex-1 min-h-0 overflow-y-auto overscroll-contain"
-              onWheelCapture={(e) => e.stopPropagation()}
-            >
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
               <VersionHistoryPanel
                 fileId={fileId}
                 onRestore={async (vid) => {
