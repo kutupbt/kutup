@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Loader2, ArrowLeft, Download } from 'lucide-react'
+import { Loader2, ArrowLeft, Download, Save, Check } from 'lucide-react'
+import { toast } from 'sonner'
 import { useAppSelector } from '@/store'
 import { selectMasterKey, selectPrivateKey } from '@/store/authSlice'
 import api from '@/api/client'
 import {
   decrypt,
   decryptStream,
+  encryptStream,
   fromBase64,
   unwrapKeyFromSender,
 } from '@/crypto'
 import { chooseEditor, chooseOfficeEditor } from '@/components/editors/dispatch'
+import type { OfficeEditorHandle } from '@/components/editors/office/OfficeEditor'
 import { chooseViewer } from '@/components/viewers/dispatch'
 import { Button } from '@/components/ui/button'
 import { KutupLogo } from '@/components/KutupLogo'
@@ -43,6 +46,12 @@ export default function FileEditorPage() {
   // TextCollabEditor to tear down its provider on every parent render.
   const collectionMasterRef = useRef<Uint8Array | null>(null)
   const [collectionMasterReady, setCollectionMasterReady] = useState(false)
+  // Per-file content key — needed for save (encrypt the OOXML output).
+  const fileKeyRef = useRef<Uint8Array | null>(null)
+  // Imperative handle for OfficeEditor save() calls.
+  const officeEditorRef = useRef<OfficeEditorHandle | null>(null)
+  const [savingOffice, setSavingOffice] = useState(false)
+  const [justSavedOffice, setJustSavedOffice] = useState(false)
 
   // Pick the right component eagerly so the load step knows whether it needs
   // the bytes as text (editor) or as a blob URL (viewer).
@@ -137,6 +146,7 @@ export default function FileEditorPage() {
         }
 
         collectionMasterRef.current = collectionKey
+        fileKeyRef.current = fileKey
         if (!cancelled) {
           setCollectionMasterReady(true)
           setPhase('ready')
@@ -153,6 +163,40 @@ export default function FileEditorPage() {
       if (createdUrl) URL.revokeObjectURL(createdUrl)
     }
   }, [cid, fid, masterKey, privateKey, userId, publicKey, navigate])
+
+  async function handleOfficeSave() {
+    if (!fid || !officeEditorRef.current || !fileKeyRef.current) return
+    if (savingOffice) return
+    setSavingOffice(true)
+    const tid = toast.loading('Saving…')
+    try {
+      // 1. Ask the editor to extract bin → x2t → OOXML.
+      const { bytes } = await officeEditorRef.current.save()
+      // 2. Encrypt with the file's content key (same scheme as the
+      //    original blob upload — see Drive.uploadFile).
+      const encrypted = await encryptStream(bytes, fileKeyRef.current)
+      // 3. Upload as a new snapshot, then register it as a version.
+      const form = new FormData()
+      form.append('file', new Blob([encrypted.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'snapshot')
+      const blobRes = await api.post(`/files/${fid}/snapshot-blob`, form)
+      await api.post(`/files/${fid}/versions`, {
+        s3VersionId: blobRes.data.s3VersionId,
+        storagePath: blobRes.data.storagePath,
+        seqAtSnapshot: 0,  // Office docs don't use the Yjs delta log.
+        docKeyId: 1,
+        sizeBytes: encrypted.length,
+        keepForever: false,
+      })
+      toast.success('Saved', { id: tid })
+      setJustSavedOffice(true)
+      setTimeout(() => setJustSavedOffice(false), 1500)
+    } catch (err: any) {
+      console.error('office save failed', err)
+      toast.error(err?.response?.data?.error ?? err?.message ?? 'Save failed', { id: tid })
+    } finally {
+      setSavingOffice(false)
+    }
+  }
 
   if (phase === 'loading') {
     return (
@@ -205,6 +249,24 @@ export default function FileEditorPage() {
         </a>
         <span className="text-sm text-muted-foreground">·</span>
         <span className="text-sm font-medium truncate">{filename}</span>
+        {officeReady && (
+          <div className="ml-auto">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={savingOffice}
+              onClick={handleOfficeSave}
+              className="gap-1.5"
+              title="Save as a new version (⌘/Ctrl+S coming in Phase 7)"
+            >
+              {justSavedOffice
+                ? <Check className="h-4 w-4 text-emerald-500" />
+                : <Save className="h-4 w-4" />}
+              {savingOffice ? 'Saving…' : justSavedOffice ? 'Saved' : 'Save'}
+            </Button>
+          </div>
+        )}
         {viewerReady && blobUrl && (
           <a
             href={blobUrl}
@@ -227,6 +289,7 @@ export default function FileEditorPage() {
           )}
           {!editorReady && officeReady && Office && (
             <Office
+              ref={officeEditorRef}
               fileId={fid!}
               filename={filename}
               collectionMaster={collectionMasterRef.current!}

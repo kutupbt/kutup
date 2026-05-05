@@ -2,10 +2,15 @@
 // to the existing preview/download UI. Two flavors:
 // - chooseEditor: text/markdown/code → CodeMirror+Yjs CollabEditor.
 // - chooseOfficeEditor: .docx/.xlsx/.pptx → OnlyOffice bridge.
-import { lazy, type ComponentType } from 'react'
+import { lazy, type ComponentType, type ForwardRefExoticComponent, type RefAttributes } from 'react'
+import type { OfficeEditorHandle } from './office/OfficeEditor'
 
 const TextCollabEditor = lazy(() => import('./TextCollabEditor'))
-const OfficeEditor = lazy(() => import('./office/OfficeEditor'))
+// Cast through unknown so TypeScript understands the lazy-wrapped component
+// still carries forwardRef's RefAttributes shape — chooseOfficeEditor's
+// callers (FileEditorPage) need to attach a ref to drive save().
+const OfficeEditor = lazy(() => import('./office/OfficeEditor')) as unknown as
+  ForwardRefExoticComponent<OfficeEditorProps & RefAttributes<OfficeEditorHandle>>
 
 const TEXT_EXT = new Set([
   'md', 'markdown', 'txt',
@@ -40,7 +45,9 @@ export function chooseEditor(filename: string): ComponentType<CollabEditorProps>
   return null
 }
 
-export function chooseOfficeEditor(filename: string): ComponentType<OfficeEditorProps> | null {
+export function chooseOfficeEditor(filename: string):
+  ForwardRefExoticComponent<OfficeEditorProps & RefAttributes<OfficeEditorHandle>> | null
+{
   const ext = filename.split('.').pop()?.toLowerCase() ?? ''
   if (OFFICE_EXT.has(ext)) return OfficeEditor
   return null
