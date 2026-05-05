@@ -3,3 +3,5 @@ data/
 frontend/dist/
 frontend/node_modules/
 frontend/package-lock.json
+nginx/certs/
+docker-compose.override.yml

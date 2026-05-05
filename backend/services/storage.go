@@ -48,6 +48,24 @@ func (s *StorageService) Upload(ctx context.Context, path string, body io.Reader
 	return nil
 }
 
+// PutObjectVersioned puts an object and returns the SeaweedFS version id.
+// Bucket must have versioning enabled (see seaweedfs-init.sh / lifecycle.json).
+func (s *StorageService) PutObjectVersioned(ctx context.Context, key string, body io.Reader, size int64) (string, error) {
+	out, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(s.bucket),
+		Key:           aws.String(key),
+		Body:          body,
+		ContentLength: aws.Int64(size),
+	})
+	if err != nil {
+		return "", err
+	}
+	if out.VersionId == nil {
+		return "", nil // bucket might not have versioning enabled
+	}
+	return *out.VersionId, nil
+}
+
 // PresignedDownload generates a presigned URL valid for 15 minutes.
 func (s *StorageService) PresignedDownload(ctx context.Context, path string) (string, error) {
 	presigner := s3.NewPresignClient(s.client)
@@ -77,11 +95,39 @@ func (s *StorageService) GetObject(ctx context.Context, path string) (io.ReadClo
 	return result.Body, size, nil
 }
 
+// GetObjectVersion fetches a specific S3 (SeaweedFS) noncurrent version of an object.
+// Returns the body stream + content-length.
+func (s *StorageService) GetObjectVersion(ctx context.Context, path, versionID string) (io.ReadCloser, int64, error) {
+	result, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket:    aws.String(s.bucket),
+		Key:       aws.String(path),
+		VersionId: aws.String(versionID),
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("s3 get version: %w", err)
+	}
+	size := int64(0)
+	if result.ContentLength != nil {
+		size = *result.ContentLength
+	}
+	return result.Body, size, nil
+}
+
 // Delete removes an object from SeaweedFS.
 func (s *StorageService) Delete(ctx context.Context, path string) error {
 	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(path),
+	})
+	return err
+}
+
+// DeleteObjectVersion deletes a specific S3 (SeaweedFS) noncurrent version of an object.
+func (s *StorageService) DeleteObjectVersion(ctx context.Context, key, versionID string) error {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket:    aws.String(s.bucket),
+		Key:       aws.String(key),
+		VersionId: aws.String(versionID),
 	})
 	return err
 }

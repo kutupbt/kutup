@@ -154,3 +154,36 @@ PostgreSQL 16 is used for all persistent metadata:
 - Global settings and per-user quotas
 
 Migrations are managed with **golang-migrate** and run automatically on server startup from `backend/db/migrations/`.
+
+## Collaborative Editing
+
+kutup supports real-time, end-to-end-encrypted collaborative editing of text/markdown/code files (`.txt`, `.md`, code formats). Office docs (`.docx`/`.xlsx`/`.pptx`/`.odt`/`.ods`/`.odp`) are deferred to a future release.
+
+The architecture is summarised below; the design rationale and footguns live in `docs/superpowers/specs/2026-05-04-collab-edit-design.md`.
+
+### Sync engine
+Yjs CRDT (`Y.Text`) under CodeMirror 6 with `y-codemirror.next`. Clients exchange opaque binary update frames; the server never instantiates a `Y.Doc`.
+
+### Wire envelope
+Each frame is wrapped in an XChaCha20-Poly1305 AEAD with `(version, kind, doc_key_id, sender_device_id, sequence)` as additional authenticated data, then signed with the sender's Ed25519 device key. The server validates the signature and stores the opaque ciphertext.
+
+### Per-file content key
+Derived deterministically as `HKDF-SHA256(collection_master_key, "kutup/file-content/v1", utf8(fileId))`. No new key wrapping — the existing collection-key plumbing already distributes the master key to authorized members.
+
+### Device keys
+Each browser tab session and each CLI session generates a fresh Ed25519 keypair. The public key is registered to the user account; the private key never leaves the device. Revocation marks the device inactive and forces existing WebSocket connections to close.
+
+### Versioning
+Two-tier:
+- **Live deltas** in Postgres `file_update_log` (truncated on snapshot).
+- **Snapshots** as SeaweedFS S3 noncurrent versions, indexed in `file_versions`.
+
+Snapshots fire on idle 30s + ≥1 update, every 200 updates, or on explicit "Save version".
+
+Retention: 30 days OR last 50 versions, whichever yields more. Named/keep-forever versions are exempt forever.
+
+### Federation, sharing
+Existing collection-share + federation flows are unchanged. A live-edited file is still a regular `files` row with an encrypted blob; non-editing users continue to download it as today.
+
+### Replay protection
+Each frame carries a per-device monotonically-increasing sequence number. The `file_update_log` has a `UNIQUE (file_id, sender_device, sender_seq)` constraint that rejects replays at the database level. Combined with Ed25519 signature verification on every frame, this prevents both forgery and replay attacks.

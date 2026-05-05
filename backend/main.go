@@ -56,6 +56,10 @@ func main() {
 		log.Fatalf("storage init: %v", err)
 	}
 
+	// Background retention job for file_versions (30d / 50ver / keep_forever exempt).
+	cleanup := &services.VersionCleanup{DB: pool, Storage: storage}
+	go cleanup.Run(context.Background())
+
 	// Handlers
 	authH := &handlers.AuthHandler{DB: pool, JWTSecret: cfg.JWTSecret, AppEnv: cfg.AppEnv}
 	collectionsH := &handlers.CollectionsHandler{DB: pool, ServerURL: cfg.ServerURL, AppEnv: cfg.AppEnv}
@@ -64,6 +68,11 @@ func main() {
 	adminH := &handlers.AdminHandler{DB: pool}
 	fedH := &handlers.FederationHandler{DB: pool, Storage: storage}
 	fedProxyH := &handlers.FedProxyHandler{DB: pool, AppEnv: cfg.AppEnv}
+	devicesH := &handlers.DevicesHandler{DB: pool}
+	fvH := &handlers.FileVersionsHandler{DB: pool, Storage: storage}
+	hub := handlers.NewHub(pool)
+	collabH := &handlers.CollabHandler{DB: pool, JWTSecret: cfg.JWTSecret, Hub: hub}
+	devicesH.WithRevokeHook(hub.CloseDevice)
 
 	// Middleware
 	authMW := middleware.NewAuth(cfg.JWTSecret)
@@ -140,11 +149,34 @@ func main() {
 	fedProxy.Post("/:shareId/upload", fedProxyH.ProxyUpload)
 	fedProxy.Delete("/:shareId/files/:fileId", fedProxyH.ProxyDelete)
 
-	// Files routes (authenticated)
-	files := api.Group("/files", authMW.Required())
-	files.Post("/upload", filesH.Upload)
-	files.Get("/:id/download", filesH.Download)
-	files.Delete("/:id", filesH.Delete)
+	// Device-key routes (authenticated) — collab-edit v1
+	devices := api.Group("/devices", authMW.Required())
+	devices.Post("/", devicesH.Register)
+	devices.Get("/", devicesH.List)
+	devices.Delete("/:id", devicesH.Revoke)
+
+	// Files routes (authenticated). NOTE: we do NOT apply authMW.Required() at
+	// the group level. Fiber's Group(prefix, handlers...) registers handlers as
+	// `app.Use(prefix, handlers...)` — i.e. as PATH-PREFIX middleware. That would
+	// gate every /api/files/* request including the collab WS route below
+	// (which has its own auth via PreUpgrade and accepts ?token= query).
+	files := api.Group("/files")
+	files.Post("/upload", authMW.Required(), filesH.Upload)
+	files.Get("/:id/download", authMW.Required(), filesH.Download)
+	files.Delete("/:id", authMW.Required(), filesH.Delete)
+
+	api.Get("/files/:fileId/versions", authMW.Required(), fvH.List)
+	api.Post("/files/:fileId/versions", authMW.Required(), fvH.Record)
+	api.Post("/files/:fileId/snapshot-blob", authMW.Required(), fvH.UploadSnapshotBlob)
+	api.Get("/files/:fileId/versions/:vid/download", authMW.Required(), fvH.Download)
+	api.Patch("/files/:fileId/versions/:vid", authMW.Required(), fvH.Patch)
+
+	// Collab-edit WebSocket route — PreUpgrade does its own JWT auth
+	// (accepts Authorization header or ?token= query), so no authMW here.
+	api.Get("/files/:fileId/collab/ws",
+		collabH.PreUpgrade(authMW),
+		collabH.Upgrade(),
+	)
 
 	// Public share routes (no auth)
 	share := api.Group("/share")
