@@ -166,7 +166,7 @@ Each phase is a separate commit and ends with either a testable artifact or pure
 | 5 | Right-click context menus (folder, file, empty space) | **Yes** — right-click everywhere |
 | 6 | Keyboard shortcuts wired (U/N/Esc/⌘A//Del/?) | **Yes** — all shortcuts |
 | 7 | `/file/:cid/:fid` route + new-tab opening + `BroadcastChannel` session sync + `?next=` login redirect | **Yes** — files open in new tab; close primary tab → editor still works |
-| 8 | Final `Drive.tsx` cleanup (remove dead code: modal overlay, FAB) — by this point the file should already be ~150 lines from incremental moves | No |
+| 8 | Final `Drive.tsx` cleanup: remove the modal-overlay block, drop unused imports / state, consolidate `lucide-react` imports, full type-check + build, update `docs/architecture.md` with the new route + BroadcastChannel section. **Deferred:** the aspirational ~150-line file-split — Drive.tsx still owns the data layer (loadCollections, loadFiles, all CRUD handlers) and sits at ~1050 lines. Splitting these into a `useDrive` hook + smaller view components is a worthwhile follow-up but high-risk for diminishing UX returns; tracked as a future cleanup. | No |
 
 After every testable phase, the assistant says **"You can test this feature: <description>"** and pauses for the user to verify in the browser before continuing.
 
