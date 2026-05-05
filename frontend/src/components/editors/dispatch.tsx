@@ -16,6 +16,8 @@ export interface CollabEditorProps {
   fileId: string
   filename: string
   collectionMaster: Uint8Array
+  /** Optional plaintext seed for cold-start (no Yjs snapshot yet). */
+  initialContent?: string
 }
 
 export function chooseEditor(filename: string): ComponentType<CollabEditorProps> | null {

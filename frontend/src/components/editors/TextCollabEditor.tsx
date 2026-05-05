@@ -43,9 +43,14 @@ interface Props {
    *  otherwise the editor tears down and reconnects every parent re-render. The G1
    *  caller is responsible for memoizing or pulling from a stable Redux selector. */
   collectionMaster: Uint8Array
+  /** Plaintext content of the original encrypted file blob (kutup's existing per-file
+   *  encryption flow). Used as the initial Y.Text content when no Yjs snapshot exists
+   *  yet — i.e. on the very first time a freshly-uploaded file is opened in the editor.
+   *  After the first Save Version, snapshots become canonical and this is ignored. */
+  initialContent?: string
 }
 
-export default function TextCollabEditor({ fileId, filename, collectionMaster }: Props) {
+export default function TextCollabEditor({ fileId, filename, collectionMaster, initialContent }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<'connecting' | 'ready' | 'error'>('connecting')
   const [trigger, setTrigger] = useState<SnapshotTrigger | null>(null)
@@ -200,7 +205,7 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
       try {
         const versions = await listVersions(fileId)
         if (versions.length > 0) {
-          const latest = versions[0] // newest-first ordering
+          const latest = versions[0]
           const r = await api.get(`/files/${fileId}/versions/${latest.id}/download`, {
             responseType: 'arraybuffer',
           })
@@ -213,14 +218,17 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
             const stateBytes = _sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
               null, ct, null, nonce, key,
             )
-            // Apply with a synthetic 'remote' origin so onLocalUpdate doesn't
-            // re-emit the snapshot bytes back through the relay.
             Y.applyUpdateV2(ydoc, stateBytes, 'remote')
             lastSeenSeq = latest.seqAtSnapshot
           }
+        } else if (initialContent && initialContent.length > 0) {
+          // Cold-start: no snapshot yet, but the file has original plaintext from
+          // its upload via kutup's existing per-file-key flow. Seed Y.Text so the
+          // editor opens with the actual file content.
+          ytext.insert(0, initialContent)
         }
       } catch (e) {
-        console.warn('collab: failed to load latest snapshot, starting empty', e)
+        console.warn('collab: failed to load initial content, starting empty', e)
       }
       if (!alive) return
 
@@ -265,7 +273,11 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
         ...(langExt ? [langExt] : []),
         yCollab(ytext, awareness),
       ]
-      const state = EditorState.create({ extensions: exts })
+      // Seed CodeMirror's initial doc from ytext so they're in sync at mount.
+      // y-codemirror.next assumes parity at mount; if Y.Text was populated by the
+      // snapshot-load step above and CM started empty, a later ytext.delete()
+      // (e.g. from restore) would reference a CM range that doesn't exist.
+      const state = EditorState.create({ doc: ytext.toString(), extensions: exts })
       view = new EditorView({ state, parent: ref.current! })
 
       // 8. Cleanup on unmount.
