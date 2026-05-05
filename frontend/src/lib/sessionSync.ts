@@ -27,6 +27,7 @@ export interface SessionPayload {
 type Message =
   | { type: 'request-session' }
   | { type: 'session-share'; payload: SessionPayload }
+  | { type: 'logout' }
 
 let channel: BroadcastChannel | null = null
 
@@ -90,6 +91,25 @@ export function requestSession(timeoutMs = 500): Promise<SessionPayload | null> 
 
     ch.postMessage({ type: 'request-session' } satisfies Message)
   })
+}
+
+/** Tell all other tabs of this origin to clear their session — call this at
+ * the start of an explicit logout so every tab signs out together. */
+export function broadcastLogout(): void {
+  const ch = getChannel()
+  if (!ch) return
+  try { ch.postMessage({ type: 'logout' } satisfies Message) } catch {}
+}
+
+/** Mount a listener that fires when another tab signals a logout. */
+export function startLogoutListener(onLogout: () => void): () => void {
+  const ch = getChannel()
+  if (!ch) return () => {}
+  function onMsg(ev: MessageEvent<Message>) {
+    if (ev.data?.type === 'logout') onLogout()
+  }
+  ch.addEventListener('message', onMsg)
+  return () => ch.removeEventListener('message', onMsg)
 }
 
 /** Sanitize a `?next=` query value: must be a same-origin pathname. Returns
