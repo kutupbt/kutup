@@ -1,3 +1,11 @@
+// SPDX-FileCopyrightText: 2026 kutup contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// Part of kutup's optional OnlyOffice integration. This file is licensed
+// AGPL-3.0-or-later because it drives the AGPL OnlyOffice bridge. Code
+// outside frontend/src/components/editors/office/ and
+// frontend/public/onlyoffice/ remains MIT. See ./LICENSE.md.
+//
 // OfficeEditor — React wrapper around the OnlyOffice bridge iframe.
 //
 // Phase 2a (this version): mounts /onlyoffice/inner.html in an iframe, does a

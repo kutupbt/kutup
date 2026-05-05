@@ -114,13 +114,25 @@ For production deployment with TLS, reverse proxies, and backup strategies, see 
 
 ## Optional: OnlyOffice for `.docx` / `.xlsx` / `.pptx`
 
-The collaborative office-document editor uses OnlyOffice client JS, which is **AGPL-3.0-or-later** (kutup itself stays MIT). The AGPL assets are not committed to this repo — opt in with:
+The collaborative office-document editor is an optional, dual-licensed integration with [OnlyOffice](https://github.com/cryptpad/onlyoffice-editor). kutup itself stays **MIT**; only the integration subtree carries an AGPL marker.
+
+| Path | License |
+|---|---|
+| Everything else in kutup | **MIT** |
+| `frontend/public/onlyoffice/` (committed bridge + downloaded AGPL assets, gitignored) | **AGPL-3.0-or-later** |
+| `frontend/src/components/editors/office/` (committed React wrapper) | **AGPL-3.0-or-later** |
+
+To enable office editing, run:
 
 ```sh
 ./install-onlyoffice.sh
 ```
 
-That populates `frontend/public/onlyoffice/dist/` (gitignored). Rebuild the frontend afterwards. Without this step, kutup still runs — `.docx` / `.xlsx` / `.pptx` files just remain download-only. Design + footguns: [docs/superpowers/specs/2026-05-05-office-collab-design.md](docs/superpowers/specs/2026-05-05-office-collab-design.md).
+That populates `frontend/public/onlyoffice/{dist,templates}/` (gitignored). Rebuild the frontend afterwards. Without this step, kutup still runs — `.docx` / `.xlsx` / `.pptx` files just remain download-only.
+
+Details:
+- License boundary: [frontend/public/onlyoffice/LICENSE.md](frontend/public/onlyoffice/LICENSE.md)
+- Architecture + footguns: [docs/superpowers/specs/2026-05-05-office-collab-design.md](docs/superpowers/specs/2026-05-05-office-collab-design.md)
 
 ---
 
