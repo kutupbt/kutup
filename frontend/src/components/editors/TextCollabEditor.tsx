@@ -116,8 +116,10 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster }:
       // Restore handler. Wired into VersionHistoryPanel via onRestore prop.
       const handleRestore = async (versionId: string) => {
         try {
-          const url = `/api/files/${fileId}/versions/${versionId}/download`
-          const r = await api.get(url, { responseType: 'arraybuffer' })
+          // axios `api` instance has baseURL='/api'; do NOT include /api/ here.
+          const r = await api.get(`/files/${fileId}/versions/${versionId}/download`, {
+            responseType: 'arraybuffer',
+          })
           const blob = new Uint8Array(r.data as ArrayBuffer)
           if (blob.length < 24 + 17) throw new Error('snapshot blob too short')
           const nonce = blob.subarray(0, 24)
