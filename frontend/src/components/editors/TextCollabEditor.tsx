@@ -438,8 +438,8 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
         <div ref={ref} className="flex-1 overflow-auto" />
 
         {historyOpen && (
-          <aside className="flex w-[360px] shrink-0 flex-col border-l border-border bg-card">
-            <header className="flex h-12 items-center justify-between border-b border-border px-4">
+          <aside className="flex h-full w-[360px] min-h-0 shrink-0 flex-col overflow-hidden border-l border-border bg-card">
+            <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
               <h2 className="text-sm font-semibold">Version history</h2>
               <Button
                 type="button"
@@ -452,7 +452,10 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
                 <X className="h-4 w-4" />
               </Button>
             </header>
-            <div className="flex-1 min-h-0 overflow-y-auto">
+            <div
+              className="flex-1 min-h-0 overflow-y-auto overscroll-contain"
+              onWheelCapture={(e) => e.stopPropagation()}
+            >
               <VersionHistoryPanel
                 fileId={fileId}
                 onRestore={async (vid) => {
