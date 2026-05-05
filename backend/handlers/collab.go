@@ -37,7 +37,7 @@ func (h *CollabHandler) Upgrade() fiber.Handler {
 // WebSocket upgrade. Browsers can't set custom headers on `new WebSocket(url)`,
 // so the token may arrive either via the standard `Authorization: Bearer ...`
 // header (server-to-server tests) or via a `?token=...` query param (browser).
-// On success, sets c.Locals("userID"|"fileID"|"collectionID") for the upgrade
+// On success, sets c.Locals("userId"|"fileId"|"collectionId") for the upgrade
 // handler. Read-only share recipients are admitted here — frame-level
 // can_upload/can_delete enforcement is the relay's job (D4).
 func (h *CollabHandler) PreUpgrade(authMW *middleware.AuthMiddleware) fiber.Handler {
