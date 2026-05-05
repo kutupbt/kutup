@@ -29,12 +29,34 @@ const processQueue = (error: unknown, token: string | null) => {
   failedQueue = []
 }
 
+// Sleep helper for retry backoff.
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
 api.interceptors.response.use(
   (res) => res,
   async (error) => {
     const originalRequest = error.config
+    const status = error.response?.status
+
+    // Transient failures (503 from rate limiter, 429 from anywhere, or
+    // network-level disconnects). Retry up to 3 times with 0.5/1/2 s backoff
+    // before bubbling the error to the caller.
+    const isTransient =
+      status === 503 ||
+      status === 429 ||
+      (error.code === 'ECONNABORTED') ||
+      (error.message === 'Network Error')
+    if (originalRequest && isTransient) {
+      originalRequest._transientRetries = (originalRequest._transientRetries ?? 0) + 1
+      if (originalRequest._transientRetries <= 3) {
+        const wait = 500 * Math.pow(2, originalRequest._transientRetries - 1)
+        await sleep(wait)
+        return api(originalRequest)
+      }
+    }
+
     const skipRefresh = originalRequest.url?.match(/\/auth\/(login|register|recover)/)
-    if (error.response?.status === 401 && !originalRequest._retry && !skipRefresh) {
+    if (status === 401 && !originalRequest._retry && !skipRefresh) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
           failedQueue.push({ resolve, reject })
