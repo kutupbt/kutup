@@ -51,9 +51,14 @@ interface InitPayload {
   type: DocType
   filename: string
   fileId: string
+  /** Decrypted OOXML bytes for an existing file. Phase 3b: inner.html runs
+   *  x2tConvert to turn this into OnlyOffice's .bin format on first open.
+   *  Undefined or 1-byte placeholders mean "freshly created — use the empty
+   *  template instead". */
+  initialBytes?: Uint8Array
 }
 
-export default function OfficeEditor({ fileId, filename }: Props) {
+export default function OfficeEditor({ fileId, filename, initialBytes }: Props) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [bridgeReady, setBridgeReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -83,7 +88,12 @@ export default function OfficeEditor({ fileId, filename }: Props) {
           setBridgeReady(true)
           send({
             type: 'init',
-            payload: { type: docType!, filename, fileId },
+            payload: {
+              type: docType!,
+              filename,
+              fileId,
+              initialBytes,
+            },
           })
           return
         case 'init-ack':
@@ -94,7 +104,7 @@ export default function OfficeEditor({ fileId, filename }: Props) {
 
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [docType, filename, fileId])
+  }, [docType, filename, fileId, initialBytes])
 
   if (error) {
     return (

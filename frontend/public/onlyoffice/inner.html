@@ -311,6 +311,13 @@
           }
         }
 
+        // Detect kutup's 1-byte "+ New" placeholder — anything that isn't a
+        // ZIP archive (PK\x03\x04) is treated as the template-fallback case.
+        var isOoxml = function (bytes) {
+          if (!bytes || bytes.length < 4) return false
+          return bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04
+        }
+
         var buildAndStart = function (payload) {
           if (ooConfigBuilt) return
           ooConfigBuilt = true
@@ -321,15 +328,46 @@
             return
           }
 
-          setStatus('loading template ' + t.template + '…')
-          return loadTemplate(t.template)
-            .then(function (templateString) {
+          var initialBytes = payload.initialBytes
+          // initialBytes arrives as a Uint8Array from postMessage's
+          // structured clone; some older browsers deliver it as a plain
+          // ArrayBuffer-like object, so coerce defensively.
+          if (initialBytes && !(initialBytes instanceof Uint8Array)) {
+            try { initialBytes = new Uint8Array(initialBytes) } catch (e) { initialBytes = null }
+          }
+          var useExisting = isOoxml(initialBytes)
+
+          var docPromise
+          if (useExisting) {
+            // Existing OOXML file: convert to OnlyOffice's .bin via x2t.
+            setStatus('converting ' + payload.type + ' via x2t…')
+            docPromise = x2tConvert(initialBytes, 'input.' + t.fileType, 'bin')
+              .then(function (res) {
+                setStatus('converted (' + res.output.length + ' bytes), loading api.js…')
+                return new Blob([res.output], { type: 'application/octet-stream' })
+              })
+              .catch(function (err) {
+                console.error('[kutup-bridge] x2t convert failed:', err)
+                setStatus('x2t convert failed; falling back to empty doc')
+                // Fall back to template if conversion fails.
+                return loadTemplate(t.template).then(function (templateString) {
+                  return new Blob([templateString], { type: 'text/plain' })
+                })
+              })
+          } else {
+            setStatus('loading template ' + t.template + '…')
+            docPromise = loadTemplate(t.template).then(function (templateString) {
               setStatus('template loaded (' + templateString.length + ' chars), loading api.js…')
               // OnlyOffice expects the document.url to fetch the binary. The
               // CryptPad templates are stored as text in DOCY/XLSY/PPTY format;
               // OnlyOffice parses that header. text/plain MIME matches CryptPad's
               // saveToServer (line ~596 in CP's inner.js).
-              var blob = new Blob([templateString], { type: 'text/plain' })
+              return new Blob([templateString], { type: 'text/plain' })
+            })
+          }
+
+          return docPromise
+            .then(function (blob) {
               var url = URL.createObjectURL(blob)
 
               return loadScript('/onlyoffice/dist/v9/web-apps/apps/api/documents/api.js')
