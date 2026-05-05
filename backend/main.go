@@ -65,7 +65,7 @@ func main() {
 	fedH := &handlers.FederationHandler{DB: pool, Storage: storage}
 	fedProxyH := &handlers.FedProxyHandler{DB: pool, AppEnv: cfg.AppEnv}
 	devicesH := &handlers.DevicesHandler{DB: pool}
-	fvH := &handlers.FileVersionsHandler{DB: pool}
+	fvH := &handlers.FileVersionsHandler{DB: pool, Storage: storage}
 	hub := handlers.NewHub(pool)
 	collabH := &handlers.CollabHandler{DB: pool, JWTSecret: cfg.JWTSecret, Hub: hub}
 	devicesH.WithRevokeHook(hub.CloseDevice)
@@ -158,6 +158,8 @@ func main() {
 	files.Delete("/:id", filesH.Delete)
 
 	api.Get("/files/:fileId/versions", authMW.Required(), fvH.List)
+	api.Get("/files/:fileId/versions/:vid/download", authMW.Required(), fvH.Download)
+	api.Patch("/files/:fileId/versions/:vid", authMW.Required(), fvH.Patch)
 
 	// Collab-edit WebSocket route — PreUpgrade does its own JWT auth
 	// (accepts Authorization header or ?token= query), so no authMW here.

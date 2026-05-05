@@ -77,6 +77,24 @@ func (s *StorageService) GetObject(ctx context.Context, path string) (io.ReadClo
 	return result.Body, size, nil
 }
 
+// GetObjectVersion fetches a specific S3 (SeaweedFS) noncurrent version of an object.
+// Returns the body stream + content-length.
+func (s *StorageService) GetObjectVersion(ctx context.Context, path, versionID string) (io.ReadCloser, int64, error) {
+	result, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket:    aws.String(s.bucket),
+		Key:       aws.String(path),
+		VersionId: aws.String(versionID),
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("s3 get version: %w", err)
+	}
+	size := int64(0)
+	if result.ContentLength != nil {
+		size = *result.ContentLength
+	}
+	return result.Body, size, nil
+}
+
 // Delete removes an object from SeaweedFS.
 func (s *StorageService) Delete(ctx context.Context, path string) error {
 	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
