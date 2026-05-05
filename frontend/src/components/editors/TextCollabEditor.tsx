@@ -22,6 +22,20 @@ import api from '../../api/client'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { setDeviceId } from '../../store/authSlice'
 import VersionHistoryPanel from '../VersionHistory/VersionHistoryPanel'
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from '@/components/ui/sheet'
+import CursorColorPicker from './CursorColorPicker'
+import {
+  buildAwarenessName,
+  getCursorColor,
+  setCursorColor as persistCursorColor,
+  withAlpha,
+} from '../../collab/identity'
 
 // Module-level cache: dedupes concurrent registerDevice() calls within the same
 // browser session (prevents StrictMode double-mount from creating two rows).
@@ -59,10 +73,14 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
   const [justSaved, setJustSaved] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [restoreHandler, setRestoreHandler] = useState<((vid: string) => Promise<void>) | null>(null)
+  const [cursorColor, setCursorColorState] = useState<string>(getCursorColor)
   const accessToken = useAppSelector(s => s.auth.accessToken)
   const username = useAppSelector(s => s.auth.username)
   const storedDeviceId = useAppSelector(s => s.auth.currentDeviceId)
   const dispatch = useAppDispatch()
+  // Stable awareness ref so the color-picker callback can mutate the live
+  // awareness state without re-mounting the editor.
+  const awarenessRef = useRef<Awareness | null>(null)
 
   useEffect(() => {
     if (!ref.current || !accessToken) return
@@ -93,9 +111,15 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
       ydoc = new Y.Doc()
       const ytext = ydoc.getText('content')
       awareness = new Awareness(ydoc)
-      if (username) {
-        awareness.setLocalStateField('user', { name: username, color: pickColor(username) })
-      }
+      awarenessRef.current = awareness
+      // Each tab gets its own display name (#<tabId>) and randomized color
+      // from a 20-color palette (user-customizable via the toolbar). The
+      // colorLight is what y-codemirror.next paints as the selection bg.
+      awareness.setLocalStateField('user', {
+        name: buildAwarenessName(username),
+        color: cursorColor,
+        colorLight: withAlpha(cursorColor, 0.3),
+      })
       let lastSeenSeq = 0
       let docKeyId = 1
       let outboundSeq = 0n
@@ -323,11 +347,29 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
     }
   }, [fileId, filename, accessToken, collectionMaster, storedDeviceId, username, dispatch])
 
+  // Push live cursor-color updates to awareness without remounting the editor.
+  useEffect(() => {
+    const a = awarenessRef.current
+    if (!a) return
+    const prev = a.getLocalState() as { user?: { name?: string } } | null
+    a.setLocalStateField('user', {
+      name: prev?.user?.name ?? buildAwarenessName(username),
+      color: cursorColor,
+      colorLight: withAlpha(cursorColor, 0.3),
+    })
+  }, [cursorColor, username])
+
+  function handleCursorColorChange(hex: string) {
+    setCursorColorState(hex)
+    persistCursorColor(hex)
+  }
+
   return (
     <div className="flex h-full w-full flex-col">
       <div className="flex items-center justify-between border-b px-3 py-1 text-xs">
         <span className="text-muted-foreground">{filename} · {status}</span>
         <div className="flex items-center gap-2">
+          <CursorColorPicker color={cursorColor} onChange={handleCursorColorChange} />
           <button
             type="button"
             disabled={!trigger || savingPlain || savingVersion}
@@ -384,10 +426,22 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
           </button>
         </div>
       </div>
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 min-h-0 overflow-hidden">
         <div ref={ref} className="flex-1 overflow-auto" />
-        {historyOpen && (
-          <aside className="w-80 shrink-0 overflow-y-auto border-l">
+      </div>
+
+      <Sheet open={historyOpen} onOpenChange={setHistoryOpen}>
+        <SheetContent
+          side="right"
+          className="flex w-full flex-col gap-0 p-0 sm:max-w-md"
+        >
+          <SheetHeader className="border-b px-4 py-3">
+            <SheetTitle>Version history</SheetTitle>
+            <SheetDescription className="sr-only">
+              Browse and restore previous versions of this file.
+            </SheetDescription>
+          </SheetHeader>
+          <div className="flex-1 min-h-0 overflow-y-auto">
             <VersionHistoryPanel
               fileId={fileId}
               onRestore={async (vid) => {
@@ -396,17 +450,10 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
                 await restoreHandler(vid)
               }}
             />
-          </aside>
-        )}
-      </div>
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   )
 }
 
-// Stable color hash for awareness cursors.
-function pickColor(s: string): string {
-  let h = 0
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0
-  const colors = ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16']
-  return colors[Math.abs(h) % colors.length]
-}
