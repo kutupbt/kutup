@@ -37,6 +37,15 @@
         height: 100%;
         width: 100%;
       }
+      /* OnlyOffice's DocsAPI mounts a child <iframe> inside #placeholder
+         with no explicit size; without this it collapses to its default
+         small dimensions instead of filling the host. */
+      #placeholder > iframe {
+        width: 100% !important;
+        height: 100% !important;
+        border: 0 !important;
+        display: block !important;
+      }
       #status {
         position: fixed;
         top: 8px;
