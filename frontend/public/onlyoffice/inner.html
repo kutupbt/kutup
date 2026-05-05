@@ -33,14 +33,16 @@
         overflow: hidden;
         font-family: system-ui, -apple-system, sans-serif;
       }
+      /* Anchor the placeholder with absolute positioning — DocsAPI sizes
+         its iframe relative to the placeholder's bounding box, and a flex
+         child sometimes resolves to 0 height during mount before its
+         siblings settle. Absolute + 100% sidesteps that race. */
       #placeholder {
-        height: 100%;
-        width: 100%;
+        position: absolute;
+        inset: 0;
       }
-      /* OnlyOffice's DocsAPI mounts a child <iframe> inside #placeholder
-         with no explicit size; without this it collapses to its default
-         small dimensions instead of filling the host. */
-      #placeholder > iframe {
+      #placeholder iframe,
+      #placeholder > * {
         width: 100% !important;
         height: 100% !important;
         border: 0 !important;
