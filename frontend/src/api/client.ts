@@ -37,6 +37,9 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config
     const status = error.response?.status
+    // If axios couldn't even attach the request config (some network-layer
+    // failures, MSW edge cases, etc.), there's nothing to retry. Bail.
+    if (!originalRequest) return Promise.reject(error)
 
     // Transient failures (503 from rate limiter, 429 from anywhere, or
     // network-level disconnects). Retry up to 3 times with 0.5/1/2 s backoff

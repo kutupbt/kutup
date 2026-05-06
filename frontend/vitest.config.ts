@@ -3,8 +3,20 @@ import path from 'path'
 
 export default defineConfig({
   test: {
-    environment: 'node',
+    // jsdom by default so component tests + sessionStorage-touching code
+    // work. Pure-node tests (crypto/, collab/) are unaffected — they don't
+    // touch window/document.
+    environment: 'jsdom',
     globals: false,
+    setupFiles: ['./vitest.setup.ts'],
+    environmentOptions: {
+      jsdom: {
+        // Anchor jsdom to a real URL so axios's fetch adapter can resolve
+        // relative paths like baseURL: '/api'. Without this jsdom defaults
+        // to "about:blank" which the URL parser rejects.
+        url: 'http://localhost/',
+      },
+    },
   },
   resolve: {
     alias: {
