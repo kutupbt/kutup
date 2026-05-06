@@ -81,7 +81,7 @@ function FolderMenuItems(props: FolderMenuItemsProps) {
         />
       ))}
       <button
-        title="Default"
+        title={t('folders.colorDefault')}
         className="w-4 h-4 rounded-full border-0 cursor-pointer hover:ring-2 ring-white ring-offset-1"
         style={{
           background: DEFAULT_FOLDER_COLOR,
@@ -98,7 +98,7 @@ function FolderMenuItems(props: FolderMenuItemsProps) {
       <>
         <Item onSelect={() => props.onEnter(col)}>
           <FolderOpen className="h-4 w-4 mr-2" />
-          Open
+          {t('folders.open')}
         </Item>
         <Item onSelect={() => props.onDetails(col)}>
           <Info className="h-4 w-4 mr-2" />
@@ -120,7 +120,7 @@ function FolderMenuItems(props: FolderMenuItemsProps) {
     <>
       <Item onSelect={() => props.onEnter(col)}>
         <FolderOpen className="h-4 w-4 mr-2" />
-        Open
+        {t('folders.open')}
       </Item>
       <Item onSelect={() => props.onDetails(col)}>
         <Info className="h-4 w-4 mr-2" />
@@ -137,7 +137,7 @@ function FolderMenuItems(props: FolderMenuItemsProps) {
         <ContextMenuSub>
           <ContextMenuSubTrigger>
             <Palette className="h-4 w-4 mr-2" />
-            Change color
+            {t('folders.changeColor')}
           </ContextMenuSubTrigger>
           <ContextMenuSubContent>
             <div className="flex items-center gap-1.5 px-2 py-1.5">{ColorRow}</div>
@@ -188,6 +188,7 @@ export default function CollectionGrid({
   onUploadTo,
   onDrop,
 }: Props) {
+  const { t } = useTranslation()
   if (isLoading) {
     return (
       <section className="mb-8">
@@ -208,7 +209,7 @@ export default function CollectionGrid({
     <section className="mb-8">
       <header className="mb-3 flex items-center gap-2">
         <h2 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
-          Folders
+          {t('drive.foldersHeader')}
         </h2>
         <span className="text-xs font-medium text-muted-foreground">[{collections.length}]</span>
       </header>
@@ -256,15 +257,15 @@ export default function CollectionGrid({
                   {col.isRemote ? (
                     <>
                       <Globe className="h-3 w-3" />
-                      <span>Remote</span>
+                      <span>{t('folders.badge.remote')}</span>
                     </>
                   ) : col.isShared ? (
                     <>
                       <Users className="h-3 w-3" />
-                      <span>Shared</span>
+                      <span>{t('folders.badge.shared')}</span>
                     </>
                   ) : (
-                    <span>Folder</span>
+                    <span>{t('folders.badge.folder')}</span>
                   )}
                 </div>
               </div>

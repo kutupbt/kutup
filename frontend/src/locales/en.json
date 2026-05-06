@@ -14,7 +14,15 @@
     "copyLink": "Copy link",
     "copied": "Copied!",
     "clear": "Clear",
-    "drive": "Drive"
+    "drive": "Drive",
+    "loading": "Loading…",
+    "new": "New",
+    "open": "Open",
+    "searchPlaceholder": "Search in Kutup…",
+    "searchAria": "Search current view",
+    "clearSearch": "Clear search",
+    "shortcutsAria": "Keyboard shortcuts",
+    "shortcutsTitle": "Keyboard shortcuts (?)"
   },
   "nav": {
     "myFiles": "My Files",
@@ -22,6 +30,8 @@
     "admin": "Admin",
     "settings": "Settings",
     "signOut": "Sign out",
+    "signOutConfirmTitle": "Sign out of Kutup?",
+    "signOutConfirmDescription": "You'll need to sign in again with your password to access your encrypted files.",
     "switchToLight": "Switch to light mode",
     "switchToDark": "Switch to dark mode"
   },
@@ -110,6 +120,8 @@
     }
   },
   "drive": {
+    "foldersHeader": "Folders",
+    "filesHeader": "Files",
     "dropToUpload": "Drop to upload to “{{name}}”",
     "uploadQuota": "Upload quota",
     "selected_one": "{{count}} item selected",
@@ -177,20 +189,39 @@
     }
   },
   "folders": {
+    "open": "Open",
     "details": "Details",
     "rename": "Rename",
     "uploadHere": "Upload here",
     "share": "Share",
     "copyPublicLink": "Copy public link",
     "deleteFolder": "Delete folder",
-    "removeShare": "Remove share"
+    "removeShare": "Remove share",
+    "changeColor": "Change color",
+    "colorDefault": "Default",
+    "badge": {
+      "remote": "Remote",
+      "shared": "Shared",
+      "folder": "Folder"
+    }
   },
   "files": {
     "name": "Name",
     "size": "Size",
+    "modified": "Modified",
     "uploaded": "Uploaded",
     "download": "Download",
-    "delete": "Delete"
+    "delete": "Delete",
+    "selectAll": "Select all files"
+  },
+  "newMenu": {
+    "folder": "Folder",
+    "note": "Note (.md)",
+    "docx": "Document (.docx)",
+    "xlsx": "Spreadsheet (.xlsx)",
+    "pptx": "Presentation (.pptx)",
+    "uploadFiles": "Upload files",
+    "addRemote": "Add remote share"
   },
   "details": {
     "title": "Details",
@@ -294,6 +325,22 @@
     "language": {
       "title": "Language",
       "desc": "Choose your display language"
+    },
+    "devices": {
+      "title": "Devices",
+      "desc": "Browser tabs and CLI sessions register here when you start a collaborative edit. Revoke a device to disconnect it and reject future signed updates from it.",
+      "empty": "No devices yet.",
+      "errorPrefix": "Error:",
+      "fallbackLabel": "Device #{{id}}",
+      "active": "Active",
+      "revoked": "Revoked",
+      "createdAt": "created {{when}}",
+      "lastSeenAt": "last seen {{when}}",
+      "revoke": "Revoke",
+      "revokeTitle": "Revoke this device?",
+      "revokeDesc": "Any active editing session from {{label}} will be disconnected, and future signed updates from it will be rejected.",
+      "revokedToast": "Device revoked",
+      "revokeFailed": "Revoke failed: {{error}}"
     }
   },
   "admin": {

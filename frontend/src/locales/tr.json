@@ -14,7 +14,15 @@
     "copyLink": "Bağlantıyı kopyala",
     "copied": "Kopyalandı!",
     "clear": "Temizle",
-    "drive": "Sürücü"
+    "drive": "Sürücü",
+    "loading": "Yükleniyor…",
+    "new": "Yeni",
+    "open": "Aç",
+    "searchPlaceholder": "Kutup'ta ara…",
+    "searchAria": "Mevcut görünümde ara",
+    "clearSearch": "Aramayı temizle",
+    "shortcutsAria": "Klavye kısayolları",
+    "shortcutsTitle": "Klavye kısayolları (?)"
   },
   "nav": {
     "myFiles": "Dosyalarım",
@@ -22,6 +30,8 @@
     "admin": "Yönetici",
     "settings": "Ayarlar",
     "signOut": "Çıkış yap",
+    "signOutConfirmTitle": "Kutup'tan çıkış yapılsın mı?",
+    "signOutConfirmDescription": "Şifrelenmiş dosyalarınıza erişmek için parolanızla yeniden giriş yapmanız gerekecek.",
     "switchToLight": "Açık temaya geç",
     "switchToDark": "Koyu temaya geç"
   },
@@ -110,6 +120,8 @@
     }
   },
   "drive": {
+    "foldersHeader": "Klasörler",
+    "filesHeader": "Dosyalar",
     "dropToUpload": "“{{name}}” klasörüne yüklemek için bırakın",
     "uploadQuota": "Yükleme kotası",
     "selected_one": "{{count}} öğe seçildi",
@@ -177,20 +189,39 @@
     }
   },
   "folders": {
+    "open": "Aç",
     "details": "Ayrıntılar",
     "rename": "Yeniden adlandır",
     "uploadHere": "Buraya yükle",
     "share": "Paylaş",
     "copyPublicLink": "Genel bağlantıyı kopyala",
     "deleteFolder": "Klasörü sil",
-    "removeShare": "Paylaşımı kaldır"
+    "removeShare": "Paylaşımı kaldır",
+    "changeColor": "Rengi değiştir",
+    "colorDefault": "Varsayılan",
+    "badge": {
+      "remote": "Uzak",
+      "shared": "Paylaşılan",
+      "folder": "Klasör"
+    }
   },
   "files": {
     "name": "Ad",
     "size": "Boyut",
+    "modified": "Değiştirildi",
     "uploaded": "Yüklendi",
     "download": "İndir",
-    "delete": "Sil"
+    "delete": "Sil",
+    "selectAll": "Tüm dosyaları seç"
+  },
+  "newMenu": {
+    "folder": "Klasör",
+    "note": "Not (.md)",
+    "docx": "Belge (.docx)",
+    "xlsx": "Hesap tablosu (.xlsx)",
+    "pptx": "Sunum (.pptx)",
+    "uploadFiles": "Dosya yükle",
+    "addRemote": "Uzak paylaşım ekle"
   },
   "details": {
     "title": "Ayrıntılar",
@@ -294,6 +325,22 @@
     "language": {
       "title": "Dil",
       "desc": "Görüntüleme dilinizi seçin"
+    },
+    "devices": {
+      "title": "Cihazlar",
+      "desc": "Tarayıcı sekmeleri ve CLI oturumları, ortak düzenlemeye başladığınızda burada kaydedilir. Bir cihazı iptal ettiğinizde bağlantısı kesilir ve o cihazdan gelecek imzalı güncellemeler reddedilir.",
+      "empty": "Henüz cihaz yok.",
+      "errorPrefix": "Hata:",
+      "fallbackLabel": "Cihaz #{{id}}",
+      "active": "Aktif",
+      "revoked": "İptal edildi",
+      "createdAt": "{{when}} tarihinde oluşturuldu",
+      "lastSeenAt": "son görülme {{when}}",
+      "revoke": "İptal et",
+      "revokeTitle": "Bu cihaz iptal edilsin mi?",
+      "revokeDesc": "{{label}} cihazından gelen aktif düzenleme oturumu kesilecek ve bu cihazdan gelecek imzalı güncellemeler reddedilecek.",
+      "revokedToast": "Cihaz iptal edildi",
+      "revokeFailed": "İptal başarısız: {{error}}"
     }
   },
   "admin": {

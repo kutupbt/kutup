@@ -942,6 +942,7 @@ export default function Drive() {
                 onToggleSelectAll={toggleAllFiles}
                 onDownload={handleDownload}
                 onDelete={(file) => setDeleteFile(file)}
+                onDetails={setDetailItem}
               />
             )}
           </>
