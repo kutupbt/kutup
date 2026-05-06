@@ -325,7 +325,7 @@
               // Phase 5c forwards cursor presence; no-op for 2c.
               break
             default:
-              // Quiet by default — too many DEBUG message types to enumerate.
+              console.log('[kutup-bridge] unhandled OO msg type=' + obj.type, obj)
               break
           }
         }
