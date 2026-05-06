@@ -271,16 +271,23 @@
               // Phase 6a; no-op for 2c.
               break
             case 'saveChanges':
-              // 1:1 port of CryptPad's handleChanges (inner.js:1357).
-              // Wrap each raw OO change-string in the {docid, change, time,
-              // user, useridoriginal} envelope OO recognizes as a remote
-              // op (its _onSaveChanges → _updateChanges path expects this
-              // shape). The outbound message also carries changesIndex +
-              // empty locks — without those OO's internal state machine
-              // refuses to advance past the first commit and stops
-              // emitting saveChanges for new typing.
+              // 1:1 port of CryptPad's parseChanges + handleChanges
+              // (inner.js:1340 + :1357). OnlyOffice emits obj.changes as a
+              // JSON-encoded STRING (e.g. `'["AgAA…","AgAB…"]'`), not as a
+              // JS array — so we must JSON.parse before mapping. The earlier
+              // `Array.isArray(obj.changes)` check fell through to `[]` for
+              // every commit, producing the empty-heartbeat symptom that
+              // blocked Phase 5. Each parsed string is then wrapped in the
+              // {docid, change, time, user, useridoriginal} envelope OO's
+              // _onSaveChanges → _updateChanges path expects.
               try {
-                var rawChanges = Array.isArray(obj.changes) ? obj.changes : []
+                var rawChanges
+                try {
+                  rawChanges = typeof obj.changes === 'string' ? JSON.parse(obj.changes) : obj.changes
+                } catch (_) {
+                  rawChanges = []
+                }
+                if (!Array.isArray(rawChanges)) rawChanges = []
                 var wrapped = rawChanges.map(function (m) {
                   return {
                     docid: 'fresh',
