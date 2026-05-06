@@ -49,8 +49,13 @@ export default function FirstLogin() {
   const [mnemonicConfirm, setMnemonicConfirm] = useState('')
   const [error, setError] = useState('')
 
-  const email = sessionStorage.getItem('setup_email') ?? ''
-  const setupToken = sessionStorage.getItem('setup_token') ?? ''
+  // Snapshot once on mount: handleConfirmMnemonic clears these items in
+  // sessionStorage right before navigating to /drive. If we re-read on every
+  // render, the post-submit re-render of this component sees them empty and
+  // fires the redirect effect below — racing the navigate('/drive') and
+  // bouncing the user back to /login with a still-valid session.
+  const [email] = useState(() => sessionStorage.getItem('setup_email') ?? '')
+  const [setupToken] = useState(() => sessionStorage.getItem('setup_token') ?? '')
 
   useEffect(() => {
     if (!setupToken) navigate('/login')
