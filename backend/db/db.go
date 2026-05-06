@@ -15,6 +15,10 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// MigrationsFS exposes the embedded migrations to other packages
+// (notably the test harness). Read-only.
+func MigrationsFS() embed.FS { return migrationsFS }
+
 func Connect(databaseURL string) (*pgxpool.Pool, error) {
 	pool, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
