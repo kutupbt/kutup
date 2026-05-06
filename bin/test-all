@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# bin/test-all — kutup milestone gate.
+#
+# Runs every test layer + lint + build. Exits non-zero on any failure.
+# Run before declaring a milestone (e.g. "OnlyOffice fully supported")
+# shipped, and attach the green output to the release notes / PR.
+#
+# Layers executed in order (each prints a banner):
+#   1. go vet ./... && go build ./...   (compile clean)
+#   2. go test ./...                     (unit + handler integration)
+#   3. go test -bench=. -benchtime=1s    (perf — captured, never gates)
+#   4. pnpm test                          (vitest unit + component)
+#   5. pnpm tsc --noEmit                  (TypeScript type check)
+#   6. pnpm build                         (production bundle compiles)
+#   7. cd tests/e2e && playwright test    (full browser e2e)
+#
+# Prereqs: docker compose stack up with `-f docker-compose.test.yml`
+# (exposes Postgres on 5433 for handler tests).
+
+set -uo pipefail
+
+cd "$(dirname "$0")/.."
+ROOT=$(pwd)
+
+# Colour helpers (skip if not a tty).
+if [[ -t 1 ]]; then
+  GREEN='\033[0;32m'; RED='\033[0;31m'; CYAN='\033[0;36m'; RST='\033[0m'
+else
+  GREEN=''; RED=''; CYAN=''; RST=''
+fi
+
+PASSED=()
+FAILED=()
+SKIPPED=()
+
+banner() { printf "\n${CYAN}══ %s ══${RST}\n" "$1"; }
+ok()     { printf "${GREEN}✓${RST} %s\n" "$1"; PASSED+=("$1"); }
+fail()   { printf "${RED}✗${RST} %s\n" "$1"; FAILED+=("$1"); }
+skip()   { printf "  (skipped: %s)\n" "$1"; SKIPPED+=("$1"); }
+
+run() {
+  local name=$1; shift
+  banner "$name"
+  if "$@"; then
+    ok "$name"
+  else
+    fail "$name"
+  fi
+}
+
+# ---- 1. Backend compile -----------------------------------------------------
+run "go vet"            bash -c "cd $ROOT/backend && go vet ./..."
+run "go build"          bash -c "cd $ROOT/backend && go build ./..."
+
+# ---- 2. Backend tests -------------------------------------------------------
+# Handler tests need Postgres on 5433 (per docker-compose.test.yml). Skip
+# them with a clear message if it's not reachable.
+if (echo > /dev/tcp/localhost/5433) 2>/dev/null; then
+  run "go test ./..."   bash -c "cd $ROOT/backend && go test ./..."
+else
+  banner "go test ./..."
+  skip "Postgres on :5433 not reachable — handler integration tests will skip themselves"
+  run "go test ./... (skip integration)"   bash -c "cd $ROOT/backend && go test ./..."
+fi
+
+# ---- 3. Backend perf (capture, no gate) -------------------------------------
+banner "go test -bench (capture only)"
+(cd $ROOT/backend && go test -bench=. -benchtime=1s -run=^$ ./services/envelope/ 2>&1 | grep -E "Benchmark") || true
+ok "go bench captured"
+
+# ---- 4. Frontend unit + component -------------------------------------------
+run "pnpm test"         bash -c "cd $ROOT/frontend && pnpm test"
+
+# ---- 5. Frontend type-check -------------------------------------------------
+run "pnpm tsc --noEmit" bash -c "cd $ROOT/frontend && pnpm exec tsc --noEmit"
+
+# ---- 6. Frontend prod bundle ------------------------------------------------
+run "pnpm build"        bash -c "cd $ROOT/frontend && pnpm build"
+
+# ---- 7. End-to-end (Playwright) --------------------------------------------
+# Needs the full compose stack up at https://localhost:38443. If nginx
+# isn't reachable, skip rather than fail (e2e is intentionally optional
+# in environments without docker).
+#
+# `bin/test-all --fast` skips the heavy 05-tab-race spec (~10 OnlyOffice
+# spreadsheet boot sequences, 8+ min). Default mode runs everything.
+if (echo > /dev/tcp/localhost/38443) 2>/dev/null; then
+  if [[ "${1:-}" == "--fast" ]]; then
+    run "playwright e2e (--fast: skips 05-tab-race)" \
+      bash -c "cd $ROOT/tests/e2e && npx playwright test --grep-invert='tab race'"
+  else
+    run "playwright e2e (full)" bash -c "cd $ROOT/tests/e2e && npx playwright test"
+  fi
+else
+  banner "playwright e2e"
+  skip "https://localhost:38443 not reachable — bring up the compose stack to run e2e"
+fi
+
+# ---- Summary ----------------------------------------------------------------
+banner "Summary"
+printf "  passed:  %d\n" "${#PASSED[@]}"
+printf "  failed:  %d\n" "${#FAILED[@]}"
+printf "  skipped: %d\n" "${#SKIPPED[@]}"
+
+if [[ ${#FAILED[@]} -gt 0 ]]; then
+  printf "\n${RED}FAILED steps:${RST}\n"
+  for s in "${FAILED[@]}"; do printf "  - %s\n" "$s"; done
+  exit 1
+fi
+printf "\n${GREEN}MILESTONE GATE PASSED${RST}\n"
