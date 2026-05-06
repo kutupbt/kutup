@@ -197,6 +197,14 @@
         // few non-auth message kinds. Phase 5+ will replace stubs with real
         // collab plumbing; Phase 6+ adds lock state.
         var docEditor = null
+        // OnlyOffice's chainpad-style commit index. CryptPad's
+        // ooChannel.cpIndex — incremented after each committed saveChanges
+        // and reflected back via unSaveLock so OO knows "the server has
+        // acknowledged ops up to this index, you may release the lock and
+        // accept new edits". index:0 (our previous value) leaves OO frozen
+        // on its first lock so subsequent typing never produces saveChanges.
+        var cpIndex = 0
+
         var sendToOO = function (obj) {
           if (!docEditor) return
           docEditor.sendMessageToOO(obj)
@@ -281,6 +289,7 @@
                   endSaveChanges: obj.endSaveChanges,
                   docid: 'fresh',
                 }
+                console.log('[kutup-bridge] outbound saveChanges, raw=' + rawChanges.length + ' wrapped=' + wrapped.length)
                 if (window.parent && window.parent !== window) {
                   window.parent.postMessage(
                     { type: 'oo-local-op', payload: JSON.stringify(outboundMsg) },
@@ -290,7 +299,8 @@
               } catch (err) {
                 console.warn('[kutup-bridge] saveChanges wrap failed', err)
               }
-              sendToOO({ type: 'unSaveLock', index: 0, time: Date.now() })
+              cpIndex++
+              sendToOO({ type: 'unSaveLock', index: cpIndex, time: Date.now() })
               break
             case 'cursor':
               // Phase 5c forwards cursor presence; no-op for 2c.
