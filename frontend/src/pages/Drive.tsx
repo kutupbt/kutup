@@ -779,7 +779,7 @@ export default function Drive() {
   })
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex h-screen overflow-hidden">
       <Sidebar
         viewMode={viewMode}
         sharedCount={sharedCollections.length}
@@ -787,7 +787,7 @@ export default function Drive() {
         onGoShared={goToShared}
       />
 
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <DriveTopBar
           ref={searchInputRef}
           searchValue={searchQuery}

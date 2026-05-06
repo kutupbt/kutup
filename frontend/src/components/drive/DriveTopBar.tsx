@@ -35,7 +35,7 @@ const DriveTopBar = forwardRef<HTMLInputElement, DriveTopBarProps>(function Driv
   searchRef,
 ) {
   return (
-    <div className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-background/95 backdrop-blur px-6">
+    <div className="shrink-0 flex h-16 items-center gap-3 border-b border-border bg-background/95 backdrop-blur px-6">
       <div className="flex-1" />
 
       <div className="relative w-full max-w-xl">
