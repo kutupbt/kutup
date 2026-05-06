@@ -127,9 +127,34 @@ export default function FileEditorPage() {
         }
         if (editorTarget || officeTarget || viewerTarget) {
           try {
-            const dlRes = await api.get(`/files/${fid}/download`, { responseType: 'arraybuffer' })
-            if (cancelled) return
-            const plain = await decryptStream(new Uint8Array(dlRes.data), fileKey)
+            // Office files: prefer the latest snapshot version (Phase 4a
+            // saved one) over the original blob, so reopens see edits.
+            // Text/viewer paths still use the original — TextCollabEditor
+            // does its own version pickup; viewers just want the raw blob.
+            let plain: Uint8Array | null = null
+            if (officeTarget) {
+              try {
+                const versionsRes = await api.get(`/files/${fid}/versions`)
+                if (cancelled) return
+                const versions = Array.isArray(versionsRes.data) ? versionsRes.data : []
+                if (versions.length > 0) {
+                  // The endpoint returns versions newest-first per existing
+                  // VersionHistoryPanel usage.
+                  const latest = versions[0]
+                  const vRes = await api.get(`/files/${fid}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
+                  if (cancelled) return
+                  plain = await decryptStream(new Uint8Array(vRes.data), fileKey)
+                }
+              } catch (e) {
+                // Fall through to original blob.
+                console.warn('office: failed to load latest version, falling back to original', e)
+              }
+            }
+            if (!plain) {
+              const dlRes = await api.get(`/files/${fid}/download`, { responseType: 'arraybuffer' })
+              if (cancelled) return
+              plain = await decryptStream(new Uint8Array(dlRes.data), fileKey)
+            }
             if (editorTarget) {
               setInitialContent(new TextDecoder().decode(plain))
             } else if (officeTarget) {
