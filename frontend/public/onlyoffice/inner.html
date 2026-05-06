@@ -257,16 +257,38 @@
               // Phase 6a; no-op for 2c.
               break
             case 'saveChanges':
-              // Phase 5a: forward to kutup parent so it can encrypt + sign +
-              // ship through the WS relay. Then ack with unSaveLock so
-              // OnlyOffice doesn't hang on "saving".
-              if (window.parent && window.parent !== window) {
-                try {
+              // Phase 5a: wrap each raw change in OnlyOffice's server-style
+              // envelope (CryptPad's parseChanges, inner.js:1340) so peers
+              // receive a saveChanges shape OO recognizes as a remote op.
+              // Without this, OO crashes with "undefined is not valid JSON"
+              // when JSON.parse'ing the change field.
+              try {
+                var rawChanges = Array.isArray(obj.changes) ? obj.changes : []
+                var wrapped = rawChanges.map(function (m) {
+                  return {
+                    docid: 'fresh',
+                    change: '"' + m + '"',
+                    time: Date.now(),
+                    user: 'me-' + Math.floor(Math.random() * 9000 + 1000),
+                    useridoriginal: 'me',
+                  }
+                })
+                var outboundMsg = {
+                  type: 'saveChanges',
+                  changes: wrapped,
+                  excelAdditionalInfo: obj.excelAdditionalInfo,
+                  startSaveChanges: obj.startSaveChanges,
+                  endSaveChanges: obj.endSaveChanges,
+                  docid: 'fresh',
+                }
+                if (window.parent && window.parent !== window) {
                   window.parent.postMessage(
-                    { type: 'oo-local-op', payload: JSON.stringify(obj) },
+                    { type: 'oo-local-op', payload: JSON.stringify(outboundMsg) },
                     EXPECTED_ORIGIN,
                   )
-                } catch (e) { /* ignore postMessage errors */ }
+                }
+              } catch (err) {
+                console.warn('[kutup-bridge] saveChanges wrap failed', err)
               }
               sendToOO({ type: 'unSaveLock', index: 0, time: Date.now() })
               break
