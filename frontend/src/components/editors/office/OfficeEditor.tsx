@@ -152,7 +152,13 @@ function OfficeEditorBase(
       const transport = transportRef.current
       const did = deviceIdRef.current
       const kp = keypairRef.current
-      if (!transport || !did || !kp) return
+      if (!transport || !did || !kp) {
+        // eslint-disable-next-line no-console
+        console.warn('[office] sendLocalOp dropped — transport/did/kp not ready', { hasTransport: !!transport, hasDid: !!did, hasKp: !!kp, payloadLen: payload.length })
+        return
+      }
+      // eslint-disable-next-line no-console
+      console.log('[office] sendLocalOp →', payload.length, 'bytes')
       try {
         outboundSeqRef.current = outboundSeqRef.current + 1n
         const f = await encryptOOOp(
@@ -176,6 +182,10 @@ function OfficeEditorBase(
       if (!iframe || e.source !== iframe.contentWindow) return
       const msg = e.data
       if (!msg || typeof msg !== 'object') return
+      if ((msg as { type?: string }).type === 'oo-local-op') {
+        // eslint-disable-next-line no-console
+        console.log('[office] got oo-local-op from bridge')
+      }
 
       switch (msg.type) {
         case 'ready':
