@@ -63,3 +63,18 @@ export async function patchVersion(
   const r = await api.patch<VersionRow>(`/files/${fileId}/versions/${vid}`, patch)
   return r.data
 }
+
+/**
+ * Claim the first-seeder slot for a fresh collab file. Server runs an
+ * atomic UPDATE; exactly one caller for a given file ever gets
+ * `committed: true`. Used by TextCollabEditor's cold-start to avoid two
+ * tabs both inserting `initialContent` and CRDT-merging into duplicate.
+ *
+ * Idempotent — once committed, all later callers (including from new
+ * tab sessions) see committed=false and must wait for WS replay to
+ * populate their local Y.Text.
+ */
+export async function claimSeed(fileId: string): Promise<{ committed: boolean }> {
+  const r = await api.post<{ committed: boolean }>(`/files/${fileId}/claim-seed`)
+  return r.data
+}
