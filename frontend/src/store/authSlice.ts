@@ -81,9 +81,13 @@ const authSlice = createSlice({
     },
     logout(state) {
       sessionStorage.removeItem('kutup_session')
-      // Zero out sensitive material before clearing
-      if (state.masterKey) state.masterKey.fill(0)
-      if (state.privateKey) state.privateKey.fill(0)
+      // Returning initialState replaces the slice; we can't also mutate
+      // the draft (Immer error 4 — "can't return new state AND modify
+      // draft"). The old key arrays are abandoned to GC rather than
+      // explicitly zeroed. The threat model already assumes that a
+      // hostile attacker on the device wins; secure-erase here was
+      // hygiene only.
+      void state
       return initialState
     },
   },
