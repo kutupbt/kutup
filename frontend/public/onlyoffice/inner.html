@@ -513,6 +513,7 @@
               // OnlyOffice via sendMessageToOO so the editor applies it.
               try {
                 var payload = JSON.parse(msg.payload)
+                console.log('[kutup-bridge] applying remote op', payload && payload.type, 'changes=' + (payload && payload.changes ? payload.changes.length : 0))
                 sendToOO(payload)
               } catch (err) {
                 console.warn('[kutup-bridge] bad oo-remote-op payload', err)

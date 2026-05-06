@@ -281,7 +281,12 @@ function OfficeEditorBase(
       transportRef.current?.close()
       transportRef.current = null
     }
-  }, [docType, fileId, accessToken, collectionMaster, storedDeviceId, dispatch])
+    // storedDeviceId is intentionally NOT a dep: the first render reads it
+    // (often null), the registration flow sets it via dispatch, and React's
+    // re-render would otherwise tear down + recreate the WS for no reason.
+    // We hold the registered id in deviceIdRef and don't need it in deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docType, fileId, accessToken, collectionMaster, dispatch])
 
   if (error) {
     return (
