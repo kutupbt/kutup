@@ -130,6 +130,17 @@ export async function encryptAwareness(
   return buildFrame(update, KIND.YJS_AWARENESS, fileId, docKeyId, deviceId, sequence, collectionMaster)
 }
 
+export async function encryptOOOp(
+  payload: Uint8Array, fileId: string, docKeyId: number,
+  deviceId: bigint, sequence: bigint, collectionMaster: Uint8Array,
+): Promise<Frame> {
+  return buildFrame(payload, KIND.OO_OP, fileId, docKeyId, deviceId, sequence, collectionMaster)
+}
+
+export async function decryptOOOp(f: Frame, fileId: string, collectionMaster: Uint8Array): Promise<Uint8Array> {
+  return decryptCommon(f, fileId, collectionMaster)
+}
+
 export async function decryptYjsUpdate(f: Frame, fileId: string, collectionMaster: Uint8Array): Promise<Uint8Array> {
   return decryptCommon(f, fileId, collectionMaster)
 }
