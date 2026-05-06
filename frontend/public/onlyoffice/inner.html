@@ -257,8 +257,17 @@
               // Phase 6a; no-op for 2c.
               break
             case 'saveChanges':
-              // Phase 5a routes to relay. For 2c just ack so the lock clears
-              // and OnlyOffice doesn't hang on "saving".
+              // Phase 5a: forward to kutup parent so it can encrypt + sign +
+              // ship through the WS relay. Then ack with unSaveLock so
+              // OnlyOffice doesn't hang on "saving".
+              if (window.parent && window.parent !== window) {
+                try {
+                  window.parent.postMessage(
+                    { type: 'oo-local-op', payload: JSON.stringify(obj) },
+                    EXPECTED_ORIGIN,
+                  )
+                } catch (e) { /* ignore postMessage errors */ }
+              }
               sendToOO({ type: 'unSaveLock', index: 0, time: Date.now() })
               break
             case 'cursor':
@@ -476,6 +485,16 @@
               return
             case 'save-request':
               handleSaveRequest(e.source, msg.requestId)
+              return
+            case 'oo-remote-op':
+              // A saveChanges payload from another peer. Re-emit it to
+              // OnlyOffice via sendMessageToOO so the editor applies it.
+              try {
+                var payload = JSON.parse(msg.payload)
+                sendToOO(payload)
+              } catch (err) {
+                console.warn('[kutup-bridge] bad oo-remote-op payload', err)
+              }
               return
           }
         })

@@ -8,16 +8,26 @@
 //
 // OfficeEditor — React wrapper around the OnlyOffice bridge iframe.
 //
-// Phase 2a (this version): mounts /onlyoffice/inner.html in an iframe, does a
-// postMessage handshake, displays bridge status. No DocsAPI, no x2t, no
-// collab plumbing. The actual editor mount lands in phase 2b.
-//
-// The split is intentional: the bridge page is plain HTML/JS so it can run
-// inside its own origin-shaped sandbox alongside OnlyOffice's deeply-nested
-// iframes; this React wrapper owns the user-facing chrome (status text,
-// errors) and is the only side that talks to kutup state via Redux.
+// Phase 5: real-time collab. The bridge captures OnlyOffice's saveChanges
+// postMessages and forwards them to us; we wrap each in a libsodium AEAD
+// envelope (KIND.OO_OP), sign with our device's Ed25519 key, and ship
+// through the existing Go WebSocket relay. Incoming frames go the other
+// way: decrypt → bridge → ooChannel.send → OnlyOffice applies remotely.
 
-import { useEffect, useImperativeHandle, useRef, useState, forwardRef, type Ref } from 'react'
+import {
+  useEffect, useImperativeHandle, useRef, useState, forwardRef,
+  type Ref,
+} from 'react'
+import { useAppDispatch, useAppSelector } from '@/store'
+import { setDeviceId } from '@/store/authSlice'
+import { CollabTransport, type HelloMsg } from '@/collab/transport'
+import { pack, unpack, KIND, type Frame } from '@/collab/envelope'
+import { encryptOOOp, decryptOOOp } from '@/collab/cryptoFrame'
+import { ed25519Sign } from '@/collab/sign'
+import {
+  generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64,
+} from '@/collab/devices'
+import { registerDevice } from '@/api/collab'
 
 export interface OfficeEditorHandle {
   /** Asks inner.html to extract the doc binary, run x2t to OOXML, and
@@ -43,44 +53,66 @@ function detectType(filename: string): DocType | null {
   return null
 }
 
-// All postMessage envelopes we exchange with inner.html. Phase 2b/2c/2d will
-// add init, save, op, lock, etc. Keeping the shape narrow + typed up front
-// so additions don't drift.
+// All postMessage envelopes we exchange with inner.html.
 type FromBridge =
   | { type: 'ready'; docType: string | null }
   | { type: 'pong' }
   | { type: 'init-ack' }
   | { type: 'save-result'; requestId: number; bytes?: Uint8Array; format?: DocType; error?: string }
+  | { type: 'oo-local-op'; payload: string }
 type ToBridge =
   | { type: 'ping' }
   | { type: 'init'; payload: InitPayload }
   | { type: 'save-request'; requestId: number }
+  | { type: 'oo-remote-op'; payload: string }
 
 interface InitPayload {
   type: DocType
   filename: string
   fileId: string
-  /** Decrypted OOXML bytes for an existing file. Phase 3b: inner.html runs
-   *  x2tConvert to turn this into OnlyOffice's .bin format on first open.
-   *  Undefined or 1-byte placeholders mean "freshly created — use the empty
-   *  template instead". */
   initialBytes?: Uint8Array
 }
 
+// Module-level cache: dedupes concurrent registerDevice() calls within the
+// same browser session — same pattern as TextCollabEditor.
+const _devicePromiseCache = new Map<string, Promise<number>>()
+function ensureRegistered(pubKeyB64: string, label: string): Promise<number> {
+  let p = _devicePromiseCache.get(pubKeyB64)
+  if (!p) {
+    p = registerDevice(pubKeyB64, label).then(r => r.deviceId)
+    _devicePromiseCache.set(pubKeyB64, p)
+  }
+  return p
+}
+
 function OfficeEditorBase(
-  { fileId, filename, initialBytes }: Props,
+  { fileId, filename, initialBytes, collectionMaster }: Props,
   ref: Ref<OfficeEditorHandle>,
 ) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [bridgeReady, setBridgeReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const docType = detectType(filename)
-  // requestId → resolver/rejecter for in-flight save() calls.
+
+  // Save() imperative handle plumbing.
   const pendingSavesRef = useRef<Map<number, {
     resolve: (v: { bytes: Uint8Array; format: DocType }) => void
     reject: (e: Error) => void
   }>>(new Map())
   const nextSaveIdRef = useRef(1)
+
+  // Collab WS state — held in refs so message handlers (which are stable)
+  // see the latest values without re-binding.
+  const transportRef = useRef<CollabTransport | null>(null)
+  const deviceIdRef = useRef<number | null>(null)
+  const keypairRef = useRef<{ publicKey: Uint8Array; privateKey: Uint8Array } | null>(null)
+  const docKeyIdRef = useRef<number>(1)
+  const lastSeenSeqRef = useRef<number>(0)
+  const outboundSeqRef = useRef<bigint>(0n)
+
+  const accessToken = useAppSelector(s => s.auth.accessToken)
+  const storedDeviceId = useAppSelector(s => s.auth.currentDeviceId)
+  const dispatch = useAppDispatch()
 
   useImperativeHandle(ref, () => ({
     save: () =>
@@ -103,6 +135,7 @@ function OfficeEditorBase(
       }),
   }), [docType])
 
+  // ---- bridge handshake (init / init-ack / save-result / oo-local-op) ----
   useEffect(() => {
     if (!docType) {
       setError(`Unsupported office extension for ${filename}`)
@@ -113,6 +146,28 @@ function OfficeEditorBase(
       const iframe = iframeRef.current
       if (!iframe || !iframe.contentWindow) return
       iframe.contentWindow.postMessage(msg, window.location.origin)
+    }
+
+    async function sendLocalOp(payload: string) {
+      const transport = transportRef.current
+      const did = deviceIdRef.current
+      const kp = keypairRef.current
+      if (!transport || !did || !kp) return
+      try {
+        outboundSeqRef.current = outboundSeqRef.current + 1n
+        const f = await encryptOOOp(
+          new TextEncoder().encode(payload),
+          fileId, docKeyIdRef.current, BigInt(did), outboundSeqRef.current,
+          collectionMaster,
+        )
+        const packed = pack(f)
+        const body = packed.subarray(0, packed.length - 64)
+        const sig = await ed25519Sign(body, kp.privateKey)
+        packed.set(sig, packed.length - 64)
+        transport.send(packed)
+      } catch (e) {
+        console.warn('office: send op failed', e)
+      }
     }
 
     function onMessage(e: MessageEvent<FromBridge>) {
@@ -127,16 +182,10 @@ function OfficeEditorBase(
           setBridgeReady(true)
           send({
             type: 'init',
-            payload: {
-              type: docType!,
-              filename,
-              fileId,
-              initialBytes,
-            },
+            payload: { type: docType!, filename, fileId, initialBytes },
           })
           return
         case 'init-ack':
-          // Phase 2b will start the actual editor mount in response.
           return
         case 'save-result': {
           const pending = pendingSavesRef.current.get(msg.requestId)
@@ -152,12 +201,87 @@ function OfficeEditorBase(
           }
           return
         }
+        case 'oo-local-op':
+          // OnlyOffice fired saveChanges → relay through WS.
+          sendLocalOp(msg.payload)
+          return
       }
     }
 
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [docType, filename, fileId, initialBytes])
+  }, [docType, filename, fileId, initialBytes, collectionMaster])
+
+  // ---- WebSocket transport ----
+  useEffect(() => {
+    if (!docType || !accessToken) return
+    let alive = true
+
+    ;(async () => {
+      // 1. Device keypair + registered deviceId.
+      let kp = loadKeypair()
+      if (!kp) {
+        kp = await generateDeviceKeypair()
+        saveKeypair(kp)
+      }
+      keypairRef.current = kp
+
+      let did = storedDeviceId
+      if (!did) {
+        const pubB64 = encodePubKeyB64(kp.publicKey)
+        did = await ensureRegistered(pubB64, 'kutup-office:' + navigator.userAgent.slice(0, 60))
+        if (!alive) return
+        dispatch(setDeviceId(did))
+      }
+      deviceIdRef.current = did
+
+      // 2. Open the relay WebSocket.
+      const wsUrl = `${location.origin.replace(/^http/, 'ws')}/api/files/${fileId}/collab/ws?token=${encodeURIComponent(accessToken)}&deviceId=${did}`
+      const transport = new CollabTransport({
+        url: wsUrl,
+        lastSeenSeq: () => lastSeenSeqRef.current,
+        onHello: (h: HelloMsg) => {
+          docKeyIdRef.current = h.currentDocKeyId
+          lastSeenSeqRef.current = h.headSeq
+          if (typeof h.mySenderSeqHigh === 'number' && h.mySenderSeqHigh > 0) {
+            outboundSeqRef.current = BigInt(h.mySenderSeqHigh)
+          }
+        },
+        onFrame: async (bs: Uint8Array) => {
+          try {
+            const f: Frame = unpack(bs)
+            if (f.kind === KIND.OO_OP) {
+              const payload = await decryptOOOp(f, fileId, collectionMaster)
+              const iframe = iframeRef.current
+              if (iframe && iframe.contentWindow) {
+                iframe.contentWindow.postMessage(
+                  {
+                    type: 'oo-remote-op',
+                    payload: new TextDecoder().decode(payload),
+                  } satisfies ToBridge,
+                  window.location.origin,
+                )
+              }
+            }
+          } catch (e) {
+            console.warn('office: dropped frame', e)
+          }
+        },
+        onError: (e: unknown) => console.warn('office: ws error', e),
+      })
+      if (!alive) {
+        transport.close()
+        return
+      }
+      transportRef.current = transport
+    })()
+
+    return () => {
+      alive = false
+      transportRef.current?.close()
+      transportRef.current = null
+    }
+  }, [docType, fileId, accessToken, collectionMaster, storedDeviceId, dispatch])
 
   if (error) {
     return (
@@ -167,8 +291,6 @@ function OfficeEditorBase(
     )
   }
 
-  // bridgeReady is read by FileEditorPage via a custom event to surface the
-  // status in the page header instead of stealing vertical space here.
   void bridgeReady
 
   return (
