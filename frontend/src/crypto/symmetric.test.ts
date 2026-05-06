@@ -1,3 +1,5 @@
+// @vitest-environment node
+// jsdom mangles the Uint8Array typing libsodium's secretstream expects.
 import { describe, it, expect } from 'vitest'
 import {
   encrypt,
