@@ -1,0 +1,15 @@
+# Tracked override layered ONTO docker-compose.yml when running backend
+# integration tests. Exposes Postgres on 127.0.0.1:5433 so Go test code in
+# backend/internal/testdb can connect and create per-test schemas without
+# clashing with a system Postgres on 5432.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
+#   cd backend && go test ./...
+#
+# The host port (5433) is configurable via KUTUP_TEST_DB:
+#   KUTUP_TEST_DB=postgres://kutup:kutup_dev_password@localhost:5433/kutup?sslmode=disable
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5433:5432"
