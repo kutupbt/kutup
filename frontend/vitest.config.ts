@@ -17,6 +17,14 @@ export default defineConfig({
         url: 'http://localhost/',
       },
     },
+    // The OnlyOffice install dump (frontend/public/onlyoffice/dist) is ~1 GB
+    // of bundled editor. Excluding it keeps vitest's chokidar from blowing
+    // the host's file-watcher limit (ENOSPC).
+    watchExclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/public/onlyoffice/**',
+    ],
   },
   resolve: {
     alias: {
