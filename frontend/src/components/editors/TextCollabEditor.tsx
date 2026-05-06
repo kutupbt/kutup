@@ -223,6 +223,14 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
       // resume(0) would replay nothing. We load the snapshot blob, decrypt,
       // applyUpdateV2 to seed the Y.Doc, then set lastSeenSeq so the WS resume
       // only fetches post-snapshot deltas.
+      //
+      // For a freshly-created note (no snapshot, no log entries yet), we want
+      // to seed Y.Text from `initialContent` exactly once globally. Doing the
+      // insert here unconditionally is wrong: on the *second* open the server
+      // replays the previous session's seed update, which CRDT-merges with the
+      // new local insert and duplicates the heading. Defer the seed until
+      // onHello confirms `headSeq === 0` (server has no log → first session).
+      let pendingInitialSeed = false
       try {
         const versions = await listVersions(fileId)
         if (versions.length > 0) {
@@ -243,10 +251,7 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
             lastSeenSeq = latest.seqAtSnapshot
           }
         } else if (initialContent && initialContent.length > 0) {
-          // Cold-start: no snapshot yet, but the file has original plaintext from
-          // its upload via kutup's existing per-file-key flow. Seed Y.Text so the
-          // editor opens with the actual file content.
-          ytext.insert(0, initialContent)
+          pendingInitialSeed = true
         }
       } catch (e) {
         console.warn('collab: failed to load initial content, starting empty', e)
@@ -267,6 +272,14 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
           if (typeof h.mySenderSeqHigh === 'number' && h.mySenderSeqHigh > 0) {
             outboundSeq = BigInt(h.mySenderSeqHigh)
           }
+          // Virgin file (no snapshot, no prior log frames): seed Y.Text from
+          // initialContent now. The local 'update' listener will encrypt + send
+          // this insert as the first persisted frame, so a future second open
+          // hits headSeq > 0 and skips this branch — no duplicate seed.
+          if (pendingInitialSeed && h.headSeq === 0 && ytext.length === 0 && initialContent) {
+            ytext.insert(0, initialContent)
+          }
+          pendingInitialSeed = false
           setStatus('ready')
         },
         onFrame: async (bs) => {
