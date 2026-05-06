@@ -202,9 +202,13 @@ LICENSES/AGPL-3.0-or-later.txt                # reference (the actual code lives
 
 ---
 
-## 11. Status snapshot (2026-05-06): what shipped vs what's deferred
+## 11. Status snapshot (2026-05-06 — updated): what shipped vs what's deferred
 
-After ~50 commits in one focused session, **single-user E2EE office editing is production-quality.** Real-time multi-tab/multi-user collab (Phases 5/6/7) is **deferred** to a focused next session — the bridge is wired and the WS relay broadcasts correctly, but OnlyOffice v9's spreadsheet doesn't emit content-bearing `saveChanges` over `connectMockServer` for our config.
+**Real-time multi-tab xlsx sync now works.** The Phase 5 gate from the prior session was a single-line bug in `inner.html`'s saveChanges handler — `Array.isArray(obj.changes)` instead of `JSON.parse(obj.changes)` — see commit `21a7af3`. Once that flipped, the rest of the wiring (`OfficeEditor.tsx` → WS → relay → peer's bridge → `sendMessageToOO`) was already correct end-to-end.
+
+Verified live with two-tab Playwright runs: type into A1 in tab A, commit Enter → `[A] outbound saveChanges raw=2 wrapped=2`, `[A] sendLocalOp → 477 bytes`, `[B] applying remote op changes=2 cpIndex=0`, `[B] OO emits unLockDocument {isSave:true}`. Concurrent edits in different cells from both tabs sync both ways.
+
+What's deferred (Phase 5c, 6, 7) is now bounded scope, not blocked.
 
 ### Shipped (works end-to-end)
 
@@ -213,41 +217,40 @@ After ~50 commits in one focused session, **single-user E2EE office editing is p
 - **Phase 3a/b**: x2t WASM bridge iframe; existing OOXML uploads → x2t → OnlyOffice loads them.
 - **Phase 4a**: Save button → `asc_nativeGetFile` → x2t → encrypted version uploaded to `/files/:fid/snapshot-blob` + `/files/:fid/versions`.
 - **Phase 4c**: open dispatch lists `/files/:fid/versions` and prefers the newest blob over the original.
+- **Phase 5a** (commit `21a7af3`): outbound `saveChanges` carries content. Bug was `Array.isArray` vs `JSON.parse` on `obj.changes`.
+- **Phase 5b** (commit `a92e632`): two-tab xlsx sync verified — concurrent edits propagate both ways.
 
-### Deferred (Phase 5/6/7)
+### Deferred — but no longer blocked (Phase 5c, 6, 7)
 
-The protocol gap that blocks Phase 5:
+These are bounded follow-ups, not protocol gaps:
 
-> OnlyOffice v9's spreadsheet emits only **empty** `saveChanges` (heartbeats every ~10 s) over the mockServer. Cell commits are visible in the UI but never reach our `fromOO` handler with non-empty `changes`.
+- **Phase 5c — multi-account multi-user.** Same code path as 5b. Manual test only — needs admin to create a second user, share a folder, both edit. No new code expected. Plan: two browser profiles via Playwright, `register` a second user, share folder, smoke-test concurrent edit.
 
-Things tried that **did not** fix it:
-1. Proper `cpIndex` tracking on outbound + inbound (mirrors CryptPad inner.js:1357 / inner.js:1000).
-2. `changesIndex`, `locks: []`, stable `myUniqueOOId` in outbound saveChanges shape.
-3. Removing `protect: true` from xlsx permissions; explicit `permissions.edit: true`.
-4. `editorConfig.coEditing.mode: 'fast'`.
-5. Suppressing empty heartbeat broadcasts.
+- **Phase 6 — locks.** Still needs implementation. The envelope kind constants are already in place (backend `KindOOLock=5` in `backend/services/envelope/envelope.go:16`, frontend `KIND.OO_LOCK=5` in `frontend/src/collab/envelope.ts:9`). What's missing:
+  - Frontend `cryptoFrame.ts`: add `encryptOOLock` / `decryptOOLock` mirroring the OO_OP pair.
+  - Frontend `OfficeEditor.tsx`: forward `oo-local-lock` from bridge → WS; on receiving a `KindOOLock` frame, postMessage `oo-remote-lock` to bridge.
+  - Frontend `inner.html`: catch `getLock` / `releaseLock` from OO and post to parent (instead of stubbing `{locks: []}`); on `oo-remote-lock` from parent, track in a per-tab `Map<userid, locks[]>` and `sendToOO({type:'getLock', locks: ...})`.
+  - Server `backend/handlers/collab.go`: skip persistence for `KindOOLock` (treat like `KindYjsAwareness`, broadcast-only). One-line change at `collab.go:243`.
+  - Phase 6b: when the Hub's `Leave` fires for a device, broadcast a synthesized `oo-remote-lock` clearing that device's locks to remaining peers.
+  - Phase 6c: single global save-lock per file, 30 s timeout — store in a per-fileID `time.Time` map on the Hub.
 
-### What to try next session
+- **Phase 7 — polish.**
+  - 7a: `injectCSS` rules to hide OnlyOffice branding (mirror CryptPad inner.js:~2002-2024).
+  - 7b: TOO_LARGE banner; x2t failure toast + retry; `mediasData` cleanup on unmount.
+  - 7c: full regression sweep against §10 verification list.
 
-Run CryptPad locally and put both integrations side-by-side. Compare every `postMessage` that crosses the editor-iframe boundary for an identical `.xlsx` typing test. Specific entry points worth the deepest read:
-
-- **CryptPad**: `www/common/onlyoffice/inner.js`
-  - `handleAuth` (line 1187) — auth response shape and what fields are required.
-  - `getInitialChanges` (line 1164) — what initial state the editor expects.
-  - `handleNewIds` / `connectState` (line 1097) — when peers are announced.
-  - The `setUsers` / `users` field on auth and whether OO needs ≥1 non-history-keeper peer to enable saveChanges emission.
-  - `m_bFast` references (lines 1613, 1831) — the gating condition for fast vs. strict coediting.
-- **OnlyOffice (un-minified, in `cryptpad/onlyoffice-editor` source repo, NOT the release tarball we install)**:
-  - `sdkjs/cell/api.js` — the spreadsheet api class. Trace the path that emits saveChanges to find the gate.
-  - `web-apps/apps/api/documents/api.js` — the source of the minified `api.js` we load. The `connectMockServer` patch is here; reading it un-minified will reveal which callbacks gate which feature.
-  - `cryptPadMessageToOO` / `cryptPadSendMessageFromOO` — the bridge message dispatch.
-
-A useful diagnostic to add when this work resumes: a `[fromOO]` log on every message OnlyOffice emits (not just our switch), so we can compare the message stream byte-for-byte against CryptPad's.
-
-### Files where Phase 5 lives in our code
+### Files where the office work lives in our code
 
 - `frontend/public/onlyoffice/inner.html` — bridge page; `fromOO` handler, mockServer callbacks, x2t convert, saveChanges wrap/unwrap.
 - `frontend/src/components/editors/office/OfficeEditor.tsx` — React wrapper, WS transport, envelope wrap, ref-exposed `save()`.
-- `frontend/src/collab/cryptoFrame.ts` — `encryptOOOp` / `decryptOOOp`.
+- `frontend/src/collab/cryptoFrame.ts` — `encryptOOOp` / `decryptOOOp` (and the lock pair to be added in Phase 6a).
 
-When the gate is found, the existing wiring should carry remote ops the rest of the way without further surgery.
+### Reference for any deeper diff work
+
+CryptPad source clone available locally at `/home/aa/_e/development/cryptpad/`. Canonical reference lines from `www/common/onlyoffice/inner.js`:
+- `parseChanges` (1340) — JSON-parse + wrap pattern (the Phase 5a fix mirrored this).
+- `handleChanges` (1357) — outbound emit + cpIndex bookkeeping.
+- `fromOOHandler` (1538) — switch over OO's emitted message types.
+- `getLock` / `handleLock` (1080-1140) — lock state machine for sheets.
+- `deleteOfflineLocks` (1144) — Phase 6b reference.
+- `connectMockServer` call site (2631) — the five callbacks: `onMessage, getParticipants, onAuth, getInitialChanges, getImageURL` (we don't pass `getImageURL`; not needed yet but worth adding when image embedding becomes a feature).
