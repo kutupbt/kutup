@@ -480,14 +480,19 @@
           }
         })
 
-        // CryptPad's getEditor (inner.js:376): the OnlyOffice editor
-        // instance is at docEditor.getIframe().contentWindow.editor.
-        // asc_nativeGetFile() returns OnlyOffice's binary .bin format.
+        // The OnlyOffice editor instance lives inside the editor iframe at
+        // window.editor (word + slide builds). The cell (xlsx) build aliases
+        // it as window.editorCell when window.editor is undefined — see
+        // sdkjs/cell/sdk-all-min.js: `window.editor==undefined)window.editorCell=this`.
+        // CryptPad's getEditor (inner.js:376) only checked .editor; that
+        // worked for older versions or because they set window.editor
+        // upstream. We probe both names for v9.
         var getInnerEditor = function () {
           if (!docEditor || typeof docEditor.getIframe !== 'function') return null
           var ifr = docEditor.getIframe()
           if (!ifr || !ifr.contentWindow) return null
-          return ifr.contentWindow.editor || null
+          var w = ifr.contentWindow
+          return w.editor || w.editorCell || w.editorDoc || w.editorSlide || null
         }
 
         var handleSaveRequest = function (replyTo, requestId) {
