@@ -170,6 +170,7 @@ func main() {
 	api.Post("/files/:fileId/snapshot-blob", authMW.Required(), fvH.UploadSnapshotBlob)
 	api.Get("/files/:fileId/versions/:vid/download", authMW.Required(), fvH.Download)
 	api.Patch("/files/:fileId/versions/:vid", authMW.Required(), fvH.Patch)
+	api.Post("/files/:fileId/claim-seed", authMW.Required(), filesH.ClaimSeed)
 
 	// Collab-edit WebSocket route — PreUpgrade does its own JWT auth
 	// (accepts Authorization header or ?token= query), so no authMW here.

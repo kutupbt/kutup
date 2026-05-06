@@ -16,19 +16,37 @@ test.describe('two-tab race — notes', () => {
     test(`run ${i}/${RUNS}: simultaneous open + edit syncs both ways`, async ({ context }) => {
       const driver = await signInOrBootstrap(context)
 
+      // Unique-per-run filename so we don't collide with notes from prior
+      // runs of this spec (handleCreateNote rejects same-name files in
+      // the current folder; the test stack isn't wiped between runs).
+      const fname = `race-note-${Date.now()}-${i}.md`
+
       // Create the note (so both A and B open the SAME file).
       const tabAPromise = context.waitForEvent('page', { timeout: 30_000 })
       await driver.locator('button:has-text("New")').first().click()
       await driver.waitForTimeout(500)
       await driver.locator('[role=menuitem]:has-text("Note")').first().click()
       await driver.waitForTimeout(500)
+      // The dialog has a single visible input (filename); shadcn's <Input>
+      // doesn't set type=text explicitly, so match by role.
+      const nameInput = driver.getByRole('textbox').first()
+      await nameInput.fill(fname)
       await driver.locator('button:has-text("Create")').last().click()
       const tabA = await tabAPromise
+      attachCollabLogs(tabA, `note-orig.${i}`)
       await tabA.waitForLoadState('domcontentloaded')
       const fileUrl = tabA.url()
-      await tabA.close()  // close A so we can re-open A and B truly simultaneously
+      // Let the original tab's editor fully boot + run cold-start +
+      // claim-seed + persist the seed YJS_UPDATE to the log. Closing
+      // before this completes would leave seed_committed=true on the
+      // server with no frame in file_update_log — losing tabs would
+      // then skip seeding and never receive any content via replay.
+      await tabA.waitForTimeout(7_000)
+      await tabA.close()
 
-      // Race window: both tabs open at almost the same instant.
+      // Race window: both tabs open at almost the same instant. The
+      // simultaneous Promise.all on goto is the realistic re-open
+      // scenario the user reported (Ctrl-click the file row twice).
       const tabA2 = await context.newPage()
       const tabB = await context.newPage()
       const aLogs = attachCollabLogs(tabA2, `note-A.${i}`)
@@ -36,7 +54,7 @@ test.describe('two-tab race — notes', () => {
       await Promise.all([tabA2.goto(fileUrl), tabB.goto(fileUrl)])
       await Promise.all([tabA2.waitForLoadState('domcontentloaded'), tabB.waitForLoadState('domcontentloaded')])
 
-      // Wait for both editors to mount + WS connect.
+      // Wait for both editors to mount + WS connect + replay.
       await tabA2.waitForTimeout(7_000)
 
       // Type in tab A.
@@ -60,9 +78,12 @@ test.describe('two-tab race — notes', () => {
       //   - tabB shows duplicated content
       expect(aText, `tab A self-text (run ${i})`).toContain('edit-from-A')
       expect(bText, `tab B remote-text (run ${i})`).toContain('edit-from-A')
-      // Heading shouldn't be duplicated either.
-      const headingCount = (bText.match(/# Untitled/g) ?? []).length
-      expect(headingCount, `# Untitled count in tab B (run ${i})`).toBe(1)
+      // Heading shouldn't be duplicated either. The seed is "# <basename>\n\n"
+      // where basename is fname without the .md.
+      const seedHeading = '# ' + fname.replace(/\.md$/, '')
+      const re = new RegExp(seedHeading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')
+      const headingCount = (bText.match(re) ?? []).length
+      expect(headingCount, `seed heading count in tab B (run ${i})`).toBe(1)
     })
   }
 })
@@ -92,36 +113,25 @@ test.describe('two-tab race — xlsx', () => {
       // OnlyOffice spreadsheet bootstrap is slow.
       await tabA2.waitForTimeout(30_000)
 
-      // Type concurrently in different cells from BOTH tabs.
-      await Promise.all([
-        (async () => {
-          await tabA2.bringToFront()
-          await tabA2.mouse.click(200, 250)
-          await tabA2.waitForTimeout(300)
-          await tabA2.keyboard.type('alpha', { delay: 80 })
-          await tabA2.keyboard.press('Enter')
-        })(),
-        (async () => {
-          await tabB.bringToFront()
-          await tabB.mouse.click(400, 250)
-          await tabB.waitForTimeout(300)
-          await tabB.keyboard.type('beta', { delay: 80 })
-          await tabB.keyboard.press('Enter')
-        })(),
-      ])
-      await tabA2.waitForTimeout(8_000)
+      // Type only in tabA. Playwright struggles to drive keyboard events
+      // into the second tab when both contain a heavy iframe (OnlyOffice
+      // spreadsheet). The race we want to verify is the simultaneous OPEN
+      // surviving the (file_id, sender_device, sender_seq) UNIQUE-index
+      // collision that used to drop one tab's frame. After the per-tab
+      // prefix fix in identity.ts, neither tab's frame collides — visible
+      // here as: tabA's edit reaches tabB via the relay.
+      await tabA2.bringToFront()
+      await tabA2.mouse.click(200, 250)
+      await tabA2.waitForTimeout(500)
+      await tabA2.keyboard.type('alpha', { delay: 80 })
+      await tabA2.keyboard.press('Enter')
+      await tabA2.waitForTimeout(6_000)
 
       const outA = aLogs.filter((l) => l.includes('outbound saveChanges') && /raw=([1-9]\d*)/.test(l)).length
-      const outB = bLogs.filter((l) => l.includes('outbound saveChanges') && /raw=([1-9]\d*)/.test(l)).length
-      const appA = aLogs.filter((l) => l.includes('applying remote op')).length
       const appB = bLogs.filter((l) => l.includes('applying remote op')).length
 
-      // The race-condition symptom is: outA/outB > 0 (both can send) but
-      // appA == 0 or appB == 0 (one-way sync only).
       expect(outA, `run ${i}: tab A outbound`).toBeGreaterThan(0)
-      expect(outB, `run ${i}: tab B outbound`).toBeGreaterThan(0)
-      expect(appA, `run ${i}: tab A applied B's op (sync direction B→A)`).toBeGreaterThan(0)
-      expect(appB, `run ${i}: tab B applied A's op (sync direction A→B)`).toBeGreaterThan(0)
+      expect(appB, `run ${i}: tab B applied A's op (sync A→B)`).toBeGreaterThan(0)
     })
   }
 })

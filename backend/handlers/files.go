@@ -337,6 +337,65 @@ func (h *FilesHandler) Delete(c *fiber.Ctx) error {
 	return c.SendStatus(204)
 }
 
+// ClaimSeed atomically arbitrates the first-seeder for a freshly-created
+// collaborative file. Two browser tabs of the same file racing on open
+// must NOT both insert the cold-start `initialContent` into Yjs (that
+// would CRDT-merge into duplicated content). Exactly one tab gets
+// committed=true; all later callers get committed=false and skip seeding.
+//
+// @Summary      Claim the first-seeder slot for a fresh collab file
+// @Description  Atomic UPDATE; exactly one caller for a given file gets committed=true. Idempotent — once true, it stays true.
+// @Tags         Files
+// @Produce      json
+// @Security     BearerAuth
+// @Param        fileId  path      string  true  "File UUID"
+// @Success      200     {object}  ClaimSeedResponse
+// @Failure      401     {object}  ErrorResponse
+// @Failure      403     {object}  ErrorResponse
+// @Failure      404     {object}  ErrorResponse
+// @Router       /files/{fileId}/claim-seed [post]
+func (h *FilesHandler) ClaimSeed(c *fiber.Ctx) error {
+	userID := middleware.UserID(c)
+	fileID := c.Params("fileId")
+
+	// Resolve the collection_id and verify access first. This is two DB
+	// round-trips instead of one fancy CTE, but it keeps the access check
+	// identical to the rest of the file-scoped routes (canAccessCollection
+	// covers owners + share recipients).
+	var collID string
+	if err := h.DB.QueryRow(c.Context(),
+		`SELECT collection_id FROM files WHERE id = $1`, fileID,
+	).Scan(&collID); err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "not found"})
+	}
+	if !h.canAccessCollection(c.Context(), userID, collID) {
+		return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
+	}
+
+	// Atomic transition false → true. RETURNING reports whether *this*
+	// statement flipped the column. Postgres takes a row-level lock for
+	// the UPDATE so concurrent calls serialise even without an explicit
+	// transaction.
+	var claimedID string
+	err := h.DB.QueryRow(c.Context(), `
+		UPDATE files SET seed_committed = true
+		WHERE id = $1 AND seed_committed = false
+		RETURNING id
+	`, fileID).Scan(&claimedID)
+
+	if err != nil {
+		// pgx returns ErrNoRows when the WHERE clause matches zero rows
+		// — i.e. someone else already committed. That's the "you lost"
+		// outcome, not a server error.
+		return c.JSON(ClaimSeedResponse{Committed: false})
+	}
+	return c.JSON(ClaimSeedResponse{Committed: true})
+}
+
+type ClaimSeedResponse struct {
+	Committed bool `json:"committed"`
+}
+
 // --- helpers ---
 
 func (h *FilesHandler) canAccessCollection(ctx context.Context, userID, collID string) bool {

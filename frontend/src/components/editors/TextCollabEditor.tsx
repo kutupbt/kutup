@@ -17,7 +17,7 @@ import { encryptYjsUpdate, decryptYjsUpdate, encryptAwareness, decryptAwareness,
 import { SnapshotTrigger } from '../../collab/snapshot'
 import { ed25519Sign } from '../../collab/sign'
 import { generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64 } from '../../collab/devices'
-import { registerDevice, listVersions } from '../../api/collab'
+import { registerDevice, listVersions, claimSeed } from '../../api/collab'
 import api from '../../api/client'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { setDeviceId } from '../../store/authSlice'
@@ -30,6 +30,7 @@ import {
   getCursorColor,
   setCursorColor as persistCursorColor,
   withAlpha,
+  randomSenderSeqPrefix,
 } from '../../collab/identity'
 
 // Module-level cache: dedupes concurrent registerDevice() calls within the same
@@ -117,7 +118,12 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
       })
       let lastSeenSeq = 0
       let docKeyId = 1
-      let outboundSeq = 0n
+      // Per-tab sender_seq partition: see randomSenderSeqPrefix in
+      // ../../collab/identity. Two tabs of the same user share a
+      // sender_device row, so without a high random tabPrefix in the upper
+      // 32 bits both tabs would collide on (file_id, sender_device,
+      // sender_seq) UNIQUE — the relay would silently drop one frame.
+      let outboundSeq = randomSenderSeqPrefix()
 
       // 2.5 Snapshot trigger.
       const trig = new SnapshotTrigger({
@@ -225,12 +231,13 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
       // only fetches post-snapshot deltas.
       //
       // For a freshly-created note (no snapshot, no log entries yet), we want
-      // to seed Y.Text from `initialContent` exactly once globally. Doing the
-      // insert here unconditionally is wrong: on the *second* open the server
-      // replays the previous session's seed update, which CRDT-merges with the
-      // new local insert and duplicates the heading. Defer the seed until
-      // onHello confirms `headSeq === 0` (server has no log → first session).
-      let pendingInitialSeed = false
+      // to seed Y.Text from `initialContent` exactly once globally. The
+      // earlier "headSeq === 0 in onHello" gate looked atomic but wasn't —
+      // two tabs whose hellos are computed concurrently both observe
+      // headSeq=0 and both seed, and Yjs CRDT-merges the duplicates. The
+      // server-arbitrated `claim-seed` endpoint runs an atomic UPDATE
+      // false→true so exactly one tab ever wins.
+      let mayInitialSeed = false
       try {
         const versions = await listVersions(fileId)
         if (versions.length > 0) {
@@ -251,7 +258,17 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
             lastSeenSeq = latest.seqAtSnapshot
           }
         } else if (initialContent && initialContent.length > 0) {
-          pendingInitialSeed = true
+          // Race-safe seed claim. The losing tab simply skips the insert
+          // and waits for WS replay to populate Y.Text from the winner's
+          // frame. Failures fall through to "don't seed" — the editor
+          // opens empty, which is recoverable and strictly better than
+          // a duplicated heading.
+          try {
+            const r = await claimSeed(fileId)
+            mayInitialSeed = r.committed
+          } catch (e) {
+            console.warn('collab: claimSeed failed, opening without seed', e)
+          }
         }
       } catch (e) {
         console.warn('collab: failed to load initial content, starting empty', e)
@@ -269,17 +286,28 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
           // Resume per-device outbound counter from the server's record so
           // we don't replay sender_seqs and trip the unique index after a
           // refresh / remount.
+          // Re-roll the tab prefix if the random pick happened to land at
+          // or below the historic high — keeps the (file_id,
+          // sender_device, sender_seq) uniqueness guarantee. Vanishingly
+          // rare (~2^-32 per fresh tab).
           if (typeof h.mySenderSeqHigh === 'number' && h.mySenderSeqHigh > 0) {
-            outboundSeq = BigInt(h.mySenderSeqHigh)
+            const high = BigInt(h.mySenderSeqHigh)
+            if (outboundSeq <= high) {
+              outboundSeq = randomSenderSeqPrefix(high)
+            }
           }
-          // Virgin file (no snapshot, no prior log frames): seed Y.Text from
-          // initialContent now. The local 'update' listener will encrypt + send
-          // this insert as the first persisted frame, so a future second open
-          // hits headSeq > 0 and skips this branch — no duplicate seed.
-          if (pendingInitialSeed && h.headSeq === 0 && ytext.length === 0 && initialContent) {
+          // We won the seed claim earlier — insert the cold-start content
+          // now that the WS is up. The local 'update' listener will encrypt
+          // and send this as a regular frame; the relay broadcasts it to
+          // peers, which replay it onto their (empty) Y.Text via onFrame.
+          //
+          // Losing tabs (mayInitialSeed=false) fall through and rely on the
+          // WS replay alone — server's atomic claim guarantees exactly one
+          // local insert per file.
+          if (mayInitialSeed && ytext.length === 0 && initialContent) {
             ytext.insert(0, initialContent)
+            mayInitialSeed = false  // single-shot
           }
-          pendingInitialSeed = false
           setStatus('ready')
         },
         onFrame: async (bs) => {
@@ -353,7 +381,13 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
       alive = false
       cleanup?.()
     }
-  }, [fileId, filename, accessToken, collectionMaster, storedDeviceId, username, dispatch])
+    // storedDeviceId is intentionally NOT a dep: the first render reads it
+    // (often null), the registration flow sets it via dispatch, and React's
+    // re-render would otherwise tear down + recreate the WS for no reason —
+    // and on second mount the claimSeed call would lose, leaving the seed
+    // un-inserted. Same pattern as OfficeEditor.tsx.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileId, filename, accessToken, collectionMaster, username, dispatch])
 
   // Push live cursor-color updates to awareness without remounting the editor.
   useEffect(() => {

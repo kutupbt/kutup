@@ -27,6 +27,7 @@ import { ed25519Sign } from '@/collab/sign'
 import {
   generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64,
 } from '@/collab/devices'
+import { randomSenderSeqPrefix } from '@/collab/identity'
 import { registerDevice } from '@/api/collab'
 
 export interface OfficeEditorHandle {
@@ -108,7 +109,12 @@ function OfficeEditorBase(
   const keypairRef = useRef<{ publicKey: Uint8Array; privateKey: Uint8Array } | null>(null)
   const docKeyIdRef = useRef<number>(1)
   const lastSeenSeqRef = useRef<number>(0)
-  const outboundSeqRef = useRef<bigint>(0n)
+  // Per-tab sender_seq partition — see randomSenderSeqPrefix doc in
+  // @/collab/identity. Two tabs of the same user share a sender_device
+  // row; without a high random tabPrefix in the upper 32 bits, both
+  // tabs would collide on (file_id, sender_device, sender_seq) UNIQUE
+  // and one frame would silently drop, producing one-way sync.
+  const outboundSeqRef = useRef<bigint>(randomSenderSeqPrefix())
 
   const accessToken = useAppSelector(s => s.auth.accessToken)
   const storedDeviceId = useAppSelector(s => s.auth.currentDeviceId)
@@ -248,7 +254,10 @@ function OfficeEditorBase(
           docKeyIdRef.current = h.currentDocKeyId
           lastSeenSeqRef.current = h.headSeq
           if (typeof h.mySenderSeqHigh === 'number' && h.mySenderSeqHigh > 0) {
-            outboundSeqRef.current = BigInt(h.mySenderSeqHigh)
+            const high = BigInt(h.mySenderSeqHigh)
+            if (outboundSeqRef.current <= high) {
+              outboundSeqRef.current = randomSenderSeqPrefix(high)
+            }
           }
         },
         onFrame: async (bs: Uint8Array) => {

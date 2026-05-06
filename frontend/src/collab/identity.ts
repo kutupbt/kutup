@@ -62,3 +62,36 @@ export function buildAwarenessName(username: string | null | undefined): string 
   const tab = getOrCreateTabId()
   return `${username ?? 'anon'} #${tab}`
 }
+
+/**
+ * Per-tab outbound `sender_seq` start point. The 64-bit sender_seq is
+ * partitioned as (tabPrefix << 32) | localCounter. Two tabs of the same
+ * user share a `deviceId` (sessionStorage-loaded keypair), so without
+ * a per-tab partition both tabs would race on `(file_id, sender_device,
+ * sender_seq)` UNIQUE collisions in `file_update_log` — the relay drops
+ * one frame on collision, producing the "one-way sync" symptom in xlsx
+ * and the silent-drop branch of the notes seed race.
+ *
+ * `mySenderSeqHigh` from the server's hello tells us the largest
+ * sender_seq this device has ever sent; the new tab's prefix MUST be
+ * strictly greater so its first counter increment can't collide with
+ * any historical row. Re-roll on the (vanishingly rare) collision.
+ *
+ * Returns a BigInt with bits 32-63 set to a random 32-bit value and
+ * bits 0-31 zero (the localCounter slot).
+ */
+export function randomSenderSeqPrefix(mustExceed: bigint = 0n): bigint {
+  const buf = new Uint32Array(1)
+  for (;;) {
+    crypto.getRandomValues(buf)
+    // Mask to 31 bits before shifting. Postgres BIGINT is SIGNED int64;
+    // a top-bit-set 32-bit prefix would shift to a value > 2^63 (negative
+    // when interpreted as int64), silently breaking MAX(sender_seq)
+    // ordering and the (file_id, sender_device, sender_seq) uniqueness
+    // semantics. 31 bits gives 2^31 distinct prefixes — collision odds
+    // remain negligible.
+    const candidate = BigInt(buf[0] & 0x7FFFFFFF) << 32n
+    if (candidate > mustExceed) return candidate
+    // Vanishingly unlikely. Re-roll.
+  }
+}

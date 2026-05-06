@@ -68,7 +68,7 @@ export function attachCollabLogs(page: Page, label = ''): string[] {
   const out: string[] = []
   page.on('console', (m) => {
     const t = m.text()
-    if (t.includes('[kutup-bridge]') || t.includes('[office]') || t.includes('[ProtectedRoute]') || t.includes('[FirstLogin]')) {
+    if (t.includes('[kutup-bridge]') || t.includes('[office]') || t.includes('[ProtectedRoute]') || t.includes('[FirstLogin]') || t.includes('[text-collab]')) {
       out.push(t)
       if (label) console.log(`[${label}]`, t)
     }
