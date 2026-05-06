@@ -197,13 +197,19 @@
         // few non-auth message kinds. Phase 5+ will replace stubs with real
         // collab plumbing; Phase 6+ adds lock state.
         var docEditor = null
-        // OnlyOffice's chainpad-style commit index. CryptPad's
-        // ooChannel.cpIndex — incremented after each committed saveChanges
-        // and reflected back via unSaveLock so OO knows "the server has
-        // acknowledged ops up to this index, you may release the lock and
-        // accept new edits". index:0 (our previous value) leaves OO frozen
-        // on its first lock so subsequent typing never produces saveChanges.
+        // OnlyOffice's chainpad-style commit index — CryptPad's ooChannel.cpIndex.
+        // Incremented for BOTH outbound saveChanges (after we send to peers)
+        // and inbound saveChanges (after applying a remote op). The current
+        // value goes out on every outbound saveChanges as `changesIndex` so
+        // peers know "this op applies on top of N committed messages", and
+        // back to OO via unSaveLock so it releases its commit lock and lets
+        // the user keep typing.
         var cpIndex = 0
+        // Stable per-tab identity for change attribution. CryptPad uses the
+        // user's account uid plus a random suffix; we use a random hex per
+        // tab session.
+        var myUniqueOOId = 'kutup-' + Math.random().toString(36).slice(2, 10)
+        var myOOId = 2  // SELF_INDEX_USER below
 
         var sendToOO = function (obj) {
           if (!docEditor) return
@@ -265,11 +271,14 @@
               // Phase 6a; no-op for 2c.
               break
             case 'saveChanges':
-              // Phase 5a: wrap each raw change in OnlyOffice's server-style
-              // envelope (CryptPad's parseChanges, inner.js:1340) so peers
-              // receive a saveChanges shape OO recognizes as a remote op.
-              // Without this, OO crashes with "undefined is not valid JSON"
-              // when JSON.parse'ing the change field.
+              // 1:1 port of CryptPad's handleChanges (inner.js:1357).
+              // Wrap each raw OO change-string in the {docid, change, time,
+              // user, useridoriginal} envelope OO recognizes as a remote
+              // op (its _onSaveChanges → _updateChanges path expects this
+              // shape). The outbound message also carries changesIndex +
+              // empty locks — without those OO's internal state machine
+              // refuses to advance past the first commit and stops
+              // emitting saveChanges for new typing.
               try {
                 var rawChanges = Array.isArray(obj.changes) ? obj.changes : []
                 var wrapped = rawChanges.map(function (m) {
@@ -277,20 +286,22 @@
                     docid: 'fresh',
                     change: '"' + m + '"',
                     time: Date.now(),
-                    user: 'me-' + Math.floor(Math.random() * 9000 + 1000),
-                    useridoriginal: 'me',
+                    user: myUniqueOOId,
+                    useridoriginal: String(myOOId),
                   }
                 })
                 var outboundMsg = {
                   type: 'saveChanges',
                   changes: wrapped,
+                  changesIndex: cpIndex,
+                  locks: [],
                   excelAdditionalInfo: obj.excelAdditionalInfo,
                   startSaveChanges: obj.startSaveChanges,
                   endSaveChanges: obj.endSaveChanges,
-                  docid: 'fresh',
                 }
-                console.log('[kutup-bridge] outbound saveChanges, raw=' + rawChanges.length + ' wrapped=' + wrapped.length)
-                if (window.parent && window.parent !== window) {
+                console.log('[kutup-bridge] outbound saveChanges raw=' + rawChanges.length + ' wrapped=' + wrapped.length + ' cpIndex=' + cpIndex)
+                if (window.parent && window.parent !== window && rawChanges.length > 0) {
+                  // Skip empty (heartbeat) saveChanges — peers don't need them.
                   window.parent.postMessage(
                     { type: 'oo-local-op', payload: JSON.stringify(outboundMsg) },
                     EXPECTED_ORIGIN,
@@ -300,7 +311,15 @@
                 console.warn('[kutup-bridge] saveChanges wrap failed', err)
               }
               cpIndex++
-              sendToOO({ type: 'unSaveLock', index: cpIndex, time: Date.now() })
+              // Tell OO the server has committed up to this index. CryptPad
+              // sends this on chainpad-ack; we send synchronously since our
+              // WS send is fire-and-forget (the relay's persist is sync
+              // enough that the server-side commit "happened" before this).
+              if (obj.endSaveChanges === false) {
+                sendToOO({ type: 'savePartChanges', changesIndex: -1, time: Date.now() })
+              } else {
+                sendToOO({ type: 'unSaveLock', index: cpIndex, time: Date.now() })
+              }
               break
             case 'cursor':
               // Phase 5c forwards cursor presence; no-op for 2c.
@@ -520,11 +539,17 @@
               return
             case 'oo-remote-op':
               // A saveChanges payload from another peer. Re-emit it to
-              // OnlyOffice via sendMessageToOO so the editor applies it.
+              // OnlyOffice via sendMessageToOO so the editor applies it,
+              // and bump our local cpIndex so the next outbound saveChanges
+              // carries the correct changesIndex (CryptPad does this in the
+              // MESSAGE handler at inner.js:1000-1002).
               try {
                 var payload = JSON.parse(msg.payload)
-                console.log('[kutup-bridge] applying remote op', payload && payload.type, 'changes=' + (payload && payload.changes ? payload.changes.length : 0))
+                var changesLen = payload && payload.changes ? payload.changes.length : 0
+                if (changesLen === 0) return  // ignore heartbeat-shaped echoes
+                console.log('[kutup-bridge] applying remote op changes=' + changesLen + ' cpIndex=' + cpIndex)
                 sendToOO(payload)
+                cpIndex++
               } catch (err) {
                 console.warn('[kutup-bridge] bad oo-remote-op payload', err)
               }
