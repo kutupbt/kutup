@@ -446,20 +446,31 @@
                       title: payload.filename || ('Untitled.' + t.fileType),
                       url: url,
                       permissions: {
-                        download: false,
+                        edit: true,        // explicit
+                        comment: false,
+                        review: false,
+                        download: true,
                         print: true,
-                        protect: t.fileType === 'xlsx',
+                        // protect: false on xlsx — `protect: true` locks all
+                        // cells from editing, which silently disabled
+                        // saveChanges emission for collab.
+                        protect: false,
+                        chat: false,
                       },
                     },
                     documentType: t.documentType,
                     editorConfig: {
                       customization: {
                         compactHeader: true,
-                        chat: false,
+                        // chat moved to permissions per OO deprecation warning.
                         comments: false,
                         hideRightMenu: true,
                         uiTheme: 'theme-classic-light',
                       },
+                      // Force fast coediting mode so each cell commit
+                      // emits saveChanges immediately instead of buffering
+                      // for the next strict-mode flush.
+                      coEditing: { mode: 'fast', change: true },
                       user: {
                         id: '1',
                         firstname: 'You',
