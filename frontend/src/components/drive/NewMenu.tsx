@@ -1,4 +1,5 @@
 import { FolderPlus, FileText, FileSpreadsheet, Presentation, Upload as UploadIcon, Globe } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import {
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -34,30 +35,31 @@ export function NewMenuItems({
   showAddRemote = true,
   showOffice = true,
 }: NewMenuItemsProps) {
+  const { t } = useTranslation()
   return (
     <>
       <DropdownMenuItem onSelect={onNewFolder}>
         <FolderPlus className="mr-2 h-4 w-4" />
-        Folder
+        {t('newMenu.folder')}
       </DropdownMenuItem>
       <DropdownMenuItem onSelect={onNewNote}>
         <FileText className="mr-2 h-4 w-4" />
-        Note (.md)
+        {t('newMenu.note')}
       </DropdownMenuItem>
       {showOffice && onNewOffice && (
         <>
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => onNewOffice('docx')}>
             <FileText className="mr-2 h-4 w-4 text-blue-500" />
-            Document (.docx)
+            {t('newMenu.docx')}
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => onNewOffice('xlsx')}>
             <FileSpreadsheet className="mr-2 h-4 w-4 text-emerald-500" />
-            Spreadsheet (.xlsx)
+            {t('newMenu.xlsx')}
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => onNewOffice('pptx')}>
             <Presentation className="mr-2 h-4 w-4 text-orange-500" />
-            Presentation (.pptx)
+            {t('newMenu.pptx')}
           </DropdownMenuItem>
         </>
       )}
@@ -66,7 +68,7 @@ export function NewMenuItems({
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={onUpload}>
             <UploadIcon className="mr-2 h-4 w-4" />
-            Upload files
+            {t('newMenu.uploadFiles')}
           </DropdownMenuItem>
         </>
       )}
@@ -75,7 +77,7 @@ export function NewMenuItems({
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={onAddRemote}>
             <Globe className="mr-2 h-4 w-4" />
-            Add remote share
+            {t('newMenu.addRemote')}
           </DropdownMenuItem>
         </>
       )}

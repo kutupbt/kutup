@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Download, Trash2, MoreVertical, ArrowUp, ArrowDown, ExternalLink } from 'lucide-react'
+import { Download, Trash2, MoreVertical, ArrowUp, ArrowDown, ExternalLink, Info } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
   Table,
@@ -40,6 +40,7 @@ interface Props {
   onToggleSelectAll: () => void
   onDownload: (file: DecryptedFile) => void
   onDelete: (file: DecryptedFile) => void
+  onDetails: (file: DecryptedFile) => void
 }
 
 type SortKey = 'name' | 'modified' | 'size'
@@ -108,6 +109,7 @@ export default function FileTable({
   onToggleSelectAll,
   onDownload,
   onDelete,
+  onDetails,
 }: Props) {
   const { t } = useTranslation()
   const [sortKey, setSortKey] = useState<SortKey>('name')
@@ -145,7 +147,7 @@ export default function FileTable({
     <section>
       <header className="mb-3 flex items-center gap-2">
         <h2 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
-          Files
+          {t('drive.filesHeader')}
         </h2>
         <span className="text-xs font-medium text-muted-foreground">[{files.length}]</span>
       </header>
@@ -158,7 +160,7 @@ export default function FileTable({
                 checked={allSelected}
                 data-state={someSelected && !allSelected ? 'indeterminate' : undefined}
                 onCheckedChange={onToggleSelectAll}
-                aria-label="Select all files"
+                aria-label={t('files.selectAll')}
                 className="h-5 w-5"
               />
             </TableHead>
@@ -169,7 +171,7 @@ export default function FileTable({
               onClick={() => toggleSort('name')}
             />
             <SortableHead
-              label="Modified"
+              label={t('files.modified')}
               active={sortKey === 'modified'}
               dir={sortDir}
               onClick={() => toggleSort('modified')}
@@ -232,7 +234,11 @@ export default function FileTable({
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onSelect={() => onSelect(file)}>
                             <ExternalLink className="h-4 w-4 mr-2" />
-                            Open
+                            {t('common.open')}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => onDetails(file)}>
+                            <Info className="h-4 w-4 mr-2" />
+                            {t('details.title')}
                           </DropdownMenuItem>
                           <DropdownMenuItem onSelect={() => onDownload(file)}>
                             <Download className="h-4 w-4 mr-2" />
@@ -255,7 +261,11 @@ export default function FileTable({
                 <ContextMenuContent className="w-44">
                   <ContextMenuItem onSelect={() => onSelect(file)}>
                     <ExternalLink className="h-4 w-4 mr-2" />
-                    Open
+                    {t('common.open')}
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => onDetails(file)}>
+                    <Info className="h-4 w-4 mr-2" />
+                    {t('details.title')}
                   </ContextMenuItem>
                   <ContextMenuItem onSelect={() => onDownload(file)}>
                     <Download className="h-4 w-4 mr-2" />

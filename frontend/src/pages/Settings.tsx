@@ -63,6 +63,7 @@ const LANGUAGES = [
 ]
 
 function DevicesSection() {
+  const { t } = useTranslation()
   const [devs, setDevs] = useState<DeviceRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -88,9 +89,9 @@ function DevicesSection() {
     try {
       await revokeDevice(id)
       setDevs((arr) => arr.map((x) => (x.deviceId === id ? { ...x, isActive: false } : x)))
-      toast.success('Device revoked')
+      toast.success(t('settings.devices.revokedToast'))
     } catch (e) {
-      toast.error('Revoke failed: ' + (e instanceof Error ? e.message : String(e)))
+      toast.error(t('settings.devices.revokeFailed', { error: e instanceof Error ? e.message : String(e) }))
     }
   }
 
@@ -99,60 +100,61 @@ function DevicesSection() {
       <CardHeader>
         <CardTitle className="text-base flex items-center gap-2">
           <Smartphone className="h-4 w-4" />
-          Devices
+          {t('settings.devices.title')}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-sm text-muted-foreground">
-          Browser tabs and CLI sessions register here when you start a collaborative edit.
-          Revoke a device to disconnect it and reject future signed updates from it.
+          {t('settings.devices.desc')}
         </p>
-        {loading && <div className="text-sm text-muted-foreground">Loading…</div>}
-        {error && <div className="text-sm text-destructive">Error: {error}</div>}
+        {loading && <div className="text-sm text-muted-foreground">{t('common.loading')}</div>}
+        {error && <div className="text-sm text-destructive">{t('settings.devices.errorPrefix')} {error}</div>}
         {!loading && !error && devs.length === 0 && (
-          <div className="text-sm text-muted-foreground">No devices yet.</div>
+          <div className="text-sm text-muted-foreground">{t('settings.devices.empty')}</div>
         )}
         {devs.length > 0 && (
           <ul className="divide-y rounded border">
-            {devs.map((d) => (
-              <li key={d.deviceId} className="flex items-center justify-between gap-2 p-3">
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm">{d.label || `Device #${d.deviceId}`}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {d.isActive ? 'Active' : 'Revoked'} · created{' '}
-                    {new Date(d.createdAt).toLocaleString()}
-                    {d.lastSeenAt && ` · last seen ${new Date(d.lastSeenAt).toLocaleString()}`}
+            {devs.map((d) => {
+              const label = d.label || t('settings.devices.fallbackLabel', { id: d.deviceId })
+              return (
+                <li key={d.deviceId} className="flex items-center justify-between gap-2 p-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm">{label}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {d.isActive ? t('settings.devices.active') : t('settings.devices.revoked')} ·{' '}
+                      {t('settings.devices.createdAt', { when: new Date(d.createdAt).toLocaleString() })}
+                      {d.lastSeenAt && ` · ${t('settings.devices.lastSeenAt', { when: new Date(d.lastSeenAt).toLocaleString() })}`}
+                    </div>
                   </div>
-                </div>
-                {d.isActive && (
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button variant="outline" size="sm">
-                        Revoke
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Revoke this device?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          Any active editing session from {d.label || `Device #${d.deviceId}`} will
-                          be disconnected, and future signed updates from it will be rejected.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction
-                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                          onClick={() => onRevoke(d.deviceId)}
-                        >
-                          Revoke
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                )}
-              </li>
-            ))}
+                  {d.isActive && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          {t('settings.devices.revoke')}
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>{t('settings.devices.revokeTitle')}</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            {t('settings.devices.revokeDesc', { label })}
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+                          <AlertDialogAction
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            onClick={() => onRevoke(d.deviceId)}
+                          >
+                            {t('settings.devices.revoke')}
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
+                </li>
+              )
+            })}
           </ul>
         )}
       </CardContent>

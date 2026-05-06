@@ -7,6 +7,16 @@ import { logout } from '@/store/authSlice'
 import { broadcastLogout } from '@/lib/sessionSync'
 import { KutupLogo } from '@/components/KutupLogo'
 import { Progress } from '@/components/ui/progress'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
 import { formatBytes } from '@/lib/format'
 import { getTheme, toggleTheme, type Theme } from '@/lib/theme'
@@ -59,6 +69,7 @@ export default function Sidebar({ viewMode, sharedCount, onGoHome, onGoShared }:
   const dispatch = useAppDispatch()
   const auth = useAppSelector((s) => s.auth)
   const [theme, setTheme] = useState<Theme>(getTheme)
+  const [signOutOpen, setSignOutOpen] = useState(false)
   const { t } = useTranslation()
 
   const quotaPercent =
@@ -132,26 +143,16 @@ export default function Sidebar({ viewMode, sharedCount, onGoHome, onGoShared }:
           label={t('nav.settings')}
           onClick={() => navigate('/settings')}
         />
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="flex-1 flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-          >
-            <LogOut className="h-4 w-4 shrink-0" />
-            {t('nav.signOut')}
-          </button>
-          <button
-            type="button"
-            onClick={handleThemeToggle}
-            title={theme === 'dark' ? t('nav.switchToLight') : t('nav.switchToDark')}
-            className="h-9 w-9 inline-flex items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-          >
-            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => setSignOutOpen(true)}
+          className="w-full flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+        >
+          <LogOut className="h-4 w-4 shrink-0" />
+          {t('nav.signOut')}
+        </button>
 
-        {/* User chip */}
+        {/* User chip + theme toggle */}
         <div className="flex items-center gap-2 mt-2 mx-1 rounded-lg px-2 py-1.5">
           <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-sm font-semibold">
             {initial}
@@ -166,8 +167,34 @@ export default function Sidebar({ viewMode, sharedCount, onGoHome, onGoShared }:
               </p>
             )}
           </div>
+          <button
+            type="button"
+            onClick={handleThemeToggle}
+            title={theme === 'dark' ? t('nav.switchToLight') : t('nav.switchToDark')}
+            aria-label={theme === 'dark' ? t('nav.switchToLight') : t('nav.switchToDark')}
+            className="h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+          >
+            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </button>
         </div>
       </div>
+
+      <AlertDialog open={signOutOpen} onOpenChange={setSignOutOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('nav.signOutConfirmTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('nav.signOutConfirmDescription')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+            <AlertDialogAction onClick={handleLogout}>
+              {t('nav.signOut')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </aside>
   )
 }
