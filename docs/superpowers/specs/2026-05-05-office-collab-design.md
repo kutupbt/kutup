@@ -199,3 +199,55 @@ LICENSES/AGPL-3.0-or-later.txt                # reference (the actual code lives
    - Save version + restore → restored version replaces live state cleanly.
    - File > 100 MB blocked at the existing preview cap.
 4. No CSP errors in console for the new iframe paths.
+
+---
+
+## 11. Status snapshot (2026-05-06): what shipped vs what's deferred
+
+After ~50 commits in one focused session, **single-user E2EE office editing is production-quality.** Real-time multi-tab/multi-user collab (Phases 5/6/7) is **deferred** to a focused next session — the bridge is wired and the WS relay broadcasts correctly, but OnlyOffice v9's spreadsheet doesn't emit content-bearing `saveChanges` over `connectMockServer` for our config.
+
+### Shipped (works end-to-end)
+
+- **Phase 1**: opt-in `install-onlyoffice.sh` (v9 + x2t + CryptPad templates), gitignored AGPL subtree.
+- **Phase 2a/b/c/d**: bridge HTML + DocsAPI mount + stub mockServer + "+ New Document/Spreadsheet/Presentation" flow.
+- **Phase 3a/b**: x2t WASM bridge iframe; existing OOXML uploads → x2t → OnlyOffice loads them.
+- **Phase 4a**: Save button → `asc_nativeGetFile` → x2t → encrypted version uploaded to `/files/:fid/snapshot-blob` + `/files/:fid/versions`.
+- **Phase 4c**: open dispatch lists `/files/:fid/versions` and prefers the newest blob over the original.
+
+### Deferred (Phase 5/6/7)
+
+The protocol gap that blocks Phase 5:
+
+> OnlyOffice v9's spreadsheet emits only **empty** `saveChanges` (heartbeats every ~10 s) over the mockServer. Cell commits are visible in the UI but never reach our `fromOO` handler with non-empty `changes`.
+
+Things tried that **did not** fix it:
+1. Proper `cpIndex` tracking on outbound + inbound (mirrors CryptPad inner.js:1357 / inner.js:1000).
+2. `changesIndex`, `locks: []`, stable `myUniqueOOId` in outbound saveChanges shape.
+3. Removing `protect: true` from xlsx permissions; explicit `permissions.edit: true`.
+4. `editorConfig.coEditing.mode: 'fast'`.
+5. Suppressing empty heartbeat broadcasts.
+
+### What to try next session
+
+Run CryptPad locally and put both integrations side-by-side. Compare every `postMessage` that crosses the editor-iframe boundary for an identical `.xlsx` typing test. Specific entry points worth the deepest read:
+
+- **CryptPad**: `www/common/onlyoffice/inner.js`
+  - `handleAuth` (line 1187) — auth response shape and what fields are required.
+  - `getInitialChanges` (line 1164) — what initial state the editor expects.
+  - `handleNewIds` / `connectState` (line 1097) — when peers are announced.
+  - The `setUsers` / `users` field on auth and whether OO needs ≥1 non-history-keeper peer to enable saveChanges emission.
+  - `m_bFast` references (lines 1613, 1831) — the gating condition for fast vs. strict coediting.
+- **OnlyOffice (un-minified, in `cryptpad/onlyoffice-editor` source repo, NOT the release tarball we install)**:
+  - `sdkjs/cell/api.js` — the spreadsheet api class. Trace the path that emits saveChanges to find the gate.
+  - `web-apps/apps/api/documents/api.js` — the source of the minified `api.js` we load. The `connectMockServer` patch is here; reading it un-minified will reveal which callbacks gate which feature.
+  - `cryptPadMessageToOO` / `cryptPadSendMessageFromOO` — the bridge message dispatch.
+
+A useful diagnostic to add when this work resumes: a `[fromOO]` log on every message OnlyOffice emits (not just our switch), so we can compare the message stream byte-for-byte against CryptPad's.
+
+### Files where Phase 5 lives in our code
+
+- `frontend/public/onlyoffice/inner.html` — bridge page; `fromOO` handler, mockServer callbacks, x2t convert, saveChanges wrap/unwrap.
+- `frontend/src/components/editors/office/OfficeEditor.tsx` — React wrapper, WS transport, envelope wrap, ref-exposed `save()`.
+- `frontend/src/collab/cryptoFrame.ts` — `encryptOOOp` / `decryptOOOp`.
+
+When the gate is found, the existing wiring should carry remote ops the rest of the way without further surgery.
