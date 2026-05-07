@@ -22,7 +22,7 @@ import { useAppDispatch, useAppSelector } from '@/store'
 import { setDeviceId } from '@/store/authSlice'
 import { CollabTransport, type HelloMsg } from '@/collab/transport'
 import { pack, unpack, KIND, type Frame } from '@/collab/envelope'
-import { encryptOOOp, decryptOOOp } from '@/collab/cryptoFrame'
+import { encryptOOOp, decryptOOOp, encryptOOLock, decryptOOLock } from '@/collab/cryptoFrame'
 import { ed25519Sign } from '@/collab/sign'
 import {
   generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64,
@@ -61,11 +61,13 @@ type FromBridge =
   | { type: 'init-ack' }
   | { type: 'save-result'; requestId: number; bytes?: Uint8Array; format?: DocType; error?: string }
   | { type: 'oo-local-op'; payload: string }
+  | { type: 'oo-local-lock'; payload: string }
 type ToBridge =
   | { type: 'ping' }
   | { type: 'init'; payload: InitPayload }
   | { type: 'save-request'; requestId: number }
   | { type: 'oo-remote-op'; payload: string }
+  | { type: 'oo-remote-lock'; senderDeviceId: number; payload: string }
   | { type: 'oo-peers'; list: { deviceId: number; userId: string; username?: string }[]; ts: number }
   | { type: 'oo-self'; deviceId: number }
 
@@ -187,6 +189,28 @@ function OfficeEditorBase(
       }
     }
 
+    async function sendLocalLock(payload: string) {
+      const transport = transportRef.current
+      const did = deviceIdRef.current
+      const kp = keypairRef.current
+      if (!transport || !did || !kp) return
+      try {
+        outboundSeqRef.current = outboundSeqRef.current + 1n
+        const f = await encryptOOLock(
+          new TextEncoder().encode(payload),
+          fileId, docKeyIdRef.current, BigInt(did), outboundSeqRef.current,
+          collectionMaster,
+        )
+        const packed = pack(f)
+        const body = packed.subarray(0, packed.length - 64)
+        const sig = await ed25519Sign(body, kp.privateKey)
+        packed.set(sig, packed.length - 64)
+        transport.send(packed)
+      } catch (e) {
+        console.warn('office: send lock failed', e)
+      }
+    }
+
     function onMessage(e: MessageEvent<FromBridge>) {
       if (e.origin !== window.location.origin) return
       const iframe = iframeRef.current
@@ -227,6 +251,10 @@ function OfficeEditorBase(
         case 'oo-local-op':
           // OnlyOffice fired saveChanges → relay through WS.
           sendLocalOp(msg.payload)
+          return
+        case 'oo-local-lock':
+          // Bridge broadcasts our lock state delta to peers.
+          sendLocalLock(msg.payload)
           return
       }
     }
@@ -315,6 +343,19 @@ function OfficeEditorBase(
                 iframe.contentWindow.postMessage(
                   {
                     type: 'oo-remote-op',
+                    payload: new TextDecoder().decode(payload),
+                  } satisfies ToBridge,
+                  window.location.origin,
+                )
+              }
+            } else if (f.kind === KIND.OO_LOCK) {
+              const payload = await decryptOOLock(f, fileId, collectionMaster)
+              const iframe = iframeRef.current
+              if (iframe && iframe.contentWindow) {
+                iframe.contentWindow.postMessage(
+                  {
+                    type: 'oo-remote-lock',
+                    senderDeviceId: Number(f.senderDeviceId),
                     payload: new TextDecoder().decode(payload),
                   } satisfies ToBridge,
                   window.location.origin,

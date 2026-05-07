@@ -259,6 +259,23 @@
         // Self-held cell-edit locks. Cleared on releaseLock or
         // unLockDocument {releaseLocks: true}. See fromOO 'getLock'.
         var selfLocks = Object.create(null)
+        // Per-peer last-seen lock state, keyed by deviceId (string).
+        // peerLocks[deviceId] = { lockUid: {time, user, block}, ... }
+        // Used to diff incoming oo-remote-lock frames so we only push
+        // adds/removes into OO instead of resending the full state.
+        var peerLocks = Object.create(null)
+        function broadcastSelfLocks() {
+          if (!window.parent || window.parent === window) return
+          // Snapshot keyed by lockUid so the receiver can diff.
+          var snapshot = {}
+          var keys = Object.keys(selfLocks)
+          for (var i = 0; i < keys.length; i++) snapshot[keys[i]] = selfLocks[keys[i]]
+          console.log('[kutup-bridge] broadcastSelfLocks count=' + keys.length)
+          window.parent.postMessage(
+            { type: 'oo-local-lock', payload: JSON.stringify({ locks: snapshot }) },
+            EXPECTED_ORIGIN,
+          )
+        }
 
         var sendToOO = function (obj) {
           if (!docEditor) return
@@ -410,10 +427,12 @@
                 type: 'getLock',
                 locks: Object.keys(selfLocks).map(function (k) { return selfLocks[k] }),
               })
+              broadcastSelfLocks()
               break
             case 'releaseLock':
               // OO is done with its locks; clear self-held entries.
               selfLocks = Object.create(null)
+              broadcastSelfLocks()
               break
             case 'saveChanges':
               // 1:1 port of CryptPad's parseChanges + handleChanges
@@ -493,6 +512,7 @@
               }
               if (obj.releaseLocks) {
                 selfLocks = Object.create(null)
+                broadcastSelfLocks()
               }
               break
             default:
@@ -774,6 +794,31 @@
                 console.warn('[kutup-bridge] bad oo-remote-op payload', err)
               }
               return
+            case 'oo-remote-lock':
+              // A peer's lock state snapshot. Diff against last-seen for that
+              // peer and dispatch getLock (added) / releaseLock (removed) into
+              // OO. OO's _onGetLock stores the lock with state=3 (other peer)
+              // since lock.user !== our _userId, which renders the cell-edit
+              // highlight using that peer's color/name from connectState.
+              try {
+                var lockMsg = JSON.parse(msg.payload)
+                var newL = (lockMsg && lockMsg.locks) || {}
+                var senderKey = String(msg.senderDeviceId)
+                var oldL = peerLocks[senderKey] || {}
+                var added = []
+                var removed = []
+                for (var k in newL) if (!oldL[k]) added.push(newL[k])
+                for (var k in oldL) if (!newL[k]) removed.push(oldL[k])
+                if (added.length > 0 || removed.length > 0) {
+                  console.log('[kutup-bridge] peer lock dev=' + senderKey + ' add=' + added.length + ' rm=' + removed.length)
+                }
+                if (added.length > 0) sendToOO({ type: 'getLock', locks: added })
+                if (removed.length > 0) sendToOO({ type: 'releaseLock', locks: removed })
+                peerLocks[senderKey] = newL
+              } catch (err) {
+                console.warn('[kutup-bridge] bad oo-remote-lock payload', err)
+              }
+              return
             case 'oo-self':
               // Parent tells us which deviceId is OUR tab. We use it both
               // to filter self out of peer rosters AND to derive our OO
@@ -810,6 +855,18 @@
                 peerByDevice = nextById
                 console.log('[kutup-bridge] peers updated count=' + (Object.keys(nextById).length + 1))
                 emitConnectState()
+                // Clean up stale peer locks: when a peer leaves, push
+                // releaseLock to OO for everything they were holding so
+                // their cell-edit highlights disappear.
+                var liveKeys = nextById
+                var pkeys = Object.keys(peerLocks)
+                for (var pi = 0; pi < pkeys.length; pi++) {
+                  if (liveKeys[pkeys[pi]]) continue
+                  var stale = peerLocks[pkeys[pi]]
+                  var staleVals = Object.keys(stale).map(function (k) { return stale[k] })
+                  if (staleVals.length > 0) sendToOO({ type: 'releaseLock', locks: staleVals })
+                  delete peerLocks[pkeys[pi]]
+                }
               } catch (err) {
                 console.warn('[kutup-bridge] bad oo-peers payload', err)
               }
