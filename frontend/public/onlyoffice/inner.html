@@ -317,16 +317,20 @@
               } catch (err) {
                 console.warn('[kutup-bridge] saveChanges wrap failed', err)
               }
-              cpIndex++
-              // Tell OO the server has committed up to this index. CryptPad
-              // sends this on chainpad-ack; we send synchronously since our
-              // WS send is fire-and-forget (the relay's persist is sync
-              // enough that the server-side commit "happened" before this).
+              // Tell OO the server has committed THROUGH the cpIndex value
+              // we just sent in changesIndex. CryptPad does it in this order
+              // (inner.js:1427-1434): send unSaveLock with the CURRENT
+              // cpIndex first, THEN increment. Doing the ++ before the
+              // unSaveLock advances OO's "what's committed" pointer one
+              // step ahead of what peers actually saw — the result is
+              // OnlyOffice's state machine refusing the next remote frame
+              // (the user-reported "second-direction sync stalls" bug).
               if (obj.endSaveChanges === false) {
                 sendToOO({ type: 'savePartChanges', changesIndex: -1, time: Date.now() })
               } else {
                 sendToOO({ type: 'unSaveLock', index: cpIndex, time: Date.now() })
               }
+              cpIndex++
               break
             case 'cursor':
               // Phase 5c forwards cursor presence; no-op for 2c.
