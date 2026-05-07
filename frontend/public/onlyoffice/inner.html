@@ -435,6 +435,21 @@
             case 'cursor':
               // Phase 5c forwards cursor presence; no-op for 2c.
               break
+            case 'unLockDocument':
+              // After saveChanges, OnlyOffice fires unLockDocument with
+              // isSave:true and waits for a sentinel unSaveLock {time:-1,
+              // index:-1} before it'll allow another local edit to commit.
+              // Without this ack, OO stays in "saving" state and refuses
+              // to emit the next saveChanges — manifesting as the user-
+              // reported "second tab can't send after applying a remote op".
+              // Mirrors CryptPad inner.js:1663-1669.
+              if (obj.isSave) {
+                sendToOO({ type: 'unSaveLock', time: -1, index: -1 })
+              }
+              // The releaseLocks branch needs a content.locks state
+              // machine, which we don't have post-revert; OO degrades
+              // gracefully without it for the single-cell-at-a-time path.
+              break
             default:
               console.log('[kutup-bridge] unhandled OO msg type=' + obj.type, obj)
               break
