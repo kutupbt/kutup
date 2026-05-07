@@ -325,12 +325,14 @@
 
         // Self entry — populated lazily once selfDeviceId arrives, since the
         // identity scheme derives all four ID fields from deviceId.
+        // Display name comes from the React parent's auth slice via init payload.
         var selfPlaceholder = null
+        var selfUsername = null
         function buildSelfPlaceholder() {
           return {
             id: myUniqueOOId,
             idOriginal: String(myOOId),
-            username: 'You',
+            username: selfUsername || 'You',
             indexUser: myIndex,
             connectionId: 'self',
             isCloseCoAuthoring: false,
@@ -557,6 +559,7 @@
             myOOId = selfDeviceId
             myIndex = selfDeviceId
             myUniqueOOId = ooUserIdFor(selfDeviceId)
+            selfUsername = pendingInitPayload.username || null
             selfPlaceholder = buildSelfPlaceholder()
           }
           var p = pendingInitPayload
@@ -662,8 +665,8 @@
                         //   _userId = user.id + getParticipants().index
                         // and checks lock.user === _userId for self-vs-other.
                         id: String(myOOId),
-                        firstname: 'You',
-                        name: 'You',
+                        firstname: selfUsername || 'You',
+                        name: selfUsername || 'You',
                       },
                       mode: 'edit',  // mockServer is wired in 2c — full edit mode.
                       lang: (navigator.language || 'en').slice(0, 2),
