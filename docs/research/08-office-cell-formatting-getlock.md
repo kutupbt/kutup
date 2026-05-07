@@ -116,6 +116,132 @@ identical failures. Most likely missing piece:
    collab.go's KindOOLock route — all reverted in 9271c31 but the
    commit body has the design). That's the Phase 6b work.
 
+## Session 2 (2026-05-07 PM) — deeper attempts, still blocked
+
+User pointed at `/home/aa/_e/development/cryptpad-documentation` (mostly
+admin/user-facing — not protocol-level help) so dug back into the
+cryptpad source proper. Made several successive alignments and tested
+each. **All ultimately reverted.**
+
+### What we found about CryptPad's identity scheme
+
+Critical alignment that wasn't previously understood:
+
+1. **`myOOId`** = `Util.createRandomInteger()` — a random 53-bit integer
+   per session. NOT a hardcoded constant.
+
+2. **`myIndex`** = `getNextUserIndex()` — also a random integer.
+
+3. **`myUniqueOOId`** = `String(myOOId) + myIndex` — concatenation, so
+   it always starts with `String(myOOId)` as a prefix.
+
+4. **`editorConfig.user.id`** = `String(myOOId)` — matches the prefix
+   of myUniqueOOId.
+
+5. **`lock.user`** = `myUniqueOOId` — full concatenated value.
+
+6. **Participant entries (from `getParticipants`)**:
+   - `id` = `String(user.ooid) + user.index` — same shape as myUniqueOOId
+   - `idOriginal` = `String(user.ooid)` — matches editor `user.id`
+   - `indexUser` = `user.index`
+
+   **Self appears in this list** (CryptPad iterates `content.ids` which
+   includes self). Our pre-fix code added a `selfPlaceholder` only when
+   `peerByDevice` was empty, then dropped it when peers joined.
+
+7. **OO's lookup chain**: `lock.user` → find participant where
+   `participant.id === lock.user` → "is this my own lock?" check uses
+   the participant's `idOriginal` against `editorConfig.user.id`.
+
+   So you need ALL of: matching myOOId in user.id, matching
+   myUniqueOOId in lock.user, matching participant.id, matching
+   participant.idOriginal. They form a four-way equality chain.
+
+### Attempt 3: full identity alignment + self-in-participants
+
+Changes made (frontend/public/onlyoffice/inner.html):
+
+- `myOOId = Math.floor(Math.random() * 1e6) + 1` (was `2`).
+- `myIndex = Math.floor(Math.random() * 1000)` (new).
+- `myUniqueOOId = String(myOOId) + myIndex` (was `'kutup-' + random`).
+- `editorConfig.user.id = String(myOOId)` (was `'1'`).
+- `selfPlaceholder.id = myUniqueOOId` (was `String(SELF_INDEX_USER)`).
+- `selfPlaceholder.idOriginal = String(myOOId)` (was `String(SELF_INDEX_USER)`).
+- `buildParticipantList()` always includes `selfPlaceholder`, even
+  when `peerByDevice` has entries (was: dropped when peers existed).
+- `selfLocks` module state + getLock self-echo + releaseLock clear +
+  unLockDocument {releaseLocks} clear.
+
+**Result:** All 3 Playwright sync tests still fail. Same silent failure
+mode — typing produces zero outbound saveChanges. Verified via debug
+log that OO IS firing `getLock` with a structured block:
+`[{sheetId, type, subType, guid, rangeOrObjectId: {c1,r1,c2,r2}}]`.
+We respond with `{user: myUniqueOOId, block: <that object>, time}`.
+OO receives it and... emits no further messages.
+
+### Diagnostic isolation
+
+To narrow down what specifically OO rejects, ran one variant:
+- Track selfLocks (as in Attempt 3).
+- Respond with `{locks: []}` (empty, like the pre-fix stub).
+
+**Result:** Tests pass. So tracking is fine. The blocker is the
+RESPONSE — specifically, returning a non-empty `locks` array makes OO
+silently stall.
+
+### What the OO bundle exposes
+
+The mockServer interface (from minified
+`dist/v9/web-apps/apps/api/documents/api.js`) only consumes 4 callbacks:
+`onMessage`, `onAuth`, `getParticipants`, `getInitialChanges`. We provide
+all 4. So no missing callback.
+
+### What's still unknown
+
+Despite the four-way ID alignment, OO refuses to accept any non-empty
+`getLock` response. There's at least one more invariant we haven't
+identified. Candidates not yet tried:
+
+- **`connectionId` format.** CryptPad uses `Hash.createChannelId()`
+  (32-char hex). We use `'self'` / `'dev-' + deviceId`. Maybe OO
+  validates this (parses as channel id, fails silently if bad).
+- **`sessionId` in some auth response.** Legacy CryptPad code path
+  (v < 7) sends a comprehensive auth packet with `sessionId`,
+  `participants`, `locks: []`, etc. The v7+ path says "handled by
+  onlyoffice-editor now" — but maybe we're hitting v<7 code paths
+  somewhere?
+- **The shape of `block` in our lock response.** We echo it back
+  verbatim from OO, but maybe OO's internal `getLock` callback
+  consumer applies `JSON.stringify` on the block before comparison
+  and our object reference doesn't equal the original.
+- **Lock format for sheet vs. presentation/document.** CryptPad's
+  `handleLock` has a `if (type === "sheet" || typeof(b) !== "string")`
+  branch — sheet uses random uid keys, others use `b` (the block
+  string) as key. This affects `getUserLock` return shape (array vs.
+  object). We always treat as sheet (array). Maybe wrong for some
+  message OO emits?
+
+### What we DIDN'T try (next-session candidates)
+
+1. **Make `selfPlaceholder.connectionId` a real 32-char hex string.**
+   Might unblock the participant lookup if OO validates it.
+2. **Pretty-print the OO bundle and grep for `getLock` callback
+   handler.** This is the only way to understand what OO actually does
+   with the response. Likely the most productive single action.
+3. **Run a working CryptPad instance side-by-side and compare the
+   full OO message flow** (DevTools network/console) for a fill-color
+   operation. Identify exactly which messages CryptPad emits that we
+   don't, and in what order.
+
+### Summary of where to start next session
+
+Don't repeat any of the attempts above — they've all been tried with
+the result documented. The fastest path forward is option 3
+(side-by-side CryptPad comparison) or option 2 (read OO source). The
+identity scheme alignment work (Attempt 3) is structurally correct
+and worth keeping in mind, but needs the unidentified invariant to
+also be satisfied before it pays off.
+
 ## Files touched while investigating (all reverted)
 
 - `frontend/public/onlyoffice/inner.html` — getLock + releaseLock +
