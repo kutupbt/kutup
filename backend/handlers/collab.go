@@ -321,19 +321,15 @@ func (h *CollabHandler) handleFrame(c *wsConn, fileID string, data []byte) {
 		return
 	}
 
-	// Ephemeral broadcast-only kinds (no file_update_log entry):
-	//   - KindYjsAwareness: cursor / selection presence.
-	//   - KindOOLock: per-cell lock state diffs for office docs. Lock
-	//     state is transient and rebuilt from peer announcements on
-	//     reconnect; persisting it would bloat the log without need.
-	if f.Kind == envelope.KindYjsAwareness || f.Kind == envelope.KindOOLock {
+	// Awareness frames: broadcast only, no persistence.
+	if f.Kind == envelope.KindYjsAwareness {
 		peers := len(h.Hub.Peers(fileID))
-		log.Printf("collab: bcast ephemeral file=%s sender=%d kind=%d peers=%d", fileID, c.deviceID, f.Kind, peers)
+		log.Printf("collab: bcast awareness file=%s sender=%d peers=%d", fileID, c.deviceID, peers)
 		h.Hub.Broadcast(fileID, c, data)
 		return
 	}
 
-	// All other persisted kinds (yjs_update, snapshot_announce, oo_op/checkpoint_meta).
+	// All other persisted kinds (yjs_update, snapshot_announce, oo_op/lock/checkpoint_meta).
 	if _, err := h.persistFrame(fileID, c.deviceID, f, data); err != nil {
 		log.Printf("collab: persist failed file=%s sender=%d err=%v", fileID, c.deviceID, err)
 		return
