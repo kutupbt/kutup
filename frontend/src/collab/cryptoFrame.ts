@@ -141,20 +141,6 @@ export async function decryptOOOp(f: Frame, fileId: string, collectionMaster: Ui
   return decryptCommon(f, fileId, collectionMaster)
 }
 
-// OO_LOCK frames carry per-cell lock state diffs. They use the same envelope
-// + AEAD as OO_OP but with a different kind so the relay can route them as
-// ephemeral (broadcast-only, no persistence) — lock state is transient.
-export async function encryptOOLock(
-  payload: Uint8Array, fileId: string, docKeyId: number,
-  deviceId: bigint, sequence: bigint, collectionMaster: Uint8Array,
-): Promise<Frame> {
-  return buildFrame(payload, KIND.OO_LOCK, fileId, docKeyId, deviceId, sequence, collectionMaster)
-}
-
-export async function decryptOOLock(f: Frame, fileId: string, collectionMaster: Uint8Array): Promise<Uint8Array> {
-  return decryptCommon(f, fileId, collectionMaster)
-}
-
 export async function decryptYjsUpdate(f: Frame, fileId: string, collectionMaster: Uint8Array): Promise<Uint8Array> {
   return decryptCommon(f, fileId, collectionMaster)
 }
