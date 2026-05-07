@@ -11,6 +11,11 @@ interface AuthState {
   storageQuotaBytes: number
   storageUsedBytes: number
   totpEnabled: boolean
+  /** Per-user collab presence color. Hex string '#rrggbb', or null if the
+   *  user hasn't picked one — clients fall back to a deterministic palette
+   *  pick from userId hash. Synced from /user/me on login + persisted via
+   *  PATCH /user/me. */
+  color: string | null
   // Sensitive — in memory only, Uint8Array serializes as plain object in Redux DevTools
   // but is NEVER written to any storage
   masterKey: number[] | null   // stored as number[] to be Redux-serializable
@@ -28,6 +33,7 @@ const initialState: AuthState = {
   storageQuotaBytes: 0,
   storageUsedBytes: 0,
   totpEnabled: false,
+  color: null,
   masterKey: null,
   privateKey: null,
   publicKey: null,
@@ -50,6 +56,7 @@ const authSlice = createSlice({
       storageQuotaBytes: number
       storageUsedBytes: number
       totpEnabled?: boolean
+      color?: string | null
     }>) {
       const p = action.payload
       state.userId = p.userId
@@ -63,6 +70,10 @@ const authSlice = createSlice({
       state.storageQuotaBytes = p.storageQuotaBytes
       state.storageUsedBytes = p.storageUsedBytes
       state.totpEnabled = p.totpEnabled ?? false
+      state.color = p.color ?? null
+    },
+    setColor(state, action: PayloadAction<string | null>) {
+      state.color = action.payload
     },
     updateAccessToken(state, action: PayloadAction<string>) {
       state.accessToken = action.payload
@@ -93,7 +104,7 @@ const authSlice = createSlice({
   },
 })
 
-export const { setAuth, updateAccessToken, updateStorageUsed, updateStorageQuota, updateTotpEnabled, setDeviceId, logout } = authSlice.actions
+export const { setAuth, updateAccessToken, updateStorageUsed, updateStorageQuota, updateTotpEnabled, setDeviceId, setColor, logout } = authSlice.actions
 
 // Typed selectors that reconstruct Uint8Array from stored number[]
 export const selectMasterKey = (state: { auth: AuthState }): Uint8Array | null =>

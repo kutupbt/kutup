@@ -293,7 +293,11 @@
       "title": "Account",
       "email": "Email",
       "username": "Username",
-      "storage": "Storage"
+      "storage": "Storage",
+      "presenceColor": "Presence color",
+      "presenceColorDesc": "Your color in collaborative cursors and cell-edit highlights. Stable across notes and office documents.",
+      "presenceColorClear": "Reset",
+      "presenceColorFailed": "Failed to update color"
     },
     "totp": {
       "title": "Two-Factor Authentication",

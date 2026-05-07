@@ -147,6 +147,7 @@ export default function Login() {
       isAdmin: data.isAdmin,
       storageQuotaBytes: data.storageQuotaBytes,
       storageUsedBytes: data.storageUsedBytes,
+      color: data.color ?? null,
     }))
     navigate(nextParam)
   }

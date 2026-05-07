@@ -18,6 +18,7 @@ export interface SessionPayload {
   storageQuotaBytes: number
   storageUsedBytes: number
   totpEnabled: boolean
+  color: string | null
   currentDeviceId: number | null
   publicKey: string | null
   masterKey: number[] | null

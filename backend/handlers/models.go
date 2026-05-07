@@ -46,6 +46,12 @@ type MeResponse struct {
 	StorageQuotaBytes int64  `json:"storageQuotaBytes"`
 	StorageUsedBytes  int64  `json:"storageUsedBytes"`
 	IsAdmin           bool   `json:"isAdmin"`
+	Color             string `json:"color"`
+}
+
+// OkResponse is the response for endpoints that just return success.
+type OkResponse struct {
+	OK bool `json:"ok"`
 }
 
 // TOTPSetupResponse is returned by POST /api/user/2fa/setup.
