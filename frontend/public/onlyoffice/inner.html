@@ -256,30 +256,99 @@
         var HISTORY_KEEPER_INDEX_USER = 1
         var SELF_INDEX_USER = 2
 
+        // Live peer list. Keyed by deviceId so every wire-format peer
+        // entry maps to a stable {id, indexUser, username, connectionId}
+        // that OnlyOffice expects in its connectState message.
+        // peerByDevice[deviceId] = oo participant entry (see makePeer).
+        var peerByDevice = Object.create(null)
+        var lastConnectStateTs = 0
+        var selfDeviceId = null  // set in init handler from msg.payload.deviceId
+
+        // Allocate a per-device indexUser starting from SELF_INDEX_USER+1.
+        // OO requires every peer to have a distinct positive integer index.
+        // We assign on first sight and remember (so the same device keeps
+        // its index across leave/rejoin within the same session).
+        var nextIndex = SELF_INDEX_USER + 1
+        var indexByDevice = Object.create(null)
+        function indexFor(deviceId) {
+          if (deviceId === selfDeviceId) return SELF_INDEX_USER
+          var k = String(deviceId)
+          if (!(k in indexByDevice)) {
+            indexByDevice[k] = nextIndex++
+          }
+          return indexByDevice[k]
+        }
+
+        function makePeer(deviceId, username) {
+          var idx = indexFor(deviceId)
+          var label = username || ('user-' + deviceId)
+          var idStr = String(deviceId)
+          return {
+            id: idStr,
+            idOriginal: idStr,
+            username: label,
+            indexUser: idx,
+            connectionId: 'dev-' + deviceId,
+            isCloseCoAuthoring: false,
+            view: false,
+          }
+        }
+
+        var historyKeeperPeer = {
+          id: '0',
+          idOriginal: '0',
+          username: 'History',
+          indexUser: HISTORY_KEEPER_INDEX_USER,
+          connectionId: 'hk',
+          isCloseCoAuthoring: false,
+          view: false,
+        }
+
+        // Self placeholder used until the first oo-peers arrives. The
+        // editor calls getParticipants synchronously on mount; if our
+        // peer list is empty (hello not yet processed), we fall back to
+        // [historyKeeper, self] so OO doesn't barf on an empty list.
+        var selfPlaceholder = {
+          id: String(SELF_INDEX_USER),
+          idOriginal: String(SELF_INDEX_USER),
+          username: 'You',
+          indexUser: SELF_INDEX_USER,
+          connectionId: 'self',
+          isCloseCoAuthoring: false,
+          view: false,
+        }
+
+        function buildParticipantList() {
+          var peers = [historyKeeperPeer]
+          var keys = Object.keys(peerByDevice)
+          if (keys.length === 0) {
+            peers.push(selfPlaceholder)
+            return peers
+          }
+          for (var i = 0; i < keys.length; i++) peers.push(peerByDevice[keys[i]])
+          return peers
+        }
+
         var getParticipants = function () {
           return {
             index: SELF_INDEX_USER,
-            list: [
-              {
-                id: '0',
-                idOriginal: '0',
-                username: 'History',
-                indexUser: HISTORY_KEEPER_INDEX_USER,
-                connectionId: nextRandomId('hk-'),
-                isCloseCoAuthoring: false,
-                view: false,
-              },
-              {
-                id: String(SELF_INDEX_USER),
-                idOriginal: String(SELF_INDEX_USER),
-                username: 'You',
-                indexUser: SELF_INDEX_USER,
-                connectionId: nextRandomId('self-'),
-                isCloseCoAuthoring: false,
-                view: false,
-              },
-            ],
+            list: buildParticipantList(),
           }
+        }
+
+        // Push the current peer list into OO via connectState. Bumps a
+        // monotonic timestamp so OO can dedupe stale messages. Mirrors
+        // CryptPad's handleNewIds (inner.js:1100-1106).
+        function emitConnectState() {
+          var ts = Date.now()
+          if (ts <= lastConnectStateTs) ts = lastConnectStateTs + 1
+          lastConnectStateTs = ts
+          sendToOO({
+            type: 'connectState',
+            participantsTimestamp: ts,
+            participants: buildParticipantList(),
+            waitAuth: false,
+          })
         }
 
         var fromOO = function (obj) {
@@ -619,6 +688,45 @@
                 cpIndex++
               } catch (err) {
                 console.warn('[kutup-bridge] bad oo-remote-op payload', err)
+              }
+              return
+            case 'oo-self':
+              // Parent tells us which deviceId in oo-peers entries is OUR
+              // tab. Stored so we can filter ourselves out of the
+              // participant list (self always sits at SELF_INDEX_USER;
+              // no per-device entry needed).
+              if (typeof msg.deviceId === 'number') {
+                selfDeviceId = msg.deviceId
+                console.log('[kutup-bridge] selfDeviceId set to', selfDeviceId)
+              }
+              return
+            case 'oo-peers':
+              // Server pushed the current peer roster (relay's Hub fires
+              // this on join + leave). Rebuild our peer index, then emit
+              // connectState into OO so subsequent remote saveChanges from
+              // those peers aren't rejected as "unknown user". Mirrors
+              // CryptPad's handleNewIds (inner.js:1097-1106) — the missing
+              // piece that was causing the second-direction stall in xlsx.
+              try {
+                var list = Array.isArray(msg.list) ? msg.list : []
+                var nextById = Object.create(null)
+                for (var i = 0; i < list.length; i++) {
+                  var entry = list[i]
+                  if (!entry || typeof entry.deviceId === 'undefined') continue
+                  var did = entry.deviceId
+                  // Skip self — we render at SELF_INDEX_USER (selfPlaceholder).
+                  // If selfDeviceId hasn't been received yet (parent's
+                  // oo-self message arrives async), include the entry — it
+                  // will be re-emitted on the next oo-peers after oo-self
+                  // arrives.
+                  if (selfDeviceId !== null && did === selfDeviceId) continue
+                  nextById[String(did)] = makePeer(did, entry.username)
+                }
+                peerByDevice = nextById
+                console.log('[kutup-bridge] peers updated count=' + (Object.keys(nextById).length + 1))
+                emitConnectState()
+              } catch (err) {
+                console.warn('[kutup-bridge] bad oo-peers payload', err)
               }
               return
           }

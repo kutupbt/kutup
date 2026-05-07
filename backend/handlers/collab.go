@@ -35,14 +35,17 @@ type wsConn struct {
 	ws        *websocket.Conn
 	deviceID  int64
 	userID    string
+	username  string
 	pubKey    ed25519.PublicKey
-	out       chan []byte
+	out       chan []byte // binary collab frames
+	outText   chan []byte // JSON control messages (e.g. peer-list)
 	done      chan struct{}
 	closeOnce sync.Once
 }
 
 func (c *wsConn) DeviceID() int64 { return c.deviceID }
 func (c *wsConn) UserID() string  { return c.userID }
+func (c *wsConn) Username() string { return c.username }
 
 // WriteFrame waits up to backpressureTimeout for c.out to have room before
 // closing the conn. Original v1 was strictly non-blocking with default close
@@ -79,7 +82,8 @@ func (c *wsConn) Close() {
 	})
 }
 
-// writePump drains c.out to the WebSocket as binary messages. Exits on done.
+// writePump drains c.out (binary collab frames) and c.outText (JSON control
+// messages like peer-list) to the WebSocket. Exits on done.
 func (c *wsConn) writePump() {
 	for {
 		select {
@@ -88,9 +92,38 @@ func (c *wsConn) writePump() {
 				c.Close()
 				return
 			}
+		case b := <-c.outText:
+			if err := c.ws.WriteMessage(websocket.TextMessage, b); err != nil {
+				c.Close()
+				return
+			}
 		case <-c.done:
 			return
 		}
+	}
+}
+
+// WriteText queues a JSON control message for delivery as a text-frame
+// WebSocket message. Same backpressure semantics as WriteFrame: bounded
+// wait, then close-and-drop on stuck writers. Only used for low-volume
+// control traffic (peer-list announcements); collab frames keep using
+// WriteFrame's binary path.
+func (c *wsConn) WriteText(b []byte) error {
+	select {
+	case <-c.done:
+		return errors.New("conn closed")
+	default:
+	}
+	t := time.NewTimer(backpressureTimeout)
+	defer t.Stop()
+	select {
+	case c.outText <- b:
+		return nil
+	case <-c.done:
+		return errors.New("conn closed")
+	case <-t.C:
+		c.Close()
+		return errors.New("backpressure timeout")
 	}
 }
 
@@ -112,10 +145,18 @@ func (h *CollabHandler) Upgrade() fiber.Handler {
 func (h *CollabHandler) HandleConnection(
 	ws *websocket.Conn, userID, fileID string, deviceID int64, pubKey ed25519.PublicKey,
 ) {
+	// Look up the username for the peer-list (peers payload uses it as the
+	// label OnlyOffice's `connectState` / users dropdown shows).
+	var username string
+	_ = h.DB.QueryRow(context.Background(),
+		`SELECT COALESCE(username, '') FROM users WHERE id = $1`, userID,
+	).Scan(&username)
+
 	c := &wsConn{
-		ws: ws, deviceID: deviceID, userID: userID, pubKey: pubKey,
-		out:  make(chan []byte, wsOutBuf),
-		done: make(chan struct{}),
+		ws: ws, deviceID: deviceID, userID: userID, username: username, pubKey: pubKey,
+		out:     make(chan []byte, wsOutBuf),
+		outText: make(chan []byte, wsOutBuf),
+		done:    make(chan struct{}),
 	}
 	defer func() {
 		h.Hub.Leave(fileID, c)
@@ -163,11 +204,19 @@ func (h *CollabHandler) HandleConnection(
 	go c.writePump()
 	h.Hub.Join(fileID, c)
 	log.Printf("collab: device=%d joined fileId=%s, peers=%d", deviceID, fileID, len(h.Hub.Peers(fileID)))
+	// Tell every connected peer (including the new one) that the peer set
+	// changed. The OnlyOffice bridge needs this to call connectState on its
+	// editor so the new peer's edits aren't rejected as coming from an
+	// unknown user. Mirrors CryptPad's handleNewIds (inner.js:1097).
+	h.broadcastPeers(fileID)
 	defer func() {
 		// Logged via defer-stack ordering: Hub.Leave runs first (the outer
 		// defer) and removes us from peers, so this print reflects the
 		// post-leave state.
 		log.Printf("collab: device=%d left fileId=%s, peers=%d", deviceID, fileID, len(h.Hub.Peers(fileID)))
+		// Same broadcast on departure so peers can drop the leaver from
+		// their participant list (and OO can release any locks it held).
+		h.broadcastPeers(fileID)
 	}()
 
 	// Read loop.
@@ -185,15 +234,48 @@ func (h *CollabHandler) HandleConnection(
 	}
 }
 
+// peerSummaries returns the JSON shape clients use for their participant
+// list. `username` is best-effort — we add it via a wsConn type assertion
+// (HubConn doesn't carry the field for portability with the test fakeConn).
 func (h *CollabHandler) peerSummaries(fileID string) []fiber.Map {
 	out := []fiber.Map{}
 	for _, p := range h.Hub.Peers(fileID) {
-		out = append(out, fiber.Map{
+		row := fiber.Map{
 			"deviceId": p.DeviceID(),
 			"userId":   p.UserID(),
-		})
+		}
+		if wc, ok := p.(*wsConn); ok && wc.username != "" {
+			row["username"] = wc.username
+		}
+		out = append(out, row)
 	}
 	return out
+}
+
+// broadcastPeers sends the current peer-list as a JSON text message to
+// every conn in the room. Called from join + leave; lets clients keep
+// their OnlyOffice connectState up to date so remote saveChanges from
+// late-joining peers aren't rejected as unknown-user.
+//
+// Best-effort: WriteText errors close the offending conn, which then
+// triggers a fresh broadcast via the Leave path. No retry needed here.
+func (h *CollabHandler) broadcastPeers(fileID string) {
+	peers := h.peerSummaries(fileID)
+	payload, err := json.Marshal(fiber.Map{
+		"type":  "peers",
+		"list":  peers,
+		"ts":    time.Now().UnixMilli(),
+	})
+	if err != nil {
+		return
+	}
+	for _, p := range h.Hub.Peers(fileID) {
+		wc, ok := p.(*wsConn)
+		if !ok {
+			continue
+		}
+		_ = wc.WriteText(payload)
+	}
 }
 
 // handleControl handles JSON control messages. v1 only supports {"type":"resume","lastSeenSeq":N}.

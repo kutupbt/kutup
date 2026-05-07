@@ -66,6 +66,8 @@ type ToBridge =
   | { type: 'init'; payload: InitPayload }
   | { type: 'save-request'; requestId: number }
   | { type: 'oo-remote-op'; payload: string }
+  | { type: 'oo-peers'; list: { deviceId: number; userId: string; username?: string }[]; ts: number }
+  | { type: 'oo-self'; deviceId: number }
 
 interface InitPayload {
   type: DocType
@@ -247,6 +249,31 @@ function OfficeEditorBase(
 
       // 2. Open the relay WebSocket.
       const wsUrl = `${location.origin.replace(/^http/, 'ws')}/api/files/${fileId}/collab/ws?token=${encodeURIComponent(accessToken)}&deviceId=${did}`
+      // Forward initial peer-list (from hello) + later updates (from
+      // server-pushed `peers` messages) to the bridge so it can rebuild
+      // OnlyOffice's connectState. Without this OO rejects remote
+      // saveChanges from peers it never learned about, producing the
+      // "second-direction sync stalls" bug user-reported on 2026-05-07.
+      function forwardPeers(list: { deviceId: number; userId: string; username?: string }[], ts: number) {
+        const iframe = iframeRef.current
+        if (!iframe || !iframe.contentWindow) return
+        iframe.contentWindow.postMessage(
+          { type: 'oo-peers', list, ts } satisfies ToBridge,
+          window.location.origin,
+        )
+      }
+
+      // Tell the bridge which deviceId is "self" so it can filter that
+      // entry out of the peer list (self stays at SELF_INDEX_USER and
+      // doesn't need a separate participant entry).
+      const iframeForSelf = iframeRef.current
+      if (iframeForSelf && iframeForSelf.contentWindow && did) {
+        iframeForSelf.contentWindow.postMessage(
+          { type: 'oo-self', deviceId: did } satisfies ToBridge,
+          window.location.origin,
+        )
+      }
+
       const transport = new CollabTransport({
         url: wsUrl,
         lastSeenSeq: () => lastSeenSeqRef.current,
@@ -259,6 +286,13 @@ function OfficeEditorBase(
               outboundSeqRef.current = randomSenderSeqPrefix(high)
             }
           }
+          // Hello carries the initial peer snapshot. Forward immediately so
+          // a tab opened into an existing room can connectState before the
+          // first remote frame arrives.
+          if (Array.isArray(h.peers)) forwardPeers(h.peers, Date.now())
+        },
+        onPeers: (p) => {
+          forwardPeers(p.list, p.ts)
         },
         onFrame: async (bs: Uint8Array) => {
           try {
