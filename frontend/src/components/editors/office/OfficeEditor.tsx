@@ -74,6 +74,10 @@ interface InitPayload {
   filename: string
   fileId: string
   initialBytes?: Uint8Array
+  /** Display name for the local user — surfaced as `editorConfig.user.name`
+   *  inside OnlyOffice and as the self entry's username in connectState
+   *  (so peers see a real handle instead of the previous 'You' placeholder). */
+  username?: string
 }
 
 // Module-level cache: dedupes concurrent registerDevice() calls within the
@@ -120,6 +124,7 @@ function OfficeEditorBase(
 
   const accessToken = useAppSelector(s => s.auth.accessToken)
   const storedDeviceId = useAppSelector(s => s.auth.currentDeviceId)
+  const username = useAppSelector(s => s.auth.username)
   const dispatch = useAppDispatch()
 
   useImperativeHandle(ref, () => ({
@@ -194,7 +199,13 @@ function OfficeEditorBase(
           setBridgeReady(true)
           send({
             type: 'init',
-            payload: { type: docType!, filename, fileId, initialBytes },
+            payload: {
+              type: docType!,
+              filename,
+              fileId,
+              initialBytes,
+              username: username ?? undefined,
+            },
           })
           return
         case 'init-ack':
@@ -222,7 +233,7 @@ function OfficeEditorBase(
 
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [docType, filename, fileId, initialBytes, collectionMaster])
+  }, [docType, filename, fileId, initialBytes, collectionMaster, username])
 
   // ---- WebSocket transport ----
   useEffect(() => {
