@@ -91,4 +91,54 @@ test.describe('office xlsx — two-tab sync (happy path)', () => {
     expect(appA, 'tab A applied B\'s op').toBeGreaterThan(0)
     expect(appB, 'tab B applied A\'s op').toBeGreaterThan(0)
   })
+
+  // Reproduces the user-reported xlsx stall: A types and B receives,
+  // then B types and A is supposed to receive. The "two-way" test above
+  // exercises simultaneous edits, which masks this failure mode.
+  test('sequential: A→B works, then B→A also works', async ({ context }) => {
+    const page = await signInOrBootstrap(context)
+
+    const tabAPromise = context.waitForEvent('page', { timeout: 30_000 })
+    await page.locator('button:has-text("New")').first().click()
+    await page.waitForTimeout(500)
+    await page.locator('[role=menuitem]:has-text("Spreadsheet")').first().click()
+    const tabA = await tabAPromise
+    await tabA.waitForLoadState('domcontentloaded')
+    const fileUrl = tabA.url()
+
+    const tabB = await context.newPage()
+    await tabB.goto(fileUrl)
+    await tabB.waitForLoadState('domcontentloaded')
+
+    const aLogs = attachCollabLogs(tabA, 'A')
+    const bLogs = attachCollabLogs(tabB, 'B')
+
+    await tabA.waitForTimeout(30_000)
+
+    // Phase 1: A types, B should receive.
+    await tabA.bringToFront()
+    await tabA.mouse.click(200, 250)
+    await tabA.waitForTimeout(500)
+    await tabA.keyboard.type('first', { delay: 80 })
+    await tabA.keyboard.press('Enter')
+    await tabA.waitForTimeout(5_000)
+
+    const appliedBPhase1 = bLogs.filter((l) => l.includes('applying remote op')).length
+    expect(appliedBPhase1, 'tab B applied phase-1 op from A').toBeGreaterThan(0)
+
+    // Phase 2: B types in a different cell, A should receive.
+    const appliedABefore = aLogs.filter((l) => l.includes('applying remote op')).length
+    await tabB.bringToFront()
+    await tabB.mouse.click(400, 250)
+    await tabB.waitForTimeout(500)
+    await tabB.keyboard.type('second', { delay: 80 })
+    await tabB.keyboard.press('Enter')
+    await tabB.waitForTimeout(5_000)
+
+    const outBPhase2 = bLogs.filter((l) => l.includes('outbound saveChanges') && /raw=([1-9]\d*)/.test(l)).length
+    const appliedAAfter = aLogs.filter((l) => l.includes('applying remote op')).length
+
+    expect(outBPhase2, 'tab B outbound saveChanges in phase-2').toBeGreaterThan(0)
+    expect(appliedAAfter - appliedABefore, 'tab A applied phase-2 op from B').toBeGreaterThan(0)
+  })
 })
