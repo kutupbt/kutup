@@ -351,99 +351,6 @@
           })
         }
 
-        // -------- Lock state machine ---------------------------------
-        // Mirrors CryptPad's content.locks + handleNewLocks
-        // (inner.js:1080-1162). Per-cell lock acquisitions from any
-        // peer are tracked here; the differ synthesises getLock /
-        // releaseLock to OnlyOffice on every state change so OO's
-        // internal cell-edit state machine stays consistent. Empty-
-        // locks across edits is what causes OO's "second-direction
-        // sync stalls" symptom — phantom locks accumulate on receive.
-        //
-        // Shape: contentLocks[ownerDeviceId][lockUid] = lockObj where
-        //   lockObj = { time, user: <ooUniqueId>, block: <opaque> }
-        // ownerDeviceId is a string for stable Object key.
-        var contentLocks = Object.create(null)
-        var oldLocks = {}  // last-applied snapshot for diff
-
-        function uidShort() {
-          return Math.random().toString(36).slice(2, 10)
-        }
-
-        // Flat-list view of all current locks across all owners — the
-        // shape OO expects in its `locks: [...]` field for sheets.
-        function flatLocks() {
-          var out = []
-          var ownerKeys = Object.keys(contentLocks)
-          for (var i = 0; i < ownerKeys.length; i++) {
-            var owner = contentLocks[ownerKeys[i]]
-            var lockKeys = Object.keys(owner)
-            for (var j = 0; j < lockKeys.length; j++) {
-              out.push(owner[lockKeys[j]])
-            }
-          }
-          return out
-        }
-
-        function snapshotLocks() {
-          // Plain-object deep clone via JSON; lock values are simple
-          // {time, user, block} objects so this is sufficient.
-          return JSON.parse(JSON.stringify(contentLocks))
-        }
-
-        // CryptPad inner.js:1108-1141. Diffs newState vs oldState; for
-        // each lock that disappeared, send releaseLock to OO. If any
-        // new locks appeared, send a fresh getLock with the full list.
-        function handleNewLocks(o, n) {
-          var hasNew = false
-          var newKeys = Object.keys(n || {})
-          for (var i = 0; i < newKeys.length; i++) {
-            var oid = newKeys[i]
-            if (typeof n[oid] !== 'object') continue
-            var inner = Object.keys(n[oid])
-            for (var j = 0; j < inner.length; j++) {
-              var uid = inner[j]
-              if (!o[oid] || !o[oid][uid]) {
-                hasNew = true
-                break
-              }
-            }
-            if (hasNew) break
-          }
-          var oldKeys = Object.keys(o || {})
-          for (var i2 = 0; i2 < oldKeys.length; i2++) {
-            var oid2 = oldKeys[i2]
-            if (typeof o[oid2] !== 'object') continue
-            var inner2 = Object.keys(o[oid2])
-            for (var j2 = 0; j2 < inner2.length; j2++) {
-              var uid2 = inner2[j2]
-              if (!n[oid2] || !n[oid2][uid2]) {
-                sendToOO({ type: 'releaseLock', locks: [o[oid2][uid2]] })
-              }
-            }
-          }
-          if (hasNew) {
-            sendToOO({ type: 'getLock', locks: flatLocks() })
-          }
-        }
-
-        // Broadcast our current contentLocks snapshot to peers as an
-        // ephemeral OO_LOCK frame (server treats it like awareness:
-        // broadcast-only, no persistence). The receiver replays the
-        // diff via handleNewLocks. Self-deviceId is implicit in the
-        // envelope's senderDeviceId.
-        function broadcastLockState() {
-          if (window.parent && window.parent !== window && selfDeviceId !== null) {
-            var selfKey = String(selfDeviceId)
-            var selfLocks = contentLocks[selfKey] || {}
-            var payload = JSON.stringify({ owner: selfKey, locks: selfLocks })
-            window.parent.postMessage(
-              { type: 'oo-local-lock', payload: payload },
-              EXPECTED_ORIGIN,
-            )
-          }
-        }
-
         var fromOO = function (obj) {
           if (!obj || !obj.type) return
           switch (obj.type) {
@@ -457,50 +364,11 @@
               sendToOO({ type: 'message' })
               break
             case 'getLock':
-              // OnlyOffice asks to lock a cell/block. We grant locally,
-              // record in contentLocks, broadcast to peers, then echo
-              // the FULL current lock list back to OO so it knows what's
-              // locked across all peers (mirrors CryptPad's handleLock,
-              // inner.js:1251-1338).
-              try {
-                if (selfDeviceId !== null) {
-                  var selfKey = String(selfDeviceId)
-                  contentLocks[selfKey] = contentLocks[selfKey] || {}
-                  var lockMsg = {
-                    time: Date.now(),
-                    user: myUniqueOOId,
-                    block: obj.block,
-                  }
-                  // Sheets: random uid per lock acquire so each Enter-
-                  // commit gets a fresh lockId. Non-sheet docs key by
-                  // block.id (CryptPad's behaviour, but we treat
-                  // everything uniformly — sheets are the case where
-                  // this matters).
-                  var luid = uidShort()
-                  contentLocks[selfKey][luid] = lockMsg
-                  broadcastLockState()
-                }
-                sendToOO({ type: 'getLock', locks: flatLocks() })
-                oldLocks = snapshotLocks()
-              } catch (err) {
-                console.warn('[kutup-bridge] getLock failed', err)
-              }
+              // Phase 6a will gate by shared state; for 2c grant immediately.
+              sendToOO({ type: 'getLock', locks: [] })
               break
             case 'releaseLock':
-              // OnlyOffice signals the user finished editing a cell.
-              // Drop ALL of our locks (CryptPad's pattern: a single
-              // releaseLock from OO clears the whole peer's lock set
-              // — Phase 6 could be more surgical if needed) and
-              // broadcast.
-              try {
-                if (selfDeviceId !== null) {
-                  delete contentLocks[String(selfDeviceId)]
-                  broadcastLockState()
-                  oldLocks = snapshotLocks()
-                }
-              } catch (err) {
-                console.warn('[kutup-bridge] releaseLock failed', err)
-              }
+              // Phase 6a; no-op for 2c.
               break
             case 'saveChanges':
               // 1:1 port of CryptPad's parseChanges + handleChanges
@@ -529,23 +397,11 @@
                     useridoriginal: String(myOOId),
                   }
                 })
-                // CryptPad's handleChanges (inner.js:1399) attaches the
-                // sender's current locks to every saveChanges. Empty
-                // here used to confuse OO's state machine — phantom
-                // locks accumulated. Now we ship the real list.
-                var selfLockList = []
-                if (selfDeviceId !== null) {
-                  var ownLocks = contentLocks[String(selfDeviceId)] || {}
-                  var ownKeys = Object.keys(ownLocks)
-                  for (var lk = 0; lk < ownKeys.length; lk++) {
-                    selfLockList.push(ownLocks[ownKeys[lk]])
-                  }
-                }
                 var outboundMsg = {
                   type: 'saveChanges',
                   changes: wrapped,
                   changesIndex: cpIndex,
-                  locks: selfLockList,
+                  locks: [],
                   excelAdditionalInfo: obj.excelAdditionalInfo,
                   startSaveChanges: obj.startSaveChanges,
                   endSaveChanges: obj.endSaveChanges,
@@ -834,28 +690,6 @@
                 console.warn('[kutup-bridge] bad oo-remote-op payload', err)
               }
               return
-            case 'oo-remote-lock':
-              // A peer broadcast their full lock-set. Replace their
-              // entry in contentLocks, then run handleNewLocks to emit
-              // getLock/releaseLock to OO for any transitions. This is
-              // the missing primitive the architecture comparison doc
-              // identified — without it, OO accumulates phantom locks
-              // and rejects subsequent edits in the second direction.
-              try {
-                var lockPayload = JSON.parse(msg.payload)
-                var owner = String(lockPayload.owner || msg.senderDeviceId)
-                if (!owner) return
-                if (lockPayload.locks && Object.keys(lockPayload.locks).length > 0) {
-                  contentLocks[owner] = lockPayload.locks
-                } else {
-                  delete contentLocks[owner]
-                }
-                handleNewLocks(oldLocks, contentLocks)
-                oldLocks = snapshotLocks()
-              } catch (err) {
-                console.warn('[kutup-bridge] bad oo-remote-lock payload', err)
-              }
-              return
             case 'oo-self':
               // Parent tells us which deviceId in oo-peers entries is OUR
               // tab. Stored so we can filter ourselves out of the
@@ -891,26 +725,6 @@
                 peerByDevice = nextById
                 console.log('[kutup-bridge] peers updated count=' + (Object.keys(nextById).length + 1))
                 emitConnectState()
-
-                // CryptPad's deleteOfflineLocks (inner.js:1144-1162):
-                // any owner in contentLocks who's no longer in the
-                // participant list has gone offline; drop their locks
-                // and let handleNewLocks synthesise releaseLock to OO
-                // so the cells they were editing become editable again.
-                var ownerIds = Object.keys(contentLocks)
-                var changed = false
-                for (var li = 0; li < ownerIds.length; li++) {
-                  var oid = ownerIds[li]
-                  if (selfDeviceId !== null && oid === String(selfDeviceId)) continue
-                  if (!nextById[oid]) {
-                    delete contentLocks[oid]
-                    changed = true
-                  }
-                }
-                if (changed) {
-                  handleNewLocks(oldLocks, contentLocks)
-                  oldLocks = snapshotLocks()
-                }
               } catch (err) {
                 console.warn('[kutup-bridge] bad oo-peers payload', err)
               }
