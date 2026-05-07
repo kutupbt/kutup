@@ -220,6 +220,31 @@ What's deferred (Phase 5c, 6, 7) is now bounded scope, not blocked.
 - **Phase 5a** (commit `21a7af3`): outbound `saveChanges` carries content. Bug was `Array.isArray` vs `JSON.parse` on `obj.changes`.
 - **Phase 5b** (commit `a92e632`): two-tab xlsx sync verified — concurrent edits propagate both ways.
 
+### Known issue: xlsx second-direction sync stalls (2026-05-07, user-reported)
+
+Notes work perfectly after the simultaneous-tab-open race fix in commit
+`843718a`. Xlsx improved but is still imperfect:
+
+> "After waiting 25 s and editing in tab A, the edit syncs to tab B. But
+> when I then try editing in B → A, that doesn't propagate. After that,
+> editing in A → B also stops working."
+
+Symptoms suggest a sticky desync after the first remote-op application:
+something on the receiving side (cpIndex bookkeeping in `inner.html`,
+OnlyOffice's internal `m_bFast` / `unSaveLock` state, or our envelope's
+`docKeyId` / `outboundSeq` partition) doesn't tolerate alternating
+directions of edits. Worth investigating in Phase 5c — the same code
+path the multi-user smoke test will exercise.
+
+Lines to start the diff against CryptPad's reference:
+- `inner.html` `case 'oo-remote-op':` apply path — does our `cpIndex++`
+  match what CryptPad does after applying a remote frame? CryptPad does
+  it inside its rt-channel onMessage handler around `inner.js:1000`,
+  before `ooChannel.send`.
+- The `unSaveLock` we send back after our own outbound — confirm the
+  `index` matches what OnlyOffice expects after a peer's frame has been
+  applied.
+
 ### Deferred — but no longer blocked (Phase 5c, 6, 7)
 
 These are bounded follow-ups, not protocol gaps:
