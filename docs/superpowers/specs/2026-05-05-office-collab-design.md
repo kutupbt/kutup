@@ -229,21 +229,37 @@ Notes work perfectly after the simultaneous-tab-open race fix in commit
 > when I then try editing in B → A, that doesn't propagate. After that,
 > editing in A → B also stops working."
 
-Symptoms suggest a sticky desync after the first remote-op application:
-something on the receiving side (cpIndex bookkeeping in `inner.html`,
-OnlyOffice's internal `m_bFast` / `unSaveLock` state, or our envelope's
-`docKeyId` / `outboundSeq` partition) doesn't tolerate alternating
-directions of edits. Worth investigating in Phase 5c — the same code
-path the multi-user smoke test will exercise.
+**Things tried that did not fix it:**
 
-Lines to start the diff against CryptPad's reference:
-- `inner.html` `case 'oo-remote-op':` apply path — does our `cpIndex++`
-  match what CryptPad does after applying a remote frame? CryptPad does
-  it inside its rt-channel onMessage handler around `inner.js:1000`,
-  before `ooChannel.send`.
-- The `unSaveLock` we send back after our own outbound — confirm the
-  `index` matches what OnlyOffice expects after a peer's frame has been
-  applied.
+1. **`unSaveLock` index off-by-one** (commit `66fd9ed`). Reordered to
+   match CryptPad's `inner.js:1427-1434` — emit `unSaveLock(cpIndex)`
+   then `cpIndex++`, instead of `cpIndex++` then `unSaveLock(cpIndex)`.
+   Plausible candidate; user re-verified manually after the fix landed
+   and reported same behaviour. So the cause is something else.
+
+**Still worth investigating next time the office work resumes:**
+
+- The inbound apply path in `inner.html` (`case 'oo-remote-op':`) calls
+  `sendToOO(payload); cpIndex++`. Does OnlyOffice expect any *acknowledgement*
+  back after applying a remote frame (e.g. a `releaseLock` or `forceSave`
+  signal that we're not emitting)? CryptPad fires `common.notify()` after
+  the apply (`inner.js:1003`); we don't, but our `common.notify` would be
+  a no-op anyway.
+- Frame-level diff: capture every `postMessage` between OnlyOffice and
+  the bridge during a known-bad sequence (A type → B receives → B types
+  → A doesn't receive), then capture the same against CryptPad's working
+  integration. The first divergence is the bug. Would benefit from the
+  CryptPad-source-side instrumentation we never added.
+- Check `m_bFast` (`inner.js:1613`) — CryptPad gates its
+  `themeLocked` rebroadcast on `AscCommon.CollaborativeEditing.m_bFast`
+  being truthy. If our config doesn't engage fast-coediting mode the
+  state machine may degrade after the first remote apply.
+- The 2-tab `04-office-2tab-sync.spec.ts` happy path passes for ONE
+  direction. Adding a deliberately-bidirectional version (typing in
+  A then B sequentially with assertions both ways) would catch the
+  regression in CI rather than waiting for manual reports.
+
+Belongs to Phase 5c follow-up; not a regression of 5b.
 
 ### Deferred — but no longer blocked (Phase 5c, 6, 7)
 

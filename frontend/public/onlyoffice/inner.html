@@ -89,6 +89,37 @@
         var docType = null
         var fileId = null
 
+        // CSS injected into the OnlyOffice editor iframe at onAppReady to
+        // hide stock branding + chrome that doesn't fit kutup's surface.
+        // Lifted verbatim from CryptPad's `www/common/onlyoffice/inner.js`
+        // (~line 2002-2024). v9-compatible — re-check upstream when bumping
+        // the OnlyOffice build, since selectors are private API.
+        var KUTUP_HIDE_BRANDING_CSS = [
+          // Title bar (top centre): document name + user name pill.
+          '#title-doc-name { display: none !important; }',
+          '#title-user-name { display: none !important; }',
+          // Insert tab: equation slot + the trailing separator before it.
+          'section[data-tab="ins"] .separator:nth-last-child(2) { display: none !important; }',
+          '#slot-btn-insequation { display: none !important; }',
+          // File menu: "Document info" entry + its panel (carries the
+          // OnlyOffice About / build version — primary branding hide).
+          '#fm-btn-info { display: none !important; }',
+          '#panel-info { display: none !important; }',
+          // Image / textart "from URL": kutup is E2EE, no remote fetch.
+          '#image-button-from-url { display: none !important; }',
+          '.cp-from-url, #textart-button-from-url { display: none !important; }',
+          // Status bar (bottom): language selector + spell-check toggle.
+          // No backend for either in kutup.
+          '.statusbar .cnt-lang { display: none !important; }',
+          '.statusbar #btn-doc-spell { display: none !important; }',
+          // File menu: dividers + spell-check / about sidebar entries.
+          '#file-menu-panel .devider { display: none !important; }',
+          '#left-btn-spellcheck, #left-btn-about { display: none !important; }',
+          // Toolbar Users dropdown — kutup renders its own cursor presence,
+          // OnlyOffice's peer list is redundant.
+          'div.btn-users.dropdown-toggle { display: none !important; }',
+        ].join('\n')
+
         // Map kutup file extension → OnlyOffice template script + DocsAPI types.
         var DOC_TYPES = {
           docx: { template: 'oodoc_base.js',   documentType: 'word',  fileType: 'docx' },
@@ -491,7 +522,21 @@
                       lang: (navigator.language || 'en').slice(0, 2),
                     },
                     events: {
-                      onAppReady: function () { setStatus('editor: app ready') },
+                      onAppReady: function () {
+                        setStatus('editor: app ready')
+                        // Hide OnlyOffice's stock branding/chrome. injectCSS
+                        // is OnlyOffice's documented API for landing rules in
+                        // the editor's nested iframe — used for theme switch
+                        // upstream too. No-op if the editor build doesn't
+                        // expose it (older v6/v7 forks); v9 has it.
+                        try {
+                          if (docEditor && typeof docEditor.injectCSS === 'function') {
+                            docEditor.injectCSS(KUTUP_HIDE_BRANDING_CSS)
+                          }
+                        } catch (err) {
+                          console.warn('[kutup-bridge] injectCSS failed', err)
+                        }
+                      },
                       onDocumentReady: function () { setStatus('editor: document ready') },
                       onError: function (e) {
                         console.error('OO error:', e)
