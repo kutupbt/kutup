@@ -237,7 +237,53 @@ Notes work perfectly after the simultaneous-tab-open race fix in commit
    Plausible candidate; user re-verified manually after the fix landed
    and reported same behaviour. So the cause is something else.
 
-**Still worth investigating next time the office work resumes:**
+2. **`connectState` peer announcements** (commit `b78c7d6`, 2026-05-07).
+   Three parallel Explore agents identified this as the most likely
+   missing piece: kutup's `getParticipants` was hardcoded
+   `[history-keeper, self]`, never updated when peers joined. CryptPad's
+   `handleNewIds` (`inner.js:1097-1106`) sends `connectState` into the
+   editor on every peer join/leave so OO populates `m_oParticipants`;
+   without it, OO degrades silently when a remote `saveChanges` arrives
+   with an unknown `useridoriginal`.
+
+   Implementation:
+   - Backend Hub broadcasts `{type:'peers', list, ts}` JSON control
+     messages on Join/Leave. New `outText` channel on `wsConn` keeps
+     text-frame backpressure separate from the binary collab path.
+   - `peerSummaries()` looks up `username` per connection so peers
+     carry a label.
+   - Transport routes `peers` messages to a new `onPeers` callback.
+   - OfficeEditor forwards initial peers (from hello) + later updates
+     (from peers messages) to the bridge. Sends a one-shot `oo-self`
+     so the bridge can identify which deviceId is itself.
+   - Bridge replaces static `getParticipants` with a dynamic
+     `peerByDevice` map + monotonic indexUser allocator + an
+     `emitConnectState` that mirrors CryptPad's call shape verbatim
+     (`participantsTimestamp` + `waitAuth: false`).
+
+   User re-verified after deploy (2026-05-07): same symptom — only the
+   first cell change syncs, subsequent edits in either direction stall.
+   So `connectState` alone is not the root cause. Worth keeping
+   regardless (it's needed for Phase 5c multi-account anyway).
+
+**Top remaining candidates** (after two CryptPad-shaped fixes haven't
+moved the needle, this is the one I'd try first):
+
+- **Lock synthesis via `handleNewLocks`** (`inner.js:1108-1141`). When a
+  remote `saveChanges` arrives carrying a `locks` list, CryptPad diffs
+  it against the previous state (`oldLocks`) and emits `releaseLock` to
+  OO for any lock that disappeared. We always send `locks: []` and never
+  synthesise a `releaseLock`. OO may track per-cell locks internally
+  even when our wire payload says `[]` — the first remote apply sets a
+  phantom lock, subsequent edits hit it. This was Agent #2's leading
+  hypothesis (file:line in `cryptpad/www/common/onlyoffice/inner.js`).
+
+  Concrete experiment: temporarily emit a `releaseLock` with an empty
+  `locks` array right after every `sendToOO(payload)` in `oo-remote-op`.
+  If that unsticks the second-direction stall, the real fix is the full
+  diff-and-release pattern.
+
+**Still worth investigating after that:**
 
 - The inbound apply path in `inner.html` (`case 'oo-remote-op':`) calls
   `sendToOO(payload); cpIndex++`. Does OnlyOffice expect any *acknowledgement*
