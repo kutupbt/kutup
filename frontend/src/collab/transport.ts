@@ -1,6 +1,12 @@
 // WebSocket client for the collab relay. Reconnect with backoff, queue while
 // disconnected, replay-from-seq on reconnect.
 
+export interface PeerInfo {
+  deviceId: number
+  userId: string
+  username?: string
+}
+
 export interface HelloMsg {
   type: 'hello'
   fileId: string
@@ -11,7 +17,16 @@ export interface HelloMsg {
    * remount doesn't replay sequence numbers. 0 means this device has no
    * prior frames for this file. */
   mySenderSeqHigh: number
-  peers: { deviceId: number; userId: string }[]
+  peers: PeerInfo[]
+}
+
+/** Server pushes this whenever a peer joins or leaves the file's room.
+ *  The OnlyOffice bridge needs it to feed connectState into the editor —
+ *  without it, OO rejects remote saveChanges from unknown peers. */
+export interface PeersMsg {
+  type: 'peers'
+  list: PeerInfo[]
+  ts: number
 }
 
 export interface CollabTransportOpts {
@@ -20,6 +35,8 @@ export interface CollabTransportOpts {
   onFrame: (bytes: Uint8Array) => void
   onHello: (h: HelloMsg) => void
   onError: (e: unknown) => void
+  /** Optional — fires when the server pushes an updated peer-list. */
+  onPeers?: (p: PeersMsg) => void
   lastSeenSeq?: () => number                        // for resume on reconnect
 }
 
@@ -83,6 +100,7 @@ export class CollabTransport {
         try {
           const obj = JSON.parse(ev.data)
           if (obj.type === 'hello') this.opts.onHello(obj as HelloMsg)
+          else if (obj.type === 'peers') this.opts.onPeers?.(obj as PeersMsg)
         } catch {
           // ignore non-JSON text
         }
