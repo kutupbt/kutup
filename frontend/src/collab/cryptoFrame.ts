@@ -141,6 +141,21 @@ export async function decryptOOOp(f: Frame, fileId: string, collectionMaster: Ui
   return decryptCommon(f, fileId, collectionMaster)
 }
 
+// OO_CURSOR: peer live cell-selection presence (the translucent rectangle
+// over the cells the other user has selected). Ephemeral — same envelope
+// + AEAD as OO_OP but with a different KIND so the relay routes it as
+// broadcast-only (no file_update_log entry; selections are transient).
+export async function encryptOOCursor(
+  payload: Uint8Array, fileId: string, docKeyId: number,
+  deviceId: bigint, sequence: bigint, collectionMaster: Uint8Array,
+): Promise<Frame> {
+  return buildFrame(payload, KIND.OO_CURSOR, fileId, docKeyId, deviceId, sequence, collectionMaster)
+}
+
+export async function decryptOOCursor(f: Frame, fileId: string, collectionMaster: Uint8Array): Promise<Uint8Array> {
+  return decryptCommon(f, fileId, collectionMaster)
+}
+
 export async function decryptYjsUpdate(f: Frame, fileId: string, collectionMaster: Uint8Array): Promise<Uint8Array> {
   return decryptCommon(f, fileId, collectionMaster)
 }
