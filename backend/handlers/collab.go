@@ -321,10 +321,13 @@ func (h *CollabHandler) handleFrame(c *wsConn, fileID string, data []byte) {
 		return
 	}
 
-	// Awareness frames: broadcast only, no persistence.
-	if f.Kind == envelope.KindYjsAwareness {
+	// Ephemeral broadcast-only kinds (no file_update_log entry):
+	//   - KindYjsAwareness: notes cursor / selection presence.
+	//   - KindOOCursor:     office cell-selection presence (xlsx range
+	//     rectangles; mirrors notes cursor presence for sheets).
+	if f.Kind == envelope.KindYjsAwareness || f.Kind == envelope.KindOOCursor {
 		peers := len(h.Hub.Peers(fileID))
-		log.Printf("collab: bcast awareness file=%s sender=%d peers=%d", fileID, c.deviceID, peers)
+		log.Printf("collab: bcast ephemeral file=%s sender=%d kind=%d peers=%d", fileID, c.deviceID, f.Kind, peers)
 		h.Hub.Broadcast(fileID, c, data)
 		return
 	}
