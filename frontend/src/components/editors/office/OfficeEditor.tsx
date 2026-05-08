@@ -229,6 +229,20 @@ function OfficeEditorBase(
       switch (msg.type) {
         case 'ready':
           setBridgeReady(true)
+          // Send 'oo-self' before 'init' so the bridge's maybeStart() —
+          // which gates on selfDeviceId/selfUserId — has both sides of the
+          // identity ready when 'init' lands. The WS effect also posts
+          // 'oo-self', but on refresh storedDeviceId is hydrated from
+          // sessionStorage and the WS effect sends it BEFORE inner.html's
+          // listener is attached (the await in ensureRegistered that gave
+          // it a head start on first login is skipped). Sending here on
+          // 'ready' guarantees the iframe is listening.
+          {
+            const did = deviceIdRef.current ?? storedDeviceId
+            if (did != null && userId) {
+              send({ type: 'oo-self', deviceId: did, userId })
+            }
+          }
           send({
             type: 'init',
             payload: {
