@@ -1,6 +1,7 @@
 {
   "name": "kutup-e2e",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "test": "playwright test",
