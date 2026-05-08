@@ -36,6 +36,7 @@ type wsConn struct {
 	deviceID  int64
 	userID    string
 	username  string
+	color     string // hex like '#ef4444' or '' if unset (peers fall back to deterministic palette)
 	pubKey    ed25519.PublicKey
 	out       chan []byte // binary collab frames
 	outText   chan []byte // JSON control messages (e.g. peer-list)
@@ -145,15 +146,16 @@ func (h *CollabHandler) Upgrade() fiber.Handler {
 func (h *CollabHandler) HandleConnection(
 	ws *websocket.Conn, userID, fileID string, deviceID int64, pubKey ed25519.PublicKey,
 ) {
-	// Look up the username for the peer-list (peers payload uses it as the
-	// label OnlyOffice's `connectState` / users dropdown shows).
-	var username string
+	// Look up the username + color for the peer-list. Username labels the
+	// peer in OnlyOffice connectState; color drives the cell-edit highlight
+	// + cursor-rectangle fill (window.APP.getUserColor hook in inner.html).
+	var username, color string
 	_ = h.DB.QueryRow(context.Background(),
-		`SELECT COALESCE(username, '') FROM users WHERE id = $1`, userID,
-	).Scan(&username)
+		`SELECT COALESCE(username, ''), COALESCE(color, '') FROM users WHERE id = $1`, userID,
+	).Scan(&username, &color)
 
 	c := &wsConn{
-		ws: ws, deviceID: deviceID, userID: userID, username: username, pubKey: pubKey,
+		ws: ws, deviceID: deviceID, userID: userID, username: username, color: color, pubKey: pubKey,
 		out:     make(chan []byte, wsOutBuf),
 		outText: make(chan []byte, wsOutBuf),
 		done:    make(chan struct{}),
@@ -244,8 +246,13 @@ func (h *CollabHandler) peerSummaries(fileID string) []fiber.Map {
 			"deviceId": p.DeviceID(),
 			"userId":   p.UserID(),
 		}
-		if wc, ok := p.(*wsConn); ok && wc.username != "" {
-			row["username"] = wc.username
+		if wc, ok := p.(*wsConn); ok {
+			if wc.username != "" {
+				row["username"] = wc.username
+			}
+			if wc.color != "" {
+				row["color"] = wc.color
+			}
 		}
 		out = append(out, row)
 	}

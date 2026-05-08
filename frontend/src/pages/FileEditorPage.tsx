@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Loader2, ArrowLeft, Download, Save, Check } from 'lucide-react'
 import { toast } from 'sonner'
-import { useAppSelector } from '@/store'
-import { selectMasterKey, selectPrivateKey } from '@/store/authSlice'
+import { useAppDispatch, useAppSelector } from '@/store'
+import { selectMasterKey, selectPrivateKey, setColor } from '@/store/authSlice'
+import CursorColorPicker from '@/components/editors/CursorColorPicker'
 import api from '@/api/client'
 import {
   decrypt,
@@ -36,6 +37,8 @@ export default function FileEditorPage() {
   const privateKey = useAppSelector(selectPrivateKey)
   const userId = useAppSelector((s) => s.auth.userId)
   const publicKey = useAppSelector((s) => s.auth.publicKey)
+  const userColor = useAppSelector((s) => s.auth.color)
+  const dispatch = useAppDispatch()
 
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState('')
@@ -189,6 +192,17 @@ export default function FileEditorPage() {
     }
   }, [cid, fid, masterKey, privateKey, userId, publicKey, navigate])
 
+  async function handleColorChange(hex: string) {
+    const previous = userColor
+    dispatch(setColor(hex))
+    try {
+      await api.patch('/user/me', { color: hex })
+    } catch (err: any) {
+      dispatch(setColor(previous))
+      toast.error(err?.response?.data?.error ?? 'Failed to update color')
+    }
+  }
+
   async function handleOfficeSave() {
     if (!fid || !officeEditorRef.current || !fileKeyRef.current) return
     if (savingOffice) return
@@ -275,7 +289,8 @@ export default function FileEditorPage() {
         <span className="text-sm text-muted-foreground">·</span>
         <span className="text-sm font-medium truncate">{filename}</span>
         {officeReady && (
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            <CursorColorPicker color={userColor ?? '#94a3b8'} onChange={handleColorChange} />
             <Button
               type="button"
               size="sm"
