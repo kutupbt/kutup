@@ -110,6 +110,7 @@ func main() {
 	// User routes (authenticated)
 	user := api.Group("/user", authMW.Required())
 	user.Get("/me", authH.GetMe)
+	user.Patch("/me", authH.UpdateMe)
 	user.Post("/2fa/setup", authH.SetupTOTP)
 	user.Post("/2fa/verify", authH.VerifyTOTP)
 	user.Delete("/2fa", authH.DisableTOTP)

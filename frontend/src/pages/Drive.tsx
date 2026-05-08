@@ -9,7 +9,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { useAppSelector, useAppDispatch } from '@/store'
-import { selectMasterKey, selectPrivateKey, updateStorageUsed, updateStorageQuota } from '@/store/authSlice'
+import { selectMasterKey, selectPrivateKey, updateStorageUsed, updateStorageQuota, setColor } from '@/store/authSlice'
 import api from '@/api/client'
 import {
   encrypt, decrypt, generateKey, encryptStream, decryptStream,
@@ -158,6 +158,7 @@ export default function Drive() {
       const meRes = await api.get('/user/me')
       dispatch(updateStorageUsed(meRes.data.storageUsedBytes))
       dispatch(updateStorageQuota(meRes.data.storageQuotaBytes))
+      dispatch(setColor(meRes.data.color || null))
 
       const res = await api.get('/collections/')
       const decrypted: Collection[] = await Promise.all(

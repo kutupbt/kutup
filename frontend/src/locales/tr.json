@@ -293,7 +293,11 @@
       "title": "Hesap",
       "email": "E-posta",
       "username": "Kullanıcı adı",
-      "storage": "Depolama"
+      "storage": "Depolama",
+      "presenceColor": "Görünürlük rengi",
+      "presenceColorDesc": "İşbirlikçi imleçlerde ve hücre düzenleme vurgularında görünen renginiz. Notlar ve ofis belgeleri arasında sabittir.",
+      "presenceColorClear": "Sıfırla",
+      "presenceColorFailed": "Renk güncellenemedi"
     },
     "totp": {
       "title": "İki Faktörlü Kimlik Doğrulama",
