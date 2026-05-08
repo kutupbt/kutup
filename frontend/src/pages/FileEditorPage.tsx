@@ -3,8 +3,9 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Loader2, ArrowLeft, Download, Save, Check } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAppDispatch, useAppSelector } from '@/store'
-import { selectMasterKey, selectPrivateKey, setColor } from '@/store/authSlice'
+import { setColor } from '@/store/authSlice'
 import CursorColorPicker from '@/components/editors/CursorColorPicker'
+import { broadcastColor } from '@/lib/sessionSync'
 import api from '@/api/client'
 import {
   decrypt,
@@ -33,8 +34,17 @@ const MAX_PREVIEW_BYTES = 100 * 1024 * 1024
 export default function FileEditorPage() {
   const { cid, fid } = useParams<{ cid: string; fid: string }>()
   const navigate = useNavigate()
-  const masterKey = useAppSelector(selectMasterKey)
-  const privateKey = useAppSelector(selectPrivateKey)
+  // selectMasterKey/selectPrivateKey wrap state.auth.masterKey (number[]) in
+  // a fresh Uint8Array on every call. Without memoization the file-load
+  // effect below sees identity churn on every render — its cleanup re-ran
+  // on every authSlice update (e.g. presence-color picks), kicking off
+  // /files/{id}/download in a loop and eventually triggering 500s + iframe
+  // remounts. Memoize on the underlying number[] which IS stable across
+  // dispatches that don't touch the keys.
+  const masterKeyArr = useAppSelector(s => s.auth.masterKey)
+  const privateKeyArr = useAppSelector(s => s.auth.privateKey)
+  const masterKey = useMemo(() => masterKeyArr ? new Uint8Array(masterKeyArr) : null, [masterKeyArr])
+  const privateKey = useMemo(() => privateKeyArr ? new Uint8Array(privateKeyArr) : null, [privateKeyArr])
   const userId = useAppSelector((s) => s.auth.userId)
   const publicKey = useAppSelector((s) => s.auth.publicKey)
   const userColor = useAppSelector((s) => s.auth.color)
@@ -195,10 +205,12 @@ export default function FileEditorPage() {
   async function handleColorChange(hex: string) {
     const previous = userColor
     dispatch(setColor(hex))
+    broadcastColor(hex)
     try {
       await api.patch('/user/me', { color: hex })
     } catch (err: any) {
       dispatch(setColor(previous))
+      broadcastColor(previous)
       toast.error(err?.response?.data?.error ?? 'Failed to update color')
     }
   }

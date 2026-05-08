@@ -20,7 +20,8 @@ import { generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64 } from
 import { registerDevice, listVersions, claimSeed } from '../../api/collab'
 import api from '../../api/client'
 import { useAppDispatch, useAppSelector } from '../../store'
-import { setDeviceId } from '../../store/authSlice'
+import { setDeviceId, setColor } from '../../store/authSlice'
+import { broadcastColor } from '../../lib/sessionSync'
 import VersionHistoryPanel from '../VersionHistory/VersionHistoryPanel'
 import { Button } from '@/components/ui/button'
 import { Save, BookmarkPlus, History, X, Check } from 'lucide-react'
@@ -69,11 +70,17 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
   const [justSaved, setJustSaved] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [restoreHandler, setRestoreHandler] = useState<((vid: string) => Promise<void>) | null>(null)
-  const [cursorColor, setCursorColorState] = useState<string>(getCursorColor)
+  // Cursor color: per-user via authSlice (persisted in DB via /user/me +
+  // synced cross-tab via BroadcastChannel). Falls back to localStorage on
+  // first load before authSlice has hydrated, or for users who haven't
+  // picked a color yet — getCursorColor populates a random palette pick
+  // and stashes it locally so the cursor is never invisible.
   const accessToken = useAppSelector(s => s.auth.accessToken)
   const username = useAppSelector(s => s.auth.username)
   const storedDeviceId = useAppSelector(s => s.auth.currentDeviceId)
+  const userColor = useAppSelector(s => s.auth.color)
   const dispatch = useAppDispatch()
+  const cursorColor = userColor ?? getCursorColor()
   // Stable awareness ref so the color-picker callback can mutate the live
   // awareness state without re-mounting the editor.
   const awarenessRef = useRef<Awareness | null>(null)
@@ -401,9 +408,18 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
     })
   }, [cursorColor, username])
 
-  function handleCursorColorChange(hex: string) {
-    setCursorColorState(hex)
-    persistCursorColor(hex)
+  async function handleCursorColorChange(hex: string) {
+    const previous = userColor
+    dispatch(setColor(hex))
+    broadcastColor(hex)
+    persistCursorColor(hex)  // localStorage fallback for the next reload
+    try {
+      await api.patch('/user/me', { color: hex })
+    } catch (err: any) {
+      dispatch(setColor(previous))
+      broadcastColor(previous)
+      // localStorage stays — small UX cost; better than re-flashing.
+    }
   }
 
   const statusDot = status === 'ready'

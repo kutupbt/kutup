@@ -5,6 +5,9 @@ export interface PeerInfo {
   deviceId: number
   userId: string
   username?: string
+  /** Per-user presence color (hex '#rrggbb'). Drives the foreign-selection
+   *  rectangle fill in office docs and the awareness cursor color in notes. */
+  color?: string
 }
 
 export interface HelloMsg {

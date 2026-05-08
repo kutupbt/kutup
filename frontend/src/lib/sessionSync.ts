@@ -29,6 +29,7 @@ type Message =
   | { type: 'request-session' }
   | { type: 'session-share'; payload: SessionPayload }
   | { type: 'logout' }
+  | { type: 'color-update'; color: string | null }
 
 let channel: BroadcastChannel | null = null
 
@@ -108,6 +109,26 @@ export function startLogoutListener(onLogout: () => void): () => void {
   if (!ch) return () => {}
   function onMsg(ev: MessageEvent<Message>) {
     if (ev.data?.type === 'logout') onLogout()
+  }
+  ch.addEventListener('message', onMsg)
+  return () => ch.removeEventListener('message', onMsg)
+}
+
+/** Broadcast a presence-color change so other tabs of the same browser
+ *  reflect it without a /user/me round-trip. Cross-USER sync still goes
+ *  through the WS peer roster. */
+export function broadcastColor(color: string | null): void {
+  const ch = getChannel()
+  if (!ch) return
+  try { ch.postMessage({ type: 'color-update', color } satisfies Message) } catch {}
+}
+
+/** Mount a listener that fires when another tab updates its presence color. */
+export function startColorListener(onColor: (color: string | null) => void): () => void {
+  const ch = getChannel()
+  if (!ch) return () => {}
+  function onMsg(ev: MessageEvent<Message>) {
+    if (ev.data?.type === 'color-update') onColor(ev.data.color)
   }
   ch.addEventListener('message', onMsg)
   return () => ch.removeEventListener('message', onMsg)
