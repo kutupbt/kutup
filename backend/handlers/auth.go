@@ -15,6 +15,15 @@ import (
 )
 
 var usernameRegexp = regexp.MustCompile(`^[a-z0-9_-]{3,32}$`)
+var colorHexRegexp = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+// UpdateMeRequest carries optional patch fields for /user/me.
+// Pointer-typed so callers can explicitly send `null`/empty to clear vs.
+// omit to leave unchanged.
+type UpdateMeRequest struct {
+	// Hex color like '#ef4444'. Empty string clears the stored value.
+	Color *string `json:"color,omitempty"`
+}
 
 type AuthHandler struct {
 	DB        *pgxpool.Pool
@@ -181,6 +190,7 @@ type LoginResponse struct {
 	IsAdmin              bool    `json:"isAdmin"`
 	StorageQuotaBytes    int64   `json:"storageQuotaBytes"`
 	StorageUsedBytes     int64   `json:"storageUsedBytes"`
+	Color                string  `json:"color"`
 	RequiresTotp         bool    `json:"requiresTotp,omitempty"`
 	PreAuthToken         *string `json:"preAuthToken,omitempty"`
 	RequiresSetup        bool    `json:"requiresSetup,omitempty"`
@@ -205,23 +215,23 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 	}
 
 	var (
-		userID, loginKeyHash, encMK, mkNonce, encPK, pkNonce, pubKey, kdfSalt, username string
-		totpEnabled                                                                        bool
-		isAdmin                                                                            bool
-		quotaBytes, usedBytes                                                              int64
-		isActive                                                                           bool
+		userID, loginKeyHash, encMK, mkNonce, encPK, pkNonce, pubKey, kdfSalt, username, color string
+		totpEnabled                                                                                bool
+		isAdmin                                                                                    bool
+		quotaBytes, usedBytes                                                                      int64
+		isActive                                                                                   bool
 	)
 
 	err := h.DB.QueryRow(context.Background(), `
 		SELECT id, login_key_hash, encrypted_master_key, master_key_nonce,
 		       encrypted_private_key, private_key_nonce, public_key,
 		       totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes, is_active, kdf_salt,
-		       COALESCE(username, '')
+		       COALESCE(username, ''), COALESCE(color, '')
 		FROM users WHERE email = $1
 	`, req.Email).Scan(
 		&userID, &loginKeyHash, &encMK, &mkNonce,
 		&encPK, &pkNonce, &pubKey,
-		&totpEnabled, &isAdmin, &quotaBytes, &usedBytes, &isActive, &kdfSalt, &username,
+		&totpEnabled, &isAdmin, &quotaBytes, &usedBytes, &isActive, &kdfSalt, &username, &color,
 	)
 	if err != nil {
 		// Always run bcrypt to prevent timing attacks
@@ -263,7 +273,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		})
 	}
 
-	return h.issueTokensAndRespond(c, userID, username, encMK, mkNonce, encPK, pkNonce, pubKey, isAdmin, quotaBytes, usedBytes)
+	return h.issueTokensAndRespond(c, userID, username, encMK, mkNonce, encPK, pkNonce, pubKey, isAdmin, quotaBytes, usedBytes, color)
 }
 
 type TwoFALoginRequest struct {
@@ -300,7 +310,7 @@ func (h *AuthHandler) LoginTwoFA(c *fiber.Ctx) error {
 
 	var (
 		totpSecret                                                              *string
-		encMK, mkNonce, encPK, pkNonce, pubKey, username2fa                    string
+		encMK, mkNonce, encPK, pkNonce, pubKey, username2fa, color2fa          string
 		isAdmin                                                                  bool
 		quotaBytes, usedBytes                                                    int64
 		isActive                                                                  bool
@@ -311,10 +321,10 @@ func (h *AuthHandler) LoginTwoFA(c *fiber.Ctx) error {
 		SELECT totp_secret, encrypted_master_key, master_key_nonce,
 		       encrypted_private_key, private_key_nonce, public_key,
 		       is_admin, storage_quota_bytes, storage_used_bytes,
-		       COALESCE(username, ''), is_active
+		       COALESCE(username, ''), is_active, COALESCE(color, '')
 		FROM users WHERE id = $1
 	`, userID).Scan(&totpSecret, &encMK, &mkNonce, &encPK, &pkNonce, &pubKey,
-		&isAdmin, &quotaBytes, &usedBytes, &username2fa, &isActive)
+		&isAdmin, &quotaBytes, &usedBytes, &username2fa, &isActive, &color2fa)
 	if err != nil {
 		return c.Status(401).JSON(fiber.Map{"error": "unauthorized"})
 	}
@@ -333,7 +343,7 @@ func (h *AuthHandler) LoginTwoFA(c *fiber.Ctx) error {
 
 	middleware.RecordTOTPAttempt(req.PreAuthToken, true)
 
-	return h.issueTokensAndRespond(c, userID, username2fa, encMK, mkNonce, encPK, pkNonce, pubKey, isAdmin, quotaBytes, usedBytes)
+	return h.issueTokensAndRespond(c, userID, username2fa, encMK, mkNonce, encPK, pkNonce, pubKey, isAdmin, quotaBytes, usedBytes, color2fa)
 }
 
 // GetRecoveryPreflight returns the data needed client-side to perform recovery:
@@ -533,19 +543,59 @@ func (h *AuthHandler) GetMe(c *fiber.Ctx) error {
 		StorageQuota      int64  `json:"storageQuotaBytes"`
 		StorageUsed       int64  `json:"storageUsedBytes"`
 		IsAdmin           bool   `json:"isAdmin"`
+		Color             string `json:"color"`
 	}
 
 	err := h.DB.QueryRow(context.Background(), `
 		SELECT id, email, COALESCE(username, ''), public_key, totp_enabled,
-		       storage_quota_bytes, storage_used_bytes, is_admin
+		       storage_quota_bytes, storage_used_bytes, is_admin, COALESCE(color, '')
 		FROM users WHERE id = $1
 	`, userID).Scan(&u.ID, &u.Email, &u.Username, &u.PublicKey, &u.TOTPEnabled,
-		&u.StorageQuota, &u.StorageUsed, &u.IsAdmin)
+		&u.StorageQuota, &u.StorageUsed, &u.IsAdmin, &u.Color)
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "user not found"})
 	}
 
 	return c.JSON(u)
+}
+
+// @Summary      Update the authenticated user's profile (color picker, etc.)
+// @Tags         User
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      UpdateMeRequest  true  "Profile fields to update"
+// @Success      200   {object}  OkResponse
+// @Failure      400   {object}  ErrorResponse  "Invalid color"
+// @Failure      401   {object}  ErrorResponse
+// @Router       /user/me [patch]
+func (h *AuthHandler) UpdateMe(c *fiber.Ctx) error {
+	userID := middleware.UserID(c)
+
+	var req UpdateMeRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid request body"})
+	}
+
+	// Color: hex like '#ef4444'. Empty string clears it (clients fall back
+	// to a deterministic palette pick).
+	if req.Color != nil {
+		c2 := *req.Color
+		if c2 != "" && !colorHexRegexp.MatchString(c2) {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid color: expected #rrggbb hex"})
+		}
+		var v any = c2
+		if c2 == "" {
+			v = nil
+		}
+		if _, err := h.DB.Exec(context.Background(),
+			`UPDATE users SET color = $1 WHERE id = $2`, v, userID,
+		); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "failed to update color"})
+		}
+	}
+
+	return c.JSON(fiber.Map{"ok": true})
 }
 
 // @Summary      Look up another user's public key by email
@@ -808,7 +858,7 @@ func (h *AuthHandler) GetPublicSettings(c *fiber.Ctx) error {
 
 // --- helpers ---
 
-func (h *AuthHandler) issueTokensAndRespond(c *fiber.Ctx, userID, username, encMK, mkNonce, encPK, pkNonce, pubKey string, isAdmin bool, quota, used int64) error {
+func (h *AuthHandler) issueTokensAndRespond(c *fiber.Ctx, userID, username, encMK, mkNonce, encPK, pkNonce, pubKey string, isAdmin bool, quota, used int64, color string) error {
 	accessToken, err := utils.GenerateAccessToken(userID, isAdmin, h.JWTSecret)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
@@ -841,6 +891,7 @@ func (h *AuthHandler) issueTokensAndRespond(c *fiber.Ctx, userID, username, encM
 		IsAdmin:             isAdmin,
 		StorageQuotaBytes:   quota,
 		StorageUsedBytes:    used,
+		Color:               color,
 	})
 }
 

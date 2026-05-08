@@ -23,6 +23,7 @@ const loadSession = () => {
           storageQuotaBytes: saved.storageQuotaBytes ?? 0,
           storageUsedBytes: saved.storageUsedBytes ?? 0,
           totpEnabled: saved.totpEnabled ?? false,
+          color: saved.color ?? null,
           currentDeviceId: saved.currentDeviceId ?? null,
           accessToken: null, // always null on load — refreshed by App.tsx
           masterKey: saved.masterKey ?? null,
@@ -58,6 +59,7 @@ store.subscribe(() => {
       storageQuotaBytes: auth.storageQuotaBytes,
       storageUsedBytes: auth.storageUsedBytes,
       totpEnabled: auth.totpEnabled,
+      color: auth.color,
       currentDeviceId: auth.currentDeviceId,
       masterKey: auth.masterKey,   // number[] — JSON-safe
       privateKey: auth.privateKey,

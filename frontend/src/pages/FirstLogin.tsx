@@ -139,6 +139,7 @@ export default function FirstLogin() {
         isAdmin: res.data.isAdmin,
         storageQuotaBytes: res.data.storageQuotaBytes,
         storageUsedBytes: res.data.storageUsedBytes,
+        color: res.data.color ?? null,
       }))
       navigate('/drive')
     } catch (err: any) {

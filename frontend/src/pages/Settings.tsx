@@ -7,7 +7,8 @@ import { z } from 'zod'
 import { Loader2, Shield, KeyRound, ArrowLeft, Globe, Check, ChevronDown, Smartphone } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { useAppSelector, useAppDispatch } from '@/store'
-import { updateTotpEnabled } from '@/store/authSlice'
+import { updateTotpEnabled, setColor } from '@/store/authSlice'
+import { CURSOR_COLORS_20 } from '@/collab/identity'
 import api from '@/api/client'
 import { listDevices, revokeDevice, type DeviceRow } from '@/api/collab'
 import { formatBytes } from '@/lib/format'
@@ -216,6 +217,17 @@ export default function Settings() {
     }
   }
 
+  async function updatePresenceColor(hex: string | null) {
+    const previous = auth.color
+    dispatch(setColor(hex))
+    try {
+      await api.patch('/user/me', { color: hex ?? '' })
+    } catch (err: any) {
+      dispatch(setColor(previous))
+      toast.error(err.response?.data?.error ?? t('settings.account.presenceColorFailed'))
+    }
+  }
+
   return (
     <div className="max-w-2xl mx-auto p-6 space-y-4">
       <div className="flex items-center gap-3">
@@ -247,6 +259,31 @@ export default function Settings() {
               <span>{formatBytes(auth.storageUsedBytes)} / {formatBytes(auth.storageQuotaBytes)}</span>
             </div>
             <Progress value={quotaPercent} className="h-1.5" />
+          </div>
+          <Separator />
+          <div className="space-y-2 py-1">
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-muted-foreground">{t('settings.account.presenceColor')}</span>
+              {auth.color && (
+                <Button variant="ghost" size="sm" onClick={() => updatePresenceColor(null)}>
+                  {t('settings.account.presenceColorClear')}
+                </Button>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">{t('settings.account.presenceColorDesc')}</p>
+            <div className="grid grid-cols-10 gap-1.5">
+              {CURSOR_COLORS_20.map((hex) => (
+                <button
+                  key={hex}
+                  type="button"
+                  onClick={() => updatePresenceColor(hex)}
+                  className={`h-7 w-7 rounded-full border-2 ${auth.color === hex ? 'border-foreground' : 'border-transparent'} hover:scale-110 transition-transform`}
+                  style={{ background: hex }}
+                  aria-label={hex}
+                  title={hex}
+                />
+              ))}
+            </div>
           </div>
         </CardContent>
       </Card>

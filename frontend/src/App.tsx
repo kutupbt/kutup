@@ -32,6 +32,7 @@ function snapshotFromState(): SessionPayload | null {
     storageQuotaBytes: auth.storageQuotaBytes,
     storageUsedBytes: auth.storageUsedBytes,
     totpEnabled: auth.totpEnabled,
+    color: auth.color,
     currentDeviceId: auth.currentDeviceId,
     publicKey: auth.publicKey,
     masterKey: auth.masterKey,
@@ -76,6 +77,7 @@ export default function App() {
             storageQuotaBytes: payload.storageQuotaBytes,
             storageUsedBytes: payload.storageUsedBytes,
             totpEnabled: payload.totpEnabled,
+            color: payload.color,
           }))
         }
       }
