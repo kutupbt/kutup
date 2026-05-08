@@ -282,6 +282,12 @@
         var lastConnectStateTs = 0
         var selfDeviceId = null  // set in init handler from msg.payload.deviceId
 
+        // Per-peer cursor identity, keyed by deviceId (string). Captured from
+        // each oo-remote-cursor frame so we can address the right user when
+        // a peer leaves and we need to clear their foreign-selection rect.
+        // peerCursorIdentity[deviceId] = { user: '<myUniqueOOId>', useridoriginal: '<myOOId>' }.
+        var peerCursorIdentity = Object.create(null)
+
         // Allocate a per-device indexUser starting from SELF_INDEX_USER+1.
         // OO requires every peer to have a distinct positive integer index.
         // We assign on first sight and remember (so the same device keeps
@@ -478,7 +484,30 @@
               cpIndex++
               break
             case 'cursor':
-              // Phase 5c forwards cursor presence; no-op for 2c.
+              // OO emits 'cursor' whenever the local user changes selection
+              // (a single cell, a multi-cell range, an in-cell caret, etc.).
+              // obj.cursor is OO's opaque serialized blob — pass through to
+              // peers verbatim wrapped in CryptPad's message envelope shape
+              // (mirrors www/common/onlyoffice/inner.js:1562-1574). Peers
+              // re-emit verbatim into their OO via sendToOO; OO's
+              // _onCursor → WorkbookView.Update_ForeignCursor decodes the
+              // ranges and renders the translucent foreign-selection
+              // rectangle in the auto-assigned color for useridoriginal.
+              if (window.parent && window.parent !== window) {
+                var cursorMsg = {
+                  type: 'cursor',
+                  messages: [{
+                    cursor: obj.cursor,
+                    time: Date.now(),
+                    user: myUniqueOOId,
+                    useridoriginal: String(myOOId),
+                  }],
+                }
+                window.parent.postMessage(
+                  { type: 'oo-local-cursor', payload: JSON.stringify(cursorMsg) },
+                  EXPECTED_ORIGIN,
+                )
+              }
               break
             case 'unLockDocument':
               // After saveChanges, OnlyOffice fires unLockDocument with
@@ -774,6 +803,30 @@
                 console.warn('[kutup-bridge] bad oo-remote-op payload', err)
               }
               return
+            case 'oo-remote-cursor':
+              // A peer's selection-presence frame. Pass-through to OO; the
+              // payload is already in the {type:'cursor', messages:[...]}
+              // shape OO's _onCursor expects. OO renders the translucent
+              // foreign-selection rectangle from the binary cell-range data
+              // in messages[].cursor and the userid in messages[].user.
+              try {
+                var cursorPayload = JSON.parse(msg.payload)
+                // Track the senderDeviceId → user identity so we can clear
+                // the rectangle when this peer leaves the room (see
+                // 'oo-peers' below).
+                if (typeof msg.senderDeviceId === 'number'
+                    && cursorPayload && cursorPayload.messages && cursorPayload.messages[0]) {
+                  var first = cursorPayload.messages[0]
+                  peerCursorIdentity[String(msg.senderDeviceId)] = {
+                    user: first.user,
+                    useridoriginal: first.useridoriginal,
+                  }
+                }
+                sendToOO(cursorPayload)
+              } catch (err) {
+                console.warn('[kutup-bridge] bad oo-remote-cursor payload', err)
+              }
+              return
             case 'oo-self':
               // Parent tells us which deviceId is OUR tab. We use it both
               // to filter self out of peer rosters AND to derive our OO
@@ -810,6 +863,27 @@
                 peerByDevice = nextById
                 console.log('[kutup-bridge] peers updated count=' + (Object.keys(nextById).length + 1))
                 emitConnectState()
+                // Clear foreign-selection rectangles for peers that have
+                // left the room. CryptPad sends a hardcoded "empty cursor"
+                // blob (inner.js:3714); we mirror that — passing it through
+                // sendToOO with the peer's identity tells OO to wipe their
+                // entry from m_aForeignCursorsData and redraw without their
+                // rectangle.
+                var idKeys = Object.keys(peerCursorIdentity)
+                for (var pi = 0; pi < idKeys.length; pi++) {
+                  if (nextById[idKeys[pi]]) continue
+                  var ident = peerCursorIdentity[idKeys[pi]]
+                  sendToOO({
+                    type: 'cursor',
+                    messages: [{
+                      cursor: '10;AgAAADIAAAAAAA==',
+                      time: Date.now(),
+                      user: ident.user,
+                      useridoriginal: ident.useridoriginal,
+                    }],
+                  })
+                  delete peerCursorIdentity[idKeys[pi]]
+                }
               } catch (err) {
                 console.warn('[kutup-bridge] bad oo-peers payload', err)
               }

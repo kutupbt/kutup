@@ -8,6 +8,9 @@ export const KIND = {
   OO_OP: 4,
   OO_LOCK: 5,
   OO_CHECKPOINT_META: 6,
+  /** Peer live cell-selection presence (xlsx range rectangles). Ephemeral —
+   *  same wire pattern as YJS_AWARENESS. */
+  OO_CURSOR: 7,
 } as const
 export type Kind = typeof KIND[keyof typeof KIND]
 

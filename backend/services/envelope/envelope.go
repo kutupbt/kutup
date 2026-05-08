@@ -15,6 +15,7 @@ const (
 	KindOOOp             uint8 = 4 // v2
 	KindOOLock           uint8 = 5 // v2
 	KindOOCheckpointMeta uint8 = 6 // v2
+	KindOOCursor         uint8 = 7 // v2 — peer live cell-selection (ephemeral)
 )
 
 // HeaderSize is the fixed-size prefix used as AAD.
