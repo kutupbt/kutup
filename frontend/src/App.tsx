@@ -8,8 +8,8 @@ import AdminRoute from '@/components/layout/AdminRoute'
 import RouteErrorBoundary from '@/components/layout/RouteErrorBoundary'
 import { useAppDispatch, useAppSelector } from '@/store'
 import { store } from '@/store'
-import { selectMasterKey, setAuth, updateAccessToken, logout } from '@/store/authSlice'
-import { broadcastSession, requestSession, startSessionResponder, startLogoutListener, type SessionPayload } from '@/lib/sessionSync'
+import { selectMasterKey, setAuth, updateAccessToken, setColor, logout } from '@/store/authSlice'
+import { broadcastSession, requestSession, startSessionResponder, startLogoutListener, startColorListener, type SessionPayload } from '@/lib/sessionSync'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import FirstLogin from './pages/FirstLogin'
@@ -96,6 +96,13 @@ export default function App() {
   // BroadcastChannel logout listener — when any tab signs out, all tabs do.
   useEffect(() => {
     return startLogoutListener(() => dispatch(logout()))
+  }, [dispatch])
+
+  // BroadcastChannel color listener — when any tab updates its presence
+  // color, mirror it locally so OO's foreign-cursor renderer picks up the
+  // new value via window.APP.getUserColor without a reload.
+  useEffect(() => {
+    return startColorListener((color) => dispatch(setColor(color)))
   }, [dispatch])
 
   // Re-broadcast whenever auth state materially changes so passive listeners

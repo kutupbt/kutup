@@ -89,6 +89,26 @@
         var docType = null
         var fileId = null
 
+        // userId → hex color map. Populated from init payload (self) and
+        // oo-peers entries (peers). OO's foreign-cursor / lock-highlight
+        // renderer checks `window.parent.APP.getUserColor(userId)` (see
+        // sdkjs/cell/sdk-all-min.js _getUserColorById ~line 23527 of the
+        // beautified bundle); we expose APP.getUserColor here so OO can
+        // resolve per-user colors instead of falling back to its
+        // deterministic palette.
+        var userColors = Object.create(null)
+        window.APP = window.APP || {}
+        window.APP.getUserColor = function (userId) {
+          var hex = userColors[userId]
+          if (!hex || typeof hex !== 'string' || hex.charAt(0) !== '#' || hex.length !== 7) return null
+          return {
+            r: parseInt(hex.slice(1, 3), 16),
+            g: parseInt(hex.slice(3, 5), 16),
+            b: parseInt(hex.slice(5, 7), 16),
+            a: 255,
+          }
+        }
+
         // CSS injected into the OnlyOffice editor iframe at onAppReady to
         // hide stock branding + chrome that doesn't fit kutup's surface.
         // Lifted verbatim from CryptPad's `www/common/onlyoffice/inner.js`
@@ -236,26 +256,31 @@
         // back to OO via unSaveLock so it releases its commit lock and lets
         // the user keep typing.
         var cpIndex = 0
-        // Stable per-tab identity, DERIVED from selfDeviceId so peers can
-        // reconstruct each other's myUniqueOOId without an explicit
-        // identity exchange. CONFIRMED by reading OO's compiled cell SDK
-        // (sdkjs/cell/sdk-all-min.js, _onAuth + _onGetLock):
-        //   _userId = editorConfig.user.id + getParticipants().index
-        //   lock granted iff lock.user === _userId  (strict equality)
-        // Cross-tab saveChanges acceptance ALSO requires that the wrapped
-        // change.user (= myUniqueOOId of sender) match a participant.id
-        // on the receiving tab. Since each tab only knows peers' deviceIds,
-        // peer makePeer must compute id = ooUserIdFor(deviceId), so the
-        // sender's myUniqueOOId and receivers' participant.id agree.
+        // Stable per-tab identity. CONFIRMED by reading OO's compiled cell
+        // SDK (sdkjs/cell/sdk-all-min.js):
+        //   _onAuth:    _userId = editorConfig.user.id + getParticipants().index
+        //   _onGetLock: lock granted iff lock.user === _userId  (strict eq)
+        //   _getUserColorById: if window.parent.APP.getUserColor(id) returns
+        //                      {r,g,b,a}, OO uses it; else auto-palette.
         //
-        // Scheme: myUniqueOOId = "<deviceId><deviceId>" (digit-pair string).
-        //   - user.id = String(deviceId), indexUser = deviceId
-        //   - => _userId = String(deviceId) + String(deviceId) === myUniqueOOId
-        //   - peers compute the same from any peer's deviceId.
-        var myOOId = null
-        var myIndex = null
-        var myUniqueOOId = null
-        function ooUserIdFor(deviceId) { return String(deviceId) + String(deviceId) }
+        // Scheme: myUniqueOOId = "<userId>--<deviceId>" (separator avoids
+        // ambiguous concat of two numeric strings — userId is a UUID so the
+        // separator is just for readability).
+        //   - user.id            = userId       (UUID; same across user's tabs)
+        //   - indexUser          = deviceId     (per-tab; unique)
+        //   - _userId            = userId + String(deviceId)
+        //   - participant.id     = peerUserId + "--" + String(peerDeviceId)
+        //                                       — wait: must EQUAL _userId
+        //                                         on receivers, so use direct
+        //                                         concat, not separator.
+        //
+        // Final: ooUserIdFor(uid, did) = String(uid) + String(did). matches
+        // _userId because OO does string concat with no separator.
+        // idOriginal = userId so OO's per-USER color cache is keyed per-user.
+        var myOOId = null            // = selfUserId (UUID string)
+        var myIndex = null           // = selfDeviceId (number)
+        var myUniqueOOId = null      // = ooUserIdFor(myOOId, myIndex)
+        function ooUserIdFor(userId, deviceId) { return String(userId) + String(deviceId) }
         // Self-held cell-edit locks. Cleared on releaseLock or
         // unLockDocument {releaseLocks: true}. See fromOO 'getLock'.
         var selfLocks = Object.create(null)
@@ -280,7 +305,8 @@
         // peerByDevice[deviceId] = oo participant entry (see makePeer).
         var peerByDevice = Object.create(null)
         var lastConnectStateTs = 0
-        var selfDeviceId = null  // set in init handler from msg.payload.deviceId
+        var selfDeviceId = null  // set in oo-self handler from msg.deviceId
+        var selfUserId   = null  // set in oo-self handler from msg.userId
 
         // Per-peer cursor identity, keyed by deviceId (string). Captured from
         // each oo-remote-cursor frame so we can address the right user when
@@ -303,15 +329,32 @@
           return indexByDevice[k]
         }
 
-        function makePeer(deviceId, username) {
-          // Identity MUST be derivable from deviceId so the sender's
-          // change.user / lock.user (= ooUserIdFor(senderDeviceId)) lands
-          // on the matching participant.id when peers receive a frame.
-          var label = username || ('user-' + deviceId)
+        // Tab differentiator suffix — last 4 hex chars of deviceId. Mirrors
+        // notes' "<username> #<tabId>" pattern (TextCollabEditor uses
+        // buildAwarenessName) so two tabs of the same user have visually
+        // distinct labels in OO's peer chrome — color is intentionally
+        // per-user / shared across tabs (like the user's display name).
+        function tabSuffix(deviceId) {
+          return Number(deviceId).toString(16).slice(-4)
+        }
+        function withTabSuffix(name, deviceId) {
+          if (!name) return 'user-' + deviceId
+          return name + ' #' + tabSuffix(deviceId)
+        }
+
+        function makePeer(deviceId, userId, username) {
+          // Identity must satisfy:
+          //   participant.id     = ooUserIdFor(peerUserId, peerDeviceId)
+          //                        — equals sender's myUniqueOOId so cross-tab
+          //                        change.user attribution and lock-grant
+          //                        lookups resolve to this entry.
+          //   participant.idOriginal = String(peerUserId)
+          //                        — keys per-USER color in
+          //                        window.APP.getUserColor and OO's color cache.
           return {
-            id: ooUserIdFor(deviceId),
-            idOriginal: String(deviceId),
-            username: label,
+            id: ooUserIdFor(userId, deviceId),
+            idOriginal: String(userId),
+            username: withTabSuffix(username, deviceId),
             indexUser: deviceId,
             connectionId: 'dev-' + deviceId,
             isCloseCoAuthoring: false,
@@ -335,10 +378,11 @@
         var selfPlaceholder = null
         var selfUsername = null
         function buildSelfPlaceholder() {
+          var raw = selfUsername || 'You'
           return {
             id: myUniqueOOId,
             idOriginal: String(myOOId),
-            username: selfUsername || 'You',
+            username: selfDeviceId != null ? withTabSuffix(raw, selfDeviceId) : raw,
             indexUser: myIndex,
             connectionId: 'self',
             isCloseCoAuthoring: false,
@@ -580,15 +624,16 @@
 
         var pendingInitPayload = null
         var maybeStart = function () {
-          if (selfDeviceId == null || pendingInitPayload == null) return
-          // Bind the OO identity from our deviceId. Must happen before the
-          // editor mounts because user.id is read from the config at
-          // construction time.
+          if (selfDeviceId == null || selfUserId == null || pendingInitPayload == null) return
+          // Bind OO identity from (selfUserId, selfDeviceId). Must happen
+          // before the editor mounts because user.id is read from the config
+          // at construction time.
           if (myOOId == null) {
-            myOOId = selfDeviceId
+            myOOId = selfUserId
             myIndex = selfDeviceId
-            myUniqueOOId = ooUserIdFor(selfDeviceId)
+            myUniqueOOId = ooUserIdFor(selfUserId, selfDeviceId)
             selfUsername = pendingInitPayload.username || null
+            if (pendingInitPayload.color) userColors[selfUserId] = pendingInitPayload.color
             selfPlaceholder = buildSelfPlaceholder()
           }
           var p = pendingInitPayload
@@ -694,8 +739,8 @@
                         //   _userId = user.id + getParticipants().index
                         // and checks lock.user === _userId for self-vs-other.
                         id: String(myOOId),
-                        firstname: selfUsername || 'You',
-                        name: selfUsername || 'You',
+                        firstname: withTabSuffix(selfUsername || 'You', selfDeviceId),
+                        name: withTabSuffix(selfUsername || 'You', selfDeviceId),
                       },
                       mode: 'edit',  // mockServer is wired in 2c — full edit mode.
                       lang: (navigator.language || 'en').slice(0, 2),
@@ -827,16 +872,33 @@
                 console.warn('[kutup-bridge] bad oo-remote-cursor payload', err)
               }
               return
+            case 'oo-color-update':
+              // Live color picker update. Parent re-asserts the userId →
+              // color mapping; bridge updates userColors so OO's next
+              // foreign-cursor / lock render via window.APP.getUserColor
+              // picks up the new value. No re-mount needed.
+              if (typeof msg.userId === 'string' && msg.userId) {
+                if (msg.color) {
+                  userColors[msg.userId] = msg.color
+                } else {
+                  delete userColors[msg.userId]
+                }
+              }
+              return
             case 'oo-self':
-              // Parent tells us which deviceId is OUR tab. We use it both
+              // Parent tells us which (deviceId, userId) is OUR tab. Used
               // to filter self out of peer rosters AND to derive our OO
-              // identity (myOOId / myUniqueOOId / myIndex). The init flow
-              // waits on this — see maybeStart().
+              // identity (myUniqueOOId = userId+deviceId, idOriginal = userId
+              // for stable per-user color). The init flow waits on this
+              // — see maybeStart().
               if (typeof msg.deviceId === 'number') {
                 selfDeviceId = msg.deviceId
-                console.log('[kutup-bridge] selfDeviceId set to', selfDeviceId)
-                maybeStart()
               }
+              if (typeof msg.userId === 'string') {
+                selfUserId = msg.userId
+              }
+              console.log('[kutup-bridge] self set deviceId=' + selfDeviceId + ' userId=' + selfUserId)
+              maybeStart()
               return
             case 'oo-peers':
               // Server pushed the current peer roster (relay's Hub fires
@@ -858,7 +920,16 @@
                   // will be re-emitted on the next oo-peers after oo-self
                   // arrives.
                   if (selfDeviceId !== null && did === selfDeviceId) continue
-                  nextById[String(did)] = makePeer(did, entry.username)
+                  // userId is the per-USER color key. If the backend wire
+                  // dropped it (shouldn't — collab.go peerSummaries always
+                  // includes it), fall back to a deviceId-derived key so
+                  // we still get a participant entry and OO renders peer
+                  // cell-edit cursors with auto-palette colors.
+                  var entryUserId = (typeof entry.userId === 'string' && entry.userId)
+                    ? entry.userId
+                    : 'dev-' + did
+                  nextById[String(did)] = makePeer(did, entryUserId, entry.username)
+                  if (entry.color) userColors[entryUserId] = entry.color
                 }
                 peerByDevice = nextById
                 console.log('[kutup-bridge] peers updated count=' + (Object.keys(nextById).length + 1))

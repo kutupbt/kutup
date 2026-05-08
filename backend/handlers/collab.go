@@ -419,7 +419,15 @@ func (h *CollabHandler) PreUpgrade(authMW *middleware.AuthMiddleware) fiber.Hand
 		}
 
 		// Confirm user has access to this file's collection.
-		fileID := c.Params("fileId")
+		// strings.Clone so we don't keep a reference into the request body
+		// buffer — Fiber recycles those across requests, so the fileId
+		// stored in c.Locals (read for the WS connection's whole lifetime
+		// in HandleConnection) would otherwise get clobbered when a later
+		// HTTP request lands on the same fasthttp worker. Symptom: peer
+		// rooms appear empty (Hub.Leave runs against the corrupted fileID,
+		// targeting an empty/non-existent room) so two-way sync silently
+		// breaks mid-session.
+		fileID := strings.Clone(c.Params("fileId"))
 		var ownerID, collID string
 		var sharedWith bool
 		err = h.DB.QueryRow(c.Context(), `

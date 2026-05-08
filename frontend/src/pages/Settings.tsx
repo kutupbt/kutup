@@ -9,6 +9,7 @@ import { QRCodeSVG } from 'qrcode.react'
 import { useAppSelector, useAppDispatch } from '@/store'
 import { updateTotpEnabled, setColor } from '@/store/authSlice'
 import { CURSOR_COLORS_20 } from '@/collab/identity'
+import { broadcastColor } from '@/lib/sessionSync'
 import api from '@/api/client'
 import { listDevices, revokeDevice, type DeviceRow } from '@/api/collab'
 import { formatBytes } from '@/lib/format'
@@ -220,10 +221,12 @@ export default function Settings() {
   async function updatePresenceColor(hex: string | null) {
     const previous = auth.color
     dispatch(setColor(hex))
+    broadcastColor(hex)
     try {
       await api.patch('/user/me', { color: hex ?? '' })
     } catch (err: any) {
       dispatch(setColor(previous))
+      broadcastColor(previous)
       toast.error(err.response?.data?.error ?? t('settings.account.presenceColorFailed'))
     }
   }

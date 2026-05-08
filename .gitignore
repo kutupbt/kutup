@@ -10,3 +10,4 @@ docker-compose.override.yml
 # AGPL-3.0-or-later, kept out of the kutup repo to preserve our MIT boundary.
 frontend/public/onlyoffice/dist/
 frontend/public/onlyoffice/templates/
+test-results/

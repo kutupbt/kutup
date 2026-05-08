@@ -68,8 +68,9 @@ type ToBridge =
   | { type: 'save-request'; requestId: number }
   | { type: 'oo-remote-op'; payload: string }
   | { type: 'oo-remote-cursor'; senderDeviceId: number; payload: string }
-  | { type: 'oo-peers'; list: { deviceId: number; userId: string; username?: string }[]; ts: number }
-  | { type: 'oo-self'; deviceId: number }
+  | { type: 'oo-peers'; list: { deviceId: number; userId: string; username?: string; color?: string }[]; ts: number }
+  | { type: 'oo-self'; deviceId: number; userId: string }
+  | { type: 'oo-color-update'; userId: string; color: string | null }
 
 interface InitPayload {
   type: DocType
@@ -80,6 +81,10 @@ interface InitPayload {
    *  inside OnlyOffice and as the self entry's username in connectState
    *  (so peers see a real handle instead of the previous 'You' placeholder). */
   username?: string
+  /** Per-user presence color — populated into userColors[selfUserId] in
+   *  the bridge so window.APP.getUserColor returns it for self's foreign-
+   *  selection rectangle. Null falls back to OO's deterministic palette. */
+  color?: string | null
 }
 
 // Module-level cache: dedupes concurrent registerDevice() calls within the
@@ -127,6 +132,8 @@ function OfficeEditorBase(
   const accessToken = useAppSelector(s => s.auth.accessToken)
   const storedDeviceId = useAppSelector(s => s.auth.currentDeviceId)
   const username = useAppSelector(s => s.auth.username)
+  const color = useAppSelector(s => s.auth.color)
+  const userId = useAppSelector(s => s.auth.userId)
   const dispatch = useAppDispatch()
 
   useImperativeHandle(ref, () => ({
@@ -229,6 +236,7 @@ function OfficeEditorBase(
               fileId,
               initialBytes,
               username: username ?? undefined,
+              color: color ?? null,
             },
           })
           return
@@ -261,7 +269,24 @@ function OfficeEditorBase(
 
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [docType, filename, fileId, initialBytes, collectionMaster, username])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- color/username
+    // changes don't need a full effect re-run (init send is gated by 'ready'
+    // which fires once); a separate effect below pushes them live.
+  }, [docType, filename, fileId, initialBytes, collectionMaster])
+
+  // Push live color updates to the iframe so the picker's effect is
+  // visible without a reload. The bridge updates userColors[selfUserId]
+  // and OO's next foreign-cursor render uses the new value via
+  // window.APP.getUserColor.
+  useEffect(() => {
+    const iframe = iframeRef.current
+    if (!iframe || !iframe.contentWindow) return
+    if (!userId) return
+    iframe.contentWindow.postMessage(
+      { type: 'oo-color-update', userId, color: color ?? null } satisfies ToBridge,
+      window.location.origin,
+    )
+  }, [userId, color])
 
   // ---- WebSocket transport ----
   useEffect(() => {
@@ -293,7 +318,7 @@ function OfficeEditorBase(
       // OnlyOffice's connectState. Without this OO rejects remote
       // saveChanges from peers it never learned about, producing the
       // "second-direction sync stalls" bug user-reported on 2026-05-07.
-      function forwardPeers(list: { deviceId: number; userId: string; username?: string }[], ts: number) {
+      function forwardPeers(list: { deviceId: number; userId: string; username?: string; color?: string }[], ts: number) {
         const iframe = iframeRef.current
         if (!iframe || !iframe.contentWindow) return
         iframe.contentWindow.postMessage(
@@ -306,9 +331,9 @@ function OfficeEditorBase(
       // entry out of the peer list (self stays at SELF_INDEX_USER and
       // doesn't need a separate participant entry).
       const iframeForSelf = iframeRef.current
-      if (iframeForSelf && iframeForSelf.contentWindow && did) {
+      if (iframeForSelf && iframeForSelf.contentWindow && did && userId) {
         iframeForSelf.contentWindow.postMessage(
-          { type: 'oo-self', deviceId: did } satisfies ToBridge,
+          { type: 'oo-self', deviceId: did, userId } satisfies ToBridge,
           window.location.origin,
         )
       }
@@ -385,7 +410,13 @@ function OfficeEditorBase(
     // re-render would otherwise tear down + recreate the WS for no reason.
     // We hold the registered id in deviceIdRef and don't need it in deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docType, fileId, accessToken, collectionMaster, dispatch])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- accessToken is
+    // captured in the WS URL on first connect; refreshing the token mid-session
+    // (App.tsx handles 401 → /auth/refresh) MUST NOT tear down the WS — that
+    // would drop the peer roster and silently break sync. The WS itself stays
+    // authenticated for its lifetime; if the relay needs to re-auth, it'll
+    // close the connection and the existing reconnect-with-backoff handles it.
+  }, [docType, fileId, collectionMaster, dispatch])
 
   if (error) {
     return (
