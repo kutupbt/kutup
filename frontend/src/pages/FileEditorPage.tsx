@@ -434,7 +434,7 @@ export default function FileEditorPage() {
         <EditableFilename filename={filename} onCommit={handleRename} />
         {(officeReady || whiteboardReady) && (
           <div className="ml-auto flex items-center gap-2">
-            {officeReady && (
+            {(officeReady || whiteboardReady) && (
               <CursorColorPicker color={userColor ?? '#94a3b8'} onChange={handleColorChange} />
             )}
             <Button
