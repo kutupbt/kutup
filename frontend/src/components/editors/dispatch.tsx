@@ -37,6 +37,8 @@ export interface OfficeEditorProps {
   /** Decrypted file bytes (the OOXML blob), if the file already exists.
    *  Undefined when creating a brand-new doc — phase 2d. */
   initialBytes?: Uint8Array
+  /** Fires when inner.html intercepts Cmd/Ctrl+S inside the OO iframe. */
+  onSaveShortcut?: () => void
 }
 
 export function chooseEditor(filename: string): ComponentType<CollabEditorProps> | null {

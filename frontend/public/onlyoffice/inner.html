@@ -792,7 +792,32 @@
                           console.warn('[kutup-bridge] injectCSS failed', err)
                         }
                       },
-                      onDocumentReady: function () { setStatus('editor: document ready') },
+                      onDocumentReady: function () {
+                        setStatus('editor: document ready')
+                        // Attach a Cmd/Ctrl+S listener inside OO's own
+                        // iframe document. Without this layer, the OS
+                        // "Save Page As" dialog wins because OO's iframe
+                        // captures keystrokes before our outer page sees
+                        // them. We preventDefault and post the intent up.
+                        try {
+                          var oo = getInnerEditor()
+                          var inDoc = oo && oo.document
+                          if (inDoc && !inDoc._kutupSaveBound) {
+                            inDoc.addEventListener('keydown', function (ev) {
+                              if ((ev.metaKey || ev.ctrlKey) && !ev.shiftKey && !ev.altKey && (ev.key === 's' || ev.key === 'S')) {
+                                ev.preventDefault()
+                                ev.stopPropagation()
+                                if (window.parent && window.parent !== window) {
+                                  send(window.parent, { type: 'oo-save-shortcut' })
+                                }
+                              }
+                            }, true)  // capture phase: beat OO's own listeners
+                            inDoc._kutupSaveBound = true
+                          }
+                        } catch (e) {
+                          console.warn('[kutup-bridge] Cmd/Ctrl+S binding failed', e)
+                        }
+                      },
                       onError: function (e) {
                         console.error('OO error:', e)
                         setStatus('editor error — see console')
@@ -1134,6 +1159,18 @@
             }, EXPECTED_ORIGIN)
           }
         }
+
+        // Cmd/Ctrl+S listener at the inner.html document level — covers
+        // the brief window between bridge ready and OO's onDocumentReady
+        // (which binds a deeper listener inside OO's own iframe).
+        document.addEventListener('keydown', function (ev) {
+          if ((ev.metaKey || ev.ctrlKey) && !ev.shiftKey && !ev.altKey && (ev.key === 's' || ev.key === 'S')) {
+            ev.preventDefault()
+            if (window.parent && window.parent !== window) {
+              send(window.parent, { type: 'oo-save-shortcut' })
+            }
+          }
+        }, true)
 
         if (window.parent && window.parent !== window) {
           send(window.parent, { type: 'ready', docType: docType })

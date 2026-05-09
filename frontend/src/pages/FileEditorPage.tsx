@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Loader2, ArrowLeft, Download, Save, Check, History, X } from 'lucide-react'
+import { Loader2, ArrowLeft, Download, Save, Check, History, X, BookmarkPlus } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAppDispatch, useAppSelector } from '@/store'
 import { setColor } from '@/store/authSlice'
@@ -72,6 +72,7 @@ export default function FileEditorPage() {
   // Imperative handle for OfficeEditor save() calls.
   const officeEditorRef = useRef<OfficeEditorHandle | null>(null)
   const [savingOffice, setSavingOffice] = useState(false)
+  const [savingVersionOffice, setSavingVersionOffice] = useState(false)
   const [justSavedOffice, setJustSavedOffice] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   // null = dialog closed; string = pending versionId awaiting user's
@@ -251,7 +252,7 @@ export default function FileEditorPage() {
     }
   }
 
-  async function handleOfficeSave(opts: { silent?: boolean; label?: string } = {}) {
+  async function handleOfficeSave(opts: { silent?: boolean; label?: string; keepForever?: boolean } = {}) {
     if (!fid || !officeEditorRef.current || !fileKeyRef.current) return
     if (savingOffice) return
     setSavingOffice(true)
@@ -273,7 +274,7 @@ export default function FileEditorPage() {
         docKeyId: 1,
         sizeBytes: encrypted.length,
         label: opts.label ?? null,
-        keepForever: false,
+        keepForever: !!opts.keepForever,
       })
       if (!opts.silent && tid) toast.success('Saved', { id: tid })
       setJustSavedOffice(true)
@@ -327,6 +328,23 @@ export default function FileEditorPage() {
       toast.error(err?.response?.data?.error ?? err?.message ?? 'Restore failed', { id: tid })
     }
   }
+
+  // Page-level Cmd/Ctrl+S → save. Catches the case when focus isn't on
+  // the OO iframe (filename input, color picker, etc.). The OO-focused
+  // case is handled by inner.html's keydown forwarder + OfficeEditor's
+  // onSaveShortcut prop.
+  const handleOfficeSaveRef = useRef(handleOfficeSave)
+  handleOfficeSaveRef.current = handleOfficeSave
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        handleOfficeSaveRef.current({}).catch(() => {})
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   if (phase === 'loading') {
     return (
@@ -386,15 +404,37 @@ export default function FileEditorPage() {
               type="button"
               size="sm"
               variant="outline"
-              disabled={savingOffice}
+              disabled={savingOffice || savingVersionOffice}
               onClick={() => handleOfficeSave().catch(() => {})}
               className="gap-1.5"
-              title="Save as a new version (⌘/Ctrl+S coming in Phase 7)"
+              title="Save current state (⌘/Ctrl+S)"
             >
               {justSavedOffice
                 ? <Check className="h-4 w-4 text-emerald-500" />
                 : <Save className="h-4 w-4" />}
               {savingOffice ? 'Saving…' : justSavedOffice ? 'Saved' : 'Save'}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={savingOffice || savingVersionOffice}
+              onClick={async () => {
+                const name = window.prompt('Name this version:')
+                const trimmed = name?.trim() ?? ''
+                if (!trimmed) return
+                setSavingVersionOffice(true)
+                try {
+                  await handleOfficeSave({ label: trimmed, keepForever: true })
+                } catch { /* toast already shown */ } finally {
+                  setSavingVersionOffice(false)
+                }
+              }}
+              className="gap-1.5"
+              title="Save a named, kept-forever milestone"
+            >
+              <BookmarkPlus className="h-4 w-4" />
+              {savingVersionOffice ? 'Saving…' : 'Save version'}
             </Button>
             <Button
               type="button"
@@ -437,6 +477,7 @@ export default function FileEditorPage() {
                 filename={filename}
                 collectionMaster={collectionMasterRef.current!}
                 initialBytes={officeBytes ?? undefined}
+                onSaveShortcut={() => handleOfficeSaveRef.current({}).catch(() => {})}
               />
             )}
             {!editorReady && !officeReady && viewerReady && viewer && blobUrl && (

@@ -32,7 +32,7 @@ test('office xlsx — save twice, history shows two versions, restore round-trip
   await tabA.waitForTimeout(1_000)
 
   // Save (creates version 1).
-  await tabA.locator('header button:has-text("Save")').click()
+  await tabA.locator('header button[title="Save current state (⌘/Ctrl+S)"]').click()
   await tabA.waitForTimeout(3_000)
 
   // Type more.
@@ -43,7 +43,7 @@ test('office xlsx — save twice, history shows two versions, restore round-trip
   await tabA.waitForTimeout(1_000)
 
   // Save again (version 2).
-  await tabA.locator('header button:has-text("Save")').click()
+  await tabA.locator('header button[title="Save current state (⌘/Ctrl+S)"]').click()
   await tabA.waitForTimeout(3_000)
 
   // Open History sidebar.

@@ -43,6 +43,9 @@ interface Props {
   filename: string
   collectionMaster: Uint8Array
   initialBytes?: Uint8Array
+  /** Fires when inner.html intercepts Cmd/Ctrl+S inside the OO iframe.
+   *  Parent should call its save handler. */
+  onSaveShortcut?: () => void
 }
 
 type DocType = 'docx' | 'xlsx' | 'pptx'
@@ -63,6 +66,7 @@ type FromBridge =
   | { type: 'save-result'; requestId: number; bytes?: Uint8Array; format?: DocType; error?: string }
   | { type: 'oo-local-op'; payload: string }
   | { type: 'oo-local-cursor'; payload: string }
+  | { type: 'oo-save-shortcut' }
 type ToBridge =
   | { type: 'ping' }
   | { type: 'init'; payload: InitPayload }
@@ -101,9 +105,13 @@ function ensureRegistered(pubKeyB64: string, label: string): Promise<number> {
 }
 
 function OfficeEditorBase(
-  { fileId, filename, initialBytes, collectionMaster }: Props,
+  { fileId, filename, initialBytes, collectionMaster, onSaveShortcut }: Props,
   ref: Ref<OfficeEditorHandle>,
 ) {
+  // Stable ref so the postMessage handler doesn't need to re-bind when
+  // the parent's callback identity churns.
+  const onSaveShortcutRef = useRef(onSaveShortcut)
+  onSaveShortcutRef.current = onSaveShortcut
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [bridgeReady, setBridgeReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -278,6 +286,12 @@ function OfficeEditorBase(
         case 'oo-local-cursor':
           // OnlyOffice fired a cursor/selection event → broadcast as ephemeral.
           sendLocalCursor(msg.payload)
+          return
+        case 'oo-save-shortcut':
+          // User pressed Cmd/Ctrl+S inside the OO iframe — inner.html
+          // intercepted it, suppressed the browser save dialog, and
+          // forwarded the intent here. Bubble up to the parent.
+          onSaveShortcutRef.current?.()
           return
       }
     }

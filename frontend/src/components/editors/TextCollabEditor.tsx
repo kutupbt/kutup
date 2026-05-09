@@ -66,6 +66,7 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
   const ref = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<'connecting' | 'ready' | 'error'>('connecting')
   const [trigger, setTrigger] = useState<SnapshotTrigger | null>(null)
+  const triggerRef = useRef<SnapshotTrigger | null>(null)
   const [savingVersion, setSavingVersion] = useState(false)
   const [savingPlain, setSavingPlain] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
@@ -152,7 +153,7 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
           return { ciphertext: out, storageHints: { docKeyId, sizeBytes: out.length } }
         },
       })
-      if (alive) setTrigger(trig)
+      if (alive) { triggerRef.current = trig; setTrigger(trig) }
 
       // Restore handler. Wired into VersionHistoryPanel + RestoreConfirmDialog
       // via the staged-versionId pattern in render. The `choice` arg comes
@@ -401,6 +402,25 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
     // un-inserted. Same pattern as OfficeEditor.tsx.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId, filename, accessToken, collectionMaster, username, dispatch])
+
+  // Page-level Cmd/Ctrl+S — catches the case when CodeMirror doesn't
+  // have focus (filename input, color picker, history sidebar, etc.).
+  // CM's own keymap (line ~360) still wins when CM is focused, which is
+  // faster + cancels its default key bindings.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 's' || e.key === 'S')) {
+        const t = triggerRef.current
+        if (!t) return
+        e.preventDefault()
+        t.forceSave(undefined, false)
+          .then(() => { setJustSaved(true); setTimeout(() => setJustSaved(false), 1200) })
+          .catch((err) => console.warn('save shortcut failed', err))
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // Push live cursor-color updates to awareness without remounting the editor.
   useEffect(() => {
