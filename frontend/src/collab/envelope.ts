@@ -11,6 +11,10 @@ export const KIND = {
   /** Peer live cell-selection presence (xlsx range rectangles). Ephemeral —
    *  same wire pattern as YJS_AWARENESS. */
   OO_CURSOR: 7,
+  /** Excalidraw element-array delta. Last-write-wins per element via
+   *  versionNonce — Excalidraw's reconcileElements does the merge.
+   *  Persisted (treated like YJS_UPDATE). */
+  EXCALIDRAW_OP: 8,
 } as const
 export type Kind = typeof KIND[keyof typeof KIND]
 

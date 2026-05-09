@@ -156,6 +156,22 @@ export async function decryptOOCursor(f: Frame, fileId: string, collectionMaster
   return decryptCommon(f, fileId, collectionMaster)
 }
 
+// EXCALIDRAW_OP: whiteboard element delta. Persisted (treated like
+// YJS_UPDATE) so reopens can be replayed; convergence relies on
+// Excalidraw's per-element versionNonce + reconcileElements rather
+// than CRDT semantics. Same envelope + AEAD as YJS_UPDATE; different
+// KIND so the relay routes it correctly.
+export async function encryptExcalidrawOp(
+  payload: Uint8Array, fileId: string, docKeyId: number,
+  deviceId: bigint, sequence: bigint, collectionMaster: Uint8Array,
+): Promise<Frame> {
+  return buildFrame(payload, KIND.EXCALIDRAW_OP, fileId, docKeyId, deviceId, sequence, collectionMaster)
+}
+
+export async function decryptExcalidrawOp(f: Frame, fileId: string, collectionMaster: Uint8Array): Promise<Uint8Array> {
+  return decryptCommon(f, fileId, collectionMaster)
+}
+
 export async function decryptYjsUpdate(f: Frame, fileId: string, collectionMaster: Uint8Array): Promise<Uint8Array> {
   return decryptCommon(f, fileId, collectionMaster)
 }
