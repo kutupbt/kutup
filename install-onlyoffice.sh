@@ -106,6 +106,19 @@ install_oo() {
     unzip -q onlyoffice-editor.zip
     rm onlyoffice-editor.zip onlyoffice-editor.zip.sha512
     echo "$OO_VERSION" > "$FULL_DIR/.version"
+    # OnlyOffice's editor index.html files unconditionally register a
+    # service worker at ../../../../document_editor_service_worker.js
+    # (resolves to /onlyoffice/dist/v9/document_editor_service_worker.js).
+    # The CryptPad build doesn't ship that file → 404 every editor open.
+    # Drop a no-op stub so registration succeeds silently. Empty install
+    # listener is enough; OO's caching needs aren't required for kutup.
+    cat > "$FULL_DIR/document_editor_service_worker.js" <<'SW_EOF'
+// kutup: no-op stub. OnlyOffice's editor index.html unconditionally
+// registers this path; without a real file the browser logs a 404 on
+// every editor open. We don't need the upstream caching behaviour.
+self.addEventListener('install', () => self.skipWaiting())
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()))
+SW_EOF
     cd "$SCRIPT_DIR"
 }
 
