@@ -5,13 +5,12 @@ import { signInOrBootstrap, attachCollabLogs } from '../fixtures/auth'
 // operations had a 3-attempt fix history (PR #9 + research file 08), so this
 // gates the path against future regression.
 //
-// Currently exercises Ctrl+U (underline). Bold/italic exhibit a flake on
-// the FIRST xlsx open per browser session because OO v9 shows a one-shot
-// "Cell text direction" feature-callout tooltip that intercepts the
-// initial Ctrl+B/I; underline runs after the popup is dismissed and works
-// reliably. The lock path is identical for all three; one passing test is
-// enough to gate it. (We can add bold/italic once a reliable pre-test
-// popup-dismiss is found — toolbar selectors or localStorage flag.)
+// Underline uses the keyboard shortcut Ctrl+U; bold + italic use the OO
+// public API (`WorkbookView.prototype.setFontAttributes(prop, val)`) to
+// bypass the OO v9 first-time "Cell text direction" tutorial popup that
+// intercepts Ctrl+B/Ctrl+I once per browser session. The setter routes
+// through the same lock-grant + saveChanges path so it gates the same
+// regression class as a keyboard shortcut would.
 
 async function openTwoTabs(context: any) {
   const page = await signInOrBootstrap(context)
@@ -43,12 +42,17 @@ async function probeActiveCell(tab: any) {
     const model = wb.model || wb.Model;
     const ws = model && model.getActiveWs && model.getActiveWs();
     if (!ws) return { state: 'no-ws' };
-    const wsView = wb.getWorksheet && wb.getWorksheet();
-    const activeRange = wsView && wsView.activeRange;
-    const row = activeRange ? activeRange.r1 : 0;
-    const col = activeRange ? activeRange.c1 : 0;
+    // Active cell: prefer the WS model's selectionRange.activeCell which
+    // is the canonical "currently focused" cell. Fall back to the worksheet
+    // view's activeRange.r1/c1 only if that's missing. Earlier the view
+    // path returned (0,0) when selection had moved to an entry-only cell;
+    // model path is more reliable.
+    const sr = ws.selectionRange || (wb.getWorksheet && wb.getWorksheet() && wb.getWorksheet().model && wb.getWorksheet().model.selectionRange);
+    const activeCell = sr && sr.activeCell;
+    const row = activeCell ? activeCell.row : 0;
+    const col = activeCell ? activeCell.col : 0;
     const cell = ws.getCell3 ? ws.getCell3(row, col) : (ws.getCell ? ws.getCell(row, col) : null);
-    if (!cell) return { state: 'no-cell' };
+    if (!cell) return { state: 'no-cell', row, col };
     const font = cell.getFont ? cell.getFont() : null;
     if (!font) return { state: 'no-font' };
     return {
@@ -61,13 +65,94 @@ async function probeActiveCell(tab: any) {
   })()`)
 }
 
+// Apply a font attribute via OO's public API. Bypasses keyboard shortcuts
+// so OO's first-time "Cell text direction" tutorial popup can't intercept.
+// prop: 'b' = bold, 'i' = italic, 'u' = underline.
+async function applyFontAttr(tab: any, prop: 'b' | 'i' | 'u') {
+  return tab.evaluate(`(() => {
+    const outerIfr = document.querySelector('iframe');
+    const innerIfr = outerIfr && outerIfr.contentDocument && outerIfr.contentDocument.querySelector('iframe');
+    const w = innerIfr && innerIfr.contentWindow;
+    const editor = w && (w.editor || w.editorCell);
+    if (!editor) return { state: 'no-editor' };
+    const wb = editor.wb || editor.WB;
+    if (!wb || typeof wb.setFontAttributes !== 'function') return { state: 'no-setter' };
+    const val = '${prop}' === 'u' ? (w.Asc && w.Asc.EUnderline && w.Asc.EUnderline.underlineSingle) : true;
+    wb.setFontAttributes('${prop}', val);
+    return { state: 'ok' };
+  })()`)
+}
+
 test.describe('office xlsx — cell formatting cross-tab sync', () => {
+  test('cell bold via API propagates to peer', async ({ context }) => {
+    const { tabA, tabB } = await openTwoTabs(context)
+
+    await tabA.bringToFront()
+    // Dismiss any first-time tutorial popups by clicking the "Got it"
+    // location — even though we use the API for the actual format,
+    // the popup can hold a global lock that makes setSelectionInfo no-op.
+    await tabA.mouse.click(440, 263)
+    await tabA.waitForTimeout(500)
+    await tabA.mouse.click(200, 250)
+    await tabA.waitForTimeout(500)
+    await tabA.keyboard.type('hello', { delay: 60 })
+    await tabA.keyboard.press('Enter')
+    await tabA.waitForTimeout(1_000)
+    await tabA.mouse.click(200, 250)
+    await tabA.waitForTimeout(500)
+    const setResult = await applyFontAttr(tabA, 'b')
+    expect(setResult.state, 'tab A apply bold').toBe('ok')
+    await tabA.waitForTimeout(5_000)
+
+    // Verify locally first — narrows wire vs apply if cross-tab fails.
+    const aFmt = await probeActiveCell(tabA)
+    expect(aFmt.state, 'tab A probe').toBe('ok')
+    expect(aFmt.bold, 'tab A applied bold locally').toBe(true)
+
+    await tabB.bringToFront()
+    await tabB.mouse.click(200, 250)
+    await tabB.waitForTimeout(500)
+    const f = await probeActiveCell(tabB)
+    expect(f.state).toBe('ok')
+    expect(f.bold, 'tab B sees cell bold').toBe(true)
+  })
+
+  test('cell italic via API propagates to peer', async ({ context }) => {
+    const { tabA, tabB } = await openTwoTabs(context)
+
+    await tabA.bringToFront()
+    await tabA.mouse.click(440, 263)
+    await tabA.waitForTimeout(500)
+    await tabA.mouse.click(200, 250)
+    await tabA.waitForTimeout(500)
+    await tabA.keyboard.type('hello', { delay: 60 })
+    await tabA.keyboard.press('Enter')
+    await tabA.waitForTimeout(1_000)
+    await tabA.mouse.click(200, 250)
+    await tabA.waitForTimeout(500)
+    const setResult = await applyFontAttr(tabA, 'i')
+    expect(setResult.state, 'tab A apply italic').toBe('ok')
+    await tabA.waitForTimeout(5_000)
+
+    const aFmt = await probeActiveCell(tabA)
+    expect(aFmt.state, 'tab A probe').toBe('ok')
+    expect(aFmt.italic, 'tab A applied italic locally').toBe(true)
+
+    await tabB.bringToFront()
+    await tabB.mouse.click(200, 250)
+    await tabB.waitForTimeout(500)
+    const f = await probeActiveCell(tabB)
+    expect(f.state).toBe('ok')
+    expect(f.italic, 'tab B sees cell italic').toBe(true)
+  })
+
   test('cell underline (Ctrl+U) propagates to peer', async ({ context }) => {
     const { tabA, tabB } = await openTwoTabs(context)
 
     await tabA.bringToFront()
-    // Dismiss any first-time tutorial popups (OO v9 callouts) by clicking
-    // a known dismiss-button location, then idle-clicking the cell.
+    // Dismiss any first-time tutorial popups (OO v9 callouts) so Ctrl+U
+    // isn't intercepted. Underline-only kept on the keyboard path because
+    // it confirms the keyboard route stays wired alongside the API route.
     await tabA.mouse.click(440, 263)
     await tabA.waitForTimeout(500)
     await tabA.mouse.click(200, 250)
@@ -85,7 +170,6 @@ test.describe('office xlsx — cell formatting cross-tab sync', () => {
     await tabB.waitForTimeout(500)
     const f = await probeActiveCell(tabB)
     expect(f.state).toBe('ok')
-    // Excel underline returns an enum value (single/double/none).
     expect(f.underline, 'tab B sees cell underline').toBeTruthy()
     expect(f.underline, 'tab B underline is not "none"').not.toBe('none')
   })
