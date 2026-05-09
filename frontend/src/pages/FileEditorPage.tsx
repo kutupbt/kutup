@@ -434,7 +434,11 @@ export default function FileEditorPage() {
         <EditableFilename filename={filename} onCommit={handleRename} />
         {(officeReady || whiteboardReady) && (
           <div className="ml-auto flex items-center gap-2">
-            {(officeReady || whiteboardReady) && (
+            {/* Picker hidden on whiteboard: Excalidraw 0.18.x renders peer
+                cursors via getClientColor() which hashes id||socketId and
+                ignores Collaborator.color, so the picker can't influence
+                the rendered color without forking the package. */}
+            {officeReady && (
               <CursorColorPicker color={userColor ?? '#94a3b8'} onChange={handleColorChange} />
             )}
             <Button
