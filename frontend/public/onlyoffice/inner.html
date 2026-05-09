@@ -439,28 +439,57 @@
               sendToOO({ type: 'message' })
               break
             case 'getLock':
-              // OO emits getLock when about to apply a cell-level operation
-              // (formatting, fill color, even some typing paths). It expects
-              // the bridge to respond with the granted lock list. The match
-              // is strict: OO sets _userId = user.id + indexUser (from auth)
-              // and grants iff lock.user === _userId. Our identity scheme
-              // up top arranges myUniqueOOId === _userId, so echoing the
-              // self-locks list resolves to "granted".
+              // OO emits getLock when about to apply a block-level operation
+              // (cell formatting in xlsx; new paragraph in docx; new shape in
+              // pptx). It expects the bridge to respond with the granted
+              // lock list — strict identity match: lock.user === _userId
+              // where _userId = user.id + indexUser. Our identity scheme
+              // arranges myUniqueOOId === _userId so a self-echo registers
+              // as "granted by self". The rest is shape.
               //
-              // For excel, OO indexes locks by lock.block.guid (cell SDK
-              // _onGetLock at sdkjs/cell/sdk-all-min.js:7102), so we echo
-              // the requested block object verbatim.
-              var requestedBlock = (obj.block && obj.block[0]) || null
-              var lockUid = 'lk-' + Math.random().toString(36).slice(2, 10)
-              selfLocks[lockUid] = {
-                time: Date.now(),
-                user: myUniqueOOId,
-                block: requestedBlock,
+              // CRITICAL shape difference (read directly from compiled OO
+              // SDK — sdkjs/word/sdk-all-min.js _onGetLock at offset 230622
+              // and the equivalent in cell):
+              //   isExcel || isPresentation || isPDF:
+              //     blockTmp = lock["block"]["guid"]   ← read .guid off the lock
+              //     blockValue = lock["block"]          ← whole cell-range object
+              //   else (word):
+              //     blockTmp = key                      ← THE ITERATION KEY
+              //     blockValue = key
+              // OO iterates with `for (key in data.locks)`. For xlsx/pptx
+              // an array works because `lock.block.guid` carries the block
+              // id; for word the iteration key IS the block id, so the
+              // locks payload MUST be an OBJECT keyed by block GUID — an
+              // array yields keys "0","1",... that never match the
+              // requested block, and OO silently refuses input on the new
+              // block. That's the user's "type a, Enter, can't type" bug.
+              if (docType === 'xlsx' || docType === 'pptx') {
+                var requestedBlock = (obj.block && obj.block[0]) || null
+                var lockUid = 'lk-' + Math.random().toString(36).slice(2, 10)
+                selfLocks[lockUid] = {
+                  time: Date.now(),
+                  user: myUniqueOOId,
+                  block: requestedBlock,
+                }
+                sendToOO({
+                  type: 'getLock',
+                  locks: Object.keys(selfLocks).map(function (k) { return selfLocks[k] }),
+                })
+              } else {
+                // docx — block GUID is a string (e.g. '890'); store keyed
+                // by GUID so the iteration key matches.
+                var blockIds = Array.isArray(obj.block) ? obj.block : [obj.block]
+                for (var bi = 0; bi < blockIds.length; bi++) {
+                  var bid = blockIds[bi]
+                  if (typeof bid !== 'string' || !bid) continue
+                  selfLocks[bid] = {
+                    time: Date.now(),
+                    user: myUniqueOOId,
+                    block: bid,
+                  }
+                }
+                sendToOO({ type: 'getLock', locks: selfLocks })
               }
-              sendToOO({
-                type: 'getLock',
-                locks: Object.keys(selfLocks).map(function (k) { return selfLocks[k] }),
-              })
               break
             case 'releaseLock':
               // OO is done with its locks; clear self-held entries.
