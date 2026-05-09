@@ -42,7 +42,7 @@ import RenameDialog from '@/components/drive/dialogs/RenameDialog'
 import ShareDialog from '@/components/drive/dialogs/ShareDialog'
 import PublicShareDialog from '@/components/drive/dialogs/PublicShareDialog'
 import AddRemoteShareDialog from '@/components/drive/dialogs/AddRemoteShareDialog'
-import { chooseEditor, chooseOfficeEditor } from '@/components/editors/dispatch'
+import { chooseEditor, chooseOfficeEditor, chooseWhiteboardEditor } from '@/components/editors/dispatch'
 import { chooseViewer } from '@/components/viewers/dispatch'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 
@@ -454,6 +454,7 @@ export default function Drive() {
     const previewable = !!name && (
       chooseEditor(name) !== null ||
       chooseOfficeEditor(name) !== null ||
+      chooseWhiteboardEditor(name) !== null ||
       chooseViewer(name) !== null
     )
     if (name && currentFolder && !currentFolder.isRemote && previewable) {
