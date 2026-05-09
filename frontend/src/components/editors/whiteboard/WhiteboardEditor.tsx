@@ -54,7 +54,7 @@ import { ed25519Sign } from '@/collab/sign'
 import {
   generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64,
 } from '@/collab/devices'
-import { randomSenderSeqPrefix } from '@/collab/identity'
+import { randomSenderSeqPrefix, buildAwarenessName } from '@/collab/identity'
 import { registerDevice } from '@/api/collab'
 
 import '@excalidraw/excalidraw/index.css'
@@ -340,7 +340,10 @@ function WhiteboardEditorBase(
       if (!transport || !did || !kp) return
       const payload: CursorPayload = {
         color: userColorRef.current,
-        username: usernameRef.current,
+        // Same "<user> #<tabId>" shape that notes / office use, so two
+        // tabs of the same account are distinguishable in the cursor
+        // label instead of both reading just "admin".
+        username: buildAwarenessName(usernameRef.current),
         userId: userIdRef.current,
         button: localButtonRef.current,
         selectedElementIds: localSelectionRef.current,
