@@ -329,6 +329,17 @@ function WhiteboardEditorBase(
     // reconnect, NOT by re-mounting the WS (would lose in-flight broadcasts).
   }, [fileId, collectionMaster, dispatch])
 
+  // Push a fresh presence frame as soon as the color picker changes.
+  // Without this, peers keep seeing the old color until the user next
+  // moves the mouse over the canvas (onPointerUpdate is the only other
+  // trigger). Picker-stand-still is the case the user reported.
+  useEffect(() => {
+    schedulePresence()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- schedule
+    // reads everything off refs; only userColor needs to drive the
+    // re-broadcast.
+  }, [userColor])
+
   // Trailing-edge throttle for cursor + selection presence.
   function schedulePresence() {
     if (presenceTimerRef.current) return
