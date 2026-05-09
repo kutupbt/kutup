@@ -329,10 +329,17 @@ func (h *CollabHandler) handleFrame(c *wsConn, fileID string, data []byte) {
 	}
 
 	// Ephemeral broadcast-only kinds (no file_update_log entry):
-	//   - KindYjsAwareness: notes cursor / selection presence.
-	//   - KindOOCursor:     office cell-selection presence (xlsx range
+	//   - KindYjsAwareness:    notes cursor / selection presence.
+	//   - KindOOCursor:        office cell-selection presence (xlsx range
 	//     rectangles; mirrors notes cursor presence for sheets).
-	if f.Kind == envelope.KindYjsAwareness || f.Kind == envelope.KindOOCursor {
+	//   - KindExcalidrawOp:    whiteboard element delta. Canonical state
+	//     lives in snapshots; persisting deltas would replay all history
+	//     on reconnect and clobber a freshly-restored scene.
+	//   - KindExcalidrawCursor: whiteboard pointer + selection presence.
+	if f.Kind == envelope.KindYjsAwareness ||
+		f.Kind == envelope.KindOOCursor ||
+		f.Kind == envelope.KindExcalidrawOp ||
+		f.Kind == envelope.KindExcalidrawCursor {
 		peers := len(h.Hub.Peers(fileID))
 		log.Printf("collab: bcast ephemeral file=%s sender=%d kind=%d peers=%d", fileID, c.deviceID, f.Kind, peers)
 		h.Hub.Broadcast(fileID, c, data)

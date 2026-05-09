@@ -156,11 +156,11 @@ export async function decryptOOCursor(f: Frame, fileId: string, collectionMaster
   return decryptCommon(f, fileId, collectionMaster)
 }
 
-// EXCALIDRAW_OP: whiteboard element delta. Persisted (treated like
-// YJS_UPDATE) so reopens can be replayed; convergence relies on
-// Excalidraw's per-element versionNonce + reconcileElements rather
-// than CRDT semantics. Same envelope + AEAD as YJS_UPDATE; different
-// KIND so the relay routes it correctly.
+// EXCALIDRAW_OP: whiteboard element delta. Ephemeral — canonical state
+// lives in snapshot blobs. Convergence relies on Excalidraw's per-
+// element versionNonce + reconcileElements rather than CRDT semantics.
+// Same envelope + AEAD as YJS_UPDATE; different KIND so the relay
+// routes it as broadcast-only.
 export async function encryptExcalidrawOp(
   payload: Uint8Array, fileId: string, docKeyId: number,
   deviceId: bigint, sequence: bigint, collectionMaster: Uint8Array,
@@ -169,6 +169,20 @@ export async function encryptExcalidrawOp(
 }
 
 export async function decryptExcalidrawOp(f: Frame, fileId: string, collectionMaster: Uint8Array): Promise<Uint8Array> {
+  return decryptCommon(f, fileId, collectionMaster)
+}
+
+// EXCALIDRAW_CURSOR: pointer + selection presence. Ephemeral, mirrors
+// the OO_CURSOR pattern. Drives appState.collaborators on receivers so
+// peers see each other's cursor + selected-element rectangles.
+export async function encryptExcalidrawCursor(
+  payload: Uint8Array, fileId: string, docKeyId: number,
+  deviceId: bigint, sequence: bigint, collectionMaster: Uint8Array,
+): Promise<Frame> {
+  return buildFrame(payload, KIND.EXCALIDRAW_CURSOR, fileId, docKeyId, deviceId, sequence, collectionMaster)
+}
+
+export async function decryptExcalidrawCursor(f: Frame, fileId: string, collectionMaster: Uint8Array): Promise<Uint8Array> {
   return decryptCommon(f, fileId, collectionMaster)
 }
 

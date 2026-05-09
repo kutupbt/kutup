@@ -13,8 +13,13 @@ export const KIND = {
   OO_CURSOR: 7,
   /** Excalidraw element-array delta. Last-write-wins per element via
    *  versionNonce — Excalidraw's reconcileElements does the merge.
-   *  Persisted (treated like YJS_UPDATE). */
+   *  Ephemeral: canonical scene lives in snapshot blobs, so persisting
+   *  deltas would replay all element history on reconnect and clobber
+   *  a freshly-restored scene. */
   EXCALIDRAW_OP: 8,
+  /** Whiteboard pointer + selection presence (ephemeral). Drives the
+   *  Excalidraw appState.collaborators map for live peer cursors. */
+  EXCALIDRAW_CURSOR: 9,
 } as const
 export type Kind = typeof KIND[keyof typeof KIND]
 
