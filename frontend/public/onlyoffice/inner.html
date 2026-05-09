@@ -577,6 +577,7 @@
                     useridoriginal: String(myOOId),
                   }],
                 }
+                console.log('[kutup-bridge] outbound cursor type=' + (typeof obj.cursor) + ' len=' + (obj.cursor ? String(obj.cursor).length : 0))
                 window.parent.postMessage(
                   { type: 'oo-local-cursor', payload: JSON.stringify(cursorMsg) },
                   EXPECTED_ORIGIN,
@@ -896,8 +897,45 @@
                     user: first.user,
                     useridoriginal: first.useridoriginal,
                   }
+                  console.log('[kutup-bridge] applying remote cursor sender=' + msg.senderDeviceId + ' user=' + first.user)
                 }
                 sendToOO(cursorPayload)
+                if (docType === 'docx') {
+                  // word's CDocument.Update_ForeignCursor stores the peer's
+                  // caret in m_aForeignCursorsXY and queues a paint task
+                  // via DrawingDocument.Collaborative_UpdateTarget — but
+                  // with is_from_paint=undefined the call only PUSHES to
+                  // CollaborativeTargetsUpdateTasks. The queue is drained
+                  // on each paint tick. xlsx's sheet redraws constantly so
+                  // the queue flushes; docx is idle between edits so the
+                  // peer caret would never visualise. Force a flush +
+                  // repaint here, mirroring the call sites in
+                  // sdkjs/word/sdk-all.js (line 30605, 33186).
+                  try {
+                    var oo = getInnerEditor()
+                    var dd = oo && oo.WordControl && oo.WordControl.m_oDrawingDocument
+                    if (dd && typeof dd.Collaborative_TargetsUpdate === 'function') {
+                      dd.Collaborative_TargetsUpdate(true)
+                    }
+                    if (dd && typeof dd.FirePaint === 'function') {
+                      dd.FirePaint()
+                    }
+                    // Peer caret is a 2px vertical bar by default; widen
+                    // slightly + add a halo so it's visually distinct from
+                    // the local caret. xlsx's selection rectangle already
+                    // pops out; docx needs the help.
+                    if (dd && Array.isArray(dd.CollaborativeTargets)) {
+                      for (var ti = 0; ti < dd.CollaborativeTargets.length; ti++) {
+                        var tgt = dd.CollaborativeTargets[ti]
+                        if (!tgt || !tgt.HtmlElement) continue
+                        tgt.HtmlElement.style.width = '3px'
+                        tgt.HtmlElement.style.boxShadow = '0 0 0 1px rgba(255,255,255,.6)'
+                      }
+                    }
+                  } catch (err) {
+                    console.warn('[kutup-bridge] docx cursor paint kick failed', err)
+                  }
+                }
               } catch (err) {
                 console.warn('[kutup-bridge] bad oo-remote-cursor payload', err)
               }
