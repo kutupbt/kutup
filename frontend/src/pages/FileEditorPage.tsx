@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Loader2, ArrowLeft, Download, Save, Check } from 'lucide-react'
+import { Loader2, ArrowLeft, Download, Save, Check, History, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAppDispatch, useAppSelector } from '@/store'
 import { setColor } from '@/store/authSlice'
@@ -17,6 +17,7 @@ import {
   unwrapKeyFromSender,
 } from '@/crypto'
 import EditableFilename from '@/components/EditableFilename'
+import VersionHistoryPanel from '@/components/VersionHistory/VersionHistoryPanel'
 import { chooseEditor, chooseOfficeEditor } from '@/components/editors/dispatch'
 import type { OfficeEditorHandle } from '@/components/editors/office/OfficeEditor'
 import { chooseViewer } from '@/components/viewers/dispatch'
@@ -71,6 +72,7 @@ export default function FileEditorPage() {
   const officeEditorRef = useRef<OfficeEditorHandle | null>(null)
   const [savingOffice, setSavingOffice] = useState(false)
   const [justSavedOffice, setJustSavedOffice] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
 
   // Pick the right component eagerly so the load step knows whether it needs
   // the bytes as text (editor) or as a blob URL (viewer).
@@ -245,11 +247,11 @@ export default function FileEditorPage() {
     }
   }
 
-  async function handleOfficeSave() {
+  async function handleOfficeSave(opts: { silent?: boolean; label?: string } = {}) {
     if (!fid || !officeEditorRef.current || !fileKeyRef.current) return
     if (savingOffice) return
     setSavingOffice(true)
-    const tid = toast.loading('Saving…')
+    const tid = opts.silent ? undefined : toast.loading('Saving…')
     try {
       // 1. Ask the editor to extract bin → x2t → OOXML.
       const { bytes } = await officeEditorRef.current.save()
@@ -266,16 +268,55 @@ export default function FileEditorPage() {
         seqAtSnapshot: 0,  // Office docs don't use the Yjs delta log.
         docKeyId: 1,
         sizeBytes: encrypted.length,
+        label: opts.label ?? null,
         keepForever: false,
       })
-      toast.success('Saved', { id: tid })
+      if (!opts.silent && tid) toast.success('Saved', { id: tid })
       setJustSavedOffice(true)
       setTimeout(() => setJustSavedOffice(false), 1500)
     } catch (err: any) {
       console.error('office save failed', err)
-      toast.error(err?.response?.data?.error ?? err?.message ?? 'Save failed', { id: tid })
+      if (!opts.silent && tid) {
+        toast.error(err?.response?.data?.error ?? err?.message ?? 'Save failed', { id: tid })
+      }
+      throw err
     } finally {
       setSavingOffice(false)
+    }
+  }
+
+  // Office restore — append-only: download the chosen snapshot, pre-snapshot
+  // current state so we don't lose it, then re-encrypt the old bytes and
+  // post as a NEW snapshot. Page reload picks the latest version (the just-
+  // restored one) via the existing load flow. Avoids the complexity of
+  // hot-swapping the OnlyOffice iframe's initialBytes mid-session.
+  async function handleRestoreOffice(versionId: string) {
+    if (!fid || !fileKeyRef.current) return
+    if (!window.confirm('Restore this version? Current state will be saved as a new version first.')) return
+    const tid = toast.loading('Restoring…')
+    try {
+      const dl = await api.get(`/files/${fid}/versions/${versionId}/download`, { responseType: 'arraybuffer' })
+      const oldBytes = await decryptStream(new Uint8Array(dl.data), fileKeyRef.current)
+      // Pre-snapshot current state so the user can roll back the restore.
+      try { await handleOfficeSave({ silent: true, label: 'Pre-restore' }) } catch { /* ignore */ }
+      const reEncrypted = await encryptStream(oldBytes, fileKeyRef.current)
+      const form = new FormData()
+      form.append('file', new Blob([reEncrypted.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'snapshot')
+      const blobRes = await api.post(`/files/${fid}/snapshot-blob`, form)
+      await api.post(`/files/${fid}/versions`, {
+        s3VersionId: blobRes.data.s3VersionId,
+        storagePath: blobRes.data.storagePath,
+        seqAtSnapshot: 0,
+        docKeyId: 1,
+        sizeBytes: reEncrypted.length,
+        label: `Restored from ${new Date().toLocaleString()}`,
+        keepForever: false,
+      })
+      toast.success('Restored', { id: tid })
+      window.location.reload()
+    } catch (err: any) {
+      console.error('office restore failed', err)
+      toast.error(err?.response?.data?.error ?? err?.message ?? 'Restore failed', { id: tid })
     }
   }
 
@@ -338,7 +379,7 @@ export default function FileEditorPage() {
               size="sm"
               variant="outline"
               disabled={savingOffice}
-              onClick={handleOfficeSave}
+              onClick={() => handleOfficeSave().catch(() => {})}
               className="gap-1.5"
               title="Save as a new version (⌘/Ctrl+S coming in Phase 7)"
             >
@@ -346,6 +387,17 @@ export default function FileEditorPage() {
                 ? <Check className="h-4 w-4 text-emerald-500" />
                 : <Save className="h-4 w-4" />}
               {savingOffice ? 'Saving…' : justSavedOffice ? 'Saved' : 'Save'}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={historyOpen ? 'default' : 'outline'}
+              onClick={() => setHistoryOpen((v) => !v)}
+              className="gap-1.5"
+              title="Version history"
+            >
+              <History className="h-4 w-4" />
+              History
             </Button>
           </div>
         )}
@@ -359,33 +411,56 @@ export default function FileEditorPage() {
           </a>
         )}
       </header>
-      <div className="flex-1 min-h-0">
-        <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading…</div>}>
-          {editorReady && Editor && (
-            <Editor
-              fileId={fid!}
-              filename={filename}
-              collectionMaster={collectionMasterRef.current!}
-              initialContent={initialContent}
-            />
-          )}
-          {!editorReady && officeReady && Office && (
-            <Office
-              ref={officeEditorRef}
-              fileId={fid!}
-              filename={filename}
-              collectionMaster={collectionMasterRef.current!}
-              initialBytes={officeBytes ?? undefined}
-            />
-          )}
-          {!editorReady && !officeReady && viewerReady && viewer && blobUrl && (
-            <viewer.Component
-              filename={filename}
-              blobUrl={blobUrl}
-              mimeType={viewer.mimeType}
-            />
-          )}
-        </Suspense>
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        <div className="flex-1 min-h-0">
+          <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading…</div>}>
+            {editorReady && Editor && (
+              <Editor
+                fileId={fid!}
+                filename={filename}
+                collectionMaster={collectionMasterRef.current!}
+                initialContent={initialContent}
+              />
+            )}
+            {!editorReady && officeReady && Office && (
+              <Office
+                ref={officeEditorRef}
+                fileId={fid!}
+                filename={filename}
+                collectionMaster={collectionMasterRef.current!}
+                initialBytes={officeBytes ?? undefined}
+              />
+            )}
+            {!editorReady && !officeReady && viewerReady && viewer && blobUrl && (
+              <viewer.Component
+                filename={filename}
+                blobUrl={blobUrl}
+                mimeType={viewer.mimeType}
+              />
+            )}
+          </Suspense>
+        </div>
+
+        {historyOpen && officeReady && fid && (
+          <aside className="flex h-full w-[360px] min-h-0 shrink-0 flex-col overflow-hidden border-l border-border bg-card">
+            <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
+              <h2 className="text-sm font-semibold">Version history</h2>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={() => setHistoryOpen(false)}
+                aria-label="Close history"
+                className="h-7 w-7"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </header>
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+              <VersionHistoryPanel fileId={fid} onRestore={handleRestoreOffice} />
+            </div>
+          </aside>
+        )}
       </div>
     </div>
   )
