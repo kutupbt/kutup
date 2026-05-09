@@ -1,11 +1,11 @@
-import { FolderPlus, FileText, FileSpreadsheet, Presentation, Upload as UploadIcon, Globe } from 'lucide-react'
+import { FolderPlus, FileText, FileSpreadsheet, Presentation, Upload as UploadIcon, Globe, Pencil } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 
-export type OfficeKind = 'docx' | 'xlsx' | 'pptx'
+export type OfficeKind = 'docx' | 'xlsx' | 'pptx' | 'excalidraw'
 
 export interface NewMenuActions {
   onNewFolder: () => void
@@ -60,6 +60,10 @@ export function NewMenuItems({
           <DropdownMenuItem onSelect={() => onNewOffice('pptx')}>
             <Presentation className="mr-2 h-4 w-4 text-orange-500" />
             {t('newMenu.pptx')}
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onNewOffice('excalidraw')}>
+            <Pencil className="mr-2 h-4 w-4 text-pink-500" />
+            {t('newMenu.excalidraw')}
           </DropdownMenuItem>
         </>
       )}

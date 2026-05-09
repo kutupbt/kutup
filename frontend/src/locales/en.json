@@ -221,6 +221,7 @@
     "docx": "Document (.docx)",
     "xlsx": "Spreadsheet (.xlsx)",
     "pptx": "Presentation (.pptx)",
+    "excalidraw": "Whiteboard (.excalidraw)",
     "uploadFiles": "Upload files",
     "addRemote": "Add remote share"
   },

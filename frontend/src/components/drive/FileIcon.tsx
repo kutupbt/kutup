@@ -7,6 +7,7 @@ import {
   Video,
   Archive,
   Presentation,
+  Pencil,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -20,6 +21,7 @@ type IconKind =
   | 'audio'
   | 'video'
   | 'archive'
+  | 'whiteboard'
   | 'generic'
 
 const ICON_BY_EXT: Record<string, IconKind> = {
@@ -32,6 +34,7 @@ const ICON_BY_EXT: Record<string, IconKind> = {
   mp3: 'audio', wav: 'audio', flac: 'audio', ogg: 'audio', m4a: 'audio',
   mp4: 'video', mov: 'video', webm: 'video', mkv: 'video', avi: 'video',
   zip: 'archive', tar: 'archive', gz: 'archive', '7z': 'archive', rar: 'archive',
+  excalidraw: 'whiteboard',
 }
 
 const KIND_PRESET: Record<IconKind, { Icon: typeof File; tone: string }> = {
@@ -44,6 +47,7 @@ const KIND_PRESET: Record<IconKind, { Icon: typeof File; tone: string }> = {
   audio:       { Icon: Music,           tone: 'bg-pink-500/15 text-pink-600 dark:text-pink-400' },
   video:       { Icon: Video,           tone: 'bg-purple-500/15 text-purple-600 dark:text-purple-400' },
   archive:     { Icon: Archive,         tone: 'bg-amber-500/15 text-amber-600 dark:text-amber-400' },
+  whiteboard:  { Icon: Pencil,          tone: 'bg-pink-500/15 text-pink-600 dark:text-pink-400' },
   generic:     { Icon: File,            tone: 'bg-muted text-muted-foreground' },
 }
 

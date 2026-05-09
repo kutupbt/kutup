@@ -221,6 +221,7 @@
     "docx": "Belge (.docx)",
     "xlsx": "Hesap tablosu (.xlsx)",
     "pptx": "Sunum (.pptx)",
+    "excalidraw": "Beyaz tahta (.excalidraw)",
     "uploadFiles": "Dosya yükle",
     "addRemote": "Uzak paylaşım ekle"
   },

@@ -4,6 +4,7 @@
 // - chooseOfficeEditor: .docx/.xlsx/.pptx → OnlyOffice bridge.
 import { lazy, type ComponentType, type ForwardRefExoticComponent, type RefAttributes } from 'react'
 import type { OfficeEditorHandle } from './office/OfficeEditor'
+import type { WhiteboardEditorHandle } from './whiteboard/WhiteboardEditor'
 
 const TextCollabEditor = lazy(() => import('./TextCollabEditor'))
 // Cast through unknown so TypeScript understands the lazy-wrapped component
@@ -11,6 +12,8 @@ const TextCollabEditor = lazy(() => import('./TextCollabEditor'))
 // callers (FileEditorPage) need to attach a ref to drive save().
 const OfficeEditor = lazy(() => import('./office/OfficeEditor')) as unknown as
   ForwardRefExoticComponent<OfficeEditorProps & RefAttributes<OfficeEditorHandle>>
+const WhiteboardEditor = lazy(() => import('./whiteboard/WhiteboardEditor')) as unknown as
+  ForwardRefExoticComponent<WhiteboardEditorProps & RefAttributes<WhiteboardEditorHandle>>
 
 const TEXT_EXT = new Set([
   'md', 'markdown', 'txt',
@@ -32,6 +35,8 @@ const TEXT_EXT = new Set([
 
 const OFFICE_EXT = new Set(['docx', 'xlsx', 'pptx'])
 
+const WHITEBOARD_EXT = new Set(['excalidraw'])
+
 export interface CollabEditorProps {
   fileId: string
   filename: string
@@ -51,6 +56,14 @@ export interface OfficeEditorProps {
   onSaveShortcut?: () => void
 }
 
+export interface WhiteboardEditorProps {
+  fileId: string
+  filename: string
+  collectionMaster: Uint8Array
+  /** Decrypted .excalidraw JSON bytes if the file already exists. */
+  initialBytes?: Uint8Array
+}
+
 export function chooseEditor(filename: string): ComponentType<CollabEditorProps> | null {
   const ext = filename.split('.').pop()?.toLowerCase() ?? ''
   if (TEXT_EXT.has(ext)) return TextCollabEditor
@@ -62,5 +75,13 @@ export function chooseOfficeEditor(filename: string):
 {
   const ext = filename.split('.').pop()?.toLowerCase() ?? ''
   if (OFFICE_EXT.has(ext)) return OfficeEditor
+  return null
+}
+
+export function chooseWhiteboardEditor(filename: string):
+  ForwardRefExoticComponent<WhiteboardEditorProps & RefAttributes<WhiteboardEditorHandle>> | null
+{
+  const ext = filename.split('.').pop()?.toLowerCase() ?? ''
+  if (WHITEBOARD_EXT.has(ext)) return WhiteboardEditor
   return null
 }

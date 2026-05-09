@@ -538,7 +538,7 @@ export default function Drive() {
     }
   }
 
-  async function handleCreateOffice(kind: 'docx' | 'xlsx' | 'pptx') {
+  async function handleCreateOffice(kind: 'docx' | 'xlsx' | 'pptx' | 'excalidraw') {
     if (!currentFolder?.collectionKey) {
       toast.error(t('drive.toast.uploadFailed'))
       return
@@ -559,15 +559,28 @@ export default function Drive() {
       docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      excalidraw: 'application/vnd.excalidraw+json',
     }
     const tid = toast.loading(`Creating ${kind}…`)
     try {
-      // Phase 2d: empty placeholder (1 byte, otherwise the encrypt-stream
-      // header math choke on 0-length plaintext). The OfficeEditor renders
-      // the template instead. Phase 4's first save replaces this with real
-      // OOXML, after which the placeholder is never seen again.
-      const placeholder = new Uint8Array([0])
-      const officeFile = new File([new Blob([placeholder], { type: mimeByKind[kind] })], filename, {
+      // Office: 1-byte placeholder (the editor renders an empty template
+      // and replaces with real OOXML on first save). Excalidraw needs a
+      // valid empty JSON shape so the editor can parse it on first open.
+      let initialBytes: Uint8Array
+      if (kind === 'excalidraw') {
+        const empty = JSON.stringify({
+          type: 'excalidraw',
+          version: 2,
+          source: 'kutup',
+          elements: [],
+          appState: { gridSize: null, viewBackgroundColor: '#ffffff' },
+          files: {},
+        })
+        initialBytes = new TextEncoder().encode(empty)
+      } else {
+        initialBytes = new Uint8Array([0])
+      }
+      const officeFile = new File([new Blob([initialBytes.buffer as ArrayBuffer], { type: mimeByKind[kind] })], filename, {
         type: mimeByKind[kind],
       })
       await uploadFile(officeFile, currentFolder)

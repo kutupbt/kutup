@@ -19,8 +19,9 @@ import {
 import EditableFilename from '@/components/EditableFilename'
 import VersionHistoryPanel from '@/components/VersionHistory/VersionHistoryPanel'
 import RestoreConfirmDialog, { type RestoreChoice } from '@/components/RestoreConfirmDialog'
-import { chooseEditor, chooseOfficeEditor } from '@/components/editors/dispatch'
+import { chooseEditor, chooseOfficeEditor, chooseWhiteboardEditor } from '@/components/editors/dispatch'
 import type { OfficeEditorHandle } from '@/components/editors/office/OfficeEditor'
+import type { WhiteboardEditorHandle } from '@/components/editors/whiteboard/WhiteboardEditor'
 import { chooseViewer } from '@/components/viewers/dispatch'
 import { Button } from '@/components/ui/button'
 import { KutupLogo } from '@/components/KutupLogo'
@@ -69,8 +70,9 @@ export default function FileEditorPage() {
   const [collectionMasterReady, setCollectionMasterReady] = useState(false)
   // Per-file content key — needed for save (encrypt the OOXML output).
   const fileKeyRef = useRef<Uint8Array | null>(null)
-  // Imperative handle for OfficeEditor save() calls.
+  // Imperative handle for OfficeEditor / WhiteboardEditor save() calls.
   const officeEditorRef = useRef<OfficeEditorHandle | null>(null)
+  const whiteboardEditorRef = useRef<WhiteboardEditorHandle | null>(null)
   const [savingOffice, setSavingOffice] = useState(false)
   const [savingVersionOffice, setSavingVersionOffice] = useState(false)
   const [justSavedOffice, setJustSavedOffice] = useState(false)
@@ -83,6 +85,7 @@ export default function FileEditorPage() {
   // the bytes as text (editor) or as a blob URL (viewer).
   const Editor = useMemo(() => (filename ? chooseEditor(filename) : null), [filename])
   const Office = useMemo(() => (filename ? chooseOfficeEditor(filename) : null), [filename])
+  const Whiteboard = useMemo(() => (filename ? chooseWhiteboardEditor(filename) : null), [filename])
   const viewer = useMemo(() => (filename ? chooseViewer(filename) : null), [filename])
   const [officeBytes, setOfficeBytes] = useState<Uint8Array | null>(null)
 
@@ -146,20 +149,22 @@ export default function FileEditorPage() {
         // once; the only difference is how we hand the bytes to the renderer.
         const editorTarget = chooseEditor(meta.name)
         const officeTarget = chooseOfficeEditor(meta.name)
+        const whiteboardTarget = chooseWhiteboardEditor(meta.name)
         const viewerTarget = chooseViewer(meta.name)
-        if ((editorTarget || officeTarget || viewerTarget) && meta.size > MAX_PREVIEW_BYTES) {
+        if ((editorTarget || officeTarget || whiteboardTarget || viewerTarget) && meta.size > MAX_PREVIEW_BYTES) {
           throw new Error(
             `File is too large to preview in the browser (${Math.round(meta.size / 1024 / 1024)} MB; cap is ${MAX_PREVIEW_BYTES / 1024 / 1024} MB). Download it from Drive instead.`,
           )
         }
-        if (editorTarget || officeTarget || viewerTarget) {
+        if (editorTarget || officeTarget || whiteboardTarget || viewerTarget) {
           try {
-            // Office files: prefer the latest snapshot version (Phase 4a
-            // saved one) over the original blob, so reopens see edits.
-            // Text/viewer paths still use the original — TextCollabEditor
-            // does its own version pickup; viewers just want the raw blob.
+            // Office + whiteboard: prefer the latest snapshot version
+            // (saved by their Save flow) over the original blob, so
+            // reopens see edits. Text/viewer paths still use the original —
+            // TextCollabEditor does its own version pickup; viewers just
+            // want the raw blob.
             let plain: Uint8Array | null = null
-            if (officeTarget) {
+            if (officeTarget || whiteboardTarget) {
               try {
                 const versionsRes = await api.get(`/files/${fid}/versions`)
                 if (cancelled) return
@@ -174,7 +179,7 @@ export default function FileEditorPage() {
                 }
               } catch (e) {
                 // Fall through to original blob.
-                console.warn('office: failed to load latest version, falling back to original', e)
+                console.warn('snapshot: failed to load latest version, falling back to original', e)
               }
             }
             if (!plain) {
@@ -184,7 +189,8 @@ export default function FileEditorPage() {
             }
             if (editorTarget) {
               setInitialContent(new TextDecoder().decode(plain))
-            } else if (officeTarget) {
+            } else if (officeTarget || whiteboardTarget) {
+              // Same state slot — both editors take Uint8Array initialBytes.
               setOfficeBytes(plain)
             } else if (viewerTarget) {
               const blob = new Blob([plain.buffer as ArrayBuffer], { type: viewerTarget.mimeType })
@@ -252,25 +258,28 @@ export default function FileEditorPage() {
     }
   }
 
-  async function handleOfficeSave(opts: { silent?: boolean; label?: string; keepForever?: boolean } = {}) {
-    if (!fid || !officeEditorRef.current || !fileKeyRef.current) return
+  // Generic snapshot upload: takes a function that returns the editor's
+  // current bytes, encrypts + posts via the file-type-agnostic
+  // /files/:fileId/snapshot-blob + /files/:fileId/versions endpoints.
+  // Used by both office and whiteboard saves.
+  async function handleSnapshotSave(
+    getBytes: () => Promise<Uint8Array>,
+    opts: { silent?: boolean; label?: string; keepForever?: boolean } = {},
+  ) {
+    if (!fid || !fileKeyRef.current) return
     if (savingOffice) return
     setSavingOffice(true)
     const tid = opts.silent ? undefined : toast.loading('Saving…')
     try {
-      // 1. Ask the editor to extract bin → x2t → OOXML.
-      const { bytes } = await officeEditorRef.current.save()
-      // 2. Encrypt with the file's content key (same scheme as the
-      //    original blob upload — see Drive.uploadFile).
+      const bytes = await getBytes()
       const encrypted = await encryptStream(bytes, fileKeyRef.current)
-      // 3. Upload as a new snapshot, then register it as a version.
       const form = new FormData()
       form.append('file', new Blob([encrypted.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'snapshot')
       const blobRes = await api.post(`/files/${fid}/snapshot-blob`, form)
       await api.post(`/files/${fid}/versions`, {
         s3VersionId: blobRes.data.s3VersionId,
         storagePath: blobRes.data.storagePath,
-        seqAtSnapshot: 0,  // Office docs don't use the Yjs delta log.
+        seqAtSnapshot: 0,  // Non-Yjs editors (office, whiteboard) don't use the delta log.
         docKeyId: 1,
         sizeBytes: encrypted.length,
         label: opts.label ?? null,
@@ -280,7 +289,7 @@ export default function FileEditorPage() {
       setJustSavedOffice(true)
       setTimeout(() => setJustSavedOffice(false), 1500)
     } catch (err: any) {
-      console.error('office save failed', err)
+      console.error('snapshot save failed', err)
       if (!opts.silent && tid) {
         toast.error(err?.response?.data?.error ?? err?.message ?? 'Save failed', { id: tid })
       }
@@ -288,6 +297,16 @@ export default function FileEditorPage() {
     } finally {
       setSavingOffice(false)
     }
+  }
+
+  async function handleOfficeSave(opts: { silent?: boolean; label?: string; keepForever?: boolean } = {}) {
+    if (!officeEditorRef.current) return
+    return handleSnapshotSave(async () => (await officeEditorRef.current!.save()).bytes, opts)
+  }
+
+  async function handleWhiteboardSave(opts: { silent?: boolean; label?: string; keepForever?: boolean } = {}) {
+    if (!whiteboardEditorRef.current) return
+    return handleSnapshotSave(async () => (await whiteboardEditorRef.current!.save()).bytes, opts)
   }
 
   // Office restore — append-only: download the chosen snapshot, optionally
@@ -299,14 +318,22 @@ export default function FileEditorPage() {
   // The "save current first" decision is the user's via RestoreConfirmDialog;
   // panel onRestore just stages the version id, the dialog hands back the
   // choice, this function does the actual work.
-  async function performOfficeRestore(versionId: string, choice: RestoreChoice) {
+  // Generic blob-restore: download the chosen snapshot, optionally pre-
+  // snapshot via the editor's save handler, then re-encrypt the old bytes
+  // as a new snapshot. Page reload picks up the latest version. Used by
+  // both office and whiteboard.
+  async function performBlobRestore(
+    versionId: string,
+    choice: RestoreChoice,
+    preSave: () => Promise<unknown>,
+  ) {
     if (!fid || !fileKeyRef.current) return
     const tid = toast.loading('Restoring…')
     try {
       const dl = await api.get(`/files/${fid}/versions/${versionId}/download`, { responseType: 'arraybuffer' })
       const oldBytes = await decryptStream(new Uint8Array(dl.data), fileKeyRef.current)
       if (choice === 'save-and-restore') {
-        try { await handleOfficeSave({ silent: true, label: 'Pre-restore' }) } catch { /* ignore */ }
+        try { await preSave() } catch { /* ignore */ }
       }
       const reEncrypted = await encryptStream(oldBytes, fileKeyRef.current)
       const form = new FormData()
@@ -324,22 +351,29 @@ export default function FileEditorPage() {
       toast.success('Restored', { id: tid })
       window.location.reload()
     } catch (err: any) {
-      console.error('office restore failed', err)
+      console.error('blob restore failed', err)
       toast.error(err?.response?.data?.error ?? err?.message ?? 'Restore failed', { id: tid })
     }
   }
 
   // Page-level Cmd/Ctrl+S → save. Catches the case when focus isn't on
-  // the OO iframe (filename input, color picker, etc.). The OO-focused
-  // case is handled by inner.html's keydown forwarder + OfficeEditor's
-  // onSaveShortcut prop.
+  // the editor surface (filename input, color picker, etc.). The OO-
+  // focused case is handled by inner.html's keydown forwarder.
+  // Whiteboard: page-level listener catches everything since it's a
+  // React-native canvas (no nested iframe).
   const handleOfficeSaveRef = useRef(handleOfficeSave)
   handleOfficeSaveRef.current = handleOfficeSave
+  const handleWhiteboardSaveRef = useRef(handleWhiteboardSave)
+  handleWhiteboardSaveRef.current = handleWhiteboardSave
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 's') {
         e.preventDefault()
-        handleOfficeSaveRef.current({}).catch(() => {})
+        if (whiteboardEditorRef.current) {
+          handleWhiteboardSaveRef.current({}).catch(() => {})
+        } else if (officeEditorRef.current) {
+          handleOfficeSaveRef.current({}).catch(() => {})
+        }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -362,9 +396,10 @@ export default function FileEditorPage() {
   // render an unsupported notice.
   const editorReady = !!Editor && collectionMasterReady && !!collectionMasterRef.current
   const officeReady = !!Office && collectionMasterReady && !!collectionMasterRef.current
+  const whiteboardReady = !!Whiteboard && collectionMasterReady && !!collectionMasterRef.current
   const viewerReady = !!viewer && !!blobUrl
 
-  if (phase === 'error' || (!editorReady && !officeReady && !viewerReady)) {
+  if (phase === 'error' || (!editorReady && !officeReady && !whiteboardReady && !viewerReady)) {
     return (
       <div className="flex min-h-screen items-center justify-center p-6">
         <div className="max-w-md text-center space-y-4">
@@ -397,15 +432,17 @@ export default function FileEditorPage() {
         </a>
         <span className="text-sm text-muted-foreground">·</span>
         <EditableFilename filename={filename} onCommit={handleRename} />
-        {officeReady && (
+        {(officeReady || whiteboardReady) && (
           <div className="ml-auto flex items-center gap-2">
-            <CursorColorPicker color={userColor ?? '#94a3b8'} onChange={handleColorChange} />
+            {officeReady && (
+              <CursorColorPicker color={userColor ?? '#94a3b8'} onChange={handleColorChange} />
+            )}
             <Button
               type="button"
               size="sm"
               variant="outline"
               disabled={savingOffice || savingVersionOffice}
-              onClick={() => handleOfficeSave().catch(() => {})}
+              onClick={() => (whiteboardReady ? handleWhiteboardSave() : handleOfficeSave()).catch(() => {})}
               className="gap-1.5"
               title="Save current state (⌘/Ctrl+S)"
             >
@@ -425,7 +462,8 @@ export default function FileEditorPage() {
                 if (!trimmed) return
                 setSavingVersionOffice(true)
                 try {
-                  await handleOfficeSave({ label: trimmed, keepForever: true })
+                  const fn = whiteboardReady ? handleWhiteboardSave : handleOfficeSave
+                  await fn({ label: trimmed, keepForever: true })
                 } catch { /* toast already shown */ } finally {
                   setSavingVersionOffice(false)
                 }
@@ -480,7 +518,16 @@ export default function FileEditorPage() {
                 onSaveShortcut={() => handleOfficeSaveRef.current({}).catch(() => {})}
               />
             )}
-            {!editorReady && !officeReady && viewerReady && viewer && blobUrl && (
+            {!editorReady && !officeReady && whiteboardReady && Whiteboard && (
+              <Whiteboard
+                ref={whiteboardEditorRef}
+                fileId={fid!}
+                filename={filename}
+                collectionMaster={collectionMasterRef.current!}
+                initialBytes={officeBytes ?? undefined}
+              />
+            )}
+            {!editorReady && !officeReady && !whiteboardReady && viewerReady && viewer && blobUrl && (
               <viewer.Component
                 filename={filename}
                 blobUrl={blobUrl}
@@ -490,7 +537,7 @@ export default function FileEditorPage() {
           </Suspense>
         </div>
 
-        {historyOpen && officeReady && fid && (
+        {historyOpen && (officeReady || whiteboardReady) && fid && (
           <aside className="flex h-full w-[360px] min-h-0 shrink-0 flex-col overflow-hidden border-l border-border bg-card">
             <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
               <h2 className="text-sm font-semibold">Version history</h2>
@@ -518,7 +565,11 @@ export default function FileEditorPage() {
         onChoose={(choice) => {
           const vid = pendingRestoreVersionId
           setPendingRestoreVersionId(null)
-          if (vid) performOfficeRestore(vid, choice)
+          if (!vid) return
+          const preSave = whiteboardReady
+            ? () => handleWhiteboardSave({ silent: true, label: 'Pre-restore' })
+            : () => handleOfficeSave({ silent: true, label: 'Pre-restore' })
+          performBlobRestore(vid, choice, preSave)
         }}
       />
     </div>
