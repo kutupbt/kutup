@@ -2,6 +2,7 @@
 // Maps file extensions to CodeMirror 6 language extensions.
 // Extensions not listed return null (plain-text mode).
 import { type Extension } from '@codemirror/state'
+import { StreamLanguage } from '@codemirror/language'
 import { markdown } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
 import { python } from '@codemirror/lang-python'
@@ -12,6 +13,18 @@ import { yaml } from '@codemirror/lang-yaml'
 import { html } from '@codemirror/lang-html'
 import { css } from '@codemirror/lang-css'
 import { sql } from '@codemirror/lang-sql'
+import { cpp } from '@codemirror/lang-cpp'
+import { java } from '@codemirror/lang-java'
+import { php } from '@codemirror/lang-php'
+import { xml } from '@codemirror/lang-xml'
+import { shell } from '@codemirror/legacy-modes/mode/shell'
+import { ruby } from '@codemirror/legacy-modes/mode/ruby'
+import { toml } from '@codemirror/legacy-modes/mode/toml'
+import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile'
+import { perl } from '@codemirror/legacy-modes/mode/perl'
+import { powerShell } from '@codemirror/legacy-modes/mode/powershell'
+import { lua } from '@codemirror/legacy-modes/mode/lua'
+import { swift } from '@codemirror/legacy-modes/mode/swift'
 
 export function langForExtension(ext: string): Extension | null {
   switch (ext.toLowerCase()) {
@@ -44,6 +57,51 @@ export function langForExtension(ext: string): Extension | null {
       return css()
     case 'sql':
       return sql()
+    case 'c':
+    case 'h':
+    case 'cpp':
+    case 'cc':
+    case 'cxx':
+    case 'c++':
+    case 'hpp':
+    case 'hh':
+    case 'hxx':
+    case 'h++':
+      return cpp()
+    case 'java':
+      return java()
+    case 'php':
+    case 'phtml':
+      return php()
+    case 'xml':
+    case 'svg':
+    case 'xsl':
+    case 'xsd':
+      return xml()
+    case 'sh':
+    case 'bash':
+    case 'zsh':
+    case 'fish':
+      return StreamLanguage.define(shell)
+    case 'rb':
+    case 'rake':
+    case 'gemspec':
+      return StreamLanguage.define(ruby)
+    case 'toml':
+      return StreamLanguage.define(toml)
+    case 'dockerfile':
+    case 'containerfile':
+      return StreamLanguage.define(dockerFile)
+    case 'pl':
+    case 'pm':
+      return StreamLanguage.define(perl)
+    case 'ps1':
+    case 'psm1':
+      return StreamLanguage.define(powerShell)
+    case 'lua':
+      return StreamLanguage.define(lua)
+    case 'swift':
+      return StreamLanguage.define(swift)
     case 'txt':
     default:
       return null

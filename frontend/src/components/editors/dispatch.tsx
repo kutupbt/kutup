@@ -17,7 +17,17 @@ const TEXT_EXT = new Set([
   'go', 'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx',
   'py', 'rs', 'json', 'yaml', 'yml',
   'html', 'htm', 'css', 'toml', 'sh', 'sql',
-  'dockerfile', 'nix',
+  'dockerfile', 'containerfile', 'nix',
+  // C / C++
+  'c', 'h', 'cpp', 'cc', 'cxx', 'c++', 'hpp', 'hh', 'hxx', 'h++',
+  // Other
+  'java', 'php', 'phtml',
+  'xml', 'svg', 'xsl', 'xsd',
+  'bash', 'zsh', 'fish',
+  'rb', 'rake', 'gemspec',
+  'pl', 'pm',
+  'ps1', 'psm1',
+  'lua', 'swift',
 ])
 
 const OFFICE_EXT = new Set(['docx', 'xlsx', 'pptx'])
