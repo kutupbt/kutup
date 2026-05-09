@@ -794,26 +794,35 @@
                       },
                       onDocumentReady: function () {
                         setStatus('editor: document ready')
-                        // Attach a Cmd/Ctrl+S listener inside OO's own
-                        // iframe document. Without this layer, the OS
-                        // "Save Page As" dialog wins because OO's iframe
-                        // captures keystrokes before our outer page sees
-                        // them. We preventDefault and post the intent up.
+                        // Attach Cmd/Ctrl+S listeners inside OO's own
+                        // iframe — when the user is focused on a cell or
+                        // canvas, our outer-page listener never sees the
+                        // keydown because the OO iframe captures it first.
+                        // Bind on BOTH window and document of the OO
+                        // iframe at capture phase to beat OO's own listeners.
                         try {
-                          var oo = getInnerEditor()
-                          var inDoc = oo && oo.document
-                          if (inDoc && !inDoc._kutupSaveBound) {
-                            inDoc.addEventListener('keydown', function (ev) {
-                              if ((ev.metaKey || ev.ctrlKey) && !ev.shiftKey && !ev.altKey && (ev.key === 's' || ev.key === 'S')) {
-                                ev.preventDefault()
-                                ev.stopPropagation()
-                                if (window.parent && window.parent !== window) {
-                                  send(window.parent, { type: 'oo-save-shortcut' })
-                                }
+                          if (!docEditor || typeof docEditor.getIframe !== 'function') return
+                          var ooIfr = docEditor.getIframe()
+                          var ooWin = ooIfr && ooIfr.contentWindow
+                          var ooDoc = ooIfr && ooIfr.contentDocument
+                          var saveHandler = function (ev) {
+                            if ((ev.metaKey || ev.ctrlKey) && !ev.shiftKey && !ev.altKey && (ev.key === 's' || ev.key === 'S')) {
+                              ev.preventDefault()
+                              ev.stopPropagation()
+                              if (window.parent && window.parent !== window) {
+                                send(window.parent, { type: 'oo-save-shortcut' })
                               }
-                            }, true)  // capture phase: beat OO's own listeners
-                            inDoc._kutupSaveBound = true
+                            }
                           }
+                          if (ooDoc && !ooDoc._kutupSaveBound) {
+                            ooDoc.addEventListener('keydown', saveHandler, true)
+                            ooDoc._kutupSaveBound = true
+                          }
+                          if (ooWin && !ooWin._kutupSaveBound) {
+                            ooWin.addEventListener('keydown', saveHandler, true)
+                            ooWin._kutupSaveBound = true
+                          }
+                          console.log('[kutup-bridge] Cmd/Ctrl+S bound on OO iframe ooDoc=' + !!ooDoc + ' ooWin=' + !!ooWin)
                         } catch (e) {
                           console.warn('[kutup-bridge] Cmd/Ctrl+S binding failed', e)
                         }
