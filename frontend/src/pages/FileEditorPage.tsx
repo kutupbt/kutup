@@ -10,10 +10,13 @@ import api from '@/api/client'
 import {
   decrypt,
   decryptStream,
+  encrypt,
   encryptStream,
   fromBase64,
+  toBase64,
   unwrapKeyFromSender,
 } from '@/crypto'
+import EditableFilename from '@/components/EditableFilename'
 import { chooseEditor, chooseOfficeEditor } from '@/components/editors/dispatch'
 import type { OfficeEditorHandle } from '@/components/editors/office/OfficeEditor'
 import { chooseViewer } from '@/components/viewers/dispatch'
@@ -53,6 +56,9 @@ export default function FileEditorPage() {
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState('')
   const [filename, setFilename] = useState('')
+  // Stash mime + size at load so the rename helper can re-encrypt the
+  // full metadata blob ({name, mimeType, size}) without re-fetching.
+  const fileMetaRef = useRef<{ mimeType: string; size: number } | null>(null)
   const [initialContent, setInitialContent] = useState<string | undefined>(undefined)
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
   // Stable Uint8Array reference for the editor — recreating it would cause
@@ -124,6 +130,7 @@ export default function FileEditorPage() {
         const meta: FileMetadata = JSON.parse(new TextDecoder().decode(metaBytes))
         if (cancelled) return
         setFilename(meta.name)
+        fileMetaRef.current = { mimeType: meta.mimeType, size: meta.size }
         document.title = `${meta.name} — Kutup`
 
         // Decrypt the original blob. Editors need it as text; viewers need it
@@ -201,6 +208,29 @@ export default function FileEditorPage() {
       if (createdUrl) URL.revokeObjectURL(createdUrl)
     }
   }, [cid, fid, masterKey, privateKey, userId, publicKey, navigate])
+
+  async function handleRename(newFullName: string): Promise<boolean> {
+    if (!fid || !fileKeyRef.current || !fileMetaRef.current) return false
+    try {
+      const meta = {
+        name: newFullName,
+        mimeType: fileMetaRef.current.mimeType,
+        size: fileMetaRef.current.size,
+      }
+      const enc = await encrypt(new TextEncoder().encode(JSON.stringify(meta)), fileKeyRef.current)
+      await api.put(`/files/${fid}`, {
+        encryptedMetadata: toBase64(enc.ciphertext),
+        metadataNonce: toBase64(enc.nonce),
+      })
+      setFilename(newFullName)
+      document.title = `${newFullName} — Kutup`
+      toast.success('Renamed')
+      return true
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error ?? 'Rename failed')
+      return false
+    }
+  }
 
   async function handleColorChange(hex: string) {
     const previous = userColor
@@ -299,7 +329,7 @@ export default function FileEditorPage() {
           <span className="text-sm font-semibold tracking-tight">Kutup</span>
         </a>
         <span className="text-sm text-muted-foreground">·</span>
-        <span className="text-sm font-medium truncate">{filename}</span>
+        <EditableFilename filename={filename} onCommit={handleRename} />
         {officeReady && (
           <div className="ml-auto flex items-center gap-2">
             <CursorColorPicker color={userColor ?? '#94a3b8'} onChange={handleColorChange} />

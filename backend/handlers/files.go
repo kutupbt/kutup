@@ -274,6 +274,82 @@ func (h *FilesHandler) Download(c *fiber.Ctx) error {
 	return c.SendStream(body, int(size))
 }
 
+// @Summary      Update file metadata (rename)
+// @Description  Re-encrypted metadata blob with the new filename. Backend
+// @Description  is E2EE-blind to the plaintext name; clients are responsible
+// @Description  for preserving the file extension where required (office /
+// @Description  text-editor dispatch).
+// @Tags         Files
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id    path      string                true  "File UUID"
+// @Param        body  body      UpdateFileMetadataRequest true  "New encrypted metadata"
+// @Success      200   {object}  MessageResponse
+// @Failure      400   {object}  ErrorResponse
+// @Failure      401   {object}  ErrorResponse
+// @Failure      403   {object}  ErrorResponse
+// @Failure      404   {object}  ErrorResponse
+// @Router       /files/{id} [put]
+func (h *FilesHandler) UpdateMetadata(c *fiber.Ctx) error {
+	userID := middleware.UserID(c)
+	fileID := c.Params("id")
+
+	var req struct {
+		EncryptedMetadata string `json:"encryptedMetadata"`
+		MetadataNonce     string `json:"metadataNonce"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
+	}
+	if req.EncryptedMetadata == "" || req.MetadataNonce == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "encryptedMetadata and metadataNonce required"})
+	}
+
+	// Permission: collection owner OR uploader-with-can-delete (same gate
+	// the Delete handler uses — rename is a softer mutation than delete,
+	// so the same set of users can do it).
+	var collID, uploaderID string
+	if err := h.DB.QueryRow(context.Background(),
+		`SELECT collection_id, uploader_user_id FROM files WHERE id = $1`,
+		fileID,
+	).Scan(&collID, &uploaderID); err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "not found"})
+	}
+	var ownerID string
+	h.DB.QueryRow(context.Background(),
+		`SELECT owner_user_id FROM collections WHERE id = $1`, collID,
+	).Scan(&ownerID)
+	if ownerID != userID {
+		if uploaderID != userID {
+			return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
+		}
+		var canDelete bool
+		h.DB.QueryRow(context.Background(),
+			`SELECT can_delete FROM collection_shares WHERE collection_id = $1 AND recipient_user_id = $2`,
+			collID, userID,
+		).Scan(&canDelete)
+		if !canDelete {
+			return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
+		}
+	}
+
+	if _, err := h.DB.Exec(context.Background(), `
+		UPDATE files SET encrypted_metadata = $1, metadata_nonce = $2
+		WHERE id = $3
+	`, req.EncryptedMetadata, req.MetadataNonce, fileID); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	return c.JSON(fiber.Map{"message": "updated"})
+}
+
+// UpdateFileMetadataRequest documents the rename body shape for swagger.
+type UpdateFileMetadataRequest struct {
+	EncryptedMetadata string `json:"encryptedMetadata"`
+	MetadataNonce     string `json:"metadataNonce"`
+}
+
 // @Summary      Delete a file
 // @Tags         Files
 // @Security     BearerAuth

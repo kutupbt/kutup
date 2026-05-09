@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Download, Trash2, MoreVertical, ArrowUp, ArrowDown, ExternalLink, Info } from 'lucide-react'
+import { Download, Trash2, MoreVertical, ArrowUp, ArrowDown, ExternalLink, Info, Pencil } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
   Table,
@@ -41,6 +41,7 @@ interface Props {
   onDownload: (file: DecryptedFile) => void
   onDelete: (file: DecryptedFile) => void
   onDetails: (file: DecryptedFile) => void
+  onRename?: (file: DecryptedFile) => void
 }
 
 type SortKey = 'name' | 'modified' | 'size'
@@ -110,6 +111,7 @@ export default function FileTable({
   onDownload,
   onDelete,
   onDetails,
+  onRename,
 }: Props) {
   const { t } = useTranslation()
   const [sortKey, setSortKey] = useState<SortKey>('name')
@@ -244,6 +246,12 @@ export default function FileTable({
                             <Download className="h-4 w-4 mr-2" />
                             {t('files.download')}
                           </DropdownMenuItem>
+                          {canDelete && onRename && (
+                            <DropdownMenuItem onSelect={() => onRename(file)}>
+                              <Pencil className="h-4 w-4 mr-2" />
+                              {t('files.rename', { defaultValue: 'Rename' })}
+                            </DropdownMenuItem>
+                          )}
                           {canDelete && (
                             <DropdownMenuItem
                               className="text-destructive focus:text-destructive"
@@ -271,6 +279,12 @@ export default function FileTable({
                     <Download className="h-4 w-4 mr-2" />
                     {t('files.download')}
                   </ContextMenuItem>
+                  {canDelete && onRename && (
+                    <ContextMenuItem onSelect={() => onRename(file)}>
+                      <Pencil className="h-4 w-4 mr-2" />
+                      {t('files.rename', { defaultValue: 'Rename' })}
+                    </ContextMenuItem>
+                  )}
                   {canDelete && (
                     <>
                       <ContextMenuSeparator />

@@ -211,6 +211,7 @@
     "modified": "Değiştirildi",
     "uploaded": "Yüklendi",
     "download": "İndir",
+    "rename": "Yeniden adlandır",
     "delete": "Sil",
     "selectAll": "Tüm dosyaları seç"
   },
@@ -254,6 +255,8 @@
     },
     "rename": {
       "title": "Klasörü yeniden adlandır",
+      "titleFolder": "Klasörü yeniden adlandır",
+      "titleFile": "Dosyayı yeniden adlandır",
       "newName": "Yeni ad",
       "cancel": "İptal",
       "rename": "Yeniden adlandır"

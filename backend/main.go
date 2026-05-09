@@ -164,6 +164,7 @@ func main() {
 	files := api.Group("/files")
 	files.Post("/upload", authMW.Required(), filesH.Upload)
 	files.Get("/:id/download", authMW.Required(), filesH.Download)
+	files.Put("/:id", authMW.Required(), filesH.UpdateMetadata)
 	files.Delete("/:id", authMW.Required(), filesH.Delete)
 
 	api.Get("/files/:fileId/versions", authMW.Required(), fvH.List)

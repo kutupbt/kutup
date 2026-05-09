@@ -92,7 +92,7 @@ export default function Drive() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [newMenuOpen, setNewMenuOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
-  const [renameTarget, setRenameTarget] = useState<Collection | null>(null)
+  const [renameTarget, setRenameTarget] = useState<import('@/components/drive/dialogs/RenameDialog').RenameTarget | null>(null)
   const [shareTarget, setShareTarget] = useState<Collection | null>(null)
   const [publicShareUrl, setPublicShareUrl] = useState<string | null>(null)
   const [addRemoteOpen, setAddRemoteOpen] = useState(false)
@@ -626,6 +626,27 @@ export default function Drive() {
     if (myFilesCollection?.id === col.id) setMyFilesCollection((prev) => prev ? { ...prev, decryptedName: newName } : prev)
   }
 
+  async function handleRenameFile(file: DecryptedFile, newName: string) {
+    if (!file._fileKey) {
+      toast.error(t('drive.toast.renameFailed', { defaultValue: 'Rename failed' }))
+      return
+    }
+    try {
+      const { renameFile } = await import('@/lib/renameFile')
+      await renameFile(file, newName, file._fileKey)
+      setFiles((prev) => prev.map((f) => f.id === file.id ? { ...f, decryptedName: newName } : f))
+      // If the details panel currently shows this file, update it too.
+      setDetailItem((prev) =>
+        prev && !('ownerUserId' in prev) && (prev as DecryptedFile).id === file.id
+          ? { ...(prev as DecryptedFile), decryptedName: newName }
+          : prev,
+      )
+    } catch (err) {
+      console.error('rename file failed', err)
+      toast.error(t('drive.toast.renameFailed', { defaultValue: 'Rename failed' }))
+    }
+  }
+
   async function handleColorFolder(col: Collection, color: string | null) {
     await api.patch(`/collections/${col.id}/color`, { color })
     setCollections((prev) => prev.map((c) => c.id === col.id ? { ...c, color } : c))
@@ -899,7 +920,7 @@ export default function Drive() {
           onEnter={enterFolder}
           onDetails={setDetailItem}
           onToggleSelect={toggleFolderSelect}
-          onRename={(col) => setRenameTarget(col)}
+          onRename={(col) => setRenameTarget({ kind: "collection", collection: col })}
           onColor={handleColorFolder}
           onShare={(col) => setShareTarget(col)}
           onPublicLink={handleCreatePublicLink}
@@ -944,6 +965,7 @@ export default function Drive() {
                 onDownload={handleDownload}
                 onDelete={(file) => setDeleteFile(file)}
                 onDetails={setDetailItem}
+                onRename={(file) => setRenameTarget({ kind: 'file', file })}
               />
             )}
           </>
@@ -1005,7 +1027,8 @@ export default function Drive() {
           if ('ownerUserId' in item) setDeleteFolder(item as Collection)
           else setDeleteFile(item as DecryptedFile)
         }}
-        onRename={(col) => setRenameTarget(col)}
+        onRename={(col) => setRenameTarget({ kind: "collection", collection: col })}
+        onRenameFile={(file) => setRenameTarget({ kind: 'file', file })}
         onColor={handleColorFolder}
         onShare={(col) => setShareTarget(col)}
         onPublicLink={handleCreatePublicLink}
@@ -1028,9 +1051,10 @@ export default function Drive() {
       <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
 
       <RenameDialog
-        collection={renameTarget}
+        target={renameTarget}
         onOpenChange={(open) => { if (!open) setRenameTarget(null) }}
-        onConfirm={handleRenameFolder}
+        onConfirmCollection={handleRenameFolder}
+        onConfirmFile={handleRenameFile}
       />
 
       <ShareDialog

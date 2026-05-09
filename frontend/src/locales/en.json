@@ -211,6 +211,7 @@
     "modified": "Modified",
     "uploaded": "Uploaded",
     "download": "Download",
+    "rename": "Rename",
     "delete": "Delete",
     "selectAll": "Select all files"
   },
@@ -254,6 +255,8 @@
     },
     "rename": {
       "title": "Rename folder",
+      "titleFolder": "Rename folder",
+      "titleFile": "Rename file",
       "newName": "New name",
       "cancel": "Cancel",
       "rename": "Rename"

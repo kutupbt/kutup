@@ -19,6 +19,7 @@ interface Props {
   onDownloadFolder?: (col: Collection) => void
   onDelete?: (item: Collection | DecryptedFile) => void
   onRename?: (col: Collection) => void
+  onRenameFile?: (file: DecryptedFile) => void
   onColor?: (col: Collection, color: string | null) => void
   onShare?: (col: Collection) => void
   onPublicLink?: (col: Collection) => void
@@ -33,6 +34,7 @@ export default function DetailsPanel({
   onDownloadFolder,
   onDelete,
   onRename,
+  onRenameFile,
   onColor,
   onShare,
   onPublicLink,
@@ -178,6 +180,15 @@ export default function DetailsPanel({
               <Button className="w-full" onClick={() => onDownload?.(item as DecryptedFile)}>
                 <Download className="h-4 w-4 mr-2" /> {t('details.download')}
               </Button>
+              {canDelete && onRenameFile && (
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => { onRenameFile(item as DecryptedFile); onClose() }}
+                >
+                  <Pencil className="h-4 w-4 mr-2" /> {t('details.rename')}
+                </Button>
+              )}
               {canDelete && (
                 <Button
                   variant="destructive"
