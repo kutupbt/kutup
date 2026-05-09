@@ -905,12 +905,20 @@
                   // caret in m_aForeignCursorsXY and queues a paint task
                   // via DrawingDocument.Collaborative_UpdateTarget — but
                   // with is_from_paint=undefined the call only PUSHES to
-                  // CollaborativeTargetsUpdateTasks. The queue is drained
-                  // on each paint tick. xlsx's sheet redraws constantly so
+                  // CollaborativeTargetsUpdateTasks. The queue drains on
+                  // each paint tick. xlsx's sheet redraws constantly so
                   // the queue flushes; docx is idle between edits so the
                   // peer caret would never visualise. Force a flush +
                   // repaint here, mirroring the call sites in
                   // sdkjs/word/sdk-all.js (line 30605, 33186).
+                  //
+                  // Not extended to pptx: slide's drawingsUpdateForeignCursor
+                  // (slide/sdk-all.js:3012) gates on the RECEIVER having an
+                  // active text-edit context (`getTargetDocContent` != null).
+                  // Without that gate passing, no target ever gets queued —
+                  // a paint kick has nothing to flush. Peer caret in pptx
+                  // only renders while both peers are co-editing the same
+                  // shape; this is OO's design and matches CryptPad behaviour.
                   try {
                     var oo = getInnerEditor()
                     var dd = oo && oo.WordControl && oo.WordControl.m_oDrawingDocument
