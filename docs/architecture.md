@@ -6,31 +6,24 @@ Kutup is a zero-knowledge file storage system. The server stores only ciphertext
 
 ## Key Hierarchy
 
-```
-mnemonic (BIP39, 24 words)
-    │
-    └─► recovery key  (Argon2id KDF over mnemonic)
-              │
-              └─► encrypts ──► encryptedMasterKey  (stored server-side)
-                                        │
-                               decrypt (client-side)
-                                        │
-                                  master key
-                                        │
-                          ┌─────────────┴───────────────┐
-                          │                             │
-              per-collection key               NaCl keypair
-              (XSalsa20-Poly1305 via      (asymmetric, for sharing)
-               crypto_secretbox)                        │
-                          │                  publicKey  encryptedPrivateKey
-              per-file key (random)         (stored     (stored encrypted,
-                          │                 plaintext)  nonce = privateKeyNonce)
-                XChaCha20-Poly1305
-              (crypto_secretstream,
-                  5 MB chunks)
-                          │
-              encrypted file content
-              (stored in SeaweedFS)
+```mermaid
+flowchart TD
+    M["mnemonic<br/>(BIP39, 24 words)"]
+    R["recovery key<br/>Argon2id over mnemonic"]
+    EMK["encryptedMasterKey<br/>(stored server-side)"]
+    MK["master key<br/>(browser memory only)"]
+    CK["per-collection key<br/>XSalsa20-Poly1305<br/>via crypto_secretbox"]
+    NACL["NaCl keypair<br/>publicKey + encryptedPrivateKey<br/>(for cross-user sharing)"]
+    FK["per-file key<br/>(random, per file)"]
+    BLOB["encrypted file content<br/>XChaCha20-Poly1305<br/>crypto_secretstream, 5 MB chunks<br/>→ SeaweedFS"]
+
+    M -->|derives| R
+    R -->|encrypts| EMK
+    EMK -->|client-side decrypt| MK
+    MK -->|encrypts| CK
+    MK -->|encrypts| NACL
+    CK -->|encrypts| FK
+    FK -->|encrypts| BLOB
 ```
 
 Every cryptographic primitive is from **libsodium** (`libsodium-wrappers-sumo`), running entirely in the browser. The backend is a pure ciphertext relay.
@@ -53,6 +46,20 @@ Every cryptographic primitive is from **libsodium** (`libsodium-wrappers-sumo`),
 ---
 
 ## Login Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant S as Backend
+
+    B->>S: GET /auth/login/preflight?email=...
+    S-->>B: { loginKeySalt, kdfSalt }
+    Note over B: Argon2id(password, loginKeySalt)<br/>in Web Worker → loginKey
+    B->>S: POST /auth/login { loginKey }
+    S-->>B: { accessToken, encryptedMasterKey, ... }<br/>+ refresh_token cookie (httpOnly)
+    Note over B: Decrypt encryptedMasterKey<br/>with loginKey → master key<br/>(browser memory only)
+```
 
 1. Client fetches `GET /api/auth/login/preflight?email=...` to retrieve `loginKeySalt` and `kdfSalt`.
 2. Client recomputes the login key from the password + `loginKeySalt` via Argon2id (in a Web Worker to avoid blocking the UI).
@@ -157,12 +164,45 @@ Migrations are managed with **golang-migrate** and run automatically on server s
 
 ## Collaborative Editing
 
-kutup supports real-time, end-to-end-encrypted collaborative editing of text/markdown/code files (`.txt`, `.md`, code formats). Office docs (`.docx`/`.xlsx`/`.pptx`/`.odt`/`.ods`/`.odp`) are deferred to a future release.
+kutup supports real-time, end-to-end-encrypted collaborative editing for three file families:
+
+| Family | Extensions | Engine |
+|---|---|---|
+| Notes / code | `.md`, `.txt`, `.js`, `.ts`, `.go`, `.py`, `.cpp`, `.rs`, … | Yjs CRDT (`Y.Text`) under CodeMirror 6 with `y-codemirror.next` |
+| Office | `.docx`, `.xlsx`, `.pptx` | OnlyOffice client-side via the CryptPad pattern (`OO_OP` envelope kind wraps OnlyOffice's native ops; see [`docs/onlyoffice.md`](onlyoffice.md)) |
+| Whiteboards | `.excalidraw` | Excalidraw with last-write-wins per element via `versionNonce` + `reconcileElements` |
 
 The architecture is summarised below; the design rationale and footguns live in `docs/superpowers/specs/2026-05-04-collab-edit-design.md`.
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Browser A<br/>(Editor)
+    participant R as Go relay<br/>(ciphertext only)
+    participant B as Browser B<br/>(Editor)
+
+    Note over A: edit → diff → encrypt
+    A->>A: derive content_key =<br/>HKDF(collection_master, fileId)
+    A->>A: AEAD encrypt (XChaCha20-Poly1305)<br/>AAD = 30-byte header
+    A->>A: Ed25519-sign (header + ciphertext)
+    A->>R: WS frame (header + ciphertext + sig)
+    R->>R: verify signature + epoch
+    alt persisted (yjs / oo_op / excalidraw_op)
+        R->>R: append to file_update_log
+    else ephemeral (awareness / *_cursor)
+        Note over R: no persistence
+    end
+    R->>B: broadcast frame (unchanged bytes)
+    B->>B: verify signature
+    B->>B: AEAD decrypt → plaintext op
+    B->>B: apply (CRDT merge / OO setOp / reconcile)
+```
+
 ### Sync engine
-Yjs CRDT (`Y.Text`) under CodeMirror 6 with `y-codemirror.next`. Clients exchange opaque binary update frames; the server never instantiates a `Y.Doc`.
+Three engines run side-by-side, each routed by `KIND` byte in the envelope:
+- **Yjs CRDT** (`KIND.YJS_UPDATE` = 1) for notes/code. Clients exchange opaque binary update frames; the server never instantiates a `Y.Doc`.
+- **OnlyOffice op** (`KIND.OO_OP` = 4) wraps the editor's native operation stream. Keeps document state consistent across peers using OO's own coauthoring protocol — patched to run client-side per [`docs/onlyoffice.md`](onlyoffice.md).
+- **Excalidraw op** (`KIND.EXCALIDRAW_OP` = 8) carries an array of changed elements. Convergence relies on each element's `versionNonce` plus Excalidraw's `reconcileElements` — last-write-wins per element, no CRDT semantics. Ephemeral on the wire (canonical state lives in snapshots).
 
 ### Wire envelope
 Each frame is wrapped in an XChaCha20-Poly1305 AEAD with `(version, kind, doc_key_id, sender_device_id, sequence)` as additional authenticated data, then signed with the sender's Ed25519 device key. The server validates the signature and stores the opaque ciphertext.
@@ -181,6 +221,8 @@ Two-tier:
 Snapshots fire on idle 30s + ≥1 update, every 200 updates, or on explicit "Save version".
 
 Retention: 30 days OR last 50 versions, whichever yields more. Named/keep-forever versions are exempt forever.
+
+The snapshot endpoints (`/files/:fileId/snapshot-blob` + `/files/:fileId/versions`) are file-type-agnostic — notes, office docs, and whiteboards all use the same plumbing. Restore for blob-based editors (office, whiteboard) reposts the chosen old bytes as a new version then reloads the page; for Yjs editors the CRDT merges the restored state in-place.
 
 ### Federation, sharing
 Existing collection-share + federation flows are unchanged. A live-edited file is still a regular `files` row with an encrypted blob; non-editing users continue to download it as today.

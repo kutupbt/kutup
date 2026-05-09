@@ -191,9 +191,15 @@ kutup/
 │   ├── src/
 │   │   ├── api/client.ts    # Axios instance with auth interceptors
 │   │   ├── crypto/          # All libsodium wrappers (symmetric, asymmetric, KDF, mnemonic)
-│   │   ├── pages/           # Route-level components
+│   │   ├── collab/          # Envelope, transport, AEAD frame helpers (collab WS layer)
+│   │   ├── components/editors/
+│   │   │   ├── TextCollabEditor.tsx       # Notes / code (CodeMirror 6 + Yjs)
+│   │   │   ├── office/OfficeEditor.tsx    # .docx/.xlsx/.pptx (OnlyOffice bridge)
+│   │   │   └── whiteboard/WhiteboardEditor.tsx  # .excalidraw (Excalidraw + last-write-wins)
+│   │   ├── pages/           # Route-level components (Drive, FileEditorPage, Settings, Admin, …)
 │   │   ├── store/           # Redux slices (auth state)
 │   │   └── workers/         # Web Worker for Argon2id KDF
+│   ├── public/onlyoffice/   # CryptPad-pinned OnlyOffice bundle (gitignored; install via script)
 │   └── vite.config.ts       # Dev server proxy config
 ├── cli/                      # Go CLI (Cobra) — login, ls, upload, download, sync, share
 │   ├── cmd/                 # One file per command
