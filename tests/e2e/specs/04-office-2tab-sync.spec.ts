@@ -63,21 +63,27 @@ test.describe('office xlsx — two-tab sync (happy path)', () => {
 
     await tabA.waitForTimeout(30_000)
 
+    // Serialize the cell click + cell focus across both tabs first; only
+    // the typing runs concurrently. Earlier this block called bringToFront
+    // inside Promise.all, racing for OS-level focus — whichever lost ended
+    // up with its keystrokes going to a tab OnlyOffice didn't treat as
+    // active, dropping all saveChanges. Click + 300ms wait per tab,
+    // sequentially, picks the cell on each side without the focus race.
+    await tabA.bringToFront()
+    await tabA.mouse.click(200, 250)
+    await tabA.waitForTimeout(300)
+    await tabB.bringToFront()
+    await tabB.mouse.click(400, 250)
+    await tabB.waitForTimeout(300)
+    // Now type concurrently. Page.keyboard targets a specific Page object
+    // regardless of OS focus, so this part is safe to parallelise.
     await Promise.all([
-      (async () => {
-        await tabA.bringToFront()
-        await tabA.mouse.click(200, 250)
-        await tabA.waitForTimeout(300)
-        await tabA.keyboard.type('alpha', { delay: 80 })
-        await tabA.keyboard.press('Enter')
-      })(),
-      (async () => {
-        await tabB.bringToFront()
-        await tabB.mouse.click(400, 250)
-        await tabB.waitForTimeout(300)
-        await tabB.keyboard.type('beta', { delay: 80 })
-        await tabB.keyboard.press('Enter')
-      })(),
+      tabA.keyboard.type('alpha', { delay: 80 }),
+      tabB.keyboard.type('beta', { delay: 80 }),
+    ])
+    await Promise.all([
+      tabA.keyboard.press('Enter'),
+      tabB.keyboard.press('Enter'),
     ])
     await tabA.waitForTimeout(5_000)
 
