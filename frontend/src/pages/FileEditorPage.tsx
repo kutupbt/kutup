@@ -18,6 +18,7 @@ import {
 } from '@/crypto'
 import EditableFilename from '@/components/EditableFilename'
 import VersionHistoryPanel from '@/components/VersionHistory/VersionHistoryPanel'
+import RestoreConfirmDialog, { type RestoreChoice } from '@/components/RestoreConfirmDialog'
 import { chooseEditor, chooseOfficeEditor } from '@/components/editors/dispatch'
 import type { OfficeEditorHandle } from '@/components/editors/office/OfficeEditor'
 import { chooseViewer } from '@/components/viewers/dispatch'
@@ -73,6 +74,9 @@ export default function FileEditorPage() {
   const [savingOffice, setSavingOffice] = useState(false)
   const [justSavedOffice, setJustSavedOffice] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  // null = dialog closed; string = pending versionId awaiting user's
+  // save-or-restore-only choice.
+  const [pendingRestoreVersionId, setPendingRestoreVersionId] = useState<string | null>(null)
 
   // Pick the right component eagerly so the load step knows whether it needs
   // the bytes as text (editor) or as a blob URL (viewer).
@@ -285,20 +289,24 @@ export default function FileEditorPage() {
     }
   }
 
-  // Office restore — append-only: download the chosen snapshot, pre-snapshot
-  // current state so we don't lose it, then re-encrypt the old bytes and
-  // post as a NEW snapshot. Page reload picks the latest version (the just-
-  // restored one) via the existing load flow. Avoids the complexity of
-  // hot-swapping the OnlyOffice iframe's initialBytes mid-session.
-  async function handleRestoreOffice(versionId: string) {
+  // Office restore — append-only: download the chosen snapshot, optionally
+  // pre-snapshot the current state, then re-encrypt the old bytes and post
+  // as a NEW snapshot. Page reload picks the latest version (the just-
+  // restored one) via the existing load flow. Avoids hot-swapping the
+  // OnlyOffice iframe's initialBytes mid-session.
+  //
+  // The "save current first" decision is the user's via RestoreConfirmDialog;
+  // panel onRestore just stages the version id, the dialog hands back the
+  // choice, this function does the actual work.
+  async function performOfficeRestore(versionId: string, choice: RestoreChoice) {
     if (!fid || !fileKeyRef.current) return
-    if (!window.confirm('Restore this version? Current state will be saved as a new version first.')) return
     const tid = toast.loading('Restoring…')
     try {
       const dl = await api.get(`/files/${fid}/versions/${versionId}/download`, { responseType: 'arraybuffer' })
       const oldBytes = await decryptStream(new Uint8Array(dl.data), fileKeyRef.current)
-      // Pre-snapshot current state so the user can roll back the restore.
-      try { await handleOfficeSave({ silent: true, label: 'Pre-restore' }) } catch { /* ignore */ }
+      if (choice === 'save-and-restore') {
+        try { await handleOfficeSave({ silent: true, label: 'Pre-restore' }) } catch { /* ignore */ }
+      }
       const reEncrypted = await encryptStream(oldBytes, fileKeyRef.current)
       const form = new FormData()
       form.append('file', new Blob([reEncrypted.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'snapshot')
@@ -457,11 +465,21 @@ export default function FileEditorPage() {
               </Button>
             </header>
             <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
-              <VersionHistoryPanel fileId={fid} onRestore={handleRestoreOffice} />
+              <VersionHistoryPanel fileId={fid} onRestore={(vid) => setPendingRestoreVersionId(vid)} />
             </div>
           </aside>
         )}
       </div>
+
+      <RestoreConfirmDialog
+        open={pendingRestoreVersionId !== null}
+        onCancel={() => setPendingRestoreVersionId(null)}
+        onChoose={(choice) => {
+          const vid = pendingRestoreVersionId
+          setPendingRestoreVersionId(null)
+          if (vid) performOfficeRestore(vid, choice)
+        }}
+      />
     </div>
   )
 }

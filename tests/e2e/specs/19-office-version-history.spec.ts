@@ -58,9 +58,11 @@ test('office xlsx — save twice, history shows two versions, restore round-trip
   expect(count, 'at least 2 version rows in sidebar').toBeGreaterThanOrEqual(2)
 
   // Restore the OLDEST version (last button in the newest-first list) to
-  // exercise the round-trip. Auto-confirm the window.confirm dialog.
-  tabA.once('dialog', (d) => d.accept())
+  // exercise the round-trip. RestoreConfirmDialog opens; click "Save &
+  // restore" to back up the current state then apply the old one.
   await restoreBtns.last().click()
+  await expect(tabA.locator('[role=dialog]:has-text("Restore this version?")')).toBeVisible()
+  await tabA.locator('[role=dialog] button:has-text("Save & restore")').click()
 
   // The restore handler reloads the page; wait for it.
   await tabA.waitForLoadState('domcontentloaded')

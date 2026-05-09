@@ -23,6 +23,7 @@ import { useAppDispatch, useAppSelector } from '../../store'
 import { setDeviceId, setColor } from '../../store/authSlice'
 import { broadcastColor } from '../../lib/sessionSync'
 import VersionHistoryPanel from '../VersionHistory/VersionHistoryPanel'
+import RestoreConfirmDialog from '@/components/RestoreConfirmDialog'
 import { Button } from '@/components/ui/button'
 import { Save, BookmarkPlus, History, X, Check } from 'lucide-react'
 import CursorColorPicker from './CursorColorPicker'
@@ -69,7 +70,8 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
   const [savingPlain, setSavingPlain] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [restoreHandler, setRestoreHandler] = useState<((vid: string) => Promise<void>) | null>(null)
+  const [restoreHandler, setRestoreHandler] = useState<((vid: string, choice: 'save-and-restore' | 'restore-only') => Promise<void>) | null>(null)
+  const [pendingRestoreVersionId, setPendingRestoreVersionId] = useState<string | null>(null)
   // Cursor color: per-user via authSlice (persisted in DB via /user/me +
   // synced cross-tab via BroadcastChannel). Falls back to localStorage on
   // first load before authSlice has hydrated, or for users who haven't
@@ -152,8 +154,11 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
       })
       if (alive) setTrigger(trig)
 
-      // Restore handler. Wired into VersionHistoryPanel via onRestore prop.
-      const handleRestore = async (versionId: string) => {
+      // Restore handler. Wired into VersionHistoryPanel + RestoreConfirmDialog
+      // via the staged-versionId pattern in render. The `choice` arg comes
+      // from the dialog: 'save-and-restore' pre-snapshots first;
+      // 'restore-only' skips the backup snapshot.
+      const handleRestore = async (versionId: string, choice: 'save-and-restore' | 'restore-only') => {
         try {
           // axios `api` instance has baseURL='/api'; do NOT include /api/ here.
           const r = await api.get(`/files/${fileId}/versions/${versionId}/download`, {
@@ -171,8 +176,9 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
           Y.applyUpdateV2(oldDoc, stateBytes)
           const oldText = oldDoc.getText('content').toString()
           oldDoc.destroy()
-          // Pre-save the current state so the restore doesn't clobber unsaved work.
-          await trig.forceSave(`Pre-restore @ ${new Date().toLocaleString()}`)
+          if (choice === 'save-and-restore') {
+            await trig.forceSave(`Pre-restore @ ${new Date().toLocaleString()}`)
+          }
           // Replace live content. CodeMirror sees this as a delete + insert.
           ydoc!.transact(() => {
             ytext.delete(0, ytext.length)
@@ -518,16 +524,22 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
             <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
               <VersionHistoryPanel
                 fileId={fileId}
-                onRestore={async (vid) => {
-                  if (!restoreHandler) return
-                  if (!window.confirm('Restore this version? Current state will be saved as a new version first.')) return
-                  await restoreHandler(vid)
-                }}
+                onRestore={(vid) => setPendingRestoreVersionId(vid)}
               />
             </div>
           </aside>
         )}
       </div>
+
+      <RestoreConfirmDialog
+        open={pendingRestoreVersionId !== null}
+        onCancel={() => setPendingRestoreVersionId(null)}
+        onChoose={(choice) => {
+          const vid = pendingRestoreVersionId
+          setPendingRestoreVersionId(null)
+          if (vid && restoreHandler) restoreHandler(vid, choice).catch(() => {})
+        }}
+      />
     </div>
   )
 }
