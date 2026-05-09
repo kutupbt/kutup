@@ -1066,25 +1066,67 @@
             if (!inner || typeof inner.asc_nativeGetFile !== 'function') {
               throw new Error('asc_nativeGetFile not available on this OO build')
             }
-            var bin = inner.asc_nativeGetFile()
-            // bin is a Uint8Array of OnlyOffice's .bin format. Convert to
-            // the original OOXML extension via x2t so kutup stores the
-            // file in the user-visible format.
+            // Flush pending edits before extracting. Without this, typing
+            // a value + Enter + immediately clicking Save races the
+            // collab/save tick: the cell value is in the model but
+            // History.Have_Changes() is still pending and asc_nativeGetFile
+            // may serialize without the latest value. The flush sequence:
+            //
+            //   1. Close any open cell editor with commit=true (xlsx) —
+            //      same effect as pressing Enter.
+            //   2. Call Continue_FastCollaborativeEditing — this runs
+            //      History.Apply_Changes + Send_Changes (or asc_Save(true)
+            //      if there are local changes).
+            //   3. Wait 250ms — asc_Save's serialize+commit is async; this
+            //      gives the History queue and binary writer time to settle.
+            //   4. THEN call asc_nativeGetFile.
+            //
+            // 250ms was chosen empirically for typical xlsx ops on the
+            // CryptPad-pinned OO v9 build; it's well below any user-
+            // perceptible save latency.
+            try {
+              if (docType === 'xlsx') {
+                if (inner.wb && inner.wb.cellEditor && inner.wb.getCellEditMode && inner.wb.getCellEditMode()) {
+                  inner.wb.cellEditor.close(true)
+                }
+                if (inner.wb && typeof inner.wb.Continue_FastCollaborativeEditing === 'function') {
+                  inner.wb.Continue_FastCollaborativeEditing()
+                }
+              } else {
+                var ld = inner.WordControl && inner.WordControl.m_oLogicDocument
+                if (ld && typeof ld.Continue_FastCollaborativeEditing === 'function') {
+                  ld.Continue_FastCollaborativeEditing()
+                }
+              }
+            } catch (flushErr) {
+              console.warn('[kutup-bridge] pre-save flush failed', flushErr)
+            }
+
             var outFmt = docType  // 'docx' | 'xlsx' | 'pptx'
-            x2tConvert(bin, 'out.bin', outFmt)
-              .then(function (res) {
+            setTimeout(function () {
+              try {
+                var bin = inner.asc_nativeGetFile()
+                x2tConvert(bin, 'out.bin', outFmt)
+                  .then(function (res) {
+                    replyTo.postMessage({
+                      type: 'save-result', requestId: requestId,
+                      bytes: res.output,
+                      format: outFmt,
+                    }, EXPECTED_ORIGIN)
+                  })
+                  .catch(function (err) {
+                    replyTo.postMessage({
+                      type: 'save-result', requestId: requestId,
+                      error: 'x2t convert failed: ' + (err && err.message || err),
+                    }, EXPECTED_ORIGIN)
+                  })
+              } catch (err) {
                 replyTo.postMessage({
                   type: 'save-result', requestId: requestId,
-                  bytes: res.output,
-                  format: outFmt,
+                  error: (err && err.message) || String(err),
                 }, EXPECTED_ORIGIN)
-              })
-              .catch(function (err) {
-                replyTo.postMessage({
-                  type: 'save-result', requestId: requestId,
-                  error: 'x2t convert failed: ' + (err && err.message || err),
-                }, EXPECTED_ORIGIN)
-              })
+              }
+            }, 250)
           } catch (err) {
             replyTo.postMessage({
               type: 'save-result', requestId: requestId,
