@@ -103,12 +103,50 @@ go build -o ~/.local/bin/kutup .
 
 Tagged release binaries (Linux / macOS / Windows; amd64 + arm64) are published via [goreleaser](cmd/kutup/.goreleaser.yaml) on GitHub Releases.
 
+### Common workflows
+
 ```sh
+# Login (interactive password + recovery phrase prompt for first device).
 kutup login --server https://your.kutup.host
-kutup whoami
-kutup version
+
+# List your folders + files at the Drive root.
+kutup ls
+kutup ls <folder-id>           # contents of a sub-folder
+
+# Upload a file. The CLI's chunked stream encryption (5 MB blocks via
+# crypto_secretstream) has NO browser-imposed size limit — multi-GB
+# files (ISOs, raw video, datasets) work where the web upload chokes
+# around ~2 GB and crashes the tab. File size is bounded by disk,
+# not RAM.
+kutup upload ./big-dataset.tar.gz <folder-id>
+kutup upload ./local-dir <folder-id> --recursive
+
+# Download a file. For collab-edited files (notes / office /
+# whiteboards) returns the latest snapshot — same content the web
+# shows, not the cold-start initial.
+kutup download <file-id>
+kutup download <file-id> ./local/path/
+
+# Bidirectional sync. --watch keeps the local folder live-synced via
+# fsnotify; new local files upload immediately, new remote files
+# arrive within seconds.
+kutup sync ./local-folder <folder-id>
+kutup sync ./local-folder <folder-id> --watch
+
+# Snapshot versions of any file (notes, office, whiteboard).
+kutup versions list <file-id>
+kutup versions restore <file-id> <version-id>
+
+# Public-link consumption — no kutup login required for the URL itself.
+kutup pub get https://your.kutup.host/p/<token>#key=<base64>
+kutup pub download <url> <file-id>
+
+# Discover the rest.
 kutup --help
+kutup version
 ```
+
+The **>2 GB** path is the standout. Browser File API + Web Crypto streaming work in theory but practically wedge the tab at multi-GB sizes; the CLI uses `golang.org/x/crypto/chacha20poly1305` over Go's `io.Reader`, so it streams arbitrarily large files at constant ~5 MB memory.
 
 ---
 

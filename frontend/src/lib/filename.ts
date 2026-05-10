@@ -13,6 +13,8 @@
 const KNOWN_EXTS = new Set([
   // office
   'docx', 'xlsx', 'pptx',
+  // whiteboard
+  'excalidraw',
   // text / code (matches dispatch.tsx TEXT_EXT)
   'md', 'markdown', 'txt',
   'go', 'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx',
