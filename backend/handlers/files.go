@@ -407,8 +407,13 @@ func (h *FilesHandler) Delete(c *fiber.Ctx) error {
 		fileSize, uploaderID,
 	)
 
-	// Delete from SeaweedFS (best-effort)
+	// Delete from SeaweedFS (best-effort).
+	// Wipe the entire files/{fileId}/ prefix so per-file children
+	// (snapshot blobs, whiteboard image asset blobs, …) get GC'd along
+	// with the parent. The single-key Delete on storagePath stays for
+	// safety: legacy main blobs may not live under that prefix.
 	h.Storage.Delete(context.Background(), storagePath)
+	h.Storage.DeletePrefix(context.Background(), "files/"+fileID+"/")
 
 	return c.SendStatus(204)
 }

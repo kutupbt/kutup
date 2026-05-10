@@ -40,8 +40,14 @@ import {
 import type {
   ExcalidrawImperativeAPI,
   ExcalidrawInitialDataState,
+  BinaryFileData,
+  DataURL,
 } from '@excalidraw/excalidraw/types'
-import type { OrderedExcalidrawElement } from '@excalidraw/excalidraw/element/types'
+import type {
+  OrderedExcalidrawElement,
+  ExcalidrawImageElement,
+  FileId,
+} from '@excalidraw/excalidraw/element/types'
 import { useAppDispatch, useAppSelector } from '@/store'
 import { setDeviceId } from '@/store/authSlice'
 import { CollabTransport, type HelloMsg, type PeerInfo } from '@/collab/transport'
@@ -56,6 +62,7 @@ import {
 } from '@/collab/devices'
 import { randomSenderSeqPrefix, buildAwarenessName } from '@/collab/identity'
 import { registerDevice } from '@/api/collab'
+import { uploadAsset, fetchAsset } from '@/api/whiteboardAssets'
 
 import '@excalidraw/excalidraw/index.css'
 
@@ -150,6 +157,30 @@ function WhiteboardEditorBase(
   // saturating the relay.
   const presenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // ---- Image asset sync (Excalidraw-native pattern) -------------------
+  // Image binaries are NOT broadcast through the WS. Instead, we follow
+  // upstream Excalidraw's status-driven flow:
+  //   1. Image element appears with status "pending" + binary in
+  //      appState.files. We encrypt the binary client-side and PUT it to
+  //      /api/files/:fileId/assets/:assetId, then flip the element's
+  //      status to "saved" via updateScene.
+  //   2. The status flip bumps versionNonce → broadcasts via the normal
+  //      EXCALIDRAW_OP channel.
+  //   3. A peer receiving an image element with status "saved" whose
+  //      fileId is missing from its local cache GETs the asset, decrypts,
+  //      and api.addFiles to inject the binary. Excalidraw rerenders the
+  //      element automatically.
+  // assetSavedRef: fileIds we know to be "saved" (uploaded by us OR
+  //   loaded from the snapshot OR already broadcast by a peer). Used to
+  //   skip both the upload-side scan and re-flip churn.
+  const assetSavedRef = useRef<Set<string>>(new Set())
+  // pendingUploadsRef: fileIds with an in-flight uploadAsset Promise.
+  //   Dedupes re-entrant calls from rapid onChange ticks.
+  const pendingUploadsRef = useRef<Set<string>>(new Set())
+  // fetchedAssetsRef: fileIds we've already fetched (or are fetching) so
+  //   repeated reconciles don't fire N redundant GETs.
+  const fetchedAssetsRef = useRef<Set<string>>(new Set())
+
   const initialData = useMemo<ExcalidrawInitialDataState | null>(() => {
     if (!initialBytes || initialBytes.length === 0) return null
     try {
@@ -164,10 +195,18 @@ function WhiteboardEditorBase(
         map.set(el.id, el.version ?? 0)
       }
       lastBroadcastRef.current = map
+      // Anything already in the snapshot's files map has already been
+      // uploaded (or originated locally and was persisted). Skip both the
+      // upload-side scan and the download-side fetch for these fileIds.
+      const files = (json.files ?? {}) as Record<string, BinaryFileData>
+      for (const fid of Object.keys(files)) {
+        assetSavedRef.current.add(fid)
+        fetchedAssetsRef.current.add(fid)
+      }
       return {
         elements: json.elements ?? [],
         appState,
-        files: json.files ?? {},
+        files,
         scrollToContent: true,
       }
     } catch (err) {
@@ -254,6 +293,11 @@ function WhiteboardEditorBase(
               for (const el of merged) {
                 lastBroadcastRef.current.set(el.id, (el as OrderedExcalidrawElement).version ?? 0)
               }
+              // If the merge pulled in image elements with status="saved"
+              // whose binaries we don't have locally, fetch them from the
+              // asset blob endpoint. Async — element renders as broken
+              // until the file lands.
+              maybeFetchMissingAssets(merged as OrderedExcalidrawElement[])
             } else if (f.kind === KIND.EXCALIDRAW_CURSOR) {
               const payload = await decryptExcalidrawCursor(f, fileId, collectionMaster)
               const data = JSON.parse(new TextDecoder().decode(payload)) as CursorPayload
@@ -366,6 +410,110 @@ function WhiteboardEditorBase(
     }, 50)
   }
 
+  // ---- Asset upload helpers ------------------------------------------
+  // Walk the scene for image elements that haven't been "saved" yet, then
+  // for each one whose binary is in api.getFiles(), encrypt+upload and
+  // flip the element's status to "saved" via updateScene. The flip is a
+  // normal local mutation: scheduleBroadcast picks it up and propagates.
+  //
+  // Idempotent — guarded by assetSavedRef + pendingUploadsRef so rapid
+  // onChange ticks don't fire duplicate uploads.
+  async function maybeUploadDirtyAssets() {
+    const api = apiRef.current
+    if (!api) return
+    const els = api.getSceneElementsIncludingDeleted() as OrderedExcalidrawElement[]
+    const files = api.getFiles()
+    for (const el of els) {
+      if (el.type !== 'image') continue
+      const img = el as ExcalidrawImageElement
+      if (img.isDeleted) continue
+      if (!img.fileId) continue
+      if (img.status === 'saved') continue
+      const fid = img.fileId as string
+      if (assetSavedRef.current.has(fid)) continue
+      if (pendingUploadsRef.current.has(fid)) continue
+      const data = files[fid]
+      if (!data || !data.dataURL) continue
+
+      pendingUploadsRef.current.add(fid)
+      const elemId = img.id
+      ;(async () => {
+        try {
+          const plain = new TextEncoder().encode(data.dataURL)
+          await uploadAsset(fileId, fid, plain, collectionMaster)
+          assetSavedRef.current.add(fid)
+          // Flip status to "saved". Bump version + versionNonce so the
+          // diff in scheduleBroadcast picks this up as our change. Do
+          // NOT set applyingRemoteRef here — we WANT scheduleBroadcast
+          // to fire from the resulting onChange.
+          const api2 = apiRef.current
+          if (!api2) return
+          const current = api2.getSceneElementsIncludingDeleted() as OrderedExcalidrawElement[]
+          const next = current.map((e) => {
+            if (e.id !== elemId) return e
+            const ie = e as ExcalidrawImageElement
+            return {
+              ...ie,
+              status: 'saved' as const,
+              version: (ie.version ?? 0) + 1,
+              versionNonce: Math.floor(Math.random() * 0x7fffffff),
+              updated: Date.now(),
+            }
+          })
+          api2.updateScene({ elements: next })
+        } catch (e) {
+          console.warn('whiteboard: asset upload failed', e)
+        } finally {
+          pendingUploadsRef.current.delete(fid)
+        }
+      })()
+    }
+  }
+
+  // After applying a remote element merge, walk the merged elements for
+  // image elements with status "saved" whose binary is missing locally,
+  // and fetch each from the asset blob endpoint.
+  function maybeFetchMissingAssets(merged: OrderedExcalidrawElement[]) {
+    const api = apiRef.current
+    if (!api) return
+    const have = api.getFiles()
+    for (const el of merged) {
+      if (el.type !== 'image') continue
+      const img = el as ExcalidrawImageElement
+      if (img.isDeleted) continue
+      if (img.status !== 'saved') continue
+      if (!img.fileId) continue
+      const fid = img.fileId as string
+      if (have[fid]) continue
+      if (fetchedAssetsRef.current.has(fid)) continue
+      fetchedAssetsRef.current.add(fid)
+      ;(async () => {
+        try {
+          const plain = await fetchAsset(fileId, fid, collectionMaster)
+          const dataURL = new TextDecoder().decode(plain)
+          // Recover mimeType from the dataURL prefix; default to png.
+          const match = dataURL.match(/^data:([^;]+);/i)
+          const mimeType = (match?.[1] ?? 'image/png') as BinaryFileData['mimeType']
+          const data: BinaryFileData = {
+            id: fid as FileId,
+            mimeType,
+            dataURL: dataURL as DataURL,
+            created: Date.now(),
+          }
+          const api2 = apiRef.current
+          if (!api2) return
+          api2.addFiles([data])
+          assetSavedRef.current.add(fid)
+        } catch (e) {
+          console.warn('whiteboard: asset fetch failed', fid, e)
+          // Allow a future reconcile to retry — the peer might be in the
+          // middle of uploading.
+          fetchedAssetsRef.current.delete(fid)
+        }
+      })()
+    }
+  }
+
   // Debounced broadcaster: diff current scene against lastBroadcast
   // and send only the changed elements.
   function scheduleBroadcast() {
@@ -426,6 +574,11 @@ function WhiteboardEditorBase(
           onChange={(_elements, appState) => {
             if (applyingRemoteRef.current) return
             scheduleBroadcast()
+            // Image binaries: scan for newly-pasted images whose status
+            // is still "pending" and upload them. The status flip after
+            // upload re-enters this onChange — assetSavedRef short-
+            // circuits the second pass.
+            maybeUploadDirtyAssets()
             // Selection changes also drive presence so peers see the
             // translucent rectangle around the elements you've selected.
             // selectedElementIds is a small object — JSON.stringify is fine.

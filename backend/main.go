@@ -70,6 +70,7 @@ func main() {
 	fedProxyH := &handlers.FedProxyHandler{DB: pool, AppEnv: cfg.AppEnv}
 	devicesH := &handlers.DevicesHandler{DB: pool}
 	fvH := &handlers.FileVersionsHandler{DB: pool, Storage: storage}
+	faH := &handlers.FileAssetsHandler{DB: pool, Storage: storage}
 	hub := handlers.NewHub(pool)
 	collabH := &handlers.CollabHandler{DB: pool, JWTSecret: cfg.JWTSecret, Hub: hub}
 	devicesH.WithRevokeHook(hub.CloseDevice)
@@ -172,6 +173,8 @@ func main() {
 	api.Post("/files/:fileId/snapshot-blob", authMW.Required(), fvH.UploadSnapshotBlob)
 	api.Get("/files/:fileId/versions/:vid/download", authMW.Required(), fvH.Download)
 	api.Patch("/files/:fileId/versions/:vid", authMW.Required(), fvH.Patch)
+	api.Put("/files/:fileId/assets/:assetId", authMW.Required(), faH.Upload)
+	api.Get("/files/:fileId/assets/:assetId", authMW.Required(), faH.Download)
 	api.Post("/files/:fileId/claim-seed", authMW.Required(), filesH.ClaimSeed)
 
 	// Collab-edit WebSocket route — PreUpgrade does its own JWT auth

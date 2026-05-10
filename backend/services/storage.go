@@ -10,6 +10,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 type StorageService struct {
@@ -130,4 +131,48 @@ func (s *StorageService) DeleteObjectVersion(ctx context.Context, key, versionID
 		VersionId: aws.String(versionID),
 	})
 	return err
+}
+
+// DeletePrefix wipes every object whose key begins with the given prefix.
+// Used to GC all per-file children (snapshot blob + asset blobs + …) when
+// the parent file is deleted from Drive. Paginated ListObjectsV2 + batched
+// DeleteObjects (S3 caps a delete batch at 1000 keys).
+//
+// Returns the first error encountered. Callers treat this as best-effort —
+// the parent file row is already gone from the DB, so a partial failure
+// only leaks orphan blobs (recoverable later by an admin sweep).
+func (s *StorageService) DeletePrefix(ctx context.Context, prefix string) error {
+	var continuationToken *string
+	for {
+		out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(s.bucket),
+			Prefix:            aws.String(prefix),
+			ContinuationToken: continuationToken,
+		})
+		if err != nil {
+			return fmt.Errorf("s3 list: %w", err)
+		}
+		if len(out.Contents) > 0 {
+			ids := make([]s3types.ObjectIdentifier, 0, len(out.Contents))
+			for _, obj := range out.Contents {
+				if obj.Key == nil {
+					continue
+				}
+				ids = append(ids, s3types.ObjectIdentifier{Key: obj.Key})
+			}
+			if len(ids) > 0 {
+				_, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+					Bucket: aws.String(s.bucket),
+					Delete: &s3types.Delete{Objects: ids, Quiet: aws.Bool(true)},
+				})
+				if err != nil {
+					return fmt.Errorf("s3 delete batch: %w", err)
+				}
+			}
+		}
+		if out.IsTruncated == nil || !*out.IsTruncated {
+			return nil
+		}
+		continuationToken = out.NextContinuationToken
+	}
 }
