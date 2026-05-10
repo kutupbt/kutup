@@ -13,6 +13,15 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
+// ObjectInfo is a slim projection of S3 ListObjectsV2 entries used by paged
+// walkers. Carrying Size + LastModified inline avoids a per-key HEAD round
+// trip in the orphan-sweep age check.
+type ObjectInfo struct {
+	Key          string
+	Size         int64
+	LastModified time.Time
+}
+
 type StorageService struct {
 	client *s3.Client
 	bucket string
@@ -133,15 +142,15 @@ func (s *StorageService) DeleteObjectVersion(ctx context.Context, key, versionID
 	return err
 }
 
-// DeletePrefix wipes every object whose key begins with the given prefix.
-// Used to GC all per-file children (snapshot blob + asset blobs + …) when
-// the parent file is deleted from Drive. Paginated ListObjectsV2 + batched
-// DeleteObjects (S3 caps a delete batch at 1000 keys).
-//
-// Returns the first error encountered. Callers treat this as best-effort —
-// the parent file row is already gone from the DB, so a partial failure
-// only leaks orphan blobs (recoverable later by an admin sweep).
-func (s *StorageService) DeletePrefix(ctx context.Context, prefix string) error {
+// ListObjectsPaged iterates ListObjectsV2 results in pages of up to 1000
+// keys, invoking page() once per non-empty page. Stops + returns the
+// error if page() returns one. Used by both DeletePrefix and the orphan
+// sweep — extracting it lets both share one tested LIST loop.
+func (s *StorageService) ListObjectsPaged(
+	ctx context.Context,
+	prefix string,
+	page func(objs []ObjectInfo) error,
+) error {
 	var continuationToken *string
 	for {
 		out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
@@ -153,21 +162,23 @@ func (s *StorageService) DeletePrefix(ctx context.Context, prefix string) error 
 			return fmt.Errorf("s3 list: %w", err)
 		}
 		if len(out.Contents) > 0 {
-			ids := make([]s3types.ObjectIdentifier, 0, len(out.Contents))
+			objs := make([]ObjectInfo, 0, len(out.Contents))
 			for _, obj := range out.Contents {
 				if obj.Key == nil {
 					continue
 				}
-				ids = append(ids, s3types.ObjectIdentifier{Key: obj.Key})
-			}
-			if len(ids) > 0 {
-				_, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
-					Bucket: aws.String(s.bucket),
-					Delete: &s3types.Delete{Objects: ids, Quiet: aws.Bool(true)},
-				})
-				if err != nil {
-					return fmt.Errorf("s3 delete batch: %w", err)
+				size := int64(0)
+				if obj.Size != nil {
+					size = *obj.Size
 				}
+				lm := time.Time{}
+				if obj.LastModified != nil {
+					lm = *obj.LastModified
+				}
+				objs = append(objs, ObjectInfo{Key: *obj.Key, Size: size, LastModified: lm})
+			}
+			if err := page(objs); err != nil {
+				return err
 			}
 		}
 		if out.IsTruncated == nil || !*out.IsTruncated {
@@ -175,4 +186,42 @@ func (s *StorageService) DeletePrefix(ctx context.Context, prefix string) error 
 		}
 		continuationToken = out.NextContinuationToken
 	}
+}
+
+// DeleteObjectsBatch removes up to 1000 keys in a single DeleteObjects S3 call.
+// S3 caps a delete batch at exactly 1000 keys; callers should chunk if larger.
+func (s *StorageService) DeleteObjectsBatch(ctx context.Context, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	ids := make([]s3types.ObjectIdentifier, len(keys))
+	for i := range keys {
+		k := keys[i]
+		ids[i] = s3types.ObjectIdentifier{Key: &k}
+	}
+	_, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		Bucket: aws.String(s.bucket),
+		Delete: &s3types.Delete{Objects: ids, Quiet: aws.Bool(true)},
+	})
+	if err != nil {
+		return fmt.Errorf("s3 delete batch: %w", err)
+	}
+	return nil
+}
+
+// DeletePrefix wipes every object whose key begins with the given prefix.
+// Used to GC all per-file children (snapshot blob + asset blobs + …) when
+// the parent file is deleted from Drive.
+//
+// Returns the first error encountered. Callers treat this as best-effort —
+// the parent file row is already gone from the DB, so a partial failure
+// only leaks orphan blobs (recoverable later by the admin orphan sweep).
+func (s *StorageService) DeletePrefix(ctx context.Context, prefix string) error {
+	return s.ListObjectsPaged(ctx, prefix, func(objs []ObjectInfo) error {
+		keys := make([]string, len(objs))
+		for i, o := range objs {
+			keys[i] = o.Key
+		}
+		return s.DeleteObjectsBatch(ctx, keys)
+	})
 }

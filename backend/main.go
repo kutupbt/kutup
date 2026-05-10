@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 	"strings"
 
 	_ "github.com/kutup/backend/docs"
+	"github.com/kutup/backend/cmd"
 	"github.com/kutup/backend/config"
 	"github.com/kutup/backend/db"
 	"github.com/kutup/backend/handlers"
@@ -54,6 +56,16 @@ func main() {
 	)
 	if err != nil {
 		log.Fatalf("storage init: %v", err)
+	}
+
+	// Subcommand dispatch — admin tooling that reuses the server's DB pool
+	// and storage client without spinning up Fiber. Runs to completion and
+	// exits; the HTTP server is NOT started.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "orphan-sweep":
+			os.Exit(cmd.RunOrphanSweep(pool, storage, os.Args[2:]))
+		}
 	}
 
 	// Background retention job for file_versions (30d / 50ver / keep_forever exempt).

@@ -215,6 +215,50 @@ kutup/
 
 ---
 
+## Operations
+
+### Orphan-blob sweep
+
+Periodic admin task that walks SeaweedFS for blobs whose containing `files.id` row no longer exists (PUT-then-crash leftovers, residual snapshot blobs from before quota tracking, etc.) and deletes them.
+
+Subcommand on the existing `kutup-server` binary — same Docker image, same env vars, same DB pool.
+
+**Always start with a dry-run.** Default behaviour reports orphans without touching them.
+
+```sh
+# Dry-run (default). Lists orphans + summary; no deletions.
+docker compose exec backend ./kutup-server orphan-sweep
+
+# Tighter age window for testing — anything older than 1h is fair game.
+docker compose exec backend ./kutup-server orphan-sweep --age-floor=1h
+
+# After verifying the dry-run output looks right, actually delete.
+docker compose exec backend ./kutup-server orphan-sweep --delete
+```
+
+**Flags:**
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--delete` | `false` | Without this, the command is a dry-run. |
+| `--age-floor` | `24h` | Skip blobs younger than this. The 24h default absorbs in-flight uploads; lower it only for testing. |
+| `--page-sleep` | `200ms` | Sleep between S3 LIST pages. |
+| `--prefix` | `files/` | S3 key prefix to walk. |
+
+**Reading the summary log:**
+
+```
+orphan-sweep summary: pages=N keys=N orphans=N skipped-age=N skipped-shape=N deleted=N bytes-reclaimed=N mode=dry-run|delete
+```
+
+- `skipped-age` should be > 0 on a healthy bucket (the in-flight upload window). If it's 0 every run, the age floor isn't engaging — investigate before relying on the result.
+- `skipped-shape` counts keys outside the `files/<UUID>/...` shape; the sweep never deletes these.
+- `bytes-reclaimed` is the projected (dry-run) or actual (`--delete`) byte savings.
+
+The sweep does **not** persist progress — a crash mid-run means rerunning from scratch. Acceptable at current scale; revisit if the bucket grows past ~500K objects.
+
+---
+
 ## Code Conventions
 
 ### Backend (Go)
