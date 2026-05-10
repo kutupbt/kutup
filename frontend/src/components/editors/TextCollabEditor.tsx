@@ -18,7 +18,10 @@ import { SnapshotTrigger } from '../../collab/snapshot'
 import { ed25519Sign } from '../../collab/sign'
 import { generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64 } from '../../collab/devices'
 import { registerDevice, listVersions, claimSeed } from '../../api/collab'
+import { QuotaExceededError } from '../../api/errors'
 import api from '../../api/client'
+import { toast } from 'sonner'
+import { useTranslation } from 'react-i18next'
 import { useAppDispatch, useAppSelector } from '../../store'
 import { setDeviceId, setColor } from '../../store/authSlice'
 import { broadcastColor } from '../../lib/sessionSync'
@@ -63,6 +66,7 @@ interface Props {
 }
 
 export default function TextCollabEditor({ fileId, filename, collectionMaster, initialContent }: Props) {
+  const { t } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<'connecting' | 'ready' | 'error'>('connecting')
   const [trigger, setTrigger] = useState<SnapshotTrigger | null>(null)
@@ -151,6 +155,18 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
           out.set(nonce, 0)
           out.set(ct, 24)
           return { ciphertext: out, storageHints: { docKeyId, sizeBytes: out.length } }
+        },
+        // Surface 413 quota errors as a localized toast. Other errors are
+        // logged to console only — the autosave path can't surface every
+        // transient failure or it'd spam users on flaky networks. Trigger
+        // disarms itself after a 413, so this fires at most once per
+        // session-after-reload.
+        onError: (err) => {
+          if (err instanceof QuotaExceededError) {
+            toast.error(t('errors.quotaExceededSave'))
+          } else {
+            console.warn('snapshot save failed', err)
+          }
         },
       })
       if (alive) { triggerRef.current = trig; setTrigger(trig) }

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { Loader2, ArrowLeft, Download, Save, Check, History, X, BookmarkPlus } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAppDispatch, useAppSelector } from '@/store'
@@ -7,6 +8,8 @@ import { setColor } from '@/store/authSlice'
 import CursorColorPicker from '@/components/editors/CursorColorPicker'
 import { broadcastColor } from '@/lib/sessionSync'
 import api from '@/api/client'
+import { recordSnapshot } from '@/api/collab'
+import { QuotaExceededError } from '@/api/errors'
 import {
   decrypt,
   decryptStream,
@@ -40,6 +43,7 @@ const MAX_PREVIEW_BYTES = 100 * 1024 * 1024
 export default function FileEditorPage() {
   const { cid, fid } = useParams<{ cid: string; fid: string }>()
   const navigate = useNavigate()
+  const { t } = useTranslation()
   // selectMasterKey/selectPrivateKey wrap state.auth.masterKey (number[]) in
   // a fresh Uint8Array on every call. Without memoization the file-load
   // effect below sees identity churn on every render — its cleanup re-ran
@@ -276,7 +280,7 @@ export default function FileEditorPage() {
       const form = new FormData()
       form.append('file', new Blob([encrypted.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'snapshot')
       const blobRes = await api.post(`/files/${fid}/snapshot-blob`, form)
-      await api.post(`/files/${fid}/versions`, {
+      await recordSnapshot(fid, {
         s3VersionId: blobRes.data.s3VersionId,
         storagePath: blobRes.data.storagePath,
         seqAtSnapshot: 0,  // Non-Yjs editors (office, whiteboard) don't use the delta log.
@@ -291,7 +295,11 @@ export default function FileEditorPage() {
     } catch (err: any) {
       console.error('snapshot save failed', err)
       if (!opts.silent && tid) {
-        toast.error(err?.response?.data?.error ?? err?.message ?? 'Save failed', { id: tid })
+        if (err instanceof QuotaExceededError) {
+          toast.error(t('errors.quotaExceededSave'), { id: tid })
+        } else {
+          toast.error(err?.response?.data?.error ?? err?.message ?? 'Save failed', { id: tid })
+        }
       }
       throw err
     } finally {
@@ -339,7 +347,7 @@ export default function FileEditorPage() {
       const form = new FormData()
       form.append('file', new Blob([reEncrypted.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'snapshot')
       const blobRes = await api.post(`/files/${fid}/snapshot-blob`, form)
-      await api.post(`/files/${fid}/versions`, {
+      await recordSnapshot(fid, {
         s3VersionId: blobRes.data.s3VersionId,
         storagePath: blobRes.data.storagePath,
         seqAtSnapshot: 0,
@@ -352,7 +360,11 @@ export default function FileEditorPage() {
       window.location.reload()
     } catch (err: any) {
       console.error('blob restore failed', err)
-      toast.error(err?.response?.data?.error ?? err?.message ?? 'Restore failed', { id: tid })
+      if (err instanceof QuotaExceededError) {
+        toast.error(t('errors.quotaExceededRestore'), { id: tid })
+      } else {
+        toast.error(err?.response?.data?.error ?? err?.message ?? 'Restore failed', { id: tid })
+      }
     }
   }
 

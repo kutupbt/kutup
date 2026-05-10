@@ -16,16 +16,11 @@ import _sodium from 'libsodium-wrappers-sumo'
 import axios from 'axios'
 import api from './client'
 import { deriveContentKey } from '@/collab/cryptoFrame'
+import { QuotaExceededError } from './errors'
 
-/** Thrown when the server returns 413 (storage quota exceeded). Distinct
- *  type so the editor can handle it differently from generic upload
- *  failures (toast + element flipped to "error" instead of retry loop). */
-export class QuotaExceededError extends Error {
-  constructor() {
-    super('storage quota exceeded')
-    this.name = 'QuotaExceededError'
-  }
-}
+// Re-export so existing import paths keep working (the editor imports
+// QuotaExceededError from here).
+export { QuotaExceededError }
 
 interface AeadXChaCha20Poly1305Ietf {
   crypto_aead_xchacha20poly1305_ietf_encrypt(

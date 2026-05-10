@@ -422,5 +422,9 @@
     "image": {
       "quotaExceeded": "Depolama kotası aşıldı — görsel yüklenmedi"
     }
+  },
+  "errors": {
+    "quotaExceededSave": "Depolama kotası aşıldı — kaydedilemedi",
+    "quotaExceededRestore": "Depolama kotası aşıldı — geri yüklenemedi"
   }
 }

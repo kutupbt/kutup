@@ -1,4 +1,6 @@
+import axios from 'axios'
 import api from './client'
+import { QuotaExceededError } from './errors'
 
 export interface DeviceRow {
   deviceId: number
@@ -77,4 +79,37 @@ export async function patchVersion(
 export async function claimSeed(fileId: string): Promise<{ committed: boolean }> {
   const r = await api.post<{ committed: boolean }>(`/files/${fileId}/claim-seed`)
   return r.data
+}
+
+export interface RecordSnapshotBody {
+  s3VersionId: string
+  storagePath: string
+  seqAtSnapshot: number
+  docKeyId: number
+  sizeBytes: number
+  label: string | null
+  keepForever: boolean
+}
+
+/**
+ * POST /files/:fileId/versions — record a snapshot version.
+ *
+ * Wraps the bare api.post so 413 (storage quota exceeded) becomes a typed
+ * {@link QuotaExceededError}. Callers handle it specifically: notes
+ * autosave disarms itself, explicit save / restore show a localized
+ * toast.
+ */
+export async function recordSnapshot(
+  fileId: string,
+  body: RecordSnapshotBody,
+): Promise<{ id: string }> {
+  try {
+    const r = await api.post<{ id: string }>(`/files/${fileId}/versions`, body)
+    return r.data
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response?.status === 413) {
+      throw new QuotaExceededError()
+    }
+    throw err
+  }
 }

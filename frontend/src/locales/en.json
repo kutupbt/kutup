@@ -422,5 +422,9 @@
     "image": {
       "quotaExceeded": "Storage quota exceeded — image not uploaded"
     }
+  },
+  "errors": {
+    "quotaExceededSave": "Storage quota exceeded — couldn't save",
+    "quotaExceededRestore": "Storage quota exceeded — couldn't restore"
   }
 }
