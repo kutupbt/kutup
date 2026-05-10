@@ -42,4 +42,7 @@ func init() {
 	rootCmd.AddCommand(versionsCmd)
 	rootCmd.AddCommand(devicesCmd)
 	rootCmd.AddCommand(twoFACmd)
+	rootCmd.AddCommand(pubCmd)
+	rootCmd.AddCommand(mvCmd)
+	rootCmd.AddCommand(colorCmd)
 }

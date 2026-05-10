@@ -354,6 +354,69 @@ func (c *Client) DownloadFile(fileID string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
+// UpdateFileMetadataRequest carries the new encrypted name for PUT /files/:id.
+// Mirrors backend/handlers/files.go:UpdateMetadata's body.
+type UpdateFileMetadataRequest struct {
+	EncryptedMetadata string `json:"encryptedMetadata"`
+	MetadataNonce     string `json:"metadataNonce"`
+}
+
+// UpdateFileMetadata replaces a file's encrypted metadata (name, etc).
+// Used by `kutup mv`.
+func (c *Client) UpdateFileMetadata(fileID string, req UpdateFileMetadataRequest) error {
+	resp, err := c.putJSON("/files/"+fileID, req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// UpdateCollectionColor patches just the color hex on a collection.
+// Used by `kutup color`. Pass "" to clear.
+func (c *Client) UpdateCollectionColor(collectionID, color string) error {
+	body := map[string]any{"color": color}
+	if color == "" {
+		body["color"] = nil
+	}
+	req, err := http.NewRequest(http.MethodPatch, c.base+"/api/collections/"+collectionID+"/color", nil)
+	if err != nil {
+		return err
+	}
+	// Re-build body via the helper to set Content-Type — the existing
+	// patchJSON pattern isn't a method, so inline.
+	resp, err := c.patchJSONBody("/collections/"+collectionID+"/color", body)
+	_ = req
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		errBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(errBody))
+	}
+	return nil
+}
+
+// patchJSONBody is a small helper to avoid duplicating the JSON marshal
+// + Content-Type set in callers. Mirrors postJSON / putJSON.
+func (c *Client) patchJSONBody(path string, body any) (*http.Response, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodPatch, c.base+"/api"+path, bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return c.do(req)
+}
+
 func (c *Client) DeleteFile(fileID string) error {
 	resp, err := c.deleteReq("/files/" + fileID)
 	if err != nil {
