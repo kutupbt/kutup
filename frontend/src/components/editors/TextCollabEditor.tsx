@@ -104,6 +104,11 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
   // Stable awareness ref so the color-picker callback can mutate the live
   // awareness state without re-mounting the editor.
   const awarenessRef = useRef<Awareness | null>(null)
+  // Stable ytext ref so the markdown preview's checkbox-toggle handler
+  // can mutate the document without re-mounting the editor. y-codemirror
+  // .next picks the change up and dispatches a CM update — preview re-
+  // renders with the new state.
+  const ytextRef = useRef<Y.Text | null>(null)
 
   // Markdown view-mode state. The mode toggle (Edit/Split/Read) only
   // appears for .md/.markdown files; code files keep the plain editor.
@@ -126,6 +131,30 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
   // Number of remote collaborators currently online (excludes self).
   // Updated from awareness 'change' events.
   const [collaboratorCount, setCollaboratorCount] = useState<number>(0)
+
+  // Toggle the Nth GFM task-list checkbox in the source. Pattern is
+  // line-anchored to match only legal task-list syntax (CommonMark +
+  // GFM). Mutating ytext via .delete + .insert propagates through
+  // y-codemirror.next to the editor (and to remote peers via the
+  // existing collab transport).
+  function handleToggleTaskList(idx: number, checked: boolean) {
+    const ytext = ytextRef.current
+    if (!ytext) return
+    const taskRE = /^([ \t]*[-*+] +)\[([ xX])\]/gm
+    const src = ytext.toString()
+    let i = 0
+    for (const m of src.matchAll(taskRE)) {
+      if (i === idx) {
+        const pos = (m.index ?? 0) + m[1].length + 1
+        const newChar = checked ? 'x' : ' '
+        if (src[pos] === newChar) return
+        ytext.delete(pos, 1)
+        ytext.insert(pos, newChar)
+        return
+      }
+      i++
+    }
+  }
 
   useEffect(() => {
     if (!ref.current || !accessToken) return
@@ -155,6 +184,7 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
       // 2. Local Yjs doc + awareness.
       ydoc = new Y.Doc()
       const ytext = ydoc.getText('content')
+      ytextRef.current = ytext
       awareness = new Awareness(ydoc)
       awarenessRef.current = awareness
       // Each tab gets its own display name (#<tabId>) and randomized color
@@ -688,6 +718,7 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
             source={docText}
             scrollPercent={mdMode === 'split' ? scrollPercent : undefined}
             onScrollPercent={mdMode === 'split' ? setScrollPercent : undefined}
+            onToggleTaskList={handleToggleTaskList}
             className={mdMode === 'split' ? 'flex-1 min-w-0' : 'flex-1'}
           />
         )}
