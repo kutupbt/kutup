@@ -528,6 +528,12 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
       // (e.g. from restore) would reference a CM range that doesn't exist.
       const state = EditorState.create({ doc: ytext.toString(), extensions: exts })
       view = new EditorView({ state, parent: ref.current! })
+      // Seed the React state mirror to the editor's initial doc. Without
+      // this, docText holds the stale `initialContent` (cold-start seed)
+      // until the user's first keypress fires updateListener — meaning
+      // the markdown preview rendered only the seed (often just the
+      // "# Untitled" heading) until typing.
+      setDocText(state.doc.toString())
       // Auto-focus on mount so the user can start typing immediately
       // without an extra click. Mirrors the way most editors behave on
       // open. Safe because the view is the primary interaction surface;
