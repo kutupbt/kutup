@@ -40,4 +40,6 @@ func init() {
 	rootCmd.AddCommand(syncCmd)
 	rootCmd.AddCommand(shareCmd)
 	rootCmd.AddCommand(versionsCmd)
+	rootCmd.AddCommand(devicesCmd)
+	rootCmd.AddCommand(twoFACmd)
 }
