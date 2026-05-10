@@ -109,6 +109,13 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
   // .next picks the change up and dispatches a CM update — preview re-
   // renders with the new state.
   const ytextRef = useRef<Y.Text | null>(null)
+  // EditorView ref so React effects can drive scroll back into the
+  // editor (preview-side scroll sync uses this).
+  const viewRef = useRef<EditorView | null>(null)
+  // Ignore the next 'scroll' event after we apply a controlled scroll —
+  // otherwise the editor's own onScroll re-emits scrollPercent and we
+  // get a feedback loop with the preview.
+  const ignoreEditorScrollRef = useRef(false)
 
   // Markdown view-mode state. The mode toggle (Edit/Split/Read) only
   // appears for .md/.markdown files; code files keep the plain editor.
@@ -499,7 +506,13 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
             // Mirror editor scroll into the React state so the preview
             // pane (in Split mode) follows along. The scrollDOM is the
             // CodeMirror outer scroller. Suppress when the document
-            // hasn't grown beyond the viewport (no scroll possible).
+            // hasn't grown beyond the viewport (no scroll possible),
+            // and when the scroll was caused by a controlled-write from
+            // the preview (would feedback-loop otherwise).
+            if (ignoreEditorScrollRef.current) {
+              ignoreEditorScrollRef.current = false
+              return
+            }
             const el = v.scrollDOM
             const max = el.scrollHeight - el.clientHeight
             if (max <= 0) return
@@ -528,6 +541,7 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
       // (e.g. from restore) would reference a CM range that doesn't exist.
       const state = EditorState.create({ doc: ytext.toString(), extensions: exts })
       view = new EditorView({ state, parent: ref.current! })
+      viewRef.current = view
       // Seed the React state mirror to the editor's initial doc. Without
       // this, docText holds the stale `initialContent` (cold-start seed)
       // until the user's first keypress fires updateListener — meaning
@@ -602,6 +616,24 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
       colorLight: withAlpha(cursorColor, 0.3),
     })
   }, [cursorColor, username])
+
+  // Drive the editor's scroll position from the shared scrollPercent
+  // state — this is the preview-pane → editor leg of the bidirectional
+  // sync (the editor → preview leg is handled by the scroll handler in
+  // the extension list). Only active in Split mode; in Edit / Read the
+  // panes don't share a viewport.
+  useEffect(() => {
+    if (!isMarkdown || mdMode !== 'split') return
+    const v = viewRef.current
+    if (!v) return
+    const el = v.scrollDOM
+    const max = el.scrollHeight - el.clientHeight
+    if (max <= 0) return
+    const target = Math.round(max * scrollPercent)
+    if (Math.abs(el.scrollTop - target) < 2) return
+    ignoreEditorScrollRef.current = true
+    el.scrollTop = target
+  }, [scrollPercent, mdMode, isMarkdown])
 
   async function handleCursorColorChange(hex: string) {
     const previous = userColor
