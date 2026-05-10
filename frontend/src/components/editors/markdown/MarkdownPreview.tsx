@@ -52,51 +52,6 @@ import 'katex/dist/katex.min.css'
 // from the document content which a collaborator could craft.
 mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'default' })
 
-// Custom remark plugin: preserve multi-blank-line spacing.
-//
-// CommonMark collapses runs of blank lines to a single paragraph break;
-// remark-breaks only fixes the single-newline-as-space case (soft break).
-// Users who hit Enter five times expect five visual rows — they're
-// thinking in editor lines, not paragraph semantics.
-//
-// We do this on the AST (not the raw source) because position info on
-// each block-level mdast node tells us the exact source-line gap. That
-// gives us a clean signal — and lets us avoid the regex-on-fenced-code
-// edge cases that a string preprocessor has to dodge.
-//
-// For each adjacent pair of root children, the line gap is:
-//   gap = next.position.start.line - curr.position.end.line - 1
-//       = number of blank lines between the two blocks
-// Standard paragraph break is 1 blank line (gap === 1). Each blank line
-// beyond that gets a placeholder paragraph containing a non-breaking
-// space (renders as a visual empty row).
-function remarkPreserveBlankLines() {
-  type Position = { start: { line: number }; end: { line: number } }
-  type RootChild = { type: string; position?: Position; children?: unknown[] }
-  type Root = { children: RootChild[] }
-  return (tree: Root) => {
-    const out: RootChild[] = []
-    for (let i = 0; i < tree.children.length; i++) {
-      const curr = tree.children[i]
-      out.push(curr)
-      const next = tree.children[i + 1]
-      if (!next) continue
-      const currEnd = curr.position?.end.line
-      const nextStart = next.position?.start.line
-      if (currEnd == null || nextStart == null) continue
-      const gap = nextStart - currEnd - 1
-      const extras = Math.max(0, gap - 1)
-      for (let j = 0; j < extras; j++) {
-        out.push({
-          type: 'paragraph',
-          children: [{ type: 'text', value: ' ' } as unknown as RootChild],
-        })
-      }
-    }
-    tree.children = out
-  }
-}
-
 interface Props {
   source: string
   /** 0..1 desired scroll position. Parent drives this when in Split mode. */
@@ -221,7 +176,7 @@ export default function MarkdownPreview({
       }
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkBreaks, remarkMath, remarkPreserveBlankLines]}
+        remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
         rehypePlugins={[rehypeSanitize, rehypeKatex, rehypeHighlight]}
 
         components={{
