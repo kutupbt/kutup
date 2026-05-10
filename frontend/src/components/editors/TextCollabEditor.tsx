@@ -39,6 +39,10 @@ import RestoreConfirmDialog from '@/components/RestoreConfirmDialog'
 import { Button } from '@/components/ui/button'
 import { Save, BookmarkPlus, History, X, Check } from 'lucide-react'
 import CursorColorPicker from './CursorColorPicker'
+import MarkdownPreview from './markdown/MarkdownPreview'
+import ModeToggle from './markdown/ModeToggle'
+import StatusBar, { countWords } from './markdown/StatusBar'
+import { useMarkdownMode, nextMode, prevMode } from './markdown/useMarkdownMode'
 import {
   buildAwarenessName,
   getCursorColor,
@@ -100,6 +104,28 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
   // Stable awareness ref so the color-picker callback can mutate the live
   // awareness state without re-mounting the editor.
   const awarenessRef = useRef<Awareness | null>(null)
+
+  // Markdown view-mode state. The mode toggle (Edit/Split/Read) only
+  // appears for .md/.markdown files; code files keep the plain editor.
+  const isMarkdown = (() => {
+    const dot = filename.lastIndexOf('.')
+    if (dot < 0) return false
+    const ext = filename.slice(dot + 1).toLowerCase()
+    return ext === 'md' || ext === 'markdown'
+  })()
+  const [mdMode, setMdMode] = useMarkdownMode(fileId)
+  // Live document content for the preview pane + word/char count. Updated
+  // from the CodeMirror updateListener below — we read ytext.toString()
+  // each tick so it picks up remote changes too.
+  const [docText, setDocText] = useState<string>(initialContent ?? '')
+  const [cursorPos, setCursorPos] = useState<{ line: number; col: number }>({ line: 1, col: 1 })
+  // Scroll-percent state shared between editor pane and preview pane in
+  // Split mode. The pane that scrolled most-recently is the source of
+  // truth; the other mirrors via this state.
+  const [scrollPercent, setScrollPercent] = useState<number>(0)
+  // Number of remote collaborators currently online (excludes self).
+  // Updated from awareness 'change' events.
+  const [collaboratorCount, setCollaboratorCount] = useState<number>(0)
 
   useEffect(() => {
     if (!ref.current || !accessToken) return
@@ -261,6 +287,20 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
         })()
       }
       awareness.on('change', onAwarenessChange)
+
+      // Track remote-collaborator count for the status bar. Awareness
+      // states map clientID → state; we count entries other than our own
+      // local clientID. Yjs's awareness 'update' fires on every state
+      // change including additions / removals.
+      const updateCollabCount = () => {
+        const states = awareness!.getStates()
+        let n = 0
+        const myID = ydoc!.clientID
+        states.forEach((_v, id) => { if (id !== myID) n++ })
+        setCollaboratorCount(n)
+      }
+      awareness.on('update', updateCollabCount)
+      updateCollabCount()
 
       // 5.5 Load the latest snapshot from S3 (if any) so the editor shows the
       // current state on open. The relay can't help here — when a snapshot was
@@ -425,6 +465,31 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
               v.focus()
             }
           },
+          scroll(_event, v) {
+            // Mirror editor scroll into the React state so the preview
+            // pane (in Split mode) follows along. The scrollDOM is the
+            // CodeMirror outer scroller. Suppress when the document
+            // hasn't grown beyond the viewport (no scroll possible).
+            const el = v.scrollDOM
+            const max = el.scrollHeight - el.clientHeight
+            if (max <= 0) return
+            setScrollPercent(el.scrollTop / max)
+          },
+        }),
+        // Track document content + cursor position for the status bar
+        // and the markdown preview pane. Using updateListener over a
+        // ViewPlugin keeps it ergonomic; the cost is one closure call
+        // per dispatch, which is negligible at the dispatch rates Yjs
+        // produces (typing is debounced upstream).
+        EditorView.updateListener.of((u) => {
+          if (u.docChanged) {
+            setDocText(u.state.doc.toString())
+          }
+          if (u.selectionSet || u.docChanged) {
+            const head = u.state.selection.main.head
+            const line = u.state.doc.lineAt(head)
+            setCursorPos({ line: line.number, col: head - line.from + 1 })
+          }
         }),
       ]
       // Seed CodeMirror's initial doc from ytext so they're in sync at mount.
@@ -444,6 +509,7 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
         trig.destroy()
         ydoc?.off('update', onLocalUpdate)
         awareness?.off('change', onAwarenessChange)
+        awareness?.off('update', updateCollabCount)
         view?.destroy()
         ydoc?.destroy()
         transport?.close()
@@ -466,6 +532,8 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
   // have focus (filename input, color picker, history sidebar, etc.).
   // CM's own keymap (line ~360) still wins when CM is focused, which is
   // faster + cancels its default key bindings.
+  // Also Cmd/Ctrl+E cycles markdown view modes (Edit → Split → Read),
+  // matching Obsidian's binding. Only fires for .md/.markdown files.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 's' || e.key === 'S')) {
@@ -475,11 +543,16 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
         t.forceSave(undefined, false)
           .then(() => { setJustSaved(true); setTimeout(() => setJustSaved(false), 1200) })
           .catch((err) => console.warn('save shortcut failed', err))
+        return
+      }
+      if (isMarkdown && (e.metaKey || e.ctrlKey) && (e.key === 'e' || e.key === 'E')) {
+        e.preventDefault()
+        setMdMode(e.shiftKey ? prevMode(mdMode) : nextMode(mdMode))
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [isMarkdown, mdMode, setMdMode])
 
   // Push live cursor-color updates to awareness without remounting the editor.
   useEffect(() => {
@@ -523,6 +596,7 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          {isMarkdown && <ModeToggle mode={mdMode} onChange={setMdMode} />}
           <CursorColorPicker color={cursorColor} onChange={handleCursorColorChange} />
           <Button
             type="button"
@@ -594,8 +668,29 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
             null-pos case. */}
         <div
           ref={ref}
-          className="flex-1 overflow-auto [&>.cm-editor]:h-full [&_.cm-content]:min-h-full"
+          className={
+            'overflow-auto [&>.cm-editor]:h-full [&_.cm-content]:min-h-full ' +
+            (isMarkdown && mdMode === 'read'
+              ? 'hidden'
+              : isMarkdown && mdMode === 'split'
+                ? 'flex-1 min-w-0 border-r border-border'
+                : 'flex-1')
+          }
         />
+
+        {/* Markdown preview pane. Visible in Split (50/50) and Read
+            (full) modes; hidden in Edit. Source pulls from the live
+            ytext via docText state, updated by the editor's
+            updateListener — that means remote edits via Yjs propagate
+            to the preview within the same React tick. */}
+        {isMarkdown && (mdMode === 'split' || mdMode === 'read') && (
+          <MarkdownPreview
+            source={docText}
+            scrollPercent={mdMode === 'split' ? scrollPercent : undefined}
+            onScrollPercent={mdMode === 'split' ? setScrollPercent : undefined}
+            className={mdMode === 'split' ? 'flex-1 min-w-0' : 'flex-1'}
+          />
+        )}
 
         {historyOpen && (
           <aside className="flex h-full w-[360px] min-h-0 shrink-0 flex-col overflow-hidden border-l border-border bg-card">
@@ -621,6 +716,21 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
           </aside>
         )}
       </div>
+
+      {/* Status bar — shown in Edit + Split (where the editor is visible
+          and cursor position is meaningful). Hidden in Read mode where
+          the editor isn't visible. Shown for both markdown and code
+          files since line:col + word/char count is useful in code too.
+       */}
+      {mdMode !== 'read' && (
+        <StatusBar
+          cursorLine={cursorPos.line}
+          cursorCol={cursorPos.col}
+          words={countWords(docText)}
+          chars={docText.length}
+          collaborators={collaboratorCount}
+        />
+      )}
 
       <RestoreConfirmDialog
         open={pendingRestoreVersionId !== null}

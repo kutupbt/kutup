@@ -426,5 +426,19 @@
   "errors": {
     "quotaExceededSave": "Depolama kotası aşıldı — kaydedilemedi",
     "quotaExceededRestore": "Depolama kotası aşıldı — geri yüklenemedi"
+  },
+  "notes": {
+    "mode": {
+      "edit": "Düzenle",
+      "split": "Bölünmüş",
+      "read": "Okuma"
+    },
+    "statusBar": {
+      "cursor": "Satır {{line}}, Sütun {{col}}",
+      "words": "{{count}} kelime",
+      "chars": "{{count}} karakter",
+      "collaborators_one": "{{count}} işbirlikçi",
+      "collaborators_other": "{{count}} işbirlikçi"
+    }
   }
 }

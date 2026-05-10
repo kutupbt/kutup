@@ -426,5 +426,19 @@
   "errors": {
     "quotaExceededSave": "Storage quota exceeded — couldn't save",
     "quotaExceededRestore": "Storage quota exceeded — couldn't restore"
+  },
+  "notes": {
+    "mode": {
+      "edit": "Edit",
+      "split": "Split",
+      "read": "Read"
+    },
+    "statusBar": {
+      "cursor": "Ln {{line}}, Col {{col}}",
+      "words": "{{count}} words",
+      "chars": "{{count}} chars",
+      "collaborators_one": "{{count}} collaborator",
+      "collaborators_other": "{{count}} collaborators"
+    }
   }
 }
