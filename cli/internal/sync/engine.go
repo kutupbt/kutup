@@ -180,7 +180,10 @@ func downloadFile(client *api.Client, f *api.File, collectionKey []byte, localPa
 		progressbar.OptionShowBytes(true),
 		progressbar.OptionClearOnFinish(),
 	)
-	encrypted, err := client.DownloadFile(f.ID)
+	// Version-aware download: try the latest /versions snapshot first.
+	// Necessary for collab-edited files where /files/:id/download alone
+	// returns only the cold-start initial state.
+	encrypted, _, err := client.LatestEncryptedBytes(f.ID)
 	if err != nil {
 		return err
 	}

@@ -39,4 +39,5 @@ func init() {
 	rootCmd.AddCommand(rmCmd)
 	rootCmd.AddCommand(syncCmd)
 	rootCmd.AddCommand(shareCmd)
+	rootCmd.AddCommand(versionsCmd)
 }
