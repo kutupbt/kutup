@@ -37,9 +37,8 @@ import { broadcastColor } from '../../lib/sessionSync'
 import VersionHistoryPanel from '../VersionHistory/VersionHistoryPanel'
 import RestoreConfirmDialog from '@/components/RestoreConfirmDialog'
 import { Button } from '@/components/ui/button'
-import { Save, BookmarkPlus, History, X, Check, HelpCircle } from 'lucide-react'
+import { Save, BookmarkPlus, History, X, Check } from 'lucide-react'
 import CursorColorPicker from './CursorColorPicker'
-import EditorShortcutsDialog from './EditorShortcutsDialog'
 import MarkdownPreview from './markdown/MarkdownPreview'
 import ModeToggle from './markdown/ModeToggle'
 import StatusBar, { countWords } from './markdown/StatusBar'
@@ -89,7 +88,6 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
   const [savingPlain, setSavingPlain] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [restoreHandler, setRestoreHandler] = useState<((vid: string, choice: 'save-and-restore' | 'restore-only') => Promise<void>) | null>(null)
   const [pendingRestoreVersionId, setPendingRestoreVersionId] = useState<string | null>(null)
   // Cursor color: per-user via authSlice (persisted in DB via /user/me +
@@ -588,16 +586,6 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
         setMdMode(e.shiftKey ? prevMode(mdMode) : nextMode(mdMode))
         return
       }
-      // `?` opens the shortcuts dialog. Suppress when the user is typing
-      // into an actual <input> or contenteditable so we don't steal "?"
-      // out of the editor or filename / dialog inputs.
-      if (e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        const t = e.target as HTMLElement | null
-        const tag = t?.tagName
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || t?.isContentEditable) return
-        e.preventDefault()
-        setShortcutsOpen(true)
-      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -692,19 +680,6 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
             <BookmarkPlus className="h-4 w-4" />
             {savingVersion ? 'Saving…' : 'Save version'}
           </Button>
-          {isMarkdown && (
-            <Button
-              type="button"
-              size="icon"
-              variant="outline"
-              onClick={() => setShortcutsOpen(true)}
-              title={t('editor.shortcuts.openTitle', { defaultValue: 'Keyboard shortcuts (?)' })}
-              aria-label={t('editor.shortcuts.openTitle', { defaultValue: 'Keyboard shortcuts' })}
-              className="h-8 w-8"
-            >
-              <HelpCircle className="h-4 w-4" />
-            </Button>
-          )}
           <Button
             type="button"
             size="sm"
@@ -805,11 +780,6 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
         }}
       />
 
-      <EditorShortcutsDialog
-        open={shortcutsOpen}
-        onOpenChange={setShortcutsOpen}
-        showMarkdownShortcuts={isMarkdown}
-      />
     </div>
   )
 }

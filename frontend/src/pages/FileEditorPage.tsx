@@ -28,6 +28,8 @@ import type { WhiteboardEditorHandle } from '@/components/editors/whiteboard/Whi
 import { chooseViewer } from '@/components/viewers/dispatch'
 import { Button } from '@/components/ui/button'
 import { KutupLogo } from '@/components/KutupLogo'
+import { HelpCircle } from 'lucide-react'
+import EditorShortcutsDialog from '@/components/editors/EditorShortcutsDialog'
 
 interface FileMetadata {
   name: string
@@ -63,6 +65,16 @@ export default function FileEditorPage() {
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState('')
   const [filename, setFilename] = useState('')
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  // Markdown files get the editor shortcuts help dialog (Cmd+E mode
+  // cycling, etc); other file types don't have unique shortcuts worth
+  // surfacing here.
+  const isMarkdownFile = (() => {
+    const dot = filename.lastIndexOf('.')
+    if (dot < 0) return false
+    const ext = filename.slice(dot + 1).toLowerCase()
+    return ext === 'md' || ext === 'markdown'
+  })()
   // Stash mime + size at load so the rename helper can re-encrypt the
   // full metadata blob ({name, mimeType, size}) without re-fetching.
   const fileMetaRef = useRef<{ mimeType: string; size: number } | null>(null)
@@ -386,11 +398,25 @@ export default function FileEditorPage() {
         } else if (officeEditorRef.current) {
           handleOfficeSaveRef.current({}).catch(() => {})
         }
+        return
+      }
+      // `?` opens the shortcuts dialog (markdown files only). Suppress
+      // when the user is typing into <input>/<textarea>/contenteditable
+      // so we don't steal "?" from the editor or filename input.
+      if (e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey && isMarkdownFile) {
+        const t = e.target as HTMLElement | null
+        const tag = t?.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || t?.isContentEditable) return
+        e.preventDefault()
+        setShortcutsOpen(true)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- isMarkdownFile
+    // is read inside onKey but the listener is rebound on filename change
+    // so the closure captures the latest value via this dep.
+  }, [isMarkdownFile])
 
   if (phase === 'loading') {
     return (
@@ -444,6 +470,23 @@ export default function FileEditorPage() {
         </a>
         <span className="text-sm text-muted-foreground">·</span>
         <EditableFilename filename={filename} onCommit={handleRename} />
+        {/* Notes shortcut help — only for markdown files. Office +
+            whiteboard editors render their own action row below; code
+            files have no unique shortcuts worth surfacing at the page
+            level. */}
+        {isMarkdownFile && (
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            onClick={() => setShortcutsOpen(true)}
+            title="Keyboard shortcuts (?)"
+            aria-label="Keyboard shortcuts"
+            className="ml-auto h-8 w-8 text-muted-foreground hover:text-foreground"
+          >
+            <HelpCircle className="h-4 w-4" />
+          </Button>
+        )}
         {(officeReady || whiteboardReady) && (
           <div className="ml-auto flex items-center gap-2">
             {/* Picker hidden on whiteboard: Excalidraw 0.18.x renders peer
@@ -587,6 +630,12 @@ export default function FileEditorPage() {
             : () => handleOfficeSave({ silent: true, label: 'Pre-restore' })
           performBlobRestore(vid, choice, preSave)
         }}
+      />
+
+      <EditorShortcutsDialog
+        open={shortcutsOpen}
+        onOpenChange={setShortcutsOpen}
+        showMarkdownShortcuts={isMarkdownFile}
       />
     </div>
   )
