@@ -1,9 +1,13 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"time"
 )
 
@@ -94,6 +98,80 @@ func (c *Client) ProxyDownload(shareID, fileID string) ([]byte, error) {
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 	return io.ReadAll(resp.Body)
+}
+
+// ProxyUploadResponse mirrors the remote UploadShareFile response. The
+// remote returns either {id: ...} or just a MessageResponse depending on
+// build; we accept both — ID may be empty.
+type ProxyUploadResponse struct {
+	ID string `json:"id"`
+}
+
+// ProxyUploadFile posts an encrypted file to a federated share via the
+// local /api/fed-proxy/:shareId/upload pass-through. The remote
+// UploadShareFile handler enforces:
+//   - can_upload permission (returns 403 if not)
+//   - share-imposed upload_quota_bytes (atomic FOR UPDATE; 413 on overflow)
+//   - sharer's storage_used_bytes is incremented post-write
+//
+// Multipart shape: same as the local UploadFile — encryptedMetadata,
+// metadataNonce, encryptedFileKey, fileKeyNonce, file — minus the
+// `collectionId` field (the remote infers it from the share token).
+//
+// The CLI must already have unwrapped the share's collection key (use
+// cli/cmd/share_files.go:resolveSharedCollectionKey) and used it to wrap
+// the per-file encFileKey. Asymmetric to local upload only in that one
+// step; metadata + content encryption are identical.
+func (c *Client) ProxyUploadFile(
+	shareID string,
+	encryptedMetadata, metadataNonce string,
+	encryptedFileKey, fileKeyNonce string,
+	encryptedContent []byte,
+) (*ProxyUploadResponse, error) {
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+
+	_ = w.WriteField("encryptedMetadata", encryptedMetadata)
+	_ = w.WriteField("metadataNonce", metadataNonce)
+	_ = w.WriteField("encryptedFileKey", encryptedFileKey)
+	_ = w.WriteField("fileKeyNonce", fileKeyNonce)
+
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", `form-data; name="file"; filename="blob"`)
+	h.Set("Content-Type", "application/octet-stream")
+	part, err := w.CreatePart(h)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := part.Write(encryptedContent); err != nil {
+		return nil, err
+	}
+	w.Close()
+
+	req, err := http.NewRequest(http.MethodPost,
+		c.base+"/api/fed-proxy/"+shareID+"/upload", &buf)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := c.do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	// Body may be {id:...} or {message:"ok"}. Best-effort decode — if the
+	// shape doesn't include id, we leave it empty and let the caller fall
+	// back to listing the share to find the new file.
+	body, _ := io.ReadAll(resp.Body)
+	r := &ProxyUploadResponse{}
+	if len(body) > 0 {
+		_ = json.Unmarshal(body, r)
+	}
+	return r, nil
 }
 
 // ProxyDeleteFile removes a file from a federated share. Requires
