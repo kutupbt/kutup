@@ -417,5 +417,10 @@
     "error": {
       "title": "Paylaşıma erişilemiyor"
     }
+  },
+  "whiteboard": {
+    "image": {
+      "quotaExceeded": "Depolama kotası aşıldı — görsel yüklenmedi"
+    }
   }
 }

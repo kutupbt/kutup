@@ -13,8 +13,19 @@
 //                                                blobs between assets.
 
 import _sodium from 'libsodium-wrappers-sumo'
+import axios from 'axios'
 import api from './client'
 import { deriveContentKey } from '@/collab/cryptoFrame'
+
+/** Thrown when the server returns 413 (storage quota exceeded). Distinct
+ *  type so the editor can handle it differently from generic upload
+ *  failures (toast + element flipped to "error" instead of retry loop). */
+export class QuotaExceededError extends Error {
+  constructor() {
+    super('storage quota exceeded')
+    this.name = 'QuotaExceededError'
+  }
+}
 
 interface AeadXChaCha20Poly1305Ietf {
   crypto_aead_xchacha20poly1305_ietf_encrypt(
@@ -56,7 +67,14 @@ export async function uploadAsset(
 
   const fd = new FormData()
   fd.append('file', new Blob([blob.buffer as ArrayBuffer], { type: 'application/octet-stream' }))
-  await api.put(`/files/${kutupFileId}/assets/${assetId}`, fd)
+  try {
+    await api.put(`/files/${kutupFileId}/assets/${assetId}`, fd)
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response?.status === 413) {
+      throw new QuotaExceededError()
+    }
+    throw err
+  }
 }
 
 /** Fetch + decrypt an asset. Returns the plaintext bytes (the dataURL

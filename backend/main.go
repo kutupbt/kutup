@@ -60,6 +60,12 @@ func main() {
 	cleanup := &services.VersionCleanup{DB: pool, Storage: storage}
 	go cleanup.Run(context.Background())
 
+	// Background reconciliation of users.storage_used_bytes against the
+	// authoritative row sums. Heals drift from crashes between an S3 PUT
+	// and the counter UPDATE landing.
+	quotaRecon := &services.QuotaReconcile{DB: pool}
+	go quotaRecon.Run(context.Background())
+
 	// Handlers
 	authH := &handlers.AuthHandler{DB: pool, JWTSecret: cfg.JWTSecret, AppEnv: cfg.AppEnv}
 	collectionsH := &handlers.CollectionsHandler{DB: pool, ServerURL: cfg.ServerURL, AppEnv: cfg.AppEnv}

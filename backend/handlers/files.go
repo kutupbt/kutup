@@ -396,22 +396,55 @@ func (h *FilesHandler) Delete(c *fiber.Ctx) error {
 		}
 	}
 
-	_, err = h.DB.Exec(context.Background(), `DELETE FROM files WHERE id = $1`, fileID)
+	// Release quota (main-file size + child-asset sums) atomically with
+	// the file row delete. Order:
+	//   1. SUM file_assets.size_bytes per uploader BEFORE the row cascades
+	//      away — once DELETE FROM files fires, the rows are gone.
+	//   2. DELETE the file (cascades file_assets via FK).
+	//   3. Decrement the main-file uploader's quota by encrypted_size_bytes.
+	// All three under one tx so a partial failure rolls back cleanly.
+	tx, err := h.DB.Begin(context.Background())
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
+	defer tx.Rollback(context.Background())
 
-	// Release quota (best-effort, no rollback needed)
-	h.DB.Exec(context.Background(),
+	if _, err := tx.Exec(context.Background(), `
+		WITH per_uploader AS (
+		  SELECT uploader_user_id, COALESCE(SUM(size_bytes), 0) AS total
+		  FROM file_assets WHERE file_id = $1 GROUP BY uploader_user_id
+		)
+		UPDATE users
+		SET storage_used_bytes = GREATEST(0, storage_used_bytes - per_uploader.total)
+		FROM per_uploader
+		WHERE users.id = per_uploader.uploader_user_id
+	`, fileID); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	if _, err := tx.Exec(context.Background(),
+		`DELETE FROM files WHERE id = $1`, fileID,
+	); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	if _, err := tx.Exec(context.Background(),
 		`UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1) WHERE id = $2`,
 		fileSize, uploaderID,
-	)
+	); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
 
-	// Delete from SeaweedFS (best-effort).
-	// Wipe the entire files/{fileId}/ prefix so per-file children
-	// (snapshot blobs, whiteboard image asset blobs, …) get GC'd along
-	// with the parent. The single-key Delete on storagePath stays for
-	// safety: legacy main blobs may not live under that prefix.
+	if err := tx.Commit(context.Background()); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	// Delete from SeaweedFS (best-effort, post-commit so a S3 outage
+	// doesn't block the user's delete UX). Wipe the entire files/{fileId}/
+	// prefix so per-file children (snapshot blobs, whiteboard image asset
+	// blobs, …) get GC'd along with the parent. The single-key Delete on
+	// storagePath stays for safety: legacy main blobs may not live under
+	// that prefix.
 	h.Storage.Delete(context.Background(), storagePath)
 	h.Storage.DeletePrefix(context.Background(), "files/"+fileID+"/")
 

@@ -62,7 +62,9 @@ import {
 } from '@/collab/devices'
 import { randomSenderSeqPrefix, buildAwarenessName } from '@/collab/identity'
 import { registerDevice } from '@/api/collab'
-import { uploadAsset, fetchAsset } from '@/api/whiteboardAssets'
+import { uploadAsset, fetchAsset, QuotaExceededError } from '@/api/whiteboardAssets'
+import { toast } from 'sonner'
+import { useTranslation } from 'react-i18next'
 
 import '@excalidraw/excalidraw/index.css'
 
@@ -109,6 +111,7 @@ function WhiteboardEditorBase(
 ) {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null)
   const dispatch = useAppDispatch()
+  const { t } = useTranslation()
   const accessToken = useAppSelector(s => s.auth.accessToken)
   const storedDeviceId = useAppSelector(s => s.auth.currentDeviceId)
   const userColor = useAppSelector(s => s.auth.color)
@@ -410,6 +413,30 @@ function WhiteboardEditorBase(
     }, 50)
   }
 
+  // Mutate a single image element's status field (saved | error). Bumps
+  // version + versionNonce so the existing scheduleBroadcast diff picks
+  // it up as a local change and propagates it to peers. Used by both the
+  // happy path (status → "saved") and the quota-exceeded path
+  // (status → "error" so the user sees a broken-image marker instead of
+  // an indefinitely-pending placeholder).
+  function flipImageStatus(elemId: string, next: 'saved' | 'error') {
+    const api = apiRef.current
+    if (!api) return
+    const current = api.getSceneElementsIncludingDeleted() as OrderedExcalidrawElement[]
+    const updated = current.map((e) => {
+      if (e.id !== elemId) return e
+      const ie = e as ExcalidrawImageElement
+      return {
+        ...ie,
+        status: next,
+        version: (ie.version ?? 0) + 1,
+        versionNonce: Math.floor(Math.random() * 0x7fffffff),
+        updated: Date.now(),
+      }
+    })
+    api.updateScene({ elements: updated })
+  }
+
   // ---- Asset upload helpers ------------------------------------------
   // Walk the scene for image elements that haven't been "saved" yet, then
   // for each one whose binary is in api.getFiles(), encrypt+upload and
@@ -442,27 +469,17 @@ function WhiteboardEditorBase(
           const plain = new TextEncoder().encode(data.dataURL)
           await uploadAsset(fileId, fid, plain, collectionMaster)
           assetSavedRef.current.add(fid)
-          // Flip status to "saved". Bump version + versionNonce so the
-          // diff in scheduleBroadcast picks this up as our change. Do
-          // NOT set applyingRemoteRef here — we WANT scheduleBroadcast
-          // to fire from the resulting onChange.
-          const api2 = apiRef.current
-          if (!api2) return
-          const current = api2.getSceneElementsIncludingDeleted() as OrderedExcalidrawElement[]
-          const next = current.map((e) => {
-            if (e.id !== elemId) return e
-            const ie = e as ExcalidrawImageElement
-            return {
-              ...ie,
-              status: 'saved' as const,
-              version: (ie.version ?? 0) + 1,
-              versionNonce: Math.floor(Math.random() * 0x7fffffff),
-              updated: Date.now(),
-            }
-          })
-          api2.updateScene({ elements: next })
+          flipImageStatus(elemId, 'saved')
         } catch (e) {
-          console.warn('whiteboard: asset upload failed', e)
+          if (e instanceof QuotaExceededError) {
+            // 413: don't retry. Surface to the user and flip the element to
+            // "error" so the upload-side scan ignores it on next onChange.
+            toast.error(t('whiteboard.image.quotaExceeded'))
+            assetSavedRef.current.add(fid) // suppress further attempts
+            flipImageStatus(elemId, 'error')
+          } else {
+            console.warn('whiteboard: asset upload failed', e)
+          }
         } finally {
           pendingUploadsRef.current.delete(fid)
         }

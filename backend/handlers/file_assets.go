@@ -2,16 +2,26 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kutup/backend/middleware"
-	"github.com/kutup/backend/services"
 )
+
+// ObjectStore is the slice of services.StorageService that FileAssetsHandler
+// needs. Extracted so tests can inject a fake whose Upload returns an error,
+// exercising the compensating-transaction path.
+type ObjectStore interface {
+	Upload(ctx context.Context, path string, body io.Reader, size int64) error
+	GetObject(ctx context.Context, path string) (io.ReadCloser, int64, error)
+	Delete(ctx context.Context, path string) error
+}
 
 // FileAssetsHandler exposes per-file binary asset blobs (currently used by
 // the whiteboard for embedded image binaries — Excalidraw's content-addressed
@@ -21,10 +31,18 @@ import (
 // Path layout in S3: files/{fileId}/assets/{assetId}.
 //
 // Lifecycle: assets are GC'd transitively when the parent file is deleted —
-// FilesHandler.Delete calls Storage.DeletePrefix("files/{fileId}/").
+// FilesHandler.Delete first releases the quota (SUM size_bytes per uploader),
+// then DELETE FROM files cascades the file_assets rows, and the S3 prefix
+// wipe (Storage.DeletePrefix) cleans the blobs.
+//
+// Quota: every successful upload INSERTs a (file_id, asset_id, size_bytes)
+// row and increments users.storage_used_bytes in the same transaction.
+// Re-uploading the same content-addressed asset is a no-op for quota
+// (ON CONFLICT DO NOTHING). A nightly QuotaReconcile cron in services/
+// quota_reconcile.go heals any drift.
 type FileAssetsHandler struct {
 	DB      *pgxpool.Pool
-	Storage *services.StorageService
+	Storage ObjectStore
 }
 
 // canAccessFile mirrors FileVersionsHandler.canAccessFile (file_versions.go:269).
@@ -71,6 +89,7 @@ func assetStoragePath(fileID, assetID string) string {
 // @Success 204
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
+// @Failure 413 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
 // @Router  /files/{fileId}/assets/{assetId} [put]
 func (h *FileAssetsHandler) Upload(c *fiber.Ctx) error {
@@ -89,13 +108,74 @@ func (h *FileAssetsHandler) Upload(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "missing file"})
 	}
-	f, err := fh.Open()
+	size := fh.Size
+
+	// --- Atomic pre-flight: lock user row, check quota, INSERT row,
+	//     increment counter — all before any S3 I/O. The FOR UPDATE
+	//     serializes concurrent uploads from the same user.
+	tx, err := h.DB.Begin(c.Context())
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
-	defer f.Close()
+	defer tx.Rollback(c.Context())
 
-	if err := h.Storage.Upload(c.Context(), assetStoragePath(fileID, assetID), f, fh.Size); err != nil {
+	var quota, used int64
+	err = tx.QueryRow(c.Context(),
+		`SELECT storage_quota_bytes, storage_used_bytes FROM users WHERE id = $1 FOR UPDATE`,
+		userID,
+	).Scan(&quota, &used)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	// INSERT idempotently. If a row already exists (re-PUT of the same
+	// content-addressed asset), we get zero rows and skip both the quota
+	// check and the counter bump — the storage was already paid for.
+	var insertedSize int64
+	err = tx.QueryRow(c.Context(), `
+		INSERT INTO file_assets (file_id, asset_id, size_bytes, uploader_user_id)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (file_id, asset_id) DO NOTHING
+		RETURNING size_bytes
+	`, fileID, assetID, size, userID).Scan(&insertedSize)
+	isNewRow := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	if isNewRow {
+		if used+size > quota {
+			// Roll back: don't charge, don't write S3.
+			return c.Status(413).JSON(fiber.Map{"error": "storage quota exceeded"})
+		}
+		if _, err := tx.Exec(c.Context(),
+			`UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2`,
+			size, userID,
+		); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+		}
+	}
+
+	// --- S3 PUT. Performed AFTER the DB increment but BEFORE the commit
+	//     so we still hold the lock. If the PUT fails we ROLLBACK the
+	//     entire pre-flight (insert + counter increment), leaving DB and
+	//     S3 convergent. This keeps the "PUT first, DB second" failure
+	//     mode (orphan blob with no row) impossible.
+	src, err := fh.Open()
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+	defer src.Close()
+	if err := h.Storage.Upload(c.Context(), assetStoragePath(fileID, assetID), src, size); err != nil {
+		// tx.Rollback will fire from defer — both the file_assets row and
+		// the counter increment vanish.
+		return c.Status(500).JSON(fiber.Map{"error": "storage error"})
+	}
+
+	if err := tx.Commit(c.Context()); err != nil {
+		// Best-effort cleanup of the just-uploaded blob; if this fails the
+		// nightly orphan sweep (future work) will catch it.
+		_ = h.Storage.Delete(context.Background(), assetStoragePath(fileID, assetID))
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
 	return c.SendStatus(204)

@@ -417,5 +417,10 @@
     "error": {
       "title": "Cannot access share"
     }
+  },
+  "whiteboard": {
+    "image": {
+      "quotaExceeded": "Storage quota exceeded — image not uploaded"
+    }
   }
 }
