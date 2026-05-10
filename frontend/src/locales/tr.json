@@ -440,5 +440,21 @@
       "collaborators_one": "{{count}} işbirlikçi",
       "collaborators_other": "{{count}} işbirlikçi"
     }
+  },
+  "editor": {
+    "shortcuts": {
+      "title": "Düzenleyici klavye kısayolları",
+      "desc": "Düzenleme sırasında kullanılabilir. Kaydet ve ara sayfa genelinde çalışır; geri kalanı yalnızca düzenleyici odaklandığında.",
+      "openTitle": "Klavye kısayolları (?)",
+      "save": "Kaydet",
+      "search": "Belgede ara",
+      "undo": "Geri al",
+      "redo": "Yinele",
+      "comment": "Satır yorumunu aç/kapat",
+      "cycleMode": "Düzenle / Bölünmüş / Okuma arasında geçiş",
+      "cycleModeRev": "Modlarda geriye doğru geçiş",
+      "addCursor": "Tıklanan konuma imleç ekle",
+      "rectSelect": "Dikdörtgen seçim"
+    }
   }
 }

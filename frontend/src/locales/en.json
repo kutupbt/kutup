@@ -440,5 +440,21 @@
       "collaborators_one": "{{count}} collaborator",
       "collaborators_other": "{{count}} collaborators"
     }
+  },
+  "editor": {
+    "shortcuts": {
+      "title": "Editor keyboard shortcuts",
+      "desc": "Available while editing. Save and search are page-wide; the rest fire only when the editor has focus.",
+      "openTitle": "Keyboard shortcuts (?)",
+      "save": "Save",
+      "search": "Find in document",
+      "undo": "Undo",
+      "redo": "Redo",
+      "comment": "Toggle line comment",
+      "cycleMode": "Cycle Edit / Split / Read",
+      "cycleModeRev": "Cycle modes backward",
+      "addCursor": "Add cursor at click position",
+      "rectSelect": "Rectangular selection"
+    }
   }
 }
