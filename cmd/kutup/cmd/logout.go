@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/alperen-albayrak/kutup/cli/internal/session"
+	"github.com/kutupbulut/kutup/cmd/kutup/internal/session"
 	"github.com/spf13/cobra"
 )
 

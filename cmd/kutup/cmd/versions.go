@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/alperen-albayrak/kutup/cli/internal/api"
-	"github.com/alperen-albayrak/kutup/cli/internal/crypto"
+	"github.com/kutupbulut/kutup/cmd/kutup/internal/api"
+	"github.com/kutupbulut/kutup/cmd/kutup/internal/crypto"
 	"github.com/spf13/cobra"
 )
 

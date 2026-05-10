@@ -1,4 +1,4 @@
-module github.com/alperen-albayrak/kutup/cli
+module github.com/kutupbulut/kutup/cmd/kutup
 
 go 1.24.0
 

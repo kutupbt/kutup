@@ -15,7 +15,7 @@ This guide covers a production Kutup deployment using Docker Compose.
 ## Step 1: Clone and Configure
 
 ```sh
-git clone https://github.com/alperen-albayrak/kutup.git
+git clone https://github.com/kutupbulut/kutup.git
 cd kutup
 cp .env.example .env
 ```

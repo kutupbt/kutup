@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/alperen-albayrak/kutup/cli/internal/api"
+	"github.com/kutupbulut/kutup/cmd/kutup/internal/api"
 	"github.com/spf13/cobra"
 )
 

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	kutupSync "github.com/alperen-albayrak/kutup/cli/internal/sync"
+	kutupSync "github.com/kutupbulut/kutup/cmd/kutup/internal/sync"
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/cobra"
 )

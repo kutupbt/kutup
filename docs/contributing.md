@@ -20,7 +20,7 @@ Contributions are welcome. This guide covers local development setup for both th
 ### 1. Clone and configure
 
 ```sh
-git clone https://github.com/alperen-albayrak/kutup.git
+git clone https://github.com/kutupbulut/kutup.git
 cd kutup
 cp .env.example .env
 # Fill in required values — see README for the configuration table
@@ -201,7 +201,7 @@ kutup/
 │   │   └── workers/         # Web Worker for Argon2id KDF
 │   ├── public/onlyoffice/   # CryptPad-pinned OnlyOffice bundle (gitignored; install via script)
 │   └── vite.config.ts       # Dev server proxy config
-├── cli/                      # Go CLI (Cobra) — login, ls, upload, download, sync, share
+├── cmd/kutup/                # Go CLI (Cobra) — login, ls, upload, download, sync, share, versions, devices, 2fa, pub, mv, color
 │   ├── cmd/                 # One file per command
 │   └── internal/
 │       ├── api/             # HTTP client to the backend

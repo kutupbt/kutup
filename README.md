@@ -69,7 +69,7 @@ Multi-device with per-device Ed25519 keypairs (revocable individually). 24-word 
 ## Quick Start
 
 ```sh
-git clone https://github.com/alperen-albayrak/kutup.git
+git clone https://github.com/kutupbulut/kutup.git
 cd kutup
 cp .env.example .env
 # Edit .env — set strong values for POSTGRES_PASSWORD, JWT_SECRET,
@@ -80,6 +80,35 @@ docker compose up -d --build
 Open `http://localhost`, log in with the credentials from `ADMIN_ACCOUNTS`, save your generated recovery phrase, and you're in.
 
 Optional: `./install-onlyoffice.sh` enables `.docx` / `.xlsx` / `.pptx` editing (otherwise office files are download-only).
+
+---
+
+## CLI
+
+`kutup` is a Cobra-based CLI for the same E2EE primitives as the web — login, ls, upload, download, sync, share, versions, devices, 2fa, public-link consumption, file rename. All operations are end-to-end encrypted in your shell; the server only ever sees ciphertext.
+
+**Install** (Go ≥ 1.22 + `$GOPATH/bin` on `$PATH`):
+
+```sh
+go install github.com/kutupbulut/kutup/cmd/kutup@latest
+```
+
+Or build from source:
+
+```sh
+git clone https://github.com/kutupbulut/kutup.git
+cd kutup/cmd/kutup
+go build -o ~/.local/bin/kutup .
+```
+
+Tagged release binaries (Linux / macOS / Windows; amd64 + arm64) are published via [goreleaser](cmd/kutup/.goreleaser.yaml) on GitHub Releases.
+
+```sh
+kutup login --server https://your.kutup.host
+kutup whoami
+kutup version
+kutup --help
+```
 
 ---
 

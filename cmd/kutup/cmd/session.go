@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/alperen-albayrak/kutup/cli/internal/api"
-	"github.com/alperen-albayrak/kutup/cli/internal/session"
+	"github.com/kutupbulut/kutup/cmd/kutup/internal/api"
+	"github.com/kutupbulut/kutup/cmd/kutup/internal/session"
 )
 
 func requireSessionFull() (*api.Client, *session.Session, func(), error) {

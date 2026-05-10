@@ -36,6 +36,6 @@ checksum:
 
 release:
   github:
-    owner: alperen-albayrak
+    owner: kutupbulut
     name: kutup
   name_template: "{{ .ProjectName }} v{{ .Version }}"

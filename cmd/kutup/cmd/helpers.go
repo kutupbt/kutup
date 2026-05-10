@@ -5,9 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 
-	"github.com/alperen-albayrak/kutup/cli/internal/api"
-	"github.com/alperen-albayrak/kutup/cli/internal/crypto"
-	"github.com/alperen-albayrak/kutup/cli/internal/session"
+	"github.com/kutupbulut/kutup/cmd/kutup/internal/api"
+	"github.com/kutupbulut/kutup/cmd/kutup/internal/crypto"
+	"github.com/kutupbulut/kutup/cmd/kutup/internal/session"
 )
 
 func decryptCollections(cols []api.Collection, masterKey []byte, sess *session.Session) []api.Collection {
