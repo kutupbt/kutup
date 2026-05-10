@@ -51,6 +51,7 @@ func init() {
 	shareCmd.AddCommand(shareFolderCmd)
 	shareCmd.AddCommand(shareFederatedCmd)
 	shareCmd.AddCommand(sharePublicCmd)
+	shareCmd.AddCommand(shareIncomingCmd)
 }
 
 func runShareFolder(cmd *cobra.Command, args []string) error {
