@@ -165,11 +165,12 @@ For the full picture (key hierarchy, login flow, federation model, storage layer
 
 ## Acknowledgements
 
-Kutup's design and several of its core technical choices are directly inspired by — and in places adapted from — three projects:
+Kutup's design and several of its core technical choices are directly inspired by — and in places adapted from — these projects:
 
 - **[OnlyOffice](https://github.com/ONLYOFFICE)** — AGPL `documenteditor` / `spreadsheeteditor` / `presentationeditor` builds power kutup's collaborative office editing. The bridged iframe + `x2t` WASM converter approach is taken straight from upstream.
 - **[CryptPad](https://github.com/cryptpad/cryptpad)** — the pattern of running OnlyOffice client-only with all document state encrypted in the browser is theirs. kutup's office collab follows their playbook (see [docs/onlyoffice.md](docs/onlyoffice.md)).
 - **[Ente](https://github.com/ente-io/ente)** — the E2EE primitives (libsodium, the master/collection/file-key hierarchy, Argon2id-derived login keys, streaming chunk format) are modeled on Ente's open-source clients.
+- **[Excalidraw](https://github.com/excalidraw/excalidraw)** — kutup's whiteboard editor embeds the upstream `@excalidraw/excalidraw` React component. The status-driven asset flow (`pending` → upload → `saved` → peer fetch on reconcile) and the `versionNonce`-based last-write-wins reconciliation come straight from upstream's collab model.
 
 Where code, schemas, or protocol details were copied or closely adapted, the relevant files carry the upstream license headers.
 
