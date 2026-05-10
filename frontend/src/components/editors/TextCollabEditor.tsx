@@ -642,17 +642,6 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
           <span className={`inline-block h-2 w-2 rounded-full ${statusDot}`} aria-hidden />
           <span className="truncate text-sm font-medium">{filename}</span>
           <span className="text-xs text-muted-foreground capitalize">· {status}</span>
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            onClick={() => setShortcutsOpen(true)}
-            title={t('editor.shortcuts.openTitle', { defaultValue: 'Keyboard shortcuts (?)' })}
-            aria-label={t('editor.shortcuts.openTitle', { defaultValue: 'Keyboard shortcuts' })}
-            className="h-7 w-7 ml-1 text-muted-foreground hover:text-foreground"
-          >
-            <HelpCircle className="h-4 w-4" />
-          </Button>
         </div>
 
         <div className="ml-auto flex items-center gap-2">
@@ -703,6 +692,19 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
             <BookmarkPlus className="h-4 w-4" />
             {savingVersion ? 'Saving…' : 'Save version'}
           </Button>
+          {isMarkdown && (
+            <Button
+              type="button"
+              size="icon"
+              variant="outline"
+              onClick={() => setShortcutsOpen(true)}
+              title={t('editor.shortcuts.openTitle', { defaultValue: 'Keyboard shortcuts (?)' })}
+              aria-label={t('editor.shortcuts.openTitle', { defaultValue: 'Keyboard shortcuts' })}
+              className="h-8 w-8"
+            >
+              <HelpCircle className="h-4 w-4" />
+            </Button>
+          )}
           <Button
             type="button"
             size="sm"
