@@ -7,8 +7,17 @@ import * as Y from 'yjs'
 import { yCollab } from 'y-codemirror.next'
 import { Awareness, encodeAwarenessUpdate, applyAwarenessUpdate } from 'y-protocols/awareness'
 import { EditorState, type Extension } from '@codemirror/state'
-import { EditorView, keymap } from '@codemirror/view'
+import {
+  EditorView, keymap,
+  lineNumbers, highlightActiveLine, drawSelection,
+  rectangularSelection, crosshairCursor,
+} from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
+import { bracketMatching } from '@codemirror/language'
+import { closeBrackets } from '@codemirror/autocomplete'
+import { search, searchKeymap } from '@codemirror/search'
+import { oneDark } from '@codemirror/theme-one-dark'
+import { getTheme } from '@/lib/theme'
 
 import { langForExtension } from './lang'
 import { CollabTransport, type HelloMsg } from '../../collab/transport'
@@ -383,11 +392,40 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
         },
       }])
       const exts: Extension[] = [
+        // Note: saveKeymap and the user keymap come BEFORE search keymap
+        // so Cmd+S still saves (search wires Cmd+F + a few others).
         saveKeymap,
-        keymap.of([...defaultKeymap, ...historyKeymap]),
+        keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
         history(),
         ...(langExt ? [langExt] : []),
         yCollab(ytext, awareness),
+        // ---- Tier 1 baseline polish ----
+        lineNumbers(),
+        highlightActiveLine(),
+        drawSelection(),
+        bracketMatching(),
+        closeBrackets(),
+        search({ top: true }),
+        rectangularSelection(),
+        crosshairCursor(),
+        EditorState.allowMultipleSelections.of(true),
+        // Theme: dark mode picks oneDark; light mode uses CM6 defaults.
+        ...(getTheme() === 'dark' ? [oneDark] : []),
+        // Click-anywhere fallback. CodeMirror's own posAtCoords handles
+        // clicks within .cm-content correctly (snapping past line-end to
+        // the line's end). For clicks BELOW the last line the wrapper
+        // CSS makes .cm-content fill the height — but as a belt+braces
+        // measure, if a click reports no position we move the caret to
+        // end-of-document (matches Obsidian/VSCode behavior).
+        EditorView.domEventHandlers({
+          mousedown(event, v) {
+            const pos = v.posAtCoords({ x: event.clientX, y: event.clientY })
+            if (pos == null) {
+              v.dispatch({ selection: { anchor: v.state.doc.length } })
+              v.focus()
+            }
+          },
+        }),
       ]
       // Seed CodeMirror's initial doc from ytext so they're in sync at mount.
       // y-codemirror.next assumes parity at mount; if Y.Text was populated by the
@@ -395,6 +433,11 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
       // (e.g. from restore) would reference a CM range that doesn't exist.
       const state = EditorState.create({ doc: ytext.toString(), extensions: exts })
       view = new EditorView({ state, parent: ref.current! })
+      // Auto-focus on mount so the user can start typing immediately
+      // without an extra click. Mirrors the way most editors behave on
+      // open. Safe because the view is the primary interaction surface;
+      // header buttons and dialogs still receive their own focus.
+      view.focus()
 
       // 8. Cleanup on unmount.
       cleanup = () => {
@@ -540,7 +583,19 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
       </div>
 
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        <div ref={ref} className="flex-1 overflow-auto" />
+        {/* The CSS class trio is what fixes the "can't click anywhere"
+            bug: by default CM6 sizes .cm-editor to its content, so the
+            scroll area below the last line was dead. h-full on the
+            CodeMirror root + min-h-full on .cm-content makes the
+            content area fill the wrapper, so clicks below the text
+            land inside .cm-content and CM positions the caret at the
+            nearest line. The mousedown handler in the extension list
+            above is the belt-and-suspenders fallback for the rare
+            null-pos case. */}
+        <div
+          ref={ref}
+          className="flex-1 overflow-auto [&>.cm-editor]:h-full [&_.cm-content]:min-h-full"
+        />
 
         {historyOpen && (
           <aside className="flex h-full w-[360px] min-h-0 shrink-0 flex-col overflow-hidden border-l border-border bg-card">
