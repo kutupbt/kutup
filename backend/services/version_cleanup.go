@@ -45,14 +45,20 @@ func (v *VersionCleanup) Run(ctx context.Context) {
 }
 
 // tick deletes any (non-keep_forever) version that's BOTH older than KeepDays AND beyond KeepN per file.
+// On each successful row delete, decrements users.storage_used_bytes for the
+// version's author by size_bytes — the row's quota charge is symmetric to the
+// charge we made in FileVersionsHandler.Record. GREATEST(0, ...) defends
+// against double-decrement if the cron crashes mid-tick and resumes.
 func (v *VersionCleanup) tick(ctx context.Context) {
 	rows, err := v.DB.Query(ctx, `
 		WITH ranked AS (
-		  SELECT id, file_id, storage_path, s3_version_id, created_at, keep_forever,
+		  SELECT id, file_id, storage_path, s3_version_id,
+		         author_user_id, size_bytes,
+		         created_at, keep_forever,
 		         ROW_NUMBER() OVER (PARTITION BY file_id ORDER BY created_at DESC) AS rn
 		  FROM file_versions
 		)
-		SELECT id::text, storage_path, s3_version_id
+		SELECT id::text, storage_path, s3_version_id, author_user_id::text, size_bytes
 		FROM ranked
 		WHERE keep_forever = false
 		  AND rn > $1
@@ -63,12 +69,13 @@ func (v *VersionCleanup) tick(ctx context.Context) {
 		return
 	}
 	type doomed struct {
-		id, path, vid string
+		id, path, vid, author string
+		size                  int64
 	}
 	var ds []doomed
 	for rows.Next() {
 		var d doomed
-		if err := rows.Scan(&d.id, &d.path, &d.vid); err == nil {
+		if err := rows.Scan(&d.id, &d.path, &d.vid, &d.author, &d.size); err == nil {
 			ds = append(ds, d)
 		}
 	}
@@ -81,6 +88,15 @@ func (v *VersionCleanup) tick(ctx context.Context) {
 		if _, err := v.DB.Exec(ctx, `DELETE FROM file_versions WHERE id = $1`, d.id); err != nil {
 			log.Printf("version cleanup: row delete %s failed: %v", d.id, err)
 			continue
+		}
+		// Quota release. Best-effort: a failure leaves the counter inflated;
+		// the periodic reconcile cron will heal that on its next tick.
+		if _, err := v.DB.Exec(ctx,
+			`UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1) WHERE id = $2`,
+			d.size, d.author,
+		); err != nil {
+			log.Printf("version cleanup: quota release for user=%s size=%d failed: %v",
+				d.author, d.size, err)
 		}
 	}
 	if len(ds) > 0 {

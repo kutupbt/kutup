@@ -226,6 +226,7 @@ type recordSnapshotRequest struct {
 // @Success 201
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
+// @Failure 413 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
 // @Router  /files/{fileId}/versions [post]
 func (h *FileVersionsHandler) Record(c *fiber.Ctx) error {
@@ -241,25 +242,64 @@ func (h *FileVersionsHandler) Record(c *fiber.Ctx) error {
 	if req.S3VersionID == "" || req.StoragePath == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "s3VersionId and storagePath are required"})
 	}
+	if req.SizeBytes < 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "sizeBytes must be non-negative"})
+	}
+
+	// Atomic quota tx, mirroring file_assets.Upload:
+	//   FOR UPDATE on user → quota gate → INSERT row → bump counter → truncate log → COMMIT.
+	// Snapshot bytes were already PUT to S3 in the prior /snapshot-blob call; this
+	// Record handler is the moment we know the bytes are committed and the version
+	// is "real". A 413 here means we still leave the S3 blob behind — PR-B's
+	// orphan sweep handles that residue (the blob has no file_versions row, so
+	// it's GC-eligible after the age threshold).
+	tx, err := h.DB.Begin(c.Context())
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+	defer tx.Rollback(c.Context())
+
+	var quota, used int64
+	if err := tx.QueryRow(c.Context(),
+		`SELECT storage_quota_bytes, storage_used_bytes FROM users WHERE id = $1 FOR UPDATE`,
+		userID,
+	).Scan(&quota, &used); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+	if used+req.SizeBytes > quota {
+		return c.Status(413).JSON(fiber.Map{"error": "storage quota exceeded"})
+	}
+
 	var id string
-	err := h.DB.QueryRow(c.Context(), `
+	if err := tx.QueryRow(c.Context(), `
 		INSERT INTO file_versions (file_id, s3_version_id, storage_path, seq_at_snapshot,
 		                           doc_key_id, author_user_id, size_bytes, label, keep_forever)
 		VALUES ($1,$2,$3,$4,$5,$6,$7, NULLIF($8, ''),$9)
 		RETURNING id::text
 	`, fileID, req.S3VersionID, req.StoragePath, req.SeqAtSnapshot,
-		req.DocKeyID, userID, req.SizeBytes, req.Label, req.KeepForever).Scan(&id)
-	if err != nil {
+		req.DocKeyID, userID, req.SizeBytes, req.Label, req.KeepForever).Scan(&id); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
-	// Truncate the log up to seq_at_snapshot.
-	if _, err := h.DB.Exec(c.Context(),
+
+	if _, err := tx.Exec(c.Context(),
+		`UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2`,
+		req.SizeBytes, userID,
+	); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	// Truncate the update log inside the same tx — if the snapshot fails to
+	// commit, we don't want to lose the log entries that would replay.
+	if _, err := tx.Exec(c.Context(),
 		`DELETE FROM file_update_log WHERE file_id = $1 AND seq <= $2`,
-		fileID, req.SeqAtSnapshot); err != nil {
-		// Snapshot already committed; log truncation is best-effort. Don't 500 the caller.
-		// (A future cleanup job would catch up if this drops.)
+		fileID, req.SeqAtSnapshot,
+	); err != nil {
 		log.Printf("WARN: file_update_log truncate failed for file=%s seq<=%d: %v",
 			fileID, req.SeqAtSnapshot, err)
+	}
+
+	if err := tx.Commit(c.Context()); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
 	return c.Status(201).JSON(fiber.Map{"id": id})
 }

@@ -396,13 +396,14 @@ func (h *FilesHandler) Delete(c *fiber.Ctx) error {
 		}
 	}
 
-	// Release quota (main-file size + child-asset sums) atomically with
-	// the file row delete. Order:
+	// Release quota (main-file size + child-asset sums + child-version sums)
+	// atomically with the file row delete. Order:
 	//   1. SUM file_assets.size_bytes per uploader BEFORE the row cascades
 	//      away — once DELETE FROM files fires, the rows are gone.
-	//   2. DELETE the file (cascades file_assets via FK).
-	//   3. Decrement the main-file uploader's quota by encrypted_size_bytes.
-	// All three under one tx so a partial failure rolls back cleanly.
+	//   2. SUM file_versions.size_bytes per author (same reason).
+	//   3. DELETE the file (cascades file_assets + file_versions via FK).
+	//   4. Decrement the main-file uploader's quota by encrypted_size_bytes.
+	// All four under one tx so a partial failure rolls back cleanly.
 	tx, err := h.DB.Begin(context.Background())
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
@@ -418,6 +419,19 @@ func (h *FilesHandler) Delete(c *fiber.Ctx) error {
 		SET storage_used_bytes = GREATEST(0, storage_used_bytes - per_uploader.total)
 		FROM per_uploader
 		WHERE users.id = per_uploader.uploader_user_id
+	`, fileID); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	if _, err := tx.Exec(context.Background(), `
+		WITH per_author AS (
+		  SELECT author_user_id, COALESCE(SUM(size_bytes), 0) AS total
+		  FROM file_versions WHERE file_id = $1 GROUP BY author_user_id
+		)
+		UPDATE users
+		SET storage_used_bytes = GREATEST(0, storage_used_bytes - per_author.total)
+		FROM per_author
+		WHERE users.id = per_author.author_user_id
 	`, fileID); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}

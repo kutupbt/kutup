@@ -9,18 +9,18 @@ import (
 )
 
 // QuotaReconcile periodically rewrites users.storage_used_bytes from the
-// authoritative row sums (files.encrypted_size_bytes + file_assets.size_bytes).
+// authoritative row sums across all three byte-charged tables:
+//   - files.encrypted_size_bytes
+//   - file_assets.size_bytes (whiteboard image binaries)
+//   - file_versions.size_bytes (per-file snapshot blobs)
+//
 // Drift can creep in via crashes between an S3 PUT succeeding and the
-// counter UPDATE landing, or via direct admin SQL touching these tables.
+// counter UPDATE landing, version_cleanup failing to release a counter
+// after deleting a row, or direct admin SQL touching these tables.
 //
 // The query is a single CTE that touches at most one row per drifted user
 // per tick; the WHERE storage_used_bytes <> expected clause skips no-op
 // updates so the change set logged is exactly the drift count.
-//
-// NOTE: this currently does not include snapshot blob bytes — file_versions
-// has no per-row size charged to quota today (existing gap, separate fix).
-// When that lands, add a third CTE branch here mirroring file_sums and
-// asset_sums.
 type QuotaReconcile struct {
 	DB       *pgxpool.Pool
 	Interval time.Duration
@@ -58,6 +58,8 @@ func (q *QuotaReconcile) Tick(ctx context.Context) int {
 		  SELECT uploader_user_id AS user_id, encrypted_size_bytes AS bytes FROM files
 		  UNION ALL
 		  SELECT uploader_user_id,            size_bytes              FROM file_assets
+		  UNION ALL
+		  SELECT author_user_id,              size_bytes              FROM file_versions
 		),
 		expected AS (
 		  SELECT u.id AS user_id, COALESCE(SUM(c.bytes), 0) AS bytes

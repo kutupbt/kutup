@@ -102,6 +102,43 @@ func TestReconcile_NoOpWhenAccurate(t *testing.T) {
 	}
 }
 
+func TestReconcile_IncludesSnapshotBytes(t *testing.T) {
+	// Three byte-charged tables — the reconciler must sum all three.
+	pool := testdb.Setup(t)
+	uid, collID := seedUser(t, pool, "snapsum_user")
+
+	var fileID string
+	pool.QueryRow(context.Background(),
+		`INSERT INTO files (collection_id, uploader_user_id,
+			encrypted_metadata, metadata_nonce, encrypted_file_key, file_key_nonce,
+			storage_path, encrypted_size_bytes)
+		 VALUES ($1,$2,'m','n','k','kn','/p',100)
+		 RETURNING id`, collID, uid).Scan(&fileID)
+	pool.Exec(context.Background(),
+		`INSERT INTO file_assets (file_id, asset_id, size_bytes, uploader_user_id)
+		 VALUES ($1,'a',50,$2)`, fileID, uid)
+	pool.Exec(context.Background(),
+		`INSERT INTO file_versions (file_id, s3_version_id, storage_path, seq_at_snapshot,
+			doc_key_id, author_user_id, size_bytes)
+		 VALUES ($1,'vid',$2,0,1,$3,200)`,
+		fileID, "files/"+fileID+"/snapshot", uid)
+
+	// Drift the counter to a wrong value.
+	pool.Exec(context.Background(),
+		`UPDATE users SET storage_used_bytes = 9999 WHERE id = $1`, uid)
+
+	q := &QuotaReconcile{DB: pool}
+	q.Tick(context.Background())
+
+	var got int64
+	pool.QueryRow(context.Background(),
+		`SELECT storage_used_bytes FROM users WHERE id = $1`, uid).Scan(&got)
+	want := int64(100 + 50 + 200)
+	if got != want {
+		t.Errorf("storage_used_bytes = %d, want %d (file:100 + asset:50 + snapshot:200)", got, want)
+	}
+}
+
 func TestReconcile_FixesUserWithZeroFiles(t *testing.T) {
 	// A user with corrupted counter but no files must reconcile to 0.
 	pool := testdb.Setup(t)
