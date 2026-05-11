@@ -78,10 +78,17 @@ func main() {
 	quotaRecon := &services.QuotaReconcile{DB: pool}
 	go quotaRecon.Run(context.Background())
 
+	// Reap abandoned tus uploads (24h-stale rows; aborts S3 multipart +
+	// drops the row, which frees soft-reserved quota). Boots one sweep
+	// immediately so a server restart doesn't pile up unreaped state.
+	uploadsSweeper := &services.UploadsSweeper{DB: pool, Storage: storage}
+	go uploadsSweeper.Run(context.Background())
+
 	// Handlers
 	authH := &handlers.AuthHandler{DB: pool, JWTSecret: cfg.JWTSecret, AppEnv: cfg.AppEnv}
 	collectionsH := &handlers.CollectionsHandler{DB: pool, ServerURL: cfg.ServerURL, AppEnv: cfg.AppEnv}
 	filesH := &handlers.FilesHandler{DB: pool, Storage: storage}
+	tusH := &handlers.TusHandler{DB: pool, Storage: storage}
 	sharesH := &handlers.SharesHandler{DB: pool, Storage: storage}
 	adminH := &handlers.AdminHandler{DB: pool}
 	fedH := &handlers.FederationHandler{DB: pool, Storage: storage}
@@ -185,6 +192,17 @@ func main() {
 	files.Get("/:id/download", authMW.Required(), filesH.Download)
 	files.Put("/:id", authMW.Required(), filesH.UpdateMetadata)
 	files.Delete("/:id", authMW.Required(), filesH.Delete)
+
+	// tus.io 1.0 resumable upload endpoint — the streaming-friendly upload
+	// path used by the desktop / mobile shells and the CLI for big files.
+	// See backend/handlers/tus.go. OPTIONS is unauthenticated per spec.
+	uploads := api.Group("/uploads")
+	uploads.Options("/", tusH.Options)
+	uploads.Options("/:id", tusH.Options)
+	uploads.Post("/", authMW.Required(), tusH.Create)
+	uploads.Head("/:id", authMW.Required(), tusH.Head)
+	uploads.Patch("/:id", authMW.Required(), tusH.Patch)
+	uploads.Delete("/:id", authMW.Required(), tusH.Delete)
 
 	api.Get("/files/:fileId/versions", authMW.Required(), fvH.List)
 	api.Post("/files/:fileId/versions", authMW.Required(), fvH.Record)
