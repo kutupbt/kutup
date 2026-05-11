@@ -3,13 +3,16 @@ package cmd
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/kutupbulut/kutup/cmd/kutup/internal/api"
 	"github.com/kutupbulut/kutup/cmd/kutup/internal/crypto"
+	"github.com/kutupbulut/kutup/cmd/kutup/internal/upload"
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 )
@@ -287,55 +290,108 @@ func createSubCollection(client *api.Client, name, parentID string, masterKey []
 	return resp.ID, collectionKey, nil
 }
 
+// uploadSingleFile streams the file through the tus.io endpoint:
+// secretstream-encrypt one 5 MB chunk at a time, PATCH each chunk to the
+// server. Memory usage stays bounded regardless of file size — no
+// os.ReadFile of the whole input. The previous in-memory path
+// (EncryptStream + multipart POST to /files/upload) is left intact on
+// the server for the web frontend's small-file path.
 func uploadSingleFile(client *api.Client, localPath, collectionID string, collectionKey []byte) (string, error) {
-	data, err := os.ReadFile(localPath)
+	f, err := os.Open(localPath)
 	if err != nil {
 		return "", err
 	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+	plainSize := info.Size()
+	cipherSize := upload.CipherSize(plainSize)
 
 	fileKey := crypto.NewStreamKey()
 
-	bar := progressbar.NewOptions64(int64(len(data)),
-		progressbar.OptionSetDescription(filepath.Base(localPath)),
-		progressbar.OptionSetWidth(30),
-		progressbar.OptionShowBytes(true),
-		progressbar.OptionClearOnFinish(),
-	)
-
-	encrypted, err := crypto.EncryptStream(data, fileKey)
-	if err != nil {
-		return "", fmt.Errorf("encrypt: %w", err)
-	}
-	_ = bar.Add64(int64(len(data)))
-
-	encFileKey, fileKeyNonce, err := crypto.SecretBoxSeal(fileKey, collectionKey)
-	if err != nil {
-		return "", fmt.Errorf("wrap file key: %w", err)
-	}
-
+	// Encrypted metadata + wrapped file key — both committed up-front via
+	// the tus Upload-Metadata header on Create.
 	meta := api.FileMetadata{
 		Name:     filepath.Base(localPath),
 		MimeType: guessMIMEFromPath(localPath),
-		Size:     int64(len(data)),
+		Size:     plainSize,
 	}
 	metaBytes, _ := json.Marshal(meta)
 	encMeta, metaNonce, err := crypto.SecretBoxSeal(metaBytes, fileKey)
 	if err != nil {
 		return "", fmt.Errorf("encrypt metadata: %w", err)
 	}
+	encFileKey, fileKeyNonce, err := crypto.SecretBoxSeal(fileKey, collectionKey)
+	if err != nil {
+		return "", fmt.Errorf("wrap file key: %w", err)
+	}
 
-	resp, err := client.UploadFile(
+	uploadID, err := client.TusCreate(
+		cipherSize,
 		collectionID,
 		base64.StdEncoding.EncodeToString(encMeta),
 		base64.StdEncoding.EncodeToString(metaNonce),
 		base64.StdEncoding.EncodeToString(encFileKey),
 		base64.StdEncoding.EncodeToString(fileKeyNonce),
-		encrypted,
 	)
 	if err != nil {
-		return "", fmt.Errorf("upload: %w", err)
+		return "", fmt.Errorf("tus create: %w", err)
 	}
-	return resp.ID, nil
+
+	// Stream the file through the secretstream encryptor + PATCH loop.
+	enc, err := upload.NewStreamEncryptor(f, fileKey, plainSize)
+	if err != nil {
+		_ = client.TusDelete(uploadID)
+		return "", fmt.Errorf("init encryptor: %w", err)
+	}
+
+	bar := progressbar.NewOptions64(plainSize,
+		progressbar.OptionSetDescription(filepath.Base(localPath)),
+		progressbar.OptionSetWidth(30),
+		progressbar.OptionShowBytes(true),
+		progressbar.OptionClearOnFinish(),
+	)
+
+	var offset int64
+	var fileID string
+	var lastPlain int64
+	for {
+		chunk, cerr := enc.NextChunk()
+		if errors.Is(cerr, io.EOF) {
+			break
+		}
+		if cerr != nil {
+			_ = client.TusDelete(uploadID)
+			return "", fmt.Errorf("encrypt chunk: %w", cerr)
+		}
+		newOffset, finalFileID, perr := client.TusPatch(uploadID, offset, chunk)
+		if perr != nil {
+			_ = client.TusDelete(uploadID)
+			return "", fmt.Errorf("tus patch: %w", perr)
+		}
+		offset = newOffset
+		if finalFileID != "" {
+			fileID = finalFileID
+		}
+		// Progress in plaintext bytes — friendlier to users than
+		// ciphertext-with-per-chunk-overhead. PlainRead() is the
+		// monotonic high-water mark; we advance by the delta.
+		plainNow := enc.PlainRead()
+		_ = bar.Add64(plainNow - lastPlain)
+		lastPlain = plainNow
+	}
+	_ = bar.Finish()
+
+	if fileID == "" {
+		// Server didn't echo X-Kutup-File-Id on the final PATCH —
+		// extremely unlikely, but be loud about it rather than return
+		// an empty file ID that downstream code will then misuse.
+		return "", fmt.Errorf("tus: upload completed but server returned no file id")
+	}
+	return fileID, nil
 }
 
 func guessMIMEFromPath(path string) string {
