@@ -36,6 +36,12 @@ test.describe('tus.io streaming upload', () => {
     const page = await signInOrBootstrap(context)
     await page.waitForURL(/\/drive/, { timeout: 30_000 })
 
+    // Wait for Drive to finish hydrating the My Files collection — the
+    // upload handler bails silently if currentFolder.collectionKey is
+    // not yet decrypted. The "Folders" heading appears once the listing
+    // is in.
+    await expect(page.getByRole('heading', { name: /folders/i })).toBeVisible({ timeout: 30_000 })
+
     // Track which upload endpoint(s) get hit. We want the new tus path
     // (/api/uploads) and explicitly *not* the legacy multipart
     // (/api/files/upload). The federated /fed-proxy/.../upload still
@@ -51,17 +57,21 @@ test.describe('tus.io streaming upload', () => {
       if (method === 'POST' && /\/api\/files\/upload$/.test(url)) legacyMultipartCount.push(1)
     })
 
-    // Build a deterministic 12 MB blob the browser will hand to the
-    // hidden <input type="file"> via setInputFiles. Pattern: byte i =
-    // (i * 31 + 7) & 0xff — same shape the streamEncryptor test uses,
-    // catches sloppy zero-fill bugs that pass on all-zeros input.
+    // Build a deterministic 12 MB blob. Pattern: byte i = (i * 31 + 7)
+    // & 0xff — same shape the streamEncryptor test uses, catches
+    // sloppy zero-fill bugs that pass on all-zeros input.
     const fileBuffer = Buffer.alloc(FILE_BYTES)
     for (let i = 0; i < FILE_BYTES; i++) fileBuffer[i] = (i * 31 + 7) & 0xff
 
-    // The Drive page hides its file input. Playwright can call
-    // setInputFiles directly on hidden inputs.
-    const fileInput = page.locator('input[type="file"]').first()
-    await fileInput.setInputFiles({
+    // The Upload button wires fileInputRef.onchange THEN clicks the
+    // hidden input — directly calling setInputFiles on the hidden input
+    // wouldn't fire the React handler (no onchange installed yet).
+    // Playwright's filechooser pattern hooks the click and feeds files.
+    const [fileChooser] = await Promise.all([
+      page.waitForEvent('filechooser'),
+      page.getByRole('button', { name: /^upload$/i }).click(),
+    ])
+    await fileChooser.setFiles({
       name: FILE_NAME,
       mimeType: 'application/octet-stream',
       buffer: fileBuffer,

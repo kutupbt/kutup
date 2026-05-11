@@ -14,6 +14,7 @@ import { useAppSelector, useAppDispatch } from '@/store'
 import { selectMasterKey, selectPrivateKey, updateStorageUsed, updateStorageQuota, setColor } from '@/store/authSlice'
 import api from '@/api/client'
 import { streamUpload } from '@/upload/streamUpload'
+import { streamDownload } from '@/download/streamDownload'
 import {
   encrypt, decrypt, generateKey, encryptStream, decryptStream,
   wrapKeyForRecipient, unwrapKeyFromSender,
@@ -494,20 +495,50 @@ export default function Drive() {
 
   async function handleDownload(file: DecryptedFile) {
     if (!file._fileKey) return
+    // Federated downloads stay on the old buffered path until the
+    // peer's download endpoint can stream — there's no streaming
+    // wire contract over `/fed-proxy/.../download` yet.
+    if (currentFolder?.isRemote) {
+      try {
+        const res = await api.get(
+          `/fed-proxy/${currentFolder.remoteShareId}/files/${file.id}/download`,
+          { responseType: 'arraybuffer' },
+        )
+        const plaintext = await decryptStream(new Uint8Array(res.data), file._fileKey)
+        const blob = new Blob([plaintext.buffer as ArrayBuffer], { type: file.decryptedMimeType ?? 'application/octet-stream' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = file.decryptedName ?? 'file'
+        a.click()
+        URL.revokeObjectURL(url)
+      } catch {
+        toast.error(t('drive.toast.downloadFailed'))
+      }
+      return
+    }
+
+    // Local files: streaming-decrypt path. RAM stays bounded at
+    // ~10 MB on Chromium (FSA writes per chunk); Firefox / Safari
+    // degrade to a Blob accumulator inside streamDownload.
+    const accessToken = auth.accessToken
+    if (!accessToken) {
+      toast.error(t('drive.toast.downloadFailed'))
+      return
+    }
     try {
-      const downloadUrl = currentFolder?.isRemote
-        ? `/fed-proxy/${currentFolder.remoteShareId}/files/${file.id}/download`
-        : `/files/${file.id}/download`
-      const res = await api.get(downloadUrl, { responseType: 'arraybuffer' })
-      const plaintext = await decryptStream(new Uint8Array(res.data), file._fileKey)
-      const blob = new Blob([plaintext.buffer as ArrayBuffer], { type: file.decryptedMimeType ?? 'application/octet-stream' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = file.decryptedName ?? 'file'
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch {
+      await streamDownload({
+        url: `/api/files/${file.id}/download`,
+        fileKey: file._fileKey,
+        filename: file.decryptedName ?? 'file',
+        mimeType: file.decryptedMimeType ?? 'application/octet-stream',
+        expectedPlainSize: file.decryptedSize,
+        accessToken,
+      })
+    } catch (err) {
+      // showSaveFilePicker user-cancel surfaces as AbortError —
+      // silent in that case.
+      if (err instanceof DOMException && err.name === 'AbortError') return
       toast.error(t('drive.toast.downloadFailed'))
     }
   }

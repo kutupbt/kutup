@@ -387,6 +387,34 @@ func (c *Client) DownloadFile(fileID string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
+// DownloadFileStream is the streaming counterpart to DownloadFile —
+// returns the raw HTTP response body for the caller to read in chunks.
+// Used by `kutup download` to decrypt 5 MB + 17 B ciphertext frames
+// one at a time and write plaintext straight to disk, keeping RAM
+// flat regardless of file size.
+//
+// Routes through the per-phase-timeout uploadClient (no overall
+// Client.Timeout) so multi-GB transfers aren't cut by the 60 s
+// safety net the standard `do()` carries.
+//
+// Caller is responsible for closing the returned ReadCloser.
+func (c *Client) DownloadFileStream(fileID string) (io.ReadCloser, error) {
+	req, err := http.NewRequest(http.MethodGet, c.base+"/api/files/"+fileID+"/download", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.doUpload(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	return resp.Body, nil
+}
+
 // UpdateFileMetadataRequest carries the new encrypted name for PUT /files/:id.
 // Mirrors backend/handlers/files.go:UpdateMetadata's body.
 type UpdateFileMetadataRequest struct {
