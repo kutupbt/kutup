@@ -1,12 +1,12 @@
 // TextCollabEditor: CodeMirror 6 + Yjs + AEAD-encrypted relay transport.
 // Mounts in place of the existing file preview when the file extension matches a
 // CodeMirror language (see ../components/editors/dispatch.tsx, written in G1).
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import _sodium from 'libsodium-wrappers-sumo'
 import * as Y from 'yjs'
 import { yCollab } from 'y-codemirror.next'
 import { Awareness, encodeAwarenessUpdate, applyAwarenessUpdate } from 'y-protocols/awareness'
-import { EditorState, type Extension } from '@codemirror/state'
+import { Compartment, EditorState, type Extension } from '@codemirror/state'
 import {
   EditorView, keymap,
   lineNumbers, highlightActiveLine, drawSelection,
@@ -17,7 +17,7 @@ import { bracketMatching } from '@codemirror/language'
 import { closeBrackets } from '@codemirror/autocomplete'
 import { search, searchKeymap } from '@codemirror/search'
 import { oneDark } from '@codemirror/theme-one-dark'
-import { getTheme } from '@/lib/theme'
+import { useTheme } from '@/hooks/useTheme'
 
 import { langForExtension } from './lang'
 import { CollabTransport, type HelloMsg } from '../../collab/transport'
@@ -112,6 +112,11 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
   // EditorView ref so React effects can drive scroll back into the
   // editor (preview-side scroll sync uses this).
   const viewRef = useRef<EditorView | null>(null)
+  // Compartment wrapping the CodeMirror theme extension so we can swap
+  // light/dark without rebuilding the EditorView (which would tear down
+  // cursor + selection state). One Compartment per mount.
+  const themeCompartment = useMemo(() => new Compartment(), [])
+  const [theme] = useTheme()
   // Ignore the next 'scroll' event after we apply a controlled scroll —
   // otherwise the editor's own onScroll re-emits scrollPercent and we
   // get a feedback loop with the preview.
@@ -487,7 +492,9 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
         crosshairCursor(),
         EditorState.allowMultipleSelections.of(true),
         // Theme: dark mode picks oneDark; light mode uses CM6 defaults.
-        ...(getTheme() === 'dark' ? [oneDark] : []),
+        // Wrapped in a Compartment so the useEffect below can reconfigure
+        // on theme change without rebuilding the EditorView.
+        themeCompartment.of(theme === 'dark' ? oneDark : []),
         // Click-anywhere fallback. CodeMirror's own posAtCoords handles
         // clicks within .cm-content correctly (snapping past line-end to
         // the line's end). For clicks BELOW the last line the wrapper
@@ -634,6 +641,14 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
     ignoreEditorScrollRef.current = true
     el.scrollTop = target
   }, [scrollPercent, mdMode, isMarkdown])
+
+  // Reactive theme: when kutup's theme toggles, reconfigure the
+  // Compartment instead of rebuilding the view.
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: themeCompartment.reconfigure(theme === 'dark' ? oneDark : []),
+    })
+  }, [theme, themeCompartment])
 
   async function handleCursorColorChange(hex: string) {
     const previous = userColor

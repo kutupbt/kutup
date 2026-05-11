@@ -19,7 +19,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
 import { formatBytes } from '@/lib/format'
-import { getTheme, toggleTheme, type Theme } from '@/lib/theme'
+import { useTheme } from '@/hooks/useTheme'
 
 interface SidebarProps {
   viewMode: 'myfiles' | 'shared'
@@ -68,7 +68,7 @@ export default function Sidebar({ viewMode, sharedCount, onGoHome, onGoShared }:
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const auth = useAppSelector((s) => s.auth)
-  const [theme, setTheme] = useState<Theme>(getTheme)
+  const [theme, toggle] = useTheme()
   const [signOutOpen, setSignOutOpen] = useState(false)
   const { t } = useTranslation()
 
@@ -83,10 +83,6 @@ export default function Sidebar({ viewMode, sharedCount, onGoHome, onGoShared }:
     broadcastLogout()
     dispatch(logout())
     navigate('/login')
-  }
-
-  function handleThemeToggle() {
-    setTheme(toggleTheme())
   }
 
   const initial = (auth.username ?? auth.email ?? '?').slice(0, 1).toUpperCase()
@@ -169,7 +165,7 @@ export default function Sidebar({ viewMode, sharedCount, onGoHome, onGoShared }:
           </div>
           <button
             type="button"
-            onClick={handleThemeToggle}
+            onClick={() => toggle()}
             title={theme === 'dark' ? t('nav.switchToLight') : t('nav.switchToDark')}
             aria-label={theme === 'dark' ? t('nav.switchToLight') : t('nav.switchToDark')}
             className="h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"

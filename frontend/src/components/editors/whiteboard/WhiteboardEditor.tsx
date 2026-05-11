@@ -63,6 +63,7 @@ import {
 import { randomSenderSeqPrefix, buildAwarenessName } from '@/collab/identity'
 import { registerDevice } from '@/api/collab'
 import { uploadAsset, fetchAsset, QuotaExceededError } from '@/api/whiteboardAssets'
+import { useTheme } from '@/hooks/useTheme'
 import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 
@@ -117,6 +118,15 @@ function WhiteboardEditorBase(
   const userColor = useAppSelector(s => s.auth.color)
   const username = useAppSelector(s => s.auth.username)
   const userId = useAppSelector(s => s.auth.userId)
+  const [theme] = useTheme()
+
+  // Push kutup's theme into Excalidraw on every change. The `theme` prop
+  // below seeds the initial canvas; this effect keeps subsequent toggles
+  // in sync. Users can still flip the canvas independently via
+  // Excalidraw's own top-right toggle — the next kutup toggle re-syncs.
+  useEffect(() => {
+    apiRef.current?.updateScene({ appState: { theme } })
+  }, [theme])
 
   // Mirror identity into refs so the cursor sender (bound once on mount)
   // picks up live colour-picker changes without remounting the WS.
@@ -580,6 +590,7 @@ function WhiteboardEditorBase(
         fallback={<div className="p-4 text-sm text-muted-foreground">Loading whiteboard…</div>}
       >
         <Excalidraw
+          theme={theme}
           initialData={initialData ?? undefined}
           excalidrawAPI={(api) => {
             apiRef.current = api

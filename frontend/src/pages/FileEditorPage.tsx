@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Loader2, ArrowLeft, Download, Save, Check, History, X, BookmarkPlus } from 'lucide-react'
+import { Loader2, ArrowLeft, Download, Save, Check, History, X, BookmarkPlus, Sun, Moon } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAppDispatch, useAppSelector } from '@/store'
 import { setColor } from '@/store/authSlice'
@@ -30,6 +30,25 @@ import { Button } from '@/components/ui/button'
 import { KutupLogo } from '@/components/KutupLogo'
 import { HelpCircle } from 'lucide-react'
 import EditorShortcutsDialog from '@/components/editors/EditorShortcutsDialog'
+import { useTheme } from '@/hooks/useTheme'
+
+function ThemeToggleButton() {
+  const { t } = useTranslation()
+  const [theme, toggle] = useTheme()
+  return (
+    <Button
+      type="button"
+      size="icon"
+      variant="ghost"
+      onClick={() => toggle()}
+      title={theme === 'dark' ? t('nav.switchToLight') : t('nav.switchToDark')}
+      aria-label={theme === 'dark' ? t('nav.switchToLight') : t('nav.switchToDark')}
+      className="h-8 w-8 text-muted-foreground hover:text-foreground"
+    >
+      {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+    </Button>
+  )
+}
 
 interface FileMetadata {
   name: string
@@ -475,17 +494,20 @@ export default function FileEditorPage() {
             files have no unique shortcuts worth surfacing at the page
             level. */}
         {isMarkdownFile && (
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            onClick={() => setShortcutsOpen(true)}
-            title="Keyboard shortcuts (?)"
-            aria-label="Keyboard shortcuts"
-            className="ml-auto h-8 w-8 text-muted-foreground hover:text-foreground"
-          >
-            <HelpCircle className="h-4 w-4" />
-          </Button>
+          <div className="ml-auto flex items-center gap-1">
+            <ThemeToggleButton />
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              onClick={() => setShortcutsOpen(true)}
+              title="Keyboard shortcuts (?)"
+              aria-label="Keyboard shortcuts"
+              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+            >
+              <HelpCircle className="h-4 w-4" />
+            </Button>
+          </div>
         )}
         {(officeReady || whiteboardReady) && (
           <div className="ml-auto flex items-center gap-2">
@@ -544,16 +566,25 @@ export default function FileEditorPage() {
               <History className="h-4 w-4" />
               History
             </Button>
+            <ThemeToggleButton />
           </div>
         )}
         {viewerReady && blobUrl && (
-          <a
-            href={blobUrl}
-            download={filename}
-            className="ml-auto inline-flex items-center gap-1.5 rounded border border-input bg-background px-2.5 py-1 text-xs hover:bg-accent"
-          >
-            <Download className="h-3.5 w-3.5" /> Download
-          </a>
+          <div className="ml-auto flex items-center gap-2">
+            <a
+              href={blobUrl}
+              download={filename}
+              className="inline-flex items-center gap-1.5 rounded border border-input bg-background px-2.5 py-1 text-xs hover:bg-accent"
+            >
+              <Download className="h-3.5 w-3.5" /> Download
+            </a>
+            <ThemeToggleButton />
+          </div>
+        )}
+        {!isMarkdownFile && !officeReady && !whiteboardReady && !(viewerReady && blobUrl) && (
+          <div className="ml-auto">
+            <ThemeToggleButton />
+          </div>
         )}
       </header>
       <div className="flex flex-1 min-h-0 overflow-hidden">
