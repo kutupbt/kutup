@@ -247,12 +247,17 @@ func (h *TusHandler) Create(c *fiber.Ctx) error {
 		}
 	}
 
-	// Allocate S3 multipart upload at a temp key. Temp keys live under
-	// {userId}/tmp/{uploadId}/ so the existing per-user orphan sweep can
-	// reach them; on completion we CopyObject to the canonical path.
+	// Generate both upload-session id AND the file id up-front. We allocate
+	// the S3 multipart upload directly at the canonical
+	// {userId}/{collectionId}/{fileId} key — no temp → final copy. S3
+	// doesn't expose incomplete multipart uploads via GetObject, so a
+	// half-uploaded blob at the final key is invisible until Complete-
+	// MultipartUpload runs; cancel/abort cleanly removes all uploaded
+	// parts.
 	uploadID := uuid.New()
-	tempKey := fmt.Sprintf("%s/tmp/%s", userID, uploadID.String())
-	s3UploadID, err := h.Storage.CreateMultipart(c.Context(), tempKey)
+	fileID := uuid.New()
+	storagePath := fmt.Sprintf("%s/%s/%s", userID, collID, fileID.String())
+	s3UploadID, err := h.Storage.CreateMultipart(c.Context(), storagePath)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).
 			SendString("storage create multipart")
@@ -260,23 +265,23 @@ func (h *TusHandler) Create(c *fiber.Ctx) error {
 
 	_, err = tx.Exec(c.Context(), `
 		INSERT INTO uploads
-		    (id, user_id, collection_id, total_bytes,
+		    (id, user_id, collection_id, file_id, total_bytes,
 		     encrypted_metadata, metadata_nonce,
 		     encrypted_file_key, file_key_nonce,
-		     storage_temp_key, s3_upload_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-	`, uploadID, userID, collID, totalBytes,
+		     storage_path, s3_upload_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+	`, uploadID, userID, collID, fileID, totalBytes,
 		encMetadata, metadataNonce, encFileKey, fileKeyNonce,
-		tempKey, s3UploadID,
+		storagePath, s3UploadID,
 	)
 	if err != nil {
 		// Best-effort cleanup of the S3 multipart we just allocated.
-		_ = h.Storage.AbortMultipart(context.Background(), tempKey, s3UploadID)
+		_ = h.Storage.AbortMultipart(context.Background(), storagePath, s3UploadID)
 		return c.Status(fiber.StatusInternalServerError).
 			SendString("db insert upload")
 	}
 	if err := tx.Commit(c.Context()); err != nil {
-		_ = h.Storage.AbortMultipart(context.Background(), tempKey, s3UploadID)
+		_ = h.Storage.AbortMultipart(context.Background(), storagePath, s3UploadID)
 		return c.Status(fiber.StatusInternalServerError).SendString("db commit")
 	}
 
@@ -333,8 +338,8 @@ func (h *TusHandler) Head(c *fiber.Ctx) error {
 //
 // Each PATCH becomes one S3 multipart part. Parts before the final must
 // be ≥ 5 MiB. On the PATCH that brings received_bytes == total_bytes we
-// run the finaliser: CompleteMultipartUpload, CopyObject to the canonical
-// {userId}/{collectionId}/{fileId} path, INSERT into files, bump
+// run the finaliser: CompleteMultipartUpload (parts get stitched in
+// place at the canonical key, no CopyObject), INSERT into files, bump
 // storage_used_bytes, DELETE the uploads row.
 func (h *TusHandler) Patch(c *fiber.Ctx) error {
 	if !requireTusResumable(c) {
@@ -376,21 +381,22 @@ func (h *TusHandler) Patch(c *fiber.Ctx) error {
 	var (
 		collID, encMetadata, metadataNonce, encFileKey, fileKeyNonce string
 		totalBytes, receivedBytes                                    int64
-		tempKey, s3UploadID                                          string
+		storagePath, s3UploadID                                      string
 		partEtagsJSON                                                []byte
+		fileID                                                       uuid.UUID
 	)
 	err = tx.QueryRow(c.Context(), `
-		SELECT collection_id, total_bytes, received_bytes,
+		SELECT collection_id, file_id, total_bytes, received_bytes,
 		       encrypted_metadata, metadata_nonce,
 		       encrypted_file_key, file_key_nonce,
-		       storage_temp_key, s3_upload_id, s3_part_etags
+		       storage_path, s3_upload_id, s3_part_etags
 		FROM uploads
 		WHERE id=$1 AND user_id=$2
 		FOR UPDATE
 	`, id, userID).Scan(
-		&collID, &totalBytes, &receivedBytes,
+		&collID, &fileID, &totalBytes, &receivedBytes,
 		&encMetadata, &metadataNonce, &encFileKey, &fileKeyNonce,
-		&tempKey, &s3UploadID, &partEtagsJSON,
+		&storagePath, &s3UploadID, &partEtagsJSON,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -430,7 +436,7 @@ func (h *TusHandler) Patch(c *fiber.Ctx) error {
 	// can swallow a buffered []byte without re-copying. (When we move to
 	// true streaming bodies, swap for a fasthttp stream reader.)
 	etag, err := h.Storage.UploadPart(
-		c.Context(), tempKey, s3UploadID, nextPart,
+		c.Context(), storagePath, s3UploadID, nextPart,
 		bytes.NewReader(c.Body()), chunkLen,
 	)
 	if err != nil {
@@ -460,23 +466,19 @@ func (h *TusHandler) Patch(c *fiber.Ctx) error {
 	}
 
 	// --- finaliser path ---
-	// 1. CompleteMultipartUpload — stitches parts into one temp object.
-	// 2. CopyObject from temp key to canonical {userId}/{collectionId}/{fileId}.
-	// 3. INSERT into files, bump users.storage_used_bytes.
-	// 4. Delete uploads row.
-	// 5. Delete the temp object.
-	// Storage side-effects happen after the DB commit so a crash in
-	// between leaves an orphan temp object (cleanable by the orphan
-	// sweep) rather than an orphan DB row pointing at nothing.
-	if err := h.Storage.CompleteMultipart(c.Context(), tempKey, s3UploadID, parts); err != nil {
+	// 1. CompleteMultipartUpload — parts get stitched in place at the
+	//    canonical {userId}/{collectionId}/{fileId} path. No CopyObject.
+	// 2. INSERT into files using the file_id + storage_path the upload
+	//    row has been carrying since Create.
+	// 3. Bump users.storage_used_bytes (commits the quota soft-reservation).
+	// 4. DELETE the uploads row.
+	// CompleteMultipart runs before the DB commit so a crash between
+	// them leaves an orphan S3 object — picked up by the existing
+	// orphan-sweep job which scans for storage_path entries with no
+	// matching files row.
+	if err := h.Storage.CompleteMultipart(c.Context(), storagePath, s3UploadID, parts); err != nil {
 		return c.Status(fiber.StatusInternalServerError).
 			SendString("storage complete multipart: " + err.Error())
-	}
-	fileID := uuid.New()
-	finalKey := fmt.Sprintf("%s/%s/%s", userID, collID, fileID.String())
-	if err := h.Storage.CopyObject(c.Context(), tempKey, finalKey); err != nil {
-		return c.Status(fiber.StatusInternalServerError).
-			SendString("storage copy: " + err.Error())
 	}
 
 	_, err = tx.Exec(c.Context(), `
@@ -488,10 +490,10 @@ func (h *TusHandler) Patch(c *fiber.Ctx) error {
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 	`, fileID, collID, userID,
 		encMetadata, metadataNonce, encFileKey, fileKeyNonce,
-		finalKey, totalBytes,
+		storagePath, totalBytes,
 	)
 	if err != nil {
-		_ = h.Storage.Delete(context.Background(), finalKey)
+		_ = h.Storage.Delete(context.Background(), storagePath)
 		return c.Status(fiber.StatusInternalServerError).SendString("db insert file")
 	}
 	_, err = tx.Exec(c.Context(),
@@ -499,21 +501,18 @@ func (h *TusHandler) Patch(c *fiber.Ctx) error {
 		totalBytes, userID,
 	)
 	if err != nil {
-		_ = h.Storage.Delete(context.Background(), finalKey)
+		_ = h.Storage.Delete(context.Background(), storagePath)
 		return c.Status(fiber.StatusInternalServerError).SendString("db quota update")
 	}
 	_, err = tx.Exec(c.Context(), `DELETE FROM uploads WHERE id=$1`, id)
 	if err != nil {
-		_ = h.Storage.Delete(context.Background(), finalKey)
+		_ = h.Storage.Delete(context.Background(), storagePath)
 		return c.Status(fiber.StatusInternalServerError).SendString("db delete upload")
 	}
 	if err := tx.Commit(c.Context()); err != nil {
-		_ = h.Storage.Delete(context.Background(), finalKey)
+		_ = h.Storage.Delete(context.Background(), storagePath)
 		return c.Status(fiber.StatusInternalServerError).SendString("db commit")
 	}
-
-	// Best-effort temp-object cleanup. Orphan sweep handles failures.
-	_ = h.Storage.Delete(context.Background(), tempKey)
 
 	c.Set("Tus-Resumable", tusVersion)
 	c.Set("Upload-Offset", strconv.FormatInt(newReceived, 10))
@@ -535,12 +534,12 @@ func (h *TusHandler) Delete(c *fiber.Ctx) error {
 	userID := middleware.UserID(c)
 	id := c.Params("id")
 
-	var tempKey, s3UploadID string
+	var storagePath, s3UploadID string
 	err := h.DB.QueryRow(c.Context(),
-		`SELECT storage_temp_key, s3_upload_id FROM uploads
+		`SELECT storage_path, s3_upload_id FROM uploads
 		 WHERE id=$1 AND user_id=$2`,
 		id, userID,
-	).Scan(&tempKey, &s3UploadID)
+	).Scan(&storagePath, &s3UploadID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return c.SendStatus(fiber.StatusNotFound)
@@ -552,7 +551,7 @@ func (h *TusHandler) Delete(c *fiber.Ctx) error {
 	// the Abort failed, we'd leak the multipart with no record of how to
 	// reach it; this ordering means a failed Abort is recoverable from
 	// the row.
-	if err := h.Storage.AbortMultipart(c.Context(), tempKey, s3UploadID); err != nil {
+	if err := h.Storage.AbortMultipart(c.Context(), storagePath, s3UploadID); err != nil {
 		return c.Status(fiber.StatusInternalServerError).
 			SendString("storage abort: " + err.Error())
 	}

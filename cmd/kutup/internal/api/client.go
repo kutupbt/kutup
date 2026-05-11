@@ -7,24 +7,48 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/textproto"
 	"time"
 )
 
-// Client is a thin wrapper around http.Client with bearer token auth.
+// Client wraps two http.Clients: a 60 s-total-timeout one for short JSON
+// calls (login, ls, mv, etc.) and a per-phase-timeout one for tus PATCH
+// streaming where a 60 s total deadline would trip on slow uplinks or
+// final-chunk server-side finalisation work.
+//
+// Per Cloudflare's "complete guide to net/http timeouts," Client.Timeout
+// is a *total* deadline covering connect + body upload + response, so
+// it's the wrong knob for arbitrarily-long upload bodies. The upload
+// client uses a Transport with per-phase limits + no overall deadline;
+// context cancellation + TCP keepalive bound stalled streams.
 type Client struct {
-	base       string
-	token      string
-	httpClient *http.Client
+	base             string
+	token            string
+	httpClient       *http.Client
+	uploadClient     *http.Client
 	OnTokenRefreshed func(newToken string)
 }
 
 func New(baseURL, token string) *Client {
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 5 * time.Minute, // final-chunk includes DB work
+		ExpectContinueTimeout: 1 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          16,
+		MaxIdleConnsPerHost:   8,
+	}
 	return &Client{
-		base:  baseURL,
-		token: token,
-		httpClient: &http.Client{Timeout: 60 * time.Second},
+		base:         baseURL,
+		token:        token,
+		httpClient:   &http.Client{Timeout: 60 * time.Second},
+		uploadClient: &http.Client{Transport: transport}, // no overall Timeout
 	}
 }
 
@@ -35,6 +59,15 @@ func (c *Client) do(req *http.Request) (*http.Response, error) {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	return c.httpClient.Do(req)
+}
+
+// doUpload is do() that routes through the per-phase-timeout upload
+// client. Use for tus PATCH and any other arbitrarily-long body streams.
+func (c *Client) doUpload(req *http.Request) (*http.Response, error) {
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	return c.uploadClient.Do(req)
 }
 
 func (c *Client) get(path string) (*http.Response, error) {

@@ -48,7 +48,9 @@ func (c *Client) TusCreate(
 	req.Header.Set("Upload-Length", strconv.FormatInt(totalBytes, 10))
 	req.Header.Set("Upload-Metadata", uploadMeta)
 
-	resp, err := c.do(req)
+	// Create is small but symmetric with Patch — same transport keeps the
+	// connection warm for the upload that immediately follows.
+	resp, err := c.doUpload(req)
 	if err != nil {
 		return "", err
 	}
@@ -104,11 +106,13 @@ func (c *Client) TusPatch(uploadID string, offset int64, body []byte) (int64, st
 	req.Header.Set("Upload-Offset", strconv.FormatInt(offset, 10))
 	req.Header.Set("Content-Type", "application/offset+octet-stream")
 	req.Header.Set("Content-Length", strconv.Itoa(len(body)))
-	// Each PATCH may be up to ~5 MB; bump beyond the client's default
-	// 60 s so cold-storage SeaweedFS doesn't trip us on the first part.
 	req.ContentLength = int64(len(body))
 
-	resp, err := c.do(req)
+	// doUpload uses the Transport-tuned upload client: no overall
+	// timeout, generous ResponseHeaderTimeout (covers the final-chunk
+	// DB work). The previous c.do() would have tripped on slow uplinks
+	// or larger-than-5 GiB finalisation paths.
+	resp, err := c.doUpload(req)
 	if err != nil {
 		return 0, "", err
 	}

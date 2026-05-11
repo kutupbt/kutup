@@ -52,7 +52,7 @@ func (s *UploadsSweeper) Run(ctx context.Context) {
 
 func (s *UploadsSweeper) once(ctx context.Context) {
 	rows, err := s.DB.Query(ctx, `
-		SELECT id, storage_temp_key, s3_upload_id
+		SELECT id, storage_path, s3_upload_id
 		FROM uploads
 		WHERE updated_at < NOW() - $1::interval
 	`, s.StaleAfter.String())
@@ -62,12 +62,12 @@ func (s *UploadsSweeper) once(ctx context.Context) {
 	}
 
 	type stale struct {
-		id, tempKey, s3UploadID string
+		id, storagePath, s3UploadID string
 	}
 	var batch []stale
 	for rows.Next() {
 		var x stale
-		if err := rows.Scan(&x.id, &x.tempKey, &x.s3UploadID); err != nil {
+		if err := rows.Scan(&x.id, &x.storagePath, &x.s3UploadID); err != nil {
 			log.Printf("uploads-sweeper: scan: %v", err)
 			continue
 		}
@@ -79,7 +79,7 @@ func (s *UploadsSweeper) once(ctx context.Context) {
 		// Abort first; if it fails we leave the row in place so the next
 		// sweep can retry. A successful Abort is a precondition for
 		// dropping the row.
-		if err := s.Storage.AbortMultipart(ctx, x.tempKey, x.s3UploadID); err != nil {
+		if err := s.Storage.AbortMultipart(ctx, x.storagePath, x.s3UploadID); err != nil {
 			log.Printf("uploads-sweeper: abort %s: %v", x.id, err)
 			continue
 		}
@@ -87,6 +87,6 @@ func (s *UploadsSweeper) once(ctx context.Context) {
 			log.Printf("uploads-sweeper: delete %s: %v", x.id, err)
 			continue
 		}
-		log.Printf("uploads-sweeper: reaped upload=%s temp=%s", x.id, x.tempKey)
+		log.Printf("uploads-sweeper: reaped upload=%s path=%s", x.id, x.storagePath)
 	}
 }
