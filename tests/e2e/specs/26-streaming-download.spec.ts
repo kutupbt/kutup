@@ -18,7 +18,7 @@ import { signInOrBootstrap } from '../fixtures/auth'
 import { createHash } from 'node:crypto'
 import * as fs from 'node:fs/promises'
 
-const FILE_NAME = 'tus-roundtrip-12mb.bin'
+const FILE_NAME = `tus-roundtrip-12mb-${Date.now()}.bin`
 const FILE_BYTES = 12 * 1024 * 1024
 
 test.describe('streaming download', () => {

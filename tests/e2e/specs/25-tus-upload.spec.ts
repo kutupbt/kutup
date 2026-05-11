@@ -19,7 +19,7 @@
 import { test, expect } from '@playwright/test'
 import { signInOrBootstrap } from '../fixtures/auth'
 
-const FILE_NAME = 'tus-12mb.bin'
+const FILE_NAME = `tus-12mb-${Date.now()}.bin`
 // 12 MB plaintext → 3 secretstream chunks → 4 tus PATCHes
 // (header+chunk1, chunk2, chunk3-final). Sized just over 2 × 5 MB so
 // non-final 5-MB-minimum part rules get exercised.

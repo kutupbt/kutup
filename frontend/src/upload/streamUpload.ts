@@ -109,6 +109,13 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<string> {
       // still well within the upper bound the backend tolerates.
       chunkSize: CIPHER_CHUNK,
       retryDelays: [0, 1000, 3000, 5000, 10000],
+      // Disable tus-js-client's cross-session resume machinery. For
+      // stream inputs the default fingerprint logic is flaky and can
+      // interfere with back-to-back uploads (e.g. in uploadFolder).
+      // We don't support cross-reload resume on web anyway — Slice 4
+      // out-of-scope.
+      storeFingerprintForResuming: false,
+      removeFingerprintOnSuccess: true,
       headers: {
         Authorization: `Bearer ${opts.accessToken}`,
       },

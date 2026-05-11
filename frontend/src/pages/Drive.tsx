@@ -16,6 +16,12 @@ import api from '@/api/client'
 import { streamUpload } from '@/upload/streamUpload'
 import { streamDownload } from '@/download/streamDownload'
 import {
+  uploadFolder,
+  filesToFolderEntries,
+  dataTransferToFolderEntries,
+  type FolderEntry,
+} from '@/upload/uploadFolder'
+import {
   encrypt, decrypt, generateKey, encryptStream, decryptStream,
   wrapKeyForRecipient, unwrapKeyFromSender,
   toBase64, fromBase64,
@@ -107,6 +113,7 @@ export default function Drive() {
 
 
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
   const downloadAbortRef = useRef<AbortController | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
@@ -847,6 +854,57 @@ export default function Drive() {
     }
   }
 
+  async function handleFolderUploadEntries(entries: FolderEntry[]) {
+    if (entries.length === 0) return
+    const folder = currentFolder
+    if (!folder?.collectionKey || !masterKey) return
+    const accessToken = auth.accessToken
+    if (!accessToken) {
+      toast.error(t('drive.toast.uploadFailed'))
+      return
+    }
+    const totalBytes = entries.reduce((s, e) => s + e.file.size, 0)
+    const tid = toast.loading(t('drive.toast.uploadingFolder', { count: entries.length }))
+    try {
+      let filesDone = 0
+      await uploadFolder({
+        entries,
+        parentCollection: { id: folder.id, collectionKey: folder.collectionKey },
+        masterKey,
+        accessToken,
+        onProgress: (done, total, current) => {
+          filesDone = done
+          toast.loading(
+            t('drive.toast.uploadingFolderProgress', { done, total, current }),
+            { id: tid },
+          )
+        },
+      })
+      toast.success(
+        t('drive.toast.folderUploaded', { count: filesDone, bytes: totalBytes }),
+        { id: tid },
+      )
+      await loadCollections()
+      await loadFiles(folder)
+    } catch (err) {
+      const aborted = err instanceof DOMException && err.name === 'AbortError'
+      toast.error(aborted ? t('drive.toast.uploadCancelled') : t('drive.toast.uploadFailed'), { id: tid })
+    }
+  }
+
+  function triggerFolderUpload() {
+    if (!folderInputRef.current) return
+    folderInputRef.current.onchange = (e) => {
+      const input = e.target as HTMLInputElement
+      const files = input.files
+      if (!files || files.length === 0) return
+      void handleFolderUploadEntries(filesToFolderEntries(files))
+      // Clear so picking the same folder again triggers onchange.
+      input.value = ''
+    }
+    folderInputRef.current.click()
+  }
+
   const totalSelected = selectedFileIds.size + selectedFolderIds.size
 
   useKeyboardShortcuts({
@@ -896,6 +954,7 @@ export default function Drive() {
           canUpload={canUploadToCurrentFolder()}
           onShowHelp={() => setShortcutsOpen(true)}
           onUpload={() => triggerUpload()}
+          onUploadFolder={() => triggerFolderUpload()}
           onNewFolder={() => setNewFolderOpen(true)}
           onNewNote={() => setNewNoteOpen(true)}
           onNewOffice={(kind) => handleCreateOffice(kind)}
@@ -915,6 +974,24 @@ export default function Drive() {
             e.preventDefault()
             setIsDragging(false)
             if (!currentFolder?.collectionKey || !canUploadToCurrentFolder()) return
+            const items = e.dataTransfer.items
+            const hasDirEntry = (() => {
+              for (let i = 0; i < items.length; i++) {
+                const it = items[i] as DataTransferItem & {
+                  webkitGetAsEntry?: () => FileSystemEntry | null
+                }
+                const entry = it.webkitGetAsEntry?.()
+                if (entry?.isDirectory) return true
+              }
+              return false
+            })()
+            if (hasDirEntry) {
+              void (async () => {
+                const entries = await dataTransferToFolderEntries(items)
+                if (entries.length) await handleFolderUploadEntries(entries)
+              })()
+              return
+            }
             const dropped = Array.from(e.dataTransfer.files).filter((f) => f.size > 0)
             if (dropped.length) uploadFiles(dropped)
           }}
@@ -929,6 +1006,9 @@ export default function Drive() {
           )}
 
           <input ref={fileInputRef} type="file" multiple className="hidden" />
+          {/* eslint-disable-next-line @typescript-eslint/ban-ts-comment */}
+          {/* @ts-expect-error — webkitdirectory isn't in React's typing yet */}
+          <input ref={folderInputRef} type="file" webkitdirectory="" directory="" multiple className="hidden" />
 
           <DriveBreadcrumb
           viewMode={viewMode}
