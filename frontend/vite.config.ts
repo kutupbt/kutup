@@ -28,8 +28,13 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:3000',
+        // The docker compose stack at https://localhost:38443 (self-signed
+        // cert, single-user dev box). `secure: false` accepts the cert;
+        // `ws: true` upgrades collab WebSocket connections.
+        target: 'https://localhost:38443',
         changeOrigin: true,
+        secure: false,
+        ws: true,
       },
     },
   },

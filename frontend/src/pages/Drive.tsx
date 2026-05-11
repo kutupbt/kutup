@@ -1,5 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from 'react-router-dom'
+import { isTauri } from '@/lib/isTauri'
 import {
   Download,
   Trash2,
@@ -64,6 +66,7 @@ interface FileMetadata { name: string; mimeType: string; size: number }
 
 export default function Drive() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const masterKey = useAppSelector(selectMasterKey)
   const privateKey = useAppSelector(selectPrivateKey)
@@ -459,8 +462,11 @@ export default function Drive() {
     )
     if (name && currentFolder && !currentFolder.isRemote && previewable) {
       // Open in a new tab — FileEditorPage dispatches to text-collab editor,
-      // OnlyOffice office editor, or static viewer based on extension.
-      window.open(`/file/${currentFolder.id}/${file.id}`, '_blank', 'noopener')
+      // OnlyOffice office editor, or static viewer based on extension. Tauri
+      // blocks new tabs, so navigate in-window there.
+      const url = `/file/${currentFolder.id}/${file.id}`
+      if (isTauri) navigate(url)
+      else window.open(url, '_blank', 'noopener')
       return
     }
     setDetailItem(file)
@@ -528,7 +534,11 @@ export default function Drive() {
         toast.error('Note uploaded, but could not be opened — refresh the page.', { id: tid })
         return
       }
-      window.open(`/file/${currentFolder.id}/${created.id}`, '_blank', 'noopener')
+      {
+        const url = `/file/${currentFolder.id}/${created.id}`
+        if (isTauri) navigate(url)
+        else window.open(url, '_blank', 'noopener')
+      }
       try {
         const meRes = await api.get('/user/me')
         dispatch(updateStorageUsed(meRes.data.storageUsedBytes))
@@ -591,7 +601,11 @@ export default function Drive() {
         toast.error('File uploaded, but could not be opened — refresh the page.', { id: tid })
         return
       }
-      window.open(`/file/${currentFolder.id}/${created.id}`, '_blank', 'noopener')
+      {
+        const url = `/file/${currentFolder.id}/${created.id}`
+        if (isTauri) navigate(url)
+        else window.open(url, '_blank', 'noopener')
+      }
       try {
         const meRes = await api.get('/user/me')
         dispatch(updateStorageUsed(meRes.data.storageUsedBytes))

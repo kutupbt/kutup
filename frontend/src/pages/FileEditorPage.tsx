@@ -31,6 +31,7 @@ import { KutupLogo } from '@/components/KutupLogo'
 import { HelpCircle } from 'lucide-react'
 import EditorShortcutsDialog from '@/components/editors/EditorShortcutsDialog'
 import { useTheme } from '@/hooks/useTheme'
+import { isTauri } from '@/lib/isTauri'
 
 function ThemeToggleButton() {
   const { t } = useTranslation()
@@ -475,18 +476,34 @@ export default function FileEditorPage() {
   return (
     <div className="flex h-screen flex-col overflow-hidden">
       <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
-        {/* Kutup logo opens Drive in a NEW tab — Google-Docs style: this
-            tab IS the document, you exit by closing it. */}
-        <a
-          href="/drive"
-          target="_blank"
-          rel="noopener"
-          className="flex items-center gap-2 rounded px-1 py-1 hover:bg-accent"
-          title="Open Kutup Drive (new tab)"
-        >
-          <KutupLogo size={22} />
-          <span className="text-sm font-semibold tracking-tight">Kutup</span>
-        </a>
+        {/* Kutup logo: in a browser opens Drive in a NEW tab (Google-Docs
+            style: this tab IS the document, you exit by closing it). In the
+            Tauri shell new tabs are blocked / routed to the system browser,
+            so we navigate in-window — the logo doubles as a Back-to-Drive
+            button there. */}
+        {isTauri ? (
+          <button
+            type="button"
+            onClick={() => navigate('/drive')}
+            className="flex items-center gap-2 rounded px-1 py-1 hover:bg-accent"
+            title="Back to Kutup Drive"
+            aria-label="Back to Kutup Drive"
+          >
+            <KutupLogo size={22} />
+            <span className="text-sm font-semibold tracking-tight">Kutup</span>
+          </button>
+        ) : (
+          <a
+            href="/drive"
+            target="_blank"
+            rel="noopener"
+            className="flex items-center gap-2 rounded px-1 py-1 hover:bg-accent"
+            title="Open Kutup Drive (new tab)"
+          >
+            <KutupLogo size={22} />
+            <span className="text-sm font-semibold tracking-tight">Kutup</span>
+          </a>
+        )}
         <span className="text-sm text-muted-foreground">·</span>
         <EditableFilename filename={filename} onCommit={handleRename} />
         {/* Notes shortcut help — only for markdown files. Office +
