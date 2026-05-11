@@ -54,6 +54,21 @@
       "enterCode": "Enter the 6-digit code from your authenticator app.",
       "verify": "Verify"
     },
+    "serverSelect": {
+      "title": "Connect to your kutup server",
+      "subtitle": "Enter the address of your kutup server to continue.",
+      "url": "Server address",
+      "urlPlaceholder": "https://kutup.example.com",
+      "continue": "Continue",
+      "checking": "Checking server…",
+      "errorEmpty": "Please enter a server address.",
+      "errorInvalid": "That doesn't look like a valid URL.",
+      "errorInsecureHttp": "http:// is only allowed for localhost addresses. Use https:// otherwise.",
+      "errorUnreachable": "Could not reach a kutup server at this address.",
+      "errorNotKutup": "This address is reachable but it doesn't appear to be a kutup server.",
+      "switchServer": "Switch server"
+    },
+    "vaultUnavailable": "Stay-signed-in is unavailable on this machine. Install gnome-keyring or libsecret to enable it.",
     "strength": {
       "veryWeak": "Very weak",
       "weak": "Weak",

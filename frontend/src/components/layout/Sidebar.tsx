@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useAppSelector, useAppDispatch } from '@/store'
 import { logout } from '@/store/authSlice'
 import { broadcastLogout } from '@/lib/sessionSync'
+import * as sessionVault from '@/lib/sessionVault'
 import { KutupLogo } from '@/components/KutupLogo'
 import { Progress } from '@/components/ui/progress'
 import {
@@ -77,10 +78,17 @@ export default function Sidebar({ viewMode, sharedCount, onGoHome, onGoShared }:
       ? Math.min(Math.round((auth.storageUsedBytes / auth.storageQuotaBytes) * 100), 100)
       : 0
 
-  function handleLogout() {
+  async function handleLogout() {
     // Tell every other tab to log out too — otherwise a sibling editor tab
     // (or the BroadcastChannel session-sync) would re-hydrate the session.
     broadcastLogout()
+    // Tauri-only: wipe the OS-keychain vault so the next app launch doesn't
+    // silently rehydrate the just-cleared session. No-op on the web.
+    try {
+      await sessionVault.clear()
+    } catch {
+      // best-effort; logout proceeds regardless
+    }
     dispatch(logout())
     navigate('/login')
   }

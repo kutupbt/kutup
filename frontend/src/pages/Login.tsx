@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
+import { toast } from 'sonner'
 import { sanitizeNext } from '@/lib/sessionSync'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -8,8 +9,16 @@ import { z } from 'zod'
 import { Loader2 } from 'lucide-react'
 import { useAppDispatch } from '@/store'
 import { setAuth } from '@/store/authSlice'
+import { store } from '@/store'
 import api from '@/api/client'
 import { decryptMasterKey, decryptPrivateKey, toBase64 } from '@/crypto'
+import { isTauri } from '@/lib/isTauri'
+import {
+  getServerUrl,
+  clearServerUrl,
+} from '@/lib/serverConfig'
+import { invalidateApiBase } from '@/lib/apiBase'
+import * as sessionVault from '@/lib/sessionVault'
 import { KutupLogo } from '@/components/KutupLogo'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -73,6 +82,26 @@ export default function Login() {
 
   const credForm = useForm<CredForm>({ resolver: zodResolver(credSchema) })
   const totpForm = useForm<TotpForm>({ resolver: zodResolver(totpSchema) })
+
+  // Tauri-only: if no server URL has been picked yet, bounce to the server-
+  // select page. Web (`!isTauri`) is always same-origin so this is a no-op.
+  useEffect(() => {
+    if (!isTauri) return
+    let cancelled = false
+    ;(async () => {
+      const url = await getServerUrl()
+      if (!cancelled && !url) navigate('/server-select', { replace: true })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [navigate])
+
+  async function onSwitchServer() {
+    await clearServerUrl()
+    invalidateApiBase()
+    navigate('/server-select', { replace: true })
+  }
 
   async function onCredSubmit({ email, password }: CredForm) {
     setError('')
@@ -149,6 +178,42 @@ export default function Login() {
       storageUsedBytes: data.storageUsedBytes,
       color: data.color ?? null,
     }))
+
+    // Persist to the OS keychain so the next launch silently restores the
+    // session (Nextcloud / Signal / Element model). Tauri-only — web stays
+    // on the sessionStorage path. Failures here just mean "stay signed in"
+    // is unavailable on this device (e.g. headless Linux with no Secret
+    // Service daemon); the user is still signed in for this run, so we
+    // surface a toast and move on.
+    if (isTauri) {
+      try {
+        const s = store.getState().auth
+        await sessionVault.save({
+          profile: {
+            userId: s.userId!,
+            email: s.email!,
+            username: s.username,
+            isAdmin: s.isAdmin,
+            storageQuotaBytes: s.storageQuotaBytes,
+            storageUsedBytes: s.storageUsedBytes,
+            totpEnabled: s.totpEnabled,
+            color: s.color,
+            currentDeviceId: s.currentDeviceId,
+            publicKey: s.publicKey!,
+          },
+          secrets: {
+            accessToken: s.accessToken!,
+            masterKey,
+            privateKey,
+          },
+        })
+      } catch (e) {
+        if (e instanceof sessionVault.VaultUnavailableError) {
+          toast.warning(t('auth.vaultUnavailable'))
+        }
+      }
+    }
+
     navigate(nextParam)
   }
 
@@ -284,6 +349,17 @@ export default function Login() {
               {t('auth.noAccount')}{' '}
               <Link to="/register" className="text-primary hover:underline">{t('auth.createOne')}</Link>
             </p>
+            {isTauri && (
+              <p className="pt-2">
+                <button
+                  type="button"
+                  onClick={onSwitchServer}
+                  className="text-primary hover:underline"
+                >
+                  {t('auth.serverSelect.switchServer')}
+                </button>
+              </p>
+            )}
           </div>
         </CardContent>
       </Card>

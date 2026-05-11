@@ -10,6 +10,9 @@ import { useAppDispatch, useAppSelector } from '@/store'
 import { store } from '@/store'
 import { selectMasterKey, setAuth, updateAccessToken, setColor, logout } from '@/store/authSlice'
 import { broadcastSession, requestSession, startSessionResponder, startLogoutListener, startColorListener, type SessionPayload } from '@/lib/sessionSync'
+import { isTauri } from '@/lib/isTauri'
+import { resolveApiBase } from '@/lib/apiBase'
+import { restoreSession, type RestoreRoute } from '@/lib/restoreSession'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import FirstLogin from './pages/FirstLogin'
@@ -19,6 +22,7 @@ import Admin from './pages/Admin'
 import Settings from './pages/Settings'
 import PublicShare from './pages/PublicShare'
 import FileEditorPage from './pages/FileEditorPage'
+import ServerSelect from './pages/ServerSelect'
 
 function snapshotFromState(): SessionPayload | null {
   const { auth } = store.getState()
@@ -45,11 +49,31 @@ export default function App() {
   const masterKey = useAppSelector(selectMasterKey)
   const accessToken = useAppSelector((s) => s.auth.accessToken)
   const [ready, setReady] = useState(false)
+  // Tauri-only: where to land on first paint. `/` redirects here after
+  // bootstrap completes. Web stays at `/drive` (existing behaviour).
+  const [initialRoute, setInitialRoute] = useState<RestoreRoute>('/drive')
 
   useEffect(() => {
     let cancelled = false
 
     async function bootstrap() {
+      // Warm the api-base cache before any route can mount a component that
+      // talks to the API. Cheap on web (sync '/api') and one Store read in
+      // Tauri.
+      await resolveApiBase()
+
+      if (isTauri) {
+        // Tauri owns its own restore path: vault (OS keychain) holds the
+        // secrets, Store-plugin holds the profile + serverUrl. No
+        // BroadcastChannel — Tauri runs a single webview process.
+        const r = await restoreSession()
+        if (!cancelled) {
+          setInitialRoute(r.route)
+          setReady(true)
+        }
+        return
+      }
+
       if (masterKey && !accessToken) {
         // Keys restored from sessionStorage but no access token — silently refresh
         // using the HTTP-only refresh token cookie (valid for 7 days).
@@ -125,7 +149,8 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Navigate to="/drive" replace />} />
+        <Route path="/" element={<Navigate to={initialRoute} replace />} />
+        <Route path="/server-select" element={<ServerSelect />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/first-login" element={<FirstLogin />} />

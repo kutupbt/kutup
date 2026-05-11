@@ -2,14 +2,20 @@ import axios from 'axios'
 import { store } from '../store'
 import { updateAccessToken, logout } from '../store/authSlice'
 import { broadcastLogout } from '../lib/sessionSync'
+import { resolveApiBase } from '../lib/apiBase'
+import * as sessionVault from '../lib/sessionVault'
 
+// baseURL is resolved per-request via the interceptor below so the Tauri
+// shell can talk to a user-selected backend (`tauri://localhost` cannot
+// route a bare `/api` to the backend). On the web `resolveApiBase()`
+// returns `/api` and behaviour is unchanged.
 const api = axios.create({
-  baseURL: '/api',
   withCredentials: true,
 })
 
-// Attach access token to every request
-api.interceptors.request.use((config) => {
+// Attach access token + resolve base URL on every request.
+api.interceptors.request.use(async (config) => {
+  config.baseURL = await resolveApiBase()
   const token = store.getState().auth.accessToken
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
@@ -73,7 +79,8 @@ api.interceptors.response.use(
       isRefreshing = true
 
       try {
-        const res = await axios.post('/api/auth/refresh', {}, { withCredentials: true })
+        const base = await resolveApiBase()
+        const res = await axios.post(`${base}/auth/refresh`, {}, { withCredentials: true })
         const newToken = res.data.accessToken
         store.dispatch(updateAccessToken(newToken))
         processQueue(null, newToken)
@@ -82,8 +89,11 @@ api.interceptors.response.use(
       } catch (refreshError) {
         processQueue(refreshError, null)
         // Refresh failed → server-side session is gone. Tell every tab to
-        // clear local state too, then redirect this tab to /login.
+        // clear local state too, wipe any Tauri-side keyring vault (so
+        // the next launch doesn't auto-rehydrate into a dead session),
+        // then redirect this tab to /login.
         broadcastLogout()
+        try { await sessionVault.clear() } catch { /* best-effort */ }
         store.dispatch(logout())
         window.location.href = '/login'
         return Promise.reject(refreshError)
