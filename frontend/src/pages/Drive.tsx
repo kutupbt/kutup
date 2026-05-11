@@ -1,5 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from 'react-router-dom'
+import { isTauri } from '@/lib/isTauri'
 import {
   Download,
   Trash2,
@@ -11,6 +13,14 @@ import {
 import { useAppSelector, useAppDispatch } from '@/store'
 import { selectMasterKey, selectPrivateKey, updateStorageUsed, updateStorageQuota, setColor } from '@/store/authSlice'
 import api from '@/api/client'
+import { streamUpload } from '@/upload/streamUpload'
+import { streamDownload } from '@/download/streamDownload'
+import {
+  uploadFolder,
+  filesToFolderEntries,
+  dataTransferToFolderEntries,
+  type FolderEntry,
+} from '@/upload/uploadFolder'
 import {
   encrypt, decrypt, generateKey, encryptStream, decryptStream,
   wrapKeyForRecipient, unwrapKeyFromSender,
@@ -64,6 +74,7 @@ interface FileMetadata { name: string; mimeType: string; size: number }
 
 export default function Drive() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const masterKey = useAppSelector(selectMasterKey)
   const privateKey = useAppSelector(selectPrivateKey)
@@ -102,6 +113,7 @@ export default function Drive() {
 
 
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
   const downloadAbortRef = useRef<AbortController | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
@@ -404,21 +416,40 @@ export default function Drive() {
   // --- File/folder operations ---
 
   async function uploadFile(file: File, collection: Collection, onProgress?: (loaded: number, total: number) => void) {
-    const fileKey = await generateKey()
-    const buffer = await file.arrayBuffer()
-    const encryptedData = await encryptStream(new Uint8Array(buffer), fileKey)
-    const meta: FileMetadata = { name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size }
-    const encMeta = await encrypt(new TextEncoder().encode(JSON.stringify(meta)), fileKey)
-    const encFileKey = await encrypt(fileKey, collection.collectionKey!)
-    const form = new FormData()
-    form.append('collectionId', collection.id)
-    form.append('encryptedMetadata', toBase64(encMeta.ciphertext))
-    form.append('metadataNonce', toBase64(encMeta.nonce))
-    form.append('encryptedFileKey', toBase64(encFileKey.ciphertext))
-    form.append('fileKeyNonce', toBase64(encFileKey.nonce))
-    form.append('file', new Blob([encryptedData.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'encrypted')
-    const uploadUrl = collection.isRemote ? `/fed-proxy/${collection.remoteShareId}/upload` : '/files/upload'
-    await api.post(uploadUrl, form, { onUploadProgress: (e) => { if (e.total && onProgress) onProgress(e.loaded, e.total) } })
+    // Federated uploads still use the old in-memory multipart path — the
+    // remote peer doesn't speak tus yet. Local uploads go through the
+    // streaming tus endpoint: memory stays bounded at ~10 MB regardless
+    // of file size, replacing the previous full-file-in-RAM pipeline.
+    if (collection.isRemote) {
+      const fileKey = await generateKey()
+      const buffer = await file.arrayBuffer()
+      const encryptedData = await encryptStream(new Uint8Array(buffer), fileKey)
+      const meta: FileMetadata = { name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size }
+      const encMeta = await encrypt(new TextEncoder().encode(JSON.stringify(meta)), fileKey)
+      const encFileKey = await encrypt(fileKey, collection.collectionKey!)
+      const form = new FormData()
+      form.append('collectionId', collection.id)
+      form.append('encryptedMetadata', toBase64(encMeta.ciphertext))
+      form.append('metadataNonce', toBase64(encMeta.nonce))
+      form.append('encryptedFileKey', toBase64(encFileKey.ciphertext))
+      form.append('fileKeyNonce', toBase64(encFileKey.nonce))
+      form.append('file', new Blob([encryptedData.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'encrypted')
+      await api.post(`/fed-proxy/${collection.remoteShareId}/upload`, form, {
+        onUploadProgress: (e) => { if (e.total && onProgress) onProgress(e.loaded, e.total) },
+      })
+      return
+    }
+
+    const accessToken = auth.accessToken
+    if (!accessToken) throw new Error('Not logged in')
+    await streamUpload({
+      file,
+      collection: { id: collection.id, collectionKey: collection.collectionKey! },
+      accessToken,
+      onProgress: onProgress
+        ? (plainSent, plainTotal) => onProgress(plainSent, plainTotal)
+        : undefined,
+    })
   }
 
   async function uploadFiles(filesToUpload: File[], targetFolder?: Collection) {
@@ -459,8 +490,11 @@ export default function Drive() {
     )
     if (name && currentFolder && !currentFolder.isRemote && previewable) {
       // Open in a new tab — FileEditorPage dispatches to text-collab editor,
-      // OnlyOffice office editor, or static viewer based on extension.
-      window.open(`/file/${currentFolder.id}/${file.id}`, '_blank', 'noopener')
+      // OnlyOffice office editor, or static viewer based on extension. Tauri
+      // blocks new tabs, so navigate in-window there.
+      const url = `/file/${currentFolder.id}/${file.id}`
+      if (isTauri) navigate(url)
+      else window.open(url, '_blank', 'noopener')
       return
     }
     setDetailItem(file)
@@ -468,20 +502,50 @@ export default function Drive() {
 
   async function handleDownload(file: DecryptedFile) {
     if (!file._fileKey) return
+    // Federated downloads stay on the old buffered path until the
+    // peer's download endpoint can stream — there's no streaming
+    // wire contract over `/fed-proxy/.../download` yet.
+    if (currentFolder?.isRemote) {
+      try {
+        const res = await api.get(
+          `/fed-proxy/${currentFolder.remoteShareId}/files/${file.id}/download`,
+          { responseType: 'arraybuffer' },
+        )
+        const plaintext = await decryptStream(new Uint8Array(res.data), file._fileKey)
+        const blob = new Blob([plaintext.buffer as ArrayBuffer], { type: file.decryptedMimeType ?? 'application/octet-stream' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = file.decryptedName ?? 'file'
+        a.click()
+        URL.revokeObjectURL(url)
+      } catch {
+        toast.error(t('drive.toast.downloadFailed'))
+      }
+      return
+    }
+
+    // Local files: streaming-decrypt path. RAM stays bounded at
+    // ~10 MB on Chromium (FSA writes per chunk); Firefox / Safari
+    // degrade to a Blob accumulator inside streamDownload.
+    const accessToken = auth.accessToken
+    if (!accessToken) {
+      toast.error(t('drive.toast.downloadFailed'))
+      return
+    }
     try {
-      const downloadUrl = currentFolder?.isRemote
-        ? `/fed-proxy/${currentFolder.remoteShareId}/files/${file.id}/download`
-        : `/files/${file.id}/download`
-      const res = await api.get(downloadUrl, { responseType: 'arraybuffer' })
-      const plaintext = await decryptStream(new Uint8Array(res.data), file._fileKey)
-      const blob = new Blob([plaintext.buffer as ArrayBuffer], { type: file.decryptedMimeType ?? 'application/octet-stream' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = file.decryptedName ?? 'file'
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch {
+      await streamDownload({
+        url: `/api/files/${file.id}/download`,
+        fileKey: file._fileKey,
+        filename: file.decryptedName ?? 'file',
+        mimeType: file.decryptedMimeType ?? 'application/octet-stream',
+        expectedPlainSize: file.decryptedSize,
+        accessToken,
+      })
+    } catch (err) {
+      // showSaveFilePicker user-cancel surfaces as AbortError —
+      // silent in that case.
+      if (err instanceof DOMException && err.name === 'AbortError') return
       toast.error(t('drive.toast.downloadFailed'))
     }
   }
@@ -528,7 +592,11 @@ export default function Drive() {
         toast.error('Note uploaded, but could not be opened — refresh the page.', { id: tid })
         return
       }
-      window.open(`/file/${currentFolder.id}/${created.id}`, '_blank', 'noopener')
+      {
+        const url = `/file/${currentFolder.id}/${created.id}`
+        if (isTauri) navigate(url)
+        else window.open(url, '_blank', 'noopener')
+      }
       try {
         const meRes = await api.get('/user/me')
         dispatch(updateStorageUsed(meRes.data.storageUsedBytes))
@@ -591,7 +659,11 @@ export default function Drive() {
         toast.error('File uploaded, but could not be opened — refresh the page.', { id: tid })
         return
       }
-      window.open(`/file/${currentFolder.id}/${created.id}`, '_blank', 'noopener')
+      {
+        const url = `/file/${currentFolder.id}/${created.id}`
+        if (isTauri) navigate(url)
+        else window.open(url, '_blank', 'noopener')
+      }
       try {
         const meRes = await api.get('/user/me')
         dispatch(updateStorageUsed(meRes.data.storageUsedBytes))
@@ -782,6 +854,57 @@ export default function Drive() {
     }
   }
 
+  async function handleFolderUploadEntries(entries: FolderEntry[]) {
+    if (entries.length === 0) return
+    const folder = currentFolder
+    if (!folder?.collectionKey || !masterKey) return
+    const accessToken = auth.accessToken
+    if (!accessToken) {
+      toast.error(t('drive.toast.uploadFailed'))
+      return
+    }
+    const totalBytes = entries.reduce((s, e) => s + e.file.size, 0)
+    const tid = toast.loading(t('drive.toast.uploadingFolder', { count: entries.length }))
+    try {
+      let filesDone = 0
+      await uploadFolder({
+        entries,
+        parentCollection: { id: folder.id, collectionKey: folder.collectionKey },
+        masterKey,
+        accessToken,
+        onProgress: (done, total, current) => {
+          filesDone = done
+          toast.loading(
+            t('drive.toast.uploadingFolderProgress', { done, total, current }),
+            { id: tid },
+          )
+        },
+      })
+      toast.success(
+        t('drive.toast.folderUploaded', { count: filesDone, bytes: totalBytes }),
+        { id: tid },
+      )
+      await loadCollections()
+      await loadFiles(folder)
+    } catch (err) {
+      const aborted = err instanceof DOMException && err.name === 'AbortError'
+      toast.error(aborted ? t('drive.toast.uploadCancelled') : t('drive.toast.uploadFailed'), { id: tid })
+    }
+  }
+
+  function triggerFolderUpload() {
+    if (!folderInputRef.current) return
+    folderInputRef.current.onchange = (e) => {
+      const input = e.target as HTMLInputElement
+      const files = input.files
+      if (!files || files.length === 0) return
+      void handleFolderUploadEntries(filesToFolderEntries(files))
+      // Clear so picking the same folder again triggers onchange.
+      input.value = ''
+    }
+    folderInputRef.current.click()
+  }
+
   const totalSelected = selectedFileIds.size + selectedFolderIds.size
 
   useKeyboardShortcuts({
@@ -831,6 +954,7 @@ export default function Drive() {
           canUpload={canUploadToCurrentFolder()}
           onShowHelp={() => setShortcutsOpen(true)}
           onUpload={() => triggerUpload()}
+          onUploadFolder={() => triggerFolderUpload()}
           onNewFolder={() => setNewFolderOpen(true)}
           onNewNote={() => setNewNoteOpen(true)}
           onNewOffice={(kind) => handleCreateOffice(kind)}
@@ -850,6 +974,24 @@ export default function Drive() {
             e.preventDefault()
             setIsDragging(false)
             if (!currentFolder?.collectionKey || !canUploadToCurrentFolder()) return
+            const items = e.dataTransfer.items
+            const hasDirEntry = (() => {
+              for (let i = 0; i < items.length; i++) {
+                const it = items[i] as DataTransferItem & {
+                  webkitGetAsEntry?: () => FileSystemEntry | null
+                }
+                const entry = it.webkitGetAsEntry?.()
+                if (entry?.isDirectory) return true
+              }
+              return false
+            })()
+            if (hasDirEntry) {
+              void (async () => {
+                const entries = await dataTransferToFolderEntries(items)
+                if (entries.length) await handleFolderUploadEntries(entries)
+              })()
+              return
+            }
             const dropped = Array.from(e.dataTransfer.files).filter((f) => f.size > 0)
             if (dropped.length) uploadFiles(dropped)
           }}
@@ -864,6 +1006,9 @@ export default function Drive() {
           )}
 
           <input ref={fileInputRef} type="file" multiple className="hidden" />
+          {/* eslint-disable-next-line @typescript-eslint/ban-ts-comment */}
+          {/* @ts-expect-error — webkitdirectory isn't in React's typing yet */}
+          <input ref={folderInputRef} type="file" webkitdirectory="" directory="" multiple className="hidden" />
 
           <DriveBreadcrumb
           viewMode={viewMode}

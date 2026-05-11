@@ -1,5 +1,5 @@
 import { forwardRef } from 'react'
-import { Search, Upload as UploadIcon, Plus, HelpCircle, X } from 'lucide-react'
+import { Search, Upload as UploadIcon, FolderUp, Plus, HelpCircle, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,6 +17,7 @@ interface DriveTopBarProps extends NewMenuActions {
   onShowHelp: () => void
   newMenuOpen: boolean
   onNewMenuOpenChange: (open: boolean) => void
+  onUploadFolder?: () => void
 }
 
 const DriveTopBar = forwardRef<HTMLInputElement, DriveTopBarProps>(function DriveTopBar(
@@ -26,6 +27,7 @@ const DriveTopBar = forwardRef<HTMLInputElement, DriveTopBarProps>(function Driv
     canUpload,
     onShowHelp,
     onUpload,
+    onUploadFolder,
     onNewFolder,
     onNewNote,
     onNewOffice,
@@ -67,6 +69,19 @@ const DriveTopBar = forwardRef<HTMLInputElement, DriveTopBarProps>(function Driv
           <Button onClick={onUpload} className="gap-2">
             <UploadIcon className="h-4 w-4" />
             {t('common.upload')}
+          </Button>
+        )}
+        {canUpload && onUploadFolder && (
+          <Button
+            onClick={onUploadFolder}
+            variant="outline"
+            className="gap-2"
+            title={t('common.uploadFolderAriaTitle')}
+            aria-label={t('common.uploadFolderAriaTitle')}
+            data-testid="upload-folder-button"
+          >
+            <FolderUp className="h-4 w-4" />
+            {t('common.uploadFolder')}
           </Button>
         )}
 

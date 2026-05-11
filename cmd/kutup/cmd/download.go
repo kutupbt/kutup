@@ -10,6 +10,7 @@ import (
 
 	"github.com/kutupbulut/kutup/cmd/kutup/internal/api"
 	"github.com/kutupbulut/kutup/cmd/kutup/internal/crypto"
+	"github.com/kutupbulut/kutup/cmd/kutup/internal/download"
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 )
@@ -81,58 +82,74 @@ func runDownload(cmd *cobra.Command, args []string) error {
 				progressbar.OptionClearOnFinish(),
 			)
 
-			// Try the latest snapshot version first; fall back to the main
-			// /files/:id/download blob if no versions exist. Mirrors
-			// frontend/src/pages/FileEditorPage.tsx:170-188 — necessary
-			// because the main blob holds only the cold-start state for
-			// any collab-edited file (notes / office / whiteboard). The
-			// version_size assertion (meta.Size >= 0) holds for the latest
-			// snapshot too: snapshot blobs are stream-encrypted with the
-			// same per-file key + format as the main blob.
-			encrypted, fromVersion, err := client.LatestEncryptedBytes(fileID)
+			destPath := destDir
+			if fi, err := os.Stat(destDir); err == nil && fi.IsDir() {
+				destPath = filepath.Join(destDir, meta.Name)
+			}
+
+			// Streaming download path: pull the encrypted body in 5 MB
+			// frames and decrypt straight to disk. Replaces the previous
+			// `LatestEncryptedBytes → DecryptStream(buffer)` pattern that
+			// held the full ciphertext AND plaintext in RAM. Memory peak
+			// is now ~10 MB regardless of file size.
+			//
+			// Same fallback as before: prefer the newest version snapshot
+			// (collab-edited files only carry their post-load state there),
+			// fall back to the main /files/:id/download blob otherwise.
+			rc, fromVersion, err := client.LatestEncryptedStream(fileID)
 			if err != nil {
 				return fmt.Errorf("download: %w", err)
 			}
-			_ = bar.Add64(int64(len(encrypted)))
+			defer rc.Close()
 
-			plaintext, err := crypto.DecryptStream(encrypted, fileKey)
+			out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 			if err != nil {
-				return fmt.Errorf("decrypt: %w", err)
+				return fmt.Errorf("open dest: %w", err)
+			}
+			plainWritten, derr := download.Stream(rc, fileKey, out, func(n int64) {
+				_ = bar.Set64(n)
+			})
+			if cerr := out.Close(); cerr != nil && derr == nil {
+				derr = cerr
+			}
+			if derr != nil {
+				_ = os.Remove(destPath)
+				return fmt.Errorf("decrypt-write: %w", derr)
 			}
 
 			// Integrity check (only meaningful for the cold-start blob;
 			// snapshot bytes carry their own size in file_versions.size_bytes
 			// and may differ from the file's original meta.Size).
-			if !fromVersion && meta.Size > 0 && int64(len(plaintext)) != meta.Size {
-				return fmt.Errorf("size mismatch: expected %d bytes, got %d", meta.Size, len(plaintext))
+			if !fromVersion && meta.Size > 0 && plainWritten != meta.Size {
+				_ = os.Remove(destPath)
+				return fmt.Errorf("size mismatch: expected %d bytes, got %d", meta.Size, plainWritten)
 			}
 
-			// Whiteboard asset hydration: if this is a .excalidraw and any
-			// image element references a fileId whose dataURL isn't inline
-			// in the saved JSON, fetch the corresponding asset blob from
-			// /assets/:assetId, decrypt with the per-file content key, and
-			// patch it inline so the on-disk file is self-contained.
+			// Whiteboard asset hydration: a .excalidraw written above may
+			// reference assets stored separately as /assets/<id> blobs.
+			// hydrateWhiteboardAssets parses the JSON, fetches each missing
+			// blob, and patches it inline. We read the just-written file
+			// back into RAM for this — Excalidraw files are small in
+			// practice (a few MB even with images), so the temporary
+			// non-streaming step is acceptable here.
 			if isExcalidraw(meta.Name) {
-				patched, hydErr := hydrateWhiteboardAssets(client, fileID, masterKey, plaintext, colKey, fileKey)
-				if hydErr != nil {
-					// Non-fatal: warn, write the partially-functional blob.
-					fmt.Fprintf(os.Stderr, "warn: asset hydration failed: %v\n", hydErr)
-				} else if patched != nil {
-					plaintext = patched
+				plaintext, rerr := os.ReadFile(destPath)
+				if rerr == nil {
+					patched, hydErr := hydrateWhiteboardAssets(client, fileID, masterKey, plaintext, colKey, fileKey)
+					if hydErr != nil {
+						fmt.Fprintf(os.Stderr, "warn: asset hydration failed: %v\n", hydErr)
+					} else if patched != nil {
+						if werr := os.WriteFile(destPath, patched, 0644); werr != nil {
+							fmt.Fprintf(os.Stderr, "warn: rewrite after hydration failed: %v\n", werr)
+						}
+						plainWritten = int64(len(patched))
+					}
 				}
-			}
-
-			destPath := destDir
-			if fi, err := os.Stat(destDir); err == nil && fi.IsDir() {
-				destPath = filepath.Join(destDir, meta.Name)
-			}
-			if err := os.WriteFile(destPath, plaintext, 0644); err != nil {
-				return fmt.Errorf("write file: %w", err)
 			}
 
 			if jsonOut {
 				fmt.Printf(`{"id":%q,"name":%q,"size":%d,"dest":%q,"fromVersion":%t}`+"\n",
-					fileID, meta.Name, len(plaintext), destPath, fromVersion)
+					fileID, meta.Name, plainWritten, destPath, fromVersion)
 			} else {
 				suffix := ""
 				if fromVersion {

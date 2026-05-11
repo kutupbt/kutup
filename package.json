@@ -1,0 +1,25 @@
+{
+  "name": "kutup",
+  "private": true,
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "description": "Kutup — E2EE Drive. Root package: orchestrates the Tauri native shell (desktop + mobile).",
+  "scripts": {
+    "dev": "pnpm -C frontend dev",
+    "build": "pnpm -C frontend build",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:android:init": "tauri android init",
+    "tauri:android:dev": "tauri android dev",
+    "tauri:android:build": "tauri android build",
+    "tauri:ios:init": "tauri ios init",
+    "tauri:ios:dev": "tauri ios dev",
+    "tauri:ios:build": "tauri ios build",
+    "tauri:icon": "tauri icon"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  },
+  "packageManager": "pnpm@10.28.2"
+}

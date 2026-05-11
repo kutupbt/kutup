@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- White app-icon background. -->
+  <rect width="1024" height="1024" fill="#ffffff"/>
+  <!--
+    Original Kutup logo: 56×44 viewBox with three rhombi.
+    Scale 16× → 896×704, then center on the 1024 square:
+      x offset = (1024 - 896) / 2 = 64
+      y offset = (1024 - 704) / 2 = 160
+  -->
+  <g transform="translate(64 160) scale(16)">
+    <polygon points="10,13 16,22 10,31 4,22" fill="#0369a1"/>
+    <polygon points="28,8 37,22 28,36 19,22" fill="#38bdf8"/>
+    <polygon points="46,11 53,22 46,33 39,22" fill="#7dd3fc"/>
+  </g>
+</svg>

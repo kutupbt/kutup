@@ -1,0 +1,32 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default permissions for Kutup's main window. Tighten / split per route once the app surface is mature.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-emit",
+    "core:window:default",
+    "core:path:default",
+    "core:app:default",
+    "core:webview:default",
+
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-message",
+
+    "fs:default",
+    "fs:allow-home-read-recursive",
+    "fs:allow-home-write-recursive",
+    "fs:allow-download-read-recursive",
+    "fs:allow-download-write-recursive",
+
+    "http:default",
+    "shell:allow-open",
+    "os:default",
+    "notification:default",
+    "store:default",
+    "process:default"
+  ]
+}

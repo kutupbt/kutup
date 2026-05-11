@@ -55,6 +55,43 @@ func (c *Client) DownloadVersion(fileID, versionID string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
+// DownloadVersionStream is the streaming counterpart to DownloadVersion,
+// matching DownloadFileStream's contract. Used by LatestEncryptedStream
+// for the version-first download path in `kutup download`.
+func (c *Client) DownloadVersionStream(fileID, versionID string) (io.ReadCloser, error) {
+	req, err := http.NewRequest(http.MethodGet,
+		c.base+"/api/files/"+fileID+"/versions/"+versionID+"/download", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.doUpload(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	return resp.Body, nil
+}
+
+// LatestEncryptedStream mirrors LatestEncryptedBytes but returns an
+// io.ReadCloser the caller can pipe through a streaming decryptor.
+// Same version-snapshot-preferred fallback logic. Bool tells the
+// caller whether they got a version snapshot (vs the main blob).
+func (c *Client) LatestEncryptedStream(fileID string) (io.ReadCloser, bool, error) {
+	versions, err := c.ListVersions(fileID)
+	if err == nil && len(versions) > 0 {
+		rc, dlErr := c.DownloadVersionStream(fileID, versions[0].ID)
+		if dlErr == nil {
+			return rc, true, nil
+		}
+	}
+	rc, err := c.DownloadFileStream(fileID)
+	return rc, false, err
+}
+
 // SnapshotBlobResponse is what POST /files/:fid/snapshot-blob returns.
 type SnapshotBlobResponse struct {
 	StoragePath string `json:"storagePath"`

@@ -12,3 +12,8 @@ docker-compose.override.yml
 frontend/public/onlyoffice/dist/
 frontend/public/onlyoffice/templates/
 test-results/
+
+# Root package.json (Tauri orchestrator). Rust artifacts live under
+# src-tauri/.gitignore.
+node_modules/
+package-lock.json
