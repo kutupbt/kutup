@@ -288,7 +288,14 @@ func (h *TusHandler) Create(c *fiber.Ctx) error {
 	c.Set("Tus-Resumable", tusVersion)
 	c.Set("Location", "/api/uploads/"+uploadID.String())
 	c.Set("Upload-Offset", "0")
-	return c.SendStatus(fiber.StatusCreated)
+	// Echo the pre-allocated fileId in the response body. tus-js-client
+	// surfaces the Create response body to the caller via onAfterResponse,
+	// which is what lets the browser path resolve a fileId without the
+	// extra round-trip a HEAD-after-PATCH would need. (The CLI reads
+	// X-Kutup-File-Id off the final PATCH directly.)
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"fileId": fileID.String(),
+	})
 }
 
 // ---------------------------------------------------------------------------

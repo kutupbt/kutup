@@ -13,6 +13,7 @@ import {
 import { useAppSelector, useAppDispatch } from '@/store'
 import { selectMasterKey, selectPrivateKey, updateStorageUsed, updateStorageQuota, setColor } from '@/store/authSlice'
 import api from '@/api/client'
+import { streamUpload } from '@/upload/streamUpload'
 import {
   encrypt, decrypt, generateKey, encryptStream, decryptStream,
   wrapKeyForRecipient, unwrapKeyFromSender,
@@ -407,21 +408,40 @@ export default function Drive() {
   // --- File/folder operations ---
 
   async function uploadFile(file: File, collection: Collection, onProgress?: (loaded: number, total: number) => void) {
-    const fileKey = await generateKey()
-    const buffer = await file.arrayBuffer()
-    const encryptedData = await encryptStream(new Uint8Array(buffer), fileKey)
-    const meta: FileMetadata = { name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size }
-    const encMeta = await encrypt(new TextEncoder().encode(JSON.stringify(meta)), fileKey)
-    const encFileKey = await encrypt(fileKey, collection.collectionKey!)
-    const form = new FormData()
-    form.append('collectionId', collection.id)
-    form.append('encryptedMetadata', toBase64(encMeta.ciphertext))
-    form.append('metadataNonce', toBase64(encMeta.nonce))
-    form.append('encryptedFileKey', toBase64(encFileKey.ciphertext))
-    form.append('fileKeyNonce', toBase64(encFileKey.nonce))
-    form.append('file', new Blob([encryptedData.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'encrypted')
-    const uploadUrl = collection.isRemote ? `/fed-proxy/${collection.remoteShareId}/upload` : '/files/upload'
-    await api.post(uploadUrl, form, { onUploadProgress: (e) => { if (e.total && onProgress) onProgress(e.loaded, e.total) } })
+    // Federated uploads still use the old in-memory multipart path — the
+    // remote peer doesn't speak tus yet. Local uploads go through the
+    // streaming tus endpoint: memory stays bounded at ~10 MB regardless
+    // of file size, replacing the previous full-file-in-RAM pipeline.
+    if (collection.isRemote) {
+      const fileKey = await generateKey()
+      const buffer = await file.arrayBuffer()
+      const encryptedData = await encryptStream(new Uint8Array(buffer), fileKey)
+      const meta: FileMetadata = { name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size }
+      const encMeta = await encrypt(new TextEncoder().encode(JSON.stringify(meta)), fileKey)
+      const encFileKey = await encrypt(fileKey, collection.collectionKey!)
+      const form = new FormData()
+      form.append('collectionId', collection.id)
+      form.append('encryptedMetadata', toBase64(encMeta.ciphertext))
+      form.append('metadataNonce', toBase64(encMeta.nonce))
+      form.append('encryptedFileKey', toBase64(encFileKey.ciphertext))
+      form.append('fileKeyNonce', toBase64(encFileKey.nonce))
+      form.append('file', new Blob([encryptedData.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'encrypted')
+      await api.post(`/fed-proxy/${collection.remoteShareId}/upload`, form, {
+        onUploadProgress: (e) => { if (e.total && onProgress) onProgress(e.loaded, e.total) },
+      })
+      return
+    }
+
+    const accessToken = auth.accessToken
+    if (!accessToken) throw new Error('Not logged in')
+    await streamUpload({
+      file,
+      collection: { id: collection.id, collectionKey: collection.collectionKey! },
+      accessToken,
+      onProgress: onProgress
+        ? (plainSent, plainTotal) => onProgress(plainSent, plainTotal)
+        : undefined,
+    })
   }
 
   async function uploadFiles(filesToUpload: File[], targetFolder?: Collection) {
