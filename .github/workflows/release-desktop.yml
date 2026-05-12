@@ -85,14 +85,21 @@ jobs:
 
       # tauri-action has no version-override input, so make the tag the single
       # source of truth: write its version into tauri.conf.json before building.
+      # Caveat: Windows' MSI (WiX) bundler rejects non-numeric pre-release
+      # identifiers ("must be numeric-only", so 0.1.0 / 0.1.0-1 are ok but
+      # 0.1.0-alpha.1 is not) — on Windows fall back to just the X.Y.Z part.
+      # The GitHub release tag/name still carries the full version, and the
+      # non-Windows bundles (.deb/.rpm/.AppImage/.dmg) keep the -alpha.N suffix.
       - name: Pin tauri.conf.json version to the tag
         if: env.APP_VERSION != ''
         shell: bash
         run: |
+          v="$APP_VERSION"
+          if [ "${{ runner.os }}" = "Windows" ]; then v="${v%%-*}"; fi
           tmp="$(mktemp)"
-          jq --arg v "$APP_VERSION" '.version = $v' src-tauri/tauri.conf.json > "$tmp"
+          jq --arg v "$v" '.version = $v' src-tauri/tauri.conf.json > "$tmp"
           mv "$tmp" src-tauri/tauri.conf.json
-          echo "src-tauri/tauri.conf.json version -> $APP_VERSION"
+          echo "src-tauri/tauri.conf.json version -> $v"
 
       - name: Install Linux build dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -107,14 +114,6 @@ jobs:
             libssl-dev \
             patchelf \
             file
-
-      - name: Add swap (Linux — headroom for the Rust build)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo fallocate -l 6G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
