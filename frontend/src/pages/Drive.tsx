@@ -13,6 +13,7 @@ import {
 import { useAppSelector, useAppDispatch } from '@/store'
 import { selectMasterKey, selectPrivateKey, updateStorageUsed, updateStorageQuota, setColor } from '@/store/authSlice'
 import api from '@/api/client'
+import { resolveApiBase } from '@/lib/apiBase'
 import { streamUpload } from '@/upload/streamUpload'
 import { streamDownload } from '@/download/streamDownload'
 import {
@@ -534,8 +535,12 @@ export default function Drive() {
       return
     }
     try {
+      // Use the resolved API base (so the Tauri shell hits the
+      // user-selected backend, not `tauri://localhost/api/...`). On the
+      // web this is just `/api`, unchanged.
+      const base = await resolveApiBase()
       await streamDownload({
-        url: `/api/files/${file.id}/download`,
+        url: `${base}/files/${file.id}/download`,
         fileKey: file._fileKey,
         filename: file.decryptedName ?? 'file',
         mimeType: file.decryptedMimeType ?? 'application/octet-stream',

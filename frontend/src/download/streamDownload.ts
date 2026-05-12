@@ -18,6 +18,7 @@
 
 import { newStreamDecryptor } from '@/crypto/streamDecryptor'
 import { CIPHER_CHUNK, HEADER_BYTES } from '@/crypto/streamEncryptor'
+import { isTauri } from '@/lib/isTauri'
 
 export interface StreamDownloadOptions {
   /** Full URL — already includes `/api/files/<id>/download` or the
@@ -161,6 +162,21 @@ interface Sink {
 }
 
 async function openSink(opts: StreamDownloadOptions): Promise<Sink> {
+  // Tauri desktop / mobile: WebKitGTK / WKWebView don't have
+  // showSaveFilePicker, and a Blob + `<a download>` doesn't reliably
+  // surface a save dialog inside the Tauri webview. Use the native
+  // save dialog + filesystem plugins instead, streaming chunks to disk.
+  if (isTauri) {
+    try {
+      return await openTauriSink(opts)
+    } catch (err) {
+      // User cancelled the save dialog → AbortError, surface it.
+      if (err instanceof DOMException && err.name === 'AbortError') throw err
+      // Plugin missing / scope denied / etc → fall through to the Blob
+      // path (better than nothing, even if the webview ignores it).
+      console.warn('Tauri sink failed, falling back to Blob:', err)
+    }
+  }
   if (canUseFSA()) {
     try {
       return await openFSASink(opts)
@@ -177,6 +193,39 @@ async function openSink(opts: StreamDownloadOptions): Promise<Sink> {
     }
   }
   return openBlobSink(opts)
+}
+
+// Tauri-native sink: native save dialog → streaming write to the chosen
+// path via @tauri-apps/plugin-fs. Dynamic imports keep the Tauri plugins
+// out of the web bundle.
+async function openTauriSink(opts: StreamDownloadOptions): Promise<Sink> {
+  const [{ save }, fs] = await Promise.all([
+    import('@tauri-apps/plugin-dialog'),
+    import('@tauri-apps/plugin-fs'),
+  ])
+  const path = await save({
+    defaultPath: opts.filename,
+    title: 'Save file',
+  })
+  if (!path) {
+    // Treat a cancelled save dialog like the FSA picker cancel.
+    throw new DOMException('save cancelled', 'AbortError')
+  }
+  const file = await fs.open(path, { write: true, create: true, truncate: true })
+  return {
+    async write(plain) {
+      // plugin-fs FileHandle.write wants a Uint8Array; .slice() forces
+      // a plain ArrayBuffer-backed view (libsodium hands back
+      // ArrayBufferLike-typed views under TS strict).
+      await file.write(plain.slice())
+    },
+    async finalize() {
+      await file.close()
+    },
+    async abort() {
+      await file.close().catch(() => {})
+    },
+  }
 }
 
 interface FSAGlobals {
