@@ -25,7 +25,7 @@ const STORE_FILE = 'kutup.dat'
 const PROFILE_KEY = 'profile'
 
 // Keychain keys. Kept short + namespaced by the OS-side service
-// (`io.kutup.app`, see src-tauri/src/lib.rs).
+// (`dev.kutup.app`, see src-tauri/src/lib.rs).
 const KK_ACCESS_TOKEN = 'accessToken'
 const KK_MASTER_KEY = 'masterKey'
 const KK_PRIVATE_KEY = 'privateKey'

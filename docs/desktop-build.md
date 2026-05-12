@@ -64,7 +64,7 @@ declared in `src-tauri/Cargo.toml` (`libwebkit2gtk-4.1-0`, `libgtk-3-0`).
 On first launch the app shows a server-picker screen (Nextcloud / Mastodon
 style). The user enters a kutup backend URL, the app probes
 `GET ${url}/api/health`, and on success persists the choice via the
-Tauri Store plugin at `$APPDATA/io.kutup.app/kutup.dat`.
+Tauri Store plugin at `$APPDATA/dev.kutup.app/kutup.dat`.
 
 URL normalization:
 
