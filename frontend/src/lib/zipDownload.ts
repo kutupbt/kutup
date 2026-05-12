@@ -1,6 +1,7 @@
 import { Zip, ZipPassThrough } from 'fflate'
 import api from '@/api/client'
 import { decryptStream } from '@/crypto'
+import { isTauri } from '@/lib/isTauri'
 
 // 2 GB — ZIP32 max; Windows Explorer and most real-world readers cap here.
 const SPLIT_BYTES = 2 * 1024 * 1024 * 1024
@@ -139,6 +140,107 @@ function triggerBlobDownload(chunks: Uint8Array[], filename: string): void {
   URL.revokeObjectURL(url)
 }
 
+// ---------------------------------------------------------------------------
+// Tauri path — WebKitGTK / WKWebView have no File System Access API, so use
+// the native save dialog (single ZIP) or directory picker (multi-part) plus
+// @tauri-apps/plugin-fs streaming writes. Mirrors streamPartToWritable.
+// ---------------------------------------------------------------------------
+
+interface TauriFileHandle {
+  write(data: Uint8Array): Promise<number>
+  close(): Promise<void>
+}
+
+async function streamPartToTauriFile(
+  files: ZipFile[],
+  file: TauriFileHandle,
+  partDone: number,
+  total: number,
+  onProgress: ProgressCallback,
+  partIdx: number,
+  parts: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  const pending: Uint8Array[] = []
+  const zip = new Zip((err, chunk) => {
+    if (err) throw err
+    pending.push(chunk)
+  })
+  try {
+    for (let i = 0; i < files.length; i++) {
+      signal?.throwIfAborted()
+      const f = files[i]
+      const path = f.isRemote
+        ? `/fed-proxy/${f.remoteShareId}/files/${f.id}/download`
+        : `/files/${f.id}/download`
+      const res = await api.get(path, { responseType: 'arraybuffer', signal })
+      const plain = await decryptStream(new Uint8Array(res.data), f.fileKey)
+      const entry = new ZipPassThrough(f.name)
+      zip.add(entry)
+      entry.push(plain, true)
+      for (const chunk of pending) await file.write(chunk)
+      pending.length = 0
+      onProgress(partDone + i + 1, total, partIdx + 1, parts)
+    }
+    zip.end()
+    for (const chunk of pending) await file.write(chunk)
+    await file.close()
+  } catch (e) {
+    await file.close().catch(() => {})
+    throw e
+  }
+}
+
+async function downloadAsZipTauri(
+  groups: ZipFile[][],
+  folderName: string,
+  total: number,
+  onProgress: ProgressCallback,
+  signal?: AbortSignal,
+): Promise<void> {
+  const [{ save, open: openDialog }, fs] = await Promise.all([
+    import('@tauri-apps/plugin-dialog'),
+    import('@tauri-apps/plugin-fs'),
+  ])
+
+  if (groups.length === 1) {
+    const path = await save({
+      defaultPath: `${folderName}.zip`,
+      filters: [{ name: 'ZIP archive', extensions: ['zip'] }],
+      title: 'Save ZIP',
+    })
+    if (!path) throw new DOMException('save cancelled', 'AbortError')
+    const file = (await fs.open(path, {
+      write: true,
+      create: true,
+      truncate: true,
+    })) as unknown as TauriFileHandle
+    await streamPartToTauriFile(groups[0], file, 0, total, onProgress, 0, 1, signal)
+    return
+  }
+
+  // >2 GB total → split into parts → pick a directory to drop them in.
+  const dir = await openDialog({
+    directory: true,
+    multiple: false,
+    title: `Choose a folder for the ${groups.length} ZIP parts`,
+  })
+  if (!dir || typeof dir !== 'string') {
+    throw new DOMException('directory pick cancelled', 'AbortError')
+  }
+  let partDone = 0
+  for (let i = 0; i < groups.length; i++) {
+    signal?.throwIfAborted()
+    const file = (await fs.open(`${dir}/${folderName}_part${i + 1}.zip`, {
+      write: true,
+      create: true,
+      truncate: true,
+    })) as unknown as TauriFileHandle
+    await streamPartToTauriFile(groups[i], file, partDone, total, onProgress, i, groups.length, signal)
+    partDone += groups[i].length
+  }
+}
+
 export async function downloadAsZip(
   files: ZipFile[],
   folderName: string,
@@ -150,6 +252,11 @@ export async function downloadAsZip(
   const totalSize = files.reduce((n, f) => n + f.size, 0)
   const groups = partition(files)
   const total = files.length
+
+  if (isTauri) {
+    await downloadAsZipTauri(groups, folderName, total, onProgress, signal)
+    return
+  }
 
   if (!hasFSA()) {
     if (totalSize > BLOB_FALLBACK_LIMIT) throw new FsaRequiredError()
