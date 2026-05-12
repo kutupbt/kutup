@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:tauri": "pnpm build && node -e \"require('fs').rmSync('dist/onlyoffice',{recursive:true,force:true})\"",
     "preview": "vite preview",
     "test": "vitest run"
   },

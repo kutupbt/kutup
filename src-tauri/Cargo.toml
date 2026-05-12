@@ -6,11 +6,17 @@ edition = "2021"
 license = "AGPL-3.0-only"
 rust-version = "1.77"
 
-# Library target so Tauri Mobile can link us as cdylib/staticlib on iOS+Android,
-# and the desktop binary can re-use the same entry point via lib.rs::run().
+# Library target. Desktop builds only need `rlib` (the desktop binary in
+# src/main.rs links it via `kutup_lib::run()`). The `staticlib` + `cdylib`
+# crate-types are *only* consumed by Tauri Mobile's iOS / Android FFI
+# tooling — and producing them means a full static/dynamic link of the
+# entire tauri dependency tree, which OOMs the linker on ~4 GB build
+# machines. Re-add them when we start the mobile bring-up slice (likely on
+# CI or a beefier box by then):
+#   crate-type = ["staticlib", "cdylib", "rlib"]
 [lib]
 name = "kutup_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -57,3 +63,23 @@ default = ["custom-protocol"]
 # Tauri's custom-protocol is required for release builds — embeds the frontend
 # bundle and serves it via a custom URL scheme instead of needing a local server.
 custom-protocol = ["tauri/custom-protocol"]
+
+# Per-package override for the kutup shell crate: opt-level=1.
+#
+# `tauri::generate_context!()` const-evaluates the entire embedded
+# frontend bundle plus the `Builder::default().plugin(...)...run(...)`
+# chain's monomorphized generics, all inside *our* crate. At cargo's
+# default release opt-level=3 a single rustc building kutup_lib peaks
+# well past available RAM on modest build machines. opt-level=1 roughly
+# halves that. The kutup shell crate is thin glue (plugin registration +
+# the keyring vault commands); its runtime perf is irrelevant — the deps
+# that matter (tauri internals, reqwest) still build at opt-level=3, and
+# the real work lives in the JS frontend.
+#
+# NOTE: this matters far less now that build:tauri strips the ~2.6 GB
+# OnlyOffice SDK from dist/ before `generate_context!()` runs — embedding
+# that was the real OOM cause. Office-doc editing is therefore unavailable
+# in the desktop bundle for now; the follow-up is to load the SDK from the
+# user's server origin (see docs/desktop-build.md). Kept as a margin.
+[profile.release.package.kutup]
+opt-level = 1

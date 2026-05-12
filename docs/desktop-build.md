@@ -19,6 +19,35 @@ Artifacts land in `src-tauri/target/release/bundle/`:
 The build cross-compiles only to the host OS — to ship all platforms, run
 the build on each (or wire CI matrices later).
 
+## OnlyOffice is excluded from the desktop bundle
+
+`tauri.conf.json`'s `beforeBuildCommand` runs `pnpm -C frontend
+build:tauri`, which builds `dist/` and then deletes `dist/onlyoffice/`.
+That directory is the ~2.6 GB OnlyOffice document-editor SDK (copied from
+`frontend/public/onlyoffice/dist/`). `tauri::generate_context!()` embeds
+**all** of `frontendDist` into the binary as a static byte array — embedding
+2.6 GB OOMs `rustc` on any machine, so it has to go.
+
+Consequence: **the desktop app cannot open `.docx` / `.xlsx` / `.pptx`
+files in v1.** Everything else (Excalidraw, CodeMirror text/code editors,
+file browse / upload / download, sharing, admin) works. The follow-up is
+to point the OnlyOffice iframe at `${serverUrl}/onlyoffice/...` instead of
+the relative `/onlyoffice/...` so the desktop app streams the SDK from the
+user's kutup server — at which point it can be re-enabled without bloating
+the binary. (`OfficeEditor.tsx` + the hardcoded paths in
+`frontend/public/onlyoffice/inner.html` / `x2t.html` are the touch points.)
+
+## Memory note for the build itself
+
+The `kutup` shell crate is built at `opt-level = 1`
+(`[profile.release.package.kutup]` in `src-tauri/Cargo.toml`) — `rustc`'s
+peak memory const-evaluating the embedded bundle + the
+`Builder::default()…run()` monomorphizations exceeds ~4 GB at the default
+`opt-level = 3`. opt-level=1 roughly halves that; the shell crate is thin
+glue so the perf cost is irrelevant. Deps stay at opt-level=3. The `[lib]
+crate-type` is `["rlib"]` only — `staticlib`/`cdylib` are needed solely by
+Tauri Mobile's FFI tooling (re-add them for the mobile bring-up slice).
+
 ## Linux prerequisites
 
 ```bash

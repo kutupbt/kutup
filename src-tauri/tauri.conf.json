@@ -5,7 +5,7 @@
   "identifier": "io.kutup.app",
   "build": {
     "beforeDevCommand": "pnpm -C frontend dev",
-    "beforeBuildCommand": "pnpm -C frontend build",
+    "beforeBuildCommand": "pnpm -C frontend build:tauri",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../frontend/dist"
   },
