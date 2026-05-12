@@ -14,7 +14,12 @@
 // up the new URL.
 
 import { isTauri } from './isTauri'
-import { getServerUrl } from './serverConfig'
+import {
+  getServerUrl,
+  getServerInsecure,
+  primeInsecureCache,
+  resetInsecureCache,
+} from './serverConfig'
 
 let cached: string | null = null
 let warmupPromise: Promise<string> | null = null
@@ -27,7 +32,14 @@ export async function resolveApiBase(): Promise<string> {
       cached = '/api'
       return cached
     }
-    const url = await getServerUrl()
+    // Read both server-config values from the Store while we're here, and
+    // prime the synchronous insecure-TLS cache the global-fetch wrapper
+    // depends on.
+    const [url, insecure] = await Promise.all([
+      getServerUrl(),
+      getServerInsecure(),
+    ])
+    primeInsecureCache(insecure)
     cached = url ? `${url}/api` : '/api'
     return cached
   })()
@@ -47,4 +59,5 @@ export function apiBase(): string {
 export function invalidateApiBase(): void {
   cached = null
   warmupPromise = null
+  resetInsecureCache()
 }

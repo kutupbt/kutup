@@ -6,6 +6,12 @@
 // Flow: input → normalize (https prepend, http-on-localhost-only, trailing
 // slash strip) → probe `${url}/api/health` with a 5 s timeout → on a valid
 // kutup response, persist via the Tauri Store plugin and navigate to /login.
+//
+// "Allow insecure connection" checkbox: when ticked, the probe and all
+// subsequent HTTP go through tauri-plugin-http with TLS cert/hostname
+// verification disabled — for self-signed servers or connecting by IP. The
+// flag is persisted alongside the URL. (Large-file uploads still use the
+// webview's XHR and so still need a valid cert; see lib/httpClient.)
 
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -15,11 +21,17 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 
-import { normalizeServerUrl, setServerUrl } from '@/lib/serverConfig'
+import {
+  normalizeServerUrl,
+  setServerUrl,
+  setServerInsecure,
+} from '@/lib/serverConfig'
 import { invalidateApiBase } from '@/lib/apiBase'
+import { httpFetch } from '@/lib/httpClient'
 import { KutupLogo } from '@/components/KutupLogo'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Form,
   FormControl,
@@ -38,14 +50,19 @@ type FormShape = z.infer<typeof schema>
 
 async function probeHealth(
   origin: string,
+  insecure: boolean,
   timeoutMs: number,
 ): Promise<{ ok: boolean; isKutup: boolean }> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const r = await fetch(`${origin}/api/health`, {
-      signal: controller.signal,
-    })
+    // forceInsecure = the checkbox value: the persisted flag isn't cached yet
+    // at this point in the flow.
+    const r = await httpFetch(
+      `${origin}/api/health`,
+      { signal: controller.signal },
+      insecure,
+    )
     if (!r.ok) return { ok: false, isKutup: false }
     const body = (await r.json()) as { name?: string }
     return { ok: true, isKutup: body?.name === 'kutup' }
@@ -61,6 +78,7 @@ export default function ServerSelect() {
   const navigate = useNavigate()
   const [error, setError] = useState<string>('')
   const [checking, setChecking] = useState(false)
+  const [insecure, setInsecure] = useState(false)
 
   const form = useForm<FormShape>({
     resolver: zodResolver(schema),
@@ -82,7 +100,7 @@ export default function ServerSelect() {
     }
 
     setChecking(true)
-    const probe = await probeHealth(norm.url, 5000)
+    const probe = await probeHealth(norm.url, insecure, 5000)
     setChecking(false)
 
     if (!probe.ok) {
@@ -95,7 +113,8 @@ export default function ServerSelect() {
     }
 
     await setServerUrl(norm.url)
-    invalidateApiBase() // next API call re-resolves with the new origin
+    await setServerInsecure(insecure)
+    invalidateApiBase() // next API call re-resolves with the new origin + flag
     navigate('/login', { replace: true })
   }
 
@@ -145,16 +164,28 @@ export default function ServerSelect() {
                   </FormItem>
                 )}
               />
+              <label className="flex items-start gap-2 text-sm">
+                <Checkbox
+                  checked={insecure}
+                  onCheckedChange={(v) => setInsecure(v === true)}
+                  disabled={checking}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="font-medium">
+                    {t('auth.serverSelect.insecure')}
+                  </span>
+                  <span className="block text-xs text-muted-foreground">
+                    {t('auth.serverSelect.insecureHint')}
+                  </span>
+                </span>
+              </label>
               {error && (
                 <Alert variant="destructive">
                   <AlertDescription>{error}</AlertDescription>
                 </Alert>
               )}
-              <Button
-                type="submit"
-                className="w-full"
-                disabled={checking}
-              >
+              <Button type="submit" className="w-full" disabled={checking}>
                 {checking && (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 )}

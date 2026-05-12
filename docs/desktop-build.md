@@ -73,26 +73,39 @@ URL normalization:
 - trailing slash is stripped
 - malformed URLs are rejected before the probe fires
 
-## Self-signed certificate caveat
+## Self-signed certificate handling
 
 Kutup's local development stack runs at `https://localhost:38443` with a
-self-signed cert. The Tauri webview rejects this by default — there is no
-"continue anyway" UX baked in.
+self-signed cert. The Tauri **webview** rejects untrusted certs, so a bare
+`fetch`/XHR to that URL fails the TLS handshake.
 
-Three workable paths during development:
+The server-picker has an **"Allow insecure connection"** checkbox. When
+ticked, the health probe *and* all subsequent HTTP go through
+`tauri-plugin-http` with cert + hostname verification disabled (it's a
+Rust/reqwest client, not the webview's fetch). The flag is persisted
+alongside the server URL. This is the path for self-signed servers or
+connecting by IP (where the cert's hostname won't match).
 
-1. **Real cert via tunnel.** Run [cloudflared](https://github.com/cloudflare/cloudflared)
-   or [ngrok](https://ngrok.com) and point the desktop app at the tunnel
-   URL (which has a trusted cert).
-2. **OS trust store.** Generate the dev cert with `mkcert` (auto-trusts
-   on macOS / Windows / Linux when the root CA is installed) and run the
-   backend behind that.
-3. **Plain http on localhost.** `http://localhost:38443` is allowed by
-   the server-picker, and the webview accepts it. Skip TLS for local
-   dev — tunnel-or-cert remains the production requirement.
+> **Caveat:** `tus-js-client` (large-file uploads) uses `XMLHttpRequest`,
+> not `fetch`, so it still goes through the webview's TLS stack. With
+> "insecure" mode against a self-signed server, *uploads* will fail even
+> though browsing / login / downloads work. Use a server URL whose cert is
+> valid (matching hostname) for uploads, or wait for the follow-up that
+> routes tus through `tauri-plugin-http` too.
+
+Other options for development:
+
+1. **Real cert via tunnel** — [cloudflared](https://github.com/cloudflare/cloudflared)
+   / [ngrok](https://ngrok.com); the tunnel URL has a trusted cert and
+   everything (including uploads) works without the insecure checkbox.
+2. **OS trust store** — generate the dev cert with `mkcert` (auto-trusts
+   on macOS / Windows / Linux when the root CA is installed).
+3. **Plain http on localhost** — `http://localhost:38443` is allowed by
+   the server-picker and the webview accepts it.
 
 For production deploys the server should serve TLS via a real certificate
-(Let's Encrypt, Cloudflare, etc.) and the desktop app then "just works".
+(Let's Encrypt, Cloudflare, etc.) and the desktop app just works with no
+checkbox.
 
 ## OS keychain (restart persistence)
 

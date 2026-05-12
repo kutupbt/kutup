@@ -66,7 +66,9 @@
       "errorInsecureHttp": "http:// is only allowed for localhost addresses. Use https:// otherwise.",
       "errorUnreachable": "Could not reach a kutup server at this address.",
       "errorNotKutup": "This address is reachable but it doesn't appear to be a kutup server.",
-      "switchServer": "Switch server"
+      "switchServer": "Switch server",
+      "insecure": "Allow insecure connection",
+      "insecureHint": "Skip TLS certificate verification — for self-signed servers or connecting by IP. Large-file uploads may still need a valid certificate."
     },
     "vaultUnavailable": "Stay-signed-in is unavailable on this machine. Install gnome-keyring or libsecret to enable it.",
     "strength": {

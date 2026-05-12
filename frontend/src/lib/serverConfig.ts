@@ -13,6 +13,23 @@ import { isTauri } from './isTauri'
 
 const STORE_FILE = 'kutup.dat'
 const KEY = 'serverUrl'
+const KEY_INSECURE = 'serverInsecure'
+
+// Synchronous cache for the "skip TLS verification" flag. The Store-plugin
+// read is async, but the global-fetch wrapper in lib/httpClient needs the
+// value synchronously on every request — so we cache it. `primeInsecureCache`
+// is called once at boot (from resolveApiBase, which reads the Store anyway);
+// `resetInsecureCache` is called by the "switch server" flow.
+let _insecureCache = false
+export function serverInsecureSync(): boolean {
+  return _insecureCache
+}
+export function primeInsecureCache(v: boolean): void {
+  _insecureCache = v
+}
+export function resetInsecureCache(): void {
+  _insecureCache = false
+}
 
 // Cache the Store handle. Dynamic import keeps @tauri-apps/plugin-store
 // out of the web bundle's critical path.
@@ -116,11 +133,34 @@ export async function setServerUrl(url: string): Promise<void> {
   await store.save()
 }
 
+// getServerInsecure — whether to skip TLS cert/hostname verification when
+// talking to the configured server. Defaults to false. Web always false.
+export async function getServerInsecure(): Promise<boolean> {
+  if (!isTauri) return false
+  try {
+    const store = await getStore()
+    const v = await store.get<boolean>(KEY_INSECURE)
+    return v === true
+  } catch {
+    return false
+  }
+}
+
+export async function setServerInsecure(v: boolean): Promise<void> {
+  if (!isTauri) return
+  const store = await getStore()
+  await store.set(KEY_INSECURE, v)
+  await store.save()
+  _insecureCache = v
+}
+
 export async function clearServerUrl(): Promise<void> {
   if (!isTauri) return
+  resetInsecureCache()
   try {
     const store = await getStore()
     await store.delete(KEY)
+    await store.delete(KEY_INSECURE)
     await store.save()
   } catch {
     // best-effort
