@@ -1,9 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kutup",
-  "mainBinaryName": "kutup-app",
+  "mainBinaryName": "kutup-desktop",
   "version": "0.1.0",
-  "identifier": "dev.kutup.app",
+  "identifier": "dev.kutup.desktop",
   "build": {
     "beforeDevCommand": "pnpm -C frontend dev",
     "beforeBuildCommand": "pnpm -C frontend build:tauri",

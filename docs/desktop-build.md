@@ -22,11 +22,13 @@ GitHub Actions workflow (`.github/workflows/release-desktop.yml`), which
 builds Linux / macOS / Windows in a matrix and drafts a GitHub Release with
 all the installers.
 
-The bundled executable is named **`kutup-app`** (`mainBinaryName` in
+The bundled executable is named **`kutup-desktop`** (`mainBinaryName` in
 `tauri.conf.json`), not `kutup` — the plain `kutup` name belongs to the CLI
 (`cmd/kutup/`), and a `.deb` shipping `/usr/bin/kutup` would clash with it.
 The Cargo crate is still `kutup`; only the produced binary is renamed. The
-identifier (`dev.kutup.app`) and the app-data dir are unchanged.
+bundle identifier is **`dev.kutup.desktop`** — which is also the OS-keychain
+service name (`src-tauri/src/lib.rs`) and the suffix of the app-data dir
+(`$APPDATA/dev.kutup.desktop/`).
 
 ## Cutting a release
 
@@ -92,7 +94,7 @@ declared in `src-tauri/Cargo.toml` (`libwebkit2gtk-4.1-0`, `libgtk-3-0`).
 On first launch the app shows a server-picker screen (Nextcloud / Mastodon
 style). The user enters a kutup backend URL, the app probes
 `GET ${url}/api/health`, and on success persists the choice via the
-Tauri Store plugin at `$APPDATA/dev.kutup.app/kutup.dat`.
+Tauri Store plugin at `$APPDATA/dev.kutup.desktop/kutup.dat`.
 
 URL normalization:
 

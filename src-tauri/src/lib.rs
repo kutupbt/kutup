@@ -18,7 +18,7 @@ use keyring::{Entry, Error as KeyringError};
 // Service namespace under which all kutup secrets live in the OS keychain.
 // Matches the bundle identifier so secrets don't collide with other apps
 // and are visible under that name in Keychain Access / seahorse / etc.
-const KEYRING_SERVICE: &str = "dev.kutup.app";
+const KEYRING_SERVICE: &str = "dev.kutup.desktop";
 
 // vault_set / vault_get / vault_delete — invoked from the frontend via
 // `@tauri-apps/api/core::invoke()` to persist session secrets (access
