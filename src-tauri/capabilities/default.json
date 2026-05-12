@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default permissions for Kutup's main window. Tighten / split per route once the app surface is mature.",
+  "description": "Cross-platform permissions for Kutup's main webview. Desktop-only filesystem scopes ($HOME / $DOWNLOAD) live in desktop.json so they don't break the mobile build. Tighten / split per route once the app surface is mature.",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -17,10 +17,6 @@
     "dialog:allow-message",
 
     "fs:default",
-    "fs:allow-home-read-recursive",
-    "fs:allow-home-write-recursive",
-    "fs:allow-download-read-recursive",
-    "fs:allow-download-write-recursive",
 
     "http:default",
     "shell:allow-open",

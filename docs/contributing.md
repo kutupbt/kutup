@@ -208,10 +208,10 @@ kutup/
 │       ├── crypto/          # Mirrors the frontend crypto for E2E ops
 │       ├── session/         # BoltDB session store, device key in OS keyring
 │       └── sync/            # Bidirectional folder sync
-├── src-tauri/                # Tauri 2 desktop/mobile shell — see docs/desktop-build.md
+├── src-tauri/                # Tauri 2 shell (desktop + iOS/Android) — see docs/desktop-build.md, docs/mobile-build.md
 │   ├── src/lib.rs           # Plugin setup + OS-keychain vault commands (vault_set/get/delete)
-│   ├── tauri.conf.json      # Bundle id (dev.kutup.desktop), mainBinaryName (kutup-desktop), targets, scopes
-│   └── capabilities/        # Tauri permission capabilities
+│   ├── tauri.conf.json      # Bundle id (dev.kutup.client), mainBinaryName (kutup-client), targets, scopes
+│   └── capabilities/        # Tauri permission capabilities (default.json + desktop.json)
 ├── nginx/nginx.conf          # Production Nginx config
 ├── docs/                     # Documentation
 └── docker-compose.yml

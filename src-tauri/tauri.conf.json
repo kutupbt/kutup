@@ -1,9 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kutup",
-  "mainBinaryName": "kutup-desktop",
+  "mainBinaryName": "kutup-client",
   "version": "0.1.0",
-  "identifier": "dev.kutup.desktop",
+  "identifier": "dev.kutup.client",
   "build": {
     "beforeDevCommand": "pnpm -C frontend dev",
     "beforeBuildCommand": "pnpm -C frontend build:tauri",
@@ -60,6 +60,12 @@
         "type": "embedBootstrapper",
         "silent": true
       }
+    },
+    "iOS": {
+      "minimumSystemVersion": "13.0"
+    },
+    "android": {
+      "minSdkVersion": 24
     }
   }
 }

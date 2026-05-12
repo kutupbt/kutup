@@ -22,13 +22,16 @@ GitHub Actions workflow (`.github/workflows/release-desktop.yml`), which
 builds Linux / macOS / Windows in a matrix and drafts a GitHub Release with
 all the installers.
 
-The bundled executable is named **`kutup-desktop`** (`mainBinaryName` in
+For the **iOS / Android** apps, see [`mobile-build.md`](mobile-build.md).
+
+The bundled executable is named **`kutup-client`** (`mainBinaryName` in
 `tauri.conf.json`), not `kutup` — the plain `kutup` name belongs to the CLI
 (`cmd/kutup/`), and a `.deb` shipping `/usr/bin/kutup` would clash with it.
 The Cargo crate is still `kutup`; only the produced binary is renamed. The
-bundle identifier is **`dev.kutup.desktop`** — which is also the OS-keychain
-service name (`src-tauri/src/lib.rs`) and the suffix of the app-data dir
-(`$APPDATA/dev.kutup.desktop/`).
+bundle identifier is **`dev.kutup.client`** — applies to desktop + iOS +
+Android (one ID for the whole product); it's also the OS-keychain service
+name (`src-tauri/src/lib.rs`) and the suffix of the desktop app-data dir
+(`$APPDATA/dev.kutup.client/`).
 
 ## Cutting a release
 
@@ -75,8 +78,10 @@ peak memory const-evaluating the embedded bundle + the
 `Builder::default()…run()` monomorphizations exceeds ~4 GB at the default
 `opt-level = 3`. opt-level=1 roughly halves that; the shell crate is thin
 glue so the perf cost is irrelevant. Deps stay at opt-level=3. The `[lib]
-crate-type` is `["rlib"]` only — `staticlib`/`cdylib` are needed solely by
-Tauri Mobile's FFI tooling (re-add them for the mobile bring-up slice).
+crate-type` is `["staticlib", "cdylib", "rlib"]` — `rlib` for the desktop
+binary, `staticlib`/`cdylib` for Tauri Mobile's iOS/Android FFI tooling
+(cargo only emits the ones a given build requests, so a desktop build still
+produces just `rlib`).
 
 ## Linux prerequisites
 
@@ -94,7 +99,7 @@ declared in `src-tauri/Cargo.toml` (`libwebkit2gtk-4.1-0`, `libgtk-3-0`).
 On first launch the app shows a server-picker screen (Nextcloud / Mastodon
 style). The user enters a kutup backend URL, the app probes
 `GET ${url}/api/health`, and on success persists the choice via the
-Tauri Store plugin at `$APPDATA/dev.kutup.desktop/kutup.dat`.
+Tauri Store plugin at `$APPDATA/dev.kutup.client/kutup.dat`.
 
 URL normalization:
 

@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop",
+  "description": "Desktop-only ($HOME / $DOWNLOAD) filesystem scopes — used by the native save-dialog + fs-write download sink. Excluded from iOS/Android, where those directories don't exist and the scopes would fail capability resolution.",
+  "platforms": ["linux", "macOS", "windows"],
+  "windows": ["main"],
+  "permissions": [
+    "fs:allow-home-read-recursive",
+    "fs:allow-home-write-recursive",
+    "fs:allow-download-read-recursive",
+    "fs:allow-download-write-recursive"
+  ]
+}
