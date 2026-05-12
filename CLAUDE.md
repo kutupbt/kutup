@@ -20,7 +20,7 @@ End-to-end encrypted, self-hosted "Google Drive" with **real-time collaboration*
 
 ## Repo layout (top level)
 
-`backend/` Go Fiber API · `frontend/` React SPA + the editors · `src-tauri/` Tauri 2 desktop/mobile shell (binary **`kutup-desktop`**; see `docs/desktop-build.md`) · `cmd/kutup/` Go CLI (binary **`kutup`**) · `nginx/` prod config · `docker-compose*.yml` · `docs/`.
+`backend/` Go Fiber API · `frontend/` React SPA + the editors · `src-tauri/` Tauri 2 shell — desktop + iOS/Android (binary **`kutup-client`**; see `docs/desktop-build.md`, `docs/mobile-build.md`) · `cmd/kutup/` Go CLI (binary **`kutup`**) · `nginx/` prod config · `docker-compose*.yml` · `docs/`.
 
 ## Dev workflow (cheat-sheet — full detail in `docs/contributing.md`)
 
@@ -28,6 +28,7 @@ End-to-end encrypted, self-hosted "Google Drive" with **real-time collaboration*
 - **Frontend:** `pnpm -C frontend dev` · `pnpm -C frontend test` (vitest) · `pnpm -C frontend exec tsc --noEmit`. Every new user-facing string **must** be added to `frontend/src/locales/en.json` *and* `tr.json` in the same change — no hard-coded English in JSX.
 - **Backend:** `cd backend && go test ./...`. Migrations live in `backend/db/migrations/` (but see "pre-production" below).
 - **Desktop app:** `pnpm tauri:build` → bundles in `src-tauri/target/release/bundle/`. (`pnpm tauri:dev` for the dev loop.) See `docs/desktop-build.md` first — there are real memory/OnlyOffice constraints.
+- **Mobile app:** `pnpm tauri:ios:init` / `tauri:android:init` (once), then `tauri:ios:dev` / `tauri:android:dev` (simulator/emulator) and `tauri:ios:build` / `tauri:android:build`. iOS needs a Mac (Xcode); Android works on Linux too. `src-tauri/gen/` is gitignored. See `docs/mobile-build.md` — and note mobile session persistence isn't wired yet (the OS-keychain vault is desktop-only → you re-login each launch on iOS/Android).
 - **CLI:** `go run ./cmd/kutup …` (or `go build -o /tmp/kutup ./cmd/kutup`).
 - **Releases are tag-triggered** (CI on `master`): `v*` → CLI via GoReleaser (`.github/workflows/release.yml`); `desktop-v*` → desktop installers (`.deb`/`.rpm`/`.AppImage`/`.dmg`/`.msi`) via `tauri-action`, drafting a GitHub Release (`.github/workflows/release-desktop.yml`). A `-alpha.N` / `-beta.N` / `-rc.N` segment ⇒ the release is flagged "Pre-release". Builds are currently **unsigned**.
 - **e2e / Playwright repros** run against the running dev stack at `https://localhost:38443`. Note: the `kutup-frontend-1` container **bakes `dist/`**, so a bare `pnpm -C frontend build` won't be visible to Playwright until you `docker compose build frontend` (or run the frontend natively against the stack).
@@ -36,8 +37,8 @@ End-to-end encrypted, self-hosted "Google Drive" with **real-time collaboration*
 
 - **Pre-production**: there are no public releases yet (until the first `v*` / `desktop-v*` tag). Breaking changes are fine — rename freely, change DB schema directly, no need to write migrations for every change yet.
 - **Office docs** (`.docx`/`.xlsx`/`.pptx`) collab uses the **CryptPad pattern** — OnlyOffice runs entirely in the browser; document state is never decrypted server-side. No WOPI, no Collabora. (`docs/onlyoffice.md`.)
-- **Desktop build memory constraint**: `tauri::generate_context!()` embeds *all* of `frontendDist` as a static byte array; the ~2.6 GB OnlyOffice SDK is stripped by `pnpm -C frontend build:tauri` before that embed (otherwise `rustc` OOMs). Consequence: the **desktop app can't open Office docs in v1**. The shell crate builds at `opt-level = 1`; `[lib] crate-type = ["rlib"]` only (the `cdylib`/`staticlib` types are needed only by Tauri Mobile's FFI tooling — re-add for the mobile slice). Follow-up: load the SDK from `${serverUrl}/onlyoffice/…` so the desktop app streams it from the user's server.
-- **Desktop identifiers**: bundle id `dev.kutup.desktop`, main binary `kutup-desktop`, `productName` `Kutup`, app-data dir `$APPDATA/dev.kutup.desktop/`, OS-keychain service `dev.kutup.desktop` (= `KEYRING_SERVICE` in `src-tauri/src/lib.rs`). The CLI's keychain service is the separate `kutup-cli`.
+- **Desktop build memory constraint**: `tauri::generate_context!()` embeds *all* of `frontendDist` as a static byte array; the ~2.6 GB OnlyOffice SDK is stripped by `pnpm -C frontend build:tauri` before that embed (otherwise `rustc` OOMs). Consequence: the app **can't open Office docs in v1** (desktop or mobile). The shell crate builds at `opt-level = 1`; `[lib] crate-type = ["staticlib", "cdylib", "rlib"]` (rlib = desktop binary, staticlib/cdylib = iOS/Android FFI). Follow-up: load the SDK from `${serverUrl}/onlyoffice/…` so the app streams it from the user's server.
+- **Bundle identity**: `identifier` `dev.kutup.client` (product-wide — desktop + iOS + Android), `mainBinaryName` `kutup-client`, `productName` `Kutup`, desktop app-data dir `$APPDATA/dev.kutup.client/`, OS-keychain service `dev.kutup.client` (= `KEYRING_SERVICE` in `src-tauri/src/lib.rs`; desktop only — no mobile keychain yet). The CLI's keychain service is the separate `kutup-cli`.
 - **The crypto must stay mirrored**: `frontend/src/crypto/` and `cmd/kutup/internal/crypto/` implement the same primitives (KDF, secretstream framing, mnemonic, asymmetric) — keep them in sync when you change one.
 - **CORS**: the backend uses an env-driven `ALLOWED_ORIGINS` allowlist (not `*`) because `withCredentials` (refresh-cookie) is incompatible with the wildcard; the Tauri origins (`tauri://localhost`, `http://tauri.localhost`) are in the default list.
 

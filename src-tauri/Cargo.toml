@@ -6,17 +6,19 @@ edition = "2021"
 license = "AGPL-3.0-only"
 rust-version = "1.77"
 
-# Library target. Desktop builds only need `rlib` (the desktop binary in
-# src/main.rs links it via `kutup_lib::run()`). The `staticlib` + `cdylib`
-# crate-types are *only* consumed by Tauri Mobile's iOS / Android FFI
-# tooling — and producing them means a full static/dynamic link of the
-# entire tauri dependency tree, which OOMs the linker on ~4 GB build
-# machines. Re-add them when we start the mobile bring-up slice (likely on
-# CI or a beefier box by then):
-#   crate-type = ["staticlib", "cdylib", "rlib"]
+# Library target.
+#  - rlib      → linked by the desktop binary (src/main.rs: `kutup_lib::run()`)
+#  - staticlib → consumed by Tauri Mobile's iOS FFI tooling
+#  - cdylib    → consumed by Tauri Mobile's Android FFI tooling
+# Cargo only emits the crate-types a given build requests, so a desktop
+# `cargo build` still produces just `rlib`; `tauri ios build` asks for the
+# staticlib, `tauri android build` for the cdylib. (The earlier OOM was
+# `generate_context!()` embedding the ~2.6 GB OnlyOffice SDK — fixed by
+# build:tauri stripping dist/onlyoffice/ before the embed; the crate-type
+# list isn't the cause, so keeping all three is safe.)
 [lib]
 name = "kutup_lib"
-crate-type = ["rlib"]
+crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
