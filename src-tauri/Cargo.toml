@@ -38,17 +38,33 @@ tauri-plugin-process = "2"           # restart / exit, used by the updater flow
 
 # Desktop-only: auto-updater + OS keychain (`keyring` crate).
 #
-# `keyring` wraps each platform's native credential store:
-#   • Linux   → libsecret (Secret Service: gnome-keyring / KWallet)
-#   • macOS   → macOS Keychain (Security framework)
-#   • Windows → Windows Credential Manager
+# keyring v3 ships NO default backend — each platform's credential store
+# is an opt-in feature, and the dep for each is only compiled on its
+# target. We enable:
+#   • apple-native        → macOS Keychain (Security framework)
+#   • windows-native      → Windows Credential Manager
+#   • sync-secret-service → Linux: the freedesktop D-Bus Secret Service API
+#                           (served by gnome-keyring / KWallet / keepassxc /
+#                           any provider) — not a KWallet- or
+#                           gnome-keyring-specific API
+#   • crypto-rust         → pure-Rust crypto for the secret-service
+#                           transport (no OpenSSL build dependency)
+# If no Secret Service provider is running, Entry ops return
+# NoStorageAccess → the JS side surfaces a "stay-signed-in unavailable"
+# toast and falls back to re-login per launch (graceful degradation).
 #
 # Mobile (iOS Keychain Services, Android Keystore) is a follow-up slice
 # with different APIs, so we gate the dep to desktop and stub the
-# JS-exposed commands on mobile.
+# JS-exposed commands on mobile. (Stay on keyring v3 — v4 needs Rust 1.88;
+# our MSRV is 1.77.)
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
-keyring = "3"
+keyring = { version = "3", default-features = false, features = [
+  "apple-native",
+  "windows-native",
+  "sync-secret-service",
+  "crypto-rust",
+] }
 
 # Serde for any custom command payloads we add later.
 serde = { version = "1", features = ["derive"] }
