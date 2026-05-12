@@ -4,8 +4,12 @@ name: Release Desktop
 # installers (.deb, .rpm, .AppImage, .dmg, .app.tar.gz, .msi, NSIS .exe) to a
 # *draft* GitHub Release so they can be reviewed before publishing.
 #
-# Trigger: push a tag like `desktop-v0.1.0`  ->  builds + drafts the release.
-#          Kept separate from the `v*` tags (which build the CLI via
+# Trigger: push a tag like `desktop-v0.1.0` (stable) or `desktop-v0.1.0-alpha.1`
+#          / `-beta.N` / `-rc.N` (prerelease — the GitHub release is flagged
+#          "Pre-release" and the suffix is baked into the installer version).
+#          The tag is the source of truth for the version: a step below writes
+#          `<tag minus the desktop-v prefix>` into tauri.conf.json before the
+#          build. Kept separate from the `v*` tags (which build the CLI via
 #          GoReleaser in release.yml) so the two don't fight over one release.
 # Also runnable manually from the Actions tab — with an empty `tag` input it
 # just builds the bundles and uploads them as workflow artifacts (no release).
@@ -26,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to publish to (e.g. desktop-v0.1.0). Leave empty to only build + upload artifacts."
+        description: "Release tag to publish to (e.g. desktop-v0.1.0, or desktop-v0.1.0-alpha.1 for a prerelease). Leave empty to only build + upload artifacts."
         required: false
         default: ""
 
@@ -64,6 +68,31 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # Tag desktop-v0.1.0          -> APP_VERSION=0.1.0,         IS_PRERELEASE=false
+      # Tag desktop-v0.1.0-alpha.1  -> APP_VERSION=0.1.0-alpha.1, IS_PRERELEASE=true
+      # (skipped on a manual run with an empty `tag` input — then we just build)
+      - name: Resolve version & prerelease flag from the tag
+        if: env.RELEASE_TAG != ''
+        shell: bash
+        run: |
+          v="${RELEASE_TAG#desktop-v}"
+          echo "APP_VERSION=$v" >> "$GITHUB_ENV"
+          case "$v" in
+            *-*) echo "IS_PRERELEASE=true"  >> "$GITHUB_ENV" ;;
+            *)   echo "IS_PRERELEASE=false" >> "$GITHUB_ENV" ;;
+          esac
+
+      # tauri-action has no version-override input, so make the tag the single
+      # source of truth: write its version into tauri.conf.json before building.
+      - name: Pin tauri.conf.json version to the tag
+        if: env.APP_VERSION != ''
+        shell: bash
+        run: |
+          tmp="$(mktemp)"
+          jq --arg v "$APP_VERSION" '.version = $v' src-tauri/tauri.conf.json > "$tmp"
+          mv "$tmp" src-tauri/tauri.conf.json
+          echo "src-tauri/tauri.conf.json version -> $APP_VERSION"
 
       - name: Install Linux build dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -133,7 +162,7 @@ jobs:
 
             Builds are not code-signed yet: macOS may need right-click -> Open, Windows may show a SmartScreen warning.
           releaseDraft: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
           args: ${{ matrix.tauri-args }}
 
       - name: Upload bundles as workflow artifacts

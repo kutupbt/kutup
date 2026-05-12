@@ -28,6 +28,25 @@ The bundled executable is named **`kutup-app`** (`mainBinaryName` in
 The Cargo crate is still `kutup`; only the produced binary is renamed. The
 identifier (`dev.kutup.app`) and the app-data dir are unchanged.
 
+## Cutting a release
+
+Releases are tag-triggered; the **tag is the source of truth for the
+version** (the desktop workflow writes it into `tauri.conf.json` before the
+build).
+
+| What | CLI (`v*` → GoReleaser) | Desktop (`desktop-v*` → tauri-action) |
+| --- | --- | --- |
+| Stable | `git tag v0.1.0 && git push origin v0.1.0` | `git tag desktop-v0.1.0 && git push origin desktop-v0.1.0` |
+| Prerelease | `git tag v0.1.0-alpha.1 …` | `git tag desktop-v0.1.0-alpha.1 …` |
+
+A `-alpha.N` / `-beta.N` / `-rc.N` segment makes GitHub flag the release
+**"Pre-release"** (so it's excluded from "Latest release") and, for the
+desktop app, gets baked into the installer version
+(`Kutup_0.1.0-alpha.1_amd64.deb`, …). Both workflows create a **draft**
+release — review it on GitHub, then publish. (This is just the GitHub
+prerelease *flag*; a real alpha auto-update *channel* would need
+`tauri-plugin-updater` configured first — not done yet.)
+
 ## OnlyOffice is excluded from the desktop bundle
 
 `tauri.conf.json`'s `beforeBuildCommand` runs `pnpm -C frontend

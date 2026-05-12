@@ -42,3 +42,8 @@ release:
     owner: kutupbulut
     name: kutup
   name_template: "{{ .ProjectName }} v{{ .Version }}"
+  # auto = flag the GitHub release as a prerelease when the tag's version has a
+  # semver prerelease segment (v1.2.3-alpha.1 / -beta.N / -rc.N). Already the
+  # default; explicit here so the behaviour is obvious. A prerelease can never
+  # be GitHub's "latest", so no `make_latest` override is needed.
+  prerelease: auto
