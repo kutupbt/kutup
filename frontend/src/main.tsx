@@ -22,8 +22,13 @@ const queryClient = new QueryClient({
   },
 })
 
-import { getTheme, applyTheme } from './lib/theme'
-applyTheme(getTheme())
+import { getThemePreference, applyTheme, initSystemThemeWatcher } from './lib/theme'
+// Apply the *preference* (not the resolved theme) so a 'system' choice is
+// preserved/persisted as 'system' and keeps tracking the OS. The flash-free
+// first paint already happened via the inline <script> in index.html; this
+// re-applies (idempotent) and wires up the live-OS-change watcher.
+applyTheme(getThemePreference())
+initSystemThemeWatcher()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

@@ -19,3 +19,21 @@ if (typeof URL.createObjectURL !== 'function') {
   // @ts-expect-error
   URL.revokeObjectURL = () => undefined
 }
+
+// jsdom doesn't ship window.matchMedia. Provide a stub (matches: false →
+// the "no OS preference → light" path) so code that calls it doesn't crash;
+// tests that care can vi.spyOn(window, 'matchMedia').
+if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
+  // @ts-expect-error — augmenting a global for the test environment.
+  window.matchMedia = (query: string): MediaQueryList =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }) as unknown as MediaQueryList
+}
