@@ -3,17 +3,7 @@ import { store } from '../store'
 import { updateAccessToken, logout } from '../store/authSlice'
 import { broadcastLogout } from '../lib/sessionSync'
 import { resolveApiBase } from '../lib/apiBase'
-import { isTauri } from '../lib/isTauri'
 import * as sessionVault from '../lib/sessionVault'
-
-// In the Tauri shell, use axios's fetch adapter so requests go through
-// `globalThis.fetch` — which lib/httpClient's installTauriFetch() has swapped
-// for tauri-plugin-http. That bypasses the webview CORS layer and lets the
-// per-server "skip TLS verification" flag take effect. On the web, the
-// default xhr adapter is used and behaviour is unchanged.
-if (isTauri) {
-  axios.defaults.adapter = 'fetch'
-}
 
 // baseURL is resolved per-request via the interceptor below so the Tauri
 // shell can talk to a user-selected backend (`tauri://localhost` cannot

@@ -1,11 +1,6 @@
 import './polyfills'
 import './i18n'
 import './index.css'
-import { installTauriFetch } from './lib/httpClient'
-// In the Tauri shell, route globalThis.fetch through tauri-plugin-http
-// before anything issues a request — gives us CORS-free transport and the
-// per-server "skip TLS verification" option. No-op on the web.
-installTauriFetch()
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'

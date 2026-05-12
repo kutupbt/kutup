@@ -66,9 +66,7 @@
       "errorInsecureHttp": "http:// yalnızca localhost adresleri için izinlidir. Aksi halde https:// kullanın.",
       "errorUnreachable": "Bu adreste bir kutup sunucusuna ulaşılamadı.",
       "errorNotKutup": "Bu adrese ulaşıldı ancak bir kutup sunucusu gibi görünmüyor.",
-      "switchServer": "Sunucu değiştir",
-      "insecure": "Güvensiz bağlantıya izin ver",
-      "insecureHint": "TLS sertifika doğrulamasını atla — kendinden imzalı sunucular veya IP ile bağlanmak için. Büyük dosya yüklemeleri yine de geçerli bir sertifika gerektirebilir."
+      "switchServer": "Sunucu değiştir"
     },
     "vaultUnavailable": "Bu makinede oturum açık kalma kullanılamıyor. Etkinleştirmek için gnome-keyring veya libsecret kurun.",
     "strength": {

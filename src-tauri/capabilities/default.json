@@ -22,13 +22,7 @@
     "fs:allow-download-read-recursive",
     "fs:allow-download-write-recursive",
 
-    {
-      "identifier": "http:default",
-      "allow": [
-        { "url": "http://**" },
-        { "url": "https://**" }
-      ]
-    },
+    "http:default",
     "shell:allow-open",
     "os:default",
     "notification:default",

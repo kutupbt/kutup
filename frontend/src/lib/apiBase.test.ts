@@ -9,16 +9,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 // prior test doesn't bleed in.
 
 const getServerUrlMock = vi.fn<() => Promise<string | null>>()
-const getServerInsecureMock = vi.fn<() => Promise<boolean>>(async () => false)
 
 vi.mock('./serverConfig', () => ({
   getServerUrl: () => getServerUrlMock(),
-  getServerInsecure: () => getServerInsecureMock(),
   setServerUrl: vi.fn(),
-  setServerInsecure: vi.fn(),
   clearServerUrl: vi.fn(),
-  primeInsecureCache: vi.fn(),
-  resetInsecureCache: vi.fn(),
 }))
 
 const isTauriMock = vi.hoisted(() => ({ value: false }))
