@@ -17,7 +17,16 @@ Artifacts land in `src-tauri/target/release/bundle/`:
 | Windows  | `.msi`, `.exe` (NSIS)         |
 
 The build cross-compiles only to the host OS — to ship all platforms, run
-the build on each (or wire CI matrices later).
+the build on each, or push a `desktop-v*` tag to run the `Release Desktop`
+GitHub Actions workflow (`.github/workflows/release-desktop.yml`), which
+builds Linux / macOS / Windows in a matrix and drafts a GitHub Release with
+all the installers.
+
+The bundled executable is named **`kutup-app`** (`mainBinaryName` in
+`tauri.conf.json`), not `kutup` — the plain `kutup` name belongs to the CLI
+(`cmd/kutup/`), and a `.deb` shipping `/usr/bin/kutup` would clash with it.
+The Cargo crate is still `kutup`; only the produced binary is renamed. The
+identifier (`dev.kutup.app`) and the app-data dir are unchanged.
 
 ## OnlyOffice is excluded from the desktop bundle
 

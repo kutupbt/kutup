@@ -1,3 +1,7 @@
+# GoReleaser config for the `kutup` CLI (this directory: cmd/kutup/).
+# Triggered by `v*` tags via .github/workflows/release.yml, which runs
+# `goreleaser release` with workdir = cmd/kutup. Separate from the desktop
+# app's `desktop-v*` releases (release-desktop.yml).
 version: 2
 
 project_name: kutup
@@ -22,14 +26,13 @@ builds:
       - -s -w -X main.version={{.Version}}
 
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
-        format: zip
-    files:
-      - LICENSE
-      - README.md
+        formats:
+          - zip
 
 checksum:
   name_template: "checksums.txt"
