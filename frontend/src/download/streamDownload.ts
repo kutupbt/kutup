@@ -1,23 +1,18 @@
 // streamDownload — chunked decrypt-and-save for non-federated downloads.
 //
-// Replaces `api.get(url, { responseType: 'arraybuffer' })` + one-shot
-// `decryptStream()` which buffered the full encrypted blob AND the
-// full plaintext (~3× file size in peak RAM). New path:
+// Streaming path (RAM stays bounded ~constant regardless of file size on
+// the FSA / Tauri sinks; the Blob fallback still buffers one full plaintext):
 //
-//   fetch(url) → ReadableStream<Uint8Array>
-//     → re-chunk into 24-byte header + (5 MB + 17 B) ciphertext frames
-//       → streamDecryptor.pull() → plaintext
-//         → showSaveFilePicker WritableStream (Chrome / Edge / Brave)
-//         OR Blob accumulator + <a download> (Firefox / Safari)
+//   fetchDecryptedChunks(url) → { plain, isFinal } per 5 MB chunk
+//     → showSaveFilePicker WritableStream (Chrome / Edge / Brave)
+//     OR @tauri-apps/plugin-fs FileHandle (the desktop app)
+//     OR Blob accumulator + <a download> (Firefox / Safari)
 //
-// Wire format and crypto are identical to the existing in-memory path
-// — only the buffering strategy changes. RAM stays bounded at ~10 MB
-// on the FSA path; the Blob fallback degrades back to the old peak
-// (one full plaintext) but is still better than the 3× plaintext+
-// ciphertext the previous handler held.
+// The fetch + re-framing + secretstream decryption all live in
+// fetchDecrypt.ts, shared with the folder-as-ZIP path (lib/zipDownload.ts).
 
-import { newStreamDecryptor } from '@/crypto/streamDecryptor'
-import { CIPHER_CHUNK, HEADER_BYTES } from '@/crypto/streamEncryptor'
+import { fetchDecryptedChunks } from './fetchDecrypt'
+import { isTauri } from '@/lib/isTauri'
 
 export interface StreamDownloadOptions {
   /** Full URL — already includes `/api/files/<id>/download` or the
@@ -61,88 +56,24 @@ function canUseFSA(): boolean {
  *   - opts.signal aborted
  */
 export async function streamDownload(opts: StreamDownloadOptions): Promise<void> {
-  const resp = await fetch(opts.url, {
-    headers: { Authorization: `Bearer ${opts.accessToken}` },
-    signal: opts.signal,
-  })
-  if (!resp.ok) {
-    throw new Error(`download HTTP ${resp.status}: ${await resp.text().catch(() => '')}`)
-  }
-  if (!resp.body) {
-    throw new Error('download response has no body')
-  }
-
-  // Resolve the destination sink BEFORE we start reading bytes. If
-  // the user cancels showSaveFilePicker we want to fail fast without
-  // having consumed the response stream.
+  // Resolve the destination sink BEFORE we start reading bytes — if the
+  // user cancels the save picker we want to fail fast without having
+  // touched the response stream. (fetchDecryptedChunks's fetch() is lazy
+  // — it fires on the first `for await` step, after this.)
   const sink = await openSink(opts)
 
-  const reader = resp.body.getReader()
-  // `Uint8Array<ArrayBufferLike>` so we can hold both `ArrayBuffer`-
-  // backed slices from libsodium AND whatever the reader yields
-  // (which may be SharedArrayBuffer-backed under TS strict types).
-  let buf: Uint8Array<ArrayBufferLike> = new Uint8Array(0)
-  let decryptor: Awaited<ReturnType<typeof newStreamDecryptor>> | null = null
   let plainWritten = 0
-  let sawFinal = false
-
   try {
-    for (;;) {
-      const { value, done } = await reader.read()
-      if (value) {
-        buf = appendBytes(buf, value)
-      }
-
-      // Drain as many full secretstream frames as our buffer allows.
-      // Frame layout: first 24 bytes = header, then ciphertext chunks
-      // of length `CIPHER_CHUNK` (last chunk may be shorter — handled
-      // at EOF below).
-      while (true) {
-        if (!decryptor) {
-          if (buf.length < HEADER_BYTES) break
-          const header = buf.subarray(0, HEADER_BYTES)
-          decryptor = await newStreamDecryptor(opts.fileKey, header)
-          buf = buf.subarray(HEADER_BYTES)
-        }
-        // Only consume a full CIPHER_CHUNK while more bytes might
-        // still arrive. The last chunk (which can be smaller) is
-        // pulled out-of-loop once `done` is true.
-        if (buf.length < CIPHER_CHUNK) break
-        const chunk = buf.subarray(0, CIPHER_CHUNK)
-        const { plain, isFinal } = decryptor.pull(chunk)
-        await sink.write(plain)
-        plainWritten += plain.length
-        opts.onProgress?.(plainWritten, opts.expectedPlainSize ?? plainWritten)
-        buf = buf.subarray(CIPHER_CHUNK)
-        if (isFinal) {
-          sawFinal = true
-          break
-        }
-      }
-      if (sawFinal) break
-
-      if (done) {
-        // Final (possibly partial) chunk lives in `buf` once the
-        // server stops sending.
-        if (!decryptor) {
-          throw new Error('download ended before secretstream header was received')
-        }
-        if (buf.length > 0) {
-          const { plain, isFinal } = decryptor.pull(buf)
-          await sink.write(plain)
-          plainWritten += plain.length
-          opts.onProgress?.(plainWritten, opts.expectedPlainSize ?? plainWritten)
-          buf = new Uint8Array(0)
-          if (!isFinal) {
-            // The encryptor tags the LAST message with TAG_FINAL. If
-            // we got `done` without seeing it, the stream was cut.
-            throw new Error('download ended before secretstream FINAL tag')
-          }
-        }
-        break
-      }
+    for await (const { plain } of fetchDecryptedChunks(
+      opts.url,
+      opts.fileKey,
+      opts.accessToken,
+      opts.signal,
+    )) {
+      await sink.write(plain)
+      plainWritten += plain.length
+      opts.onProgress?.(plainWritten, opts.expectedPlainSize ?? plainWritten)
     }
-
     await sink.finalize()
   } catch (err) {
     await sink.abort().catch(() => {})
@@ -161,6 +92,21 @@ interface Sink {
 }
 
 async function openSink(opts: StreamDownloadOptions): Promise<Sink> {
+  // Tauri desktop / mobile: WebKitGTK / WKWebView don't have
+  // showSaveFilePicker, and a Blob + `<a download>` doesn't reliably
+  // surface a save dialog inside the Tauri webview. Use the native
+  // save dialog + filesystem plugins instead, streaming chunks to disk.
+  if (isTauri) {
+    try {
+      return await openTauriSink(opts)
+    } catch (err) {
+      // User cancelled the save dialog → AbortError, surface it.
+      if (err instanceof DOMException && err.name === 'AbortError') throw err
+      // Plugin missing / scope denied / etc → fall through to the Blob
+      // path (better than nothing, even if the webview ignores it).
+      console.warn('Tauri sink failed, falling back to Blob:', err)
+    }
+  }
   if (canUseFSA()) {
     try {
       return await openFSASink(opts)
@@ -177,6 +123,39 @@ async function openSink(opts: StreamDownloadOptions): Promise<Sink> {
     }
   }
   return openBlobSink(opts)
+}
+
+// Tauri-native sink: native save dialog → streaming write to the chosen
+// path via @tauri-apps/plugin-fs. Dynamic imports keep the Tauri plugins
+// out of the web bundle.
+async function openTauriSink(opts: StreamDownloadOptions): Promise<Sink> {
+  const [{ save }, fs] = await Promise.all([
+    import('@tauri-apps/plugin-dialog'),
+    import('@tauri-apps/plugin-fs'),
+  ])
+  const path = await save({
+    defaultPath: opts.filename,
+    title: 'Save file',
+  })
+  if (!path) {
+    // Treat a cancelled save dialog like the FSA picker cancel.
+    throw new DOMException('save cancelled', 'AbortError')
+  }
+  const file = await fs.open(path, { write: true, create: true, truncate: true })
+  return {
+    async write(plain) {
+      // plugin-fs FileHandle.write wants a Uint8Array; .slice() forces
+      // a plain ArrayBuffer-backed view (libsodium hands back
+      // ArrayBufferLike-typed views under TS strict).
+      await file.write(plain.slice())
+    },
+    async finalize() {
+      await file.close()
+    },
+    async abort() {
+      await file.close().catch(() => {})
+    },
+  }
 }
 
 interface FSAGlobals {
@@ -255,17 +234,6 @@ function openBlobSink(opts: StreamDownloadOptions): Sink {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-
-function appendBytes(
-  a: Uint8Array<ArrayBufferLike>,
-  b: Uint8Array<ArrayBufferLike>,
-): Uint8Array<ArrayBufferLike> {
-  if (a.length === 0) return b
-  const out = new Uint8Array(a.length + b.length)
-  out.set(a, 0)
-  out.set(b, a.length)
-  return out
-}
 
 function extOf(filename: string): string {
   const i = filename.lastIndexOf('.')

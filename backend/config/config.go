@@ -5,30 +5,32 @@ import (
 )
 
 type Config struct {
-	DatabaseURL   string
-	JWTSecret     string
-	S3Endpoint    string
-	S3AccessKey   string
-	S3SecretKey   string
-	S3Bucket      string
-	S3Region      string
-	AppEnv        string
-	AdminAccounts string
-	ServerURL     string // e.g. https://kutup.example.com — used for federation invite links
+	DatabaseURL    string
+	JWTSecret      string
+	S3Endpoint     string
+	S3AccessKey    string
+	S3SecretKey    string
+	S3Bucket       string
+	S3Region       string
+	AppEnv         string
+	AdminAccounts  string
+	ServerURL      string // e.g. https://kutup.example.com — used for federation invite links
+	AllowedOrigins string // comma-separated CORS allowlist; "*" allowed in dev only
 }
 
 func Load() *Config {
 	cfg := &Config{
-		DatabaseURL:   mustEnv("DATABASE_URL"),
-		JWTSecret:     mustEnv("JWT_SECRET"),
-		S3Endpoint:    mustEnv("S3_ENDPOINT"),
-		S3AccessKey:   mustEnv("S3_ACCESS_KEY"),
-		S3SecretKey:   mustEnv("S3_SECRET_KEY"),
-		S3Bucket:      getEnv("S3_BUCKET", "kutup-files"),
-		S3Region:      getEnv("S3_REGION", "us-east-1"),
-		AppEnv:        getEnv("APP_ENV", "development"),
-		AdminAccounts: getEnv("ADMIN_ACCOUNTS", ""),
-		ServerURL:     getEnv("SERVER_URL", "http://kutup.local"),
+		DatabaseURL:    mustEnv("DATABASE_URL"),
+		JWTSecret:      mustEnv("JWT_SECRET"),
+		S3Endpoint:     mustEnv("S3_ENDPOINT"),
+		S3AccessKey:    mustEnv("S3_ACCESS_KEY"),
+		S3SecretKey:    mustEnv("S3_SECRET_KEY"),
+		S3Bucket:       getEnv("S3_BUCKET", "kutup-files"),
+		S3Region:       getEnv("S3_REGION", "us-east-1"),
+		AppEnv:         getEnv("APP_ENV", "development"),
+		AdminAccounts:  getEnv("ADMIN_ACCOUNTS", ""),
+		ServerURL:      getEnv("SERVER_URL", "http://kutup.local"),
+		AllowedOrigins: getEnv("ALLOWED_ORIGINS", "https://localhost:38443,tauri://localhost,http://tauri.localhost"),
 	}
 	if len(cfg.JWTSecret) < 32 {
 		panic("JWT_SECRET must be at least 32 characters long")

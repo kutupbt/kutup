@@ -54,6 +54,21 @@
       "enterCode": "Kimlik doğrulama uygulamanızdaki 6 haneli kodu girin.",
       "verify": "Doğrula"
     },
+    "serverSelect": {
+      "title": "kutup sunucunuza bağlanın",
+      "subtitle": "Devam etmek için kutup sunucunuzun adresini girin.",
+      "url": "Sunucu adresi",
+      "urlPlaceholder": "https://kutup.ornek.com",
+      "continue": "Devam et",
+      "checking": "Sunucu kontrol ediliyor…",
+      "errorEmpty": "Lütfen bir sunucu adresi girin.",
+      "errorInvalid": "Bu geçerli bir URL gibi görünmüyor.",
+      "errorInsecureHttp": "http:// yalnızca localhost adresleri için izinlidir. Aksi halde https:// kullanın.",
+      "errorUnreachable": "Bu adreste bir kutup sunucusuna ulaşılamadı.",
+      "errorNotKutup": "Bu adrese ulaşıldı ancak bir kutup sunucusu gibi görünmüyor.",
+      "switchServer": "Sunucu değiştir"
+    },
+    "vaultUnavailable": "Bu makinede oturum açık kalma kullanılamıyor. Etkinleştirmek için gnome-keyring veya libsecret kurun.",
     "strength": {
       "veryWeak": "Çok zayıf",
       "weak": "Zayıf",
@@ -166,7 +181,8 @@
       "zipDone": "İndirme tamamlandı",
       "zipFailed": "İndirme başarısız",
       "zipSelectDir": "Parçaları kaydetmek için bir klasör seçin",
-      "zipNoFsa": "Büyük indirmeler Chrome veya Edge gerektirir"
+      "zipNoFsa": "Bu klasör bu tarayıcıda ZIP olarak indirilemeyecek kadar büyük. Chrome veya Edge'i, masaüstü uygulamasını ya da CLI'yi kullanın.",
+      "zipNoFiles": "Bu klasörde indirilecek dosya yok."
     },
     "deleteFile": {
       "title": "“{{name}}” silinsin mi?",

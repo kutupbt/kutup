@@ -21,6 +21,11 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// buildVersion is the server build identifier returned by /api/health.
+// Injected at link time via `-ldflags "-X main.buildVersion=<git-sha>"` in
+// release builds; defaults to "dev" otherwise.
+var buildVersion = "dev"
+
 // @title          Kutup API
 // @version        1.0.0
 // @description    Self-hosted, end-to-end encrypted file storage with federation. All file content and metadata are encrypted client-side; the server stores only ciphertext.
@@ -112,14 +117,29 @@ func main() {
 	app.Get("/swagger/*", fiberSwagger.WrapHandler)
 
 	app.Use(recover.New())
+	// Cross-origin requests are now real: the Tauri desktop / mobile shells
+	// run from `tauri://localhost` (or `http://tauri.localhost` on Windows)
+	// and call the backend on a separate origin. The refresh-token cookie
+	// path requires AllowCredentials=true, which per the CORS spec is
+	// incompatible with a wildcard origin — hence the env-driven allowlist.
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "*",
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
-		AllowMethods:     "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-		AllowCredentials: false,
+		AllowOrigins: cfg.AllowedOrigins,
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization, " +
+			"Tus-Resumable, Upload-Length, Upload-Offset, Upload-Metadata, " +
+			"Upload-Defer-Length, Upload-Concat",
+		ExposeHeaders:    "Tus-Resumable, Upload-Offset, Upload-Length, Location",
+		AllowMethods:     "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD",
+		AllowCredentials: true,
 	}))
 
 	api := app.Group("/api")
+
+	// Liveness / identity probe — anonymous, idempotent, no DB hit. Used by
+	// the desktop / mobile apps to validate a user-supplied server URL
+	// before they offer the login form, and to surface CORS / cert issues
+	// at server-pick time rather than mid-login.
+	healthH := &handlers.HealthHandler{Version: buildVersion}
+	api.Get("/health", healthH.Get)
 
 	// Auth routes
 	auth := api.Group("/auth")

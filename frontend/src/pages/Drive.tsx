@@ -13,6 +13,7 @@ import {
 import { useAppSelector, useAppDispatch } from '@/store'
 import { selectMasterKey, selectPrivateKey, updateStorageUsed, updateStorageQuota, setColor } from '@/store/authSlice'
 import api from '@/api/client'
+import { resolveApiBase } from '@/lib/apiBase'
 import { streamUpload } from '@/upload/streamUpload'
 import { streamDownload } from '@/download/streamDownload'
 import {
@@ -347,6 +348,8 @@ export default function Drive() {
 
   async function handleFolderDownload(col: Collection) {
     if (!col.collectionKey) return
+    const accessToken = auth.accessToken
+    if (!accessToken) { toast.error(t('drive.toast.zipFailed')); return }
     const ac = new AbortController()
     downloadAbortRef.current = ac
     const tid = toast.loading(t('drive.toast.zipPreparing'))
@@ -368,15 +371,20 @@ export default function Drive() {
         )
       ).filter(Boolean)
 
-      if (zipFiles.length === 0) { toast.dismiss(tid); return }
+      if (zipFiles.length === 0) {
+        toast.error(t('drive.toast.zipNoFiles'), { id: tid })
+        return
+      }
 
-      await downloadAsZip(zipFiles as any, col.decryptedName ?? 'folder', (done, total) => {
+      await downloadAsZip(zipFiles as any, col.decryptedName ?? 'folder', accessToken, (done, total) => {
         toast.loading(t('drive.toast.zipProgress', { done, total }), { id: tid })
       }, ac.signal)
       toast.success(t('drive.toast.zipDone'), { id: tid })
     } catch (err: any) {
+      // Cancelling the save dialog surfaces as AbortError — silent.
       if (err?.name === 'AbortError') { toast.dismiss(tid); return }
       if (err instanceof FsaRequiredError) { toast.error(t('drive.toast.zipNoFsa'), { id: tid }); return }
+      console.error('ZIP download failed:', err)
       toast.error(t('drive.toast.zipFailed'), { id: tid })
     } finally {
       downloadAbortRef.current = null
@@ -534,8 +542,12 @@ export default function Drive() {
       return
     }
     try {
+      // Use the resolved API base (so the Tauri shell hits the
+      // user-selected backend, not `tauri://localhost/api/...`). On the
+      // web this is just `/api`, unchanged.
+      const base = await resolveApiBase()
       await streamDownload({
-        url: `/api/files/${file.id}/download`,
+        url: `${base}/files/${file.id}/download`,
         fileKey: file._fileKey,
         filename: file.decryptedName ?? 'file',
         mimeType: file.decryptedMimeType ?? 'application/octet-stream',

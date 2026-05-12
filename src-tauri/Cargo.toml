@@ -6,11 +6,17 @@ edition = "2021"
 license = "AGPL-3.0-only"
 rust-version = "1.77"
 
-# Library target so Tauri Mobile can link us as cdylib/staticlib on iOS+Android,
-# and the desktop binary can re-use the same entry point via lib.rs::run().
+# Library target. Desktop builds only need `rlib` (the desktop binary in
+# src/main.rs links it via `kutup_lib::run()`). The `staticlib` + `cdylib`
+# crate-types are *only* consumed by Tauri Mobile's iOS / Android FFI
+# tooling — and producing them means a full static/dynamic link of the
+# entire tauri dependency tree, which OOMs the linker on ~4 GB build
+# machines. Re-add them when we start the mobile bring-up slice (likely on
+# CI or a beefier box by then):
+#   crate-type = ["staticlib", "cdylib", "rlib"]
 [lib]
 name = "kutup_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -30,9 +36,35 @@ tauri-plugin-notification = "2"      # system notifications
 tauri-plugin-store = "2"             # encrypted-at-rest preferences store for settings
 tauri-plugin-process = "2"           # restart / exit, used by the updater flow
 
-# Desktop-only: auto-updater. Mobile updates happen via the App Store / Play Store.
+# Desktop-only: auto-updater + OS keychain (`keyring` crate).
+#
+# keyring v3 ships NO default backend — each platform's credential store
+# is an opt-in feature, and the dep for each is only compiled on its
+# target. We enable:
+#   • apple-native        → macOS Keychain (Security framework)
+#   • windows-native      → Windows Credential Manager
+#   • sync-secret-service → Linux: the freedesktop D-Bus Secret Service API
+#                           (served by gnome-keyring / KWallet / keepassxc /
+#                           any provider) — not a KWallet- or
+#                           gnome-keyring-specific API
+#   • crypto-rust         → pure-Rust crypto for the secret-service
+#                           transport (no OpenSSL build dependency)
+# If no Secret Service provider is running, Entry ops return
+# NoStorageAccess → the JS side surfaces a "stay-signed-in unavailable"
+# toast and falls back to re-login per launch (graceful degradation).
+#
+# Mobile (iOS Keychain Services, Android Keystore) is a follow-up slice
+# with different APIs, so we gate the dep to desktop and stub the
+# JS-exposed commands on mobile. (Stay on keyring v3 — v4 needs Rust 1.88;
+# our MSRV is 1.77.)
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
+keyring = { version = "3", default-features = false, features = [
+  "apple-native",
+  "windows-native",
+  "sync-secret-service",
+  "crypto-rust",
+] }
 
 # Serde for any custom command payloads we add later.
 serde = { version = "1", features = ["derive"] }
@@ -47,3 +79,23 @@ default = ["custom-protocol"]
 # Tauri's custom-protocol is required for release builds — embeds the frontend
 # bundle and serves it via a custom URL scheme instead of needing a local server.
 custom-protocol = ["tauri/custom-protocol"]
+
+# Per-package override for the kutup shell crate: opt-level=1.
+#
+# `tauri::generate_context!()` const-evaluates the entire embedded
+# frontend bundle plus the `Builder::default().plugin(...)...run(...)`
+# chain's monomorphized generics, all inside *our* crate. At cargo's
+# default release opt-level=3 a single rustc building kutup_lib peaks
+# well past available RAM on modest build machines. opt-level=1 roughly
+# halves that. The kutup shell crate is thin glue (plugin registration +
+# the keyring vault commands); its runtime perf is irrelevant — the deps
+# that matter (tauri internals, reqwest) still build at opt-level=3, and
+# the real work lives in the JS frontend.
+#
+# NOTE: this matters far less now that build:tauri strips the ~2.6 GB
+# OnlyOffice SDK from dist/ before `generate_context!()` runs — embedding
+# that was the real OOM cause. Office-doc editing is therefore unavailable
+# in the desktop bundle for now; the follow-up is to load the SDK from the
+# user's server origin (see docs/desktop-build.md). Kept as a margin.
+[profile.release.package.kutup]
+opt-level = 1

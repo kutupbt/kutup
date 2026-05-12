@@ -1,0 +1,177 @@
+name: Release Desktop
+
+# Builds the Tauri 2 desktop app for Linux / macOS / Windows and uploads the
+# installers (.deb, .rpm, .AppImage, .dmg, .app.tar.gz, .msi, NSIS .exe) to a
+# *draft* GitHub Release so they can be reviewed before publishing.
+#
+# Trigger: push a tag like `desktop-v0.1.0` (stable) or `desktop-v0.1.0-alpha.1`
+#          / `-beta.N` / `-rc.N` (prerelease — the GitHub release is flagged
+#          "Pre-release" and the suffix is baked into the installer version).
+#          The tag is the source of truth for the version: a step below writes
+#          `<tag minus the desktop-v prefix>` into tauri.conf.json before the
+#          build. Kept separate from the `v*` tags (which build the CLI via
+#          GoReleaser in release.yml) so the two don't fight over one release.
+# Also runnable manually from the Actions tab — with an empty `tag` input it
+# just builds the bundles and uploads them as workflow artifacts (no release).
+#
+# Notes:
+#  * `tauri.conf.json` already sets `bundle.targets: "all"` and
+#    `beforeBuildCommand: pnpm -C frontend build:tauri` — the latter strips the
+#    2.6 GB OnlyOffice SDK from frontend/dist before `generate_context!()`
+#    embeds it, which is what keeps the Rust build from OOM-ing.
+#  * Builds are UNSIGNED for v1: macOS users get a Gatekeeper prompt, Windows
+#    users a SmartScreen warning. To sign later, add the cert secrets and the
+#    matching env vars to the `tauri-action` step (see its README).
+
+on:
+  push:
+    tags:
+      - "desktop-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish to (e.g. desktop-v0.1.0, or desktop-v0.1.0-alpha.1 for a prerelease). Leave empty to only build + upload artifacts."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-22.04 ships webkit2gtk-4.1 and produces broadly-compatible
+          # binaries; newer Ubuntu links against newer glibc.
+          - platform: ubuntu-22.04
+            rust-targets: ""
+            tauri-args: ""
+          # One universal .dmg/.app that runs on both Apple Silicon and Intel.
+          - platform: macos-latest
+            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+            tauri-args: "--target universal-apple-darwin"
+          - platform: windows-latest
+            rust-targets: ""
+            tauri-args: ""
+    runs-on: ${{ matrix.platform }}
+
+    # Resolve the release tag once, into an env var, so it never touches a
+    # shell command (avoids workflow-injection foot-guns).
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tag desktop-v0.1.0          -> APP_VERSION=0.1.0,         IS_PRERELEASE=false
+      # Tag desktop-v0.1.0-alpha.1  -> APP_VERSION=0.1.0-alpha.1, IS_PRERELEASE=true
+      # (skipped on a manual run with an empty `tag` input — then we just build)
+      - name: Resolve version & prerelease flag from the tag
+        if: env.RELEASE_TAG != ''
+        shell: bash
+        run: |
+          v="${RELEASE_TAG#desktop-v}"
+          echo "APP_VERSION=$v" >> "$GITHUB_ENV"
+          case "$v" in
+            *-*) echo "IS_PRERELEASE=true"  >> "$GITHUB_ENV" ;;
+            *)   echo "IS_PRERELEASE=false" >> "$GITHUB_ENV" ;;
+          esac
+
+      # tauri-action has no version-override input, so make the tag the single
+      # source of truth: write its version into tauri.conf.json before building.
+      - name: Pin tauri.conf.json version to the tag
+        if: env.APP_VERSION != ''
+        shell: bash
+        run: |
+          tmp="$(mktemp)"
+          jq --arg v "$APP_VERSION" '.version = $v' src-tauri/tauri.conf.json > "$tmp"
+          mv "$tmp" src-tauri/tauri.conf.json
+          echo "src-tauri/tauri.conf.json version -> $APP_VERSION"
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            file
+
+      - name: Add swap (Linux — headroom for the Rust build)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo fallocate -l 6G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        # version is taken from the "packageManager" field in package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+
+      - name: Install root deps (Tauri CLI)
+        run: pnpm install --frozen-lockfile
+
+      - name: Install frontend deps
+        run: pnpm -C frontend install --frozen-lockfile
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Build & (optionally) release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # On a tag push -> release to that tag. On a manual run -> release to
+          # the supplied tag, or (empty) skip the release and just build.
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: ${{ env.RELEASE_TAG }}
+          releaseBody: |
+            Kutup desktop app — see the assets below for your platform:
+            - Linux: `.AppImage` (portable), `.deb` (Debian/Ubuntu), `.rpm` (Fedora/RHEL)
+            - macOS: `.dmg` (universal — Apple Silicon + Intel)
+            - Windows: `.msi` and the NSIS `.exe` installer
+
+            Builds are not code-signed yet: macOS may need right-click -> Open, Windows may show a SmartScreen warning.
+          releaseDraft: true
+          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
+          args: ${{ matrix.tauri-args }}
+
+      - name: Upload bundles as workflow artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kutup-desktop-${{ matrix.platform }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: |
+            src-tauri/target/release/bundle/**/*
+            src-tauri/target/*/release/bundle/**/*

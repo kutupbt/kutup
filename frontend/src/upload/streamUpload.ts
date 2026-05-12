@@ -22,6 +22,7 @@
 
 import * as tus from 'tus-js-client'
 import { generateKey, encrypt, toBase64 } from '@/crypto'
+import { resolveApiBase } from '@/lib/apiBase'
 import {
   newStreamEncryptor,
   cipherSize,
@@ -91,6 +92,11 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<string> {
     },
   })
 
+  // Resolve the tus endpoint against the API base — on the web that's
+  // `/api/uploads/`; in the Tauri shell it's the user-selected backend
+  // (a bare `/api/...` would resolve to `tauri://localhost/api/...`).
+  const uploadsEndpoint = `${await resolveApiBase()}/uploads/`
+
   return new Promise<string>((resolve, reject) => {
     let resolvedFileId = ''
     let lastPlainSent = 0
@@ -100,7 +106,7 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<string> {
     const reader = stream.getReader()
 
     const upload = new tus.Upload(reader, {
-      endpoint: '/api/uploads/',
+      endpoint: uploadsEndpoint,
       uploadSize: cipherTotal,
       // chunkSize is the per-PATCH body size. We send exactly one
       // secretstream message per PATCH; CIPHER_CHUNK = 5 MiB + 17 B

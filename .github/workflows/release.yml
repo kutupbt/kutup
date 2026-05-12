@@ -1,5 +1,12 @@
 name: Release CLI
 
+# Builds the `kutup` CLI (cmd/kutup/) for Linux / macOS / Windows (amd64 + arm64)
+# via GoReleaser and publishes a GitHub Release with the archives + checksums.
+#
+# Trigger: push a tag like `v0.1.0`. (The desktop app releases independently
+# on `desktop-v*` tags — see release-desktop.yml. The two never overlap:
+# `v0.1.0` doesn't match `desktop-v*`, and vice versa.)
+
 on:
   push:
     tags:
@@ -18,9 +25,9 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.24"
           cache: true
-          cache-dependency-path: cli/go.sum
+          cache-dependency-path: cmd/kutup/go.sum
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
@@ -28,6 +35,6 @@ jobs:
           distribution: goreleaser
           version: latest
           args: release --clean
-          workdir: cli
+          workdir: cmd/kutup
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

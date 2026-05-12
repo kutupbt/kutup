@@ -5,13 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Kutup — Encrypted Storage</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 56 44'><polygon points='10,13 16,22 10,31 4,22' fill='%230369a1'/><polygon points='28,8 37,22 28,36 19,22' fill='%2338bdf8'/><polygon points='46,11 53,22 46,33 39,22' fill='%237dd3fc'/></svg>" />
+    <script>
+      // No-flash theme: resolve the theme and set the <html> class before
+      // first paint. Mirrors src/lib/theme.ts — a stored preference wins,
+      // else follow the OS (prefers-color-scheme), else light.
+      (function () {
+        var p; try { p = localStorage.getItem('kutup-theme'); } catch (e) {}
+        var resolved = (p === 'light' || p === 'dark') ? p
+          : ((window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light');
+        var d = document.documentElement;
+        d.classList.add(resolved);
+        d.style.colorScheme = resolved;
+      })();
+    </script>
     <style>
       *, *::before, *::after { box-sizing: border-box; }
+      /* Placeholder page colours for the few ms before src/index.css loads
+         and the real Tailwind --background / --foreground tokens take over.
+         The inline <script> above has already added .dark or .light. */
+      html.dark  { background: #0a0f17; color: #d4ecf7; }
+      html.light { background: #f4f6f8; color: #1a2230; }
       body {
         margin: 0;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        background: #060d14;
-        color: #d4ecf7;
         min-height: 100vh;
       }
       #root { min-height: 100vh; }
