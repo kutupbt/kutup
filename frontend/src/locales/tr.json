@@ -181,7 +181,8 @@
       "zipDone": "İndirme tamamlandı",
       "zipFailed": "İndirme başarısız",
       "zipSelectDir": "Parçaları kaydetmek için bir klasör seçin",
-      "zipNoFsa": "Büyük indirmeler Chrome veya Edge gerektirir"
+      "zipNoFsa": "Bu klasör bu tarayıcıda ZIP olarak indirilemeyecek kadar büyük. Chrome veya Edge'i, masaüstü uygulamasını ya da CLI'yi kullanın.",
+      "zipNoFiles": "Bu klasörde indirilecek dosya yok."
     },
     "deleteFile": {
       "title": "“{{name}}” silinsin mi?",

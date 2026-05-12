@@ -181,7 +181,8 @@
       "zipDone": "Download complete",
       "zipFailed": "Download failed",
       "zipSelectDir": "Select a folder to save the parts",
-      "zipNoFsa": "Large downloads require Chrome or Edge"
+      "zipNoFsa": "This folder is too large to download as a ZIP in this browser. Use Chrome or Edge, the desktop app, or the CLI.",
+      "zipNoFiles": "This folder has no files to download."
     },
     "deleteFile": {
       "title": "Delete “{{name}}”?",
