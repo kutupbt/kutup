@@ -23,3 +23,9 @@ A planned major feature: real-time collaborative editing of files inside kutup, 
 | File | Topic |
 |---|---|
 | [`06-webdav-support.md`](./06-webdav-support.md) | Future feature: mount kutup as a native filesystem (Finder / Explorer / KIO). Why server-side WebDAV breaks E2EE; why a client-side proxy in the kutup CLI is the only viable path; references to Cryptomator / Filen / rclone precedents. No spec, no committed scope — captured so the idea isn't lost. |
+
+### Mobile (in progress, May 2026)
+
+| File | Topic |
+|---|---|
+| [`09-mobile-strategy.md`](./09-mobile-strategy.md) | Why we're on Tauri-mobile (not React Native or Capacitor) given the DOM-bound editor stack — with prior-art table (Spacedrive, OneKeePass, Padloc). Survey of Tauri-mobile secure-storage plugins for the Android Keystore follow-up — recommends `tauri-plugin-keystore` + `tauri-plugin-biometric`. iOS half shipped (`feat/ios-keychain`); Android half is the open follow-up. |
