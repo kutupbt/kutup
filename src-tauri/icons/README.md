@@ -16,3 +16,8 @@ That writes everything `tauri.conf.json` references plus the
 
 For now the build will fail to bundle release artifacts until the
 real icons land here; `pnpm tauri:dev` works without them.
+
+The source artwork (`source.svg` / `source.png`) and all icons
+rendered from it are kutup brand assets — see [`/TRADEMARK.md`](../../TRADEMARK.md)
+for the brand-use policy. The AGPL covers the surrounding code, not
+the artwork.
