@@ -1,3 +1,6 @@
+// The three-diamond mark drawn here is a kutup brand asset — see
+// /TRADEMARK.md for the brand-use policy. The AGPL-3.0 that covers
+// the surrounding code does not grant rights to the artwork itself.
 export function KutupLogo({ size = 36 }: { size?: number }) {
   const scale = size / 44
   return (
