@@ -8,11 +8,17 @@
 // Custom commands exposed to the frontend live below the `run()` function and
 // are registered via `tauri::generate_handler![...]`.
 
-// OS-keychain backend. Desktop-only — see Cargo.toml for the target gate.
+// OS-keychain backend. Desktop **+ iOS** — see Cargo.toml for the target
+// gate. iOS routes through `keyring`'s apple-native backend (the same
+// Security framework calls macOS uses: kSecClassGenericPassword via
+// SecItemAdd / SecItemCopyMatching / SecItemDelete). Only Android stays
+// without a backend (the keyring crate has none); a future custom Tauri
+// plugin wrapping Android Keystore is the path.
+//
 // We re-export the keyring `Error` type so the command bodies below can use
 // the `NoEntry` variant for "soft-miss" semantics (a missing key is not a
 // failure for vault_get / vault_delete).
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "android"))]
 use keyring::{Entry, Error as KeyringError};
 
 // Service namespace under which all kutup secrets live in the OS keychain.
@@ -25,18 +31,19 @@ const KEYRING_SERVICE: &str = "dev.kutup.client";
 // `@tauri-apps/api/core::invoke()` to persist session secrets (access
 // token, master key, private key) across app restarts.
 //
-// On mobile builds the keyring crate isn't available, so the commands
-// return an error string; the JS side treats that as "vault unavailable"
-// and falls back to the existing sessionStorage-only flow.
+// Active on desktop + iOS. On Android the keyring crate has no backend
+// and the commands stub-fail; the JS side treats that as
+// "vault unavailable" and falls back to the existing sessionStorage-only
+// flow (re-login per launch).
 
 #[tauri::command]
 async fn vault_set(key: String, value: String) -> Result<(), String> {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[cfg(not(target_os = "android"))]
     {
         let entry = Entry::new(KEYRING_SERVICE, &key).map_err(|e| e.to_string())?;
         entry.set_password(&value).map_err(|e| e.to_string())
     }
-    #[cfg(any(target_os = "android", target_os = "ios"))]
+    #[cfg(target_os = "android")]
     {
         let _ = (key, value);
         Err("vault unavailable on this platform".to_string())
@@ -45,7 +52,7 @@ async fn vault_set(key: String, value: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn vault_get(key: String) -> Result<Option<String>, String> {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[cfg(not(target_os = "android"))]
     {
         let entry = Entry::new(KEYRING_SERVICE, &key).map_err(|e| e.to_string())?;
         match entry.get_password() {
@@ -54,7 +61,7 @@ async fn vault_get(key: String) -> Result<Option<String>, String> {
             Err(e) => Err(e.to_string()),
         }
     }
-    #[cfg(any(target_os = "android", target_os = "ios"))]
+    #[cfg(target_os = "android")]
     {
         let _ = key;
         Ok(None)
@@ -63,7 +70,7 @@ async fn vault_get(key: String) -> Result<Option<String>, String> {
 
 #[tauri::command]
 async fn vault_delete(key: String) -> Result<(), String> {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[cfg(not(target_os = "android"))]
     {
         let entry = Entry::new(KEYRING_SERVICE, &key).map_err(|e| e.to_string())?;
         match entry.delete_credential() {
@@ -72,7 +79,7 @@ async fn vault_delete(key: String) -> Result<(), String> {
             Err(e) => Err(e.to_string()),
         }
     }
-    #[cfg(any(target_os = "android", target_os = "ios"))]
+    #[cfg(target_os = "android")]
     {
         let _ = key;
         Ok(())
