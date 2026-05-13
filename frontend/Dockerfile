@@ -1,6 +1,10 @@
 FROM node:20-alpine AS builder
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Pin to the pnpm version declared in package.json's `packageManager` field.
+# `corepack prepare pnpm@latest --activate` was hitting an npm-registry tag
+# lookup that fails inside this builder; npm-installing the exact version
+# bypasses corepack's signature/tag-lookup path entirely.
+RUN npm install -g pnpm@9.1.1
 
 WORKDIR /app
 COPY package.json pnpm-lock.yaml* ./
