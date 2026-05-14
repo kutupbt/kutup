@@ -37,6 +37,7 @@ import DriveTopBar from '@/components/drive/DriveTopBar'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { MobileShell } from '@/components/mobile/MobileShell'
 import { MobileFilesPage } from '@/pages/mobile/MobileFilesPage'
+import { MobileItemSheet } from '@/components/mobile/MobileItemSheet'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -1023,6 +1024,38 @@ export default function Drive() {
             })
           }}
           onNewWhiteboard={() => handleCreateOffice('excalidraw')}
+        />
+
+        {/* Item-actions sheet — opens when the user taps the ⋯ button on a
+            folder tile or file row. Wires the actions that don't require a
+            dialog (Open, Color, Download) directly; the rest surface stub
+            toasts until a follow-up PR moves RenameDialog / ShareDialog /
+            delete-confirm AlertDialogs out of the desktop branch so mobile
+            can share them. */}
+        <MobileItemSheet
+          item={detailItem}
+          onClose={() => setDetailItem(null)}
+          onOpen={(it) => {
+            if ('encryptedName' in it) enterFolder(it)
+            else handleFileClick(it)
+          }}
+          onChangeColor={(folder, color) => handleColorFolder(folder, color)}
+          onDownload={(file) => handleDownload(file)}
+          onRename={() =>
+            toast.message(t('mobile.item.rename', 'Rename'), {
+              description: t('mobile.actionUnavailable', 'Tap a folder on desktop to create one — mobile flow coming soon.'),
+            })
+          }
+          onShare={() =>
+            toast.message(t('mobile.item.share', 'Share'), {
+              description: t('mobile.actionUnavailable', 'Tap a folder on desktop to create one — mobile flow coming soon.'),
+            })
+          }
+          onDelete={() =>
+            toast.message(t('mobile.item.trash', 'Move to Trash'), {
+              description: t('mobile.actionUnavailable', 'Tap a folder on desktop to create one — mobile flow coming soon.'),
+            })
+          }
         />
       </MobileShell>
     )

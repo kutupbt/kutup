@@ -594,6 +594,10 @@
       "about.trademark": "Marka politikası",
       "about.license": "Lisans"
     },
-    "actionUnavailable": "Oluşturmak için masaüstünde bir klasöre dokunun — mobil akış yakında."
+    "actionUnavailable": "Oluşturmak için masaüstünde bir klasöre dokunun — mobil akış yakında.",
+    "item.folder": "Klasör",
+    "item.sharedFolder": "Paylaşılan klasör",
+    "item.color": "Renk",
+    "item.colorClear": "Rengi temizle"
   }
 }

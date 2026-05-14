@@ -594,6 +594,10 @@
       "about.trademark": "Brand policy",
       "about.license": "License"
     },
-    "actionUnavailable": "Tap a folder on desktop to create one — mobile flow coming soon."
+    "actionUnavailable": "Tap a folder on desktop to create one — mobile flow coming soon.",
+    "item.folder": "Folder",
+    "item.sharedFolder": "Shared folder",
+    "item.color": "Color",
+    "item.colorClear": "Clear color"
   }
 }
