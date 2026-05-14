@@ -331,7 +331,8 @@
       "presenceColorDesc": "Your color in collaborative cursors and cell-edit highlights. Stable across notes and office documents.",
       "presenceColorClear": "Reset",
       "presenceColorFailed": "Failed to update color",
-      "presenceColorSelected": "Selected presence color {{color}}"
+      "presenceColorSelected": "Selected presence color {{color}}",
+      "presenceColorNone": "No presence color selected"
     },
     "totp": {
       "title": "Two-Factor Authentication",
