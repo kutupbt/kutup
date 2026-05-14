@@ -30,6 +30,9 @@ import MobileProfilePage from './pages/mobile/account/MobileProfilePage'
 import MobileEncryptionKeysPage from './pages/mobile/account/MobileEncryptionKeysPage'
 import MobileSecurityPage from './pages/mobile/account/MobileSecurityPage'
 import MobileTotpSetupPage from './pages/mobile/account/MobileTotpSetupPage'
+import MobileAdminPage from './pages/mobile/account/admin/MobileAdminPage'
+import MobileAdminUserDetailPage from './pages/mobile/account/admin/MobileAdminUserDetailPage'
+import MobileAdminCreateUserPage from './pages/mobile/account/admin/MobileAdminCreateUserPage'
 import MobileNotificationsPage from './pages/mobile/account/MobileNotificationsPage'
 import MobileLanguagePage from './pages/mobile/account/MobileLanguagePage'
 import MobileAboutPage from './pages/mobile/account/MobileAboutPage'
@@ -187,10 +190,9 @@ export default function App() {
           />
           <Route path="/drive/account/notifications" element={<MobileNotificationsPage />} />
           <Route path="/drive/account/language" element={<MobileLanguagePage />} />
-          {/* The Account → Admin row navigates straight to /admin (existing
-              desktop dashboard). A mobile-first admin dashboard is a future
-              PR (PR 12 in the plan); when it lands, restore the
-              /drive/account/admin route + MobileAdminPage import. */}
+          <Route path="/drive/account/admin" element={<MobileAdminPage />} />
+          <Route path="/drive/account/admin/new-user" element={<MobileAdminCreateUserPage />} />
+          <Route path="/drive/account/admin/users/:id" element={<MobileAdminUserDetailPage />} />
           <Route path="/drive/account/about" element={<MobileAboutPage />} />
           <Route path="/file/:cid/:fid" element={<FileEditorPage />} />
           <Route path="/settings" element={<Settings />} />

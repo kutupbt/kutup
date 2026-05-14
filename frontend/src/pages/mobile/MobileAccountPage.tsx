@@ -132,10 +132,9 @@ export default function MobileAccountPage() {
             {
               icon: 'shield' as const,
               label: t('mobile.account.admin', 'Admin'),
-              // No mobile-native admin dashboard yet — route straight to the
-              // desktop /admin page. PR 12 introduces a mobile-first admin
-              // shell + restores the /drive/account/admin sub-route.
-              onClick: () => navigate('/admin'),
+              // Mobile admin dashboard lives at /drive/account/admin (see
+              // PR 12 in the plan file — Overview / Users / Settings tabs).
+              onClick: () => navigate('/drive/account/admin'),
             },
           ]
         : []),
