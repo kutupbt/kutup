@@ -437,11 +437,6 @@
       },
       "menu": {
         "editQuota": "Edit quota",
-        "resetPassword": "Reset password",
-        "requireTotp": "Require 2FA",
-        "disableTotp": "Disable 2FA",
-        "makeAdmin": "Make admin",
-        "removeAdmin": "Remove admin role",
         "disable": "Disable account",
         "reenable": "Re-enable account",
         "delete": "Delete permanently"
@@ -466,11 +461,6 @@
       "storageUsedUnknown": "Capacity unknown — set STORAGE_TOTAL_BYTES to display.",
       "storageEncryption": "Encryption",
       "moreSoonNote": "More admin controls — required 2FA, quota defaults, danger-zone actions — land as the backend grows."
-    },
-    "notWired": {
-      "resetPassword": "Reset password endpoint not wired yet — rotate the temp password via the kutup CLI or DB for now.",
-      "toggleTotp": "2FA force/disable from admin isn't in the backend yet — ask the user to manage it from their Security page.",
-      "toggleAdmin": "Promoting / demoting admins from the UI isn't wired yet — set is_admin via SQL until the PUT /admin/users/:id body accepts it."
     },
     "createDialog": {
       "title": "Create user",
@@ -711,13 +701,6 @@
       "user.quotaGB": "Quota (GB)",
       "user.quotaSaved": "Quota updated",
       "user.currentlyX": "Currently {{x}}",
-      "user.resetPassword": "Reset password",
-      "user.resetPasswordSub": "Send password reset email",
-      "user.makeAdmin": "Make admin",
-      "user.makeAdminSub": "Grant full access to this panel",
-      "user.removeAdmin": "Remove admin role",
-      "user.removeAdminSub": "Revoke full admin access",
-      "user.notWiredHint": "Use the desktop /admin page or run via kutup CLI for now.",
       "user.stateSection": "Account state",
       "user.disable": "Disable account",
       "user.disableSub": "User cannot sign in but data is preserved",

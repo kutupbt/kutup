@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 import { Icon, ICONS } from '@/components/mobile/Icon'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -150,33 +149,16 @@ export function AdminUsersTab({ users, loading, onCreate }: AdminUsersTabProps) 
   }
 
   function onAction(action: AdminMenuAction, user: UserRow) {
+    // Every action here is wired end-to-end. The design has additional
+    // actions (Reset password / Toggle 2FA / Make admin) that require
+    // backend slices that don't exist yet — they're tracked in
+    // docs/roadmap.md and reappear in the menu when the backend lands.
     if (action === 'editQuota') {
       setEditTarget(user)
     } else if (action === 'toggleActive') {
       updateUser.mutate({ id: user.id, body: { isActive: !user.isActive } })
     } else if (action === 'delete') {
       setDeleteTarget(user)
-    } else if (action === 'resetPassword') {
-      toast.info(
-        t(
-          'admin.notWired.resetPassword',
-          'Reset password endpoint not wired yet — rotate the temp password via the kutup CLI or DB for now.',
-        ),
-      )
-    } else if (action === 'toggleTotp') {
-      toast.info(
-        t(
-          'admin.notWired.toggleTotp',
-          '2FA force/disable from admin isn’t in the backend yet — ask the user to manage it from their Security page.',
-        ),
-      )
-    } else if (action === 'toggleAdmin') {
-      toast.info(
-        t(
-          'admin.notWired.toggleAdmin',
-          'Promoting / demoting admins from the UI isn’t wired yet — set is_admin via SQL until the PUT /admin/users/:id body accepts it.',
-        ),
-      )
     }
   }
 

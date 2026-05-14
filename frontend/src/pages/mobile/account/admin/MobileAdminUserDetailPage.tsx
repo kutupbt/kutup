@@ -31,17 +31,17 @@ import { cn } from '@/lib/utils'
  * MobileAdminUserDetailPage — `/drive/account/admin/users/:id`.
  *
  * Per the design + the user's "tap → full page, never a slide-in" rule.
- * Renders four sections:
+ * Renders three sections (every action wired end-to-end per CLAUDE.md's
+ * "no silent stubs in shipped builds" rule):
  *
  *   1. Header card     — avatar + email + role pill + status + storage bar
  *   2. Account info    — 2FA / Role / Joined (createdAt) / Last active
- *   3. Manage          — Edit quota (wired) · Reset password (stubbed — no
- *                        backend) · Make/Remove admin (stubbed — needs
- *                        backend isAdmin support; see PR 12.1 in the plan)
+ *   3. Manage          — Edit quota (wired)
  *   4. Account state   — Disable / Re-enable (wired) · Delete (wired)
  *
- * Stubbed actions surface a toast pointing at the desktop /admin page +
- * the plan note so users know where the gap is.
+ * The design also includes Reset password / Make-Remove admin / Force 2FA
+ * — these need backend slices that don't exist yet. They're tracked in
+ * `docs/roadmap.md` and re-appear here when the backend lands.
  *
  * Desktop hits redirect to /admin (via useIsMobile-guarded effect).
  */
@@ -129,15 +129,6 @@ export default function MobileAdminUserDetailPage() {
     await deleteUser.mutateAsync(user.id)
     setDeleteConfirmOpen(false)
     navigate('/drive/account/admin', { replace: true })
-  }
-
-  function notWiredToast(action: string) {
-    toast.message(action, {
-      description: t(
-        'mobile.admin.user.notWiredHint',
-        'Use the desktop /admin page or run via kutup CLI for now.',
-      ),
-    })
   }
 
   return (
@@ -252,7 +243,7 @@ export default function MobileAdminUserDetailPage() {
         <Surface className="mb-4.5">
           <PressableRow
             onClick={() => setEditQuotaOpen(true)}
-            last={false}
+            last
             ariaLabel={t('mobile.admin.user.editQuota', 'Edit quota')}
           >
             <div className="w-[30px] h-[30px] rounded-[9px] bg-surface-sunken text-text-secondary flex items-center justify-center shrink-0">
@@ -266,50 +257,6 @@ export default function MobileAdminUserDetailPage() {
                 {t('mobile.admin.user.currentlyX', 'Currently {{x}}', {
                   x: formatBytes(user.storageQuotaBytes),
                 })}
-              </div>
-            </div>
-            <Icon d={ICONS.chevronRight} size={16} color="var(--text-tertiary)" />
-          </PressableRow>
-          <PressableRow
-            onClick={() => notWiredToast(t('mobile.admin.user.resetPassword', 'Reset password'))}
-            last={false}
-          >
-            <div className="w-[30px] h-[30px] rounded-[9px] bg-surface-sunken text-text-secondary flex items-center justify-center shrink-0">
-              <Icon d={ICONS.refresh} size={15} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-[13.5px] font-medium text-text-primary">
-                {t('mobile.admin.user.resetPassword', 'Reset password')}
-              </div>
-              <div className="text-[11.5px] text-text-tertiary mt-0.5">
-                {t('mobile.admin.user.resetPasswordSub', 'Send password reset email')}
-              </div>
-            </div>
-            <Icon d={ICONS.chevronRight} size={16} color="var(--text-tertiary)" />
-          </PressableRow>
-          <PressableRow
-            onClick={() =>
-              notWiredToast(
-                user.isAdmin
-                  ? t('mobile.admin.user.removeAdmin', 'Remove admin role')
-                  : t('mobile.admin.user.makeAdmin', 'Make admin'),
-              )
-            }
-            last
-          >
-            <div className="w-[30px] h-[30px] rounded-[9px] bg-surface-sunken text-text-secondary flex items-center justify-center shrink-0">
-              <Icon d={user.isAdmin ? ICONS.user : ICONS.shield} size={15} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-[13.5px] font-medium text-text-primary">
-                {user.isAdmin
-                  ? t('mobile.admin.user.removeAdmin', 'Remove admin role')
-                  : t('mobile.admin.user.makeAdmin', 'Make admin')}
-              </div>
-              <div className="text-[11.5px] text-text-tertiary mt-0.5">
-                {user.isAdmin
-                  ? t('mobile.admin.user.removeAdminSub', 'Revoke full admin access')
-                  : t('mobile.admin.user.makeAdminSub', 'Grant full access to this panel')}
               </div>
             </div>
             <Icon d={ICONS.chevronRight} size={16} color="var(--text-tertiary)" />

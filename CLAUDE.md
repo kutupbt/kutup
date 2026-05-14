@@ -15,6 +15,7 @@ End-to-end encrypted, self-hosted "Google Drive" with **real-time collaboration*
 - `docs/desktop-build.md` — the Tauri app: build, the OnlyOffice-strip, server-picker, OS keychain, CORS, cutting (pre)releases.
 - `docs/onlyoffice.md` — how office docs stay client-side (the CryptPad pattern: OnlyOffice in the browser, **no WOPI / no Collabora**).
 - `docs/self-hosting.md`, `docs/test/curl.md`.
+- `docs/roadmap.md` — **production-readiness backlog**. Sits between `docs/` (current state) and `docs/research/` (open design). Every deferred feature / stubbed action / "wire when backend lands" note from recent PRs lives here, scoped + categorized as v1-blocker vs post-v1. Read this before adding new stubs — if it's not in the roadmap, add it before shipping the stub.
 - `docs/research/` — **forward-looking** design/research notes (vs. everything else under `docs/` = **current-state** reference). Don't treat `docs/research/` as describing what's shipped.
 - Recent `git log` + open PRs (`gh pr list`) — what changed lately. The Tauri 2 desktop app v1 landed in **PR #18**.
 
@@ -35,7 +36,7 @@ End-to-end encrypted, self-hosted "Google Drive" with **real-time collaboration*
 
 ## Conventions & non-obvious context
 
-- **Pre-production**: there are no public releases yet (until the first `v*` / `desktop-v*` tag). Breaking changes are fine — rename freely, change DB schema directly, no need to write migrations for every change yet.
+- **Pre-production, not pre-quality**: there are no public releases yet (until the first `v*` / `desktop-v*` tag). Breaking changes are fine — rename freely, change DB schema directly, no need to write migrations for every change yet. But: **the bar for "this is done" is production-grade.** When you ship a UI affordance, wire it end-to-end — no silent stubs, no toasts pointing at SQL workarounds. If a feature can't be wired end-to-end yet (because a backend slice is missing, etc.), **don't ship the affordance** — add the gap to `docs/roadmap.md` and skip the UI entry until the slice lands. The user's standing direction: *"we need proper production-ready app, dont try to ship fast"*.
 - **Office docs** (`.docx`/`.xlsx`/`.pptx`) collab uses the **CryptPad pattern** — OnlyOffice runs entirely in the browser; document state is never decrypted server-side. No WOPI, no Collabora. (`docs/onlyoffice.md`.)
 - **Desktop build memory constraint**: `tauri::generate_context!()` embeds *all* of `frontendDist` as a static byte array; the ~2.6 GB OnlyOffice SDK is stripped by `pnpm -C frontend build:tauri` before that embed (otherwise `rustc` OOMs). Consequence: the app **can't open Office docs in v1** (desktop or mobile). The shell crate builds at `opt-level = 1`; `[lib] crate-type = ["staticlib", "cdylib", "rlib"]` (rlib = desktop binary, staticlib/cdylib = iOS/Android FFI). Follow-up: load the SDK from `${serverUrl}/onlyoffice/…` so the app streams it from the user's server.
 - **Bundle identity**: `identifier` `dev.kutup.client` (product-wide — desktop + iOS + Android), `mainBinaryName` `kutup-client`, `productName` `Kutup`, desktop app-data dir `$APPDATA/dev.kutup.client/`, OS-keychain service `dev.kutup.client` (= `KEYRING_SERVICE` in `src-tauri/src/lib.rs`; desktop only — no mobile keychain yet). The CLI's keychain service is the separate `kutup-cli`.

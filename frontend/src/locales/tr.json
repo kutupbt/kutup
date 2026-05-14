@@ -437,11 +437,6 @@
       },
       "menu": {
         "editQuota": "Kotayı düzenle",
-        "resetPassword": "Şifreyi sıfırla",
-        "requireTotp": "2FA gerektir",
-        "disableTotp": "2FA'yı devre dışı bırak",
-        "makeAdmin": "Yönetici yap",
-        "removeAdmin": "Yönetici rolünü kaldır",
         "disable": "Hesabı devre dışı bırak",
         "reenable": "Hesabı yeniden etkinleştir",
         "delete": "Kalıcı olarak sil"
@@ -466,11 +461,6 @@
       "storageUsedUnknown": "Kapasite bilinmiyor — görüntülemek için STORAGE_TOTAL_BYTES değişkenini ayarlayın.",
       "storageEncryption": "Şifreleme",
       "moreSoonNote": "Daha fazla yönetici kontrolü — zorunlu 2FA, kota varsayılanları, tehlikeli bölge eylemleri — arka uç büyüdükçe gelecek."
-    },
-    "notWired": {
-      "resetPassword": "Şifre sıfırlama uç noktası henüz bağlı değil — şimdilik geçici şifreyi kutup CLI veya veritabanı üzerinden döndürün.",
-      "toggleTotp": "2FA'yı yöneticiden zorlamak/kapatmak henüz arka uçta yok — kullanıcıdan Güvenlik sayfasından yönetmesini isteyin.",
-      "toggleAdmin": "Yönetici atama / kaldırma henüz arayüzden bağlı değil — PUT /admin/users/:id gövdesi bunu kabul edene kadar is_admin değerini SQL ile ayarlayın."
     },
     "createDialog": {
       "title": "Kullanıcı oluştur",
@@ -711,13 +701,6 @@
       "user.quotaGB": "Kota (GB)",
       "user.quotaSaved": "Kota güncellendi",
       "user.currentlyX": "Şu an {{x}}",
-      "user.resetPassword": "Şifreyi sıfırla",
-      "user.resetPasswordSub": "Şifre sıfırlama e-postası gönder",
-      "user.makeAdmin": "Yönetici yap",
-      "user.makeAdminSub": "Bu panele tam erişim ver",
-      "user.removeAdmin": "Yönetici rolünü kaldır",
-      "user.removeAdminSub": "Tam yönetici erişimini iptal et",
-      "user.notWiredHint": "Şimdilik masaüstü /admin sayfasını veya kutup CLI'yi kullanın.",
       "user.stateSection": "Hesap durumu",
       "user.disable": "Hesabı devre dışı bırak",
       "user.disableSub": "Kullanıcı giriş yapamaz ancak verileri korunur",

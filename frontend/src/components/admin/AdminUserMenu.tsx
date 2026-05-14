@@ -11,23 +11,18 @@ import type { UserRow } from '@/types/api'
  * the menu clamps itself to the viewport so it never clips off-screen.
  * Click-outside / Escape both close the menu.
  *
- * Per-action wiring decisions (same as mobile admin):
+ * Every action here is wired end-to-end — no silent stubs per the CLAUDE.md
+ * "pre-production, not pre-quality" rule. The features the design has that
+ * kutup's backend doesn't support yet (Reset password / Toggle 2FA / Make
+ * admin) are tracked in `docs/roadmap.md` and re-appear here when the
+ * backend slice lands.
+ *
  *  - **Edit quota** — opens a small dialog wired to `useUpdateUser`.
- *  - **Reset password** — STUB. No backend endpoint yet (PR 13.1).
- *  - **Toggle 2FA** — STUB. No backend endpoint to force/disable TOTP yet.
- *  - **Make / Remove admin** — STUB. `PUT /admin/users/:id` body doesn't
- *    accept `isAdmin` today; wire when the backend slice lands (PR 13.1).
  *  - **Disable / Re-enable** — wired via `useUpdateUser({ isActive })`.
  *  - **Delete permanently** — wired via `useDeleteUser` after AlertDialog confirm.
  */
 
-export type AdminMenuAction =
-  | 'editQuota'
-  | 'resetPassword'
-  | 'toggleTotp'
-  | 'toggleAdmin'
-  | 'toggleActive'
-  | 'delete'
+export type AdminMenuAction = 'editQuota' | 'toggleActive' | 'delete'
 
 export interface AdminUserMenuState {
   x: number
@@ -73,25 +68,8 @@ export function AdminUserMenu({ menu, onClose, onAction }: AdminUserMenuProps) {
   const u = menu.user
 
   const groups: MenuItem[][] = [
+    [{ id: 'editQuota', icon: 'edit', label: t('admin.users.menu.editQuota', 'Edit quota') }],
     [
-      { id: 'editQuota', icon: 'edit', label: t('admin.users.menu.editQuota', 'Edit quota') },
-      { id: 'resetPassword', icon: 'refresh', label: t('admin.users.menu.resetPassword', 'Reset password') },
-      {
-        id: 'toggleTotp',
-        icon: 'key',
-        label: u.totpEnabled
-          ? t('admin.users.menu.disableTotp', 'Disable 2FA')
-          : t('admin.users.menu.requireTotp', 'Require 2FA'),
-      },
-    ],
-    [
-      {
-        id: 'toggleAdmin',
-        icon: u.isAdmin ? 'user' : 'shield',
-        label: u.isAdmin
-          ? t('admin.users.menu.removeAdmin', 'Remove admin role')
-          : t('admin.users.menu.makeAdmin', 'Make admin'),
-      },
       {
         id: 'toggleActive',
         icon: u.isActive ? 'userX' : 'userCheck',
@@ -111,9 +89,9 @@ export function AdminUserMenu({ menu, onClose, onAction }: AdminUserMenuProps) {
     ],
   ]
 
-  // Clamp coords so the menu can't render off-screen. Width ~220, height ~340.
+  // Clamp coords so the menu can't render off-screen. Width ~220, height ~180.
   const x = Math.min(menu.x, window.innerWidth - 230)
-  const y = Math.min(menu.y, window.innerHeight - 340)
+  const y = Math.min(menu.y, window.innerHeight - 200)
 
   return (
     <div
