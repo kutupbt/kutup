@@ -590,9 +590,6 @@
       "notifications.emptyTitle": "No notifications",
       "notifications.emptySubtitle": "Activity from shares, mentions, and updates will appear here.",
       "language.selected": "Selected",
-      "admin.open": "Open admin dashboard",
-      "admin.openSub": "Manage users, storage and system settings",
-      "admin.note": "The full admin pane is desktop-only for now — a mobile-native version is on the roadmap.",
       "about.source": "Source code",
       "about.trademark": "Brand policy",
       "about.license": "License"

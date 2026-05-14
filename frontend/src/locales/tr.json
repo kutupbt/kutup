@@ -590,9 +590,6 @@
       "notifications.emptyTitle": "Bildirim yok",
       "notifications.emptySubtitle": "Paylaşımlar, etiketlemeler ve güncellemelerden gelen etkinlikler burada görünür.",
       "language.selected": "Seçili",
-      "admin.open": "Yönetici panelini aç",
-      "admin.openSub": "Kullanıcı, depolama ve sistem ayarlarını yönet",
-      "admin.note": "Tam yönetici paneli şu an sadece masaüstü — mobil sürüm yol haritasında.",
       "about.source": "Kaynak kod",
       "about.trademark": "Marka politikası",
       "about.license": "Lisans"
