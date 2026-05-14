@@ -344,7 +344,7 @@
       "disableConfirm": "Devre dışı bırak",
       "addSecurity": "Kimlik doğrulama uygulamasıyla ekstra güvenlik katmanı ekleyin.",
       "setUp": "TOTP'yi kur",
-      "setupTitle": "İki faktörlü kimlik doğrulamayı kur",
+      "setupTitle": "TOTP kurulumu",
       "scanQr": "Bu QR kodunu kimlik doğrulama uygulamanızla tarayın (Google Authenticator, Authy vb.)",
       "manualKey": "Manuel giriş anahtarı:",
       "confirmCode": "Onaylamak için 6 haneli kodu girin",
@@ -352,7 +352,10 @@
       "enabledToast": "İki faktörlü kimlik doğrulama etkinleştirildi",
       "disabledToast": "İki faktörlü kimlik doğrulama devre dışı bırakıldı",
       "setupFailed": "TOTP kurulumu başlatılamadı",
-      "disableFailed": "TOTP devre dışı bırakılamadı"
+      "disableFailed": "TOTP devre dışı bırakılamadı",
+      "setupButton": "TOTP kur",
+      "scanInstructions": "Kodu kimlik doğrulama uygulamanızla tarayın, ardından oluşan 6 haneli kodu girin.",
+      "secret": "Veya anahtarı manuel olarak girin"
     },
     "encryption": {
       "title": "Şifreleme",
@@ -592,7 +595,9 @@
       "language.selected": "Seçili",
       "about.source": "Kaynak kod",
       "about.trademark": "Marka politikası",
-      "about.license": "Lisans"
+      "about.license": "Lisans",
+      "security.devicesEmptyHint": "Cihazlar ortak bir düzenleme başlattıklarında burada görünür.",
+      "security.totpOffDescription": "Kimlik doğrulama uygulamasıyla ekstra güvenlik katmanı ekleyin"
     },
     "actionUnavailable": "Oluşturmak için masaüstünde bir klasöre dokunun — mobil akış yakında.",
     "item.folder": "Klasör",

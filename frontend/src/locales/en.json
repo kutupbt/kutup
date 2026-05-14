@@ -352,7 +352,10 @@
       "enabledToast": "Two-factor authentication enabled",
       "disabledToast": "Two-factor authentication disabled",
       "setupFailed": "Failed to start TOTP setup",
-      "disableFailed": "Failed to disable TOTP"
+      "disableFailed": "Failed to disable TOTP",
+      "setupButton": "Set up TOTP",
+      "scanInstructions": "Scan the QR code with your authenticator app, then enter the 6-digit code it generates.",
+      "secret": "Or enter the key manually"
     },
     "encryption": {
       "title": "Encryption",
@@ -592,7 +595,9 @@
       "language.selected": "Selected",
       "about.source": "Source code",
       "about.trademark": "Brand policy",
-      "about.license": "License"
+      "about.license": "License",
+      "security.devicesEmptyHint": "Devices appear here when they start a collaborative edit.",
+      "security.totpOffDescription": "Add an extra layer of security with an authenticator app"
     },
     "actionUnavailable": "Tap a folder on desktop to create one — mobile flow coming soon.",
     "item.folder": "Folder",
