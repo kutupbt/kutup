@@ -221,7 +221,7 @@ export default function Login() {
 
   if (isBusy) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <div className="flex min-h-screen items-center justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
         <Card className="w-full max-w-sm">
           <CardContent className="pt-8 pb-8 flex flex-col items-center gap-3">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -241,7 +241,7 @@ export default function Login() {
 
   if (step === 'totp') {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <div className="flex min-h-screen items-center justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
         <Card className="w-full max-w-sm">
           <CardHeader>
             <CardTitle>{t('auth.totp.title')}</CardTitle>
@@ -292,7 +292,7 @@ export default function Login() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
+    <div className="flex min-h-screen items-center justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
       <Card className="w-full max-w-sm">
         <CardHeader>
           <div className="flex items-center gap-2.5 justify-center mb-2">

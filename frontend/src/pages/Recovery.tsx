@@ -109,7 +109,7 @@ export default function Recovery() {
 
   if (step === 'deriving') {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <div className="flex min-h-screen items-center justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
         <Card className="w-full max-w-sm">
           <CardContent className="pt-8 pb-8 flex flex-col items-center gap-3">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -123,7 +123,7 @@ export default function Recovery() {
 
   if (step === 'done') {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <div className="flex min-h-screen items-center justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
         <Card className="w-full max-w-sm text-center">
           <CardHeader><CardTitle>{t('recovery.success.title')}</CardTitle></CardHeader>
           <CardContent className="space-y-4">
@@ -136,7 +136,7 @@ export default function Recovery() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
+    <div className="flex min-h-screen items-center justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
       <Card className="w-full max-w-md">
         <CardHeader>
           <div className="flex items-center gap-2.5 justify-center mb-2">

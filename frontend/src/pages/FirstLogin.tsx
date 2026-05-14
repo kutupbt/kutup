@@ -150,7 +150,7 @@ export default function FirstLogin() {
 
   if (step === 'generating' || step === 'submitting') {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <div className="flex min-h-screen items-center justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
         <Card className="w-full max-w-sm">
           <CardContent className="pt-8 pb-8 flex flex-col items-center gap-3">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -168,7 +168,7 @@ export default function FirstLogin() {
 
   if (step === 'mnemonic' && keys) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <div className="flex min-h-screen items-center justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
         <Card className="w-full max-w-xl">
           <CardHeader><CardTitle>{t('register.mnemonic.title')}</CardTitle></CardHeader>
           <CardContent className="space-y-4">
@@ -190,7 +190,7 @@ export default function FirstLogin() {
 
   if (step === 'confirm') {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <div className="flex min-h-screen items-center justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
         <Card className="w-full max-w-xl">
           <CardHeader><CardTitle>{t('register.confirm.title')}</CardTitle></CardHeader>
           <CardContent>
@@ -218,7 +218,7 @@ export default function FirstLogin() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
+    <div className="flex min-h-screen items-center justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
       <Card className="w-full max-w-sm">
         <CardHeader>
           <div className="flex items-center gap-2.5 justify-center mb-2">
