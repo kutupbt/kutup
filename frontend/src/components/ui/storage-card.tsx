@@ -27,7 +27,11 @@ export function StorageCard({ used, quota, onUpgrade, className }: StorageCardPr
     <Surface className={cn('p-3.5', className)}>
       <div className="flex items-center gap-2.5 mb-2.5">
         <div className="w-8 h-8 rounded-[10px] bg-primary-faint flex items-center justify-center text-primary shrink-0">
-          <Icon d={ICONS.shield} size={16} />
+          {/* hardDrive icon — same as the desktop Sidebar's storage card so
+              the mobile + desktop storage chips read as one design family.
+              (Previously this used `shield`, which read as a security badge
+              rather than a storage indicator.) */}
+          <Icon d={ICONS.hardDrive} size={16} />
         </div>
         <div className="flex-1">
           <div className="text-[13px] font-semibold text-text-primary">
