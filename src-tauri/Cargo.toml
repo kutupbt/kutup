@@ -38,12 +38,21 @@ tauri-plugin-notification = "2"      # system notifications
 tauri-plugin-store = "2"             # encrypted-at-rest preferences store for settings
 tauri-plugin-process = "2"           # restart / exit, used by the updater flow
 
-# Desktop-only: auto-updater + OS keychain (`keyring` crate).
+# Desktop-only: auto-updater. Mobile gets updates via the App Store /
+# TestFlight / Play Store, so the in-app updater is irrelevant (and
+# tauri-plugin-updater doesn't compile for iOS/Android targets anyway).
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
+
+# OS keychain (`keyring` crate) — desktop **+ iOS**.
 #
 # keyring v3 ships NO default backend — each platform's credential store
 # is an opt-in feature, and the dep for each is only compiled on its
 # target. We enable:
-#   • apple-native        → macOS Keychain (Security framework)
+#   • apple-native        → macOS Keychain *and iOS Keychain Services*
+#                           (both call Apple's Security framework:
+#                           kSecClassGenericPassword via SecItemAdd /
+#                           SecItemCopyMatching / SecItemDelete)
 #   • windows-native      → Windows Credential Manager
 #   • sync-secret-service → Linux: the freedesktop D-Bus Secret Service API
 #                           (served by gnome-keyring / KWallet / keepassxc /
@@ -51,16 +60,22 @@ tauri-plugin-process = "2"           # restart / exit, used by the updater flow
 #                           gnome-keyring-specific API
 #   • crypto-rust         → pure-Rust crypto for the secret-service
 #                           transport (no OpenSSL build dependency)
-# If no Secret Service provider is running, Entry ops return
-# NoStorageAccess → the JS side surfaces a "stay-signed-in unavailable"
-# toast and falls back to re-login per launch (graceful degradation).
 #
-# Mobile (iOS Keychain Services, Android Keystore) is a follow-up slice
-# with different APIs, so we gate the dep to desktop and stub the
-# JS-exposed commands on mobile. (Stay on keyring v3 — v4 needs Rust 1.88;
-# our MSRV is 1.77.)
-[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-tauri-plugin-updater = "2"
+# Per-platform behavior:
+#   • macOS / Windows / iOS → vault commands succeed, session persists
+#     across app restarts. iOS does NOT need an explicit
+#     `keychain-access-groups` entitlement for Simulator dev; for
+#     real-device / TestFlight builds the entitlement should be present
+#     (tauri-action / `tauri ios init` generate a default).
+#   • Linux → if no Secret Service provider is running, Entry ops return
+#     NoStorageAccess; the JS side surfaces a "stay-signed-in unavailable"
+#     toast and falls back to re-login per launch (graceful degradation).
+#   • Android → no `keyring` backend exists. Gated out below. A future
+#     custom Tauri plugin wrapping Android Keystore is the path; for
+#     now the vault_set/get/delete commands stub-fail on Android only.
+#
+# (Stay on keyring v3 — v4 needs Rust 1.88; our MSRV is 1.77.)
+[target.'cfg(not(target_os = "android"))'.dependencies]
 keyring = { version = "3", default-features = false, features = [
   "apple-native",
   "windows-native",
