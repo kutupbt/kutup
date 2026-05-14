@@ -35,7 +35,12 @@
     "signOutConfirmTitle": "Sign out of Kutup?",
     "signOutConfirmDescription": "You'll need to sign in again with your password to access your encrypted files.",
     "switchToLight": "Switch to light mode",
-    "switchToDark": "Switch to dark mode"
+    "switchToDark": "Switch to dark mode",
+    "files": "Files",
+    "shared": "Shared",
+    "trash": "Trash",
+    "account": "Account",
+    "primary": "Primary navigation"
   },
   "auth": {
     "signIn": "Sign in",
@@ -480,5 +485,93 @@
       "addCursor": "Add cursor at click position",
       "rectSelect": "Rectangular selection"
     }
+  },
+  "mobile": {
+    "back": "Back",
+    "cancel": "Cancel",
+    "files": {
+      "subtitle": "{{folders}} folders · {{files}} files",
+      "search": {
+        "placeholder": "Search in Kutup…",
+        "empty": "No results for \"{{q}}\"",
+        "clear": "Clear search"
+      },
+      "empty": {
+        "subtitle": "Try a different search term"
+      },
+      "chips": {
+        "all": "All",
+        "recent": "Recent",
+        "photos": "Photos",
+        "documents": "Documents",
+        "pdfs": "PDFs",
+        "audio": "Audio"
+      }
+    },
+    "section": {
+      "folders": "Folders · {{n}}",
+      "files": "Files · {{n}}"
+    },
+    "shared": {
+      "subtitle": "{{n}} shared with you",
+      "empty": {
+        "title": "Nothing shared yet",
+        "subtitle": "Send a file to anyone — even without a Kutup account",
+        "hint": "Open a file and tap Share to start"
+      }
+    },
+    "trash": {
+      "subtitle": "Items are permanently deleted after 30 days",
+      "empty": {
+        "title": "Trash is empty",
+        "subtitle": "Deleted files appear here for 30 days",
+        "action": "Empty"
+      },
+      "restore": "Restore"
+    },
+    "sheet": {
+      "add": {
+        "title": "Add to Kutup",
+        "upload": "Upload files",
+        "uploadSub": "From your device",
+        "uploadFolder": "Upload folder",
+        "newFolder": "New folder",
+        "newNote": "New note",
+        "newWhiteboard": "New whiteboard",
+        "pasteLink": "Paste encrypted link",
+        "pasteLinkSub": "Decrypt a shared file"
+      }
+    },
+    "item": {
+      "open": "Open",
+      "downloadZip": "Download as ZIP",
+      "download": "Download",
+      "share": "Share",
+      "rename": "Rename",
+      "favorite": "Add to favorites",
+      "trash": "Move to Trash",
+      "e2eBadge": "End-to-end encrypted"
+    },
+    "account": {
+      "profile": "Profile",
+      "encryptionKeys": "Encryption keys",
+      "encryptionKeys.sub": "Manage your recovery phrase",
+      "security": "Security",
+      "notifications": "Notifications",
+      "language": "Language",
+      "about": "About Kutup",
+      "admin": "Admin",
+      "signOut": "Sign out",
+      "darkMode": "Dark mode",
+      "lightMode": "Light mode",
+      "storage": "Storage",
+      "storageUsed": "{{used}} used",
+      "storageOf": "of {{total}}",
+      "upgrade": "Upgrade",
+      "freePlan": "Free plan",
+      "adminPlan": "Admin",
+      "tagline": "Kutup · End-to-end encrypted drive"
+    },
+    "actionUnavailable": "Tap a folder on desktop to create one — mobile flow coming soon."
   }
 }

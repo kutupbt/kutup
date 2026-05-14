@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Home, Users, Settings, LogOut, ShieldCheck, Sun, Moon, HardDrive } from 'lucide-react'
+import { Home, Users, Settings, LogOut, ShieldCheck, Sun, Moon, HardDrive, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAppSelector, useAppDispatch } from '@/store'
 import { logout } from '@/store/authSlice'
@@ -117,6 +117,11 @@ export default function Sidebar({ viewMode, sharedCount, onGoHome, onGoShared }:
           active={viewMode === 'shared'}
           badge={sharedCount}
           onClick={onGoShared}
+        />
+        <NavRow
+          icon={Trash2}
+          label={t('nav.trash', 'Trash')}
+          onClick={() => navigate('/drive/trash')}
         />
       </nav>
 

@@ -35,7 +35,12 @@
     "signOutConfirmTitle": "Kutup'tan çıkış yapılsın mı?",
     "signOutConfirmDescription": "Şifrelenmiş dosyalarınıza erişmek için parolanızla yeniden giriş yapmanız gerekecek.",
     "switchToLight": "Açık temaya geç",
-    "switchToDark": "Koyu temaya geç"
+    "switchToDark": "Koyu temaya geç",
+    "files": "Dosyalar",
+    "shared": "Paylaşılan",
+    "trash": "Çöp Kutusu",
+    "account": "Hesap",
+    "primary": "Birincil gezinme"
   },
   "auth": {
     "signIn": "Giriş yap",
@@ -480,5 +485,93 @@
       "addCursor": "Tıklanan konuma imleç ekle",
       "rectSelect": "Dikdörtgen seçim"
     }
+  },
+  "mobile": {
+    "back": "Geri",
+    "cancel": "İptal",
+    "files": {
+      "subtitle": "{{folders}} klasör · {{files}} dosya",
+      "search": {
+        "placeholder": "Kutup'ta ara…",
+        "empty": "\"{{q}}\" için sonuç yok",
+        "clear": "Aramayı temizle"
+      },
+      "empty": {
+        "subtitle": "Farklı bir arama terimi deneyin"
+      },
+      "chips": {
+        "all": "Tümü",
+        "recent": "Yakınlarda",
+        "photos": "Fotoğraflar",
+        "documents": "Belgeler",
+        "pdfs": "PDF'ler",
+        "audio": "Ses"
+      }
+    },
+    "section": {
+      "folders": "Klasörler · {{n}}",
+      "files": "Dosyalar · {{n}}"
+    },
+    "shared": {
+      "subtitle": "Sizinle {{n}} paylaşıldı",
+      "empty": {
+        "title": "Henüz paylaşılan yok",
+        "subtitle": "Bir dosyayı kimseye gönderin — Kutup hesabı olmasa bile",
+        "hint": "Bir dosya açın ve başlamak için Paylaş'a dokunun"
+      }
+    },
+    "trash": {
+      "subtitle": "Öğeler 30 gün sonra kalıcı olarak silinir",
+      "empty": {
+        "title": "Çöp kutusu boş",
+        "subtitle": "Silinen dosyalar burada 30 gün görünür",
+        "action": "Boşalt"
+      },
+      "restore": "Geri yükle"
+    },
+    "sheet": {
+      "add": {
+        "title": "Kutup'a Ekle",
+        "upload": "Dosya yükle",
+        "uploadSub": "Cihazınızdan",
+        "uploadFolder": "Klasör yükle",
+        "newFolder": "Yeni klasör",
+        "newNote": "Yeni not",
+        "newWhiteboard": "Yeni beyaz tahta",
+        "pasteLink": "Şifreli bağlantı yapıştır",
+        "pasteLinkSub": "Paylaşılan bir dosyanın şifresini çöz"
+      }
+    },
+    "item": {
+      "open": "Aç",
+      "downloadZip": "ZIP olarak indir",
+      "download": "İndir",
+      "share": "Paylaş",
+      "rename": "Yeniden adlandır",
+      "favorite": "Favorilere ekle",
+      "trash": "Çöp kutusuna taşı",
+      "e2eBadge": "Uçtan uca şifreli"
+    },
+    "account": {
+      "profile": "Profil",
+      "encryptionKeys": "Şifreleme anahtarları",
+      "encryptionKeys.sub": "Kurtarma ifadenizi yönetin",
+      "security": "Güvenlik",
+      "notifications": "Bildirimler",
+      "language": "Dil",
+      "about": "Kutup Hakkında",
+      "admin": "Yönetici",
+      "signOut": "Çıkış yap",
+      "darkMode": "Karanlık mod",
+      "lightMode": "Aydınlık mod",
+      "storage": "Depolama",
+      "storageUsed": "{{used}} kullanıldı",
+      "storageOf": "/ {{total}}",
+      "upgrade": "Yükselt",
+      "freePlan": "Ücretsiz plan",
+      "adminPlan": "Yönetici",
+      "tagline": "Kutup · Uçtan uca şifreli sürücü"
+    },
+    "actionUnavailable": "Oluşturmak için masaüstünde bir klasöre dokunun — mobil akış yakında."
   }
 }

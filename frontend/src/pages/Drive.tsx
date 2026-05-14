@@ -34,6 +34,9 @@ import { downloadAsZip, FsaRequiredError } from '@/lib/zipDownload'
 import Sidebar from '@/components/layout/Sidebar'
 import DriveBreadcrumb from '@/components/drive/DriveBreadcrumb'
 import DriveTopBar from '@/components/drive/DriveTopBar'
+import { useIsMobile } from '@/hooks/useIsMobile'
+import { MobileShell } from '@/components/mobile/MobileShell'
+import { MobileFilesPage } from '@/pages/mobile/MobileFilesPage'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -80,6 +83,10 @@ export default function Drive() {
   const masterKey = useAppSelector(selectMasterKey)
   const privateKey = useAppSelector(selectPrivateKey)
   const auth = useAppSelector((s) => s.auth)
+  // Below `md:` we render the mobile shell (bottom-tab nav + design-driven
+  // file/folder views). Desktop keeps the existing Sidebar + DriveTopBar +
+  // ContextMenu-wrapped FileTable. Both branches share the data state below.
+  const isMobile = useIsMobile()
 
   const [collections, setCollections] = useState<Collection[]>([])
   const [currentFolder, setCurrentFolder] = useState<Collection | null>(null)
@@ -948,6 +955,57 @@ export default function Drive() {
       setShortcutsOpen((o) => !o)
     },
   })
+
+  // Mobile branch — bottom-tab navigation shell, design-driven Files page.
+  // Returns early so the desktop layout below never mounts on phones (avoids
+  // mounting the desktop Sidebar / drag-and-drop main / FileTable, all of
+  // which assume a wide viewport).
+  //
+  // PR 2 wires the actions that DON'T require dialogs (upload-files,
+  // upload-folder, new-whiteboard); New folder / New note / item-actions
+  // (rename / share / details) get wired in PR 3 once the design's mobile
+  // sheet variants for those flows are in place.
+  if (isMobile) {
+    return (
+      <MobileShell>
+        <MobileFilesPage
+          folders={visibleFolders}
+          files={visibleFiles}
+          currentFolder={currentFolder}
+          usedBytes={auth.storageUsedBytes}
+          quotaBytes={auth.storageQuotaBytes}
+          onOpenFolder={enterFolder}
+          onOpenFile={handleFileClick}
+          onBack={() => {
+            if (navigationStack.length > 0) {
+              const next = navigationStack[navigationStack.length - 1]
+              setNavigationStack((prev) => prev.slice(0, -1))
+              setCurrentFolder(next)
+              setFiles([])
+            } else {
+              goHome()
+            }
+          }}
+          onItemMore={setDetailItem}
+          onUploadFiles={() => triggerUpload()}
+          onUploadFolder={() => triggerFolderUpload()}
+          onNewFolder={() => {
+            // PR 3: mobile NewFolder sheet. For now show a stub toast so the
+            // FAB sheet item isn't silently dead.
+            toast.message(t('mobile.sheet.add.newFolder', 'New folder'), {
+              description: t('mobile.actionUnavailable', 'Tap a folder on desktop to create one — mobile flow coming soon.'),
+            })
+          }}
+          onNewNote={() => {
+            toast.message(t('mobile.sheet.add.newNote', 'New note'), {
+              description: t('mobile.actionUnavailable', 'Tap a folder on desktop to create one — mobile flow coming soon.'),
+            })
+          }}
+          onNewWhiteboard={() => handleCreateOffice('excalidraw')}
+        />
+      </MobileShell>
+    )
+  }
 
   return (
     <div className="flex h-screen overflow-hidden">

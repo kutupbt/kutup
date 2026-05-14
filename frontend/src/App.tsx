@@ -23,6 +23,9 @@ import Settings from './pages/Settings'
 import PublicShare from './pages/PublicShare'
 import FileEditorPage from './pages/FileEditorPage'
 import ServerSelect from './pages/ServerSelect'
+import TrashPage from './pages/TrashPage'
+import MobileSharedPage from './pages/mobile/MobileSharedPage'
+import MobileAccountPage from './pages/mobile/MobileAccountPage'
 
 function snapshotFromState(): SessionPayload | null {
   const { auth } = store.getState()
@@ -158,6 +161,11 @@ export default function App() {
 
         <Route element={<ProtectedRoute />} errorElement={<RouteErrorBoundary />}>
           <Route path="/drive" element={<Drive />} />
+          {/* Mobile-only bottom-tab sibling routes — desktop redirects via useIsMobile.
+              `/drive/trash` is served on both; the page forks its layout. */}
+          <Route path="/drive/shared" element={<MobileSharedPage />} />
+          <Route path="/drive/trash" element={<TrashPage />} />
+          <Route path="/drive/account" element={<MobileAccountPage />} />
           <Route path="/file/:cid/:fid" element={<FileEditorPage />} />
           <Route path="/settings" element={<Settings />} />
           <Route element={<AdminRoute />}>
