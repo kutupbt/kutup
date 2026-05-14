@@ -603,6 +603,13 @@
     "item.folder": "Folder",
     "item.sharedFolder": "Shared folder",
     "item.color": "Color",
-    "item.colorClear": "Clear color"
+    "item.colorClear": "Clear color",
+    "totp": {
+      "setupInstructions": "Open your authenticator app (Google Authenticator, 1Password, Authy, etc.) and add an account by scanning the QR code below — or pasting the key manually. Then enter the 6-digit code it generates.",
+      "copy": "Copy",
+      "copySecret": "Copy secret",
+      "enterCodeLabel": "Enter the 6-digit code",
+      "lossNote": "If you lose access to your authenticator app, use your 24-word recovery phrase to restore the account."
+    }
   }
 }

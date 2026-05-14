@@ -29,6 +29,7 @@ import MobileAccountPage from './pages/mobile/MobileAccountPage'
 import MobileProfilePage from './pages/mobile/account/MobileProfilePage'
 import MobileEncryptionKeysPage from './pages/mobile/account/MobileEncryptionKeysPage'
 import MobileSecurityPage from './pages/mobile/account/MobileSecurityPage'
+import MobileTotpSetupPage from './pages/mobile/account/MobileTotpSetupPage'
 import MobileNotificationsPage from './pages/mobile/account/MobileNotificationsPage'
 import MobileLanguagePage from './pages/mobile/account/MobileLanguagePage'
 import MobileAboutPage from './pages/mobile/account/MobileAboutPage'
@@ -180,6 +181,10 @@ export default function App() {
           <Route path="/drive/account/profile" element={<MobileProfilePage />} />
           <Route path="/drive/account/encryption-keys" element={<MobileEncryptionKeysPage />} />
           <Route path="/drive/account/security" element={<MobileSecurityPage />} />
+          <Route
+            path="/drive/account/security/totp-setup"
+            element={<MobileTotpSetupPage />}
+          />
           <Route path="/drive/account/notifications" element={<MobileNotificationsPage />} />
           <Route path="/drive/account/language" element={<MobileLanguagePage />} />
           {/* The Account → Admin row navigates straight to /admin (existing

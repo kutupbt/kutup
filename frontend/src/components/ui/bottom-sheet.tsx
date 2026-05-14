@@ -11,6 +11,30 @@ import { cn } from '@/lib/utils'
  * API matches Radix Sheet so we can swap them per surface if needed.
  *
  * Background scrim: Vaul renders a dimmed overlay automatically.
+ *
+ * ─── WHEN TO USE A BOTTOM SHEET (vs a full page) ────────────────────────
+ *
+ * **Bottom sheets are for ephemeral, fully in-context interactions** —
+ * the user picks an action / confirms / glances + closes. Examples that
+ * belong in a BottomSheet:
+ *   - Item action menus (Open / Download / Share / Rename / Delete)
+ *   - Color pickers
+ *   - "Create something" launchers (the FAB sheet on Files)
+ *   - Single-tap confirmations
+ *
+ * **DO NOT use a BottomSheet for any flow where the user needs to leave
+ * the app, copy state out, or do something that takes more than a few
+ * seconds.** Sheets dismiss on accidental swipes / background-foreground
+ * cycles / app-switches, and state vanishes with them. Use a dedicated
+ * route instead. Examples that must be pages, not sheets:
+ *   - TOTP / 2FA setup (user switches to an authenticator app)
+ *   - File uploads with progress
+ *   - Recovery-phrase reveal / verify
+ *   - Long forms (anything beyond ~3 fields)
+ *   - Anything the user might want to bookmark or refresh on
+ *
+ * Rule of thumb: if you wouldn't comfortably hand someone a 3-second
+ * countdown to interact with the sheet, it should be a page.
  */
 interface BottomSheetProps {
   open: boolean

@@ -603,6 +603,13 @@
     "item.folder": "Klasör",
     "item.sharedFolder": "Paylaşılan klasör",
     "item.color": "Renk",
-    "item.colorClear": "Rengi temizle"
+    "item.colorClear": "Rengi temizle",
+    "totp": {
+      "setupInstructions": "Kimlik doğrulama uygulamanızı (Google Authenticator, 1Password, Authy, vb.) açın ve aşağıdaki QR kodu tarayarak veya anahtarı manuel olarak yapıştırarak bir hesap ekleyin. Ardından oluşturduğu 6 haneli kodu girin.",
+      "copy": "Kopyala",
+      "copySecret": "Anahtarı kopyala",
+      "enterCodeLabel": "6 haneli kodu girin",
+      "lossNote": "Kimlik doğrulama uygulamanıza erişimi kaybederseniz, hesabı geri yüklemek için 24 kelimelik kurtarma ifadenizi kullanın."
+    }
   }
 }

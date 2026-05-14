@@ -1,17 +1,12 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
-import { QRCodeSVG } from 'qrcode.react'
 import { toast } from 'sonner'
-import { Loader2 } from 'lucide-react'
 import { Icon, ICONS } from '@/components/mobile/Icon'
 import { MobileAccountSubPage } from '@/pages/mobile/account/MobileAccountSubPage'
 import { Surface } from '@/components/ui/surface'
 import { PressableRow } from '@/components/ui/pressable-row'
 import { EmptyState } from '@/components/ui/empty-state'
-import { BottomSheet } from '@/components/ui/bottom-sheet'
 import { Button } from '@/components/ui/button'
 import {
   AlertDialog,
@@ -43,53 +38,18 @@ import { cn } from '@/lib/utils'
  * the mobile flow stays in lock-step with desktop Settings.
  */
 
-const totpVerifySchema = z.object({
-  code: z.string().regex(/^\d{6}$/, 'Enter the 6-digit code'),
-})
-type TotpVerifyForm = z.infer<typeof totpVerifySchema>
-
 export default function MobileSecurityPage() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const auth = useAppSelector((s) => s.auth)
   const totpOn = !!auth.totpEnabled
 
-  // --- TOTP setup state ---------------------------------------------------
-  const [totpSetup, setTotpSetup] = useState<{ secret: string; qrUri: string } | null>(null)
-  const [totpSheetOpen, setTotpSheetOpen] = useState(false)
-  const [setupLoading, setSetupLoading] = useState(false)
+  // TOTP setup is its own page (`/drive/account/security/totp-setup`),
+  // not a bottom sheet — the user needs to switch to their authenticator
+  // app to add the key, and a sheet would get dismissed on the
+  // background-foreground cycle. A durable URL persists state cleanly.
   const [disableOpen, setDisableOpen] = useState(false)
-  const totpForm = useForm<TotpVerifyForm>({ resolver: zodResolver(totpVerifySchema) })
-
-  async function startTOTPSetup() {
-    setSetupLoading(true)
-    try {
-      const res = await api.post('/user/2fa/setup')
-      setTotpSetup(res.data)
-      setTotpSheetOpen(true)
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } }).response?.data?.error
-      toast.error(msg ?? t('settings.totp.setupFailed'))
-    } finally {
-      setSetupLoading(false)
-    }
-  }
-
-  async function onVerifyTOTP({ code }: TotpVerifyForm) {
-    try {
-      await api.post('/user/2fa/verify', { code })
-      dispatch(updateTotpEnabled(true))
-      setTotpSheetOpen(false)
-      setTotpSetup(null)
-      totpForm.reset()
-      toast.success(t('settings.totp.enabledToast'))
-    } catch (err: unknown) {
-      const msg =
-        (err as { response?: { data?: { error?: string } } }).response?.data?.error ??
-        'Invalid code'
-      totpForm.setError('code', { message: msg })
-    }
-  }
 
   async function disableTOTP() {
     try {
@@ -194,10 +154,8 @@ export default function MobileSecurityPage() {
           ) : (
             <Button
               className="w-full min-h-tap"
-              onClick={startTOTPSetup}
-              disabled={setupLoading}
+              onClick={() => navigate('/drive/account/security/totp-setup')}
             >
-              {setupLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               {t('settings.totp.setupButton', 'Set up TOTP')}
             </Button>
           )}
@@ -268,66 +226,8 @@ export default function MobileSecurityPage() {
         )}
       </div>
 
-      {/* TOTP setup bottom sheet */}
-      <BottomSheet
-        open={totpSheetOpen}
-        onOpenChange={(open) => {
-          setTotpSheetOpen(open)
-          if (!open) {
-            setTotpSetup(null)
-            totpForm.reset()
-          }
-        }}
-        title={t('settings.totp.setupTitle', 'Set up TOTP')}
-      >
-        <div className="px-5 py-4 flex flex-col items-center gap-4">
-          <p className="text-[13px] text-text-secondary text-center max-w-xs">
-            {t('settings.totp.scanInstructions', 'Scan the QR code with your authenticator app, then enter the 6-digit code it generates.')}
-          </p>
-          {totpSetup && (
-            <>
-              <div className="p-3 bg-white rounded-[var(--radius-lg)] shadow-sm">
-                <QRCodeSVG value={totpSetup.qrUri} size={192} />
-              </div>
-              <div className="w-full">
-                <div className="text-[11.5px] font-semibold tracking-[0.06em] uppercase text-text-tertiary mb-1">
-                  {t('settings.totp.secret', 'Or enter the key manually')}
-                </div>
-                <code className="block text-[12px] font-mono bg-surface-sunken text-text-primary px-3 py-2 rounded-[10px] break-all select-all">
-                  {totpSetup.secret}
-                </code>
-              </div>
-              <form
-                onSubmit={totpForm.handleSubmit(onVerifyTOTP)}
-                className="w-full flex flex-col gap-3"
-              >
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]{6}"
-                  maxLength={6}
-                  autoComplete="one-time-code"
-                  autoFocus
-                  placeholder="000000"
-                  className="w-full h-12 text-center text-[24px] tracking-[0.5em] font-mono rounded-[10px] border border-border bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary"
-                  {...totpForm.register('code')}
-                />
-                {totpForm.formState.errors.code && (
-                  <p className="text-[12px] text-destructive text-center" role="alert">
-                    {totpForm.formState.errors.code.message}
-                  </p>
-                )}
-                <Button type="submit" className="w-full min-h-tap" disabled={totpForm.formState.isSubmitting}>
-                  {totpForm.formState.isSubmitting && (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  )}
-                  {t('settings.totp.verify', 'Verify')}
-                </Button>
-              </form>
-            </>
-          )}
-        </div>
-      </BottomSheet>
+      {/* TOTP setup is its own page now (`/drive/account/security/totp-setup`)
+          — see BottomSheet's "WHEN TO USE" doc comment for the rationale. */}
 
       {/* Disable TOTP confirm */}
       <AlertDialog open={disableOpen} onOpenChange={setDisableOpen}>
