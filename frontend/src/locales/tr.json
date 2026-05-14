@@ -330,7 +330,8 @@
       "presenceColor": "Görünürlük rengi",
       "presenceColorDesc": "İşbirlikçi imleçlerde ve hücre düzenleme vurgularında görünen renginiz. Notlar ve ofis belgeleri arasında sabittir.",
       "presenceColorClear": "Sıfırla",
-      "presenceColorFailed": "Renk güncellenemedi"
+      "presenceColorFailed": "Renk güncellenemedi",
+      "presenceColorSelected": "Seçili sunum rengi {{color}}"
     },
     "totp": {
       "title": "İki Faktörlü Kimlik Doğrulama",

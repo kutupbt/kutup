@@ -38,6 +38,12 @@ interface MobileFilesPageProps {
   folders: Collection[]
   files: DecryptedFile[]
   currentFolder: Collection | null
+  /** True when `currentFolder` is the user's root "My Files" collection (or
+   *  unset). Drives the large-title pattern + suppresses the Back button at
+   *  the top level. In kutup the root Collection is non-null (unlike the
+   *  design prototype), so this must be derived in `Drive.tsx` rather than
+   *  inferred from `currentFolder == null`. */
+  isAtRoot: boolean
   /** Total bytes used by this user. */
   usedBytes: number
   /** Storage quota in bytes. */
@@ -71,6 +77,7 @@ export function MobileFilesPage(props: MobileFilesPageProps) {
     folders,
     files,
     currentFolder,
+    isAtRoot,
     usedBytes,
     quotaBytes,
     onOpenFolder,
@@ -104,10 +111,13 @@ export function MobileFilesPage(props: MobileFilesPageProps) {
   }, [files, search])
 
   const isEmpty = filteredFolders.length === 0 && filteredFiles.length === 0
-  const isRoot = currentFolder === null
-  const showLargeTitle = isRoot && !searchOpen
+  const showLargeTitle = isAtRoot && !searchOpen
 
-  const titleText = currentFolder ? currentFolder.decryptedName ?? '' : t('nav.files', 'Files')
+  // At root we show the section label ("My Files"); inside a sub-folder we
+  // show the folder's decrypted name.
+  const titleText = isAtRoot
+    ? t('nav.files', 'Files')
+    : currentFolder?.decryptedName ?? ''
   const subtitleText = showLargeTitle
     ? t('mobile.files.subtitle', '{{folders}} folders · {{files}} files', {
         folders: folders.length,
@@ -121,7 +131,7 @@ export function MobileFilesPage(props: MobileFilesPageProps) {
         title={titleText}
         subtitle={subtitleText}
         large={showLargeTitle}
-        back={!!currentFolder}
+        back={!isAtRoot}
         onBack={onBack}
         right={
           searchOpen ? null : (
@@ -155,13 +165,13 @@ export function MobileFilesPage(props: MobileFilesPageProps) {
       )}
 
       <div className="flex-1 overflow-auto px-3.5 pt-3 pb-24">
-        {isRoot && !searchOpen && (
+        {isAtRoot && !searchOpen && (
           <div className="mb-4">
             <StorageCard used={usedBytes} quota={quotaBytes} />
           </div>
         )}
 
-        {isRoot && !searchOpen && (
+        {isAtRoot && !searchOpen && (
           <div className="-mx-3.5 px-3.5 mb-4 flex gap-2 overflow-x-auto pb-1">
             {CHIPS.map((c) => {
               const active = activeChip === c.id

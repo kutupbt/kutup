@@ -966,12 +966,23 @@ export default function Drive() {
   // (rename / share / details) get wired in PR 3 once the design's mobile
   // sheet variants for those flows are in place.
   if (isMobile) {
+    // "At root" = we're at the user's My Files collection AND there are no
+    // sub-folders on the breadcrumb stack. Drives the large-title pattern +
+    // suppresses the Back button. kutup's root is a non-null Collection
+    // (unlike the design prototype's `null` root) so this can't be inferred
+    // from `currentFolder == null`.
+    const isAtRoot =
+      navigationStack.length === 0 &&
+      (!currentFolder ||
+        (myFilesCollection != null && currentFolder.id === myFilesCollection.id))
+
     return (
       <MobileShell>
         <MobileFilesPage
           folders={visibleFolders}
           files={visibleFiles}
           currentFolder={currentFolder}
+          isAtRoot={isAtRoot}
           usedBytes={auth.storageUsedBytes}
           quotaBytes={auth.storageQuotaBytes}
           onOpenFolder={enterFolder}
