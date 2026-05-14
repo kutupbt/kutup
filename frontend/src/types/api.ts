@@ -74,6 +74,13 @@ export interface AdminStats {
   totalFiles: number
   totalStorageUsedBytes: number
   totalCollections: number
+  /**
+   * Total storage capacity advertised by the server (S3 bucket / volume size).
+   * `0` means "unknown" — the admin UI hides the capacity readout in that case.
+   * Sourced from the `STORAGE_TOTAL_BYTES` env var on the backend; future PR
+   * may auto-detect this from the SeaweedFS master.
+   */
+  storageTotalBytes: number
 }
 
 export interface AdminSettings {

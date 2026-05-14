@@ -389,48 +389,104 @@
   "admin": {
     "title": "Yönetici Paneli",
     "createUser": "Kullanıcı oluştur",
-    "notice": "Dosya adları ve içerikleri şifrelidir. Yöneticiler kullanıcı verilerini göremez.",
-    "stats": {
-      "totalUsers": "Toplam kullanıcı",
-      "activeUsers": "Aktif kullanıcı",
-      "totalFiles": "Toplam dosya",
-      "collections": "Koleksiyonlar",
-      "storageUsed": "Kullanılan depolama"
+    "sidebar": {
+      "drive": "← Sürücü",
+      "adminSection": "Yönetici",
+      "signedInAs": "Yönetici olarak giriş yapıldı",
+      "totpOff": "2FA kapalı · hemen etkinleştirin"
     },
-    "registration": {
-      "public": "Genel kayıt",
-      "enabled": "Etkin",
-      "disabled": "Devre dışı"
+    "topBar": {
+      "overviewTitle": "Yönetici Genel Bakış",
+      "overviewSubtitle": "kutup · kendi sunucunuzda, uçtan uca şifreli",
+      "usersTitle": "Kullanıcılar",
+      "usersSubtitle": "Bu sunucuda {{count}} hesap",
+      "settingsTitle": "Ayarlar",
+      "settingsSubtitle": "Kayıt ve depolamayı yapılandırın"
     },
-    "table": {
-      "email": "E-posta",
-      "username": "Kullanıcı adı",
-      "quota": "Kota",
-      "used": "Kullanılan",
-      "status": "Durum",
-      "totp": "TOTP",
-      "joined": "Katıldı",
-      "active": "Aktif",
-      "inactive": "Devre dışı",
-      "disable": "Devre dışı bırak",
-      "enable": "Etkinleştir",
-      "delete": "Sil"
+    "kpi": {
+      "collections": "Koleksiyonlar"
+    },
+    "encryption": {
+      "title": "Uçtan uca şifreli",
+      "body": "Dosya adları ve içerikleri her cihazda şifrelenir. Yöneticiler hesapları yönetebilir ancak kullanıcı verilerini okuyamaz."
+    },
+    "overview": {
+      "topUsersTitle": "Depolamaya göre en üst kullanıcılar",
+      "topUsersEmpty": "Henüz kullanıcı yok.",
+      "totalCapacity": "Toplam kapasite: {{total}}",
+      "storageHint": {
+        "of": "{{total}} tahsisli",
+        "unknown": "tüm hesaplarda"
+      },
+      "footnote": "Etkinlik akışı, sunucu çalışma süresi ve TLS durumu kutup'un arka ucu tarafından henüz sunulmuyor — ilgili uç noktalar geldiğinde burada görünecek."
+    },
+    "users": {
+      "exportCsv": "CSV dışa aktar",
+      "showing": "{{total}} kullanıcıdan {{count}} tanesi gösteriliyor",
+      "pageOf": "Sayfa {{current}} / {{total}}",
+      "prev": "Önceki",
+      "next": "Sonraki",
+      "totpEnabled": "Etkin",
+      "menuLabel": "İşlemler",
+      "column": {
+        "user": "Kullanıcı",
+        "status": "Durum",
+        "storage": "Depolama",
+        "totp": "2FA",
+        "joined": "Katıldı"
+      },
+      "menu": {
+        "editQuota": "Kotayı düzenle",
+        "resetPassword": "Şifreyi sıfırla",
+        "requireTotp": "2FA gerektir",
+        "disableTotp": "2FA'yı devre dışı bırak",
+        "makeAdmin": "Yönetici yap",
+        "removeAdmin": "Yönetici rolünü kaldır",
+        "disable": "Hesabı devre dışı bırak",
+        "reenable": "Hesabı yeniden etkinleştir",
+        "delete": "Kalıcı olarak sil"
+      }
+    },
+    "editQuota": {
+      "title": "Depolama kotasını düzenle",
+      "desc": "{{email}} için — anında uygulanır.",
+      "placeholder": "ör. 25",
+      "save": "Kaydet",
+      "cancel": "İptal"
+    },
+    "settings": {
+      "registrationTitle": "Kayıt",
+      "registrationDesc": "Bu Kutup sunucusuna kimlerin kayıt olabileceğini kontrol edin.",
+      "storageTitle": "Depolama arka ucu",
+      "storageDesc": "Salt okunur — kutup.yml yapılandırma / env değişkenleriyle değiştirin.",
+      "driver": "Sürücü",
+      "driverValue": "SeaweedFS · S3-uyumlu",
+      "storageUsed": "Kullanılan depolama",
+      "storageUsedBody": "{{total}} alandan {{used}} kullanıldı · {{free}} boş",
+      "storageUsedUnknown": "Kapasite bilinmiyor — görüntülemek için STORAGE_TOTAL_BYTES değişkenini ayarlayın.",
+      "storageEncryption": "Şifreleme",
+      "moreSoonNote": "Daha fazla yönetici kontrolü — zorunlu 2FA, kota varsayılanları, tehlikeli bölge eylemleri — arka uç büyüdükçe gelecek."
+    },
+    "notWired": {
+      "resetPassword": "Şifre sıfırlama uç noktası henüz bağlı değil — şimdilik geçici şifreyi kutup CLI veya veritabanı üzerinden döndürün.",
+      "toggleTotp": "2FA'yı yöneticiden zorlamak/kapatmak henüz arka uçta yok — kullanıcıdan Güvenlik sayfasından yönetmesini isteyin.",
+      "toggleAdmin": "Yönetici atama / kaldırma henüz arayüzden bağlı değil — PUT /admin/users/:id gövdesi bunu kabul edene kadar is_admin değerini SQL ile ayarlayın."
     },
     "createDialog": {
       "title": "Kullanıcı oluştur",
-      "desc": "Kullanıcı ilk girişte kendi şifresini ve kurtarma ifadesini belirleyecek.",
+      "desc": "Şimdi geçici bir şifre belirleniyor; kullanıcı ilk girişte değiştirir.",
       "email": "E-posta",
       "username": "Kullanıcı adı",
-      "usernamePlaceholder": "3-32 karakter: a-z, 0-9, _ ve -",
+      "usernamePlaceholder": "kısa-takma-ad",
       "tempPassword": "Geçici şifre",
-      "tempPasswordPlaceholder": "Bunu kullanıcıyla paylaşın",
-      "quotaLabel": "Depolama kotası (GB)",
+      "tempPasswordPlaceholder": "en az 8 karakter",
+      "quotaLabel": "Kota",
       "cancel": "İptal",
       "create": "Kullanıcı oluştur"
     },
     "deleteDialog": {
       "title": "{{email}} silinsin mi?",
-      "desc": "Bu işlem hesabı ve tüm ilgili verileri kalıcı olarak siler. Bu işlem geri alınamaz.",
+      "desc": "Bu işlem kullanıcıyı ve tüm verilerini kalıcı olarak siler. Bu işlem geri alınamaz.",
       "cancel": "İptal",
       "confirm": "Sil"
     }

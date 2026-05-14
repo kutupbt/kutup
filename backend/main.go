@@ -95,7 +95,7 @@ func main() {
 	filesH := &handlers.FilesHandler{DB: pool, Storage: storage}
 	tusH := &handlers.TusHandler{DB: pool, Storage: storage}
 	sharesH := &handlers.SharesHandler{DB: pool, Storage: storage}
-	adminH := &handlers.AdminHandler{DB: pool}
+	adminH := &handlers.AdminHandler{DB: pool, StorageTotalBytes: cfg.StorageTotalBytes}
 	fedH := &handlers.FederationHandler{DB: pool, Storage: storage}
 	fedProxyH := &handlers.FedProxyHandler{DB: pool, AppEnv: cfg.AppEnv}
 	devicesH := &handlers.DevicesHandler{DB: pool}
