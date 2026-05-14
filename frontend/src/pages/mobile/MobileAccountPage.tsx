@@ -83,36 +83,39 @@ export default function MobileAccountPage() {
     danger?: boolean
   }
 
+  // Each Account row routes to its own dedicated sub-page now (per user
+  // feedback: "make each one its own page not open settings page"). The
+  // sub-pages live under /drive/account/<slug>; see App.tsx route table.
   const groups: Row[][] = [
     [
       {
         icon: 'user',
         label: t('mobile.account.profile', 'Profile'),
         sub: auth.username && auth.email ? `${auth.username} · ${auth.email}` : username,
-        onClick: () => navigate('/settings'),
+        onClick: () => navigate('/drive/account/profile'),
       },
       {
         icon: 'key',
         label: t('mobile.account.encryptionKeys', 'Encryption keys'),
         sub: t('mobile.account.encryptionKeys.sub', 'Manage your recovery phrase'),
-        onClick: () => navigate('/settings'),
+        onClick: () => navigate('/drive/account/encryption-keys'),
       },
       {
         icon: 'shield',
         label: t('mobile.account.security', 'Security'),
-        onClick: () => navigate('/settings'),
+        onClick: () => navigate('/drive/account/security'),
       },
     ],
     [
       {
         icon: 'bell',
         label: t('mobile.account.notifications', 'Notifications'),
-        onClick: () => navigate('/settings'),
+        onClick: () => navigate('/drive/account/notifications'),
       },
       {
         icon: 'globe',
         label: t('mobile.account.language', 'Language'),
-        onClick: () => navigate('/settings'),
+        onClick: () => navigate('/drive/account/language'),
       },
       {
         icon: isDark ? 'sun' : 'moon',
@@ -129,14 +132,14 @@ export default function MobileAccountPage() {
             {
               icon: 'shield' as const,
               label: t('mobile.account.admin', 'Admin'),
-              onClick: () => navigate('/admin'),
+              onClick: () => navigate('/drive/account/admin'),
             },
           ]
         : []),
       {
         icon: 'info',
         label: t('mobile.account.about', 'About Kutup'),
-        onClick: () => navigate('/settings'),
+        onClick: () => navigate('/drive/account/about'),
       },
       {
         icon: 'logout',

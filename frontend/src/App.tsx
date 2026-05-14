@@ -26,6 +26,13 @@ import ServerSelect from './pages/ServerSelect'
 import TrashPage from './pages/TrashPage'
 import MobileSharedPage from './pages/mobile/MobileSharedPage'
 import MobileAccountPage from './pages/mobile/MobileAccountPage'
+import MobileProfilePage from './pages/mobile/account/MobileProfilePage'
+import MobileEncryptionKeysPage from './pages/mobile/account/MobileEncryptionKeysPage'
+import MobileSecurityPage from './pages/mobile/account/MobileSecurityPage'
+import MobileNotificationsPage from './pages/mobile/account/MobileNotificationsPage'
+import MobileLanguagePage from './pages/mobile/account/MobileLanguagePage'
+import MobileAdminPage from './pages/mobile/account/MobileAdminPage'
+import MobileAboutPage from './pages/mobile/account/MobileAboutPage'
 
 function snapshotFromState(): SessionPayload | null {
   const { auth } = store.getState()
@@ -166,6 +173,18 @@ export default function App() {
           <Route path="/drive/shared" element={<MobileSharedPage />} />
           <Route path="/drive/trash" element={<TrashPage />} />
           <Route path="/drive/account" element={<MobileAccountPage />} />
+          {/* Mobile Account sub-pages — each row has its own page so
+              "Profile" / "Encryption keys" / "Security" / etc. open
+              dedicated screens instead of all bouncing to /settings.
+              Desktop hits to these redirect to /settings via
+              MobileAccountSubPage. */}
+          <Route path="/drive/account/profile" element={<MobileProfilePage />} />
+          <Route path="/drive/account/encryption-keys" element={<MobileEncryptionKeysPage />} />
+          <Route path="/drive/account/security" element={<MobileSecurityPage />} />
+          <Route path="/drive/account/notifications" element={<MobileNotificationsPage />} />
+          <Route path="/drive/account/language" element={<MobileLanguagePage />} />
+          <Route path="/drive/account/admin" element={<MobileAdminPage />} />
+          <Route path="/drive/account/about" element={<MobileAboutPage />} />
           <Route path="/file/:cid/:fid" element={<FileEditorPage />} />
           <Route path="/settings" element={<Settings />} />
           <Route element={<AdminRoute />}>
