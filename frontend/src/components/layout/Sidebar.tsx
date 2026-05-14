@@ -23,10 +23,12 @@ import { formatBytes } from '@/lib/format'
 import { useTheme } from '@/hooks/useTheme'
 
 interface SidebarProps {
-  viewMode: 'myfiles' | 'shared'
+  viewMode: 'myfiles' | 'shared' | 'trash'
   sharedCount?: number
+  trashCount?: number
   onGoHome: () => void
   onGoShared: () => void
+  onGoTrash: () => void
 }
 
 interface NavRowProps {
@@ -65,7 +67,14 @@ function NavRow({ icon: Icon, label, active, badge, onClick }: NavRowProps) {
   )
 }
 
-export default function Sidebar({ viewMode, sharedCount, onGoHome, onGoShared }: SidebarProps) {
+export default function Sidebar({
+  viewMode,
+  sharedCount,
+  trashCount,
+  onGoHome,
+  onGoShared,
+  onGoTrash,
+}: SidebarProps) {
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const auth = useAppSelector((s) => s.auth)
@@ -121,7 +130,9 @@ export default function Sidebar({ viewMode, sharedCount, onGoHome, onGoShared }:
         <NavRow
           icon={Trash2}
           label={t('nav.trash', 'Trash')}
-          onClick={() => navigate('/drive/trash')}
+          active={viewMode === 'trash'}
+          badge={trashCount}
+          onClick={onGoTrash}
         />
       </nav>
 

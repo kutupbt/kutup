@@ -93,7 +93,7 @@ export default function Drive() {
   const [navigationStack, setNavigationStack] = useState<Collection[]>([])
   const [files, setFiles] = useState<DecryptedFile[]>([])
   const [myFilesCollection, setMyFilesCollection] = useState<Collection | null>(null)
-  const [viewMode, setViewMode] = useState<'myfiles' | 'shared'>('myfiles')
+  const [viewMode, setViewMode] = useState<'myfiles' | 'shared' | 'trash'>('myfiles')
   const [uploadState, setUploadState] = useState<UploadState | null>(null)
   const [isDragging, setIsDragging] = useState(false)
 
@@ -303,6 +303,16 @@ export default function Drive() {
   function goToShared() {
     setNavigationStack([])
     setViewMode('shared')
+    clearSelection()
+    if (currentFolder !== null) {
+      setCurrentFolder(null)
+      setFiles([])
+    }
+  }
+
+  function goToTrash() {
+    setNavigationStack([])
+    setViewMode('trash')
     clearSelection()
     if (currentFolder !== null) {
       setCurrentFolder(null)
@@ -1025,6 +1035,7 @@ export default function Drive() {
         sharedCount={sharedCollections.length}
         onGoHome={goHome}
         onGoShared={goToShared}
+        onGoTrash={goToTrash}
       />
 
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
@@ -1090,6 +1101,26 @@ export default function Drive() {
           {/* eslint-disable-next-line @typescript-eslint/ban-ts-comment */}
           {/* @ts-expect-error — webkitdirectory isn't in React's typing yet */}
           <input ref={folderInputRef} type="file" webkitdirectory="" directory="" multiple className="hidden" />
+
+          {viewMode === 'trash' ? (
+            // Trash view lives inside the same Sidebar + DriveTopBar chrome
+            // as My Files / Shared (per user request: "should be like My
+            // Files tab and Shared with me tab just change the main board").
+            // PR 2 ships the empty hero; PRs 6/7 (backend soft-delete +
+            // wired UI) add the items list + Restore / Delete-permanently
+            // controls.
+            <div className="flex flex-col items-center justify-center h-full text-center py-12">
+              <div className="w-16 h-16 rounded-2xl bg-muted text-muted-foreground inline-flex items-center justify-center mb-3">
+                <Trash2 className="h-7 w-7" />
+              </div>
+              <div className="text-base font-semibold text-foreground">
+                {t('mobile.trash.empty.title', 'Trash is empty')}
+              </div>
+              <div className="text-sm text-muted-foreground mt-1 max-w-md">
+                {t('mobile.trash.empty.subtitle', 'Deleted files appear here for 30 days')}
+              </div>
+            </div>
+          ) : (<>
 
           <DriveBreadcrumb
           viewMode={viewMode}
@@ -1210,6 +1241,7 @@ export default function Drive() {
             )}
           </>
         )}
+          </>)}
         </main>
         </ContextMenuTrigger>
         <ContextMenuContent className="w-52">
