@@ -26,46 +26,32 @@ Items below are organized by **whether they block v1** vs. whether they can ship
 
 ## Blockers for v1 (must-have)
 
-### Admin · `isAdmin` mutation
+### Admin · `isAdmin` mutation, force-disable 2FA, break-glass admin — ✅ SHIPPED (PR 14)
 
-Today the admin UI shows "Make admin" / "Remove admin" entries but they `toast()` a stub message. Self-hosters must run `UPDATE users SET is_admin = true WHERE id = ?` directly against PostgreSQL.
+PR 14 wired all three. Kept here briefly for history; remove on the next roadmap sweep.
 
-| What's needed | Where |
-|---|---|
-| Backend: accept `isAdmin` in the request body | `backend/handlers/admin.go` — `UpdateUser` handler |
-| Backend: validate that the last admin can't be demoted (1-admin minimum) | same handler |
-| Frontend: drop stubs, call `useUpdateUser({ isAdmin })` | `frontend/src/components/admin/AdminUserMenu.tsx`, `frontend/src/pages/mobile/account/admin/MobileAdminUserDetailPage.tsx` |
-| Frontend: remove `admin.notWired.toggleAdmin` locale key | `frontend/src/locales/{en,tr}.json` |
-| Test: integration test for promote / demote round-trip + the "last admin" guard | `backend/handlers/admin_test.go` (new) |
+- **Promote / demote admin** — the backend `UpdateUser` handler already accepted `isAdmin`; PR 14 added the frontend wiring (`useUpdateUser({ isAdmin })`, confirm dialogs on desktop + mobile).
+- **Force-disable 2FA** — `DELETE /admin/users/:id/2fa` clears `totp_secret` + `totp_enabled`; wired into both admin UIs with a confirm.
+- **Break-glass admin** — the single `ADMIN_ACCOUNT` bootstrap account is immutable: it can't be demoted, disabled, or deleted (backend 403 guards + `isProtected` flag surfaced in the UI). A generic last-admin guard backstops when `ADMIN_ACCOUNT` is unset.
 
-### Admin · Password reset endpoint
+Still **NOT** done — audit-log entries for these actions (`// TODO(audit-log)` markers are in `admin.go`); see the Audit log blocker below.
 
-No way to recover a user who has forgotten their password (the password unlocks their master key — a true reset would destroy their files). What admins actually need is to **rotate the temp password** so the user can re-derive their key on next sign-in (only works if they remember the recovery phrase).
+### Admin · Password reset
 
-The actual semantics need design work because of the E2EE constraint:
+kutup is E2EE. A user's password derives (via Argon2id over `kdf_salt`) the key-encryption-key that decrypts `encrypted_master_key`. **The server never sees the master key**, so an admin *cannot* reset a password while preserving the user's data — only the user can, with their current password or their recovery phrase (the existing `/auth/recover` flow).
 
-- If the user remembers their recovery phrase → admin rotates temp password; user signs in, types the new temp password, re-derives keys from the phrase, sets a new password.
-- If the user has lost both password and recovery phrase → their files are unrecoverable. The "reset" path becomes "wipe the account and start fresh" with explicit data-loss acknowledgement.
+This means there is **no simple "reset password" endpoint** — it's a design problem with two distinct flows:
+
+- **Recoverable** — the user still has their recovery phrase. They don't need an admin: they self-serve via `/auth/recover`. The admin's only role is to point them there. If we want an admin-initiated nudge, the safe scope is *rotating the temp password of a user still in `is_first_login` state* (no keys generated yet) — anything more for an established user breaks their access to their own files.
+- **Unrecoverable** — the user has lost both password and recovery phrase. Their data is cryptographically gone. The only "reset" is a **destructive account wipe** (destroy keys + files, keep email/username) so they can start fresh, behind an explicit data-loss confirmation.
 
 | What's needed | Where |
 |---|---|
-| Design: write up the two flows (recoverable vs unrecoverable) + UI copy | `docs/research/` — new note |
-| Backend: `POST /admin/users/:id/reset-password` returning a fresh temp password | `backend/handlers/admin.go` |
-| Backend: `POST /admin/users/:id/wipe` for the unrecoverable path (destroys keys + files, preserves email/username) | same |
-| Frontend: confirm dialog with clear data-loss warning for the wipe path | `AdminUserMenu` / `MobileAdminUserDetailPage` |
-| Frontend: drop `admin.notWired.resetPassword` stubs | as above |
-| Email (optional v1, see SMTP below): send the new temp password to the user's email if SMTP is configured | backend integration |
-
-### Admin · Force/disable 2FA
-
-A user who loses their TOTP device today **cannot sign in**. The only recovery is to delete the account and recreate it. v1 needs an admin override.
-
-| What's needed | Where |
-|---|---|
-| Backend: `DELETE /admin/users/:id/2fa` — clears `totp_secret` + flips `totp_enabled` to false | `backend/handlers/admin.go` |
-| Backend: audit log entry for "admin X disabled 2FA on user Y" | tied to audit-log work below |
-| Frontend: confirm dialog ("This makes the account password-only until the user re-enables 2FA") | `AdminUserMenu`, `MobileAdminUserDetailPage` |
-| Frontend: drop `admin.notWired.toggleTotp` stubs | as above |
+| Design: write up both flows + UI copy + the `is_first_login` temp-password-rotation carve-out | `docs/research/` — new note |
+| Backend: `POST /admin/users/:id/rotate-temp-password` — only valid while `is_first_login` | `backend/handlers/admin.go` |
+| Backend: `POST /admin/users/:id/wipe` — destructive reset for the unrecoverable path | same |
+| Frontend: surface both as distinct, clearly-labelled actions (not one "Reset password") | `AdminUserMenu` / `MobileAdminUserDetailPage` |
+| Email (optional, see SMTP below): deliver the rotated temp password if SMTP is configured | backend integration |
 
 ### Trash + 30-day retention (PR 6 + PR 7)
 
@@ -182,16 +168,9 @@ The design has "Re-index search" and "Purge soft-deleted files now" in a Setting
 | Backend: `POST /admin/actions/purge-trash` (forces the sweeper to run now) — depends on trash work above | new |
 | Frontend: unhide the danger zone card | both admin Settings tabs |
 
-### SeaweedFS master auto-detect for storage capacity
+### SeaweedFS master auto-detect for storage capacity — ✅ SHIPPED (PR 14)
 
-PR 13 added `STORAGE_TOTAL_BYTES` env var so the admin UI can show "X of Y used". When kutup is deployed with SeaweedFS (the only driver today), capacity could be auto-detected from `http://seaweedfs-master:9333/dir/status` and the env var becomes optional.
-
-| What's needed | Where |
-|---|---|
-| Backend: optional HTTP probe to the SeaweedFS master, returning total disk size | `backend/services/storage.go` or new `seaweedfs.go` |
-| Backend: prefer env var when set; fall back to probe; cache 60s | same |
-| Frontend: no change — `storageTotalBytes` just gets populated | — |
-| Documentation: `docs/self-hosting.md` note that auto-detect works for SeaweedFS | `docs/self-hosting.md` |
+PR 14 added `backend/services/storageprobe.go`: a cached (60s) probe that walks the SeaweedFS master topology (`SEAWEEDFS_MASTER_URL`) + each volume server's `/status`, returning real total + used + free disk bytes. `GET /admin/stats` now returns probe-sourced `storageTotalBytes` + `storageBackendUsedBytes`; the `STORAGE_TOTAL_BYTES` env var is the fallback when the probe is unavailable. Remove this entry on the next roadmap sweep.
 
 ### Mobile · Android Keychain
 

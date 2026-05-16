@@ -39,6 +39,12 @@ export interface UserRow {
   isActive: boolean
   totpEnabled: boolean
   createdAt: string
+  /**
+   * True for the break-glass admin (the account from the `ADMIN_ACCOUNT`
+   * env var). The UI disables demote / disable / delete for this user —
+   * the backend rejects those mutations with 403.
+   */
+  isProtected: boolean
 }
 
 export interface LoginResponse {
@@ -75,12 +81,18 @@ export interface AdminStats {
   totalStorageUsedBytes: number
   totalCollections: number
   /**
-   * Total storage capacity advertised by the server (S3 bucket / volume size).
+   * Total storage capacity of the storage backend (S3 bucket / volume size).
    * `0` means "unknown" — the admin UI hides the capacity readout in that case.
-   * Sourced from the `STORAGE_TOTAL_BYTES` env var on the backend; future PR
-   * may auto-detect this from the SeaweedFS master.
+   * Resolved from the live SeaweedFS probe (`SEAWEEDFS_MASTER_URL`); falls
+   * back to the `STORAGE_TOTAL_BYTES` env var.
    */
   storageTotalBytes: number
+  /**
+   * Real on-disk bytes used by the storage backend, from the SeaweedFS
+   * probe. `0` when no probe is available. Distinct from
+   * `totalStorageUsedBytes`, which is the DB sum of per-account usage.
+   */
+  storageBackendUsedBytes: number
 }
 
 export interface AdminSettings {

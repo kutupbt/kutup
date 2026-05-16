@@ -19,7 +19,7 @@ import { StatusPill } from '@/components/mobile/admin/StatusPill'
 import { RolePill } from '@/components/mobile/admin/RolePill'
 import { avatarColor, initials } from '@/components/mobile/admin/avatar'
 import { formatBytes } from '@/lib/format'
-import { useUpdateUser, useDeleteUser } from '@/api/hooks/useAdmin'
+import { useUpdateUser, useDeleteUser, useForceDisable2fa } from '@/api/hooks/useAdmin'
 import { cn } from '@/lib/utils'
 import { AdminUserMenu, type AdminUserMenuState, type AdminMenuAction } from './AdminUserMenu'
 import { AdminEditQuotaDialog } from './AdminEditQuotaDialog'
@@ -36,8 +36,8 @@ import type { UserRow } from '@/types/api'
  *    2FA (totpEnabled), Joined (createdAt). No `lastActive` — not in the schema.
  *  - **Export CSV** is client-side (no backend export endpoint needed).
  *  - **Pagination** is client-side, 25 per page — fits today's user counts.
- *  - **Reset password / Make admin / Toggle 2FA** stub with a toast (no
- *    backend endpoints yet; PR 13.1 wires them).
+ *  - **Make/Remove admin + Force-disable 2FA** are wired end-to-end; the
+ *    break-glass admin (`isProtected`) can't be demoted/disabled/deleted.
  */
 
 const PAGE_SIZE = 25
@@ -57,6 +57,7 @@ export function AdminUsersTab({ users, loading, onCreate }: AdminUsersTabProps) 
   const { t } = useTranslation()
   const updateUser = useUpdateUser()
   const deleteUser = useDeleteUser()
+  const forceDisable2fa = useForceDisable2fa()
 
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<FilterId>('all')
@@ -66,6 +67,8 @@ export function AdminUsersTab({ users, loading, onCreate }: AdminUsersTabProps) 
   const [menu, setMenu] = useState<AdminUserMenuState | null>(null)
   const [editTarget, setEditTarget] = useState<UserRow | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null)
+  const [adminTarget, setAdminTarget] = useState<UserRow | null>(null)
+  const [totpTarget, setTotpTarget] = useState<UserRow | null>(null)
   const [hoveredId, setHoveredId] = useState<string | null>(null)
 
   const counts = useMemo(() => {
@@ -149,14 +152,17 @@ export function AdminUsersTab({ users, loading, onCreate }: AdminUsersTabProps) 
   }
 
   function onAction(action: AdminMenuAction, user: UserRow) {
-    // Every action here is wired end-to-end. The design has additional
-    // actions (Reset password / Toggle 2FA / Make admin) that require
-    // backend slices that don't exist yet — they're tracked in
-    // docs/roadmap.md and reappear in the menu when the backend lands.
+    // Every action is wired end-to-end. Promote/demote + force-disable-2FA
+    // open a confirm dialog; toggleActive is reversible so it applies
+    // directly; delete + editQuota have their own dialogs.
     if (action === 'editQuota') {
       setEditTarget(user)
     } else if (action === 'toggleActive') {
       updateUser.mutate({ id: user.id, body: { isActive: !user.isActive } })
+    } else if (action === 'toggleAdmin') {
+      setAdminTarget(user)
+    } else if (action === 'disableTotp') {
+      setTotpTarget(user)
     } else if (action === 'delete') {
       setDeleteTarget(user)
     }
@@ -304,6 +310,7 @@ export function AdminUsersTab({ users, loading, onCreate }: AdminUsersTabProps) 
                                 {u.email}
                               </span>
                               <RolePill isAdmin={u.isAdmin} />
+                              {u.isProtected && <BreakGlassBadge />}
                             </div>
                             <div className="text-[11.5px] text-text-tertiary truncate mt-px">
                               @{u.username}
@@ -458,7 +465,110 @@ export function AdminUsersTab({ users, loading, onCreate }: AdminUsersTabProps) 
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Promote / demote confirm */}
+      <AlertDialog
+        open={adminTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setAdminTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {adminTarget?.isAdmin
+                ? t('admin.adminDialog.demoteTitle', 'Remove admin from {{email}}?', {
+                    email: adminTarget?.email ?? '',
+                  })
+                : t('admin.adminDialog.promoteTitle', 'Make {{email}} an admin?', {
+                    email: adminTarget?.email ?? '',
+                  })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {adminTarget?.isAdmin
+                ? t(
+                    'admin.adminDialog.demoteDesc',
+                    'They lose access to this admin panel. Takes effect on their next sign-in or token refresh.',
+                  )
+                : t(
+                    'admin.adminDialog.promoteDesc',
+                    'They gain full access to this admin panel — managing users, settings, and storage. Takes effect on their next sign-in or token refresh.',
+                  )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('admin.deleteDialog.cancel', 'Cancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (adminTarget) {
+                  updateUser.mutate({
+                    id: adminTarget.id,
+                    body: { isAdmin: !adminTarget.isAdmin },
+                  })
+                }
+                setAdminTarget(null)
+              }}
+            >
+              {adminTarget?.isAdmin
+                ? t('admin.users.menu.removeAdmin', 'Remove admin role')
+                : t('admin.users.menu.makeAdmin', 'Make admin')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Force-disable 2FA confirm */}
+      <AlertDialog
+        open={totpTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setTotpTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t('admin.totpDialog.title', 'Disable 2FA for {{email}}?', {
+                email: totpTarget?.email ?? '',
+              })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(
+                'admin.totpDialog.desc',
+                'This makes the account password-only until the user re-enables 2FA from their Security page. Use this when a user is locked out of their authenticator.',
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('admin.deleteDialog.cancel', 'Cancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (totpTarget) forceDisable2fa.mutate(totpTarget.id)
+                setTotpTarget(null)
+              }}
+            >
+              {t('admin.users.menu.disableTotp', 'Disable 2FA')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
+  )
+}
+
+/* ── Break-glass badge ──────────────────────────────────────────── */
+
+function BreakGlassBadge() {
+  const { t } = useTranslation()
+  return (
+    <span
+      className="text-[10px] font-bold tracking-[0.04em] uppercase bg-warning-faint text-warning px-1.5 py-0.5 rounded-md"
+      title={t(
+        'admin.breakGlass.tooltip',
+        'Break-glass admin — protected from demote, disable, and delete.',
+      )}
+    >
+      {t('admin.breakGlass.badge', 'Break-glass')}
+    </span>
   )
 }
 

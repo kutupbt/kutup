@@ -9,17 +9,21 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kutup/backend/internal/testdb"
 	"github.com/kutup/backend/middleware"
 	"github.com/kutup/backend/utils"
 )
 
-// newAdminApp wires AdminHandler behind both Required() (any user) and
-// AdminRequired() (must be admin). Returns the app + the admin's userID.
-func newAdminApp(t *testing.T) (app *fiber.App, adminUID string, regularUID string) {
+// buildAdminApp wires AdminHandler behind both Required() (any user) and
+// AdminRequired() (must be admin). breakGlassEmail, when non-empty, marks
+// that account as the protected break-glass admin. Returns the app, the
+// DB pool (for tests that need to set up / assert state directly), and the
+// two seeded user IDs.
+func buildAdminApp(t *testing.T, breakGlassEmail string) (app *fiber.App, pool *pgxpool.Pool, adminUID string, regularUID string) {
 	t.Helper()
-	pool := testdb.Setup(t)
+	pool = testdb.Setup(t)
 
 	if err := pool.QueryRow(context.Background(),
 		`INSERT INTO users (
@@ -46,7 +50,7 @@ func newAdminApp(t *testing.T) (app *fiber.App, adminUID string, regularUID stri
 		t.Fatalf("seed regular: %v", err)
 	}
 
-	h := &AdminHandler{DB: pool}
+	h := &AdminHandler{DB: pool, BreakGlassAdminEmail: breakGlassEmail}
 	authMW := middleware.NewAuth(testJWTSecret)
 	app = fiber.New()
 	api := app.Group("/api")
@@ -55,7 +59,22 @@ func newAdminApp(t *testing.T) (app *fiber.App, adminUID string, regularUID stri
 	admin.Post("/users", h.CreateUser)
 	admin.Put("/users/:id", h.UpdateUser)
 	admin.Delete("/users/:id", h.DeleteUser)
+	admin.Delete("/users/:id/2fa", h.ForceDisable2FA)
 	admin.Get("/stats", h.GetStats)
+	return app, pool, adminUID, regularUID
+}
+
+// newAdminApp is the no-break-glass variant used by most tests.
+func newAdminApp(t *testing.T) (app *fiber.App, adminUID string, regularUID string) {
+	t.Helper()
+	app, _, adminUID, regularUID = buildAdminApp(t, "")
+	return app, adminUID, regularUID
+}
+
+// newAdminAppBG marks the seeded admin@example.com as the break-glass admin.
+func newAdminAppBG(t *testing.T) (app *fiber.App, adminUID string, regularUID string) {
+	t.Helper()
+	app, _, adminUID, regularUID = buildAdminApp(t, "admin@example.com")
 	return app, adminUID, regularUID
 }
 
@@ -179,5 +198,147 @@ func TestGetStats_Counts(t *testing.T) {
 	}
 	if stats["activeUsers"] != float64(2) {
 		t.Errorf("activeUsers = %v, want 2", stats["activeUsers"])
+	}
+}
+
+// userField fetches a single field of one user from GET /admin/users.
+func userField(t *testing.T, app *fiber.App, adminUID, targetUID, field string) any {
+	t.Helper()
+	req := adminAuthedReq(t, http.MethodGet, "/api/admin/users", "", adminUID, true)
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var users []map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&users)
+	for _, u := range users {
+		if u["id"] == targetUID {
+			return u[field]
+		}
+	}
+	t.Fatalf("user %s not found in /admin/users", targetUID)
+	return nil
+}
+
+func TestUpdateUser_PromoteDemote(t *testing.T) {
+	app, adminUID, regularUID := newAdminApp(t)
+
+	// Promote the regular user.
+	req := adminAuthedReq(t, http.MethodPut, "/api/admin/users/"+regularUID, `{"isAdmin":true}`, adminUID, true)
+	if resp, _ := app.Test(req, -1); resp.StatusCode != 200 {
+		t.Fatalf("promote: status = %d, want 200", resp.StatusCode)
+	}
+	if got := userField(t, app, adminUID, regularUID, "isAdmin"); got != true {
+		t.Errorf("after promote: isAdmin = %v, want true", got)
+	}
+
+	// Demote back — allowed, the seeded admin is still a usable admin.
+	req = adminAuthedReq(t, http.MethodPut, "/api/admin/users/"+regularUID, `{"isAdmin":false}`, adminUID, true)
+	if resp, _ := app.Test(req, -1); resp.StatusCode != 200 {
+		t.Fatalf("demote: status = %d, want 200", resp.StatusCode)
+	}
+	if got := userField(t, app, adminUID, regularUID, "isAdmin"); got != false {
+		t.Errorf("after demote: isAdmin = %v, want false", got)
+	}
+}
+
+func TestUpdateUser_CannotDemoteLastAdmin(t *testing.T) {
+	// No break-glass admin configured — the generic last-admin guard applies.
+	app, adminUID, _ := newAdminApp(t)
+	req := adminAuthedReq(t, http.MethodPut, "/api/admin/users/"+adminUID, `{"isAdmin":false}`, adminUID, true)
+	resp, _ := app.Test(req, -1)
+	if resp.StatusCode != 400 {
+		t.Errorf("demote sole admin: status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestUpdateUser_CannotDisableLastAdmin(t *testing.T) {
+	app, adminUID, _ := newAdminApp(t)
+	req := adminAuthedReq(t, http.MethodPut, "/api/admin/users/"+adminUID, `{"isActive":false}`, adminUID, true)
+	resp, _ := app.Test(req, -1)
+	if resp.StatusCode != 400 {
+		t.Errorf("disable sole admin: status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestUpdateUser_BreakGlassAdminCannotBeDemoted(t *testing.T) {
+	app, adminUID, _ := newAdminAppBG(t)
+	req := adminAuthedReq(t, http.MethodPut, "/api/admin/users/"+adminUID, `{"isAdmin":false}`, adminUID, true)
+	resp, _ := app.Test(req, -1)
+	if resp.StatusCode != 403 {
+		t.Errorf("demote break-glass admin: status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestUpdateUser_BreakGlassAdminCannotBeDisabled(t *testing.T) {
+	app, adminUID, _ := newAdminAppBG(t)
+	req := adminAuthedReq(t, http.MethodPut, "/api/admin/users/"+adminUID, `{"isActive":false}`, adminUID, true)
+	resp, _ := app.Test(req, -1)
+	if resp.StatusCode != 403 {
+		t.Errorf("disable break-glass admin: status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestUpdateUser_BreakGlassAdminQuotaStillEditable(t *testing.T) {
+	// Break-glass protection only blocks demote/disable — quota edits work.
+	app, adminUID, _ := newAdminAppBG(t)
+	req := adminAuthedReq(t, http.MethodPut, "/api/admin/users/"+adminUID, `{"storageQuotaBytes":2147483648}`, adminUID, true)
+	resp, _ := app.Test(req, -1)
+	if resp.StatusCode != 200 {
+		t.Errorf("quota edit on break-glass admin: status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestDeleteUser_BreakGlassAdminProtected(t *testing.T) {
+	app, adminUID, _ := newAdminAppBG(t)
+	req := adminAuthedReq(t, http.MethodDelete, "/api/admin/users/"+adminUID, "", adminUID, true)
+	resp, _ := app.Test(req, -1)
+	if resp.StatusCode != 403 {
+		t.Errorf("delete break-glass admin: status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestListUsers_MarksBreakGlassProtected(t *testing.T) {
+	app, adminUID, regularUID := newAdminAppBG(t)
+	if got := userField(t, app, adminUID, adminUID, "isProtected"); got != true {
+		t.Errorf("break-glass admin: isProtected = %v, want true", got)
+	}
+	if got := userField(t, app, adminUID, regularUID, "isProtected"); got != false {
+		t.Errorf("regular user: isProtected = %v, want false", got)
+	}
+}
+
+func TestForceDisable2FA(t *testing.T) {
+	app, pool, adminUID, regularUID := buildAdminApp(t, "")
+
+	// Give the regular user 2FA, then have an admin force-disable it.
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE users SET totp_enabled=true, totp_secret='SECRET' WHERE id=$1`, regularUID); err != nil {
+		t.Fatalf("seed totp: %v", err)
+	}
+
+	req := adminAuthedReq(t, http.MethodDelete, "/api/admin/users/"+regularUID+"/2fa", "", adminUID, true)
+	resp, _ := app.Test(req, -1)
+	if resp.StatusCode != 200 {
+		t.Fatalf("force-disable 2fa: status = %d, want 200", resp.StatusCode)
+	}
+
+	var enabled bool
+	var secret *string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT totp_enabled, totp_secret FROM users WHERE id=$1`, regularUID).Scan(&enabled, &secret); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if enabled {
+		t.Error("totp_enabled still true after force-disable")
+	}
+	if secret != nil {
+		t.Errorf("totp_secret = %v, want NULL after force-disable", *secret)
+	}
+
+	// Unknown user → 404.
+	req = adminAuthedReq(t, http.MethodDelete, "/api/admin/users/00000000-0000-0000-0000-000000000000/2fa", "", adminUID, true)
+	if resp, _ := app.Test(req, -1); resp.StatusCode != 404 {
+		t.Errorf("force-disable 2fa unknown: status = %d, want 404", resp.StatusCode)
 	}
 }
