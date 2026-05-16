@@ -80,6 +80,8 @@ services:
       S3_REGION: ${S3_REGION:-us-east-1}
       APP_ENV: ${APP_ENV:-production}
       ADMIN_ACCOUNTS: ${ADMIN_ACCOUNTS:-}
+      # Total storage capacity for the admin Settings card. 0 / unset → hidden.
+      STORAGE_TOTAL_BYTES: ${STORAGE_TOTAL_BYTES:-0}
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Home, Users, Settings, LogOut, ShieldCheck, Sun, Moon, HardDrive } from 'lucide-react'
+import { Home, Users, Settings, LogOut, ShieldCheck, Sun, Moon, HardDrive, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAppSelector, useAppDispatch } from '@/store'
 import { logout } from '@/store/authSlice'
@@ -23,10 +23,12 @@ import { formatBytes } from '@/lib/format'
 import { useTheme } from '@/hooks/useTheme'
 
 interface SidebarProps {
-  viewMode: 'myfiles' | 'shared'
+  viewMode: 'myfiles' | 'shared' | 'trash'
   sharedCount?: number
+  trashCount?: number
   onGoHome: () => void
   onGoShared: () => void
+  onGoTrash: () => void
 }
 
 interface NavRowProps {
@@ -65,7 +67,14 @@ function NavRow({ icon: Icon, label, active, badge, onClick }: NavRowProps) {
   )
 }
 
-export default function Sidebar({ viewMode, sharedCount, onGoHome, onGoShared }: SidebarProps) {
+export default function Sidebar({
+  viewMode,
+  sharedCount,
+  trashCount,
+  onGoHome,
+  onGoShared,
+  onGoTrash,
+}: SidebarProps) {
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const auth = useAppSelector((s) => s.auth)
@@ -117,6 +126,13 @@ export default function Sidebar({ viewMode, sharedCount, onGoHome, onGoShared }:
           active={viewMode === 'shared'}
           badge={sharedCount}
           onClick={onGoShared}
+        />
+        <NavRow
+          icon={Trash2}
+          label={t('nav.trash', 'Trash')}
+          active={viewMode === 'trash'}
+          badge={trashCount}
+          onClick={onGoTrash}
         />
       </nav>
 

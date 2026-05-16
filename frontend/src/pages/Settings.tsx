@@ -13,6 +13,7 @@ import { broadcastColor } from '@/lib/sessionSync'
 import api from '@/api/client'
 import { listDevices, revokeDevice, type DeviceRow } from '@/api/collab'
 import { formatBytes } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -232,7 +233,18 @@ export default function Settings() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto p-6 space-y-4">
+    // pt-[calc(env(safe-area-inset-top)+1.5rem)] keeps the back button + title
+    // below the iOS status bar / Dynamic Island when this page renders inside
+    // the Tauri WebView. On desktop browsers the inset is 0 so the layout is
+    // unchanged. The bottom padding likewise honors the home indicator inset
+    // so the last card isn't clipped by the system gesture area.
+    <div
+      className="max-w-2xl mx-auto px-6 space-y-4"
+      style={{
+        paddingTop: 'calc(env(safe-area-inset-top) + 1.5rem)',
+        paddingBottom: 'calc(env(safe-area-inset-bottom) + 1.5rem)',
+      }}
+    >
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" asChild>
           <Link to="/drive"><ArrowLeft className="h-4 w-4 mr-1" />{t('common.drive')}</Link>
@@ -267,11 +279,41 @@ export default function Settings() {
           <div className="space-y-2 py-1">
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">{t('settings.account.presenceColor')}</span>
-              {auth.color && (
-                <Button variant="ghost" size="sm" onClick={() => updatePresenceColor(null)}>
+              <div className="flex items-center gap-3">
+                {/* Currently-selected chip — always rendered to avoid the
+                    layout shift that the user flagged when picking a swatch.
+                    When `auth.color` is unset the chip shows a dashed
+                    placeholder, and the Reset button is kept in flow but
+                    invisible (so the row width doesn't change between
+                    states). */}
+                <span
+                  className={cn(
+                    'inline-block h-4 w-4 rounded-full shrink-0',
+                    auth.color
+                      ? 'border border-foreground/15'
+                      : 'border border-dashed border-muted-foreground/40',
+                  )}
+                  style={auth.color ? { background: auth.color } : undefined}
+                  aria-label={
+                    auth.color
+                      ? t('settings.account.presenceColorSelected', { color: auth.color })
+                      : t('settings.account.presenceColorNone', 'No presence color selected')
+                  }
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => updatePresenceColor(null)}
+                  className={cn(
+                    'transition-opacity',
+                    auth.color ? 'opacity-100' : 'opacity-0 pointer-events-none',
+                  )}
+                  aria-hidden={!auth.color}
+                  tabIndex={auth.color ? undefined : -1}
+                >
                   {t('settings.account.presenceColorClear')}
                 </Button>
-              )}
+              </div>
             </div>
             <p className="text-xs text-muted-foreground">{t('settings.account.presenceColorDesc')}</p>
             <div className="grid grid-cols-10 gap-1.5">

@@ -24,7 +24,8 @@
     "searchAria": "Mevcut görünümde ara",
     "clearSearch": "Aramayı temizle",
     "shortcutsAria": "Klavye kısayolları",
-    "shortcutsTitle": "Klavye kısayolları (?)"
+    "shortcutsTitle": "Klavye kısayolları (?)",
+    "save": "Kaydet"
   },
   "nav": {
     "myFiles": "Dosyalarım",
@@ -35,7 +36,12 @@
     "signOutConfirmTitle": "Kutup'tan çıkış yapılsın mı?",
     "signOutConfirmDescription": "Şifrelenmiş dosyalarınıza erişmek için parolanızla yeniden giriş yapmanız gerekecek.",
     "switchToLight": "Açık temaya geç",
-    "switchToDark": "Koyu temaya geç"
+    "switchToDark": "Koyu temaya geç",
+    "files": "Dosyalar",
+    "shared": "Paylaşılan",
+    "trash": "Çöp Kutusu",
+    "account": "Hesap",
+    "primary": "Birincil gezinme"
   },
   "auth": {
     "signIn": "Giriş yap",
@@ -325,7 +331,9 @@
       "presenceColor": "Görünürlük rengi",
       "presenceColorDesc": "İşbirlikçi imleçlerde ve hücre düzenleme vurgularında görünen renginiz. Notlar ve ofis belgeleri arasında sabittir.",
       "presenceColorClear": "Sıfırla",
-      "presenceColorFailed": "Renk güncellenemedi"
+      "presenceColorFailed": "Renk güncellenemedi",
+      "presenceColorSelected": "Seçili sunum rengi {{color}}",
+      "presenceColorNone": "Sunum rengi seçilmedi"
     },
     "totp": {
       "title": "İki Faktörlü Kimlik Doğrulama",
@@ -337,7 +345,7 @@
       "disableConfirm": "Devre dışı bırak",
       "addSecurity": "Kimlik doğrulama uygulamasıyla ekstra güvenlik katmanı ekleyin.",
       "setUp": "TOTP'yi kur",
-      "setupTitle": "İki faktörlü kimlik doğrulamayı kur",
+      "setupTitle": "TOTP kurulumu",
       "scanQr": "Bu QR kodunu kimlik doğrulama uygulamanızla tarayın (Google Authenticator, Authy vb.)",
       "manualKey": "Manuel giriş anahtarı:",
       "confirmCode": "Onaylamak için 6 haneli kodu girin",
@@ -345,7 +353,10 @@
       "enabledToast": "İki faktörlü kimlik doğrulama etkinleştirildi",
       "disabledToast": "İki faktörlü kimlik doğrulama devre dışı bırakıldı",
       "setupFailed": "TOTP kurulumu başlatılamadı",
-      "disableFailed": "TOTP devre dışı bırakılamadı"
+      "disableFailed": "TOTP devre dışı bırakılamadı",
+      "setupButton": "TOTP kur",
+      "scanInstructions": "Kodu kimlik doğrulama uygulamanızla tarayın, ardından oluşan 6 haneli kodu girin.",
+      "secret": "Veya anahtarı manuel olarak girin"
     },
     "encryption": {
       "title": "Şifreleme",
@@ -378,48 +389,94 @@
   "admin": {
     "title": "Yönetici Paneli",
     "createUser": "Kullanıcı oluştur",
-    "notice": "Dosya adları ve içerikleri şifrelidir. Yöneticiler kullanıcı verilerini göremez.",
-    "stats": {
-      "totalUsers": "Toplam kullanıcı",
-      "activeUsers": "Aktif kullanıcı",
-      "totalFiles": "Toplam dosya",
-      "collections": "Koleksiyonlar",
-      "storageUsed": "Kullanılan depolama"
+    "sidebar": {
+      "drive": "← Sürücü",
+      "adminSection": "Yönetici",
+      "signedInAs": "Yönetici olarak giriş yapıldı",
+      "totpOff": "2FA kapalı · hemen etkinleştirin"
     },
-    "registration": {
-      "public": "Genel kayıt",
-      "enabled": "Etkin",
-      "disabled": "Devre dışı"
+    "topBar": {
+      "overviewTitle": "Yönetici Genel Bakış",
+      "overviewSubtitle": "kutup · kendi sunucunuzda, uçtan uca şifreli",
+      "usersTitle": "Kullanıcılar",
+      "usersSubtitle": "Bu sunucuda {{count}} hesap",
+      "settingsTitle": "Ayarlar",
+      "settingsSubtitle": "Kayıt ve depolamayı yapılandırın"
     },
-    "table": {
-      "email": "E-posta",
-      "username": "Kullanıcı adı",
-      "quota": "Kota",
-      "used": "Kullanılan",
-      "status": "Durum",
-      "totp": "TOTP",
-      "joined": "Katıldı",
-      "active": "Aktif",
-      "inactive": "Devre dışı",
-      "disable": "Devre dışı bırak",
-      "enable": "Etkinleştir",
-      "delete": "Sil"
+    "kpi": {
+      "collections": "Koleksiyonlar"
+    },
+    "encryption": {
+      "title": "Uçtan uca şifreli",
+      "body": "Dosya adları ve içerikleri her cihazda şifrelenir. Yöneticiler hesapları yönetebilir ancak kullanıcı verilerini okuyamaz."
+    },
+    "overview": {
+      "topUsersTitle": "Depolamaya göre en üst kullanıcılar",
+      "topUsersEmpty": "Henüz kullanıcı yok.",
+      "totalCapacity": "Toplam kapasite: {{total}}",
+      "storageHint": {
+        "of": "{{total}} tahsisli",
+        "unknown": "tüm hesaplarda"
+      },
+      "footnote": "Etkinlik akışı, sunucu çalışma süresi ve TLS durumu kutup'un arka ucu tarafından henüz sunulmuyor — ilgili uç noktalar geldiğinde burada görünecek."
+    },
+    "users": {
+      "exportCsv": "CSV dışa aktar",
+      "showing": "{{total}} kullanıcıdan {{count}} tanesi gösteriliyor",
+      "pageOf": "Sayfa {{current}} / {{total}}",
+      "prev": "Önceki",
+      "next": "Sonraki",
+      "totpEnabled": "Etkin",
+      "menuLabel": "İşlemler",
+      "column": {
+        "user": "Kullanıcı",
+        "status": "Durum",
+        "storage": "Depolama",
+        "totp": "2FA",
+        "joined": "Katıldı"
+      },
+      "menu": {
+        "editQuota": "Kotayı düzenle",
+        "disable": "Hesabı devre dışı bırak",
+        "reenable": "Hesabı yeniden etkinleştir",
+        "delete": "Kalıcı olarak sil"
+      }
+    },
+    "editQuota": {
+      "title": "Depolama kotasını düzenle",
+      "desc": "{{email}} için — anında uygulanır.",
+      "placeholder": "ör. 25",
+      "save": "Kaydet",
+      "cancel": "İptal"
+    },
+    "settings": {
+      "registrationTitle": "Kayıt",
+      "registrationDesc": "Bu Kutup sunucusuna kimlerin kayıt olabileceğini kontrol edin.",
+      "storageTitle": "Depolama arka ucu",
+      "storageDesc": "Salt okunur — kutup.yml yapılandırma / env değişkenleriyle değiştirin.",
+      "driver": "Sürücü",
+      "driverValue": "SeaweedFS · S3-uyumlu",
+      "storageUsed": "Kullanılan depolama",
+      "storageUsedBody": "{{total}} alandan {{used}} kullanıldı · {{free}} boş",
+      "storageUsedUnknown": "Kapasite bilinmiyor — görüntülemek için STORAGE_TOTAL_BYTES değişkenini ayarlayın.",
+      "storageEncryption": "Şifreleme",
+      "moreSoonNote": "Daha fazla yönetici kontrolü — zorunlu 2FA, kota varsayılanları, tehlikeli bölge eylemleri — arka uç büyüdükçe gelecek."
     },
     "createDialog": {
       "title": "Kullanıcı oluştur",
-      "desc": "Kullanıcı ilk girişte kendi şifresini ve kurtarma ifadesini belirleyecek.",
+      "desc": "Şimdi geçici bir şifre belirleniyor; kullanıcı ilk girişte değiştirir.",
       "email": "E-posta",
       "username": "Kullanıcı adı",
-      "usernamePlaceholder": "3-32 karakter: a-z, 0-9, _ ve -",
+      "usernamePlaceholder": "kısa-takma-ad",
       "tempPassword": "Geçici şifre",
-      "tempPasswordPlaceholder": "Bunu kullanıcıyla paylaşın",
-      "quotaLabel": "Depolama kotası (GB)",
+      "tempPasswordPlaceholder": "en az 8 karakter",
+      "quotaLabel": "Kota",
       "cancel": "İptal",
       "create": "Kullanıcı oluştur"
     },
     "deleteDialog": {
       "title": "{{email}} silinsin mi?",
-      "desc": "Bu işlem hesabı ve tüm ilgili verileri kalıcı olarak siler. Bu işlem geri alınamaz.",
+      "desc": "Bu işlem kullanıcıyı ve tüm verilerini kalıcı olarak siler. Bu işlem geri alınamaz.",
       "cancel": "İptal",
       "confirm": "Sil"
     }
@@ -479,6 +536,198 @@
       "cycleModeRev": "Modlarda geriye doğru geçiş",
       "addCursor": "Tıklanan konuma imleç ekle",
       "rectSelect": "Dikdörtgen seçim"
+    }
+  },
+  "mobile": {
+    "back": "Geri",
+    "cancel": "İptal",
+    "files": {
+      "subtitle": "{{folders}} klasör · {{files}} dosya",
+      "search": {
+        "placeholder": "Kutup'ta ara…",
+        "empty": "\"{{q}}\" için sonuç yok",
+        "clear": "Aramayı temizle"
+      },
+      "empty": {
+        "subtitle": "Farklı bir arama terimi deneyin"
+      },
+      "chips": {
+        "all": "Tümü",
+        "recent": "Yakınlarda",
+        "photos": "Fotoğraflar",
+        "documents": "Belgeler",
+        "pdfs": "PDF'ler",
+        "audio": "Ses"
+      }
+    },
+    "section": {
+      "folders": "Klasörler · {{n}}",
+      "files": "Dosyalar · {{n}}"
+    },
+    "shared": {
+      "subtitle": "Sizinle {{n}} paylaşıldı",
+      "empty": {
+        "title": "Henüz paylaşılan yok",
+        "subtitle": "Bir dosyayı kimseye gönderin — Kutup hesabı olmasa bile",
+        "hint": "Bir dosya açın ve başlamak için Paylaş'a dokunun"
+      }
+    },
+    "trash": {
+      "subtitle": "Öğeler 30 gün sonra kalıcı olarak silinir",
+      "empty": {
+        "title": "Çöp kutusu boş",
+        "subtitle": "Silinen dosyalar burada 30 gün görünür",
+        "action": "Boşalt"
+      },
+      "restore": "Geri yükle"
+    },
+    "sheet": {
+      "add": {
+        "title": "Kutup'a Ekle",
+        "upload": "Dosya yükle",
+        "uploadSub": "Cihazınızdan",
+        "uploadFolder": "Klasör yükle",
+        "newFolder": "Yeni klasör",
+        "newNote": "Yeni not",
+        "newWhiteboard": "Yeni beyaz tahta",
+        "pasteLink": "Şifreli bağlantı yapıştır",
+        "pasteLinkSub": "Paylaşılan bir dosyanın şifresini çöz"
+      }
+    },
+    "item": {
+      "open": "Aç",
+      "downloadZip": "ZIP olarak indir",
+      "download": "İndir",
+      "share": "Paylaş",
+      "rename": "Yeniden adlandır",
+      "favorite": "Favorilere ekle",
+      "trash": "Çöp kutusuna taşı",
+      "e2eBadge": "Uçtan uca şifreli"
+    },
+    "account": {
+      "profile": "Profil",
+      "encryptionKeys": "Şifreleme anahtarları",
+      "encryptionKeys.sub": "Kurtarma ifadenizi yönetin",
+      "security": "Güvenlik",
+      "notifications": "Bildirimler",
+      "language": "Dil",
+      "about": "Kutup Hakkında",
+      "admin": "Yönetici",
+      "signOut": "Çıkış yap",
+      "darkMode": "Karanlık mod",
+      "lightMode": "Aydınlık mod",
+      "storage": "Depolama",
+      "storageUsed": "{{used}} kullanıldı",
+      "storageOf": "/ {{total}}",
+      "upgrade": "Yükselt",
+      "freePlan": "Ücretsiz plan",
+      "adminPlan": "Yönetici",
+      "tagline": "Kutup · Uçtan uca şifreli sürücü",
+      "profile.note": "Hesap bilgileri Kutup sunucunuz tarafından yönetilir. Değişiklik için yöneticinizle iletişime geçin.",
+      "encryptionKeys.heroTitle": "Anahtarlarınız, verileriniz",
+      "encryptionKeys.heroBody": "Dosyalar şifrenizden türetilen anahtarlarla uçtan uca şifrelenir. 24 kelimelik kurtarma ifadesi, şifrenizi unutursanız tek yedeğinizdir.",
+      "encryptionKeys.viewRecovery": "Kurtarma ifadesini görüntüle",
+      "encryptionKeys.viewRecoverySub": "24 kelimeyi yazın veya yazdırın",
+      "encryptionKeys.rotate": "Kurtarma ifadesini yenile",
+      "encryptionKeys.rotateSub": "Yeni ifade oluştur — eskisi geçersiz olur",
+      "encryptionKeys.footer": "Kutup ifadenizi asla görmez — bu cihazda ve senkronladığınız cihazlarda kalır.",
+      "security.totp": "İki adımlı doğrulama",
+      "security.totpOn": "Etkin",
+      "security.totpOff": "Etkin değil",
+      "security.devices": "Güvenilir cihazlar",
+      "security.devicesSub": "Tarayıcı sekmeleri ve CLI oturumları",
+      "security.note": "Tam kurulum (QR kodu, kurtarma kodları, cihaz iptali) şu an masaüstü Ayarlar sayfasında.",
+      "notifications.emptyTitle": "Bildirim yok",
+      "notifications.emptySubtitle": "Paylaşımlar, etiketlemeler ve güncellemelerden gelen etkinlikler burada görünür.",
+      "language.selected": "Seçili",
+      "about.source": "Kaynak kod",
+      "about.trademark": "Marka politikası",
+      "about.license": "Lisans",
+      "security.devicesEmptyHint": "Cihazlar ortak bir düzenleme başlattıklarında burada görünür.",
+      "security.totpOffDescription": "Kimlik doğrulama uygulamasıyla ekstra güvenlik katmanı ekleyin"
+    },
+    "actionUnavailable": "Oluşturmak için masaüstünde bir klasöre dokunun — mobil akış yakında.",
+    "item.folder": "Klasör",
+    "item.sharedFolder": "Paylaşılan klasör",
+    "item.color": "Renk",
+    "item.colorClear": "Rengi temizle",
+    "totp": {
+      "setupInstructions": "Kimlik doğrulama uygulamanızı (Google Authenticator, 1Password, Authy, vb.) açın ve aşağıdaki QR kodu tarayarak veya anahtarı manuel olarak yapıştırarak bir hesap ekleyin. Ardından oluşturduğu 6 haneli kodu girin.",
+      "copy": "Kopyala",
+      "copySecret": "Anahtarı kopyala",
+      "enterCodeLabel": "6 haneli kodu girin",
+      "lossNote": "Kimlik doğrulama uygulamanıza erişimi kaybederseniz, hesabı geri yüklemek için 24 kelimelik kurtarma ifadenizi kullanın."
+    },
+    "admin": {
+      "title": "Yönetici",
+      "tabs.overview": "Genel bakış",
+      "tabs.users": "Kullanıcılar",
+      "tabs.settings": "Ayarlar",
+      "kpi.totalUsers": "Toplam kullanıcı",
+      "kpi.activeUsers": "Aktif kullanıcı",
+      "kpi.totalFiles": "Toplam dosya",
+      "kpi.storageUsed": "Kullanılan depolama",
+      "status.active": "Aktif",
+      "status.disabled": "Devre dışı",
+      "rolePillAdmin": "Yönetici",
+      "overview.e2eNote": "Dosya adları ve içerikleri her cihazda şifrelenir. Yöneticiler hesapları yönetebilir ancak kullanıcı verilerini okuyamaz.",
+      "users.openRow": "{{email}} kullanıcısını aç",
+      "users.countAll": "{{n}} kullanıcı",
+      "users.countOf": "{{total}} içinden {{shown}}",
+      "users.newUser": "Yeni kullanıcı",
+      "users.searchPlaceholder": "E-posta veya kullanıcı adıyla ara…",
+      "users.searchClear": "Aramayı temizle",
+      "users.filterAll": "Tümü",
+      "users.filterActive": "Aktif",
+      "users.filterDisabled": "Devre dışı",
+      "users.filterAdmins": "Yöneticiler",
+      "users.filterOver75": "%75 üzeri",
+      "users.emptyTitle": "Eşleşen kullanıcı yok",
+      "users.emptySubtitle": "Farklı bir filtre veya arama deneyin",
+      "user.title": "Kullanıcı",
+      "user.notFound": "Kullanıcı bulunamadı.",
+      "user.storage": "Depolama",
+      "user.accountSection": "Hesap",
+      "user.totp": "2FA",
+      "user.totpEnabled": "Etkin",
+      "user.totpNotSet": "Ayarlanmamış",
+      "user.role": "Rol",
+      "user.roleAdmin": "Yönetici",
+      "user.roleUser": "Kullanıcı",
+      "user.joined": "Katıldı",
+      "user.manageSection": "Yönet",
+      "user.editQuota": "Kotayı düzenle",
+      "user.editQuotaDesc": "Gigabayt cinsinden depolama kotasını ayarlayın. Mevcut dosyalar korunur.",
+      "user.quotaGB": "Kota (GB)",
+      "user.quotaSaved": "Kota güncellendi",
+      "user.currentlyX": "Şu an {{x}}",
+      "user.stateSection": "Hesap durumu",
+      "user.disable": "Hesabı devre dışı bırak",
+      "user.disableSub": "Kullanıcı giriş yapamaz ancak verileri korunur",
+      "user.disableTitle": "{{email}} devre dışı bırakılsın mı?",
+      "user.disabledToast": "Kullanıcı devre dışı bırakıldı",
+      "user.enable": "Hesabı yeniden etkinleştir",
+      "user.enableSub": "Kullanıcı tekrar giriş yapabilir",
+      "user.enableTitle": "{{email}} yeniden etkinleştirilsin mi?",
+      "user.enabledToast": "Kullanıcı yeniden etkinleştirildi",
+      "user.delete": "Kalıcı olarak sil",
+      "user.deleteSub": "Tüm şifreli bloblar kaldırılacak",
+      "user.deleteTitle": "{{email}} silinsin mi?",
+      "user.deleteDesc": "Tüm şifreli bloblar kaldırılacak. Bu işlem geri alınamaz.",
+      "createUser.title": "Yeni kullanıcı",
+      "createUser.intro": "Şimdi geçici bir şifre ayarlanır; kullanıcı ilk girişte değiştirir ve şifreleme anahtarlarını istemci tarafında oluşturur.",
+      "createUser.accountSection": "Hesap",
+      "createUser.email": "E-posta",
+      "createUser.username": "Kullanıcı adı",
+      "createUser.tempPassword": "Geçici şifre",
+      "createUser.tempPasswordPlaceholder": "en az 8 karakter",
+      "createUser.tempPasswordHint": "Bunu kullanıcıyla başka bir kanal üzerinden paylaşın; ilk girişte değiştirir.",
+      "createUser.quotaSection": "Kota",
+      "createUser.submit": "Kullanıcı oluştur",
+      "settings.registrationGroup": "Kayıt",
+      "settings.publicReg": "Herkese açık kayıt",
+      "settings.publicRegSub": "Herkes kayıt sayfasından bir hesap oluşturabilir",
+      "settings.moreSoonNote": "Daha fazla yönetici denetimi — zorunlu 2FA, kota varsayılanları, depolama arka uç, tehlikeli işlemler — arka uç büyüdükçe gelir. Masaüstü /admin sayfası burada eksik olan her şeyi kapsar."
     }
   }
 }

@@ -4,11 +4,29 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* ----------------------------------------------------------------------------
+ * Tailwind 4 token map.
+ *
+ * Token values come from the Claude Design handoff at /tmp/kutup-design/kutup/
+ * (the `:root` blocks of `kutup-mobile.html` + `kutup-drive.html`). The
+ * existing shadcn-style token *names* (--background, --foreground, --primary,
+ * etc.) are preserved so every existing component keeps working without code
+ * changes — only the OKLCH values shift to match the design.
+ *
+ * Additional design-only tokens (surface-raised, surface-sunken, text-tertiary,
+ * primary-faint, success/-faint, destructive-faint, three shadow vars) are
+ * exposed alongside as `--color-*` so they become `bg-surface-raised`,
+ * `text-text-tertiary`, etc. via Tailwind 4's @theme mechanism — used by the
+ * new mobile UI components.
+ * --------------------------------------------------------------------------*/
 @theme inline {
+  /* Radius — design uses tighter values than the prior kutup defaults */
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
+  /* Existing kutup tokens (re-tuned values defined in :root / .dark blocks) */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -40,77 +58,144 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Design-only additions — used by the mobile UI primitives */
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-border-light: var(--border-light);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-primary-pressed: var(--primary-pressed);
+  --color-primary-light: var(--primary-light);
+  --color-primary-faint: var(--primary-faint);
+  --color-destructive-faint: var(--destructive-faint);
+  --color-success: var(--success);
+  --color-success-faint: var(--success-faint);
+  --color-warning: var(--warning);
+  --color-warning-faint: var(--warning-faint);
+
+  /* iOS minimum tap target (HIG) */
+  --spacing-tap: 44px;
 }
 
-/* Light theme (default) */
+/* Light theme (default) — values re-tuned to the design's OKLCH stops */
 :root {
   --radius: 0.625rem;
-  --background: oklch(0.97 0.005 220);
-  --foreground: oklch(0.12 0.02 240);
+
+  /* shadcn-style tokens, design-matched */
+  --background: oklch(0.965 0.006 220);          /* was 0.97 0.005 220 */
+  --foreground: oklch(0.14 0.022 240);           /* was 0.12 0.02 240 — slightly warmer */
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.12 0.02 240);
+  --card-foreground: oklch(0.14 0.022 240);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.12 0.02 240);
-  --primary: oklch(0.5 0.18 220);
+  --popover-foreground: oklch(0.14 0.022 240);
+  --primary: oklch(0.48 0.19 222);               /* was 0.5 0.18 220 — slightly more saturated */
   --primary-foreground: oklch(0.98 0.005 220);
-  --secondary: oklch(0.93 0.01 220);
+  --secondary: oklch(0.93 0.008 220);
   --secondary-foreground: oklch(0.2 0.02 240);
-  --muted: oklch(0.93 0.01 220);
-  --muted-foreground: oklch(0.45 0.04 220);
-  --accent: oklch(0.93 0.01 220);
+  --muted: oklch(0.955 0.006 220);               /* was 0.93 0.01 220 — lighter, matches surface-sunken */
+  --muted-foreground: oklch(0.42 0.028 228);     /* was 0.45 0.04 220 */
+  --accent: oklch(0.93 0.008 220);
   --accent-foreground: oklch(0.2 0.02 240);
-  --destructive: oklch(0.55 0.22 25);
-  --border: oklch(0.88 0.015 220);
-  --input: oklch(0.88 0.015 220);
-  --ring: oklch(0.5 0.18 220);
-  --chart-1: oklch(0.5 0.18 220);
-  --chart-2: oklch(0.55 0.15 160);
-  --chart-3: oklch(0.6 0.12 80);
-  --chart-4: oklch(0.5 0.2 300);
-  --chart-5: oklch(0.55 0.18 30);
-  --sidebar: oklch(0.94 0.01 220);
-  --sidebar-foreground: oklch(0.12 0.02 240);
-  --sidebar-primary: oklch(0.5 0.18 220);
+  --destructive: oklch(0.52 0.20 22);            /* was 0.55 0.22 25 — softer red */
+  --border: oklch(0.87 0.014 218);               /* was 0.88 0.015 220 */
+  --input: oklch(0.87 0.014 218);
+  --ring: oklch(0.48 0.19 222);
+  --chart-1: oklch(0.48 0.19 222);
+  --chart-2: oklch(0.50 0.18 152);
+  --chart-3: oklch(0.55 0.20 62);
+  --chart-4: oklch(0.46 0.20 282);
+  --chart-5: oklch(0.50 0.20 22);
+  --sidebar: oklch(0.945 0.008 220);
+  --sidebar-foreground: oklch(0.14 0.022 240);
+  --sidebar-primary: oklch(0.48 0.19 222);
   --sidebar-primary-foreground: oklch(0.98 0.005 220);
-  --sidebar-accent: oklch(0.88 0.015 220);
+  --sidebar-accent: oklch(0.87 0.014 218);
   --sidebar-accent-foreground: oklch(0.2 0.02 240);
   --sidebar-border: oklch(0.85 0.015 220);
-  --sidebar-ring: oklch(0.5 0.18 220);
+  --sidebar-ring: oklch(0.48 0.19 222);
+
+  /* Design-only additions */
+  --surface: oklch(1 0 0);
+  --surface-raised: oklch(0.988 0.004 218);
+  --surface-sunken: oklch(0.955 0.006 220);
+  --border-light: oklch(0.93 0.008 220);
+  --text-primary: oklch(0.14 0.022 240);
+  --text-secondary: oklch(0.42 0.028 228);
+  --text-tertiary: oklch(0.60 0.018 224);
+  --primary-pressed: oklch(0.42 0.19 222);
+  --primary-light: oklch(0.91 0.07 220);
+  --primary-faint: oklch(0.955 0.035 220);
+  --destructive-faint: oklch(0.965 0.035 22);
+  --success: oklch(0.50 0.18 152);
+  --success-faint: oklch(0.95 0.05 152);
+  /* Warning — design uses this for >75%-quota indicators on admin storage bars */
+  --warning: oklch(0.62 0.16 65);
+  --warning-faint: oklch(0.96 0.05 65);
+
+  /* Design shadows — used by sheets + cards */
+  --shadow-sm: 0 1px 2px oklch(0.14 0.02 240 / 0.07);
+  --shadow-md: 0 4px 14px oklch(0.14 0.02 240 / 0.10);
+  --shadow-lg: 0 -8px 24px oklch(0.14 0.02 240 / 0.10);
 }
 
-/* Dark theme */
+/* Dark theme — values re-tuned to the design's dark OKLCH stops */
 .dark {
-  --background: oklch(0.145 0.02 240);
-  --foreground: oklch(0.92 0.02 215);
-  --card: oklch(0.17 0.025 235);
-  --card-foreground: oklch(0.92 0.02 215);
-  --popover: oklch(0.17 0.025 235);
-  --popover-foreground: oklch(0.92 0.02 215);
-  --primary: oklch(0.6 0.18 220);
+  --background: oklch(0.138 0.018 242);
+  --foreground: oklch(0.920 0.012 214);
+  --card: oklch(0.175 0.020 238);
+  --card-foreground: oklch(0.920 0.012 214);
+  --popover: oklch(0.175 0.020 238);
+  --popover-foreground: oklch(0.920 0.012 214);
+  --primary: oklch(0.62 0.17 220);
   --primary-foreground: oklch(0.98 0.005 220);
-  --secondary: oklch(0.22 0.03 235);
+  --secondary: oklch(0.215 0.018 238);
   --secondary-foreground: oklch(0.85 0.02 215);
-  --muted: oklch(0.2 0.025 235);
-  --muted-foreground: oklch(0.55 0.04 220);
-  --accent: oklch(0.22 0.03 235);
+  --muted: oklch(0.155 0.018 240);
+  --muted-foreground: oklch(0.620 0.022 220);
+  --accent: oklch(0.215 0.018 238);
   --accent-foreground: oklch(0.85 0.02 215);
-  --destructive: oklch(0.55 0.22 25);
-  --border: oklch(0.25 0.03 235);
-  --input: oklch(0.25 0.03 235);
-  --ring: oklch(0.6 0.18 220);
-  --chart-1: oklch(0.6 0.18 220);
-  --chart-2: oklch(0.65 0.15 160);
-  --chart-3: oklch(0.7 0.12 80);
-  --chart-4: oklch(0.6 0.2 300);
-  --chart-5: oklch(0.65 0.18 30);
-  --sidebar: oklch(0.13 0.02 240);
-  --sidebar-foreground: oklch(0.92 0.02 215);
-  --sidebar-primary: oklch(0.6 0.18 220);
+  --destructive: oklch(0.62 0.20 22);
+  --border: oklch(0.255 0.022 236);
+  --input: oklch(0.255 0.022 236);
+  --ring: oklch(0.62 0.17 220);
+  --chart-1: oklch(0.62 0.17 220);
+  --chart-2: oklch(0.62 0.16 152);
+  --chart-3: oklch(0.65 0.18 62);
+  --chart-4: oklch(0.60 0.18 282);
+  --chart-5: oklch(0.62 0.20 22);
+  --sidebar: oklch(0.120 0.016 244);
+  --sidebar-foreground: oklch(0.920 0.012 214);
+  --sidebar-primary: oklch(0.62 0.17 220);
   --sidebar-primary-foreground: oklch(0.98 0.005 220);
-  --sidebar-accent: oklch(0.2 0.025 235);
+  --sidebar-accent: oklch(0.215 0.018 238);
   --sidebar-accent-foreground: oklch(0.85 0.02 215);
-  --sidebar-border: oklch(0.22 0.025 235);
-  --sidebar-ring: oklch(0.6 0.18 220);
+  --sidebar-border: oklch(0.220 0.020 238);
+  --sidebar-ring: oklch(0.62 0.17 220);
+
+  /* Design-only additions */
+  --surface: oklch(0.175 0.020 238);
+  --surface-raised: oklch(0.205 0.022 236);
+  --surface-sunken: oklch(0.155 0.018 240);
+  --border-light: oklch(0.215 0.018 238);
+  --text-primary: oklch(0.920 0.012 214);
+  --text-secondary: oklch(0.620 0.022 220);
+  --text-tertiary: oklch(0.450 0.016 225);
+  --primary-pressed: oklch(0.55 0.18 220);
+  --primary-light: oklch(0.265 0.075 222);
+  --primary-faint: oklch(0.215 0.048 222);
+  --destructive-faint: oklch(0.215 0.055 22);
+  --success: oklch(0.62 0.16 152);
+  --success-faint: oklch(0.22 0.055 152);
+  --warning: oklch(0.70 0.16 65);
+  --warning-faint: oklch(0.22 0.04 65);
+
+  /* Heavier shadows in dark mode (the surfaces are darker, so the shadow needs more presence) */
+  --shadow-sm: 0 1px 3px oklch(0.04 0.01 240 / 0.45);
+  --shadow-md: 0 4px 14px oklch(0.04 0.01 240 / 0.55);
+  --shadow-lg: 0 16px 40px oklch(0.04 0.01 240 / 0.65);
 }
 
 * {
@@ -124,3 +209,31 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+
+/* ----------------------------------------------------------------------------
+ * Safe-area + tap-target utilities — Tailwind 4 user-defined utilities.
+ *
+ * The padding-* set covers iPhone notch / Dynamic Island / home indicator.
+ * Requires `viewport-fit=cover` in the viewport meta (set in index.html); without it
+ * env(safe-area-inset-*) returns 0 on iOS even when the app is full-bleed.
+ *
+ * `min-h-tap` / `min-w-tap` enforce the iOS Human Interface Guidelines 44pt
+ * minimum hit target on tap-able elements.
+ * --------------------------------------------------------------------------*/
+@layer utilities {
+  .pt-safe { padding-top:    env(safe-area-inset-top); }
+  .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+  .pl-safe { padding-left:   env(safe-area-inset-left); }
+  .pr-safe { padding-right:  env(safe-area-inset-right); }
+  .min-h-tap { min-height: var(--spacing-tap); }
+  .min-w-tap { min-width:  var(--spacing-tap); }
+}
+
+/* ----------------------------------------------------------------------------
+ * Sheet animation keyframes — ported from the design prototype.
+ *
+ * `sheet-up`: bottom sheets slide up from the bottom edge.
+ * `fade-in`:  the dimmed scrim behind a sheet fades in.
+ * --------------------------------------------------------------------------*/
+@keyframes sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes fade-in  { from { opacity: 0; }                 to { opacity: 1; } }

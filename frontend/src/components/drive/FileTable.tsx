@@ -154,6 +154,13 @@ export default function FileTable({
         <span className="text-xs font-medium text-muted-foreground">[{files.length}]</span>
       </header>
 
+      {/* Card surround — mirrors the design's
+          { background: var(--surface); border-radius: var(--radius-lg);
+            border: 1px solid var(--border-light); overflow: hidden; }
+          on the desktop Files table. The folder cards already get this
+          rounded-card look from CollectionGrid; this brings the files
+          section to the same visual treatment. */}
+      <div className="rounded-lg border border-border-light bg-surface overflow-hidden">
       <Table>
         <TableHeader>
           <TableRow>
@@ -303,6 +310,7 @@ export default function FileTable({
           })}
         </TableBody>
       </Table>
+      </div>
     </section>
   )
 }

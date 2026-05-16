@@ -15,6 +15,12 @@ var adminUsernameRegexp = regexp.MustCompile(`^[a-z0-9_-]{3,32}$`)
 
 type AdminHandler struct {
 	DB *pgxpool.Pool
+	// StorageTotalBytes is the configured total storage capacity of this
+	// instance (S3 bucket / volume size). 0 means "unknown" — the admin UI
+	// hides the capacity readout. Sourced from STORAGE_TOTAL_BYTES env var
+	// at startup; surfaced via GetStats so the admin page can render
+	// "X of Y used · Z free" without an extra round-trip.
+	StorageTotalBytes int64
 }
 
 // @Summary      List all users
@@ -260,11 +266,12 @@ func (h *AdminHandler) DeleteUser(c *fiber.Ctx) error {
 // @Router       /admin/stats [get]
 func (h *AdminHandler) GetStats(c *fiber.Ctx) error {
 	var stats struct {
-		TotalUsers       int64 `json:"totalUsers"`
-		ActiveUsers      int64 `json:"activeUsers"`
-		TotalFiles       int64 `json:"totalFiles"`
-		TotalStorageUsed int64 `json:"totalStorageUsedBytes"`
-		TotalCollections int64 `json:"totalCollections"`
+		TotalUsers        int64 `json:"totalUsers"`
+		ActiveUsers       int64 `json:"activeUsers"`
+		TotalFiles        int64 `json:"totalFiles"`
+		TotalStorageUsed  int64 `json:"totalStorageUsedBytes"`
+		TotalCollections  int64 `json:"totalCollections"`
+		StorageTotalBytes int64 `json:"storageTotalBytes"` // 0 = unknown (env var unset)
 	}
 
 	h.DB.QueryRow(context.Background(), `SELECT COUNT(*) FROM users`).Scan(&stats.TotalUsers)
@@ -272,6 +279,7 @@ func (h *AdminHandler) GetStats(c *fiber.Ctx) error {
 	h.DB.QueryRow(context.Background(), `SELECT COUNT(*) FROM files`).Scan(&stats.TotalFiles)
 	h.DB.QueryRow(context.Background(), `SELECT COALESCE(SUM(storage_used_bytes),0) FROM users`).Scan(&stats.TotalStorageUsed)
 	h.DB.QueryRow(context.Background(), `SELECT COUNT(*) FROM collections`).Scan(&stats.TotalCollections)
+	stats.StorageTotalBytes = h.StorageTotalBytes
 
 	return c.JSON(stats)
 }
