@@ -19,9 +19,22 @@ describe('formatBytes', () => {
     expect(formatBytes(5 * 1024 * 1024 + 512 * 1024)).toBe('5.5 MB')
   })
 
-  it('returns GB at 1 GiB and above', () => {
+  it('returns GB between 1 GiB and 1 TiB', () => {
     expect(formatBytes(1024 * 1024 * 1024)).toBe('1.00 GB')
     expect(formatBytes(2.5 * 1024 * 1024 * 1024)).toBe('2.50 GB')
+  })
+
+  it('returns TB between 1 TiB and 1 PiB', () => {
+    const TiB = 1024 ** 4
+    expect(formatBytes(TiB)).toBe('1.00 TB')
+    expect(formatBytes(57.07 * TiB)).toBe('57.07 TB')
+    expect(formatBytes(1024 ** 5 - 1)).toBe('1024.00 TB')
+  })
+
+  it('returns PB at 1 PiB and above', () => {
+    const PiB = 1024 ** 5
+    expect(formatBytes(PiB)).toBe('1.00 PB')
+    expect(formatBytes(3 * PiB)).toBe('3.00 PB')
   })
 })
 

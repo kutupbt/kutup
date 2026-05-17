@@ -199,6 +199,16 @@ func TestGetStats_Counts(t *testing.T) {
 	if stats["activeUsers"] != float64(2) {
 		t.Errorf("activeUsers = %v, want 2", stats["activeUsers"])
 	}
+	// Lock the storage-telemetry fields into the response shape. The test
+	// handler has no probe + no STORAGE_TOTAL_BYTES, so both are 0 — the
+	// point is that the keys are always present (a rename would break the
+	// admin Settings card silently otherwise).
+	if _, ok := stats["storageTotalBytes"]; !ok {
+		t.Error("storageTotalBytes missing from /admin/stats response")
+	}
+	if _, ok := stats["storageBackendUsedBytes"]; !ok {
+		t.Error("storageBackendUsedBytes missing from /admin/stats response")
+	}
 }
 
 // userField fetches a single field of one user from GET /admin/users.
