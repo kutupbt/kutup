@@ -117,6 +117,7 @@ CLAUDE.md explicitly notes: **"Builds are currently unsigned."** macOS Gatekeepe
 | Microsoft Authenticode certificate for Windows | external — DigiCert / Sectigo (~$300/yr) |
 | `.github/workflows/release-desktop.yml` — accept signing secrets, run `codesign` (mac) + `signtool` (win) | repo |
 | iOS distribution: TestFlight + App Store Connect setup | external |
+| iOS App Store icon: re-render with a non-transparent background (`pnpm tauri:icon src-tauri/icons/source.png --ios-color <hex>`) — App Store Connect rejects transparent / alpha-channel app icons at submission | `package.json` + `src-tauri/icons/` |
 | Android: Play Store key + Play Console | external |
 | Documentation: `docs/release-signing.md` covering how to rotate keys | new doc |
 

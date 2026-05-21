@@ -10,10 +10,10 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "tauri:android:init": "tauri android init",
+    "tauri:android:init": "tauri android init && tauri icon src-tauri/icons/source.png",
     "tauri:android:dev": "tauri android dev",
     "tauri:android:build": "tauri android build",
-    "tauri:ios:init": "tauri ios init",
+    "tauri:ios:init": "tauri ios init && tauri icon src-tauri/icons/source.png",
     "tauri:ios:dev": "tauri ios dev",
     "tauri:ios:build": "tauri ios build",
     "tauri:icon": "tauri icon"

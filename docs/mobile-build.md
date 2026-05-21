@@ -1,8 +1,10 @@
 # Building the Kutup mobile apps (iOS / Android)
 
-The mobile apps are the same [Tauri 2](https://tauri.app) shell + React frontend as the [desktop app](desktop-build.md), built for iOS and Android. The Rust side is already mobile-ready (`src-tauri/src/lib.rs` has the `tauri::mobile_entry_point`; `[lib] crate-type` includes `staticlib`/`cdylib`; `src-tauri/icons/{ios,android}/` are generated). What's left is `init`-ing the platform projects and building.
+The mobile apps are the same [Tauri 2](https://tauri.app) shell + React frontend as the [desktop app](desktop-build.md), built for iOS and Android. The Rust side is already mobile-ready (`src-tauri/src/lib.rs` has the `tauri::mobile_entry_point`; `[lib] crate-type` includes `staticlib`/`cdylib`). What's left is `init`-ing the platform projects and building.
 
 `src-tauri/gen/` (the generated Xcode / Android Studio projects) is **gitignored** — it contains absolute paths + signing config. You regenerate it locally with `tauri ios init` / `tauri android init`; don't commit it.
+
+App-icon branding is plumbed automatically: the `tauri:ios:init` / `tauri:android:init` scripts in `package.json` chain `tauri icon src-tauri/icons/source.png` after the init step, so the generated `gen/` project picks up the kutup three-diamond mark instead of Tauri's default droplet. If you need to refresh icons later (e.g. after pulling a new `source.png`), run `pnpm tauri:icon src-tauri/icons/source.png` — that rewrites both the desktop set under `src-tauri/icons/` and the mobile resources under `gen/{apple,android}/…`.
 
 ## Prerequisites
 
