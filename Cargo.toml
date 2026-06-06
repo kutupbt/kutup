@@ -1,0 +1,45 @@
+# Root Cargo workspace for the Go→Rust rewrite.
+#
+# Crates (see docs/contributing.md and CLAUDE.md):
+#   crates/kutup-crypto  — shared E2EE primitives; the canonical mirror partner of
+#                          frontend/src/crypto/ (libsodium-wrappers). Used by the CLI
+#                          and (for the collab envelope) the server.
+#   crates/kutup-cli     — the `kutup` CLI         (replaces cmd/kutup/)      [pending]
+#   crates/kutup-server  — the backend API binary  (replaces backend/)       [pending]
+#
+# src-tauri/ is its own standalone crate and is intentionally NOT a member of this
+# workspace; `exclude` keeps `cargo build` there independent of this tree.
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+exclude = ["src-tauri"]
+
+[workspace.package]
+edition = "2021"
+license = "AGPL-3.0-only"
+rust-version = "1.82"
+
+# Shared dependency versions, pinned once for the whole workspace.
+[workspace.dependencies]
+# Crypto — libsodium-compatible primitives in pure Rust (no C toolchain), plus the
+# RustCrypto crates for the constructions dryoc does not expose (HKDF-SHA256, the
+# IETF XChaCha20-Poly1305 AEAD used for asset blobs, and Ed25519 frame signatures).
+dryoc = "0.7"
+hkdf = "0.12"
+sha2 = "0.10"
+chacha20poly1305 = "0.10"
+ed25519-dalek = "2"
+
+# Common plumbing.
+thiserror = "2"
+base64 = "0.22"
+zeroize = "1"
+
+# Dev / test.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+
+[profile.release]
+# Match the security-conscious, debuggable posture; tune later for the server/CLI.
+opt-level = 2
