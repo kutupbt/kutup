@@ -55,6 +55,29 @@ enum Commands {
         /// Folder id to list (omit for top level).
         folder_id: Option<String>,
     },
+    /// Create a new folder.
+    Mkdir {
+        /// Folder name.
+        name: String,
+        /// Parent folder id (for a nested folder).
+        #[arg(long)]
+        parent: Option<String>,
+    },
+    /// Rename a file (re-encrypts metadata; content untouched).
+    Mv {
+        /// File id.
+        file_id: String,
+        /// New name.
+        new_name: String,
+    },
+    /// Delete a file or folder.
+    Rm {
+        /// File or folder id.
+        id: String,
+        /// Delete a folder (collection) instead of a file.
+        #[arg(long)]
+        folder: bool,
+    },
 }
 
 fn main() {
@@ -66,6 +89,13 @@ fn main() {
         Commands::Ls { tree, folder_id } => {
             commands::ls::run(&cli.profile, cli.json, *tree, folder_id.as_deref())
         }
+        Commands::Mkdir { name, parent } => {
+            commands::mkdir::run(&cli.profile, cli.json, name, parent.as_deref())
+        }
+        Commands::Mv { file_id, new_name } => {
+            commands::mv::run(&cli.profile, cli.json, file_id, new_name)
+        }
+        Commands::Rm { id, folder } => commands::rm::run(&cli.profile, cli.json, id, *folder),
     };
     if let Err(e) = result {
         eprintln!("{e:#}");

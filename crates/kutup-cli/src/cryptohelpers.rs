@@ -1,9 +1,9 @@
 //! Shared decryption helpers used across commands — mirrors `helpers.go`.
 
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use base64::Engine;
 
-use crate::api::{Collection, File, FileMetadata};
+use crate::api::{Client, Collection, File, FileMetadata};
 use crate::session::Session;
 use kutup_crypto::{sealedbox, secretbox};
 
@@ -79,4 +79,34 @@ pub fn decrypt_file_meta(f: &File, collection_key: &[u8]) -> (String, i64) {
 /// Finds a collection by id.
 pub fn find_collection<'a>(cols: &'a [Collection], id: &str) -> Option<&'a Collection> {
     cols.iter().find(|c| c.id == id)
+}
+
+/// Locates a file across the user's owned collections and unwraps its file key.
+/// Mirrors `findFileAndKey` (versions.go); shared/federated collections are
+/// skipped (their keys don't open with the master key directly).
+pub fn find_file_and_key(
+    client: &Client,
+    master_key: &[u8],
+    file_id: &str,
+) -> Result<(File, Vec<u8>)> {
+    let cols = client.list_collections()?;
+    for col in &cols {
+        let Ok(col_key) =
+            secretbox::open_b64(&col.encrypted_key, &col.encrypted_key_nonce, master_key)
+        else {
+            continue;
+        };
+        let Ok(files) = client.list_files(&col.id) else {
+            continue;
+        };
+        for f in files {
+            if f.id != file_id {
+                continue;
+            }
+            let fk = secretbox::open_b64(&f.encrypted_file_key, &f.file_key_nonce, &col_key)
+                .map_err(|e| anyhow!("unwrap file key: {e}"))?;
+            return Ok((f, fk));
+        }
+    }
+    bail!("file {file_id} not found in any accessible collection")
 }
