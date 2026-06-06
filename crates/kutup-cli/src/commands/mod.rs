@@ -11,6 +11,7 @@ pub mod mv;
 pub mod rm;
 pub mod upload;
 pub mod version;
+pub mod versions;
 pub mod whoami;
 
 use std::io::{self, Write};

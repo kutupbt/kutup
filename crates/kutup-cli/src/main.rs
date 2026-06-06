@@ -111,6 +111,11 @@ enum Commands {
         #[command(subcommand)]
         command: commands::devices::DevicesCmd,
     },
+    /// List, download, restore, and label snapshot versions of a file.
+    Versions {
+        #[command(subcommand)]
+        command: commands::versions::VersionsCmd,
+    },
     /// Print the kutup CLI version + build info.
     Version,
 }
@@ -145,6 +150,7 @@ fn main() {
             commands::color::run(&cli.profile, cli.json, collection_id, hex)
         }
         Commands::Devices { command } => commands::devices::run(&cli.profile, cli.json, command),
+        Commands::Versions { command } => commands::versions::run(&cli.profile, cli.json, command),
         Commands::Version => {
             commands::version::run(cli.json);
             Ok(())
