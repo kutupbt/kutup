@@ -1,0 +1,74 @@
+//! kutup CLI — Rust rewrite of `cmd/kutup`. E2E-encrypted file storage client.
+//!
+//! Commands are ported incrementally; only fully-wired commands are exposed
+//! (no stubs). See `docs/roadmap.md` / the rewrite branch for what remains.
+
+// TODO(rust-rewrite): drop once the command surface (mkdir/mv/rm/sync/share/…)
+// consumes the remaining API + session methods already ported below.
+#![allow(dead_code)]
+
+mod api;
+mod commands;
+mod config;
+mod context;
+mod cryptohelpers;
+mod output;
+mod session;
+
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(
+    name = "kutup",
+    about = "Kutup CLI — E2E encrypted file storage",
+    version,
+    disable_help_subcommand = true
+)]
+struct Cli {
+    /// Profile name (for multiple accounts).
+    #[arg(long, global = true, default_value = "default")]
+    profile: String,
+    /// Output as JSON.
+    #[arg(long, global = true)]
+    json: bool,
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Authenticate and store session.
+    Login {
+        /// Server URL (e.g. https://kutup.example.com).
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Clear stored session.
+    Logout,
+    /// Show current user info.
+    Whoami,
+    /// List files and folders.
+    Ls {
+        /// Show the full folder tree.
+        #[arg(long)]
+        tree: bool,
+        /// Folder id to list (omit for top level).
+        folder_id: Option<String>,
+    },
+}
+
+fn main() {
+    let cli = Cli::parse();
+    let result = match &cli.command {
+        Commands::Login { server } => commands::login::run(&cli.profile, server.as_deref()),
+        Commands::Logout => commands::logout::run(&cli.profile),
+        Commands::Whoami => commands::whoami::run(&cli.profile, cli.json),
+        Commands::Ls { tree, folder_id } => {
+            commands::ls::run(&cli.profile, cli.json, *tree, folder_id.as_deref())
+        }
+    };
+    if let Err(e) = result {
+        eprintln!("{e:#}");
+        std::process::exit(1);
+    }
+}
