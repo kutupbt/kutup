@@ -43,6 +43,9 @@ enum Commands {
         /// Server URL (e.g. https://kutup.example.com).
         #[arg(long)]
         server: Option<String>,
+        /// Email (for non-interactive login; password via KUTUP_PASSWORD env).
+        #[arg(long)]
+        email: Option<String>,
     },
     /// Clear stored session.
     Logout,
@@ -115,7 +118,9 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     let result = match &cli.command {
-        Commands::Login { server } => commands::login::run(&cli.profile, server.as_deref()),
+        Commands::Login { server, email } => {
+            commands::login::run(&cli.profile, server.as_deref(), email.as_deref())
+        }
         Commands::Logout => commands::logout::run(&cli.profile),
         Commands::Whoami => commands::whoami::run(&cli.profile, cli.json),
         Commands::Ls { tree, folder_id } => {

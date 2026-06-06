@@ -8,7 +8,7 @@ use crate::commands::prompt_line;
 use crate::session::{Session, Store};
 use kutup_crypto::{kdf, secretbox};
 
-pub fn run(profile: &str, server_flag: Option<&str>) -> Result<()> {
+pub fn run(profile: &str, server_flag: Option<&str>, email_flag: Option<&str>) -> Result<()> {
     let b64 = base64::engine::general_purpose::STANDARD;
 
     let mut server = server_flag.unwrap_or("").to_string();
@@ -17,8 +17,16 @@ pub fn run(profile: &str, server_flag: Option<&str>) -> Result<()> {
     }
     let server = server.trim_end_matches('/').to_string();
 
-    let email = prompt_line("Email: ")?;
-    let password = rpassword::prompt_password("Password: ")?;
+    // Email: --email flag, else prompt. Password: KUTUP_PASSWORD env (for
+    // non-interactive automation/CI), else a hidden prompt.
+    let email = match email_flag {
+        Some(e) => e.to_string(),
+        None => prompt_line("Email: ")?,
+    };
+    let password = match std::env::var("KUTUP_PASSWORD") {
+        Ok(p) if !p.is_empty() => p,
+        _ => rpassword::prompt_password("Password: ")?,
+    };
 
     let client = Client::new(&server, "");
 
