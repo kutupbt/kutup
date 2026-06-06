@@ -51,7 +51,7 @@ rpassword = "7"
 rand = "0.8"
 indicatif = "0.17"
 qrcode = "0.14"
-time = { version = "0.3", features = ["formatting"] }
+time = { version = "0.3", features = ["formatting", "serde", "serde-well-known"] }
 notify = "6"
 url = "2"
 
@@ -60,10 +60,18 @@ axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "migrate", "uuid", "time"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "limit", "catch-panic"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+# OpenAPI — replaces swaggo/swag. The interactive swagger-ui crate downloads its UI
+# bundle from GitHub at build time, which breaks offline/sandboxed builds; we generate
+# the spec with utoipa and serve the raw JSON instead (see docs/roadmap.md).
+utoipa = { version = "5", features = ["axum_extras", "time", "uuid", "preserve_order"] }
+# Auth + 2FA (server slice 2).
+jsonwebtoken = "9"
+bcrypt = "0.16"
+totp-rs = { version = "5", features = ["qr"] }
 
 # Dev / test.
 hex = "0.4"

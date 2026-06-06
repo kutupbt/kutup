@@ -321,6 +321,19 @@ snapshot API surface ported (`UploadAsset`, `DownloadAsset`, `UploadSnapshotBlob
 `RecordSnapshot`), which lands with the CLI's collab/versions slice. Port these
 before declaring CLI parity.
 
+### Go→Rust server rewrite · interactive Swagger UI
+
+The Rust `kutup-server` (branch `claude/go-rust-rewrite-G16zO`, `crates/kutup-server`)
+generates its OpenAPI spec with `utoipa` and serves the machine-readable document at
+`GET /api-docs/openapi.json`. The Go server served an **interactive Swagger UI** at
+`/swagger/*` (`swaggo/fiber-swagger`). That route is not yet restored in Rust: the
+`utoipa-swagger-ui` crate downloads the Swagger UI bundle from GitHub in its build
+script, which breaks offline/sandboxed builds (and the rule that the server compiles
+offline). Restore it by vendoring the UI bundle (`SWAGGER_UI_OVERWRITE_FOLDER` or a
+`file://` `SWAGGER_UI_DOWNLOAD_URL`) so the build stays network-free, then mount it at
+`/swagger`. The OpenAPI JSON is unaffected and is what the slice-8 parity diff against
+`backend/docs/swagger.yaml` consumes.
+
 ---
 
 ## Research / open questions

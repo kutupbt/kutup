@@ -24,3 +24,5 @@ serde_json.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+time.workspace = true
+utoipa.workspace = true

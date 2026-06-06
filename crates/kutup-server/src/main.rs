@@ -1,22 +1,40 @@
 //! kutup backend API — Rust rewrite of `backend/` (Axum + sqlx).
 //!
-//! This is the Phase-3 scaffold: config, the Postgres pool + migrations, and an
-//! Axum app serving `/api/health`. Handlers (auth, files, collab, federation,
-//! …) land in subsequent slices; the route groups are added as each is wired.
+//! Mirrors `backend/main.go`. This is the Phase-3 build: config, the Postgres pool +
+//! migrations, the shared error/DTO layer, OpenAPI (utoipa) + swagger-ui, and the
+//! cross-cutting middleware (CORS, tracing, panic recovery, 10 GB body limit). Route
+//! groups (auth, files, collab, federation, …) are added in `build_router` as each
+//! handler slice lands.
 
 mod config;
 mod db;
+mod error;
+mod models;
+mod openapi;
 
 use std::sync::Arc;
 
+use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderName, HeaderValue, Method};
 use axum::routing::get;
 use axum::{Json, Router};
-use serde_json::json;
 use sqlx::PgPool;
+use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
+use utoipa::OpenApi;
 
 use config::Config;
+use error::AppError;
+use models::HealthResponse;
+
+/// Server build identifier returned by `/api/health`. Mirrors `main.buildVersion`
+/// in Go (injected via `-ldflags` in release builds; `"dev"` otherwise).
+const BUILD_VERSION: &str = "dev";
+
+/// Max request body — mirrors the Fiber `BodyLimit: 10 GB`. Streaming upload routes
+/// (tus) disable this per-route once they land (`DefaultBodyLimit::disable()`).
+const BODY_LIMIT_BYTES: usize = 10 * 1024 * 1024 * 1024;
 
 /// Shared application state.
 #[derive(Clone)]
@@ -54,20 +72,41 @@ async fn main() -> anyhow::Result<()> {
 /// Builds the application router. Route groups are added here as handlers land.
 fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
+
     Router::new()
+        // OpenAPI spec as JSON. The Go server served an interactive Swagger UI at
+        // `/swagger/*`; the UI bundle is deferred (offline-build constraint, see
+        // docs/roadmap.md) — the machine-readable spec lives here meanwhile.
+        .route("/api-docs/openapi.json", get(openapi_json))
         .route("/api/health", get(health))
+        // Layer order: outermost first. Panic recovery wraps everything so a handler
+        // panic becomes a 500 (mirrors Fiber's `recover.New()`); tracing logs each
+        // request; CORS + body limit gate inputs.
+        .layer(CatchPanicLayer::new())
+        .layer(TraceLayer::new_for_http())
         .layer(cors)
+        .layer(DefaultBodyLimit::max(BODY_LIMIT_BYTES))
         .with_state(state)
 }
 
-/// Liveness probe — mirrors `handlers/health.go` (no DB touch).
-async fn health() -> Json<serde_json::Value> {
-    Json(json!({ "status": "ok" }))
+/// Serves the generated OpenAPI document as JSON (utoipa replaces `swaggo/swag`).
+async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
+    Json(openapi::ApiDoc::openapi())
 }
 
-/// CORS allowlist (env-driven, never `*` with credentials) — mirrors the Fiber
-/// CORS config. `withCredentials` (refresh cookie) is incompatible with a
-/// wildcard, so origins are explicit.
+/// Liveness / identity probe — mirrors `handlers/health.go` `Get`. Anonymous,
+/// idempotent, no DB hit; returns `{name, version, tusVersions}`.
+async fn health() -> Result<Json<HealthResponse>, AppError> {
+    Ok(Json(HealthResponse {
+        name: "kutup",
+        version: BUILD_VERSION.to_string(),
+        tus_versions: vec!["1.0.0"],
+    }))
+}
+
+/// CORS allowlist (env-driven, never `*` with credentials) — mirrors the Fiber CORS
+/// config in `main.go`. `withCredentials` (refresh cookie) is incompatible with a
+/// wildcard, so origins are explicit. Header/method lists match the Go config.
 fn build_cors(allowed_origins: &str) -> CorsLayer {
     let origins: Vec<HeaderValue> = allowed_origins
         .split(',')
@@ -87,13 +126,22 @@ fn build_cors(allowed_origins: &str) -> CorsLayer {
             Method::HEAD,
         ])
         .allow_headers([
-            axum::http::header::AUTHORIZATION,
+            axum::http::header::ORIGIN,
             axum::http::header::CONTENT_TYPE,
-            axum::http::header::CONTENT_LENGTH,
-            // tus.io resumable-upload headers.
+            axum::http::header::ACCEPT,
+            axum::http::header::AUTHORIZATION,
+            // tus.io resumable-upload headers (mirrors the Go AllowHeaders list).
             HeaderName::from_static("tus-resumable"),
             HeaderName::from_static("upload-length"),
-            HeaderName::from_static("upload-metadata"),
             HeaderName::from_static("upload-offset"),
+            HeaderName::from_static("upload-metadata"),
+            HeaderName::from_static("upload-defer-length"),
+            HeaderName::from_static("upload-concat"),
+        ])
+        .expose_headers([
+            HeaderName::from_static("tus-resumable"),
+            HeaderName::from_static("upload-offset"),
+            HeaderName::from_static("upload-length"),
+            axum::http::header::LOCATION,
         ])
 }
