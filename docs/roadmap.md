@@ -303,6 +303,24 @@ Desktop OnlyOffice was stripped from the Tauri build to avoid the OOM on `tauri:
 
 The mobile share sheet doesn't yet expose federated share flows (cross-server) — only public link sharing.
 
+### Go→Rust CLI rewrite · whiteboard asset extraction/hydration
+
+The Rust `kutup` CLI (branch `claude/go-rust-rewrite-G16zO`, `crates/kutup-cli`)
+ports the core upload/download paths but **defers the `.excalidraw` whiteboard
+asset steps** the Go CLI does:
+
+- **upload** (`cmd/upload.go:extractAndUploadWhiteboardAssets`) — encrypt each
+  embedded image as an asset blob, upload it, flip the element to
+  `status:"saved"`, and commit a fresh snapshot.
+- **download** (`cmd/download.go:hydrateWhiteboardAssets`) — fetch separately
+  stored asset blobs and re-inline their `dataURL`s.
+
+Both are best-effort optimizations (regular files transfer correctly without
+them; the web re-uploads/hydrates assets on first open). They need the asset +
+snapshot API surface ported (`UploadAsset`, `DownloadAsset`, `UploadSnapshotBlob`,
+`RecordSnapshot`), which lands with the CLI's collab/versions slice. Port these
+before declaring CLI parity.
+
 ---
 
 ## Research / open questions

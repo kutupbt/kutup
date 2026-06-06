@@ -5,7 +5,9 @@
 //! and a no-total-timeout one for tus PATCH streaming / large downloads where a
 //! total deadline would trip on slow uplinks or final-chunk server work.
 
+pub mod tus;
 pub mod types;
+pub mod versions;
 
 use std::cell::RefCell;
 use std::time::Duration;

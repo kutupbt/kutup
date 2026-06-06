@@ -14,6 +14,7 @@ mod context;
 mod cryptohelpers;
 mod output;
 mod session;
+mod transfer;
 
 use clap::{Parser, Subcommand};
 
@@ -78,6 +79,23 @@ enum Commands {
         #[arg(long)]
         folder: bool,
     },
+    /// Encrypt and upload a file or directory.
+    Upload {
+        /// Local file or directory path.
+        path: String,
+        /// Destination collection id.
+        collection_id: String,
+        /// Upload a directory recursively.
+        #[arg(short, long)]
+        recursive: bool,
+    },
+    /// Download and decrypt a file.
+    Download {
+        /// File id.
+        file_id: String,
+        /// Destination directory or path (default: current directory).
+        dest: Option<String>,
+    },
 }
 
 fn main() {
@@ -96,6 +114,14 @@ fn main() {
             commands::mv::run(&cli.profile, cli.json, file_id, new_name)
         }
         Commands::Rm { id, folder } => commands::rm::run(&cli.profile, cli.json, id, *folder),
+        Commands::Upload {
+            path,
+            collection_id,
+            recursive,
+        } => commands::upload::run(&cli.profile, cli.json, path, collection_id, *recursive),
+        Commands::Download { file_id, dest } => {
+            commands::download::run(&cli.profile, cli.json, file_id, dest.as_deref())
+        }
     };
     if let Err(e) = result {
         eprintln!("{e:#}");
