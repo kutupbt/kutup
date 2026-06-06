@@ -24,7 +24,8 @@ See [`server/plan.md`](server/plan.md) for the full 8-slice build order and
 ## Milestones
 
 - **Before declaring the CLI done:** run `scripts/verify-cli.sh` on a VM with a live
-  stack (see [`cli/README.md`](cli/README.md) for the env vars).
+  stack — full guide in [`cli/testing.md`](cli/testing.md) (build, test account, manual
+  walkthrough, differential testing vs the Go CLI, known quirks, troubleshooting).
 - **After all server slices:** regenerate the OpenAPI spec (utoipa) and diff it against
   `backend/docs/swagger.yaml`; port the Go test suites; then remove `backend/` +
   `cmd/kutup/`.

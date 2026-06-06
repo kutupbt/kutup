@@ -56,3 +56,7 @@ Global flags: `--profile <name>` (default `default`), `--json`.
 
   It runs login → whoami → mkdir → upload (6 MiB, multi-chunk) → ls → download →
   sha256 compare → rm → logout.
+
+See **[`testing.md`](testing.md)** for the full VM testing guide — build, getting a test
+account, manual walkthrough, differential testing against the Go CLI, known quirks, and
+troubleshooting.
