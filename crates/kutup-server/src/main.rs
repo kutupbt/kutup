@@ -9,14 +9,22 @@
 mod config;
 mod db;
 mod error;
+mod handlers;
+mod jwt;
+mod middleware;
 mod models;
 mod openapi;
+mod ratelimit;
+mod ssrf;
+mod totp;
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderName, HeaderValue, Method};
-use axum::routing::get;
+use axum::middleware::from_fn;
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use sqlx::PgPool;
 use tower_http::catch_panic::CatchPanicLayer;
@@ -57,6 +65,12 @@ async fn main() -> anyhow::Result<()> {
     db::migrate(&pool).await?;
     tracing::info!("migrations applied");
 
+    // Seed admin accounts from ADMIN_ACCOUNTS — mirrors main.bootstrapAdmins.
+    bootstrap_admins(&pool, &config.admin_accounts).await;
+
+    // Periodic pruning of the rate-limit + TOTP-block maps (replaces the Go init goroutines).
+    ratelimit::spawn_cleanup();
+
     let state = AppState {
         pool,
         config: Arc::new(config),
@@ -65,13 +79,81 @@ async fn main() -> anyhow::Result<()> {
     let app = build_router(state);
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     tracing::info!("listening on :3000");
-    axum::serve(listener, app).await?;
+    // into_make_service_with_connect_info exposes the peer address so the rate-limit
+    // layers can key on the client IP (Fiber's c.IP()).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
+}
+
+/// Seeds admin accounts from `ADMIN_ACCOUNTS` (comma-separated `email:username:password`).
+/// Admins must complete first-login setup to establish their E2EE key material — mirrors
+/// `main.bootstrapAdmins`.
+async fn bootstrap_admins(pool: &PgPool, accounts_env: &str) {
+    if accounts_env.is_empty() {
+        return;
+    }
+    for entry in accounts_env.split(',') {
+        let parts: Vec<&str> = entry.trim().splitn(3, ':').collect();
+        if parts.len() != 3 {
+            tracing::warn!(
+                "bootstrapAdmins: skipping malformed entry (expected email:username:password)"
+            );
+            continue;
+        }
+        let (email, username, password) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
+        if email.is_empty() || username.is_empty() || password.is_empty() {
+            continue;
+        }
+
+        let exists: Option<i64> = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE email=$1")
+            .bind(email)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+        if exists.unwrap_or(0) > 0 {
+            continue;
+        }
+
+        let hash = match bcrypt::hash(password, 10) {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!("bootstrapAdmins: bcrypt error for {email}: {e}");
+                continue;
+            }
+        };
+
+        let res = sqlx::query(
+            r#"INSERT INTO users (
+                email, username, login_key_hash,
+                encrypted_master_key, master_key_nonce,
+                encrypted_recovery_key, recovery_key_nonce,
+                encrypted_private_key, private_key_nonce,
+                public_key, kdf_salt, login_key_salt,
+                is_admin, is_first_login
+            ) VALUES ($1,$2,$3,'','','','','','','','','',true,true)"#,
+        )
+        .bind(email)
+        .bind(username)
+        .bind(&hash)
+        .execute(pool)
+        .await;
+        match res {
+            Ok(_) => tracing::info!("bootstrapAdmins: created admin account {email} (@{username})"),
+            Err(e) => tracing::warn!("bootstrapAdmins: insert error for {email}: {e}"),
+        }
+    }
 }
 
 /// Builds the application router. Route groups are added here as handlers land.
 fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
+
+    use handlers::auth;
 
     Router::new()
         // OpenAPI spec as JSON. The Go server served an interactive Swagger UI at
@@ -79,6 +161,34 @@ fn build_router(state: AppState) -> Router {
         // docs/roadmap.md) — the machine-readable spec lives here meanwhile.
         .route("/api-docs/openapi.json", get(openapi_json))
         .route("/api/health", get(health))
+        // --- Auth routes (anonymous; rate-limited per the Go middleware chain) ---
+        .route("/api/auth/settings", get(auth::get_public_settings))
+        .route("/api/auth/register", post(auth::register))
+        .route(
+            "/api/auth/login/preflight",
+            get(auth::get_login_preflight).route_layer(from_fn(middleware::rate_limit_preflight)),
+        )
+        .route(
+            "/api/auth/login",
+            post(auth::login).route_layer(from_fn(middleware::rate_limit_login)),
+        )
+        .route("/api/auth/login/2fa", post(auth::login_two_fa))
+        .route(
+            "/api/auth/recover/preflight",
+            get(auth::get_recovery_preflight).route_layer(from_fn(middleware::rate_limit_recovery)),
+        )
+        .route(
+            "/api/auth/recover",
+            post(auth::recover).route_layer(from_fn(middleware::rate_limit_recovery)),
+        )
+        .route("/api/auth/refresh", post(auth::refresh))
+        .route("/api/auth/complete-setup", post(auth::complete_setup))
+        // --- User routes (authenticated via the AuthUser extractor) ---
+        .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
+        .route("/api/user/2fa/setup", post(auth::setup_totp))
+        .route("/api/user/2fa/verify", post(auth::verify_totp))
+        .route("/api/user/2fa", delete(auth::disable_totp))
+        .route("/api/users/by-email/:email", get(auth::get_user_by_email))
         // Layer order: outermost first. Panic recovery wraps everything so a handler
         // panic becomes a 500 (mirrors Fiber's `recover.New()`); tracing logs each
         // request; CORS + body limit gate inputs.

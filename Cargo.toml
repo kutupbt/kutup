@@ -71,7 +71,8 @@ utoipa = { version = "5", features = ["axum_extras", "time", "uuid", "preserve_o
 # Auth + 2FA (server slice 2).
 jsonwebtoken = "9"
 bcrypt = "0.16"
-totp-rs = { version = "5", features = ["qr"] }
+# otpauth = get_url() (the QR URI Go returns); gen_secret = Secret::generate_secret().
+totp-rs = { version = "5", default-features = false, features = ["otpauth", "gen_secret"] }
 
 # Dev / test.
 hex = "0.4"
