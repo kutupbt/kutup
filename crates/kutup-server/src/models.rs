@@ -147,8 +147,9 @@ pub struct CollectionRow {
 }
 
 /// `POST /api/collections` body — mirrors `handlers.CreateCollectionRequest`.
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+/// `default` so missing JSON fields decode to zero values (Go `c.BodyParser`).
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", default)]
 pub struct CreateCollectionRequest {
     pub encrypted_name: String,
     pub name_nonce: String,
@@ -164,22 +165,23 @@ pub struct CreateCollectionResult {
 }
 
 /// `PUT /api/collections/{id}` body — mirrors `handlers.UpdateCollectionRequest`.
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", default)]
 pub struct UpdateCollectionRequest {
     pub encrypted_name: String,
     pub name_nonce: String,
 }
 
 /// `PATCH /api/collections/{id}/color` body — mirrors `handlers.UpdateColorRequest`.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(default)]
 pub struct UpdateColorRequest {
     pub color: Option<String>,
 }
 
 /// `POST /api/collections/{id}/share` body — mirrors `handlers.ShareCollectionRequest`.
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", default)]
 pub struct ShareCollectionRequest {
     pub recipient_user_id: String,
     pub encrypted_collection_key: String,

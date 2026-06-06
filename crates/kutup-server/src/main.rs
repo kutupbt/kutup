@@ -16,6 +16,7 @@ mod models;
 mod openapi;
 mod ratelimit;
 mod ssrf;
+mod storage;
 mod totp;
 
 use std::net::SocketAddr;
@@ -24,7 +25,7 @@ use std::sync::Arc;
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderName, HeaderValue, Method};
 use axum::middleware::from_fn;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use sqlx::PgPool;
 use tower_http::catch_panic::CatchPanicLayer;
@@ -49,6 +50,7 @@ const BODY_LIMIT_BYTES: usize = 10 * 1024 * 1024 * 1024;
 pub struct AppState {
     pub pool: PgPool,
     pub config: Arc<Config>,
+    pub storage: storage::StorageService,
 }
 
 #[tokio::main]
@@ -71,9 +73,19 @@ async fn main() -> anyhow::Result<()> {
     // Periodic pruning of the rate-limit + TOTP-block maps (replaces the Go init goroutines).
     ratelimit::spawn_cleanup();
 
+    // S3 (SeaweedFS) storage client — mirrors services.NewStorage in main.go.
+    let storage = storage::StorageService::new(
+        &config.s3_endpoint,
+        &config.s3_access_key,
+        &config.s3_secret_key,
+        &config.s3_bucket,
+        &config.s3_region,
+    );
+
     let state = AppState {
         pool,
         config: Arc::new(config),
+        storage,
     };
 
     let app = build_router(state);
@@ -153,7 +165,7 @@ async fn bootstrap_admins(pool: &PgPool, accounts_env: &str) {
 fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
 
-    use handlers::auth;
+    use handlers::{auth, collections, devices, file_assets, file_versions, files};
 
     Router::new()
         // OpenAPI spec as JSON. The Go server served an interactive Swagger UI at
@@ -189,6 +201,57 @@ fn build_router(state: AppState) -> Router {
         .route("/api/user/2fa/verify", post(auth::verify_totp))
         .route("/api/user/2fa", delete(auth::disable_totp))
         .route("/api/users/by-email/:email", get(auth::get_user_by_email))
+        // --- Collections (authenticated). Federated-share + fed-pubkey land in slice 6. ---
+        .route(
+            "/api/collections",
+            get(collections::list_collections).post(collections::create_collection),
+        )
+        .route(
+            "/api/collections/:id",
+            get(collections::get_collection)
+                .put(collections::update_collection)
+                .delete(collections::delete_collection),
+        )
+        .route(
+            "/api/collections/:id/color",
+            patch(collections::update_collection_color),
+        )
+        .route(
+            "/api/collections/:id/share",
+            post(collections::share_collection),
+        )
+        .route("/api/collections/:id/files", get(files::list_files))
+        // --- Devices (authenticated) ---
+        .route("/api/devices", post(devices::register).get(devices::list))
+        .route("/api/devices/:id", delete(devices::revoke))
+        // --- Files (authenticated) ---
+        .route("/api/files/upload", post(files::upload))
+        .route("/api/files/:id/download", get(files::download))
+        .route(
+            "/api/files/:id",
+            put(files::update_metadata).delete(files::delete),
+        )
+        .route("/api/files/:fileId/claim-seed", post(files::claim_seed))
+        .route(
+            "/api/files/:fileId/versions",
+            get(file_versions::list).post(file_versions::record),
+        )
+        .route(
+            "/api/files/:fileId/snapshot-blob",
+            post(file_versions::upload_snapshot_blob),
+        )
+        .route(
+            "/api/files/:fileId/versions/:vid/download",
+            get(file_versions::download),
+        )
+        .route(
+            "/api/files/:fileId/versions/:vid",
+            patch(file_versions::patch),
+        )
+        .route(
+            "/api/files/:fileId/assets/:assetId",
+            put(file_assets::upload).get(file_assets::download),
+        )
         // Layer order: outermost first. Panic recovery wraps everything so a handler
         // panic becomes a 500 (mirrors Fiber's `recover.New()`); tracing logs each
         // request; CORS + body limit gate inputs.
