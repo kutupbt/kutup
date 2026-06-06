@@ -27,6 +27,7 @@ indicatif.workspace = true
 qrcode.workspace = true
 time.workspace = true
 notify.workspace = true
+url.workspace = true
 
 # OS keychain only where it needs no C deps (Linux uses the file fallback).
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]

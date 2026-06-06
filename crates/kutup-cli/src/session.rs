@@ -237,16 +237,6 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) fn sync_remove(&self, key: &str) -> Result<()> {
-        let wtx = self.db.begin_write()?;
-        {
-            let mut t = wtx.open_table(SYNC)?;
-            t.remove(key)?;
-        }
-        wtx.commit()?;
-        Ok(())
-    }
-
     /// Returns the synced-file record for `(collection, remote_id)`, if any.
     pub fn get_synced_file(
         &self,

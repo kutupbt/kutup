@@ -4,9 +4,17 @@
 //! client. Two clients are kept: a 60 s-total-timeout one for short JSON calls,
 //! and a no-total-timeout one for tus PATCH streaming / large downloads where a
 //! total deadline would trip on slow uplinks or final-chunk server work.
+//!
+//! This module mirrors the Go API client's full surface, so some response-DTO
+//! fields are deserialized but not read by any command, and a few protocol
+//! methods (e.g. `tus_head` for resume) exist for completeness/future use.
+#![allow(dead_code)]
 
 pub mod devices;
+pub mod federation;
 pub mod files;
+pub mod public;
+pub mod sharing;
 pub mod tus;
 pub mod types;
 pub mod versions;

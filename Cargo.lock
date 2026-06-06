@@ -984,6 +984,7 @@ dependencies = [
  "serde",
  "serde_json",
  "time",
+ "url",
  "zeroize",
 ]
 

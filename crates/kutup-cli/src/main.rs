@@ -3,10 +3,6 @@
 //! Commands are ported incrementally; only fully-wired commands are exposed
 //! (no stubs). See `docs/roadmap.md` / the rewrite branch for what remains.
 
-// TODO(rust-rewrite): drop once the command surface (mkdir/mv/rm/sync/share/…)
-// consumes the remaining API + session methods already ported below.
-#![allow(dead_code)]
-
 mod api;
 mod commands;
 mod config;
@@ -127,6 +123,16 @@ enum Commands {
         #[command(subcommand)]
         command: commands::versions::VersionsCmd,
     },
+    /// Share folders (with users, federated servers, or public links).
+    Share {
+        #[command(subcommand)]
+        command: commands::share::ShareCmd,
+    },
+    /// Consume a public share link (no login required for the link).
+    Pub {
+        #[command(subcommand)]
+        command: commands::pubshare::PubCmd,
+    },
     /// Print the kutup CLI version + build info.
     Version,
 }
@@ -167,6 +173,8 @@ fn main() {
         }
         Commands::Devices { command } => commands::devices::run(&cli.profile, cli.json, command),
         Commands::Versions { command } => commands::versions::run(&cli.profile, cli.json, command),
+        Commands::Share { command } => commands::share::run(&cli.profile, cli.json, command),
+        Commands::Pub { command } => commands::pubshare::run(cli.json, command),
         Commands::Version => {
             commands::version::run(cli.json);
             Ok(())

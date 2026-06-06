@@ -189,3 +189,73 @@ pub struct UpdateFileMetadataRequest {
 pub struct UploadResponse {
     pub id: String,
 }
+
+// --- Sharing ---
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareRequest {
+    pub recipient_user_id: String,
+    pub encrypted_collection_key: String,
+    pub can_upload: bool,
+    pub can_delete: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upload_quota_bytes: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FederatedShareRequest {
+    pub recipient_username: String,
+    pub recipient_server: String,
+    pub encrypted_collection_key: String,
+    pub can_upload: bool,
+    pub can_delete: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upload_quota_bytes: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FederatedShareResponse {
+    #[serde(default)]
+    pub invite_token: String,
+    #[serde(default)]
+    pub invite_url: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicShareRequest {
+    pub share_type: String,
+    pub target_id: String,
+    pub encrypted_collection_key: String,
+    pub encrypted_collection_key_nonce: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_in_hours: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicShareResponse {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub token: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserByEmail {
+    #[serde(default)]
+    pub user_id: String,
+    #[serde(default)]
+    pub public_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FedPubKeyResponse {
+    #[serde(default)]
+    pub public_key: String,
+}
