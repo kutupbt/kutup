@@ -96,6 +96,20 @@ enum Commands {
         /// Destination directory or path (default: current directory).
         dest: Option<String>,
     },
+    /// Set the display color for a collection (e.g. #ef4444; "" to clear).
+    Color {
+        /// Collection id.
+        collection_id: String,
+        /// Hex color #rrggbb, or "" to clear.
+        hex: String,
+    },
+    /// List and revoke devices on your account.
+    Devices {
+        #[command(subcommand)]
+        command: commands::devices::DevicesCmd,
+    },
+    /// Print the kutup CLI version + build info.
+    Version,
 }
 
 fn main() {
@@ -121,6 +135,14 @@ fn main() {
         } => commands::upload::run(&cli.profile, cli.json, path, collection_id, *recursive),
         Commands::Download { file_id, dest } => {
             commands::download::run(&cli.profile, cli.json, file_id, dest.as_deref())
+        }
+        Commands::Color { collection_id, hex } => {
+            commands::color::run(&cli.profile, cli.json, collection_id, hex)
+        }
+        Commands::Devices { command } => commands::devices::run(&cli.profile, cli.json, command),
+        Commands::Version => {
+            commands::version::run(cli.json);
+            Ok(())
         }
     };
     if let Err(e) = result {

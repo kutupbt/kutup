@@ -1,5 +1,7 @@
 //! CLI command implementations. Each module mirrors the matching `cmd/*.go`.
 
+pub mod color;
+pub mod devices;
 pub mod download;
 pub mod login;
 pub mod logout;
@@ -8,6 +10,7 @@ pub mod mkdir;
 pub mod mv;
 pub mod rm;
 pub mod upload;
+pub mod version;
 pub mod whoami;
 
 use std::io::{self, Write};
