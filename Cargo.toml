@@ -52,6 +52,7 @@ rand = "0.8"
 indicatif = "0.17"
 qrcode = "0.14"
 time = { version = "0.3", features = ["formatting"] }
+notify = "6"
 
 # Dev / test.
 hex = "0.4"

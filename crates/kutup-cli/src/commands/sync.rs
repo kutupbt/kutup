@@ -1,0 +1,90 @@
+//! `kutup sync` — bidirectional dir↔collection sync, with optional `--watch`.
+//! Mirrors `cmd/sync.go`.
+
+use std::path::Path;
+use std::sync::mpsc::{channel, RecvTimeoutError};
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use notify::{RecursiveMode, Watcher};
+
+use crate::context::require_session;
+use crate::syncengine;
+
+pub fn run(profile: &str, local_dir: &str, collection_id: &str, watch: bool) -> Result<()> {
+    std::fs::create_dir_all(local_dir).context("create local dir")?;
+
+    if !watch {
+        return do_sync(profile, local_dir, collection_id);
+    }
+
+    // Initial sync before entering the watch loop.
+    if let Err(e) = do_sync(profile, local_dir, collection_id) {
+        eprintln!("sync error: {e:#}");
+    }
+
+    let (tx, rx) = channel();
+    let mut watcher = notify::recommended_watcher(move |res| {
+        let _ = tx.send(res);
+    })?;
+    watcher
+        .watch(Path::new(local_dir), RecursiveMode::NonRecursive)
+        .context("watch dir")?;
+
+    println!("Watching {local_dir} for changes… (Ctrl+C to stop)");
+
+    loop {
+        let ev = match rx.recv() {
+            Ok(Ok(ev)) => ev,
+            Ok(Err(e)) => {
+                eprintln!("watcher error: {e}");
+                continue;
+            }
+            Err(_) => return Ok(()), // channel closed
+        };
+        if !relevant(&ev) {
+            continue;
+        }
+        // Debounce: wait until 2s pass with no further events.
+        loop {
+            match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(_) => continue,
+                Err(RecvTimeoutError::Timeout) => break,
+                Err(RecvTimeoutError::Disconnected) => return Ok(()),
+            }
+        }
+        println!("\nChange detected, syncing…");
+        if let Err(e) = do_sync(profile, local_dir, collection_id) {
+            eprintln!("sync error: {e:#}");
+        }
+    }
+}
+
+/// Skips events that only touch hidden (`.`-prefixed) or temp (`~`-suffixed) files.
+fn relevant(ev: &notify::Event) -> bool {
+    ev.paths.iter().any(|p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .map(|b| !b.starts_with('.') && !b.ends_with('~'))
+            .unwrap_or(false)
+    })
+}
+
+fn do_sync(profile: &str, local_dir: &str, collection_id: &str) -> Result<()> {
+    let ctx = require_session(profile)?;
+    let result = syncengine::sync(
+        &ctx.client,
+        &ctx.store,
+        &ctx.session,
+        local_dir,
+        collection_id,
+    )?;
+    println!(
+        "Sync complete: ↑ {} uploaded, ↓ {} downloaded, ⚠ {} conflicts",
+        result.uploaded, result.downloaded, result.conflicts
+    );
+    for e in &result.errors {
+        eprintln!("  error: {e}");
+    }
+    Ok(())
+}

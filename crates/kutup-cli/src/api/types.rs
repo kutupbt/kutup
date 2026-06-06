@@ -184,3 +184,8 @@ pub struct UpdateFileMetadataRequest {
     pub encrypted_metadata: String,
     pub metadata_nonce: String,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct UploadResponse {
+    pub id: String,
+}

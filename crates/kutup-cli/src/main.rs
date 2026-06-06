@@ -14,6 +14,7 @@ mod context;
 mod cryptohelpers;
 mod output;
 mod session;
+mod syncengine;
 mod transfer;
 
 use clap::{Parser, Subcommand};
@@ -99,6 +100,16 @@ enum Commands {
         /// Destination directory or path (default: current directory).
         dest: Option<String>,
     },
+    /// Bidirectional sync between a local directory and a remote collection.
+    Sync {
+        /// Local directory.
+        local_dir: String,
+        /// Remote collection id.
+        collection_id: String,
+        /// Stay running and sync on file changes.
+        #[arg(long)]
+        watch: bool,
+    },
     /// Set the display color for a collection (e.g. #ef4444; "" to clear).
     Color {
         /// Collection id.
@@ -146,6 +157,11 @@ fn main() {
         Commands::Download { file_id, dest } => {
             commands::download::run(&cli.profile, cli.json, file_id, dest.as_deref())
         }
+        Commands::Sync {
+            local_dir,
+            collection_id,
+            watch,
+        } => commands::sync::run(&cli.profile, local_dir, collection_id, *watch),
         Commands::Color { collection_id, hex } => {
             commands::color::run(&cli.profile, cli.json, collection_id, hex)
         }

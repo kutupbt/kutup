@@ -9,6 +9,7 @@ pub mod ls;
 pub mod mkdir;
 pub mod mv;
 pub mod rm;
+pub mod sync;
 pub mod upload;
 pub mod version;
 pub mod versions;

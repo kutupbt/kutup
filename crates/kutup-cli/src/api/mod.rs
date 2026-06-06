@@ -6,6 +6,7 @@
 //! total deadline would trip on slow uplinks or final-chunk server work.
 
 pub mod devices;
+pub mod files;
 pub mod tus;
 pub mod types;
 pub mod versions;

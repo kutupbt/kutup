@@ -246,6 +246,40 @@ impl Store {
         wtx.commit()?;
         Ok(())
     }
+
+    /// Returns the synced-file record for `(collection, remote_id)`, if any.
+    pub fn get_synced_file(
+        &self,
+        collection_id: &str,
+        remote_id: &str,
+    ) -> Result<Option<SyncedFile>> {
+        let key = format!("{collection_id}/files/{remote_id}");
+        match self.sync_get(&key)? {
+            Some(bytes) => Ok(serde_json::from_slice(&bytes).ok()),
+            None => Ok(None),
+        }
+    }
+
+    /// Records a synced file for `(collection, remote_id)`.
+    pub fn save_synced_file(
+        &self,
+        collection_id: &str,
+        remote_id: &str,
+        f: &SyncedFile,
+    ) -> Result<()> {
+        let key = format!("{collection_id}/files/{remote_id}");
+        self.sync_put(&key, &serde_json::to_vec(f)?)
+    }
+}
+
+/// Tracks a file that has been synced. Mirrors `session.SyncedFile`.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncedFile {
+    pub local_path: String,
+    pub size: i64,
+    pub mod_time: i64,
+    pub synced_at: i64,
 }
 
 // --- OS keychain access (macOS/Windows only; Linux uses the file fallback to
