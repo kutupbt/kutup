@@ -3,11 +3,15 @@
 //!
 //! Path-style addressing + a static-credentials provider, exactly like the Go
 //! `NewStorage`. Covers the object get/put/delete + prefix-wipe paths (files/versions/
-//! assets) and the multipart paths (tus). Still deferred to their slices: presign (shares,
-//! slice 6), copy, and version-delete (cleanup, slice 7).
+//! assets), the multipart paths (tus), and presigned download (public shares). Go's
+//! `CopyObject` is unported — it became dead after the tus temp→canonical-key change and
+//! has no caller. Version-delete (cleanup) lands with slice 7.
+
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
+use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{
     CompletedMultipartUpload, CompletedPart as S3CompletedPart, Delete, ObjectIdentifier,
@@ -88,6 +92,22 @@ impl StorageService {
             .await
             .context("s3 put versioned")?;
         Ok(out.version_id().unwrap_or("").to_string())
+    }
+
+    /// Generates a presigned GET URL valid for 15 minutes — mirrors `PresignedDownload`.
+    /// Used by the public-share download endpoint.
+    pub async fn presigned_download(&self, path: &str) -> Result<String> {
+        let cfg =
+            PresigningConfig::expires_in(Duration::from_secs(15 * 60)).context("presign config")?;
+        let req = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(path)
+            .presigned(cfg)
+            .await
+            .context("presign")?;
+        Ok(req.uri().to_string())
     }
 
     /// Fetches an object — mirrors `GetObject`. Returns the body stream + content length.

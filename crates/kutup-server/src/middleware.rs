@@ -118,8 +118,7 @@ pub async fn rate_limit_recovery(
     limit(addr, &ratelimit::RECOVERY, req, next).await
 }
 
-/// 60/min/IP — mirrors `FedUsersRateLimit` (wired by the federation slice 6).
-#[allow(dead_code)]
+/// 60/min/IP — mirrors `FedUsersRateLimit` (the `/api/fed/users` route layer).
 pub async fn rate_limit_fed_users(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request,

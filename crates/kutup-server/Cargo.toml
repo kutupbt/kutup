@@ -39,3 +39,6 @@ aws-credential-types.workspace = true
 tokio-util.workspace = true
 futures-util.workspace = true
 tempfile.workspace = true
+# Outbound federation HTTP calls (fed-proxy + fetch-remote-pubkey).
+reqwest.workspace = true
+rand.workspace = true

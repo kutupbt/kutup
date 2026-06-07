@@ -1,23 +1,25 @@
 //! Collection handlers — mirrors `backend/handlers/collections.go`.
 //!
-//! CRUD over collections plus local (same-server) sharing. The federated-share and
-//! remote-pubkey endpoints (`/collections/{id}/share-federated`, `/collections/fed-pubkey`)
-//! land with the federation slice (slice 6), alongside the SSRF guard + outbound client.
+//! CRUD over collections plus local (same-server) sharing, the federated-share invite, and
+//! the remote-pubkey lookup (`/collections/{id}/share-federated`, `/collections/fed-pubkey`)
+//! — the last two go through the SSRF guard + the shared federation HTTP client.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use serde::Deserialize;
+use serde_json::json;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::handlers::trusted_uuid;
+use crate::handlers::{trusted_uuid, FED_CLIENT};
 use crate::middleware::AuthUser;
 use crate::models::{
     CollectionRow, CreateCollectionRequest, CreateCollectionResult, MessageResponse,
     ShareCollectionRequest, UpdateCollectionRequest, UpdateColorRequest,
 };
-use crate::AppState;
+use crate::{ssrf, AppState};
 
 /// Parses a collection-id path param; an invalid UUID is a 404 (Go's scan-fails → 404).
 fn coll_id_or_404(s: &str) -> AppResult<Uuid> {
@@ -345,4 +347,127 @@ pub async fn share_collection(
         }),
     )
         .into_response())
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ShareFederatedRequest {
+    recipient_username: String,
+    recipient_server: String,
+    encrypted_collection_key: String,
+    can_upload: bool,
+    can_delete: bool,
+    upload_quota_bytes: Option<i64>,
+}
+
+/// `POST /api/collections/{id}/share-federated` — mirrors `ShareFederated`. Creates an
+/// outgoing federated share + a random access token, returning an invite URL the recipient
+/// pastes into their server.
+pub async fn share_federated(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(req): Json<ShareFederatedRequest>,
+) -> AppResult<Response> {
+    let sharer_id = trusted_uuid(&user.user_id)?;
+    if req.recipient_username.is_empty() || req.recipient_server.is_empty() {
+        return Err(AppError::bad_request("invalid request"));
+    }
+    let coll_id = Uuid::parse_str(&id).map_err(|_| AppError::forbidden("forbidden"))?;
+
+    let owner: Option<Uuid> =
+        sqlx::query_scalar("SELECT owner_user_id FROM collections WHERE id = $1")
+            .bind(coll_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    if owner != Some(sharer_id) {
+        return Err(AppError::forbidden("forbidden"));
+    }
+
+    // 32-byte random access token, hex-encoded (matches Go's hex.EncodeToString).
+    let mut token_bytes = [0u8; 32];
+    {
+        use rand::RngCore;
+        rand::thread_rng().fill_bytes(&mut token_bytes);
+    }
+    let access_token = hex::encode(token_bytes);
+
+    sqlx::query(
+        r#"INSERT INTO federated_outgoing_shares (collection_id, sharer_user_id,
+               recipient_username, recipient_server, encrypted_collection_key,
+               access_token, can_upload, can_delete, upload_quota_bytes)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"#,
+    )
+    .bind(coll_id)
+    .bind(sharer_id)
+    .bind(&req.recipient_username)
+    .bind(&req.recipient_server)
+    .bind(&req.encrypted_collection_key)
+    .bind(&access_token)
+    .bind(req.can_upload)
+    .bind(req.can_delete)
+    .bind(req.upload_quota_bytes)
+    .execute(&state.pool)
+    .await
+    .map_err(|_| AppError::internal("internal error"))?;
+
+    let invite_url = format!("{}/invite/{}", state.config.server_url, access_token);
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "inviteToken": access_token, "inviteUrl": invite_url })),
+    )
+        .into_response())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FedPubkeyQuery {
+    username: Option<String>,
+    server: Option<String>,
+}
+
+/// `GET /api/collections/fed-pubkey?username=…&server=…` — mirrors `FetchRemotePubkey`.
+/// SSRF-validates `server`, then proxies the remote `/api/fed/users` lookup.
+pub async fn fetch_remote_pubkey(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Query(q): Query<FedPubkeyQuery>,
+) -> AppResult<Response> {
+    let username = q.username.unwrap_or_default();
+    let server = q.server.unwrap_or_default();
+    if username.is_empty() || server.is_empty() {
+        return Err(AppError::bad_request("username and server required"));
+    }
+
+    let allow_http = state.config.app_env != "production";
+    if let Err(e) = ssrf::validate_federation_url(&server, allow_http).await {
+        return Err(AppError::bad_request(format!("invalid server URL: {e}")));
+    }
+
+    let url = format!("{server}/api/fed/users?username={username}");
+    let resp = FED_CLIENT.get(&url).send().await;
+    let pubkey = match resp {
+        Ok(r) if r.status().as_u16() == 200 => {
+            #[derive(serde::Deserialize)]
+            struct Data {
+                #[serde(rename = "publicKey", default)]
+                public_key: String,
+            }
+            match r.json::<Data>().await {
+                Ok(d) if !d.public_key.is_empty() => d.public_key,
+                _ => {
+                    return Err(AppError::new(
+                        StatusCode::BAD_GATEWAY,
+                        "invalid response from remote server",
+                    ))
+                }
+            }
+        }
+        _ => {
+            return Err(AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "failed to fetch pubkey from remote server",
+            ))
+        }
+    };
+    Ok(Json(json!({ "publicKey": pubkey })).into_response())
 }

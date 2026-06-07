@@ -40,7 +40,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 
 # CLI (kutup-cli).
 clap = { version = "4", features = ["derive"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "stream", "rustls-tls"] }
 anyhow = "1"
 dirs = "6"
 # Linux Secret Service needs libdbus (a C dep); we use native keychains on

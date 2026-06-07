@@ -169,7 +169,10 @@ async fn bootstrap_admins(pool: &PgPool, accounts_env: &str) {
 fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
 
-    use handlers::{auth, collab, collections, devices, file_assets, file_versions, files, tus};
+    use handlers::{
+        auth, collab, collections, devices, federation, fedproxy, file_assets, file_versions,
+        files, shares, tus,
+    };
 
     Router::new()
         // OpenAPI spec as JSON. The Go server served an interactive Swagger UI at
@@ -205,10 +208,15 @@ fn build_router(state: AppState) -> Router {
         .route("/api/user/2fa/verify", post(auth::verify_totp))
         .route("/api/user/2fa", delete(auth::disable_totp))
         .route("/api/users/by-email/:email", get(auth::get_user_by_email))
-        // --- Collections (authenticated). Federated-share + fed-pubkey land in slice 6. ---
+        // --- Collections (authenticated). ---
         .route(
             "/api/collections",
             get(collections::list_collections).post(collections::create_collection),
+        )
+        // Static segment registered alongside `:id` (matchit prefers the literal).
+        .route(
+            "/api/collections/fed-pubkey",
+            get(collections::fetch_remote_pubkey),
         )
         .route(
             "/api/collections/:id",
@@ -223,6 +231,10 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/collections/:id/share",
             post(collections::share_collection),
+        )
+        .route(
+            "/api/collections/:id/share-federated",
+            post(collections::share_federated),
         )
         .route("/api/collections/:id/files", get(files::list_files))
         // --- Devices (authenticated) ---
@@ -269,6 +281,64 @@ fn build_router(state: AppState) -> Router {
         // handler before the upgrade (mirrors Go's PreUpgrade — browsers can't set headers
         // on `new WebSocket`, so the token may arrive via ?token=). ---
         .route("/api/files/:fileId/collab/ws", get(collab::ws))
+        // --- Public shares. Create is authenticated; the read/download endpoints are
+        // anonymous (the token is the capability). ---
+        .route("/api/share", post(shares::create_public_share))
+        .route("/api/share/:token", get(shares::get_public_share))
+        .route(
+            "/api/share/:token/files",
+            get(shares::list_public_share_files),
+        )
+        .route(
+            "/api/share/:token/download/:fileId",
+            get(shares::download_public_share_file),
+        )
+        // --- Federation public endpoints (no auth — the access token is the capability;
+        // called by remote kutup servers). `/fed/users` is rate-limited (60/min/IP). ---
+        .route(
+            "/api/fed/users",
+            get(federation::get_user_by_username)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route("/api/fed/invites/:token", get(federation::get_invite))
+        .route(
+            "/api/fed/shares/:token/files",
+            get(federation::list_share_files).post(federation::upload_share_file),
+        )
+        .route(
+            "/api/fed/shares/:token/files/:fileId/download",
+            get(federation::download_share_file),
+        )
+        .route(
+            "/api/fed/shares/:token/files/:fileId",
+            delete(federation::delete_share_file),
+        )
+        // --- Federation proxy (authenticated; the recipient's browser proxies to the
+        // remote server through these so it never holds the remote token). ---
+        .route(
+            "/api/fed-proxy/incoming",
+            post(fedproxy::add_incoming_share).get(fedproxy::list_incoming_shares),
+        )
+        .route(
+            "/api/fed-proxy/incoming/:shareId",
+            delete(fedproxy::remove_incoming_share),
+        )
+        .route(
+            "/api/fed-proxy/:shareId/files",
+            get(fedproxy::proxy_list_files),
+        )
+        .route(
+            "/api/fed-proxy/:shareId/files/:fileId/download",
+            get(fedproxy::proxy_download),
+        )
+        .route(
+            "/api/fed-proxy/:shareId/upload",
+            post(fedproxy::proxy_upload),
+        )
+        .route(
+            "/api/fed-proxy/:shareId/files/:fileId",
+            delete(fedproxy::proxy_delete),
+        )
         // Layer order: with chained `.layer()` the *last* added is the outermost (receives
         // the request first). The tus OPTIONS passthrough is therefore outermost so it can
         // answer tus discovery before CORS swallows the OPTIONS (tower-http's CorsLayer,
