@@ -1,6 +1,6 @@
 # Resume here
 
-**State:** crypto ✅, CLI ✅ (16 commands), server 🟡 — slices 1–6 done. Branch
+**State:** crypto ✅, CLI ✅ (16 commands), server 🟡 — slices 1–7 done. Branch
 `claude/go-rust-rewrite-G16zO`; `cargo build`/`test`/`clippy` green.
 
 Done in the server crate:
@@ -40,16 +40,24 @@ Done in the server crate:
   Live-verified vs Postgres + SeaweedFS (public share presigned-download SHA, expiry 410,
   non-owned 403; fed share/upload/download/delete + balanced quota; fed-proxy round-trip
   via self-loopback; SSRF loopback rejection 400). Go's `CopyObject` left unported (dead).
+- **Slice 7** (admin + jobs): `handlers/admin.rs` (`/admin/*` users CRUD + stats + settings,
+  behind the `AdminUser` extractor), `jobs.rs` (version_cleanup / quota_reconcile /
+  uploads_sweeper as boot+interval background tasks via `jobs::spawn_all`; orphan_sweep as
+  the `orphan-sweep` subcommand), `storage.rs::{delete_object_version,list_objects_page}`.
+  Live-verified vs Postgres + SeaweedFS (admin CRUD/stats/settings + 403/401 guard;
+  quota-reconcile + uploads-sweeper boot ticks corrected drift / reaped a real stale
+  multipart; orphan-sweep dry-run→delete→clean over a real orphaned asset blob).
 
-## Next action — Phase 3 slice 7 (admin + background jobs) in `kutup-server`
+## Next action — Phase 3 slice 8 (verification & cutover) in `kutup-server`
 
-1. Read `backend/handlers/admin.go` → `/admin/*` (users CRUD, stats, settings GET/PUT).
-2. Read `backend/services/{version_cleanup,quota_reconcile,uploads_sweeper,orphan_sweep}.go`
-   → implement as background tokio tasks spawned in `main` (like `ratelimit::spawn_cleanup`);
-   port the `backend/cmd/sweep.go` subcommand (decide: a `--sweep` flag on the server bin or
-   a tiny separate bin). `storage.rs::delete_object_version` lands here (version cleanup).
-3. Gate: `cargo clippy --all-targets -- -D warnings` + tests; live test against the test
-   Postgres + SeaweedFS (admin CRUD/stats/settings; a sweeper run over seeded rows).
+1. Re-implement the 21 Go `*_test.go` suites in Rust against a per-test Postgres schema
+   (port `backend/internal/testdb`); `cargo test -p kutup-server` green.
+2. Run the Rust server against a fresh DB + the SeaweedFS S3; drive it with the Rust **and**
+   Go CLI and the frontend Playwright flows — behaviour must match the Go backend.
+3. Regenerate the OpenAPI spec via utoipa and diff the endpoint set against
+   `backend/docs/swagger.yaml` (43 routes + 1 WS) — must match.
+   Then Part C (cutover): swap docker-compose/nginx to the Rust binary, remove `backend/`
+   and `cmd/kutup/`, update the docs.
 
 Local test infra: `kutup-test-pg` (127.0.0.1:5433, db/user `kutup`, pw
 `kutup_dev_password`) + `kutup-test-s3` SeaweedFS (127.0.0.1:8333, creds
