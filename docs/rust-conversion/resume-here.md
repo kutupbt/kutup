@@ -1,6 +1,6 @@
 # Resume here
 
-**State:** crypto ✅, CLI ✅ (16 commands), server 🟡 — slices 1 & 2 done. Branch
+**State:** crypto ✅, CLI ✅ (16 commands), server 🟡 — slices 1–4 done. Branch
 `claude/go-rust-rewrite-G16zO`; `cargo build`/`test`/`clippy` green.
 
 Done in the server crate:
@@ -12,21 +12,35 @@ Done in the server crate:
   `middleware.rs` (AuthUser/AdminUser extractors), `handlers/auth.rs` (all `/auth/*`,
   `/user/*`, `/users/by-email/:email`), `bootstrap_admins`. Verified live against
   Postgres (register→login→me→refresh→2FA→rate-limit).
+- **Slice 3** (storage+data): `storage.rs` (aws-sdk-s3) + `handlers/{collections,files,
+  file_versions,file_assets,devices}.rs` + shared access helpers. Live-verified vs
+  Postgres + SeaweedFS (upload/download/version/asset SHA round-trips, quota, cascade
+  delete). Deferred to slice 6: collections share-federated + fed-pubkey (need SSRF +
+  outbound HTTP).
+- **Slice 4** (tus.io): `handlers/tus.rs` (OPTIONS/POST/HEAD/PATCH/DELETE) + S3 multipart
+  in `storage.rs` (`CompletedPart`, create/upload_part/complete/abort). Soft-quota
+  reservation via the `uploads` table; final PATCH finalises → `files` row + atomic
+  `storage_used_bytes` + `X-Kutup-File-Id`. A `tus_options_passthrough` outermost layer
+  serves non-preflight OPTIONS discovery (tower-http CorsLayer swallows all OPTIONS;
+  Fiber passes non-preflight ones through). Live-verified vs Postgres + SeaweedFS (6 MiB
+  two-part round-trip SHA match, error paths, abort, exact quota commit).
 
-## Next action — Phase 3 slice 3 (storage + files) in `kutup-server`
+## Next action — Phase 3 slice 5 (collab WebSocket) in `kutup-server`
 
-1. Read `backend/services/storage.go`, `backend/services/quota*.go`,
-   `backend/handlers/{collections,files,file_versions,file_assets,devices}.go`.
-2. Add dep: `aws-sdk-s3` (+ `aws-config`/`aws-credential-types` as needed).
-3. Implement the storage service (S3 client mirroring `NewStorage`), quota helpers, and
-   the collections/files/versions/assets/devices handlers; register routes in
-   `build_router`. Use the `AuthUser` extractor for auth.
-4. Gate: `cargo clippy --all-targets -- -D warnings` + tests; live test against the
-   SeaweedFS S3 from `docker compose` (a test Postgres is already used for slice 2).
+1. Read `backend/handlers/{collab,collab_hub}.go`.
+2. Implement `axum::extract::ws` + an in-memory hub (tokio broadcast/mpsc, one room per
+   `fileId`); verify frames with `kutup-crypto::envelope` (`verify_strict`); 256-frame
+   backpressure buffer w/ 2 s timeout; persist frames to `file_update_log`. Route
+   `/files/:fileId/collab/ws`. Wire the device-hub hook left as TODO in
+   `handlers/devices.rs`.
+3. Gate: `cargo clippy --all-targets -- -D warnings` + tests; live WS test against the
+   test Postgres.
 
-Local test infra: `docker run … postgres:16-alpine` on `127.0.0.1:5433`
-(db/user `kutup`, pw `kutup_dev_password`); run the server with dummy `S3_*` until the
-storage slice needs real SeaweedFS.
+Local test infra: `kutup-test-pg` (127.0.0.1:5433, db/user `kutup`, pw
+`kutup_dev_password`) + `kutup-test-s3` SeaweedFS (127.0.0.1:8333, creds
+kutupkey/kutupsecret, bucket `kutup-files` with object-lock/versioning; s3 config at
+`~/kutup-test/swfs/s3.json`). Run the server with the `DATABASE_URL`/`JWT_SECRET`/`S3_*`
+env vars (see git history of this doc / the slice-4 test commands).
 
 See [`server/plan.md`](server/plan.md) for the full 8-slice build order and
 [`server/routes.md`](server/routes.md) for the endpoint inventory + sqlx notes.
