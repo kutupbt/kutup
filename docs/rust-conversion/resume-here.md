@@ -1,6 +1,6 @@
 # Resume here
 
-**State:** crypto ✅, CLI ✅ (16 commands), server 🟡 — slices 1–5 done. Branch
+**State:** crypto ✅, CLI ✅ (16 commands), server 🟡 — slices 1–6 done. Branch
 `claude/go-rust-rewrite-G16zO`; `cargo build`/`test`/`clippy` green.
 
 Done in the server crate:
@@ -32,19 +32,24 @@ Done in the server crate:
   `/api/files/:fileId/collab/ws`. axum `ws` feature + `futures-util` added. Live-verified
   (raw-socket WS + real Ed25519 frames): two-peer join/hello/peer-list, durable+ephemeral
   relay, bad-sig/wrong-sender drop, resume replay, revoke tears down the WS.
+- **Slice 6** (sharing + federation): `handlers/shares.rs` (`/share/*` public links),
+  `handlers/federation.rs` (`/fed/*` remote-facing, token-auth), `handlers/fedproxy.rs`
+  (`/fed-proxy/*` authed proxy, SSRF-checked at accept, FED_CLIENT no-redirect),
+  collections `share_federated` + `fetch_remote_pubkey`, `storage.rs::presigned_download`.
+  FED_CLIENT + `random_token` in handlers/mod.rs; reqwest `stream` feature + rand added.
+  Live-verified vs Postgres + SeaweedFS (public share presigned-download SHA, expiry 410,
+  non-owned 403; fed share/upload/download/delete + balanced quota; fed-proxy round-trip
+  via self-loopback; SSRF loopback rejection 400). Go's `CopyObject` left unported (dead).
 
-## Next action — Phase 3 slice 6 (sharing + federation) in `kutup-server`
+## Next action — Phase 3 slice 7 (admin + background jobs) in `kutup-server`
 
-1. Read `backend/handlers/{shares,federation,fedproxy}.go` + `backend/utils/ssrf.go`
-   (the Rust `ssrf.rs` guard already exists from slice 2).
-2. Implement `/share/*`, `/fed/*`, `/fed-proxy/*` and the deferred collections
-   `share-federated` + `/collections/fed-pubkey` (slice 3 deferral) — all outbound
-   federation calls go through the SSRF guard + an HTTP client (add `reqwest` to the
-   server crate). `PresignedDownload` + `CopyObject` land in `storage.rs` here (presign is
-   used by `shares.go`).
+1. Read `backend/handlers/admin.go` → `/admin/*` (users CRUD, stats, settings GET/PUT).
+2. Read `backend/services/{version_cleanup,quota_reconcile,uploads_sweeper,orphan_sweep}.go`
+   → implement as background tokio tasks spawned in `main` (like `ratelimit::spawn_cleanup`);
+   port the `backend/cmd/sweep.go` subcommand (decide: a `--sweep` flag on the server bin or
+   a tiny separate bin). `storage.rs::delete_object_version` lands here (version cleanup).
 3. Gate: `cargo clippy --all-targets -- -D warnings` + tests; live test against the test
-   Postgres + SeaweedFS (presigned download round-trip; a loopback federation pair if
-   feasible).
+   Postgres + SeaweedFS (admin CRUD/stats/settings; a sweeper run over seeded rows).
 
 Local test infra: `kutup-test-pg` (127.0.0.1:5433, db/user `kutup`, pw
 `kutup_dev_password`) + `kutup-test-s3` SeaweedFS (127.0.0.1:8333, creds
