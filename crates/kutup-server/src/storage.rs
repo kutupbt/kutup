@@ -2,15 +2,28 @@
 //! (`aws-sdk-go-v2` → `aws-sdk-s3`).
 //!
 //! Path-style addressing + a static-credentials provider, exactly like the Go
-//! `NewStorage`. This slice ports the object get/put/delete + prefix-wipe paths used by
-//! the files/versions/assets handlers; multipart (tus, slice 4), presign (shares, slice
-//! 6), copy, and version-delete (cleanup, slice 7) are added with their slices.
+//! `NewStorage`. Covers the object get/put/delete + prefix-wipe paths (files/versions/
+//! assets) and the multipart paths (tus). Still deferred to their slices: presign (shares,
+//! slice 6), copy, and version-delete (cleanup, slice 7).
 
 use anyhow::{Context, Result};
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::types::{Delete, ObjectIdentifier};
+use aws_sdk_s3::types::{
+    CompletedMultipartUpload, CompletedPart as S3CompletedPart, Delete, ObjectIdentifier,
+};
 use aws_sdk_s3::Client;
+use serde::{Deserialize, Serialize};
+
+/// The `{PartNumber, ETag}` pair S3 needs at finalize time — mirrors
+/// `services.CompletedPart`. Serialised into the `uploads.s3_part_etags` JSONB column;
+/// the snake_case field names match the Go `json:"part_number"`/`json:"etag"` tags so a
+/// row written by either backend round-trips through the other.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompletedPart {
+    pub part_number: i32,
+    pub etag: String,
+}
 
 /// Wraps the S3 client + target bucket — mirrors `StorageService`.
 #[derive(Clone)]
@@ -175,5 +188,95 @@ impl StorageService {
             }
             continuation = out.next_continuation_token().map(String::from);
         }
+    }
+
+    /// Opens a new S3 multipart upload at `key`, returning the opaque UploadId —
+    /// mirrors `CreateMultipart`.
+    pub async fn create_multipart(&self, key: &str) -> Result<String> {
+        let out = self
+            .client
+            .create_multipart_upload()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .context("s3 create multipart")?;
+        out.upload_id()
+            .map(String::from)
+            .context("s3 create multipart: empty upload id")
+    }
+
+    /// Streams one part of a multipart upload (1-based `part_number`); returns the ETag the
+    /// caller must remember for `complete_multipart` — mirrors `UploadPart`. S3 requires
+    /// every part except the last to be ≥ 5 MiB; the tus handler enforces that.
+    pub async fn upload_part(
+        &self,
+        key: &str,
+        upload_id: &str,
+        part_number: i32,
+        body: ByteStream,
+        size: i64,
+    ) -> Result<String> {
+        let out = self
+            .client
+            .upload_part()
+            .bucket(&self.bucket)
+            .key(key)
+            .upload_id(upload_id)
+            .part_number(part_number)
+            .body(body)
+            .content_length(size)
+            .send()
+            .await
+            .with_context(|| format!("s3 upload part {part_number}"))?;
+        out.e_tag()
+            .map(String::from)
+            .with_context(|| format!("s3 upload part {part_number}: empty etag"))
+    }
+
+    /// Finalises the multipart upload, producing one object at `key` — mirrors
+    /// `CompleteMultipart`. Parts must be in `part_number` order.
+    pub async fn complete_multipart(
+        &self,
+        key: &str,
+        upload_id: &str,
+        parts: &[CompletedPart],
+    ) -> Result<()> {
+        let sdk_parts: Vec<S3CompletedPart> = parts
+            .iter()
+            .map(|p| {
+                S3CompletedPart::builder()
+                    .part_number(p.part_number)
+                    .e_tag(&p.etag)
+                    .build()
+            })
+            .collect();
+        let completed = CompletedMultipartUpload::builder()
+            .set_parts(Some(sdk_parts))
+            .build();
+        self.client
+            .complete_multipart_upload()
+            .bucket(&self.bucket)
+            .key(key)
+            .upload_id(upload_id)
+            .multipart_upload(completed)
+            .send()
+            .await
+            .context("s3 complete multipart")?;
+        Ok(())
+    }
+
+    /// Discards a multipart upload (user cancel / stale-upload sweep) — mirrors
+    /// `AbortMultipart`. Idempotent per the S3 spec.
+    pub async fn abort_multipart(&self, key: &str, upload_id: &str) -> Result<()> {
+        self.client
+            .abort_multipart_upload()
+            .bucket(&self.bucket)
+            .key(key)
+            .upload_id(upload_id)
+            .send()
+            .await
+            .context("s3 abort multipart")?;
+        Ok(())
     }
 }

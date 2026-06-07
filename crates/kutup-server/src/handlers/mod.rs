@@ -6,6 +6,7 @@ pub mod devices;
 pub mod file_assets;
 pub mod file_versions;
 pub mod files;
+pub mod tus;
 
 use aws_sdk_s3::primitives::ByteStream;
 use axum::body::Body;

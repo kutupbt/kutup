@@ -165,7 +165,7 @@ async fn bootstrap_admins(pool: &PgPool, accounts_env: &str) {
 fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
 
-    use handlers::{auth, collections, devices, file_assets, file_versions, files};
+    use handlers::{auth, collections, devices, file_assets, file_versions, files, tus};
 
     Router::new()
         // OpenAPI spec as JSON. The Go server served an interactive Swagger UI at
@@ -224,6 +224,15 @@ fn build_router(state: AppState) -> Router {
         // --- Devices (authenticated) ---
         .route("/api/devices", post(devices::register).get(devices::list))
         .route("/api/devices/:id", delete(devices::revoke))
+        // --- tus.io resumable uploads. The OPTIONS discovery is served by the
+        // `tus_options_passthrough` layer (mirroring Fiber, which lets non-preflight
+        // OPTIONS reach the handler); the rest authenticate via the AuthUser extractor
+        // inside each handler. ---
+        .route("/api/uploads", post(tus::create))
+        .route(
+            "/api/uploads/:id",
+            patch(tus::patch).head(tus::head).delete(tus::delete),
+        )
         // --- Files (authenticated) ---
         .route("/api/files/upload", post(files::upload))
         .route("/api/files/:id/download", get(files::download))
@@ -252,14 +261,44 @@ fn build_router(state: AppState) -> Router {
             "/api/files/:fileId/assets/:assetId",
             put(file_assets::upload).get(file_assets::download),
         )
-        // Layer order: outermost first. Panic recovery wraps everything so a handler
-        // panic becomes a 500 (mirrors Fiber's `recover.New()`); tracing logs each
-        // request; CORS + body limit gate inputs.
+        // Layer order: with chained `.layer()` the *last* added is the outermost (receives
+        // the request first). The tus OPTIONS passthrough is therefore outermost so it can
+        // answer tus discovery before CORS swallows the OPTIONS (tower-http's CorsLayer,
+        // unlike Fiber, intercepts every OPTIONS). Inner of it: CORS + body limit gate
+        // inputs; tracing logs each request; panic recovery turns a handler panic into a
+        // 500 (mirrors Fiber's `recover.New()`).
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .layer(DefaultBodyLimit::max(BODY_LIMIT_BYTES))
+        .layer(from_fn(tus_options_passthrough))
         .with_state(state)
+}
+
+/// Serves the tus discovery response for non-preflight `OPTIONS` on the upload endpoints,
+/// mirroring Fiber's CORS behaviour: a request with both `Origin` and
+/// `Access-Control-Request-Method` is a real browser preflight and falls through to the
+/// CORS layer; everything else (CLI/curl/tus discovery) reaches `tus::Options`. tower-http's
+/// `CorsLayer`, unlike Fiber, intercepts *all* OPTIONS, so this layer sits outside it.
+async fn tus_options_passthrough(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if req.method() == Method::OPTIONS {
+        let path = req.uri().path();
+        let is_uploads = path == "/api/uploads"
+            || path
+                .strip_prefix("/api/uploads/")
+                .is_some_and(|rest| !rest.is_empty() && !rest.contains('/'));
+        let is_preflight = req.headers().contains_key(axum::http::header::ORIGIN)
+            && req
+                .headers()
+                .contains_key(axum::http::header::ACCESS_CONTROL_REQUEST_METHOD);
+        if is_uploads && !is_preflight {
+            return handlers::tus::options().await;
+        }
+    }
+    next.run(req).await
 }
 
 /// Serves the generated OpenAPI document as JSON (utoipa replaces `swaggo/swag`).
