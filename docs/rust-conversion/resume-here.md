@@ -1,6 +1,6 @@
 # Resume here
 
-**State:** crypto ✅, CLI ✅ (16 commands), server 🟡 — slices 1–4 done. Branch
+**State:** crypto ✅, CLI ✅ (16 commands), server 🟡 — slices 1–5 done. Branch
 `claude/go-rust-rewrite-G16zO`; `cargo build`/`test`/`clippy` green.
 
 Done in the server crate:
@@ -24,17 +24,27 @@ Done in the server crate:
   serves non-preflight OPTIONS discovery (tower-http CorsLayer swallows all OPTIONS;
   Fiber passes non-preflight ones through). Live-verified vs Postgres + SeaweedFS (6 MiB
   two-part round-trip SHA match, error paths, abort, exact quota commit).
+- **Slice 5** (collab WS): `hub.rs` (in-memory per-fileId rooms; mpsc writer task +
+  Notify-based close; 2 s backpressure) + `handlers/collab.rs` (`ws()` PreUpgrade auth →
+  `WebSocketUpgrade::on_upgrade`; hello/peers control msgs, Ed25519 frame verify via
+  `kutup-crypto::envelope`, durable→`file_update_log` / ephemeral→broadcast-only, resume
+  replay). devices.rs revoke wired to `hub.close_device`. Route
+  `/api/files/:fileId/collab/ws`. axum `ws` feature + `futures-util` added. Live-verified
+  (raw-socket WS + real Ed25519 frames): two-peer join/hello/peer-list, durable+ephemeral
+  relay, bad-sig/wrong-sender drop, resume replay, revoke tears down the WS.
 
-## Next action — Phase 3 slice 5 (collab WebSocket) in `kutup-server`
+## Next action — Phase 3 slice 6 (sharing + federation) in `kutup-server`
 
-1. Read `backend/handlers/{collab,collab_hub}.go`.
-2. Implement `axum::extract::ws` + an in-memory hub (tokio broadcast/mpsc, one room per
-   `fileId`); verify frames with `kutup-crypto::envelope` (`verify_strict`); 256-frame
-   backpressure buffer w/ 2 s timeout; persist frames to `file_update_log`. Route
-   `/files/:fileId/collab/ws`. Wire the device-hub hook left as TODO in
-   `handlers/devices.rs`.
-3. Gate: `cargo clippy --all-targets -- -D warnings` + tests; live WS test against the
-   test Postgres.
+1. Read `backend/handlers/{shares,federation,fedproxy}.go` + `backend/utils/ssrf.go`
+   (the Rust `ssrf.rs` guard already exists from slice 2).
+2. Implement `/share/*`, `/fed/*`, `/fed-proxy/*` and the deferred collections
+   `share-federated` + `/collections/fed-pubkey` (slice 3 deferral) — all outbound
+   federation calls go through the SSRF guard + an HTTP client (add `reqwest` to the
+   server crate). `PresignedDownload` + `CopyObject` land in `storage.rs` here (presign is
+   used by `shares.go`).
+3. Gate: `cargo clippy --all-targets -- -D warnings` + tests; live test against the test
+   Postgres + SeaweedFS (presigned download round-trip; a loopback federation pair if
+   feasible).
 
 Local test infra: `kutup-test-pg` (127.0.0.1:5433, db/user `kutup`, pw
 `kutup_dev_password`) + `kutup-test-s3` SeaweedFS (127.0.0.1:8333, creds
