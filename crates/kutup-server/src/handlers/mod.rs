@@ -1,5 +1,6 @@
 //! HTTP handlers — each module mirrors the matching `backend/handlers/*.go` file.
 
+pub mod admin;
 pub mod auth;
 pub mod collab;
 pub mod collections;

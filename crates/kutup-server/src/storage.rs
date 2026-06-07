@@ -18,6 +18,16 @@ use aws_sdk_s3::types::{
 };
 use aws_sdk_s3::Client;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+
+/// One object's metadata from a LIST — mirrors `services.ObjectInfo`. Used by the orphan
+/// sweep to age-filter candidates.
+#[derive(Clone, Debug)]
+pub struct ObjectInfo {
+    pub key: String,
+    pub size: i64,
+    pub last_modified: OffsetDateTime,
+}
 
 /// The `{PartNumber, ETag}` pair S3 needs at finalize time — mirrors
 /// `services.CompletedPart`. Serialised into the `uploads.s3_part_etags` JSONB column;
@@ -122,6 +132,63 @@ impl StorageService {
             .context("s3 get")?;
         let size = out.content_length().unwrap_or(0);
         Ok((out.body, size))
+    }
+
+    /// Deletes a specific (noncurrent) object version — mirrors `DeleteObjectVersion`.
+    /// Used by the version-cleanup job.
+    pub async fn delete_object_version(&self, key: &str, version_id: &str) -> Result<()> {
+        self.client
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .version_id(version_id)
+            .send()
+            .await
+            .context("s3 delete version")?;
+        Ok(())
+    }
+
+    /// Lists one page (≤1000 keys) under `prefix`, returning the objects + the continuation
+    /// token for the next page (`None` when exhausted) — the paged half of Go's
+    /// `ListObjectsPaged`. The orphan sweep drives the loop so it can do per-page DB work +
+    /// inter-page sleeps.
+    pub async fn list_objects_page(
+        &self,
+        prefix: &str,
+        token: Option<String>,
+    ) -> Result<(Vec<ObjectInfo>, Option<String>)> {
+        let out = self
+            .client
+            .list_objects_v2()
+            .bucket(&self.bucket)
+            .prefix(prefix)
+            .set_continuation_token(token)
+            .send()
+            .await
+            .context("s3 list")?;
+        let objs = out
+            .contents()
+            .iter()
+            .filter_map(|o| {
+                let key = o.key()?.to_string();
+                let size = o.size().unwrap_or(0);
+                let last_modified = o
+                    .last_modified()
+                    .and_then(|d| OffsetDateTime::from_unix_timestamp(d.secs()).ok())
+                    .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                Some(ObjectInfo {
+                    key,
+                    size,
+                    last_modified,
+                })
+            })
+            .collect();
+        let next = if out.is_truncated() == Some(true) {
+            out.next_continuation_token().map(String::from)
+        } else {
+            None
+        };
+        Ok((objs, next))
     }
 
     /// Fetches a specific noncurrent version — mirrors `GetObjectVersion`.

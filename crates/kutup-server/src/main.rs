@@ -11,6 +11,7 @@ mod db;
 mod error;
 mod handlers;
 mod hub;
+mod jobs;
 mod jwt;
 mod middleware;
 mod models;
@@ -70,12 +71,6 @@ async fn main() -> anyhow::Result<()> {
     db::migrate(&pool).await?;
     tracing::info!("migrations applied");
 
-    // Seed admin accounts from ADMIN_ACCOUNTS — mirrors main.bootstrapAdmins.
-    bootstrap_admins(&pool, &config.admin_accounts).await;
-
-    // Periodic pruning of the rate-limit + TOTP-block maps (replaces the Go init goroutines).
-    ratelimit::spawn_cleanup();
-
     // S3 (SeaweedFS) storage client — mirrors services.NewStorage in main.go.
     let storage = storage::StorageService::new(
         &config.s3_endpoint,
@@ -84,6 +79,25 @@ async fn main() -> anyhow::Result<()> {
         &config.s3_bucket,
         &config.s3_region,
     );
+
+    // Subcommand dispatch — admin tooling that reuses the DB pool + storage without starting
+    // the HTTP server. Mirrors the `os.Args[1]` switch in main.go (orphan-sweep). Runs to
+    // completion and exits.
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && args[1] == "orphan-sweep" {
+        let code = run_orphan_sweep_cmd(&pool, &storage, &args[2..]).await;
+        std::process::exit(code);
+    }
+
+    // Seed admin accounts from ADMIN_ACCOUNTS — mirrors main.bootstrapAdmins.
+    bootstrap_admins(&pool, &config.admin_accounts).await;
+
+    // Periodic pruning of the rate-limit + TOTP-block maps (replaces the Go init goroutines).
+    ratelimit::spawn_cleanup();
+
+    // Background maintenance jobs (version cleanup / quota reconcile / uploads sweeper) —
+    // mirrors the three `go x.Run(...)` calls in main.go.
+    jobs::spawn_all(pool.clone(), storage.clone());
 
     let state = AppState {
         pool,
@@ -170,8 +184,8 @@ fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
 
     use handlers::{
-        auth, collab, collections, devices, federation, fedproxy, file_assets, file_versions,
-        files, shares, tus,
+        admin, auth, collab, collections, devices, federation, fedproxy, file_assets,
+        file_versions, files, shares, tus,
     };
 
     Router::new()
@@ -339,6 +353,20 @@ fn build_router(state: AppState) -> Router {
             "/api/fed-proxy/:shareId/files/:fileId",
             delete(fedproxy::proxy_delete),
         )
+        // --- Admin (authenticated + isAdmin via the AdminUser extractor). ---
+        .route(
+            "/api/admin/users",
+            get(admin::list_users).post(admin::create_user),
+        )
+        .route(
+            "/api/admin/users/:id",
+            put(admin::update_user).delete(admin::delete_user),
+        )
+        .route("/api/admin/stats", get(admin::get_stats))
+        .route(
+            "/api/admin/settings",
+            get(admin::get_settings).put(admin::update_settings),
+        )
         // Layer order: with chained `.layer()` the *last* added is the outermost (receives
         // the request first). The tus OPTIONS passthrough is therefore outermost so it can
         // answer tus discovery before CORS swallows the OPTIONS (tower-http's CorsLayer,
@@ -377,6 +405,90 @@ async fn tus_options_passthrough(
         }
     }
     next.run(req).await
+}
+
+/// Parses + runs the `orphan-sweep` subcommand — mirrors `cmd.RunOrphanSweep`. Dry-run by
+/// default; `--delete` actually removes orphans. Returns the process exit code.
+async fn run_orphan_sweep_cmd(
+    pool: &PgPool,
+    storage: &storage::StorageService,
+    args: &[String],
+) -> i32 {
+    let mut delete = false;
+    let mut age_floor = std::time::Duration::from_secs(24 * 3600);
+    let mut page_sleep = std::time::Duration::from_millis(200);
+    let mut prefix = "files/".to_string();
+    for a in args {
+        if a == "--delete" {
+            delete = true;
+        } else if let Some(v) = a.strip_prefix("--age-floor=") {
+            match parse_go_duration(v) {
+                Some(d) => age_floor = d,
+                None => {
+                    eprintln!("orphan-sweep: bad --age-floor: {v}");
+                    return 1;
+                }
+            }
+        } else if let Some(v) = a.strip_prefix("--page-sleep=") {
+            match parse_go_duration(v) {
+                Some(d) => page_sleep = d,
+                None => {
+                    eprintln!("orphan-sweep: bad --page-sleep: {v}");
+                    return 1;
+                }
+            }
+        } else if let Some(v) = a.strip_prefix("--prefix=") {
+            prefix = v.to_string();
+        } else {
+            eprintln!("orphan-sweep: unknown arg: {a}");
+            return 1;
+        }
+    }
+    let mode = if delete { "DELETE" } else { "DRY-RUN" };
+    tracing::info!(
+        "orphan-sweep: starting mode={mode} age-floor={age_floor:?} page-sleep={page_sleep:?} prefix={prefix}"
+    );
+    match jobs::run_orphan_sweep(pool, storage, &prefix, age_floor, page_sleep, delete).await {
+        Ok(r) => {
+            tracing::info!(
+                "orphan-sweep summary: pages={} keys={} orphans={} skipped-age={} skipped-shape={} deleted={} bytes-reclaimed={} mode={}",
+                r.pages_scanned, r.keys_scanned, r.orphans_found, r.skipped_age,
+                r.skipped_shape, r.deleted, r.bytes_reclaimed, mode
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("orphan-sweep: failed: {e}");
+            1
+        }
+    }
+}
+
+/// Parses the subset of Go `time.Duration` strings the sweep flags use (`24h`, `1h`, `30m`,
+/// `200ms`, `0`). Returns `None` on anything unrecognised.
+fn parse_go_duration(s: &str) -> Option<std::time::Duration> {
+    if s == "0" {
+        return Some(std::time::Duration::ZERO);
+    }
+    if let Some(n) = s.strip_suffix("ms") {
+        return n.parse::<u64>().ok().map(std::time::Duration::from_millis);
+    }
+    if let Some(n) = s.strip_suffix('h') {
+        return n
+            .parse::<u64>()
+            .ok()
+            .map(|h| std::time::Duration::from_secs(h * 3600));
+    }
+    if let Some(n) = s.strip_suffix('m') {
+        return n
+            .parse::<u64>()
+            .ok()
+            .map(|m| std::time::Duration::from_secs(m * 60));
+    }
+    if let Some(n) = s.strip_suffix('s') {
+        return n.parse::<u64>().ok().map(std::time::Duration::from_secs);
+    }
+    None
 }
 
 /// Serves the generated OpenAPI document as JSON (utoipa replaces `swaggo/swag`).
