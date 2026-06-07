@@ -37,4 +37,5 @@ aws-config.workspace = true
 aws-sdk-s3.workspace = true
 aws-credential-types.workspace = true
 tokio-util.workspace = true
+futures-util.workspace = true
 tempfile.workspace = true

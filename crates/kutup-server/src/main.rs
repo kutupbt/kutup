@@ -10,6 +10,7 @@ mod config;
 mod db;
 mod error;
 mod handlers;
+mod hub;
 mod jwt;
 mod middleware;
 mod models;
@@ -51,6 +52,8 @@ pub struct AppState {
     pub pool: PgPool,
     pub config: Arc<Config>,
     pub storage: storage::StorageService,
+    /// In-memory collab-room registry (one room per fileId) — mirrors the Go `Hub`.
+    pub hub: Arc<hub::Hub>,
 }
 
 #[tokio::main]
@@ -86,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
         pool,
         config: Arc::new(config),
         storage,
+        hub: Arc::new(hub::Hub::new()),
     };
 
     let app = build_router(state);
@@ -165,7 +169,7 @@ async fn bootstrap_admins(pool: &PgPool, accounts_env: &str) {
 fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
 
-    use handlers::{auth, collections, devices, file_assets, file_versions, files, tus};
+    use handlers::{auth, collab, collections, devices, file_assets, file_versions, files, tus};
 
     Router::new()
         // OpenAPI spec as JSON. The Go server served an interactive Swagger UI at
@@ -261,6 +265,10 @@ fn build_router(state: AppState) -> Router {
             "/api/files/:fileId/assets/:assetId",
             put(file_assets::upload).get(file_assets::download),
         )
+        // --- Collab-edit WebSocket. Auth (token + file access + device) happens inside the
+        // handler before the upgrade (mirrors Go's PreUpgrade — browsers can't set headers
+        // on `new WebSocket`, so the token may arrive via ?token=). ---
+        .route("/api/files/:fileId/collab/ws", get(collab::ws))
         // Layer order: with chained `.layer()` the *last* added is the outermost (receives
         // the request first). The tus OPTIONS passthrough is therefore outermost so it can
         // answer tus discovery before CORS swallows the OPTIONS (tower-http's CorsLayer,

@@ -56,7 +56,7 @@ notify = "6"
 url = "2"
 
 # Server (kutup-server).
-axum = { version = "0.7", features = ["multipart"] }
+axum = { version = "0.7", features = ["multipart", "ws"] }
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "migrate", "uuid", "time"] }
 tower = "0.5"
@@ -70,6 +70,8 @@ aws-sdk-s3 = "1"
 aws-credential-types = "1"
 # Stream S3 object bodies into Axum responses, and buffer multipart uploads to disk.
 tokio-util = { version = "0.7", features = ["io"] }
+# Split the collab WebSocket into independent read/write halves.
+futures-util = { version = "0.3", default-features = false }
 tempfile = "3"
 # OpenAPI — replaces swaggo/swag. The interactive swagger-ui crate downloads its UI
 # bundle from GitHub at build time, which breaks offline/sandboxed builds; we generate

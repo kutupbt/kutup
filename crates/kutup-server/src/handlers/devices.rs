@@ -142,6 +142,7 @@ pub async fn revoke(
         Ok(r) if r.rows_affected() > 0 => {}
         _ => return Err(AppError::not_found("not found")),
     }
-    // TODO(slice 5): notify the collab Hub to drop this device's WS connections.
+    // Drop this device's live collab WS connections — mirrors Go's hub.CloseDevice.
+    state.hub.close_device(device_id);
     Ok(StatusCode::NO_CONTENT.into_response())
 }
