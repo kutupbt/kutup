@@ -162,6 +162,29 @@ impl Client {
         decode_json(resp)
     }
 
+    // --- 2FA (TOTP) ---
+
+    pub fn setup_totp(&self) -> Result<SetupTotpResponse> {
+        let resp = self.post_json("/user/2fa/setup", &serde_json::json!({}))?;
+        decode_json(resp)
+    }
+
+    pub fn verify_totp(&self, code: &str) -> Result<()> {
+        let resp = self.post_json("/user/2fa/verify", &serde_json::json!({ "code": code }))?;
+        check_ok(resp)
+    }
+
+    /// DELETE-with-body: the backend requires a current code to disable 2FA (so a stolen
+    /// session can't silently remove it). Mirrors the Go `DisableTOTP`.
+    pub fn disable_totp(&self, code: &str) -> Result<()> {
+        let resp = self
+            .request(Method::DELETE, "/user/2fa")
+            .header(CONTENT_TYPE, "application/json")
+            .json(&serde_json::json!({ "code": code }))
+            .send()?;
+        check_ok(resp)
+    }
+
     // --- Collections ---
 
     pub fn list_collections(&self) -> Result<Vec<Collection>> {

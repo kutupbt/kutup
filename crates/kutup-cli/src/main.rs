@@ -125,6 +125,12 @@ enum Commands {
         /// Hex color #rrggbb, or "" to clear.
         hex: String,
     },
+    /// Manage TOTP two-factor authentication.
+    #[command(name = "2fa")]
+    Twofa {
+        #[command(subcommand)]
+        command: commands::twofa::TwofaCmd,
+    },
     /// List and revoke devices on your account.
     Devices {
         #[command(subcommand)]
@@ -193,6 +199,7 @@ fn main() {
         Commands::Color { collection_id, hex } => {
             commands::color::run(&cli.profile, cli.json, collection_id, hex)
         }
+        Commands::Twofa { command } => commands::twofa::run(&cli.profile, cli.json, command),
         Commands::Devices { command } => commands::devices::run(&cli.profile, cli.json, command),
         Commands::Versions { command } => commands::versions::run(&cli.profile, cli.json, command),
         Commands::Share { command } => commands::share::run(&cli.profile, cli.json, command),

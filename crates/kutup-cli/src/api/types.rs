@@ -90,6 +90,17 @@ pub struct RefreshResponse {
     pub access_token: String,
 }
 
+/// `POST /user/2fa/setup` response — `secret` is the base32 form for manual entry, `qr_uri`
+/// the `otpauth://` URI for scanning. Mirrors `SetupTOTPResponse`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupTotpResponse {
+    #[serde(default)]
+    pub secret: String,
+    #[serde(default)]
+    pub qr_uri: String,
+}
+
 // --- User ---
 
 #[derive(Debug, Serialize, Deserialize)]

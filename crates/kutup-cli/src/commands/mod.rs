@@ -13,6 +13,7 @@ pub mod register;
 pub mod rm;
 pub mod share;
 pub mod sync;
+pub mod twofa;
 pub mod upload;
 pub mod version;
 pub mod versions;
