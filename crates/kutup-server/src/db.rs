@@ -24,9 +24,6 @@ pub async fn connect(database_url: &str) -> Result<PgPool> {
 
 /// Runs all pending migrations. Mirrors `Migrate`.
 pub async fn migrate(pool: &PgPool) -> Result<()> {
-    sqlx::migrate!()
-        .run(pool)
-        .await
-        .context("migrate up")?;
+    sqlx::migrate!().run(pool).await.context("migrate up")?;
     Ok(())
 }

@@ -1,11 +1,11 @@
 name: Release CLI
 
-# Builds the `kutup` CLI (cmd/kutup/) for Linux / macOS / Windows (amd64 + arm64)
-# via GoReleaser and publishes a GitHub Release with the archives + checksums.
+# Builds the `kutup` CLI (the Rust `crates/kutup-cli`) for Linux / macOS / Windows
+# (amd64 + arm64) and publishes a GitHub Release with the archives + checksums.
+# Replaces the previous Go/GoReleaser build (cmd/kutup/ was removed in the Go→Rust cutover).
 #
-# Trigger: push a tag like `v0.1.0`. (The desktop app releases independently
-# on `desktop-v*` tags — see release-desktop.yml. The two never overlap:
-# `v0.1.0` doesn't match `desktop-v*`, and vice versa.)
+# Trigger: push a tag like `v0.1.0`. (The desktop app releases independently on `desktop-v*`
+# tags — see release-desktop.yml. The two never overlap.)
 
 on:
   push:
@@ -16,25 +16,55 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  # Create the GitHub release up-front (as a draft) so the per-target build jobs can each
+  # upload their archive into it. Flag it a prerelease when the tag has a -alpha/-beta/-rc
+  # segment (mirrors the old GoReleaser `prerelease: auto`).
+  create-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-          cache: true
-          cache-dependency-path: cmd/kutup/go.sum
-
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: latest
-          args: release --clean
-          workdir: cmd/kutup
+      - name: Create draft release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          PRERELEASE=""
+          if [[ "$TAG" =~ -(alpha|beta|rc) ]]; then PRERELEASE="--prerelease"; fi
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --draft $PRERELEASE --title "kutup $TAG" \
+              --notes "Automated draft release for $TAG. Review and publish."
+
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Builds the release binary for the target, packages it as
+      # kutup_<tag>_<target>.{tar.gz|zip}, writes a sha256 checksum, and uploads it to the
+      # release for the pushed tag. Uses `cross` automatically for the Linux cross target.
+      - name: Build + upload
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: kutup
+          manifest-path: crates/kutup-cli/Cargo.toml
+          target: ${{ matrix.target }}
+          archive: kutup_$tag_$target
+          tar: unix
+          zip: windows
+          checksum: sha256
+          token: ${{ secrets.GITHUB_TOKEN }}

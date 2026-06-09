@@ -66,9 +66,11 @@ services:
       - seaweedfs-s3
 
   backend:
+    # The Rust kutup-server (Axum). Build context is the workspace root so the Cargo
+    # workspace + the embedded migrations (crates/kutup-server/migrations) are available.
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: Dockerfile.server
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-kutup}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kutup}?sslmode=disable

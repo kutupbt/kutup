@@ -1,11 +1,12 @@
-# Root Cargo workspace for the Go→Rust rewrite.
+# Root Cargo workspace — the kutup backend + CLI (Rust; the former Go `backend/` + `cmd/kutup/`
+# were rewritten here and removed).
 #
 # Crates (see docs/contributing.md and CLAUDE.md):
 #   crates/kutup-crypto  — shared E2EE primitives; the canonical mirror partner of
 #                          frontend/src/crypto/ (libsodium-wrappers). Used by the CLI
 #                          and (for the collab envelope) the server.
-#   crates/kutup-cli     — the `kutup` CLI         (replaces cmd/kutup/)      [pending]
-#   crates/kutup-server  — the backend API binary  (replaces backend/)       [pending]
+#   crates/kutup-cli     — the `kutup` CLI         (binary `kutup`)
+#   crates/kutup-server  — the backend API binary  (binary `kutup-server`; Axum + sqlx)
 #
 # src-tauri/ is its own standalone crate and is intentionally NOT a member of this
 # workspace; `exclude` keeps `cargo build` there independent of this tree.

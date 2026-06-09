@@ -1,0 +1,26 @@
+# Build image for the Rust kutup-server (replaces the Go backend/Dockerfile).
+# Build context is the workspace root so the root Cargo.toml + all crates (incl. the
+# embedded migrations under crates/kutup-server/migrations) are available.
+#
+#   docker build -f Dockerfile.server -t kutup-server .
+FROM rust:1-bookworm AS builder
+WORKDIR /build
+
+# Copy the workspace manifests + sources. src-tauri is excluded from the workspace and not
+# needed here. A single COPY keeps the build cache simple; the dep graph is small enough.
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+
+# Build only the server binary in release mode (pulls in kutup-crypto; not kutup-cli).
+RUN cargo build --release -p kutup-server --bin kutup-server \
+    && cp target/release/kutup-server /kutup-server
+
+# Minimal runtime: rustls is used throughout (no OpenSSL), so only CA certs are needed.
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /kutup-server /usr/local/bin/kutup-server
+
+EXPOSE 3000
+ENTRYPOINT ["kutup-server"]
