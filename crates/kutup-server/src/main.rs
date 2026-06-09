@@ -28,10 +28,12 @@ use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderName, HeaderValue, Method};
 use axum::middleware::from_fn;
 use axum::routing::{delete, get, patch, post, put};
-use axum::{Json, Router};
+use axum::{Json, Router, ServiceExt};
 use sqlx::PgPool;
+use tower::Layer;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::CorsLayer;
+use tower_http::normalize_path::NormalizePathLayer;
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 
@@ -106,14 +108,21 @@ async fn main() -> anyhow::Result<()> {
         hub: Arc::new(hub::Hub::new()),
     };
 
-    let app = build_router(state);
+    // Trailing-slash normalization wraps the whole Router from the *outside* (a
+    // `Router::layer` only runs for already-matched paths, so it can't rescue an unmatched
+    // `/api/collections/`). This mirrors Fiber's default `StrictRouting = false`, which the
+    // Go CLI relies on (it calls e.g. `/collections/` with a trailing slash).
+    let app = NormalizePathLayer::trim_trailing_slash().layer(build_router(state));
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     tracing::info!("listening on :3000");
     // into_make_service_with_connect_info exposes the peer address so the rate-limit
-    // layers can key on the client IP (Fiber's c.IP()).
+    // layers can key on the client IP (Fiber's c.IP()). `ServiceExt` provides it for the
+    // NormalizePath-wrapped service (not just a bare Router).
     axum::serve(
         listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
+        ServiceExt::<axum::extract::Request>::into_make_service_with_connect_info::<SocketAddr>(
+            app,
+        ),
     )
     .await?;
     Ok(())
@@ -367,12 +376,13 @@ fn build_router(state: AppState) -> Router {
             "/api/admin/settings",
             get(admin::get_settings).put(admin::update_settings),
         )
-        // Layer order: with chained `.layer()` the *last* added is the outermost (receives
-        // the request first). The tus OPTIONS passthrough is therefore outermost so it can
-        // answer tus discovery before CORS swallows the OPTIONS (tower-http's CorsLayer,
-        // unlike Fiber, intercepts every OPTIONS). Inner of it: CORS + body limit gate
-        // inputs; tracing logs each request; panic recovery turns a handler panic into a
-        // 500 (mirrors Fiber's `recover.New()`).
+        // Layer order: with chained `.layer()` the *last* added is the outermost. The tus
+        // OPTIONS passthrough is outermost here so it can answer tus discovery before CORS
+        // swallows the OPTIONS (tower-http's CorsLayer, unlike Fiber, intercepts every
+        // OPTIONS). Inner of it: CORS + body limit gate inputs; tracing logs each request;
+        // panic recovery turns a handler panic into a 500 (mirrors Fiber's `recover.New()`).
+        // NOTE: trailing-slash normalization is applied *outside* the Router in `main` (a
+        // `Router::layer` runs only for matched paths, so it can't rescue `/collections/`).
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http())
         .layer(cors)
