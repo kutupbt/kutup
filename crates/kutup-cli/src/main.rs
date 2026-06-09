@@ -35,6 +35,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Create a new account (generates keys client-side; prints a recovery phrase).
+    Register {
+        /// Server URL (e.g. https://kutup.example.com).
+        #[arg(long)]
+        server: Option<String>,
+        /// Email for the new account.
+        #[arg(long)]
+        email: Option<String>,
+        /// Username (3-32 chars: lowercase letters, numbers, _ and -).
+        #[arg(long)]
+        username: Option<String>,
+    },
     /// Authenticate and store session.
     Login {
         /// Server URL (e.g. https://kutup.example.com).
@@ -140,6 +152,16 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     let result = match &cli.command {
+        Commands::Register {
+            server,
+            email,
+            username,
+        } => commands::register::run(
+            cli.json,
+            server.as_deref(),
+            email.as_deref(),
+            username.as_deref(),
+        ),
         Commands::Login { server, email } => {
             commands::login::run(&cli.profile, server.as_deref(), email.as_deref())
         }

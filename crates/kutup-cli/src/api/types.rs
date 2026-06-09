@@ -20,6 +20,27 @@ pub struct LoginRequest {
     pub login_key: String,
 }
 
+/// Registration bundle — mirrors the backend `RegisterRequest` + the web client's
+/// `generateRegistrationKeys` output. All key material is base64; the server only bcrypts
+/// `login_key` + `recovery_proof` and stores the rest as-is (it never sees plaintext keys).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterRequest {
+    pub email: String,
+    pub username: String,
+    pub login_key: String,
+    pub encrypted_master_key: String,
+    pub master_key_nonce: String,
+    pub encrypted_recovery_key: String,
+    pub recovery_key_nonce: String,
+    pub encrypted_private_key: String,
+    pub private_key_nonce: String,
+    pub public_key: String,
+    pub kdf_salt: String,
+    pub login_key_salt: String,
+    pub recovery_proof: String,
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginResponse {

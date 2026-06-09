@@ -127,6 +127,11 @@ impl Client {
 
     // --- Auth ---
 
+    pub fn register(&self, req: &RegisterRequest) -> Result<()> {
+        let resp = self.post_json("/auth/register", req)?;
+        check_ok(resp)
+    }
+
     pub fn login_preflight(&self, email: &str) -> Result<PreflightResponse> {
         let resp = self.get(&format!("/auth/login/preflight?email={email}"))?;
         decode_json(resp)

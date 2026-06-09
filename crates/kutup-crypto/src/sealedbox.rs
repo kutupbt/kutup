@@ -5,7 +5,9 @@
 //! anonymous (ephemeral keypair), and only the holder of the recipient secret
 //! key can open the result.
 
-use dryoc::classic::crypto_box::{crypto_box_seal, crypto_box_seal_open, PublicKey, SecretKey};
+use dryoc::classic::crypto_box::{
+    crypto_box_keypair, crypto_box_seal, crypto_box_seal_open, PublicKey, SecretKey,
+};
 use dryoc::constants::{
     CRYPTO_BOX_PUBLICKEYBYTES, CRYPTO_BOX_SEALBYTES, CRYPTO_BOX_SECRETKEYBYTES,
 };
@@ -18,6 +20,13 @@ pub const SEAL_BYTES: usize = CRYPTO_BOX_SEALBYTES;
 pub const PUBLIC_KEY_BYTES: usize = CRYPTO_BOX_PUBLICKEYBYTES;
 /// X25519 secret key length (32 bytes).
 pub const SECRET_KEY_BYTES: usize = CRYPTO_BOX_SECRETKEYBYTES;
+
+/// Generates a fresh X25519 keypair `(public, secret)` — mirrors `generateKeypair`
+/// (`frontend/src/crypto/asymmetric.ts`). At registration the secret key is sealed under the
+/// master key and the public key is stored in plaintext.
+pub fn generate_keypair() -> ([u8; PUBLIC_KEY_BYTES], [u8; SECRET_KEY_BYTES]) {
+    crypto_box_keypair()
+}
 
 fn pk(public_key: &[u8]) -> Result<PublicKey> {
     public_key
