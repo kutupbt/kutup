@@ -1,6 +1,25 @@
 # Resume here
 
-**State:** crypto ✅, CLI ✅ (16 commands), server 🟡 — slices 1–7 done. Branch
+**State: DONE ✅** — the Go→Rust rewrite is complete and the Go tree was removed (cutover).
+Branch `claude/go-rust-rewrite-G16zO`; `cargo build`/`test`/`clippy`/`fmt` green.
+
+- **crypto** ✅ (`kutup-crypto`; byte-parity vectors + a BIP39 `mnemonic` module).
+- **CLI** ✅ (`kutup-cli`; all former Go commands **plus** a new `register`). Differentially
+  verified: the old Go CLI and the Rust CLI drive the same account through the same battery
+  against **both** servers identically (incl. cross-binary upload/download SHA).
+- **server** ✅ (`kutup-server`; slices 1–8). Route set matches the old Go backend exactly
+  (72 method+paths). Containerized (`Dockerfile.server`), wired into `docker-compose*.yml`.
+- **cutover** ✅ — `backend/` + `cmd/kutup/` deleted; migrations moved to
+  `crates/kutup-server/migrations/`; CI release builds the Rust CLI; docs updated.
+- Deferrals (see `docs/roadmap.md`): per-path OpenAPI operations + interactive Swagger UI;
+  `.excalidraw` asset extraction. Federation Go↔Rust cross-server test was intentionally
+  skipped (SSRF blocks loopback/private IPs on one host; handlers are verified single-server).
+
+Everything below is the historical slice-by-slice record.
+
+---
+
+**(historical) State:** crypto ✅, CLI ✅ (16 commands), server 🟡 — slices 1–7 done. Branch
 `claude/go-rust-rewrite-G16zO`; `cargo build`/`test`/`clippy` green.
 
 Done in the server crate:

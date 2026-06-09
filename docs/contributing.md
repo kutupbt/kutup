@@ -44,16 +44,15 @@ docker compose up -d postgres seaweedfs-master seaweedfs-volume seaweedfs-filer 
 
 ## Backend Development
 
-The backend is a Go 1.22 application in `backend/`.
+The backend is a Rust application — `crates/kutup-server` (Axum + sqlx + aws-sdk-s3) in the
+root Cargo workspace. It shares the E2EE primitives with the CLI via `crates/kutup-crypto`.
 
 ### Running natively
 
 ```sh
-cd backend
-
 # Export env vars (or use a tool like direnv)
 export DATABASE_URL="postgres://kutup:<POSTGRES_PASSWORD>@localhost:5432/kutup?sslmode=disable"
-export JWT_SECRET="<your-jwt-secret>"
+export JWT_SECRET="<your-jwt-secret-32+chars>"
 export S3_ENDPOINT="http://localhost:8333"
 export S3_ACCESS_KEY="kutup"
 export S3_SECRET_KEY="<your-s3-secret>"
@@ -61,80 +60,45 @@ export S3_BUCKET="kutup-files"
 export S3_REGION="us-east-1"
 export APP_ENV="development"
 
-go run ./...
+cargo run -p kutup-server          # or: cargo build --release -p kutup-server
 ```
 
-The backend starts on `http://localhost:3000`.
+The backend starts on `http://localhost:3000`. The binary also has an `orphan-sweep`
+subcommand (`cargo run -p kutup-server -- orphan-sweep [--delete]`) for GC'ing orphaned S3
+blobs.
 
 > You need to expose the SeaweedFS S3 port to the host. Add `ports: ["8333:8333"]` to the `seaweedfs-s3` service in `docker-compose.yml` temporarily for local dev.
 
 ### Database migrations
 
-Migrations live in `backend/db/migrations/` and are applied automatically on startup using **golang-migrate**.
+Migrations live in `crates/kutup-server/migrations/` (`<N>_<name>.up.sql` / `.down.sql` —
+sqlx's reversible format) and are **embedded into the binary at compile time** via
+`sqlx::migrate!()`, then applied automatically on startup.
 
-To add a new migration:
-
-```sh
-# Install migrate CLI (one-time)
-go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
-
-# Create a new migration
-migrate create -ext sql -dir backend/db/migrations -seq <migration_name>
-```
-
-This creates two files: `<N>_<name>.up.sql` and `<N>_<name>.down.sql`. Write the forward migration in `.up.sql` and the rollback in `.down.sql`.
-
-### Swagger UI
-
-The API spec is generated from `// @` annotations in the handler files using [swaggo/swag](https://github.com/swaggo/swag). The generated files live in `backend/docs/` and are committed to the repo.
-
-**Viewing the UI locally**
-
-Start the stack, then open:
-
-```
-http://localhost/swagger/index.html
-```
-
-To authenticate, click **Authorize** and paste a Bearer token (obtain one from `POST /api/auth/login`).
-
-**Regenerating the spec after changing an endpoint**
+To add a migration, create the pair by hand (or with the sqlx CLI):
 
 ```sh
-# Install the swag CLI (one-time)
-go install github.com/swaggo/swag/cmd/swag@v1.8.1
-
-# Regenerate from the handler annotations
-cd backend
-swag init -g main.go
+cargo install sqlx-cli --no-default-features --features postgres   # one-time
+sqlx migrate add -r <migration_name> --source crates/kutup-server/migrations
 ```
 
-Commit the updated `backend/docs/` files alongside your handler changes. The Dockerfile also runs `swag init` during `docker build`, so the image always reflects the current annotations.
+Write the forward migration in `.up.sql` and the rollback in `.down.sql`. Because migrations
+are embedded at compile time, **rebuild** the server after adding one.
 
-**Adding annotations to a new handler**
+### OpenAPI
 
-Place the comment block immediately above the `func` signature:
-
-```go
-// @Summary      Brief description shown in the UI
-// @Tags         Auth
-// @Accept       json
-// @Produce      json
-// @Security     BearerAuth
-// @Param        body  body      MyRequestType  true  "Description"
-// @Success      200   {object}  MyResponseType
-// @Failure      400   {object}  ErrorResponse
-// @Router       /auth/my-endpoint [post]
-func (h *AuthHandler) MyEndpoint(c *fiber.Ctx) error {
-```
-
-Define any new request/response types at package level in `backend/handlers/models.go` so swag can resolve them. Types defined inside function bodies are invisible to the generator.
+The server generates its OpenAPI document with [`utoipa`](https://github.com/juhaku/utoipa)
+and serves the machine-readable JSON at `GET /api-docs/openapi.json`. Per-path operation
+annotations and an interactive Swagger UI are deferred (see `docs/roadmap.md`); the document
+currently carries the info block, the `BearerAuth` security scheme, and the response schemas.
 
 ### Running tests
 
 ```sh
-cd backend
-go test ./...
+cargo test                                      # all crates
+cargo test -p kutup-crypto                      # crypto byte-parity vectors
+cargo clippy --all-targets -- -D warnings       # lints (gate)
+cargo fmt --check                               # formatting (gate)
 ```
 
 ---
@@ -175,18 +139,21 @@ pnpm tsc --noEmit
 
 ```
 kutup/
-├── backend/
-│   ├── main.go              # Server setup and route registration
-│   ├── config/config.go     # Environment-based configuration
-│   ├── db/
-│   │   ├── db.go            # Connection pool, migration runner
-│   │   └── migrations/      # SQL migration files
-│   ├── handlers/            # HTTP handlers (one file per domain)
-│   │   └── models.go        # Exported request/response types for Swagger
-│   ├── docs/                # Generated OpenAPI spec (swag init output)
-│   ├── middleware/          # JWT auth, admin check, rate limiting
-│   ├── services/            # Business logic (S3, quotas, TOTP)
-│   └── utils/               # JWT helpers, token gen, SSRF check
+├── Cargo.toml               # Root Cargo workspace (backend + CLI + crypto)
+├── Dockerfile.server        # Build image for the Rust kutup-server
+├── crates/
+│   ├── kutup-server/        # Backend API (Axum + sqlx + aws-sdk-s3)
+│   │   ├── src/main.rs      # Server setup, route registration, layers, subcommands
+│   │   ├── src/handlers/    # HTTP handlers (one file per domain)
+│   │   ├── src/{jwt,totp,ssrf,ratelimit,middleware}.rs  # auth, rate limiting, SSRF guard
+│   │   ├── src/{storage,jobs,hub}.rs  # S3 client, background jobs, collab room hub
+│   │   ├── src/{models,error,config,db,openapi}.rs
+│   │   └── migrations/      # SQL migrations (embedded via sqlx::migrate!())
+│   ├── kutup-cli/           # The `kutup` CLI (clap)
+│   │   └── src/{commands,api,session,syncengine,transfer}/  # commands, HTTP client, session store, sync
+│   └── kutup-crypto/        # Shared E2EE primitives (dryoc + RustCrypto)
+│       ├── src/{kdf,secretbox,sealedbox,stream,asset,envelope,mnemonic}.rs
+│       └── tests/vectors/   # Checked-in byte-parity vectors
 ├── frontend/
 │   ├── src/
 │   │   ├── api/client.ts    # Axios instance with auth interceptors
@@ -201,13 +168,8 @@ kutup/
 │   │   └── workers/         # Web Worker for Argon2id KDF
 │   ├── public/onlyoffice/   # CryptPad-pinned OnlyOffice bundle (gitignored; install via script)
 │   └── vite.config.ts       # Dev server proxy config
-├── cmd/kutup/                # Go CLI (Cobra) — login, ls, upload, download, sync, share, versions, devices, 2fa, pub, mv, color
-│   ├── cmd/                 # One file per command
-│   └── internal/
-│       ├── api/             # HTTP client to the backend
-│       ├── crypto/          # Mirrors the frontend crypto for E2E ops
-│       ├── session/         # BoltDB session store, device key in OS keyring
-│       └── sync/            # Bidirectional folder sync
+│   (CLI commands: register, login, ls, upload, download, sync, share, versions, devices, 2fa, pub, mv, color;
+│    redb session store, device key in the OS keyring on macOS/Windows or a chmod-600 file on Linux)
 ├── src-tauri/                # Tauri 2 shell (desktop + iOS/Android) — see docs/desktop-build.md, docs/mobile-build.md
 │   ├── src/lib.rs           # Plugin setup + OS-keychain vault commands (vault_set/get/delete)
 │   ├── tauri.conf.json      # Bundle id (dev.kutup.client), mainBinaryName (kutup-client), targets, scopes
@@ -265,13 +227,13 @@ The sweep does **not** persist progress — a crash mid-run means rerunning from
 
 ## Code Conventions
 
-### Backend (Go)
+### Backend (Rust)
 
-- Follow standard Go project layout. No framework-specific patterns beyond Fiber handler signatures.
-- Handler files are organized by domain (auth, collections, files, shares, federation, admin).
-- Use `pgx/v5` directly for database queries — no ORM.
-- All cryptographic operations are the client's responsibility; the backend must never attempt to decrypt anything.
-- SSRF validation (`utils/ssrf.go`) must be applied to all user-supplied URLs before making outbound requests (federation).
+- Axum handlers organized by domain (`crates/kutup-server/src/handlers/` — auth, collections, files, shares, federation, admin, …). Each file opens with a `//!` doc comment.
+- Use `sqlx` runtime queries (`sqlx::query`/`query_as`) — no compile-time-checked macros (no live DB at build), no ORM.
+- All cryptographic operations are the client's responsibility; the backend must never attempt to decrypt anything. Shared primitives live in `crates/kutup-crypto`.
+- SSRF validation (`crates/kutup-server/src/ssrf.rs`) must be applied to all user-supplied URLs before making outbound requests (federation).
+- Gate every change with `cargo clippy --all-targets -- -D warnings` + `cargo fmt` + `cargo test`.
 
 ### Frontend (TypeScript)
 

@@ -141,7 +141,7 @@ Server A (sharer)                          Server B (recipient)
 
 Files are stored in **SeaweedFS** accessed via its S3-compatible API. The backend uses the AWS SDK v2 (`aws-sdk-go-v2`) configured to point at the internal SeaweedFS S3 gateway.
 
-- The backend acts as a **streaming proxy** — it pipes upload bytes directly to SeaweedFS without buffering the entire file in memory (Fiber's `StreamRequestBody` is enabled).
+- The backend acts as a **streaming proxy** — multipart uploads are spooled to a temp file and streamed to SeaweedFS; the tus.io path uploads ≥5 MiB S3 multipart chunks, so neither buffers the whole file in memory.
 - Each file is stored under a UUID key; the human-readable name exists only in `encryptedMetadata` which the server cannot read.
 - The SeaweedFS cluster (master + volume + filer + S3 gateway) runs as Docker services on the same network as the backend. No S3 ports are exposed externally.
 - Storage quotas are enforced by the backend before accepting uploads; the current usage is tracked in PostgreSQL.
@@ -160,7 +160,7 @@ PostgreSQL 16 is used for all persistent metadata:
 - TOTP secrets (encrypted)
 - Global settings and per-user quotas
 
-Migrations are managed with **golang-migrate** and run automatically on server startup from `backend/db/migrations/`.
+Migrations live in `crates/kutup-server/migrations/` (sqlx's reversible `.up/.down.sql` format), are embedded into the server binary at compile time via `sqlx::migrate!()`, and run automatically on startup.
 
 ## Collaborative Editing
 
@@ -178,7 +178,7 @@ The architecture is summarised below; the design rationale and footguns live in 
 sequenceDiagram
     autonumber
     participant A as Browser A<br/>(Editor)
-    participant R as Go relay<br/>(ciphertext only)
+    participant R as server relay<br/>(ciphertext only)
     participant B as Browser B<br/>(Editor)
 
     Note over A: edit → diff → encrypt
