@@ -334,6 +334,19 @@ offline). Restore it by vendoring the UI bundle (`SWAGGER_UI_OVERWRITE_FOLDER` o
 `/swagger`. The OpenAPI JSON is unaffected and is what the slice-8 parity diff against
 `backend/docs/swagger.yaml` consumes.
 
+### Go→Rust server rewrite · per-path OpenAPI operations
+
+The Rust `utoipa` `ApiDoc` currently carries the `info` block, the `BearerAuth` security
+scheme, and the response/DTO **schemas**, but not the per-path **operations** (the Go
+handlers had `// @Router`/`// @Summary` annotations consumed by `swaggo`; the Rust handlers
+have no `#[utoipa::path(...)]` annotations yet). So `GET /api-docs/openapi.json` lists
+schemas but an empty `paths`. Endpoint parity was instead verified **directly against the
+router**: a method+path diff of `crates/kutup-server/src/main.rs` against
+`backend/main.go` matches exactly (72 method+path combinations; only `GET /swagger/*` →
+`GET /api-docs/openapi.json` differs, per the entry above). To fully restore the spec, add
+`#[utoipa::path]` to each handler and register them in `ApiDoc::paths(...)`, then the
+slice-8 `paths` diff against `backend/docs/swagger.yaml` becomes meaningful.
+
 ---
 
 ## Research / open questions
