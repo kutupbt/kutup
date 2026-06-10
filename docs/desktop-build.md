@@ -39,7 +39,7 @@ Releases are tag-triggered; the **tag is the source of truth for the
 version** (the desktop workflow writes it into `tauri.conf.json` before the
 build).
 
-| What | CLI (`v*` → GoReleaser) | Desktop (`desktop-v*` → tauri-action) |
+| What | CLI (`v*` → cargo matrix) | Desktop (`desktop-v*` → tauri-action) |
 | --- | --- | --- |
 | Stable | `git tag v0.1.0 && git push origin v0.1.0` | `git tag desktop-v0.1.0 && git push origin desktop-v0.1.0` |
 | Prerelease | `git tag v0.1.0-alpha.1 …` | `git tag desktop-v0.1.0-alpha.1 …` |
