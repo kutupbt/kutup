@@ -188,7 +188,9 @@
       "zipFailed": "İndirme başarısız",
       "zipSelectDir": "Parçaları kaydetmek için bir klasör seçin",
       "zipNoFsa": "Bu klasör bu tarayıcıda ZIP olarak indirilemeyecek kadar büyük. Chrome veya Edge'i, masaüstü uygulamasını ya da CLI'yi kullanın.",
-      "zipNoFiles": "Bu klasörde indirilecek dosya yok."
+      "zipNoFiles": "Bu klasörde indirilecek dosya yok.",
+      "shareUserNotFound": "Bu e-postayla bir hesap bulunamadı",
+      "shareFailed": "Klasör paylaşılamadı"
     },
     "deleteFile": {
       "title": "“{{name}}” silinsin mi?",
@@ -296,7 +298,7 @@
       "title": "“{{name}}” paylaşılıyor",
       "recipient": "Alıcı",
       "recipientPlaceholder": "eposta@ornek.com veya ali@baska-sunucu.com",
-      "federatedNote": "Federasyon paylaşımı — davet bağlantısı oluşturulacak",
+      "federatedNote": "Bu kullanıcı başka bir sunucudaysa bir davet bağlantısı oluşturulur",
       "permissions": "İzinler",
       "downloadAlways": "İndirme (her zaman açık)",
       "uploadLabel": "Yükleme",

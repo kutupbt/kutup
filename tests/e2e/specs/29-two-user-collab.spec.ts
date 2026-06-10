@@ -76,23 +76,7 @@ async function typeInEditor(page: Page, text: string): Promise<void> {
 }
 
 test.describe('two-user collaboration', () => {
-  // SKIPPED — blocked by a frontend bug, NOT the backend.
-  //
-  // The cross-user E2EE share + collab path is verified end-to-end at the API
-  // layer (see scripts/verify-cli.sh-style run in the PR notes): userA shares a
-  // folder, userB unseals the collection key with their own private key and
-  // downloads the file — bytes match. The collab WS relay that drives the live
-  // sync is covered by the multi-tab specs (04, 07, 21).
-  //
-  // What blocks the *browser* version: ShareDialog.isFederated() classifies any
-  // recipient whose email has a dotted domain (i.e. every real email) as a
-  // *federated* cross-server share, and then points the federated lookup at the
-  // email's domain rather than this server — so a normal local share is
-  // unreachable through the dialog. The fix is on the frontend (e.g. try the
-  // local /users/by-email lookup first, fall back to federated on 404). Un-skip
-  // this spec once that lands; the body below already drives the full flow
-  // (registration → folder + note → share → cross-user bidirectional sync).
-  test.skip('userA shares a note with userB; edits sync both ways', async ({ browser }) => {
+  test('userA shares a note with userB; edits sync both ways', async ({ browser }) => {
     test.slow() // registration KDF + share crypto + collab handshakes
     const ctxA = await browser.newContext({ ignoreHTTPSErrors: true })
     const ctxB = await browser.newContext({ ignoreHTTPSErrors: true })
@@ -103,10 +87,7 @@ test.describe('two-user collaboration', () => {
 
     // --- userB: a fresh registered account ---
     const tag = Date.now()
-    // Non-dotted domain on purpose: the share dialog treats any dotted-domain
-    // recipient as a *federated* (cross-server) share; `@localhost` keeps it a
-    // local same-server share (by-email lookup → seal collection key to pubkey).
-    const emailB = `bob-${tag}@localhost`
+    const emailB = `bob-${tag}@kutup.local`
     await registerUser(ctxB, emailB, `bob${tag % 1_000_000}`)
 
     // --- userA creates a folder + a note inside it, then shares the folder ---
@@ -162,8 +143,17 @@ test.describe('two-user collaboration', () => {
     await driveB.getByText(noteName, { exact: false }).first().dblclick()
     const noteB = await noteTabBP
     await noteB.waitForLoadState('domcontentloaded')
+    noteB.on('console', (m) => {
+      const t = m.text()
+      if (t.includes('[text-collab]') || t.includes('[kutup-bridge]')) console.log('[noteB]', t)
+    })
 
-    // userB sees userA's seed → the share + key unseal worked.
+    // The editor must mount for userB — proves they decrypted the shared note's
+    // file key with the collection key they unsealed from the share.
+    await expect(noteB.locator('.cm-content')).toBeVisible({ timeout: 30_000 })
+    await noteB.waitForTimeout(3_000) // let the collab WS connect + initial sync land
+
+    // userB sees userA's seed → the share + key unseal + live sync worked.
     await expect.poll(() => readEditor(noteB), { timeout: 30_000 }).toContain(`SEED-${tag}`)
 
     // A → B: userA types, userB sees it.
