@@ -12,17 +12,25 @@ import type { UserRow } from '@/types/api'
  * Click-outside / Escape both close the menu.
  *
  * Every action here is wired end-to-end — no silent stubs per the CLAUDE.md
- * "pre-production, not pre-quality" rule. The features the design has that
- * kutup's backend doesn't support yet (Reset password / Toggle 2FA / Make
- * admin) are tracked in `docs/roadmap.md` and re-appear here when the
- * backend slice lands.
+ * "pre-production, not pre-quality" rule.
  *
  *  - **Edit quota** — opens a small dialog wired to `useUpdateUser`.
- *  - **Disable / Re-enable** — wired via `useUpdateUser({ isActive })`.
- *  - **Delete permanently** — wired via `useDeleteUser` after AlertDialog confirm.
+ *  - **Make / Remove admin** — `useUpdateUser({ isAdmin })`.
+ *  - **Disable 2FA** — `useForceDisable2fa` (admin override for lockouts).
+ *  - **Disable / Re-enable** — `useUpdateUser({ isActive })`.
+ *  - **Delete permanently** — `useDeleteUser` after an AlertDialog confirm.
+ *
+ * For the break-glass admin (`user.isProtected`), the demote / disable /
+ * delete items render disabled with an explanation — the backend rejects
+ * those mutations with 403, so the UI surfaces the reason up front.
  */
 
-export type AdminMenuAction = 'editQuota' | 'toggleActive' | 'delete'
+export type AdminMenuAction =
+  | 'editQuota'
+  | 'toggleAdmin'
+  | 'disableTotp'
+  | 'toggleActive'
+  | 'delete'
 
 export interface AdminUserMenuState {
   x: number
@@ -41,6 +49,8 @@ interface MenuItem {
   icon: IconName
   label: string
   danger?: boolean
+  /** Disabled with a reason (e.g. break-glass admin protection). */
+  disabledReason?: string
 }
 
 export function AdminUserMenu({ menu, onClose, onAction }: AdminUserMenuProps) {
@@ -66,9 +76,33 @@ export function AdminUserMenu({ menu, onClose, onAction }: AdminUserMenuProps) {
   if (!menu) return null
 
   const u = menu.user
+  // The break-glass admin can't be demoted / disabled / deleted.
+  const protectedReason = u.isProtected
+    ? t('admin.users.menu.breakGlassReason', 'Break-glass admin — protected')
+    : undefined
 
   const groups: MenuItem[][] = [
-    [{ id: 'editQuota', icon: 'edit', label: t('admin.users.menu.editQuota', 'Edit quota') }],
+    [
+      { id: 'editQuota', icon: 'edit', label: t('admin.users.menu.editQuota', 'Edit quota') },
+      {
+        id: 'toggleAdmin',
+        icon: u.isAdmin ? 'user' : 'shield',
+        label: u.isAdmin
+          ? t('admin.users.menu.removeAdmin', 'Remove admin role')
+          : t('admin.users.menu.makeAdmin', 'Make admin'),
+        // Demoting an admin is the protected direction; promoting is fine.
+        disabledReason: u.isAdmin ? protectedReason : undefined,
+      },
+      {
+        id: 'disableTotp',
+        icon: 'key',
+        label: t('admin.users.menu.disableTotp', 'Disable 2FA'),
+        // 2FA disable is allowed even on the break-glass admin.
+        disabledReason: u.totpEnabled
+          ? undefined
+          : t('admin.users.menu.totpAlreadyOff', '2FA is not enabled'),
+      },
+    ],
     [
       {
         id: 'toggleActive',
@@ -77,6 +111,7 @@ export function AdminUserMenu({ menu, onClose, onAction }: AdminUserMenuProps) {
           ? t('admin.users.menu.disable', 'Disable account')
           : t('admin.users.menu.reenable', 'Re-enable account'),
         danger: u.isActive,
+        disabledReason: u.isActive ? protectedReason : undefined,
       },
     ],
     [
@@ -85,13 +120,14 @@ export function AdminUserMenu({ menu, onClose, onAction }: AdminUserMenuProps) {
         icon: 'trash',
         label: t('admin.users.menu.delete', 'Delete permanently'),
         danger: true,
+        disabledReason: protectedReason,
       },
     ],
   ]
 
-  // Clamp coords so the menu can't render off-screen. Width ~220, height ~180.
+  // Clamp coords so the menu can't render off-screen. Width ~220, height ~260.
   const x = Math.min(menu.x, window.innerWidth - 230)
-  const y = Math.min(menu.y, window.innerHeight - 200)
+  const y = Math.min(menu.y, window.innerHeight - 280)
 
   return (
     <div
@@ -103,26 +139,34 @@ export function AdminUserMenu({ menu, onClose, onAction }: AdminUserMenuProps) {
       {groups.map((group, gi) => (
         <div key={gi}>
           {gi > 0 && <div className="h-px bg-border-light my-1" aria-hidden="true" />}
-          {group.map((item) => (
-            <button
-              key={item.id}
-              role="menuitem"
-              onClick={() => {
-                onAction(item.id, u)
-                onClose()
-              }}
-              className={cn(
-                'flex items-center gap-2.5 w-full px-3.5 py-1.5 border-0 cursor-pointer text-left bg-transparent',
-                'text-[13px] font-medium',
-                item.danger
-                  ? 'text-destructive hover:bg-destructive-faint'
-                  : 'text-text-primary hover:bg-surface-raised',
-              )}
-            >
-              <Icon d={ICONS[item.icon]} size={13} />
-              {item.label}
-            </button>
-          ))}
+          {group.map((item) => {
+            const disabled = item.disabledReason != null
+            return (
+              <button
+                key={item.id}
+                role="menuitem"
+                disabled={disabled}
+                title={item.disabledReason}
+                onClick={() => {
+                  if (disabled) return
+                  onAction(item.id, u)
+                  onClose()
+                }}
+                className={cn(
+                  'flex items-center gap-2.5 w-full px-3.5 py-1.5 border-0 text-left bg-transparent',
+                  'text-[13px] font-medium',
+                  disabled
+                    ? 'text-text-tertiary cursor-not-allowed'
+                    : item.danger
+                      ? 'text-destructive hover:bg-destructive-faint cursor-pointer'
+                      : 'text-text-primary hover:bg-surface-raised cursor-pointer',
+                )}
+              >
+                <Icon d={ICONS[item.icon]} size={13} />
+                <span className="flex-1">{item.label}</span>
+              </button>
+            )
+          })}
         </div>
       ))}
     </div>

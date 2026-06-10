@@ -437,10 +437,29 @@
       },
       "menu": {
         "editQuota": "Edit quota",
+        "makeAdmin": "Make admin",
+        "removeAdmin": "Remove admin role",
+        "disableTotp": "Disable 2FA",
+        "totpAlreadyOff": "2FA is not enabled",
         "disable": "Disable account",
         "reenable": "Re-enable account",
-        "delete": "Delete permanently"
+        "delete": "Delete permanently",
+        "breakGlassReason": "Break-glass admin — protected"
       }
+    },
+    "adminDialog": {
+      "promoteTitle": "Make {{email}} an admin?",
+      "demoteTitle": "Remove admin from {{email}}?",
+      "promoteDesc": "They gain full access to this admin panel — managing users, settings, and storage. Takes effect on their next sign-in or token refresh.",
+      "demoteDesc": "They lose access to this admin panel. Takes effect on their next sign-in or token refresh."
+    },
+    "totpDialog": {
+      "title": "Disable 2FA for {{email}}?",
+      "desc": "This makes the account password-only until the user re-enables 2FA from their Security page. Use this when a user is locked out of their authenticator."
+    },
+    "breakGlass": {
+      "badge": "Break-glass",
+      "tooltip": "Break-glass admin — protected from demote, disable, and delete."
     },
     "editQuota": {
       "title": "Edit storage quota",
@@ -457,8 +476,9 @@
       "driver": "Driver",
       "driverValue": "SeaweedFS · S3-compatible",
       "storageUsed": "Storage used",
+      "storageUsedDisk": "Storage used (disk)",
       "storageUsedBody": "{{used}} of {{total}} · {{free}} free",
-      "storageUsedUnknown": "Capacity unknown — set STORAGE_TOTAL_BYTES to display.",
+      "storageUsedUnknown": "Capacity unknown — set STORAGE_TOTAL_BYTES or SEAWEEDFS_MASTER_URL to display.",
       "storageEncryption": "Encryption",
       "moreSoonNote": "More admin controls — required 2FA, quota defaults, danger-zone actions — land as the backend grows."
     },
@@ -701,6 +721,22 @@
       "user.quotaGB": "Quota (GB)",
       "user.quotaSaved": "Quota updated",
       "user.currentlyX": "Currently {{x}}",
+      "user.makeAdmin": "Make admin",
+      "user.makeAdminSub": "Grant full access to the admin panel",
+      "user.removeAdmin": "Remove admin role",
+      "user.removeAdminSub": "Revoke access to the admin panel",
+      "user.adminGrantedToast": "User is now an admin",
+      "user.adminRemovedToast": "Admin role removed",
+      "user.promoteTitle": "Make {{email}} an admin?",
+      "user.demoteTitle": "Remove admin from {{email}}?",
+      "user.promoteDesc": "They gain full access to the admin panel. Takes effect on their next sign-in.",
+      "user.demoteDesc": "They lose access to the admin panel. Takes effect on their next sign-in.",
+      "user.disableTotp": "Disable 2FA",
+      "user.disableTotpSub": "For users locked out of their authenticator",
+      "user.totpAlreadyOff": "2FA is not enabled for this user",
+      "user.totpTitle": "Disable 2FA for {{email}}?",
+      "user.totpDesc": "The account becomes password-only until the user re-enables 2FA from their Security page.",
+      "user.breakGlassReason": "Break-glass admin — protected",
       "user.stateSection": "Account state",
       "user.disable": "Disable account",
       "user.disableSub": "User cannot sign in but data is preserved",

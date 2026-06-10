@@ -91,7 +91,9 @@ services:
       S3_BUCKET: ${S3_BUCKET:-kutup-files}
       S3_REGION: ${S3_REGION:-us-east-1}
       APP_ENV: ${APP_ENV:-production}
-      ADMIN_ACCOUNTS: ${ADMIN_ACCOUNTS:-}
+      ADMIN_ACCOUNT: ${ADMIN_ACCOUNT:-}
+      SEAWEEDFS_MASTER_URL: ${SEAWEEDFS_MASTER_URL:-http://seaweedfs-master:9333}
+      STORAGE_TOTAL_BYTES: ${STORAGE_TOTAL_BYTES:-0}
     depends_on:
       postgres:
         condition: service_healthy

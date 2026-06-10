@@ -26,7 +26,15 @@ export function AdminSettingsTab() {
   const { data: stats } = useAdminStats()
 
   const publicReg = !!settings?.registrationEnabled
-  const totalUsed = stats?.totalStorageUsedBytes ?? 0
+
+  // Storage card "used": prefer the real SeaweedFS-probe figure
+  // (storageBackendUsedBytes — actual on-disk bytes); fall back to the DB
+  // sum of per-account usage when no probe is available. A non-zero
+  // backend figure means the probe ran, so both numbers are real.
+  const backendUsed = stats?.storageBackendUsedBytes ?? 0
+  const dbUsed = stats?.totalStorageUsedBytes ?? 0
+  const haveProbe = backendUsed > 0
+  const totalUsed = haveProbe ? backendUsed : dbUsed
   const totalCapacity = stats?.storageTotalBytes ?? 0
   const havePct = totalCapacity > 0
   const pct = havePct ? Math.min((totalUsed / totalCapacity) * 100, 100) : 0
@@ -78,7 +86,9 @@ export function AdminSettingsTab() {
           <div className="flex items-start justify-between mb-2">
             <div>
               <div className="text-[13.5px] font-medium text-text-primary">
-                {t('admin.settings.storageUsed', 'Storage used')}
+                {haveProbe
+                  ? t('admin.settings.storageUsedDisk', 'Storage used (disk)')
+                  : t('admin.settings.storageUsed', 'Storage used')}
               </div>
               <div className="text-[12px] text-text-tertiary mt-0.5">
                 {havePct
@@ -89,7 +99,7 @@ export function AdminSettingsTab() {
                     })
                   : t(
                       'admin.settings.storageUsedUnknown',
-                      'Capacity unknown — set STORAGE_TOTAL_BYTES to display.',
+                      'Capacity unknown — set STORAGE_TOTAL_BYTES or SEAWEEDFS_MASTER_URL to display.',
                     )}
               </div>
             </div>

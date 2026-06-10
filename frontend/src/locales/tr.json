@@ -437,10 +437,29 @@
       },
       "menu": {
         "editQuota": "Kotayı düzenle",
+        "makeAdmin": "Yönetici yap",
+        "removeAdmin": "Yönetici rolünü kaldır",
+        "disableTotp": "2FA'yı devre dışı bırak",
+        "totpAlreadyOff": "2FA etkin değil",
         "disable": "Hesabı devre dışı bırak",
         "reenable": "Hesabı yeniden etkinleştir",
-        "delete": "Kalıcı olarak sil"
+        "delete": "Kalıcı olarak sil",
+        "breakGlassReason": "Acil durum yöneticisi — korumalı"
       }
+    },
+    "adminDialog": {
+      "promoteTitle": "{{email}} yönetici yapılsın mı?",
+      "demoteTitle": "{{email}} kullanıcısının yöneticiliği kaldırılsın mı?",
+      "promoteDesc": "Bu yönetici paneline tam erişim kazanır — kullanıcıları, ayarları ve depolamayı yönetir. Bir sonraki girişte veya jeton yenilemesinde etkili olur.",
+      "demoteDesc": "Bu yönetici paneline erişimini kaybeder. Bir sonraki girişte veya jeton yenilemesinde etkili olur."
+    },
+    "totpDialog": {
+      "title": "{{email}} için 2FA devre dışı bırakılsın mı?",
+      "desc": "Bu, kullanıcı Güvenlik sayfasından 2FA'yı yeniden etkinleştirene kadar hesabı yalnızca-şifre yapar. Bir kullanıcı kimlik doğrulayıcısına erişemediğinde kullanın."
+    },
+    "breakGlass": {
+      "badge": "Acil durum",
+      "tooltip": "Acil durum yöneticisi — yöneticilik kaldırma, devre dışı bırakma ve silmeye karşı korumalı."
     },
     "editQuota": {
       "title": "Depolama kotasını düzenle",
@@ -457,8 +476,9 @@
       "driver": "Sürücü",
       "driverValue": "SeaweedFS · S3-uyumlu",
       "storageUsed": "Kullanılan depolama",
+      "storageUsedDisk": "Kullanılan depolama (disk)",
       "storageUsedBody": "{{total}} alandan {{used}} kullanıldı · {{free}} boş",
-      "storageUsedUnknown": "Kapasite bilinmiyor — görüntülemek için STORAGE_TOTAL_BYTES değişkenini ayarlayın.",
+      "storageUsedUnknown": "Kapasite bilinmiyor — görüntülemek için STORAGE_TOTAL_BYTES veya SEAWEEDFS_MASTER_URL değişkenini ayarlayın.",
       "storageEncryption": "Şifreleme",
       "moreSoonNote": "Daha fazla yönetici kontrolü — zorunlu 2FA, kota varsayılanları, tehlikeli bölge eylemleri — arka uç büyüdükçe gelecek."
     },
@@ -701,6 +721,22 @@
       "user.quotaGB": "Kota (GB)",
       "user.quotaSaved": "Kota güncellendi",
       "user.currentlyX": "Şu an {{x}}",
+      "user.makeAdmin": "Yönetici yap",
+      "user.makeAdminSub": "Yönetici paneline tam erişim ver",
+      "user.removeAdmin": "Yönetici rolünü kaldır",
+      "user.removeAdminSub": "Yönetici paneline erişimi iptal et",
+      "user.adminGrantedToast": "Kullanıcı artık yönetici",
+      "user.adminRemovedToast": "Yönetici rolü kaldırıldı",
+      "user.promoteTitle": "{{email}} yönetici yapılsın mı?",
+      "user.demoteTitle": "{{email}} kullanıcısının yöneticiliği kaldırılsın mı?",
+      "user.promoteDesc": "Yönetici paneline tam erişim kazanır. Bir sonraki girişte etkili olur.",
+      "user.demoteDesc": "Yönetici paneline erişimini kaybeder. Bir sonraki girişte etkili olur.",
+      "user.disableTotp": "2FA'yı devre dışı bırak",
+      "user.disableTotpSub": "Kimlik doğrulayıcısına erişemeyen kullanıcılar için",
+      "user.totpAlreadyOff": "Bu kullanıcı için 2FA etkin değil",
+      "user.totpTitle": "{{email}} için 2FA devre dışı bırakılsın mı?",
+      "user.totpDesc": "Kullanıcı Güvenlik sayfasından 2FA'yı yeniden etkinleştirene kadar hesap yalnızca-şifre olur.",
+      "user.breakGlassReason": "Acil durum yöneticisi — korumalı",
       "user.stateSection": "Hesap durumu",
       "user.disable": "Hesabı devre dışı bırak",
       "user.disableSub": "Kullanıcı giriş yapamaz ancak verileri korunur",

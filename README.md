@@ -73,11 +73,11 @@ git clone https://github.com/kutupbulut/kutup.git
 cd kutup
 cp .env.example .env
 # Edit .env — set strong values for POSTGRES_PASSWORD, JWT_SECRET,
-# S3_SECRET_KEY, ADMIN_ACCOUNTS.
+# S3_SECRET_KEY, ADMIN_ACCOUNT.
 docker compose up -d --build
 ```
 
-Open `http://localhost`, log in with the credentials from `ADMIN_ACCOUNTS`, save your generated recovery phrase, and you're in.
+Open `http://localhost`, log in with the credentials from `ADMIN_ACCOUNT`, save your generated recovery phrase, and you're in. That bootstrap account is the protected **break-glass admin** — it can't be demoted, disabled, or deleted; promote any further admins from inside the app.
 
 Optional: `./install-onlyoffice.sh` enables `.docx` / `.xlsx` / `.pptx` editing (otherwise office files are download-only).
 

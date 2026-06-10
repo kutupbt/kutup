@@ -51,8 +51,8 @@ func main() {
 	}
 	defer pool.Close()
 
-	// Seed admin accounts from env
-	bootstrapAdmins(pool, cfg.AdminAccounts)
+	// Seed the break-glass admin account from env
+	bootstrapAdmin(pool, cfg.AdminAccount)
 
 	// Storage service
 	storage, err := services.NewStorage(
@@ -95,7 +95,12 @@ func main() {
 	filesH := &handlers.FilesHandler{DB: pool, Storage: storage}
 	tusH := &handlers.TusHandler{DB: pool, Storage: storage}
 	sharesH := &handlers.SharesHandler{DB: pool, Storage: storage}
-	adminH := &handlers.AdminHandler{DB: pool, StorageTotalBytes: cfg.StorageTotalBytes}
+	adminH := &handlers.AdminHandler{
+		DB:                   pool,
+		StorageTotalBytes:    cfg.StorageTotalBytes,
+		StorageProbe:         services.NewStorageProbe(cfg.SeaweedFSMasterURL),
+		BreakGlassAdminEmail: cfg.BreakGlassAdminEmail,
+	}
 	fedH := &handlers.FederationHandler{DB: pool, Storage: storage}
 	fedProxyH := &handlers.FedProxyHandler{DB: pool, AppEnv: cfg.AppEnv}
 	devicesH := &handlers.DevicesHandler{DB: pool}
@@ -253,6 +258,7 @@ func main() {
 	admin.Post("/users", adminH.CreateUser)
 	admin.Put("/users/:id", adminH.UpdateUser)
 	admin.Delete("/users/:id", adminH.DeleteUser)
+	admin.Delete("/users/:id/2fa", adminH.ForceDisable2FA)
 	admin.Get("/stats", adminH.GetStats)
 	admin.Get("/settings", adminH.GetSettings)
 	admin.Put("/settings", adminH.UpdateSettings)
@@ -263,53 +269,55 @@ func main() {
 	}
 }
 
-// bootstrapAdmins seeds admin accounts from ADMIN_ACCOUNTS env var.
-// Format: comma-separated email:username:password triples.
-// Admins must complete setup on first login to establish their E2EE key material.
-func bootstrapAdmins(pool *pgxpool.Pool, accountsEnv string) {
-	if accountsEnv == "" {
+// bootstrapAdmin seeds the single break-glass admin account from the
+// ADMIN_ACCOUNT env var. Format: email:username:password.
+// This account is the protected break-glass admin — it can never be
+// demoted, disabled, or deleted (see config.BreakGlassAdminEmail and the
+// guards in handlers/admin.go). Other admins are promoted in-app.
+// The admin must complete setup on first login to establish E2EE key material.
+func bootstrapAdmin(pool *pgxpool.Pool, accountEnv string) {
+	if accountEnv == "" {
 		return
 	}
 	ctx := context.Background()
-	for _, entry := range strings.Split(accountsEnv, ",") {
-		parts := strings.SplitN(strings.TrimSpace(entry), ":", 3)
-		if len(parts) != 3 {
-			log.Printf("bootstrapAdmins: skipping malformed entry (expected email:username:password)")
-			continue
-		}
-		email := strings.TrimSpace(parts[0])
-		username := strings.TrimSpace(parts[1])
-		password := strings.TrimSpace(parts[2])
-		if email == "" || username == "" || password == "" {
-			continue
-		}
+	parts := strings.SplitN(strings.TrimSpace(accountEnv), ":", 3)
+	if len(parts) != 3 {
+		log.Printf("bootstrapAdmin: malformed ADMIN_ACCOUNT (expected email:username:password)")
+		return
+	}
+	email := strings.TrimSpace(parts[0])
+	username := strings.TrimSpace(parts[1])
+	password := strings.TrimSpace(parts[2])
+	if email == "" || username == "" || password == "" {
+		log.Printf("bootstrapAdmin: ADMIN_ACCOUNT has an empty field — skipping")
+		return
+	}
 
-		var count int
-		pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE email=$1`, email).Scan(&count)
-		if count > 0 {
-			continue
-		}
+	var count int
+	pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE email=$1`, email).Scan(&count)
+	if count > 0 {
+		return
+	}
 
-		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-		if err != nil {
-			log.Printf("bootstrapAdmins: bcrypt error for %s: %v", email, err)
-			continue
-		}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		log.Printf("bootstrapAdmin: bcrypt error for %s: %v", email, err)
+		return
+	}
 
-		_, err = pool.Exec(ctx, `
-			INSERT INTO users (
-				email, username, login_key_hash,
-				encrypted_master_key, master_key_nonce,
-				encrypted_recovery_key, recovery_key_nonce,
-				encrypted_private_key, private_key_nonce,
-				public_key, kdf_salt, login_key_salt,
-				is_admin, is_first_login
-			) VALUES ($1,$2,$3,'','','','','','','','','',true,true)
-		`, email, username, string(hash))
-		if err != nil {
-			log.Printf("bootstrapAdmins: insert error for %s: %v", email, err)
-		} else {
-			log.Printf("bootstrapAdmins: created admin account %s (@%s)", email, username)
-		}
+	_, err = pool.Exec(ctx, `
+		INSERT INTO users (
+			email, username, login_key_hash,
+			encrypted_master_key, master_key_nonce,
+			encrypted_recovery_key, recovery_key_nonce,
+			encrypted_private_key, private_key_nonce,
+			public_key, kdf_salt, login_key_salt,
+			is_admin, is_first_login
+		) VALUES ($1,$2,$3,'','','','','','','','','',true,true)
+	`, email, username, string(hash))
+	if err != nil {
+		log.Printf("bootstrapAdmin: insert error for %s: %v", email, err)
+	} else {
+		log.Printf("bootstrapAdmin: created break-glass admin account %s (@%s)", email, username)
 	}
 }

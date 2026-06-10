@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kutup/backend/services"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
@@ -18,9 +20,23 @@ type AdminHandler struct {
 	// StorageTotalBytes is the configured total storage capacity of this
 	// instance (S3 bucket / volume size). 0 means "unknown" — the admin UI
 	// hides the capacity readout. Sourced from STORAGE_TOTAL_BYTES env var
-	// at startup; surfaced via GetStats so the admin page can render
-	// "X of Y used · Z free" without an extra round-trip.
+	// at startup; used as a fallback when the live SeaweedFS probe is
+	// unavailable.
 	StorageTotalBytes int64
+	// StorageProbe queries the SeaweedFS layer for real capacity + usage.
+	// nil when SEAWEEDFS_MASTER_URL is unset — GetStats then falls back to
+	// StorageTotalBytes.
+	StorageProbe *services.StorageProbe
+	// BreakGlassAdminEmail is the protected break-glass admin's email
+	// (from the ADMIN_ACCOUNT env var). This account can never be demoted,
+	// disabled, or deleted. Empty when ADMIN_ACCOUNT is unset.
+	BreakGlassAdminEmail string
+}
+
+// isBreakGlass reports whether the given email is the protected
+// break-glass admin. Case-insensitive.
+func (h *AdminHandler) isBreakGlass(email string) bool {
+	return h.BreakGlassAdminEmail != "" && strings.EqualFold(email, h.BreakGlassAdminEmail)
 }
 
 // @Summary      List all users
@@ -53,6 +69,9 @@ func (h *AdminHandler) ListUsers(c *fiber.Ctx) error {
 		IsActive          bool      `json:"isActive"`
 		TOTPEnabled       bool      `json:"totpEnabled"`
 		CreatedAt         time.Time `json:"createdAt"`
+		// IsProtected marks the break-glass admin — the UI disables
+		// demote/disable/delete for this user.
+		IsProtected bool `json:"isProtected"`
 	}
 
 	var users []UserRow
@@ -64,6 +83,7 @@ func (h *AdminHandler) ListUsers(c *fiber.Ctx) error {
 		); err != nil {
 			continue
 		}
+		u.IsProtected = h.isBreakGlass(u.Email)
 		users = append(users, u)
 	}
 	if users == nil {
@@ -210,6 +230,43 @@ func (h *AdminHandler) UpdateUser(c *fiber.Ctx) error {
 	}
 
 	ctx := context.Background()
+
+	// Load the target's current state for the break-glass + last-admin guards.
+	var targetEmail string
+	var targetIsAdmin, targetIsActive bool
+	if err := h.DB.QueryRow(ctx,
+		`SELECT email, is_admin, is_active FROM users WHERE id = $1`, targetID,
+	).Scan(&targetEmail, &targetIsAdmin, &targetIsActive); err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "not found"})
+	}
+
+	wantsDemote := req.IsAdmin != nil && !*req.IsAdmin
+	wantsDisable := req.IsActive != nil && !*req.IsActive
+
+	// Break-glass admin is immutable: never demote, disable, or delete it.
+	// This guarantees the server maintainer always has a working admin.
+	if h.isBreakGlass(targetEmail) && (wantsDemote || wantsDisable) {
+		return c.Status(403).JSON(fiber.Map{"error": "break-glass admin is protected"})
+	}
+
+	// Last-admin guard (backstop for when no break-glass admin is configured):
+	// don't let a demote/disable leave zero usable admins.
+	if (wantsDemote || wantsDisable) && targetIsAdmin && targetIsActive {
+		var otherUsableAdmins int
+		h.DB.QueryRow(ctx,
+			`SELECT COUNT(*) FROM users WHERE is_admin AND is_active AND id != $1`,
+			targetID,
+		).Scan(&otherUsableAdmins)
+		if otherUsableAdmins == 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "cannot remove the last admin"})
+		}
+	}
+
+	// NOTE(audit-log): admin promotion/demotion + account disable should be
+	// recorded once the audit-log endpoint lands (see docs/roadmap.md).
+	// NOTE: isAdmin is baked into the JWT access-token claims, so a
+	// promotion/demotion takes full effect on the target's next token
+	// refresh (access tokens are short-lived).
 	if req.StorageQuotaBytes != nil {
 		if _, err := h.DB.Exec(ctx,
 			`UPDATE users SET storage_quota_bytes = $1 WHERE id = $2`,
@@ -246,14 +303,57 @@ func (h *AdminHandler) UpdateUser(c *fiber.Ctx) error {
 // @Router       /admin/users/{id} [delete]
 func (h *AdminHandler) DeleteUser(c *fiber.Ctx) error {
 	targetID := c.Params("id")
+	ctx := context.Background()
 
-	result, err := h.DB.Exec(context.Background(),
-		`DELETE FROM users WHERE id = $1`, targetID)
+	// Break-glass admin can never be deleted.
+	var targetEmail string
+	if err := h.DB.QueryRow(ctx,
+		`SELECT email FROM users WHERE id = $1`, targetID,
+	).Scan(&targetEmail); err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "not found"})
+	}
+	if h.isBreakGlass(targetEmail) {
+		return c.Status(403).JSON(fiber.Map{"error": "break-glass admin is protected"})
+	}
+
+	result, err := h.DB.Exec(ctx, `DELETE FROM users WHERE id = $1`, targetID)
 	if err != nil || result.RowsAffected() == 0 {
 		return c.Status(404).JSON(fiber.Map{"error": "not found"})
 	}
 
 	return c.SendStatus(204)
+}
+
+// @Summary      Force-disable a user's two-factor authentication
+// @Description  Admin override for users locked out of their authenticator.
+// @Description  Clears the TOTP secret; the account becomes password-only
+// @Description  until the user re-enables 2FA from their Security page.
+// @Tags         Admin
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id  path  string  true  "User UUID"
+// @Success      200  {object}  MessageResponse
+// @Failure      401  {object}  ErrorResponse
+// @Failure      403  {object}  ErrorResponse
+// @Failure      404  {object}  ErrorResponse
+// @Router       /admin/users/{id}/2fa [delete]
+func (h *AdminHandler) ForceDisable2FA(c *fiber.Ctx) error {
+	targetID := c.Params("id")
+
+	// Mirrors auth.DisableTOTP, minus the TOTP-code challenge — the caller
+	// is already authenticated and admin-gated. Allowed on the break-glass
+	// admin too: it's a recovery aid and can't lock anyone out.
+	// NOTE(audit-log): record this once the audit-log endpoint lands.
+	result, err := h.DB.Exec(context.Background(),
+		`UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1`,
+		targetID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+	if result.RowsAffected() == 0 {
+		return c.Status(404).JSON(fiber.Map{"error": "not found"})
+	}
+	return c.JSON(fiber.Map{"message": "2fa disabled"})
 }
 
 // @Summary      Get aggregate server statistics
@@ -266,20 +366,36 @@ func (h *AdminHandler) DeleteUser(c *fiber.Ctx) error {
 // @Router       /admin/stats [get]
 func (h *AdminHandler) GetStats(c *fiber.Ctx) error {
 	var stats struct {
-		TotalUsers        int64 `json:"totalUsers"`
-		ActiveUsers       int64 `json:"activeUsers"`
-		TotalFiles        int64 `json:"totalFiles"`
-		TotalStorageUsed  int64 `json:"totalStorageUsedBytes"`
-		TotalCollections  int64 `json:"totalCollections"`
-		StorageTotalBytes int64 `json:"storageTotalBytes"` // 0 = unknown (env var unset)
+		TotalUsers       int64 `json:"totalUsers"`
+		ActiveUsers      int64 `json:"activeUsers"`
+		TotalFiles       int64 `json:"totalFiles"`
+		TotalStorageUsed int64 `json:"totalStorageUsedBytes"` // DB sum — logical per-account usage
+		TotalCollections int64 `json:"totalCollections"`
+		// StorageTotalBytes is the storage backend's real total capacity.
+		// Resolved from the live SeaweedFS probe; falls back to the
+		// STORAGE_TOTAL_BYTES env var, then 0 ("unknown").
+		StorageTotalBytes int64 `json:"storageTotalBytes"`
+		// StorageBackendUsedBytes is the storage backend's real on-disk
+		// usage (from the SeaweedFS probe). 0 when no probe is available.
+		StorageBackendUsedBytes int64 `json:"storageBackendUsedBytes"`
 	}
 
-	h.DB.QueryRow(context.Background(), `SELECT COUNT(*) FROM users`).Scan(&stats.TotalUsers)
-	h.DB.QueryRow(context.Background(), `SELECT COUNT(*) FROM users WHERE is_active = true`).Scan(&stats.ActiveUsers)
-	h.DB.QueryRow(context.Background(), `SELECT COUNT(*) FROM files`).Scan(&stats.TotalFiles)
-	h.DB.QueryRow(context.Background(), `SELECT COALESCE(SUM(storage_used_bytes),0) FROM users`).Scan(&stats.TotalStorageUsed)
-	h.DB.QueryRow(context.Background(), `SELECT COUNT(*) FROM collections`).Scan(&stats.TotalCollections)
+	ctx := context.Background()
+	h.DB.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&stats.TotalUsers)
+	h.DB.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE is_active = true`).Scan(&stats.ActiveUsers)
+	h.DB.QueryRow(ctx, `SELECT COUNT(*) FROM files`).Scan(&stats.TotalFiles)
+	h.DB.QueryRow(ctx, `SELECT COALESCE(SUM(storage_used_bytes),0) FROM users`).Scan(&stats.TotalStorageUsed)
+	h.DB.QueryRow(ctx, `SELECT COUNT(*) FROM collections`).Scan(&stats.TotalCollections)
+
+	// Storage capacity: prefer the live SeaweedFS probe; fall back to the
+	// configured env var.
 	stats.StorageTotalBytes = h.StorageTotalBytes
+	if h.StorageProbe != nil {
+		if probed, ok := h.StorageProbe.Probe(ctx); ok {
+			stats.StorageTotalBytes = probed.TotalBytes
+			stats.StorageBackendUsedBytes = probed.UsedBytes
+		}
+	}
 
 	return c.JSON(stats)
 }

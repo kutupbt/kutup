@@ -39,9 +39,19 @@ S3_BUCKET=kutup-files
 # Must be the address users (and remote servers) reach this instance at
 SERVER_URL=https://kutup.example.com
 
-# Admin bootstrap: email:username:password triples, comma-separated
-# Accounts are created on first start; admins must complete setup on first login
-ADMIN_ACCOUNTS=admin@example.com:admin:<strong-admin-password>
+# Break-glass admin bootstrap: a single email:username:password triple.
+# Created on first start; the admin completes setup on first login.
+# This account is the protected break-glass admin — it can never be
+# demoted, disabled, or deleted. Promote further admins inside the app.
+ADMIN_ACCOUNT=admin@example.com:admin:<strong-admin-password>
+
+# SeaweedFS master — the admin dashboard probes it for real storage
+# capacity + usage. Default works for the bundled compose.
+SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
+
+# Optional fallback storage capacity (bytes) for the admin UI, used only
+# when the SeaweedFS probe is unavailable. Unset / 0 hides the readout.
+# STORAGE_TOTAL_BYTES=536870912000
 ```
 
 ---
@@ -250,7 +260,7 @@ kutup.example.com {
 - **Change all defaults** in `.env` before first start. The defaults are intentionally weak placeholders.
 - **Firewall:** Only expose ports 80 and 443. All other services (PostgreSQL, SeaweedFS) must not be reachable from the internet.
 - **JWT_SECRET:** Use `openssl rand -hex 64`. A weak secret allows forging authentication tokens.
-- **ADMIN_ACCOUNTS:** Remove or rotate the bootstrap admin credentials after first login.
+- **ADMIN_ACCOUNT:** Keep this set — it defines the protected break-glass admin (never demotable/deletable). Rotate its password after first login, but don't remove the variable, or the break-glass protection lapses.
 - **Quotas:** Set default storage quotas in the admin dashboard to prevent abuse.
 - **Updates:** Keep Docker images and the application updated.
 
