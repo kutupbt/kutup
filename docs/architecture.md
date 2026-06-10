@@ -139,7 +139,7 @@ Server A (sharer)                          Server B (recipient)
 
 ## Storage Layer
 
-Files are stored in **SeaweedFS** accessed via its S3-compatible API. The backend uses the AWS SDK v2 (`aws-sdk-go-v2`) configured to point at the internal SeaweedFS S3 gateway.
+Files are stored in **SeaweedFS** accessed via its S3-compatible API. The backend uses the Rust `aws-sdk-s3` crate configured to point at the internal SeaweedFS S3 gateway.
 
 - The backend acts as a **streaming proxy** — multipart uploads are spooled to a temp file and streamed to SeaweedFS; the tus.io path uploads ≥5 MiB S3 multipart chunks, so neither buffers the whole file in memory.
 - Each file is stored under a UUID key; the human-readable name exists only in `encryptedMetadata` which the server cannot read.

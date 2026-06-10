@@ -34,7 +34,7 @@ PR 14 wired all three. Kept here briefly for history; remove on the next roadmap
 - **Force-disable 2FA** — `DELETE /admin/users/:id/2fa` clears `totp_secret` + `totp_enabled`; wired into both admin UIs with a confirm.
 - **Break-glass admin** — the single `ADMIN_ACCOUNT` bootstrap account is immutable: it can't be demoted, disabled, or deleted (backend 403 guards + `isProtected` flag surfaced in the UI). A generic last-admin guard backstops when `ADMIN_ACCOUNT` is unset.
 
-Still **NOT** done — audit-log entries for these actions (`// TODO(audit-log)` markers are in `admin.go`); see the Audit log blocker below.
+Still **NOT** done — audit-log entries for these actions (`// TODO(audit-log)` markers are in `handlers/admin.rs`); see the Audit log blocker below.
 
 ### Admin · Password reset
 
@@ -48,7 +48,7 @@ This means there is **no simple "reset password" endpoint** — it's a design pr
 | What's needed | Where |
 |---|---|
 | Design: write up both flows + UI copy + the `is_first_login` temp-password-rotation carve-out | `docs/research/` — new note |
-| Backend: `POST /admin/users/:id/rotate-temp-password` — only valid while `is_first_login` | `backend/handlers/admin.go` |
+| Backend: `POST /admin/users/:id/rotate-temp-password` — only valid while `is_first_login` | `crates/kutup-server/src/handlers/admin.rs` |
 | Backend: `POST /admin/users/:id/wipe` — destructive reset for the unrecoverable path | same |
 | Frontend: surface both as distinct, clearly-labelled actions (not one "Reset password") | `AdminUserMenu` / `MobileAdminUserDetailPage` |
 | Email (optional, see SMTP below): deliver the rotated temp password if SMTP is configured | backend integration |
@@ -59,10 +59,10 @@ Both desktop and mobile Trash UI are already built and shipped (`frontend/src/ho
 
 | What's needed | Where |
 |---|---|
-| Backend: schema migration — `deleted_at TIMESTAMPTZ NULL` on `files` and `collections` | `backend/db/migrations/` |
-| Backend: change `DELETE /files/:id` + `DELETE /collections/:id` to soft-delete (write `deleted_at = NOW()`, skip from default queries) | `backend/handlers/files.go`, `collections.go` |
+| Backend: schema migration — `deleted_at TIMESTAMPTZ NULL` on `files` and `collections` | `crates/kutup-server/migrations/` |
+| Backend: change `DELETE /files/:id` + `DELETE /collections/:id` to soft-delete (write `deleted_at = NOW()`, skip from default queries) | `crates/kutup-server/src/handlers/{files,collections}.rs` |
 | Backend: `GET /trash` (per-user) + `POST /trash/:id/restore` + `DELETE /trash/:id` (permanent) + `DELETE /trash` (empty all) | new handler |
-| Backend: sweeper goroutine to purge items older than `TRASH_RETENTION_DAYS` (default 30) | `backend/sweepers/` or extending the existing uploads sweeper |
+| Backend: sweeper goroutine to purge items older than `TRASH_RETENTION_DAYS` (default 30) | `crates/kutup-server/src/jobs.rs` (alongside the existing sweepers) |
 | Backend: storage usage recalc on restore (trashed items still count against quota OR don't — pick one, document) | tied to handler |
 | Frontend: replace `useTrash`'s NOT_WIRED stubs with real fetches via React Query | `frontend/src/hooks/useTrash.ts` |
 | Frontend: change "Delete" actions to "Move to Trash" everywhere; permanent-delete only from Trash | Drive / mobile sheets / admin |
@@ -75,8 +75,8 @@ Admin actions today leave no record. Production self-hosters — especially in r
 
 | What's needed | Where |
 |---|---|
-| Backend: schema migration — `admin_audit_log(id, admin_user_id, action, target_user_id, payload_jsonb, occurred_at)` | `backend/db/migrations/` |
-| Backend: write a log row from every admin handler (`CreateUser`, `UpdateUser`, `DeleteUser`, `UpdateAdminSettings`, future reset/2fa/promote) | `backend/handlers/admin.go` |
+| Backend: schema migration — `admin_audit_log(id, admin_user_id, action, target_user_id, payload_jsonb, occurred_at)` | `crates/kutup-server/migrations/` |
+| Backend: write a log row from every admin handler (`CreateUser`, `UpdateUser`, `DeleteUser`, `UpdateAdminSettings`, future reset/2fa/promote) | `crates/kutup-server/src/handlers/admin.rs` |
 | Backend: `GET /admin/activity?limit=50&before=cursor` | new handler |
 | Frontend: unhide the Recent activity card on the desktop Admin Overview (today it's hidden with a footnote about the missing endpoint) | `frontend/src/components/admin/AdminOverviewTab.tsx` |
 | Frontend: similar card on mobile Admin Overview | `frontend/src/pages/mobile/account/admin/MobileAdminOverviewTab.tsx` |
@@ -87,11 +87,11 @@ Login + register + admin endpoints have no rate limit. A trivial script can hamm
 
 | What's needed | Where |
 |---|---|
-| Backend: middleware — token-bucket per IP for `/auth/*` (10 req / 5 min default) | `backend/middleware/` |
-| Backend: per-account "5 failed logins → lockout for 15 min" | `backend/handlers/auth.go` + DB column or in-memory `failed_logins` |
+| Backend: middleware — token-bucket per IP for `/auth/*` (10 req / 5 min default) | `crates/kutup-server/src/middleware.rs` + `ratelimit.rs` |
+| Backend: per-account "5 failed logins → lockout for 15 min" | `crates/kutup-server/src/handlers/auth.rs` + DB column or in-memory `failed_logins` |
 | Backend: separate stricter limit on admin endpoints | same middleware |
-| Config: env-var overrides (`AUTH_RATE_LIMIT_PER_5MIN`, `LOGIN_LOCKOUT_THRESHOLD`, etc.) | `backend/config/config.go` |
-| Test: integration test that exceeding the limit returns 429 | `backend/handlers/auth_test.go` |
+| Config: env-var overrides (`AUTH_RATE_LIMIT_PER_5MIN`, `LOGIN_LOCKOUT_THRESHOLD`, etc.) | `crates/kutup-server/src/config.rs` |
+| Test: integration test that exceeding the limit returns 429 | `crates/kutup-server/src/handlers/auth.rs` (tests) |
 
 ### Signed builds
 
@@ -116,7 +116,7 @@ The mobile UI shipped over PRs 2 → 13 changed a lot of user-visible behavior (
 | Re-read each `docs/*.md` and confirm it describes the current shipped UI | every file under `docs/` |
 | Update `docs/api.md` with the new `storageTotalBytes` field on `AdminStats` | `docs/api.md` |
 | Update `docs/self-hosting.md` to document the new `STORAGE_TOTAL_BYTES` env var | `docs/self-hosting.md` |
-| Re-generate `backend/docs/` Swagger via `swag init` after the admin-handler changes above | `backend/` |
+| Add per-path `#[utoipa::path]` operation annotations + an interactive Swagger UI (the spec is already served at `GET /api-docs/openapi.json`) | `crates/kutup-server/src/openapi.rs` + handlers |
 
 ---
 
@@ -133,8 +133,8 @@ Without SMTP, kutup can't:
 
 | What's needed | Where |
 |---|---|
-| Backend: SMTP client + env-var config (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`) | `backend/services/email.go` (new) |
-| Backend: template system for welcome / reset / share emails (HTML + plaintext) | `backend/templates/email/` |
+| Backend: SMTP client + env-var config (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`) | `crates/kutup-server/src/email.rs` (new) |
+| Backend: template system for welcome / reset / share emails (HTML + plaintext) | `crates/kutup-server/templates/email/` |
 | Frontend: re-enable the "Send welcome email" toggle in `AdminCreateUserDialog` (currently dropped) | `frontend/src/components/admin/AdminCreateUserDialog.tsx` |
 | Documentation: `docs/email.md` setup guide | new |
 
@@ -154,9 +154,9 @@ The desktop Admin Overview's System card is hidden today because the backend doe
 
 | What's needed | Where |
 |---|---|
-| Backend: extend `admin_settings` JSON to include `require_2fa_users`, `require_2fa_admins`, `default_quota_bytes`, `trash_retention_days` | `backend/handlers/admin.go` |
-| Backend: enforce `require_2fa_users` on next sign-in (force-set TOTP within N days or block) | `backend/handlers/auth.go` |
-| Backend: apply `default_quota_bytes` when creating new users | `backend/handlers/admin.go` `CreateUser` |
+| Backend: extend `admin_settings` JSON to include `require_2fa_users`, `require_2fa_admins`, `default_quota_bytes`, `trash_retention_days` | `crates/kutup-server/src/handlers/admin.rs` |
+| Backend: enforce `require_2fa_users` on next sign-in (force-set TOTP within N days or block) | `crates/kutup-server/src/handlers/auth.rs` |
+| Backend: apply `default_quota_bytes` when creating new users | `crates/kutup-server/src/handlers/admin.rs` |
 | Frontend: unhide the three cards in `AdminSettingsTab` | `frontend/src/components/admin/AdminSettingsTab.tsx`, mobile equivalent |
 
 ### Admin · Danger-zone actions
@@ -171,7 +171,7 @@ The design has "Re-index search" and "Purge soft-deleted files now" in a Setting
 
 ### SeaweedFS master auto-detect for storage capacity — ✅ SHIPPED (PR 14)
 
-PR 14 added `backend/services/storageprobe.go`: a cached (60s) probe that walks the SeaweedFS master topology (`SEAWEEDFS_MASTER_URL`) + each volume server's `/status`, returning real total + used + free disk bytes. `GET /admin/stats` now returns probe-sourced `storageTotalBytes` + `storageBackendUsedBytes`; the `STORAGE_TOTAL_BYTES` env var is the fallback when the probe is unavailable. Remove this entry on the next roadmap sweep.
+PR 14 added `crates/kutup-server/src/storage_probe.rs`: a cached (60s) probe that walks the SeaweedFS master topology (`SEAWEEDFS_MASTER_URL`) + each volume server's `/status`, returning real total + used + free disk bytes. `GET /admin/stats` now returns probe-sourced `storageTotalBytes` + `storageBackendUsedBytes`; the `STORAGE_TOTAL_BYTES` env var is the fallback when the probe is unavailable. Remove this entry on the next roadmap sweep.
 
 ### Mobile · Android Keychain
 
@@ -241,7 +241,7 @@ The mobile Encryption Keys page renders the recovery phrase. There's no "verify 
 
 ### Backup / restore CLI
 
-Self-hosters need an easy way to back up + restore the full encrypted dataset (DB + S3 blobs). The Go CLI already exists (`cmd/kutup/`); adding `kutup backup` / `kutup restore` subcommands is mostly tooling around `pg_dump` + `mc mirror`.
+Self-hosters need an easy way to back up + restore the full encrypted dataset (DB + S3 blobs). The Rust CLI exists (`crates/kutup-cli`); adding `kutup backup` / `kutup restore` subcommands is mostly tooling around `pg_dump` + `mc mirror`.
 
 ---
 
@@ -288,10 +288,10 @@ The Rust `kutup` CLI (branch `claude/go-rust-rewrite-G16zO`, `crates/kutup-cli`)
 ports the core upload/download paths but **defers the `.excalidraw` whiteboard
 asset steps** the Go CLI does:
 
-- **upload** (`cmd/upload.go:extractAndUploadWhiteboardAssets`) — encrypt each
+- **upload** (`crates/kutup-cli` upload path) — encrypt each
   embedded image as an asset blob, upload it, flip the element to
   `status:"saved"`, and commit a fresh snapshot.
-- **download** (`cmd/download.go:hydrateWhiteboardAssets`) — fetch separately
+- **download** (`crates/kutup-cli` download path) — fetch separately
   stored asset blobs and re-inline their `dataURL`s.
 
 Both are best-effort optimizations (regular files transfer correctly without
@@ -302,7 +302,7 @@ before declaring CLI parity.
 
 ### Go→Rust server rewrite · interactive Swagger UI
 
-The Rust `kutup-server` (branch `claude/go-rust-rewrite-G16zO`, `crates/kutup-server`)
+The Rust `kutup-server` (`crates/kutup-server`)
 generates its OpenAPI spec with `utoipa` and serves the machine-readable document at
 `GET /api-docs/openapi.json`. The Go server served an **interactive Swagger UI** at
 `/swagger/*` (`swaggo/fiber-swagger`). That route is not yet restored in Rust: the
@@ -310,8 +310,7 @@ generates its OpenAPI spec with `utoipa` and serves the machine-readable documen
 script, which breaks offline/sandboxed builds (and the rule that the server compiles
 offline). Restore it by vendoring the UI bundle (`SWAGGER_UI_OVERWRITE_FOLDER` or a
 `file://` `SWAGGER_UI_DOWNLOAD_URL`) so the build stays network-free, then mount it at
-`/swagger`. The OpenAPI JSON is unaffected and is what the slice-8 parity diff against
-`backend/docs/swagger.yaml` consumes.
+`/swagger`. The OpenAPI JSON is unaffected.
 
 ### Go→Rust server rewrite · per-path OpenAPI operations
 
@@ -320,11 +319,11 @@ scheme, and the response/DTO **schemas**, but not the per-path **operations** (t
 handlers had `// @Router`/`// @Summary` annotations consumed by `swaggo`; the Rust handlers
 have no `#[utoipa::path(...)]` annotations yet). So `GET /api-docs/openapi.json` lists
 schemas but an empty `paths`. Endpoint parity was instead verified **directly against the
-router**: a method+path diff of `crates/kutup-server/src/main.rs` against
-`backend/main.go` matches exactly (72 method+path combinations; only `GET /swagger/*` →
-`GET /api-docs/openapi.json` differs, per the entry above). To fully restore the spec, add
-`#[utoipa::path]` to each handler and register them in `ApiDoc::paths(...)`, then the
-slice-8 `paths` diff against `backend/docs/swagger.yaml` becomes meaningful.
+router**: before the cutover, a method+path diff of `crates/kutup-server/src/main.rs`
+against the Go `backend/main.go` matched exactly (72 method+path combinations; only
+`GET /swagger/*` → `GET /api-docs/openapi.json` differed, per the entry above). To fully
+restore the spec, add `#[utoipa::path]` to each handler and register them in
+`ApiDoc::paths(...)`, then `GET /api-docs/openapi.json` lists every operation.
 
 ---
 
