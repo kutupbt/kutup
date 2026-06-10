@@ -1,0 +1,94 @@
+# Root Cargo workspace — the kutup backend + CLI (Rust; the former Go `backend/` + `cmd/kutup/`
+# were rewritten here and removed).
+#
+# Crates (see docs/contributing.md and CLAUDE.md):
+#   crates/kutup-crypto  — shared E2EE primitives; the canonical mirror partner of
+#                          frontend/src/crypto/ (libsodium-wrappers). Used by the CLI
+#                          and (for the collab envelope) the server.
+#   crates/kutup-cli     — the `kutup` CLI         (binary `kutup`)
+#   crates/kutup-server  — the backend API binary  (binary `kutup-server`; Axum + sqlx)
+#
+# src-tauri/ is its own standalone crate and is intentionally NOT a member of this
+# workspace; `exclude` keeps `cargo build` there independent of this tree.
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+exclude = ["src-tauri"]
+
+[workspace.package]
+edition = "2021"
+license = "AGPL-3.0-only"
+rust-version = "1.82"
+
+# Shared dependency versions, pinned once for the whole workspace.
+[workspace.dependencies]
+# Crypto — libsodium-compatible primitives in pure Rust (no C toolchain), plus the
+# RustCrypto crates for the constructions dryoc does not expose (HKDF-SHA256, the
+# IETF XChaCha20-Poly1305 AEAD used for asset blobs, and Ed25519 frame signatures).
+dryoc = "0.7"
+hkdf = "0.12"
+sha2 = "0.10"
+chacha20poly1305 = "0.10"
+ed25519-dalek = "2"
+# BIP39 recovery-phrase encoding (English wordlist) — mirrors frontend/src/crypto/mnemonic.ts.
+bip39 = "2"
+
+# Common plumbing.
+thiserror = "2"
+base64 = "0.22"
+zeroize = "1"
+serde = { version = "1", features = ["derive"] }
+# preserve_order so json! output matches the Go CLI's printf key ordering.
+serde_json = { version = "1", features = ["preserve_order"] }
+
+# CLI (kutup-cli).
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "stream", "rustls-tls"] }
+anyhow = "1"
+dirs = "6"
+# Linux Secret Service needs libdbus (a C dep); we use native keychains on
+# macOS/Windows and a chmod-600 file fallback on Linux (see session.rs).
+keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }
+redb = "2"
+rpassword = "7"
+rand = "0.8"
+indicatif = "0.17"
+qrcode = "0.14"
+time = { version = "0.3", features = ["formatting", "serde", "serde-well-known"] }
+notify = "6"
+url = "2"
+
+# Server (kutup-server).
+axum = { version = "0.7", features = ["multipart", "ws"] }
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "migrate", "uuid", "time"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "limit", "catch-panic", "normalize-path"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+# S3 (SeaweedFS) — replaces aws-sdk-go-v2.
+aws-config = "1"
+aws-sdk-s3 = "1"
+aws-credential-types = "1"
+# Stream S3 object bodies into Axum responses, and buffer multipart uploads to disk.
+tokio-util = { version = "0.7", features = ["io"] }
+# Split the collab WebSocket into independent read/write halves.
+futures-util = { version = "0.3", default-features = false }
+tempfile = "3"
+# OpenAPI — replaces swaggo/swag. The interactive swagger-ui crate downloads its UI
+# bundle from GitHub at build time, which breaks offline/sandboxed builds; we generate
+# the spec with utoipa and serve the raw JSON instead (see docs/roadmap.md).
+utoipa = { version = "5", features = ["axum_extras", "time", "uuid", "preserve_order"] }
+# Auth + 2FA (server slice 2).
+jsonwebtoken = "9"
+bcrypt = "0.16"
+# otpauth = get_url() (the QR URI Go returns); gen_secret = Secret::generate_secret().
+totp-rs = { version = "5", default-features = false, features = ["otpauth", "gen_secret"] }
+
+# Dev / test.
+hex = "0.4"
+
+[profile.release]
+# Match the security-conscious, debuggable posture; tune later for the server/CLI.
+opt-level = 2

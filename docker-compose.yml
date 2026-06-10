@@ -66,9 +66,11 @@ services:
       - seaweedfs-s3
 
   backend:
+    # The Rust kutup-server (Axum). Build context is the workspace root so the Cargo
+    # workspace + the embedded migrations (crates/kutup-server/migrations) are available.
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: Dockerfile.server
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-kutup}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kutup}?sslmode=disable
@@ -79,13 +81,12 @@ services:
       S3_BUCKET: ${S3_BUCKET:-kutup-files}
       S3_REGION: ${S3_REGION:-us-east-1}
       APP_ENV: ${APP_ENV:-production}
-      # Single break-glass admin (email:username:password) — created on
-      # first boot, can never be demoted/disabled/deleted.
+      # Single break-glass admin (email:username:password) — created on first boot; it can
+      # never be demoted/disabled/deleted via the API.
       ADMIN_ACCOUNT: ${ADMIN_ACCOUNT:-}
-      # SeaweedFS master — probed for real storage capacity + usage.
+      # SeaweedFS master — probed for real storage capacity + usage (admin dashboard).
       SEAWEEDFS_MASTER_URL: ${SEAWEEDFS_MASTER_URL:-http://seaweedfs-master:9333}
-      # Fallback capacity for the admin Settings card when the probe is
-      # unavailable. 0 / unset → capacity readout hidden.
+      # Fallback capacity for the admin Settings card when the probe is unavailable. 0 → hidden.
       STORAGE_TOTAL_BYTES: ${STORAGE_TOTAL_BYTES:-0}
     depends_on:
       postgres:
@@ -103,8 +104,8 @@ services:
     image: nginx:alpine
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      - "38080:80"
+      - "38443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro

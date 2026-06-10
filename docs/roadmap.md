@@ -282,6 +282,50 @@ Desktop OnlyOffice was stripped from the Tauri build to avoid the OOM on `tauri:
 
 The mobile share sheet doesn't yet expose federated share flows (cross-server) — only public link sharing.
 
+### Go→Rust CLI rewrite · whiteboard asset extraction/hydration
+
+The Rust `kutup` CLI (branch `claude/go-rust-rewrite-G16zO`, `crates/kutup-cli`)
+ports the core upload/download paths but **defers the `.excalidraw` whiteboard
+asset steps** the Go CLI does:
+
+- **upload** (`cmd/upload.go:extractAndUploadWhiteboardAssets`) — encrypt each
+  embedded image as an asset blob, upload it, flip the element to
+  `status:"saved"`, and commit a fresh snapshot.
+- **download** (`cmd/download.go:hydrateWhiteboardAssets`) — fetch separately
+  stored asset blobs and re-inline their `dataURL`s.
+
+Both are best-effort optimizations (regular files transfer correctly without
+them; the web re-uploads/hydrates assets on first open). They need the asset +
+snapshot API surface ported (`UploadAsset`, `DownloadAsset`, `UploadSnapshotBlob`,
+`RecordSnapshot`), which lands with the CLI's collab/versions slice. Port these
+before declaring CLI parity.
+
+### Go→Rust server rewrite · interactive Swagger UI
+
+The Rust `kutup-server` (branch `claude/go-rust-rewrite-G16zO`, `crates/kutup-server`)
+generates its OpenAPI spec with `utoipa` and serves the machine-readable document at
+`GET /api-docs/openapi.json`. The Go server served an **interactive Swagger UI** at
+`/swagger/*` (`swaggo/fiber-swagger`). That route is not yet restored in Rust: the
+`utoipa-swagger-ui` crate downloads the Swagger UI bundle from GitHub in its build
+script, which breaks offline/sandboxed builds (and the rule that the server compiles
+offline). Restore it by vendoring the UI bundle (`SWAGGER_UI_OVERWRITE_FOLDER` or a
+`file://` `SWAGGER_UI_DOWNLOAD_URL`) so the build stays network-free, then mount it at
+`/swagger`. The OpenAPI JSON is unaffected and is what the slice-8 parity diff against
+`backend/docs/swagger.yaml` consumes.
+
+### Go→Rust server rewrite · per-path OpenAPI operations
+
+The Rust `utoipa` `ApiDoc` currently carries the `info` block, the `BearerAuth` security
+scheme, and the response/DTO **schemas**, but not the per-path **operations** (the Go
+handlers had `// @Router`/`// @Summary` annotations consumed by `swaggo`; the Rust handlers
+have no `#[utoipa::path(...)]` annotations yet). So `GET /api-docs/openapi.json` lists
+schemas but an empty `paths`. Endpoint parity was instead verified **directly against the
+router**: a method+path diff of `crates/kutup-server/src/main.rs` against
+`backend/main.go` matches exactly (72 method+path combinations; only `GET /swagger/*` →
+`GET /api-docs/openapi.json` differs, per the entry above). To fully restore the spec, add
+`#[utoipa::path]` to each handler and register them in `ApiDoc::paths(...)`, then the
+slice-8 `paths` diff against `backend/docs/swagger.yaml` becomes meaningful.
+
 ---
 
 ## Research / open questions

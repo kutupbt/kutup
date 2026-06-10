@@ -6,7 +6,7 @@
 
 **End-to-end encrypted, self-hosted Google Drive — with real-time collab for notes, office docs, and whiteboards.**
 
-![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go)
+![Rust](https://img.shields.io/badge/Rust-1.82-000000?logo=rust)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.4-3178C6?logo=typescript)
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)
@@ -85,29 +85,27 @@ Optional: `./install-onlyoffice.sh` enables `.docx` / `.xlsx` / `.pptx` editing 
 
 ## CLI
 
-`kutup` is a Cobra-based CLI for the same E2EE primitives as the web — login, ls, upload, download, sync, share, versions, devices, 2fa, public-link consumption, file rename. All operations are end-to-end encrypted in your shell; the server only ever sees ciphertext.
+`kutup` is a Rust CLI for the same E2EE primitives as the web — register, login, ls, upload, download, sync, share, versions, devices, 2fa, public-link consumption, file rename. All operations are end-to-end encrypted in your shell; the server only ever sees ciphertext.
 
-**Install** (Go ≥ 1.22 + `$GOPATH/bin` on `$PATH`):
-
-```sh
-go install github.com/kutupbulut/kutup/cmd/kutup@latest
-```
-
-Or build from source:
+**Build from source** (Rust ≥ 1.82):
 
 ```sh
 git clone https://github.com/kutupbulut/kutup.git
-cd kutup/cmd/kutup
-go build -o ~/.local/bin/kutup .
+cd kutup
+cargo build --release -p kutup-cli   # → target/release/kutup
+install -m755 target/release/kutup ~/.local/bin/kutup
 ```
 
-Tagged release binaries (Linux / macOS / Windows; amd64 + arm64) are published via [goreleaser](cmd/kutup/.goreleaser.yaml) on GitHub Releases.
+Tagged release binaries (Linux / macOS / Windows; amd64 + arm64) are published on GitHub Releases (see [`.github/workflows/release.yml`](.github/workflows/release.yml)).
 
 ### Common workflows
 
 ```sh
-# Login (interactive password + recovery phrase prompt for first device).
-kutup login --server https://your.kutup.host
+# Create an account (client-side crypto; prints a 24-word recovery phrase once).
+kutup register --server https://your.kutup.host --email you@example.com --username you
+
+# Login (interactive password prompt; password can also come from KUTUP_PASSWORD).
+kutup login --server https://your.kutup.host --email you@example.com
 
 # List your folders + files at the Drive root.
 kutup ls
@@ -146,7 +144,7 @@ kutup --help
 kutup version
 ```
 
-The **>2 GB** path is the standout. Browser File API + Web Crypto streaming work in theory but practically wedge the tab at multi-GB sizes; the CLI uses `golang.org/x/crypto/chacha20poly1305` over Go's `io.Reader`, so it streams arbitrarily large files at constant ~5 MB memory.
+The **>2 GB** path is the standout. Browser File API + Web Crypto streaming work in theory but practically wedge the tab at multi-GB sizes; the CLI streams `crypto_secretstream` (XChaCha20-Poly1305, 5 MB chunks) over a Rust reader, so it handles arbitrarily large files at constant ~5 MB memory.
 
 ---
 
@@ -158,7 +156,7 @@ Every collab frame is encrypted in the browser, signed with a per-device Ed25519
 sequenceDiagram
     autonumber
     participant A as Browser A
-    participant R as Go relay<br/>(ciphertext only)
+    participant R as server relay<br/>(ciphertext only)
     participant B as Browser B
 
     A->>A: AEAD encrypt + sign
@@ -178,13 +176,14 @@ For the full picture (key hierarchy, login flow, federation model, storage layer
 
 | Layer | Technology |
 |-------|------------|
-| Backend | Go 1.25, [Fiber v2](https://gofiber.io/) (HTTP + WebSocket), [pgx v5](https://github.com/jackc/pgx), PostgreSQL 16 |
+| Backend | Rust, [Axum 0.7](https://github.com/tokio-rs/axum) (HTTP + WebSocket), [sqlx](https://github.com/launchbadge/sqlx) (Postgres), [aws-sdk-s3](https://crates.io/crates/aws-sdk-s3), PostgreSQL 16 |
+| CLI / crypto | Rust — `dryoc` + RustCrypto (Argon2id, XChaCha20-Poly1305 AEAD, Ed25519, NaCl box / secretbox / secretstream); `clap` CLI |
 | Frontend | React 18, TypeScript 5.4, Vite 8, [Redux Toolkit 2](https://redux-toolkit.js.org/), [TailwindCSS](https://tailwindcss.com/) + [Radix UI](https://www.radix-ui.com/) |
-| Crypto | [libsodium-wrappers-sumo](https://github.com/jedisct1/libsodium.js) — Argon2id, XChaCha20-Poly1305 AEAD, Ed25519, NaCl box / secretbox / secretstream |
-| Realtime collab | Yjs 13 + `y-codemirror.next` (notes); OnlyOffice + `x2t` WASM (office); `@excalidraw/excalidraw` (whiteboards); custom Go relay with per-frame AEAD envelopes |
+| Frontend crypto | [libsodium-wrappers-sumo](https://github.com/jedisct1/libsodium.js) — Argon2id, XChaCha20-Poly1305 AEAD, Ed25519, NaCl box / secretbox / secretstream |
+| Realtime collab | Yjs 13 + `y-codemirror.next` (notes); OnlyOffice + `x2t` WASM (office); `@excalidraw/excalidraw` (whiteboards); a server relay with per-frame AEAD envelopes |
 | Storage | [SeaweedFS](https://github.com/seaweedfs/seaweedfs) (S3-compatible) |
 | Infrastructure | Docker Compose, Nginx (TLS termination + static asset serving) |
-| Testing | Playwright (e2e), Go `testing` (unit + integration), Vitest (frontend unit) |
+| Testing | Playwright (e2e), `cargo test` (Rust unit + crypto vectors), Vitest (frontend unit) |
 
 ---
 

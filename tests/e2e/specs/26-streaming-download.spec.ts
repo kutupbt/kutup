@@ -40,7 +40,15 @@ test.describe('streaming download', () => {
 
     const page = await signInOrBootstrap(context)
     await page.waitForURL(/\/drive/, { timeout: 30_000 })
-    await expect(page.getByRole('heading', { name: /folders/i })).toBeVisible({ timeout: 30_000 })
+    // Drive is ready once the My Files listing renders: a Folders/Files section
+    // heading (populated drive) or the empty-state dropzone. The old /folders/i-only
+    // proxy hung forever on a folder-less account (drive loaded, but no Folders heading).
+    await expect(
+      page
+        .getByRole('heading', { name: /folders|files/i })
+        .or(page.getByText(/drop files here/i))
+        .first(),
+    ).toBeVisible({ timeout: 30_000 })
 
     // Build a deterministic 12 MB buffer + its sha256 expectation.
     const original = Buffer.alloc(FILE_BYTES)

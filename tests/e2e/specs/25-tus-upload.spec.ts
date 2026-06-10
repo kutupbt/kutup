@@ -40,7 +40,15 @@ test.describe('tus.io streaming upload', () => {
     // upload handler bails silently if currentFolder.collectionKey is
     // not yet decrypted. The "Folders" heading appears once the listing
     // is in.
-    await expect(page.getByRole('heading', { name: /folders/i })).toBeVisible({ timeout: 30_000 })
+    // Drive is ready once the My Files listing renders: a Folders/Files section
+    // heading (populated drive) or the empty-state dropzone. The old /folders/i-only
+    // proxy hung forever on a folder-less account (drive loaded, but no Folders heading).
+    await expect(
+      page
+        .getByRole('heading', { name: /folders|files/i })
+        .or(page.getByText(/drop files here/i))
+        .first(),
+    ).toBeVisible({ timeout: 30_000 })
 
     // Track which upload endpoint(s) get hit. We want the new tus path
     // (/api/uploads) and explicitly *not* the legacy multipart

@@ -59,7 +59,10 @@ export default function ShareDialog({ collection, onOpenChange, onShare }: Props
 
   const recipient = form.watch('recipient')
   const canUpload = form.watch('canUpload')
-  const federated = isFederated(recipient)
+  // Only a *hint*: the share resolves local-first (see Drive.handleShare), so a
+  // `user@another-server` shows the "an invite link will be generated" note, but
+  // a local account always shares directly even if its email has a domain.
+  const looksRemote = isFederated(recipient)
 
   async function onSubmit(data: FormData) {
     const quotaBytes = data.canUpload && data.quotaGB.trim()
@@ -98,7 +101,7 @@ export default function ShareDialog({ collection, onOpenChange, onShare }: Props
                       {...field}
                     />
                   </FormControl>
-                  {federated && (
+                  {looksRemote && (
                     <div className="flex items-center gap-1.5 text-xs text-primary mt-1">
                       <Globe className="h-3.5 w-3.5" />
                       {t('dialogs.share.federatedNote')}
@@ -177,7 +180,7 @@ export default function ShareDialog({ collection, onOpenChange, onShare }: Props
                 {t('dialogs.share.cancel')}
               </Button>
               <Button type="submit" disabled={form.formState.isSubmitting}>
-                {federated ? t('dialogs.share.shareAndInvite') : t('dialogs.share.share')}
+                {t('dialogs.share.share')}
               </Button>
             </DialogFooter>
           </form>

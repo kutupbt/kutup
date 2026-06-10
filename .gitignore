@@ -17,3 +17,7 @@ test-results/
 # src-tauri/.gitignore.
 node_modules/
 package-lock.json
+
+# Rust workspace (Go→Rust rewrite: crates/ + root Cargo workspace).
+# src-tauri keeps its own target dir via src-tauri/.gitignore.
+/target/

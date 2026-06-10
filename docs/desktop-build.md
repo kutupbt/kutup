@@ -26,7 +26,7 @@ For the **iOS / Android** apps, see [`mobile-build.md`](mobile-build.md).
 
 The bundled executable is named **`kutup-client`** (`mainBinaryName` in
 `tauri.conf.json`), not `kutup` — the plain `kutup` name belongs to the CLI
-(`cmd/kutup/`), and a `.deb` shipping `/usr/bin/kutup` would clash with it.
+(`crates/kutup-cli`), and a `.deb` shipping `/usr/bin/kutup` would clash with it.
 The Cargo crate is still `kutup`; only the produced binary is renamed. The
 bundle identifier is **`dev.kutup.client`** — applies to desktop + iOS +
 Android (one ID for the whole product); it's also the OS-keychain service

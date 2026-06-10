@@ -1,0 +1,16 @@
+# Build context for Dockerfile.server is the repo root, but the image only needs the Cargo
+# workspace (Cargo.toml, Cargo.lock, crates/). Everything else is excluded to keep the
+# context small/fast — most importantly the multi-GB target/ dir.
+target/
+.git/
+**/node_modules/
+frontend/
+src-tauri/
+backend/
+cmd/
+nginx/
+docs/
+**/*.md
+.env
+.env.*
+**/target/

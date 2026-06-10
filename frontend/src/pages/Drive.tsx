@@ -776,7 +776,40 @@ export default function Drive() {
 
   async function handleShare(params: { recipient: string; canUpload: boolean; canDelete: boolean; quotaBytes: number | null; isFederated: boolean }) {
     if (!shareTarget?.collectionKey) return
-    if (params.isFederated) {
+    try {
+      // Prefer a *local* share: if an account with this email exists on THIS
+      // server, seal the collection key to their public key and share directly.
+      // We can't tell a local email from a remote `user@other-server` by string
+      // alone (both look like emails), so probe the local directory first and
+      // only fall back to a federated invite when there's no local match.
+      let local: { userId: string; publicKey: string } | null = null
+      try {
+        const res = await api.get(`/users/by-email/${encodeURIComponent(params.recipient)}`)
+        local = res.data
+      } catch (err) {
+        const status = (err as { response?: { status?: number } })?.response?.status
+        if (status !== 404) throw err
+      }
+
+      if (local) {
+        const sealedKey = await wrapKeyForRecipient(shareTarget.collectionKey, fromBase64(local.publicKey))
+        await api.post(`/collections/${shareTarget.id}/share`, {
+          recipientUserId: local.userId,
+          encryptedCollectionKey: toBase64(sealedKey),
+          canUpload: params.canUpload,
+          canDelete: params.canDelete,
+          uploadQuotaBytes: params.canUpload && params.quotaBytes ? params.quotaBytes : null,
+        })
+        toast.success(t('drive.toast.folderShared'))
+        return
+      }
+
+      // No local account — treat as a federated (cross-server) share. The
+      // recipient must be `username@server`; the server hosts the recipient.
+      if (!params.recipient.includes('@')) {
+        toast.error(t('drive.toast.shareUserNotFound'))
+        return
+      }
       const at = params.recipient.lastIndexOf('@')
       const username = params.recipient.slice(0, at)
       const server = params.recipient.slice(at + 1)
@@ -792,17 +825,9 @@ export default function Drive() {
         uploadQuotaBytes: params.canUpload && params.quotaBytes ? params.quotaBytes : null,
       })
       setFedInviteUrl(res.data.inviteUrl)
-    } else {
-      const res = await api.get(`/users/by-email/${encodeURIComponent(params.recipient)}`)
-      const sealedKey = await wrapKeyForRecipient(shareTarget.collectionKey, fromBase64(res.data.publicKey))
-      await api.post(`/collections/${shareTarget.id}/share`, {
-        recipientUserId: res.data.userId,
-        encryptedCollectionKey: toBase64(sealedKey),
-        canUpload: params.canUpload,
-        canDelete: params.canDelete,
-        uploadQuotaBytes: params.canUpload && params.quotaBytes ? params.quotaBytes : null,
-      })
-      toast.success(t('drive.toast.folderShared'))
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status
+      toast.error(status === 404 ? t('drive.toast.shareUserNotFound') : t('drive.toast.shareFailed'))
     }
   }
 
