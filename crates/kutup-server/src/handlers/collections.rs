@@ -207,23 +207,73 @@ pub async fn get_collection(
     .fetch_optional(&state.pool)
     .await?;
 
-    let Some((cid, owner, en, nn, ek, ekn, parent, color)) = row else {
+    if let Some((cid, owner, en, nn, ek, ekn, parent, color)) = row {
+        return Ok(Json(CollectionRow {
+            id: cid.to_string(),
+            owner_user_id: owner.to_string(),
+            encrypted_name: en,
+            name_nonce: nn,
+            encrypted_key: ek,
+            encrypted_key_nonce: ekn,
+            parent_collection_id: parent.map(|p| p.to_string()),
+            color,
+            can_upload: None,
+            can_delete: None,
+            upload_quota_bytes: None,
+            upload_used_bytes: None,
+            is_shared: false,
+        })
+        .into_response());
+    }
+
+    // Not the owner — fall back to a collection shared *with* this user, returning the
+    // recipient-specific sealed key (so the file editor can open a shared note/doc). The
+    // owner-only Go GetCollection 404'd here, which left shared-file open broken; serving the
+    // share view matches ListCollections + the frontend's FileEditorPage.
+    type SharedRow = (
+        Uuid,
+        String,
+        String,
+        String,
+        Option<Uuid>,
+        Option<String>,
+        String,
+        bool,
+        bool,
+        Option<i64>,
+    );
+    let shared: Option<SharedRow> = sqlx::query_as(
+        r#"SELECT c.owner_user_id, c.encrypted_name, c.name_nonce, c.encrypted_key_nonce,
+                  c.parent_collection_id, c.color,
+                  cs.encrypted_collection_key, cs.can_upload, cs.can_delete, cs.upload_quota_bytes
+           FROM collections c
+           JOIN collection_shares cs ON cs.collection_id = c.id
+           WHERE c.id = $1 AND cs.recipient_user_id = $2"#,
+    )
+    .bind(coll_id)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let Some((owner, en, nn, ekn, parent, color, shared_key, can_upload, can_delete, quota)) =
+        shared
+    else {
         return Err(AppError::not_found("not found"));
     };
     Ok(Json(CollectionRow {
-        id: cid.to_string(),
+        id: coll_id.to_string(),
         owner_user_id: owner.to_string(),
         encrypted_name: en,
         name_nonce: nn,
-        encrypted_key: ek,
+        encrypted_key: shared_key, // recipient-specific key overrides the owner's
         encrypted_key_nonce: ekn,
         parent_collection_id: parent.map(|p| p.to_string()),
         color,
-        can_upload: None,
-        can_delete: None,
-        upload_quota_bytes: None,
+        can_upload: Some(can_upload),
+        can_delete: Some(can_delete),
+        upload_quota_bytes: quota,
         upload_used_bytes: None,
-        is_shared: false,
+        is_shared: true,
     })
     .into_response())
 }
