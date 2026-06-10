@@ -1,5 +1,5 @@
 import { forwardRef } from 'react'
-import { Search, Upload as UploadIcon, Plus, HelpCircle, X } from 'lucide-react'
+import { Search, Upload as UploadIcon, FolderUp, Plus, HelpCircle, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -71,12 +71,18 @@ const DriveTopBar = forwardRef<HTMLInputElement, DriveTopBarProps>(function Driv
             {t('common.upload')}
           </Button>
         )}
-        {/* Upload-folder is reachable via drag-and-drop on the file area
-            (Drive.tsx) and via the file picker; the separate top-bar button
-            was redundant alongside "Upload" and got removed. The
-            `onUploadFolder` prop is retained on the type for possible future
-            re-introduction (e.g. a "More" menu) but currently no UI renders
-            it. */}
+        {canUpload && onUploadFolder && (
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={onUploadFolder}
+            data-testid="upload-folder-button"
+            aria-label={t('common.uploadFolderAriaTitle')}
+            title={t('common.uploadFolderAriaTitle')}
+          >
+            <FolderUp className="h-4 w-4" />
+          </Button>
+        )}
 
         <DropdownMenu open={newMenuOpen} onOpenChange={onNewMenuOpenChange}>
           <DropdownMenuTrigger asChild>

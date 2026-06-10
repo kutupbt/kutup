@@ -85,17 +85,17 @@ test.describe('office xlsx — two-tab sync (happy path)', () => {
       tabA.keyboard.press('Enter'),
       tabB.keyboard.press('Enter'),
     ])
-    await tabA.waitForTimeout(5_000)
+    // Poll the (continuously-appended) collab logs until both directions have
+    // synced, rather than a fixed sleep + one-shot assert — concurrent
+    // OnlyOffice saveChanges timing is jittery, so a hard 5 s wait was flaky.
+    const outbound = (logs: string[]) =>
+      logs.filter((l) => l.includes('outbound saveChanges') && /raw=([1-9]\d*)/.test(l)).length
+    const applied = (logs: string[]) => logs.filter((l) => l.includes('applying remote op')).length
 
-    const outA = aLogs.filter((l) => l.includes('outbound saveChanges') && /raw=([1-9]\d*)/.test(l)).length
-    const outB = bLogs.filter((l) => l.includes('outbound saveChanges') && /raw=([1-9]\d*)/.test(l)).length
-    const appA = aLogs.filter((l) => l.includes('applying remote op')).length
-    const appB = bLogs.filter((l) => l.includes('applying remote op')).length
-
-    expect(outA, 'tab A outbound').toBeGreaterThan(0)
-    expect(outB, 'tab B outbound').toBeGreaterThan(0)
-    expect(appA, 'tab A applied B\'s op').toBeGreaterThan(0)
-    expect(appB, 'tab B applied A\'s op').toBeGreaterThan(0)
+    await expect.poll(() => outbound(aLogs), { timeout: 30_000, message: 'tab A outbound' }).toBeGreaterThan(0)
+    await expect.poll(() => outbound(bLogs), { timeout: 30_000, message: 'tab B outbound' }).toBeGreaterThan(0)
+    await expect.poll(() => applied(aLogs), { timeout: 30_000, message: "tab A applied B's op" }).toBeGreaterThan(0)
+    await expect.poll(() => applied(bLogs), { timeout: 30_000, message: "tab B applied A's op" }).toBeGreaterThan(0)
   })
 
   // Reproduces the user-reported xlsx stall: A types and B receives,
