@@ -85,7 +85,10 @@ pub struct RecordSnapshotRequest {
     seq_at_snapshot: i64,
     doc_key_id: i64,
     size_bytes: i64,
-    label: String,
+    /// `Option` so an explicit JSON `null` (the client sends `label: null` on a plain
+    /// snapshot) deserializes — Go's `BodyParser` mapped null→"" but serde errors on
+    /// `null → String`. `None`/empty both become SQL NULL via the `NULLIF($8,'')` below.
+    label: Option<String>,
     keep_forever: bool,
 }
 
@@ -300,7 +303,7 @@ pub async fn record(
     .bind(req.doc_key_id)
     .bind(user_id)
     .bind(req.size_bytes)
-    .bind(&req.label)
+    .bind(req.label.as_deref().unwrap_or(""))
     .bind(req.keep_forever)
     .fetch_one(&mut *tx)
     .await?;
