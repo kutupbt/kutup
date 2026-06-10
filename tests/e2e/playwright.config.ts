@@ -1,8 +1,11 @@
 import { defineConfig, devices } from '@playwright/test'
 
-// kutup e2e: runs against the local stack at https://localhost:38443.
+// kutup e2e: runs against the local stack at https://localhost:38443
+// (override with E2E_BASE_URL when the stack is on a different port).
 // Tests assume the stack is already up; the wipe-stack fixture (bin/reset)
 // is invoked manually between specs that need a fresh DB.
+const BASE_URL = process.env.E2E_BASE_URL ?? 'https://localhost:38443'
+
 export default defineConfig({
   testDir: './specs',
   testMatch: '**/*.spec.ts',
@@ -16,7 +19,7 @@ export default defineConfig({
   timeout: 120_000,
   expect: { timeout: 15_000 },
   use: {
-    baseURL: 'https://localhost:38443',
+    baseURL: BASE_URL,
     ignoreHTTPSErrors: true,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',

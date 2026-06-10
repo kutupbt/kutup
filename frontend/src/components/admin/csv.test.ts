@@ -13,6 +13,7 @@ function makeUser(overrides: Partial<UserRow> = {}): UserRow {
     isActive: true,
     totpEnabled: true,
     createdAt: '2026-04-22T09:00:00Z',
+    isProtected: false,
     ...overrides,
   }
 }

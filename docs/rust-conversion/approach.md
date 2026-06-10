@@ -50,6 +50,6 @@ cargo fmt
   `github.com/kutupbulut/kutup/cmd/kutup`.
 - Backend env vars: `DATABASE_URL`, `JWT_SECRET` (≥32 chars), `S3_ENDPOINT` /
   `S3_ACCESS_KEY` / `S3_SECRET_KEY` / `S3_BUCKET` / `S3_REGION`, `APP_ENV`,
-  `ADMIN_ACCOUNTS`, `SERVER_URL`, `ALLOWED_ORIGINS`, `STORAGE_TOTAL_BYTES`.
+  `ADMIN_ACCOUNT`, `SERVER_URL`, `ALLOWED_ORIGINS`, `STORAGE_TOTAL_BYTES`.
 - Backend listens on `:3000`; nginx fronts it; the dev stack is at
   `https://localhost:38443` (self-signed cert).

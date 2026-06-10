@@ -19,6 +19,7 @@ mod openapi;
 mod ratelimit;
 mod ssrf;
 mod storage;
+mod storage_probe;
 mod totp;
 
 use std::net::SocketAddr;
@@ -57,6 +58,9 @@ pub struct AppState {
     pub storage: storage::StorageService,
     /// In-memory collab-room registry (one room per fileId) — mirrors the Go `Hub`.
     pub hub: Arc<hub::Hub>,
+    /// Live SeaweedFS capacity probe for the admin dashboard; `None` disables it (the admin
+    /// stats then fall back to `config.storage_total_bytes`).
+    pub storage_probe: Option<Arc<storage_probe::StorageProbe>>,
 }
 
 #[tokio::main]
@@ -91,8 +95,8 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(code);
     }
 
-    // Seed admin accounts from ADMIN_ACCOUNTS — mirrors main.bootstrapAdmins.
-    bootstrap_admins(&pool, &config.admin_accounts).await;
+    // Seed the break-glass admin account from ADMIN_ACCOUNT — mirrors main.bootstrapAdmin.
+    bootstrap_admin(&pool, &config.admin_account).await;
 
     // Periodic pruning of the rate-limit + TOTP-block maps (replaces the Go init goroutines).
     ratelimit::spawn_cleanup();
@@ -101,11 +105,16 @@ async fn main() -> anyhow::Result<()> {
     // mirrors the three `go x.Run(...)` calls in main.go.
     jobs::spawn_all(pool.clone(), storage.clone());
 
+    // Live SeaweedFS capacity probe (admin dashboard) — None when SEAWEEDFS_MASTER_URL is empty.
+    let storage_probe =
+        storage_probe::StorageProbe::new(&config.seaweedfs_master_url).map(Arc::new);
+
     let state = AppState {
         pool,
         config: Arc::new(config),
         storage,
         hub: Arc::new(hub::Hub::new()),
+        storage_probe,
     };
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
@@ -128,63 +137,65 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Seeds admin accounts from `ADMIN_ACCOUNTS` (comma-separated `email:username:password`).
-/// Admins must complete first-login setup to establish their E2EE key material — mirrors
-/// `main.bootstrapAdmins`.
-async fn bootstrap_admins(pool: &PgPool, accounts_env: &str) {
-    if accounts_env.is_empty() {
+/// Seeds the single break-glass admin account from `ADMIN_ACCOUNT` (`email:username:password`).
+/// This account is the protected break-glass admin (never demotable/disableable/deletable; see
+/// the guards in `handlers/admin.rs`); other admins are promoted in-app. The admin must complete
+/// first-login setup to establish their E2EE key material — mirrors `main.bootstrapAdmin`.
+async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
+    if account_env.is_empty() {
         return;
     }
-    for entry in accounts_env.split(',') {
-        let parts: Vec<&str> = entry.trim().splitn(3, ':').collect();
-        if parts.len() != 3 {
-            tracing::warn!(
-                "bootstrapAdmins: skipping malformed entry (expected email:username:password)"
-            );
-            continue;
-        }
-        let (email, username, password) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
-        if email.is_empty() || username.is_empty() || password.is_empty() {
-            continue;
-        }
+    let parts: Vec<&str> = account_env.trim().splitn(3, ':').collect();
+    if parts.len() != 3 {
+        tracing::warn!(
+            "bootstrapAdmin: malformed ADMIN_ACCOUNT (expected email:username:password)"
+        );
+        return;
+    }
+    let (email, username, password) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
+    if email.is_empty() || username.is_empty() || password.is_empty() {
+        tracing::warn!("bootstrapAdmin: ADMIN_ACCOUNT has an empty field — skipping");
+        return;
+    }
 
-        let exists: Option<i64> = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE email=$1")
-            .bind(email)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-        if exists.unwrap_or(0) > 0 {
-            continue;
-        }
-
-        let hash = match bcrypt::hash(password, 10) {
-            Ok(h) => h,
-            Err(e) => {
-                tracing::warn!("bootstrapAdmins: bcrypt error for {email}: {e}");
-                continue;
-            }
-        };
-
-        let res = sqlx::query(
-            r#"INSERT INTO users (
-                email, username, login_key_hash,
-                encrypted_master_key, master_key_nonce,
-                encrypted_recovery_key, recovery_key_nonce,
-                encrypted_private_key, private_key_nonce,
-                public_key, kdf_salt, login_key_salt,
-                is_admin, is_first_login
-            ) VALUES ($1,$2,$3,'','','','','','','','','',true,true)"#,
-        )
+    let exists: Option<i64> = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE email=$1")
         .bind(email)
-        .bind(username)
-        .bind(&hash)
-        .execute(pool)
-        .await;
-        match res {
-            Ok(_) => tracing::info!("bootstrapAdmins: created admin account {email} (@{username})"),
-            Err(e) => tracing::warn!("bootstrapAdmins: insert error for {email}: {e}"),
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+    if exists.unwrap_or(0) > 0 {
+        return;
+    }
+
+    let hash = match bcrypt::hash(password, 10) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!("bootstrapAdmin: bcrypt error for {email}: {e}");
+            return;
         }
+    };
+
+    let res = sqlx::query(
+        r#"INSERT INTO users (
+            email, username, login_key_hash,
+            encrypted_master_key, master_key_nonce,
+            encrypted_recovery_key, recovery_key_nonce,
+            encrypted_private_key, private_key_nonce,
+            public_key, kdf_salt, login_key_salt,
+            is_admin, is_first_login
+        ) VALUES ($1,$2,$3,'','','','','','','','','',true,true)"#,
+    )
+    .bind(email)
+    .bind(username)
+    .bind(&hash)
+    .execute(pool)
+    .await;
+    match res {
+        Ok(_) => tracing::info!(
+            "bootstrapAdmin: created break-glass admin account {email} (@{username})"
+        ),
+        Err(e) => tracing::warn!("bootstrapAdmin: insert error for {email}: {e}"),
     }
 }
 
@@ -371,6 +382,7 @@ fn build_router(state: AppState) -> Router {
             "/api/admin/users/:id",
             put(admin::update_user).delete(admin::delete_user),
         )
+        .route("/api/admin/users/:id/2fa", delete(admin::force_disable_2fa))
         .route("/api/admin/stats", get(admin::get_stats))
         .route(
             "/api/admin/settings",

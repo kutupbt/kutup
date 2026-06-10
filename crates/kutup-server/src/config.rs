@@ -11,13 +11,22 @@ pub struct Config {
     pub s3_bucket: String,
     pub s3_region: String,
     pub app_env: String,
-    pub admin_accounts: String,
+    /// The single bootstrap admin account, `email:username:password`. Created at first boot;
+    /// this is the protected "break-glass" admin. From `ADMIN_ACCOUNT`.
+    pub admin_account: String,
+    /// Email of the break-glass admin, derived from `admin_account`. Never demotable/
+    /// disableable/deletable via the API/UI. Empty when `ADMIN_ACCOUNT` is unset.
+    pub break_glass_admin_email: String,
     /// e.g. `https://kutup.example.com` — used for federation invite links.
     pub server_url: String,
     /// Comma-separated CORS allowlist (`*` allowed in dev only).
     pub allowed_origins: String,
-    /// Total storage capacity advertised to the admin UI; 0 = unknown.
+    /// Total storage capacity advertised to the admin UI; 0 = unknown. Fallback/override when
+    /// the live SeaweedFS probe is unavailable.
     pub storage_total_bytes: i64,
+    /// SeaweedFS master endpoint probed for real capacity + usage (admin dashboard). Empty
+    /// disables the probe (the admin UI then falls back to `storage_total_bytes`).
+    pub seaweedfs_master_url: String,
 }
 
 impl Config {
@@ -33,19 +42,35 @@ impl Config {
             s3_bucket: get_env("S3_BUCKET", "kutup-files"),
             s3_region: get_env("S3_REGION", "us-east-1"),
             app_env: get_env("APP_ENV", "development"),
-            admin_accounts: get_env("ADMIN_ACCOUNTS", ""),
+            admin_account: get_env("ADMIN_ACCOUNT", ""),
+            break_glass_admin_email: break_glass_email(&get_env("ADMIN_ACCOUNT", "")),
             server_url: get_env("SERVER_URL", "http://kutup.local"),
             allowed_origins: get_env(
                 "ALLOWED_ORIGINS",
                 "https://localhost:38443,tauri://localhost,http://tauri.localhost",
             ),
             storage_total_bytes: get_env_i64("STORAGE_TOTAL_BYTES", 0),
+            seaweedfs_master_url: get_env("SEAWEEDFS_MASTER_URL", "http://seaweedfs-master:9333"),
         };
         if cfg.jwt_secret.len() < 32 {
             panic!("JWT_SECRET must be at least 32 characters long");
         }
         cfg
     }
+}
+
+/// Extracts the break-glass admin's email (the first field of `email:username:password`) —
+/// mirrors `breakGlassEmail`. Empty when the account is unset or malformed.
+fn break_glass_email(admin_account: &str) -> String {
+    let acct = admin_account.trim();
+    if acct.is_empty() {
+        return String::new();
+    }
+    let parts: Vec<&str> = acct.splitn(3, ':').collect();
+    if parts.len() != 3 {
+        return String::new();
+    }
+    parts[0].trim().to_string()
 }
 
 fn must_env(key: &str) -> String {

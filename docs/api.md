@@ -110,7 +110,7 @@ The refresh token is delivered via an HTTP-only cookie named `refresh_token` (sc
 
 **Response (2FA enabled):** `200` with `{"requiresTotp": true, "preAuthToken": "<jwt>"}` — proceed to `/api/auth/login/2fa`.
 
-**Response (first login, account created via `ADMIN_ACCOUNTS` and not yet set up):** `200` with `{"requiresSetup": true, "setupToken": "<jwt>"}` — proceed to `/api/auth/complete-setup`.
+**Response (first login, account created via `ADMIN_ACCOUNT` and not yet set up):** `200` with `{"requiresSetup": true, "setupToken": "<jwt>"}` — proceed to `/api/auth/complete-setup`.
 
 ---
 
@@ -198,7 +198,7 @@ Exchange a refresh token for a new access token. The refresh token is normally r
 
 ### POST /api/auth/complete-setup
 
-Called after first login by accounts created via `ADMIN_ACCOUNTS` that haven't yet generated a recovery phrase. The client derives a full key bundle (mnemonic, master key, recovery key, NaCl box keypair) and submits it here.
+Called after first login by accounts created via `ADMIN_ACCOUNT` that haven't yet generated a recovery phrase. The client derives a full key bundle (mnemonic, master key, recovery key, NaCl box keypair) and submits it here.
 
 **Auth:** Bearer `setupToken` (returned by `/api/auth/login` when `requiresSetup` is true)
 
@@ -861,10 +861,13 @@ List all registered users.
     "isAdmin": false,
     "isActive": true,
     "totpEnabled": false,
-    "createdAt": "2026-03-14T12:00:00Z"
+    "createdAt": "2026-03-14T12:00:00Z",
+    "isProtected": false
   }
 ]
 ```
+
+`isProtected` is `true` for the break-glass admin (the account from the `ADMIN_ACCOUNT` env var). Protected users cannot be demoted, disabled, or deleted — the relevant mutations below return `403`.
 
 ---
 
@@ -903,7 +906,9 @@ Update a user. All fields are optional; only the ones present in the request are
 }
 ```
 
-**Response:** `200 OK` `{"message": "updated"}`.
+`isAdmin` promotes/demotes the user. The change is reflected in JWT claims on the user's next token refresh.
+
+**Response:** `200 OK` `{"message": "updated"}`. `403` if the request would demote or disable the break-glass admin; `400` if it would leave zero usable admins.
 
 ---
 
@@ -912,6 +917,18 @@ Update a user. All fields are optional; only the ones present in the request are
 Delete a user and all their data.
 
 **Auth:** Bearer JWT (admin)
+
+**Response:** `204 No Content`. `403` if the target is the break-glass admin.
+
+---
+
+### DELETE /api/admin/users/:id/2fa
+
+Force-disable a user's TOTP two-factor authentication — an admin override for users locked out of their authenticator. Clears `totp_secret` and `totp_enabled`; the account becomes password-only until the user re-enables 2FA from their Security page. Allowed on any user, including the break-glass admin.
+
+**Auth:** Bearer JWT (admin)
+
+**Response:** `200 OK` `{"message": "2fa disabled"}`. `404` if the user does not exist.
 
 ---
 
@@ -928,9 +945,13 @@ Return aggregate server statistics.
   "activeUsers": 39,
   "totalFiles": 1234,
   "totalStorageUsedBytes": 107374182400,
-  "totalCollections": 87
+  "totalCollections": 87,
+  "storageTotalBytes": 536870912000,
+  "storageBackendUsedBytes": 268435456000
 }
 ```
+
+`totalStorageUsedBytes` is the DB sum of per-account usage. `storageTotalBytes` and `storageBackendUsedBytes` are the storage backend's real total capacity and on-disk usage, probed live from the SeaweedFS master (`SEAWEEDFS_MASTER_URL`); `storageTotalBytes` falls back to the `STORAGE_TOTAL_BYTES` env var, and both are `0` when no probe or env var is configured.
 
 ---
 

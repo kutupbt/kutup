@@ -81,8 +81,12 @@ services:
       S3_BUCKET: ${S3_BUCKET:-kutup-files}
       S3_REGION: ${S3_REGION:-us-east-1}
       APP_ENV: ${APP_ENV:-production}
-      ADMIN_ACCOUNTS: ${ADMIN_ACCOUNTS:-}
-      # Total storage capacity for the admin Settings card. 0 / unset → hidden.
+      # Single break-glass admin (email:username:password) — created on first boot; it can
+      # never be demoted/disabled/deleted via the API.
+      ADMIN_ACCOUNT: ${ADMIN_ACCOUNT:-}
+      # SeaweedFS master — probed for real storage capacity + usage (admin dashboard).
+      SEAWEEDFS_MASTER_URL: ${SEAWEEDFS_MASTER_URL:-http://seaweedfs-master:9333}
+      # Fallback capacity for the admin Settings card when the probe is unavailable. 0 → hidden.
       STORAGE_TOTAL_BYTES: ${STORAGE_TOTAL_BYTES:-0}
     depends_on:
       postgres:
@@ -100,8 +104,8 @@ services:
     image: nginx:alpine
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      - "38080:80"
+      - "38443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro

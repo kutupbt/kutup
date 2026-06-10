@@ -1,8 +1,15 @@
 export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+  const KB = 1024
+  const MB = KB * 1024
+  const GB = MB * 1024
+  const TB = GB * 1024
+  const PB = TB * 1024
+  if (bytes < KB) return `${bytes} B`
+  if (bytes < MB) return `${(bytes / KB).toFixed(1)} KB`
+  if (bytes < GB) return `${(bytes / MB).toFixed(1)} MB`
+  if (bytes < TB) return `${(bytes / GB).toFixed(2)} GB`
+  if (bytes < PB) return `${(bytes / TB).toFixed(2)} TB`
+  return `${(bytes / PB).toFixed(2)} PB`
 }
 
 export function formatSpeed(bps: number): string {

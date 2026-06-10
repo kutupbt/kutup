@@ -24,6 +24,13 @@ fn valid_admin_username(s: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
+/// Whether `email` is the protected break-glass admin (case-insensitive) — mirrors
+/// `isBreakGlass`. The break-glass admin can never be demoted, disabled, or deleted.
+fn is_break_glass(state: &AppState, email: &str) -> bool {
+    let bg = &state.config.break_glass_admin_email;
+    !bg.is_empty() && bg.eq_ignore_ascii_case(email)
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UserRow {
@@ -38,6 +45,8 @@ struct UserRow {
     totp_enabled: bool,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+    /// Marks the break-glass admin — the UI disables demote/disable/delete for this user.
+    is_protected: bool,
 }
 
 /// `GET /api/admin/users` — mirrors `ListUsers`.
@@ -65,16 +74,20 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     let users: Vec<UserRow> = rows
         .into_iter()
         .map(
-            |(id, email, username, quota, used, is_admin, is_active, totp, created)| UserRow {
-                id,
-                email,
-                username,
-                storage_quota_bytes: quota,
-                storage_used_bytes: used,
-                is_admin,
-                is_active,
-                totp_enabled: totp,
-                created_at: created,
+            |(id, email, username, quota, used, is_admin, is_active, totp, created)| {
+                let is_protected = is_break_glass(&state, &email);
+                UserRow {
+                    id,
+                    email,
+                    username,
+                    storage_quota_bytes: quota,
+                    storage_used_bytes: used,
+                    is_admin,
+                    is_active,
+                    totp_enabled: totp,
+                    created_at: created,
+                    is_protected,
+                }
             },
         )
         .collect();
@@ -156,8 +169,40 @@ pub async fn update_user(
     Path(id): Path<String>,
     Json(req): Json<UpdateUserRequest>,
 ) -> AppResult<Response> {
-    // A non-uuid id simply matches no rows (each UPDATE is a no-op), as in Go.
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+
+    // Load the target's current state for the break-glass + last-admin guards.
+    let (target_email, target_is_admin, target_is_active): (String, bool, bool) =
+        sqlx::query_as("SELECT email, is_admin, is_active FROM users WHERE id = $1")
+            .bind(target)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+            .ok_or_else(|| AppError::not_found("not found"))?;
+
+    let wants_demote = req.is_admin == Some(false);
+    let wants_disable = req.is_active == Some(false);
+
+    // Break-glass admin is immutable: never demote or disable it.
+    if is_break_glass(&state, &target_email) && (wants_demote || wants_disable) {
+        return Err(AppError::forbidden("break-glass admin is protected"));
+    }
+
+    // Last-admin guard: don't let a demote/disable leave zero usable admins.
+    if (wants_demote || wants_disable) && target_is_admin && target_is_active {
+        let other_usable: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM users WHERE is_admin AND is_active AND id != $1",
+        )
+        .bind(target)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap_or(0);
+        if other_usable == 0 {
+            return Err(AppError::bad_request("cannot remove the last admin"));
+        }
+    }
+
     if let Some(q) = req.storage_quota_bytes {
         sqlx::query("UPDATE users SET storage_quota_bytes = $1 WHERE id = $2")
             .bind(q)
@@ -192,6 +237,19 @@ pub async fn delete_user(
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+
+    // Break-glass admin can never be deleted.
+    let target_email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+        .bind(target)
+        .fetch_optional(&state.pool)
+        .await
+        .ok()
+        .flatten()
+        .ok_or_else(|| AppError::not_found("not found"))?;
+    if is_break_glass(&state, &target_email) {
+        return Err(AppError::forbidden("break-glass admin is protected"));
+    }
+
     let res = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(target)
         .execute(&state.pool)
@@ -202,16 +260,42 @@ pub async fn delete_user(
     }
 }
 
+/// `DELETE /api/admin/users/{id}/2fa` — mirrors `ForceDisable2FA`. Clears the target's TOTP
+/// (the admin caller is already authenticated + admin-gated, so no TOTP-code challenge).
+/// Allowed on the break-glass admin too — it's a recovery aid and can't lock anyone out.
+pub async fn force_disable_2fa(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+    let res =
+        sqlx::query("UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1")
+            .bind(target)
+            .execute(&state.pool)
+            .await
+            .map_err(|_| AppError::internal("internal error"))?;
+    if res.rows_affected() == 0 {
+        return Err(AppError::not_found("not found"));
+    }
+    Ok(Json(json!({"message": "2fa disabled"})).into_response())
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StatsResponse {
     total_users: i64,
     active_users: i64,
     total_files: i64,
+    /// DB sum — logical per-account usage.
     #[serde(rename = "totalStorageUsedBytes")]
     total_storage_used: i64,
     total_collections: i64,
+    /// The storage backend's real total capacity — from the live SeaweedFS probe, falling back
+    /// to `STORAGE_TOTAL_BYTES`, then 0 ("unknown").
     storage_total_bytes: i64,
+    /// The storage backend's real on-disk usage (from the probe); 0 when no probe is available.
+    storage_backend_used_bytes: i64,
 }
 
 /// `GET /api/admin/stats` — mirrors `GetStats`.
@@ -225,13 +309,25 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
                 .unwrap_or(0)
         }
     };
+
+    // Storage capacity: prefer the live SeaweedFS probe; fall back to the configured env var.
+    let mut storage_total_bytes = state.config.storage_total_bytes;
+    let mut storage_backend_used_bytes = 0;
+    if let Some(probe) = &state.storage_probe {
+        if let Some(probed) = probe.probe().await {
+            storage_total_bytes = probed.total_bytes;
+            storage_backend_used_bytes = probed.used_bytes;
+        }
+    }
+
     let stats = StatsResponse {
         total_users: scalar("SELECT COUNT(*) FROM users").await,
         active_users: scalar("SELECT COUNT(*) FROM users WHERE is_active = true").await,
         total_files: scalar("SELECT COUNT(*) FROM files").await,
         total_storage_used: scalar("SELECT COALESCE(SUM(storage_used_bytes),0) FROM users").await,
         total_collections: scalar("SELECT COUNT(*) FROM collections").await,
-        storage_total_bytes: state.config.storage_total_bytes,
+        storage_total_bytes,
+        storage_backend_used_bytes,
     };
     Ok(Json(stats).into_response())
 }

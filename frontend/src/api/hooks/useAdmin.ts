@@ -52,13 +52,34 @@ export function useUpdateUser() {
       body,
     }: {
       id: string
-      body: Partial<{ isActive: boolean; storageQuotaBytes: number }>
+      // `isAdmin` promotes/demotes; the backend rejects demoting the
+      // break-glass admin (403) and the last usable admin (400).
+      body: Partial<{ isActive: boolean; storageQuotaBytes: number; isAdmin: boolean }>
     }) => api.put(`/admin/users/${id}`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'users'] })
     },
     onError: (err: any) => {
       toast.error(err.response?.data?.error ?? 'Update failed')
+    },
+  })
+}
+
+/**
+ * Admin override that force-disables a user's TOTP 2FA — for users locked
+ * out of their authenticator. The account becomes password-only until the
+ * user re-enables 2FA from their Security page.
+ */
+export function useForceDisable2fa() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/admin/users/${id}/2fa`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'users'] })
+      toast.success('Two-factor authentication disabled for this user')
+    },
+    onError: (err: any) => {
+      toast.error(err.response?.data?.error ?? 'Failed to disable 2FA')
     },
   })
 }

@@ -93,7 +93,12 @@ services:
       S3_BUCKET: ${S3_BUCKET:-kutup-files}
       S3_REGION: ${S3_REGION:-us-east-1}
       APP_ENV: ${APP_ENV:-production}
-      ADMIN_ACCOUNTS: ${ADMIN_ACCOUNTS:-}
+      # Single break-glass admin (email:username:password) — created on first boot; it can
+      # never be demoted/disabled/deleted via the API.
+      ADMIN_ACCOUNT: ${ADMIN_ACCOUNT:-}
+      # SeaweedFS master — probed for real storage capacity + usage (admin dashboard).
+      SEAWEEDFS_MASTER_URL: ${SEAWEEDFS_MASTER_URL:-http://seaweedfs-master:9333}
+      STORAGE_TOTAL_BYTES: ${STORAGE_TOTAL_BYTES:-0}
     depends_on:
       postgres:
         condition: service_healthy
