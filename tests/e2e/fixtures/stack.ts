@@ -23,14 +23,14 @@ export function wipeStack(): void {
   execFileSync('bash', ['-c', script], { cwd: KUTUP_ROOT, stdio: 'inherit' })
 }
 
-/** Confirm the bootstrap admin was just created. */
+/** Confirm the break-glass bootstrap admin was just created. */
 export function expectFreshBootstrap(): void {
   const out = execFileSync(
     'bash',
-    ['-c', 'docker compose logs backend 2>&1 | grep bootstrapAdmins | tail -1'],
+    ['-c', 'docker compose logs backend 2>&1 | grep -i bootstrapAdmin | tail -1'],
     { cwd: KUTUP_ROOT, encoding: 'utf-8' },
   )
-  if (!out.includes('created admin account admin@kutup.local')) {
+  if (!out.includes('admin account admin@kutup.local')) {
     throw new Error(`bootstrap admin not found in backend logs:\n${out}`)
   }
 }
