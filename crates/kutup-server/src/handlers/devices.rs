@@ -12,13 +12,14 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
 use crate::AppState;
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RegisterDeviceRequest {
     /// base64 32-byte Ed25519 pubkey.
@@ -30,7 +31,7 @@ pub struct RegisterDeviceRequest {
     timestamp: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterDeviceResponse {
     device_id: i64,
@@ -39,7 +40,7 @@ pub struct RegisterDeviceResponse {
     created_at: OffsetDateTime,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceRow {
     device_id: i64,
@@ -52,6 +53,15 @@ pub struct DeviceRow {
 }
 
 /// `POST /api/devices` — mirrors `Register`.
+#[utoipa::path(
+    post,
+    path = "/api/devices",
+    tag = "devices",
+    operation_id = "registerDevice",
+    security(("BearerAuth" = [])),
+    request_body = RegisterDeviceRequest,
+    responses((status = 201, description = "Device signing key registered", body = RegisterDeviceResponse))
+)]
 pub async fn register(
     State(state): State<AppState>,
     user: AuthUser,
@@ -95,6 +105,14 @@ pub async fn register(
 }
 
 /// `GET /api/devices` — mirrors `List`.
+#[utoipa::path(
+    get,
+    path = "/api/devices",
+    tag = "devices",
+    operation_id = "listDevices",
+    security(("BearerAuth" = [])),
+    responses((status = 200, description = "The caller's devices", body = Vec<DeviceRow>))
+)]
 pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let rows: Vec<(i64, String, bool, OffsetDateTime, Option<OffsetDateTime>)> = sqlx::query_as(
@@ -121,6 +139,14 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
 }
 
 /// `DELETE /api/devices/{id}` — mirrors `Revoke`.
+#[utoipa::path(
+    delete,
+    path = "/api/devices/{id}",
+    tag = "devices",
+    security(("BearerAuth" = [])),
+    params(("id" = i64, Path, description = "Device id")),
+    responses((status = 204, description = "Device revoked; live collab connections dropped"))
+)]
 pub async fn revoke(
     State(state): State<AppState>,
     user: AuthUser,

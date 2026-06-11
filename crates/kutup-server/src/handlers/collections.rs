@@ -28,6 +28,13 @@ fn coll_id_or_404(s: &str) -> AppResult<Uuid> {
 
 /// `GET /api/collections` — mirrors `ListCollections`. Owned collections, then those
 /// shared with the user (with the recipient-specific key + permissions + computed usage).
+#[utoipa::path(
+    get,
+    path = "/api/collections",
+    tag = "collections",
+    security(("BearerAuth" = [])),
+    responses((status = 200, description = "Owned + shared collections", body = Vec<CollectionRow>))
+)]
 pub async fn list_collections(
     State(state): State<AppState>,
     user: AuthUser,
@@ -47,7 +54,7 @@ pub async fn list_collections(
     let own: Vec<OwnRow> = sqlx::query_as(
         r#"SELECT id, owner_user_id, encrypted_name, name_nonce,
                   encrypted_key, encrypted_key_nonce, parent_collection_id, color
-           FROM collections WHERE owner_user_id = $1
+           FROM collections WHERE owner_user_id = $1 AND deleted_at IS NULL
            ORDER BY created_at ASC"#,
     )
     .bind(user_id)
@@ -95,7 +102,7 @@ pub async fn list_collections(
                   cs.encrypted_collection_key, cs.can_upload, cs.can_delete, cs.upload_quota_bytes
            FROM collections c
            JOIN collection_shares cs ON cs.collection_id = c.id
-           WHERE cs.recipient_user_id = $1
+           WHERE cs.recipient_user_id = $1 AND c.deleted_at IS NULL
            ORDER BY c.created_at ASC"#,
     )
     .bind(user_id)
@@ -143,6 +150,14 @@ pub async fn list_collections(
 }
 
 /// `POST /api/collections` — mirrors `CreateCollection`.
+#[utoipa::path(
+    post,
+    path = "/api/collections",
+    tag = "collections",
+    security(("BearerAuth" = [])),
+    request_body = CreateCollectionRequest,
+    responses((status = 201, description = "Collection created", body = CreateCollectionResult))
+)]
 pub async fn create_collection(
     State(state): State<AppState>,
     user: AuthUser,
@@ -179,6 +194,14 @@ pub async fn create_collection(
 }
 
 /// `GET /api/collections/{id}` — mirrors `GetCollection`.
+#[utoipa::path(
+    get,
+    path = "/api/collections/{id}",
+    tag = "collections",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Collection id")),
+    responses((status = 200, description = "One collection (owned or shared view)", body = CollectionRow))
+)]
 pub async fn get_collection(
     State(state): State<AppState>,
     user: AuthUser,
@@ -200,7 +223,7 @@ pub async fn get_collection(
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT id, owner_user_id, encrypted_name, name_nonce,
                   encrypted_key, encrypted_key_nonce, parent_collection_id, color
-           FROM collections WHERE id = $1 AND owner_user_id = $2"#,
+           FROM collections WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL"#,
     )
     .bind(coll_id)
     .bind(user_id)
@@ -248,7 +271,7 @@ pub async fn get_collection(
                   cs.encrypted_collection_key, cs.can_upload, cs.can_delete, cs.upload_quota_bytes
            FROM collections c
            JOIN collection_shares cs ON cs.collection_id = c.id
-           WHERE c.id = $1 AND cs.recipient_user_id = $2"#,
+           WHERE c.id = $1 AND cs.recipient_user_id = $2 AND c.deleted_at IS NULL"#,
     )
     .bind(coll_id)
     .bind(user_id)
@@ -279,6 +302,15 @@ pub async fn get_collection(
 }
 
 /// `PUT /api/collections/{id}` — mirrors `UpdateCollection` (rename).
+#[utoipa::path(
+    put,
+    path = "/api/collections/{id}",
+    tag = "collections",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Collection id")),
+    request_body = UpdateCollectionRequest,
+    responses((status = 200, description = "Renamed", body = MessageResponse))
+)]
 pub async fn update_collection(
     State(state): State<AppState>,
     user: AuthUser,
@@ -290,7 +322,7 @@ pub async fn update_collection(
 
     let res = sqlx::query(
         r#"UPDATE collections SET encrypted_name = $1, name_nonce = $2, updated_at = NOW()
-           WHERE id = $3 AND owner_user_id = $4"#,
+           WHERE id = $3 AND owner_user_id = $4 AND deleted_at IS NULL"#,
     )
     .bind(&req.encrypted_name)
     .bind(&req.name_nonce)
@@ -308,6 +340,15 @@ pub async fn update_collection(
 }
 
 /// `PATCH /api/collections/{id}/color` — mirrors `UpdateCollectionColor`.
+#[utoipa::path(
+    patch,
+    path = "/api/collections/{id}/color",
+    tag = "collections",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Collection id")),
+    request_body = UpdateColorRequest,
+    responses((status = 204, description = "Color updated"))
+)]
 pub async fn update_collection_color(
     State(state): State<AppState>,
     user: AuthUser,
@@ -318,7 +359,7 @@ pub async fn update_collection_color(
     let coll_id = coll_id_or_404(&id)?;
 
     let res = sqlx::query(
-        "UPDATE collections SET color = $1, updated_at = NOW() WHERE id = $2 AND owner_user_id = $3",
+        "UPDATE collections SET color = $1, updated_at = NOW() WHERE id = $2 AND owner_user_id = $3 AND deleted_at IS NULL",
     )
     .bind(req.color)
     .bind(coll_id)
@@ -331,7 +372,18 @@ pub async fn update_collection_color(
     }
 }
 
-/// `DELETE /api/collections/{id}` — mirrors `DeleteCollection`.
+/// `DELETE /api/collections/{id}` — soft-deletes the folder *and its whole subtree*
+/// (sub-folders + files) into the trash. The folder is the single trash entry
+/// (`trash_root_id = its id`); restore/purge operate on the entry and everything
+/// tagged with it. Items already in the trash keep their own entry + deletion time.
+#[utoipa::path(
+    delete,
+    path = "/api/collections/{id}",
+    tag = "collections",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Collection id")),
+    responses((status = 204, description = "Folder + subtree moved to trash"))
+)]
 pub async fn delete_collection(
     State(state): State<AppState>,
     user: AuthUser,
@@ -340,18 +392,56 @@ pub async fn delete_collection(
     let user_id = trusted_uuid(&user.user_id)?;
     let coll_id = coll_id_or_404(&id)?;
 
-    let res = sqlx::query("DELETE FROM collections WHERE id = $1 AND owner_user_id = $2")
-        .bind(coll_id)
-        .bind(user_id)
-        .execute(&state.pool)
-        .await;
-    match res {
-        Ok(r) if r.rows_affected() > 0 => Ok(StatusCode::NO_CONTENT.into_response()),
-        _ => Err(AppError::not_found("not found")),
+    let mut tx = state.pool.begin().await?;
+    // Walk the live subtree from the root (only the owner's root qualifies).
+    let subtree: Vec<Uuid> = sqlx::query_scalar(
+        r#"WITH RECURSIVE subtree AS (
+             SELECT id FROM collections
+             WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL
+             UNION ALL
+             SELECT c.id FROM collections c
+             JOIN subtree s ON c.parent_collection_id = s.id
+             WHERE c.deleted_at IS NULL
+           )
+           SELECT id FROM subtree"#,
+    )
+    .bind(coll_id)
+    .bind(user_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    if subtree.is_empty() {
+        return Err(AppError::not_found("not found"));
     }
+
+    sqlx::query(
+        "UPDATE collections SET deleted_at = NOW(), trash_root_id = $2 WHERE id = ANY($1) AND deleted_at IS NULL",
+    )
+    .bind(&subtree)
+    .bind(coll_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE files SET deleted_at = NOW(), trash_root_id = $2 WHERE collection_id = ANY($1) AND deleted_at IS NULL",
+    )
+    .bind(&subtree)
+    .bind(coll_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 /// `POST /api/collections/{id}/share` — mirrors `ShareCollection` (local share/upsert).
+#[utoipa::path(
+    post,
+    path = "/api/collections/{id}/share",
+    tag = "collections",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Collection id")),
+    request_body = ShareCollectionRequest,
+    responses((status = 201, description = "Shared", body = MessageResponse))
+)]
 pub async fn share_collection(
     State(state): State<AppState>,
     user: AuthUser,
@@ -364,11 +454,12 @@ pub async fn share_collection(
     let recipient_id = Uuid::parse_str(&req.recipient_user_id)
         .map_err(|_| AppError::bad_request("invalid request"))?;
 
-    let owner: Option<Uuid> =
-        sqlx::query_scalar("SELECT owner_user_id FROM collections WHERE id = $1")
-            .bind(coll_id)
-            .fetch_optional(&state.pool)
-            .await?;
+    let owner: Option<Uuid> = sqlx::query_scalar(
+        "SELECT owner_user_id FROM collections WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(coll_id)
+    .fetch_optional(&state.pool)
+    .await?;
     if owner != Some(sharer_id) {
         return Err(AppError::forbidden("forbidden"));
     }
@@ -413,6 +504,15 @@ pub struct ShareFederatedRequest {
 /// `POST /api/collections/{id}/share-federated` — mirrors `ShareFederated`. Creates an
 /// outgoing federated share + a random access token, returning an invite URL the recipient
 /// pastes into their server.
+#[utoipa::path(
+    post,
+    path = "/api/collections/{id}/share-federated",
+    tag = "collections",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Collection id")),
+    request_body = crate::models::ShareFederatedRequest,
+    responses((status = 201, description = "Invite token + URL", body = crate::models::ShareFederatedResult))
+)]
 pub async fn share_federated(
     State(state): State<AppState>,
     user: AuthUser,
@@ -425,11 +525,12 @@ pub async fn share_federated(
     }
     let coll_id = Uuid::parse_str(&id).map_err(|_| AppError::forbidden("forbidden"))?;
 
-    let owner: Option<Uuid> =
-        sqlx::query_scalar("SELECT owner_user_id FROM collections WHERE id = $1")
-            .bind(coll_id)
-            .fetch_optional(&state.pool)
-            .await?;
+    let owner: Option<Uuid> = sqlx::query_scalar(
+        "SELECT owner_user_id FROM collections WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(coll_id)
+    .fetch_optional(&state.pool)
+    .await?;
     if owner != Some(sharer_id) {
         return Err(AppError::forbidden("forbidden"));
     }
@@ -477,6 +578,17 @@ pub struct FedPubkeyQuery {
 
 /// `GET /api/collections/fed-pubkey?username=…&server=…` — mirrors `FetchRemotePubkey`.
 /// SSRF-validates `server`, then proxies the remote `/api/fed/users` lookup.
+#[utoipa::path(
+    get,
+    path = "/api/collections/fed-pubkey",
+    tag = "collections",
+    security(("BearerAuth" = [])),
+    params(
+        ("username" = String, Query, description = "Remote username"),
+        ("server" = String, Query, description = "Remote kutup server base URL")
+    ),
+    responses((status = 200, description = "Remote user's public key", body = crate::models::PubkeyResponse))
+)]
 pub async fn fetch_remote_pubkey(
     State(state): State<AppState>,
     _user: AuthUser,

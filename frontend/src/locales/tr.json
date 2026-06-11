@@ -43,6 +43,30 @@
     "account": "Hesap",
     "primary": "Birincil gezinme"
   },
+  "trash": {
+    "restore": "Geri yükle",
+    "deleteForever": "Kalıcı olarak sil",
+    "emptyTrash": "Çöp kutusunu boşalt",
+    "items_one": "{{count}} öğe",
+    "items_other": "{{count}} öğe",
+    "deletedOn": "{{date}} tarihinde silindi",
+    "deleteConfirm": {
+      "title": "“{{name}}” kalıcı olarak silinsin mi?",
+      "desc": "Bu öğe kalıcı olarak silinir. Bu işlem geri alınamaz."
+    },
+    "emptyConfirm": {
+      "title": "Çöp kutusu boşaltılsın mı?",
+      "desc": "Çöp kutusundaki tüm öğeler kalıcı olarak silinir. Bu işlem geri alınamaz."
+    },
+    "toast": {
+      "restored": "Geri yüklendi",
+      "restoreFailed": "Geri yükleme başarısız",
+      "restoreParentFirst": "Önce üst klasörü geri yükleyin",
+      "deleted": "Kalıcı olarak silindi",
+      "deleteFailed": "Silme başarısız",
+      "emptied": "Çöp kutusu boşaltıldı"
+    }
+  },
   "auth": {
     "signIn": "Giriş yap",
     "email": "E-posta",
@@ -163,8 +187,8 @@
       "uploaded_other": "{{count}} dosya yüklendi",
       "downloading_one": "{{count}} dosya indiriliyor…",
       "downloading_other": "{{count}} dosya indiriliyor…",
-      "deleted_one": "{{count}} öğe silindi",
-      "deleted_other": "{{count}} öğe silindi",
+      "deleted_one": "{{count}} öğe çöp kutusuna taşındı",
+      "deleted_other": "{{count}} öğe çöp kutusuna taşındı",
       "someFailed": "Bazı öğeler silinemedi",
       "remoteAdded": "Uzak paylaşım eklendi",
       "remoteRemoved": "Uzak paylaşım kaldırıldı",
@@ -177,9 +201,9 @@
       "folderUploaded_one": "{{count}} dosya yüklendi",
       "folderUploaded_other": "{{count}} dosya yüklendi",
       "downloadFailed": "İndirme başarısız",
-      "fileDeleted": "Dosya silindi",
+      "fileDeleted": "Çöp kutusuna taşındı",
       "deleteFailed": "Silme başarısız",
-      "folderDeleted": "Klasör silindi",
+      "folderDeleted": "Klasör çöp kutusuna taşındı",
       "folderDeleteFailed": "Klasör silinemedi",
       "loadFailed": "Koleksiyonlar yüklenemedi",
       "zipPreparing": "ZIP hazırlanıyor…",
@@ -193,23 +217,23 @@
       "shareFailed": "Klasör paylaşılamadı"
     },
     "deleteFile": {
-      "title": "“{{name}}” silinsin mi?",
-      "desc": "Bu işlem geri alınamaz."
+      "title": "“{{name}}” çöp kutusuna taşınsın mı?",
+      "desc": "30 gün içinde çöp kutusundan geri yükleyebilirsiniz."
     },
     "deleteFolder": {
-      "title": "“{{name}}” klasörü silinsin mi?",
-      "desc": "Tüm dosyalar ve alt klasörler kalıcı olarak silinecek."
+      "title": "“{{name}}” klasörü çöp kutusuna taşınsın mı?",
+      "desc": "Klasör ve içindeki her şey çöp kutusuna taşınır. 30 gün içinde geri yükleyebilirsiniz."
     },
     "batchDelete": {
-      "title_one": "{{count}} öğe silinsin mi?",
-      "title_other": "{{count}} öğe silinsin mi?",
+      "title_one": "{{count}} öğe çöp kutusuna taşınsın mı?",
+      "title_other": "{{count}} öğe çöp kutusuna taşınsın mı?",
       "files_one": "{{count}} dosya",
       "files_other": "{{count}} dosya",
       "folders_one": "{{count}} klasör",
       "folders_other": "{{count}} klasör",
       "and": "ve",
-      "willBeDeleted": "kalıcı olarak silinecek. Bu işlem geri alınamaz.",
-      "deleteAll": "Tümünü sil"
+      "willBeDeleted": "çöp kutusuna taşınacak. 30 gün içinde geri yükleyebilirsiniz.",
+      "deleteAll": "Tümünü çöp kutusuna taşı"
     },
     "publicLink": {
       "title": "Genel bağlantı hazır",
@@ -227,7 +251,7 @@
     "uploadHere": "Buraya yükle",
     "share": "Paylaş",
     "copyPublicLink": "Genel bağlantıyı kopyala",
-    "deleteFolder": "Klasörü sil",
+    "deleteFolder": "Çöp kutusuna taşı",
     "removeShare": "Paylaşımı kaldır",
     "changeColor": "Rengi değiştir",
     "colorDefault": "Varsayılan",
@@ -244,7 +268,7 @@
     "uploaded": "Yüklendi",
     "download": "İndir",
     "rename": "Yeniden adlandır",
-    "delete": "Sil",
+    "delete": "Çöp kutusuna taşı",
     "selectAll": "Tüm dosyaları seç"
   },
   "newMenu": {
@@ -267,10 +291,10 @@
     "rename": "Yeniden adlandır",
     "share": "Paylaş",
     "copyPublicLink": "Genel bağlantıyı kopyala",
-    "deleteFolder": "Klasörü sil",
+    "deleteFolder": "Çöp kutusuna taşı",
     "download": "İndir",
     "downloadFolder": "ZIP olarak indir",
-    "delete": "Sil"
+    "delete": "Çöp kutusuna taşı"
   },
   "upload": {
     "progress": "Yükleniyor",
@@ -420,7 +444,7 @@
         "of": "{{total}} tahsisli",
         "unknown": "tüm hesaplarda"
       },
-      "footnote": "Etkinlik akışı, sunucu çalışma süresi ve TLS durumu kutup'un arka ucu tarafından henüz sunulmuyor — ilgili uç noktalar geldiğinde burada görünecek."
+      "footnote": "Sunucu çalışma süresi ve TLS durumu henüz kutup arka ucu tarafından sunulmuyor — uç noktalar eklendiğinde burada görünecekler."
     },
     "users": {
       "exportCsv": "CSV dışa aktar",
@@ -446,7 +470,10 @@
         "disable": "Hesabı devre dışı bırak",
         "reenable": "Hesabı yeniden etkinleştir",
         "delete": "Kalıcı olarak sil",
-        "breakGlassReason": "Acil durum yöneticisi — korumalı"
+        "breakGlassReason": "Acil durum yöneticisi — korumalı",
+        "rotateTempPassword": "Geçici parolayı yenile",
+        "rotateTempPasswordDisabled": "Kurulum tamamlandı — parolayı yalnızca kullanıcı sıfırlayabilir (kurtarma ifadesi)",
+        "wipe": "Hesabı sıfırla…"
       }
     },
     "adminDialog": {
@@ -501,6 +528,34 @@
       "desc": "Bu işlem kullanıcıyı ve tüm verilerini kalıcı olarak siler. Bu işlem geri alınamaz.",
       "cancel": "İptal",
       "confirm": "Sil"
+    },
+    "activity": {
+      "title": "Son etkinlik",
+      "empty": "Henüz kaydedilmiş yönetici işlemi yok.",
+      "deletedUser": "silinmiş kullanıcı",
+      "action": {
+        "userCreate": "{{admin}}, {{target}} kullanıcısını oluşturdu",
+        "userUpdate": "{{admin}}, {{target}} kullanıcısını güncelledi",
+        "userDelete": "{{admin}}, {{target}} kullanıcısını sildi",
+        "user2faDisable": "{{admin}}, {{target}} için 2FA’yı devre dışı bıraktı",
+        "settingsUpdate": "{{admin}} sunucu ayarlarını güncelledi",
+        "unknown": "{{admin}}: {{action}}",
+        "userRotateTempPassword": "{{admin}}, {{target}} kullanıcısının geçici parolasını yeniledi",
+        "userWipe": "{{admin}}, {{target}} hesabını sıfırladı"
+      }
+    },
+    "rotateTemp": {
+      "title": "Geçici parolayı yenile",
+      "desc": "{{email}} kurulumu henüz tamamlamadı, bu yüzden hiçbir veri risk altında değil. Yeni bir geçici parola belirleyin ve kullanıcıya güvenli bir kanaldan iletin.",
+      "placeholder": "Yeni geçici parola (en az 8 karakter)",
+      "confirm": "Parolayı yenile"
+    },
+    "wipe": {
+      "title": "{{email}} sıfırlansın mı?",
+      "desc": "Bu kullanıcının TÜM dosyalarını ve şifreleme anahtarlarını siler — kutup’un uçtan uca şifrelemesi nedeniyle arka kapı yoktur ve bu işlem geri alınamaz. Hesap silinmez; aşağıdaki geçici parolayla ilk-giriş durumuna sıfırlanır. Yalnızca hem parolasını hem kurtarma ifadesini kaybetmiş kullanıcılar için.",
+      "passwordPlaceholder": "Yeni geçici parola (en az 8 karakter)",
+      "confirmLabel": "Onaylamak için {{email}} yazın",
+      "confirm": "Hesabı sıfırla"
     }
   },
   "publicShare": {
@@ -765,7 +820,9 @@
       "settings.registrationGroup": "Kayıt",
       "settings.publicReg": "Herkese açık kayıt",
       "settings.publicRegSub": "Herkes kayıt sayfasından bir hesap oluşturabilir",
-      "settings.moreSoonNote": "Daha fazla yönetici denetimi — zorunlu 2FA, kota varsayılanları, depolama arka uç, tehlikeli işlemler — arka uç büyüdükçe gelir. Masaüstü /admin sayfası burada eksik olan her şeyi kapsar."
+      "settings.moreSoonNote": "Daha fazla yönetici denetimi — zorunlu 2FA, kota varsayılanları, depolama arka uç, tehlikeli işlemler — arka uç büyüdükçe gelir. Masaüstü /admin sayfası burada eksik olan her şeyi kapsar.",
+      "user.rotateTempSub": "Hesap kurulumu henüz tamamlanmadı",
+      "user.wipeSub": "Tüm veriyi ve anahtarları sil; ilk-girişe sıfırla"
     }
   }
 }

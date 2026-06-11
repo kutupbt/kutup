@@ -24,6 +24,7 @@ import { RolePill } from '@/components/mobile/admin/RolePill'
 import { avatarColor, initials } from '@/components/mobile/admin/avatar'
 import { formatBytes } from '@/lib/format'
 import { useAdminUsers, useUpdateUser, useDeleteUser, useForceDisable2fa } from '@/api/hooks/useAdmin'
+import { RotateTempPasswordDialog, WipeUserDialog } from '@/components/admin/AdminPasswordResetDialogs'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { cn } from '@/lib/utils'
 import type { ReactNode } from 'react'
@@ -36,13 +37,14 @@ import type { ReactNode } from 'react'
  *
  *   1. Header card     — avatar + email + role/break-glass pill + status + storage bar
  *   2. Account info    — 2FA / Role / Joined
- *   3. Manage          — Edit quota · Make/Remove admin · Disable 2FA
- *   4. Account state   — Disable / Re-enable · Delete
+ *   3. Manage          — Edit quota · Make/Remove admin · Disable 2FA ·
+ *                        Rotate temp password (first-login accounts only)
+ *   4. Account state   — Disable / Re-enable · Wipe · Delete
  *
  * The break-glass admin (`user.isProtected`) can't be demoted, disabled,
- * or deleted — those rows render disabled with a reason (the backend
- * rejects the mutations with 403). Reset password is still out (E2EE
- * design problem — see docs/roadmap.md).
+ * wiped, or deleted — those rows render disabled with a reason (the
+ * backend rejects the mutations with 403). "Password reset" under E2EE is
+ * two distinct actions — see docs/research/10-admin-password-reset.md.
  *
  * Desktop hits redirect to /admin (via useIsMobile-guarded effect).
  */
@@ -69,6 +71,8 @@ export default function MobileAdminUserDetailPage() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [adminConfirmOpen, setAdminConfirmOpen] = useState(false)
   const [totpConfirmOpen, setTotpConfirmOpen] = useState(false)
+  const [rotateOpen, setRotateOpen] = useState(false)
+  const [wipeOpen, setWipeOpen] = useState(false)
 
   // Sync quota input when the user changes.
   useEffect(() => {
@@ -319,6 +323,36 @@ export default function MobileAdminUserDetailPage() {
             </PressableRow>
           )}
 
+          {/* Rotate temp password — only meaningful before first-login setup */}
+          {user.isFirstLogin ? (
+            <PressableRow
+              onClick={() => setRotateOpen(true)}
+              ariaLabel={t('admin.users.menu.rotateTempPassword', 'Rotate temp password')}
+            >
+              <div className="w-[30px] h-[30px] rounded-[9px] bg-surface-sunken text-text-secondary flex items-center justify-center shrink-0">
+                <Icon d={ICONS.refresh} size={15} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[13.5px] font-medium text-text-primary">
+                  {t('admin.users.menu.rotateTempPassword', 'Rotate temp password')}
+                </div>
+                <div className="text-[11.5px] text-text-tertiary mt-0.5">
+                  {t('mobile.admin.user.rotateTempSub', 'Account hasn’t completed setup yet')}
+                </div>
+              </div>
+              <Icon d={ICONS.chevronRight} size={16} color="var(--text-tertiary)" />
+            </PressableRow>
+          ) : (
+            <StaticRow
+              icon={ICONS.refresh}
+              label={t('admin.users.menu.rotateTempPassword', 'Rotate temp password')}
+              sub={t(
+                'admin.users.menu.rotateTempPasswordDisabled',
+                'Setup completed — only the user can reset their password (recovery phrase)',
+              )}
+            />
+          )}
+
           {/* Force-disable 2FA — allowed even on the break-glass admin */}
           {user.totpEnabled ? (
             <PressableRow onClick={() => setTotpConfirmOpen(true)} last>
@@ -386,6 +420,29 @@ export default function MobileAdminUserDetailPage() {
                 </div>
               </div>
               <Icon d={ICONS.chevronRight} size={16} color={user.isActive ? 'var(--destructive)' : 'var(--success)'} />
+            </PressableRow>
+          )}
+          {/* Destructive wipe — for users who lost both password and recovery phrase */}
+          {user.isProtected ? (
+            <StaticRow
+              icon={ICONS.alertTriangle}
+              label={t('admin.users.menu.wipe', 'Wipe account…')}
+              sub={protectedReason}
+            />
+          ) : (
+            <PressableRow onClick={() => setWipeOpen(true)}>
+              <div className="w-[30px] h-[30px] rounded-[9px] bg-destructive-faint text-destructive flex items-center justify-center shrink-0">
+                <Icon d={ICONS.alertTriangle} size={15} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[13.5px] font-medium text-destructive">
+                  {t('admin.users.menu.wipe', 'Wipe account…')}
+                </div>
+                <div className="text-[11.5px] text-text-tertiary mt-0.5">
+                  {t('mobile.admin.user.wipeSub', 'Erase all data + keys; reset to first-login')}
+                </div>
+              </div>
+              <Icon d={ICONS.chevronRight} size={16} color="var(--destructive)" />
             </PressableRow>
           )}
           {user.isProtected ? (
@@ -525,6 +582,10 @@ export default function MobileAdminUserDetailPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Rotate temp password + destructive wipe */}
+      <RotateTempPasswordDialog user={rotateOpen ? user : null} onClose={() => setRotateOpen(false)} />
+      <WipeUserDialog user={wipeOpen ? user : null} onClose={() => setWipeOpen(false)} />
 
       {/* Force-disable 2FA confirm */}
       <AlertDialog open={totpConfirmOpen} onOpenChange={setTotpConfirmOpen}>

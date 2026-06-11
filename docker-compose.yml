@@ -88,6 +88,17 @@ services:
       SEAWEEDFS_MASTER_URL: ${SEAWEEDFS_MASTER_URL:-http://seaweedfs-master:9333}
       # Fallback capacity for the admin Settings card when the probe is unavailable. 0 → hidden.
       STORAGE_TOTAL_BYTES: ${STORAGE_TOTAL_BYTES:-0}
+      # Days a trashed item stays restorable before the sweeper purges it. 0 disables the sweep.
+      TRASH_RETENTION_DAYS: ${TRASH_RETENTION_DAYS:-30}
+      # Per-IP rate limits + per-account login lockout (blank → server defaults).
+      RATE_LIMIT_LOGIN_PER_MIN: ${RATE_LIMIT_LOGIN_PER_MIN:-}
+      RATE_LIMIT_PREFLIGHT_PER_MIN: ${RATE_LIMIT_PREFLIGHT_PER_MIN:-}
+      RATE_LIMIT_REGISTER_PER_HOUR: ${RATE_LIMIT_REGISTER_PER_HOUR:-}
+      RATE_LIMIT_RECOVERY_PER_HOUR: ${RATE_LIMIT_RECOVERY_PER_HOUR:-}
+      RATE_LIMIT_FED_USERS_PER_MIN: ${RATE_LIMIT_FED_USERS_PER_MIN:-}
+      RATE_LIMIT_ADMIN_PER_MIN: ${RATE_LIMIT_ADMIN_PER_MIN:-}
+      LOGIN_LOCKOUT_THRESHOLD: ${LOGIN_LOCKOUT_THRESHOLD:-}
+      LOGIN_LOCKOUT_MINUTES: ${LOGIN_LOCKOUT_MINUTES:-}
     depends_on:
       postgres:
         condition: service_healthy

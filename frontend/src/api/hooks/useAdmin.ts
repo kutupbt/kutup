@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '../client'
-import type { UserRow, AdminStats, AdminSettings } from '@/types/api'
+import type { UserRow, AdminStats, AdminSettings, AdminActivityResponse } from '@/types/api'
 
 export function useAdminUsers() {
   return useQuery<UserRow[]>({
@@ -14,6 +14,15 @@ export function useAdminStats() {
   return useQuery<AdminStats>({
     queryKey: ['admin', 'stats'],
     queryFn: () => api.get<AdminStats>('/admin/stats').then((r) => r.data),
+  })
+}
+
+/** The audit-log feed for the Recent-activity cards (newest first). */
+export function useAdminActivity(limit = 10) {
+  return useQuery<AdminActivityResponse>({
+    queryKey: ['admin', 'activity', limit],
+    queryFn: () =>
+      api.get<AdminActivityResponse>(`/admin/activity?limit=${limit}`).then((r) => r.data),
   })
 }
 
@@ -36,6 +45,7 @@ export function useCreateUser() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'users'] })
       qc.invalidateQueries({ queryKey: ['admin', 'stats'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
       toast.success('User created')
     },
     onError: (err: any) => {
@@ -58,6 +68,7 @@ export function useUpdateUser() {
     }) => api.put(`/admin/users/${id}`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'users'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
     },
     onError: (err: any) => {
       toast.error(err.response?.data?.error ?? 'Update failed')
@@ -76,10 +87,53 @@ export function useForceDisable2fa() {
     mutationFn: (id: string) => api.delete(`/admin/users/${id}/2fa`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'users'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
       toast.success('Two-factor authentication disabled for this user')
     },
     onError: (err: any) => {
       toast.error(err.response?.data?.error ?? 'Failed to disable 2FA')
+    },
+  })
+}
+
+/**
+ * Replaces the temp password of a user still in first-login state (no key
+ * material yet, so nothing is destroyed). 409 for established accounts —
+ * E2EE means only the user can reset their own password (recovery phrase).
+ */
+export function useRotateTempPassword() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, tempPassword }: { id: string; tempPassword: string }) =>
+      api.post(`/admin/users/${id}/rotate-temp-password`, { tempPassword }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
+      toast.success('Temporary password rotated')
+    },
+    onError: (err: any) => {
+      toast.error(err.response?.data?.error ?? 'Failed to rotate temp password')
+    },
+  })
+}
+
+/**
+ * Destructive account wipe — for a user who lost both password and recovery
+ * phrase. Purges all their data + keys and resets the account to first-login
+ * with a new temp password. Irreversible.
+ */
+export function useWipeUser() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, tempPassword }: { id: string; tempPassword: string }) =>
+      api.post(`/admin/users/${id}/wipe`, { tempPassword }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'users'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'stats'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
+      toast.success('Account wiped and reset to first-login')
+    },
+    onError: (err: any) => {
+      toast.error(err.response?.data?.error ?? 'Wipe failed')
     },
   })
 }
@@ -96,6 +150,7 @@ export function useDeleteUser() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'stats'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
       toast.success('User deleted')
     },
     onError: (err: any, _id, ctx: any) => {
@@ -112,6 +167,7 @@ export function useUpdateAdminSettings() {
       api.put('/admin/settings', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'settings'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
     },
     onError: (err: any) => {
       toast.error(err.response?.data?.error ?? 'Settings update failed')

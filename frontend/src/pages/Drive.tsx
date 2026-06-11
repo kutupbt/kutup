@@ -32,6 +32,7 @@ import { formatBytes } from '@/lib/format'
 import { downloadAsZip, FsaRequiredError } from '@/lib/zipDownload'
 
 import Sidebar from '@/components/layout/Sidebar'
+import TrashView from '@/components/drive/TrashView'
 import DriveBreadcrumb from '@/components/drive/DriveBreadcrumb'
 import DriveTopBar from '@/components/drive/DriveTopBar'
 import { useIsMobile } from '@/hooks/useIsMobile'
@@ -1164,20 +1165,14 @@ export default function Drive() {
             // Trash view lives inside the same Sidebar + DriveTopBar chrome
             // as My Files / Shared (per user request: "should be like My
             // Files tab and Shared with me tab just change the main board").
-            // PR 2 ships the empty hero; PRs 6/7 (backend soft-delete +
-            // wired UI) add the items list + Restore / Delete-permanently
-            // controls.
-            <div className="flex flex-col items-center justify-center h-full text-center py-12">
-              <div className="w-16 h-16 rounded-2xl bg-muted text-muted-foreground inline-flex items-center justify-center mb-3">
-                <Trash2 className="h-7 w-7" />
-              </div>
-              <div className="text-base font-semibold text-foreground">
-                {t('mobile.trash.empty.title', 'Trash is empty')}
-              </div>
-              <div className="text-sm text-muted-foreground mt-1 max-w-md">
-                {t('mobile.trash.empty.subtitle', 'Deleted files appear here for 30 days')}
-              </div>
-            </div>
+            // Restores touch collections/files that Drive holds in local
+            // state, so TrashView reloads them through onChanged.
+            <TrashView
+              onChanged={() => {
+                loadCollections()
+                if (currentFolder) loadFiles(currentFolder)
+              }}
+            />
           ) : (<>
 
           <DriveBreadcrumb
@@ -1232,7 +1227,7 @@ export default function Drive() {
               )}
               <Button size="sm" variant="destructive" onClick={() => setBatchDeleteOpen(true)}>
                 <Trash2 className="h-4 w-4 mr-1.5" />
-                {t('common.delete')}
+                {t('mobile.item.trash', 'Move to Trash')}
               </Button>
               <Button size="sm" variant="ghost" onClick={clearSelection} className="ml-auto">
                 {t('drive.clear')}
@@ -1426,7 +1421,7 @@ export default function Drive() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => { if (deleteFile) handleDeleteFile(deleteFile); setDeleteFile(null) }}
             >
-              {t('common.delete')}
+              {t('mobile.item.trash', 'Move to Trash')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1445,7 +1440,7 @@ export default function Drive() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => { if (deleteFolder) handleDeleteFolder(deleteFolder); setDeleteFolder(null) }}
             >
-              {t('common.delete')}
+              {t('mobile.item.trash', 'Move to Trash')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -11,6 +11,7 @@ pub mod file_assets;
 pub mod file_versions;
 pub mod files;
 pub mod shares;
+pub mod trash;
 pub mod tus;
 
 use std::sync::LazyLock;
@@ -55,19 +56,23 @@ pub(crate) fn trusted_uuid(s: &str) -> AppResult<Uuid> {
 /// Access check for a collection — owner or share recipient. Mirrors
 /// `FilesHandler.canAccessCollection`.
 pub(crate) async fn can_access_collection(pool: &PgPool, user_id: Uuid, coll_id: Uuid) -> bool {
-    let owner: Option<i64> =
-        sqlx::query_scalar("SELECT COUNT(*) FROM collections WHERE id = $1 AND owner_user_id = $2")
-            .bind(coll_id)
-            .bind(user_id)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
+    // Trashed collections are invisible to normal access; only the trash endpoints see them.
+    let owner: Option<i64> = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM collections WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL",
+    )
+    .bind(coll_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
     if owner.unwrap_or(0) > 0 {
         return true;
     }
     let shared: Option<i64> = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM collection_shares WHERE collection_id = $1 AND recipient_user_id = $2",
+        r#"SELECT COUNT(*) FROM collection_shares cs
+           JOIN collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL
+           WHERE cs.collection_id = $1 AND cs.recipient_user_id = $2"#,
     )
     .bind(coll_id)
     .bind(user_id)
@@ -86,7 +91,7 @@ pub(crate) async fn can_access_file(pool: &PgPool, user_id: Uuid, file_id: Uuid)
                   EXISTS(SELECT 1 FROM collection_shares cs
                          WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2)
            FROM files f JOIN collections c ON c.id = f.collection_id
-           WHERE f.id = $1"#,
+           WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL"#,
     )
     .bind(file_id)
     .bind(user_id)

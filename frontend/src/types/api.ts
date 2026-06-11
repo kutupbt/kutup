@@ -38,6 +38,11 @@ export interface UserRow {
   isAdmin: boolean
   isActive: boolean
   totpEnabled: boolean
+  /**
+   * Still on the admin-issued temp password — no key material yet. Gates the
+   * admin "Rotate temp password" action (safe only in this state).
+   */
+  isFirstLogin: boolean
   createdAt: string
   /**
    * True for the break-glass admin (the account from the `ADMIN_ACCOUNT`
@@ -97,6 +102,30 @@ export interface AdminStats {
 
 export interface AdminSettings {
   registrationEnabled: boolean
+}
+
+/**
+ * One admin audit-log row — `GET /admin/activity`. `adminEmail`/`targetEmail`
+ * are the LIVE identities and go `null` once the referenced account is
+ * deleted; `payload` keeps the at-action-time snapshot (e.g. `payload.email`).
+ */
+export interface AdminActivityEntry {
+  id: number
+  /** `user.create` | `user.update` | `user.delete` | `user.2fa_disable` | `settings.update` | future actions */
+  action: string
+  adminUserId: string
+  adminEmail: string | null
+  adminUsername: string | null
+  targetUserId: string | null
+  targetEmail: string | null
+  payload: Record<string, unknown>
+  occurredAt: string
+}
+
+export interface AdminActivityResponse {
+  entries: AdminActivityEntry[]
+  /** Pass as `?before=` for the next (older) page; `null` = no more pages. */
+  nextBefore: number | null
 }
 
 export interface MeResponse {

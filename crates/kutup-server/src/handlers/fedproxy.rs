@@ -13,6 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -45,7 +46,7 @@ struct InviteData {
 }
 
 /// The `AddIncomingShare` response (keys alphabetical, matching Go's marshalled `fiber.Map`).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct AddIncomingShareResponse {
     #[serde(rename = "canDelete")]
     can_delete: bool,
@@ -66,6 +67,14 @@ struct AddIncomingShareResponse {
 
 /// `POST /api/fed-proxy/incoming` — mirrors `AddIncomingShare`. Parses the invite URL,
 /// SSRF-validates the remote host, fetches the invite, and stores it.
+#[utoipa::path(
+    post,
+    path = "/api/fed-proxy/incoming",
+    tag = "federation",
+    security(("BearerAuth" = [])),
+    request_body = crate::models::AddIncomingShareRequest,
+    responses((status = 201, description = "Incoming share accepted", body = AddIncomingShareResponse))
+)]
 pub async fn add_incoming_share(
     State(state): State<AppState>,
     user: AuthUser,
@@ -151,7 +160,7 @@ pub async fn add_incoming_share(
 }
 
 /// An incoming federated share. Field order mirrors the Go struct.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct IncomingShare {
     id: Uuid,
@@ -167,6 +176,13 @@ struct IncomingShare {
 }
 
 /// `GET /api/fed-proxy/incoming` — mirrors `ListIncomingShares`.
+#[utoipa::path(
+    get,
+    path = "/api/fed-proxy/incoming",
+    tag = "federation",
+    security(("BearerAuth" = [])),
+    responses((status = 200, description = "The caller's incoming federated shares", body = Vec<IncomingShare>))
+)]
 pub async fn list_incoming_shares(
     State(state): State<AppState>,
     user: AuthUser,
@@ -212,6 +228,14 @@ pub async fn list_incoming_shares(
 }
 
 /// `DELETE /api/fed-proxy/incoming/{shareId}` — mirrors `RemoveIncomingShare`.
+#[utoipa::path(
+    delete,
+    path = "/api/fed-proxy/incoming/{shareId}",
+    tag = "federation",
+    security(("BearerAuth" = [])),
+    params(("shareId" = String, Path, description = "Incoming-share id")),
+    responses((status = 204, description = "Incoming share removed"))
+)]
 pub async fn remove_incoming_share(
     State(state): State<AppState>,
     user: AuthUser,
@@ -246,6 +270,14 @@ async fn get_share(state: &AppState, share_id: &str, user_id: Uuid) -> Option<(S
 }
 
 /// `GET /api/fed-proxy/{shareId}/files` — mirrors `ProxyListFiles`.
+#[utoipa::path(
+    get,
+    path = "/api/fed-proxy/{shareId}/files",
+    tag = "federation",
+    security(("BearerAuth" = [])),
+    params(("shareId" = String, Path, description = "Incoming-share id")),
+    responses((status = 200, description = "The remote share's file list, proxied verbatim (JSON)"))
+)]
 pub async fn proxy_list_files(
     State(state): State<AppState>,
     user: AuthUser,
@@ -269,6 +301,17 @@ pub async fn proxy_list_files(
 
 /// `GET /api/fed-proxy/{shareId}/files/{fileId}/download` — mirrors `ProxyDownload`. Streams
 /// the remote response body straight back to the caller.
+#[utoipa::path(
+    get,
+    path = "/api/fed-proxy/{shareId}/files/{fileId}/download",
+    tag = "federation",
+    security(("BearerAuth" = [])),
+    params(
+        ("shareId" = String, Path, description = "Incoming-share id"),
+        ("fileId" = String, Path, description = "Remote file id")
+    ),
+    responses((status = 200, description = "The encrypted blob streamed from the remote server (application/octet-stream)"))
+)]
 pub async fn proxy_download(
     State(state): State<AppState>,
     user: AuthUser,
@@ -303,6 +346,19 @@ pub async fn proxy_download(
 
 /// `POST /api/fed-proxy/{shareId}/upload` — mirrors `ProxyUpload`. Forwards the raw multipart
 /// body (with its Content-Type) to the remote share.
+#[utoipa::path(
+    post,
+    path = "/api/fed-proxy/{shareId}/upload",
+    tag = "federation",
+    security(("BearerAuth" = [])),
+    params(("shareId" = String, Path, description = "Incoming-share id")),
+    request_body(
+        content = Vec<u8>,
+        content_type = "multipart/form-data",
+        description = "Raw multipart body forwarded verbatim to the remote share"
+    ),
+    responses((status = 201, description = "The remote upload result, proxied verbatim (JSON)"))
+)]
 pub async fn proxy_upload(
     State(state): State<AppState>,
     user: AuthUser,
@@ -334,6 +390,17 @@ pub async fn proxy_upload(
 }
 
 /// `DELETE /api/fed-proxy/{shareId}/files/{fileId}` — mirrors `ProxyDelete`.
+#[utoipa::path(
+    delete,
+    path = "/api/fed-proxy/{shareId}/files/{fileId}",
+    tag = "federation",
+    security(("BearerAuth" = [])),
+    params(
+        ("shareId" = String, Path, description = "Incoming-share id"),
+        ("fileId" = String, Path, description = "Remote file id")
+    ),
+    responses((status = 204, description = "Deleted on the remote server (status proxied)"))
+)]
 pub async fn proxy_delete(
     State(state): State<AppState>,
     user: AuthUser,

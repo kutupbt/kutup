@@ -241,6 +241,48 @@ pub struct UploadResult {
     pub id: String,
 }
 
+/// A trashed folder (a trash root) — `GET /api/trash`. The owner decrypts
+/// `encrypted_key` with their master key, then the name with the collection key.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashFolderRow {
+    pub id: String,
+    pub encrypted_name: String,
+    pub name_nonce: String,
+    pub encrypted_key: String,
+    pub encrypted_key_nonce: String,
+    pub color: Option<String>,
+    /// Files trashed together with this folder (its whole subtree).
+    pub items: i64,
+    #[serde(with = "time::serde::rfc3339")]
+    pub deleted_at: OffsetDateTime,
+}
+
+/// A trashed file (a trash root) — `GET /api/trash`. Carries the parent collection's
+/// owner-wrapped key so the metadata chain decrypts even when the collection itself
+/// is not in the live listing.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashFileRow {
+    pub id: String,
+    pub collection_id: String,
+    pub encrypted_metadata: String,
+    pub metadata_nonce: String,
+    pub encrypted_file_key: String,
+    pub file_key_nonce: String,
+    pub collection_encrypted_key: String,
+    pub collection_encrypted_key_nonce: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub deleted_at: OffsetDateTime,
+}
+
+/// `GET /api/trash` body — the caller's trash roots, newest first.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TrashResponse {
+    pub folders: Vec<TrashFolderRow>,
+    pub files: Vec<TrashFileRow>,
+}
+
 /// `POST /api/share` body — mirrors `handlers.CreateShareRequest`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]

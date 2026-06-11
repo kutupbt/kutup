@@ -73,6 +73,18 @@ struct PeersMsg {
 /// `GET /api/files/{fileId}/collab/ws` — authenticates, then upgrades. Mirrors
 /// `PreUpgrade` + `Upgrade`: all access checks run here so the upgraded connection trusts
 /// the resolved identity.
+#[utoipa::path(
+    get,
+    path = "/api/files/{fileId}/collab/ws",
+    tag = "collab",
+    security(("BearerAuth" = [])),
+    params(
+        ("fileId" = String, Path, description = "File id"),
+        ("token" = Option<String>, Query, description = "Access token (browsers cannot set headers on `new WebSocket`)"),
+        ("deviceId" = Option<String>, Query, description = "The caller's registered device id")
+    ),
+    responses((status = 101, description = "WebSocket upgrade — Ed25519-signed encrypted collab frames; the server relays without decrypting"))
+)]
 pub async fn ws(
     State(state): State<AppState>,
     Path(file_id): Path<String>,
@@ -103,7 +115,7 @@ pub async fn ws(
                   EXISTS(SELECT 1 FROM collection_shares cs
                          WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2)
            FROM files f JOIN collections c ON c.id = f.collection_id
-           WHERE f.id = $1"#,
+           WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL"#,
     )
     .bind(file_uuid)
     .bind(user_uuid)

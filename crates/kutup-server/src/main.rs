@@ -101,9 +101,9 @@ async fn main() -> anyhow::Result<()> {
     // Periodic pruning of the rate-limit + TOTP-block maps (replaces the Go init goroutines).
     ratelimit::spawn_cleanup();
 
-    // Background maintenance jobs (version cleanup / quota reconcile / uploads sweeper) —
-    // mirrors the three `go x.Run(...)` calls in main.go.
-    jobs::spawn_all(pool.clone(), storage.clone());
+    // Background maintenance jobs (version cleanup / quota reconcile / uploads sweeper /
+    // trash retention).
+    jobs::spawn_all(pool.clone(), storage.clone(), config.trash_retention_days);
 
     // Live SeaweedFS capacity probe (admin dashboard) — None when SEAWEEDFS_MASTER_URL is empty.
     let storage_probe =
@@ -205,7 +205,7 @@ fn build_router(state: AppState) -> Router {
 
     use handlers::{
         admin, auth, collab, collections, devices, federation, fedproxy, file_assets,
-        file_versions, files, shares, tus,
+        file_versions, files, shares, trash, tus,
     };
 
     Router::new()
@@ -216,7 +216,10 @@ fn build_router(state: AppState) -> Router {
         .route("/api/health", get(health))
         // --- Auth routes (anonymous; rate-limited per the Go middleware chain) ---
         .route("/api/auth/settings", get(auth::get_public_settings))
-        .route("/api/auth/register", post(auth::register))
+        .route(
+            "/api/auth/register",
+            post(auth::register).route_layer(from_fn(middleware::rate_limit_register)),
+        )
         .route(
             "/api/auth/login/preflight",
             get(auth::get_login_preflight).route_layer(from_fn(middleware::rate_limit_preflight)),
@@ -225,7 +228,10 @@ fn build_router(state: AppState) -> Router {
             "/api/auth/login",
             post(auth::login).route_layer(from_fn(middleware::rate_limit_login)),
         )
-        .route("/api/auth/login/2fa", post(auth::login_two_fa))
+        .route(
+            "/api/auth/login/2fa",
+            post(auth::login_two_fa).route_layer(from_fn(middleware::rate_limit_login)),
+        )
         .route(
             "/api/auth/recover/preflight",
             get(auth::get_recovery_preflight).route_layer(from_fn(middleware::rate_limit_recovery)),
@@ -291,6 +297,10 @@ fn build_router(state: AppState) -> Router {
             put(files::update_metadata).delete(files::delete),
         )
         .route("/api/files/:fileId/claim-seed", post(files::claim_seed))
+        // --- Trash (authenticated; owner-scoped soft-delete + 30-day retention) ---
+        .route("/api/trash", get(trash::list).delete(trash::empty))
+        .route("/api/trash/:id", delete(trash::destroy))
+        .route("/api/trash/:id/restore", post(trash::restore))
         .route(
             "/api/files/:fileId/versions",
             get(file_versions::list).post(file_versions::record),
@@ -373,20 +383,31 @@ fn build_router(state: AppState) -> Router {
             "/api/fed-proxy/:shareId/files/:fileId",
             delete(fedproxy::proxy_delete),
         )
-        // --- Admin (authenticated + isAdmin via the AdminUser extractor). ---
-        .route(
-            "/api/admin/users",
-            get(admin::list_users).post(admin::create_user),
-        )
-        .route(
-            "/api/admin/users/:id",
-            put(admin::update_user).delete(admin::delete_user),
-        )
-        .route("/api/admin/users/:id/2fa", delete(admin::force_disable_2fa))
-        .route("/api/admin/stats", get(admin::get_stats))
-        .route(
-            "/api/admin/settings",
-            get(admin::get_settings).put(admin::update_settings),
+        // --- Admin (authenticated + isAdmin via the AdminUser extractor; a stricter
+        //     per-IP rate limit fronts every admin route). ---
+        .merge(
+            Router::new()
+                .route(
+                    "/api/admin/users",
+                    get(admin::list_users).post(admin::create_user),
+                )
+                .route(
+                    "/api/admin/users/:id",
+                    put(admin::update_user).delete(admin::delete_user),
+                )
+                .route("/api/admin/users/:id/2fa", delete(admin::force_disable_2fa))
+                .route(
+                    "/api/admin/users/:id/rotate-temp-password",
+                    post(admin::rotate_temp_password),
+                )
+                .route("/api/admin/users/:id/wipe", post(admin::wipe_user))
+                .route("/api/admin/stats", get(admin::get_stats))
+                .route("/api/admin/activity", get(admin::activity))
+                .route(
+                    "/api/admin/settings",
+                    get(admin::get_settings).put(admin::update_settings),
+                )
+                .route_layer(from_fn(middleware::rate_limit_admin)),
         )
         // Layer order: with chained `.layer()` the *last* added is the outermost. The tus
         // OPTIONS passthrough is outermost here so it can answer tus discovery before CORS
@@ -520,6 +541,12 @@ async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
 
 /// Liveness / identity probe — mirrors `handlers/health.go` `Get`. Anonymous,
 /// idempotent, no DB hit; returns `{name, version, tusVersions}`.
+#[utoipa::path(
+    get,
+    path = "/api/health",
+    tag = "health",
+    responses((status = 200, description = "Server name, build version, tus versions", body = HealthResponse))
+)]
 async fn health() -> Result<Json<HealthResponse>, AppError> {
     Ok(Json(HealthResponse {
         name: "kutup",

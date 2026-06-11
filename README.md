@@ -32,7 +32,7 @@ Self-hosted by design. Federation lets you share a folder with someone on a diff
 
 <img src="docs/screenshots/01-drive.png" alt="Drive view" width="800" />
 
-Nested collections, drag-and-drop upload, public share links, per-user folder shares with read/upload/delete permissions, and a hard-baked encryption boundary. Filenames, MIME types, and folder structure are encrypted client-side. Stream upload via `crypto_secretstream_xchacha20poly1305` keeps large files out of memory. Storage backs onto SeaweedFS (S3-compatible).
+Nested collections, drag-and-drop upload, public share links, per-user folder shares with read/upload/delete permissions, and a hard-baked encryption boundary. Filenames, MIME types, and folder structure are encrypted client-side. Stream upload via `crypto_secretstream_xchacha20poly1305` keeps large files out of memory. Deletes are recoverable: items land in a trash with restore + permanent delete and a configurable retention sweep (30 days by default). Storage backs onto SeaweedFS (S3-compatible).
 
 ### Live notes & code
 

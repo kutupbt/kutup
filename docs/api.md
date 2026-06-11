@@ -27,7 +27,7 @@ Returns public server settings (e.g. registration enabled/disabled).
 
 ### POST /api/auth/register
 
-Create a new account with an encrypted key bundle.
+Create a new account with an encrypted key bundle. Rate-limited (10/hr/IP, `RATE_LIMIT_REGISTER_PER_HOUR`).
 
 **Auth:** None
 
@@ -77,7 +77,7 @@ Fetch the KDF salts needed to derive the login key before submitting credentials
 
 ### POST /api/auth/login
 
-Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP).
+Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RATE_LIMIT_LOGIN_PER_MIN`). On top of the per-IP limit, repeated failed password attempts for one email lock that account out: after 5 failures (`LOGIN_LOCKOUT_THRESHOLD`) further attempts return `429` for 15 minutes (`LOGIN_LOCKOUT_MINUTES`). The lockout applies to unknown emails too, so a `429` does not reveal whether the account exists.
 
 **Auth:** None
 
@@ -411,9 +411,9 @@ Rename a collection (client re-encrypts the name with the collection key).
 
 ### DELETE /api/collections/:id
 
-Delete a collection and all files within it.
+Move a collection — with its whole subtree (sub-folders + files) — to the trash. The folder becomes a single trash entry; restore or purge it via the Trash endpoints. Items already in the trash keep their own entry and deletion time. While trashed, the subtree is invisible to every other endpoint (listings, downloads, shares, federation, collab) and its public share links go dark. Trashed items keep counting against quota until purged.
 
-**Auth:** Bearer JWT
+**Auth:** Bearer JWT (owner only)
 
 **Response:** `204 No Content`.
 
@@ -575,9 +575,80 @@ Download the encrypted content of a file.
 
 ### DELETE /api/files/:id
 
-Delete a file.
+Move a file to the trash (soft delete). The file disappears from every normal endpoint but keeps counting against quota; restore or purge it via the Trash endpoints. Permanent deletion happens from the trash — explicitly, or automatically after `TRASH_RETENTION_DAYS` (default 30).
+
+**Auth:** Bearer JWT (collection owner, or the uploader holding a `canDelete` share)
+
+**Response:** `204 No Content`.
+
+---
+
+## Trash
+
+Trash is **owner-scoped**: an item lives in the trash of the user who owns the collection it belongs to (a share recipient's delete lands in the owner's trash — the Google Drive model). Every entry is a *trash root*: a deleted file, or a deleted folder carrying its whole subtree. A background sweeper purges roots older than `TRASH_RETENTION_DAYS` (default 30; `0` disables the sweeper). Federated deletes (`DELETE /api/fed/shares/...`) remain permanent — there is no cross-server trash.
+
+### GET /api/trash
+
+List the caller's trash roots, newest first. Like everything else, names arrive encrypted: folder rows carry the folder's owner-wrapped key; file rows additionally carry the parent collection's owner-wrapped key (`collectionEncryptedKey`/`collectionEncryptedKeyNonce`) so the metadata chain decrypts even when the folder isn't in the live listing.
 
 **Auth:** Bearer JWT
+
+**Response:** `200 OK`
+```json
+{
+  "folders": [
+    {
+      "id": "<uuid>",
+      "encryptedName": "<base64>",
+      "nameNonce": "<base64>",
+      "encryptedKey": "<base64>",
+      "encryptedKeyNonce": "<base64>",
+      "color": "blue",
+      "items": 12,
+      "deletedAt": "2026-06-11T11:22:33Z"
+    }
+  ],
+  "files": [
+    {
+      "id": "<uuid>",
+      "collectionId": "<uuid>",
+      "encryptedMetadata": "<base64>",
+      "metadataNonce": "<base64>",
+      "encryptedFileKey": "<base64>",
+      "fileKeyNonce": "<base64>",
+      "collectionEncryptedKey": "<base64>",
+      "collectionEncryptedKeyNonce": "<base64>",
+      "deletedAt": "2026-06-11T11:22:33Z"
+    }
+  ]
+}
+```
+
+`items` is the number of files trashed together with the folder (its subtree).
+
+### POST /api/trash/:id/restore
+
+Put a trash root back where it was. Restoring a folder restores its whole subtree; if its original parent is gone or still trashed, it comes back at the top level. Restoring a file whose folder is still in the trash returns `409 Conflict` (restore the folder instead).
+
+**Auth:** Bearer JWT (owner only)
+
+**Response:** `200 OK` `{"message": "restored"}` · `409 Conflict` when the parent folder is still trashed.
+
+### DELETE /api/trash/:id
+
+Permanently purge one trash root: DB rows, S3 blobs (including version/asset children), and the held quota. Irreversible.
+
+**Auth:** Bearer JWT (owner only)
+
+**Response:** `204 No Content`.
+
+### DELETE /api/trash
+
+Empty the caller's whole trash. Irreversible.
+
+**Auth:** Bearer JWT
+
+**Response:** `204 No Content`.
 
 ---
 
@@ -841,7 +912,9 @@ Delete a file in an incoming federated share (if permitted). Proxied to the remo
 
 ## Admin
 
-All admin endpoints require the `isAdmin` flag on the JWT.
+All admin endpoints require the `isAdmin` flag on the JWT and share a stricter per-IP rate limit (120/min, `RATE_LIMIT_ADMIN_PER_MIN`; over-limit requests return `429`).
+
+Every mutating admin endpoint (create / update / delete user, force-disable 2FA, settings update) writes a row to the **admin audit log** — who did what to whom, when. The log is readable via `GET /api/admin/activity` below. Audit rows have no foreign keys and outlive the accounts they reference; the human-readable identities (emails, usernames) are snapshotted into the row's `payload` at action time.
 
 ### GET /api/admin/users
 
@@ -932,6 +1005,30 @@ Force-disable a user's TOTP two-factor authentication — an admin override for 
 
 ---
 
+### POST /api/admin/users/:id/rotate-temp-password
+
+Replace the temporary password of an account still in first-login state (`isFirstLogin: true`). Such an account has no E2EE key material yet, so nothing is destroyed. For an established account this returns `409` — under E2EE the server cannot reset a password without destroying the user's data; the user self-serves via `POST /api/auth/recover` (recovery phrase), or the admin wipes (below). Design: `docs/research/10-admin-password-reset.md`.
+
+**Auth:** Bearer JWT (admin)
+
+**Request body:** `{"tempPassword": "<new temp password>"}`
+
+**Response:** `200 OK` `{"message": "temp password rotated"}` · `409` when the user has completed setup.
+
+---
+
+### POST /api/admin/users/:id/wipe
+
+Destructive account reset for a user who lost both their password and their recovery phrase (their data is cryptographically unreachable anyway). Purges every collection the user owns — files, versions, assets, S3 blobs, share links, trash — erases the key bundle, disables TOTP, revokes collab device keys and received shares, then resets the account to first-login with the supplied temp password. Email, username, and quota survive. **Irreversible.** Refused (`403`) for the break-glass admin.
+
+**Auth:** Bearer JWT (admin)
+
+**Request body:** `{"tempPassword": "<new temp password>"}`
+
+**Response:** `200 OK` `{"message": "account wiped"}`.
+
+---
+
 ### GET /api/admin/stats
 
 Return aggregate server statistics.
@@ -952,6 +1049,38 @@ Return aggregate server statistics.
 ```
 
 `totalStorageUsedBytes` is the DB sum of per-account usage. `storageTotalBytes` and `storageBackendUsedBytes` are the storage backend's real total capacity and on-disk usage, probed live from the SeaweedFS master (`SEAWEEDFS_MASTER_URL`); `storageTotalBytes` falls back to the `STORAGE_TOTAL_BYTES` env var, and both are `0` when no probe or env var is configured.
+
+---
+
+### GET /api/admin/activity
+
+The admin audit-log feed, newest first.
+
+**Auth:** Bearer JWT (admin)
+
+**Query parameters:** `limit` (1–100, default 50) · `before` (cursor: return entries with `id` lower than this — pass the previous page's `nextBefore`).
+
+**Response:**
+```json
+{
+  "entries": [
+    {
+      "id": 7,
+      "action": "user.create",
+      "adminUserId": "<uuid>",
+      "adminEmail": "admin@example.com",
+      "adminUsername": "admin",
+      "targetUserId": "<uuid>",
+      "targetEmail": "newuser@example.com",
+      "payload": { "email": "newuser@example.com", "username": "newuser", "storageQuotaBytes": 10737418240 },
+      "occurredAt": "2026-06-11T11:22:33Z"
+    }
+  ],
+  "nextBefore": null
+}
+```
+
+Actions: `user.create`, `user.update` (payload carries a `changes` object with only the fields that were modified), `user.delete`, `user.2fa_disable`, `settings.update`. `adminEmail`/`targetEmail` are the live identities and become `null` once the referenced account is deleted — the `payload` snapshot keeps the trail readable. `nextBefore` is non-null while older pages remain.
 
 ---
 

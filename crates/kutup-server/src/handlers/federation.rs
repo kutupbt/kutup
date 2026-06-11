@@ -28,6 +28,13 @@ pub struct UserQuery {
 
 /// `GET /api/fed/users?username=…` — mirrors `GetUserByUsername`. Rate-limited (60/min/IP)
 /// by the route layer. Returns the recipient's public key for wrapping the collection key.
+#[utoipa::path(
+    get,
+    path = "/api/fed/users",
+    tag = "federation",
+    params(("username" = String, Query, description = "Local username to look up")),
+    responses((status = 200, description = "The user's public key", body = crate::models::PubkeyResponse))
+)]
 pub async fn get_user_by_username(
     State(state): State<AppState>,
     Query(q): Query<UserQuery>,
@@ -68,6 +75,13 @@ struct InviteResponse {
 }
 
 /// `GET /api/fed/invites/{token}` — mirrors `GetInvite`. The token is the auth.
+#[utoipa::path(
+    get,
+    path = "/api/fed/invites/{token}",
+    tag = "federation",
+    params(("token" = String, Path, description = "Federated-share access token")),
+    responses((status = 200, description = "Invite metadata + wrapped collection key", body = crate::models::FedInviteResponse))
+)]
 pub async fn get_invite(
     State(state): State<AppState>,
     Path(token): Path<String>,
@@ -76,7 +90,7 @@ pub async fn get_invite(
         r#"SELECT fos.encrypted_collection_key, c.encrypted_name, c.name_nonce,
                   fos.can_upload, fos.can_delete, fos.upload_quota_bytes
            FROM federated_outgoing_shares fos
-           JOIN collections c ON c.id = fos.collection_id
+           JOIN collections c ON c.id = fos.collection_id AND c.deleted_at IS NULL
            WHERE fos.access_token = $1"#,
     )
     .bind(&token)
@@ -117,12 +131,22 @@ struct FedFileRow {
 }
 
 /// `GET /api/fed/shares/{token}/files` — mirrors `ListShareFiles`.
+#[utoipa::path(
+    get,
+    path = "/api/fed/shares/{token}/files",
+    tag = "federation",
+    operation_id = "fedListShareFiles",
+    params(("token" = String, Path, description = "Federated-share access token")),
+    responses((status = 200, description = "Files in the shared collection", body = Vec<crate::models::FileRow>))
+)]
 pub async fn list_share_files(
     State(state): State<AppState>,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
     let coll_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT collection_id FROM federated_outgoing_shares WHERE access_token = $1",
+        r#"SELECT fos.collection_id FROM federated_outgoing_shares fos
+           JOIN collections c ON c.id = fos.collection_id AND c.deleted_at IS NULL
+           WHERE fos.access_token = $1"#,
     )
     .bind(&token)
     .fetch_optional(&state.pool)
@@ -148,7 +172,8 @@ pub async fn list_share_files(
     let rows: Vec<FedFileTuple> = sqlx::query_as(
         r#"SELECT id, collection_id, uploader_user_id, encrypted_metadata, metadata_nonce,
                   encrypted_file_key, file_key_nonce, encrypted_size_bytes, created_at, updated_at
-           FROM files WHERE collection_id = $1 ORDER BY created_at DESC"#,
+           FROM files WHERE collection_id = $1 AND deleted_at IS NULL
+           ORDER BY created_at DESC"#,
     )
     .bind(coll_id)
     .fetch_all(&state.pool)
@@ -176,12 +201,24 @@ pub async fn list_share_files(
 }
 
 /// `GET /api/fed/shares/{token}/files/{fileId}/download` — mirrors `DownloadShareFile`.
+#[utoipa::path(
+    get,
+    path = "/api/fed/shares/{token}/files/{fileId}/download",
+    tag = "federation",
+    params(
+        ("token" = String, Path, description = "Federated-share access token"),
+        ("fileId" = String, Path, description = "File id")
+    ),
+    responses((status = 200, description = "The encrypted blob (application/octet-stream)"))
+)]
 pub async fn download_share_file(
     State(state): State<AppState>,
     Path((token, file_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
     let coll_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT collection_id FROM federated_outgoing_shares WHERE access_token = $1",
+        r#"SELECT fos.collection_id FROM federated_outgoing_shares fos
+           JOIN collections c ON c.id = fos.collection_id AND c.deleted_at IS NULL
+           WHERE fos.access_token = $1"#,
     )
     .bind(&token)
     .fetch_optional(&state.pool)
@@ -193,7 +230,7 @@ pub async fn download_share_file(
     };
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
     let row: Option<(String, i64)> = sqlx::query_as(
-        "SELECT storage_path, encrypted_size_bytes FROM files WHERE id = $1 AND collection_id = $2",
+        "SELECT storage_path, encrypted_size_bytes FROM files WHERE id = $1 AND collection_id = $2 AND deleted_at IS NULL",
     )
     .bind(fid)
     .bind(coll_id)
@@ -214,14 +251,28 @@ pub async fn download_share_file(
 
 /// `POST /api/fed/shares/{token}/files` — mirrors `UploadShareFile`. Multipart upload from a
 /// remote server; the file blob is stored under `fed/{shareId}/{collectionId}/{fileId}`.
+#[utoipa::path(
+    post,
+    path = "/api/fed/shares/{token}/files",
+    tag = "federation",
+    params(("token" = String, Path, description = "Federated-share access token")),
+    request_body(
+        content = Vec<u8>,
+        content_type = "multipart/form-data",
+        description = "Fields: encryptedMetadata, metadataNonce, encryptedFileKey, fileKeyNonce + the encrypted `file` part"
+    ),
+    responses((status = 201, description = "File stored; body is `{\"id\": <fileId>}`"))
+)]
 pub async fn upload_share_file(
     State(state): State<AppState>,
     Path(token): Path<String>,
     mut multipart: Multipart,
 ) -> AppResult<Response> {
     let share: Option<(Uuid, Uuid, Uuid, bool, Option<i64>)> = sqlx::query_as(
-        r#"SELECT id, collection_id, sharer_user_id, can_upload, upload_quota_bytes
-           FROM federated_outgoing_shares WHERE access_token = $1"#,
+        r#"SELECT fos.id, fos.collection_id, fos.sharer_user_id, fos.can_upload, fos.upload_quota_bytes
+           FROM federated_outgoing_shares fos
+           JOIN collections c ON c.id = fos.collection_id AND c.deleted_at IS NULL
+           WHERE fos.access_token = $1"#,
     )
     .bind(&token)
     .fetch_optional(&state.pool)
@@ -360,13 +411,28 @@ pub async fn upload_share_file(
 }
 
 /// `DELETE /api/fed/shares/{token}/files/{fileId}` — mirrors `DeleteShareFile`.
+#[utoipa::path(
+    delete,
+    path = "/api/fed/shares/{token}/files/{fileId}",
+    tag = "federation",
+    params(
+        ("token" = String, Path, description = "Federated-share access token"),
+        ("fileId" = String, Path, description = "File id")
+    ),
+    responses((status = 204, description = "File permanently deleted (no cross-server trash)"))
+)]
 pub async fn delete_share_file(
     State(state): State<AppState>,
     Path((token, file_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
+    // NOTE: federated deletes stay *permanent* (no cross-server trash): the share-quota
+    // counter (`upload_used_bytes`) must balance on delete, and the remote user has no
+    // view into this server's trash to restore from.
     let share: Option<(Uuid, Uuid, Uuid, bool)> = sqlx::query_as(
-        r#"SELECT id, collection_id, sharer_user_id, can_delete
-           FROM federated_outgoing_shares WHERE access_token = $1"#,
+        r#"SELECT fos.id, fos.collection_id, fos.sharer_user_id, fos.can_delete
+           FROM federated_outgoing_shares fos
+           JOIN collections c ON c.id = fos.collection_id AND c.deleted_at IS NULL
+           WHERE fos.access_token = $1"#,
     )
     .bind(&token)
     .fetch_optional(&state.pool)
@@ -381,7 +447,7 @@ pub async fn delete_share_file(
     }
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
     let row: Option<(String, i64)> = sqlx::query_as(
-        "SELECT storage_path, encrypted_size_bytes FROM files WHERE id = $1 AND collection_id = $2",
+        "SELECT storage_path, encrypted_size_bytes FROM files WHERE id = $1 AND collection_id = $2 AND deleted_at IS NULL",
     )
     .bind(fid)
     .bind(coll_id)

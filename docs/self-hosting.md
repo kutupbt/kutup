@@ -52,6 +52,27 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # Optional fallback storage capacity (bytes) for the admin UI, used only
 # when the SeaweedFS probe is unavailable. Unset / 0 hides the readout.
 # STORAGE_TOTAL_BYTES=536870912000
+
+# Days a trashed file/folder stays restorable before the hourly sweeper
+# purges it permanently. 0 disables the automatic purge (trash only
+# empties when users do it themselves). Default: 30.
+# TRASH_RETENTION_DAYS=30
+
+# Rate limits, per client IP (defaults shown). The backend resolves the
+# client IP from the proxy-set X-Real-IP header, so keep the backend
+# unreachable except through nginx.
+# RATE_LIMIT_LOGIN_PER_MIN=10
+# RATE_LIMIT_PREFLIGHT_PER_MIN=20
+# RATE_LIMIT_REGISTER_PER_HOUR=10
+# RATE_LIMIT_RECOVERY_PER_HOUR=5
+# RATE_LIMIT_FED_USERS_PER_MIN=60
+# RATE_LIMIT_ADMIN_PER_MIN=120
+
+# Per-account login lockout: this many failed password attempts lock the
+# email out for the cooldown. Locked attempts return 429; the lock clears
+# on its own. Defaults shown.
+# LOGIN_LOCKOUT_THRESHOLD=5
+# LOGIN_LOCKOUT_MINUTES=15
 ```
 
 ---
@@ -97,7 +118,7 @@ This builds the backend and frontend images, then starts all services:
 | `seaweedfs-filer` | SeaweedFS filer |
 | `seaweedfs-s3` | SeaweedFS S3 gateway |
 | `seaweedfs-init` | One-shot: creates the S3 bucket |
-| `backend` | Go API server (internal port 3000) |
+| `backend` | Rust API server (Axum, internal port 3000) |
 | `frontend` | Compiled React app (served by Nginx) |
 | `nginx` | Reverse proxy — listens on port 80; 443 requires the manual TLS setup below |
 

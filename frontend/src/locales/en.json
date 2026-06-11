@@ -43,6 +43,30 @@
     "account": "Account",
     "primary": "Primary navigation"
   },
+  "trash": {
+    "restore": "Restore",
+    "deleteForever": "Delete forever",
+    "emptyTrash": "Empty trash",
+    "items_one": "{{count}} item",
+    "items_other": "{{count}} items",
+    "deletedOn": "Deleted {{date}}",
+    "deleteConfirm": {
+      "title": "Delete “{{name}}” forever?",
+      "desc": "This item will be permanently deleted. This cannot be undone."
+    },
+    "emptyConfirm": {
+      "title": "Empty trash?",
+      "desc": "All items in the trash will be permanently deleted. This cannot be undone."
+    },
+    "toast": {
+      "restored": "Restored",
+      "restoreFailed": "Restore failed",
+      "restoreParentFirst": "Restore the parent folder first",
+      "deleted": "Deleted forever",
+      "deleteFailed": "Delete failed",
+      "emptied": "Trash emptied"
+    }
+  },
   "auth": {
     "signIn": "Sign in",
     "email": "Email",
@@ -163,8 +187,8 @@
       "uploaded_other": "Uploaded {{count}} files",
       "downloading_one": "Downloading {{count}} file…",
       "downloading_other": "Downloading {{count}} files…",
-      "deleted_one": "Deleted {{count}} item",
-      "deleted_other": "Deleted {{count}} items",
+      "deleted_one": "Moved {{count}} item to Trash",
+      "deleted_other": "Moved {{count}} items to Trash",
       "someFailed": "Some items could not be deleted",
       "remoteAdded": "Remote share added",
       "remoteRemoved": "Remote share removed",
@@ -177,9 +201,9 @@
       "folderUploaded_one": "Uploaded {{count}} file",
       "folderUploaded_other": "Uploaded {{count}} files",
       "downloadFailed": "Download failed",
-      "fileDeleted": "File deleted",
+      "fileDeleted": "Moved to Trash",
       "deleteFailed": "Delete failed",
-      "folderDeleted": "Folder deleted",
+      "folderDeleted": "Folder moved to Trash",
       "folderDeleteFailed": "Failed to delete folder",
       "loadFailed": "Failed to load collections",
       "zipPreparing": "Preparing ZIP…",
@@ -193,23 +217,23 @@
       "shareFailed": "Could not share folder"
     },
     "deleteFile": {
-      "title": "Delete “{{name}}”?",
-      "desc": "This cannot be undone."
+      "title": "Move “{{name}}” to Trash?",
+      "desc": "You can restore it from the Trash for 30 days."
     },
     "deleteFolder": {
-      "title": "Delete folder “{{name}}”?",
-      "desc": "All files and subfolders will be permanently deleted."
+      "title": "Move folder “{{name}}” to Trash?",
+      "desc": "The folder and everything inside it move to the Trash. You can restore it for 30 days."
     },
     "batchDelete": {
-      "title_one": "Delete {{count}} item?",
-      "title_other": "Delete {{count}} items?",
+      "title_one": "Move {{count}} item to Trash?",
+      "title_other": "Move {{count}} items to Trash?",
       "files_one": "{{count}} file",
       "files_other": "{{count}} files",
       "folders_one": "{{count}} folder",
       "folders_other": "{{count}} folders",
       "and": "and",
-      "willBeDeleted": "will be permanently deleted. This cannot be undone.",
-      "deleteAll": "Delete all"
+      "willBeDeleted": "will be moved to the Trash. You can restore them for 30 days.",
+      "deleteAll": "Move all to Trash"
     },
     "publicLink": {
       "title": "Public link ready",
@@ -227,7 +251,7 @@
     "uploadHere": "Upload here",
     "share": "Share",
     "copyPublicLink": "Copy public link",
-    "deleteFolder": "Delete folder",
+    "deleteFolder": "Move to Trash",
     "removeShare": "Remove share",
     "changeColor": "Change color",
     "colorDefault": "Default",
@@ -244,7 +268,7 @@
     "uploaded": "Uploaded",
     "download": "Download",
     "rename": "Rename",
-    "delete": "Delete",
+    "delete": "Move to Trash",
     "selectAll": "Select all files"
   },
   "newMenu": {
@@ -267,10 +291,10 @@
     "rename": "Rename",
     "share": "Share",
     "copyPublicLink": "Copy public link",
-    "deleteFolder": "Delete folder",
+    "deleteFolder": "Move to Trash",
     "download": "Download",
     "downloadFolder": "Download as ZIP",
-    "delete": "Delete"
+    "delete": "Move to Trash"
   },
   "upload": {
     "progress": "Uploading",
@@ -420,7 +444,7 @@
         "of": "of {{total}} allocated",
         "unknown": "across all accounts"
       },
-      "footnote": "Activity feed, server uptime, and TLS status are not exposed by kutup's backend yet — they'll appear here when the endpoints land."
+      "footnote": "Server uptime and TLS status are not exposed by kutup’s backend yet — they’ll appear here when the endpoints land."
     },
     "users": {
       "exportCsv": "Export CSV",
@@ -446,7 +470,10 @@
         "disable": "Disable account",
         "reenable": "Re-enable account",
         "delete": "Delete permanently",
-        "breakGlassReason": "Break-glass admin — protected"
+        "breakGlassReason": "Break-glass admin — protected",
+        "rotateTempPassword": "Rotate temp password",
+        "rotateTempPasswordDisabled": "Setup completed — only the user can reset their password (recovery phrase)",
+        "wipe": "Wipe account…"
       }
     },
     "adminDialog": {
@@ -501,6 +528,34 @@
       "desc": "This permanently removes the user and all their data. This action cannot be undone.",
       "cancel": "Cancel",
       "confirm": "Delete"
+    },
+    "activity": {
+      "title": "Recent activity",
+      "empty": "No admin actions recorded yet.",
+      "deletedUser": "deleted user",
+      "action": {
+        "userCreate": "{{admin}} created user {{target}}",
+        "userUpdate": "{{admin}} updated {{target}}",
+        "userDelete": "{{admin}} deleted user {{target}}",
+        "user2faDisable": "{{admin}} disabled 2FA for {{target}}",
+        "settingsUpdate": "{{admin}} updated server settings",
+        "unknown": "{{admin}}: {{action}}",
+        "userRotateTempPassword": "{{admin}} rotated the temp password of {{target}}",
+        "userWipe": "{{admin}} wiped {{target}}"
+      }
+    },
+    "rotateTemp": {
+      "title": "Rotate temporary password",
+      "desc": "{{email}} hasn’t completed setup yet, so no data is at risk. Set a new temporary password and share it with the user out-of-band.",
+      "placeholder": "New temporary password (min 8 chars)",
+      "confirm": "Rotate password"
+    },
+    "wipe": {
+      "title": "Wipe {{email}}?",
+      "desc": "Erases ALL of this user’s files and encryption keys — kutup’s end-to-end encryption means there is no backdoor and this cannot be undone. The account itself stays, reset to first-login with the temporary password below. Only for a user who lost both their password and their recovery phrase.",
+      "passwordPlaceholder": "New temporary password (min 8 chars)",
+      "confirmLabel": "Type {{email}} to confirm",
+      "confirm": "Wipe account"
     }
   },
   "publicShare": {
@@ -765,7 +820,9 @@
       "settings.registrationGroup": "Registration",
       "settings.publicReg": "Public registration",
       "settings.publicRegSub": "Anyone can create an account from the sign-up page",
-      "settings.moreSoonNote": "More admin controls — required 2FA, quota defaults, storage backend, danger-zone actions — land as the backend grows. The desktop /admin page covers anything missing here."
+      "settings.moreSoonNote": "More admin controls — required 2FA, quota defaults, storage backend, danger-zone actions — land as the backend grows. The desktop /admin page covers anything missing here.",
+      "user.rotateTempSub": "Account hasn’t completed setup yet",
+      "user.wipeSub": "Erase all data + keys; reset to first-login"
     }
   }
 }

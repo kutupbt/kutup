@@ -12,6 +12,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -31,6 +32,14 @@ pub struct CreateShareRequest {
 }
 
 /// `POST /api/share` — mirrors `CreatePublicShare`. The link key is never sent here.
+#[utoipa::path(
+    post,
+    path = "/api/share",
+    tag = "shares",
+    security(("BearerAuth" = [])),
+    request_body = crate::models::CreateShareRequest,
+    responses((status = 201, description = "Share created", body = crate::models::CreateShareResult))
+)]
 pub async fn create_public_share(
     State(state): State<AppState>,
     user: AuthUser,
@@ -88,6 +97,13 @@ struct PublicShareResponse {
 }
 
 /// `GET /api/share/{token}` — mirrors `GetPublicShare`. Anonymous.
+#[utoipa::path(
+    get,
+    path = "/api/share/{token}",
+    tag = "shares",
+    params(("token" = String, Path, description = "Share token (the capability)")),
+    responses((status = 200, description = "Share metadata + wrapped key", body = crate::models::PublicShareResponse))
+)]
 pub async fn get_public_share(
     State(state): State<AppState>,
     Path(token): Path<String>,
@@ -131,7 +147,7 @@ pub async fn get_public_share(
 
 /// One file in a public-collection share. Field order mirrors the Go struct; `created_at`
 /// is the Postgres timestamp rendered as the same text Go's `time.Time` JSON produces.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct PublicFileRow {
     id: Uuid,
@@ -146,6 +162,13 @@ struct PublicFileRow {
 }
 
 /// `GET /api/share/{token}/files` — mirrors `ListPublicShareFiles`. Anonymous.
+#[utoipa::path(
+    get,
+    path = "/api/share/{token}/files",
+    tag = "shares",
+    params(("token" = String, Path, description = "Share token (the capability)")),
+    responses((status = 200, description = "Files in the shared collection", body = Vec<PublicFileRow>))
+)]
 pub async fn list_public_share_files(
     State(state): State<AppState>,
     Path(token): Path<String>,
@@ -169,6 +192,17 @@ pub async fn list_public_share_files(
     if share_type != "collection" {
         return Err(AppError::bad_request("not a collection share"));
     }
+    // A trashed collection's share links go dark until it is restored.
+    let live: Option<i64> =
+        sqlx::query_scalar("SELECT COUNT(*) FROM collections WHERE id = $1 AND deleted_at IS NULL")
+            .bind(target_id)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten();
+    if live.unwrap_or(0) == 0 {
+        return Err(AppError::not_found("not found"));
+    }
 
     type PubFileTuple = (
         Uuid,
@@ -183,7 +217,8 @@ pub async fn list_public_share_files(
     let rows: Vec<PubFileTuple> = sqlx::query_as(
         r#"SELECT id, collection_id, encrypted_metadata, metadata_nonce,
                   encrypted_file_key, file_key_nonce, encrypted_size_bytes, created_at
-           FROM files WHERE collection_id = $1 ORDER BY created_at DESC"#,
+           FROM files WHERE collection_id = $1 AND deleted_at IS NULL
+           ORDER BY created_at DESC"#,
     )
     .bind(target_id)
     .fetch_all(&state.pool)
@@ -210,6 +245,16 @@ pub async fn list_public_share_files(
 
 /// `GET /api/share/{token}/download/{fileId}` — mirrors `DownloadPublicShareFile`. Returns a
 /// presigned S3 URL. Anonymous.
+#[utoipa::path(
+    get,
+    path = "/api/share/{token}/download/{fileId}",
+    tag = "shares",
+    params(
+        ("token" = String, Path, description = "Share token (the capability)"),
+        ("fileId" = String, Path, description = "File id")
+    ),
+    responses((status = 200, description = "Presigned S3 download URL", body = crate::models::DownloadUrlResponse))
+)]
 pub async fn download_public_share_file(
     State(state): State<AppState>,
     Path((token, file_id)): Path<(String, String)>,
@@ -232,13 +277,14 @@ pub async fn download_public_share_file(
     }
 
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
-    let file: Option<(String, Uuid)> =
-        sqlx::query_as("SELECT storage_path, collection_id FROM files WHERE id = $1")
-            .bind(fid)
-            .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten();
+    let file: Option<(String, Uuid)> = sqlx::query_as(
+        "SELECT storage_path, collection_id FROM files WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(fid)
+    .fetch_optional(&state.pool)
+    .await
+    .ok()
+    .flatten();
     let Some((storage_path, coll_id)) = file else {
         return Err(AppError::not_found("not found"));
     };
@@ -269,8 +315,12 @@ async fn user_owns_target(
         return false;
     };
     let sql = match share_type {
-        "collection" => "SELECT COUNT(*) FROM collections WHERE id = $1 AND owner_user_id = $2",
-        "file" => "SELECT COUNT(*) FROM files WHERE id = $1 AND uploader_user_id = $2",
+        "collection" => {
+            "SELECT COUNT(*) FROM collections WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL"
+        }
+        "file" => {
+            "SELECT COUNT(*) FROM files WHERE id = $1 AND uploader_user_id = $2 AND deleted_at IS NULL"
+        }
         _ => return false,
     };
     let count: i64 = sqlx::query_scalar(sql)

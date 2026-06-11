@@ -15,6 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -23,19 +24,27 @@ use crate::middleware::AuthUser;
 use crate::models::{FileRow, MessageResponse, UploadResult};
 use crate::AppState;
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateFileMetadataRequest {
     encrypted_metadata: String,
     metadata_nonce: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ClaimSeedResponse {
     committed: bool,
 }
 
 /// `GET /api/collections/{id}/files` — mirrors `ListFiles`.
+#[utoipa::path(
+    get,
+    path = "/api/collections/{id}/files",
+    tag = "files",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Collection id")),
+    responses((status = 200, description = "Files in the collection", body = Vec<FileRow>))
+)]
 pub async fn list_files(
     State(state): State<AppState>,
     user: AuthUser,
@@ -65,7 +74,8 @@ pub async fn list_files(
                   encrypted_metadata, metadata_nonce,
                   encrypted_file_key, file_key_nonce,
                   encrypted_size_bytes, created_at, updated_at
-           FROM files WHERE collection_id = $1 ORDER BY created_at DESC"#,
+           FROM files WHERE collection_id = $1 AND deleted_at IS NULL
+           ORDER BY created_at DESC"#,
     )
     .bind(coll_id)
     .fetch_all(&state.pool)
@@ -92,6 +102,19 @@ pub async fn list_files(
 }
 
 /// `POST /api/files/upload` — mirrors `Upload`.
+#[utoipa::path(
+    post,
+    path = "/api/files/upload",
+    tag = "files",
+    operation_id = "uploadFile",
+    security(("BearerAuth" = [])),
+    request_body(
+        content = Vec<u8>,
+        content_type = "multipart/form-data",
+        description = "Fields: collectionId, encryptedMetadata, metadataNonce, encryptedFileKey, fileKeyNonce + the encrypted `file` part"
+    ),
+    responses((status = 201, description = "File stored", body = UploadResult))
+)]
 pub async fn upload(
     State(state): State<AppState>,
     user: AuthUser,
@@ -263,6 +286,15 @@ pub async fn upload(
 }
 
 /// `GET /api/files/{id}/download` — mirrors `Download`.
+#[utoipa::path(
+    get,
+    path = "/api/files/{id}/download",
+    tag = "files",
+    operation_id = "downloadFile",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "File id")),
+    responses((status = 200, description = "The encrypted blob (application/octet-stream)"))
+)]
 pub async fn download(
     State(state): State<AppState>,
     user: AuthUser,
@@ -272,7 +304,7 @@ pub async fn download(
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     let row: Option<(Uuid, String, Uuid)> = sqlx::query_as(
-        "SELECT collection_id, storage_path, uploader_user_id FROM files WHERE id = $1",
+        "SELECT collection_id, storage_path, uploader_user_id FROM files WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(file_id)
     .fetch_optional(&state.pool)
@@ -293,6 +325,15 @@ pub async fn download(
 }
 
 /// `PUT /api/files/{id}` — mirrors `UpdateMetadata` (rename).
+#[utoipa::path(
+    put,
+    path = "/api/files/{id}",
+    tag = "files",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "File id")),
+    request_body = UpdateFileMetadataRequest,
+    responses((status = 200, description = "Metadata updated", body = MessageResponse))
+)]
 pub async fn update_metadata(
     State(state): State<AppState>,
     user: AuthUser,
@@ -308,11 +349,12 @@ pub async fn update_metadata(
         ));
     }
 
-    let row: Option<(Uuid, Uuid)> =
-        sqlx::query_as("SELECT collection_id, uploader_user_id FROM files WHERE id = $1")
-            .bind(file_id)
-            .fetch_optional(&state.pool)
-            .await?;
+    let row: Option<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT collection_id, uploader_user_id FROM files WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(file_id)
+    .fetch_optional(&state.pool)
+    .await?;
     let Some((coll_id, uploader_id)) = row else {
         return Err(AppError::not_found("not found"));
     };
@@ -330,7 +372,18 @@ pub async fn update_metadata(
     .into_response())
 }
 
-/// `DELETE /api/files/{id}` — mirrors `Delete`.
+/// `DELETE /api/files/{id}` — soft-deletes into the trash (30-day retention). Quota stays
+/// reserved while the file is in trash (the blob still occupies storage); the permanent
+/// path (`DELETE /api/trash/{id}` or the retention sweeper) releases it.
+#[utoipa::path(
+    delete,
+    path = "/api/files/{id}",
+    tag = "files",
+    operation_id = "deleteFile",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "File id")),
+    responses((status = 204, description = "File moved to trash"))
+)]
 pub async fn delete(
     State(state): State<AppState>,
     user: AuthUser,
@@ -339,64 +392,36 @@ pub async fn delete(
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
-    let row: Option<(Uuid, String, i64, Uuid)> = sqlx::query_as(
-        "SELECT collection_id, storage_path, encrypted_size_bytes, uploader_user_id FROM files WHERE id = $1",
+    let row: Option<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT collection_id, uploader_user_id FROM files WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(file_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((coll_id, storage_path, file_size, uploader_id)) = row else {
+    let Some((coll_id, uploader_id)) = row else {
         return Err(AppError::not_found("not found"));
     };
     require_owner_or_uploader_with_delete(&state, user_id, coll_id, uploader_id).await?;
 
-    // Release quota for the file + its asset/version children, then delete (cascades the
-    // child rows via FK) — all in one transaction.
-    let mut tx = state.pool.begin().await?;
     sqlx::query(
-        r#"WITH per_uploader AS (
-              SELECT uploader_user_id, COALESCE(SUM(size_bytes), 0) AS total
-              FROM file_assets WHERE file_id = $1 GROUP BY uploader_user_id)
-           UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - per_uploader.total)
-           FROM per_uploader WHERE users.id = per_uploader.uploader_user_id"#,
+        "UPDATE files SET deleted_at = NOW(), trash_root_id = id WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(file_id)
-    .execute(&mut *tx)
+    .execute(&state.pool)
     .await?;
-    sqlx::query(
-        r#"WITH per_author AS (
-              SELECT author_user_id, COALESCE(SUM(size_bytes), 0) AS total
-              FROM file_versions WHERE file_id = $1 GROUP BY author_user_id)
-           UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - per_author.total)
-           FROM per_author WHERE users.id = per_author.author_user_id"#,
-    )
-    .bind(file_id)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query("DELETE FROM files WHERE id = $1")
-        .bind(file_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query(
-        "UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1) WHERE id = $2",
-    )
-    .bind(file_size)
-    .bind(uploader_id)
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
-
-    // Best-effort S3 GC (post-commit): the legacy main blob + the whole files/{id}/ prefix.
-    let _ = state.storage.delete(&storage_path).await;
-    let _ = state
-        .storage
-        .delete_prefix(&format!("files/{file_id}/"))
-        .await;
 
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 /// `POST /api/files/{fileId}/claim-seed` — mirrors `ClaimSeed`.
+#[utoipa::path(
+    post,
+    path = "/api/files/{fileId}/claim-seed",
+    tag = "files",
+    security(("BearerAuth" = [])),
+    params(("fileId" = String, Path, description = "File id")),
+    responses((status = 200, description = "Whether this caller won the first-seeder race", body = ClaimSeedResponse))
+)]
 pub async fn claim_seed(
     State(state): State<AppState>,
     user: AuthUser,
@@ -405,10 +430,11 @@ pub async fn claim_seed(
     let user_id = trusted_uuid(&user.user_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
 
-    let coll_id: Option<Uuid> = sqlx::query_scalar("SELECT collection_id FROM files WHERE id = $1")
-        .bind(fid)
-        .fetch_optional(&state.pool)
-        .await?;
+    let coll_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT collection_id FROM files WHERE id = $1 AND deleted_at IS NULL")
+            .bind(fid)
+            .fetch_optional(&state.pool)
+            .await?;
     let Some(coll_id) = coll_id else {
         return Err(AppError::not_found("not found"));
     };

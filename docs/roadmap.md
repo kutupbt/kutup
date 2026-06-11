@@ -13,85 +13,18 @@ It is the bridge between `docs/` (current state, authoritative) and `docs/resear
 The bar for the first `v*` tag:
 
 1. **No silent stubs in admin-facing UI.** Every clickable action that exists in the UI must work end-to-end. No "wire-up pending" toasts in shipped builds.
-2. **Deletion is recoverable.** Today, deleting a file is permanent. Google Drive / Apple Files have set the expectation that deletion is undoable; matching it is table stakes.
-3. **Self-hosters can recover broken users without SSH.** Lost TOTP device, forgotten password, accidental disable — the admin UI must cover these without touching the database.
+2. **Deletion is recoverable.** ✅ Shipped: owner-scoped trash with restore + permanent delete, and an hourly retention sweeper (`TRASH_RETENTION_DAYS`, default 30). See `docs/api.md` → Trash.
+3. **Self-hosters can recover broken users without SSH.** ✅ Shipped: force-disable 2FA (lost authenticator), re-enable account (accidental disable), rotate temp password (first-login accounts), and the destructive wipe for users who lost both password and recovery phrase — all from the admin UI on desktop + mobile. `docs/research/10-admin-password-reset.md` records why "reset password" is two actions under E2EE.
 4. **Builds are signed.** Unsigned binaries trigger macOS Gatekeeper and Windows SmartScreen warnings that look like malware to non-technical users.
-5. **Admin actions leave an audit trail.** Self-hosting communities — especially compliance-driven ones — need to know who disabled an account, when, and why.
-6. **Basic abuse protection.** Login + admin endpoints have rate-limiting; brute-force attempts surface in logs.
-7. **Documentation tracks reality.** No "this works but..." caveats in user-facing docs.
+5. **Admin actions leave an audit trail.** ✅ Shipped: every mutating admin endpoint writes an `admin_audit_log` row; `GET /admin/activity` serves the feed and the Recent-activity cards render it on desktop + mobile Admin Overview. See `docs/api.md` → Admin.
+6. **Basic abuse protection.** ✅ Shipped: per-IP limits on login/preflight/register/recovery/federation/admin (env-overridable `RATE_LIMIT_*`), per-account login lockout (`LOGIN_LOCKOUT_*`), per-token TOTP blocking, and proxy-aware client-IP resolution (X-Real-IP). See `docs/self-hosting.md`.
+7. **Documentation tracks reality.** ✅ Shipped: full docs sweep against the shipped code (stale Go-stack references scrubbed, env vars + endpoints verified), and every HTTP operation is annotated with `#[utoipa::path]` so `GET /api-docs/openapi.json` lists the complete API (a coverage test in `openapi.rs` keeps it honest). Interactive Swagger UI remains deferred (see below).
 
 Items below are organized by **whether they block v1** vs. whether they can ship in a subsequent release.
 
 ---
 
 ## Blockers for v1 (must-have)
-
-### Admin · `isAdmin` mutation, force-disable 2FA, break-glass admin — ✅ SHIPPED (PR 14)
-
-PR 14 wired all three. Kept here briefly for history; remove on the next roadmap sweep.
-
-- **Promote / demote admin** — the backend `UpdateUser` handler already accepted `isAdmin`; PR 14 added the frontend wiring (`useUpdateUser({ isAdmin })`, confirm dialogs on desktop + mobile).
-- **Force-disable 2FA** — `DELETE /admin/users/:id/2fa` clears `totp_secret` + `totp_enabled`; wired into both admin UIs with a confirm.
-- **Break-glass admin** — the single `ADMIN_ACCOUNT` bootstrap account is immutable: it can't be demoted, disabled, or deleted (backend 403 guards + `isProtected` flag surfaced in the UI). A generic last-admin guard backstops when `ADMIN_ACCOUNT` is unset.
-
-Still **NOT** done — audit-log entries for these actions (`// TODO(audit-log)` markers are in `handlers/admin.rs`); see the Audit log blocker below.
-
-### Admin · Password reset
-
-kutup is E2EE. A user's password derives (via Argon2id over `kdf_salt`) the key-encryption-key that decrypts `encrypted_master_key`. **The server never sees the master key**, so an admin *cannot* reset a password while preserving the user's data — only the user can, with their current password or their recovery phrase (the existing `/auth/recover` flow).
-
-This means there is **no simple "reset password" endpoint** — it's a design problem with two distinct flows:
-
-- **Recoverable** — the user still has their recovery phrase. They don't need an admin: they self-serve via `/auth/recover`. The admin's only role is to point them there. If we want an admin-initiated nudge, the safe scope is *rotating the temp password of a user still in `is_first_login` state* (no keys generated yet) — anything more for an established user breaks their access to their own files.
-- **Unrecoverable** — the user has lost both password and recovery phrase. Their data is cryptographically gone. The only "reset" is a **destructive account wipe** (destroy keys + files, keep email/username) so they can start fresh, behind an explicit data-loss confirmation.
-
-| What's needed | Where |
-|---|---|
-| Design: write up both flows + UI copy + the `is_first_login` temp-password-rotation carve-out | `docs/research/` — new note |
-| Backend: `POST /admin/users/:id/rotate-temp-password` — only valid while `is_first_login` | `crates/kutup-server/src/handlers/admin.rs` |
-| Backend: `POST /admin/users/:id/wipe` — destructive reset for the unrecoverable path | same |
-| Frontend: surface both as distinct, clearly-labelled actions (not one "Reset password") | `AdminUserMenu` / `MobileAdminUserDetailPage` |
-| Email (optional, see SMTP below): deliver the rotated temp password if SMTP is configured | backend integration |
-
-### Trash + 30-day retention (PR 6 + PR 7)
-
-Both desktop and mobile Trash UI are already built and shipped (`frontend/src/hooks/useTrash.ts`, `frontend/src/pages/mobile/MobileTrashPage.tsx`, `frontend/src/pages/TrashPage.tsx`). They render an empty-state hero because the backend has no soft-delete concept yet — `useTrash()` returns `{ items: [], …NOT_WIRED }`.
-
-| What's needed | Where |
-|---|---|
-| Backend: schema migration — `deleted_at TIMESTAMPTZ NULL` on `files` and `collections` | `crates/kutup-server/migrations/` |
-| Backend: change `DELETE /files/:id` + `DELETE /collections/:id` to soft-delete (write `deleted_at = NOW()`, skip from default queries) | `crates/kutup-server/src/handlers/{files,collections}.rs` |
-| Backend: `GET /trash` (per-user) + `POST /trash/:id/restore` + `DELETE /trash/:id` (permanent) + `DELETE /trash` (empty all) | new handler |
-| Backend: sweeper goroutine to purge items older than `TRASH_RETENTION_DAYS` (default 30) | `crates/kutup-server/src/jobs.rs` (alongside the existing sweepers) |
-| Backend: storage usage recalc on restore (trashed items still count against quota OR don't — pick one, document) | tied to handler |
-| Frontend: replace `useTrash`'s NOT_WIRED stubs with real fetches via React Query | `frontend/src/hooks/useTrash.ts` |
-| Frontend: change "Delete" actions to "Move to Trash" everywhere; permanent-delete only from Trash | Drive / mobile sheets / admin |
-| Frontend: drop the `useTrash()` JSDoc note about NOT_WIRED | `useTrash.ts` |
-| Test: round-trip — delete → appears in trash → restore → reappears in source folder → sweeper purges after N days | both ends |
-
-### Admin · Audit log
-
-Admin actions today leave no record. Production self-hosters — especially in regulated contexts — need to know who disabled an account, when, with what reason.
-
-| What's needed | Where |
-|---|---|
-| Backend: schema migration — `admin_audit_log(id, admin_user_id, action, target_user_id, payload_jsonb, occurred_at)` | `crates/kutup-server/migrations/` |
-| Backend: write a log row from every admin handler (`CreateUser`, `UpdateUser`, `DeleteUser`, `UpdateAdminSettings`, future reset/2fa/promote) | `crates/kutup-server/src/handlers/admin.rs` |
-| Backend: `GET /admin/activity?limit=50&before=cursor` | new handler |
-| Frontend: unhide the Recent activity card on the desktop Admin Overview (today it's hidden with a footnote about the missing endpoint) | `frontend/src/components/admin/AdminOverviewTab.tsx` |
-| Frontend: similar card on mobile Admin Overview | `frontend/src/pages/mobile/account/admin/MobileAdminOverviewTab.tsx` |
-
-### Rate limiting + brute-force protection
-
-Login + register + admin endpoints have no rate limit. A trivial script can hammer them.
-
-| What's needed | Where |
-|---|---|
-| Backend: middleware — token-bucket per IP for `/auth/*` (10 req / 5 min default) | `crates/kutup-server/src/middleware.rs` + `ratelimit.rs` |
-| Backend: per-account "5 failed logins → lockout for 15 min" | `crates/kutup-server/src/handlers/auth.rs` + DB column or in-memory `failed_logins` |
-| Backend: separate stricter limit on admin endpoints | same middleware |
-| Config: env-var overrides (`AUTH_RATE_LIMIT_PER_5MIN`, `LOGIN_LOCKOUT_THRESHOLD`, etc.) | `crates/kutup-server/src/config.rs` |
-| Test: integration test that exceeding the limit returns 429 | `crates/kutup-server/src/handlers/auth.rs` (tests) |
 
 ### Signed builds
 
@@ -106,17 +39,6 @@ CLAUDE.md explicitly notes: **"Builds are currently unsigned."** macOS Gatekeepe
 | iOS App Store icon: re-render with a non-transparent background (`pnpm tauri:icon src-tauri/icons/source.png --ios-color <hex>`) — App Store Connect rejects transparent / alpha-channel app icons at submission | `package.json` + `src-tauri/icons/` |
 | Android: Play Store key + Play Console | external |
 | Documentation: `docs/release-signing.md` covering how to rotate keys | new doc |
-
-### Documentation truthfulness pass
-
-The mobile UI shipped over PRs 2 → 13 changed a lot of user-visible behavior (bottom-tab nav, Account → Admin sub-pages, mobile-specific routes like `/drive/account/admin`, TOTP setup as a page, etc.). `docs/architecture.md` and `docs/mobile-build.md` need a sweep to confirm they describe what shipped, not what the design originally proposed.
-
-| What's needed | Where |
-|---|---|
-| Re-read each `docs/*.md` and confirm it describes the current shipped UI | every file under `docs/` |
-| Update `docs/api.md` with the new `storageTotalBytes` field on `AdminStats` | `docs/api.md` |
-| Update `docs/self-hosting.md` to document the new `STORAGE_TOTAL_BYTES` env var | `docs/self-hosting.md` |
-| Add per-path `#[utoipa::path]` operation annotations + an interactive Swagger UI (the spec is already served at `GET /api-docs/openapi.json`) | `crates/kutup-server/src/openapi.rs` + handlers |
 
 ---
 
@@ -166,12 +88,8 @@ The design has "Re-index search" and "Purge soft-deleted files now" in a Setting
 | What's needed | Where |
 |---|---|
 | Backend: `POST /admin/actions/reindex-search` (kicks off the encrypted-search reindex) | new |
-| Backend: `POST /admin/actions/purge-trash` (forces the sweeper to run now) — depends on trash work above | new |
+| Backend: `POST /admin/actions/purge-trash` (forces the trash retention sweeper — `jobs::trash_sweep_once` — to run now) | new |
 | Frontend: unhide the danger zone card | both admin Settings tabs |
-
-### SeaweedFS master auto-detect for storage capacity — ✅ SHIPPED (PR 14)
-
-PR 14 added `crates/kutup-server/src/storage_probe.rs`: a cached (60s) probe that walks the SeaweedFS master topology (`SEAWEEDFS_MASTER_URL`) + each volume server's `/status`, returning real total + used + free disk bytes. `GET /admin/stats` now returns probe-sourced `storageTotalBytes` + `storageBackendUsedBytes`; the `STORAGE_TOTAL_BYTES` env var is the fallback when the probe is unavailable. Remove this entry on the next roadmap sweep.
 
 ### Mobile · Android Keychain
 
@@ -311,19 +229,6 @@ script, which breaks offline/sandboxed builds (and the rule that the server comp
 offline). Restore it by vendoring the UI bundle (`SWAGGER_UI_OVERWRITE_FOLDER` or a
 `file://` `SWAGGER_UI_DOWNLOAD_URL`) so the build stays network-free, then mount it at
 `/swagger`. The OpenAPI JSON is unaffected.
-
-### Go→Rust server rewrite · per-path OpenAPI operations
-
-The Rust `utoipa` `ApiDoc` currently carries the `info` block, the `BearerAuth` security
-scheme, and the response/DTO **schemas**, but not the per-path **operations** (the Go
-handlers had `// @Router`/`// @Summary` annotations consumed by `swaggo`; the Rust handlers
-have no `#[utoipa::path(...)]` annotations yet). So `GET /api-docs/openapi.json` lists
-schemas but an empty `paths`. Endpoint parity was instead verified **directly against the
-router**: before the cutover, a method+path diff of `crates/kutup-server/src/main.rs`
-against the Go `backend/main.go` matched exactly (72 method+path combinations; only
-`GET /swagger/*` → `GET /api-docs/openapi.json` differed, per the entry above). To fully
-restore the spec, add `#[utoipa::path]` to each handler and register them in
-`ApiDoc::paths(...)`, then `GET /api-docs/openapi.json` lists every operation.
 
 ---
 

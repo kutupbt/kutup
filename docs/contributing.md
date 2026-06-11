@@ -8,7 +8,7 @@ Contributions are welcome. This guide covers local development setup for both th
 
 | Tool | Version | Install |
 |------|---------|---------|
-| Go | 1.22+ | https://go.dev/dl/ |
+| Rust | 1.91+ (stable) | https://rustup.rs/ |
 | Node.js | 20+ | https://nodejs.org/ |
 | pnpm | 9+ | `npm install -g pnpm` |
 | Docker + Compose v2 | latest | https://docs.docker.com/get-docker/ |

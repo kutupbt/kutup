@@ -14,6 +14,7 @@ use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -36,7 +37,7 @@ const FAKE_BCRYPT_HASH: &str = "$2a$10$fakehashfortimingprotectiononly";
 // deserializes to its zero value — Go's `c.BodyParser` (encoding/json) never errors on
 // absent fields, only on malformed JSON.
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RegisterRequest {
     email: String,
@@ -56,7 +57,7 @@ pub struct RegisterRequest {
     recovery_proof: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LoginRequest {
     email: String,
@@ -65,7 +66,7 @@ pub struct LoginRequest {
 
 /// Mirrors `auth.LoginResponse`. Non-omitempty fields are always present (empty/zero on
 /// the setup/2FA branches); the four omitempty fields are skipped at their defaults.
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginResponse {
     access_token: String,
@@ -90,14 +91,14 @@ pub struct LoginResponse {
     setup_token: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct TwoFALoginRequest {
     pre_auth_token: String,
     code: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RecoverRequest {
     email: String,
@@ -111,20 +112,20 @@ pub struct RecoverRequest {
     recovery_proof: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RefreshRequest {
     refresh_token: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateMeRequest {
     /// Hex color like `#ef4444`; empty string clears it; absent leaves it unchanged.
     color: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(default)]
 pub struct CodeRequest {
     code: String,
@@ -138,7 +139,7 @@ pub struct EmailQuery {
 }
 
 /// Mirrors the `fiber.Map` returned by `CompleteSetup`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CompleteSetupResponse {
     access_token: String,
@@ -156,6 +157,12 @@ fn is_false(b: &bool) -> bool {
 // --- handlers ---
 
 /// `GET /api/auth/settings` — mirrors `GetPublicSettings`.
+#[utoipa::path(
+    get,
+    path = "/api/auth/settings",
+    tag = "auth",
+    responses((status = 200, description = "Public registration settings", body = SettingsResponse))
+)]
 pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Response> {
     let val: Option<String> =
         sqlx::query_scalar("SELECT value FROM site_settings WHERE key='registration_enabled'")
@@ -168,6 +175,13 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
 }
 
 /// `POST /api/auth/register` — mirrors `Register`.
+#[utoipa::path(
+    post,
+    path = "/api/auth/register",
+    tag = "auth",
+    request_body = RegisterRequest,
+    responses((status = 201, description = "Account created", body = MessageResponse))
+)]
 pub async fn register(
     State(state): State<AppState>,
     body: Result<Json<RegisterRequest>, JsonRejection>,
@@ -247,6 +261,13 @@ pub async fn register(
 
 /// `GET /api/auth/login/preflight` — mirrors `GetLoginPreflight`. Returns deterministic
 /// fake salts for unknown emails to defeat enumeration.
+#[utoipa::path(
+    get,
+    path = "/api/auth/login/preflight",
+    tag = "auth",
+    params(("email" = String, Query, description = "Account email")),
+    responses((status = 200, description = "KDF + login-key salts", body = PreflightLoginResponse))
+)]
 pub async fn get_login_preflight(
     State(state): State<AppState>,
     Query(q): Query<EmailQuery>,
@@ -278,11 +299,27 @@ pub async fn get_login_preflight(
 }
 
 /// `POST /api/auth/login` — mirrors `Login`.
+#[utoipa::path(
+    post,
+    path = "/api/auth/login",
+    tag = "auth",
+    request_body = LoginRequest,
+    responses((status = 200, description = "Session, 2FA challenge, or first-login setup token", body = LoginResponse))
+)]
 pub async fn login(
     State(state): State<AppState>,
     body: Result<Json<LoginRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
+
+    // Per-account lockout (on top of the per-IP route limiter): N failed password
+    // attempts lock the email out for a cooldown. Checked for unknown emails too, so
+    // the 429 is not an account-existence oracle.
+    if ratelimit::LOGIN_LOCKOUT.is_locked(&req.email) {
+        return Err(AppError::too_many_requests(
+            "too many failed attempts, try again later",
+        ));
+    }
 
     type Row = (
         Uuid,
@@ -332,6 +369,7 @@ pub async fn login(
     else {
         // Run bcrypt anyway to keep timing constant.
         let _ = bcrypt::verify("dummy", FAKE_BCRYPT_HASH);
+        ratelimit::LOGIN_LOCKOUT.record(&req.email, false);
         return Err(AppError::unauthorized("invalid credentials"));
     };
 
@@ -344,8 +382,10 @@ pub async fn login(
         .map_err(|_| AppError::bad_request("invalid loginKey"))?;
 
     if !bcrypt::verify(&login_key_bytes, &login_key_hash).unwrap_or(false) {
+        ratelimit::LOGIN_LOCKOUT.record(&req.email, false);
         return Err(AppError::unauthorized("invalid credentials"));
     }
+    ratelimit::LOGIN_LOCKOUT.record(&req.email, true);
 
     let user_id = id.to_string();
 
@@ -390,6 +430,13 @@ pub async fn login(
 }
 
 /// `POST /api/auth/login/2fa` — mirrors `LoginTwoFA`.
+#[utoipa::path(
+    post,
+    path = "/api/auth/login/2fa",
+    tag = "auth",
+    request_body = TwoFALoginRequest,
+    responses((status = 200, description = "Full session after TOTP", body = LoginResponse))
+)]
 pub async fn login_two_fa(
     State(state): State<AppState>,
     body: Result<Json<TwoFALoginRequest>, JsonRejection>,
@@ -483,6 +530,13 @@ pub async fn login_two_fa(
 }
 
 /// `GET /api/auth/recover/preflight` — mirrors `GetRecoveryPreflight`.
+#[utoipa::path(
+    get,
+    path = "/api/auth/recover/preflight",
+    tag = "auth",
+    params(("email" = String, Query, description = "Account email")),
+    responses((status = 200, description = "Encrypted recovery key material", body = PreflightRecoverResponse))
+)]
 pub async fn get_recovery_preflight(
     State(state): State<AppState>,
     Query(q): Query<EmailQuery>,
@@ -519,6 +573,13 @@ pub async fn get_recovery_preflight(
 }
 
 /// `POST /api/auth/recover` — mirrors `Recover`.
+#[utoipa::path(
+    post,
+    path = "/api/auth/recover",
+    tag = "auth",
+    request_body = RecoverRequest,
+    responses((status = 200, description = "Password reset via recovery phrase", body = MessageResponse))
+)]
 pub async fn recover(
     State(state): State<AppState>,
     body: Result<Json<RecoverRequest>, JsonRejection>,
@@ -585,6 +646,13 @@ pub async fn recover(
 
 /// `POST /api/auth/refresh` — mirrors `Refresh`. Reads the refresh token from the cookie,
 /// falling back to the JSON body.
+#[utoipa::path(
+    post,
+    path = "/api/auth/refresh",
+    tag = "auth",
+    request_body(content = RefreshRequest, description = "Fallback when the refresh_token cookie is absent"),
+    responses((status = 200, description = "Fresh access token", body = RefreshResponse))
+)]
 pub async fn refresh(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -628,6 +696,13 @@ pub async fn refresh(
 }
 
 /// `GET /api/user/me` — mirrors `GetMe`.
+#[utoipa::path(
+    get,
+    path = "/api/user/me",
+    tag = "auth",
+    security(("BearerAuth" = [])),
+    responses((status = 200, description = "The caller's profile", body = MeResponse))
+)]
 pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
     type Row = (Uuid, String, String, String, bool, i64, i64, bool, String);
     let row: Option<Row> = sqlx::query_as(
@@ -658,6 +733,14 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
 }
 
 /// `PATCH /api/user/me` — mirrors `UpdateMe`.
+#[utoipa::path(
+    patch,
+    path = "/api/user/me",
+    tag = "auth",
+    security(("BearerAuth" = [])),
+    request_body = UpdateMeRequest,
+    responses((status = 200, description = "Profile updated", body = OkResponse))
+)]
 pub async fn update_me(
     State(state): State<AppState>,
     user: AuthUser,
@@ -682,6 +765,14 @@ pub async fn update_me(
 }
 
 /// `GET /api/users/by-email/:email` — mirrors `GetUserByEmail`.
+#[utoipa::path(
+    get,
+    path = "/api/users/by-email/{email}",
+    tag = "auth",
+    security(("BearerAuth" = [])),
+    params(("email" = String, Path, description = "Target user's email")),
+    responses((status = 200, description = "User id + public key", body = UserLookupResponse))
+)]
 pub async fn get_user_by_email(
     State(state): State<AppState>,
     _user: AuthUser,
@@ -703,6 +794,13 @@ pub async fn get_user_by_email(
 }
 
 /// `POST /api/user/2fa/setup` — mirrors `SetupTOTP`.
+#[utoipa::path(
+    post,
+    path = "/api/user/2fa/setup",
+    tag = "auth",
+    security(("BearerAuth" = [])),
+    responses((status = 200, description = "TOTP secret + provisioning URI", body = TotpSetupResponse))
+)]
 pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
     let email: Option<String> = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
         .bind(parse_uuid(&user.user_id)?)
@@ -725,6 +823,14 @@ pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppRes
 }
 
 /// `POST /api/user/2fa/verify` — mirrors `VerifyTOTP`.
+#[utoipa::path(
+    post,
+    path = "/api/user/2fa/verify",
+    tag = "auth",
+    security(("BearerAuth" = [])),
+    request_body = CodeRequest,
+    responses((status = 200, description = "TOTP enabled", body = MessageResponse))
+)]
 pub async fn verify_totp(
     State(state): State<AppState>,
     user: AuthUser,
@@ -757,6 +863,14 @@ pub async fn verify_totp(
 }
 
 /// `DELETE /api/user/2fa` — mirrors `DisableTOTP`.
+#[utoipa::path(
+    delete,
+    path = "/api/user/2fa",
+    tag = "auth",
+    security(("BearerAuth" = [])),
+    request_body = CodeRequest,
+    responses((status = 200, description = "TOTP disabled", body = MessageResponse))
+)]
 pub async fn disable_totp(
     State(state): State<AppState>,
     user: AuthUser,
@@ -797,6 +911,14 @@ pub async fn disable_totp(
 
 /// `POST /api/auth/complete-setup` — mirrors `CompleteSetup`. Authenticated by the
 /// short-lived setup token (not a regular access token).
+#[utoipa::path(
+    post,
+    path = "/api/auth/complete-setup",
+    tag = "auth",
+    security(("BearerAuth" = [])),
+    request_body = RegisterRequest,
+    responses((status = 200, description = "Setup complete; full session issued", body = CompleteSetupResponse))
+)]
 pub async fn complete_setup(
     State(state): State<AppState>,
     headers: HeaderMap,

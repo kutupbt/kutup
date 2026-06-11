@@ -135,6 +135,19 @@ pub async fn options() -> Response {
 /// `Upload-Metadata` carrying `collectionId, encryptedMetadata, metadataNonce,
 /// encryptedFileKey, fileKeyNonce`. Returns 201 with `Location`, `Upload-Offset: 0` and a
 /// `{"fileId": …}` body (tus-js-client surfaces it to the browser path).
+#[utoipa::path(
+    post,
+    path = "/api/uploads",
+    tag = "tus",
+    operation_id = "tusCreate",
+    security(("BearerAuth" = [])),
+    params(
+        ("Tus-Resumable" = String, Header, description = "Must be 1.0.0"),
+        ("Upload-Length" = i64, Header, description = "Total upload size in bytes"),
+        ("Upload-Metadata" = String, Header, description = "Comma-separated `key <base64>` pairs: collectionId, encryptedMetadata, metadataNonce, encryptedFileKey, fileKeyNonce")
+    ),
+    responses((status = 201, description = "Session created; `Location` + `Upload-Offset: 0` headers and a `{\"fileId\": …}` body"))
+)]
 pub async fn create(State(state): State<AppState>, user: AuthUser, headers: HeaderMap) -> Response {
     if let Some(resp) = require_tus_resumable(&headers) {
         return resp;
@@ -196,20 +209,22 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     };
 
     // Permission check + quota gate, mirroring files.rs upload.
-    let owner_n: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM collections WHERE id=$1 AND owner_user_id=$2")
-            .bind(coll_uuid)
-            .bind(user_id)
-            .fetch_one(&mut *tx)
-            .await
-            .unwrap_or(0);
+    let owner_n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM collections WHERE id=$1 AND owner_user_id=$2 AND deleted_at IS NULL",
+    )
+    .bind(coll_uuid)
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap_or(0);
     let is_owner = owner_n > 0;
 
     let mut upload_quota_bytes: Option<i64> = None;
     if !is_owner {
         let share: Option<(bool, Option<i64>)> = sqlx::query_as(
-            "SELECT can_upload, upload_quota_bytes FROM collection_shares \
-             WHERE collection_id=$1 AND recipient_user_id=$2",
+            "SELECT cs.can_upload, cs.upload_quota_bytes FROM collection_shares cs \
+             JOIN collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL \
+             WHERE cs.collection_id=$1 AND cs.recipient_user_id=$2",
         )
         .bind(coll_uuid)
         .bind(user_id)
@@ -343,6 +358,18 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
 
 /// Returns the current `Upload-Offset` so the client can resume — mirrors `Head`. 404 if
 /// the upload doesn't exist / isn't owned by the caller.
+#[utoipa::path(
+    head,
+    path = "/api/uploads/{id}",
+    tag = "tus",
+    operation_id = "tusHead",
+    security(("BearerAuth" = [])),
+    params(
+        ("id" = String, Path, description = "Upload-session id"),
+        ("Tus-Resumable" = String, Header, description = "Must be 1.0.0")
+    ),
+    responses((status = 200, description = "`Upload-Offset` + `Upload-Length` headers for resuming"))
+)]
 pub async fn head(
     State(state): State<AppState>,
     user: AuthUser,
@@ -394,6 +421,24 @@ pub async fn head(
 /// the final must be ≥ 5 MiB. The PATCH that brings `received_bytes == total_bytes` runs the
 /// finaliser: complete-multipart, INSERT `files`, bump `storage_used_bytes`, DELETE the row;
 /// it returns `X-Kutup-File-Id`.
+#[utoipa::path(
+    patch,
+    path = "/api/uploads/{id}",
+    tag = "tus",
+    operation_id = "tusPatch",
+    security(("BearerAuth" = [])),
+    params(
+        ("id" = String, Path, description = "Upload-session id"),
+        ("Tus-Resumable" = String, Header, description = "Must be 1.0.0"),
+        ("Upload-Offset" = i64, Header, description = "Byte offset this chunk starts at")
+    ),
+    request_body(
+        content = Vec<u8>,
+        content_type = "application/offset+octet-stream",
+        description = "One chunk of the encrypted blob (non-final chunks must be ≥ 5 MiB)"
+    ),
+    responses((status = 204, description = "Chunk appended; the final chunk also returns `X-Kutup-File-Id`"))
+)]
 pub async fn patch(
     State(state): State<AppState>,
     user: AuthUser,
@@ -651,6 +696,18 @@ pub async fn patch(
 /// Cancels an in-flight upload — mirrors `Delete`. Aborts the S3 multipart (freeing
 /// SeaweedFS staging), then removes the DB row (freeing reserved quota). Abort-before-row
 /// ordering keeps a failed abort recoverable from the row. 404 if not owned by the caller.
+#[utoipa::path(
+    delete,
+    path = "/api/uploads/{id}",
+    tag = "tus",
+    operation_id = "tusDelete",
+    security(("BearerAuth" = [])),
+    params(
+        ("id" = String, Path, description = "Upload-session id"),
+        ("Tus-Resumable" = String, Header, description = "Must be 1.0.0")
+    ),
+    responses((status = 204, description = "Upload cancelled; reserved quota freed"))
+)]
 pub async fn delete(
     State(state): State<AppState>,
     user: AuthUser,
