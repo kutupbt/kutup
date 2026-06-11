@@ -37,7 +37,10 @@ describe('envelope', () => {
   })
 
   it('decodes the canonical vector_v1.bin', () => {
-    const p = path.resolve(__dirname, '../../../backend/services/envelope/testdata/vector_v1.bin')
+    // Vendored from the (removed) Go reference's envelope testdata — the canonical
+    // cross-implementation frame; the Rust mirror checks the same bytes via
+    // crates/kutup-crypto/tests/vectors/envelope.json.
+    const p = path.resolve(__dirname, 'testdata/vector_v1.bin')
     const bs = new Uint8Array(fs.readFileSync(p))
     const f = unpack(bs)
     expect(f.version).toBe(1)
