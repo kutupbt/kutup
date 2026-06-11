@@ -541,6 +541,12 @@ async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
 
 /// Liveness / identity probe — mirrors `handlers/health.go` `Get`. Anonymous,
 /// idempotent, no DB hit; returns `{name, version, tusVersions}`.
+#[utoipa::path(
+    get,
+    path = "/api/health",
+    tag = "health",
+    responses((status = 200, description = "Server name, build version, tus versions", body = HealthResponse))
+)]
 async fn health() -> Result<Json<HealthResponse>, AppError> {
     Ok(Json(HealthResponse {
         name: "kutup",

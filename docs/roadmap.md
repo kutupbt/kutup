@@ -18,7 +18,7 @@ The bar for the first `v*` tag:
 4. **Builds are signed.** Unsigned binaries trigger macOS Gatekeeper and Windows SmartScreen warnings that look like malware to non-technical users.
 5. **Admin actions leave an audit trail.** ✅ Shipped: every mutating admin endpoint writes an `admin_audit_log` row; `GET /admin/activity` serves the feed and the Recent-activity cards render it on desktop + mobile Admin Overview. See `docs/api.md` → Admin.
 6. **Basic abuse protection.** ✅ Shipped: per-IP limits on login/preflight/register/recovery/federation/admin (env-overridable `RATE_LIMIT_*`), per-account login lockout (`LOGIN_LOCKOUT_*`), per-token TOTP blocking, and proxy-aware client-IP resolution (X-Real-IP). See `docs/self-hosting.md`.
-7. **Documentation tracks reality.** No "this works but..." caveats in user-facing docs.
+7. **Documentation tracks reality.** ✅ Shipped: full docs sweep against the shipped code (stale Go-stack references scrubbed, env vars + endpoints verified), and every HTTP operation is annotated with `#[utoipa::path]` so `GET /api-docs/openapi.json` lists the complete API (a coverage test in `openapi.rs` keeps it honest). Interactive Swagger UI remains deferred (see below).
 
 Items below are organized by **whether they block v1** vs. whether they can ship in a subsequent release.
 
@@ -39,17 +39,6 @@ CLAUDE.md explicitly notes: **"Builds are currently unsigned."** macOS Gatekeepe
 | iOS App Store icon: re-render with a non-transparent background (`pnpm tauri:icon src-tauri/icons/source.png --ios-color <hex>`) — App Store Connect rejects transparent / alpha-channel app icons at submission | `package.json` + `src-tauri/icons/` |
 | Android: Play Store key + Play Console | external |
 | Documentation: `docs/release-signing.md` covering how to rotate keys | new doc |
-
-### Documentation truthfulness pass
-
-The mobile UI shipped over PRs 2 → 13 changed a lot of user-visible behavior (bottom-tab nav, Account → Admin sub-pages, mobile-specific routes like `/drive/account/admin`, TOTP setup as a page, etc.). `docs/architecture.md` and `docs/mobile-build.md` need a sweep to confirm they describe what shipped, not what the design originally proposed.
-
-| What's needed | Where |
-|---|---|
-| Re-read each `docs/*.md` and confirm it describes the current shipped UI | every file under `docs/` |
-| Update `docs/api.md` with the new `storageTotalBytes` field on `AdminStats` | `docs/api.md` |
-| Update `docs/self-hosting.md` to document the new `STORAGE_TOTAL_BYTES` env var | `docs/self-hosting.md` |
-| Add per-path `#[utoipa::path]` operation annotations + an interactive Swagger UI (the spec is already served at `GET /api-docs/openapi.json`) | `crates/kutup-server/src/openapi.rs` + handlers |
 
 ---
 
@@ -240,19 +229,6 @@ script, which breaks offline/sandboxed builds (and the rule that the server comp
 offline). Restore it by vendoring the UI bundle (`SWAGGER_UI_OVERWRITE_FOLDER` or a
 `file://` `SWAGGER_UI_DOWNLOAD_URL`) so the build stays network-free, then mount it at
 `/swagger`. The OpenAPI JSON is unaffected.
-
-### Go→Rust server rewrite · per-path OpenAPI operations
-
-The Rust `utoipa` `ApiDoc` currently carries the `info` block, the `BearerAuth` security
-scheme, and the response/DTO **schemas**, but not the per-path **operations** (the Go
-handlers had `// @Router`/`// @Summary` annotations consumed by `swaggo`; the Rust handlers
-have no `#[utoipa::path(...)]` annotations yet). So `GET /api-docs/openapi.json` lists
-schemas but an empty `paths`. Endpoint parity was instead verified **directly against the
-router**: before the cutover, a method+path diff of `crates/kutup-server/src/main.rs`
-against the Go `backend/main.go` matched exactly (72 method+path combinations; only
-`GET /swagger/*` → `GET /api-docs/openapi.json` differed, per the entry above). To fully
-restore the spec, add `#[utoipa::path]` to each handler and register them in
-`ApiDoc::paths(...)`, then `GET /api-docs/openapi.json` lists every operation.
 
 ---
 

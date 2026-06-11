@@ -33,6 +33,23 @@ fn asset_storage_path(file_id: Uuid, asset_id: &str) -> String {
 }
 
 /// `PUT /api/files/{fileId}/assets/{assetId}` — mirrors `Upload`.
+#[utoipa::path(
+    put,
+    path = "/api/files/{fileId}/assets/{assetId}",
+    tag = "assets",
+    operation_id = "uploadFileAsset",
+    security(("BearerAuth" = [])),
+    params(
+        ("fileId" = String, Path, description = "File id"),
+        ("assetId" = String, Path, description = "Content-addressed asset id")
+    ),
+    request_body(
+        content = Vec<u8>,
+        content_type = "multipart/form-data",
+        description = "The encrypted asset blob as the `file` part"
+    ),
+    responses((status = 204, description = "Asset stored (idempotent re-PUT is a no-op)"))
+)]
 pub async fn upload(
     State(state): State<AppState>,
     user: AuthUser,
@@ -132,6 +149,18 @@ pub async fn upload(
 }
 
 /// `GET /api/files/{fileId}/assets/{assetId}` — mirrors `Download`.
+#[utoipa::path(
+    get,
+    path = "/api/files/{fileId}/assets/{assetId}",
+    tag = "assets",
+    operation_id = "downloadFileAsset",
+    security(("BearerAuth" = [])),
+    params(
+        ("fileId" = String, Path, description = "File id"),
+        ("assetId" = String, Path, description = "Content-addressed asset id")
+    ),
+    responses((status = 200, description = "The encrypted asset blob (application/octet-stream)"))
+)]
 pub async fn download(
     State(state): State<AppState>,
     user: AuthUser,

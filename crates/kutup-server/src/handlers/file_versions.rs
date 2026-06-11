@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use tempfile::NamedTempFile;
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -21,7 +22,7 @@ use crate::middleware::AuthUser;
 use crate::models::UploadResult;
 use crate::AppState;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct VersionRow {
     id: String,
@@ -70,14 +71,14 @@ const VERSION_SELECT: &str = r#"SELECT id, s3_version_id, storage_path, seq_at_s
        doc_key_id, author_user_id, size_bytes, label, keep_forever, created_at
 FROM file_versions"#;
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PatchVersionRequest {
     label: Option<String>,
     keep_forever: Option<bool>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RecordSnapshotRequest {
     s3_version_id: String,
@@ -92,7 +93,7 @@ pub struct RecordSnapshotRequest {
     keep_forever: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SnapshotBlobResponse {
     storage_path: String,
@@ -100,6 +101,15 @@ pub struct SnapshotBlobResponse {
 }
 
 /// `GET /api/files/{fileId}/versions` — mirrors `List`.
+#[utoipa::path(
+    get,
+    path = "/api/files/{fileId}/versions",
+    tag = "versions",
+    operation_id = "listFileVersions",
+    security(("BearerAuth" = [])),
+    params(("fileId" = String, Path, description = "File id")),
+    responses((status = 200, description = "Version history, newest first", body = Vec<VersionRow>))
+)]
 pub async fn list(
     State(state): State<AppState>,
     user: AuthUser,
@@ -120,6 +130,18 @@ pub async fn list(
 }
 
 /// `GET /api/files/{fileId}/versions/{vid}/download` — mirrors `Download`.
+#[utoipa::path(
+    get,
+    path = "/api/files/{fileId}/versions/{vid}/download",
+    tag = "versions",
+    operation_id = "downloadFileVersion",
+    security(("BearerAuth" = [])),
+    params(
+        ("fileId" = String, Path, description = "File id"),
+        ("vid" = String, Path, description = "Version id")
+    ),
+    responses((status = 200, description = "The encrypted snapshot blob (octet-stream) + x-kutup-doc-key-id / x-kutup-seq / x-kutup-s3-version headers"))
+)]
 pub async fn download(
     State(state): State<AppState>,
     user: AuthUser,
@@ -159,6 +181,19 @@ pub async fn download(
 }
 
 /// `PATCH /api/files/{fileId}/versions/{vid}` — mirrors `Patch`.
+#[utoipa::path(
+    patch,
+    path = "/api/files/{fileId}/versions/{vid}",
+    tag = "versions",
+    operation_id = "patchFileVersion",
+    security(("BearerAuth" = [])),
+    params(
+        ("fileId" = String, Path, description = "File id"),
+        ("vid" = String, Path, description = "Version id")
+    ),
+    request_body = PatchVersionRequest,
+    responses((status = 200, description = "The updated version", body = VersionRow))
+)]
 pub async fn patch(
     State(state): State<AppState>,
     user: AuthUser,
@@ -203,6 +238,19 @@ pub async fn patch(
 }
 
 /// `POST /api/files/{fileId}/snapshot-blob` — mirrors `UploadSnapshotBlob`.
+#[utoipa::path(
+    post,
+    path = "/api/files/{fileId}/snapshot-blob",
+    tag = "versions",
+    security(("BearerAuth" = [])),
+    params(("fileId" = String, Path, description = "File id")),
+    request_body(
+        content = Vec<u8>,
+        content_type = "multipart/form-data",
+        description = "The encrypted snapshot as the `file` part"
+    ),
+    responses((status = 200, description = "Versioned S3 PUT result", body = SnapshotBlobResponse))
+)]
 pub async fn upload_snapshot_blob(
     State(state): State<AppState>,
     user: AuthUser,
@@ -258,6 +306,16 @@ pub async fn upload_snapshot_blob(
 }
 
 /// `POST /api/files/{fileId}/versions` — mirrors `Record`.
+#[utoipa::path(
+    post,
+    path = "/api/files/{fileId}/versions",
+    tag = "versions",
+    operation_id = "recordFileVersion",
+    security(("BearerAuth" = [])),
+    params(("fileId" = String, Path, description = "File id")),
+    request_body = RecordSnapshotRequest,
+    responses((status = 201, description = "Version row recorded", body = UploadResult))
+)]
 pub async fn record(
     State(state): State<AppState>,
     user: AuthUser,

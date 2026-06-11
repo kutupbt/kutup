@@ -28,6 +28,13 @@ pub struct UserQuery {
 
 /// `GET /api/fed/users?username=…` — mirrors `GetUserByUsername`. Rate-limited (60/min/IP)
 /// by the route layer. Returns the recipient's public key for wrapping the collection key.
+#[utoipa::path(
+    get,
+    path = "/api/fed/users",
+    tag = "federation",
+    params(("username" = String, Query, description = "Local username to look up")),
+    responses((status = 200, description = "The user's public key", body = crate::models::PubkeyResponse))
+)]
 pub async fn get_user_by_username(
     State(state): State<AppState>,
     Query(q): Query<UserQuery>,
@@ -68,6 +75,13 @@ struct InviteResponse {
 }
 
 /// `GET /api/fed/invites/{token}` — mirrors `GetInvite`. The token is the auth.
+#[utoipa::path(
+    get,
+    path = "/api/fed/invites/{token}",
+    tag = "federation",
+    params(("token" = String, Path, description = "Federated-share access token")),
+    responses((status = 200, description = "Invite metadata + wrapped collection key", body = crate::models::FedInviteResponse))
+)]
 pub async fn get_invite(
     State(state): State<AppState>,
     Path(token): Path<String>,
@@ -117,6 +131,14 @@ struct FedFileRow {
 }
 
 /// `GET /api/fed/shares/{token}/files` — mirrors `ListShareFiles`.
+#[utoipa::path(
+    get,
+    path = "/api/fed/shares/{token}/files",
+    tag = "federation",
+    operation_id = "fedListShareFiles",
+    params(("token" = String, Path, description = "Federated-share access token")),
+    responses((status = 200, description = "Files in the shared collection", body = Vec<crate::models::FileRow>))
+)]
 pub async fn list_share_files(
     State(state): State<AppState>,
     Path(token): Path<String>,
@@ -179,6 +201,16 @@ pub async fn list_share_files(
 }
 
 /// `GET /api/fed/shares/{token}/files/{fileId}/download` — mirrors `DownloadShareFile`.
+#[utoipa::path(
+    get,
+    path = "/api/fed/shares/{token}/files/{fileId}/download",
+    tag = "federation",
+    params(
+        ("token" = String, Path, description = "Federated-share access token"),
+        ("fileId" = String, Path, description = "File id")
+    ),
+    responses((status = 200, description = "The encrypted blob (application/octet-stream)"))
+)]
 pub async fn download_share_file(
     State(state): State<AppState>,
     Path((token, file_id)): Path<(String, String)>,
@@ -219,6 +251,18 @@ pub async fn download_share_file(
 
 /// `POST /api/fed/shares/{token}/files` — mirrors `UploadShareFile`. Multipart upload from a
 /// remote server; the file blob is stored under `fed/{shareId}/{collectionId}/{fileId}`.
+#[utoipa::path(
+    post,
+    path = "/api/fed/shares/{token}/files",
+    tag = "federation",
+    params(("token" = String, Path, description = "Federated-share access token")),
+    request_body(
+        content = Vec<u8>,
+        content_type = "multipart/form-data",
+        description = "Fields: encryptedMetadata, metadataNonce, encryptedFileKey, fileKeyNonce + the encrypted `file` part"
+    ),
+    responses((status = 201, description = "File stored; body is `{\"id\": <fileId>}`"))
+)]
 pub async fn upload_share_file(
     State(state): State<AppState>,
     Path(token): Path<String>,
@@ -367,6 +411,16 @@ pub async fn upload_share_file(
 }
 
 /// `DELETE /api/fed/shares/{token}/files/{fileId}` — mirrors `DeleteShareFile`.
+#[utoipa::path(
+    delete,
+    path = "/api/fed/shares/{token}/files/{fileId}",
+    tag = "federation",
+    params(
+        ("token" = String, Path, description = "Federated-share access token"),
+        ("fileId" = String, Path, description = "File id")
+    ),
+    responses((status = 204, description = "File permanently deleted (no cross-server trash)"))
+)]
 pub async fn delete_share_file(
     State(state): State<AppState>,
     Path((token, file_id)): Path<(String, String)>,

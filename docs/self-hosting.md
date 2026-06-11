@@ -118,7 +118,7 @@ This builds the backend and frontend images, then starts all services:
 | `seaweedfs-filer` | SeaweedFS filer |
 | `seaweedfs-s3` | SeaweedFS S3 gateway |
 | `seaweedfs-init` | One-shot: creates the S3 bucket |
-| `backend` | Go API server (internal port 3000) |
+| `backend` | Rust API server (Axum, internal port 3000) |
 | `frontend` | Compiled React app (served by Nginx) |
 | `nginx` | Reverse proxy — listens on port 80; 443 requires the manual TLS setup below |
 

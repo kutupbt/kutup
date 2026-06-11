@@ -15,6 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -23,19 +24,27 @@ use crate::middleware::AuthUser;
 use crate::models::{FileRow, MessageResponse, UploadResult};
 use crate::AppState;
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateFileMetadataRequest {
     encrypted_metadata: String,
     metadata_nonce: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ClaimSeedResponse {
     committed: bool,
 }
 
 /// `GET /api/collections/{id}/files` — mirrors `ListFiles`.
+#[utoipa::path(
+    get,
+    path = "/api/collections/{id}/files",
+    tag = "files",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Collection id")),
+    responses((status = 200, description = "Files in the collection", body = Vec<FileRow>))
+)]
 pub async fn list_files(
     State(state): State<AppState>,
     user: AuthUser,
@@ -93,6 +102,19 @@ pub async fn list_files(
 }
 
 /// `POST /api/files/upload` — mirrors `Upload`.
+#[utoipa::path(
+    post,
+    path = "/api/files/upload",
+    tag = "files",
+    operation_id = "uploadFile",
+    security(("BearerAuth" = [])),
+    request_body(
+        content = Vec<u8>,
+        content_type = "multipart/form-data",
+        description = "Fields: collectionId, encryptedMetadata, metadataNonce, encryptedFileKey, fileKeyNonce + the encrypted `file` part"
+    ),
+    responses((status = 201, description = "File stored", body = UploadResult))
+)]
 pub async fn upload(
     State(state): State<AppState>,
     user: AuthUser,
@@ -264,6 +286,15 @@ pub async fn upload(
 }
 
 /// `GET /api/files/{id}/download` — mirrors `Download`.
+#[utoipa::path(
+    get,
+    path = "/api/files/{id}/download",
+    tag = "files",
+    operation_id = "downloadFile",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "File id")),
+    responses((status = 200, description = "The encrypted blob (application/octet-stream)"))
+)]
 pub async fn download(
     State(state): State<AppState>,
     user: AuthUser,
@@ -294,6 +325,15 @@ pub async fn download(
 }
 
 /// `PUT /api/files/{id}` — mirrors `UpdateMetadata` (rename).
+#[utoipa::path(
+    put,
+    path = "/api/files/{id}",
+    tag = "files",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "File id")),
+    request_body = UpdateFileMetadataRequest,
+    responses((status = 200, description = "Metadata updated", body = MessageResponse))
+)]
 pub async fn update_metadata(
     State(state): State<AppState>,
     user: AuthUser,
@@ -335,6 +375,15 @@ pub async fn update_metadata(
 /// `DELETE /api/files/{id}` — soft-deletes into the trash (30-day retention). Quota stays
 /// reserved while the file is in trash (the blob still occupies storage); the permanent
 /// path (`DELETE /api/trash/{id}` or the retention sweeper) releases it.
+#[utoipa::path(
+    delete,
+    path = "/api/files/{id}",
+    tag = "files",
+    operation_id = "deleteFile",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "File id")),
+    responses((status = 204, description = "File moved to trash"))
+)]
 pub async fn delete(
     State(state): State<AppState>,
     user: AuthUser,
@@ -365,6 +414,14 @@ pub async fn delete(
 }
 
 /// `POST /api/files/{fileId}/claim-seed` — mirrors `ClaimSeed`.
+#[utoipa::path(
+    post,
+    path = "/api/files/{fileId}/claim-seed",
+    tag = "files",
+    security(("BearerAuth" = [])),
+    params(("fileId" = String, Path, description = "File id")),
+    responses((status = 200, description = "Whether this caller won the first-seeder race", body = ClaimSeedResponse))
+)]
 pub async fn claim_seed(
     State(state): State<AppState>,
     user: AuthUser,

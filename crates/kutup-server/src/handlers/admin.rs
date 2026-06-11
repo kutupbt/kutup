@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::PgPool;
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -64,7 +65,8 @@ fn is_break_glass(state: &AppState, email: &str) -> bool {
     !bg.is_empty() && bg.eq_ignore_ascii_case(email)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = AdminUserRow)]
 #[serde(rename_all = "camelCase")]
 struct UserRow {
     id: Uuid,
@@ -86,6 +88,13 @@ struct UserRow {
 }
 
 /// `GET /api/admin/users` — mirrors `ListUsers`.
+#[utoipa::path(
+    get,
+    path = "/api/admin/users",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    responses((status = 200, description = "All user accounts", body = Vec<UserRow>))
+)]
 pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
     type Row = (
         Uuid,
@@ -143,6 +152,14 @@ pub struct CreateUserRequest {
 
 /// `POST /api/admin/users` — mirrors `CreateUser`. Creates a first-login account with a
 /// temp password; the user establishes their E2EE key material on first login.
+#[utoipa::path(
+    post,
+    path = "/api/admin/users",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    request_body = crate::models::CreateAdminUserRequest,
+    responses((status = 201, description = "First-login account created"))
+)]
 pub async fn create_user(
     State(state): State<AppState>,
     admin: AdminUser,
@@ -215,6 +232,15 @@ pub struct UpdateUserRequest {
 }
 
 /// `PUT /api/admin/users/{id}` — mirrors `UpdateUser`. Each present field is one UPDATE.
+#[utoipa::path(
+    put,
+    path = "/api/admin/users/{id}",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Target user id")),
+    request_body = crate::models::UpdateAdminUserRequest,
+    responses((status = 200, description = "User updated"))
+)]
 pub async fn update_user(
     State(state): State<AppState>,
     admin: AdminUser,
@@ -303,6 +329,14 @@ pub async fn update_user(
 }
 
 /// `DELETE /api/admin/users/{id}` — mirrors `DeleteUser` (cascades via FKs).
+#[utoipa::path(
+    delete,
+    path = "/api/admin/users/{id}",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Target user id")),
+    responses((status = 204, description = "User deleted"))
+)]
 pub async fn delete_user(
     State(state): State<AppState>,
     admin: AdminUser,
@@ -349,6 +383,14 @@ pub async fn delete_user(
 /// `DELETE /api/admin/users/{id}/2fa` — mirrors `ForceDisable2FA`. Clears the target's TOTP
 /// (the admin caller is already authenticated + admin-gated, so no TOTP-code challenge).
 /// Allowed on the break-glass admin too — it's a recovery aid and can't lock anyone out.
+#[utoipa::path(
+    delete,
+    path = "/api/admin/users/{id}/2fa",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Target user id")),
+    responses((status = 200, description = "TOTP cleared for the target user"))
+)]
 pub async fn force_disable_2fa(
     State(state): State<AppState>,
     admin: AdminUser,
@@ -376,7 +418,8 @@ pub async fn force_disable_2fa(
     Ok(Json(json!({"message": "2fa disabled"})).into_response())
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = AdminStatsResponse)]
 #[serde(rename_all = "camelCase")]
 struct StatsResponse {
     total_users: i64,
@@ -394,6 +437,13 @@ struct StatsResponse {
 }
 
 /// `GET /api/admin/stats` — mirrors `GetStats`.
+#[utoipa::path(
+    get,
+    path = "/api/admin/stats",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    responses((status = 200, description = "Aggregate instance stats", body = StatsResponse))
+)]
 pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
     let scalar = |sql: &'static str| {
         let pool = state.pool.clone();
@@ -428,6 +478,13 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
 }
 
 /// `GET /api/admin/settings` — mirrors `GetSettings`.
+#[utoipa::path(
+    get,
+    path = "/api/admin/settings",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    responses((status = 200, description = "Site settings", body = crate::models::SettingsResponse))
+)]
 pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
     let val: Option<String> =
         sqlx::query_scalar("SELECT value FROM site_settings WHERE key='registration_enabled'")
@@ -446,6 +503,14 @@ pub struct UpdateSettingsRequest {
 }
 
 /// `PUT /api/admin/settings` — mirrors `UpdateSettings`.
+#[utoipa::path(
+    put,
+    path = "/api/admin/settings",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    request_body = crate::models::UpdateAdminSettingsRequest,
+    responses((status = 200, description = "Updated site settings", body = crate::models::SettingsResponse))
+)]
 pub async fn update_settings(
     State(state): State<AppState>,
     admin: AdminUser,
@@ -475,7 +540,7 @@ pub async fn update_settings(
     Ok(Json(json!({"registrationEnabled": req.registration_enabled})).into_response())
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RotateTempPasswordRequest {
     temp_password: String,
@@ -487,6 +552,18 @@ pub struct RotateTempPasswordRequest {
 /// server cannot reset a password without destroying the user's data — they self-serve
 /// via `/auth/recover`, or the admin wipes (see `wipe_user`).
 /// Design: `docs/research/10-admin-password-reset.md`.
+#[utoipa::path(
+    post,
+    path = "/api/admin/users/{id}/rotate-temp-password",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Target user id")),
+    request_body = RotateTempPasswordRequest,
+    responses(
+        (status = 200, description = "Temp password rotated"),
+        (status = 409, description = "User has completed setup — recovery phrase or wipe instead")
+    )
+)]
 pub async fn rotate_temp_password(
     State(state): State<AppState>,
     admin: AdminUser,
@@ -534,7 +611,7 @@ pub async fn rotate_temp_password(
     Ok(Json(json!({"message": "temp password rotated"})).into_response())
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WipeUserRequest {
     temp_password: String,
@@ -546,6 +623,15 @@ pub struct WipeUserRequest {
 /// blobs, shares), erases the key bundle + TOTP + device signing keys, and resets the
 /// account to `is_first_login` with the supplied temp password. Email/username/quota
 /// survive. Irreversible. Design: `docs/research/10-admin-password-reset.md`.
+#[utoipa::path(
+    post,
+    path = "/api/admin/users/{id}/wipe",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Target user id")),
+    request_body = WipeUserRequest,
+    responses((status = 200, description = "Account wiped + reset to first-login"))
+)]
 pub async fn wipe_user(
     State(state): State<AppState>,
     admin: AdminUser,
@@ -667,7 +753,7 @@ pub struct ActivityQuery {
     before: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct ActivityEntry {
     id: i64,
@@ -685,7 +771,7 @@ struct ActivityEntry {
     occurred_at: OffsetDateTime,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct ActivityResponse {
     entries: Vec<ActivityEntry>,
@@ -694,6 +780,17 @@ struct ActivityResponse {
 }
 
 /// `GET /api/admin/activity?limit=50&before=<id>` — the audit-log feed, newest first.
+#[utoipa::path(
+    get,
+    path = "/api/admin/activity",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(
+        ("limit" = Option<i64>, Query, description = "Page size, clamped to 1..=100 (default 50)"),
+        ("before" = Option<i64>, Query, description = "Cursor: entries with id < this (previous page's nextBefore)")
+    ),
+    responses((status = 200, description = "Audit-log page, newest first", body = ActivityResponse))
+)]
 pub async fn activity(
     State(state): State<AppState>,
     _admin: AdminUser,

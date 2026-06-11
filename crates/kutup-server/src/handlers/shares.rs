@@ -12,6 +12,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -31,6 +32,14 @@ pub struct CreateShareRequest {
 }
 
 /// `POST /api/share` — mirrors `CreatePublicShare`. The link key is never sent here.
+#[utoipa::path(
+    post,
+    path = "/api/share",
+    tag = "shares",
+    security(("BearerAuth" = [])),
+    request_body = crate::models::CreateShareRequest,
+    responses((status = 201, description = "Share created", body = crate::models::CreateShareResult))
+)]
 pub async fn create_public_share(
     State(state): State<AppState>,
     user: AuthUser,
@@ -88,6 +97,13 @@ struct PublicShareResponse {
 }
 
 /// `GET /api/share/{token}` — mirrors `GetPublicShare`. Anonymous.
+#[utoipa::path(
+    get,
+    path = "/api/share/{token}",
+    tag = "shares",
+    params(("token" = String, Path, description = "Share token (the capability)")),
+    responses((status = 200, description = "Share metadata + wrapped key", body = crate::models::PublicShareResponse))
+)]
 pub async fn get_public_share(
     State(state): State<AppState>,
     Path(token): Path<String>,
@@ -131,7 +147,7 @@ pub async fn get_public_share(
 
 /// One file in a public-collection share. Field order mirrors the Go struct; `created_at`
 /// is the Postgres timestamp rendered as the same text Go's `time.Time` JSON produces.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct PublicFileRow {
     id: Uuid,
@@ -146,6 +162,13 @@ struct PublicFileRow {
 }
 
 /// `GET /api/share/{token}/files` — mirrors `ListPublicShareFiles`. Anonymous.
+#[utoipa::path(
+    get,
+    path = "/api/share/{token}/files",
+    tag = "shares",
+    params(("token" = String, Path, description = "Share token (the capability)")),
+    responses((status = 200, description = "Files in the shared collection", body = Vec<PublicFileRow>))
+)]
 pub async fn list_public_share_files(
     State(state): State<AppState>,
     Path(token): Path<String>,
@@ -222,6 +245,16 @@ pub async fn list_public_share_files(
 
 /// `GET /api/share/{token}/download/{fileId}` — mirrors `DownloadPublicShareFile`. Returns a
 /// presigned S3 URL. Anonymous.
+#[utoipa::path(
+    get,
+    path = "/api/share/{token}/download/{fileId}",
+    tag = "shares",
+    params(
+        ("token" = String, Path, description = "Share token (the capability)"),
+        ("fileId" = String, Path, description = "File id")
+    ),
+    responses((status = 200, description = "Presigned S3 download URL", body = crate::models::DownloadUrlResponse))
+)]
 pub async fn download_public_share_file(
     State(state): State<AppState>,
     Path((token, file_id)): Path<(String, String)>,

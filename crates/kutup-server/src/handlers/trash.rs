@@ -22,6 +22,14 @@ use crate::models::{MessageResponse, TrashFileRow, TrashFolderRow, TrashResponse
 use crate::AppState;
 
 /// `GET /api/trash` — the caller's trash roots (owned folders + files), newest first.
+#[utoipa::path(
+    get,
+    path = "/api/trash",
+    tag = "trash",
+    operation_id = "listTrash",
+    security(("BearerAuth" = [])),
+    responses((status = 200, description = "The caller's trash roots, newest first", body = TrashResponse))
+)]
 pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
 
@@ -110,6 +118,14 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
 /// `POST /api/trash/{id}/restore` — puts a trash root back where it was. A file whose
 /// folder is still in the trash is a 409 (restore the folder instead); a folder whose
 /// original parent is gone or trashed comes back at the top level.
+#[utoipa::path(
+    post,
+    path = "/api/trash/{id}/restore",
+    tag = "trash",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Trash-root id (file or folder)")),
+    responses((status = 200, description = "Restored", body = MessageResponse))
+)]
 pub async fn restore(
     State(state): State<AppState>,
     user: AuthUser,
@@ -203,6 +219,14 @@ pub async fn restore(
 
 /// `DELETE /api/trash/{id}` — permanently purges one trash root (DB rows + S3 blobs +
 /// quota release). Irreversible.
+#[utoipa::path(
+    delete,
+    path = "/api/trash/{id}",
+    tag = "trash",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Trash-root id (file or folder)")),
+    responses((status = 204, description = "Permanently purged"))
+)]
 pub async fn destroy(
     State(state): State<AppState>,
     user: AuthUser,
@@ -249,6 +273,14 @@ pub async fn destroy(
 }
 
 /// `DELETE /api/trash` — empties the caller's whole trash. Irreversible.
+#[utoipa::path(
+    delete,
+    path = "/api/trash",
+    tag = "trash",
+    operation_id = "emptyTrash",
+    security(("BearerAuth" = [])),
+    responses((status = 204, description = "Trash emptied"))
+)]
 pub async fn empty(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
 
