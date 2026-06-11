@@ -102,6 +102,17 @@ test.describe.serial('admin panel', () => {
     await page.getByRole('menuitem', { name: 'Delete permanently' }).click()
     await page.getByRole('alertdialog').getByRole('button', { name: 'Delete', exact: true }).click()
     await expect(page.locator('tr', { hasText: email })).toHaveCount(0, { timeout: 15_000 })
+
+    // ── Audit trail ─────────────────────────────────────────────────
+    // The lifecycle above must be visible in the Recent-activity feed.
+    // The delete row resolves the target from the payload snapshot (the
+    // account no longer exists), proving the trail outlives the user.
+    await gotoTab('Overview')
+    const activityCard = page.getByTestId('admin-activity')
+    await expect(activityCard.getByText(`deleted user ${email}`).first()).toBeVisible({
+      timeout: 15_000,
+    })
+    await expect(activityCard.getByText(`created user ${email}`).first()).toBeVisible()
   })
 
   test('Settings → Storage card renders real formatted capacity', async () => {

@@ -444,7 +444,7 @@
         "of": "{{total}} tahsisli",
         "unknown": "tüm hesaplarda"
       },
-      "footnote": "Etkinlik akışı, sunucu çalışma süresi ve TLS durumu kutup'un arka ucu tarafından henüz sunulmuyor — ilgili uç noktalar geldiğinde burada görünecek."
+      "footnote": "Sunucu çalışma süresi ve TLS durumu henüz kutup arka ucu tarafından sunulmuyor — uç noktalar eklendiğinde burada görünecekler."
     },
     "users": {
       "exportCsv": "CSV dışa aktar",
@@ -525,6 +525,19 @@
       "desc": "Bu işlem kullanıcıyı ve tüm verilerini kalıcı olarak siler. Bu işlem geri alınamaz.",
       "cancel": "İptal",
       "confirm": "Sil"
+    },
+    "activity": {
+      "title": "Son etkinlik",
+      "empty": "Henüz kaydedilmiş yönetici işlemi yok.",
+      "deletedUser": "silinmiş kullanıcı",
+      "action": {
+        "userCreate": "{{admin}}, {{target}} kullanıcısını oluşturdu",
+        "userUpdate": "{{admin}}, {{target}} kullanıcısını güncelledi",
+        "userDelete": "{{admin}}, {{target}} kullanıcısını sildi",
+        "user2faDisable": "{{admin}}, {{target}} için 2FA’yı devre dışı bıraktı",
+        "settingsUpdate": "{{admin}} sunucu ayarlarını güncelledi",
+        "unknown": "{{admin}}: {{action}}"
+      }
     }
   },
   "publicShare": {

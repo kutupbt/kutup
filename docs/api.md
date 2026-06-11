@@ -914,6 +914,8 @@ Delete a file in an incoming federated share (if permitted). Proxied to the remo
 
 All admin endpoints require the `isAdmin` flag on the JWT.
 
+Every mutating admin endpoint (create / update / delete user, force-disable 2FA, settings update) writes a row to the **admin audit log** — who did what to whom, when. The log is readable via `GET /api/admin/activity` below. Audit rows have no foreign keys and outlive the accounts they reference; the human-readable identities (emails, usernames) are snapshotted into the row's `payload` at action time.
+
 ### GET /api/admin/users
 
 List all registered users.
@@ -1023,6 +1025,38 @@ Return aggregate server statistics.
 ```
 
 `totalStorageUsedBytes` is the DB sum of per-account usage. `storageTotalBytes` and `storageBackendUsedBytes` are the storage backend's real total capacity and on-disk usage, probed live from the SeaweedFS master (`SEAWEEDFS_MASTER_URL`); `storageTotalBytes` falls back to the `STORAGE_TOTAL_BYTES` env var, and both are `0` when no probe or env var is configured.
+
+---
+
+### GET /api/admin/activity
+
+The admin audit-log feed, newest first.
+
+**Auth:** Bearer JWT (admin)
+
+**Query parameters:** `limit` (1–100, default 50) · `before` (cursor: return entries with `id` lower than this — pass the previous page's `nextBefore`).
+
+**Response:**
+```json
+{
+  "entries": [
+    {
+      "id": 7,
+      "action": "user.create",
+      "adminUserId": "<uuid>",
+      "adminEmail": "admin@example.com",
+      "adminUsername": "admin",
+      "targetUserId": "<uuid>",
+      "targetEmail": "newuser@example.com",
+      "payload": { "email": "newuser@example.com", "username": "newuser", "storageQuotaBytes": 10737418240 },
+      "occurredAt": "2026-06-11T11:22:33Z"
+    }
+  ],
+  "nextBefore": null
+}
+```
+
+Actions: `user.create`, `user.update` (payload carries a `changes` object with only the fields that were modified), `user.delete`, `user.2fa_disable`, `settings.update`. `adminEmail`/`targetEmail` are the live identities and become `null` once the referenced account is deleted — the `payload` snapshot keeps the trail readable. `nextBefore` is non-null while older pages remain.
 
 ---
 

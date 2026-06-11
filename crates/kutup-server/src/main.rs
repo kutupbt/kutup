@@ -388,6 +388,7 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/api/admin/users/:id/2fa", delete(admin::force_disable_2fa))
         .route("/api/admin/stats", get(admin::get_stats))
+        .route("/api/admin/activity", get(admin::activity))
         .route(
             "/api/admin/settings",
             get(admin::get_settings).put(admin::update_settings),

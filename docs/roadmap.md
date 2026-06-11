@@ -16,7 +16,7 @@ The bar for the first `v*` tag:
 2. **Deletion is recoverable.** ✅ Shipped: owner-scoped trash with restore + permanent delete, and an hourly retention sweeper (`TRASH_RETENTION_DAYS`, default 30). See `docs/api.md` → Trash.
 3. **Self-hosters can recover broken users without SSH.** Lost TOTP device, forgotten password, accidental disable — the admin UI must cover these without touching the database.
 4. **Builds are signed.** Unsigned binaries trigger macOS Gatekeeper and Windows SmartScreen warnings that look like malware to non-technical users.
-5. **Admin actions leave an audit trail.** Self-hosting communities — especially compliance-driven ones — need to know who disabled an account, when, and why.
+5. **Admin actions leave an audit trail.** ✅ Shipped: every mutating admin endpoint writes an `admin_audit_log` row; `GET /admin/activity` serves the feed and the Recent-activity cards render it on desktop + mobile Admin Overview. See `docs/api.md` → Admin.
 6. **Basic abuse protection.** Login + admin endpoints have rate-limiting; brute-force attempts surface in logs.
 7. **Documentation tracks reality.** No "this works but..." caveats in user-facing docs.
 
@@ -42,18 +42,6 @@ This means there is **no simple "reset password" endpoint** — it's a design pr
 | Backend: `POST /admin/users/:id/wipe` — destructive reset for the unrecoverable path | same |
 | Frontend: surface both as distinct, clearly-labelled actions (not one "Reset password") | `AdminUserMenu` / `MobileAdminUserDetailPage` |
 | Email (optional, see SMTP below): deliver the rotated temp password if SMTP is configured | backend integration |
-
-### Admin · Audit log
-
-Admin actions today leave no record. Production self-hosters — especially in regulated contexts — need to know who disabled an account, when, with what reason.
-
-| What's needed | Where |
-|---|---|
-| Backend: schema migration — `admin_audit_log(id, admin_user_id, action, target_user_id, payload_jsonb, occurred_at)` | `crates/kutup-server/migrations/` |
-| Backend: write a log row from every admin handler (`CreateUser`, `UpdateUser`, `DeleteUser`, `UpdateAdminSettings`, future reset/2fa/promote) | `crates/kutup-server/src/handlers/admin.rs` |
-| Backend: `GET /admin/activity?limit=50&before=cursor` | new handler |
-| Frontend: unhide the Recent activity card on the desktop Admin Overview (today it's hidden with a footnote about the missing endpoint) | `frontend/src/components/admin/AdminOverviewTab.tsx` |
-| Frontend: similar card on mobile Admin Overview | `frontend/src/pages/mobile/account/admin/MobileAdminOverviewTab.tsx` |
 
 ### Rate limiting + brute-force protection
 

@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '../client'
-import type { UserRow, AdminStats, AdminSettings } from '@/types/api'
+import type { UserRow, AdminStats, AdminSettings, AdminActivityResponse } from '@/types/api'
 
 export function useAdminUsers() {
   return useQuery<UserRow[]>({
@@ -14,6 +14,15 @@ export function useAdminStats() {
   return useQuery<AdminStats>({
     queryKey: ['admin', 'stats'],
     queryFn: () => api.get<AdminStats>('/admin/stats').then((r) => r.data),
+  })
+}
+
+/** The audit-log feed for the Recent-activity cards (newest first). */
+export function useAdminActivity(limit = 10) {
+  return useQuery<AdminActivityResponse>({
+    queryKey: ['admin', 'activity', limit],
+    queryFn: () =>
+      api.get<AdminActivityResponse>(`/admin/activity?limit=${limit}`).then((r) => r.data),
   })
 }
 
@@ -36,6 +45,7 @@ export function useCreateUser() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'users'] })
       qc.invalidateQueries({ queryKey: ['admin', 'stats'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
       toast.success('User created')
     },
     onError: (err: any) => {
@@ -58,6 +68,7 @@ export function useUpdateUser() {
     }) => api.put(`/admin/users/${id}`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'users'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
     },
     onError: (err: any) => {
       toast.error(err.response?.data?.error ?? 'Update failed')
@@ -76,6 +87,7 @@ export function useForceDisable2fa() {
     mutationFn: (id: string) => api.delete(`/admin/users/${id}/2fa`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'users'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
       toast.success('Two-factor authentication disabled for this user')
     },
     onError: (err: any) => {
@@ -96,6 +108,7 @@ export function useDeleteUser() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'stats'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
       toast.success('User deleted')
     },
     onError: (err: any, _id, ctx: any) => {
@@ -112,6 +125,7 @@ export function useUpdateAdminSettings() {
       api.put('/admin/settings', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'settings'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
     },
     onError: (err: any) => {
       toast.error(err.response?.data?.error ?? 'Settings update failed')

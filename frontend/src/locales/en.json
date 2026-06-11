@@ -444,7 +444,7 @@
         "of": "of {{total}} allocated",
         "unknown": "across all accounts"
       },
-      "footnote": "Activity feed, server uptime, and TLS status are not exposed by kutup's backend yet — they'll appear here when the endpoints land."
+      "footnote": "Server uptime and TLS status are not exposed by kutup’s backend yet — they’ll appear here when the endpoints land."
     },
     "users": {
       "exportCsv": "Export CSV",
@@ -525,6 +525,19 @@
       "desc": "This permanently removes the user and all their data. This action cannot be undone.",
       "cancel": "Cancel",
       "confirm": "Delete"
+    },
+    "activity": {
+      "title": "Recent activity",
+      "empty": "No admin actions recorded yet.",
+      "deletedUser": "deleted user",
+      "action": {
+        "userCreate": "{{admin}} created user {{target}}",
+        "userUpdate": "{{admin}} updated {{target}}",
+        "userDelete": "{{admin}} deleted user {{target}}",
+        "user2faDisable": "{{admin}} disabled 2FA for {{target}}",
+        "settingsUpdate": "{{admin}} updated server settings",
+        "unknown": "{{admin}}: {{action}}"
+      }
     }
   },
   "publicShare": {

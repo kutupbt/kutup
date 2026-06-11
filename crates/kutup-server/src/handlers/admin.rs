@@ -1,20 +1,52 @@
-//! Admin handlers — mirrors `backend/handlers/admin.go`.
+//! Admin handlers — user CRUD, aggregate stats, the registration toggle, and the
+//! audit-log feed. Every route is behind the `AdminUser` extractor (authenticated +
+//! `isAdmin`), so the handlers trust the caller.
 //!
-//! User CRUD, aggregate stats, and the registration toggle. Every route is behind the
-//! `AdminUser` extractor (authenticated + `isAdmin`), so the handlers trust the caller.
+//! Every mutating handler writes an `admin_audit_log` row (who did what to whom,
+//! when). The write is best-effort: an audit insert failure is logged but never
+//! fails the admin action itself.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::middleware::AdminUser;
 use crate::AppState;
+
+/// Best-effort audit-log write. The payload snapshots human-readable identities
+/// (emails, usernames) at action time so the trail stays meaningful after the
+/// referenced users are deleted.
+pub(crate) async fn audit(
+    pool: &PgPool,
+    admin_user_id: &str,
+    action: &str,
+    target_user_id: Option<Uuid>,
+    payload: serde_json::Value,
+) {
+    let Ok(admin_uuid) = Uuid::parse_str(admin_user_id) else {
+        return;
+    };
+    if let Err(e) = sqlx::query(
+        "INSERT INTO admin_audit_log (admin_user_id, action, target_user_id, payload) \
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(admin_uuid)
+    .bind(action)
+    .bind(target_user_id)
+    .bind(payload)
+    .execute(pool)
+    .await
+    {
+        tracing::warn!("audit log write failed ({action}): {e}");
+    }
+}
 
 /// `^[a-z0-9_-]{3,32}$` — mirrors `adminUsernameRegexp`.
 fn valid_admin_username(s: &str) -> bool {
@@ -107,7 +139,7 @@ pub struct CreateUserRequest {
 /// temp password; the user establishes their E2EE key material on first login.
 pub async fn create_user(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    admin: AdminUser,
     Json(mut req): Json<CreateUserRequest>,
 ) -> AppResult<Response> {
     if req.email.is_empty() || req.temp_password.is_empty() {
@@ -128,7 +160,7 @@ pub async fn create_user(
     let hash =
         bcrypt::hash(&req.temp_password, 10).map_err(|_| AppError::internal("internal error"))?;
 
-    let res = sqlx::query(
+    let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO users (
                email, username, login_key_hash,
                encrypted_master_key, master_key_nonce,
@@ -136,17 +168,31 @@ pub async fn create_user(
                encrypted_private_key, private_key_nonce,
                public_key, kdf_salt, login_key_salt,
                is_admin, is_first_login, storage_quota_bytes
-           ) VALUES ($1,$2,$3,'','','','','','','','','',false,true,$4)"#,
+           ) VALUES ($1,$2,$3,'','','','','','','','','',false,true,$4)
+           RETURNING id"#,
     )
     .bind(&req.email)
     .bind(&req.username)
     .bind(&hash)
     .bind(req.storage_quota_bytes)
-    .execute(&state.pool)
+    .fetch_one(&state.pool)
     .await;
-    if let Err(e) = res {
-        return Err(map_insert_conflict(e));
-    }
+    let new_id = match res {
+        Ok(id) => id,
+        Err(e) => return Err(map_insert_conflict(e)),
+    };
+    audit(
+        &state.pool,
+        &admin.user_id,
+        "user.create",
+        Some(new_id),
+        json!({
+            "email": req.email,
+            "username": req.username,
+            "storageQuotaBytes": req.storage_quota_bytes,
+        }),
+    )
+    .await;
     Ok((
         StatusCode::CREATED,
         Json(json!({"message": "user created"})),
@@ -165,7 +211,7 @@ pub struct UpdateUserRequest {
 /// `PUT /api/admin/users/{id}` — mirrors `UpdateUser`. Each present field is one UPDATE.
 pub async fn update_user(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    admin: AdminUser,
     Path(id): Path<String>,
     Json(req): Json<UpdateUserRequest>,
 ) -> AppResult<Response> {
@@ -227,25 +273,46 @@ pub async fn update_user(
             .await
             .map_err(|_| AppError::internal("internal error"))?;
     }
+
+    // Snapshot only the fields that were actually changed.
+    let mut changes = serde_json::Map::new();
+    if let Some(q) = req.storage_quota_bytes {
+        changes.insert("storageQuotaBytes".into(), json!(q));
+    }
+    if let Some(a) = req.is_active {
+        changes.insert("isActive".into(), json!(a));
+    }
+    if let Some(a) = req.is_admin {
+        changes.insert("isAdmin".into(), json!(a));
+    }
+    audit(
+        &state.pool,
+        &admin.user_id,
+        "user.update",
+        Some(target),
+        json!({"email": target_email, "changes": changes}),
+    )
+    .await;
     Ok(Json(json!({"message": "updated"})).into_response())
 }
 
 /// `DELETE /api/admin/users/{id}` — mirrors `DeleteUser` (cascades via FKs).
 pub async fn delete_user(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    admin: AdminUser,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     // Break-glass admin can never be deleted.
-    let target_email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
-        .bind(target)
-        .fetch_optional(&state.pool)
-        .await
-        .ok()
-        .flatten()
-        .ok_or_else(|| AppError::not_found("not found"))?;
+    let (target_email, target_username): (String, Option<String>) =
+        sqlx::query_as("SELECT email, username FROM users WHERE id = $1")
+            .bind(target)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+            .ok_or_else(|| AppError::not_found("not found"))?;
     if is_break_glass(&state, &target_email) {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
@@ -255,7 +322,20 @@ pub async fn delete_user(
         .execute(&state.pool)
         .await;
     match res {
-        Ok(r) if r.rows_affected() > 0 => Ok(StatusCode::NO_CONTENT.into_response()),
+        Ok(r) if r.rows_affected() > 0 => {
+            audit(
+                &state.pool,
+                &admin.user_id,
+                "user.delete",
+                Some(target),
+                json!({
+                    "email": target_email,
+                    "username": target_username.unwrap_or_default(),
+                }),
+            )
+            .await;
+            Ok(StatusCode::NO_CONTENT.into_response())
+        }
         _ => Err(AppError::not_found("not found")),
     }
 }
@@ -265,19 +345,28 @@ pub async fn delete_user(
 /// Allowed on the break-glass admin too — it's a recovery aid and can't lock anyone out.
 pub async fn force_disable_2fa(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    admin: AdminUser,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    let res =
-        sqlx::query("UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1")
-            .bind(target)
-            .execute(&state.pool)
-            .await
-            .map_err(|_| AppError::internal("internal error"))?;
-    if res.rows_affected() == 0 {
+    let email: Option<String> = sqlx::query_scalar(
+        "UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1 RETURNING email",
+    )
+    .bind(target)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|_| AppError::internal("internal error"))?;
+    let Some(email) = email else {
         return Err(AppError::not_found("not found"));
-    }
+    };
+    audit(
+        &state.pool,
+        &admin.user_id,
+        "user.2fa_disable",
+        Some(target),
+        json!({"email": email}),
+    )
+    .await;
     Ok(Json(json!({"message": "2fa disabled"})).into_response())
 }
 
@@ -353,7 +442,7 @@ pub struct UpdateSettingsRequest {
 /// `PUT /api/admin/settings` — mirrors `UpdateSettings`.
 pub async fn update_settings(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    admin: AdminUser,
     Json(req): Json<UpdateSettingsRequest>,
 ) -> AppResult<Response> {
     let val = if req.registration_enabled {
@@ -369,7 +458,116 @@ pub async fn update_settings(
     .execute(&state.pool)
     .await
     .map_err(|_| AppError::internal("internal error"))?;
+    audit(
+        &state.pool,
+        &admin.user_id,
+        "settings.update",
+        None,
+        json!({"registrationEnabled": req.registration_enabled}),
+    )
+    .await;
     Ok(Json(json!({"registrationEnabled": req.registration_enabled})).into_response())
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ActivityQuery {
+    /// Page size, clamped to 1..=100 (default 50).
+    limit: Option<i64>,
+    /// Cursor: return entries with `id <` this (from the previous page's `nextBefore`).
+    before: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActivityEntry {
+    id: i64,
+    action: String,
+    admin_user_id: Uuid,
+    /// The acting admin's live identity — `null` once that account is deleted.
+    admin_email: Option<String>,
+    admin_username: Option<String>,
+    target_user_id: Option<Uuid>,
+    /// The target's live email — `null` once deleted; the payload keeps the
+    /// at-action-time snapshot.
+    target_email: Option<String>,
+    payload: serde_json::Value,
+    #[serde(with = "time::serde::rfc3339")]
+    occurred_at: OffsetDateTime,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActivityResponse {
+    entries: Vec<ActivityEntry>,
+    /// Pass as `?before=` to fetch the next (older) page; `null` = no more pages.
+    next_before: Option<i64>,
+}
+
+/// `GET /api/admin/activity?limit=50&before=<id>` — the audit-log feed, newest first.
+pub async fn activity(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Query(q): Query<ActivityQuery>,
+) -> AppResult<Response> {
+    let limit = q.limit.unwrap_or(50).clamp(1, 100);
+
+    type Row = (
+        i64,
+        String,
+        Uuid,
+        Option<String>,
+        Option<String>,
+        Option<Uuid>,
+        Option<String>,
+        serde_json::Value,
+        OffsetDateTime,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        r#"SELECT l.id, l.action, l.admin_user_id, a.email, a.username,
+                  l.target_user_id, t.email, l.payload, l.occurred_at
+           FROM admin_audit_log l
+           LEFT JOIN users a ON a.id = l.admin_user_id
+           LEFT JOIN users t ON t.id = l.target_user_id
+           WHERE ($1::bigint IS NULL OR l.id < $1)
+           ORDER BY l.id DESC
+           LIMIT $2"#,
+    )
+    .bind(q.before)
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|_| AppError::internal("internal error"))?;
+
+    let full_page = rows.len() as i64 == limit;
+    let entries: Vec<ActivityEntry> = rows
+        .into_iter()
+        .map(
+            |(id, action, admin_id, a_email, a_username, target_id, t_email, payload, at)| {
+                ActivityEntry {
+                    id,
+                    action,
+                    admin_user_id: admin_id,
+                    admin_email: a_email,
+                    admin_username: a_username,
+                    target_user_id: target_id,
+                    target_email: t_email,
+                    payload,
+                    occurred_at: at,
+                }
+            },
+        )
+        .collect();
+    let next_before = if full_page {
+        entries.last().map(|e| e.id)
+    } else {
+        None
+    };
+    Ok(Json(ActivityResponse {
+        entries,
+        next_before,
+    })
+    .into_response())
 }
 
 /// Maps a unique-violation INSERT error to the right 409 — mirrors the Go duplicate check.

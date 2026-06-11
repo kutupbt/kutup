@@ -3,19 +3,23 @@ import { useTranslation } from 'react-i18next'
 import { Icon, ICONS } from '@/components/mobile/Icon'
 import { AdminKpiCard } from './AdminKpiCard'
 import { EncryptionBanner } from './EncryptionBanner'
+import { activityText, activityIcon } from './activity'
 import { avatarColor, initials } from '@/components/mobile/admin/avatar'
+import { useAdminActivity } from '@/api/hooks/useAdmin'
 import { formatBytes } from '@/lib/format'
+import { formatTimeAgo } from '@/components/mobile/dateFormat'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import type { AdminStats, UserRow } from '@/types/api'
 
 /**
- * AdminOverviewTab — KPI grid + EncryptionBanner + Top-users table.
+ * AdminOverviewTab — KPI grid + EncryptionBanner + Top-users table + the
+ * Recent-activity feed (the admin audit log via `GET /admin/activity`).
  *
  * Honest cut vs the design's prototype: kutup has no historical-stats
- * endpoint, so no "+N this week" delta pills. No activity feed (no backend
- * endpoint). No system-status card (no backend endpoints for uptime / TLS
- * / public URL — mobile admin made the same call).
+ * endpoint, so no "+N this week" delta pills. No system-status card (no
+ * backend endpoints for uptime / TLS / public URL — mobile admin made the
+ * same call).
  *
  * The 5th KPI swaps the design's "API requests" (no endpoint) for kutup's
  * `totalCollections` from `/admin/stats`.
@@ -57,6 +61,8 @@ export function AdminOverviewTab({
     () => [...(users ?? [])].sort((a, b) => b.storageUsedBytes - a.storageUsedBytes).slice(0, 5),
     [users],
   )
+
+  const { data: activity, isLoading: activityLoading } = useAdminActivity(8)
 
   return (
     <div className="px-8 py-6">
@@ -183,13 +189,54 @@ export function AdminOverviewTab({
         )}
       </div>
 
+      {/* Recent activity — the admin audit log */}
+      <div
+        data-testid="admin-activity"
+        className="bg-surface border border-border-light rounded-[var(--radius-lg)] overflow-hidden mt-6"
+      >
+        <div className="px-4 py-3 border-b border-border-light text-[13.5px] font-semibold text-text-primary">
+          {t('admin.activity.title', 'Recent activity')}
+        </div>
+        {activityLoading ? (
+          <div className="p-4 space-y-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-9 w-full" />
+            ))}
+          </div>
+        ) : !activity || activity.entries.length === 0 ? (
+          <div className="px-4 py-8 text-center text-[12.5px] text-text-tertiary">
+            {t('admin.activity.empty', 'No admin actions recorded yet.')}
+          </div>
+        ) : (
+          activity.entries.map((e, i) => (
+            <div
+              key={e.id}
+              className={cn(
+                'flex items-center gap-3 px-4 py-2.5',
+                i < activity.entries.length - 1 && 'border-b border-border-light',
+              )}
+            >
+              <div className="w-7 h-7 rounded-full bg-surface-sunken text-text-tertiary flex items-center justify-center shrink-0">
+                <Icon d={activityIcon(e.action)} size={13} />
+              </div>
+              <div className="min-w-0 flex-1 text-[12.5px] text-text-secondary truncate">
+                {activityText(e, t)}
+              </div>
+              <div className="text-[11.5px] text-text-tertiary whitespace-nowrap">
+                {formatTimeAgo(e.occurredAt)}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
       {/* Subtle footnote: features the design has but kutup's backend doesn't yet */}
       <div className="flex items-center gap-1.5 mt-5 text-[11.5px] text-text-tertiary">
         <Icon d={ICONS.info} size={12} />
         <span>
           {t(
             'admin.overview.footnote',
-            'Activity feed, server uptime, and TLS status are not exposed by kutup’s backend yet — they’ll appear here when the endpoints land.',
+            'Server uptime and TLS status are not exposed by kutup’s backend yet — they’ll appear here when the endpoints land.',
           )}
         </span>
       </div>
