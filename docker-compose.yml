@@ -88,6 +88,8 @@ services:
       SEAWEEDFS_MASTER_URL: ${SEAWEEDFS_MASTER_URL:-http://seaweedfs-master:9333}
       # Fallback capacity for the admin Settings card when the probe is unavailable. 0 → hidden.
       STORAGE_TOTAL_BYTES: ${STORAGE_TOTAL_BYTES:-0}
+      # Days a trashed item stays restorable before the sweeper purges it. 0 disables the sweep.
+      TRASH_RETENTION_DAYS: ${TRASH_RETENTION_DAYS:-30}
     depends_on:
       postgres:
         condition: service_healthy

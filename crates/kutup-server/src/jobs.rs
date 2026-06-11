@@ -20,10 +20,12 @@ const VERSION_KEEP_N: i32 = 50;
 const QUOTA_RECONCILE_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 const UPLOADS_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 const UPLOADS_STALE_AFTER_SECS: i64 = 24 * 3600;
+const TRASH_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 
-/// Spawns the three lifetime background jobs — mirrors the three `go x.Run(...)` calls in
-/// `main.go`. Each runs once immediately, then on its interval.
-pub fn spawn_all(pool: PgPool, storage: StorageService) {
+/// Spawns the lifetime background jobs (version cleanup, quota reconcile, uploads sweeper,
+/// trash retention). Each runs once immediately, then on its interval.
+/// `trash_retention_days == 0` disables the trash sweeper.
+pub fn spawn_all(pool: PgPool, storage: StorageService, trash_retention_days: i64) {
     let (p1, s1) = (pool.clone(), storage.clone());
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(VERSION_CLEANUP_INTERVAL);
@@ -40,6 +42,16 @@ pub fn spawn_all(pool: PgPool, storage: StorageService) {
             quota_reconcile_tick(&p2).await;
         }
     });
+    if trash_retention_days > 0 {
+        let (p3, s3) = (pool.clone(), storage.clone());
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(TRASH_SWEEP_INTERVAL);
+            loop {
+                tick.tick().await;
+                trash_sweep_once(&p3, &s3, trash_retention_days).await;
+            }
+        });
+    }
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(UPLOADS_SWEEP_INTERVAL);
         loop {
@@ -188,6 +200,150 @@ pub async fn uploads_sweep_once(pool: &PgPool, storage: &StorageService) -> usiz
         reaped += 1;
     }
     reaped
+}
+
+// --- trash purge (shared by the trash endpoints + the retention sweeper) ---
+
+/// Permanently purges one trashed file: releases the quota its blob + asset/version
+/// children hold, deletes the row (FK-cascading the children), then GCs S3 — the same
+/// sequence the old hard `DELETE /files/{id}` ran. A missing row is a no-op (another
+/// purge path won the race).
+pub async fn purge_file_root(
+    pool: &PgPool,
+    storage: &StorageService,
+    file_id: Uuid,
+) -> anyhow::Result<()> {
+    let row: Option<(String, i64, Uuid)> = sqlx::query_as(
+        "SELECT storage_path, encrypted_size_bytes, uploader_user_id FROM files WHERE id = $1",
+    )
+    .bind(file_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((storage_path, file_size, uploader_id)) = row else {
+        return Ok(());
+    };
+
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r#"WITH per_uploader AS (
+              SELECT uploader_user_id, COALESCE(SUM(size_bytes), 0) AS total
+              FROM file_assets WHERE file_id = $1 GROUP BY uploader_user_id)
+           UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - per_uploader.total)
+           FROM per_uploader WHERE users.id = per_uploader.uploader_user_id"#,
+    )
+    .bind(file_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        r#"WITH per_author AS (
+              SELECT author_user_id, COALESCE(SUM(size_bytes), 0) AS total
+              FROM file_versions WHERE file_id = $1 GROUP BY author_user_id)
+           UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - per_author.total)
+           FROM per_author WHERE users.id = per_author.author_user_id"#,
+    )
+    .bind(file_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM files WHERE id = $1")
+        .bind(file_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1) WHERE id = $2",
+    )
+    .bind(file_size)
+    .bind(uploader_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    // Best-effort S3 GC (post-commit): the legacy main blob + the whole files/{id}/ prefix.
+    let _ = storage.delete(&storage_path).await;
+    let _ = storage.delete_prefix(&format!("files/{file_id}/")).await;
+    Ok(())
+}
+
+/// Permanently purges one trashed folder root: every file in its cascade-trashed
+/// subtree (including files that had their own trash entry inside it — with the folder
+/// gone they could never be restored), then the collection rows. Folders trashed
+/// *independently* inside the subtree keep their own trash entry (their FK reparents
+/// to NULL) and purge on their own schedule.
+pub async fn purge_collection_root(
+    pool: &PgPool,
+    storage: &StorageService,
+    root_id: Uuid,
+) -> anyhow::Result<()> {
+    let colls: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM collections WHERE trash_root_id = $1")
+            .bind(root_id)
+            .fetch_all(pool)
+            .await?;
+    if colls.is_empty() {
+        return Ok(());
+    }
+    let files: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM files WHERE collection_id = ANY($1)")
+        .bind(&colls)
+        .fetch_all(pool)
+        .await?;
+    for fid in files {
+        purge_file_root(pool, storage, fid).await?;
+    }
+    sqlx::query("DELETE FROM collections WHERE id = ANY($1)")
+        .bind(&colls)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Purges every trash root older than `retention_days` — the 30-day-retention sweeper.
+/// Returns the number of roots purged.
+pub async fn trash_sweep_once(
+    pool: &PgPool,
+    storage: &StorageService,
+    retention_days: i64,
+) -> usize {
+    let mut purged = 0;
+
+    let coll_roots: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM collections WHERE trash_root_id = id \
+         AND deleted_at < NOW() - make_interval(days => $1::int)",
+    )
+    .bind(retention_days)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_else(|e| {
+        tracing::warn!("trash sweep: list collection roots: {e}");
+        Vec::new()
+    });
+    for root in coll_roots {
+        match purge_collection_root(pool, storage, root).await {
+            Ok(()) => purged += 1,
+            Err(e) => tracing::warn!("trash sweep: purge collection {root}: {e:#}"),
+        }
+    }
+
+    let file_roots: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM files WHERE trash_root_id = id \
+         AND deleted_at < NOW() - make_interval(days => $1::int)",
+    )
+    .bind(retention_days)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_else(|e| {
+        tracing::warn!("trash sweep: list file roots: {e}");
+        Vec::new()
+    });
+    for root in file_roots {
+        match purge_file_root(pool, storage, root).await {
+            Ok(()) => purged += 1,
+            Err(e) => tracing::warn!("trash sweep: purge file {root}: {e:#}"),
+        }
+    }
+
+    if purged > 0 {
+        tracing::info!("trash sweep: purged {purged} expired trash roots");
+    }
+    purged
 }
 
 // --- orphan sweep (operator-driven subcommand) ---

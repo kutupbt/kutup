@@ -47,7 +47,7 @@ pub async fn list_collections(
     let own: Vec<OwnRow> = sqlx::query_as(
         r#"SELECT id, owner_user_id, encrypted_name, name_nonce,
                   encrypted_key, encrypted_key_nonce, parent_collection_id, color
-           FROM collections WHERE owner_user_id = $1
+           FROM collections WHERE owner_user_id = $1 AND deleted_at IS NULL
            ORDER BY created_at ASC"#,
     )
     .bind(user_id)
@@ -95,7 +95,7 @@ pub async fn list_collections(
                   cs.encrypted_collection_key, cs.can_upload, cs.can_delete, cs.upload_quota_bytes
            FROM collections c
            JOIN collection_shares cs ON cs.collection_id = c.id
-           WHERE cs.recipient_user_id = $1
+           WHERE cs.recipient_user_id = $1 AND c.deleted_at IS NULL
            ORDER BY c.created_at ASC"#,
     )
     .bind(user_id)
@@ -200,7 +200,7 @@ pub async fn get_collection(
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT id, owner_user_id, encrypted_name, name_nonce,
                   encrypted_key, encrypted_key_nonce, parent_collection_id, color
-           FROM collections WHERE id = $1 AND owner_user_id = $2"#,
+           FROM collections WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL"#,
     )
     .bind(coll_id)
     .bind(user_id)
@@ -248,7 +248,7 @@ pub async fn get_collection(
                   cs.encrypted_collection_key, cs.can_upload, cs.can_delete, cs.upload_quota_bytes
            FROM collections c
            JOIN collection_shares cs ON cs.collection_id = c.id
-           WHERE c.id = $1 AND cs.recipient_user_id = $2"#,
+           WHERE c.id = $1 AND cs.recipient_user_id = $2 AND c.deleted_at IS NULL"#,
     )
     .bind(coll_id)
     .bind(user_id)
@@ -290,7 +290,7 @@ pub async fn update_collection(
 
     let res = sqlx::query(
         r#"UPDATE collections SET encrypted_name = $1, name_nonce = $2, updated_at = NOW()
-           WHERE id = $3 AND owner_user_id = $4"#,
+           WHERE id = $3 AND owner_user_id = $4 AND deleted_at IS NULL"#,
     )
     .bind(&req.encrypted_name)
     .bind(&req.name_nonce)
@@ -318,7 +318,7 @@ pub async fn update_collection_color(
     let coll_id = coll_id_or_404(&id)?;
 
     let res = sqlx::query(
-        "UPDATE collections SET color = $1, updated_at = NOW() WHERE id = $2 AND owner_user_id = $3",
+        "UPDATE collections SET color = $1, updated_at = NOW() WHERE id = $2 AND owner_user_id = $3 AND deleted_at IS NULL",
     )
     .bind(req.color)
     .bind(coll_id)
@@ -331,7 +331,10 @@ pub async fn update_collection_color(
     }
 }
 
-/// `DELETE /api/collections/{id}` — mirrors `DeleteCollection`.
+/// `DELETE /api/collections/{id}` — soft-deletes the folder *and its whole subtree*
+/// (sub-folders + files) into the trash. The folder is the single trash entry
+/// (`trash_root_id = its id`); restore/purge operate on the entry and everything
+/// tagged with it. Items already in the trash keep their own entry + deletion time.
 pub async fn delete_collection(
     State(state): State<AppState>,
     user: AuthUser,
@@ -340,15 +343,44 @@ pub async fn delete_collection(
     let user_id = trusted_uuid(&user.user_id)?;
     let coll_id = coll_id_or_404(&id)?;
 
-    let res = sqlx::query("DELETE FROM collections WHERE id = $1 AND owner_user_id = $2")
-        .bind(coll_id)
-        .bind(user_id)
-        .execute(&state.pool)
-        .await;
-    match res {
-        Ok(r) if r.rows_affected() > 0 => Ok(StatusCode::NO_CONTENT.into_response()),
-        _ => Err(AppError::not_found("not found")),
+    let mut tx = state.pool.begin().await?;
+    // Walk the live subtree from the root (only the owner's root qualifies).
+    let subtree: Vec<Uuid> = sqlx::query_scalar(
+        r#"WITH RECURSIVE subtree AS (
+             SELECT id FROM collections
+             WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL
+             UNION ALL
+             SELECT c.id FROM collections c
+             JOIN subtree s ON c.parent_collection_id = s.id
+             WHERE c.deleted_at IS NULL
+           )
+           SELECT id FROM subtree"#,
+    )
+    .bind(coll_id)
+    .bind(user_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    if subtree.is_empty() {
+        return Err(AppError::not_found("not found"));
     }
+
+    sqlx::query(
+        "UPDATE collections SET deleted_at = NOW(), trash_root_id = $2 WHERE id = ANY($1) AND deleted_at IS NULL",
+    )
+    .bind(&subtree)
+    .bind(coll_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE files SET deleted_at = NOW(), trash_root_id = $2 WHERE collection_id = ANY($1) AND deleted_at IS NULL",
+    )
+    .bind(&subtree)
+    .bind(coll_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 /// `POST /api/collections/{id}/share` — mirrors `ShareCollection` (local share/upsert).
@@ -364,11 +396,12 @@ pub async fn share_collection(
     let recipient_id = Uuid::parse_str(&req.recipient_user_id)
         .map_err(|_| AppError::bad_request("invalid request"))?;
 
-    let owner: Option<Uuid> =
-        sqlx::query_scalar("SELECT owner_user_id FROM collections WHERE id = $1")
-            .bind(coll_id)
-            .fetch_optional(&state.pool)
-            .await?;
+    let owner: Option<Uuid> = sqlx::query_scalar(
+        "SELECT owner_user_id FROM collections WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(coll_id)
+    .fetch_optional(&state.pool)
+    .await?;
     if owner != Some(sharer_id) {
         return Err(AppError::forbidden("forbidden"));
     }
@@ -425,11 +458,12 @@ pub async fn share_federated(
     }
     let coll_id = Uuid::parse_str(&id).map_err(|_| AppError::forbidden("forbidden"))?;
 
-    let owner: Option<Uuid> =
-        sqlx::query_scalar("SELECT owner_user_id FROM collections WHERE id = $1")
-            .bind(coll_id)
-            .fetch_optional(&state.pool)
-            .await?;
+    let owner: Option<Uuid> = sqlx::query_scalar(
+        "SELECT owner_user_id FROM collections WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(coll_id)
+    .fetch_optional(&state.pool)
+    .await?;
     if owner != Some(sharer_id) {
         return Err(AppError::forbidden("forbidden"));
     }

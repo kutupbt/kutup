@@ -13,7 +13,7 @@ It is the bridge between `docs/` (current state, authoritative) and `docs/resear
 The bar for the first `v*` tag:
 
 1. **No silent stubs in admin-facing UI.** Every clickable action that exists in the UI must work end-to-end. No "wire-up pending" toasts in shipped builds.
-2. **Deletion is recoverable.** Today, deleting a file is permanent. Google Drive / Apple Files have set the expectation that deletion is undoable; matching it is table stakes.
+2. **Deletion is recoverable.** ✅ Shipped: owner-scoped trash with restore + permanent delete, and an hourly retention sweeper (`TRASH_RETENTION_DAYS`, default 30). See `docs/api.md` → Trash.
 3. **Self-hosters can recover broken users without SSH.** Lost TOTP device, forgotten password, accidental disable — the admin UI must cover these without touching the database.
 4. **Builds are signed.** Unsigned binaries trigger macOS Gatekeeper and Windows SmartScreen warnings that look like malware to non-technical users.
 5. **Admin actions leave an audit trail.** Self-hosting communities — especially compliance-driven ones — need to know who disabled an account, when, and why.
@@ -25,16 +25,6 @@ Items below are organized by **whether they block v1** vs. whether they can ship
 ---
 
 ## Blockers for v1 (must-have)
-
-### Admin · `isAdmin` mutation, force-disable 2FA, break-glass admin — ✅ SHIPPED (PR 14)
-
-PR 14 wired all three. Kept here briefly for history; remove on the next roadmap sweep.
-
-- **Promote / demote admin** — the backend `UpdateUser` handler already accepted `isAdmin`; PR 14 added the frontend wiring (`useUpdateUser({ isAdmin })`, confirm dialogs on desktop + mobile).
-- **Force-disable 2FA** — `DELETE /admin/users/:id/2fa` clears `totp_secret` + `totp_enabled`; wired into both admin UIs with a confirm.
-- **Break-glass admin** — the single `ADMIN_ACCOUNT` bootstrap account is immutable: it can't be demoted, disabled, or deleted (backend 403 guards + `isProtected` flag surfaced in the UI). A generic last-admin guard backstops when `ADMIN_ACCOUNT` is unset.
-
-Still **NOT** done — audit-log entries for these actions (`// TODO(audit-log)` markers are in `handlers/admin.rs`); see the Audit log blocker below.
 
 ### Admin · Password reset
 
@@ -52,22 +42,6 @@ This means there is **no simple "reset password" endpoint** — it's a design pr
 | Backend: `POST /admin/users/:id/wipe` — destructive reset for the unrecoverable path | same |
 | Frontend: surface both as distinct, clearly-labelled actions (not one "Reset password") | `AdminUserMenu` / `MobileAdminUserDetailPage` |
 | Email (optional, see SMTP below): deliver the rotated temp password if SMTP is configured | backend integration |
-
-### Trash + 30-day retention (PR 6 + PR 7)
-
-Both desktop and mobile Trash UI are already built and shipped (`frontend/src/hooks/useTrash.ts`, `frontend/src/pages/mobile/MobileTrashPage.tsx`, `frontend/src/pages/TrashPage.tsx`). They render an empty-state hero because the backend has no soft-delete concept yet — `useTrash()` returns `{ items: [], …NOT_WIRED }`.
-
-| What's needed | Where |
-|---|---|
-| Backend: schema migration — `deleted_at TIMESTAMPTZ NULL` on `files` and `collections` | `crates/kutup-server/migrations/` |
-| Backend: change `DELETE /files/:id` + `DELETE /collections/:id` to soft-delete (write `deleted_at = NOW()`, skip from default queries) | `crates/kutup-server/src/handlers/{files,collections}.rs` |
-| Backend: `GET /trash` (per-user) + `POST /trash/:id/restore` + `DELETE /trash/:id` (permanent) + `DELETE /trash` (empty all) | new handler |
-| Backend: sweeper goroutine to purge items older than `TRASH_RETENTION_DAYS` (default 30) | `crates/kutup-server/src/jobs.rs` (alongside the existing sweepers) |
-| Backend: storage usage recalc on restore (trashed items still count against quota OR don't — pick one, document) | tied to handler |
-| Frontend: replace `useTrash`'s NOT_WIRED stubs with real fetches via React Query | `frontend/src/hooks/useTrash.ts` |
-| Frontend: change "Delete" actions to "Move to Trash" everywhere; permanent-delete only from Trash | Drive / mobile sheets / admin |
-| Frontend: drop the `useTrash()` JSDoc note about NOT_WIRED | `useTrash.ts` |
-| Test: round-trip — delete → appears in trash → restore → reappears in source folder → sweeper purges after N days | both ends |
 
 ### Admin · Audit log
 
@@ -166,12 +140,8 @@ The design has "Re-index search" and "Purge soft-deleted files now" in a Setting
 | What's needed | Where |
 |---|---|
 | Backend: `POST /admin/actions/reindex-search` (kicks off the encrypted-search reindex) | new |
-| Backend: `POST /admin/actions/purge-trash` (forces the sweeper to run now) — depends on trash work above | new |
+| Backend: `POST /admin/actions/purge-trash` (forces the trash retention sweeper — `jobs::trash_sweep_once` — to run now) | new |
 | Frontend: unhide the danger zone card | both admin Settings tabs |
-
-### SeaweedFS master auto-detect for storage capacity — ✅ SHIPPED (PR 14)
-
-PR 14 added `crates/kutup-server/src/storage_probe.rs`: a cached (60s) probe that walks the SeaweedFS master topology (`SEAWEEDFS_MASTER_URL`) + each volume server's `/status`, returning real total + used + free disk bytes. `GET /admin/stats` now returns probe-sourced `storageTotalBytes` + `storageBackendUsedBytes`; the `STORAGE_TOTAL_BYTES` env var is the fallback when the probe is unavailable. Remove this entry on the next roadmap sweep.
 
 ### Mobile · Android Keychain
 

@@ -43,6 +43,30 @@
     "account": "Account",
     "primary": "Primary navigation"
   },
+  "trash": {
+    "restore": "Restore",
+    "deleteForever": "Delete forever",
+    "emptyTrash": "Empty trash",
+    "items_one": "{{count}} item",
+    "items_other": "{{count}} items",
+    "deletedOn": "Deleted {{date}}",
+    "deleteConfirm": {
+      "title": "Delete “{{name}}” forever?",
+      "desc": "This item will be permanently deleted. This cannot be undone."
+    },
+    "emptyConfirm": {
+      "title": "Empty trash?",
+      "desc": "All items in the trash will be permanently deleted. This cannot be undone."
+    },
+    "toast": {
+      "restored": "Restored",
+      "restoreFailed": "Restore failed",
+      "restoreParentFirst": "Restore the parent folder first",
+      "deleted": "Deleted forever",
+      "deleteFailed": "Delete failed",
+      "emptied": "Trash emptied"
+    }
+  },
   "auth": {
     "signIn": "Sign in",
     "email": "Email",
@@ -163,8 +187,8 @@
       "uploaded_other": "Uploaded {{count}} files",
       "downloading_one": "Downloading {{count}} file…",
       "downloading_other": "Downloading {{count}} files…",
-      "deleted_one": "Deleted {{count}} item",
-      "deleted_other": "Deleted {{count}} items",
+      "deleted_one": "Moved {{count}} item to Trash",
+      "deleted_other": "Moved {{count}} items to Trash",
       "someFailed": "Some items could not be deleted",
       "remoteAdded": "Remote share added",
       "remoteRemoved": "Remote share removed",
@@ -177,9 +201,9 @@
       "folderUploaded_one": "Uploaded {{count}} file",
       "folderUploaded_other": "Uploaded {{count}} files",
       "downloadFailed": "Download failed",
-      "fileDeleted": "File deleted",
+      "fileDeleted": "Moved to Trash",
       "deleteFailed": "Delete failed",
-      "folderDeleted": "Folder deleted",
+      "folderDeleted": "Folder moved to Trash",
       "folderDeleteFailed": "Failed to delete folder",
       "loadFailed": "Failed to load collections",
       "zipPreparing": "Preparing ZIP…",
@@ -193,23 +217,23 @@
       "shareFailed": "Could not share folder"
     },
     "deleteFile": {
-      "title": "Delete “{{name}}”?",
-      "desc": "This cannot be undone."
+      "title": "Move “{{name}}” to Trash?",
+      "desc": "You can restore it from the Trash for 30 days."
     },
     "deleteFolder": {
-      "title": "Delete folder “{{name}}”?",
-      "desc": "All files and subfolders will be permanently deleted."
+      "title": "Move folder “{{name}}” to Trash?",
+      "desc": "The folder and everything inside it move to the Trash. You can restore it for 30 days."
     },
     "batchDelete": {
-      "title_one": "Delete {{count}} item?",
-      "title_other": "Delete {{count}} items?",
+      "title_one": "Move {{count}} item to Trash?",
+      "title_other": "Move {{count}} items to Trash?",
       "files_one": "{{count}} file",
       "files_other": "{{count}} files",
       "folders_one": "{{count}} folder",
       "folders_other": "{{count}} folders",
       "and": "and",
-      "willBeDeleted": "will be permanently deleted. This cannot be undone.",
-      "deleteAll": "Delete all"
+      "willBeDeleted": "will be moved to the Trash. You can restore them for 30 days.",
+      "deleteAll": "Move all to Trash"
     },
     "publicLink": {
       "title": "Public link ready",
@@ -227,7 +251,7 @@
     "uploadHere": "Upload here",
     "share": "Share",
     "copyPublicLink": "Copy public link",
-    "deleteFolder": "Delete folder",
+    "deleteFolder": "Move to Trash",
     "removeShare": "Remove share",
     "changeColor": "Change color",
     "colorDefault": "Default",
@@ -244,7 +268,7 @@
     "uploaded": "Uploaded",
     "download": "Download",
     "rename": "Rename",
-    "delete": "Delete",
+    "delete": "Move to Trash",
     "selectAll": "Select all files"
   },
   "newMenu": {
@@ -267,10 +291,10 @@
     "rename": "Rename",
     "share": "Share",
     "copyPublicLink": "Copy public link",
-    "deleteFolder": "Delete folder",
+    "deleteFolder": "Move to Trash",
     "download": "Download",
     "downloadFolder": "Download as ZIP",
-    "delete": "Delete"
+    "delete": "Move to Trash"
   },
   "upload": {
     "progress": "Uploading",

@@ -27,6 +27,9 @@ pub struct Config {
     /// SeaweedFS master endpoint probed for real capacity + usage (admin dashboard). Empty
     /// disables the probe (the admin UI then falls back to `storage_total_bytes`).
     pub seaweedfs_master_url: String,
+    /// Days a trashed file/folder is kept before the sweeper purges it permanently.
+    /// From `TRASH_RETENTION_DAYS`; 0 disables the automatic purge.
+    pub trash_retention_days: i64,
 }
 
 impl Config {
@@ -51,6 +54,7 @@ impl Config {
             ),
             storage_total_bytes: get_env_i64("STORAGE_TOTAL_BYTES", 0),
             seaweedfs_master_url: get_env("SEAWEEDFS_MASTER_URL", "http://seaweedfs-master:9333"),
+            trash_retention_days: get_env_i64("TRASH_RETENTION_DAYS", 30),
         };
         if cfg.jwt_secret.len() < 32 {
             panic!("JWT_SECRET must be at least 32 characters long");

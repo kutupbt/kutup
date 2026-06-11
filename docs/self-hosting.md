@@ -52,6 +52,11 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # Optional fallback storage capacity (bytes) for the admin UI, used only
 # when the SeaweedFS probe is unavailable. Unset / 0 hides the readout.
 # STORAGE_TOTAL_BYTES=536870912000
+
+# Days a trashed file/folder stays restorable before the hourly sweeper
+# purges it permanently. 0 disables the automatic purge (trash only
+# empties when users do it themselves). Default: 30.
+# TRASH_RETENTION_DAYS=30
 ```
 
 ---

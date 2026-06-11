@@ -101,9 +101,9 @@ async fn main() -> anyhow::Result<()> {
     // Periodic pruning of the rate-limit + TOTP-block maps (replaces the Go init goroutines).
     ratelimit::spawn_cleanup();
 
-    // Background maintenance jobs (version cleanup / quota reconcile / uploads sweeper) —
-    // mirrors the three `go x.Run(...)` calls in main.go.
-    jobs::spawn_all(pool.clone(), storage.clone());
+    // Background maintenance jobs (version cleanup / quota reconcile / uploads sweeper /
+    // trash retention).
+    jobs::spawn_all(pool.clone(), storage.clone(), config.trash_retention_days);
 
     // Live SeaweedFS capacity probe (admin dashboard) — None when SEAWEEDFS_MASTER_URL is empty.
     let storage_probe =
@@ -205,7 +205,7 @@ fn build_router(state: AppState) -> Router {
 
     use handlers::{
         admin, auth, collab, collections, devices, federation, fedproxy, file_assets,
-        file_versions, files, shares, tus,
+        file_versions, files, shares, trash, tus,
     };
 
     Router::new()
@@ -291,6 +291,10 @@ fn build_router(state: AppState) -> Router {
             put(files::update_metadata).delete(files::delete),
         )
         .route("/api/files/:fileId/claim-seed", post(files::claim_seed))
+        // --- Trash (authenticated; owner-scoped soft-delete + 30-day retention) ---
+        .route("/api/trash", get(trash::list).delete(trash::empty))
+        .route("/api/trash/:id", delete(trash::destroy))
+        .route("/api/trash/:id/restore", post(trash::restore))
         .route(
             "/api/files/:fileId/versions",
             get(file_versions::list).post(file_versions::record),

@@ -196,20 +196,22 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     };
 
     // Permission check + quota gate, mirroring files.rs upload.
-    let owner_n: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM collections WHERE id=$1 AND owner_user_id=$2")
-            .bind(coll_uuid)
-            .bind(user_id)
-            .fetch_one(&mut *tx)
-            .await
-            .unwrap_or(0);
+    let owner_n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM collections WHERE id=$1 AND owner_user_id=$2 AND deleted_at IS NULL",
+    )
+    .bind(coll_uuid)
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap_or(0);
     let is_owner = owner_n > 0;
 
     let mut upload_quota_bytes: Option<i64> = None;
     if !is_owner {
         let share: Option<(bool, Option<i64>)> = sqlx::query_as(
-            "SELECT can_upload, upload_quota_bytes FROM collection_shares \
-             WHERE collection_id=$1 AND recipient_user_id=$2",
+            "SELECT cs.can_upload, cs.upload_quota_bytes FROM collection_shares cs \
+             JOIN collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL \
+             WHERE cs.collection_id=$1 AND cs.recipient_user_id=$2",
         )
         .bind(coll_uuid)
         .bind(user_id)

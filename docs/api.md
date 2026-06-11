@@ -411,9 +411,9 @@ Rename a collection (client re-encrypts the name with the collection key).
 
 ### DELETE /api/collections/:id
 
-Delete a collection and all files within it.
+Move a collection — with its whole subtree (sub-folders + files) — to the trash. The folder becomes a single trash entry; restore or purge it via the Trash endpoints. Items already in the trash keep their own entry and deletion time. While trashed, the subtree is invisible to every other endpoint (listings, downloads, shares, federation, collab) and its public share links go dark. Trashed items keep counting against quota until purged.
 
-**Auth:** Bearer JWT
+**Auth:** Bearer JWT (owner only)
 
 **Response:** `204 No Content`.
 
@@ -575,9 +575,80 @@ Download the encrypted content of a file.
 
 ### DELETE /api/files/:id
 
-Delete a file.
+Move a file to the trash (soft delete). The file disappears from every normal endpoint but keeps counting against quota; restore or purge it via the Trash endpoints. Permanent deletion happens from the trash — explicitly, or automatically after `TRASH_RETENTION_DAYS` (default 30).
+
+**Auth:** Bearer JWT (collection owner, or the uploader holding a `canDelete` share)
+
+**Response:** `204 No Content`.
+
+---
+
+## Trash
+
+Trash is **owner-scoped**: an item lives in the trash of the user who owns the collection it belongs to (a share recipient's delete lands in the owner's trash — the Google Drive model). Every entry is a *trash root*: a deleted file, or a deleted folder carrying its whole subtree. A background sweeper purges roots older than `TRASH_RETENTION_DAYS` (default 30; `0` disables the sweeper). Federated deletes (`DELETE /api/fed/shares/...`) remain permanent — there is no cross-server trash.
+
+### GET /api/trash
+
+List the caller's trash roots, newest first. Like everything else, names arrive encrypted: folder rows carry the folder's owner-wrapped key; file rows additionally carry the parent collection's owner-wrapped key (`collectionEncryptedKey`/`collectionEncryptedKeyNonce`) so the metadata chain decrypts even when the folder isn't in the live listing.
 
 **Auth:** Bearer JWT
+
+**Response:** `200 OK`
+```json
+{
+  "folders": [
+    {
+      "id": "<uuid>",
+      "encryptedName": "<base64>",
+      "nameNonce": "<base64>",
+      "encryptedKey": "<base64>",
+      "encryptedKeyNonce": "<base64>",
+      "color": "blue",
+      "items": 12,
+      "deletedAt": "2026-06-11T11:22:33Z"
+    }
+  ],
+  "files": [
+    {
+      "id": "<uuid>",
+      "collectionId": "<uuid>",
+      "encryptedMetadata": "<base64>",
+      "metadataNonce": "<base64>",
+      "encryptedFileKey": "<base64>",
+      "fileKeyNonce": "<base64>",
+      "collectionEncryptedKey": "<base64>",
+      "collectionEncryptedKeyNonce": "<base64>",
+      "deletedAt": "2026-06-11T11:22:33Z"
+    }
+  ]
+}
+```
+
+`items` is the number of files trashed together with the folder (its subtree).
+
+### POST /api/trash/:id/restore
+
+Put a trash root back where it was. Restoring a folder restores its whole subtree; if its original parent is gone or still trashed, it comes back at the top level. Restoring a file whose folder is still in the trash returns `409 Conflict` (restore the folder instead).
+
+**Auth:** Bearer JWT (owner only)
+
+**Response:** `200 OK` `{"message": "restored"}` · `409 Conflict` when the parent folder is still trashed.
+
+### DELETE /api/trash/:id
+
+Permanently purge one trash root: DB rows, S3 blobs (including version/asset children), and the held quota. Irreversible.
+
+**Auth:** Bearer JWT (owner only)
+
+**Response:** `204 No Content`.
+
+### DELETE /api/trash
+
+Empty the caller's whole trash. Irreversible.
+
+**Auth:** Bearer JWT
+
+**Response:** `204 No Content`.
 
 ---
 

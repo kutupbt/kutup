@@ -103,7 +103,7 @@ pub async fn ws(
                   EXISTS(SELECT 1 FROM collection_shares cs
                          WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2)
            FROM files f JOIN collections c ON c.id = f.collection_id
-           WHERE f.id = $1"#,
+           WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL"#,
     )
     .bind(file_uuid)
     .bind(user_uuid)
