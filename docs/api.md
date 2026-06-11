@@ -27,7 +27,7 @@ Returns public server settings (e.g. registration enabled/disabled).
 
 ### POST /api/auth/register
 
-Create a new account with an encrypted key bundle.
+Create a new account with an encrypted key bundle. Rate-limited (10/hr/IP, `RATE_LIMIT_REGISTER_PER_HOUR`).
 
 **Auth:** None
 
@@ -77,7 +77,7 @@ Fetch the KDF salts needed to derive the login key before submitting credentials
 
 ### POST /api/auth/login
 
-Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP).
+Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RATE_LIMIT_LOGIN_PER_MIN`). On top of the per-IP limit, repeated failed password attempts for one email lock that account out: after 5 failures (`LOGIN_LOCKOUT_THRESHOLD`) further attempts return `429` for 15 minutes (`LOGIN_LOCKOUT_MINUTES`). The lockout applies to unknown emails too, so a `429` does not reveal whether the account exists.
 
 **Auth:** None
 
@@ -912,7 +912,7 @@ Delete a file in an incoming federated share (if permitted). Proxied to the remo
 
 ## Admin
 
-All admin endpoints require the `isAdmin` flag on the JWT.
+All admin endpoints require the `isAdmin` flag on the JWT and share a stricter per-IP rate limit (120/min, `RATE_LIMIT_ADMIN_PER_MIN`; over-limit requests return `429`).
 
 Every mutating admin endpoint (create / update / delete user, force-disable 2FA, settings update) writes a row to the **admin audit log** — who did what to whom, when. The log is readable via `GET /api/admin/activity` below. Audit rows have no foreign keys and outlive the accounts they reference; the human-readable identities (emails, usernames) are snapshotted into the row's `payload` at action time.
 

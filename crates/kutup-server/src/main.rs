@@ -216,7 +216,10 @@ fn build_router(state: AppState) -> Router {
         .route("/api/health", get(health))
         // --- Auth routes (anonymous; rate-limited per the Go middleware chain) ---
         .route("/api/auth/settings", get(auth::get_public_settings))
-        .route("/api/auth/register", post(auth::register))
+        .route(
+            "/api/auth/register",
+            post(auth::register).route_layer(from_fn(middleware::rate_limit_register)),
+        )
         .route(
             "/api/auth/login/preflight",
             get(auth::get_login_preflight).route_layer(from_fn(middleware::rate_limit_preflight)),
@@ -225,7 +228,10 @@ fn build_router(state: AppState) -> Router {
             "/api/auth/login",
             post(auth::login).route_layer(from_fn(middleware::rate_limit_login)),
         )
-        .route("/api/auth/login/2fa", post(auth::login_two_fa))
+        .route(
+            "/api/auth/login/2fa",
+            post(auth::login_two_fa).route_layer(from_fn(middleware::rate_limit_login)),
+        )
         .route(
             "/api/auth/recover/preflight",
             get(auth::get_recovery_preflight).route_layer(from_fn(middleware::rate_limit_recovery)),
@@ -377,21 +383,26 @@ fn build_router(state: AppState) -> Router {
             "/api/fed-proxy/:shareId/files/:fileId",
             delete(fedproxy::proxy_delete),
         )
-        // --- Admin (authenticated + isAdmin via the AdminUser extractor). ---
-        .route(
-            "/api/admin/users",
-            get(admin::list_users).post(admin::create_user),
-        )
-        .route(
-            "/api/admin/users/:id",
-            put(admin::update_user).delete(admin::delete_user),
-        )
-        .route("/api/admin/users/:id/2fa", delete(admin::force_disable_2fa))
-        .route("/api/admin/stats", get(admin::get_stats))
-        .route("/api/admin/activity", get(admin::activity))
-        .route(
-            "/api/admin/settings",
-            get(admin::get_settings).put(admin::update_settings),
+        // --- Admin (authenticated + isAdmin via the AdminUser extractor; a stricter
+        //     per-IP rate limit fronts every admin route). ---
+        .merge(
+            Router::new()
+                .route(
+                    "/api/admin/users",
+                    get(admin::list_users).post(admin::create_user),
+                )
+                .route(
+                    "/api/admin/users/:id",
+                    put(admin::update_user).delete(admin::delete_user),
+                )
+                .route("/api/admin/users/:id/2fa", delete(admin::force_disable_2fa))
+                .route("/api/admin/stats", get(admin::get_stats))
+                .route("/api/admin/activity", get(admin::activity))
+                .route(
+                    "/api/admin/settings",
+                    get(admin::get_settings).put(admin::update_settings),
+                )
+                .route_layer(from_fn(middleware::rate_limit_admin)),
         )
         // Layer order: with chained `.layer()` the *last* added is the outermost. The tus
         // OPTIONS passthrough is outermost here so it can answer tus discovery before CORS

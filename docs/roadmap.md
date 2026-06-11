@@ -17,7 +17,7 @@ The bar for the first `v*` tag:
 3. **Self-hosters can recover broken users without SSH.** Lost TOTP device, forgotten password, accidental disable — the admin UI must cover these without touching the database.
 4. **Builds are signed.** Unsigned binaries trigger macOS Gatekeeper and Windows SmartScreen warnings that look like malware to non-technical users.
 5. **Admin actions leave an audit trail.** ✅ Shipped: every mutating admin endpoint writes an `admin_audit_log` row; `GET /admin/activity` serves the feed and the Recent-activity cards render it on desktop + mobile Admin Overview. See `docs/api.md` → Admin.
-6. **Basic abuse protection.** Login + admin endpoints have rate-limiting; brute-force attempts surface in logs.
+6. **Basic abuse protection.** ✅ Shipped: per-IP limits on login/preflight/register/recovery/federation/admin (env-overridable `RATE_LIMIT_*`), per-account login lockout (`LOGIN_LOCKOUT_*`), per-token TOTP blocking, and proxy-aware client-IP resolution (X-Real-IP). See `docs/self-hosting.md`.
 7. **Documentation tracks reality.** No "this works but..." caveats in user-facing docs.
 
 Items below are organized by **whether they block v1** vs. whether they can ship in a subsequent release.
@@ -42,18 +42,6 @@ This means there is **no simple "reset password" endpoint** — it's a design pr
 | Backend: `POST /admin/users/:id/wipe` — destructive reset for the unrecoverable path | same |
 | Frontend: surface both as distinct, clearly-labelled actions (not one "Reset password") | `AdminUserMenu` / `MobileAdminUserDetailPage` |
 | Email (optional, see SMTP below): deliver the rotated temp password if SMTP is configured | backend integration |
-
-### Rate limiting + brute-force protection
-
-Login + register + admin endpoints have no rate limit. A trivial script can hammer them.
-
-| What's needed | Where |
-|---|---|
-| Backend: middleware — token-bucket per IP for `/auth/*` (10 req / 5 min default) | `crates/kutup-server/src/middleware.rs` + `ratelimit.rs` |
-| Backend: per-account "5 failed logins → lockout for 15 min" | `crates/kutup-server/src/handlers/auth.rs` + DB column or in-memory `failed_logins` |
-| Backend: separate stricter limit on admin endpoints | same middleware |
-| Config: env-var overrides (`AUTH_RATE_LIMIT_PER_5MIN`, `LOGIN_LOCKOUT_THRESHOLD`, etc.) | `crates/kutup-server/src/config.rs` |
-| Test: integration test that exceeding the limit returns 429 | `crates/kutup-server/src/handlers/auth.rs` (tests) |
 
 ### Signed builds
 

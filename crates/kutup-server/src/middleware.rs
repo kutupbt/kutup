@@ -74,8 +74,34 @@ fn bearer_token(parts: &Parts) -> Option<String> {
     auth.strip_prefix("Bearer ").map(|t| t.to_string())
 }
 
-/// Peer-IP string used as the rate-limit key — mirrors Fiber's `c.IP()`.
-fn client_ip(addr: SocketAddr) -> String {
+/// Client-IP string used as the rate-limit key.
+///
+/// kutup's deployment model puts nginx in front of the backend (the backend port is
+/// never published), so the TCP peer is the proxy for every request and the socket
+/// address alone would give ALL clients one shared bucket. Prefer the proxy-set
+/// `X-Real-IP`, then the first `X-Forwarded-For` hop, then the socket address.
+/// Trust note: these headers are only meaningful because the backend is not directly
+/// reachable; nginx overwrites them on every request (see `nginx/nginx.conf`).
+fn client_ip(addr: SocketAddr, req: &Request) -> String {
+    if let Some(ip) = req
+        .headers()
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return ip.to_string();
+    }
+    if let Some(ip) = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return ip.to_string();
+    }
     addr.ip().to_string()
 }
 
@@ -85,7 +111,7 @@ async fn limit(
     req: Request,
     next: Next,
 ) -> Response {
-    if !limiter.allow(&client_ip(addr)) {
+    if !limiter.allow(&client_ip(addr, &req)) {
         return AppError::too_many_requests("too many requests").into_response();
     }
     next.run(req).await
@@ -125,4 +151,88 @@ pub async fn rate_limit_fed_users(
     next: Next,
 ) -> Response {
     limit(addr, &ratelimit::FED_USERS, req, next).await
+}
+
+/// 10/hr/IP — `/api/auth/register`.
+pub async fn rate_limit_register(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    limit(addr, &ratelimit::REGISTER, req, next).await
+}
+
+/// 120/min/IP — every `/api/admin/*` route.
+pub async fn rate_limit_admin(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    limit(addr, &ratelimit::ADMIN, req, next).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::StatusCode;
+    use axum::routing::get;
+    use axum::Router;
+    use std::sync::LazyLock;
+    use tower::ServiceExt;
+
+    static TEST_LIMITER: LazyLock<ratelimit::RateLimiter> =
+        LazyLock::new(|| ratelimit::RateLimiter::new(2, std::time::Duration::from_secs(60)));
+
+    async fn test_layer(
+        ConnectInfo(addr): ConnectInfo<SocketAddr>,
+        req: Request,
+        next: Next,
+    ) -> Response {
+        limit(addr, &TEST_LIMITER, req, next).await
+    }
+
+    fn req(ip: &str, real_ip: Option<&str>) -> Request<Body> {
+        let mut r = Request::builder().uri("/ping");
+        if let Some(h) = real_ip {
+            r = r.header("x-real-ip", h);
+        }
+        let mut r = r.body(Body::empty()).unwrap();
+        let addr: SocketAddr = format!("{ip}:1234").parse().unwrap();
+        r.extensions_mut().insert(ConnectInfo(addr));
+        r
+    }
+
+    /// Exceeding the per-IP limit returns 429; another client IP (here via the
+    /// proxy-set X-Real-IP header, same TCP peer) keeps its own budget.
+    #[tokio::test]
+    async fn rate_limited_route_returns_429() {
+        let app = Router::new()
+            .route("/ping", get(|| async { "pong" }))
+            .route_layer(axum::middleware::from_fn(test_layer));
+
+        // Two allowed, third (same client) is 429.
+        for _ in 0..2 {
+            let res = app
+                .clone()
+                .oneshot(req("10.0.0.1", Some("203.0.113.7")))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+        }
+        let res = app
+            .clone()
+            .oneshot(req("10.0.0.1", Some("203.0.113.7")))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        // Same proxy peer, different X-Real-IP → separate bucket, still allowed.
+        let res = app
+            .clone()
+            .oneshot(req("10.0.0.1", Some("203.0.113.8")))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
 }

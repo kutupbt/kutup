@@ -284,6 +284,15 @@ pub async fn login(
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
 
+    // Per-account lockout (on top of the per-IP route limiter): N failed password
+    // attempts lock the email out for a cooldown. Checked for unknown emails too, so
+    // the 429 is not an account-existence oracle.
+    if ratelimit::LOGIN_LOCKOUT.is_locked(&req.email) {
+        return Err(AppError::too_many_requests(
+            "too many failed attempts, try again later",
+        ));
+    }
+
     type Row = (
         Uuid,
         String,
@@ -332,6 +341,7 @@ pub async fn login(
     else {
         // Run bcrypt anyway to keep timing constant.
         let _ = bcrypt::verify("dummy", FAKE_BCRYPT_HASH);
+        ratelimit::LOGIN_LOCKOUT.record(&req.email, false);
         return Err(AppError::unauthorized("invalid credentials"));
     };
 
@@ -344,8 +354,10 @@ pub async fn login(
         .map_err(|_| AppError::bad_request("invalid loginKey"))?;
 
     if !bcrypt::verify(&login_key_bytes, &login_key_hash).unwrap_or(false) {
+        ratelimit::LOGIN_LOCKOUT.record(&req.email, false);
         return Err(AppError::unauthorized("invalid credentials"));
     }
+    ratelimit::LOGIN_LOCKOUT.record(&req.email, true);
 
     let user_id = id.to_string();
 
