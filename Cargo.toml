@@ -18,7 +18,8 @@ exclude = ["src-tauri"]
 [workspace.package]
 edition = "2021"
 license = "AGPL-3.0-only"
-rust-version = "1.82"
+# Tracks the highest MSRV in the locked dep graph (currently the aws-sdk-* family).
+rust-version = "1.91.1"
 
 # Shared dependency versions, pinned once for the whole workspace.
 [workspace.dependencies]
@@ -81,7 +82,9 @@ tempfile = "3"
 # the spec with utoipa and serve the raw JSON instead (see docs/roadmap.md).
 utoipa = { version = "5", features = ["axum_extras", "time", "uuid", "preserve_order"] }
 # Auth + 2FA (server slice 2).
-jsonwebtoken = "9"
+# jsonwebtoken v10 ships no crypto backend by default — `rust_crypto` keeps the
+# pure-Rust posture (the alternative, `aws_lc_rs`, drags in a C/asm build).
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 bcrypt = "0.16"
 # otpauth = get_url() (the QR URI Go returns); gen_secret = Secret::generate_secret().
 totp-rs = { version = "5", default-features = false, features = ["otpauth", "gen_secret"] }
