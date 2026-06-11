@@ -4,7 +4,7 @@
 
 # Kutup
 
-**End-to-end encrypted, self-hosted Google Drive — with real-time collab for notes, office docs, and whiteboards.**
+**End-to-end encrypted, self-hosted Drive — with real-time collab for notes, office docs, and whiteboards.**
 
 ![Rust](https://img.shields.io/badge/Rust-1.91-000000?logo=rust)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.4-3178C6?logo=typescript)
