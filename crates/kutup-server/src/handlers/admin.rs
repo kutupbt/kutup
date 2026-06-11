@@ -17,6 +17,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+use crate::jobs;
 use crate::middleware::AdminUser;
 use crate::AppState;
 
@@ -75,6 +76,9 @@ struct UserRow {
     is_active: bool,
     #[serde(rename = "totpEnabled")]
     totp_enabled: bool,
+    /// Still on the admin-issued temp password (no key material yet). Gates the
+    /// admin "rotate temp password" action.
+    is_first_login: bool,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
     /// Marks the break-glass admin — the UI disables demote/disable/delete for this user.
@@ -92,11 +96,12 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
         bool,
         bool,
         bool,
+        bool,
         OffsetDateTime,
     );
     let rows: Vec<Row> = sqlx::query_as(
         r#"SELECT id, email, COALESCE(username, ''), storage_quota_bytes, storage_used_bytes,
-                  is_admin, is_active, totp_enabled, created_at
+                  is_admin, is_active, totp_enabled, is_first_login, created_at
            FROM users ORDER BY created_at DESC"#,
     )
     .fetch_all(&state.pool)
@@ -106,7 +111,7 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     let users: Vec<UserRow> = rows
         .into_iter()
         .map(
-            |(id, email, username, quota, used, is_admin, is_active, totp, created)| {
+            |(id, email, username, quota, used, is_admin, is_active, totp, first, created)| {
                 let is_protected = is_break_glass(&state, &email);
                 UserRow {
                     id,
@@ -117,6 +122,7 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
                     is_admin,
                     is_active,
                     totp_enabled: totp,
+                    is_first_login: first,
                     created_at: created,
                     is_protected,
                 }
@@ -467,6 +473,189 @@ pub async fn update_settings(
     )
     .await;
     Ok(Json(json!({"registrationEnabled": req.registration_enabled})).into_response())
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RotateTempPasswordRequest {
+    temp_password: String,
+}
+
+/// `POST /api/admin/users/{id}/rotate-temp-password` — replaces the temp password of an
+/// account still in `is_first_login` state. Such an account has no key material yet, so
+/// this destroys nothing. For an established account this is a `409`: under E2EE the
+/// server cannot reset a password without destroying the user's data — they self-serve
+/// via `/auth/recover`, or the admin wipes (see `wipe_user`).
+/// Design: `docs/research/10-admin-password-reset.md`.
+pub async fn rotate_temp_password(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<String>,
+    Json(req): Json<RotateTempPasswordRequest>,
+) -> AppResult<Response> {
+    if req.temp_password.is_empty() {
+        return Err(AppError::bad_request("tempPassword required"));
+    }
+    let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+
+    let row: Option<(String, bool)> =
+        sqlx::query_as("SELECT email, is_first_login FROM users WHERE id = $1")
+            .bind(target)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some((email, is_first_login)) = row else {
+        return Err(AppError::not_found("not found"));
+    };
+    if !is_first_login {
+        return Err(AppError::new(
+            StatusCode::CONFLICT,
+            "user has completed setup; only the user can reset their password (recovery phrase), or wipe the account",
+        ));
+    }
+
+    let hash =
+        bcrypt::hash(&req.temp_password, 10).map_err(|_| AppError::internal("internal error"))?;
+    sqlx::query(
+        "UPDATE users SET login_key_hash = $1, updated_at = NOW() WHERE id = $2 AND is_first_login",
+    )
+    .bind(&hash)
+    .bind(target)
+    .execute(&state.pool)
+    .await?;
+
+    audit(
+        &state.pool,
+        &admin.user_id,
+        "user.rotate_temp_password",
+        Some(target),
+        json!({"email": email}),
+    )
+    .await;
+    Ok(Json(json!({"message": "temp password rotated"})).into_response())
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WipeUserRequest {
+    temp_password: String,
+}
+
+/// `POST /api/admin/users/{id}/wipe` — the destructive "reset" for a user who lost both
+/// password and recovery phrase. Their data is cryptographically unreachable anyway;
+/// this makes it official: purges every owned collection (files, versions, assets, S3
+/// blobs, shares), erases the key bundle + TOTP + device signing keys, and resets the
+/// account to `is_first_login` with the supplied temp password. Email/username/quota
+/// survive. Irreversible. Design: `docs/research/10-admin-password-reset.md`.
+pub async fn wipe_user(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<String>,
+    Json(req): Json<WipeUserRequest>,
+) -> AppResult<Response> {
+    if req.temp_password.is_empty() {
+        return Err(AppError::bad_request("tempPassword required"));
+    }
+    let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+
+    let row: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT email, username FROM users WHERE id = $1")
+            .bind(target)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some((email, username)) = row else {
+        return Err(AppError::not_found("not found"));
+    };
+    if is_break_glass(&state, &email) {
+        return Err(AppError::forbidden("break-glass admin is protected"));
+    }
+
+    // 1. Purge every owned collection — same machinery as a permanent trash purge
+    //    (quota release + S3 GC + FK-cascaded children). Covers trashed items too.
+    let colls: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM collections WHERE owner_user_id = $1")
+            .bind(target)
+            .fetch_all(&state.pool)
+            .await?;
+    if !colls.is_empty() {
+        let files: Vec<Uuid> =
+            sqlx::query_scalar("SELECT id FROM files WHERE collection_id = ANY($1)")
+                .bind(&colls)
+                .fetch_all(&state.pool)
+                .await?;
+        for fid in files {
+            jobs::purge_file_root(&state.pool, &state.storage, fid)
+                .await
+                .map_err(|e| {
+                    tracing::error!("wipe {target}: purge file {fid}: {e:#}");
+                    AppError::internal("internal error")
+                })?;
+        }
+        // Public share links pointing at the purged tree (no FK ties them down).
+        sqlx::query("DELETE FROM public_shares WHERE target_id = ANY($1)")
+            .bind(&colls)
+            .execute(&state.pool)
+            .await?;
+        sqlx::query("DELETE FROM collections WHERE id = ANY($1)")
+            .bind(&colls)
+            .execute(&state.pool)
+            .await?;
+    }
+
+    // 2. Everything keyed to the lost key material: collab signing devices, incoming
+    //    federated shares (their wrapped keys are unreachable), local shares received.
+    sqlx::query("DELETE FROM user_devices WHERE user_id = $1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query("DELETE FROM federated_incoming_shares WHERE user_id = $1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query("DELETE FROM collection_shares WHERE recipient_user_id = $1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+
+    // 3. Erase the key bundle + TOTP and reset to first-login with the new temp password.
+    let hash =
+        bcrypt::hash(&req.temp_password, 10).map_err(|_| AppError::internal("internal error"))?;
+    sqlx::query(
+        r#"UPDATE users SET
+               encrypted_master_key = '', master_key_nonce = '',
+               encrypted_recovery_key = '', recovery_key_nonce = '',
+               encrypted_private_key = '', private_key_nonce = '',
+               public_key = '', kdf_salt = '', login_key_salt = '',
+               login_key_hash = $1, totp_secret = NULL, totp_enabled = false,
+               is_first_login = true, updated_at = NOW()
+           WHERE id = $2"#,
+    )
+    .bind(&hash)
+    .bind(target)
+    .execute(&state.pool)
+    .await?;
+
+    // 4. Recompute quota: uploads into OTHER people's folders survive (they're the
+    //    folder-owner's data view) and still count against this user.
+    sqlx::query(
+        r#"UPDATE users SET storage_used_bytes = (
+               SELECT COALESCE((SELECT SUM(encrypted_size_bytes) FROM files WHERE uploader_user_id = $1), 0)
+                    + COALESCE((SELECT SUM(size_bytes) FROM file_assets WHERE uploader_user_id = $1), 0)
+                    + COALESCE((SELECT SUM(size_bytes) FROM file_versions WHERE author_user_id = $1), 0)
+           ) WHERE id = $1"#,
+    )
+    .bind(target)
+    .execute(&state.pool)
+    .await?;
+
+    audit(
+        &state.pool,
+        &admin.user_id,
+        "user.wipe",
+        Some(target),
+        json!({"email": email, "username": username.unwrap_or_default()}),
+    )
+    .await;
+    Ok(Json(json!({"message": "account wiped"})).into_response())
 }
 
 #[derive(Debug, Default, Deserialize)]

@@ -29,7 +29,9 @@ export type AdminMenuAction =
   | 'editQuota'
   | 'toggleAdmin'
   | 'disableTotp'
+  | 'rotateTempPassword'
   | 'toggleActive'
+  | 'wipe'
   | 'delete'
 
 export interface AdminUserMenuState {
@@ -102,6 +104,19 @@ export function AdminUserMenu({ menu, onClose, onAction }: AdminUserMenuProps) {
           ? undefined
           : t('admin.users.menu.totpAlreadyOff', '2FA is not enabled'),
       },
+      {
+        id: 'rotateTempPassword',
+        icon: 'refresh',
+        label: t('admin.users.menu.rotateTempPassword', 'Rotate temp password'),
+        // Only safe while the account has no key material (first-login state).
+        // Established accounts self-serve via their recovery phrase.
+        disabledReason: u.isFirstLogin
+          ? undefined
+          : t(
+              'admin.users.menu.rotateTempPasswordDisabled',
+              'Setup completed — only the user can reset their password (recovery phrase)',
+            ),
+      },
     ],
     [
       {
@@ -115,6 +130,13 @@ export function AdminUserMenu({ menu, onClose, onAction }: AdminUserMenuProps) {
       },
     ],
     [
+      {
+        id: 'wipe',
+        icon: 'alertTriangle',
+        label: t('admin.users.menu.wipe', 'Wipe account…'),
+        danger: true,
+        disabledReason: protectedReason,
+      },
       {
         id: 'delete',
         icon: 'trash',

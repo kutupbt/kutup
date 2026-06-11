@@ -470,7 +470,10 @@
         "disable": "Disable account",
         "reenable": "Re-enable account",
         "delete": "Delete permanently",
-        "breakGlassReason": "Break-glass admin — protected"
+        "breakGlassReason": "Break-glass admin — protected",
+        "rotateTempPassword": "Rotate temp password",
+        "rotateTempPasswordDisabled": "Setup completed — only the user can reset their password (recovery phrase)",
+        "wipe": "Wipe account…"
       }
     },
     "adminDialog": {
@@ -536,8 +539,23 @@
         "userDelete": "{{admin}} deleted user {{target}}",
         "user2faDisable": "{{admin}} disabled 2FA for {{target}}",
         "settingsUpdate": "{{admin}} updated server settings",
-        "unknown": "{{admin}}: {{action}}"
+        "unknown": "{{admin}}: {{action}}",
+        "userRotateTempPassword": "{{admin}} rotated the temp password of {{target}}",
+        "userWipe": "{{admin}} wiped {{target}}"
       }
+    },
+    "rotateTemp": {
+      "title": "Rotate temporary password",
+      "desc": "{{email}} hasn’t completed setup yet, so no data is at risk. Set a new temporary password and share it with the user out-of-band.",
+      "placeholder": "New temporary password (min 8 chars)",
+      "confirm": "Rotate password"
+    },
+    "wipe": {
+      "title": "Wipe {{email}}?",
+      "desc": "Erases ALL of this user’s files and encryption keys — kutup’s end-to-end encryption means there is no backdoor and this cannot be undone. The account itself stays, reset to first-login with the temporary password below. Only for a user who lost both their password and their recovery phrase.",
+      "passwordPlaceholder": "New temporary password (min 8 chars)",
+      "confirmLabel": "Type {{email}} to confirm",
+      "confirm": "Wipe account"
     }
   },
   "publicShare": {
@@ -802,7 +820,9 @@
       "settings.registrationGroup": "Registration",
       "settings.publicReg": "Public registration",
       "settings.publicRegSub": "Anyone can create an account from the sign-up page",
-      "settings.moreSoonNote": "More admin controls — required 2FA, quota defaults, storage backend, danger-zone actions — land as the backend grows. The desktop /admin page covers anything missing here."
+      "settings.moreSoonNote": "More admin controls — required 2FA, quota defaults, storage backend, danger-zone actions — land as the backend grows. The desktop /admin page covers anything missing here.",
+      "user.rotateTempSub": "Account hasn’t completed setup yet",
+      "user.wipeSub": "Erase all data + keys; reset to first-login"
     }
   }
 }

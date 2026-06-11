@@ -23,6 +23,7 @@ import { useUpdateUser, useDeleteUser, useForceDisable2fa } from '@/api/hooks/us
 import { cn } from '@/lib/utils'
 import { AdminUserMenu, type AdminUserMenuState, type AdminMenuAction } from './AdminUserMenu'
 import { AdminEditQuotaDialog } from './AdminEditQuotaDialog'
+import { RotateTempPasswordDialog, WipeUserDialog } from './AdminPasswordResetDialogs'
 import { usersToCsv, downloadCsv } from './csv'
 import type { UserRow } from '@/types/api'
 
@@ -69,6 +70,8 @@ export function AdminUsersTab({ users, loading, onCreate }: AdminUsersTabProps) 
   const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null)
   const [adminTarget, setAdminTarget] = useState<UserRow | null>(null)
   const [totpTarget, setTotpTarget] = useState<UserRow | null>(null)
+  const [rotateTarget, setRotateTarget] = useState<UserRow | null>(null)
+  const [wipeTarget, setWipeTarget] = useState<UserRow | null>(null)
   const [hoveredId, setHoveredId] = useState<string | null>(null)
 
   const counts = useMemo(() => {
@@ -163,6 +166,10 @@ export function AdminUsersTab({ users, loading, onCreate }: AdminUsersTabProps) 
       setAdminTarget(user)
     } else if (action === 'disableTotp') {
       setTotpTarget(user)
+    } else if (action === 'rotateTempPassword') {
+      setRotateTarget(user)
+    } else if (action === 'wipe') {
+      setWipeTarget(user)
     } else if (action === 'delete') {
       setDeleteTarget(user)
     }
@@ -429,6 +436,10 @@ export function AdminUsersTab({ users, loading, onCreate }: AdminUsersTabProps) 
 
       {/* Edit-quota dialog */}
       <AdminEditQuotaDialog user={editTarget} onClose={() => setEditTarget(null)} />
+
+      {/* Rotate-temp-password + destructive-wipe dialogs */}
+      <RotateTempPasswordDialog user={rotateTarget} onClose={() => setRotateTarget(null)} />
+      <WipeUserDialog user={wipeTarget} onClose={() => setWipeTarget(null)} />
 
       {/* Delete confirm */}
       <AlertDialog

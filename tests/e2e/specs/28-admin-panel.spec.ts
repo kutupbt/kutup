@@ -115,6 +115,78 @@ test.describe.serial('admin panel', () => {
     await expect(activityCard.getByText(`created user ${email}`).first()).toBeVisible()
   })
 
+  test('rotate temp password (first-login only) + destructive wipe', async () => {
+    const stamp = Date.now()
+    const email = `e2e-wipe-${stamp}@kutup.local`
+    const username = `e2ewipe${stamp}`
+
+    await gotoTab('Users')
+
+    // Create a user — stays in first-login state (never signs in).
+    await page.getByRole('button', { name: 'Create user' }).first().click()
+    const createDialog = page.getByRole('dialog')
+    await expect(createDialog).toBeVisible()
+    await createDialog.getByLabel('Email').fill(email)
+    await createDialog.getByLabel('Username').fill(username)
+    await createDialog.getByLabel('Temporary password').fill('TempPass-e2e-123')
+    await createDialog.getByRole('button', { name: 'Create user' }).click()
+    await expect(createDialog).toBeHidden({ timeout: 15_000 })
+
+    const search = page.getByPlaceholder(/Search by email/i)
+    await search.fill(email)
+    const row = page.locator('tr', { hasText: email }).first()
+    await expect(row).toBeVisible({ timeout: 15_000 })
+
+    // Rotate temp password — enabled because the account is first-login.
+    await row.getByRole('button', { name: 'Actions' }).click()
+    await page.getByRole('menuitem', { name: 'Rotate temp password' }).click()
+    const rotateDialog = page.getByRole('dialog')
+    await expect(rotateDialog).toBeVisible()
+    await rotateDialog.locator('input').fill('Rotated-e2e-456')
+    await rotateDialog.getByRole('button', { name: 'Rotate password' }).click()
+    await expect(rotateDialog).toBeHidden({ timeout: 15_000 })
+
+    // The same action on the ESTABLISHED break-glass admin must be disabled.
+    await search.fill(ADMIN_EMAIL)
+    const adminRow = page.locator('tr', { hasText: ADMIN_EMAIL }).first()
+    await adminRow.getByRole('button', { name: 'Actions' }).click()
+    await expect(
+      page.getByRole('menuitem', { name: 'Rotate temp password' }),
+    ).toBeDisabled()
+    await page.keyboard.press('Escape')
+
+    // Destructive wipe — requires typing the email to arm the button.
+    await search.fill(email)
+    await row.getByRole('button', { name: 'Actions' }).click()
+    await page.getByRole('menuitem', { name: 'Wipe account…' }).click()
+    const wipeDialog = page.getByRole('dialog')
+    await expect(wipeDialog).toBeVisible()
+    await wipeDialog.locator('input').first().fill('Wiped-e2e-789')
+    await expect(wipeDialog.getByRole('button', { name: 'Wipe account' })).toBeDisabled()
+    await wipeDialog.locator('input').nth(1).fill(email)
+    await wipeDialog.getByRole('button', { name: 'Wipe account' }).click()
+    await expect(wipeDialog).toBeHidden({ timeout: 15_000 })
+
+    // The account survives a wipe (reset to first-login, not deleted).
+    await expect(row).toBeVisible()
+
+    // Both actions appear in the audit feed.
+    await gotoTab('Overview')
+    const activityCard = page.getByTestId('admin-activity')
+    await expect(
+      activityCard.getByText(`rotated the temp password of ${email}`).first(),
+    ).toBeVisible({ timeout: 15_000 })
+    await expect(activityCard.getByText(`wiped ${email}`).first()).toBeVisible()
+
+    // Cleanup.
+    await gotoTab('Users')
+    await search.fill(email)
+    await row.getByRole('button', { name: 'Actions' }).click()
+    await page.getByRole('menuitem', { name: 'Delete permanently' }).click()
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Delete', exact: true }).click()
+    await expect(page.locator('tr', { hasText: email })).toHaveCount(0, { timeout: 15_000 })
+  })
+
   test('Settings → Storage card renders real formatted capacity', async () => {
     await gotoTab('Settings')
     await expect(page.getByText('Storage backend').first()).toBeVisible()

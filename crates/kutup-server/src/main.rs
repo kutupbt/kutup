@@ -396,6 +396,11 @@ fn build_router(state: AppState) -> Router {
                     put(admin::update_user).delete(admin::delete_user),
                 )
                 .route("/api/admin/users/:id/2fa", delete(admin::force_disable_2fa))
+                .route(
+                    "/api/admin/users/:id/rotate-temp-password",
+                    post(admin::rotate_temp_password),
+                )
+                .route("/api/admin/users/:id/wipe", post(admin::wipe_user))
                 .route("/api/admin/stats", get(admin::get_stats))
                 .route("/api/admin/activity", get(admin::activity))
                 .route(

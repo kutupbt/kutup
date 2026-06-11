@@ -12,6 +12,7 @@ function makeUser(overrides: Partial<UserRow> = {}): UserRow {
     isAdmin: false,
     isActive: true,
     totpEnabled: true,
+    isFirstLogin: false,
     createdAt: '2026-04-22T09:00:00Z',
     isProtected: false,
     ...overrides,

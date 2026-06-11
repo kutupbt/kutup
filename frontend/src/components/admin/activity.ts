@@ -47,6 +47,17 @@ export function activityText(e: AdminActivityEntry, t: TFunction): string {
         admin,
         target,
       })
+    case 'user.rotate_temp_password':
+      return t(
+        'admin.activity.action.userRotateTempPassword',
+        '{{admin}} rotated the temp password of {{target}}',
+        { admin, target },
+      )
+    case 'user.wipe':
+      return t('admin.activity.action.userWipe', '{{admin}} wiped {{target}}', {
+        admin,
+        target,
+      })
     case 'settings.update':
       return t('admin.activity.action.settingsUpdate', '{{admin}} updated server settings', {
         admin,
@@ -66,6 +77,10 @@ export function activityIcon(action: string): string {
       return ICONS.userPlus
     case 'user.delete':
       return ICONS.trash
+    case 'user.rotate_temp_password':
+      return ICONS.refresh
+    case 'user.wipe':
+      return ICONS.alertTriangle
     case 'user.2fa_disable':
       return ICONS.shield
     case 'settings.update':

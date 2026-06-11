@@ -1005,6 +1005,30 @@ Force-disable a user's TOTP two-factor authentication — an admin override for 
 
 ---
 
+### POST /api/admin/users/:id/rotate-temp-password
+
+Replace the temporary password of an account still in first-login state (`isFirstLogin: true`). Such an account has no E2EE key material yet, so nothing is destroyed. For an established account this returns `409` — under E2EE the server cannot reset a password without destroying the user's data; the user self-serves via `POST /api/auth/recover` (recovery phrase), or the admin wipes (below). Design: `docs/research/10-admin-password-reset.md`.
+
+**Auth:** Bearer JWT (admin)
+
+**Request body:** `{"tempPassword": "<new temp password>"}`
+
+**Response:** `200 OK` `{"message": "temp password rotated"}` · `409` when the user has completed setup.
+
+---
+
+### POST /api/admin/users/:id/wipe
+
+Destructive account reset for a user who lost both their password and their recovery phrase (their data is cryptographically unreachable anyway). Purges every collection the user owns — files, versions, assets, S3 blobs, share links, trash — erases the key bundle, disables TOTP, revokes collab device keys and received shares, then resets the account to first-login with the supplied temp password. Email, username, and quota survive. **Irreversible.** Refused (`403`) for the break-glass admin.
+
+**Auth:** Bearer JWT (admin)
+
+**Request body:** `{"tempPassword": "<new temp password>"}`
+
+**Response:** `200 OK` `{"message": "account wiped"}`.
+
+---
+
 ### GET /api/admin/stats
 
 Return aggregate server statistics.

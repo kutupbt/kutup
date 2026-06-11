@@ -470,7 +470,10 @@
         "disable": "Hesabı devre dışı bırak",
         "reenable": "Hesabı yeniden etkinleştir",
         "delete": "Kalıcı olarak sil",
-        "breakGlassReason": "Acil durum yöneticisi — korumalı"
+        "breakGlassReason": "Acil durum yöneticisi — korumalı",
+        "rotateTempPassword": "Geçici parolayı yenile",
+        "rotateTempPasswordDisabled": "Kurulum tamamlandı — parolayı yalnızca kullanıcı sıfırlayabilir (kurtarma ifadesi)",
+        "wipe": "Hesabı sıfırla…"
       }
     },
     "adminDialog": {
@@ -536,8 +539,23 @@
         "userDelete": "{{admin}}, {{target}} kullanıcısını sildi",
         "user2faDisable": "{{admin}}, {{target}} için 2FA’yı devre dışı bıraktı",
         "settingsUpdate": "{{admin}} sunucu ayarlarını güncelledi",
-        "unknown": "{{admin}}: {{action}}"
+        "unknown": "{{admin}}: {{action}}",
+        "userRotateTempPassword": "{{admin}}, {{target}} kullanıcısının geçici parolasını yeniledi",
+        "userWipe": "{{admin}}, {{target}} hesabını sıfırladı"
       }
+    },
+    "rotateTemp": {
+      "title": "Geçici parolayı yenile",
+      "desc": "{{email}} kurulumu henüz tamamlamadı, bu yüzden hiçbir veri risk altında değil. Yeni bir geçici parola belirleyin ve kullanıcıya güvenli bir kanaldan iletin.",
+      "placeholder": "Yeni geçici parola (en az 8 karakter)",
+      "confirm": "Parolayı yenile"
+    },
+    "wipe": {
+      "title": "{{email}} sıfırlansın mı?",
+      "desc": "Bu kullanıcının TÜM dosyalarını ve şifreleme anahtarlarını siler — kutup’un uçtan uca şifrelemesi nedeniyle arka kapı yoktur ve bu işlem geri alınamaz. Hesap silinmez; aşağıdaki geçici parolayla ilk-giriş durumuna sıfırlanır. Yalnızca hem parolasını hem kurtarma ifadesini kaybetmiş kullanıcılar için.",
+      "passwordPlaceholder": "Yeni geçici parola (en az 8 karakter)",
+      "confirmLabel": "Onaylamak için {{email}} yazın",
+      "confirm": "Hesabı sıfırla"
     }
   },
   "publicShare": {
@@ -802,7 +820,9 @@
       "settings.registrationGroup": "Kayıt",
       "settings.publicReg": "Herkese açık kayıt",
       "settings.publicRegSub": "Herkes kayıt sayfasından bir hesap oluşturabilir",
-      "settings.moreSoonNote": "Daha fazla yönetici denetimi — zorunlu 2FA, kota varsayılanları, depolama arka uç, tehlikeli işlemler — arka uç büyüdükçe gelir. Masaüstü /admin sayfası burada eksik olan her şeyi kapsar."
+      "settings.moreSoonNote": "Daha fazla yönetici denetimi — zorunlu 2FA, kota varsayılanları, depolama arka uç, tehlikeli işlemler — arka uç büyüdükçe gelir. Masaüstü /admin sayfası burada eksik olan her şeyi kapsar.",
+      "user.rotateTempSub": "Hesap kurulumu henüz tamamlanmadı",
+      "user.wipeSub": "Tüm veriyi ve anahtarları sil; ilk-girişe sıfırla"
     }
   }
 }

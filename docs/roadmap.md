@@ -14,7 +14,7 @@ The bar for the first `v*` tag:
 
 1. **No silent stubs in admin-facing UI.** Every clickable action that exists in the UI must work end-to-end. No "wire-up pending" toasts in shipped builds.
 2. **Deletion is recoverable.** ✅ Shipped: owner-scoped trash with restore + permanent delete, and an hourly retention sweeper (`TRASH_RETENTION_DAYS`, default 30). See `docs/api.md` → Trash.
-3. **Self-hosters can recover broken users without SSH.** Lost TOTP device, forgotten password, accidental disable — the admin UI must cover these without touching the database.
+3. **Self-hosters can recover broken users without SSH.** ✅ Shipped: force-disable 2FA (lost authenticator), re-enable account (accidental disable), rotate temp password (first-login accounts), and the destructive wipe for users who lost both password and recovery phrase — all from the admin UI on desktop + mobile. `docs/research/10-admin-password-reset.md` records why "reset password" is two actions under E2EE.
 4. **Builds are signed.** Unsigned binaries trigger macOS Gatekeeper and Windows SmartScreen warnings that look like malware to non-technical users.
 5. **Admin actions leave an audit trail.** ✅ Shipped: every mutating admin endpoint writes an `admin_audit_log` row; `GET /admin/activity` serves the feed and the Recent-activity cards render it on desktop + mobile Admin Overview. See `docs/api.md` → Admin.
 6. **Basic abuse protection.** ✅ Shipped: per-IP limits on login/preflight/register/recovery/federation/admin (env-overridable `RATE_LIMIT_*`), per-account login lockout (`LOGIN_LOCKOUT_*`), per-token TOTP blocking, and proxy-aware client-IP resolution (X-Real-IP). See `docs/self-hosting.md`.
@@ -25,23 +25,6 @@ Items below are organized by **whether they block v1** vs. whether they can ship
 ---
 
 ## Blockers for v1 (must-have)
-
-### Admin · Password reset
-
-kutup is E2EE. A user's password derives (via Argon2id over `kdf_salt`) the key-encryption-key that decrypts `encrypted_master_key`. **The server never sees the master key**, so an admin *cannot* reset a password while preserving the user's data — only the user can, with their current password or their recovery phrase (the existing `/auth/recover` flow).
-
-This means there is **no simple "reset password" endpoint** — it's a design problem with two distinct flows:
-
-- **Recoverable** — the user still has their recovery phrase. They don't need an admin: they self-serve via `/auth/recover`. The admin's only role is to point them there. If we want an admin-initiated nudge, the safe scope is *rotating the temp password of a user still in `is_first_login` state* (no keys generated yet) — anything more for an established user breaks their access to their own files.
-- **Unrecoverable** — the user has lost both password and recovery phrase. Their data is cryptographically gone. The only "reset" is a **destructive account wipe** (destroy keys + files, keep email/username) so they can start fresh, behind an explicit data-loss confirmation.
-
-| What's needed | Where |
-|---|---|
-| Design: write up both flows + UI copy + the `is_first_login` temp-password-rotation carve-out | `docs/research/` — new note |
-| Backend: `POST /admin/users/:id/rotate-temp-password` — only valid while `is_first_login` | `crates/kutup-server/src/handlers/admin.rs` |
-| Backend: `POST /admin/users/:id/wipe` — destructive reset for the unrecoverable path | same |
-| Frontend: surface both as distinct, clearly-labelled actions (not one "Reset password") | `AdminUserMenu` / `MobileAdminUserDetailPage` |
-| Email (optional, see SMTP below): deliver the rotated temp password if SMTP is configured | backend integration |
 
 ### Signed builds
 

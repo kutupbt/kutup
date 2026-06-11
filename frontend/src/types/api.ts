@@ -38,6 +38,11 @@ export interface UserRow {
   isAdmin: boolean
   isActive: boolean
   totpEnabled: boolean
+  /**
+   * Still on the admin-issued temp password — no key material yet. Gates the
+   * admin "Rotate temp password" action (safe only in this state).
+   */
+  isFirstLogin: boolean
   createdAt: string
   /**
    * True for the break-glass admin (the account from the `ADMIN_ACCOUNT`
