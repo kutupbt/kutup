@@ -6,7 +6,7 @@
 
 **End-to-end encrypted, self-hosted Google Drive — with real-time collab for notes, office docs, and whiteboards.**
 
-![Rust](https://img.shields.io/badge/Rust-1.82-000000?logo=rust)
+![Rust](https://img.shields.io/badge/Rust-1.91-000000?logo=rust)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.4-3178C6?logo=typescript)
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)
@@ -87,7 +87,7 @@ Optional: `./install-onlyoffice.sh` enables `.docx` / `.xlsx` / `.pptx` editing 
 
 `kutup` is a Rust CLI for the same E2EE primitives as the web — register, login, ls, upload, download, sync, share, versions, devices, 2fa, public-link consumption, file rename. All operations are end-to-end encrypted in your shell; the server only ever sees ciphertext.
 
-**Build from source** (Rust ≥ 1.82):
+**Build from source** (Rust ≥ 1.91.1):
 
 ```sh
 git clone https://github.com/kutupbulut/kutup.git
