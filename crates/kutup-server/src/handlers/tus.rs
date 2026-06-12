@@ -251,7 +251,7 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read user"),
     };
     let reserved: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(total_bytes - received_bytes), 0) FROM uploads WHERE user_id=$1",
+        "SELECT COALESCE(SUM(total_bytes - received_bytes), 0)::bigint FROM uploads WHERE user_id=$1",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
@@ -265,7 +265,7 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     if !is_owner {
         if let Some(share_quota) = upload_quota_bytes {
             let used_share: i64 = sqlx::query_scalar(
-                "SELECT COALESCE(SUM(encrypted_size_bytes),0) FROM files \
+                "SELECT COALESCE(SUM(encrypted_size_bytes),0)::bigint FROM files \
                  WHERE collection_id=$1 AND uploader_user_id=$2",
             )
             .bind(coll_uuid)
@@ -274,7 +274,7 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
             .await
             .unwrap_or(0);
             let reserved_share: i64 = sqlx::query_scalar(
-                "SELECT COALESCE(SUM(total_bytes - received_bytes),0) FROM uploads \
+                "SELECT COALESCE(SUM(total_bytes - received_bytes),0)::bigint FROM uploads \
                  WHERE collection_id=$1 AND user_id=$2",
             )
             .bind(coll_uuid)

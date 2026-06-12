@@ -451,7 +451,11 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
             sqlx::query_scalar::<_, i64>(sql)
                 .fetch_one(&pool)
                 .await
-                .unwrap_or(0)
+                .unwrap_or_else(|e| {
+                    // A decode/query failure must not silently render as a 0 stat.
+                    tracing::warn!("admin stats query failed ({sql}): {e}");
+                    0
+                })
         }
     };
 
@@ -469,7 +473,10 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
         total_users: scalar("SELECT COUNT(*) FROM users").await,
         active_users: scalar("SELECT COUNT(*) FROM users WHERE is_active = true").await,
         total_files: scalar("SELECT COUNT(*) FROM files").await,
-        total_storage_used: scalar("SELECT COALESCE(SUM(storage_used_bytes),0) FROM users").await,
+        // ::bigint — SUM(bigint) yields NUMERIC, which sqlx cannot decode as i64;
+        // without the cast this silently fell back to 0 via unwrap_or.
+        total_storage_used: scalar("SELECT COALESCE(SUM(storage_used_bytes),0)::bigint FROM users")
+            .await,
         total_collections: scalar("SELECT COUNT(*) FROM collections").await,
         storage_total_bytes,
         storage_backend_used_bytes,

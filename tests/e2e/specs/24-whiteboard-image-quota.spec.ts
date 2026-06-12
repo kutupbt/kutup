@@ -100,19 +100,26 @@ test('whiteboard — pasting image charges quota; deleting releases it', async (
       method: 'POST', credentials: 'include',
     })
     const { accessToken } = await refreshRes.json()
+    // DELETE /files soft-deletes into the trash — quota stays held while
+    // trashed (by design; see docs/api.md → Trash). The permanent purge
+    // (DELETE /trash/:id) is what releases the quota.
     await fetch('/api/files/' + fid, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + accessToken },
+    })
+    await fetch('/api/trash/' + fid, {
       method: 'DELETE',
       headers: { Authorization: 'Bearer ' + accessToken },
     })
   }, fileId)
 
-  // The Delete handler runs the quota release inside a tx and returns 204
+  // The purge runs the quota release inside a tx and returns 204
   // immediately; counter should be authoritative when the DELETE returns.
   await drive.waitForTimeout(500)
 
   const afterDeleteUsed = await readUsedBytes(drive)
   expect(afterDeleteUsed,
-    'storage_used_bytes released back near baseline after delete'
+    'storage_used_bytes released back near baseline after trash purge'
   ).toBeLessThanOrEqual(baselineUsed + 100) // small slack for any other test artifacts
   expect(afterDeleteUsed,
     'storage_used_bytes never goes negative'

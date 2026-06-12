@@ -116,7 +116,7 @@ pub async fn list_collections(
         // Compute this user's usage in the shared collection when an upload quota applies.
         let upload_used_bytes = if can_upload && quota.is_some() {
             let used: Option<i64> = sqlx::query_scalar(
-                "SELECT COALESCE(SUM(encrypted_size_bytes), 0) FROM files WHERE collection_id = $1 AND uploader_user_id = $2",
+                "SELECT COALESCE(SUM(encrypted_size_bytes), 0)::bigint FROM files WHERE collection_id = $1 AND uploader_user_id = $2",
             )
             .bind(id)
             .bind(user_id)
