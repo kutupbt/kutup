@@ -83,6 +83,36 @@ pub struct TotpRequest {
     pub code: String,
 }
 
+/// `GET /auth/recover/preflight` — encrypted recovery-key material. The
+/// server answers unknown emails with deterministic fake data, so a wrong
+/// phrase/email only ever fails client-side at unwrap time.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoverPreflightResponse {
+    #[serde(default)]
+    pub encrypted_recovery_key: String,
+    #[serde(default)]
+    pub recovery_key_nonce: String,
+    #[serde(default)]
+    pub encrypted_private_key: String,
+    #[serde(default)]
+    pub private_key_nonce: String,
+}
+
+/// `POST /auth/recover` — rotates the login key, KEK wrap, and both salts.
+/// `recovery_proof` is the base64 raw 32-byte mnemonic entropy.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoverRequest {
+    pub email: String,
+    pub new_login_key: String,
+    pub new_encrypted_master_key: String,
+    pub new_master_key_nonce: String,
+    pub new_kdf_salt: String,
+    pub new_login_key_salt: String,
+    pub recovery_proof: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshResponse {
@@ -290,4 +320,36 @@ pub struct UserByEmail {
 pub struct FedPubKeyResponse {
     #[serde(default)]
     pub public_key: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RecoverRequest;
+
+    // Exact wire keys the server's RecoverRequest deserializes — the guard
+    // for the camelCase mapping (incl. the two easy-to-typo salt fields).
+    #[test]
+    fn recover_request_keys() {
+        let req = RecoverRequest {
+            email: "a@b.c".into(),
+            new_login_key: "lk".into(),
+            new_encrypted_master_key: "emk".into(),
+            new_master_key_nonce: "mkn".into(),
+            new_kdf_salt: "ks".into(),
+            new_login_key_salt: "lks".into(),
+            recovery_proof: "rp".into(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        for key in [
+            "email",
+            "newLoginKey",
+            "newEncryptedMasterKey",
+            "newMasterKeyNonce",
+            "newKdfSalt",
+            "newLoginKeySalt",
+            "recoveryProof",
+        ] {
+            assert!(v.get(key).is_some(), "missing key {key}");
+        }
+    }
 }

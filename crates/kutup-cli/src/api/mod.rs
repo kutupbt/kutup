@@ -184,6 +184,16 @@ impl Client {
         decode_json(resp)
     }
 
+    pub fn recover_preflight(&self, email: &str) -> Result<RecoverPreflightResponse> {
+        let resp = self.get(&format!("/auth/recover/preflight?email={email}"))?;
+        decode_json(resp)
+    }
+
+    pub fn recover(&self, req: &RecoverRequest) -> Result<()> {
+        let resp = self.post_json("/auth/recover", req)?;
+        check_ok(resp)
+    }
+
     pub fn refresh_token(&self, refresh_token: &str) -> Result<RefreshResponse> {
         let resp = self.post_json(
             "/auth/refresh",

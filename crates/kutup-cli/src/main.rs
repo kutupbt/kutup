@@ -58,6 +58,15 @@ enum Commands {
         #[arg(long)]
         email: Option<String>,
     },
+    /// Reset your password with the 24-word recovery phrase, then log in.
+    Recover {
+        /// Server URL (e.g. https://kutup.example.com).
+        #[arg(long)]
+        server: Option<String>,
+        /// Email (non-interactive: KUTUP_RECOVERY_PHRASE + KUTUP_PASSWORD env).
+        #[arg(long)]
+        email: Option<String>,
+    },
     /// Clear stored session.
     Logout,
     /// Show current user info.
@@ -183,6 +192,9 @@ fn main() {
         ),
         Commands::Login { server, email } => {
             commands::login::run(&cli.profile, cli.json, server.as_deref(), email.as_deref())
+        }
+        Commands::Recover { server, email } => {
+            commands::recover::run(&cli.profile, cli.json, server.as_deref(), email.as_deref())
         }
         Commands::Logout => commands::logout::run(&cli.profile, cli.json),
         Commands::Whoami => commands::whoami::run(&cli.profile, cli.json),

@@ -9,6 +9,7 @@ pub mod ls;
 pub mod mkdir;
 pub mod mv;
 pub mod pubshare;
+pub mod recover;
 pub mod register;
 pub mod rm;
 pub mod share;
