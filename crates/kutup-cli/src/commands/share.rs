@@ -308,7 +308,10 @@ fn print_file_table(out: &[FileDisplay], json: bool) -> Result<()> {
         println!("(no files in this share)");
         return Ok(());
     }
-    println!("{:<36}  {:>12}  NAME", "ID", "SIZE");
+    println!(
+        "{}",
+        crate::output::header(format!("{:<36}  {:>12}  NAME", "ID", "SIZE"))
+    );
     for d in out {
         println!("{:<36}  {:>12}  {}", d.id, d.size, d.name);
     }
@@ -354,16 +357,26 @@ fn share_download(
     .context("decrypt metadata")?;
     let meta: FileMetadata = serde_json::from_slice(&meta_bytes).unwrap_or_default();
 
-    let encrypted = ctx.client.proxy_download(share_id, file_id)?;
-    let plain = stream::decrypt_stream(&encrypted, &file_key).context("decrypt")?;
-
     let dest_path = resolve_dest(dest_dir, &meta.name);
-    std::fs::write(&dest_path, &plain)?;
+    let resp = ctx.client.proxy_download_stream(share_id, file_id)?;
+    let bar = crate::output::progress_bar(resp.content_length(), &meta.name);
+    let mut out = std::fs::File::create(&dest_path).context("open dest")?;
+    let written = match crate::transfer::stream_download(resp, &file_key, &mut out, |n| {
+        bar.set_position(n as u64)
+    }) {
+        Ok(w) => w,
+        Err(e) => {
+            drop(out);
+            let _ = std::fs::remove_file(&dest_path);
+            return Err(e).context("decrypt-write");
+        }
+    };
+    bar.finish_and_clear();
 
     let dest_str = dest_path.to_string_lossy().into_owned();
     if json {
         crate::output::print_json(
-            &serde_json::json!({ "shareId": share_id, "fileId": file_id, "size": plain.len(), "dest": dest_str }),
+            &serde_json::json!({ "shareId": share_id, "fileId": file_id, "size": written, "dest": dest_str }),
         )?;
     } else {
         println!("Downloaded {} → {dest_str}", meta.name);
@@ -398,7 +411,7 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
         .unwrap_or_default();
     let meta = FileMetadata {
         name: name.clone(),
-        mime_type: guess_mime(Path::new(path)).to_string(),
+        mime_type: crate::mimetype::guess_mime(Path::new(path)),
         size: data.len() as i64,
     };
     let meta_bytes = serde_json::to_vec(&meta)?;
@@ -484,7 +497,13 @@ fn incoming_list(profile: &str, json: bool) -> Result<()> {
         println!("(no incoming federated shares)");
         return Ok(());
     }
-    println!("{:<36}  {:<30}  {:<30}  PERMS", "ID", "REMOTE", "NAME");
+    println!(
+        "{}",
+        crate::output::header(format!(
+            "{:<36}  {:<30}  {:<30}  PERMS",
+            "ID", "REMOTE", "NAME"
+        ))
+    );
     for d in &out {
         let mut perms = String::new();
         if d.can_upload {
@@ -544,25 +563,5 @@ fn resolve_dest(dest_dir: &str, name: &str) -> std::path::PathBuf {
         p.join(name)
     } else {
         p.to_path_buf()
-    }
-}
-
-/// Mirrors `guessMIMEFromPath` (with .zip).
-fn guess_mime(path: &Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("png") => "image/png",
-        Some("gif") => "image/gif",
-        Some("pdf") => "application/pdf",
-        Some("txt") => "text/plain",
-        Some("mp4") => "video/mp4",
-        Some("mp3") => "audio/mpeg",
-        Some("zip") => "application/zip",
-        _ => "application/octet-stream",
     }
 }

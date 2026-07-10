@@ -10,12 +10,13 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use base64::Engine;
-use indicatif::{ProgressBar, ProgressStyle};
 use rand::RngCore;
 
 use crate::api::{Client, CreateCollectionRequest, FileMetadata};
 use crate::context::require_session;
 use crate::cryptohelpers::{decrypt_collection_key, decrypt_collections, find_collection};
+use crate::mimetype::guess_mime;
+use crate::output::progress_bar;
 use crate::transfer::{cipher_size, StreamUploader};
 use kutup_crypto::secretbox;
 
@@ -107,7 +108,7 @@ fn upload_single_file(
 
     let meta = FileMetadata {
         name: file_name(&local_path.to_string_lossy()),
-        mime_type: guess_mime(local_path).to_string(),
+        mime_type: guess_mime(local_path),
         size: plain_size,
     };
     let meta_bytes = serde_json::to_vec(&meta)?;
@@ -129,7 +130,7 @@ fn upload_single_file(
 
     let result = (|| -> Result<String> {
         let mut up = StreamUploader::new(&mut file, &file_key, plain_size)?;
-        let bar = progress_bar(plain_size as u64, &meta.name);
+        let bar = progress_bar(Some(plain_size as u64), &meta.name);
 
         let mut offset = 0i64;
         let mut file_id = String::new();
@@ -226,34 +227,4 @@ fn file_name(path: &str) -> String {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string())
-}
-
-fn progress_bar(total: u64, desc: &str) -> ProgressBar {
-    let bar = ProgressBar::new(total);
-    bar.set_style(
-        ProgressStyle::with_template("{msg} {bar:30} {bytes}/{total_bytes}")
-            .unwrap_or_else(|_| ProgressStyle::default_bar()),
-    );
-    bar.set_message(desc.to_string());
-    bar
-}
-
-/// Mirrors `guessMIMEFromPath`.
-fn guess_mime(path: &Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("png") => "image/png",
-        Some("gif") => "image/gif",
-        Some("pdf") => "application/pdf",
-        Some("txt") => "text/plain",
-        Some("mp4") => "video/mp4",
-        Some("mp3") => "audio/mpeg",
-        Some("zip") => "application/zip",
-        _ => "application/octet-stream",
-    }
 }

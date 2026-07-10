@@ -60,19 +60,26 @@ impl Client {
     }
 }
 
-/// Fetches bytes from an absolute presigned URL (no auth header — the URL
-/// carries short-lived authorization). Mirrors `FetchPresignedURL`.
-pub fn fetch_presigned_url(presigned: &str) -> Result<Vec<u8>> {
+/// Opens a streaming GET of an absolute presigned URL (no auth header — the
+/// URL carries short-lived authorization; no total timeout so large blobs
+/// survive slow links). Mirrors `FetchPresignedURL`.
+pub fn fetch_presigned_stream(presigned: &str) -> Result<reqwest::blocking::Response> {
     let insecure = matches!(
         std::env::var("KUTUP_INSECURE_TLS").as_deref(),
         Ok("1") | Ok("true")
     );
     let client = reqwest::blocking::Client::builder()
         .danger_accept_invalid_certs(insecure)
+        .timeout(None)
         .build()?;
     let resp = client.get(presigned).send()?;
     if resp.status().as_u16() >= 400 {
         return Err(super::api_error(resp));
     }
-    Ok(resp.bytes()?.to_vec())
+    Ok(resp)
+}
+
+/// Fetches all bytes from a presigned URL into memory.
+pub fn fetch_presigned_url(presigned: &str) -> Result<Vec<u8>> {
+    Ok(fetch_presigned_stream(presigned)?.bytes()?.to_vec())
 }

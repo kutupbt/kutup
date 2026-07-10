@@ -2207,6 +2207,7 @@ dependencies = [
  "indicatif",
  "keyring",
  "kutup-crypto",
+ "mime_guess",
  "notify",
  "qrcode",
  "rand 0.8.6",

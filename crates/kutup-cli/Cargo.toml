@@ -25,6 +25,7 @@ redb.workspace = true
 rpassword.workspace = true
 rand.workspace = true
 indicatif.workspace = true
+mime_guess.workspace = true
 qrcode.workspace = true
 time.workspace = true
 notify.workspace = true

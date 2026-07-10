@@ -174,7 +174,7 @@ fn upload_file(
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default(),
-        mime_type: guess_mime(local_path).to_string(),
+        mime_type: crate::mimetype::guess_mime(local_path),
         size: data.len() as i64,
     };
     let meta_bytes = serde_json::to_vec(&meta)?;
@@ -225,23 +225,4 @@ fn sanitize_name(name: &str) -> String {
         return "_file".to_string();
     }
     cleaned
-}
-
-/// Mirrors the sync engine's `guessMIME` (note: no .zip, matching Go).
-fn guess_mime(path: &Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("png") => "image/png",
-        Some("gif") => "image/gif",
-        Some("pdf") => "application/pdf",
-        Some("txt") => "text/plain",
-        Some("mp4") => "video/mp4",
-        Some("mp3") => "audio/mpeg",
-        _ => "application/octet-stream",
-    }
 }

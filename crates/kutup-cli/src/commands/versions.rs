@@ -67,15 +67,22 @@ fn list(profile: &str, json: bool, file_id: &str) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<36}  {:<25}  {:>12}  PIN  LABEL",
-        "ID", "CREATED", "SIZE"
+        "{}",
+        crate::output::header(format!(
+            "{:<36}  {:<16}  {:>10}  PIN  LABEL",
+            "ID", "CREATED", "SIZE"
+        ))
     );
     for v in &versions {
         let pin = if v.keep_forever { "★" } else { " " };
         let label = v.label.as_deref().unwrap_or("");
         println!(
-            "{:<36}  {:<25}  {:>12}  {}    {}",
-            v.id, v.created_at, v.size_bytes, pin, label
+            "{:<36}  {:<16}  {:>10}  {}    {}",
+            v.id,
+            crate::output::format_time(&v.created_at),
+            crate::output::format_bytes(v.size_bytes),
+            pin,
+            label
         );
     }
     Ok(())
@@ -97,9 +104,6 @@ fn download(
         .context("decrypt metadata")?;
     let meta: crate::api::FileMetadata = serde_json::from_slice(&meta_bytes).unwrap_or_default();
 
-    let encrypted = ctx.client.download_version(file_id, version_id)?;
-    let plain = stream::decrypt_stream(&encrypted, &file_key).context("decrypt")?;
-
     let short = &version_id[..version_id.len().min(8)];
     let dest_path = {
         let p = std::path::Path::new(dest_dir);
@@ -109,12 +113,27 @@ fn download(
             p.to_path_buf()
         }
     };
-    std::fs::write(&dest_path, &plain)?;
+
+    // Stream: bounded memory + a progress bar, like the main `download`.
+    let stream = ctx.client.download_version_stream(file_id, version_id)?;
+    let bar = crate::output::progress_bar(stream.content_length(), &meta.name);
+    let mut out = std::fs::File::create(&dest_path).context("open dest")?;
+    let written = match crate::transfer::stream_download(stream, &file_key, &mut out, |n| {
+        bar.set_position(n as u64)
+    }) {
+        Ok(w) => w,
+        Err(e) => {
+            drop(out);
+            let _ = std::fs::remove_file(&dest_path);
+            return Err(e).context("decrypt-write");
+        }
+    };
+    bar.finish_and_clear();
 
     let dest_str = dest_path.to_string_lossy().into_owned();
     if json {
         crate::output::print_json(
-            &serde_json::json!({ "fileId": file_id, "versionId": version_id, "size": plain.len(), "dest": dest_str }),
+            &serde_json::json!({ "fileId": file_id, "versionId": version_id, "size": written, "dest": dest_str }),
         )?;
     } else {
         println!("Downloaded version {short} of {} → {dest_str}", meta.name);
@@ -126,6 +145,19 @@ fn restore(profile: &str, json: bool, file_id: &str, version_id: &str) -> Result
     let ctx = require_session(profile)?;
     let master_key = ctx.session.master_key_bytes()?;
     let (_, file_key) = find_file_and_key(&ctx.client, &master_key, file_id)?;
+
+    // The restored row carries the SOURCE version's collab metadata: those
+    // values become the served x-kutup-seq / x-kutup-doc-key-id headers, and
+    // the live-collab values the web client would use are unknowable offline.
+    // The update log was already truncated to that seq when the source was
+    // recorded, so this is truncation-safe.
+    let versions = ctx.client.list_versions(file_id)?;
+    let src = versions
+        .iter()
+        .find(|v| v.id == version_id)
+        .ok_or_else(|| {
+            crate::errors::NotFound(format!("version {version_id} not found for file {file_id}"))
+        })?;
 
     // download chosen version → decrypt → re-encrypt → snapshot-blob → record.
     let encrypted = ctx.client.download_version(file_id, version_id)?;
@@ -142,8 +174,8 @@ fn restore(profile: &str, json: bool, file_id: &str, version_id: &str) -> Result
         &RecordSnapshotRequest {
             s3_version_id: blob.s3_version_id,
             storage_path: blob.storage_path,
-            seq_at_snapshot: 0,
-            doc_key_id: 1,
+            seq_at_snapshot: src.seq_at_snapshot,
+            doc_key_id: src.doc_key_id,
             size_bytes: size,
             label: format!("Restored from {now}"),
             keep_forever: false,

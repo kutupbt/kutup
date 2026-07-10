@@ -11,7 +11,7 @@ use url::Url;
 
 use crate::api::public::PublicShare;
 use crate::api::{Client, FileMetadata};
-use kutup_crypto::{secretbox, stream};
+use kutup_crypto::secretbox;
 
 #[derive(Subcommand)]
 pub enum PubCmd {
@@ -159,7 +159,10 @@ fn ls(json: bool, url: &str) -> Result<()> {
         println!("(no files in this share)");
         return Ok(());
     }
-    println!("{:<36}  {:>12}  NAME", "ID", "SIZE");
+    println!(
+        "{}",
+        crate::output::header(format!("{:<36}  {:>12}  NAME", "ID", "SIZE"))
+    );
     for d in &out {
         println!("{:<36}  {:>12}  {}", d.id, d.size, d.name);
     }
@@ -189,10 +192,6 @@ fn download(json: bool, url: &str, file_id: &str, dest: Option<&str>) -> Result<
     .context("decrypt metadata")?;
     let meta: FileMetadata = serde_json::from_slice(&meta_bytes).unwrap_or_default();
 
-    let url_res = client.public_share_download_url(&p.token, file_id)?;
-    let encrypted = crate::api::public::fetch_presigned_url(&url_res.url)?;
-    let plain = stream::decrypt_stream(&encrypted, &file_key).context("decrypt")?;
-
     let dest_path = {
         let pp = Path::new(dest_dir);
         if pp.is_dir() {
@@ -201,12 +200,27 @@ fn download(json: bool, url: &str, file_id: &str, dest: Option<&str>) -> Result<
             pp.to_path_buf()
         }
     };
-    std::fs::write(&dest_path, &plain)?;
+
+    let url_res = client.public_share_download_url(&p.token, file_id)?;
+    let resp = crate::api::public::fetch_presigned_stream(&url_res.url)?;
+    let bar = crate::output::progress_bar(resp.content_length(), &meta.name);
+    let mut out = std::fs::File::create(&dest_path).context("open dest")?;
+    let written = match crate::transfer::stream_download(resp, &file_key, &mut out, |n| {
+        bar.set_position(n as u64)
+    }) {
+        Ok(w) => w,
+        Err(e) => {
+            drop(out);
+            let _ = std::fs::remove_file(&dest_path);
+            return Err(e).context("decrypt-write");
+        }
+    };
+    bar.finish_and_clear();
 
     let dest_str = dest_path.to_string_lossy().into_owned();
     if json {
         crate::output::print_json(
-            &serde_json::json!({ "fileId": file_id, "size": plain.len(), "dest": dest_str }),
+            &serde_json::json!({ "fileId": file_id, "size": written, "dest": dest_str }),
         )?;
     } else {
         println!("Downloaded {} → {dest_str}", meta.name);

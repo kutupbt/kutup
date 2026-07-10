@@ -9,6 +9,7 @@ mod config;
 mod context;
 mod cryptohelpers;
 mod errors;
+mod mimetype;
 mod output;
 mod session;
 mod syncengine;
@@ -77,12 +78,15 @@ enum Commands {
         #[arg(long)]
         parent: Option<String>,
     },
-    /// Rename a file (re-encrypts metadata; content untouched).
+    /// Rename a file or folder (re-encrypts the name; content untouched).
     Mv {
-        /// File id.
-        file_id: String,
+        /// File or folder id.
+        id: String,
         /// New name.
         new_name: String,
+        /// Rename a folder (collection) instead of a file.
+        #[arg(long)]
+        folder: bool,
     },
     /// Move a file or folder to the trash.
     Rm {
@@ -183,9 +187,11 @@ fn main() {
         Commands::Mkdir { name, parent } => {
             commands::mkdir::run(&cli.profile, cli.json, name, parent.as_deref())
         }
-        Commands::Mv { file_id, new_name } => {
-            commands::mv::run(&cli.profile, cli.json, file_id, new_name)
-        }
+        Commands::Mv {
+            id,
+            new_name,
+            folder,
+        } => commands::mv::run(&cli.profile, cli.json, id, new_name, *folder),
         Commands::Rm { id, folder, yes } => {
             commands::rm::run(&cli.profile, cli.json, id, *folder, *yes)
         }
@@ -225,7 +231,7 @@ fn main() {
             }
             eprintln!("{obj}");
         } else {
-            eprintln!("error: {e:#}");
+            eprintln!("{} {e:#}", output::error_prefix());
         }
         std::process::exit(code);
     }

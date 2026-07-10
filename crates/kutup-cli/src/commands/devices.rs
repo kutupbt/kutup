@@ -40,15 +40,26 @@ fn list(profile: &str, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<12}  {:<30}  {:<25}  {:<25}  STATUS",
-        "ID", "LABEL", "CREATED", "LAST SEEN"
+        "{}",
+        crate::output::header(format!(
+            "{:<12}  {:<30}  {:<16}  {:<16}  STATUS",
+            "ID", "LABEL", "CREATED", "LAST SEEN"
+        ))
     );
     for d in &devices {
-        let last = d.last_seen_at.as_deref().unwrap_or("(never)");
+        let last = d
+            .last_seen_at
+            .as_deref()
+            .map(crate::output::format_time)
+            .unwrap_or_else(|| "(never)".to_string());
         let status = if d.is_active { "active" } else { "revoked" };
         println!(
-            "{:<12}  {:<30}  {:<25}  {:<25}  {}",
-            d.device_id, d.label, d.created_at, last, status
+            "{:<12}  {:<30}  {:<16}  {:<16}  {}",
+            d.device_id,
+            d.label,
+            crate::output::format_time(&d.created_at),
+            last,
+            status
         );
     }
     Ok(())

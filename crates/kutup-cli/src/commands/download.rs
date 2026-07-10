@@ -9,7 +9,6 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::api::FileMetadata;
 use crate::context::require_session;
@@ -46,12 +45,8 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
         // post-load state there), else the main blob.
         let (stream, from_version) = ctx.client.latest_encrypted_stream(file_id)?;
 
-        let bar = ProgressBar::new(f.encrypted_size_bytes.max(0) as u64);
-        bar.set_style(
-            ProgressStyle::with_template("{msg} {bar:30} {bytes}/{total_bytes}")
-                .unwrap_or_else(|_| ProgressStyle::default_bar()),
-        );
-        bar.set_message(meta.name.clone());
+        let bar =
+            crate::output::progress_bar(Some(f.encrypted_size_bytes.max(0) as u64), &meta.name);
 
         let mut out = File::create(&dest_path).context("open dest")?;
         let written =
