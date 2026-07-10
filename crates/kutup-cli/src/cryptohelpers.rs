@@ -1,6 +1,6 @@
 //! Shared decryption helpers used across commands — mirrors `helpers.go`.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use base64::Engine;
 
 use crate::api::{Client, Collection, File, FileMetadata};
@@ -108,5 +108,8 @@ pub fn find_file_and_key(
             return Ok((f, fk));
         }
     }
-    bail!("file {file_id} not found in any accessible collection")
+    Err(crate::errors::NotFound(format!(
+        "file {file_id} not found in any accessible collection"
+    ))
+    .into())
 }

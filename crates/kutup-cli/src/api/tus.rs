@@ -1,11 +1,11 @@
 //! tus.io 1.0 protocol client — mirrors `internal/api/tus.go`.
 //! Companion to `backend/handlers/tus.go`.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use base64::Engine;
 use reqwest::Method;
 
-use super::Client;
+use super::{api_error, Client};
 
 const TUS_VERSION: &str = "1.0.0";
 
@@ -45,12 +45,7 @@ impl Client {
             .send()?;
 
         if resp.status().as_u16() != 201 {
-            let code = resp.status().as_u16();
-            bail!(
-                "tus create: HTTP {}: {}",
-                code,
-                resp.text().unwrap_or_default()
-            );
+            return Err(api_error(resp)).context("tus create");
         }
         let loc = resp
             .headers()
@@ -71,7 +66,7 @@ impl Client {
             .header("Tus-Resumable", TUS_VERSION)
             .send()?;
         if resp.status().as_u16() != 200 {
-            bail!("tus head: HTTP {}", resp.status().as_u16());
+            return Err(api_error(resp)).context("tus head");
         }
         let offset = header_i64(&resp, "Upload-Offset");
         let length = header_i64(&resp, "Upload-Length");
@@ -91,12 +86,7 @@ impl Client {
             .body(body)
             .send()?;
         if resp.status().as_u16() != 204 {
-            let code = resp.status().as_u16();
-            bail!(
-                "tus patch: HTTP {}: {}",
-                code,
-                resp.text().unwrap_or_default()
-            );
+            return Err(api_error(resp)).context("tus patch");
         }
         let new_offset = header_i64(&resp, "Upload-Offset");
         let file_id = resp
@@ -116,7 +106,7 @@ impl Client {
             .send()?;
         let code = resp.status().as_u16();
         if code != 204 && code != 404 {
-            bail!("tus delete: HTTP {code}");
+            return Err(api_error(resp)).context("tus delete");
         }
         Ok(())
     }

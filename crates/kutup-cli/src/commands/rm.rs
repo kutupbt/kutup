@@ -1,10 +1,20 @@
-//! `kutup rm` — delete a file or folder. Mirrors `cmd/rm.go`.
+//! `kutup rm` — move a file or folder to the trash. Mirrors `cmd/rm.go`.
 
 use anyhow::{Context, Result};
 
+use crate::commands::confirm;
 use crate::context::require_session;
 
-pub fn run(profile: &str, json: bool, id: &str, folder: bool) -> Result<()> {
+pub fn run(profile: &str, json: bool, id: &str, folder: bool, yes: bool) -> Result<()> {
+    if folder {
+        confirm(
+            &format!("Move folder {id} and everything in it to the trash?"),
+            yes,
+        )?;
+    } else {
+        confirm(&format!("Move file {id} to the trash?"), yes)?;
+    }
+
     let ctx = require_session(profile)?;
 
     if folder {
@@ -12,7 +22,7 @@ pub fn run(profile: &str, json: bool, id: &str, folder: bool) -> Result<()> {
         if json {
             println!("{}", serde_json::json!({ "deleted": id, "type": "folder" }));
         } else {
-            println!("Deleted folder {id}");
+            println!("Moved folder {id} to trash");
         }
         return Ok(());
     }
@@ -21,7 +31,7 @@ pub fn run(profile: &str, json: bool, id: &str, folder: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::json!({ "deleted": id, "type": "file" }));
     } else {
-        println!("Deleted file {id}");
+        println!("Moved file {id} to trash");
     }
     Ok(())
 }

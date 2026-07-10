@@ -8,6 +8,7 @@ mod commands;
 mod config;
 mod context;
 mod cryptohelpers;
+mod errors;
 mod output;
 mod session;
 mod syncengine;
@@ -83,13 +84,16 @@ enum Commands {
         /// New name.
         new_name: String,
     },
-    /// Delete a file or folder.
+    /// Move a file or folder to the trash.
     Rm {
         /// File or folder id.
         id: String,
         /// Delete a folder (collection) instead of a file.
         #[arg(long)]
         folder: bool,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
     },
     /// Encrypt and upload a file or directory.
     Upload {
@@ -182,7 +186,9 @@ fn main() {
         Commands::Mv { file_id, new_name } => {
             commands::mv::run(&cli.profile, cli.json, file_id, new_name)
         }
-        Commands::Rm { id, folder } => commands::rm::run(&cli.profile, cli.json, id, *folder),
+        Commands::Rm { id, folder, yes } => {
+            commands::rm::run(&cli.profile, cli.json, id, *folder, *yes)
+        }
         Commands::Upload {
             path,
             collection_id,
@@ -210,7 +216,86 @@ fn main() {
         }
     };
     if let Err(e) = result {
-        eprintln!("{e:#}");
-        std::process::exit(1);
+        eprintln!("error: {e:#}");
+        std::process::exit(exit_code_for(&e));
+    }
+}
+
+/// Maps an error chain to a process exit code: 0 ok · 1 generic · 2 usage
+/// (matches clap's parse-error code) · 3 auth/session · 4 not found ·
+/// 5 network/server. Downcasting sees through `.context()` layers.
+fn exit_code_for(err: &anyhow::Error) -> i32 {
+    if err.downcast_ref::<errors::UsageError>().is_some() {
+        return 2;
+    }
+    if err.downcast_ref::<errors::NotLoggedIn>().is_some() {
+        return 3;
+    }
+    if err.downcast_ref::<errors::NotFound>().is_some() {
+        return 4;
+    }
+    if let Some(api) = err.downcast_ref::<api::ApiError>() {
+        return match api.status {
+            401 | 403 => 3,
+            404 => 4,
+            408 | 429 => 5,
+            s if s >= 500 => 5,
+            _ => 1,
+        };
+    }
+    if let Some(re) = err.downcast_ref::<reqwest::Error>() {
+        if re.is_connect() || re.is_timeout() || re.is_request() {
+            return 5;
+        }
+    }
+    1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::anyhow;
+
+    #[test]
+    fn exit_codes_map_marker_errors_through_context() {
+        let e = anyhow::Error::new(errors::NotLoggedIn("not logged in".into()))
+            .context("load session")
+            .context("whoami");
+        assert_eq!(exit_code_for(&e), 3);
+
+        let e = anyhow::Error::new(errors::NotFound("file x not found".into())).context("download");
+        assert_eq!(exit_code_for(&e), 4);
+
+        let e = anyhow::Error::new(errors::UsageError("pass --yes".into()));
+        assert_eq!(exit_code_for(&e), 2);
+    }
+
+    #[test]
+    fn exit_codes_map_api_errors_by_status() {
+        let cases = [
+            (401, 3),
+            (403, 3),
+            (404, 4),
+            (408, 5),
+            (429, 5),
+            (500, 5),
+            (503, 5),
+            (409, 1),
+            (413, 1),
+        ];
+        for (status, want) in cases {
+            let e = anyhow::Error::new(api::ApiError {
+                status,
+                message: "x".into(),
+            })
+            .context("outer")
+            .context("outermost");
+            assert_eq!(exit_code_for(&e), want, "status {status}");
+        }
+    }
+
+    #[test]
+    fn exit_codes_default_to_one() {
+        assert_eq!(exit_code_for(&anyhow!("something else")), 1);
     }
 }

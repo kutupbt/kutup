@@ -1,6 +1,6 @@
 //! Public-share consumption — mirrors `internal/api/public.go`.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 
@@ -72,8 +72,7 @@ pub fn fetch_presigned_url(presigned: &str) -> Result<Vec<u8>> {
         .build()?;
     let resp = client.get(presigned).send()?;
     if resp.status().as_u16() >= 400 {
-        let code = resp.status().as_u16();
-        bail!("HTTP {}: {}", code, resp.text().unwrap_or_default());
+        return Err(super::api_error(resp));
     }
     Ok(resp.bytes()?.to_vec())
 }

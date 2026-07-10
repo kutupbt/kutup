@@ -22,7 +22,7 @@ pub mod versions;
 use std::cell::RefCell;
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use reqwest::blocking::{Client as HttpClient, RequestBuilder, Response};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Method;
@@ -30,6 +30,42 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 pub use types::*;
+
+/// Typed HTTP error, carried through anyhow chains so `main` can map exit
+/// codes and commands can match on `status` instead of string-parsing.
+#[derive(Debug, thiserror::Error)]
+#[error("HTTP {status}: {message}")]
+pub struct ApiError {
+    pub status: u16,
+    /// The server's `{"error": "…"}` message when parseable, else the raw
+    /// body (or the status reason phrase when the body is empty).
+    pub message: String,
+}
+
+impl ApiError {
+    pub(crate) fn from_parts(status: u16, reason: &str, body: String) -> ApiError {
+        let message = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v.get("error")?.as_str().map(str::to_string))
+            .unwrap_or_else(|| {
+                let trimmed = body.trim().to_string();
+                if trimmed.is_empty() {
+                    reason.to_string()
+                } else {
+                    trimmed
+                }
+            });
+        ApiError { status, message }
+    }
+}
+
+/// Consumes an error response into an `anyhow::Error` carrying [`ApiError`].
+pub(crate) fn api_error(resp: Response) -> anyhow::Error {
+    let status = resp.status().as_u16();
+    let reason = resp.status().canonical_reason().unwrap_or("").to_string();
+    let body = resp.text().unwrap_or_default();
+    anyhow::Error::new(ApiError::from_parts(status, &reason, body))
+}
 
 /// API client. `token` is interior-mutable so transparent refresh can update it
 /// while methods take `&self` (mirrors the Go `SetToken`).
@@ -242,22 +278,46 @@ impl Client {
     }
 }
 
-/// Decodes a JSON response, surfacing HTTP >= 400 as an error with the body.
+/// Decodes a JSON response, surfacing HTTP >= 400 as an [`ApiError`].
 fn decode_json<T: DeserializeOwned>(resp: Response) -> Result<T> {
-    let status = resp.status();
-    if status.as_u16() >= 400 {
-        let body = resp.text().unwrap_or_default();
-        bail!("HTTP {}: {}", status.as_u16(), body);
+    if resp.status().as_u16() >= 400 {
+        return Err(api_error(resp));
     }
     Ok(resp.json()?)
 }
 
 /// Checks a no-body response for HTTP >= 400.
 fn check_ok(resp: Response) -> Result<()> {
-    let status = resp.status();
-    if status.as_u16() >= 400 {
-        let body = resp.text().unwrap_or_default();
-        bail!("HTTP {}: {}", status.as_u16(), body);
+    if resp.status().as_u16() >= 400 {
+        return Err(api_error(resp));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ApiError;
+
+    #[test]
+    fn from_parts_extracts_server_error_shape() {
+        let e = ApiError::from_parts(
+            413,
+            "Payload Too Large",
+            r#"{"error":"quota exceeded"}"#.into(),
+        );
+        assert_eq!(e.message, "quota exceeded");
+        assert_eq!(e.to_string(), "HTTP 413: quota exceeded");
+    }
+
+    #[test]
+    fn from_parts_falls_back_to_raw_body() {
+        let e = ApiError::from_parts(502, "Bad Gateway", "<html>upstream died</html>".into());
+        assert_eq!(e.message, "<html>upstream died</html>");
+    }
+
+    #[test]
+    fn from_parts_uses_reason_when_body_empty() {
+        let e = ApiError::from_parts(404, "Not Found", "  ".into());
+        assert_eq!(e.to_string(), "HTTP 404: Not Found");
+    }
 }

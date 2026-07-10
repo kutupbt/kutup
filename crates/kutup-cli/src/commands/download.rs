@@ -99,7 +99,10 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
         return Ok(());
     }
 
-    bail!("file {file_id} not found in any accessible collection")
+    Err(crate::errors::NotFound(format!(
+        "file {file_id} not found in any accessible collection"
+    ))
+    .into())
 }
 
 /// If `dest_dir` is an existing directory, place the file inside it under its

@@ -79,8 +79,7 @@ impl Client {
             )
             .send()?;
         if resp.status().as_u16() >= 400 {
-            let code = resp.status().as_u16();
-            anyhow::bail!("HTTP {}: {}", code, resp.text().unwrap_or_default());
+            return Err(super::api_error(resp));
         }
         Ok(resp.bytes()?.to_vec())
     }
@@ -110,8 +109,7 @@ impl Client {
             .multipart(form)
             .send()?;
         if resp.status().as_u16() >= 400 {
-            let code = resp.status().as_u16();
-            anyhow::bail!("HTTP {}: {}", code, resp.text().unwrap_or_default());
+            return Err(super::api_error(resp));
         }
         Ok(resp.json().unwrap_or_default())
     }

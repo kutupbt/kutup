@@ -8,7 +8,7 @@
 use std::fs::File;
 use std::path::Path;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use base64::Engine;
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::RngCore;
@@ -31,7 +31,7 @@ pub fn run(
 
     let cols = decrypt_collections(ctx.client.list_collections()?, &master_key, &ctx.session);
     let col = find_collection(&cols, collection_id)
-        .ok_or_else(|| anyhow!("collection {collection_id} not found"))?;
+        .ok_or_else(|| crate::errors::NotFound(format!("collection {collection_id} not found")))?;
     let collection_key =
         decrypt_collection_key(col, &master_key, &ctx.session).context("decrypt collection key")?;
 

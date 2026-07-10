@@ -174,10 +174,9 @@ fn download(json: bool, url: &str, file_id: &str, dest: Option<&str>) -> Result<
     let col_key = unwrap_collection_key(&share, &p.link_key)?;
 
     let files = client.list_public_share_files(&p.token)?;
-    let target = files
-        .iter()
-        .find(|f| f.id == file_id)
-        .ok_or_else(|| anyhow!("file {file_id} not found in this public share"))?;
+    let target = files.iter().find(|f| f.id == file_id).ok_or_else(|| {
+        crate::errors::NotFound(format!("file {file_id} not found in this public share"))
+    })?;
 
     let file_key =
         secretbox::open_b64(&target.encrypted_file_key, &target.file_key_nonce, &col_key)

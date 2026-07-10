@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use base64::Engine;
 
 use crate::api::{Client, FileMetadata};
@@ -39,7 +39,7 @@ pub fn sync(
     let col = cols
         .iter()
         .find(|c| c.id == collection_id)
-        .ok_or_else(|| anyhow!("collection {collection_id} not found"))?;
+        .ok_or_else(|| crate::errors::NotFound(format!("collection {collection_id} not found")))?;
     let collection_key =
         secretbox::open_b64(&col.encrypted_key, &col.encrypted_key_nonce, &master_key)
             .context("decrypt collection key")?;

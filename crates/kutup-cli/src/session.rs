@@ -177,7 +177,10 @@ impl Store {
         };
         let encrypted = v.value().to_vec();
         if !self.has_device_key() {
-            return Err(anyhow!("no device key — run 'kutup login' first"));
+            return Err(crate::errors::NotLoggedIn(
+                "no device key — run 'kutup login' first".into(),
+            )
+            .into());
         }
         let data = self.decrypt(&encrypted)?;
         let sess: Session = serde_json::from_slice(&data)?;

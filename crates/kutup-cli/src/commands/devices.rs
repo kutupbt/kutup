@@ -1,9 +1,9 @@
 //! `kutup devices` — list and revoke account devices. Mirrors `cmd/devices.go`.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use clap::Subcommand;
 
-use crate::commands::prompt_line;
+use crate::commands::confirm;
 use crate::context::require_session;
 
 #[derive(Subcommand)]
@@ -57,15 +57,10 @@ fn list(profile: &str, json: bool) -> Result<()> {
 fn revoke(profile: &str, json: bool, device_id: i64, yes: bool) -> Result<()> {
     let ctx = require_session(profile)?;
 
-    if !yes {
-        let ans = prompt_line(&format!(
-            "Revoke device {device_id}? This closes its active sessions. [y/N]: "
-        ))?
-        .to_lowercase();
-        if ans != "y" && ans != "yes" {
-            bail!("aborted");
-        }
-    }
+    confirm(
+        &format!("Revoke device {device_id}? This closes its active sessions."),
+        yes,
+    )?;
 
     ctx.client.revoke_user_device(device_id)?;
     if json {

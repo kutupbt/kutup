@@ -10,10 +10,11 @@ use rand::RngCore;
 use serde::Serialize;
 
 use crate::api::federation::IncomingShare;
-use crate::api::{FederatedShareRequest, FileMetadata, PublicShareRequest, ShareRequest};
-use crate::commands::prompt_line;
+use crate::api::{ApiError, FederatedShareRequest, FileMetadata, PublicShareRequest, ShareRequest};
+use crate::commands::confirm;
 use crate::context::{require_session, Ctx};
 use crate::cryptohelpers::{decrypt_collection_key, decrypt_collections, find_collection};
+use crate::errors::NotFound;
 use crate::session::Session;
 use kutup_crypto::{sealedbox, secretbox, stream};
 
@@ -105,7 +106,7 @@ fn owned_collection_key(ctx: &Ctx, collection_id: &str) -> Result<Vec<u8>> {
     let master_key = ctx.session.master_key_bytes()?;
     let cols = decrypt_collections(ctx.client.list_collections()?, &master_key, &ctx.session);
     let col = find_collection(&cols, collection_id)
-        .ok_or_else(|| anyhow!("collection {collection_id} not found"))?;
+        .ok_or_else(|| NotFound(format!("collection {collection_id} not found")))?;
     decrypt_collection_key(col, &master_key, &ctx.session).context("decrypt collection key")
 }
 
@@ -272,9 +273,9 @@ fn resolve_shared_collection_key(ctx: &Ctx, share_id: &str) -> Result<(IncomingS
         .into_iter()
         .find(|s| s.id == share_id)
         .ok_or_else(|| {
-            anyhow!(
+            NotFound(format!(
                 "share {share_id} not in your accepted shares (run `kutup share incoming list`)"
-            )
+            ))
         })?;
     let key = unwrap_shared_collection_key(&share, &ctx.session)?;
     Ok((share, key))
@@ -343,7 +344,7 @@ fn share_download(
     let target = files
         .iter()
         .find(|f| f.id == file_id)
-        .ok_or_else(|| anyhow!("file {file_id} not found in share {share_id}"))?;
+        .ok_or_else(|| NotFound(format!("file {file_id} not found in share {share_id}")))?;
 
     let file_key =
         secretbox::open_b64(&target.encrypted_file_key, &target.file_key_nonce, &col_key)
@@ -420,14 +421,12 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
             encrypted,
         )
         .map_err(|err| {
-            let msg = err.to_string();
-            if msg.contains("HTTP 403") {
-                anyhow!("share doesn't permit uploads (server: {msg})")
-            } else if msg.contains("HTTP 413") {
-                anyhow!("share upload quota exceeded (server: {msg})")
-            } else {
-                anyhow!("upload: {msg}")
-            }
+            let hint = match err.downcast_ref::<ApiError>() {
+                Some(e) if e.status == 403 => "share doesn't permit uploads",
+                Some(e) if e.status == 413 => "share upload quota exceeded",
+                _ => "upload",
+            };
+            err.context(hint)
         })?;
 
     if json {
@@ -529,15 +528,12 @@ fn incoming_accept(profile: &str, json: bool, invite_url: &str) -> Result<()> {
 
 fn incoming_remove(profile: &str, json: bool, share_id: &str, yes: bool) -> Result<()> {
     let ctx = require_session(profile)?;
-    if !yes {
-        let ans = prompt_line(&format!(
-            "Remove incoming share {share_id}? This forgets your local pointer; the remote owner is not notified. [y/N]: "
-        ))?
-        .to_lowercase();
-        if ans != "y" && ans != "yes" {
-            bail!("aborted");
-        }
-    }
+    confirm(
+        &format!(
+            "Remove incoming share {share_id}? This forgets your local pointer; the remote owner is not notified."
+        ),
+        yes,
+    )?;
     ctx.client.remove_incoming_share(share_id)?;
     if json {
         println!(
