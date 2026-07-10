@@ -200,23 +200,46 @@ Desktop OnlyOffice was stripped from the Tauri build to avoid the OOM on `tauri:
 
 The mobile share sheet doesn't yet expose federated share flows (cross-server) — only public link sharing.
 
-### Go→Rust CLI rewrite · whiteboard asset extraction/hydration
+### CLI follow-ups (from the CLI improvements batch)
 
-The Rust `kutup` CLI (branch `claude/go-rust-rewrite-G16zO`, `crates/kutup-cli`)
-ports the core upload/download paths but **defers the `.excalidraw` whiteboard
-asset steps** the Go CLI does:
+The `.excalidraw` whiteboard asset extraction/hydration deferral is **done**
+(`crates/kutup-cli/src/whiteboard.rs` — upload extracts + re-snapshots,
+download re-inlines; Go-CLI parity reached). What remains around the CLI:
 
-- **upload** (`crates/kutup-cli` upload path) — encrypt each
-  embedded image as an asset blob, upload it, flip the element to
-  `status:"saved"`, and commit a fresh snapshot.
-- **download** (`crates/kutup-cli` download path) — fetch separately
-  stored asset blobs and re-inline their `dataURL`s.
-
-Both are best-effort optimizations (regular files transfer correctly without
-them; the web re-uploads/hydrates assets on first open). They need the asset +
-snapshot API surface ported (`UploadAsset`, `DownloadAsset`, `UploadSnapshotBlob`,
-`RecordSnapshot`), which lands with the CLI's collab/versions slice. Port these
-before declaring CLI parity.
+- **Share lifecycle management (needs server slices first).** There is no
+  endpoint to list a collection's outgoing user shares, revoke one, or
+  list/delete public links (the web UI can't either — only recipient-side
+  `DELETE /fed-proxy/incoming/:shareId` exists). Server work:
+  `GET /api/collections/:id/shares`, `DELETE /api/collections/:id/share/:userId`,
+  `GET`/`DELETE /api/user/shares` (public links, owner-scoped via
+  `public_shares.created_by`); then `kutup share ls / revoke / unlink` and
+  matching web UI. Until then the CLI ships no affordance (no stubs).
+- **Server improvements that unlock better CLI behavior** (noted per the
+  "do when we touch the server" decision):
+  - `latestVersionId` on the `GET /collections/:id/files` rows (one
+    `LEFT JOIN LATERAL`) — kills the sync engine's per-file `list_versions`
+    polling (its remote-change signal; `files.updated_at` is never bumped).
+  - `trashRetentionDays` in `GET /api/auth/settings` — lets `kutup trash ls`
+    show an accurate EXPIRES column on any server config (currently omitted
+    rather than hardcoding 30).
+  - URL-encode the `email` query param in the login/recover preflights
+    (`crates/kutup-cli/src/api/mod.rs`) — emails containing `+` currently
+    mis-parse; add a shared encoder + server-side test.
+- **Sync engine: whiteboard assets.** `kutup sync` pushes/pulls `.excalidraw`
+  files as opaque bytes; the extract/hydrate steps only run in
+  `upload`/`download`. Wire `crate::whiteboard` into the engine's
+  push/pull paths.
+- **Streaming multipart uploads** for `share upload` (fed-proxy) — still
+  buffers the whole encrypted file in memory (`Part::bytes`); switch to
+  `Part::reader` with an encrypting reader for large-file parity with tus.
+- **`kutup versions restore` vs collab snapshots.** CLI restore re-encrypts
+  with the file key in secretstream framing, while web collab snapshots are
+  AEAD envelopes under a derived content key — CLI restore round-trips
+  CLI/sync-created files, not live-collab documents. Needs the collab
+  content-key path if full parity is wanted.
+- **`kutup admin` command group.** The full `/api/admin/*` surface (users,
+  quotas, stats, activity, settings, 2FA reset, wipe) has no CLI coverage;
+  useful for self-hosters. Deliberately deferred from the improvements batch.
 
 ### Go→Rust server rewrite · interactive Swagger UI
 
