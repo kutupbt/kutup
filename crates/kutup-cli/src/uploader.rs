@@ -39,7 +39,6 @@ pub enum Progress {
 /// asset step re-uses the key after upload).
 pub struct Uploaded {
     pub file_id: String,
-    #[allow(dead_code)]
     pub file_key: [u8; 32],
 }
 

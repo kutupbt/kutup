@@ -1,9 +1,7 @@
 //! `kutup upload` — encrypt and stream-upload a file or directory via tus,
 //! resuming interrupted uploads automatically (see `crate::uploader`).
-//!
-//! Note: the whiteboard (`.excalidraw`) asset-extraction step from the Go CLI
-//! is deferred — it's a best-effort optimization that needs the asset/snapshot
-//! API surface (tracked in docs/roadmap.md). Regular-file upload is complete.
+//! Whiteboards (`.excalidraw`) additionally get their embedded images
+//! extracted as encrypted asset blobs (see `crate::whiteboard`).
 
 use std::path::Path;
 
@@ -87,6 +85,13 @@ pub fn run(
         !no_resume,
         Progress::Bar,
     )?;
+    extract_whiteboard_assets(
+        &ctx.client,
+        &up,
+        &collection_key,
+        Path::new(local_path),
+        &mut Vec::new(),
+    );
 
     let name = file_name(local_path);
     if json {
@@ -102,6 +107,31 @@ pub fn run(
 struct DirUpload {
     uploaded: Vec<serde_json::Value>,
     warnings: Vec<String>,
+}
+
+/// Best-effort whiteboard asset extraction after a successful upload — a
+/// failure here never fails the main transfer.
+fn extract_whiteboard_assets(
+    client: &Client,
+    up: &crate::uploader::Uploaded,
+    collection_key: &[u8],
+    path: &Path,
+    warnings: &mut Vec<String>,
+) {
+    if !crate::whiteboard::is_excalidraw(&path.to_string_lossy()) {
+        return;
+    }
+    if let Err(e) = crate::whiteboard::extract_and_upload(
+        client,
+        &up.file_id,
+        &up.file_key,
+        collection_key,
+        path,
+    ) {
+        let w = format!("asset extraction {}: {e:#}", path.display());
+        eprintln!("warning: {w}");
+        warnings.push(w);
+    }
 }
 
 /// Recursively uploads a directory, creating sub-collections as needed.
@@ -149,6 +179,13 @@ fn upload_dir(
             ) {
                 Ok(up) => {
                     eprintln!("  ↑ {}", path.display());
+                    extract_whiteboard_assets(
+                        client,
+                        &up,
+                        &sub_col_key,
+                        &path,
+                        &mut stats.warnings,
+                    );
                     stats.uploaded.push(serde_json::json!({
                         "id": up.file_id,
                         "path": path.display().to_string(),

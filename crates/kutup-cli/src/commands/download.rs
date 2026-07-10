@@ -1,9 +1,6 @@
-//! `kutup download` — download and decrypt a file. Mirrors `cmd/download.go`.
-//!
-//! Note: the whiteboard (`.excalidraw`) asset-hydration step from the Go CLI is
-//! deferred — a best-effort optimization needing the asset API (tracked in
-//! docs/roadmap.md). Regular-file download (incl. the version-snapshot-preferred
-//! path for collab-edited files) is complete.
+//! `kutup download` — download and decrypt a file (snapshot-preferred for
+//! collab-edited files). Whiteboards (`.excalidraw`) additionally get their
+//! separately-stored image assets re-inlined (see `crate::whiteboard`).
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -49,7 +46,7 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
             crate::output::progress_bar(Some(f.encrypted_size_bytes.max(0) as u64), &meta.name);
 
         let mut out = File::create(&dest_path).context("open dest")?;
-        let written =
+        let mut written =
             match stream_download(stream, &file_key, &mut out, |n| bar.set_position(n as u64)) {
                 Ok(w) => w,
                 Err(e) => {
@@ -69,6 +66,16 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
                 meta.size,
                 written
             );
+        }
+
+        // Whiteboards may reference images stored as separate asset blobs;
+        // re-inline them so the on-disk file is self-contained. Best-effort.
+        if crate::whiteboard::is_excalidraw(&meta.name) {
+            match crate::whiteboard::hydrate(&ctx.client, file_id, &col_key, &dest_path) {
+                Ok(Some(new_len)) => written = new_len,
+                Ok(None) => {}
+                Err(e) => eprintln!("warning: asset hydration failed: {e:#}"),
+            }
         }
 
         let dest_str = dest_path.to_string_lossy().into_owned();

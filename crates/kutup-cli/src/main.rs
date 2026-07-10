@@ -15,6 +15,7 @@ mod session;
 mod syncengine;
 mod transfer;
 mod uploader;
+mod whiteboard;
 
 use clap::{Parser, Subcommand};
 

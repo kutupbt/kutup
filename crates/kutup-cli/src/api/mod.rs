@@ -10,6 +10,7 @@
 //! methods (e.g. `tus_head` for resume) exist for completeness/future use.
 #![allow(dead_code)]
 
+pub mod assets;
 pub mod devices;
 pub mod federation;
 pub mod files;
