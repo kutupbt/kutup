@@ -59,7 +59,7 @@ fn list(profile: &str, json: bool, file_id: &str) -> Result<()> {
     let versions = ctx.client.list_versions(file_id)?;
 
     if json {
-        println!("{}", serde_json::to_string(&versions)?);
+        crate::output::print_json(&versions)?;
         return Ok(());
     }
     if versions.is_empty() {
@@ -113,10 +113,9 @@ fn download(
 
     let dest_str = dest_path.to_string_lossy().into_owned();
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "fileId": file_id, "versionId": version_id, "size": plain.len(), "dest": dest_str })
-        );
+        crate::output::print_json(
+            &serde_json::json!({ "fileId": file_id, "versionId": version_id, "size": plain.len(), "dest": dest_str }),
+        )?;
     } else {
         println!("Downloaded version {short} of {} → {dest_str}", meta.name);
     }
@@ -153,10 +152,9 @@ fn restore(profile: &str, json: bool, file_id: &str, version_id: &str) -> Result
 
     let short = &version_id[..version_id.len().min(8)];
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "fileId": file_id, "newVersionId": res.id, "restoredFrom": version_id })
-        );
+        crate::output::print_json(
+            &serde_json::json!({ "fileId": file_id, "newVersionId": res.id, "restoredFrom": version_id }),
+        )?;
     } else {
         println!(
             "Restored: file={file_id} new-version={} (from {short})",
@@ -182,7 +180,7 @@ fn set_label(
     let row = ctx.client.patch_version(file_id, version_id, &patch)?;
 
     if json {
-        println!("{}", serde_json::to_string(&row)?);
+        crate::output::print_json(&row)?;
     } else {
         let short = &version_id[..version_id.len().min(8)];
         println!("Labeled version {short} of file {file_id}");

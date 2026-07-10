@@ -51,7 +51,7 @@ pub fn run(
         }
     };
 
-    println!("Generating keys…");
+    eprintln!("Generating keys…");
     // Mirror generateRegistrationKeys: random master key + recovery entropy, two independent
     // 16-byte KDF salts, Argon2id KEK + login key, an X25519 keypair, and the three seals.
     let mut rng = rand::thread_rng();
@@ -98,12 +98,11 @@ pub fn run(
 
     if json {
         // Machine-readable: include the phrase so automation can capture it once.
-        let out = serde_json::json!({
+        crate::output::print_json(&serde_json::json!({
             "email": email,
             "username": username,
             "recoveryPhrase": phrase,
-        });
-        println!("{}", serde_json::to_string(&out)?);
+        }))?;
     } else {
         println!("\nAccount created for {email} (@{username}).\n");
         println!("RECOVERY PHRASE — write this down and store it safely. It is shown ONCE and");

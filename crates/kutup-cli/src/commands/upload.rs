@@ -40,12 +40,30 @@ pub fn run(
         if !recursive {
             bail!("{local_path} is a directory — use --recursive to upload directories");
         }
-        return upload_dir(
+        let mut stats = DirUpload::default();
+        upload_dir(
             &ctx.client,
             Path::new(local_path),
             collection_id,
             &master_key,
-        );
+            &mut stats,
+        )?;
+        if json {
+            crate::output::print_json(&serde_json::json!({
+                "collectionId": collection_id,
+                "uploaded": stats.uploaded,
+                "warnings": stats.warnings,
+            }))?;
+        } else if stats.warnings.is_empty() {
+            println!("Uploaded {} file(s)", stats.uploaded.len());
+        } else {
+            println!(
+                "Uploaded {} file(s), {} warning(s)",
+                stats.uploaded.len(),
+                stats.warnings.len()
+            );
+        }
+        return Ok(());
     }
 
     let id = upload_single_file(
@@ -57,11 +75,18 @@ pub fn run(
 
     let name = file_name(local_path);
     if json {
-        println!("{}", serde_json::json!({ "id": id, "name": name }));
+        crate::output::print_json(&serde_json::json!({ "id": id, "name": name }))?;
     } else {
         println!("Uploaded {name}  id={id}");
     }
     Ok(())
+}
+
+/// Accumulates a recursive upload's results for the summary / `--json` doc.
+#[derive(Default)]
+struct DirUpload {
+    uploaded: Vec<serde_json::Value>,
+    warnings: Vec<String>,
 }
 
 /// Streams one file through the tus endpoint: secretstream-encrypt one 5 MiB
@@ -131,7 +156,13 @@ fn upload_single_file(
 }
 
 /// Recursively uploads a directory, creating sub-collections as needed.
-fn upload_dir(client: &Client, dir: &Path, parent_col_id: &str, master_key: &[u8]) -> Result<()> {
+fn upload_dir(
+    client: &Client,
+    dir: &Path,
+    parent_col_id: &str,
+    master_key: &[u8],
+    stats: &mut DirUpload,
+) -> Result<()> {
     let dir_name = file_name(&dir.to_string_lossy());
     let (sub_col_id, sub_col_key) =
         create_sub_collection(client, &dir_name, parent_col_id, master_key)
@@ -141,16 +172,26 @@ fn upload_dir(client: &Client, dir: &Path, parent_col_id: &str, master_key: &[u8
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            if let Err(e) = upload_dir(client, &path, &sub_col_id, master_key) {
-                eprintln!("warning: {e}");
+            if let Err(e) = upload_dir(client, &path, &sub_col_id, master_key, stats) {
+                let w = format!("{e:#}");
+                eprintln!("warning: {w}");
+                stats.warnings.push(w);
             }
         } else {
             match upload_single_file(client, &path, &sub_col_id, &sub_col_key) {
-                Ok(_) => println!("  ↑ {}", path.display()),
-                Err(e) => eprintln!(
-                    "warning: upload {}: {e}",
-                    entry.file_name().to_string_lossy()
-                ),
+                Ok(id) => {
+                    eprintln!("  ↑ {}", path.display());
+                    stats.uploaded.push(serde_json::json!({
+                        "id": id,
+                        "path": path.display().to_string(),
+                        "collectionId": sub_col_id,
+                    }));
+                }
+                Err(e) => {
+                    let w = format!("upload {}: {e:#}", entry.file_name().to_string_lossy());
+                    eprintln!("warning: {w}");
+                    stats.warnings.push(w);
+                }
             }
         }
     }

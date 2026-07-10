@@ -32,7 +32,7 @@ fn list(profile: &str, json: bool) -> Result<()> {
     let devices = ctx.client.list_user_devices()?;
 
     if json {
-        println!("{}", serde_json::to_string(&devices)?);
+        crate::output::print_json(&devices)?;
         return Ok(());
     }
     if devices.is_empty() {
@@ -64,10 +64,7 @@ fn revoke(profile: &str, json: bool, device_id: i64, yes: bool) -> Result<()> {
 
     ctx.client.revoke_user_device(device_id)?;
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "deviceId": device_id, "revoked": true })
-        );
+        crate::output::print_json(&serde_json::json!({ "deviceId": device_id, "revoked": true }))?;
     } else {
         println!("Revoked device {device_id}");
     }

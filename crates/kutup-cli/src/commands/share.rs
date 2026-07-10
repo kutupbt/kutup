@@ -149,10 +149,7 @@ fn share_folder(
         .context("share")?;
 
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "shared": collection_id, "with": email })
-        );
+        crate::output::print_json(&serde_json::json!({ "shared": collection_id, "with": email }))?;
     } else {
         println!("Shared folder with {email}");
     }
@@ -203,7 +200,7 @@ fn share_federated(
         .context("federated share")?;
 
     if json {
-        println!("{}", serde_json::json!({ "inviteUrl": resp.invite_url }));
+        crate::output::print_json(&serde_json::json!({ "inviteUrl": resp.invite_url }))?;
     } else {
         println!("Invite link (send to {target}):\n{}", resp.invite_url);
     }
@@ -237,7 +234,7 @@ fn share_public(profile: &str, json: bool, collection_id: &str) -> Result<()> {
         b64().encode(link_key)
     );
     if json {
-        println!("{}", serde_json::json!({ "url": share_url }));
+        crate::output::print_json(&serde_json::json!({ "url": share_url }))?;
     } else {
         println!("Public link (the decryption key is in the URL fragment):");
         println!("{share_url}");
@@ -304,7 +301,7 @@ fn decrypt_file_display(f: &crate::api::File, col_key: &[u8]) -> FileDisplay {
 
 fn print_file_table(out: &[FileDisplay], json: bool) -> Result<()> {
     if json {
-        println!("{}", serde_json::to_string(out)?);
+        crate::output::print_json(&out)?;
         return Ok(());
     }
     if out.is_empty() {
@@ -365,10 +362,9 @@ fn share_download(
 
     let dest_str = dest_path.to_string_lossy().into_owned();
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "shareId": share_id, "fileId": file_id, "size": plain.len(), "dest": dest_str })
-        );
+        crate::output::print_json(
+            &serde_json::json!({ "shareId": share_id, "fileId": file_id, "size": plain.len(), "dest": dest_str }),
+        )?;
     } else {
         println!("Downloaded {} → {dest_str}", meta.name);
     }
@@ -430,10 +426,9 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
         })?;
 
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "shareId": share_id, "fileId": resp.id, "name": meta.name, "size": meta.size })
-        );
+        crate::output::print_json(
+            &serde_json::json!({ "shareId": share_id, "fileId": resp.id, "name": meta.name, "size": meta.size }),
+        )?;
     } else if resp.id.is_empty() {
         println!("Uploaded {name} → share {share_id}");
     } else {
@@ -482,7 +477,7 @@ fn incoming_list(profile: &str, json: bool) -> Result<()> {
         .collect();
 
     if json {
-        println!("{}", serde_json::to_string(&out)?);
+        crate::output::print_json(&out)?;
         return Ok(());
     }
     if out.is_empty() {
@@ -516,7 +511,7 @@ fn incoming_accept(profile: &str, json: bool, invite_url: &str) -> Result<()> {
     let ctx = require_session(profile)?;
     let share = ctx.client.add_incoming_share(invite_url)?;
     if json {
-        println!("{}", serde_json::to_string(&share)?);
+        crate::output::print_json(&share)?;
     } else {
         println!(
             "Accepted federated share {} from {}",
@@ -536,10 +531,7 @@ fn incoming_remove(profile: &str, json: bool, share_id: &str, yes: bool) -> Resu
     )?;
     ctx.client.remove_incoming_share(share_id)?;
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "shareId": share_id, "removed": true })
-        );
+        crate::output::print_json(&serde_json::json!({ "shareId": share_id, "removed": true }))?;
     } else {
         println!("Removed incoming share {share_id}");
     }

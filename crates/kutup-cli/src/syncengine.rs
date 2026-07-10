@@ -89,7 +89,7 @@ pub fn sync(
                 synced_at: now_unix(),
             },
         );
-        println!("  ↓ {}", r.name);
+        eprintln!("  ↓ {}", r.name);
         result.downloaded += 1;
     }
 
@@ -125,7 +125,7 @@ pub fn sync(
                         synced_at: now_unix(),
                     },
                 );
-                println!("  ↑ {}", entry.file_name().to_string_lossy());
+                eprintln!("  ↑ {}", entry.file_name().to_string_lossy());
                 result.uploaded += 1;
             }
             Err(e) => result.errors.push(format!(

@@ -95,7 +95,7 @@ fn get(json: bool, url: &str) -> Result<()> {
         .context("link key from URL fragment doesn't unwrap the share")?;
 
     if json {
-        println!("{}", serde_json::to_string(&share)?);
+        crate::output::print_json(&share)?;
         return Ok(());
     }
     println!("Share:    {}", share.id);
@@ -152,7 +152,7 @@ fn ls(json: bool, url: &str) -> Result<()> {
     let out: Vec<FileDisplay> = files.iter().map(|f| decrypt_display(f, &col_key)).collect();
 
     if json {
-        println!("{}", serde_json::to_string(&out)?);
+        crate::output::print_json(&out)?;
         return Ok(());
     }
     if out.is_empty() {
@@ -205,10 +205,9 @@ fn download(json: bool, url: &str, file_id: &str, dest: Option<&str>) -> Result<
 
     let dest_str = dest_path.to_string_lossy().into_owned();
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "fileId": file_id, "size": plain.len(), "dest": dest_str })
-        );
+        crate::output::print_json(
+            &serde_json::json!({ "fileId": file_id, "size": plain.len(), "dest": dest_str }),
+        )?;
     } else {
         println!("Downloaded {} → {dest_str}", meta.name);
     }

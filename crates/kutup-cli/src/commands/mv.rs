@@ -36,7 +36,7 @@ pub fn run(profile: &str, json: bool, file_id: &str, new_name: &str) -> Result<(
     )?;
 
     if json {
-        println!("{}", serde_json::json!({ "id": file_id, "name": new_name }));
+        crate::output::print_json(&serde_json::json!({ "id": file_id, "name": new_name }))?;
     } else {
         println!("Renamed file {file_id} → {new_name}");
     }

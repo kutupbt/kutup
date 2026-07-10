@@ -20,7 +20,7 @@ pub fn run(profile: &str, json: bool, id: &str, folder: bool, yes: bool) -> Resu
     if folder {
         ctx.client.delete_collection(id).context("delete folder")?;
         if json {
-            println!("{}", serde_json::json!({ "deleted": id, "type": "folder" }));
+            crate::output::print_json(&serde_json::json!({ "deleted": id, "type": "folder" }))?;
         } else {
             println!("Moved folder {id} to trash");
         }
@@ -29,7 +29,7 @@ pub fn run(profile: &str, json: bool, id: &str, folder: bool, yes: bool) -> Resu
 
     ctx.client.delete_file(id).context("delete file")?;
     if json {
-        println!("{}", serde_json::json!({ "deleted": id, "type": "file" }));
+        crate::output::print_json(&serde_json::json!({ "deleted": id, "type": "file" }))?;
     } else {
         println!("Moved file {id} to trash");
     }

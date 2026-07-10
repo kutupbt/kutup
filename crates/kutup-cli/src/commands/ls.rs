@@ -88,7 +88,7 @@ pub fn run(profile: &str, json: bool, tree: bool, folder_id: Option<&str>) -> Re
     }
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&entries)?);
+        crate::output::print_json(&entries)?;
         return Ok(());
     }
 

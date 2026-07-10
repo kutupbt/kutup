@@ -1,4 +1,15 @@
-//! Human-readable formatting helpers — mirror `whoami.go` / `session.go`.
+//! Output helpers: the single `--json` emitter + human-readable formatting
+//! (the latter mirror `whoami.go` / `session.go`).
+//!
+//! Output contract: stdout carries the command's data — exactly one pretty
+//! JSON document under `--json`, or the human rendering. Status messages,
+//! prompts, progress bars, and warnings all go to stderr.
+
+/// Emits the one machine-readable stdout document for a `--json` run.
+pub fn print_json<T: serde::Serialize>(value: &T) -> anyhow::Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
+}
 
 /// Formats a byte count like Go's `formatBytes` (e.g. `1.5 MB`, `12 B`).
 pub fn format_bytes(b: i64) -> String {

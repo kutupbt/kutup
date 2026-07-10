@@ -37,7 +37,7 @@ pub fn run(profile: &str, json: bool, name: &str, parent: Option<&str>) -> Resul
         .context("create folder")?;
 
     if json {
-        println!("{}", serde_json::json!({ "id": resp.id, "name": name }));
+        crate::output::print_json(&serde_json::json!({ "id": resp.id, "name": name }))?;
     } else {
         println!("Created folder {name:?}  id={}", resp.id);
     }

@@ -78,16 +78,13 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
 
         let dest_str = dest_path.to_string_lossy().into_owned();
         if json {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "id": file_id,
-                    "name": meta.name,
-                    "size": written,
-                    "dest": dest_str,
-                    "fromVersion": from_version,
-                })
-            );
+            crate::output::print_json(&serde_json::json!({
+                "id": file_id,
+                "name": meta.name,
+                "size": written,
+                "dest": dest_str,
+                "fromVersion": from_version,
+            }))?;
         } else {
             let suffix = if from_version {
                 " (latest snapshot)"

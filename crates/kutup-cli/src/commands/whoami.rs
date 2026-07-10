@@ -10,7 +10,7 @@ pub fn run(profile: &str, json: bool) -> Result<()> {
     let me = ctx.client.me()?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&me)?);
+        crate::output::print_json(&me)?;
         return Ok(());
     }
 

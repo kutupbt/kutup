@@ -173,9 +173,9 @@ fn main() {
             username.as_deref(),
         ),
         Commands::Login { server, email } => {
-            commands::login::run(&cli.profile, server.as_deref(), email.as_deref())
+            commands::login::run(&cli.profile, cli.json, server.as_deref(), email.as_deref())
         }
-        Commands::Logout => commands::logout::run(&cli.profile),
+        Commands::Logout => commands::logout::run(&cli.profile, cli.json),
         Commands::Whoami => commands::whoami::run(&cli.profile, cli.json),
         Commands::Ls { tree, folder_id } => {
             commands::ls::run(&cli.profile, cli.json, *tree, folder_id.as_deref())
@@ -201,7 +201,7 @@ fn main() {
             local_dir,
             collection_id,
             watch,
-        } => commands::sync::run(&cli.profile, local_dir, collection_id, *watch),
+        } => commands::sync::run(&cli.profile, cli.json, local_dir, collection_id, *watch),
         Commands::Color { collection_id, hex } => {
             commands::color::run(&cli.profile, cli.json, collection_id, hex)
         }
@@ -210,14 +210,24 @@ fn main() {
         Commands::Versions { command } => commands::versions::run(&cli.profile, cli.json, command),
         Commands::Share { command } => commands::share::run(&cli.profile, cli.json, command),
         Commands::Pub { command } => commands::pubshare::run(cli.json, command),
-        Commands::Version => {
-            commands::version::run(cli.json);
-            Ok(())
-        }
+        Commands::Version => commands::version::run(cli.json),
     };
     if let Err(e) = result {
-        eprintln!("error: {e:#}");
-        std::process::exit(exit_code_for(&e));
+        let code = exit_code_for(&e);
+        if cli.json {
+            // Keep stderr machine-readable too when the caller asked for JSON.
+            let mut obj = serde_json::json!({
+                "error": format!("{e:#}"),
+                "exitCode": code,
+            });
+            if let Some(api) = e.downcast_ref::<api::ApiError>() {
+                obj["httpStatus"] = api.status.into();
+            }
+            eprintln!("{obj}");
+        } else {
+            eprintln!("error: {e:#}");
+        }
+        std::process::exit(code);
     }
 }
 
