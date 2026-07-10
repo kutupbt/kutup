@@ -15,6 +15,7 @@ pub mod federation;
 pub mod files;
 pub mod public;
 pub mod sharing;
+pub mod trash;
 pub mod tus;
 pub mod types;
 pub mod versions;

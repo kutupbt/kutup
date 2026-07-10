@@ -133,6 +133,11 @@ enum Commands {
         /// Hex color #rrggbb, or "" to clear.
         hex: String,
     },
+    /// List, restore, and permanently delete trashed items.
+    Trash {
+        #[command(subcommand)]
+        command: commands::trash::TrashCmd,
+    },
     /// Manage TOTP two-factor authentication.
     #[command(name = "2fa")]
     Twofa {
@@ -211,6 +216,7 @@ fn main() {
         Commands::Color { collection_id, hex } => {
             commands::color::run(&cli.profile, cli.json, collection_id, hex)
         }
+        Commands::Trash { command } => commands::trash::run(&cli.profile, cli.json, command),
         Commands::Twofa { command } => commands::twofa::run(&cli.profile, cli.json, command),
         Commands::Devices { command } => commands::devices::run(&cli.profile, cli.json, command),
         Commands::Versions { command } => commands::versions::run(&cli.profile, cli.json, command),
