@@ -22,8 +22,12 @@ const NONCE_BYTES: usize = 24;
 
 /// `(key -> value)` blobs. `data` holds the encrypted session.
 const SESSION: TableDefinition<&str, &[u8]> = TableDefinition::new("session");
-/// Sync state (per-collection metadata + synced-file records).
-const SYNC: TableDefinition<&str, &[u8]> = TableDefinition::new("sync");
+/// Legacy v1 sync table — dropped on open (records were write-only: the old
+/// engine never compared them, so nothing of value is lost).
+const SYNC_V1: TableDefinition<&str, &[u8]> = TableDefinition::new("sync");
+/// Sync state v2, keyed `"{pair}|f|{rel_path}"` / `"{pair}|d|{rel_dir}"`
+/// where `pair` = sha256(collection_id ++ "\0" ++ canonical_local_root).
+const SYNC_STATE: TableDefinition<&str, &[u8]> = TableDefinition::new("sync_state");
 /// Interrupted-upload resume records, keyed `"{collection_id}\n{canonical_path}"`.
 const RESUME: TableDefinition<&str, &[u8]> = TableDefinition::new("resume");
 
@@ -90,8 +94,9 @@ impl Store {
         {
             let wtx = db.begin_write()?;
             wtx.open_table(SESSION)?;
-            wtx.open_table(SYNC)?;
+            wtx.open_table(SYNC_STATE)?;
             wtx.open_table(RESUME)?;
+            let _ = wtx.delete_table(SYNC_V1);
             wtx.commit()?;
         }
         let mut store = Store {
@@ -225,46 +230,72 @@ impl Store {
             .map_err(|_| anyhow!("session decryption failed — wrong device key"))
     }
 
-    // --- sync state (used by the sync engine) ---
+    // --- sync state v2 (used by the sync engine) ---
 
-    pub(crate) fn sync_get(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        let rtx = self.db.begin_read()?;
-        let t = rtx.open_table(SYNC)?;
-        Ok(t.get(key)?.map(|v| v.value().to_vec()))
+    pub fn put_sync_file(&self, pair: &str, rel: &str, st: &SyncFileState) -> Result<()> {
+        self.sync_state_put(&format!("{pair}|f|{rel}"), &serde_json::to_vec(st)?)
     }
 
-    pub(crate) fn sync_put(&self, key: &str, value: &[u8]) -> Result<()> {
+    pub fn delete_sync_file(&self, pair: &str, rel: &str) -> Result<()> {
+        self.sync_state_delete(&format!("{pair}|f|{rel}"))
+    }
+
+    /// All file records for a pair, as `(rel_path, state)`.
+    pub fn list_sync_files(&self, pair: &str) -> Result<Vec<(String, SyncFileState)>> {
+        self.sync_state_prefix(&format!("{pair}|f|"))
+    }
+
+    pub fn put_sync_dir(&self, pair: &str, rel: &str, st: &SyncDirState) -> Result<()> {
+        self.sync_state_put(&format!("{pair}|d|{rel}"), &serde_json::to_vec(st)?)
+    }
+
+    pub fn delete_sync_dir(&self, pair: &str, rel: &str) -> Result<()> {
+        self.sync_state_delete(&format!("{pair}|d|{rel}"))
+    }
+
+    /// All directory records for a pair, as `(rel_dir, state)`.
+    pub fn list_sync_dirs(&self, pair: &str) -> Result<Vec<(String, SyncDirState)>> {
+        self.sync_state_prefix(&format!("{pair}|d|"))
+    }
+
+    fn sync_state_put(&self, key: &str, value: &[u8]) -> Result<()> {
         let wtx = self.db.begin_write()?;
         {
-            let mut t = wtx.open_table(SYNC)?;
+            let mut t = wtx.open_table(SYNC_STATE)?;
             t.insert(key, value)?;
         }
         wtx.commit()?;
         Ok(())
     }
 
-    /// Returns the synced-file record for `(collection, remote_id)`, if any.
-    pub fn get_synced_file(
-        &self,
-        collection_id: &str,
-        remote_id: &str,
-    ) -> Result<Option<SyncedFile>> {
-        let key = format!("{collection_id}/files/{remote_id}");
-        match self.sync_get(&key)? {
-            Some(bytes) => Ok(serde_json::from_slice(&bytes).ok()),
-            None => Ok(None),
+    fn sync_state_delete(&self, key: &str) -> Result<()> {
+        let wtx = self.db.begin_write()?;
+        {
+            let mut t = wtx.open_table(SYNC_STATE)?;
+            t.remove(key)?;
         }
+        wtx.commit()?;
+        Ok(())
     }
 
-    /// Records a synced file for `(collection, remote_id)`.
-    pub fn save_synced_file(
+    fn sync_state_prefix<T: serde::de::DeserializeOwned>(
         &self,
-        collection_id: &str,
-        remote_id: &str,
-        f: &SyncedFile,
-    ) -> Result<()> {
-        let key = format!("{collection_id}/files/{remote_id}");
-        self.sync_put(&key, &serde_json::to_vec(f)?)
+        prefix: &str,
+    ) -> Result<Vec<(String, T)>> {
+        let rtx = self.db.begin_read()?;
+        let t = rtx.open_table(SYNC_STATE)?;
+        let mut out = Vec::new();
+        for row in t.range(prefix..)? {
+            let (k, v) = row?;
+            let key = k.value();
+            if !key.starts_with(prefix) {
+                break;
+            }
+            if let Ok(st) = serde_json::from_slice(v.value()) {
+                out.push((key[prefix.len()..].to_string(), st));
+            }
+        }
+        Ok(out)
     }
 
     // --- upload resume state ---
@@ -354,14 +385,43 @@ pub struct ResumeState {
     pub updated_at: i64,
 }
 
-/// Tracks a file that has been synced. Mirrors `session.SyncedFile`.
+/// Sync pair id: one synced (collection, local dir) combination.
+pub fn sync_pair_id(collection_id: &str, canonical_root: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(collection_id.as_bytes());
+    h.update([0u8]);
+    h.update(canonical_root.as_bytes());
+    hex_lower(&h.finalize())
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The three-way-merge base for one synced file: what local and remote looked
+/// like the last time this rel_path was in sync.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SyncedFile {
-    pub local_path: String,
-    pub size: i64,
-    pub mod_time: i64,
+pub struct SyncFileState {
+    pub file_id: String,
+    /// The (sub-)collection currently holding the file.
+    pub collection_id: String,
+    /// `-1` marks a conflicted base: local is forced push-dirty next run.
+    pub local_size: i64,
+    pub local_mtime_secs: i64,
+    pub local_mtime_nanos: u32,
+    /// Newest `file_versions` id at last sync ("" = none) — the remote
+    /// change signal (`files.updated_at` is never bumped server-side).
+    pub remote_version_id: String,
     pub synced_at: i64,
+}
+
+/// Base record for one synced sub-directory ↔ sub-collection.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncDirState {
+    pub collection_id: String,
 }
 
 // --- OS keychain access (macOS/Windows only; Linux uses the file fallback to

@@ -138,6 +138,16 @@ enum Commands {
         /// Stay running and sync on file changes.
         #[arg(long)]
         watch: bool,
+        /// Propagate deletions in both directions (default: keep + report).
+        #[arg(long)]
+        delete: bool,
+        /// Show what a sync would do without changing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// With --watch: also poll the server every N seconds for
+        /// remote-only changes.
+        #[arg(long, value_name = "SECS")]
+        poll: Option<u64>,
     },
     /// Set the display color for a collection (e.g. #ef4444; "" to clear).
     Color {
@@ -236,7 +246,19 @@ fn main() {
             local_dir,
             collection_id,
             watch,
-        } => commands::sync::run(&cli.profile, cli.json, local_dir, collection_id, *watch),
+            delete,
+            dry_run,
+            poll,
+        } => commands::sync::run(
+            &cli.profile,
+            cli.json,
+            local_dir,
+            collection_id,
+            *watch,
+            *delete,
+            *dry_run,
+            *poll,
+        ),
         Commands::Color { collection_id, hex } => {
             commands::color::run(&cli.profile, cli.json, collection_id, hex)
         }

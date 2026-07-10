@@ -32,7 +32,6 @@ pub const RESUME_MAX_IDLE_SECS: i64 = 25 * 3600;
 pub enum Progress {
     Bar,
     /// Silent (the sync engine narrates per-file lines itself).
-    #[allow(dead_code)]
     Quiet,
 }
 
