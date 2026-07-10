@@ -15,7 +15,10 @@ fn b64(bytes: &[u8]) -> String {
 
 impl Client {
     /// Opens a new tus session; `total_bytes` is the ciphertext byte count.
-    /// Returns the upload id from the `Location` header. Mirrors `TusCreate`.
+    /// Returns `(upload_id, file_id)` — the upload id from the `Location`
+    /// header and the pre-allocated file id from the `{"fileId": …}` body
+    /// (used by resume to detect an upload that finished before we could
+    /// clear local state). Mirrors `TusCreate`.
     #[allow(clippy::too_many_arguments)]
     pub fn tus_create(
         &self,
@@ -25,7 +28,7 @@ impl Client {
         metadata_nonce: &str,
         encrypted_file_key: &str,
         file_key_nonce: &str,
-    ) -> Result<String> {
+    ) -> Result<(String, String)> {
         // Upload-Metadata values are base64 per the tus spec (the metadata
         // strings are themselves already base64 — double-encoded, matching Go).
         let upload_meta = [
@@ -53,24 +56,33 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default()
             .to_string();
-        match loc.rsplit('/').next() {
-            Some(id) if !id.is_empty() => Ok(id.to_string()),
+        let upload_id = match loc.rsplit('/').next() {
+            Some(id) if !id.is_empty() => id.to_string(),
             _ => bail!("tus create: missing/garbled Location header {loc:?}"),
-        }
+        };
+        let file_id = resp
+            .json::<serde_json::Value>()
+            .ok()
+            .and_then(|v| v.get("fileId")?.as_str().map(str::to_string))
+            .unwrap_or_default();
+        Ok((upload_id, file_id))
     }
 
-    /// Returns `(offset, length)` for resume. Mirrors `TusHead`.
-    pub fn tus_head(&self, upload_id: &str) -> Result<(i64, i64)> {
+    /// Returns `Some((offset, length))` for an open session, or `None` when
+    /// the session no longer exists (finished or swept). Mirrors `TusHead`.
+    pub fn tus_head(&self, upload_id: &str) -> Result<Option<(i64, i64)>> {
         let resp = self
             .request(Method::HEAD, &format!("/uploads/{upload_id}"))
             .header("Tus-Resumable", TUS_VERSION)
             .send()?;
-        if resp.status().as_u16() != 200 {
-            return Err(api_error(resp)).context("tus head");
+        match resp.status().as_u16() {
+            200 => Ok(Some((
+                header_i64(&resp, "Upload-Offset"),
+                header_i64(&resp, "Upload-Length"),
+            ))),
+            404 | 410 => Ok(None),
+            _ => Err(api_error(resp)).context("tus head"),
         }
-        let offset = header_i64(&resp, "Upload-Offset");
-        let length = header_i64(&resp, "Upload-Length");
-        Ok((offset, length))
     }
 
     /// Ships one chunk; returns `(new_offset, file_id)` — `file_id` is only set

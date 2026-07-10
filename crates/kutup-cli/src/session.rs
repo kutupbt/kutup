@@ -10,7 +10,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use rand::RngCore;
-use redb::{Database, TableDefinition};
+use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
@@ -24,6 +24,8 @@ const NONCE_BYTES: usize = 24;
 const SESSION: TableDefinition<&str, &[u8]> = TableDefinition::new("session");
 /// Sync state (per-collection metadata + synced-file records).
 const SYNC: TableDefinition<&str, &[u8]> = TableDefinition::new("sync");
+/// Interrupted-upload resume records, keyed `"{collection_id}\n{canonical_path}"`.
+const RESUME: TableDefinition<&str, &[u8]> = TableDefinition::new("resume");
 
 fn keyring_service(profile: &str) -> String {
     format!("kutup-cli/{profile}")
@@ -89,6 +91,7 @@ impl Store {
             let wtx = db.begin_write()?;
             wtx.open_table(SESSION)?;
             wtx.open_table(SYNC)?;
+            wtx.open_table(RESUME)?;
             wtx.commit()?;
         }
         let mut store = Store {
@@ -263,6 +266,92 @@ impl Store {
         let key = format!("{collection_id}/files/{remote_id}");
         self.sync_put(&key, &serde_json::to_vec(f)?)
     }
+
+    // --- upload resume state ---
+
+    pub fn get_resume(&self, key: &str) -> Result<Option<ResumeState>> {
+        let rtx = self.db.begin_read()?;
+        let t = rtx.open_table(RESUME)?;
+        Ok(t.get(key)?
+            .and_then(|v| serde_json::from_slice(v.value()).ok()))
+    }
+
+    pub fn save_resume(&self, key: &str, st: &ResumeState) -> Result<()> {
+        let wtx = self.db.begin_write()?;
+        {
+            let mut t = wtx.open_table(RESUME)?;
+            t.insert(key, serde_json::to_vec(st)?.as_slice())?;
+        }
+        wtx.commit()?;
+        Ok(())
+    }
+
+    pub fn delete_resume(&self, key: &str) -> Result<()> {
+        let wtx = self.db.begin_write()?;
+        {
+            let mut t = wtx.open_table(RESUME)?;
+            t.remove(key)?;
+        }
+        wtx.commit()?;
+        Ok(())
+    }
+
+    /// Removes records idle longer than `max_idle_secs` (the server sweeps
+    /// its side at 24 h) and returns them so the caller can best-effort
+    /// `tus_delete` the orphaned sessions.
+    pub fn sweep_resume(&self, max_idle_secs: i64, now: i64) -> Result<Vec<(String, ResumeState)>> {
+        let mut stale = Vec::new();
+        {
+            let rtx = self.db.begin_read()?;
+            let t = rtx.open_table(RESUME)?;
+            for row in t.iter()? {
+                let (k, v) = row?;
+                let Some(st) = serde_json::from_slice::<ResumeState>(v.value()).ok() else {
+                    stale.push((k.value().to_string(), ResumeState::default()));
+                    continue;
+                };
+                if now - st.updated_at > max_idle_secs {
+                    stale.push((k.value().to_string(), st));
+                }
+            }
+        }
+        if !stale.is_empty() {
+            let wtx = self.db.begin_write()?;
+            {
+                let mut t = wtx.open_table(RESUME)?;
+                for (k, _) in &stale {
+                    t.remove(k.as_str())?;
+                }
+            }
+            wtx.commit()?;
+        }
+        Ok(stale)
+    }
+}
+
+/// State needed to resume an interrupted tus upload. Values in the sync/resume
+/// tables are plaintext JSON, so the file key is stored only in its
+/// collection-key wrap (`enc_file_key` — the exact blob the server already
+/// holds), never raw; the 24-byte header is public (it's the first bytes of
+/// ciphertext the server already received).
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumeState {
+    pub upload_id: String,
+    /// Pre-allocated file id from the tus create body.
+    pub file_id: String,
+    /// base64, wrapped with the collection key.
+    pub enc_file_key: String,
+    pub file_key_nonce: String,
+    /// base64 24-byte secretstream header.
+    pub header: String,
+    pub plain_size: i64,
+    pub cipher_total: i64,
+    pub mtime_secs: i64,
+    pub mtime_nanos: u32,
+    pub created_at: i64,
+    /// Bumped after each successful PATCH; drives idle sweeping.
+    pub updated_at: i64,
 }
 
 /// Tracks a file that has been synced. Mirrors `session.SyncedFile`.

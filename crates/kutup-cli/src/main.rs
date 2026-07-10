@@ -14,6 +14,7 @@ mod output;
 mod session;
 mod syncengine;
 mod transfer;
+mod uploader;
 
 use clap::{Parser, Subcommand};
 
@@ -108,7 +109,7 @@ enum Commands {
         #[arg(long)]
         yes: bool,
     },
-    /// Encrypt and upload a file or directory.
+    /// Encrypt and upload a file or directory (interrupted uploads resume).
     Upload {
         /// Local file or directory path.
         path: String,
@@ -117,6 +118,9 @@ enum Commands {
         /// Upload a directory recursively.
         #[arg(short, long)]
         recursive: bool,
+        /// Discard any interrupted prior attempt and restart from zero.
+        #[arg(long)]
+        no_resume: bool,
     },
     /// Download and decrypt a file.
     Download {
@@ -216,7 +220,15 @@ fn main() {
             path,
             collection_id,
             recursive,
-        } => commands::upload::run(&cli.profile, cli.json, path, collection_id, *recursive),
+            no_resume,
+        } => commands::upload::run(
+            &cli.profile,
+            cli.json,
+            path,
+            collection_id,
+            *recursive,
+            *no_resume,
+        ),
         Commands::Download { file_id, dest } => {
             commands::download::run(&cli.profile, cli.json, file_id, dest.as_deref())
         }
