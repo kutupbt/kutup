@@ -163,6 +163,26 @@ Self-hosters need an easy way to back up + restore the full encrypted dataset (D
 
 ---
 
+## Post-v1 major track · Federated E2EE chat ("ileti")
+
+A Signal-class chat feature — 1:1 + group text, media, voice/video — federated between kutup instances, E2EE on the Signal protocol, media stored in the user's existing E2EE drive, everything (client *and* server, including calls) on port 443 only. Chat UI at its own domain (e.g. `ileti.` vs `depo.` for the drive) but the same backend binary and port.
+
+The full architecture is captured in `docs/research/11-federated-chat.md` (libsignal v0.97.2 study, Matrix take-vs-leave, single-443 topology, risks). Direction is committed; the design is validated up to one open go/no-go. **Locked decisions:** libsignal-protocol as a pinned wrapped dependency (AGPL-compatible, never reimplement the ratchet); transport-only federation (signed s2s over 443 + `.well-known`, no Matrix-style replicated room state); PQ (PQXDH + SPQR) always-on with a versioned suite registry — algorithm agility is a protocol mechanism, **not** a user downgrade toggle.
+
+Phases (each lands as its own PR-series; do not start N+1 with N unmerged):
+
+| # | Slice | Gate |
+|---|---|---|
+| 1 | **Spike**: `libsignal-protocol` + `spqr` on wasm32 | ✅ **GO** (2026-07-12, `spikes/libsignal-wasm/`) — compiles for the browser target on stable, full PQXDH+Triple-Ratchet round-trip executes in wasm; web client shares `kutup-chat-core` |
+| 2 | `kutup-chat-proto` + local 1:1 chat (prekey directory, per-device mailboxes, WSS drain) | |
+| 3 | Federation: server signing keys, `.well-known/kutup/federation.json`, signed delivery, retry queues | |
+| 4 | Groups: sender keys + encrypted group blobs | |
+| 5 | Media: attachments via drive/tus + federated capability tokens | |
+| 6 | Calls: 1:1 WebRTC → SFU group calls; TURN + SNI demux on 443 | |
+| 7 | Hardening: key transparency, sealed-sender-in-federation, zkgroup | research first (§7 of the note) |
+
+---
+
 ## Polish / smaller items (future)
 
 ### Desktop Drive redesign (chat1.md in the design bundle)
@@ -240,6 +260,7 @@ These live in `docs/research/` because the design hasn't been chosen yet:
 - **Version history** — `docs/research/03-version-history-design.md`. Two-tier checkpoint+delta model recommended; not yet specced.
 - **WebDAV mount** — `docs/research/06-webdav-support.md`. Client-side proxy is the only viable path because server-side WebDAV breaks E2EE. Long-term work.
 - **WebAuthn / passkey support** — not yet captured in `docs/research/`. Would supplement TOTP for second-factor. Useful research before adding.
+- **Chat open questions** — `docs/research/11-federated-chat.md` §7: sealed sender across federation (certificate-root trust with N mutually-distrusting servers), mailbox retention under E2EE, group-blob placement, an MLS suite slot for very large rooms. The chat *track* itself is committed (see the post-v1 section above); these sub-designs aren't.
 
 ---
 

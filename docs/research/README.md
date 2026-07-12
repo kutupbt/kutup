@@ -29,3 +29,9 @@ A planned major feature: real-time collaborative editing of files inside kutup, 
 | File | Topic |
 |---|---|
 | [`09-mobile-strategy.md`](./09-mobile-strategy.md) | Why we're on Tauri-mobile (not React Native or Capacitor) given the DOM-bound editor stack — with prior-art table (Spacedrive, OneKeePass, Padloc). Survey of Tauri-mobile secure-storage plugins for the Android Keystore follow-up — recommends `tauri-plugin-keystore` + `tauri-plugin-biometric`. iOS half shipped (`feat/ios-keychain`); Android half is the open follow-up. |
+
+### Federated E2EE chat — "ileti" (July 2026)
+
+| File | Topic |
+|---|---|
+| [`11-federated-chat.md`](./11-federated-chat.md) | Architecture for a Signal-class federated chat feature. Code-grounded study of libsignal v0.97.2 (PQXDH behind the `Handshake` trait, Triple Ratchet + SPQR, sender keys, sealed sender, key transparency, the no-negotiation algorithm-agility mechanics). Matrix take-vs-leave analysis (keep `.well-known` + signed s2s over 443; reject the replicated room DAG). Recommends: libsignal as a pinned dependency, transport-only federation via per-device mailboxes, media in the existing E2EE drive, SNI-demuxed single-port 443 incl. TURN for calls, PQ always-on with a versioned suite registry (never a user downgrade toggle). Phased plan; phase 1 is a libsignal-on-wasm go/no-go spike. |
