@@ -96,6 +96,10 @@ test.describe('README curated drive screenshot', () => {
           await fetch('/api/files/' + f.id, { method: 'DELETE', headers: auth })
         }
       }
+
+      // 3. The deletes above soft-delete into the trash (quota stays
+      //    held); empty it so re-runs don't accumulate held quota.
+      await fetch('/api/trash', { method: 'DELETE', headers: auth })
     })
 
     // Reload to a clean state. The app may have re-created an empty

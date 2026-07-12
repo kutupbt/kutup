@@ -209,7 +209,7 @@ pub async fn upload(
     if !is_owner {
         if let Some(limit) = share_quota {
             let used_share: i64 = sqlx::query_scalar(
-                "SELECT COALESCE(SUM(encrypted_size_bytes), 0) FROM files WHERE collection_id = $1 AND uploader_user_id = $2",
+                "SELECT COALESCE(SUM(encrypted_size_bytes), 0)::bigint FROM files WHERE collection_id = $1 AND uploader_user_id = $2",
             )
             .bind(coll_id)
             .bind(user_id)
