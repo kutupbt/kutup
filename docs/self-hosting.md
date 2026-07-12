@@ -67,6 +67,7 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # RATE_LIMIT_RECOVERY_PER_HOUR=5
 # RATE_LIMIT_FED_USERS_PER_MIN=60
 # RATE_LIMIT_ADMIN_PER_MIN=120
+# RATE_LIMIT_CHAT_KEYS_PER_MIN=30
 
 # Per-account login lockout: this many failed password attempts lock the
 # email out for the cooldown. Locked attempts return 429; the lock clears

@@ -6,6 +6,7 @@
 //! groups (auth, files, collab, federation, …) are added in `build_router` as each
 //! handler slice lands.
 
+mod chat_hub;
 mod config;
 mod db;
 mod error;
@@ -58,6 +59,8 @@ pub struct AppState {
     pub storage: storage::StorageService,
     /// In-memory collab-room registry (one room per fileId) — mirrors the Go `Hub`.
     pub hub: Arc<hub::Hub>,
+    /// Live chat WebSocket connections, keyed by (user, chat device).
+    pub chat_hub: chat_hub::ChatHub,
     /// Live SeaweedFS capacity probe for the admin dashboard; `None` disables it (the admin
     /// stats then fall back to `config.storage_total_bytes`).
     pub storage_probe: Option<Arc<storage_probe::StorageProbe>>,
@@ -114,6 +117,7 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::new(config),
         storage,
         hub: Arc::new(hub::Hub::new()),
+        chat_hub: chat_hub::ChatHub::default(),
         storage_probe,
     };
 
@@ -204,7 +208,7 @@ fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
 
     use handlers::{
-        admin, auth, collab, collections, devices, federation, fedproxy, file_assets,
+        admin, auth, chat, collab, collections, devices, federation, fedproxy, file_assets,
         file_versions, files, shares, trash, tus,
     };
 
@@ -280,6 +284,26 @@ fn build_router(state: AppState) -> Router {
         // --- Devices (authenticated) ---
         .route("/api/devices", post(devices::register).get(devices::list))
         .route("/api/devices/:id", delete(devices::revoke))
+        // --- Chat (E2EE messaging; authenticated via AuthUser except the WS, which
+        // validates its token pre-upgrade like the collab WS) ---
+        .route(
+            "/api/chat/device",
+            post(chat::register_device).get(chat::list_devices),
+        )
+        .route("/api/chat/device/:deviceId", delete(chat::revoke_device))
+        .route("/api/chat/keys", put(chat::replenish_keys))
+        .route("/api/chat/keys/count", get(chat::prekey_count))
+        .route(
+            "/api/chat/users/:username/keys",
+            get(chat::get_user_bundles).route_layer(from_fn(middleware::rate_limit_chat_keys)),
+        )
+        .route(
+            "/api/chat/users/:username/messages",
+            post(chat::send_messages),
+        )
+        .route("/api/chat/messages", get(chat::drain_mailbox))
+        .route("/api/chat/messages/ack", post(chat::ack_messages))
+        .route("/api/chat/ws", get(chat::ws))
         // --- tus.io resumable uploads. The OPTIONS discovery is served by the
         // `tus_options_passthrough` layer (mirroring Fiber, which lets non-preflight
         // OPTIONS reach the handler); the rest authenticate via the AuthUser extractor

@@ -174,7 +174,8 @@ Phases (each lands as its own PR-series; do not start N+1 with N unmerged):
 | # | Slice | Gate |
 |---|---|---|
 | 1 | **Spike**: `libsignal-protocol` + `spqr` on wasm32 | ✅ **GO** (2026-07-12, `spikes/libsignal-wasm/`) — compiles for the browser target on stable, full PQXDH+Triple-Ratchet round-trip executes in wasm; web client shares `kutup-chat-core` |
-| 2 | `kutup-chat-proto` + local 1:1 chat (prekey directory, per-device mailboxes, WSS drain) | |
+| 2 | Server slice: `kutup-chat-proto` + prekey directory, per-device mailboxes, WSS drain | ✅ landed — `crates/kutup-chat-proto`, migration 021, `handlers/chat.rs`, `chat_hub.rs`, nginx `/api/chat/ws`; full REST + WS contract smoke-verified against the live stack (incl. one-time-prekey consumption, last-resort fallback, the 409 missing/stale/extra device contract, live envelope push). Playwright chat spec lands with phase 2b |
+| 2b | Client slice: `kutup-chat-core` engine (wraps libsignal, native + wasm) + minimal 1:1 web UI | — this is what makes chat *usable*; no UI ships before it works end-to-end |
 | 3 | Federation: server signing keys, `.well-known/kutup/federation.json`, signed delivery, retry queues | |
 | 4 | Groups: sender keys + encrypted group blobs | |
 | 5 | Media: attachments via drive/tus + federated capability tokens | |

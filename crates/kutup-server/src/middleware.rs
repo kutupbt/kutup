@@ -135,6 +135,16 @@ pub async fn rate_limit_preflight(
     limit(addr, &ratelimit::PREFLIGHT, req, next).await
 }
 
+/// 30/min/IP — chat prekey-bundle fetches consume one-time prekeys
+/// (`ratelimit::CHAT_KEYS` explains why this needs a wall).
+pub async fn rate_limit_chat_keys(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    limit(addr, &ratelimit::CHAT_KEYS, req, next).await
+}
+
 /// 5/hr/IP — mirrors `RecoveryRateLimit`.
 pub async fn rate_limit_recovery(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
