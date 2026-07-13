@@ -1,0 +1,39 @@
+# kutup-chat-core — the shared client chat engine.
+#
+# Wraps libsignal-protocol (PQXDH + Triple Ratchet) behind kutup-owned types and
+# speaks the kutup-chat-proto wire contract (docs/chat-protocol.md). One crate,
+# three consumers: the web client compiles it to wasm; Android/iOS link it
+# natively via UniFFI. libsignal types must not leak through the public API.
+#
+# Standalone workspace (excluded from the root): it pulls the whole libsignal
+# tree and needs protoc at build time, which the drive/server/CLI must not.
+[package]
+name = "kutup-chat-core"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+rust-version = "1.91.1"
+
+[workspace]
+
+[dependencies]
+# The wire contract (path dep across the workspace boundary).
+kutup-chat-proto = { path = "../kutup-chat-proto" }
+# Pinned to the tag studied in docs/research/11-federated-chat.md and proven on
+# wasm32 by spikes/libsignal-wasm. Resolves the in-repo `spqr` git dep (SPQR
+# v1.5.1) transitively. libsignal needs protoc at build time.
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0.97.2" }
+# Match libsignal's rand major so its `impl Rng + CryptoRng` bounds line up.
+rand = "0.9"
+futures-util = { version = "0.3", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+thiserror = "2"
+
+[dev-dependencies]
+# Integration tests (tests/) are separate crates: they see only the crate under
+# test + dev-deps, so the wire types and helpers used directly in tests repeat here.
+kutup-chat-proto = { path = "../kutup-chat-proto" }
+rand = "0.9"
+base64 = "0.22"
