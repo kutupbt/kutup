@@ -57,14 +57,17 @@ CREATE TABLE chat_one_time_kyber_pre_keys (
 );
 
 -- Store-and-forward mailbox: one row per (message, recipient device). Content is an
--- opaque base64 libsignal ciphertext; rows are deleted on client ack. Sender columns
--- are plaintext in this phase (sealed sender across federation is a research
--- follow-up — docs/research/11-federated-chat.md §7).
+-- opaque base64 libsignal ciphertext; rows are deleted on client ack.
+-- `cursor` is a global monotonic order key (docs/chat-protocol.md §8.3): the paging
+-- cursor and the client dedup key. `sender` is nullable so sealed sender (which omits
+-- it) is additive later — v1 still populates it with the local username (user@domain
+-- once federated).
 CREATE TABLE chat_mailbox (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    cursor              BIGINT      GENERATED ALWAYS AS IDENTITY,
     recipient_user_id   UUID        NOT NULL,
     recipient_device_id INT         NOT NULL,
-    sender              TEXT        NOT NULL,   -- local username; user@domain once federated
+    sender              TEXT,                    -- local username; NULL under sealed sender
     sender_device_id    INT         NOT NULL,
     envelope_type       SMALLINT    NOT NULL,   -- 1 = preKey, 2 = message
     suite               SMALLINT    NOT NULL DEFAULT 1,
@@ -74,6 +77,17 @@ CREATE TABLE chat_mailbox (
         REFERENCES chat_devices ON DELETE CASCADE
 );
 
--- Drain order + fast per-device fetch.
+-- Drain order + fast per-device fetch, by the monotonic cursor.
 CREATE INDEX chat_mailbox_recipient_idx
-    ON chat_mailbox (recipient_user_id, recipient_device_id, server_ts, id);
+    ON chat_mailbox (recipient_user_id, recipient_device_id, cursor);
+
+-- Send idempotency (docs/chat-protocol.md §7.1): a client-generated sendId, deduped per
+-- sending device, so a durable outbox can retry a send whose response was lost without
+-- storing duplicate mailbox rows. (Retention: swept with the mailbox family.)
+CREATE TABLE chat_sends (
+    sender_user_id   UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    sender_device_id INT         NOT NULL,
+    send_id          TEXT        NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (sender_user_id, sender_device_id, send_id)
+);

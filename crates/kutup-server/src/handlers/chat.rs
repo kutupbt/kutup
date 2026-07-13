@@ -44,18 +44,27 @@ const MAX_DEVICE_ID: i32 = 127;
 /// Mailbox drain page cap.
 const MAX_DRAIN_LIMIT: i64 = 500;
 const DEFAULT_DRAIN_LIMIT: i64 = 100;
+/// Max decoded ciphertext bytes per envelope (advertised as `maxContentBytes`).
+/// Kilobyte-scale headroom over a `PreKeySignalMessage` (~1.8 KB with the PQ KEM).
+const MAX_CONTENT_BYTES: usize = 65536;
 
-fn b64_field(name: &'static str, value: &str) -> AppResult<()> {
-    if value.is_empty() || STANDARD.decode(value).is_err() {
+/// Validates a base64 field and returns the decoded bytes (callers that only
+/// need validation ignore the return).
+fn b64_field(name: &'static str, value: &str) -> AppResult<Vec<u8>> {
+    if value.is_empty() {
         return Err(AppError::bad_request(format!("{name} must be base64")));
     }
-    Ok(())
+    STANDARD
+        .decode(value)
+        .map_err(|_| AppError::bad_request(format!("{name} must be base64")))
 }
 
 fn validate_ec_prekey(name: &'static str, key: &EcPreKey, need_signature: bool) -> AppResult<()> {
     b64_field(name, &key.public_key)?;
     match &key.signature {
-        Some(sig) => b64_field(name, sig)?,
+        Some(sig) => {
+            b64_field(name, sig)?;
+        }
         None if need_signature => {
             return Err(AppError::bad_request(format!(
                 "{name} requires a signature"
@@ -68,7 +77,8 @@ fn validate_ec_prekey(name: &'static str, key: &EcPreKey, need_signature: bool) 
 
 fn validate_kem_prekey(name: &'static str, key: &KemPreKey) -> AppResult<()> {
     b64_field(name, &key.public_key)?;
-    b64_field(name, &key.signature)
+    b64_field(name, &key.signature)?;
+    Ok(())
 }
 
 fn envelope_type_code(t: EnvelopeType) -> i16 {
@@ -549,6 +559,8 @@ pub async fn get_user_bundles(
     Ok(Json(UserPreKeyBundlesResponse {
         username,
         devices: bundles,
+        // [RSV] device manifests (docs/chat-protocol.md §5.3) — not yet issued.
+        manifest: None,
     })
     .into_response())
 }
@@ -581,8 +593,17 @@ pub async fn send_messages(
     if req.envelopes.is_empty() {
         return Err(AppError::bad_request("no envelopes"));
     }
+    if req.send_id.is_empty() || req.send_id.len() > 64 {
+        return Err(AppError::bad_request("missing or oversized sendId"));
+    }
     for e in &req.envelopes {
-        b64_field("content", &e.content)?;
+        let bytes = b64_field("content", &e.content)?;
+        if bytes.len() > MAX_CONTENT_BYTES {
+            return Err(AppError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "envelope content exceeds maxContentBytes",
+            ));
+        }
     }
     // The sender must address from one of their own registered chat devices.
     require_device(&state, sender_id, req.sender_device_id as i32).await?;
@@ -630,12 +651,33 @@ pub async fn send_messages(
     // Store, then push to live sockets (mailbox row first: the push is best-effort).
     let mut stored: Vec<(Uuid, i32, DeliveredEnvelope)> = Vec::with_capacity(req.envelopes.len());
     let mut tx = state.pool.begin().await?;
+
+    // Idempotency gate: claim the sendId first (docs/chat-protocol.md §7.1). A repeat
+    // of a send whose response was lost finds the row already present and returns the
+    // same success without storing duplicate mailbox rows. The claim shares the
+    // transaction with the inserts, so a crash can't leave a claimed id with no messages.
+    let claimed: Option<(String,)> = sqlx::query_as(
+        "INSERT INTO chat_sends (sender_user_id, sender_device_id, send_id)
+         VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING send_id",
+    )
+    .bind(sender_id)
+    .bind(req.sender_device_id as i32)
+    .bind(&req.send_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if claimed.is_none() {
+        tx.rollback().await?;
+        return Ok(
+            Json(json!({ "stored": req.envelopes.len(), "deduplicated": true })).into_response(),
+        );
+    }
+
     for e in &req.envelopes {
-        let (id, ts): (Uuid, OffsetDateTime) = sqlx::query_as(
+        let (id, cursor, ts): (Uuid, i64, OffsetDateTime) = sqlx::query_as(
             "INSERT INTO chat_mailbox (recipient_user_id, recipient_device_id, sender,
                  sender_device_id, envelope_type, suite, content)
              VALUES ($1,$2,$3,$4,$5,$6,$7)
-             RETURNING id, server_ts",
+             RETURNING id, cursor, server_ts",
         )
         .bind(recipient_id)
         .bind(e.device_id as i32)
@@ -651,7 +693,8 @@ pub async fn send_messages(
             e.device_id as i32,
             DeliveredEnvelope {
                 id: id.to_string(),
-                sender: sender_username.clone(),
+                cursor: cursor as u64,
+                sender: Some(sender_username.clone()),
                 sender_device_id: req.sender_device_id,
                 envelope_type: e.envelope_type,
                 suite: e.suite,
@@ -679,6 +722,8 @@ pub struct DrainQuery {
     #[serde(rename = "deviceId")]
     device_id: i32,
     limit: Option<i64>,
+    /// Resume paging after this cursor (exclusive). Omit for the first page.
+    after: Option<i64>,
 }
 
 /// `GET /api/chat/messages?deviceId=N` — drain the device's mailbox (oldest first).
@@ -707,17 +752,30 @@ pub async fn drain_mailbox(
         .unwrap_or(DEFAULT_DRAIN_LIMIT)
         .clamp(1, MAX_DRAIN_LIMIT);
 
+    // `after` is exclusive; NULL (first page) matches everything. Ordered by the
+    // monotonic cursor (docs/chat-protocol.md §8.3).
     #[allow(clippy::type_complexity)]
-    let rows: Vec<(Uuid, String, i32, i16, i16, String, OffsetDateTime)> = sqlx::query_as(
-        "SELECT id, sender, sender_device_id, envelope_type, suite, content, server_ts
-         FROM chat_mailbox
-         WHERE recipient_user_id = $1 AND recipient_device_id = $2
-         ORDER BY server_ts, id
-         LIMIT $3",
+    let rows: Vec<(
+        Uuid,
+        i64,
+        Option<String>,
+        i32,
+        i16,
+        i16,
+        String,
+        OffsetDateTime,
+    )> = sqlx::query_as(
+        "SELECT id, cursor, sender, sender_device_id, envelope_type, suite, content, server_ts
+             FROM chat_mailbox
+             WHERE recipient_user_id = $1 AND recipient_device_id = $2
+               AND ($4::BIGINT IS NULL OR cursor > $4)
+             ORDER BY cursor
+             LIMIT $3",
     )
     .bind(user_id)
     .bind(q.device_id)
     .bind(limit + 1)
+    .bind(q.after)
     .fetch_all(&state.pool)
     .await?;
 
@@ -726,8 +784,9 @@ pub async fn drain_mailbox(
         .into_iter()
         .take(limit as usize)
         .map(
-            |(id, sender, sender_dev, etype, suite, content, ts)| DeliveredEnvelope {
+            |(id, cursor, sender, sender_dev, etype, suite, content, ts)| DeliveredEnvelope {
                 id: id.to_string(),
+                cursor: cursor as u64,
                 sender,
                 sender_device_id: sender_dev as u32,
                 envelope_type: envelope_type_from_code(etype),

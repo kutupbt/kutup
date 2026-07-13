@@ -19,7 +19,8 @@ openapi = ["dep:utoipa"]
 
 [dependencies]
 serde = { workspace = true }
-utoipa = { workspace = true, optional = true }
-
-[dev-dependencies]
+# The inner content schema (content.rs) carries an untyped `body`/`extra` so
+# unknown message kinds from newer clients survive round-trips — that needs
+# serde_json::Value in the public API, not just tests.
 serde_json = { workspace = true }
+utoipa = { workspace = true, optional = true }

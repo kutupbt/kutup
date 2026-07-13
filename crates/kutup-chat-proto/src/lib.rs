@@ -10,8 +10,14 @@
 //! - Binary payloads (keys, signatures, ciphertext) are base64 (STANDARD) strings.
 //! - IDs the protocol layer cares about (`registrationId`, prekey ids) are `u32`, like
 //!   libsignal's wire format.
+//!
+//! The normative contract is `docs/chat-protocol.md`; this crate is its Rust
+//! encoding. Tags there ([IMPL]/[ADD]/[RSV]) map to comments below.
 
 use serde::{Deserialize, Serialize};
+
+pub mod content;
+pub use content::{ChatContent, TextBody};
 
 /// Registry of encryption suites — the algorithm-agility mechanism.
 ///
@@ -28,8 +34,9 @@ use serde::{Deserialize, Serialize};
 #[serde(into = "u16", try_from = "u16")]
 #[repr(u16)]
 pub enum SuiteId {
-    /// libsignal message-version 4: PQXDH (X25519 + ML-KEM-1024 a.k.a. Kyber1024)
-    /// handshake, Triple Ratchet (Double Ratchet + SPQR) messaging.
+    /// libsignal message-version 4. **PQXDH handshake:** X25519 + **ML-KEM-1024**.
+    /// **Triple Ratchet messaging** (Double Ratchet + SPQR): **ML-KEM-768** — note the
+    /// ongoing ratchet's KEM is 768, not 1024; 1024 is the handshake parameter only.
     PqxdhTripleRatchetV1 = 1,
 }
 
@@ -127,6 +134,42 @@ pub struct RegisterChatDeviceRequest {
     /// Human label shown in device management ("Firefox on laptop").
     #[serde(default)]
     pub name: String,
+    /// [RSV] The device identity key signed by the account **self-authority
+    /// key** (§5.3), binding this device to the account so a malicious server
+    /// can't inject one. Absent until device-manifest support ships; MUST be
+    /// accepted when present. See `docs/chat-protocol.md` §5.2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_signature: Option<String>,
+}
+
+/// [RSV] One entry in a signed [`DeviceManifest`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestDevice {
+    pub device_id: u32,
+    pub identity_key: String,
+    pub registration_id: u32,
+}
+
+/// [RSV] The device-list-authenticity primitive (§5.3): a user's current chat
+/// device set, signed by an account self-authority key the server never sees.
+/// Peers verify `signature` and refuse to encrypt to a `deviceId` not in the
+/// signed set — closing the malicious-homeserver device-injection vector
+/// (`docs/research/13-…` §4.3). Reserved: the format is in v1 so a key-
+/// transparency log can wrap it later without a breaking change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceManifest {
+    /// Monotonic; a higher version supersedes a lower one.
+    pub version: u64,
+    pub devices: Vec<ManifestDevice>,
+    pub issued_at: String,
+    /// base64 account self-signing PUBLIC key.
+    pub self_authority_key: String,
+    /// base64 signature over the canonical `version‖devices‖issuedAt`.
+    pub signature: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,6 +231,12 @@ pub struct DevicePreKeyBundle {
 pub struct UserPreKeyBundlesResponse {
     pub username: String,
     pub devices: Vec<DevicePreKeyBundle>,
+    /// [RSV] The signed device manifest (§5.3). A verifying client checks each
+    /// returned `deviceId` against it before establishing a session. Absent
+    /// until manifest support ships; clients MUST accept absence (TOFU
+    /// fallback) and presence (verify).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<DeviceManifest>,
 }
 
 /// One per-device ciphertext inside a send request.
@@ -218,7 +267,18 @@ pub struct SendMessagesRequest {
     /// The sender's chat device id (must be a registered chat device of the
     /// authenticated user — recipients address replies to it).
     pub sender_device_id: u32,
+    /// [ADD] Client-generated idempotency key (UUID). The server dedupes per
+    /// `(senderUser, senderDevice, sendId)` within a retention window and
+    /// returns the original result on a repeat — so a durable outbox can retry
+    /// blindly (a send can succeed while its response is lost, the mobile
+    /// norm). See `docs/chat-protocol.md` §7.1.
+    pub send_id: String,
     pub envelopes: Vec<OutgoingEnvelope>,
+    /// [RSV] Sealed-sender delivery token (§11). When present the server MAY
+    /// accept the send without sender auth, gating delivery on this proof
+    /// instead. Absent in v1; MUST be accepted when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_token: Option<String>,
 }
 
 /// 409 body when a send's device set is out of date.
@@ -241,9 +301,16 @@ pub struct DeviceListMismatch {
 pub struct DeliveredEnvelope {
     /// Server-assigned mailbox id (UUID) — the ack handle.
     pub id: String,
-    /// Sender address. Local phase: bare username. Once federation lands this becomes
-    /// `user@domain` for remote senders (sealed sender is a research follow-up).
-    pub sender: String,
+    /// [ADD] Monotonic order key: the paging cursor (`GET …/messages?after=`)
+    /// and the client-side dedup key (tolerates a WS envelope and its
+    /// REST-drained twin). Server-assigned; ordered `(cursor)`.
+    pub cursor: u64,
+    /// [ADD→RSV] Sender address, `Option` from v1 so sealed sender (which
+    /// removes it) is not a breaking change. Local phase: bare username;
+    /// `user@domain` for remote senders once federation lands; `None` under
+    /// sealed sender. See `docs/chat-protocol.md` §8.1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<String>,
     pub sender_device_id: u32,
     pub envelope_type: EnvelopeType,
     pub suite: SuiteId,
@@ -284,6 +351,47 @@ pub enum ChatWsServerMessage {
     DrainMailbox,
 }
 
+/// [ADD] The `chat` block of `GET /api/auth/settings` — how a client
+/// feature-gates chat per server (and never shows chat UI on a server without
+/// it). See `docs/chat-protocol.md` §10.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ChatCapabilities {
+    pub enabled: bool,
+    /// The `docs/chat-protocol.md` protocol version this server speaks.
+    pub protocol_version: u16,
+    /// Suites the server will route (it doesn't decrypt; this bounds bundles).
+    pub suites: Vec<u16>,
+    /// Max `content` bytes per envelope, enforced on send (mailbox-abuse gate
+    /// and the budget for attachment-pointer payloads).
+    pub max_content_bytes: u32,
+    /// [RSV] flips true in the federation phase.
+    #[serde(default)]
+    pub federation: bool,
+    /// [RSV] flips true when device manifests ship.
+    #[serde(default)]
+    pub manifests: bool,
+    /// [RSV] flips true when sealed sender ships.
+    #[serde(default)]
+    pub sealed_sender: bool,
+}
+
+impl Default for ChatCapabilities {
+    /// The phase-2b server's advertised capabilities.
+    fn default() -> Self {
+        ChatCapabilities {
+            enabled: true,
+            protocol_version: 1,
+            suites: vec![SuiteId::PqxdhTripleRatchetV1.as_u16()],
+            max_content_bytes: 65536,
+            federation: false,
+            manifests: false,
+            sealed_sender: false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +422,47 @@ mod tests {
         );
         let back: OutgoingEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(back.registration_id, 42);
+    }
+
+    #[test]
+    fn send_request_carries_send_id_and_omits_absent_access_token() {
+        let req = SendMessagesRequest {
+            sender_device_id: 1,
+            send_id: "11111111-1111-4111-8111-111111111111".into(),
+            envelopes: vec![],
+            access_token: None,
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["sendId"], "11111111-1111-4111-8111-111111111111");
+        assert!(
+            v.get("accessToken").is_none(),
+            "reserved field omitted when None"
+        );
+        // A v-next server populating accessToken round-trips through a v1 client.
+        let with_token = r#"{"senderDeviceId":1,"sendId":"x","envelopes":[],"accessToken":"tok"}"#;
+        let back: SendMessagesRequest = serde_json::from_str(with_token).unwrap();
+        assert_eq!(back.access_token.as_deref(), Some("tok"));
+    }
+
+    #[test]
+    fn delivered_envelope_has_cursor_and_optional_sender() {
+        let src = r#"{"id":"m1","cursor":42,"sender":"alice","senderDeviceId":1,"envelopeType":"message","suite":1,"content":"AA","serverTimestamp":"2026-07-13T10:00:00Z"}"#;
+        let e: DeliveredEnvelope = serde_json::from_str(src).unwrap();
+        assert_eq!(e.cursor, 42);
+        assert_eq!(e.sender.as_deref(), Some("alice"));
+        // Sealed-sender / future: absent sender still deserializes.
+        let sealed = r#"{"id":"m2","cursor":43,"senderDeviceId":1,"envelopeType":"message","suite":1,"content":"AA","serverTimestamp":"2026-07-13T10:00:00Z"}"#;
+        let e2: DeliveredEnvelope = serde_json::from_str(sealed).unwrap();
+        assert_eq!(e2.sender, None);
+    }
+
+    #[test]
+    fn capabilities_default_shape() {
+        let v: serde_json::Value = serde_json::to_value(ChatCapabilities::default()).unwrap();
+        assert_eq!(v["enabled"], true);
+        assert_eq!(v["protocolVersion"], 1);
+        assert_eq!(v["suites"], serde_json::json!([1]));
+        assert_eq!(v["maxContentBytes"], 65536);
+        assert_eq!(v["sealedSender"], false);
     }
 }

@@ -8,18 +8,26 @@ wire-affecting parts of `docs/research/11-federated-chat.md`,
 
 **Normative language:** MUST / MUST NOT / SHOULD / MAY per RFC 2119.
 
-**Element status tags** (every field/endpoint below carries one):
-- **[IMPL]** — implemented in the phase-2 server (`crates/kutup-chat-proto`,
-  migration 021, `handlers/chat.rs`). Frozen; do not break.
-- **[ADD]** — additive, non-breaking, lands in phase 2b before clients build.
-  Old and new servers/clients interoperate (unknown fields ignored, absent
-  fields defaulted).
-- **[RSV]** — reserved now, implemented in a later phase. The **field or shape
-  exists in v1** so the later feature is additive, not a breaking migration.
-  Clients MUST tolerate the reserved fields (accept, round-trip, ignore).
+**No clients consume the contract yet** (the phase-2 server slice was
+smoke-tested against the dev stack but nothing builds against it). So v1 is
+built **correctly in one breaking pass** — the phase-2 shape is reshaped, not
+extended for backward compatibility. This matches kutup's pre-production
+posture (change DB schema directly, no compat shims).
 
-The distinction is the entire point of freezing v1 from the research: **[RSV]
-items are cheap now and breaking later.**
+**Element status tags** (every field/endpoint below carries one):
+- **[IMPL]** — already built in the phase-2 server (`crates/kutup-chat-proto`,
+  migration 021, `handlers/chat.rs`). Reshapeable — *not* frozen, since no
+  client depends on it.
+- **[ADD]** — folded into the base v1 shape now (content schema, `sendId`,
+  `cursor`, `Option` sender, capability block, per-account rate limit).
+- **[RSV]** — a later *subsystem* (device manifests, sealed sender, groups,
+  federation), but its **fields/shapes are baked into the v1 base types now**
+  so building the subsystem later touches handlers, not the wire. Clients MUST
+  tolerate reserved fields (accept, round-trip, ignore).
+
+Once a client ships against v1, the contract locks and the [IMPL]/[ADD]
+distinction stops mattering — everything below becomes the frozen base, and
+only [RSV] → implemented remains.
 
 ---
 

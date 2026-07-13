@@ -43,11 +43,15 @@ pub struct MessageResponse {
     pub message: String,
 }
 
-/// Public registration settings — mirrors `handlers.SettingsResponse`.
+/// Public server settings (`GET /api/auth/settings`) — how a client learns what
+/// the server supports before showing UI for it.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsResponse {
     pub registration_enabled: bool,
+    /// Chat feature advertisement (docs/chat-protocol.md §10). A client
+    /// feature-gates chat on this and must not show chat UI when absent/disabled.
+    pub chat: kutup_chat_proto::ChatCapabilities,
 }
 
 /// `GET /api/auth/login/preflight` — mirrors `handlers.PreflightLoginResponse`.
