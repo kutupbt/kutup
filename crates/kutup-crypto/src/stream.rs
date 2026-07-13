@@ -63,6 +63,26 @@ impl StreamEncryptor {
         Ok((Self { state }, header))
     }
 
+    /// Rebuilds the encryptor for a stream previously started with `header`
+    /// (from [`StreamEncryptor::new`]).
+    ///
+    /// The header is the construction's ONLY randomness: `init_push` derives
+    /// its state purely from `(key, header)`, exactly as `init_pull` does, so
+    /// a pull-initialized state is a valid push state and every subsequent
+    /// `push` is deterministic. Re-encrypting the same plaintext chunks in the
+    /// same order therefore reproduces the original ciphertext byte-for-byte —
+    /// the property upload resume relies on.
+    pub fn resume(key: &[u8], header: &[u8]) -> Result<Self> {
+        let k = key_array(key)?;
+        let h: Header = header.try_into().map_err(|_| CryptoError::InvalidLength {
+            expected: HEADER_BYTES,
+            got: header.len(),
+        })?;
+        let mut state = State::new();
+        crypto_secretstream_xchacha20poly1305_init_pull(&mut state, &h, &k);
+        Ok(Self { state })
+    }
+
     /// Encrypts one chunk with `tag`, returning `plaintext.len() + ABYTES` bytes.
     pub fn push(&mut self, plaintext: &[u8], tag: u8) -> Result<Vec<u8>> {
         let mut ciphertext = vec![0u8; plaintext.len() + ABYTES];
@@ -156,4 +176,64 @@ pub fn decrypt_stream(ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>> {
         offset = end;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The resume determinism guarantee: same key + same header ⇒ push()
+    // reproduces the original ciphertext byte-for-byte.
+    #[test]
+    fn resume_reproduces_identical_ciphertext() {
+        let key = [42u8; KEY_BYTES];
+        let chunks: Vec<Vec<u8>> = (0..4u8)
+            .map(|i| vec![i; if i == 3 { 1000 } else { CHUNK_SIZE }])
+            .collect();
+
+        let (mut original, header) = StreamEncryptor::new(&key).unwrap();
+        let mut resumed = StreamEncryptor::resume(&key, &header).unwrap();
+
+        for (i, chunk) in chunks.iter().enumerate() {
+            let tag = if i == chunks.len() - 1 {
+                TAG_FINAL
+            } else {
+                TAG_MESSAGE
+            };
+            let a = original.push(chunk, tag).unwrap();
+            let b = resumed.push(chunk, tag).unwrap();
+            assert_eq!(a, b, "chunk {i} diverged");
+        }
+    }
+
+    // Replaying k chunks (discarding output) then continuing yields exactly
+    // the suffix of the uninterrupted stream — the actual resume shape.
+    #[test]
+    fn replay_then_continue_matches_suffix() {
+        let key = [7u8; KEY_BYTES];
+        let chunks: Vec<Vec<u8>> = vec![vec![1; CHUNK_SIZE], vec![2; CHUNK_SIZE], vec![3; 512]];
+
+        let (mut original, header) = StreamEncryptor::new(&key).unwrap();
+        let full: Vec<Vec<u8>> = vec![
+            original.push(&chunks[0], TAG_MESSAGE).unwrap(),
+            original.push(&chunks[1], TAG_MESSAGE).unwrap(),
+            original.push(&chunks[2], TAG_FINAL).unwrap(),
+        ];
+
+        // "Crash" after 2 chunks: replay them, then continue.
+        let mut resumed = StreamEncryptor::resume(&key, &header).unwrap();
+        let _ = resumed.push(&chunks[0], TAG_MESSAGE).unwrap();
+        let _ = resumed.push(&chunks[1], TAG_MESSAGE).unwrap();
+        let tail = resumed.push(&chunks[2], TAG_FINAL).unwrap();
+        assert_eq!(tail, full[2]);
+
+        // And the resumed wire decrypts as one stream.
+        let mut wire = header.to_vec();
+        for c in &full {
+            wire.extend_from_slice(c);
+        }
+        let plain = decrypt_stream(&wire, &key).unwrap();
+        let want: Vec<u8> = chunks.concat();
+        assert_eq!(plain, want);
+    }
 }

@@ -1,7 +1,7 @@
 //! File versions + streaming download — mirrors `internal/api/versions.go`
 //! (the subset the CLI needs: listing, version/main streaming, latest-preferred).
 
-use anyhow::{bail, Result};
+use anyhow::{Context, Result};
 use reqwest::blocking::multipart::{Form, Part};
 use reqwest::blocking::Response;
 use reqwest::Method;
@@ -75,10 +75,9 @@ pub struct VersionRow {
     pub created_at: String,
 }
 
-fn ok_stream(resp: Response, what: &str) -> Result<Response> {
+fn ok_stream(resp: Response, what: &'static str) -> Result<Response> {
     if resp.status().as_u16() >= 400 {
-        let code = resp.status().as_u16();
-        bail!("{what}: HTTP {}: {}", code, resp.text().unwrap_or_default());
+        return Err(super::api_error(resp)).context(what);
     }
     Ok(resp)
 }

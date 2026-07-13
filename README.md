@@ -85,7 +85,9 @@ Optional: `./install-onlyoffice.sh` enables `.docx` / `.xlsx` / `.pptx` editing 
 
 ## CLI
 
-`kutup` is a Rust CLI for the same E2EE primitives as the web — register, login, ls, upload, download, sync, share, versions, devices, 2fa, public-link consumption, file rename. All operations are end-to-end encrypted in your shell; the server only ever sees ciphertext.
+`kutup` is a Rust CLI for the same E2EE primitives as the web — register, login, account recovery, ls, upload (resumable), download, sync, trash, share, versions, devices, 2fa, public-link consumption, file/folder rename. All operations are end-to-end encrypted in your shell; the server only ever sees ciphertext.
+
+Scripting-friendly: every command honors a global `--json` flag (stdout is exactly one JSON document; prompts/progress/status go to stderr, and with `--json` even errors are emitted as JSON on stderr), and exit codes are differentiated — `0` ok, `1` generic, `2` usage, `3` auth/session, `4` not found, `5` network/server. Destructive commands prompt `[y/N]` and take `--yes` for non-interactive use.
 
 **Build from source** (Rust ≥ 1.91.1):
 
@@ -111,32 +113,51 @@ kutup login --server https://your.kutup.host --email you@example.com
 kutup ls
 kutup ls <folder-id>           # contents of a sub-folder
 
+# Forgot the password? Reset it with the 24-word recovery phrase
+# (KUTUP_RECOVERY_PHRASE + KUTUP_PASSWORD for non-interactive use).
+kutup recover --server https://your.kutup.host --email you@example.com
+
 # Upload a file. The CLI's chunked stream encryption (5 MB blocks via
 # crypto_secretstream) has NO browser-imposed size limit — multi-GB
 # files (ISOs, raw video, datasets) work where the web upload chokes
 # around ~2 GB and crashes the tab. File size is bounded by disk,
-# not RAM.
+# not RAM. Interrupted uploads RESUME from the last 5 MB chunk when
+# you rerun the same command (--no-resume restarts from zero).
 kutup upload ./big-dataset.tar.gz <folder-id>
 kutup upload ./local-dir <folder-id> --recursive
 
 # Download a file. For collab-edited files (notes / office /
 # whiteboards) returns the latest snapshot — same content the web
-# shows, not the cold-start initial.
+# shows, not the cold-start initial. Whiteboard image assets are
+# re-inlined so the .excalidraw is self-contained.
 kutup download <file-id>
 kutup download <file-id> ./local/path/
 
-# Bidirectional sync. --watch keeps the local folder live-synced via
-# fsnotify; new local files upload immediately, new remote files
-# arrive within seconds.
+# Bidirectional sync: recursive (sub-folders ↔ sub-collections), with
+# real change detection — local edits re-upload, remote changes
+# re-download, and concurrent edits produce a name.sync-conflict-<ts>
+# copy instead of silently overwriting. Deletions propagate only with
+# --delete; --dry-run previews without touching anything.
 kutup sync ./local-folder <folder-id>
-kutup sync ./local-folder <folder-id> --watch
+kutup sync ./local-folder <folder-id> --watch          # live fsnotify sync
+kutup sync ./local-folder <folder-id> --watch --poll 60 # + poll remote every 60s
+kutup sync ./local-folder <folder-id> --delete --dry-run
+
+# Trash: deleted items are recoverable until the retention window ends.
+kutup trash ls
+kutup trash restore <id>
+kutup trash empty --yes
+
+# Rename a file or a folder (names are E2EE metadata; content untouched).
+kutup mv <file-id> "new name.txt"
+kutup mv <folder-id> "New folder name" --folder
 
 # Snapshot versions of any file (notes, office, whiteboard).
 kutup versions list <file-id>
 kutup versions restore <file-id> <version-id>
 
 # Public-link consumption — no kutup login required for the URL itself.
-kutup pub get https://your.kutup.host/p/<token>#key=<base64>
+kutup pub get https://your.kutup.host/s/<token>#key=<base64>
 kutup pub download <url> <file-id>
 
 # Discover the rest.

@@ -17,13 +17,16 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
+thiserror.workspace = true
 base64.workspace = true
 zeroize.workspace = true
 dirs.workspace = true
 redb.workspace = true
 rpassword.workspace = true
 rand.workspace = true
+sha2.workspace = true
 indicatif.workspace = true
+mime_guess.workspace = true
 qrcode.workspace = true
 time.workspace = true
 notify.workspace = true
@@ -32,6 +35,11 @@ url.workspace = true
 # OS keychain only where it needs no C deps (Linux uses the file fallback).
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 keyring.workspace = true
+
+[features]
+# Test-only interruption hook: KUTUP_TEST_ABORT_AFTER_PATCHES=N makes an
+# upload exit(74) after N tus PATCHes (e2e resume scripts build with this).
+fail-inject = []
 
 [dev-dependencies]
 hex.workspace = true

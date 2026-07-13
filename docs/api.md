@@ -735,16 +735,11 @@ Returns `400` if the share targets a single file (use `/download/:fileId` instea
 
 ### GET /api/share/:token/download/:fileId
 
-Get a presigned S3 URL for downloading a file from a public share. The client follows the URL to fetch the encrypted bytes directly from the storage backend.
+Download a file from a public share. Streams the encrypted blob (`application/octet-stream`) through the backend; the client decrypts it with the link key from the URL fragment.
 
-**Auth:** None
+**Auth:** None (the token is the capability)
 
-**Response:**
-```json
-{
-  "url": "<presigned-s3-url>"
-}
-```
+**Response:** the raw encrypted bytes.
 
 Returns `410 Gone` if the share has expired, `403` if the file does not belong to the shared target.
 

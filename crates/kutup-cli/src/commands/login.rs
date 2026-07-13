@@ -8,9 +8,12 @@ use crate::commands::prompt_line;
 use crate::session::{Session, Store};
 use kutup_crypto::{kdf, secretbox};
 
-pub fn run(profile: &str, server_flag: Option<&str>, email_flag: Option<&str>) -> Result<()> {
-    let b64 = base64::engine::general_purpose::STANDARD;
-
+pub fn run(
+    profile: &str,
+    json: bool,
+    server_flag: Option<&str>,
+    email_flag: Option<&str>,
+) -> Result<()> {
     let mut server = server_flag.unwrap_or("").to_string();
     if server.is_empty() {
         server = prompt_line("Server URL: ")?;
@@ -28,20 +31,45 @@ pub fn run(profile: &str, server_flag: Option<&str>, email_flag: Option<&str>) -
         _ => rpassword::prompt_password("Password: ")?,
     };
 
-    let client = Client::new(&server, "");
+    let sess = login_with_password(profile, &server, &email, &password)?;
+
+    if json {
+        crate::output::print_json(&serde_json::json!({
+            "username": sess.username,
+            "email": sess.email,
+            "server": sess.server,
+            "userId": sess.user_id,
+        }))?;
+    } else {
+        println!("Logged in as {} ({})", sess.username, sess.email);
+    }
+    Ok(())
+}
+
+/// The full login flow: preflight → login (with a TOTP prompt when the
+/// account has 2FA) → decrypt the vault → persist the session. Shared by
+/// `login` and `recover`.
+pub(crate) fn login_with_password(
+    profile: &str,
+    server: &str,
+    email: &str,
+    password: &str,
+) -> Result<Session> {
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let client = Client::new(server, "");
 
     // Step 1: preflight — fetch the KDF salts.
-    println!("Deriving keys…");
-    let preflight = client.login_preflight(&email).context("preflight")?;
+    eprintln!("Deriving keys…");
+    let preflight = client.login_preflight(email).context("preflight")?;
 
     // Step 2: derive the login key (independent Argon2id over loginKeySalt).
-    let login_key = kdf::derive_login_key_b64(&password, &preflight.login_key_salt)
+    let login_key = kdf::derive_login_key_b64(password, &preflight.login_key_salt)
         .context("derive login key")?;
 
     // Step 3: login.
     let mut resp = client
         .login(&LoginRequest {
-            email: email.clone(),
+            email: email.to_string(),
             login_key: b64.encode(login_key.as_slice()),
         })
         .context("login")?;
@@ -62,8 +90,8 @@ pub fn run(profile: &str, server_flag: Option<&str>, email_flag: Option<&str>) -
     }
 
     // Step 5: derive the KEK and decrypt the master + private keys.
-    println!("Decrypting vault…");
-    let kek = kdf::derive_kek_b64(&password, &preflight.kdf_salt).context("derive KEK")?;
+    eprintln!("Decrypting vault…");
+    let kek = kdf::derive_kek_b64(password, &preflight.kdf_salt).context("derive KEK")?;
     let master_key = secretbox::open_b64(
         &resp.encrypted_master_key,
         &resp.master_key_nonce,
@@ -80,8 +108,8 @@ pub fn run(profile: &str, server_flag: Option<&str>, email_flag: Option<&str>) -
     // Step 6: persist the session.
     let mut store = Store::open(profile)?;
     let sess = Session {
-        server,
-        email,
+        server: server.to_string(),
+        email: email.to_string(),
         user_id: resp.user_id,
         username: resp.username,
         access_token: resp.access_token,
@@ -97,7 +125,5 @@ pub fn run(profile: &str, server_flag: Option<&str>, email_flag: Option<&str>) -
         storage_used_bytes: resp.storage_used_bytes,
     };
     store.save_session(&sess).context("save session")?;
-
-    println!("Logged in as {} ({})", sess.username, sess.email);
-    Ok(())
+    Ok(sess)
 }

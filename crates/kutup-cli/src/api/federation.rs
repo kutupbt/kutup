@@ -70,8 +70,13 @@ impl Client {
         super::decode_json(resp)
     }
 
-    /// Downloads encrypted bytes of a file in a federated share. Mirrors `ProxyDownload`.
-    pub fn proxy_download(&self, share_id: &str, file_id: &str) -> Result<Vec<u8>> {
+    /// Streams the encrypted bytes of a file in a federated share (no total
+    /// timeout), for the bounded-memory download path.
+    pub fn proxy_download_stream(
+        &self,
+        share_id: &str,
+        file_id: &str,
+    ) -> Result<reqwest::blocking::Response> {
         let resp = self
             .upload_request(
                 Method::GET,
@@ -79,9 +84,14 @@ impl Client {
             )
             .send()?;
         if resp.status().as_u16() >= 400 {
-            let code = resp.status().as_u16();
-            anyhow::bail!("HTTP {}: {}", code, resp.text().unwrap_or_default());
+            return Err(super::api_error(resp));
         }
+        Ok(resp)
+    }
+
+    /// Downloads encrypted bytes of a file in a federated share. Mirrors `ProxyDownload`.
+    pub fn proxy_download(&self, share_id: &str, file_id: &str) -> Result<Vec<u8>> {
+        let resp = self.proxy_download_stream(share_id, file_id)?;
         Ok(resp.bytes()?.to_vec())
     }
 
@@ -110,8 +120,7 @@ impl Client {
             .multipart(form)
             .send()?;
         if resp.status().as_u16() >= 400 {
-            let code = resp.status().as_u16();
-            anyhow::bail!("HTTP {}: {}", code, resp.text().unwrap_or_default());
+            return Err(super::api_error(resp));
         }
         Ok(resp.json().unwrap_or_default())
     }

@@ -3,7 +3,7 @@
 //! `version` is the Cargo package version; an optional git commit can be baked
 //! in at build time via `KUTUP_GIT_COMMIT` (e.g. in CI/GoReleaser-equivalent).
 
-pub fn run(json: bool) {
+pub fn run(json: bool) -> anyhow::Result<()> {
     let version = env!("CARGO_PKG_VERSION");
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
@@ -18,8 +18,8 @@ pub fn run(json: bool) {
         if let Some(c) = commit {
             obj["commit"] = serde_json::Value::String(c.to_string());
         }
-        println!("{obj}");
-        return;
+        crate::output::print_json(&obj)?;
+        return Ok(());
     }
 
     println!("kutup {version}");
@@ -28,4 +28,5 @@ pub fn run(json: bool) {
         println!("commit {short}");
     }
     println!("{os}/{arch}");
+    Ok(())
 }

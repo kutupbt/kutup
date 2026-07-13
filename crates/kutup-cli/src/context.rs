@@ -1,8 +1,9 @@
 //! Session loading + proactive token refresh — mirrors `session.go`.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 
 use crate::api::Client;
+use crate::errors::NotLoggedIn;
 use crate::session::{Session, Store};
 
 /// An authenticated command context: the API client, the loaded session, and
@@ -18,7 +19,7 @@ pub struct Ctx {
 pub fn require_session(profile: &str) -> Result<Ctx> {
     let mut store = Store::open(profile)?;
     let Some(mut session) = store.load_session()? else {
-        bail!("not logged in — run 'kutup login' first");
+        return Err(NotLoggedIn("not logged in — run 'kutup login' first".into()).into());
     };
 
     let client = Client::new(&session.server, &session.access_token);
