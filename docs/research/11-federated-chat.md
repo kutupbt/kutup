@@ -2,6 +2,19 @@
 
 **Captured:** 2026-07-12
 **Status:** Architecture recommendation, approved as the direction. Code-grounded against a local libsignal checkout at **v0.97.2** (2026). **Phase-1 wasm spike: done same day — verdict GO** (see §5 and `spikes/libsignal-wasm/`); phases 2+ not started.
+
+> **Superseded in part by `13-chat-architecture-comparative-research.md` (2026-07-13).**
+> That comparative study (Signal/Matrix/XMPP + local libsignal/Prosody/ejabberd/Monal
+> code) confirms the core direction but **changes three things stated below** — read it
+> before implementing: (1) **groups must use the GV2 pattern** (server-held *encrypted,
+> versioned* authoritative group state + a signed membership manifest), **not** the pure
+> "client-managed encrypted blob" model in §4/§9 — Signal shipped that exact blob model in
+> 2014 and abandoned it for races + unenforceable roles; (2) **the ongoing SPQR ratchet
+> uses ML-KEM-768, not ML-KEM-1024** — ML-KEM-1024 is the PQXDH *handshake* parameter only,
+> so "ML-KEM-1024 / Kyber1024" wherever it describes the ratchet below is wrong; (3)
+> **device-list authenticity** (a signed per-account device manifest / cross-signing) is a
+> v1 wire-contract requirement, not deferred research — server-assigned device lists
+> otherwise reproduce the malicious-homeserver break that defeated Matrix/Megolm.
 **Scope:** A WhatsApp/Signal-class chat feature for kutup — 1:1 + group text, media, voice/video — federated between kutup instances (like Matrix), E2EE with the Signal protocol as the reference (libsignal checkout studied at `~/_e/development/libsignal`), with algorithm agility (post-quantum negotiable at the protocol level), media stored in the user's existing E2EE drive, and **clients + servers needing only port 443**. Working name: **ileti** (`ileti.kutup.dev` for the chat UI, `depo.kutup.dev` for the drive UI — same backend, same port).
 
 Priorities set by the user: **#1 security, #2 stability. No quick hacks; enterprise-grade.**
