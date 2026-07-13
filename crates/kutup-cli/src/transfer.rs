@@ -214,14 +214,22 @@ pub fn stream_download(
         on_progress(plain_written);
 
         let is_final = tag == TAG_FINAL;
-        if is_final && at_eof {
-            return Ok(plain_written);
-        }
-        if at_eof && !is_final {
-            bail!("stream cut before FINAL chunk");
-        }
-        if is_final && !at_eof {
+        if is_final {
+            if at_eof {
+                return Ok(plain_written);
+            }
+            // A plaintext that is an exact multiple of CHUNK_SIZE produces a
+            // full-size FINAL chunk, so the read above fills the buffer
+            // completely and `at_eof` can't tell — probe for the true EOF
+            // before declaring trailing garbage.
+            let mut probe = [0u8; 1];
+            if read_full(&mut src, &mut probe)? == 0 {
+                return Ok(plain_written);
+            }
             bail!("FINAL chunk seen but bytes remain on wire");
+        }
+        if at_eof {
+            bail!("stream cut before FINAL chunk");
         }
     }
 }
@@ -247,6 +255,39 @@ mod tests {
         let n = stream_download(&wire[..], &key, &mut out, |_| {}).unwrap();
         assert_eq!(n, plain.len() as i64);
         assert_eq!(out, plain);
+    }
+
+    // Exact-multiple-of-CHUNK_SIZE plaintexts produce a full-size FINAL
+    // chunk; the download loop must recognize EOF via the probe read.
+    #[test]
+    fn exact_chunk_multiple_roundtrip() {
+        let key = [4u8; 32];
+        let plain: Vec<u8> = (0..2 * CHUNK_SIZE).map(|i| (i % 253) as u8).collect();
+        let mut up = StreamUploader::new(&plain[..], &key, plain.len() as i64).unwrap();
+        let mut wire = Vec::new();
+        while let Some(c) = up.next_chunk().unwrap() {
+            wire.extend_from_slice(&c);
+        }
+        assert_eq!(wire.len() as i64, cipher_size(plain.len() as i64));
+        let mut out = Vec::new();
+        let n = stream_download(&wire[..], &key, &mut out, |_| {}).unwrap();
+        assert_eq!(n, plain.len() as i64);
+        assert_eq!(out, plain);
+    }
+
+    #[test]
+    fn trailing_garbage_still_rejected() {
+        let key = [4u8; 32];
+        let plain = vec![7u8; CHUNK_SIZE]; // exact single chunk
+        let mut up = StreamUploader::new(&plain[..], &key, plain.len() as i64).unwrap();
+        let mut wire = Vec::new();
+        while let Some(c) = up.next_chunk().unwrap() {
+            wire.extend_from_slice(&c);
+        }
+        wire.push(0xAA); // junk after the FINAL chunk
+        let mut out = Vec::new();
+        let err = stream_download(&wire[..], &key, &mut out, |_| {}).unwrap_err();
+        assert!(err.to_string().contains("bytes remain"), "{err}");
     }
 
     #[test]

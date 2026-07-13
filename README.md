@@ -157,7 +157,7 @@ kutup versions list <file-id>
 kutup versions restore <file-id> <version-id>
 
 # Public-link consumption — no kutup login required for the URL itself.
-kutup pub get https://your.kutup.host/p/<token>#key=<base64>
+kutup pub get https://your.kutup.host/s/<token>#key=<base64>
 kutup pub download <url> <file-id>
 
 # Discover the rest.

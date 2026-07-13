@@ -41,15 +41,17 @@ struct PubUrl {
     link_key: Vec<u8>,
 }
 
-/// Parses `https://example.com/p/<token>#key=<base64>`. Mirrors `parsePubURL`.
+/// Parses `https://example.com/s/<token>#key=<base64>` — the web app's
+/// public-share route (which `kutup share public` also emits). The Go-era
+/// `/p/<token>` form is accepted too.
 fn parse_pub_url(s: &str) -> Result<PubUrl> {
     let u = Url::parse(s).context("parse url")?;
     if u.host_str().is_none() {
         bail!("URL must include scheme + host");
     }
     let parts: Vec<&str> = u.path().trim_matches('/').split('/').collect();
-    if parts.len() < 2 || parts[0] != "p" {
-        bail!("URL path must be /p/<token>");
+    if parts.len() < 2 || (parts[0] != "s" && parts[0] != "p") {
+        bail!("URL path must be /s/<token>");
     }
     let token = parts[1].to_string();
 
@@ -226,4 +228,23 @@ fn download(json: bool, url: &str, file_id: &str, dest: Option<&str>) -> Result<
         println!("Downloaded {} → {dest_str}", meta.name);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_pub_url;
+    use base64::Engine;
+
+    #[test]
+    fn parses_web_and_legacy_paths() {
+        let key = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
+        for path in ["s", "p"] {
+            let u = parse_pub_url(&format!("https://h.example/{path}/tok123#key={key}")).unwrap();
+            assert_eq!(u.token, "tok123");
+            assert_eq!(u.server_base, "https://h.example");
+            assert_eq!(u.link_key.len(), 32);
+        }
+        assert!(parse_pub_url("https://h.example/x/tok#key=aaaa").is_err());
+        assert!(parse_pub_url("https://h.example/s/tok").is_err()); // missing #key
+    }
 }
