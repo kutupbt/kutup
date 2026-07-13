@@ -13,10 +13,9 @@ pub fn run(profile: &str, json: bool, collection_id: &str, color: &str) -> Resul
     ctx.client.update_collection_color(collection_id, color)?;
 
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "collectionId": collection_id, "color": color })
-        );
+        crate::output::print_json(
+            &serde_json::json!({ "collectionId": collection_id, "color": color }),
+        )?;
     } else if color.is_empty() {
         println!("Cleared color on {collection_id}");
     } else {

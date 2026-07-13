@@ -34,7 +34,7 @@ fn status(profile: &str, json: bool) -> Result<()> {
     let ctx = require_session(profile)?;
     let me = ctx.client.me()?;
     if json {
-        println!("{}", serde_json::json!({ "totpEnabled": me.totp_enabled }));
+        crate::output::print_json(&serde_json::json!({ "totpEnabled": me.totp_enabled }))?;
     } else if me.totp_enabled {
         println!("2FA: enabled");
     } else {
@@ -49,11 +49,13 @@ fn enable(profile: &str, json: bool) -> Result<()> {
 
     // Render the otpauth:// URI as a terminal QR (most authenticator apps scan it directly).
     // Also print the URI + base32 secret for terminals that mangle the QR or manual entry.
+    // All of it goes to stderr — it's part of the interactive enrollment dialog,
+    // and stdout stays reserved for the final result document.
     let qr = QrCode::new(res.qr_uri.as_bytes()).map_err(|e| anyhow::anyhow!("render QR: {e}"))?;
     let img = qr.render::<unicode::Dense1x2>().quiet_zone(true).build();
-    println!("{img}\n");
-    println!("Provisioning URI: {}", res.qr_uri);
-    println!("Or enter this secret manually: {}\n", res.secret);
+    eprintln!("{img}\n");
+    eprintln!("Provisioning URI: {}", res.qr_uri);
+    eprintln!("Or enter this secret manually: {}\n", res.secret);
 
     let code = prompt_line("Enter the 6-digit code from your authenticator: ")?;
     if code.is_empty() {
@@ -62,7 +64,7 @@ fn enable(profile: &str, json: bool) -> Result<()> {
     ctx.client.verify_totp(&code)?;
 
     if json {
-        println!("{}", serde_json::json!({ "totpEnabled": true }));
+        crate::output::print_json(&serde_json::json!({ "totpEnabled": true }))?;
     } else {
         println!(
             "2FA enabled. Save your recovery phrase — losing your authenticator without it \
@@ -81,7 +83,7 @@ fn disable(profile: &str, json: bool) -> Result<()> {
     ctx.client.disable_totp(&code)?;
 
     if json {
-        println!("{}", serde_json::json!({ "totpEnabled": false }));
+        crate::output::print_json(&serde_json::json!({ "totpEnabled": false }))?;
     } else {
         println!("2FA disabled.");
     }

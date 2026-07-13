@@ -10,10 +10,11 @@ use rand::RngCore;
 use serde::Serialize;
 
 use crate::api::federation::IncomingShare;
-use crate::api::{FederatedShareRequest, FileMetadata, PublicShareRequest, ShareRequest};
-use crate::commands::prompt_line;
+use crate::api::{ApiError, FederatedShareRequest, FileMetadata, PublicShareRequest, ShareRequest};
+use crate::commands::confirm;
 use crate::context::{require_session, Ctx};
 use crate::cryptohelpers::{decrypt_collection_key, decrypt_collections, find_collection};
+use crate::errors::NotFound;
 use crate::session::Session;
 use kutup_crypto::{sealedbox, secretbox, stream};
 
@@ -105,7 +106,7 @@ fn owned_collection_key(ctx: &Ctx, collection_id: &str) -> Result<Vec<u8>> {
     let master_key = ctx.session.master_key_bytes()?;
     let cols = decrypt_collections(ctx.client.list_collections()?, &master_key, &ctx.session);
     let col = find_collection(&cols, collection_id)
-        .ok_or_else(|| anyhow!("collection {collection_id} not found"))?;
+        .ok_or_else(|| NotFound(format!("collection {collection_id} not found")))?;
     decrypt_collection_key(col, &master_key, &ctx.session).context("decrypt collection key")
 }
 
@@ -148,10 +149,7 @@ fn share_folder(
         .context("share")?;
 
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "shared": collection_id, "with": email })
-        );
+        crate::output::print_json(&serde_json::json!({ "shared": collection_id, "with": email }))?;
     } else {
         println!("Shared folder with {email}");
     }
@@ -202,7 +200,7 @@ fn share_federated(
         .context("federated share")?;
 
     if json {
-        println!("{}", serde_json::json!({ "inviteUrl": resp.invite_url }));
+        crate::output::print_json(&serde_json::json!({ "inviteUrl": resp.invite_url }))?;
     } else {
         println!("Invite link (send to {target}):\n{}", resp.invite_url);
     }
@@ -236,7 +234,7 @@ fn share_public(profile: &str, json: bool, collection_id: &str) -> Result<()> {
         b64().encode(link_key)
     );
     if json {
-        println!("{}", serde_json::json!({ "url": share_url }));
+        crate::output::print_json(&serde_json::json!({ "url": share_url }))?;
     } else {
         println!("Public link (the decryption key is in the URL fragment):");
         println!("{share_url}");
@@ -272,9 +270,9 @@ fn resolve_shared_collection_key(ctx: &Ctx, share_id: &str) -> Result<(IncomingS
         .into_iter()
         .find(|s| s.id == share_id)
         .ok_or_else(|| {
-            anyhow!(
+            NotFound(format!(
                 "share {share_id} not in your accepted shares (run `kutup share incoming list`)"
-            )
+            ))
         })?;
     let key = unwrap_shared_collection_key(&share, &ctx.session)?;
     Ok((share, key))
@@ -303,14 +301,17 @@ fn decrypt_file_display(f: &crate::api::File, col_key: &[u8]) -> FileDisplay {
 
 fn print_file_table(out: &[FileDisplay], json: bool) -> Result<()> {
     if json {
-        println!("{}", serde_json::to_string(out)?);
+        crate::output::print_json(&out)?;
         return Ok(());
     }
     if out.is_empty() {
         println!("(no files in this share)");
         return Ok(());
     }
-    println!("{:<36}  {:>12}  NAME", "ID", "SIZE");
+    println!(
+        "{}",
+        crate::output::header(format!("{:<36}  {:>12}  NAME", "ID", "SIZE"))
+    );
     for d in out {
         println!("{:<36}  {:>12}  {}", d.id, d.size, d.name);
     }
@@ -343,7 +344,7 @@ fn share_download(
     let target = files
         .iter()
         .find(|f| f.id == file_id)
-        .ok_or_else(|| anyhow!("file {file_id} not found in share {share_id}"))?;
+        .ok_or_else(|| NotFound(format!("file {file_id} not found in share {share_id}")))?;
 
     let file_key =
         secretbox::open_b64(&target.encrypted_file_key, &target.file_key_nonce, &col_key)
@@ -356,18 +357,27 @@ fn share_download(
     .context("decrypt metadata")?;
     let meta: FileMetadata = serde_json::from_slice(&meta_bytes).unwrap_or_default();
 
-    let encrypted = ctx.client.proxy_download(share_id, file_id)?;
-    let plain = stream::decrypt_stream(&encrypted, &file_key).context("decrypt")?;
-
     let dest_path = resolve_dest(dest_dir, &meta.name);
-    std::fs::write(&dest_path, &plain)?;
+    let resp = ctx.client.proxy_download_stream(share_id, file_id)?;
+    let bar = crate::output::progress_bar(resp.content_length(), &meta.name);
+    let mut out = std::fs::File::create(&dest_path).context("open dest")?;
+    let written = match crate::transfer::stream_download(resp, &file_key, &mut out, |n| {
+        bar.set_position(n as u64)
+    }) {
+        Ok(w) => w,
+        Err(e) => {
+            drop(out);
+            let _ = std::fs::remove_file(&dest_path);
+            return Err(e).context("decrypt-write");
+        }
+    };
+    bar.finish_and_clear();
 
     let dest_str = dest_path.to_string_lossy().into_owned();
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "shareId": share_id, "fileId": file_id, "size": plain.len(), "dest": dest_str })
-        );
+        crate::output::print_json(
+            &serde_json::json!({ "shareId": share_id, "fileId": file_id, "size": written, "dest": dest_str }),
+        )?;
     } else {
         println!("Downloaded {} → {dest_str}", meta.name);
     }
@@ -401,7 +411,7 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
         .unwrap_or_default();
     let meta = FileMetadata {
         name: name.clone(),
-        mime_type: guess_mime(Path::new(path)).to_string(),
+        mime_type: crate::mimetype::guess_mime(Path::new(path)),
         size: data.len() as i64,
     };
     let meta_bytes = serde_json::to_vec(&meta)?;
@@ -420,21 +430,18 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
             encrypted,
         )
         .map_err(|err| {
-            let msg = err.to_string();
-            if msg.contains("HTTP 403") {
-                anyhow!("share doesn't permit uploads (server: {msg})")
-            } else if msg.contains("HTTP 413") {
-                anyhow!("share upload quota exceeded (server: {msg})")
-            } else {
-                anyhow!("upload: {msg}")
-            }
+            let hint = match err.downcast_ref::<ApiError>() {
+                Some(e) if e.status == 403 => "share doesn't permit uploads",
+                Some(e) if e.status == 413 => "share upload quota exceeded",
+                _ => "upload",
+            };
+            err.context(hint)
         })?;
 
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "shareId": share_id, "fileId": resp.id, "name": meta.name, "size": meta.size })
-        );
+        crate::output::print_json(
+            &serde_json::json!({ "shareId": share_id, "fileId": resp.id, "name": meta.name, "size": meta.size }),
+        )?;
     } else if resp.id.is_empty() {
         println!("Uploaded {name} → share {share_id}");
     } else {
@@ -483,14 +490,20 @@ fn incoming_list(profile: &str, json: bool) -> Result<()> {
         .collect();
 
     if json {
-        println!("{}", serde_json::to_string(&out)?);
+        crate::output::print_json(&out)?;
         return Ok(());
     }
     if out.is_empty() {
         println!("(no incoming federated shares)");
         return Ok(());
     }
-    println!("{:<36}  {:<30}  {:<30}  PERMS", "ID", "REMOTE", "NAME");
+    println!(
+        "{}",
+        crate::output::header(format!(
+            "{:<36}  {:<30}  {:<30}  PERMS",
+            "ID", "REMOTE", "NAME"
+        ))
+    );
     for d in &out {
         let mut perms = String::new();
         if d.can_upload {
@@ -517,7 +530,7 @@ fn incoming_accept(profile: &str, json: bool, invite_url: &str) -> Result<()> {
     let ctx = require_session(profile)?;
     let share = ctx.client.add_incoming_share(invite_url)?;
     if json {
-        println!("{}", serde_json::to_string(&share)?);
+        crate::output::print_json(&share)?;
     } else {
         println!(
             "Accepted federated share {} from {}",
@@ -529,21 +542,15 @@ fn incoming_accept(profile: &str, json: bool, invite_url: &str) -> Result<()> {
 
 fn incoming_remove(profile: &str, json: bool, share_id: &str, yes: bool) -> Result<()> {
     let ctx = require_session(profile)?;
-    if !yes {
-        let ans = prompt_line(&format!(
-            "Remove incoming share {share_id}? This forgets your local pointer; the remote owner is not notified. [y/N]: "
-        ))?
-        .to_lowercase();
-        if ans != "y" && ans != "yes" {
-            bail!("aborted");
-        }
-    }
+    confirm(
+        &format!(
+            "Remove incoming share {share_id}? This forgets your local pointer; the remote owner is not notified."
+        ),
+        yes,
+    )?;
     ctx.client.remove_incoming_share(share_id)?;
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "shareId": share_id, "removed": true })
-        );
+        crate::output::print_json(&serde_json::json!({ "shareId": share_id, "removed": true }))?;
     } else {
         println!("Removed incoming share {share_id}");
     }
@@ -556,25 +563,5 @@ fn resolve_dest(dest_dir: &str, name: &str) -> std::path::PathBuf {
         p.join(name)
     } else {
         p.to_path_buf()
-    }
-}
-
-/// Mirrors `guessMIMEFromPath` (with .zip).
-fn guess_mime(path: &Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("png") => "image/png",
-        Some("gif") => "image/gif",
-        Some("pdf") => "application/pdf",
-        Some("txt") => "text/plain",
-        Some("mp4") => "video/mp4",
-        Some("mp3") => "audio/mpeg",
-        Some("zip") => "application/zip",
-        _ => "application/octet-stream",
     }
 }

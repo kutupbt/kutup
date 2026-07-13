@@ -1,9 +1,9 @@
 //! `kutup devices` — list and revoke account devices. Mirrors `cmd/devices.go`.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use clap::Subcommand;
 
-use crate::commands::prompt_line;
+use crate::commands::confirm;
 use crate::context::require_session;
 
 #[derive(Subcommand)]
@@ -32,7 +32,7 @@ fn list(profile: &str, json: bool) -> Result<()> {
     let devices = ctx.client.list_user_devices()?;
 
     if json {
-        println!("{}", serde_json::to_string(&devices)?);
+        crate::output::print_json(&devices)?;
         return Ok(());
     }
     if devices.is_empty() {
@@ -40,15 +40,26 @@ fn list(profile: &str, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<12}  {:<30}  {:<25}  {:<25}  STATUS",
-        "ID", "LABEL", "CREATED", "LAST SEEN"
+        "{}",
+        crate::output::header(format!(
+            "{:<12}  {:<30}  {:<16}  {:<16}  STATUS",
+            "ID", "LABEL", "CREATED", "LAST SEEN"
+        ))
     );
     for d in &devices {
-        let last = d.last_seen_at.as_deref().unwrap_or("(never)");
+        let last = d
+            .last_seen_at
+            .as_deref()
+            .map(crate::output::format_time)
+            .unwrap_or_else(|| "(never)".to_string());
         let status = if d.is_active { "active" } else { "revoked" };
         println!(
-            "{:<12}  {:<30}  {:<25}  {:<25}  {}",
-            d.device_id, d.label, d.created_at, last, status
+            "{:<12}  {:<30}  {:<16}  {:<16}  {}",
+            d.device_id,
+            d.label,
+            crate::output::format_time(&d.created_at),
+            last,
+            status
         );
     }
     Ok(())
@@ -57,22 +68,14 @@ fn list(profile: &str, json: bool) -> Result<()> {
 fn revoke(profile: &str, json: bool, device_id: i64, yes: bool) -> Result<()> {
     let ctx = require_session(profile)?;
 
-    if !yes {
-        let ans = prompt_line(&format!(
-            "Revoke device {device_id}? This closes its active sessions. [y/N]: "
-        ))?
-        .to_lowercase();
-        if ans != "y" && ans != "yes" {
-            bail!("aborted");
-        }
-    }
+    confirm(
+        &format!("Revoke device {device_id}? This closes its active sessions."),
+        yes,
+    )?;
 
     ctx.client.revoke_user_device(device_id)?;
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "deviceId": device_id, "revoked": true })
-        );
+        crate::output::print_json(&serde_json::json!({ "deviceId": device_id, "revoked": true }))?;
     } else {
         println!("Revoked device {device_id}");
     }

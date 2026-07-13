@@ -10,14 +10,22 @@ pub fn run(profile: &str, json: bool) -> Result<()> {
     let me = ctx.client.me()?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&me)?);
+        crate::output::print_json(&me)?;
         return Ok(());
     }
 
+    let pct = if me.storage_quota_bytes > 0 {
+        format!(
+            " ({:.1}%)",
+            me.storage_used_bytes as f64 * 100.0 / me.storage_quota_bytes as f64
+        )
+    } else {
+        String::new()
+    };
     println!("Username:  {}", me.username);
     println!("Email:     {}", me.email);
     println!(
-        "Storage:   {} / {}",
+        "Storage:   {} / {}{pct}",
         format_bytes(me.storage_used_bytes),
         format_bytes(me.storage_quota_bytes)
     );
