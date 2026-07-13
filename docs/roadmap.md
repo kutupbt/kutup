@@ -46,21 +46,6 @@ CLAUDE.md explicitly notes: **"Builds are currently unsigned."** macOS Gatekeepe
 
 These aren't blockers — kutup can release without them — but they're real production gaps and should land in v1.1 or shortly after.
 
-### Public-share downloads: presigned URL points at the internal S3 endpoint
-
-Found by the CLI e2e battery (2026-07). `GET /api/share/:token/download/:fileId`
-returns a URL presigned against `S3_ENDPOINT` — `http://seaweedfs-s3:8333` in the
-bundled compose, which is deliberately unreachable from outside the compose
-network. Both consumers fetch that URL directly from the client
-(`frontend/src/pages/PublicShare.tsx` `fetch(res.data.url)`; `kutup pub download`),
-so anonymous public-share downloads fail in the bundled deployment for every
-external client. `nginx/nginx.conf` already carries an (unused) `internal`
-`location /internal/storage/` proxy — the X-Accel-Redirect integration it was
-meant for never got wired in the rewrite. Fix options: (a) backend answers the
-download route with `X-Accel-Redirect: /internal/storage/…` and streams via
-nginx, or (b) add an `S3_PUBLIC_ENDPOINT` used only for presigning. Server +
-nginx work; the clients need no changes.
-
 ### SMTP integration
 
 Without SMTP, kutup can't:
@@ -237,9 +222,6 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
   - `trashRetentionDays` in `GET /api/auth/settings` — lets `kutup trash ls`
     show an accurate EXPIRES column on any server config (currently omitted
     rather than hardcoding 30).
-  - URL-encode the `email` query param in the login/recover preflights
-    (`crates/kutup-cli/src/api/mod.rs`) — emails containing `+` currently
-    mis-parse; add a shared encoder + server-side test.
 - **Sync engine: whiteboard assets.** `kutup sync` pushes/pulls `.excalidraw`
   files as opaque bytes; the extract/hydrate steps only run in
   `upload`/`download`. Wire `crate::whiteboard` into the engine's

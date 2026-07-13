@@ -105,9 +105,11 @@ export default function PublicShare() {
     if (!file._fileKey) return
     setDownloading(file.id)
     try {
-      const res = await api.get(`/share/${token}/download/${file.id}`)
-      const encRes = await fetch(res.data.url)
-      const encData = new Uint8Array(await encRes.arrayBuffer())
+      // The endpoint streams the encrypted blob directly (the old presigned-URL
+      // hop pointed at the deployment-internal S3 endpoint and never resolved
+      // for external clients).
+      const res = await api.get(`/share/${token}/download/${file.id}`, { responseType: 'arraybuffer' })
+      const encData = new Uint8Array(res.data)
       const plaintext = await decryptStream(encData, file._fileKey)
       const blob = new Blob([plaintext.buffer as ArrayBuffer], { type: file.decryptedMimeType ?? 'application/octet-stream' })
       const url = URL.createObjectURL(blob)

@@ -16,7 +16,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::handlers::random_token;
+use crate::handlers::{octet_stream_response, random_token};
 use crate::middleware::AuthUser;
 use crate::AppState;
 
@@ -243,8 +243,14 @@ pub async fn list_public_share_files(
     Ok(Json(files).into_response())
 }
 
-/// `GET /api/share/{token}/download/{fileId}` — mirrors `DownloadPublicShareFile`. Returns a
-/// presigned S3 URL. Anonymous.
+/// `GET /api/share/{token}/download/{fileId}` — streams the encrypted blob. Anonymous:
+/// the token is the capability, and the content is E2EE (the link key that unwraps it
+/// lives only in the URL fragment, never reaching the server).
+///
+/// This used to return a presigned S3 URL, but the storage endpoint is deliberately
+/// unreachable from outside the deployment (`http://seaweedfs-s3:8333` in the bundled
+/// compose), so no external client could follow it. Streaming through the backend
+/// matches every other download path.
 #[utoipa::path(
     get,
     path = "/api/share/{token}/download/{fileId}",
@@ -253,7 +259,7 @@ pub async fn list_public_share_files(
         ("token" = String, Path, description = "Share token (the capability)"),
         ("fileId" = String, Path, description = "File id")
     ),
-    responses((status = 200, description = "Presigned S3 download URL", body = crate::models::DownloadUrlResponse))
+    responses((status = 200, description = "The encrypted blob (application/octet-stream)"))
 )]
 pub async fn download_public_share_file(
     State(state): State<AppState>,
@@ -296,12 +302,12 @@ pub async fn download_public_share_file(
         return Err(AppError::forbidden("forbidden"));
     }
 
-    let url = state
+    let (body, size) = state
         .storage
-        .presigned_download(&storage_path)
+        .get_object(&storage_path)
         .await
-        .map_err(|_| AppError::internal("internal error"))?;
-    Ok(Json(json!({ "url": url })).into_response())
+        .map_err(|_| AppError::internal("storage"))?;
+    Ok(octet_stream_response(body, size, &[]))
 }
 
 /// Verifies the caller owns the share target — mirrors `userOwnsTarget`.

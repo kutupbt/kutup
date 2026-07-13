@@ -61,6 +61,14 @@ impl ApiError {
     }
 }
 
+/// Percent-encodes one URL path segment (emails in paths may contain
+/// reserved characters like `#`, `?`, or `%`).
+pub(crate) fn path_segment(s: &str) -> String {
+    let mut u = reqwest::Url::parse("http://x/").expect("static base url");
+    u.path_segments_mut().expect("base has a path").push(s);
+    u.path()[1..].to_string()
+}
+
 /// Consumes an error response into an `anyhow::Error` carrying [`ApiError`].
 pub(crate) fn api_error(resp: Response) -> anyhow::Error {
     let status = resp.status().as_u16();
@@ -171,7 +179,12 @@ impl Client {
     }
 
     pub fn login_preflight(&self, email: &str) -> Result<PreflightResponse> {
-        let resp = self.get(&format!("/auth/login/preflight?email={email}"))?;
+        // .query() form-encodes the value — a raw `+` in an email would
+        // otherwise decode server-side as a space.
+        let resp = self
+            .request(Method::GET, "/auth/login/preflight")
+            .query(&[("email", email)])
+            .send()?;
         decode_json(resp)
     }
 
@@ -186,7 +199,10 @@ impl Client {
     }
 
     pub fn recover_preflight(&self, email: &str) -> Result<RecoverPreflightResponse> {
-        let resp = self.get(&format!("/auth/recover/preflight?email={email}"))?;
+        let resp = self
+            .request(Method::GET, "/auth/recover/preflight")
+            .query(&[("email", email)])
+            .send()?;
         decode_json(resp)
     }
 
@@ -308,7 +324,14 @@ fn check_ok(resp: Response) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::ApiError;
+    use super::{path_segment, ApiError};
+
+    #[test]
+    fn path_segment_encodes_reserved_chars() {
+        assert_eq!(path_segment("a+b@c.d"), "a+b@c.d"); // `+` is literal in paths
+        assert_eq!(path_segment("a b#c?d"), "a%20b%23c%3Fd");
+        assert_eq!(path_segment("50%off@x.y"), "50%25off@x.y");
+    }
 
     #[test]
     fn from_parts_extracts_server_error_shape() {

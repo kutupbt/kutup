@@ -315,12 +315,6 @@ pub struct PublicShareResponse {
     pub expires_at: Option<OffsetDateTime>,
 }
 
-/// Public-share file download URL — mirrors `handlers.DownloadURLResponse`.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct DownloadUrlResponse {
-    pub url: String,
-}
-
 /// `GET /api/fed/invites/{token}` — mirrors `handlers.FedInviteResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
