@@ -49,18 +49,20 @@ impl Client {
     /// Looks up a local user's id + public key by email. Mirrors `GetUserByEmail`.
     pub fn get_user_by_email(&self, email: &str) -> Result<UserByEmail> {
         let resp = self
-            .request(Method::GET, &format!("/users/by-email/{email}"))
+            .request(
+                Method::GET,
+                &format!("/users/by-email/{}", super::path_segment(email)),
+            )
             .send()?;
         super::decode_json(resp)
     }
 
     /// Fetches a remote user's federation public key. Mirrors `GetFedPubKey`.
     pub fn get_fed_pubkey(&self, username: &str, server: &str) -> Result<FedPubKeyResponse> {
+        // .query() encodes both values — the server arg is a full URL.
         let resp = self
-            .request(
-                Method::GET,
-                &format!("/collections/fed-pubkey?username={username}&server={server}"),
-            )
+            .request(Method::GET, "/collections/fed-pubkey")
+            .query(&[("username", username), ("server", server)])
             .send()?;
         super::decode_json(resp)
     }

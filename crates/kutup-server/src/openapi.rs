@@ -143,7 +143,6 @@ All file content and metadata are encrypted client-side; the server stores only 
         models::CreateShareRequest,
         models::CreateShareResult,
         models::PublicShareResponse,
-        models::DownloadUrlResponse,
         models::FedInviteResponse,
         models::AddIncomingShareRequest,
         models::UserRow,

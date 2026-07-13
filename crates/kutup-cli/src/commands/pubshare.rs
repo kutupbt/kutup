@@ -203,8 +203,7 @@ fn download(json: bool, url: &str, file_id: &str, dest: Option<&str>) -> Result<
         }
     };
 
-    let url_res = client.public_share_download_url(&p.token, file_id)?;
-    let resp = crate::api::public::fetch_presigned_stream(&url_res.url)?;
+    let resp = client.public_share_download_stream(&p.token, file_id)?;
     let bar = crate::output::progress_bar(resp.content_length(), &meta.name);
     let mut out = std::fs::File::create(&dest_path).context("open dest")?;
     let written = match crate::transfer::stream_download(resp, &file_key, &mut out, |n| {
