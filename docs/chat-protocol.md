@@ -508,6 +508,18 @@ servers. Reserved for phase 3:
    (§12) — short decision docs before code (`13-…` §4.1/§4.3).
 3. **`kutup-chat-core`**: engine skeleton (transport/db ports, event stream,
    durable outbox with `sendId`, decrypt→persist→ack ordering, 409 recovery) —
-   the artifact the Android/iOS clients link.
+   the artifact the Android/iOS clients link. **✅ Done** (branch
+   `claude/chat-phase1`): `ChatDb` port + native encrypted-SQLite impl behind
+   it (web gets IndexedDB); libsignal's six store traits over a unit-of-work
+   overlay giving atomic decrypt→persist; real clock; the async `ChatTransport`
+   port; `Engine::{register, send, receive, flush_outbox}` with a durable
+   `sendId` outbox, full `409 DeviceListMismatch` recovery (missing/extra/stale
+   — the reinstalled-peer path re-keys TOFU and surfaces a `SafetyNumberChanged`
+   event, the Signal-faithful hybrid, with the verified-peer hard-block reserved
+   for when manifests land), and a drain/ack receive loop with cursor dedup and
+   persisted history. Covered by roundtrip/send/receive test suites. Not yet in
+   core: sealed sender, groups, federation transport (all reserved), and the
+   attachment `kind`.
 4. **web wasm adapters + minimal 1:1 UI**; then native clients follow their
-   plans (`kutup-android`, `kutup-ios`).
+   plans (`kutup-android`, `kutup-ios`). The engine's public API (kutup types
+   only — libsignal never leaks) is the UniFFI/wasm binding surface.
