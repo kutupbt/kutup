@@ -15,10 +15,10 @@ use rand::{CryptoRng, Rng};
 
 use crate::db::{ChatDb, InboundEnvelope, InboundState};
 use crate::error::{ChatError, Result};
-use crate::manifest::ManifestPolicy;
+use crate::manifest::{AccountAuthority, ManifestPolicy};
 use crate::session::{ReceiveOutcome, ReceivedMessage, SendSummary, Session};
 use crate::transport::{ChatTransport, SendOutcome};
-use kutup_chat_proto::{ChatContent, OutgoingEnvelope, SendMessagesRequest};
+use kutup_chat_proto::{ChatContent, DeviceManifest, OutgoingEnvelope, SendMessagesRequest};
 
 /// How many send/recovery rounds a single message gets before giving up. Each 409
 /// consumes one; a well-behaved server converges in 1–2.
@@ -160,6 +160,67 @@ impl Engine {
 
     pub async fn mark_authority_verified(&mut self, peer: &str) -> Result<crate::ManifestTrust> {
         self.session.mark_authority_verified(peer).await
+    }
+
+    /// Add this local device to the account's authenticated device set without
+    /// trusting a server-provided list. An existing signed manifest is the only
+    /// source for other devices; this device contributes only its own locally
+    /// held identity. The server enforces an exact directory match on publish.
+    pub async fn sync_own_manifest(
+        &mut self,
+        authority: &AccountAuthority,
+        issued_at: impl Into<String>,
+    ) -> Result<DeviceManifest> {
+        let transport = Rc::clone(&self.transport);
+        let current = transport.fetch_manifest(self.session.user()).await?;
+        let local = self.session.manifest_device();
+        let issued_at = issued_at.into();
+        let candidate = match current {
+            None => authority.sign_manifest(1, None, vec![local], issued_at)?,
+            Some(current) => {
+                current.verify().map_err(ChatError::Trust)?;
+                if current.authority_key_id != authority.key_id()
+                    || current.self_authority_key != authority.public_key_base64()
+                {
+                    return Err(ChatError::Trust(
+                        "stored account manifest belongs to a different authority".into(),
+                    ));
+                }
+                let mut devices = current.devices.clone();
+                match devices.binary_search_by_key(&local.device_id, |device| device.device_id) {
+                    Ok(index)
+                        if devices[index].identity_key == local.identity_key
+                            && devices[index].registration_id == local.registration_id =>
+                    {
+                        current
+                    }
+                    location => {
+                        match location {
+                            Ok(index) => devices[index] = local,
+                            Err(index) => devices.insert(index, local),
+                        }
+                        let next_version = current.version.checked_add(1).ok_or_else(|| {
+                            ChatError::Trust("manifest version is exhausted".into())
+                        })?;
+                        authority.sign_manifest(
+                            next_version,
+                            Some(current.manifest_hash().map_err(ChatError::Trust)?),
+                            devices,
+                            issued_at,
+                        )?
+                    }
+                }
+            }
+        };
+        let expected_hash = candidate.manifest_hash().map_err(ChatError::Trust)?;
+        let published = transport.publish_manifest(&candidate).await?;
+        published.verify().map_err(ChatError::Trust)?;
+        if published.manifest_hash().map_err(ChatError::Trust)? != expected_hash {
+            return Err(ChatError::Trust(
+                "server returned a different manifest after publication".into(),
+            ));
+        }
+        Ok(published)
     }
 
     /// How many sends are still pending in the durable outbox (undelivered) — for a

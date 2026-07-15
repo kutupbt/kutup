@@ -87,6 +87,7 @@ struct MockServer {
     /// Each `fetch_bundles` pops the front; the last entry repeats.
     fetch_script: RefCell<Vec<Vec<DevicePreKeyBundle>>>,
     manifest_script: RefCell<Vec<Option<DeviceManifest>>>,
+    own_manifest: RefCell<Option<DeviceManifest>>,
     active: RefCell<Vec<(u32, u32)>>,
     fail_sends: RefCell<u32>,
     delivered: RefCell<Vec<(String, Vec<kutup_chat_proto::OutgoingEnvelope>)>>,
@@ -133,6 +134,15 @@ impl ChatTransport for MockServer {
             devices,
             manifest,
         })
+    }
+
+    async fn fetch_manifest(&self, _username: &str) -> Result<Option<DeviceManifest>> {
+        Ok(self.own_manifest.borrow().clone())
+    }
+
+    async fn publish_manifest(&self, manifest: &DeviceManifest) -> Result<DeviceManifest> {
+        *self.own_manifest.borrow_mut() = Some(manifest.clone());
+        Ok(manifest.clone())
     }
 
     async fn send(&self, _username: &str, req: &SendMessagesRequest) -> Result<SendOutcome> {
@@ -231,6 +241,29 @@ fn signed_manifest(bundle: &DevicePreKeyBundle) -> DeviceManifest {
 }
 
 // ----- the tests -----
+
+#[test]
+fn local_devices_extend_only_the_prior_account_signed_manifest() {
+    let mut rng = test_rng();
+    let server = Rc::new(MockServer::default());
+    let authority = AccountAuthority::derive(&[12; 32]).unwrap();
+
+    let mut first = Engine::new(device("alice", 1, &mut rng), server.clone());
+    let v1 = block_on(first.sync_own_manifest(&authority, "2026-07-15T12:00:00Z")).unwrap();
+    assert_eq!(v1.version, 1);
+    assert_eq!(v1.devices, vec![first.session().manifest_device()]);
+
+    let mut second = Engine::new(device("alice", 2, &mut rng), server);
+    let v2 = block_on(second.sync_own_manifest(&authority, "2026-07-15T12:01:00Z")).unwrap();
+    assert_eq!(v2.version, 2);
+    assert_eq!(
+        v2.previous_hash.as_deref(),
+        Some(v1.manifest_hash().unwrap().as_str())
+    );
+    assert_eq!(v2.devices.len(), 2);
+    assert_eq!(v2.devices[0], v1.devices[0]);
+    assert_eq!(v2.devices[1], second.session().manifest_device());
+}
 
 #[test]
 fn production_engine_requires_and_persists_a_matching_signed_manifest() {

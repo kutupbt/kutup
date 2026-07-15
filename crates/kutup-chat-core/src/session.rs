@@ -30,8 +30,8 @@ use crate::manifest::{verify_bundle_response, ManifestPolicy};
 use crate::store::ChatStore;
 use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_prekey_bundle};
 use kutup_chat_proto::{
-    ChatContent, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, OutgoingEnvelope,
-    RegisterChatDeviceRequest, SuiteId, UserPreKeyBundlesResponse,
+    ChatContent, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, ManifestDevice,
+    OutgoingEnvelope, RegisterChatDeviceRequest, SuiteId, UserPreKeyBundlesResponse,
 };
 
 /// What a [`Engine::send`](crate::Engine::send) did: whether it landed, and any
@@ -127,6 +127,16 @@ impl Session {
     /// This device's id (server-assigned after registration).
     pub fn device_id(&self) -> u32 {
         self.address.device_id
+    }
+
+    pub fn user(&self) -> &str {
+        &self.address.user
+    }
+
+    /// Public identity and registration id for this local device, suitable for
+    /// inclusion in the account-signed device manifest.
+    pub fn manifest_device(&self) -> ManifestDevice {
+        self.store.local_manifest_device(self.device_id())
     }
 
     /// Apply the server-assigned device id after registration.

@@ -5,6 +5,7 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use hkdf::Hkdf;
 use kutup_chat_proto::{DeviceManifest, ManifestDevice, UserPreKeyBundlesResponse};
 use sha2::{Digest as _, Sha256};
+use zeroize::Zeroize as _;
 
 use crate::db::{AuthorityTrust, ManifestTrust};
 use crate::error::{ChatError, Result};
@@ -33,9 +34,9 @@ impl AccountAuthority {
         let mut seed = [0u8; 32];
         hkdf.expand(AUTHORITY_KDF_INFO, &mut seed)
             .map_err(|_| ChatError::Invalid("self-authority KDF failed".into()))?;
-        Ok(Self {
-            signing: SigningKey::from_bytes(&seed),
-        })
+        let signing = SigningKey::from_bytes(&seed);
+        seed.zeroize();
+        Ok(Self { signing })
     }
 
     pub fn public_key_base64(&self) -> String {

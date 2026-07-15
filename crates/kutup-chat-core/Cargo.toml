@@ -41,6 +41,7 @@ hkdf = "0.12"
 sha2 = "0.10"
 ed25519-dalek = "2"
 hex = "0.4"
+zeroize = "1"
 # We implement libsignal's own `#[async_trait(?Send)]` store traits; match its
 # major so the desugared future types line up.
 async-trait = "0.1"

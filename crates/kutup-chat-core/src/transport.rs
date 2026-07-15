@@ -14,8 +14,8 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use kutup_chat_proto::{
-    DeviceListMismatch, MailboxPage, RegisterChatDeviceRequest, SendMessagesRequest,
-    UserPreKeyBundlesResponse,
+    DeviceListMismatch, DeviceManifest, MailboxPage, RegisterChatDeviceRequest,
+    SendMessagesRequest, UserPreKeyBundlesResponse,
 };
 
 /// The result of a `POST …/messages`. A `409 DeviceListMismatch` is modeled as a
@@ -40,6 +40,20 @@ pub trait ChatTransport {
     /// `GET /api/chat/users/{username}/keys` — every active device's bundle
     /// (consumes one one-time prekey per device server-side).
     async fn fetch_bundles(&self, username: &str) -> Result<UserPreKeyBundlesResponse>;
+
+    /// Latest account-signed device manifest. `None` maps the endpoint's 404.
+    async fn fetch_manifest(&self, _username: &str) -> Result<Option<DeviceManifest>> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement device manifests".into(),
+        ))
+    }
+
+    /// Publish the caller's next account-signed manifest.
+    async fn publish_manifest(&self, _manifest: &DeviceManifest) -> Result<DeviceManifest> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement device manifests".into(),
+        ))
+    }
 
     /// `POST /api/chat/users/{username}/messages` — multi-device send.
     async fn send(&self, username: &str, req: &SendMessagesRequest) -> Result<SendOutcome>;

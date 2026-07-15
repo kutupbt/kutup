@@ -143,7 +143,7 @@ pub struct RegisterChatDeviceRequest {
 }
 
 /// One entry in a signed [`DeviceManifest`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ManifestDevice {
@@ -158,7 +158,7 @@ pub struct ManifestDevice {
 /// signed set — closing the malicious-homeserver device-injection vector
 /// (`docs/research/13-…` §4.3). A future key-transparency log can wrap this
 /// signed leaf without a breaking change.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceManifest {

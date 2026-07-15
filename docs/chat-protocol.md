@@ -194,6 +194,12 @@ DeviceManifest {
   version/hash continuity, stable authority, and an exact match with the
   registered device set. `GET /api/chat/users/{username}/manifest` and the
   `manifest` field in the bundles response serve the latest record.
+- On first install the client signs only its locally generated device. A newly
+  linked/reinstalled client verifies the prior account manifest, then adds or
+  replaces only its own locally held identity; it MUST NOT sign a device list
+  learned from the server. The server's exact-match check turns any additional
+  injected directory entry into a publication conflict. Device removal is a
+  separate explicit account action, not automatic reconciliation.
 - Peers verify `signature` against `selfAuthorityKey` and refuse to encrypt to
   any bundle device not in the signed set, or when registration/identity values
   differ. The server distributes but cannot forge membership. Device changes
