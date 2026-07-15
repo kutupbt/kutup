@@ -67,19 +67,14 @@ pub fn spawn_all(
             }
         });
     }
-    if chat.mailbox_retention_days > 0
-        || chat.send_retention_days > 0
-        || chat.device_expiry_days > 0
-    {
-        let chat_pool = pool.clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(CHAT_SWEEP_INTERVAL);
-            loop {
-                tick.tick().await;
-                chat_maintenance_once(&chat_pool, chat, Some(&chat_hub)).await;
-            }
-        });
-    }
+    let chat_pool = pool.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(CHAT_SWEEP_INTERVAL);
+        loop {
+            tick.tick().await;
+            chat_maintenance_once(&chat_pool, chat, Some(&chat_hub)).await;
+        }
+    });
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(UPLOADS_SWEEP_INTERVAL);
         loop {
@@ -94,6 +89,7 @@ pub struct ChatSweepResult {
     pub mailbox_rows: u64,
     pub send_rows: u64,
     pub devices: u64,
+    pub ws_tickets: u64,
 }
 
 /// Bound offline-ciphertext and idempotency storage and retire abandoned chat
@@ -106,6 +102,13 @@ pub async fn chat_maintenance_once(
     chat_hub: Option<&ChatHub>,
 ) -> ChatSweepResult {
     let mut result = ChatSweepResult::default();
+    match sqlx::query("DELETE FROM chat_ws_tickets WHERE expires_at <= now()")
+        .execute(pool)
+        .await
+    {
+        Ok(done) => result.ws_tickets = done.rows_affected(),
+        Err(error) => tracing::warn!("chat maintenance: WS ticket cleanup failed: {error}"),
+    }
     if policy.mailbox_retention_days > 0 {
         match sqlx::query(
             "DELETE FROM chat_mailbox
@@ -158,6 +161,7 @@ pub async fn chat_maintenance_once(
             mailbox_rows = result.mailbox_rows,
             send_rows = result.send_rows,
             devices = result.devices,
+            ws_tickets = result.ws_tickets,
             "chat maintenance complete"
         );
     }

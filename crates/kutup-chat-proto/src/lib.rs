@@ -317,6 +317,15 @@ pub struct PreKeyCountResponse {
     pub one_time_kyber_pre_keys: u64,
 }
 
+/// `POST /api/chat/ws-ticket` — a single-use browser WebSocket credential.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ChatWsTicketResponse {
+    pub ticket: String,
+    pub expires_at: String,
+}
+
 /// One device's prekey bundle, as served by `GET /api/chat/users/{username}/keys`.
 /// Field-for-field what libsignal's `PreKeyBundle::new` consumes.
 #[derive(Debug, Clone, Serialize, Deserialize)]

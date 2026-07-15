@@ -319,6 +319,7 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/api/chat/messages", get(chat::drain_mailbox))
         .route("/api/chat/messages/ack", post(chat::ack_messages))
+        .route("/api/chat/ws-ticket", post(chat::create_ws_ticket))
         .route("/api/chat/ws", get(chat::ws))
         // --- tus.io resumable uploads. The OPTIONS discovery is served by the
         // `tus_options_passthrough` layer (mirroring Fiber, which lets non-preflight

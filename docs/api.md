@@ -787,9 +787,13 @@ Drain the device's mailbox, oldest first (max 500/page): `{ "envelopes": [{ "id"
 
 `{ "ids": ["<uuid>", …] }` → deletes processed envelopes; returns `{ "acked": n }`.
 
-### GET /api/chat/ws?deviceId=N&token=…
+### POST /api/chat/ws-ticket?deviceId=N
 
-WebSocket. Auth like the collab WS (token via `Authorization` or `?token=`, validated before upgrade). Server → client JSON frames: `{ "type": "drainMailbox" }` once on connect (fetch the backlog over REST), then `{ "type": "envelope", "envelope": {…} }` per newly arrived message. Acks stay on REST — the mailbox is the source of truth.
+Mint a random, one-time browser WebSocket ticket bound to the authenticated user and chat device. The ticket expires in 60 seconds and is returned as `{ "ticket", "expiresAt" }`.
+
+### GET /api/chat/ws?ticket=…
+
+WebSocket. Browsers use the one-time ticket; native clients instead send `Authorization: Bearer …` with `?deviceId=N`. Reusable JWT query parameters are rejected. Server → client JSON frames: `{ "type": "drainMailbox" }` once on connect (fetch the backlog over REST), then `{ "type": "envelope", "envelope": {…} }` per newly arrived message. Acks stay on REST — the mailbox is the source of truth.
 
 ---
 

@@ -124,6 +124,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::chat::send_messages,
         crate::handlers::chat::drain_mailbox,
         crate::handlers::chat::ack_messages,
+        crate::handlers::chat::create_ws_ticket,
         crate::handlers::chat::ws,
     ),
     components(schemas(
@@ -146,6 +147,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         kutup_chat_proto::MailboxPage,
         kutup_chat_proto::AckRequest,
         kutup_chat_proto::ChatWsServerMessage,
+        kutup_chat_proto::ChatWsTicketResponse,
         models::HealthResponse,
         models::ErrorResponse,
         models::MessageResponse,

@@ -119,6 +119,7 @@ Endpoints (all authenticated; the WS validates its token pre-upgrade):
 | `POST /api/chat/users/{username}/messages` | multi-device send | [IMPL] |
 | `GET /api/chat/messages` | drain (oldest-first) | [IMPL] |
 | `POST /api/chat/messages/ack` | batch ack | [IMPL] |
+| `POST /api/chat/ws-ticket` | mint one-time browser WS credential | [IMPL] |
 | `GET /api/chat/ws` | WebSocket | [IMPL] |
 
 **Rules that stay:** device ids are server-assigned lowest-free `1..=127`;
@@ -353,9 +354,14 @@ Mailbox/device windows are exposed via the capability block (§10).
 
 ---
 
-## 9. WebSocket — [IMPL] + [RSV] ticket
+## 9. WebSocket — [IMPL]
 
-`GET /api/chat/ws?deviceId=N&token=<jwt>`. On connect the server sends exactly
+Browsers first call authenticated `POST /api/chat/ws-ticket?deviceId=N`, then
+connect to `GET /api/chat/ws?ticket=<opaque>`. The ticket contains 32 random
+bytes, expires after 60 seconds, is stored only as a SHA-256 hash, is bound to
+the authenticated user/device, and is atomically consumed once. Native clients
+use `GET /api/chat/ws?deviceId=N` with `Authorization: Bearer <jwt>` and MUST
+NOT put the JWT in a query string. On connect the server sends exactly
 one `{"type":"drainMailbox"}` (drain the backlog over REST), then pushes
 `{"type":"envelope", envelope}` frames. Server ignores client frames. Server
 MAY force-close on backpressure or revocation → reconnect with jittered
@@ -367,12 +373,8 @@ ChatWsServerMessage (tagged "type"):
   { type: "drainMailbox" }
 ```
 
-**[RSV] WS ticket.** `?token=<jwt>` exists because browsers can't set headers
-on `WebSocket`, but query strings land in access logs. v1 reserves `POST
-/api/chat/ws-ticket` → a one-time, short-TTL opaque token accepted only by the
-WS upgrade. **Native clients MUST use `Authorization: Bearer`** (both
-hubs accept it) and MUST NOT put the JWT in the query string. Until the ticket
-ships, nginx MUST scrub `token=` from the chat-WS log format. (`12-…` §5.)
+Reusable JWTs are never accepted in the chat WebSocket query string because
+URLs land in browser history, proxy logs, and tracing. (`12-…` §5.)
 
 ---
 

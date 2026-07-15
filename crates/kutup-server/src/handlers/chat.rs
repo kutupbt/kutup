@@ -19,21 +19,22 @@ use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use kutup_chat_proto::{
-    AckRequest, ChatWsServerMessage, DeliveredEnvelope, DeviceListMismatch, DeviceManifest,
-    DevicePreKeyBundle, EcPreKey, EnvelopeType, KemPreKey, MailboxPage, PreKeyCountResponse,
-    RegisterChatDeviceRequest, RegisterChatDeviceResponse, ReplenishKeysRequest,
-    SendMessagesRequest, SuiteId, UserPreKeyBundlesResponse,
+    AckRequest, ChatWsServerMessage, ChatWsTicketResponse, DeliveredEnvelope, DeviceListMismatch,
+    DeviceManifest, DevicePreKeyBundle, EcPreKey, EnvelopeType, KemPreKey, MailboxPage,
+    PreKeyCountResponse, RegisterChatDeviceRequest, RegisterChatDeviceResponse,
+    ReplenishKeysRequest, SendMessagesRequest, SuiteId, UserPreKeyBundlesResponse,
 };
 
 use crate::chat_hub::ChatWsOut;
 use crate::error::{AppError, AppResult};
-use crate::handlers::trusted_uuid;
+use crate::handlers::{random_token, trusted_uuid};
 use crate::middleware::AuthUser;
 use crate::{jwt, ratelimit, AppState};
 
@@ -47,6 +48,7 @@ const DEFAULT_DRAIN_LIMIT: i64 = 100;
 /// Max decoded ciphertext bytes per envelope (advertised as `maxContentBytes`).
 /// Kilobyte-scale headroom over a `PreKeySignalMessage` (~1.8 KB with the PQ KEM).
 const MAX_CONTENT_BYTES: usize = 65536;
+const WS_TICKET_TTL_SECONDS: i64 = 60;
 
 /// Validates a base64 field and returns the decoded bytes (callers that only
 /// need validation ignore the return).
@@ -1020,25 +1022,84 @@ pub async fn ack_messages(
     Ok(Json(json!({ "acked": deleted })).into_response())
 }
 
+fn ws_ticket_hash(ticket: &str) -> String {
+    hex::encode(Sha256::digest(ticket.as_bytes()))
+}
+
+/// `POST /api/chat/ws-ticket?deviceId=N` — mint a single-use, short-lived
+/// browser WebSocket credential. Only its hash is stored server-side.
+#[utoipa::path(
+    post,
+    path = "/api/chat/ws-ticket",
+    tag = "chat",
+    operation_id = "createChatWsTicket",
+    params(("deviceId" = u32, Query, description = "Chat device id")),
+    responses(
+        (status = 200, description = "One-time ticket", body = ChatWsTicketResponse),
+        (status = 404, description = "No such chat device"),
+    ),
+    security(("bearerAuth" = []))
+)]
+pub async fn create_ws_ticket(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(q): Query<DeviceQuery>,
+) -> AppResult<Response> {
+    let user_id = trusted_uuid(&auth.user_id)?;
+    require_device(&state, user_id, q.device_id).await?;
+    let ticket = random_token(32);
+    let expires_at: OffsetDateTime = sqlx::query_scalar(
+        "INSERT INTO chat_ws_tickets (token_hash, user_id, device_id, expires_at)
+         VALUES ($1, $2, $3, now() + ($4 * interval '1 second'))
+         RETURNING expires_at",
+    )
+    .bind(ws_ticket_hash(&ticket))
+    .bind(user_id)
+    .bind(q.device_id)
+    .bind(WS_TICKET_TTL_SECONDS)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Json(ChatWsTicketResponse {
+        ticket,
+        expires_at: expires_at.format(&Rfc3339).unwrap_or_default(),
+    })
+    .into_response())
+}
+
+async fn consume_ws_ticket(state: &AppState, ticket: &str) -> AppResult<(Uuid, i32)> {
+    if ticket.is_empty() || ticket.len() > 128 {
+        return Err(AppError::unauthorized("invalid WebSocket ticket"));
+    }
+    sqlx::query_as(
+        "DELETE FROM chat_ws_tickets
+         WHERE token_hash = $1 AND expires_at > now()
+         RETURNING user_id, device_id",
+    )
+    .bind(ws_ticket_hash(ticket))
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::unauthorized("invalid or expired WebSocket ticket"))
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct ChatWsQuery {
-    token: Option<String>,
+    ticket: Option<String>,
     #[serde(rename = "deviceId")]
     device_id: Option<String>,
 }
 
 /// `GET /api/chat/ws` — authenticates, then upgrades. Pushes newly arrived envelopes to
 /// this device; the mailbox remains the source of truth (clients ack over REST). Auth
-/// mirrors the collab WS: token via `Authorization` or `?token=` (browsers can't set
-/// headers on `new WebSocket`).
+/// uses `Authorization: Bearer` for native clients or a single-use `?ticket=`
+/// minted by `POST /api/chat/ws-ticket` for browsers.
 #[utoipa::path(
     get,
     path = "/api/chat/ws",
     tag = "chat",
     operation_id = "chatWs",
     params(
-        ("token" = Option<String>, Query, description = "Access token"),
-        ("deviceId" = String, Query, description = "Chat device id"),
+        ("ticket" = Option<String>, Query, description = "Single-use browser ticket"),
+        ("deviceId" = Option<String>, Query, description = "Required with Authorization header"),
     ),
     responses((status = 101, description = "WebSocket upgrade — JSON frames of ChatWsServerMessage"))
 )]
@@ -1048,26 +1109,31 @@ pub async fn ws(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> AppResult<Response> {
-    let token = headers
+    let bearer = headers
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|s| s.to_string())
-        .or(q.token);
-    let token = match token {
-        Some(t) if !t.is_empty() => t,
-        _ => return Err(AppError::unauthorized("missing token")),
+        .filter(|token| !token.is_empty());
+    let (user_uuid, device_id) = match bearer {
+        Some(token) => {
+            let (user_id, _is_admin) = jwt::validate_access_token(token, &state.config.jwt_secret)
+                .map_err(|_| AppError::unauthorized("invalid token"))?;
+            let user_uuid =
+                Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("invalid token"))?;
+            let device_id: i32 = match q.device_id.as_deref().and_then(|s| s.trim().parse().ok()) {
+                Some(device_id) if (1..=MAX_DEVICE_ID).contains(&device_id) => device_id,
+                _ => {
+                    return Err(AppError::unauthorized("missing or invalid deviceId"));
+                }
+            };
+            require_device(&state, user_uuid, device_id).await?;
+            (user_uuid, device_id)
+        }
+        None => match q.ticket.as_deref() {
+            Some(ticket) => consume_ws_ticket(&state, ticket).await?,
+            None => return Err(AppError::unauthorized("missing WebSocket credentials")),
+        },
     };
-    let (user_id, _is_admin) = jwt::validate_access_token(&token, &state.config.jwt_secret)
-        .map_err(|_| AppError::unauthorized("invalid token"))?;
-    let user_uuid =
-        Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("invalid token"))?;
-
-    let device_id: i32 = match q.device_id.as_deref().and_then(|s| s.trim().parse().ok()) {
-        Some(d) if (1..=MAX_DEVICE_ID).contains(&d) => d,
-        _ => return Err(AppError::unauthorized("missing or invalid deviceId")),
-    };
-    require_device(&state, user_uuid, device_id).await?;
 
     Ok(upgrade.on_upgrade(move |socket| async move {
         handle_connection(state, socket, user_uuid, device_id).await;

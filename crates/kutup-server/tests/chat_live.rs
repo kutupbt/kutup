@@ -139,6 +139,9 @@ fn chat_v1_contract() {
     let max = chat["maxContentBytes"].as_u64().unwrap();
     assert_eq!(max, 65536);
     assert_eq!(chat["sealedSender"], false);
+    assert_eq!(chat["manifests"], true);
+    assert!(chat["mailboxRetentionDays"].is_number());
+    assert!(chat["deviceExpiryDays"].is_number());
     println!("ok  - capability block");
 
     let (_ea, ua, ta) = register_and_login(&c, &base, "a");
@@ -148,6 +151,19 @@ fn chat_v1_contract() {
     let (dev_a, _reg_a) = register_chat_device(&c, &base, &ta);
     let (dev_b, reg_b) = register_chat_device(&c, &base, &tb);
     println!("ok  - chat devices registered (A={dev_a} B={dev_b})");
+
+    let ticket: Value = c
+        .post(format!("{base}/api/chat/ws-ticket?deviceId={dev_a}"))
+        .bearer_auth(&ta)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert!(ticket["ticket"]
+        .as_str()
+        .is_some_and(|value| value.len() >= 40));
+    assert!(ticket["expiresAt"].is_string());
+    println!("ok  - one-time chat WebSocket ticket minted");
 
     // A fetches B's bundles: kyber always present, one-time EC consumed.
     let bundles: Value = c
