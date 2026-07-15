@@ -509,7 +509,7 @@ servers. Reserved for phase 3:
 3. **`kutup-chat-core`**: engine skeleton (transport/db ports, event stream,
    durable outbox with `sendId`, decrypt→persist→ack ordering, 409 recovery) —
    the artifact the Android/iOS clients link. **✅ Done** (branch
-   `claude/chat-phase1`): `ChatDb` port + native encrypted-SQLite impl behind
+   `claude/chat-phase1`): `ChatDb` port + native bundled-SQLite impl behind
    it (web gets IndexedDB); libsignal's six store traits over a unit-of-work
    overlay giving atomic decrypt→persist; real clock; the async `ChatTransport`
    port; `Engine::{register, send, receive, flush_outbox}` with a durable
@@ -523,3 +523,35 @@ servers. Reserved for phase 3:
 4. **web wasm adapters + minimal 1:1 UI**; then native clients follow their
    plans (`kutup-android`, `kutup-ios`). The engine's public API (kutup types
    only — libsignal never leaks) is the UniFFI/wasm binding surface.
+
+### 16.1 Hardening gate before client bindings
+
+The phase-2b engine proof established the crypto and durable-send invariants,
+but its first receive loop treated every decrypt error as skippable and acked
+the envelope. That is not a production contract: a missing session, changed
+verified identity, local-store failure, or temporarily unavailable prekey can
+be recoverable. Client bindings MUST NOT freeze against that behavior.
+
+Before the web/native adapters ship, the engine MUST use a durable inbound
+pipeline:
+
+1. Persist the raw delivered envelope locally before advancing the fetch
+   cursor. WebSocket delivery remains only a reconciliation hint.
+2. On successful decrypt, atomically persist the ratchet advance, plaintext,
+   and a `pendingAck` state; ack over REST only after that commit.
+3. Classify failures. Duplicate or authenticated-permanently-malformed input
+   MAY be dead-lettered and acked; missing session/prekey, identity change,
+   unsupported suite, database failure, and unclassified internal failures
+   MUST remain durable and unacked until repaired or explicitly quarantined.
+4. A successful REST ack removes the local raw envelope. A lost ack response
+   is safe: retrying the ack never re-decrypts the message.
+5. No failure path silently discards ciphertext. A client surfaces a durable
+   attention event for quarantined input.
+
+The current synchronous `ChatDb` proof port is also not a valid IndexedDB
+boundary: browser IndexedDB calls complete asynchronously. Before WASM lands,
+`ChatDb` and the engine/store orchestration MUST become async (`?Send` is
+allowed), retaining the atomic unit-of-work semantics. Native SQLite may
+complete those async methods immediately. The bundled SQLite implementation is
+not encrypted at rest; SQLCipher/platform-secure keying is a separate native
+hardening requirement.

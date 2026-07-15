@@ -17,7 +17,7 @@ rust-version = "1.91.1"
 [workspace]
 
 [features]
-# The native durable store (encrypted SQLite). On by default so the crate and
+# The native durable store (bundled SQLite; SQLCipher hardening is pending). On by default so the crate and
 # its tests build a real ChatDb out of the box; the wasm client turns it off and
 # supplies an IndexedDB-backed ChatDb instead (`--no-default-features`).
 default = ["sqlite"]

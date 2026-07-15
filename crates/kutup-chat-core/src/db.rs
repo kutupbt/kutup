@@ -1,7 +1,7 @@
 //! The durable-store port and its unit-of-work.
 //!
 //! [`ChatDb`] is the seam every platform implements: native (Android/iOS/desktop)
-//! over encrypted SQLite ([`sqlite::SqliteChatDb`], behind the `sqlite` feature),
+//! over bundled SQLite ([`sqlite::SqliteChatDb`], behind the `sqlite` feature),
 //! the web client over IndexedDB (a separate wasm adapter, `--no-default-features`).
 //! It is a **synchronous** blob store — the libsignal store adapters (`store.rs`)
 //! run every call inside a future that resolves immediately, so no async executor
