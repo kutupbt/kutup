@@ -167,6 +167,8 @@ fn device_state_survives_reopen() {
         let alice_reg = alice.registration().unwrap().registration_id;
 
         let bundle = serve_bundle(bob.registration().unwrap(), 1);
+        block_on(alice.complete_registration(1)).unwrap();
+        block_on(bob.complete_registration(1)).unwrap();
         block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
 
         let e = block_on(alice.encrypt(

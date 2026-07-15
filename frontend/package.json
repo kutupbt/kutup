@@ -6,8 +6,10 @@
   "type": "module",
   "packageManager": "pnpm@9.1.1",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
+    "dev": "pnpm run build:chat-wasm && vite",
+    "build": "pnpm run build:chat-wasm && pnpm run build:web",
+    "build:web": "tsc && vite build",
+    "build:chat-wasm": "bash ../scripts/build-chat-wasm.sh",
     "build:tauri": "pnpm build && node -e \"require('fs').rmSync('dist/onlyoffice',{recursive:true,force:true})\"",
     "preview": "vite preview",
     "test": "vitest run"

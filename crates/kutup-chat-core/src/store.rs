@@ -25,6 +25,7 @@ use uuid::Uuid;
 
 use crate::db::{
     ChatDb, InboundEnvelope, InboxMessage, LocalIdentity, ManifestTrust, OutboxEntry, Pending,
+    SentMessage,
 };
 use crate::error::{ChatError, Result as ChatResult};
 
@@ -168,6 +169,13 @@ impl ChatStore {
         self.pending.borrow_mut().messages.push(message);
     }
 
+    pub(crate) fn stage_sent_message(&self, message: SentMessage) {
+        self.pending
+            .borrow_mut()
+            .sent_messages
+            .insert(message.send_id.clone(), message);
+    }
+
     pub(crate) fn stage_inbound(&self, inbound: InboundEnvelope) {
         self.pending
             .borrow_mut()
@@ -198,10 +206,47 @@ impl ChatStore {
         }
     }
 
+    pub(crate) fn local_identity_key_pair(&self) -> IdentityKeyPair {
+        self.identity_store.key_pair
+    }
+
+    /// Atomically bind freshly generated private material to the
+    /// server-assigned device id and clear the durable registration journal.
+    pub(crate) fn stage_registration_complete(&self, device_id: u32) {
+        let mut pending = self.pending.borrow_mut();
+        pending.local_identity = Some(LocalIdentity {
+            identity_key_pair: self.identity_store.key_pair.serialize().to_vec(),
+            registration_id: self.identity_store.registration_id,
+            device_id: Some(device_id),
+        });
+        pending.registration_upload = Some(None);
+    }
+
+    pub(crate) fn stage_generated_pre_key(&self, id: u32, record: Vec<u8>) {
+        self.pending.borrow_mut().pre_keys.insert(id, Some(record));
+    }
+
+    pub(crate) fn stage_generated_kyber_pre_key(&self, id: u32, record: Vec<u8>) {
+        self.pending.borrow_mut().kyber_pre_keys.insert(id, record);
+    }
+
+    pub(crate) fn stage_prekey_upload(&self, request: Vec<u8>) {
+        self.pending.borrow_mut().prekey_upload = Some(Some(request));
+    }
+
+    pub(crate) fn clear_prekey_upload(&self) {
+        self.pending.borrow_mut().prekey_upload = Some(None);
+    }
+
     /// Stage a drain-cursor advance (monotonic — keeps the max).
     pub(crate) fn stage_cursor(&self, cursor: u64) {
         let mut pending = self.pending.borrow_mut();
         pending.last_cursor = Some(pending.last_cursor.map_or(cursor, |c| c.max(cursor)));
+    }
+
+    pub(crate) fn stage_sent_seq(&self, seq: u64) {
+        let mut pending = self.pending.borrow_mut();
+        pending.last_sent_seq = Some(pending.last_sent_seq.map_or(seq, |prior| prior.max(seq)));
     }
 
     /// The highest mailbox cursor processed (overlay before durable) — the drain
@@ -360,7 +405,8 @@ impl PreKeyStore for PreKeyAdapter {
 
     async fn remove_pre_key(&mut self, prekey_id: PreKeyId) -> Result<()> {
         // Tombstone in the overlay so this op's later reads see the removal; the
-        // atomic commit turns it into a DELETE.
+        // atomic commit marks it used. Durable storage retains the private key
+        // until the late-message grace sweep.
         self.pending
             .borrow_mut()
             .pre_keys

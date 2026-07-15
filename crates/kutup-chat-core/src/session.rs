@@ -22,7 +22,8 @@ use rand::{CryptoRng, Rng};
 
 use crate::address::ChatAddress;
 use crate::db::{
-    AuthorityTrust, ChatDb, InboundEnvelope, InboundState, InboxMessage, ManifestTrust, OutboxEntry,
+    AuthorityTrust, ChatDb, InboundEnvelope, InboundFailureKind, InboundState, InboxMessage,
+    LocalIdentity, ManifestTrust, OutboxEntry, SentMessage,
 };
 use crate::error::{ChatError, Result};
 use crate::keys;
@@ -31,7 +32,8 @@ use crate::store::ChatStore;
 use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_prekey_bundle};
 use kutup_chat_proto::{
     ChatContent, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, ManifestDevice,
-    OutgoingEnvelope, RegisterChatDeviceRequest, SuiteId, UserPreKeyBundlesResponse,
+    OutgoingEnvelope, RegisterChatDeviceRequest, ReplenishKeysRequest, SuiteId,
+    UserPreKeyBundlesResponse,
 };
 
 /// What a [`Engine::send`](crate::Engine::send) did: whether it landed, and any
@@ -86,7 +88,7 @@ impl Session {
     /// Generate a new device and persist its private material into `db` atomically.
     /// Returns the session; publish [`Session::registration`] to `POST
     /// /api/chat/device`, then apply the server-assigned id via
-    /// [`Session::set_device_id`].
+    /// [`Session::complete_registration`].
     pub async fn generate<R: Rng + CryptoRng>(
         db: Rc<dyn ChatDb>,
         user: impl Into<String>,
@@ -111,11 +113,49 @@ impl Session {
             .load_local_identity()
             .await?
             .ok_or_else(|| ChatError::Invalid("no chat device registered in this store".into()))?;
+        match local.device_id {
+            Some(stored) if stored == device_id => {}
+            Some(stored) => {
+                return Err(ChatError::Invalid(format!(
+                    "chat store belongs to device {stored}, not {device_id}"
+                )))
+            }
+            None => {
+                return Err(ChatError::Invalid(
+                    "chat device registration is not complete".into(),
+                ))
+            }
+        }
         let store = ChatStore::attach(db, local)?;
         Ok(Session {
             store,
             registration: None,
             address: ChatAddress::local(user, device_id),
+        })
+    }
+
+    /// Resume a fresh install whose exact registration payload was persisted
+    /// before the first network attempt.
+    pub(crate) async fn resume_registration(
+        db: Rc<dyn ChatDb>,
+        user: impl Into<String>,
+        local: LocalIdentity,
+    ) -> Result<Self> {
+        if local.device_id.is_some() {
+            return Err(ChatError::Invalid(
+                "chat device is already registered".into(),
+            ));
+        }
+        let encoded = db.load_pending_registration().await?.ok_or_else(|| {
+            ChatError::Db("unregistered chat identity has no registration journal".into())
+        })?;
+        let registration = serde_json::from_slice(&encoded)
+            .map_err(|error| ChatError::Db(format!("decode registration journal: {error}")))?;
+        let store = ChatStore::attach(db, local)?;
+        Ok(Self {
+            store,
+            registration: Some(registration),
+            address: ChatAddress::local(user, 1),
         })
     }
 
@@ -139,9 +179,14 @@ impl Session {
         self.store.local_manifest_device(self.device_id())
     }
 
-    /// Apply the server-assigned device id after registration.
-    pub fn set_device_id(&mut self, device_id: u32) {
+    /// Persist and apply the server-assigned device id after registration. The
+    /// exact registration journal is cleared in the same atomic commit.
+    pub async fn complete_registration(&mut self, device_id: u32) -> Result<()> {
+        self.store.stage_registration_complete(device_id);
+        self.store.commit().await?;
         self.address.device_id = device_id;
+        self.registration = None;
+        Ok(())
     }
 
     // ----- single-op public API (each commits atomically) -----
@@ -249,6 +294,7 @@ impl Session {
                         .map_err(|e| ChatError::Wire(e.to_string()))?,
                     state,
                     attempts: 0,
+                    failure_kind: None,
                     last_error: None,
                     received_at: now_millis(),
                 });
@@ -266,18 +312,66 @@ impl Session {
         &mut self,
         mut inbound: InboundEnvelope,
         error: &ChatError,
-    ) -> Result<()> {
-        inbound.state = InboundState::PendingDecrypt;
+    ) -> Result<InboundState> {
+        let failure_kind = error.inbound_failure_kind();
+        inbound.state = if failure_kind == InboundFailureKind::Duplicate {
+            InboundState::PendingAck
+        } else {
+            InboundState::PendingDecrypt
+        };
         inbound.attempts = inbound.attempts.saturating_add(1);
+        inbound.failure_kind = Some(failure_kind);
         inbound.last_error = Some(error.to_string());
+        let state = inbound.state;
+        self.store.stage_inbound(inbound);
+        self.store.commit().await?;
+        Ok(state)
+    }
+
+    pub(crate) async fn finish_acks(&mut self, ids: &[String]) -> Result<()> {
+        let inbound = self.store.db().list_inbound().await?;
+        for id in ids {
+            match inbound.iter().find(|item| item.id == *id) {
+                Some(item) if item.state == InboundState::DeadLetterPendingAck => {
+                    let mut retained = item.clone();
+                    retained.state = InboundState::DeadLetter;
+                    self.store.stage_inbound(retained);
+                }
+                _ => self.store.delete_inbound(id),
+            }
+        }
+        self.store.commit().await
+    }
+
+    pub(crate) async fn quarantine_inbound(&mut self, id: &str) -> Result<()> {
+        let mut inbound = self
+            .store
+            .db()
+            .list_inbound()
+            .await?
+            .into_iter()
+            .find(|item| item.id == id)
+            .ok_or_else(|| ChatError::Invalid(format!("no inbound envelope {id}")))?;
+        inbound.state = InboundState::DeadLetterPendingAck;
         self.store.stage_inbound(inbound);
         self.store.commit().await
     }
 
-    pub(crate) async fn clear_acked(&mut self, ids: &[String]) -> Result<()> {
-        for id in ids {
-            self.store.delete_inbound(id);
+    pub(crate) async fn resolve_dead_letter(&mut self, id: &str) -> Result<()> {
+        let inbound = self
+            .store
+            .db()
+            .list_inbound()
+            .await?
+            .into_iter()
+            .find(|item| item.id == id)
+            .ok_or_else(|| ChatError::Invalid(format!("no inbound envelope {id}")))?;
+        if inbound.state != InboundState::DeadLetter {
+            return Err(ChatError::Invalid(format!(
+                "inbound envelope {id} is not a dead letter"
+            )));
         }
+        self.store.delete_inbound(id);
         self.store.commit().await
     }
 
@@ -292,11 +386,7 @@ impl Session {
         envelope: &DeliveredEnvelope,
         rng: &mut R,
     ) -> Result<ReceiveOutcome> {
-        let sender = envelope.sender.clone().ok_or_else(|| {
-            ChatError::Invalid(
-                "delivered envelope has no sender (sealed sender unsupported)".into(),
-            )
-        })?;
+        let sender = envelope.sender.clone().ok_or(ChatError::MissingSender)?;
         let from = ChatAddress::from_sender(&sender, envelope.sender_device_id);
         let plaintext = match self.decrypt_bytes_staged(&from, envelope, rng).await {
             Ok(plaintext) => plaintext,
@@ -319,6 +409,7 @@ impl Session {
             envelope: serde_json::to_vec(envelope).map_err(|e| ChatError::Wire(e.to_string()))?,
             state: InboundState::PendingAck,
             attempts: 0,
+            failure_kind: None,
             last_error: None,
             received_at: now_millis(),
         });
@@ -345,6 +436,99 @@ impl Session {
     /// plaintext, so the caller decodes with its own placeholder handling.
     pub async fn history(&self) -> Result<Vec<InboxMessage>> {
         self.store.db().list_messages().await
+    }
+
+    /// Durable outbound history, including sends still pending in the outbox.
+    pub async fn sent_history(&self) -> Result<Vec<SentMessage>> {
+        self.store.db().list_sent_messages().await
+    }
+
+    /// Next content sequence for this local device. It becomes durable only
+    /// when enqueueing the corresponding ratchet/outbox transaction succeeds.
+    pub async fn next_sent_seq(&self) -> Result<u64> {
+        self.store
+            .db()
+            .load_last_sent_seq()
+            .await?
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| ChatError::Invalid("outbound sequence is exhausted".into()))
+    }
+
+    pub(crate) async fn purge_used_pre_keys(&self, used_before_ms: i64) -> Result<u64> {
+        self.store.db().purge_used_pre_keys(used_before_ms).await
+    }
+
+    pub(crate) async fn pending_prekey_upload(&self) -> Result<Option<ReplenishKeysRequest>> {
+        self.store
+            .db()
+            .load_pending_prekey_upload()
+            .await?
+            .map(|request| {
+                serde_json::from_slice(&request).map_err(|error| ChatError::Db(error.to_string()))
+            })
+            .transpose()
+    }
+
+    pub(crate) async fn prepare_prekey_replenishment<R: Rng + CryptoRng>(
+        &mut self,
+        ec_count: usize,
+        kyber_count: usize,
+        rng: &mut R,
+    ) -> Result<ReplenishKeysRequest> {
+        if let Some(request) = self.pending_prekey_upload().await? {
+            return Ok(request);
+        }
+        let ec_ids = self.unused_prekey_ids(ec_count, false, rng).await?;
+        let kyber_ids = self.unused_prekey_ids(kyber_count, true, rng).await?;
+        let material = keys::generate_replenishment(
+            &self.store.local_identity_key_pair(),
+            &ec_ids,
+            &kyber_ids,
+            rng,
+        )?;
+        let serialized = serde_json::to_vec(&material.request)
+            .map_err(|error| ChatError::Content(error.to_string()))?;
+        for (id, record) in material.pre_keys {
+            self.store.stage_generated_pre_key(id, record);
+        }
+        for (id, record) in material.kyber_pre_keys {
+            self.store.stage_generated_kyber_pre_key(id, record);
+        }
+        self.store.stage_prekey_upload(serialized);
+        self.store.commit().await?;
+        Ok(material.request)
+    }
+
+    pub(crate) async fn complete_prekey_upload(&mut self) -> Result<()> {
+        self.store.clear_prekey_upload();
+        self.store.commit().await
+    }
+
+    async fn unused_prekey_ids<R: Rng + CryptoRng>(
+        &self,
+        count: usize,
+        kyber: bool,
+        rng: &mut R,
+    ) -> Result<Vec<u32>> {
+        let mut ids = std::collections::HashSet::with_capacity(count);
+        while ids.len() < count {
+            let id = rng.random_range(1_000..=u32::MAX);
+            if ids.contains(&id) {
+                continue;
+            }
+            let exists = if kyber {
+                self.store.db().load_kyber_pre_key(id).await?.is_some()
+            } else {
+                self.store.db().load_pre_key(id).await?.is_some()
+            };
+            if !exists {
+                ids.insert(id);
+            }
+        }
+        let mut ids: Vec<u32> = ids.into_iter().collect();
+        ids.sort_unstable();
+        Ok(ids)
     }
 
     /// The pinned self-authority and highest manifest observed for `peer`.
@@ -431,16 +615,27 @@ impl Session {
             .await
         {
             Ok(envelopes) => {
+                let created_at = now_millis();
                 let entry = OutboxEntry {
                     send_id: send_id.to_string(),
                     peer: peer_user.to_string(),
-                    content: plaintext,
+                    content: plaintext.clone(),
                     envelopes: serde_json::to_vec(&envelopes)
                         .map_err(|e| ChatError::Content(e.to_string()))?,
                     attempts: 1,
-                    created_at: now_millis(),
+                    created_at,
                 };
                 self.store.stage_outbox(entry);
+                self.store.stage_sent_seq(content.seq);
+                self.store.stage_sent_message(SentMessage {
+                    send_id: send_id.to_string(),
+                    peer: peer_user.to_string(),
+                    content: plaintext,
+                    created_at,
+                    delivered_at: None,
+                    delivered: false,
+                    deduplicated: false,
+                });
                 self.store.commit().await?;
                 Ok(envelopes)
             }
@@ -481,10 +676,29 @@ impl Session {
         }
     }
 
-    /// Mark a send delivered: drop its outbox entry (one transaction).
-    pub(crate) async fn complete_send(&mut self, send_id: &str) -> Result<()> {
+    /// Mark a send delivered: drop its outbox entry and retain delivered local
+    /// history in the same transaction.
+    pub(crate) async fn complete_send(&mut self, send_id: &str, deduplicated: bool) -> Result<()> {
+        let mut message = self
+            .store
+            .db()
+            .load_sent_message(send_id)
+            .await?
+            .ok_or_else(|| ChatError::Db(format!("send {send_id} has no history record")))?;
+        message.delivered = true;
+        message.deduplicated = deduplicated;
+        message.delivered_at = Some(now_millis());
         self.store.delete_outbox(send_id);
+        self.store.stage_sent_message(message);
         self.store.commit().await
+    }
+
+    pub(crate) async fn outbox_entry(&self, send_id: &str) -> Result<Option<OutboxEntry>> {
+        self.store.db().load_outbox(send_id).await
+    }
+
+    pub(crate) async fn sent_message(&self, send_id: &str) -> Result<Option<SentMessage>> {
+        self.store.db().load_sent_message(send_id).await
     }
 
     /// Every still-pending outbound send (for resend-on-startup).
@@ -704,16 +918,14 @@ fn find_bundle(bundles: &[DevicePreKeyBundle], device_id: u32) -> Result<&Device
         .ok_or(ChatError::MissingBundle(device_id))
 }
 
-/// The wall clock libsignal uses for prekey/session staleness checks. Native uses
-/// the real clock; the wasm adapter will inject one when that build lands.
+/// The wall clock libsignal uses for prekey/session staleness checks. The
+/// platform boundary uses JavaScript's clock in browsers because
+/// `SystemTime::now()` is unsupported on `wasm32-unknown-unknown`.
 fn now() -> SystemTime {
-    SystemTime::now()
+    crate::clock::now()
 }
 
 /// Unix-epoch millis, saturating to 0 before the epoch (never in practice).
 fn now_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    crate::clock::unix_millis()
 }

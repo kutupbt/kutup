@@ -16,27 +16,34 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+pub mod indexed_db;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
 /// The local device's long-term chat identity. Persisted as a single row and
 /// cached in the store for the hot `get_identity_key_pair` path.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct LocalIdentity {
     /// `IdentityKeyPair::serialize()` — the private identity material.
     pub identity_key_pair: Vec<u8>,
     /// The libsignal registration id chosen at install (stable run-to-run).
     pub registration_id: u32,
+    /// Server-assigned libsignal device id. `None` only while the exact durable
+    /// registration request is awaiting its first confirmed response.
+    #[serde(default)]
+    pub device_id: Option<u32>,
 }
 
 /// A decrypted inbound message, persisted atomically with the ratchet advance that
 /// produced it (before the mailbox row is acked). `content` is the raw plaintext
 /// (`serde_json` of a `ChatContent`) — stored even when its `kind` is unknown, so
 /// nothing is ever dropped (the content schema's "render a placeholder" rule).
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct InboxMessage {
     /// Mailbox id (the server's ack handle) — primary key, so redelivery is idempotent.
     pub id: String,
@@ -53,7 +60,7 @@ pub struct InboxMessage {
 /// irreversible, a retry MUST resend the exact stored ciphertext (never
 /// re-encrypt); `content` is the plaintext, kept so a `409 DeviceListMismatch`
 /// can re-encrypt for a newly-added device. Deleted once the send is delivered.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OutboxEntry {
     pub send_id: String,
     /// Recipient username (`user@domain` once federation lands).
@@ -68,10 +75,25 @@ pub struct OutboxEntry {
     pub created_at: i64,
 }
 
+/// Durable local history for an outbound logical message. The pending outbox
+/// may be deleted after confirmation; this record remains for UI/history and
+/// tracks whether the exact ciphertext is still awaiting delivery.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SentMessage {
+    pub send_id: String,
+    pub peer: String,
+    /// `serde_json` of [`ChatContent`](kutup_chat_proto::ChatContent).
+    pub content: Vec<u8>,
+    pub created_at: i64,
+    pub delivered_at: Option<i64>,
+    pub delivered: bool,
+    pub deduplicated: bool,
+}
+
 /// Durable state of a raw inbound mailbox envelope. Ciphertext is journaled
 /// before the fetch cursor advances, so decrypt/session repair can be retried
 /// without depending on the server returning an older page again.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InboundState {
     /// Fetched and waiting for decrypt (or a retry after repair).
     PendingDecrypt,
@@ -80,14 +102,18 @@ pub enum InboundState {
     /// Explicitly quarantined after a permanent-policy decision. The ciphertext
     /// remains locally visible until the application resolves it.
     DeadLetter,
+    /// Explicitly quarantined locally; waiting for the idempotent server ack.
+    DeadLetterPendingAck,
 }
 
+#[cfg(feature = "sqlite")]
 impl InboundState {
     pub(crate) fn code(self) -> i64 {
         match self {
             Self::PendingDecrypt => 0,
             Self::PendingAck => 1,
             Self::DeadLetter => 2,
+            Self::DeadLetterPendingAck => 3,
         }
     }
 
@@ -96,6 +122,7 @@ impl InboundState {
             0 => Ok(Self::PendingDecrypt),
             1 => Ok(Self::PendingAck),
             2 => Ok(Self::DeadLetter),
+            3 => Ok(Self::DeadLetterPendingAck),
             _ => Err(crate::error::ChatError::Db(format!(
                 "unknown inbound state {code}"
             ))),
@@ -103,21 +130,70 @@ impl InboundState {
     }
 }
 
+/// Stable repair category persisted with a failed inbound envelope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InboundFailureKind {
+    MalformedEnvelope,
+    MalformedCiphertext,
+    MissingKeyMaterial,
+    UntrustedIdentity,
+    UnsupportedSuite,
+    MissingSender,
+    Store,
+    Duplicate,
+    Unknown,
+}
+
+#[cfg(feature = "sqlite")]
+impl InboundFailureKind {
+    pub(crate) fn code(self) -> i64 {
+        match self {
+            Self::MalformedEnvelope => 0,
+            Self::MalformedCiphertext => 1,
+            Self::MissingKeyMaterial => 2,
+            Self::UntrustedIdentity => 3,
+            Self::UnsupportedSuite => 4,
+            Self::MissingSender => 5,
+            Self::Store => 6,
+            Self::Duplicate => 7,
+            Self::Unknown => 8,
+        }
+    }
+
+    pub(crate) fn from_code(code: i64) -> Result<Self> {
+        match code {
+            0 => Ok(Self::MalformedEnvelope),
+            1 => Ok(Self::MalformedCiphertext),
+            2 => Ok(Self::MissingKeyMaterial),
+            3 => Ok(Self::UntrustedIdentity),
+            4 => Ok(Self::UnsupportedSuite),
+            5 => Ok(Self::MissingSender),
+            6 => Ok(Self::Store),
+            7 => Ok(Self::Duplicate),
+            8 => Ok(Self::Unknown),
+            _ => Err(crate::error::ChatError::Db(format!(
+                "unknown inbound failure kind {code}"
+            ))),
+        }
+    }
+}
+
 /// A server envelope retained until decrypt and acknowledgement have both
 /// completed. `envelope` is the JSON-encoded [`DeliveredEnvelope`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InboundEnvelope {
     pub id: String,
     pub cursor: u64,
     pub envelope: Vec<u8>,
     pub state: InboundState,
     pub attempts: u32,
+    pub failure_kind: Option<InboundFailureKind>,
     pub last_error: Option<String>,
     pub received_at: i64,
 }
 
 /// How the user has authenticated a peer account's self-authority key.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuthorityTrust {
     /// First valid key observed for the account. Key transparency will replace
     /// this first-contact assumption without changing the stored manifest leaf.
@@ -126,6 +202,7 @@ pub enum AuthorityTrust {
     Verified,
 }
 
+#[cfg(feature = "sqlite")]
 impl AuthorityTrust {
     pub(crate) fn code(self) -> i64 {
         match self {
@@ -146,7 +223,7 @@ impl AuthorityTrust {
 }
 
 /// Durable anti-rollback pin for one peer account's signed device directory.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestTrust {
     pub peer: String,
     pub authority_key_id: String,
@@ -193,14 +270,25 @@ pub struct Pending {
     pub(crate) outbox: HashMap<String, Option<OutboxEntry>>,
     /// Decrypted inbound messages to persist (insert-or-ignore by id).
     pub(crate) messages: Vec<InboxMessage>,
+    /// Outbound history upserts, keyed by `sendId`.
+    pub(crate) sent_messages: HashMap<String, SentMessage>,
     /// Raw inbound journal updates keyed by mailbox id. `None` removes an entry
     /// only after its REST acknowledgement succeeds.
     pub(crate) inbound: HashMap<String, Option<InboundEnvelope>>,
     /// Peer username → latest accepted signed-manifest trust record.
     pub(crate) manifest_trust: HashMap<String, ManifestTrust>,
+    /// Serialized `ReplenishKeysRequest` whose private keys are already durable
+    /// but whose server response has not yet been confirmed.
+    pub(crate) prekey_upload: Option<Option<Vec<u8>>>,
+    /// Serialized `RegisterChatDeviceRequest` durably paired with freshly
+    /// generated private keys until the server-assigned device id is committed.
+    pub(crate) registration_upload: Option<Option<Vec<u8>>>,
     /// The highest mailbox cursor processed — advanced with each message so a
     /// re-drain never re-decrypts (which the ratchet couldn't do anyway).
     pub(crate) last_cursor: Option<u64>,
+    /// Highest locally allocated outbound content sequence. Advanced in the
+    /// same transaction as the ratchet/outbox/history write.
+    pub(crate) last_sent_seq: Option<u64>,
 }
 
 impl Pending {
@@ -217,9 +305,13 @@ impl Pending {
             && self.sender_keys.is_empty()
             && self.outbox.is_empty()
             && self.messages.is_empty()
+            && self.sent_messages.is_empty()
             && self.inbound.is_empty()
             && self.manifest_trust.is_empty()
+            && self.prekey_upload.is_none()
+            && self.registration_upload.is_none()
             && self.last_cursor.is_none()
+            && self.last_sent_seq.is_none()
     }
 
     pub(crate) fn clear(&mut self) {
@@ -241,6 +333,10 @@ pub trait ChatDb {
     async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>>;
     /// Serialized one-time `PreKeyRecord` by id.
     async fn load_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>>;
+    /// Delete EC one-time prekeys that libsignal marked used before the grace
+    /// cutoff. Until then `load_pre_key` still returns them for in-flight
+    /// prekey messages, while the current operation's overlay treats them used.
+    async fn purge_used_pre_keys(&self, used_before_ms: i64) -> Result<u64>;
     /// Serialized `SignedPreKeyRecord` by id.
     async fn load_signed_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>>;
     /// Serialized `KyberPreKeyRecord` by id.
@@ -262,8 +358,15 @@ pub trait ChatDb {
 
     /// The highest mailbox cursor processed so far (the drain resume point).
     async fn load_last_cursor(&self) -> Result<Option<u64>>;
+    /// Highest locally committed outbound content sequence.
+    async fn load_last_sent_seq(&self) -> Result<Option<u64>>;
     /// Every persisted inbound message (oldest first, by cursor) — the local history.
     async fn list_messages(&self) -> Result<Vec<InboxMessage>>;
+
+    /// One durable outbound-history record.
+    async fn load_sent_message(&self, send_id: &str) -> Result<Option<SentMessage>>;
+    /// All outbound history, oldest first.
+    async fn list_sent_messages(&self) -> Result<Vec<SentMessage>>;
 
     /// Every raw inbound entry, ordered by cursor, including ack retries and
     /// visible dead letters.
@@ -271,6 +374,13 @@ pub trait ChatDb {
 
     /// Highest accepted manifest and pinned authority for `peer`.
     async fn load_manifest_trust(&self, peer: &str) -> Result<Option<ManifestTrust>>;
+
+    /// Durable prekey publication request, if a prior upload is unconfirmed.
+    async fn load_pending_prekey_upload(&self) -> Result<Option<Vec<u8>>>;
+
+    /// Exact device-registration request whose private material is installed,
+    /// but whose server-assigned id is not yet confirmed locally.
+    async fn load_pending_registration(&self) -> Result<Option<Vec<u8>>>;
 
     /// Commit a whole unit of work atomically. Either every staged write lands or
     /// none does; a partial apply MUST NOT be observable after a crash.

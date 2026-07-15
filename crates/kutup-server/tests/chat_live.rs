@@ -114,7 +114,26 @@ fn register_chat_device(c: &Client, base: &str, token: &str) -> (u32, u32) {
         .unwrap();
     assert!(r.status().is_success(), "register device: {}", r.status());
     let v: Value = r.json().unwrap();
-    (v["deviceId"].as_u64().unwrap() as u32, reg_id)
+    let device_id = v["deviceId"].as_u64().unwrap() as u32;
+
+    // An ambiguous first response is retried with the exact durable request.
+    // The identity key is install-unique, so the server must return the same id
+    // without creating a second directory row.
+    let retry = c
+        .post(format!("{base}/api/chat/device"))
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .unwrap();
+    assert!(
+        retry.status().is_success(),
+        "retry device registration: {}",
+        retry.status()
+    );
+    let retry_body: Value = retry.json().unwrap();
+    assert_eq!(retry_body["deviceId"], device_id);
+
+    (device_id, reg_id)
 }
 
 #[test]

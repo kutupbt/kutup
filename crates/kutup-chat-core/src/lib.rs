@@ -7,13 +7,14 @@
 //! API** — callers see kutup types and the wire DTOs only.
 //!
 //! Persistence is a port: the engine depends on the [`ChatDb`] trait and stores
-//! all identity/session/ratchet state through it. Native builds get the bundled
-//! [`SqliteChatDb`] (the `sqlite` feature, on by default); the web client
-//! supplies an IndexedDB-backed `ChatDb` and turns the feature off. Every crypto
-//! op is a [`Pending`] unit of work committed atomically, giving the
-//! decrypt→persist→ack ordering the send/drain orchestration relies on.
+//! all identity/session/ratchet state through it. Tests and dev builds select
+//! bundled SQLite; release native clients select SQLCipher; the browser selects
+//! the IndexedDB backend. Every crypto op is a [`Pending`] unit of work committed
+//! atomically, giving the decrypt→persist→ack ordering the send/drain
+//! orchestration relies on.
 
 mod address;
+mod clock;
 mod db;
 mod engine;
 mod error;
@@ -22,18 +23,26 @@ mod manifest;
 mod session;
 mod store;
 mod transport;
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+mod wasm;
 mod wire;
 
 pub use address::ChatAddress;
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+pub use db::indexed_db::IndexedDbChatDb;
 #[cfg(feature = "sqlite")]
 pub use db::sqlite::SqliteChatDb;
 pub use db::{
-    AuthorityTrust, ChatDb, InboundEnvelope, InboundState, InboxMessage, LocalIdentity,
-    ManifestTrust, OutboxEntry, Pending,
+    AuthorityTrust, ChatDb, InboundEnvelope, InboundFailureKind, InboundState, InboxMessage,
+    LocalIdentity, ManifestTrust, OutboxEntry, Pending, SentMessage,
 };
-pub use engine::{ChatEvent, Engine, EngineState, ReceiveReport};
+pub use engine::{
+    ChatEvent, Engine, EngineState, InboundFailure, PreKeyMaintenanceReport, ReceiveReport,
+};
 pub use error::{ChatError, Result};
 pub use kutup_chat_proto::{ChatContent, DeliveredEnvelope, OutgoingEnvelope, TextBody};
 pub use manifest::{verify_bundle_response, verify_manifest, AccountAuthority, ManifestPolicy};
 pub use session::{ReceivedMessage, SendSummary, Session};
 pub use transport::{ChatTransport, SendOutcome};
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+pub use wasm::WasmChatClient;

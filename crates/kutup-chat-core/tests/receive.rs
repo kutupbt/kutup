@@ -12,8 +12,8 @@ use std::rc::Rc;
 use async_trait::async_trait;
 use futures_executor::block_on;
 use kutup_chat_core::{
-    ChatAddress, ChatContent, ChatTransport, Engine, EngineState, Result, SendOutcome, Session,
-    SqliteChatDb,
+    ChatAddress, ChatContent, ChatTransport, Engine, EngineState, InboundFailureKind, InboundState,
+    Result, SendOutcome, Session, SqliteChatDb,
 };
 use kutup_chat_proto::{
     DeliveredEnvelope, DevicePreKeyBundle, MailboxPage, OutgoingEnvelope,
@@ -133,7 +133,7 @@ impl ChatTransport for Mailbox {
             more,
         })
     }
-    async fn ack(&self, ids: &[String]) -> Result<()> {
+    async fn ack(&self, _device_id: u32, ids: &[String]) -> Result<()> {
         let set: HashSet<&String> = ids.iter().collect();
         self.inbox.borrow_mut().retain(|e| !set.contains(&e.id));
         self.acked.borrow_mut().extend(ids.iter().cloned());
@@ -153,8 +153,9 @@ fn drains_decrypts_persists_and_acks_resuming_from_cursor() {
     let (env1, env2) = {
         // Generate Bob's device into bob_db (keys persist there); the Session itself
         // is only needed to serve the bundle, then dropped.
-        let bob = block_on(Session::generate(bob_db.open(), "bob", 1, 10, &mut rng)).unwrap();
+        let mut bob = block_on(Session::generate(bob_db.open(), "bob", 1, 10, &mut rng)).unwrap();
         let bundle = serve_bundle(bob.registration().unwrap(), 1);
+        block_on(bob.complete_registration(1)).unwrap();
 
         let mut alice = in_memory("alice", 1, &mut rng);
         block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
@@ -260,6 +261,35 @@ fn dedups_a_redelivered_cursor() {
 }
 
 #[test]
+fn authenticated_replay_with_a_new_cursor_is_classified_and_acked() {
+    let mut rng = test_rng();
+    let bob_addr = ChatAddress::local("bob", 1);
+    let bob_session = in_memory("bob", 1, &mut rng);
+    let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
+    let mut alice = in_memory("alice", 1, &mut rng);
+    block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
+    let env = block_on(alice.encrypt(
+        &bob_addr,
+        bundle.registration_id,
+        &ChatContent::text("replay", 1, "once"),
+        &mut rng,
+    ))
+    .unwrap();
+    let server = Rc::new(Mailbox::default());
+    server.deposit(vec![
+        deliver(&env, "alice", "replay-a", 1),
+        deliver(&env, "alice", "replay-b", 2),
+    ]);
+
+    let mut bob = Engine::new(bob_session, server.clone());
+    let report = block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(report.messages.len(), 1);
+    assert!(report.errors.is_empty());
+    assert_eq!(report.duplicates, vec!["replay-b"]);
+    assert_eq!(server.acked(), vec!["replay-a", "replay-b"]);
+}
+
+#[test]
 fn decrypt_failure_is_durable_and_never_silently_acked() {
     let mut rng = test_rng();
     let bob = in_memory("bob", 1, &mut rng);
@@ -278,12 +308,17 @@ fn decrypt_failure_is_durable_and_never_silently_acked() {
     let mut engine = Engine::new(bob, server.clone());
     let first = block_on(engine.receive(&mut rng)).unwrap();
     assert_eq!(first.errors.len(), 1);
+    assert_eq!(first.errors[0].kind, InboundFailureKind::MalformedEnvelope);
     assert!(server.acked().is_empty(), "failed ciphertext was not acked");
     assert_eq!(engine.state(), EngineState::Degraded);
     let retained = block_on(engine.inbound_attention()).unwrap();
     assert_eq!(retained.len(), 1);
     assert_eq!(retained[0].id, "broken-1");
     assert_eq!(retained[0].attempts, 1);
+    assert_eq!(
+        retained[0].failure_kind,
+        Some(InboundFailureKind::MalformedEnvelope)
+    );
 
     // The server query resumes after cursor 1, but the local journal retries the
     // ciphertext. It remains unacked and visible rather than disappearing.
@@ -292,4 +327,13 @@ fn decrypt_failure_is_durable_and_never_silently_acked() {
     assert!(server.acked().is_empty());
     let retained = block_on(engine.inbound_attention()).unwrap();
     assert_eq!(retained[0].attempts, 2);
+
+    // Explicit quarantine commits locally before acking, retains a visible dead
+    // letter, and lets the user remove that local record after inspection.
+    block_on(engine.quarantine_inbound("broken-1")).unwrap();
+    assert_eq!(server.acked(), vec!["broken-1"]);
+    let retained = block_on(engine.inbound_attention()).unwrap();
+    assert_eq!(retained[0].state, InboundState::DeadLetter);
+    block_on(engine.resolve_dead_letter("broken-1")).unwrap();
+    assert!(block_on(engine.inbound_attention()).unwrap().is_empty());
 }

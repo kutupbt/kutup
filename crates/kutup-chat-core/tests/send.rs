@@ -204,7 +204,7 @@ impl ChatTransport for MockServer {
         })
     }
 
-    async fn ack(&self, _ids: &[String]) -> Result<()> {
+    async fn ack(&self, _device_id: u32, _ids: &[String]) -> Result<()> {
         Ok(())
     }
 }
@@ -509,6 +509,23 @@ fn outbox_persists_across_failure_and_flush_resends() {
         0,
         "outbox cleared"
     );
+    let history = block_on(alice.session().sent_history()).unwrap();
+    assert_eq!(history.len(), 1);
+    assert!(history[0].delivered);
+    assert_eq!(
+        serde_json::from_slice::<ChatContent>(&history[0].content)
+            .unwrap()
+            .as_text()
+            .unwrap()
+            .text,
+        "survives a crash"
+    );
+
+    let delivery_count = server.delivered.borrow().len();
+    let repeated = block_on(alice.send("s4", "bob", &msg, &mut rng)).unwrap();
+    assert!(repeated.delivered && repeated.deduplicated);
+    assert_eq!(repeated.attempts, 0);
+    assert_eq!(server.delivered.borrow().len(), delivery_count);
 
     assert_eq!(
         decrypt_for(

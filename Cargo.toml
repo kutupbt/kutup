@@ -17,7 +17,7 @@ members = ["crates/*"]
 # tree (git, ~large) and needs protoc at build time, so it must not tax the
 # app/server/CLI `cargo build`/`cargo test`. It is its own standalone workspace
 # and depends on kutup-chat-proto by path. The native/wasm chat clients link it.
-exclude = ["src-tauri", "crates/kutup-chat-core"]
+exclude = ["src-tauri", "crates/kutup-chat-core", "crates/kutup-client-ffi"]
 
 [workspace.package]
 edition = "2021"

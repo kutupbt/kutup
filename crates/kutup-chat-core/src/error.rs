@@ -11,6 +11,24 @@ pub enum ChatError {
     /// contains key material.
     #[error("crypto: {0}")]
     Protocol(String),
+    /// A session or prekey needed to decrypt is unavailable and may be repaired.
+    #[error("missing session or prekey: {0}")]
+    MissingKeyMaterial(String),
+    /// libsignal rejected a changed/untrusted identity.
+    #[error("untrusted identity: {0}")]
+    UntrustedIdentity(String),
+    /// Authenticated replay / already-consumed message.
+    #[error("duplicate message: {0}")]
+    DuplicateMessage(String),
+    /// Structurally or cryptographically invalid ciphertext.
+    #[error("malformed ciphertext: {0}")]
+    MalformedCiphertext(String),
+    /// The envelope selected a suite this client does not implement.
+    #[error("unsupported encryption suite {0}")]
+    UnsupportedSuite(u16),
+    /// Plaintext-sender mode requires a sender address on every envelope.
+    #[error("delivered envelope has no sender")]
+    MissingSender,
     /// A wire blob wasn't valid base64 / had the wrong length / wrong type.
     #[error("malformed wire field: {0}")]
     Wire(String),
@@ -40,14 +58,74 @@ pub enum ChatError {
 
 impl From<libsignal_protocol::SignalProtocolError> for ChatError {
     fn from(e: libsignal_protocol::SignalProtocolError) -> Self {
-        // Display, not Debug: keep it human and free of internal structure.
-        ChatError::Protocol(e.to_string())
+        use libsignal_protocol::SignalProtocolError as Signal;
+        let message = e.to_string();
+        match e {
+            Signal::InvalidPreKeyId
+            | Signal::InvalidSignedPreKeyId
+            | Signal::InvalidKyberPreKeyId
+            | Signal::SessionNotFound(_)
+            | Signal::NoSenderKeyState { .. } => ChatError::MissingKeyMaterial(message),
+            Signal::UntrustedIdentity(_) => ChatError::UntrustedIdentity(message),
+            Signal::DuplicatedMessage(_, _) => ChatError::DuplicateMessage(message),
+            Signal::ApplicationCallbackError(_, _) => ChatError::Db(message),
+            Signal::InvalidProtobufEncoding
+            | Signal::CiphertextMessageTooShort(_)
+            | Signal::LegacyCiphertextVersion(_)
+            | Signal::UnrecognizedCiphertextVersion(_)
+            | Signal::UnrecognizedMessageVersion(_)
+            | Signal::NoKeyTypeIdentifier
+            | Signal::BadKeyType(_)
+            | Signal::BadKeyLength(_, _)
+            | Signal::InvalidKeyAgreement
+            | Signal::SignatureValidationFailed
+            | Signal::InvalidMacKeyLength(_)
+            | Signal::InvalidSessionStructure(_)
+            | Signal::InvalidSenderKeySession { .. }
+            | Signal::InvalidRegistrationId(_, _)
+            | Signal::InvalidMessage(_, _)
+            | Signal::InvalidSealedSenderMessage(_)
+            | Signal::UnknownSealedSenderVersion(_)
+            | Signal::SealedSenderSelfSend
+            | Signal::UnknownSealedSenderServerCertificateId(_)
+            | Signal::BadKEMKeyType(_)
+            | Signal::WrongKEMKeyType(_, _)
+            | Signal::BadKEMKeyLength(_, _)
+            | Signal::BadKEMCiphertextLength(_, _) => ChatError::MalformedCiphertext(message),
+            Signal::InvalidArgument(_)
+            | Signal::InvalidState(_, _)
+            | Signal::InvalidProtocolAddress { .. }
+            | Signal::FfiBindingError(_) => ChatError::Protocol(message),
+        }
     }
 }
 
 impl From<base64::DecodeError> for ChatError {
     fn from(e: base64::DecodeError) -> Self {
         ChatError::Wire(e.to_string())
+    }
+}
+
+impl ChatError {
+    pub(crate) fn inbound_failure_kind(&self) -> crate::InboundFailureKind {
+        use crate::InboundFailureKind as Kind;
+        match self {
+            Self::Wire(_) => Kind::MalformedEnvelope,
+            Self::MalformedCiphertext(_) => Kind::MalformedCiphertext,
+            Self::MissingKeyMaterial(_) => Kind::MissingKeyMaterial,
+            Self::UntrustedIdentity(_) => Kind::UntrustedIdentity,
+            Self::UnsupportedSuite(_) => Kind::UnsupportedSuite,
+            Self::MissingSender => Kind::MissingSender,
+            Self::Db(_) => Kind::Store,
+            Self::DuplicateMessage(_) => Kind::Duplicate,
+            Self::Protocol(_)
+            | Self::Content(_)
+            | Self::Invalid(_)
+            | Self::Transport(_)
+            | Self::Trust(_)
+            | Self::SendNotConverged(_)
+            | Self::MissingBundle(_) => Kind::Unknown,
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 data/
 .env
 frontend/dist/
+frontend/public/chat-wasm/
 frontend/node_modules/
 frontend/package-lock.json
 nginx/certs/

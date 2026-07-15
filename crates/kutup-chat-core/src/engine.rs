@@ -13,18 +13,22 @@ use std::rc::Rc;
 
 use rand::{CryptoRng, Rng};
 
-use crate::db::{ChatDb, InboundEnvelope, InboundState};
+use crate::db::{ChatDb, InboundEnvelope, InboundFailureKind, InboundState};
 use crate::error::{ChatError, Result};
 use crate::manifest::{AccountAuthority, ManifestPolicy};
 use crate::session::{ReceiveOutcome, ReceivedMessage, SendSummary, Session};
 use crate::transport::{ChatTransport, SendOutcome};
-use kutup_chat_proto::{ChatContent, DeviceManifest, OutgoingEnvelope, SendMessagesRequest};
+use kutup_chat_proto::{
+    ChatContent, DeviceManifest, OutgoingEnvelope, PreKeyCountResponse, SendMessagesRequest,
+};
 
 /// How many send/recovery rounds a single message gets before giving up. Each 409
 /// consumes one; a well-behaved server converges in 1–2.
 const MAX_SEND_ATTEMPTS: u32 = 5;
 /// Drain page size (the contract caps it at 500).
 const DRAIN_LIMIT: u32 = 500;
+/// Keep used EC prekey private material for late concurrent prekey messages.
+const USED_PREKEY_GRACE_MS: i64 = 14 * 24 * 60 * 60 * 1000;
 
 /// The outcome of a reconciliation pass. Decrypt failures remain in the durable
 /// inbound journal and are reported here; they are never silently acknowledged.
@@ -33,8 +37,25 @@ pub struct ReceiveReport {
     pub messages: Vec<ReceivedMessage>,
     /// Ids that decrypted but whose plaintext wasn't a valid content document.
     pub undecodable: Vec<String>,
-    /// `(id, error)` for envelopes retained for repair/retry.
-    pub errors: Vec<(String, String)>,
+    /// Envelopes retained for repair/retry.
+    pub errors: Vec<InboundFailure>,
+    /// Authenticated replays that were safely moved directly to pending-ack.
+    pub duplicates: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InboundFailure {
+    pub id: String,
+    pub kind: InboundFailureKind,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PreKeyMaintenanceReport {
+    pub before: PreKeyCountResponse,
+    pub after: PreKeyCountResponse,
+    pub uploaded_ec: usize,
+    pub uploaded_kyber: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,7 +73,15 @@ pub enum ChatEvent {
     MessageReceived(Box<ReceivedMessage>),
     MessageSent(SendSummary),
     IdentityChanged(Vec<crate::ChatAddress>),
-    InboundNeedsAttention { id: String, error: String },
+    InboundNeedsAttention {
+        id: String,
+        kind: InboundFailureKind,
+        error: String,
+    },
+    PreKeysReplenished {
+        ec: usize,
+        kyber: usize,
+    },
 }
 
 /// A registered chat client: one device plus its transport.
@@ -103,15 +132,29 @@ impl Engine {
         num_one_time: usize,
         rng: &mut R,
     ) -> Result<Self> {
-        // Provisional device id 1; the server assigns the real one below (no crypto
-        // op runs before that, so the provisional value is never used on the wire).
-        let mut session = Session::generate(db, user, 1, num_one_time, rng).await?;
+        let user = user.into();
+        // Registration is restart-safe. Generation persists both private keys
+        // and the exact request atomically; a retry reuses that journal. Once a
+        // device id is committed, initialization simply reopens the install.
+        let mut session = match db.load_local_identity().await? {
+            Some(local) => match local.device_id {
+                Some(device_id) => {
+                    return Self::open(db, transport, user, device_id).await;
+                }
+                None => Session::resume_registration(db, user, local).await?,
+            },
+            None => {
+                // Provisional id 1 is never used for a crypto operation before
+                // the server response binds the real id.
+                Session::generate(db, user, 1, num_one_time, rng).await?
+            }
+        };
         let request = session
             .registration()
             .expect("a freshly generated session carries its registration")
             .clone();
         let device_id = transport.register_device(&request).await?;
-        session.set_device_id(device_id);
+        session.complete_registration(device_id).await?;
         Ok(Engine::new(session, transport))
     }
 
@@ -150,8 +193,28 @@ impl Engine {
             .pending_inbound()
             .await?
             .into_iter()
-            .filter(|item| item.state != InboundState::PendingAck)
+            .filter(|item| {
+                !matches!(
+                    item.state,
+                    InboundState::PendingAck | InboundState::DeadLetterPendingAck
+                )
+            })
             .collect())
+    }
+
+    /// Explicitly quarantine an unrecoverable envelope. The durable state is
+    /// committed before the server ack; a lost ack is retried by `receive`.
+    pub async fn quarantine_inbound(&mut self, id: &str) -> Result<()> {
+        self.session.quarantine_inbound(id).await?;
+        let ids = vec![id.to_string()];
+        self.transport.ack(self.session.device_id(), &ids).await?;
+        self.session.finish_acks(&ids).await
+    }
+
+    /// Remove a locally retained dead-letter record after the application/user
+    /// has inspected or exported it.
+    pub async fn resolve_dead_letter(&mut self, id: &str) -> Result<()> {
+        self.session.resolve_dead_letter(id).await
     }
 
     pub fn manifest_policy(&self) -> ManifestPolicy {
@@ -229,6 +292,71 @@ impl Engine {
         Ok(self.session.pending_outbox().await?.len())
     }
 
+    /// Flush any crash-surviving key upload, then refill each one-time pool when
+    /// it drops below `low_watermark`. Private keys and the exact request become
+    /// durable atomically before the network call, so retries never publish keys
+    /// the client has lost.
+    pub async fn maintain_prekeys<R: Rng + CryptoRng>(
+        &mut self,
+        low_watermark: usize,
+        target: usize,
+        rng: &mut R,
+    ) -> Result<PreKeyMaintenanceReport> {
+        if low_watermark == 0 || target < low_watermark || target > 100 {
+            return Err(ChatError::Invalid(
+                "prekey policy requires 0 < lowWatermark <= target <= 100".into(),
+            ));
+        }
+        let transport = Rc::clone(&self.transport);
+        let device_id = self.session.device_id();
+        let mut uploaded_ec = 0;
+        let mut uploaded_kyber = 0;
+
+        if let Some(pending) = self.session.pending_prekey_upload().await? {
+            uploaded_ec += pending.one_time_pre_keys.len();
+            uploaded_kyber += pending.one_time_kyber_pre_keys.len();
+            transport.replenish_prekeys(device_id, &pending).await?;
+            self.session.complete_prekey_upload().await?;
+        }
+
+        let before = transport.prekey_count(device_id).await?;
+        let needed_ec = if before.one_time_pre_keys < low_watermark as u64 {
+            target.saturating_sub(before.one_time_pre_keys as usize)
+        } else {
+            0
+        };
+        let needed_kyber = if before.one_time_kyber_pre_keys < low_watermark as u64 {
+            target.saturating_sub(before.one_time_kyber_pre_keys as usize)
+        } else {
+            0
+        };
+        if needed_ec > 0 || needed_kyber > 0 {
+            let request = self
+                .session
+                .prepare_prekey_replenishment(needed_ec, needed_kyber, rng)
+                .await?;
+            transport.replenish_prekeys(device_id, &request).await?;
+            self.session.complete_prekey_upload().await?;
+            uploaded_ec += request.one_time_pre_keys.len();
+            uploaded_kyber += request.one_time_kyber_pre_keys.len();
+        }
+        let after = if uploaded_ec > 0 || uploaded_kyber > 0 {
+            self.events.push_back(ChatEvent::PreKeysReplenished {
+                ec: uploaded_ec,
+                kyber: uploaded_kyber,
+            });
+            transport.prekey_count(device_id).await?
+        } else {
+            before.clone()
+        };
+        Ok(PreKeyMaintenanceReport {
+            before,
+            after,
+            uploaded_ec,
+            uploaded_kyber,
+        })
+    }
+
     /// Send `content` to every active device of `peer_user`. Persists the ciphertext
     /// in a durable `sendId`-keyed outbox before hitting the network, recovers from
     /// `409 DeviceListMismatch`, and drops the outbox entry once delivered.
@@ -239,6 +367,44 @@ impl Engine {
         content: &ChatContent,
         rng: &mut R,
     ) -> Result<SendSummary> {
+        // A caller retry with the same logical id must never advance the
+        // ratchet again. Reuse the exact durable ciphertext, or no-op if its
+        // delivery was already confirmed locally.
+        if let Some(entry) = self.session.outbox_entry(send_id).await? {
+            if entry.peer != peer_user {
+                return Err(ChatError::Invalid(format!(
+                    "sendId {send_id} is already bound to {}",
+                    entry.peer
+                )));
+            }
+            let envelopes = serde_json::from_slice(&entry.envelopes)
+                .map_err(|error| ChatError::Db(format!("decode durable outbox: {error}")))?;
+            let mut summary = SendSummary::default();
+            self.deliver(send_id, peer_user, envelopes, &mut summary, rng)
+                .await?;
+            self.events
+                .push_back(ChatEvent::MessageSent(summary.clone()));
+            return Ok(summary);
+        }
+        if let Some(sent) = self.session.sent_message(send_id).await? {
+            if sent.peer != peer_user {
+                return Err(ChatError::Invalid(format!(
+                    "sendId {send_id} is already bound to {}",
+                    sent.peer
+                )));
+            }
+            if sent.delivered {
+                return Ok(SendSummary {
+                    delivered: true,
+                    deduplicated: true,
+                    attempts: 0,
+                    ..SendSummary::default()
+                });
+            }
+            return Err(ChatError::Db(format!(
+                "send {send_id} is pending but has no durable ciphertext"
+            )));
+        }
         let bundles = self.fetch_verified_bundles(peer_user).await?;
         let mut summary = SendSummary::default();
         let envelopes = self
@@ -307,6 +473,8 @@ impl Engine {
         } else {
             self.set_state(EngineState::Degraded);
         }
+        let cutoff = unix_millis().saturating_sub(USED_PREKEY_GRACE_MS);
+        self.session.purge_used_pre_keys(cutoff).await?;
         Ok(report)
     }
 
@@ -320,9 +488,12 @@ impl Engine {
         for inbound in self.session.pending_inbound().await? {
             if matches!(
                 inbound.state,
-                InboundState::PendingAck | InboundState::DeadLetter
+                InboundState::PendingAck | InboundState::DeadLetterPendingAck
             ) {
                 ack_ids.push(inbound.id);
+                continue;
+            }
+            if inbound.state == InboundState::DeadLetter {
                 continue;
             }
             if only_ids.is_some_and(|ids| !ids.contains(&inbound.id)) {
@@ -332,10 +503,17 @@ impl Engine {
                 Ok(envelope) => envelope,
                 Err(error) => {
                     let error = ChatError::Wire(error.to_string());
-                    self.session
+                    let state = self
+                        .session
                         .record_inbound_failure(inbound.clone(), &error)
                         .await?;
-                    report.errors.push((inbound.id, error.to_string()));
+                    debug_assert_eq!(state, InboundState::PendingDecrypt);
+                    let kind = error.inbound_failure_kind();
+                    report.errors.push(InboundFailure {
+                        id: inbound.id,
+                        kind,
+                        error: error.to_string(),
+                    });
                     continue;
                 }
             };
@@ -351,21 +529,35 @@ impl Engine {
                     report.undecodable.push(id);
                 }
                 Err(error) => {
-                    self.session
+                    let state = self
+                        .session
                         .record_inbound_failure(inbound.clone(), &error)
                         .await?;
+                    let kind = error.inbound_failure_kind();
+                    if state == InboundState::PendingAck {
+                        ack_ids.push(inbound.id.clone());
+                        report.duplicates.push(inbound.id);
+                        continue;
+                    }
                     self.events.push_back(ChatEvent::InboundNeedsAttention {
                         id: inbound.id.clone(),
+                        kind,
                         error: error.to_string(),
                     });
-                    report.errors.push((inbound.id, error.to_string()));
+                    report.errors.push(InboundFailure {
+                        id: inbound.id,
+                        kind,
+                        error: error.to_string(),
+                    });
                 }
             }
         }
 
         if !ack_ids.is_empty() {
-            self.transport.ack(&ack_ids).await?;
-            self.session.clear_acked(&ack_ids).await?;
+            self.transport
+                .ack(self.session.device_id(), &ack_ids)
+                .await?;
+            self.session.finish_acks(&ack_ids).await?;
         }
         Ok(())
     }
@@ -399,7 +591,7 @@ impl Engine {
             };
             match transport.send(peer_user, &request).await? {
                 SendOutcome::Delivered { deduplicated } => {
-                    self.session.complete_send(send_id).await?;
+                    self.session.complete_send(send_id, deduplicated).await?;
                     summary.delivered = true;
                     summary.deduplicated = deduplicated;
                     return Ok(());
@@ -425,4 +617,8 @@ impl Engine {
             .accept_bundle_response(peer_user, response, self.manifest_policy)
             .await
     }
+}
+
+fn unix_millis() -> i64 {
+    crate::clock::unix_millis()
 }

@@ -14,8 +14,9 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use kutup_chat_proto::{
-    DeviceListMismatch, DeviceManifest, MailboxPage, RegisterChatDeviceRequest,
-    SendMessagesRequest, UserPreKeyBundlesResponse,
+    DeviceListMismatch, DeviceManifest, MailboxPage, PreKeyCountResponse,
+    RegisterChatDeviceRequest, ReplenishKeysRequest, SendMessagesRequest,
+    UserPreKeyBundlesResponse,
 };
 
 /// The result of a `POST …/messages`. A `409 DeviceListMismatch` is modeled as a
@@ -55,6 +56,24 @@ pub trait ChatTransport {
         ))
     }
 
+    /// Remaining one-time EC/Kyber server pool sizes for the local device.
+    async fn prekey_count(&self, _device_id: u32) -> Result<PreKeyCountResponse> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement prekey counts".into(),
+        ))
+    }
+
+    /// Idempotently publish locally persisted replacement prekeys.
+    async fn replenish_prekeys(
+        &self,
+        _device_id: u32,
+        _request: &ReplenishKeysRequest,
+    ) -> Result<()> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement prekey replenishment".into(),
+        ))
+    }
+
     /// `POST /api/chat/users/{username}/messages` — multi-device send.
     async fn send(&self, username: &str, req: &SendMessagesRequest) -> Result<SendOutcome>;
 
@@ -62,5 +81,5 @@ pub trait ChatTransport {
     async fn drain(&self, device_id: u32, after: Option<u64>, limit: u32) -> Result<MailboxPage>;
 
     /// `POST /api/chat/messages/ack` — delete processed envelopes.
-    async fn ack(&self, ids: &[String]) -> Result<()>;
+    async fn ack(&self, device_id: u32, ids: &[String]) -> Result<()>;
 }

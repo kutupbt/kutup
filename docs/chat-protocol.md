@@ -8,26 +8,24 @@ wire-affecting parts of `docs/research/11-federated-chat.md`,
 
 **Normative language:** MUST / MUST NOT / SHOULD / MAY per RFC 2119.
 
-**No clients consume the contract yet** (the phase-2 server slice was
-smoke-tested against the dev stack but nothing builds against it). So v1 is
-built **correctly in one breaking pass** — the phase-2 shape is reshaped, not
-extended for backward compatibility. This matches kutup's pre-production
-posture (change DB schema directly, no compat shims).
+The phase-2 server, shared Rust engine, and browser WASM client now consume this
+contract. Kutup remains pre-production, but wire changes are no longer isolated
+server reshapes: they require a coordinated proto/core/web change, shared
+fixtures, and a deliberate protocol-version decision. Android and iOS bind the
+same engine next.
 
 **Element status tags** (every field/endpoint below carries one):
-- **[IMPL]** — already built in the phase-2 server (`crates/kutup-chat-proto`,
-  migration 021, `handlers/chat.rs`). Reshapeable — *not* frozen, since no
-  client depends on it.
+- **[IMPL]** — built in the server and/or shared client engine. The web client
+  freezes against these shapes now.
 - **[ADD]** — folded into the base v1 shape now (content schema, `sendId`,
   `cursor`, `Option` sender, capability block, per-account rate limit).
-- **[RSV]** — a later *subsystem* (device manifests, sealed sender, groups,
+- **[RSV]** — a later *subsystem* (sealed sender, groups,
   federation), but its **fields/shapes are baked into the v1 base types now**
   so building the subsystem later touches handlers, not the wire. Clients MUST
   tolerate reserved fields (accept, round-trip, ignore).
 
-Once a client ships against v1, the contract locks and the [IMPL]/[ADD]
-distinction stops mattering — everything below becomes the frozen base, and
-only [RSV] → implemented remains.
+The [IMPL]/[ADD] distinction records implementation history; both are the v1
+base. Later work is additive unless `protocolVersion` changes.
 
 ---
 
@@ -134,10 +132,20 @@ coarser 120/min IP outer wall (`RATE_LIMIT_CHAT_KEYS_IP_PER_MIN`). Mobile
 clients behind CGNAT therefore do not share the primary budget, while a
 hostile account cannot drain pools by moving across IPs. (`13-…` §7.)
 
-**[RSV] Staged prekey deletion.** From XMPP/OMEMO practice (`13-…` §6): a
-consumed one-time prekey MUST NOT be physically deleted while in-flight
-messages may target it. Mark used with a timestamp; sweep after a grace window
-(≥ 24 h). Never yank a prekey from the served set the instant it's consumed.
+**[IMPL] Staged local EC-prekey deletion.** A server stops serving a one-time
+prekey as soon as it allocates that key to one bundle fetch. The client does not
+physically delete the corresponding private EC prekey when libsignal consumes
+it: it marks it used, keeps it loadable for late concurrent prekey messages, and
+sweeps it after a 14-day grace window (matching the conservative OMEMO practice
+in `13-…` §6). The current crypto operation's overlay still sees the key as
+consumed, preserving libsignal semantics.
+
+**[IMPL] Crash-safe low-watermark refill.** `Engine::maintain_prekeys` checks
+the server pool, refills below a caller-selected watermark (recommended 20,
+target 100), and caps each key-type batch at 100. It atomically persists the new
+private keys and the exact `ReplenishKeysRequest` before networking. A lost
+response or app restart retries that same idempotent request; the server enforces
+the 100-key-per-type limit.
 
 ### 4.x Device manifest in the bundle response — [IMPL]
 
@@ -544,11 +552,15 @@ servers. Reserved for phase 3:
    persisted history. Covered by roundtrip/send/receive test suites. Not yet in
    core: sealed sender, groups, federation transport (all reserved), and the
    attachment `kind`.
-4. **web wasm adapters + minimal 1:1 UI**; then native clients follow their
+4. **web wasm adapters + minimal 1:1 UI — ✅ implemented**: account-scoped
+   IndexedDB, a DTO-only wasm-bindgen transport facade, Web Locks around every
+   ratchet transaction, capability-gated navigation, WebSocket hints feeding
+   REST reconciliation, durable inbound/outbound history, bilingual UI, and a
+   two-account Playwright roundtrip/reload spec. Native clients now follow their
    plans (`kutup-android`, `kutup-ios`). The engine's public API (kutup types
    only — libsignal never leaks) is the UniFFI/wasm binding surface.
 
-### 16.1 Hardening gate before client bindings
+### 16.1 Hardening gate before client bindings — [IMPL]
 
 The phase-2b engine proof established the crypto and durable-send invariants,
 but its first receive loop treated every decrypt error as skippable and acked
@@ -556,26 +568,45 @@ the envelope. That is not a production contract: a missing session, changed
 verified identity, local-store failure, or temporarily unavailable prekey can
 be recoverable. Client bindings MUST NOT freeze against that behavior.
 
-Before the web/native adapters ship, the engine MUST use a durable inbound
-pipeline:
+The engine uses this durable inbound pipeline before web/native adapters ship:
 
 1. Persist the raw delivered envelope locally before advancing the fetch
    cursor. WebSocket delivery remains only a reconciliation hint.
 2. On successful decrypt, atomically persist the ratchet advance, plaintext,
    and a `pendingAck` state; ack over REST only after that commit.
-3. Classify failures. Duplicate or authenticated-permanently-malformed input
-   MAY be dead-lettered and acked; missing session/prekey, identity change,
-   unsupported suite, database failure, and unclassified internal failures
-   MUST remain durable and unacked until repaired or explicitly quarantined.
+3. Persist a typed failure category (`malformedEnvelope`,
+   `malformedCiphertext`, `missingKeyMaterial`, `untrustedIdentity`,
+   `unsupportedSuite`, `missingSender`, `store`, `duplicate`, or `unknown`).
+   Authenticated duplicate replay moves directly to pending-ack. All other
+   failures remain durable and unacked until repaired or explicitly quarantined.
 4. A successful REST ack removes the local raw envelope. A lost ack response
    is safe: retrying the ack never re-decrypts the message.
-5. No failure path silently discards ciphertext. A client surfaces a durable
-   attention event for quarantined input.
+5. No failure path silently discards ciphertext. Explicit quarantine commits a
+   `deadLetterPendingAck` state before the server ack, then retains a local
+   `deadLetter` record until the application/user resolves it.
 
-The current synchronous `ChatDb` proof port is also not a valid IndexedDB
-boundary: browser IndexedDB calls complete asynchronously. Before WASM lands,
-`ChatDb` and the engine/store orchestration MUST become async (`?Send` is
-allowed), retaining the atomic unit-of-work semantics. Native SQLite may
-complete those async methods immediately. The bundled SQLite implementation is
-not encrypted at rest; SQLCipher/platform-secure keying is a separate native
-hardening requirement.
+`ChatDb` and the engine/store orchestration are async (`?Send`) so browser
+IndexedDB may yield while native SQLite completes immediately, without changing
+the atomic unit-of-work semantics. Tests/dev use the explicit plaintext
+`sqlite-bundled` feature. Native releases use the mutually selected `sqlcipher`
+feature and `open_encrypted` with a 256-bit platform-keystore key; the constructor
+checks `cipher_version` and refuses to open if ordinary SQLite was linked. The
+remaining native task is binding each app's Keychain/Keystore key plumbing to
+that constructor.
+
+### 16.2 Device-directory transaction boundary — [IMPL]
+
+The account row is the serialization point for the authenticated device set.
+Registration, revocation, and manifest publication take an update lock; bundle
+allocation and message delivery hold a shared lock from the device snapshot
+through their transaction commit. Bundle devices and their signed manifest are
+therefore one snapshot, and a send cannot pass exact-set validation while a
+device is concurrently added or removed. First-manifest publication also locks
+the account row because `FOR UPDATE` cannot lock a manifest row that does not
+exist yet.
+
+The server claims `sendId` before checking the current recipient set. An
+already-accepted retry returns deduplicated success even if the recipient added
+a device after the original commit; a new send that finds a mismatch rolls the
+claim back with the transaction. Requests with duplicate envelopes for one
+device are rejected.

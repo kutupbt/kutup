@@ -9,6 +9,8 @@
 //! verify (that's where verification is meaningful under E2EE — a malicious server
 //! could serve garbage regardless, and clients must not trust server-side checks).
 
+use std::collections::HashSet;
+
 use axum::extract::{Path, Query, State};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, StatusCode};
@@ -49,6 +51,7 @@ const DEFAULT_DRAIN_LIMIT: i64 = 100;
 /// Kilobyte-scale headroom over a `PreKeySignalMessage` (~1.8 KB with the PQ KEM).
 const MAX_CONTENT_BYTES: usize = 65536;
 const WS_TICKET_TTL_SECONDS: i64 = 60;
+const MAX_PREKEY_BATCH: usize = 100;
 
 /// Validates a base64 field and returns the decoded bytes (callers that only
 /// need validation ignore the return).
@@ -138,6 +141,13 @@ pub async fn register_device(
     if req.registration_id == 0 || req.registration_id > MAX_REGISTRATION_ID {
         return Err(AppError::bad_request("registrationId out of range"));
     }
+    if req.one_time_pre_keys.len() > MAX_PREKEY_BATCH
+        || req.one_time_kyber_pre_keys.len() > MAX_PREKEY_BATCH
+    {
+        return Err(AppError::bad_request(
+            "one-time prekey batches are limited to 100 keys per type",
+        ));
+    }
     b64_field("identityKey", &req.identity_key)?;
     validate_ec_prekey("signedPreKey", &req.signed_pre_key, true)?;
     validate_kem_prekey("lastResortKyberPreKey", &req.last_resort_kyber_pre_key)?;
@@ -149,6 +159,32 @@ pub async fn register_device(
     }
 
     let mut tx = state.pool.begin().await?;
+
+    // Lock the account row, including when it has no chat devices yet. `FOR
+    // UPDATE` over chat_devices alone does not lock an empty key range in
+    // PostgreSQL, so two first-install requests could otherwise both choose 1.
+    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+    // The exact request is durably retried after ambiguous network outcomes.
+    // Its identity key is generated once with the private store, making this a
+    // stable idempotency key without adding a caller-controlled token.
+    let existing: Option<i32> = sqlx::query_scalar(
+        "SELECT device_id FROM chat_devices WHERE user_id = $1 AND identity_key = $2",
+    )
+    .bind(user_id)
+    .bind(&req.identity_key)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(device_id) = existing {
+        tx.commit().await?;
+        return Ok(Json(RegisterChatDeviceResponse {
+            device_id: device_id as u32,
+        })
+        .into_response());
+    }
 
     // Serialize per-user registrations, then take the lowest free id.
     let taken: Vec<i32> = sqlx::query_scalar(
@@ -229,6 +265,14 @@ pub async fn publish_manifest(
     validate_manifest(&manifest)?;
     let manifest_hash = manifest.manifest_hash().map_err(AppError::bad_request)?;
     let mut tx = state.pool.begin().await?;
+
+    // This is the common serialization point for every device-set mutation and
+    // observation. It also locks the first-manifest case, where selecting the
+    // (not-yet-existent) manifest row `FOR UPDATE` cannot lock anything.
+    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
 
     let current: Option<(i64, String, String)> = sqlx::query_as(
         "SELECT version, manifest_hash, authority_key_id
@@ -447,15 +491,23 @@ pub async fn revoke_device(
     Path(device_id): Path<i32>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
+    let mut tx = state.pool.begin().await?;
+    // Serialize revocation with registration, manifest publication, bundle
+    // snapshots, and sends that validate this account's exact device set.
+    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
     let deleted = sqlx::query("DELETE FROM chat_devices WHERE user_id = $1 AND device_id = $2")
         .bind(user_id)
         .bind(device_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
     if deleted == 0 {
         return Err(AppError::not_found("no such chat device"));
     }
+    tx.commit().await?;
     state.chat_hub.close_device(user_id, device_id);
     Ok(StatusCode::NO_CONTENT.into_response())
 }
@@ -506,6 +558,14 @@ pub async fn replenish_keys(
     let user_id = trusted_uuid(&auth.user_id)?;
     require_device(&state, user_id, q.device_id).await?;
 
+    if req.one_time_pre_keys.len() > MAX_PREKEY_BATCH
+        || req.one_time_kyber_pre_keys.len() > MAX_PREKEY_BATCH
+    {
+        return Err(AppError::bad_request(
+            "one-time prekey batches are limited to 100 keys per type",
+        ));
+    }
+
     if let Some(spk) = &req.signed_pre_key {
         validate_ec_prekey("signedPreKey", spk, true)?;
     }
@@ -520,6 +580,7 @@ pub async fn replenish_keys(
     }
 
     let mut tx = state.pool.begin().await?;
+
     if let Some(spk) = &req.signed_pre_key {
         sqlx::query(
             "UPDATE chat_devices SET signed_pre_key_id = $3, signed_pre_key = $4,
@@ -631,6 +692,13 @@ pub async fn get_user_bundles(
 
     let mut tx = state.pool.begin().await?;
 
+    // Hold a stable account/device/manifest snapshot until the one-time keys
+    // have been allocated. Writers take `FOR UPDATE` on this same row.
+    sqlx::query("SELECT id FROM users WHERE id = $1 FOR SHARE")
+        .bind(target_id)
+        .execute(&mut *tx)
+        .await?;
+
     #[allow(clippy::type_complexity)]
     let devices: Vec<(
         i32,
@@ -724,17 +792,16 @@ pub async fn get_user_bundles(
         });
     }
 
-    tx.commit().await?;
-
     let manifest: Option<serde_json::Value> =
         sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
             .bind(target_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&mut *tx)
             .await?;
     let manifest = manifest
         .map(serde_json::from_value)
         .transpose()
         .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
+    tx.commit().await?;
 
     Ok(Json(UserPreKeyBundlesResponse {
         username,
@@ -784,28 +851,71 @@ pub async fn send_messages(
             ));
         }
     }
-    // The sender must address from one of their own registered chat devices.
-    require_device(&state, sender_id, req.sender_device_id as i32).await?;
-    let sender_username: String =
-        sqlx::query_scalar("SELECT COALESCE(username, '') FROM users WHERE id = $1")
-            .bind(sender_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let unique_devices: HashSet<u32> = req.envelopes.iter().map(|e| e.device_id).collect();
+    if unique_devices.len() != req.envelopes.len() {
+        return Err(AppError::bad_request(
+            "only one envelope is allowed per recipient device",
+        ));
+    }
 
-    let recipient: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
+    let recipient: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM users WHERE username = $1 AND is_active = true")
             .bind(&username)
             .fetch_optional(&state.pool)
             .await?;
-    let Some(recipient_id) = recipient else {
+    let Some((recipient_id,)) = recipient else {
         return Err(AppError::not_found("user not found"));
     };
+
+    // Lock both accounts in deterministic UUID order, then keep the recipient
+    // device set stable through mailbox insertion. Device registration,
+    // revocation, and manifest publication take `FOR UPDATE` on these rows.
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SELECT id FROM users WHERE id = $1 OR id = $2 ORDER BY id FOR SHARE")
+        .bind(sender_id)
+        .bind(recipient_id)
+        .fetch_all(&mut *tx)
+        .await?;
+
+    // The sender must address from one of their own registered chat devices.
+    let sender_username: Option<String> = sqlx::query_scalar(
+        "UPDATE chat_devices d SET last_seen_at = now()
+         FROM users u
+         WHERE d.user_id = $1 AND d.device_id = $2 AND u.id = d.user_id
+         RETURNING COALESCE(u.username, '')",
+    )
+    .bind(sender_id)
+    .bind(req.sender_device_id as i32)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let sender_username =
+        sender_username.ok_or_else(|| AppError::not_found("no such chat device"))?;
+
+    // Claim before validating the *current* recipient device set. A retry of a
+    // send that was already accepted must return the same success even if a
+    // recipient device was added or removed after that acceptance. For a new
+    // send, a later mismatch rolls this insert back with the transaction.
+    let claimed: Option<(String,)> = sqlx::query_as(
+        "INSERT INTO chat_sends (sender_user_id, sender_device_id, send_id)
+         VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING send_id",
+    )
+    .bind(sender_id)
+    .bind(req.sender_device_id as i32)
+    .bind(&req.send_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if claimed.is_none() {
+        tx.rollback().await?;
+        return Ok(
+            Json(json!({ "stored": req.envelopes.len(), "deduplicated": true })).into_response(),
+        );
+    }
 
     // Exact device-set check (Signal's missing/stale/extra contract).
     let current: Vec<(i32, i64)> =
         sqlx::query_as("SELECT device_id, registration_id FROM chat_devices WHERE user_id = $1")
             .bind(recipient_id)
-            .fetch_all(&state.pool)
+            .fetch_all(&mut *tx)
             .await?;
     let mut mismatch = DeviceListMismatch::default();
     for (dev, reg) in &current {
@@ -824,32 +934,12 @@ pub async fn send_messages(
         || !mismatch.stale_devices.is_empty()
         || !mismatch.extra_devices.is_empty()
     {
+        tx.rollback().await?;
         return Ok((StatusCode::CONFLICT, Json(mismatch)).into_response());
     }
 
     // Store, then push to live sockets (mailbox row first: the push is best-effort).
     let mut stored: Vec<(Uuid, i32, DeliveredEnvelope)> = Vec::with_capacity(req.envelopes.len());
-    let mut tx = state.pool.begin().await?;
-
-    // Idempotency gate: claim the sendId first (docs/chat-protocol.md §7.1). A repeat
-    // of a send whose response was lost finds the row already present and returns the
-    // same success without storing duplicate mailbox rows. The claim shares the
-    // transaction with the inserts, so a crash can't leave a claimed id with no messages.
-    let claimed: Option<(String,)> = sqlx::query_as(
-        "INSERT INTO chat_sends (sender_user_id, sender_device_id, send_id)
-         VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING send_id",
-    )
-    .bind(sender_id)
-    .bind(req.sender_device_id as i32)
-    .bind(&req.send_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if claimed.is_none() {
-        tx.rollback().await?;
-        return Ok(
-            Json(json!({ "stored": req.envelopes.len(), "deduplicated": true })).into_response(),
-        );
-    }
 
     for e in &req.envelopes {
         let (id, cursor, ts): (Uuid, i64, OffsetDateTime) = sqlx::query_as(

@@ -3,20 +3,22 @@
 //! `RefCell` because the engine is single-threaded and `apply` needs `&mut` for a
 //! transaction while reads only need `&`.
 //!
-//! At-rest encryption: the schema and access go through this one type, so wrapping
-//! the connection with SQLCipher (a `PRAGMA key`) or an app-layer cipher is a
-//! localized change behind the same port. v1 relies on the OS app-sandbox
-//! encryption of mobile private storage; SQLCipher is the tracked hardening step.
+//! Public native apps select the `sqlcipher` feature and call
+//! [`SqliteChatDb::open_encrypted`]. The constructor verifies SQLCipher is
+//! actually linked before touching the schema; a build accidentally linked to
+//! ordinary SQLite therefore fails closed. Plain [`open`](Self::open) exists for
+//! tests/dev tooling and must not be used by release bindings.
 
 use std::cell::RefCell;
 use std::path::Path;
 
 use async_trait::async_trait;
 use rusqlite::{Connection, OptionalExtension};
+use zeroize::Zeroize as _;
 
 use crate::db::{
-    AuthorityTrust, ChatDb, InboundEnvelope, InboundState, InboxMessage, LocalIdentity,
-    ManifestTrust, OutboxEntry, Pending,
+    AuthorityTrust, ChatDb, InboundEnvelope, InboundFailureKind, InboundState, InboxMessage,
+    LocalIdentity, ManifestTrust, OutboxEntry, Pending, SentMessage,
 };
 use crate::error::{ChatError, Result};
 
@@ -34,7 +36,8 @@ INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, 0);
 CREATE TABLE IF NOT EXISTS local_identity (
     id                INTEGER PRIMARY KEY CHECK (id = 1),
     identity_key_pair BLOB    NOT NULL,
-    registration_id   INTEGER NOT NULL
+    registration_id   INTEGER NOT NULL,
+    device_id          INTEGER
 );
 CREATE TABLE IF NOT EXISTS sessions (
     address TEXT PRIMARY KEY,
@@ -45,8 +48,9 @@ CREATE TABLE IF NOT EXISTS identities (
     identity_key BLOB NOT NULL
 );
 CREATE TABLE IF NOT EXISTS pre_keys (
-    id     INTEGER PRIMARY KEY,
-    record BLOB NOT NULL
+    id      INTEGER PRIMARY KEY,
+    record  BLOB NOT NULL,
+    used_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS signed_pre_keys (
     id     INTEGER PRIMARY KEY,
@@ -85,12 +89,24 @@ CREATE TABLE IF NOT EXISTS messages (
     received_at      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_by_cursor ON messages (cursor);
+CREATE TABLE IF NOT EXISTS sent_messages (
+    send_id        TEXT PRIMARY KEY,
+    peer           TEXT    NOT NULL,
+    content        BLOB    NOT NULL,
+    created_at     INTEGER NOT NULL,
+    delivered_at   INTEGER,
+    delivered      INTEGER NOT NULL,
+    deduplicated   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sent_messages_by_created_at
+    ON sent_messages (created_at, send_id);
 CREATE TABLE IF NOT EXISTS inbound_envelopes (
     id          TEXT PRIMARY KEY,
     cursor      INTEGER NOT NULL,
     envelope    BLOB    NOT NULL,
     state       INTEGER NOT NULL,
     attempts    INTEGER NOT NULL DEFAULT 0,
+    failure_kind INTEGER,
     last_error  TEXT,
     received_at INTEGER NOT NULL
 );
@@ -105,6 +121,14 @@ CREATE TABLE IF NOT EXISTS manifest_trust (
     trust_state        INTEGER NOT NULL,
     continuity_gap     INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pending_prekey_upload (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    request BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pending_chat_registration (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    request BLOB NOT NULL
+);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, 0);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
@@ -117,9 +141,38 @@ pub struct SqliteChatDb {
 }
 
 impl SqliteChatDb {
-    /// Open (creating if absent) the device store at `path`.
+    /// Open an unencrypted device store. Tests/dev only; release bindings use
+    /// [`open_encrypted`](Self::open_encrypted).
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Self::from_connection(db(Connection::open(path))?)
+    }
+
+    /// Open a SQLCipher database with a raw 256-bit platform-keystore key.
+    /// Fails if SQLCipher support is absent or the key cannot unlock an existing
+    /// database. The key never enters SQL or logs except as a short-lived,
+    /// zeroized hexadecimal PRAGMA buffer.
+    pub fn open_encrypted(path: impl AsRef<Path>, key: &[u8; 32]) -> Result<Self> {
+        let conn = db(Connection::open(path))?;
+        let mut key_hex = hex::encode(key);
+        let mut pragma = format!("PRAGMA key = \"x'{key_hex}'\";");
+        let keyed = conn.execute_batch(&pragma);
+        pragma.zeroize();
+        key_hex.zeroize();
+        db(keyed)?;
+
+        let cipher_version: Option<String> = db(conn
+            .query_row("PRAGMA cipher_version", [], |row| row.get(0))
+            .optional())?;
+        if cipher_version.as_deref().is_none_or(str::is_empty) {
+            return Err(ChatError::Db(
+                "SQLCipher is unavailable; refusing to open chat state unencrypted".into(),
+            ));
+        }
+        db(conn.execute_batch(
+            "PRAGMA cipher_memory_security = ON;
+             PRAGMA foreign_keys = ON;",
+        ))?;
+        Self::from_connection(conn)
     }
 
     /// An ephemeral in-memory store — for tests and throwaway sessions. State
@@ -135,6 +188,7 @@ impl SqliteChatDb {
         db(conn.pragma_update(None, "journal_mode", "WAL"))?;
         db(conn.pragma_update(None, "synchronous", "NORMAL"))?;
         db(conn.execute_batch(SCHEMA))?;
+        ensure_schema_upgrades(&conn)?;
         Ok(Self {
             conn: RefCell::new(conn),
         })
@@ -147,12 +201,13 @@ impl ChatDb for SqliteChatDb {
         let conn = self.conn.borrow();
         db(conn
             .query_row(
-                "SELECT identity_key_pair, registration_id FROM local_identity WHERE id = 1",
+                "SELECT identity_key_pair, registration_id, device_id FROM local_identity WHERE id = 1",
                 [],
                 |row| {
                     Ok(LocalIdentity {
                         identity_key_pair: row.get(0)?,
                         registration_id: row.get(1)?,
+                        device_id: row.get(2)?,
                     })
                 },
             )
@@ -176,6 +231,14 @@ impl ChatDb for SqliteChatDb {
 
     async fn load_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>> {
         blob_by_id(&self.conn.borrow(), "pre_keys", id)
+    }
+
+    async fn purge_used_pre_keys(&self, used_before_ms: i64) -> Result<u64> {
+        let changed = db(self.conn.borrow().execute(
+            "DELETE FROM pre_keys WHERE used_at IS NOT NULL AND used_at <= ?1",
+            [used_before_ms],
+        ))?;
+        Ok(changed as u64)
     }
 
     async fn load_signed_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>> {
@@ -257,6 +320,17 @@ impl ChatDb for SqliteChatDb {
         Ok(value.map(|n| n as u64))
     }
 
+    async fn load_last_sent_seq(&self) -> Result<Option<u64>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'last_sent_seq'",
+                [],
+                |row| row.get::<_, i64>(0).map(|v| v as u64),
+            )
+            .optional())
+    }
+
     async fn list_messages(&self) -> Result<Vec<InboxMessage>> {
         let conn = self.conn.borrow();
         let mut stmt = db(conn.prepare(
@@ -271,10 +345,32 @@ impl ChatDb for SqliteChatDb {
         Ok(out)
     }
 
+    async fn load_sent_message(&self, send_id: &str) -> Result<Option<SentMessage>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT send_id, peer, content, created_at, delivered_at, delivered, deduplicated
+                 FROM sent_messages WHERE send_id = ?1",
+                [send_id],
+                sent_message_row,
+            )
+            .optional())
+    }
+
+    async fn list_sent_messages(&self) -> Result<Vec<SentMessage>> {
+        let conn = self.conn.borrow();
+        let mut stmt = db(conn.prepare(
+            "SELECT send_id, peer, content, created_at, delivered_at, delivered, deduplicated
+             FROM sent_messages ORDER BY created_at, send_id",
+        ))?;
+        let rows = db(stmt.query_map([], sent_message_row))?;
+        rows.map(db).collect()
+    }
+
     async fn list_inbound(&self) -> Result<Vec<InboundEnvelope>> {
         let conn = self.conn.borrow();
         let mut stmt = db(conn.prepare(
-            "SELECT id, cursor, envelope, state, attempts, last_error, received_at \
+            "SELECT id, cursor, envelope, state, attempts, failure_kind, last_error, received_at \
              FROM inbound_envelopes ORDER BY cursor, id",
         ))?;
         let rows = db(stmt.query_map([], inbound_row))?;
@@ -316,18 +412,45 @@ impl ChatDb for SqliteChatDb {
             .optional())
     }
 
+    async fn load_pending_prekey_upload(&self) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT request FROM pending_prekey_upload WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional())
+    }
+
+    async fn load_pending_registration(&self) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT request FROM pending_chat_registration WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional())
+    }
+
     async fn apply(&self, pending: &Pending) -> Result<()> {
         let mut conn = self.conn.borrow_mut();
         let tx = db(conn.transaction())?;
 
         if let Some(local) = &pending.local_identity {
             db(tx.execute(
-                "INSERT INTO local_identity (id, identity_key_pair, registration_id) \
-                 VALUES (1, ?1, ?2) \
+                "INSERT INTO local_identity (id, identity_key_pair, registration_id, device_id) \
+                 VALUES (1, ?1, ?2, ?3) \
                  ON CONFLICT(id) DO UPDATE SET \
                    identity_key_pair = excluded.identity_key_pair, \
-                   registration_id = excluded.registration_id",
-                rusqlite::params![local.identity_key_pair, local.registration_id],
+                   registration_id = excluded.registration_id, \
+                   device_id = excluded.device_id",
+                rusqlite::params![
+                    local.identity_key_pair,
+                    local.registration_id,
+                    local.device_id
+                ],
             ))?;
         }
         for (address, record) in &pending.sessions {
@@ -350,11 +473,14 @@ impl ChatDb for SqliteChatDb {
         for (id, record) in &pending.pre_keys {
             match record {
                 Some(bytes) => db(tx.execute(
-                    "INSERT INTO pre_keys (id, record) VALUES (?1, ?2) \
-                     ON CONFLICT(id) DO UPDATE SET record = excluded.record",
+                    "INSERT INTO pre_keys (id, record, used_at) VALUES (?1, ?2, NULL) \
+                     ON CONFLICT(id) DO UPDATE SET record = excluded.record, used_at = NULL",
                     rusqlite::params![id, bytes],
                 ))?,
-                None => db(tx.execute("DELETE FROM pre_keys WHERE id = ?1", [id]))?,
+                None => db(tx.execute(
+                    "UPDATE pre_keys SET used_at = ?2 WHERE id = ?1 AND used_at IS NULL",
+                    rusqlite::params![id, unix_millis()],
+                ))?,
             };
         }
         for (id, record) in &pending.signed_pre_keys {
@@ -421,22 +547,44 @@ impl ChatDb for SqliteChatDb {
                 ],
             ))?;
         }
+        for (send_id, message) in &pending.sent_messages {
+            db(tx.execute(
+                "INSERT INTO sent_messages
+                     (send_id, peer, content, created_at, delivered_at, delivered, deduplicated)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(send_id) DO UPDATE SET
+                     peer = excluded.peer, content = excluded.content,
+                     delivered_at = excluded.delivered_at,
+                     delivered = excluded.delivered,
+                     deduplicated = excluded.deduplicated",
+                rusqlite::params![
+                    send_id,
+                    message.peer,
+                    message.content,
+                    message.created_at,
+                    message.delivered_at,
+                    i64::from(message.delivered),
+                    i64::from(message.deduplicated),
+                ],
+            ))?;
+        }
         for (id, inbound) in &pending.inbound {
             match inbound {
                 Some(item) => db(tx.execute(
                     "INSERT INTO inbound_envelopes \
-                     (id, cursor, envelope, state, attempts, last_error, received_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+                     (id, cursor, envelope, state, attempts, failure_kind, last_error, received_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
                      ON CONFLICT(id) DO UPDATE SET \
                        cursor = excluded.cursor, envelope = excluded.envelope, \
                        state = excluded.state, attempts = excluded.attempts, \
-                       last_error = excluded.last_error",
+                       failure_kind = excluded.failure_kind, last_error = excluded.last_error",
                     rusqlite::params![
                         id,
                         item.cursor as i64,
                         item.envelope,
                         item.state.code(),
                         item.attempts,
+                        item.failure_kind.map(InboundFailureKind::code),
                         item.last_error,
                         item.received_at
                     ],
@@ -468,12 +616,39 @@ impl ChatDb for SqliteChatDb {
                 ],
             ))?;
         }
+        if let Some(upload) = &pending.prekey_upload {
+            match upload {
+                Some(request) => db(tx.execute(
+                    "INSERT INTO pending_prekey_upload (id, request) VALUES (1, ?1)
+                     ON CONFLICT(id) DO UPDATE SET request = excluded.request",
+                    [request],
+                ))?,
+                None => db(tx.execute("DELETE FROM pending_prekey_upload WHERE id = 1", []))?,
+            };
+        }
+        if let Some(upload) = &pending.registration_upload {
+            match upload {
+                Some(request) => db(tx.execute(
+                    "INSERT INTO pending_chat_registration (id, request) VALUES (1, ?1)
+                     ON CONFLICT(id) DO UPDATE SET request = excluded.request",
+                    [request],
+                ))?,
+                None => db(tx.execute("DELETE FROM pending_chat_registration WHERE id = 1", []))?,
+            };
+        }
         if let Some(cursor) = pending.last_cursor {
             // MAX guards monotonicity: the drain cursor never moves backwards.
             db(tx.execute(
                 "INSERT INTO meta (key, value) VALUES ('last_cursor', ?1) \
                  ON CONFLICT(key) DO UPDATE SET value = MAX(value, excluded.value)",
                 [cursor as i64],
+            ))?;
+        }
+        if let Some(seq) = pending.last_sent_seq {
+            db(tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('last_sent_seq', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = MAX(value, excluded.value)",
+                [seq as i64],
             ))?;
         }
 
@@ -487,19 +662,68 @@ fn inbound_row(row: &rusqlite::Row) -> rusqlite::Result<Result<InboundEnvelope>>
     let envelope = row.get(2)?;
     let state_code: i64 = row.get(3)?;
     let attempts = row.get(4)?;
-    let last_error = row.get(5)?;
-    let received_at = row.get(6)?;
-    Ok(
-        InboundState::from_code(state_code).map(|state| InboundEnvelope {
+    let failure_code: Option<i64> = row.get(5)?;
+    let last_error = row.get(6)?;
+    let received_at = row.get(7)?;
+    let failure_kind = failure_code.map(InboundFailureKind::from_code).transpose();
+    Ok(InboundState::from_code(state_code).and_then(|state| {
+        failure_kind.map(|failure_kind| InboundEnvelope {
             id,
             cursor,
             envelope,
             state,
             attempts,
+            failure_kind,
             last_error,
             received_at,
-        }),
-    )
+        })
+    }))
+}
+
+/// The original proof schema predated typed inbound failures. SQLite lacks
+/// `ADD COLUMN IF NOT EXISTS`, so inspect before applying the additive upgrade.
+fn ensure_schema_upgrades(conn: &Connection) -> Result<()> {
+    if !has_column(conn, "inbound_envelopes", "failure_kind")? {
+        db(conn.execute(
+            "ALTER TABLE inbound_envelopes ADD COLUMN failure_kind INTEGER",
+            [],
+        ))?;
+    }
+    if !has_column(conn, "pre_keys", "used_at")? {
+        db(conn.execute("ALTER TABLE pre_keys ADD COLUMN used_at INTEGER", []))?;
+    }
+    if !has_column(conn, "local_identity", "device_id")? {
+        db(conn.execute(
+            "ALTER TABLE local_identity ADD COLUMN device_id INTEGER",
+            [],
+        ))?;
+    }
+    db(conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS pending_chat_registration (
+             id INTEGER PRIMARY KEY CHECK (id = 1), request BLOB NOT NULL
+         );",
+    ))?;
+    db(conn.execute(
+        "INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+         VALUES (4, 0), (5, 0), (6, 0), (7, 0)",
+        [],
+    ))?;
+    Ok(())
+}
+
+fn has_column(conn: &Connection, table: &str, wanted: &str) -> Result<bool> {
+    let mut stmt = db(conn.prepare(&format!("PRAGMA table_info({table})")))?;
+    let columns = db(stmt.query_map([], |row| row.get::<_, String>(1)))?;
+    for column in columns {
+        if db(column)? == wanted {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn unix_millis() -> i64 {
+    crate::clock::unix_millis()
 }
 
 /// Reads one row of the `messages` table into an [`InboxMessage`].
@@ -526,6 +750,18 @@ fn outbox_row(row: &rusqlite::Row) -> rusqlite::Result<OutboxEntry> {
     })
 }
 
+fn sent_message_row(row: &rusqlite::Row) -> rusqlite::Result<SentMessage> {
+    Ok(SentMessage {
+        send_id: row.get(0)?,
+        peer: row.get(1)?,
+        content: row.get(2)?,
+        created_at: row.get(3)?,
+        delivered_at: row.get(4)?,
+        delivered: row.get::<_, i64>(5)? != 0,
+        deduplicated: row.get::<_, i64>(6)? != 0,
+    })
+}
+
 /// `SELECT <col-named `record`> FROM <table> WHERE <key_col> = <key>`.
 fn blob(conn: &Connection, table: &str, key_col: &str, key: &str) -> Result<Option<Vec<u8>>> {
     let sql = format!("SELECT record FROM {table} WHERE {key_col} = ?1");
@@ -536,4 +772,101 @@ fn blob(conn: &Connection, table: &str, key_col: &str, key: &str) -> Result<Opti
 fn blob_by_id(conn: &Connection, table: &str, id: u32) -> Result<Option<Vec<u8>>> {
     let sql = format!("SELECT record FROM {table} WHERE id = ?1");
     db(conn.query_row(&sql, [id], |row| row.get(0)).optional())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upgrades_the_pre_typed_failure_journal_in_place() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+             CREATE TABLE inbound_envelopes (
+                 id TEXT PRIMARY KEY, cursor INTEGER NOT NULL, envelope BLOB NOT NULL,
+                 state INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+                 last_error TEXT, received_at INTEGER NOT NULL
+             );
+             CREATE TABLE pre_keys (id INTEGER PRIMARY KEY, record BLOB NOT NULL);",
+        )
+        .unwrap();
+        let db = SqliteChatDb::from_connection(conn).unwrap();
+        let count: i64 = db
+            .conn
+            .borrow()
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('inbound_envelopes')
+                 WHERE name = 'failure_kind'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert!(has_column(&db.conn.borrow(), "pre_keys", "used_at").unwrap());
+    }
+
+    #[test]
+    fn used_ec_prekeys_remain_loadable_until_the_grace_sweep() {
+        use futures_executor::block_on;
+
+        let db = SqliteChatDb::open_in_memory().unwrap();
+        let mut insert = Pending::default();
+        insert.pre_keys.insert(7, Some(vec![1, 2, 3]));
+        block_on(db.apply(&insert)).unwrap();
+        let mut used = Pending::default();
+        used.pre_keys.insert(7, None);
+        block_on(db.apply(&used)).unwrap();
+
+        assert_eq!(block_on(db.load_pre_key(7)).unwrap(), Some(vec![1, 2, 3]));
+        assert_eq!(block_on(db.purge_used_pre_keys(i64::MAX)).unwrap(), 1);
+        assert_eq!(block_on(db.load_pre_key(7)).unwrap(), None);
+    }
+
+    #[cfg(not(feature = "sqlcipher"))]
+    #[test]
+    fn encrypted_open_fails_closed_when_sqlcipher_is_not_linked() {
+        let path =
+            std::env::temp_dir().join(format!("kutup-chat-no-sqlcipher-{}.db", unix_millis()));
+        let result = SqliteChatDb::open_encrypted(&path, &[3; 32]);
+        assert!(matches!(result, Err(ChatError::Db(message)) if message.contains("unavailable")));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(feature = "sqlcipher")]
+    #[test]
+    fn sqlcipher_store_reopens_with_the_key_and_rejects_a_wrong_key() {
+        use futures_executor::block_on;
+
+        let path = std::env::temp_dir().join(format!("kutup-chat-sqlcipher-{}.db", unix_millis()));
+        let key = [7; 32];
+        let db = SqliteChatDb::open_encrypted(&path, &key).unwrap();
+        let mut seed = Pending::default();
+        seed.local_identity = Some(LocalIdentity {
+            identity_key_pair: vec![1, 2, 3],
+            registration_id: 42,
+            device_id: Some(1),
+        });
+        block_on(db.apply(&seed)).unwrap();
+        drop(db);
+
+        let raw = std::fs::read(&path).unwrap();
+        assert!(!raw
+            .windows(b"local_identity".len())
+            .any(|w| w == b"local_identity"));
+        let reopened = SqliteChatDb::open_encrypted(&path, &key).unwrap();
+        assert_eq!(
+            block_on(reopened.load_local_identity())
+                .unwrap()
+                .unwrap()
+                .registration_id,
+            42
+        );
+        drop(reopened);
+        assert!(SqliteChatDb::open_encrypted(&path, &[8; 32]).is_err());
+
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
 }

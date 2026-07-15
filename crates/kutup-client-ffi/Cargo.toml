@@ -1,0 +1,43 @@
+[package]
+name = "kutup-client-ffi"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+rust-version = "1.91.1"
+
+# Keep the native artifact out of the server/CLI workspace build. It pulls the
+# standalone libsignal chat core and is built only by the mobile release jobs.
+[workspace]
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+# Native releases must fail closed onto SQLCipher. There is intentionally no
+# plaintext SQLite feature in this FFI crate.
+default = ["sqlcipher"]
+sqlcipher = ["kutup-chat-core/sqlcipher"]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+async-trait = "0.1"
+futures-channel = "0.3"
+futures-executor = "0.3"
+kutup-chat-core = { path = "../kutup-chat-core", default-features = false }
+kutup-chat-proto = { path = "../kutup-chat-proto" }
+rand = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+time = { version = "0.3", features = ["formatting"] }
+uniffi = "=0.32.0"
+urlencoding = "2"
+zeroize = "1"
+
+[dev-dependencies]
+tempfile = "3"

@@ -4,7 +4,12 @@
 target/
 .git/
 **/node_modules/
-frontend/
+# The frontend image now uses the repo root so it can compile kutup-chat-core
+# to WASM. Keep its sources in context while excluding generated/heavy assets.
+frontend/dist/
+frontend/public/chat-wasm/
+frontend/public/onlyoffice/dist/
+frontend/public/onlyoffice/templates/
 src-tauri/
 backend/
 cmd/
