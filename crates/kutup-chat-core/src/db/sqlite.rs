@@ -15,7 +15,8 @@ use async_trait::async_trait;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::db::{
-    ChatDb, InboundEnvelope, InboundState, InboxMessage, LocalIdentity, OutboxEntry, Pending,
+    AuthorityTrust, ChatDb, InboundEnvelope, InboundState, InboxMessage, LocalIdentity,
+    ManifestTrust, OutboxEntry, Pending,
 };
 use crate::error::{ChatError, Result};
 
@@ -95,6 +96,16 @@ CREATE TABLE IF NOT EXISTS inbound_envelopes (
 );
 CREATE INDEX IF NOT EXISTS inbound_by_cursor ON inbound_envelopes (cursor, id);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, 0);
+CREATE TABLE IF NOT EXISTS manifest_trust (
+    peer               TEXT PRIMARY KEY,
+    authority_key_id   TEXT    NOT NULL,
+    self_authority_key TEXT    NOT NULL,
+    highest_version    INTEGER NOT NULL,
+    manifest_hash      TEXT    NOT NULL,
+    trust_state        INTEGER NOT NULL,
+    continuity_gap     INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, 0);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value INTEGER NOT NULL
@@ -274,6 +285,37 @@ impl ChatDb for SqliteChatDb {
         Ok(out)
     }
 
+    async fn load_manifest_trust(&self, peer: &str) -> Result<Option<ManifestTrust>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT peer, authority_key_id, self_authority_key, highest_version,
+                        manifest_hash, trust_state, continuity_gap
+                 FROM manifest_trust WHERE peer = ?1",
+                [peer],
+                |row| {
+                    let trust_state: i64 = row.get(5)?;
+                    let trust = AuthorityTrust::from_code(trust_state).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            5,
+                            rusqlite::types::Type::Integer,
+                            Box::new(error),
+                        )
+                    })?;
+                    Ok(ManifestTrust {
+                        peer: row.get(0)?,
+                        authority_key_id: row.get(1)?,
+                        self_authority_key: row.get(2)?,
+                        highest_version: row.get::<_, i64>(3)? as u64,
+                        manifest_hash: row.get(4)?,
+                        trust,
+                        continuity_gap: row.get::<_, i64>(6)? != 0,
+                    })
+                },
+            )
+            .optional())
+    }
+
     async fn apply(&self, pending: &Pending) -> Result<()> {
         let mut conn = self.conn.borrow_mut();
         let tx = db(conn.transaction())?;
@@ -401,6 +443,30 @@ impl ChatDb for SqliteChatDb {
                 ))?,
                 None => db(tx.execute("DELETE FROM inbound_envelopes WHERE id = ?1", [id]))?,
             };
+        }
+        for (peer, trust) in &pending.manifest_trust {
+            db(tx.execute(
+                "INSERT INTO manifest_trust
+                     (peer, authority_key_id, self_authority_key, highest_version,
+                      manifest_hash, trust_state, continuity_gap)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(peer) DO UPDATE SET
+                     authority_key_id = excluded.authority_key_id,
+                     self_authority_key = excluded.self_authority_key,
+                     highest_version = excluded.highest_version,
+                     manifest_hash = excluded.manifest_hash,
+                     trust_state = excluded.trust_state,
+                     continuity_gap = excluded.continuity_gap",
+                rusqlite::params![
+                    peer,
+                    trust.authority_key_id,
+                    trust.self_authority_key,
+                    trust.highest_version as i64,
+                    trust.manifest_hash,
+                    trust.trust.code(),
+                    i64::from(trust.continuity_gap),
+                ],
+            ))?;
         }
         if let Some(cursor) = pending.last_cursor {
             // MAX guards monotonicity: the drain cursor never moves backwards.

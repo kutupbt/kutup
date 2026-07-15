@@ -26,6 +26,10 @@ pub enum ChatError {
     /// The transport (the platform's HTTP/WS client) failed a request.
     #[error("transport: {0}")]
     Transport(String),
+    /// A signed device manifest was missing, invalid, rolled back, equivocated,
+    /// or inconsistent with the served prekey bundles.
+    #[error("device trust: {0}")]
+    Trust(String),
     /// A send exhausted its 409 device-list recovery attempts.
     #[error("send did not converge after {0} attempts")]
     SendNotConverged(u32),

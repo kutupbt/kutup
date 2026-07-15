@@ -21,7 +21,9 @@ use async_trait::async_trait;
 use libsignal_protocol::*;
 use uuid::Uuid;
 
-use crate::db::{ChatDb, InboundEnvelope, InboxMessage, LocalIdentity, OutboxEntry, Pending};
+use crate::db::{
+    ChatDb, InboundEnvelope, InboxMessage, LocalIdentity, ManifestTrust, OutboxEntry, Pending,
+};
 use crate::error::{ChatError, Result as ChatResult};
 
 /// libsignal's store traits return its own `Result` alias, which the crate does
@@ -176,6 +178,13 @@ impl ChatStore {
             .borrow_mut()
             .inbound
             .insert(id.to_string(), None);
+    }
+
+    pub(crate) fn stage_manifest_trust(&self, trust: ManifestTrust) {
+        self.pending
+            .borrow_mut()
+            .manifest_trust
+            .insert(trust.peer.clone(), trust);
     }
 
     /// Stage a drain-cursor advance (monotonic — keeps the max).

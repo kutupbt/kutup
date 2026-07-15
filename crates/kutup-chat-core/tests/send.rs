@@ -11,12 +11,12 @@ use std::rc::Rc;
 use async_trait::async_trait;
 use futures_executor::block_on;
 use kutup_chat_core::{
-    ChatAddress, ChatContent, ChatError, ChatTransport, Engine, Result, SendOutcome, Session,
-    SqliteChatDb,
+    AccountAuthority, ChatAddress, ChatContent, ChatDb, ChatError, ChatTransport, Engine, Result,
+    SendOutcome, Session, SqliteChatDb,
 };
 use kutup_chat_proto::{
-    DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, MailboxPage,
-    RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
+    DeliveredEnvelope, DeviceListMismatch, DeviceManifest, DevicePreKeyBundle, MailboxPage,
+    ManifestDevice, RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};
@@ -86,6 +86,7 @@ fn wrap(env: &kutup_chat_proto::OutgoingEnvelope, sender: &str) -> DeliveredEnve
 struct MockServer {
     /// Each `fetch_bundles` pops the front; the last entry repeats.
     fetch_script: RefCell<Vec<Vec<DevicePreKeyBundle>>>,
+    manifest_script: RefCell<Vec<Option<DeviceManifest>>>,
     active: RefCell<Vec<(u32, u32)>>,
     fail_sends: RefCell<u32>,
     delivered: RefCell<Vec<(String, Vec<kutup_chat_proto::OutgoingEnvelope>)>>,
@@ -98,6 +99,9 @@ impl MockServer {
     }
     fn set_active(&self, active: Vec<(u32, u32)>) {
         *self.active.borrow_mut() = active;
+    }
+    fn script_manifests(&self, manifests: Vec<Option<DeviceManifest>>) {
+        *self.manifest_script.borrow_mut() = manifests;
     }
     /// The envelopes of the most recent accepted send.
     fn last_delivered(&self) -> Vec<kutup_chat_proto::OutgoingEnvelope> {
@@ -118,10 +122,16 @@ impl ChatTransport for MockServer {
         } else {
             script.first().cloned().unwrap_or_default()
         };
+        let mut manifests = self.manifest_script.borrow_mut();
+        let manifest = if manifests.len() > 1 {
+            manifests.remove(0)
+        } else {
+            manifests.first().cloned().unwrap_or(None)
+        };
         Ok(UserPreKeyBundlesResponse {
             username: username.to_string(),
             devices,
-            manifest: None,
+            manifest,
         })
     }
 
@@ -204,7 +214,82 @@ fn decrypt_for<R: Rng + CryptoRng>(
     block_on(dst.decrypt(from, &wrap(env, &from.user), rng)).unwrap()
 }
 
+fn signed_manifest(bundle: &DevicePreKeyBundle) -> DeviceManifest {
+    AccountAuthority::derive(&[11; 32])
+        .unwrap()
+        .sign_manifest(
+            1,
+            None,
+            vec![ManifestDevice {
+                device_id: bundle.device_id,
+                identity_key: bundle.identity_key.clone(),
+                registration_id: bundle.registration_id,
+            }],
+            "2026-07-15T12:00:00Z",
+        )
+        .unwrap()
+}
+
 // ----- the tests -----
+
+#[test]
+fn production_engine_requires_and_persists_a_matching_signed_manifest() {
+    let mut rng = test_rng();
+    let bob = device("bob", 1, &mut rng);
+    let bundle = bundle_of(&bob, 1);
+    let manifest = signed_manifest(&bundle);
+    let server = Rc::new(MockServer::default());
+    server.script(vec![vec![bundle.clone()], vec![bundle.clone()]]);
+    server.script_manifests(vec![None, Some(manifest.clone())]);
+    server.set_active(vec![(1, reg_id(&bob))]);
+
+    let alice_db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
+    let alice_session = block_on(Session::generate(
+        alice_db.clone(),
+        "alice",
+        1,
+        10,
+        &mut rng,
+    ))
+    .unwrap();
+    let mut alice = Engine::new(alice_session, server);
+    let msg = ChatContent::text("secure-1", 1, "manifest required");
+
+    assert!(matches!(
+        block_on(alice.send("secure-1", "bob", &msg, &mut rng)),
+        Err(ChatError::Trust(_))
+    ));
+    assert_eq!(block_on(alice.pending_send_count()).unwrap(), 0);
+
+    let summary = block_on(alice.send("secure-2", "bob", &msg, &mut rng)).unwrap();
+    assert!(summary.delivered);
+    let pin = block_on(alice_db.load_manifest_trust("bob"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(pin.highest_version, 1);
+    assert_eq!(pin.authority_key_id, manifest.authority_key_id);
+}
+
+#[test]
+fn production_engine_rejects_a_bundle_device_not_in_the_manifest() {
+    let mut rng = test_rng();
+    let bob1 = device("bob", 1, &mut rng);
+    let bob2 = device("bob", 2, &mut rng);
+    let b1 = bundle_of(&bob1, 1);
+    let b2 = bundle_of(&bob2, 2);
+    let server = Rc::new(MockServer::default());
+    server.script(vec![vec![b1.clone(), b2]]);
+    server.script_manifests(vec![Some(signed_manifest(&b1))]);
+    server.set_active(vec![(1, reg_id(&bob1)), (2, reg_id(&bob2))]);
+
+    let mut alice = Engine::new(device("alice", 1, &mut rng), server);
+    let msg = ChatContent::text("secure-injection", 1, "reject injection");
+    assert!(matches!(
+        block_on(alice.send("secure-injection", "bob", &msg, &mut rng)),
+        Err(ChatError::Trust(_))
+    ));
+    assert_eq!(block_on(alice.pending_send_count()).unwrap(), 0);
+}
 
 #[test]
 fn fans_out_to_two_devices_and_recovers_missing() {
@@ -218,7 +303,7 @@ fn fans_out_to_two_devices_and_recovers_missing() {
     server.script(vec![vec![b1.clone()], vec![b1.clone(), b2.clone()]]);
     server.set_active(vec![(1, reg_id(&bob1)), (2, reg_id(&bob2))]);
 
-    let mut alice = Engine::new(device("alice", 1, &mut rng), server.clone());
+    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
     let msg = ChatContent::text("t", 1, "hi both devices");
     let summary = block_on(alice.send("s1", "bob", &msg, &mut rng)).unwrap();
 
@@ -262,7 +347,7 @@ fn drops_extra_device() {
     server.script(vec![vec![b1.clone(), b2.clone()], vec![b1.clone()]]);
     server.set_active(vec![(1, reg_id(&bob1))]);
 
-    let mut alice = Engine::new(device("alice", 1, &mut rng), server.clone());
+    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
     let msg = ChatContent::text("t", 1, "only device one is real");
     let summary = block_on(alice.send("s2", "bob", &msg, &mut rng)).unwrap();
 
@@ -296,7 +381,7 @@ fn reinstalled_peer_rekeys_and_flags_safety_number() {
     server.script(vec![vec![b_v1.clone()]]);
     server.set_active(vec![(1, reg_id(&bob_v1))]);
 
-    let mut alice = Engine::new(device("alice", 1, &mut rng), server.clone());
+    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
     let alice_addr = ChatAddress::local("alice", 1);
 
     // First conversation with the original install.
@@ -370,7 +455,7 @@ fn outbox_persists_across_failure_and_flush_resends() {
     server.set_active(vec![(1, reg_id(&bob1))]);
     *server.fail_sends.borrow_mut() = 1; // the first network send fails after enqueue
 
-    let mut alice = Engine::new(device("alice", 1, &mut rng), server.clone());
+    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
     let msg = ChatContent::text("t", 1, "survives a crash");
 
     // The send fails at the transport, but the ciphertext is already durably queued.

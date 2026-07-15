@@ -116,6 +116,50 @@ pub struct InboundEnvelope {
     pub received_at: i64,
 }
 
+/// How the user has authenticated a peer account's self-authority key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthorityTrust {
+    /// First valid key observed for the account. Key transparency will replace
+    /// this first-contact assumption without changing the stored manifest leaf.
+    Tofu,
+    /// The user compared an out-of-band safety number / QR code.
+    Verified,
+}
+
+impl AuthorityTrust {
+    pub(crate) fn code(self) -> i64 {
+        match self {
+            Self::Tofu => 0,
+            Self::Verified => 1,
+        }
+    }
+
+    pub(crate) fn from_code(code: i64) -> Result<Self> {
+        match code {
+            0 => Ok(Self::Tofu),
+            1 => Ok(Self::Verified),
+            _ => Err(crate::error::ChatError::Db(format!(
+                "unknown authority trust state {code}"
+            ))),
+        }
+    }
+}
+
+/// Durable anti-rollback pin for one peer account's signed device directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManifestTrust {
+    pub peer: String,
+    pub authority_key_id: String,
+    pub self_authority_key: String,
+    pub highest_version: u64,
+    pub manifest_hash: String,
+    pub trust: AuthorityTrust,
+    /// True if this client first observed a version after v1 or skipped one or
+    /// more signed versions while offline. The latest state is still authentic,
+    /// but the local client cannot prove the complete update chain.
+    pub continuity_gap: bool,
+}
+
 /// A unit of work. Every mutation libsignal makes during one crypto operation
 /// accumulates here (last-write-wins per key) and is flushed to the [`ChatDb`] in
 /// one atomic `apply`. Reads consult the pending overlay before the durable store,
@@ -152,6 +196,8 @@ pub struct Pending {
     /// Raw inbound journal updates keyed by mailbox id. `None` removes an entry
     /// only after its REST acknowledgement succeeds.
     pub(crate) inbound: HashMap<String, Option<InboundEnvelope>>,
+    /// Peer username → latest accepted signed-manifest trust record.
+    pub(crate) manifest_trust: HashMap<String, ManifestTrust>,
     /// The highest mailbox cursor processed — advanced with each message so a
     /// re-drain never re-decrypts (which the ratchet couldn't do anyway).
     pub(crate) last_cursor: Option<u64>,
@@ -172,6 +218,7 @@ impl Pending {
             && self.outbox.is_empty()
             && self.messages.is_empty()
             && self.inbound.is_empty()
+            && self.manifest_trust.is_empty()
             && self.last_cursor.is_none()
     }
 
@@ -180,9 +227,9 @@ impl Pending {
     }
 }
 
-/// The durable client store. All methods are synchronous; implementors are free
-/// to be `!Send` (the engine drives one session on one thread). Object-safe by
-/// design — the engine holds an `Rc<dyn ChatDb>`.
+/// The durable client store. Methods are async and implementors may be `!Send`
+/// (the engine drives one session on one thread). Object-safe by design — the
+/// engine holds an `Rc<dyn ChatDb>`.
 #[async_trait(?Send)]
 pub trait ChatDb {
     /// The installed device's identity, or `None` on a fresh store.
@@ -221,6 +268,9 @@ pub trait ChatDb {
     /// Every raw inbound entry, ordered by cursor, including ack retries and
     /// visible dead letters.
     async fn list_inbound(&self) -> Result<Vec<InboundEnvelope>>;
+
+    /// Highest accepted manifest and pinned authority for `peer`.
+    async fn load_manifest_trust(&self, peer: &str) -> Result<Option<ManifestTrust>>;
 
     /// Commit a whole unit of work atomically. Either every staged write lands or
     /// none does; a partial apply MUST NOT be observable after a crash.

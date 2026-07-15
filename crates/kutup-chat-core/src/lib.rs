@@ -28,11 +28,12 @@ pub use address::ChatAddress;
 #[cfg(feature = "sqlite")]
 pub use db::sqlite::SqliteChatDb;
 pub use db::{
-    ChatDb, InboundEnvelope, InboundState, InboxMessage, LocalIdentity, OutboxEntry, Pending,
+    AuthorityTrust, ChatDb, InboundEnvelope, InboundState, InboxMessage, LocalIdentity,
+    ManifestTrust, OutboxEntry, Pending,
 };
 pub use engine::{ChatEvent, Engine, EngineState, ReceiveReport};
 pub use error::{ChatError, Result};
 pub use kutup_chat_proto::{ChatContent, DeliveredEnvelope, OutgoingEnvelope, TextBody};
-pub use manifest::{verify_manifest, AccountAuthority};
+pub use manifest::{verify_bundle_response, verify_manifest, AccountAuthority, ManifestPolicy};
 pub use session::{ReceivedMessage, SendSummary, Session};
 pub use transport::{ChatTransport, SendOutcome};

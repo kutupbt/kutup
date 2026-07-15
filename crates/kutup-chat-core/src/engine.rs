@@ -15,6 +15,7 @@ use rand::{CryptoRng, Rng};
 
 use crate::db::{ChatDb, InboundEnvelope, InboundState};
 use crate::error::{ChatError, Result};
+use crate::manifest::ManifestPolicy;
 use crate::session::{ReceiveOutcome, ReceivedMessage, SendSummary, Session};
 use crate::transport::{ChatTransport, SendOutcome};
 use kutup_chat_proto::{ChatContent, OutgoingEnvelope, SendMessagesRequest};
@@ -60,16 +61,36 @@ pub struct Engine {
     transport: Rc<dyn ChatTransport>,
     state: EngineState,
     events: VecDeque<ChatEvent>,
+    manifest_policy: ManifestPolicy,
 }
 
 impl Engine {
     /// Wrap an already-registered [`Session`] with a transport.
     pub fn new(session: Session, transport: Rc<dyn ChatTransport>) -> Self {
+        Self::with_manifest_policy(session, transport, ManifestPolicy::Required)
+    }
+
+    /// Explicit escape hatch for local development against a legacy server.
+    /// Any manifest that is present is still fully verified.
+    pub fn new_for_development(session: Session, transport: Rc<dyn ChatTransport>) -> Self {
+        Self::with_manifest_policy(
+            session,
+            transport,
+            ManifestPolicy::AllowMissingForDevelopment,
+        )
+    }
+
+    pub fn with_manifest_policy(
+        session: Session,
+        transport: Rc<dyn ChatTransport>,
+        manifest_policy: ManifestPolicy,
+    ) -> Self {
         Engine {
             session,
             transport,
             state: EngineState::Stopped,
             events: VecDeque::new(),
+            manifest_policy,
         }
     }
 
@@ -133,6 +154,14 @@ impl Engine {
             .collect())
     }
 
+    pub fn manifest_policy(&self) -> ManifestPolicy {
+        self.manifest_policy
+    }
+
+    pub async fn mark_authority_verified(&mut self, peer: &str) -> Result<crate::ManifestTrust> {
+        self.session.mark_authority_verified(peer).await
+    }
+
     /// How many sends are still pending in the durable outbox (undelivered) — for a
     /// "N unsent" indicator, or to decide whether to [`flush_outbox`](Self::flush_outbox).
     pub async fn pending_send_count(&self) -> Result<usize> {
@@ -149,8 +178,7 @@ impl Engine {
         content: &ChatContent,
         rng: &mut R,
     ) -> Result<SendSummary> {
-        let transport = Rc::clone(&self.transport);
-        let bundles = transport.fetch_bundles(peer_user).await?.devices;
+        let bundles = self.fetch_verified_bundles(peer_user).await?;
         let mut summary = SendSummary::default();
         let envelopes = self
             .session
@@ -316,7 +344,7 @@ impl Engine {
                     return Ok(());
                 }
                 SendOutcome::Mismatch(mismatch) => {
-                    let bundles = transport.fetch_bundles(peer_user).await?.devices;
+                    let bundles = self.fetch_verified_bundles(peer_user).await?;
                     envelopes = self
                         .session
                         .amend_send(send_id, peer_user, &mismatch, &bundles, summary, rng)
@@ -325,5 +353,15 @@ impl Engine {
             }
         }
         Err(ChatError::SendNotConverged(MAX_SEND_ATTEMPTS))
+    }
+
+    async fn fetch_verified_bundles(
+        &mut self,
+        peer_user: &str,
+    ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
+        let response = Rc::clone(&self.transport).fetch_bundles(peer_user).await?;
+        self.session
+            .accept_bundle_response(peer_user, response, self.manifest_policy)
+            .await
     }
 }

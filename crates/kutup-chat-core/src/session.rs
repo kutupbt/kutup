@@ -21,14 +21,17 @@ use libsignal_protocol::{
 use rand::{CryptoRng, Rng};
 
 use crate::address::ChatAddress;
-use crate::db::{ChatDb, InboundEnvelope, InboundState, InboxMessage, OutboxEntry};
+use crate::db::{
+    AuthorityTrust, ChatDb, InboundEnvelope, InboundState, InboxMessage, ManifestTrust, OutboxEntry,
+};
 use crate::error::{ChatError, Result};
 use crate::keys;
+use crate::manifest::{verify_bundle_response, ManifestPolicy};
 use crate::store::ChatStore;
 use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_prekey_bundle};
 use kutup_chat_proto::{
     ChatContent, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, OutgoingEnvelope,
-    RegisterChatDeviceRequest, SuiteId,
+    RegisterChatDeviceRequest, SuiteId, UserPreKeyBundlesResponse,
 };
 
 /// What a [`Engine::send`](crate::Engine::send) did: whether it landed, and any
@@ -332,6 +335,43 @@ impl Session {
     /// plaintext, so the caller decodes with its own placeholder handling.
     pub async fn history(&self) -> Result<Vec<InboxMessage>> {
         self.store.db().list_messages().await
+    }
+
+    /// The pinned self-authority and highest manifest observed for `peer`.
+    pub async fn manifest_trust(&self, peer: &str) -> Result<Option<ManifestTrust>> {
+        self.store.db().load_manifest_trust(peer).await
+    }
+
+    /// Mark the current TOFU authority as verified after the application has
+    /// completed an out-of-band safety-number or QR comparison.
+    pub async fn mark_authority_verified(&mut self, peer: &str) -> Result<ManifestTrust> {
+        let mut trust = self
+            .manifest_trust(peer)
+            .await?
+            .ok_or_else(|| ChatError::Trust(format!("no authority is pinned for {peer}")))?;
+        trust.trust = AuthorityTrust::Verified;
+        self.store.stage_manifest_trust(trust.clone());
+        self.store.commit().await?;
+        Ok(trust)
+    }
+
+    /// Validate the account-signed device set before any session or ratchet
+    /// mutation, then persist the anti-rollback pin.
+    pub(crate) async fn accept_bundle_response(
+        &mut self,
+        peer: &str,
+        response: UserPreKeyBundlesResponse,
+        policy: ManifestPolicy,
+    ) -> Result<Vec<DevicePreKeyBundle>> {
+        let prior = self.store.db().load_manifest_trust(peer).await?;
+        let next = verify_bundle_response(peer, &response, policy, prior.as_ref())?;
+        if let Some(next) = next {
+            if prior.as_ref() != Some(&next) {
+                self.store.stage_manifest_trust(next);
+                self.store.commit().await?;
+            }
+        }
+        Ok(response.devices)
     }
 
     /// Decrypt to raw plaintext bytes without committing (the staged core shared by

@@ -166,9 +166,9 @@ KemPreKey { keyId: u32, publicKey: b64, signature: b64 }    // always signed
   deviceSignature: b64?   // [RSV] identity key signed by the account self-authority key (§5.3)
 }
 ```
-`deviceSignature` is what lets the server (and peers, via the manifest) bind
-this device to the account authority. **[RSV]**: absent in v1 registrations
-until manifest support ships; MUST be accepted when present.
+`deviceSignature` is reserved for a future atomic registration attestation. The
+implemented manifest already signs the exact identity and registration id for
+every device, so clients do not rely on this optional field in v1.
 
 ### 5.3 Device manifest — [IMPL], the device-list-authenticity primitive
 
@@ -203,9 +203,12 @@ DeviceManifest {
   append-only log. The format above is chosen so that is additive.
 
 Clients pin the first valid self-authority (TOFU), persist the highest observed
-manifest version/hash, reject rollback or broken continuity, and retain the
-existing safety-number-change interstitial for identity changes. Key
-transparency will later replace first-contact TOFU without changing this leaf.
+manifest version/hash, and reject rollback, same-version equivocation, authority
+replacement, or a bad link between consecutive versions. A valid signed jump
+across versions missed while offline is safe to use but records a continuity
+gap for later transparency auditing. Clients retain the existing safety-number-
+change interstitial for identity changes. Key transparency will later replace
+first-contact TOFU without changing this leaf.
 
 ---
 
