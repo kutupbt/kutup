@@ -1,0 +1,242 @@
+//! Native [`ChatDb`] over bundled SQLite — the store every Signal client uses in
+//! spirit (SQLCipher/GRDB). One connection per device store, guarded by a
+//! `RefCell` because the engine is single-threaded and `apply` needs `&mut` for a
+//! transaction while reads only need `&`.
+//!
+//! At-rest encryption: the schema and access go through this one type, so wrapping
+//! the connection with SQLCipher (a `PRAGMA key`) or an app-layer cipher is a
+//! localized change behind the same port. v1 relies on the OS app-sandbox
+//! encryption of mobile private storage; SQLCipher is the tracked hardening step.
+
+use std::cell::RefCell;
+use std::path::Path;
+
+use rusqlite::{Connection, OptionalExtension};
+
+use crate::db::{ChatDb, LocalIdentity, Pending};
+use crate::error::{ChatError, Result};
+
+/// Maps a rusqlite error into our typed [`ChatError::Db`].
+fn db<T>(r: rusqlite::Result<T>) -> Result<T> {
+    r.map_err(|e| ChatError::Db(e.to_string()))
+}
+
+const SCHEMA: &str = "\
+CREATE TABLE IF NOT EXISTS local_identity (
+    id                INTEGER PRIMARY KEY CHECK (id = 1),
+    identity_key_pair BLOB    NOT NULL,
+    registration_id   INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    address TEXT PRIMARY KEY,
+    record  BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS identities (
+    address      TEXT PRIMARY KEY,
+    identity_key BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pre_keys (
+    id     INTEGER PRIMARY KEY,
+    record BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS signed_pre_keys (
+    id     INTEGER PRIMARY KEY,
+    record BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS kyber_pre_keys (
+    id     INTEGER PRIMARY KEY,
+    record BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS kyber_base_keys_seen (
+    kyber_id INTEGER NOT NULL,
+    ec_id    INTEGER NOT NULL,
+    base_key BLOB    NOT NULL,
+    PRIMARY KEY (kyber_id, ec_id, base_key)
+);
+CREATE TABLE IF NOT EXISTS sender_keys (
+    address         TEXT NOT NULL,
+    distribution_id TEXT NOT NULL,
+    record          BLOB NOT NULL,
+    PRIMARY KEY (address, distribution_id)
+);";
+
+/// A device store backed by a single SQLite database.
+pub struct SqliteChatDb {
+    conn: RefCell<Connection>,
+}
+
+impl SqliteChatDb {
+    /// Open (creating if absent) the device store at `path`.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::from_connection(db(Connection::open(path))?)
+    }
+
+    /// An ephemeral in-memory store — for tests and throwaway sessions. State
+    /// lives only as long as the returned value.
+    pub fn open_in_memory() -> Result<Self> {
+        Self::from_connection(db(Connection::open_in_memory())?)
+    }
+
+    fn from_connection(conn: Connection) -> Result<Self> {
+        // WAL + NORMAL: atomic commits (never a torn transaction), at the cost of
+        // possibly re-draining the last message after power loss — safe, because
+        // ack happens only after the decrypt transaction commits.
+        db(conn.pragma_update(None, "journal_mode", "WAL"))?;
+        db(conn.pragma_update(None, "synchronous", "NORMAL"))?;
+        db(conn.execute_batch(SCHEMA))?;
+        Ok(Self {
+            conn: RefCell::new(conn),
+        })
+    }
+}
+
+impl ChatDb for SqliteChatDb {
+    fn load_local_identity(&self) -> Result<Option<LocalIdentity>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT identity_key_pair, registration_id FROM local_identity WHERE id = 1",
+                [],
+                |row| {
+                    Ok(LocalIdentity {
+                        identity_key_pair: row.get(0)?,
+                        registration_id: row.get(1)?,
+                    })
+                },
+            )
+            .optional())
+    }
+
+    fn load_session(&self, address: &str) -> Result<Option<Vec<u8>>> {
+        blob(&self.conn.borrow(), "sessions", "address", address)
+    }
+
+    fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT identity_key FROM identities WHERE address = ?1",
+                [address],
+                |row| row.get(0),
+            )
+            .optional())
+    }
+
+    fn load_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>> {
+        blob_by_id(&self.conn.borrow(), "pre_keys", id)
+    }
+
+    fn load_signed_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>> {
+        blob_by_id(&self.conn.borrow(), "signed_pre_keys", id)
+    }
+
+    fn load_kyber_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>> {
+        blob_by_id(&self.conn.borrow(), "kyber_pre_keys", id)
+    }
+
+    fn kyber_base_key_seen(&self, kyber_id: u32, ec_id: u32, base_key: &[u8]) -> Result<bool> {
+        let conn = self.conn.borrow();
+        let found: Option<i64> = db(conn
+            .query_row(
+                "SELECT 1 FROM kyber_base_keys_seen \
+                 WHERE kyber_id = ?1 AND ec_id = ?2 AND base_key = ?3",
+                rusqlite::params![kyber_id, ec_id, base_key],
+                |row| row.get(0),
+            )
+            .optional())?;
+        Ok(found.is_some())
+    }
+
+    fn load_sender_key(&self, address: &str, distribution_id: &str) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT record FROM sender_keys WHERE address = ?1 AND distribution_id = ?2",
+                rusqlite::params![address, distribution_id],
+                |row| row.get(0),
+            )
+            .optional())
+    }
+
+    fn apply(&self, pending: &Pending) -> Result<()> {
+        let mut conn = self.conn.borrow_mut();
+        let tx = db(conn.transaction())?;
+
+        if let Some(local) = &pending.local_identity {
+            db(tx.execute(
+                "INSERT INTO local_identity (id, identity_key_pair, registration_id) \
+                 VALUES (1, ?1, ?2) \
+                 ON CONFLICT(id) DO UPDATE SET \
+                   identity_key_pair = excluded.identity_key_pair, \
+                   registration_id = excluded.registration_id",
+                rusqlite::params![local.identity_key_pair, local.registration_id],
+            ))?;
+        }
+        for (address, record) in &pending.sessions {
+            db(tx.execute(
+                "INSERT INTO sessions (address, record) VALUES (?1, ?2) \
+                 ON CONFLICT(address) DO UPDATE SET record = excluded.record",
+                rusqlite::params![address, record],
+            ))?;
+        }
+        for (address, key) in &pending.identities {
+            db(tx.execute(
+                "INSERT INTO identities (address, identity_key) VALUES (?1, ?2) \
+                 ON CONFLICT(address) DO UPDATE SET identity_key = excluded.identity_key",
+                rusqlite::params![address, key],
+            ))?;
+        }
+        for (id, record) in &pending.pre_keys {
+            match record {
+                Some(bytes) => db(tx.execute(
+                    "INSERT INTO pre_keys (id, record) VALUES (?1, ?2) \
+                     ON CONFLICT(id) DO UPDATE SET record = excluded.record",
+                    rusqlite::params![id, bytes],
+                ))?,
+                None => db(tx.execute("DELETE FROM pre_keys WHERE id = ?1", [id]))?,
+            };
+        }
+        for (id, record) in &pending.signed_pre_keys {
+            db(tx.execute(
+                "INSERT INTO signed_pre_keys (id, record) VALUES (?1, ?2) \
+                 ON CONFLICT(id) DO UPDATE SET record = excluded.record",
+                rusqlite::params![id, record],
+            ))?;
+        }
+        for (id, record) in &pending.kyber_pre_keys {
+            db(tx.execute(
+                "INSERT INTO kyber_pre_keys (id, record) VALUES (?1, ?2) \
+                 ON CONFLICT(id) DO UPDATE SET record = excluded.record",
+                rusqlite::params![id, record],
+            ))?;
+        }
+        for (kyber_id, ec_id, base_key) in &pending.kyber_seen {
+            db(tx.execute(
+                "INSERT OR IGNORE INTO kyber_base_keys_seen (kyber_id, ec_id, base_key) \
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![kyber_id, ec_id, base_key],
+            ))?;
+        }
+        for ((address, distribution_id), record) in &pending.sender_keys {
+            db(tx.execute(
+                "INSERT INTO sender_keys (address, distribution_id, record) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(address, distribution_id) DO UPDATE SET record = excluded.record",
+                rusqlite::params![address, distribution_id, record],
+            ))?;
+        }
+
+        db(tx.commit())
+    }
+}
+
+/// `SELECT <col-named `record`> FROM <table> WHERE <key_col> = <key>`.
+fn blob(conn: &Connection, table: &str, key_col: &str, key: &str) -> Result<Option<Vec<u8>>> {
+    let sql = format!("SELECT record FROM {table} WHERE {key_col} = ?1");
+    db(conn.query_row(&sql, [key], |row| row.get(0)).optional())
+}
+
+/// `blob` for the integer-keyed prekey tables.
+fn blob_by_id(conn: &Connection, table: &str, id: u32) -> Result<Option<Vec<u8>>> {
+    let sql = format!("SELECT record FROM {table} WHERE id = ?1");
+    db(conn.query_row(&sql, [id], |row| row.get(0)).optional())
+}

@@ -20,6 +20,9 @@ pub enum ChatError {
     /// A device id, registration id, or address was out of range.
     #[error("invalid parameter: {0}")]
     Invalid(String),
+    /// The durable store (SQLite / IndexedDB) failed a read or a commit.
+    #[error("store: {0}")]
+    Db(String),
 }
 
 impl From<libsignal_protocol::SignalProtocolError> for ChatError {

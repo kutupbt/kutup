@@ -1,60 +1,87 @@
 //! The local chat device: establishes 1:1 sessions and encrypts/decrypts
-//! content. Sessions live inside the libsignal store keyed by peer address;
-//! this is the thin, kutup-typed layer over `process_prekey_bundle` /
-//! `message_encrypt` / `message_decrypt`.
+//! content. Session and ratchet state live in a durable [`ChatDb`] behind the
+//! store adapters (`store.rs`); this is the thin, kutup-typed layer over
+//! `process_prekey_bundle` / `message_encrypt` / `message_decrypt`.
 //!
-//! First slice: an in-memory store and a fixed `now` (mirroring the spike), so
-//! the crypto loop is proven through the wire types. The durable store and real
-//! clock arrive with the next slice; the public API here does not change.
+//! Every crypto op runs against a [`Pending`](crate::db::Pending) unit of work and
+//! commits atomically only on success — so a crash between the crypto and the
+//! commit re-runs the op from the last durable state, and a decrypt's ratchet
+//! advance is persisted before its plaintext is handed up. The send/drain/ack
+//! orchestration (durable outbox, 409 recovery) builds on these guarantees next.
 
+use std::rc::Rc;
 use std::time::SystemTime;
 
 use libsignal_protocol::{message_decrypt, message_encrypt, process_prekey_bundle};
 use rand::{CryptoRng, Rng};
 
 use crate::address::ChatAddress;
+use crate::db::ChatDb;
 use crate::error::{ChatError, Result};
-use crate::keys::{sync, DeviceKeys, GeneratedDevice};
+use crate::keys;
+use crate::store::{sync, ChatStore};
 use crate::wire::{decode_ciphertext, encode_ciphertext, to_prekey_bundle};
 use kutup_chat_proto::{
-    ChatContent, DeliveredEnvelope, DevicePreKeyBundle, OutgoingEnvelope, SuiteId,
+    ChatContent, DeliveredEnvelope, DevicePreKeyBundle, OutgoingEnvelope,
+    RegisterChatDeviceRequest, SuiteId,
 };
 
-/// A registered local chat device with its libsignal store.
+/// A registered local chat device, backed by a durable store.
 pub struct Session {
-    device: GeneratedDevice,
+    store: ChatStore,
+    /// The registration payload to publish — `Some` right after [`Session::generate`],
+    /// `None` for a device reloaded via [`Session::open`] (already registered).
+    registration: Option<RegisterChatDeviceRequest>,
     address: ChatAddress,
 }
 
 impl Session {
-    /// Generates a new device. Returns the session plus the registration to
-    /// publish (`POST /api/chat/device`); the server assigns the real device
-    /// id, so `address` starts with the caller's provisional id and is updated
-    /// via [`Session::set_device_id`] once registered.
+    /// Generate a new device and persist its private material into `db` atomically.
+    /// Returns the session; publish [`Session::registration`] to `POST
+    /// /api/chat/device`, then apply the server-assigned id via
+    /// [`Session::set_device_id`].
     pub fn generate<R: Rng + CryptoRng>(
+        db: Rc<dyn ChatDb>,
         user: impl Into<String>,
         device_id: u32,
         num_one_time: usize,
         rng: &mut R,
     ) -> Result<Self> {
-        let device = DeviceKeys::generate("kutup device", num_one_time, rng)?;
+        let material = keys::generate("kutup device", num_one_time, rng)?;
+        // Install the whole device (identity + every prekey) in one transaction.
+        db.apply(&material.seed)?;
+        let store = ChatStore::attach(db, material.local)?;
         Ok(Session {
-            device,
+            store,
+            registration: Some(material.registration),
             address: ChatAddress::local(user, device_id),
         })
     }
 
-    /// The registration request to publish.
-    pub fn registration(&self) -> &kutup_chat_proto::RegisterChatDeviceRequest {
-        &self.device.registration
+    /// Reopen the device already installed in `db` (e.g. on app restart).
+    pub fn open(db: Rc<dyn ChatDb>, user: impl Into<String>, device_id: u32) -> Result<Self> {
+        let local = db
+            .load_local_identity()?
+            .ok_or_else(|| ChatError::Invalid("no chat device registered in this store".into()))?;
+        let store = ChatStore::attach(db, local)?;
+        Ok(Session {
+            store,
+            registration: None,
+            address: ChatAddress::local(user, device_id),
+        })
     }
 
-    /// Applies the server-assigned device id after registration.
+    /// The registration request to publish, if this session was just generated.
+    pub fn registration(&self) -> Option<&RegisterChatDeviceRequest> {
+        self.registration.as_ref()
+    }
+
+    /// Apply the server-assigned device id after registration.
     pub fn set_device_id(&mut self, device_id: u32) {
         self.address.device_id = device_id;
     }
 
-    /// Establishes an outbound session to `peer` from its served prekey bundle.
+    /// Establish an outbound session to `peer` from its served prekey bundle.
     pub fn establish<R: Rng + CryptoRng>(
         &mut self,
         peer: &ChatAddress,
@@ -64,21 +91,28 @@ impl Session {
         let pkb = to_prekey_bundle(bundle)?;
         let peer_addr = peer.to_protocol()?;
         let self_addr = self.address.to_protocol()?;
-        sync(process_prekey_bundle(
+        let result = sync(process_prekey_bundle(
             &peer_addr,
             &self_addr,
-            &mut self.device.store.session_store,
-            &mut self.device.store.identity_store,
+            &mut self.store.session_store,
+            &mut self.store.identity_store,
             &pkb,
             now(),
             rng,
-        ))?;
-        Ok(())
+        ));
+        match result {
+            Ok(()) => self.store.commit(),
+            Err(e) => {
+                self.store.discard();
+                Err(e)
+            }
+        }
     }
 
-    /// Encrypts `content` for `peer` into a wire envelope. `recipient_reg_id` is
+    /// Encrypt `content` for `peer` into a wire envelope. `recipient_reg_id` is
     /// the peer device's registration id from its bundle (the server checks it
-    /// for staleness); pass it through from the fetched bundle.
+    /// for staleness). The sender ratchet only advances durably once a wire
+    /// envelope is produced, so a failure leaves the session retryable.
     pub fn encrypt<R: Rng + CryptoRng>(
         &mut self,
         peer: &ChatAddress,
@@ -90,26 +124,38 @@ impl Session {
             serde_json::to_vec(content).map_err(|e| ChatError::Content(e.to_string()))?;
         let peer_addr = peer.to_protocol()?;
         let self_addr = self.address.to_protocol()?;
-        let msg = sync(message_encrypt(
+        let result = sync(message_encrypt(
             &plaintext,
             &peer_addr,
             &self_addr,
-            &mut self.device.store.session_store,
-            &mut self.device.store.identity_store,
+            &mut self.store.session_store,
+            &mut self.store.identity_store,
             now(),
             rng,
-        ))?;
-        let (envelope_type, content) = encode_ciphertext(&msg)?;
-        Ok(OutgoingEnvelope {
-            device_id: peer.device_id,
-            registration_id: recipient_reg_id,
-            envelope_type,
-            suite: SuiteId::PqxdhTripleRatchetV1,
-            content,
-        })
+        ));
+        // Only advance the ratchet durably once a wire envelope is in hand.
+        match result.and_then(|msg| encode_ciphertext(&msg)) {
+            Ok((envelope_type, content)) => {
+                self.store.commit()?;
+                Ok(OutgoingEnvelope {
+                    device_id: peer.device_id,
+                    registration_id: recipient_reg_id,
+                    envelope_type,
+                    suite: SuiteId::PqxdhTripleRatchetV1,
+                    content,
+                })
+            }
+            Err(e) => {
+                self.store.discard();
+                Err(e)
+            }
+        }
     }
 
-    /// Decrypts a delivered envelope from `from` into its content document.
+    /// Decrypt a delivered envelope from `from` into its content document. On a
+    /// successful decrypt the ratchet advance is committed **before** the
+    /// plaintext is parsed and returned — so the message is never double-consumed,
+    /// even if its plaintext turns out to be a content schema we can't parse.
     pub fn decrypt<R: Rng + CryptoRng>(
         &mut self,
         from: &ChatAddress,
@@ -119,23 +165,33 @@ impl Session {
         let msg = decode_ciphertext(envelope.envelope_type, &envelope.content)?;
         let from_addr = from.to_protocol()?;
         let self_addr = self.address.to_protocol()?;
-        let plaintext = sync(message_decrypt(
+        let result = sync(message_decrypt(
             &msg,
             &from_addr,
             &self_addr,
-            &mut self.device.store.session_store,
-            &mut self.device.store.identity_store,
-            &mut self.device.store.pre_key_store,
-            &self.device.store.signed_pre_key_store,
-            &mut self.device.store.kyber_pre_key_store,
+            &mut self.store.session_store,
+            &mut self.store.identity_store,
+            &mut self.store.pre_key_store,
+            &self.store.signed_pre_key_store,
+            &mut self.store.kyber_pre_key_store,
             rng,
-        ))?;
+        ));
+        let plaintext = match result {
+            Ok(p) => {
+                self.store.commit()?;
+                p
+            }
+            Err(e) => {
+                self.store.discard();
+                return Err(e);
+            }
+        };
         serde_json::from_slice(&plaintext).map_err(|e| ChatError::Content(e.to_string()))
     }
 }
 
-/// Fixed reference time for the first slice (matches the spike). Real clients
-/// pass the current time once the durable store lands.
+/// The wall clock libsignal uses for prekey/session staleness checks. Native uses
+/// the real clock; the wasm adapter will inject one when that build lands.
 fn now() -> SystemTime {
-    SystemTime::UNIX_EPOCH
+    SystemTime::now()
 }

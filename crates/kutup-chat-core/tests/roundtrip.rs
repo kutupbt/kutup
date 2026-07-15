@@ -1,12 +1,16 @@
 //! The derisking proof: a full 1:1 PQXDH + Triple Ratchet round-trip driven
-//! entirely through the `kutup-chat-proto` wire types. If this passes, our
-//! contract (bundle → establish → encrypt → wire envelope → decrypt → content)
-//! works with real libsignal crypto.
+//! entirely through the `kutup-chat-proto` wire types, now over the durable
+//! SQLite store. If this passes, our contract (bundle → establish → encrypt →
+//! wire envelope → decrypt → content) works with real libsignal crypto, and the
+//! ratchet state persists across a full close/reopen of the device store.
+
+use std::rc::Rc;
 
 use base64::Engine as _;
-use kutup_chat_core::{ChatAddress, ChatContent, Session};
+use kutup_chat_core::{ChatAddress, ChatContent, Session, SqliteChatDb};
 use kutup_chat_proto::{DeliveredEnvelope, DevicePreKeyBundle};
 use rand::rngs::OsRng;
+use rand::Rng as _;
 use rand::TryRngCore as _;
 
 /// Simulates the server serving Bob's *published* registration as a per-device
@@ -47,22 +51,58 @@ fn wrap(env: kutup_chat_proto::OutgoingEnvelope, sender: &str, cursor: u64) -> D
     }
 }
 
+/// A device store on a throwaway file path, deleted (with its WAL/SHM siblings)
+/// when the returned guard drops. Needed for the reopen test — `:memory:` can't
+/// be reopened.
+struct TempDb(std::path::PathBuf);
+impl TempDb {
+    fn new(tag: &str) -> Self {
+        let mut rng = OsRng.unwrap_err();
+        let path =
+            std::env::temp_dir().join(format!("kutup-chat-{tag}-{}.db", rng.random::<u64>()));
+        TempDb(path)
+    }
+    fn open(&self) -> Rc<SqliteChatDb> {
+        Rc::new(SqliteChatDb::open(&self.0).unwrap())
+    }
+}
+impl Drop for TempDb {
+    fn drop(&mut self) {
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", self.0.display()));
+        }
+    }
+}
+
 #[test]
 fn one_to_one_text_round_trip_through_wire_types() {
     let mut rng = OsRng.unwrap_err();
 
     // Both parties generate + "register" (device id 1 each, assigned by server).
-    let mut alice = Session::generate("alice", 1, 20, &mut rng).unwrap();
-    let mut bob = Session::generate("bob", 1, 20, &mut rng).unwrap();
-    alice.set_device_id(1);
-    bob.set_device_id(1);
+    let mut alice = Session::generate(
+        Rc::new(SqliteChatDb::open_in_memory().unwrap()),
+        "alice",
+        1,
+        20,
+        &mut rng,
+    )
+    .unwrap();
+    let mut bob = Session::generate(
+        Rc::new(SqliteChatDb::open_in_memory().unwrap()),
+        "bob",
+        1,
+        20,
+        &mut rng,
+    )
+    .unwrap();
 
     let bob_addr = ChatAddress::local("bob", 1);
     let alice_addr = ChatAddress::local("alice", 1);
-    let bob_reg = bob.registration().registration_id;
+    let bob_reg = bob.registration().unwrap().registration_id;
+    let alice_reg = alice.registration().unwrap().registration_id;
 
     // Sanity: Bob's published bundle carries a PQ prekey and a signed prekey.
-    let bob_bundle = serve_bundle(bob.registration(), 1);
+    let bob_bundle = serve_bundle(bob.registration().unwrap(), 1);
     assert!(
         !bob_bundle.kyber_pre_key.public_key.is_empty(),
         "PQ prekey present"
@@ -86,7 +126,6 @@ fn one_to_one_text_round_trip_through_wire_types() {
 
     // Bob replies; steady-state messages are Message envelopes.
     let msg2 = ChatContent::text("2026-07-13T10:00:01Z", 1, "hi alice");
-    let alice_reg = alice.registration().registration_id;
     let env2 = bob
         .encrypt(&alice_addr, alice_reg, &msg2, &mut rng)
         .unwrap();
@@ -114,20 +153,109 @@ fn one_to_one_text_round_trip_through_wire_types() {
 }
 
 #[test]
-fn tampered_ciphertext_is_rejected() {
+fn device_state_survives_reopen() {
     let mut rng = OsRng.unwrap_err();
-    let mut alice = Session::generate("alice", 1, 5, &mut rng).unwrap();
-    let mut bob = Session::generate("bob", 1, 5, &mut rng).unwrap();
+    let alice_db = TempDb::new("alice");
+    let bob_db = TempDb::new("bob");
+
     let bob_addr = ChatAddress::local("bob", 1);
     let alice_addr = ChatAddress::local("alice", 1);
 
-    let bundle = serve_bundle(bob.registration(), 1);
+    // Session 1: establish and exchange one message each way, then drop both
+    // sessions (closing their SQLite connections).
+    let (bob_reg, alice_reg) = {
+        let mut alice = Session::generate(alice_db.open(), "alice", 1, 10, &mut rng).unwrap();
+        let mut bob = Session::generate(bob_db.open(), "bob", 1, 10, &mut rng).unwrap();
+        let bob_reg = bob.registration().unwrap().registration_id;
+        let alice_reg = alice.registration().unwrap().registration_id;
+
+        let bundle = serve_bundle(bob.registration().unwrap(), 1);
+        alice.establish(&bob_addr, &bundle, &mut rng).unwrap();
+
+        let e = alice
+            .encrypt(
+                &bob_addr,
+                bob_reg,
+                &ChatContent::text("t", 1, "before restart"),
+                &mut rng,
+            )
+            .unwrap();
+        let got = bob
+            .decrypt(&alice_addr, &wrap(e, "alice", 1), &mut rng)
+            .unwrap();
+        assert_eq!(got.as_text().unwrap().text, "before restart");
+
+        (bob_reg, alice_reg)
+    };
+
+    // Session 2: reopen both devices from disk. Their ratchet state must continue
+    // seamlessly — a message encrypted after reopen decrypts after reopen.
+    {
+        let mut alice = Session::open(alice_db.open(), "alice", 1).unwrap();
+        let mut bob = Session::open(bob_db.open(), "bob", 1).unwrap();
+        // Opened devices don't carry a fresh registration payload.
+        assert!(alice.registration().is_none());
+        assert!(bob.registration().is_none());
+
+        // Alice → Bob continues her sender ratchet loaded from disk.
+        let e = alice
+            .encrypt(
+                &bob_addr,
+                bob_reg,
+                &ChatContent::text("t", 2, "after restart"),
+                &mut rng,
+            )
+            .unwrap();
+        let got = bob
+            .decrypt(&alice_addr, &wrap(e, "alice", 2), &mut rng)
+            .unwrap();
+        assert_eq!(got.as_text().unwrap().text, "after restart");
+
+        // And the reverse direction, proving Bob's state persisted too.
+        let e = bob
+            .encrypt(
+                &alice_addr,
+                alice_reg,
+                &ChatContent::text("t", 3, "reply after restart"),
+                &mut rng,
+            )
+            .unwrap();
+        let got = alice
+            .decrypt(&bob_addr, &wrap(e, "bob", 3), &mut rng)
+            .unwrap();
+        assert_eq!(got.as_text().unwrap().text, "reply after restart");
+    }
+}
+
+#[test]
+fn tampered_ciphertext_is_rejected() {
+    let mut rng = OsRng.unwrap_err();
+    let mut alice = Session::generate(
+        Rc::new(SqliteChatDb::open_in_memory().unwrap()),
+        "alice",
+        1,
+        5,
+        &mut rng,
+    )
+    .unwrap();
+    let mut bob = Session::generate(
+        Rc::new(SqliteChatDb::open_in_memory().unwrap()),
+        "bob",
+        1,
+        5,
+        &mut rng,
+    )
+    .unwrap();
+    let bob_addr = ChatAddress::local("bob", 1);
+    let alice_addr = ChatAddress::local("alice", 1);
+
+    let bundle = serve_bundle(bob.registration().unwrap(), 1);
     alice.establish(&bob_addr, &bundle, &mut rng).unwrap();
     let msg = ChatContent::text("t", 1, "secret");
     let mut env = alice
         .encrypt(
             &bob_addr,
-            bob.registration().registration_id,
+            bob.registration().unwrap().registration_id,
             &msg,
             &mut rng,
         )

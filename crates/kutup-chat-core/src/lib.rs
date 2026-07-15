@@ -6,19 +6,25 @@
 //! the Android/iOS apps. **libsignal types never appear in this crate's public
 //! API** — callers see kutup types and the wire DTOs only.
 //!
-//! This is the first slice: identity/bundle generation, wire<->libsignal
-//! conversion, and the 1:1 encrypt/decrypt loop, proven end-to-end through the
-//! wire types. The durable store, transport ports, and the send/drain/ack
-//! orchestration (with 409 recovery and decrypt→persist→ack ordering) layer on
-//! top of these primitives next.
+//! Persistence is a port: the engine depends on the [`ChatDb`] trait and stores
+//! all identity/session/ratchet state through it. Native builds get the bundled
+//! [`SqliteChatDb`] (the `sqlite` feature, on by default); the web client
+//! supplies an IndexedDB-backed `ChatDb` and turns the feature off. Every crypto
+//! op is a [`Pending`] unit of work committed atomically, giving the
+//! decrypt→persist→ack ordering the send/drain orchestration relies on.
 
 mod address;
+mod db;
 mod error;
 mod keys;
 mod session;
+mod store;
 mod wire;
 
 pub use address::ChatAddress;
+#[cfg(feature = "sqlite")]
+pub use db::sqlite::SqliteChatDb;
+pub use db::{ChatDb, LocalIdentity, Pending};
 pub use error::{ChatError, Result};
 pub use kutup_chat_proto::{ChatContent, DeliveredEnvelope, OutgoingEnvelope, TextBody};
 pub use session::Session;
