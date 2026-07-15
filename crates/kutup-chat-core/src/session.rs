@@ -21,7 +21,7 @@ use libsignal_protocol::{
 use rand::{CryptoRng, Rng};
 
 use crate::address::ChatAddress;
-use crate::db::{ChatDb, OutboxEntry};
+use crate::db::{ChatDb, InboxMessage, OutboxEntry};
 use crate::error::{ChatError, Result};
 use crate::keys;
 use crate::store::{sync, ChatStore};
@@ -45,6 +45,29 @@ pub struct SendSummary {
     pub safety_number_changes: Vec<ChatAddress>,
     /// Number of send/recovery rounds performed.
     pub attempts: u32,
+}
+
+/// A decrypted inbound message handed up to the app.
+#[derive(Debug, Clone)]
+pub struct ReceivedMessage {
+    /// The sender device (`user`/`user@domain` + device id).
+    pub from: ChatAddress,
+    pub content: ChatContent,
+    /// The mailbox cursor (monotonic order + dedup key).
+    pub cursor: u64,
+    /// The mailbox id (ack handle).
+    pub id: String,
+}
+
+/// The result of processing one delivered envelope. Both variants are already
+/// persisted (ratchet + raw plaintext + cursor, atomically) and safe to ack; they
+/// differ only in whether the plaintext parsed as a `ChatContent`.
+pub(crate) enum ReceiveOutcome {
+    /// Decrypted and parsed. Boxed — it dwarfs the other variant.
+    Message(Box<ReceivedMessage>),
+    /// Decrypted but the plaintext wasn't a valid content document (a buggy/newer
+    /// sender). Stored raw so it's never dropped; the app renders a placeholder.
+    Undecodable { id: String, cursor: u64 },
 }
 
 /// A registered local chat device, backed by a durable store.
@@ -159,10 +182,99 @@ impl Session {
         envelope: &DeliveredEnvelope,
         rng: &mut R,
     ) -> Result<ChatContent> {
+        match self.decrypt_bytes_staged(from, envelope, rng) {
+            Ok(plaintext) => {
+                self.store.commit()?;
+                serde_json::from_slice(&plaintext).map_err(|e| ChatError::Content(e.to_string()))
+            }
+            Err(e) => {
+                self.store.discard();
+                Err(e)
+            }
+        }
+    }
+
+    // ----- receive orchestration -----
+
+    /// Decrypt one delivered envelope and persist it: the ratchet advance, the raw
+    /// plaintext (as an inbox message), and the drain cursor commit together in a
+    /// **single** transaction — *then* the engine acks. So a crash after the commit
+    /// but before the ack re-drains from a cursor past this message (never
+    /// re-decrypting it, which the ratchet couldn't do), and a plaintext we can't
+    /// parse is still stored (never dropped). A decrypt *failure* stages nothing.
+    pub(crate) fn receive_envelope<R: Rng + CryptoRng>(
+        &mut self,
+        envelope: &DeliveredEnvelope,
+        rng: &mut R,
+    ) -> Result<ReceiveOutcome> {
+        let sender = envelope.sender.clone().ok_or_else(|| {
+            ChatError::Invalid(
+                "delivered envelope has no sender (sealed sender unsupported)".into(),
+            )
+        })?;
+        let from = ChatAddress::from_sender(&sender, envelope.sender_device_id);
+        let plaintext = match self.decrypt_bytes_staged(&from, envelope, rng) {
+            Ok(plaintext) => plaintext,
+            Err(e) => {
+                self.store.discard();
+                return Err(e);
+            }
+        };
+        self.store.stage_message(InboxMessage {
+            id: envelope.id.clone(),
+            peer: sender,
+            sender_device_id: envelope.sender_device_id,
+            cursor: envelope.cursor,
+            content: plaintext.clone(),
+            received_at: now_millis(),
+        });
+        self.store.stage_cursor(envelope.cursor);
+        self.store.commit()?;
+        match serde_json::from_slice::<ChatContent>(&plaintext) {
+            Ok(content) => Ok(ReceiveOutcome::Message(Box::new(ReceivedMessage {
+                from,
+                content,
+                cursor: envelope.cursor,
+                id: envelope.id.clone(),
+            }))),
+            Err(_) => Ok(ReceiveOutcome::Undecodable {
+                id: envelope.id.clone(),
+                cursor: envelope.cursor,
+            }),
+        }
+    }
+
+    /// The highest mailbox cursor processed — the drain resume point (`?after=`).
+    pub(crate) fn last_cursor(&self) -> Result<Option<u64>> {
+        self.store.last_cursor()
+    }
+
+    /// Advance the drain cursor past an envelope we chose not to keep (an
+    /// undecryptable message the ratchet tolerates a gap for), so it isn't
+    /// re-drained. Committed on its own — no ratchet or message change.
+    pub(crate) fn skip_cursor(&mut self, cursor: u64) -> Result<()> {
+        self.store.stage_cursor(cursor);
+        self.store.commit()
+    }
+
+    /// The locally persisted message history (oldest first). Content is the raw
+    /// plaintext, so the caller decodes with its own placeholder handling.
+    pub fn history(&self) -> Result<Vec<InboxMessage>> {
+        self.store.db().list_messages()
+    }
+
+    /// Decrypt to raw plaintext bytes without committing (the staged core shared by
+    /// [`decrypt`](Self::decrypt) and [`receive_envelope`](Self::receive_envelope)).
+    fn decrypt_bytes_staged<R: Rng + CryptoRng>(
+        &mut self,
+        from: &ChatAddress,
+        envelope: &DeliveredEnvelope,
+        rng: &mut R,
+    ) -> Result<Vec<u8>> {
         let msg = decode_ciphertext(envelope.envelope_type, &envelope.content)?;
         let from_addr = from.to_protocol()?;
         let self_addr = self.address.to_protocol()?;
-        let result = sync(message_decrypt(
+        sync(message_decrypt(
             &msg,
             &from_addr,
             &self_addr,
@@ -172,18 +284,7 @@ impl Session {
             &self.store.signed_pre_key_store,
             &mut self.store.kyber_pre_key_store,
             rng,
-        ));
-        let plaintext = match result {
-            Ok(p) => {
-                self.store.commit()?;
-                p
-            }
-            Err(e) => {
-                self.store.discard();
-                return Err(e);
-            }
-        };
-        serde_json::from_slice(&plaintext).map_err(|e| ChatError::Content(e.to_string()))
+        ))
     }
 
     // ----- multi-device send orchestration (each is one atomic transaction) -----

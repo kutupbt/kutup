@@ -29,6 +29,19 @@ impl ChatAddress {
         }
     }
 
+    /// Parse a delivered envelope's `sender` (`user`, or `user@domain` once
+    /// federation lands) plus its device id into an address.
+    pub fn from_sender(sender: &str, device_id: u32) -> Self {
+        match sender.split_once('@') {
+            Some((user, domain)) => ChatAddress {
+                user: user.to_string(),
+                domain: Some(domain.to_string()),
+                device_id,
+            },
+            None => ChatAddress::local(sender, device_id),
+        }
+    }
+
     /// The `user` / `user@domain` string libsignal keys sessions by.
     pub fn name(&self) -> String {
         match &self.domain {

@@ -30,6 +30,23 @@ pub struct LocalIdentity {
     pub registration_id: u32,
 }
 
+/// A decrypted inbound message, persisted atomically with the ratchet advance that
+/// produced it (before the mailbox row is acked). `content` is the raw plaintext
+/// (`serde_json` of a `ChatContent`) — stored even when its `kind` is unknown, so
+/// nothing is ever dropped (the content schema's "render a placeholder" rule).
+#[derive(Clone)]
+pub struct InboxMessage {
+    /// Mailbox id (the server's ack handle) — primary key, so redelivery is idempotent.
+    pub id: String,
+    /// Sender username (`user@domain` once federation lands).
+    pub peer: String,
+    pub sender_device_id: u32,
+    /// The mailbox cursor (monotonic order + dedup key).
+    pub cursor: u64,
+    pub content: Vec<u8>,
+    pub received_at: i64,
+}
+
 /// A pending outbound message, keyed by its `sendId`. Because a ratchet advance is
 /// irreversible, a retry MUST resend the exact stored ciphertext (never
 /// re-encrypt); `content` is the plaintext, kept so a `409 DeviceListMismatch`
@@ -80,6 +97,11 @@ pub struct Pending {
     pub(crate) sender_keys: HashMap<(String, String), Vec<u8>>,
     /// `sendId` → `Some(entry)` (upsert the pending send) or `None` (delivered — delete).
     pub(crate) outbox: HashMap<String, Option<OutboxEntry>>,
+    /// Decrypted inbound messages to persist (insert-or-ignore by id).
+    pub(crate) messages: Vec<InboxMessage>,
+    /// The highest mailbox cursor processed — advanced with each message so a
+    /// re-drain never re-decrypts (which the ratchet couldn't do anyway).
+    pub(crate) last_cursor: Option<u64>,
 }
 
 impl Pending {
@@ -95,6 +117,8 @@ impl Pending {
             && self.kyber_seen.is_empty()
             && self.sender_keys.is_empty()
             && self.outbox.is_empty()
+            && self.messages.is_empty()
+            && self.last_cursor.is_none()
     }
 
     pub(crate) fn clear(&mut self) {
@@ -128,6 +152,11 @@ pub trait ChatDb {
     fn load_outbox(&self, send_id: &str) -> Result<Option<OutboxEntry>>;
     /// Every pending outbound send (oldest first) — for resend-on-startup.
     fn list_outbox(&self) -> Result<Vec<OutboxEntry>>;
+
+    /// The highest mailbox cursor processed so far (the drain resume point).
+    fn load_last_cursor(&self) -> Result<Option<u64>>;
+    /// Every persisted inbound message (oldest first, by cursor) — the local history.
+    fn list_messages(&self) -> Result<Vec<InboxMessage>>;
 
     /// Commit a whole unit of work atomically. Either every staged write lands or
     /// none does; a partial apply MUST NOT be observable after a crash.

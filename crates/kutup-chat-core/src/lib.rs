@@ -26,9 +26,9 @@ mod wire;
 pub use address::ChatAddress;
 #[cfg(feature = "sqlite")]
 pub use db::sqlite::SqliteChatDb;
-pub use db::{ChatDb, LocalIdentity, OutboxEntry, Pending};
-pub use engine::Engine;
+pub use db::{ChatDb, InboxMessage, LocalIdentity, OutboxEntry, Pending};
+pub use engine::{Engine, ReceiveReport};
 pub use error::{ChatError, Result};
 pub use kutup_chat_proto::{ChatContent, DeliveredEnvelope, OutgoingEnvelope, TextBody};
-pub use session::{SendSummary, Session};
+pub use session::{ReceivedMessage, SendSummary, Session};
 pub use transport::{ChatTransport, SendOutcome};

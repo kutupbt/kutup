@@ -13,7 +13,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::db::{ChatDb, LocalIdentity, OutboxEntry, Pending};
+use crate::db::{ChatDb, InboxMessage, LocalIdentity, OutboxEntry, Pending};
 use crate::error::{ChatError, Result};
 
 /// Maps a rusqlite error into our typed [`ChatError::Db`].
@@ -66,6 +66,19 @@ CREATE TABLE IF NOT EXISTS outbox (
     envelopes  BLOB    NOT NULL,
     attempts   INTEGER NOT NULL,
     created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS messages (
+    id               TEXT PRIMARY KEY,
+    peer             TEXT    NOT NULL,
+    sender_device_id INTEGER NOT NULL,
+    cursor           INTEGER NOT NULL,
+    content          BLOB    NOT NULL,
+    received_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS messages_by_cursor ON messages (cursor);
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value INTEGER NOT NULL
 );";
 
 /// A device store backed by a single SQLite database.
@@ -192,6 +205,32 @@ impl ChatDb for SqliteChatDb {
         Ok(out)
     }
 
+    fn load_last_cursor(&self) -> Result<Option<u64>> {
+        let conn = self.conn.borrow();
+        let value: Option<i64> = db(conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'last_cursor'",
+                [],
+                |row| row.get(0),
+            )
+            .optional())?;
+        Ok(value.map(|n| n as u64))
+    }
+
+    fn list_messages(&self) -> Result<Vec<InboxMessage>> {
+        let conn = self.conn.borrow();
+        let mut stmt = db(conn.prepare(
+            "SELECT id, peer, sender_device_id, cursor, content, received_at \
+             FROM messages ORDER BY cursor, id",
+        ))?;
+        let rows = db(stmt.query_map([], message_row))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(db(row)?);
+        }
+        Ok(out)
+    }
+
     fn apply(&self, pending: &Pending) -> Result<()> {
         let mut conn = self.conn.borrow_mut();
         let tx = db(conn.transaction())?;
@@ -281,9 +320,45 @@ impl ChatDb for SqliteChatDb {
                 None => db(tx.execute("DELETE FROM outbox WHERE send_id = ?1", [send_id]))?,
             };
         }
+        for msg in &pending.messages {
+            // INSERT OR IGNORE: redelivery of the same mailbox id is a no-op.
+            db(tx.execute(
+                "INSERT OR IGNORE INTO messages \
+                 (id, peer, sender_device_id, cursor, content, received_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    msg.id,
+                    msg.peer,
+                    msg.sender_device_id,
+                    msg.cursor as i64,
+                    msg.content,
+                    msg.received_at
+                ],
+            ))?;
+        }
+        if let Some(cursor) = pending.last_cursor {
+            // MAX guards monotonicity: the drain cursor never moves backwards.
+            db(tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('last_cursor', ?1) \
+                 ON CONFLICT(key) DO UPDATE SET value = MAX(value, excluded.value)",
+                [cursor as i64],
+            ))?;
+        }
 
         db(tx.commit())
     }
+}
+
+/// Reads one row of the `messages` table into an [`InboxMessage`].
+fn message_row(row: &rusqlite::Row) -> rusqlite::Result<InboxMessage> {
+    Ok(InboxMessage {
+        id: row.get(0)?,
+        peer: row.get(1)?,
+        sender_device_id: row.get(2)?,
+        cursor: row.get::<_, i64>(3)? as u64,
+        content: row.get(4)?,
+        received_at: row.get(5)?,
+    })
 }
 
 /// Reads one row of the `outbox` table into an [`OutboxEntry`].

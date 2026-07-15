@@ -23,7 +23,7 @@ use futures_util::FutureExt as _;
 use libsignal_protocol::*;
 use uuid::Uuid;
 
-use crate::db::{ChatDb, LocalIdentity, OutboxEntry, Pending};
+use crate::db::{ChatDb, InboxMessage, LocalIdentity, OutboxEntry, Pending};
 use crate::error::{ChatError, Result as ChatResult};
 
 /// libsignal's store traits return its own `Result` alias, which the crate does
@@ -165,6 +165,26 @@ impl ChatStore {
             return Ok(Some(bytes.clone()));
         }
         self.db.load_identity(address)
+    }
+
+    /// Stage a decrypted inbound message.
+    pub(crate) fn stage_message(&self, message: InboxMessage) {
+        self.pending.borrow_mut().messages.push(message);
+    }
+
+    /// Stage a drain-cursor advance (monotonic — keeps the max).
+    pub(crate) fn stage_cursor(&self, cursor: u64) {
+        let mut pending = self.pending.borrow_mut();
+        pending.last_cursor = Some(pending.last_cursor.map_or(cursor, |c| c.max(cursor)));
+    }
+
+    /// The highest mailbox cursor processed (overlay before durable) — the drain
+    /// resume point.
+    pub(crate) fn last_cursor(&self) -> ChatResult<Option<u64>> {
+        if let Some(cursor) = self.pending.borrow().last_cursor {
+            return Ok(Some(cursor));
+        }
+        self.db.load_last_cursor()
     }
 }
 

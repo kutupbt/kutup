@@ -14,13 +14,27 @@ use rand::{CryptoRng, Rng};
 
 use crate::db::ChatDb;
 use crate::error::{ChatError, Result};
-use crate::session::{SendSummary, Session};
+use crate::session::{ReceiveOutcome, ReceivedMessage, SendSummary, Session};
 use crate::transport::{ChatTransport, SendOutcome};
 use kutup_chat_proto::{ChatContent, OutgoingEnvelope, SendMessagesRequest};
 
 /// How many send/recovery rounds a single message gets before giving up. Each 409
 /// consumes one; a well-behaved server converges in 1–2.
 const MAX_SEND_ATTEMPTS: u32 = 5;
+/// Drain page size (the contract caps it at 500).
+const DRAIN_LIMIT: u32 = 500;
+
+/// The outcome of a drain: the messages received, plus the envelopes that were
+/// acked-and-dropped (decrypted-but-unparseable, or undecryptable) so the caller
+/// can log/telemeter them without them wedging the mailbox.
+#[derive(Debug, Default)]
+pub struct ReceiveReport {
+    pub messages: Vec<ReceivedMessage>,
+    /// Ids that decrypted but whose plaintext wasn't a valid content document.
+    pub undecodable: Vec<String>,
+    /// `(id, error)` for envelopes that failed to decrypt and were skipped.
+    pub errors: Vec<(String, String)>,
+}
 
 /// A registered chat client: one device plus its transport.
 pub struct Engine {
@@ -115,6 +129,62 @@ impl Engine {
             summaries.push(summary);
         }
         Ok(summaries)
+    }
+
+    /// Drain the mailbox and decrypt everything new, oldest-first, resuming from the
+    /// durable cursor. For each envelope the ratchet advance, the plaintext, and the
+    /// cursor are persisted in one transaction **before** the batch is acked — so a
+    /// crash between persist and ack simply re-drains from a cursor past the message
+    /// (never re-decrypting it). Already-processed cursors (a WebSocket twin, say)
+    /// are acked but not re-decrypted; an undecryptable envelope is skipped (the
+    /// ratchet tolerates the gap) and reported rather than wedging the mailbox.
+    pub async fn receive<R: Rng + CryptoRng>(&mut self, rng: &mut R) -> Result<ReceiveReport> {
+        let transport = Rc::clone(&self.transport);
+        let device_id = self.session.device_id();
+        let mut after = self.session.last_cursor()?;
+        let mut report = ReceiveReport::default();
+
+        loop {
+            let page = transport.drain(device_id, after, DRAIN_LIMIT).await?;
+            let mut ack_ids = Vec::new();
+            for envelope in &page.envelopes {
+                // A cursor at or below the resume point was already processed: ack it
+                // (tolerating a WS/REST twin) but never re-decrypt it.
+                if after.is_some_and(|c| envelope.cursor <= c) {
+                    ack_ids.push(envelope.id.clone());
+                    continue;
+                }
+                match self.session.receive_envelope(envelope, rng) {
+                    Ok(ReceiveOutcome::Message(message)) => {
+                        after = Some(message.cursor);
+                        ack_ids.push(message.id.clone());
+                        report.messages.push(*message);
+                    }
+                    Ok(ReceiveOutcome::Undecodable { id, cursor }) => {
+                        after = Some(cursor);
+                        ack_ids.push(id.clone());
+                        report.undecodable.push(id);
+                    }
+                    Err(e) => {
+                        // Undecryptable: advance past it (libsignal tolerates the
+                        // ratchet gap), ack it, and report — one bad message must not
+                        // stall the whole inbox. Proper session-reset recovery is a
+                        // follow-up (sessionControl).
+                        self.session.skip_cursor(envelope.cursor)?;
+                        after = Some(envelope.cursor);
+                        ack_ids.push(envelope.id.clone());
+                        report.errors.push((envelope.id.clone(), e.to_string()));
+                    }
+                }
+            }
+            if !ack_ids.is_empty() {
+                transport.ack(&ack_ids).await?;
+            }
+            if !page.more {
+                break;
+            }
+        }
+        Ok(report)
     }
 
     /// The send/recover loop shared by [`send`](Self::send) and
