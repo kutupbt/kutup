@@ -37,6 +37,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 thiserror = "2"
+hkdf = "0.12"
+sha2 = "0.10"
+ed25519-dalek = "2"
+hex = "0.4"
 # We implement libsignal's own `#[async_trait(?Send)]` store traits; match its
 # major so the desugared future types line up.
 async-trait = "0.1"

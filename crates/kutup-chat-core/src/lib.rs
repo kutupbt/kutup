@@ -18,6 +18,7 @@ mod db;
 mod engine;
 mod error;
 mod keys;
+mod manifest;
 mod session;
 mod store;
 mod transport;
@@ -32,5 +33,6 @@ pub use db::{
 pub use engine::{ChatEvent, Engine, EngineState, ReceiveReport};
 pub use error::{ChatError, Result};
 pub use kutup_chat_proto::{ChatContent, DeliveredEnvelope, OutgoingEnvelope, TextBody};
+pub use manifest::{verify_manifest, AccountAuthority};
 pub use session::{ReceivedMessage, SendSummary, Session};
 pub use transport::{ChatTransport, SendOutcome};

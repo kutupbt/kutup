@@ -25,10 +25,10 @@ use uuid::Uuid;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use kutup_chat_proto::{
-    AckRequest, ChatWsServerMessage, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle,
-    EcPreKey, EnvelopeType, KemPreKey, MailboxPage, PreKeyCountResponse, RegisterChatDeviceRequest,
-    RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest, SuiteId,
-    UserPreKeyBundlesResponse,
+    AckRequest, ChatWsServerMessage, DeliveredEnvelope, DeviceListMismatch, DeviceManifest,
+    DevicePreKeyBundle, EcPreKey, EnvelopeType, KemPreKey, MailboxPage, PreKeyCountResponse,
+    RegisterChatDeviceRequest, RegisterChatDeviceResponse, ReplenishKeysRequest,
+    SendMessagesRequest, SuiteId, UserPreKeyBundlesResponse,
 };
 
 use crate::chat_hub::ChatWsOut;
@@ -94,6 +94,21 @@ fn envelope_type_from_code(code: i16) -> EnvelopeType {
     } else {
         EnvelopeType::Message
     }
+}
+
+fn validate_manifest(manifest: &DeviceManifest) -> AppResult<()> {
+    if manifest.version > i64::MAX as u64 {
+        return Err(AppError::bad_request("manifest version is too large"));
+    }
+    manifest.verify().map_err(AppError::bad_request)?;
+    let issued_at = OffsetDateTime::parse(&manifest.issued_at, &Rfc3339)
+        .map_err(|_| AppError::bad_request("manifest issuedAt must be RFC 3339"))?;
+    if issued_at > OffsetDateTime::now_utc() + time::Duration::minutes(10) {
+        return Err(AppError::bad_request(
+            "manifest issuedAt is too far in the future",
+        ));
+    }
+    Ok(())
 }
 
 /// `POST /api/chat/device` — register this client as a chat device. The server assigns
@@ -184,6 +199,152 @@ pub async fn register_device(
         device_id: device_id as u32,
     })
     .into_response())
+}
+
+/// `POST /api/chat/manifest` — publish the caller's signed current device set.
+/// Updates form a strict hash-linked sequence and cannot rotate the account
+/// authority key in v1. The declared devices must exactly match the server's
+/// registered devices, making an injected server-side device fail closed.
+#[utoipa::path(
+    post,
+    path = "/api/chat/manifest",
+    tag = "chat",
+    operation_id = "publishChatDeviceManifest",
+    request_body = DeviceManifest,
+    responses(
+        (status = 200, description = "Published manifest", body = DeviceManifest),
+        (status = 400, description = "Malformed or invalid signature"),
+        (status = 409, description = "Version, chain, authority, or device-set conflict"),
+    ),
+    security(("bearerAuth" = []))
+)]
+pub async fn publish_manifest(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(manifest): Json<DeviceManifest>,
+) -> AppResult<Response> {
+    let user_id = trusted_uuid(&auth.user_id)?;
+    validate_manifest(&manifest)?;
+    let manifest_hash = manifest.manifest_hash().map_err(AppError::bad_request)?;
+    let mut tx = state.pool.begin().await?;
+
+    let current: Option<(i64, String, String)> = sqlx::query_as(
+        "SELECT version, manifest_hash, authority_key_id
+         FROM chat_device_manifests WHERE user_id = $1 FOR UPDATE",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let mut idempotent = false;
+    match current {
+        None if manifest.version != 1 || manifest.previous_hash.is_some() => {
+            return Err(AppError::conflict("first manifest must be version 1"));
+        }
+        None => {}
+        Some((version, current_hash, authority_key_id)) => {
+            if manifest.version == version as u64 && manifest_hash == current_hash {
+                idempotent = true;
+            } else if manifest.version != version as u64 + 1 {
+                return Err(AppError::conflict(
+                    "manifest version must advance by exactly one",
+                ));
+            } else if manifest.previous_hash.as_deref() != Some(current_hash.as_str()) {
+                return Err(AppError::conflict("manifest previousHash mismatch"));
+            }
+            if manifest.authority_key_id != authority_key_id {
+                return Err(AppError::conflict(
+                    "account authority rotation is not supported in v1",
+                ));
+            }
+        }
+    }
+
+    let registered: Vec<(i32, i64, String)> = sqlx::query_as(
+        "SELECT device_id, registration_id, identity_key
+         FROM chat_devices WHERE user_id = $1 ORDER BY device_id FOR SHARE",
+    )
+    .bind(user_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    if registered.is_empty() {
+        return Err(AppError::conflict("account has no registered chat devices"));
+    }
+    let exact_match = registered.len() == manifest.devices.len()
+        && registered.iter().zip(&manifest.devices).all(
+            |((device_id, registration_id, identity_key), declared)| {
+                declared.device_id == *device_id as u32
+                    && declared.registration_id == *registration_id as u32
+                    && declared.identity_key == *identity_key
+            },
+        );
+    if !exact_match {
+        return Err(AppError::conflict(
+            "manifest devices do not match registered chat devices",
+        ));
+    }
+    if idempotent {
+        tx.commit().await?;
+        return Ok(Json(manifest).into_response());
+    }
+
+    let value = serde_json::to_value(&manifest)
+        .map_err(|error| AppError::internal(format!("serialize chat manifest: {error}")))?;
+    sqlx::query(
+        "INSERT INTO chat_device_manifests
+             (user_id, version, manifest_hash, authority_key_id, manifest)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (user_id) DO UPDATE SET
+             version = EXCLUDED.version,
+             manifest_hash = EXCLUDED.manifest_hash,
+             authority_key_id = EXCLUDED.authority_key_id,
+             manifest = EXCLUDED.manifest,
+             updated_at = now()",
+    )
+    .bind(user_id)
+    .bind(manifest.version as i64)
+    .bind(manifest_hash)
+    .bind(&manifest.authority_key_id)
+    .bind(value)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    Ok(Json(manifest).into_response())
+}
+
+/// `GET /api/chat/users/{username}/manifest` — fetch a local account's latest
+/// signed device manifest without consuming any one-time prekeys.
+#[utoipa::path(
+    get,
+    path = "/api/chat/users/{username}/manifest",
+    tag = "chat",
+    operation_id = "getChatDeviceManifest",
+    params(("username" = String, Path, description = "Local username")),
+    responses(
+        (status = 200, description = "Latest signed manifest", body = DeviceManifest),
+        (status = 404, description = "Unknown user or no manifest"),
+    ),
+    security(("bearerAuth" = []))
+)]
+pub async fn get_user_manifest(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+    Path(username): Path<String>,
+) -> AppResult<Response> {
+    let value: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT m.manifest
+         FROM chat_device_manifests m
+         JOIN users u ON u.id = m.user_id
+         WHERE u.username = $1 AND u.is_active = true",
+    )
+    .bind(username)
+    .fetch_optional(&state.pool)
+    .await?;
+    let value = value.ok_or_else(|| AppError::not_found("chat manifest not found"))?;
+    let manifest: DeviceManifest = serde_json::from_value(value)
+        .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
+    Ok(Json(manifest).into_response())
 }
 
 async fn insert_ec_pool(
@@ -556,11 +717,20 @@ pub async fn get_user_bundles(
 
     tx.commit().await?;
 
+    let manifest: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
+            .bind(target_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let manifest = manifest
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
+
     Ok(Json(UserPreKeyBundlesResponse {
         username,
         devices: bundles,
-        // [RSV] device manifests (docs/chat-protocol.md §5.3) — not yet issued.
-        manifest: None,
+        manifest,
     })
     .into_response())
 }

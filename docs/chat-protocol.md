@@ -138,13 +138,14 @@ consumed one-time prekey MUST NOT be physically deleted while in-flight
 messages may target it. Mark used with a timestamp; sweep after a grace window
 (≥ 24 h). Never yank a prekey from the served set the instant it's consumed.
 
-### 4.x Device manifest in the bundle response — [RSV]
+### 4.x Device manifest in the bundle response — [IMPL]
 
-`UserPreKeyBundlesResponse` gains a **[RSV] `manifest`** (§5.3). A verifying
+`UserPreKeyBundlesResponse` carries an optional `manifest` (§5.3). A verifying
 client checks each returned `deviceId` against the signed manifest before
-establishing a session, so the server cannot inject a device. Absent in v1
-server responses until the feature lands; clients MUST accept its absence
-(TOFU fallback) and its presence (verify).
+establishing a session, so the server cannot inject a device. When the server
+advertises `manifests: true`, absence or any mismatch is a hard failure. A
+development client may explicitly permit TOFU only against a server that
+advertises `manifests: false`.
 
 ---
 
@@ -169,7 +170,7 @@ KemPreKey { keyId: u32, publicKey: b64, signature: b64 }    // always signed
 this device to the account authority. **[RSV]**: absent in v1 registrations
 until manifest support ships; MUST be accepted when present.
 
-### 5.3 Device manifest — [RSV], the device-list-authenticity primitive
+### 5.3 Device manifest — [IMPL], the device-list-authenticity primitive
 
 A client that holds the account self-authority private key publishes a signed
 manifest of its current chat device set:
@@ -177,28 +178,34 @@ manifest of its current chat device set:
 ```
 DeviceManifest {
   version: u64,                 // monotonic; higher wins
+  previousHash: hex?,           // absent only in v1; hash-links each update
   devices: [ { deviceId: u32, identityKey: b64, registrationId: u32 } ],
   issuedAt: rfc3339,
+  authorityKeyId: hex,          // SHA-256(raw selfAuthorityKey)
   selfAuthorityKey: b64,        // account self-signing PUBLIC key
-  signature: b64                // sign(canonical(version‖devices‖issuedAt), selfAuthorityPriv)
+  signature: b64                // Ed25519 over the domain-separated canonical record
 }
 ```
 
-- The self-authority key is derived from / protected like the master key
-  (client-only; the server never sees the private half).
-- `POST /api/chat/manifest` [RSV] publishes it (server stores + serves the
-  latest by `version`); `GET /api/chat/users/{username}/manifest` [RSV] and the
-  `manifest` field in the bundles response [RSV] serve it.
+- The Ed25519 self-authority is deterministically derived from the account
+  master key with HKDF-SHA-256 (`kutup/chat/self-authority/v1`). Every recovered
+  account obtains the same authority; the server never sees its private half.
+- `POST /api/chat/manifest` publishes it after verifying the signature, strict
+  version/hash continuity, stable authority, and an exact match with the
+  registered device set. `GET /api/chat/users/{username}/manifest` and the
+  `manifest` field in the bundles response serve the latest record.
 - Peers verify `signature` against `selfAuthorityKey` and refuse to encrypt to
-  a `deviceId` not in the signed set. The server distributes but cannot forge
-  membership.
+  any bundle device not in the signed set, or when registration/identity values
+  differ. The server distributes but cannot forge membership. Device changes
+  temporarily fail closed until an authenticated client publishes the next
+  manifest.
 - **Key transparency** (future) wraps this: the manifest becomes a leaf in an
   append-only log. The format above is chosen so that is additive.
 
-Until manifests ship, clients use TOFU + a "safety number changed"
-interstitial on `IdentityChange::ReplacedExisting` (libsignal already models
-this). The **manifest fields are in v1** so trust can be upgraded without
-resetting every client's trust store.
+Clients pin the first valid self-authority (TOFU), persist the highest observed
+manifest version/hash, reject rollback or broken continuity, and retain the
+existing safety-number-change interstitial for identity changes. Key
+transparency will later replace first-contact TOFU without changing this leaf.
 
 ---
 
@@ -369,7 +376,7 @@ lacking the routes. Add a `chat` block to the existing public
   "suites": [1],
   "maxContentBytes": 65536,        // enforced on send (closes a mailbox-abuse hole)
   "federation": false,             // [RSV] flips true in phase 3
-  "manifests": false,              // [RSV] flips true when device manifests ship
+  "manifests": true,               // signed device directory is available
   "sealedSender": false            // [RSV] flips true when sealed sender ships
 }
 ```

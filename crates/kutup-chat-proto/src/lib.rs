@@ -142,7 +142,7 @@ pub struct RegisterChatDeviceRequest {
     pub device_signature: Option<String>,
 }
 
-/// [RSV] One entry in a signed [`DeviceManifest`].
+/// One entry in a signed [`DeviceManifest`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -152,24 +152,138 @@ pub struct ManifestDevice {
     pub registration_id: u32,
 }
 
-/// [RSV] The device-list-authenticity primitive (§5.3): a user's current chat
+/// The device-list-authenticity primitive (§5.3): a user's current chat
 /// device set, signed by an account self-authority key the server never sees.
 /// Peers verify `signature` and refuse to encrypt to a `deviceId` not in the
 /// signed set — closing the malicious-homeserver device-injection vector
-/// (`docs/research/13-…` §4.3). Reserved: the format is in v1 so a key-
-/// transparency log can wrap it later without a breaking change.
+/// (`docs/research/13-…` §4.3). A future key-transparency log can wrap this
+/// signed leaf without a breaking change.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceManifest {
     /// Monotonic; a higher version supersedes a lower one.
     pub version: u64,
+    /// SHA-256 of the preceding manifest's canonical signed bytes and signature.
+    /// Absent only at version 1; binds updates into a rollback-evident chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_hash: Option<String>,
     pub devices: Vec<ManifestDevice>,
     pub issued_at: String,
+    /// Stable identifier for the authority key (lowercase SHA-256 of its raw
+    /// public-key bytes in v1). Allows additive authority rotation later.
+    pub authority_key_id: String,
     /// base64 account self-signing PUBLIC key.
     pub self_authority_key: String,
     /// base64 signature over the canonical `version‖devices‖issuedAt`.
     pub signature: String,
+}
+
+impl DeviceManifest {
+    /// Deterministic, domain-separated binary encoding signed by every client.
+    /// Devices MUST be strictly ordered by `deviceId`; accepting multiple
+    /// encodings for one manifest would make cross-client signatures unsafe.
+    pub fn signing_bytes(&self) -> Result<Vec<u8>, String> {
+        const DOMAIN: &[u8] = b"kutup-chat-device-manifest-v1\0";
+        let mut out = Vec::with_capacity(256 + self.devices.len() * 96);
+        out.extend_from_slice(DOMAIN);
+        out.extend_from_slice(&self.version.to_be_bytes());
+        push_optional(&mut out, self.previous_hash.as_deref())?;
+        push_string(&mut out, &self.issued_at)?;
+        push_string(&mut out, &self.authority_key_id)?;
+        push_string(&mut out, &self.self_authority_key)?;
+        let count = u32::try_from(self.devices.len()).map_err(|_| "too many devices")?;
+        out.extend_from_slice(&count.to_be_bytes());
+        let mut prior = None;
+        for device in &self.devices {
+            if prior.is_some_and(|id| device.device_id <= id) {
+                return Err("manifest devices must be strictly ordered by deviceId".into());
+            }
+            prior = Some(device.device_id);
+            out.extend_from_slice(&device.device_id.to_be_bytes());
+            out.extend_from_slice(&device.registration_id.to_be_bytes());
+            push_string(&mut out, &device.identity_key)?;
+        }
+        Ok(out)
+    }
+
+    /// Hash used by the next manifest's `previousHash` link. The signature is
+    /// included so the chain commits to the exact authenticated record.
+    pub fn manifest_hash(&self) -> Result<String, String> {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(self.signing_bytes()?);
+        hasher.update(self.signature.as_bytes());
+        Ok(hex::encode(hasher.finalize()))
+    }
+
+    /// Verify the account authority binding, chain-shape invariants, canonical
+    /// ordering, and Ed25519 signature. Version continuity against a previously
+    /// observed manifest is a stateful client/server responsibility.
+    pub fn verify(&self) -> Result<(), String> {
+        use base64::Engine as _;
+        use ed25519_dalek::{Signature, VerifyingKey};
+        use sha2::{Digest, Sha256};
+
+        if self.version == 0 {
+            return Err("manifest version must be positive".into());
+        }
+        if self.version == 1 && self.previous_hash.is_some() {
+            return Err("manifest version 1 cannot have previousHash".into());
+        }
+        if self.version > 1 && self.previous_hash.is_none() {
+            return Err("manifest update requires previousHash".into());
+        }
+        if let Some(previous_hash) = &self.previous_hash {
+            let decoded = hex::decode(previous_hash)
+                .map_err(|_| "previousHash must be lowercase SHA-256 hex".to_string())?;
+            if decoded.len() != 32 || hex::encode(decoded) != *previous_hash {
+                return Err("previousHash must be lowercase SHA-256 hex".into());
+            }
+        }
+
+        let public = base64::engine::general_purpose::STANDARD
+            .decode(&self.self_authority_key)
+            .map_err(|_| "selfAuthorityKey must be base64".to_string())?;
+        let public: [u8; 32] = public
+            .try_into()
+            .map_err(|_| "selfAuthorityKey must be 32 bytes".to_string())?;
+        let expected_id = hex::encode(Sha256::digest(public));
+        if self.authority_key_id != expected_id {
+            return Err("authorityKeyId does not match selfAuthorityKey".into());
+        }
+
+        let signature = base64::engine::general_purpose::STANDARD
+            .decode(&self.signature)
+            .map_err(|_| "manifest signature must be base64".to_string())?;
+        let signature = Signature::from_slice(&signature)
+            .map_err(|_| "manifest signature must be 64 bytes".to_string())?;
+        let verifying = VerifyingKey::from_bytes(&public)
+            .map_err(|_| "selfAuthorityKey is not a valid Ed25519 key".to_string())?;
+        verifying
+            .verify_strict(&self.signing_bytes()?, &signature)
+            .map_err(|_| "manifest signature is invalid".to_string())
+    }
+}
+
+fn push_string(out: &mut Vec<u8>, value: &str) -> Result<(), String> {
+    let len = u32::try_from(value.len()).map_err(|_| "manifest string is too long")?;
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(value.as_bytes());
+    Ok(())
+}
+
+fn push_optional(out: &mut Vec<u8>, value: Option<&str>) -> Result<(), String> {
+    match value {
+        Some(value) => {
+            out.push(1);
+            push_string(out, value)
+        }
+        None => {
+            out.push(0);
+            Ok(())
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,10 +345,10 @@ pub struct DevicePreKeyBundle {
 pub struct UserPreKeyBundlesResponse {
     pub username: String,
     pub devices: Vec<DevicePreKeyBundle>,
-    /// [RSV] The signed device manifest (§5.3). A verifying client checks each
-    /// returned `deviceId` against it before establishing a session. Absent
-    /// until manifest support ships; clients MUST accept absence (TOFU
-    /// fallback) and presence (verify).
+    /// The signed device manifest (§5.3). A verifying client checks each
+    /// returned bundle against it before establishing a session. Absence is
+    /// allowed only when the server advertises `manifests: false` and the
+    /// client explicitly enables development TOFU.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifest: Option<DeviceManifest>,
 }
@@ -369,7 +483,7 @@ pub struct ChatCapabilities {
     /// [RSV] flips true in the federation phase.
     #[serde(default)]
     pub federation: bool,
-    /// [RSV] flips true when device manifests ship.
+    /// Signed device manifests are available and included with prekey bundles.
     #[serde(default)]
     pub manifests: bool,
     /// [RSV] flips true when sealed sender ships.
@@ -386,7 +500,7 @@ impl Default for ChatCapabilities {
             suites: vec![SuiteId::PqxdhTripleRatchetV1.as_u16()],
             max_content_bytes: 65536,
             federation: false,
-            manifests: false,
+            manifests: true,
             sealed_sender: false,
         }
     }
@@ -464,5 +578,55 @@ mod tests {
         assert_eq!(v["suites"], serde_json::json!([1]));
         assert_eq!(v["maxContentBytes"], 65536);
         assert_eq!(v["sealedSender"], false);
+        assert_eq!(v["manifests"], true);
+    }
+
+    #[test]
+    fn manifest_signing_bytes_are_canonical_and_order_sensitive() {
+        let manifest = DeviceManifest {
+            version: 1,
+            previous_hash: None,
+            devices: vec![
+                ManifestDevice {
+                    device_id: 1,
+                    identity_key: "identity-a".into(),
+                    registration_id: 10,
+                },
+                ManifestDevice {
+                    device_id: 2,
+                    identity_key: "identity-b".into(),
+                    registration_id: 20,
+                },
+            ],
+            issued_at: "2026-07-15T12:00:00Z".into(),
+            authority_key_id: "authority-1".into(),
+            self_authority_key: "public-key".into(),
+            signature: "signature".into(),
+        };
+        let bytes = manifest.signing_bytes().unwrap();
+        assert!(bytes.starts_with(b"kutup-chat-device-manifest-v1\0"));
+        assert_eq!(manifest.signing_bytes().unwrap(), bytes);
+        assert_eq!(manifest.manifest_hash().unwrap().len(), 64);
+
+        let mut unordered = manifest.clone();
+        unordered.devices.swap(0, 1);
+        assert!(unordered.signing_bytes().is_err());
+    }
+
+    #[test]
+    fn manifest_verification_rejects_bad_chain_shape_before_crypto() {
+        let manifest = DeviceManifest {
+            version: 0,
+            previous_hash: None,
+            devices: vec![],
+            issued_at: "2026-07-15T12:00:00Z".into(),
+            authority_key_id: String::new(),
+            self_authority_key: String::new(),
+            signature: String::new(),
+        };
+        assert_eq!(
+            manifest.verify().unwrap_err(),
+            "manifest version must be positive"
+        );
     }
 }

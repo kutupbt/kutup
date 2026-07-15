@@ -291,6 +291,11 @@ fn build_router(state: AppState) -> Router {
             post(chat::register_device).get(chat::list_devices),
         )
         .route("/api/chat/device/:deviceId", delete(chat::revoke_device))
+        .route("/api/chat/manifest", post(chat::publish_manifest))
+        .route(
+            "/api/chat/users/:username/manifest",
+            get(chat::get_user_manifest),
+        )
         .route("/api/chat/keys", put(chat::replenish_keys))
         .route("/api/chat/keys/count", get(chat::prekey_count))
         .route(
