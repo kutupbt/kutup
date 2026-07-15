@@ -1,30 +1,51 @@
-//! The local chat device: establishes 1:1 sessions and encrypts/decrypts
-//! content. Session and ratchet state live in a durable [`ChatDb`] behind the
-//! store adapters (`store.rs`); this is the thin, kutup-typed layer over
+//! The local chat device: establishes 1:1 sessions, encrypts/decrypts content,
+//! and drives the atomic store transactions the send orchestration is built on.
+//! Session and ratchet state live in a durable [`ChatDb`] behind the store
+//! adapters (`store.rs`); this is the thin, kutup-typed layer over
 //! `process_prekey_bundle` / `message_encrypt` / `message_decrypt`.
 //!
 //! Every crypto op runs against a [`Pending`](crate::db::Pending) unit of work and
-//! commits atomically only on success — so a crash between the crypto and the
-//! commit re-runs the op from the last durable state, and a decrypt's ratchet
-//! advance is persisted before its plaintext is handed up. The send/drain/ack
-//! orchestration (durable outbox, 409 recovery) builds on these guarantees next.
+//! commits atomically only on success. The `*_staged` cores make the writes
+//! without committing, so the multi-device send path can establish + encrypt for
+//! several devices AND stage the durable outbox entry in a **single** transaction
+//! — which is what makes a `sendId`-keyed outbox safe (the ciphertext is persisted
+//! together with the ratchet advance that produced it). The async network
+//! coordination lives one layer up, in [`Engine`](crate::Engine).
 
 use std::rc::Rc;
 use std::time::SystemTime;
 
-use libsignal_protocol::{message_decrypt, message_encrypt, process_prekey_bundle};
+use libsignal_protocol::{
+    message_decrypt, message_encrypt, process_prekey_bundle, IdentityChange, IdentityKeyStore,
+};
 use rand::{CryptoRng, Rng};
 
 use crate::address::ChatAddress;
-use crate::db::ChatDb;
+use crate::db::{ChatDb, OutboxEntry};
 use crate::error::{ChatError, Result};
 use crate::keys;
 use crate::store::{sync, ChatStore};
-use crate::wire::{decode_ciphertext, encode_ciphertext, to_prekey_bundle};
+use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_prekey_bundle};
 use kutup_chat_proto::{
-    ChatContent, DeliveredEnvelope, DevicePreKeyBundle, OutgoingEnvelope,
+    ChatContent, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, OutgoingEnvelope,
     RegisterChatDeviceRequest, SuiteId,
 };
+
+/// What a [`Engine::send`](crate::Engine::send) did: whether it landed, and any
+/// safety-number changes it auto-accepted along the way (the app SHOULD surface
+/// those to the user).
+#[derive(Debug, Default, Clone)]
+pub struct SendSummary {
+    /// The server accepted the send to the full device set.
+    pub delivered: bool,
+    /// The server matched this `sendId` to an earlier delivery (idempotent retry).
+    pub deduplicated: bool,
+    /// Peers whose identity key changed and was auto-accepted (TOFU re-key) during
+    /// 409 recovery — surface a "safety number changed" warning for each.
+    pub safety_number_changes: Vec<ChatAddress>,
+    /// Number of send/recovery rounds performed.
+    pub attempts: u32,
+}
 
 /// A registered local chat device, backed by a durable store.
 pub struct Session {
@@ -76,10 +97,17 @@ impl Session {
         self.registration.as_ref()
     }
 
+    /// This device's id (server-assigned after registration).
+    pub fn device_id(&self) -> u32 {
+        self.address.device_id
+    }
+
     /// Apply the server-assigned device id after registration.
     pub fn set_device_id(&mut self, device_id: u32) {
         self.address.device_id = device_id;
     }
+
+    // ----- single-op public API (each commits atomically) -----
 
     /// Establish an outbound session to `peer` from its served prekey bundle.
     pub fn establish<R: Rng + CryptoRng>(
@@ -88,19 +116,7 @@ impl Session {
         bundle: &DevicePreKeyBundle,
         rng: &mut R,
     ) -> Result<()> {
-        let pkb = to_prekey_bundle(bundle)?;
-        let peer_addr = peer.to_protocol()?;
-        let self_addr = self.address.to_protocol()?;
-        let result = sync(process_prekey_bundle(
-            &peer_addr,
-            &self_addr,
-            &mut self.store.session_store,
-            &mut self.store.identity_store,
-            &pkb,
-            now(),
-            rng,
-        ));
-        match result {
+        match self.establish_staged(peer, bundle, rng) {
             Ok(()) => self.store.commit(),
             Err(e) => {
                 self.store.discard();
@@ -109,10 +125,9 @@ impl Session {
         }
     }
 
-    /// Encrypt `content` for `peer` into a wire envelope. `recipient_reg_id` is
-    /// the peer device's registration id from its bundle (the server checks it
-    /// for staleness). The sender ratchet only advances durably once a wire
-    /// envelope is produced, so a failure leaves the session retryable.
+    /// Encrypt `content` for `peer` into a wire envelope. `recipient_reg_id` is the
+    /// peer device's registration id from its bundle. The sender ratchet only
+    /// advances durably once a wire envelope is produced.
     pub fn encrypt<R: Rng + CryptoRng>(
         &mut self,
         peer: &ChatAddress,
@@ -122,28 +137,10 @@ impl Session {
     ) -> Result<OutgoingEnvelope> {
         let plaintext =
             serde_json::to_vec(content).map_err(|e| ChatError::Content(e.to_string()))?;
-        let peer_addr = peer.to_protocol()?;
-        let self_addr = self.address.to_protocol()?;
-        let result = sync(message_encrypt(
-            &plaintext,
-            &peer_addr,
-            &self_addr,
-            &mut self.store.session_store,
-            &mut self.store.identity_store,
-            now(),
-            rng,
-        ));
-        // Only advance the ratchet durably once a wire envelope is in hand.
-        match result.and_then(|msg| encode_ciphertext(&msg)) {
-            Ok((envelope_type, content)) => {
+        match self.encrypt_staged(peer, recipient_reg_id, &plaintext, rng) {
+            Ok(env) => {
                 self.store.commit()?;
-                Ok(OutgoingEnvelope {
-                    device_id: peer.device_id,
-                    registration_id: recipient_reg_id,
-                    envelope_type,
-                    suite: SuiteId::PqxdhTripleRatchetV1,
-                    content,
-                })
+                Ok(env)
             }
             Err(e) => {
                 self.store.discard();
@@ -153,9 +150,9 @@ impl Session {
     }
 
     /// Decrypt a delivered envelope from `from` into its content document. On a
-    /// successful decrypt the ratchet advance is committed **before** the
-    /// plaintext is parsed and returned — so the message is never double-consumed,
-    /// even if its plaintext turns out to be a content schema we can't parse.
+    /// successful decrypt the ratchet advance is committed **before** the plaintext
+    /// is parsed and returned — so a message is never double-consumed, even if its
+    /// plaintext turns out to be a content schema we can't parse.
     pub fn decrypt<R: Rng + CryptoRng>(
         &mut self,
         from: &ChatAddress,
@@ -188,10 +185,293 @@ impl Session {
         };
         serde_json::from_slice(&plaintext).map_err(|e| ChatError::Content(e.to_string()))
     }
+
+    // ----- multi-device send orchestration (each is one atomic transaction) -----
+
+    /// Establish (as needed) + encrypt `content` to every device in `bundles`, and
+    /// stage a durable outbox entry — all in one transaction. Returns the per-device
+    /// envelopes for the transport. Skips the caller's own device.
+    pub(crate) fn enqueue_send<R: Rng + CryptoRng>(
+        &mut self,
+        send_id: &str,
+        peer_user: &str,
+        bundles: &[DevicePreKeyBundle],
+        content: &ChatContent,
+        summary: &mut SendSummary,
+        rng: &mut R,
+    ) -> Result<Vec<OutgoingEnvelope>> {
+        let plaintext =
+            serde_json::to_vec(content).map_err(|e| ChatError::Content(e.to_string()))?;
+        match self.build_send(peer_user, bundles, &plaintext, summary, rng) {
+            Ok(envelopes) => {
+                let entry = OutboxEntry {
+                    send_id: send_id.to_string(),
+                    peer: peer_user.to_string(),
+                    content: plaintext,
+                    envelopes: serde_json::to_vec(&envelopes)
+                        .map_err(|e| ChatError::Content(e.to_string()))?,
+                    attempts: 1,
+                    created_at: now_millis(),
+                };
+                self.store.stage_outbox(entry);
+                self.store.commit()?;
+                Ok(envelopes)
+            }
+            Err(e) => {
+                self.store.discard();
+                Err(e)
+            }
+        }
+    }
+
+    /// Apply a `409 DeviceListMismatch` to a pending send: drop extra devices,
+    /// establish + encrypt for missing ones, and re-key + re-encrypt stale ones
+    /// (accepting the reinstalled peer's new identity, TOFU — recording each such
+    /// safety-number change into `summary`). Reuses the stored plaintext so already
+    /// -encrypted devices keep their ciphertext (their ratchet is not advanced
+    /// twice). Persists the updated outbox atomically and returns the corrected set.
+    pub(crate) fn amend_send<R: Rng + CryptoRng>(
+        &mut self,
+        send_id: &str,
+        peer_user: &str,
+        mismatch: &DeviceListMismatch,
+        bundles: &[DevicePreKeyBundle],
+        summary: &mut SendSummary,
+        rng: &mut R,
+    ) -> Result<Vec<OutgoingEnvelope>> {
+        match self.build_amendment(send_id, peer_user, mismatch, bundles, summary, rng) {
+            Ok(envelopes) => {
+                self.store.commit()?;
+                Ok(envelopes)
+            }
+            Err(e) => {
+                self.store.discard();
+                Err(e)
+            }
+        }
+    }
+
+    /// Mark a send delivered: drop its outbox entry (one transaction).
+    pub(crate) fn complete_send(&mut self, send_id: &str) -> Result<()> {
+        self.store.delete_outbox(send_id);
+        self.store.commit()
+    }
+
+    /// Every still-pending outbound send (for resend-on-startup).
+    pub(crate) fn pending_outbox(&self) -> Result<Vec<OutboxEntry>> {
+        self.store.db().list_outbox()
+    }
+
+    // ----- staged (non-committing) cores -----
+
+    fn build_send<R: Rng + CryptoRng>(
+        &mut self,
+        peer_user: &str,
+        bundles: &[DevicePreKeyBundle],
+        plaintext: &[u8],
+        summary: &mut SendSummary,
+        rng: &mut R,
+    ) -> Result<Vec<OutgoingEnvelope>> {
+        let mut envelopes = Vec::with_capacity(bundles.len());
+        for bundle in bundles {
+            let peer = ChatAddress::local(peer_user, bundle.device_id);
+            if self.is_self(&peer) {
+                continue;
+            }
+            envelopes.push(self.seal_device(&peer, bundle, plaintext, summary, rng)?);
+        }
+        Ok(envelopes)
+    }
+
+    fn build_amendment<R: Rng + CryptoRng>(
+        &mut self,
+        send_id: &str,
+        peer_user: &str,
+        mismatch: &DeviceListMismatch,
+        bundles: &[DevicePreKeyBundle],
+        summary: &mut SendSummary,
+        rng: &mut R,
+    ) -> Result<Vec<OutgoingEnvelope>> {
+        let entry = self
+            .store
+            .db()
+            .load_outbox(send_id)?
+            .ok_or_else(|| ChatError::Invalid(format!("no outbox entry for send {send_id}")))?;
+        let mut envelopes: Vec<OutgoingEnvelope> = serde_json::from_slice(&entry.envelopes)
+            .map_err(|e| ChatError::Content(e.to_string()))?;
+
+        // Extra devices aren't real: drop their ciphertext and archive the session.
+        for &device_id in &mismatch.extra_devices {
+            envelopes.retain(|e| e.device_id != device_id);
+            let peer = ChatAddress::local(peer_user, device_id);
+            self.store.delete_session(&peer.to_protocol()?.to_string());
+        }
+
+        // Missing devices: establish + encrypt from a fresh bundle, append.
+        for &device_id in &mismatch.missing_devices {
+            let peer = ChatAddress::local(peer_user, device_id);
+            if self.is_self(&peer) {
+                continue;
+            }
+            let bundle = find_bundle(bundles, device_id)?;
+            let env = self.seal_device(&peer, bundle, &entry.content, summary, rng)?;
+            envelopes.retain(|e| e.device_id != device_id);
+            envelopes.push(env);
+        }
+
+        // Stale devices (reinstalled): accept the changed identity (TOFU re-key),
+        // archive the old session, re-establish, re-encrypt. Surface the change.
+        for &device_id in &mismatch.stale_devices {
+            let peer = ChatAddress::local(peer_user, device_id);
+            if self.is_self(&peer) {
+                continue;
+            }
+            let bundle = find_bundle(bundles, device_id)?;
+            if self.accept_identity_staged(&peer, bundle)? {
+                summary.safety_number_changes.push(peer.clone());
+            }
+            self.store.delete_session(&peer.to_protocol()?.to_string());
+            self.establish_staged(&peer, bundle, rng)?;
+            let env = self.encrypt_staged(&peer, bundle.registration_id, &entry.content, rng)?;
+            envelopes.retain(|e| e.device_id != device_id);
+            envelopes.push(env);
+        }
+
+        let updated = OutboxEntry {
+            envelopes: serde_json::to_vec(&envelopes)
+                .map_err(|e| ChatError::Content(e.to_string()))?,
+            attempts: entry.attempts + 1,
+            ..entry
+        };
+        self.store.stage_outbox(updated);
+        Ok(envelopes)
+    }
+
+    /// Establish-if-needed + encrypt one device (staged). Reuses an existing
+    /// session (never re-establishing it — that would reset the ratchet) *unless*
+    /// the served bundle's identity key differs from the stored one, i.e. the peer
+    /// reinstalled: then it re-keys (TOFU-accept + fresh session) and flags the
+    /// safety-number change, so we never encrypt to a stale identity with the new
+    /// registration id (which the server would accept but the peer couldn't read).
+    fn seal_device<R: Rng + CryptoRng>(
+        &mut self,
+        peer: &ChatAddress,
+        bundle: &DevicePreKeyBundle,
+        plaintext: &[u8],
+        summary: &mut SendSummary,
+        rng: &mut R,
+    ) -> Result<OutgoingEnvelope> {
+        let key = peer.to_protocol()?.to_string();
+        if self.store.has_session(&key)? {
+            let served = decode_identity_key(&bundle.identity_key)?
+                .serialize()
+                .to_vec();
+            if self.store.peer_identity(&key)?.as_deref() != Some(served.as_slice()) {
+                // Reinstalled peer: re-key rather than reuse the stale session.
+                if self.accept_identity_staged(peer, bundle)? {
+                    summary.safety_number_changes.push(peer.clone());
+                }
+                self.store.delete_session(&key);
+                self.establish_staged(peer, bundle, rng)?;
+            }
+        } else {
+            self.establish_staged(peer, bundle, rng)?;
+        }
+        self.encrypt_staged(peer, bundle.registration_id, plaintext, rng)
+    }
+
+    fn establish_staged<R: Rng + CryptoRng>(
+        &mut self,
+        peer: &ChatAddress,
+        bundle: &DevicePreKeyBundle,
+        rng: &mut R,
+    ) -> Result<()> {
+        let pkb = to_prekey_bundle(bundle)?;
+        let peer_addr = peer.to_protocol()?;
+        let self_addr = self.address.to_protocol()?;
+        sync(process_prekey_bundle(
+            &peer_addr,
+            &self_addr,
+            &mut self.store.session_store,
+            &mut self.store.identity_store,
+            &pkb,
+            now(),
+            rng,
+        ))
+    }
+
+    fn encrypt_staged<R: Rng + CryptoRng>(
+        &mut self,
+        peer: &ChatAddress,
+        recipient_reg_id: u32,
+        plaintext: &[u8],
+        rng: &mut R,
+    ) -> Result<OutgoingEnvelope> {
+        let peer_addr = peer.to_protocol()?;
+        let self_addr = self.address.to_protocol()?;
+        let msg = sync(message_encrypt(
+            plaintext,
+            &peer_addr,
+            &self_addr,
+            &mut self.store.session_store,
+            &mut self.store.identity_store,
+            now(),
+            rng,
+        ))?;
+        let (envelope_type, content) = encode_ciphertext(&msg)?;
+        Ok(OutgoingEnvelope {
+            device_id: peer.device_id,
+            registration_id: recipient_reg_id,
+            envelope_type,
+            suite: SuiteId::PqxdhTripleRatchetV1,
+            content,
+        })
+    }
+
+    /// Accept a peer device's identity from its bundle (TOFU), returning whether an
+    /// existing key was *replaced* (i.e. a safety-number change). Staged; the caller
+    /// re-establishes and commits.
+    fn accept_identity_staged(
+        &mut self,
+        peer: &ChatAddress,
+        bundle: &DevicePreKeyBundle,
+    ) -> Result<bool> {
+        let new_identity = decode_identity_key(&bundle.identity_key)?;
+        let peer_addr = peer.to_protocol()?;
+        let change = sync(
+            self.store
+                .identity_store
+                .save_identity(&peer_addr, &new_identity),
+        )?;
+        Ok(matches!(change, IdentityChange::ReplacedExisting))
+    }
+
+    fn is_self(&self, peer: &ChatAddress) -> bool {
+        peer.user == self.address.user
+            && peer.domain == self.address.domain
+            && peer.device_id == self.address.device_id
+    }
+}
+
+/// Look up the bundle for `device_id` in a served set (a 409 names a device the
+/// server should also have handed us a bundle for).
+fn find_bundle(bundles: &[DevicePreKeyBundle], device_id: u32) -> Result<&DevicePreKeyBundle> {
+    bundles
+        .iter()
+        .find(|b| b.device_id == device_id)
+        .ok_or(ChatError::MissingBundle(device_id))
 }
 
 /// The wall clock libsignal uses for prekey/session staleness checks. Native uses
 /// the real clock; the wasm adapter will inject one when that build lands.
 fn now() -> SystemTime {
     SystemTime::now()
+}
+
+/// Unix-epoch millis, saturating to 0 before the epoch (never in practice).
+fn now_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }

@@ -23,6 +23,15 @@ pub enum ChatError {
     /// The durable store (SQLite / IndexedDB) failed a read or a commit.
     #[error("store: {0}")]
     Db(String),
+    /// The transport (the platform's HTTP/WS client) failed a request.
+    #[error("transport: {0}")]
+    Transport(String),
+    /// A send exhausted its 409 device-list recovery attempts.
+    #[error("send did not converge after {0} attempts")]
+    SendNotConverged(u32),
+    /// A 409 named a device the served bundles didn't include (server inconsistency).
+    #[error("no bundle for device {0}")]
+    MissingBundle(u32),
 }
 
 impl From<libsignal_protocol::SignalProtocolError> for ChatError {

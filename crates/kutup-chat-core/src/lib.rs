@@ -15,16 +15,20 @@
 
 mod address;
 mod db;
+mod engine;
 mod error;
 mod keys;
 mod session;
 mod store;
+mod transport;
 mod wire;
 
 pub use address::ChatAddress;
 #[cfg(feature = "sqlite")]
 pub use db::sqlite::SqliteChatDb;
-pub use db::{ChatDb, LocalIdentity, Pending};
+pub use db::{ChatDb, LocalIdentity, OutboxEntry, Pending};
+pub use engine::Engine;
 pub use error::{ChatError, Result};
 pub use kutup_chat_proto::{ChatContent, DeliveredEnvelope, OutgoingEnvelope, TextBody};
-pub use session::Session;
+pub use session::{SendSummary, Session};
+pub use transport::{ChatTransport, SendOutcome};

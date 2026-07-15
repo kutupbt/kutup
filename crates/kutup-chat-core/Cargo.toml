@@ -52,3 +52,8 @@ rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 kutup-chat-proto = { path = "../kutup-chat-proto" }
 rand = "0.9"
 base64 = "0.22"
+async-trait = "0.1"
+serde_json = "1"
+# Drives the engine's async orchestration in tests; the mock transport's futures
+# are immediately ready, so this just polls them to completion (no real runtime).
+futures-executor = "0.3"

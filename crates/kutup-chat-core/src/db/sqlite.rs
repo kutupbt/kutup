@@ -13,7 +13,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::db::{ChatDb, LocalIdentity, Pending};
+use crate::db::{ChatDb, LocalIdentity, OutboxEntry, Pending};
 use crate::error::{ChatError, Result};
 
 /// Maps a rusqlite error into our typed [`ChatError::Db`].
@@ -58,6 +58,14 @@ CREATE TABLE IF NOT EXISTS sender_keys (
     distribution_id TEXT NOT NULL,
     record          BLOB NOT NULL,
     PRIMARY KEY (address, distribution_id)
+);
+CREATE TABLE IF NOT EXISTS outbox (
+    send_id    TEXT PRIMARY KEY,
+    peer       TEXT    NOT NULL,
+    content    BLOB    NOT NULL,
+    envelopes  BLOB    NOT NULL,
+    attempts   INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
 );";
 
 /// A device store backed by a single SQLite database.
@@ -158,6 +166,32 @@ impl ChatDb for SqliteChatDb {
             .optional())
     }
 
+    fn load_outbox(&self, send_id: &str) -> Result<Option<OutboxEntry>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT send_id, peer, content, envelopes, attempts, created_at \
+                 FROM outbox WHERE send_id = ?1",
+                [send_id],
+                outbox_row,
+            )
+            .optional())
+    }
+
+    fn list_outbox(&self) -> Result<Vec<OutboxEntry>> {
+        let conn = self.conn.borrow();
+        let mut stmt = db(conn.prepare(
+            "SELECT send_id, peer, content, envelopes, attempts, created_at \
+             FROM outbox ORDER BY created_at, send_id",
+        ))?;
+        let rows = db(stmt.query_map([], outbox_row))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(db(row)?);
+        }
+        Ok(out)
+    }
+
     fn apply(&self, pending: &Pending) -> Result<()> {
         let mut conn = self.conn.borrow_mut();
         let tx = db(conn.transaction())?;
@@ -173,11 +207,14 @@ impl ChatDb for SqliteChatDb {
             ))?;
         }
         for (address, record) in &pending.sessions {
-            db(tx.execute(
-                "INSERT INTO sessions (address, record) VALUES (?1, ?2) \
-                 ON CONFLICT(address) DO UPDATE SET record = excluded.record",
-                rusqlite::params![address, record],
-            ))?;
+            match record {
+                Some(bytes) => db(tx.execute(
+                    "INSERT INTO sessions (address, record) VALUES (?1, ?2) \
+                     ON CONFLICT(address) DO UPDATE SET record = excluded.record",
+                    rusqlite::params![address, bytes],
+                ))?,
+                None => db(tx.execute("DELETE FROM sessions WHERE address = ?1", [address]))?,
+            };
         }
         for (address, key) in &pending.identities {
             db(tx.execute(
@@ -224,9 +261,41 @@ impl ChatDb for SqliteChatDb {
                 rusqlite::params![address, distribution_id, record],
             ))?;
         }
+        for (send_id, entry) in &pending.outbox {
+            match entry {
+                Some(e) => db(tx.execute(
+                    "INSERT INTO outbox (send_id, peer, content, envelopes, attempts, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                     ON CONFLICT(send_id) DO UPDATE SET \
+                       peer = excluded.peer, content = excluded.content, \
+                       envelopes = excluded.envelopes, attempts = excluded.attempts",
+                    rusqlite::params![
+                        send_id,
+                        e.peer,
+                        e.content,
+                        e.envelopes,
+                        e.attempts,
+                        e.created_at
+                    ],
+                ))?,
+                None => db(tx.execute("DELETE FROM outbox WHERE send_id = ?1", [send_id]))?,
+            };
+        }
 
         db(tx.commit())
     }
+}
+
+/// Reads one row of the `outbox` table into an [`OutboxEntry`].
+fn outbox_row(row: &rusqlite::Row) -> rusqlite::Result<OutboxEntry> {
+    Ok(OutboxEntry {
+        send_id: row.get(0)?,
+        peer: row.get(1)?,
+        content: row.get(2)?,
+        envelopes: row.get(3)?,
+        attempts: row.get(4)?,
+        created_at: row.get(5)?,
+    })
 }
 
 /// `SELECT <col-named `record`> FROM <table> WHERE <key_col> = <key>`.

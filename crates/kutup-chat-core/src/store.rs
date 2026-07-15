@@ -23,7 +23,7 @@ use futures_util::FutureExt as _;
 use libsignal_protocol::*;
 use uuid::Uuid;
 
-use crate::db::{ChatDb, LocalIdentity, Pending};
+use crate::db::{ChatDb, LocalIdentity, OutboxEntry, Pending};
 use crate::error::{ChatError, Result as ChatResult};
 
 /// libsignal's store traits return its own `Result` alias, which the crate does
@@ -116,6 +116,56 @@ impl ChatStore {
     pub(crate) fn discard(&self) {
         self.pending.borrow_mut().clear();
     }
+
+    /// Whether a session already exists for `address` (overlay before durable) —
+    /// lets the engine encrypt with an existing session instead of re-establishing
+    /// (which would reset the ratchet).
+    pub(crate) fn has_session(&self, address: &str) -> ChatResult<bool> {
+        if let Some(opt) = self.pending.borrow().sessions.get(address) {
+            return Ok(opt.is_some());
+        }
+        Ok(self.db.load_session(address)?.is_some())
+    }
+
+    /// Stage a session archive (drop) for a stale/extra device.
+    pub(crate) fn delete_session(&self, address: &str) {
+        self.pending
+            .borrow_mut()
+            .sessions
+            .insert(address.to_string(), None);
+    }
+
+    /// Stage an outbox upsert (the pending send for its `sendId`).
+    pub(crate) fn stage_outbox(&self, entry: OutboxEntry) {
+        self.pending
+            .borrow_mut()
+            .outbox
+            .insert(entry.send_id.clone(), Some(entry));
+    }
+
+    /// Stage an outbox delete (the send was delivered).
+    pub(crate) fn delete_outbox(&self, send_id: &str) {
+        self.pending
+            .borrow_mut()
+            .outbox
+            .insert(send_id.to_string(), None);
+    }
+
+    /// The durable store handle, for reads the engine makes outside a unit of work
+    /// (e.g. loading the outbox on resend).
+    pub(crate) fn db(&self) -> &Rc<dyn ChatDb> {
+        &self.db
+    }
+
+    /// A peer device's stored public identity bytes (overlay before durable), or
+    /// `None` — lets the send path detect a reinstall (changed identity key) before
+    /// reusing a now-stale session.
+    pub(crate) fn peer_identity(&self, address: &str) -> ChatResult<Option<Vec<u8>>> {
+        if let Some(bytes) = self.pending.borrow().identities.get(address) {
+            return Ok(Some(bytes.clone()));
+        }
+        self.db.load_identity(address)
+    }
 }
 
 // ----- session -----
@@ -129,8 +179,10 @@ pub(crate) struct SessionAdapter {
 impl SessionStore for SessionAdapter {
     async fn load_session(&self, address: &ProtocolAddress) -> Result<Option<SessionRecord>> {
         let key = address.to_string();
-        if let Some(bytes) = self.pending.borrow().sessions.get(&key) {
-            return Ok(Some(SessionRecord::deserialize(bytes)?));
+        match self.pending.borrow().sessions.get(&key) {
+            Some(Some(bytes)) => return Ok(Some(SessionRecord::deserialize(bytes)?)),
+            Some(None) => return Ok(None), // archived earlier in this unit of work
+            None => {}
         }
         match self.db.load_session(&key).map_err(cb("load_session"))? {
             Some(bytes) => Ok(Some(SessionRecord::deserialize(&bytes)?)),
@@ -146,7 +198,7 @@ impl SessionStore for SessionAdapter {
         self.pending
             .borrow_mut()
             .sessions
-            .insert(address.to_string(), record.serialize()?);
+            .insert(address.to_string(), Some(record.serialize()?));
         Ok(())
     }
 }

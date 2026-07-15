@@ -67,6 +67,12 @@ pub(crate) fn to_prekey_bundle(b: &DevicePreKeyBundle) -> Result<PreKeyBundle> {
     ))
 }
 
+/// Decodes a bundle's base64 `identityKey` into a libsignal `IdentityKey` — used
+/// when accepting a reinstalled peer's changed identity (safety-number change).
+pub(crate) fn decode_identity_key(b64: &str) -> Result<IdentityKey> {
+    crypto(IdentityKey::decode(&dec("identityKey", b64)?))
+}
+
 /// Serializes a libsignal ciphertext into the envelope's `(type, content)`.
 pub(crate) fn encode_ciphertext(msg: &CiphertextMessage) -> Result<(EnvelopeType, String)> {
     let ty = match msg.message_type() {

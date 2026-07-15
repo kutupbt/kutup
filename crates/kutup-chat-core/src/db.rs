@@ -30,6 +30,25 @@ pub struct LocalIdentity {
     pub registration_id: u32,
 }
 
+/// A pending outbound message, keyed by its `sendId`. Because a ratchet advance is
+/// irreversible, a retry MUST resend the exact stored ciphertext (never
+/// re-encrypt); `content` is the plaintext, kept so a `409 DeviceListMismatch`
+/// can re-encrypt for a newly-added device. Deleted once the send is delivered.
+#[derive(Clone)]
+pub struct OutboxEntry {
+    pub send_id: String,
+    /// Recipient username (`user@domain` once federation lands).
+    pub peer: String,
+    /// `serde_json` of the `ChatContent` plaintext.
+    pub content: Vec<u8>,
+    /// `serde_json` of the per-device `Vec<OutgoingEnvelope>` ciphertexts.
+    pub envelopes: Vec<u8>,
+    /// Send attempts so far (bounds the 409 recovery loop).
+    pub attempts: u32,
+    /// Unix-epoch millis the entry was first enqueued.
+    pub created_at: i64,
+}
+
 /// A unit of work. Every mutation libsignal makes during one crypto operation
 /// accumulates here (last-write-wins per key) and is flushed to the [`ChatDb`] in
 /// one atomic `apply`. Reads consult the pending overlay before the durable store,
@@ -42,8 +61,9 @@ pub struct LocalIdentity {
 pub struct Pending {
     /// Set only when installing a freshly generated device.
     pub(crate) local_identity: Option<LocalIdentity>,
-    /// address string (`name.deviceId`) → `SessionRecord::serialize()`.
-    pub(crate) sessions: HashMap<String, Vec<u8>>,
+    /// address string (`name.deviceId`) → `Some(SessionRecord::serialize())`
+    /// (upsert) or `None` (archive — a session dropped on a stale/extra device).
+    pub(crate) sessions: HashMap<String, Option<Vec<u8>>>,
     /// address string → `IdentityKey::serialize()` (a peer's public identity).
     pub(crate) identities: HashMap<String, Vec<u8>>,
     /// one-time EC prekey id → `Some(PreKeyRecord::serialize())` (upsert) or
@@ -58,6 +78,8 @@ pub struct Pending {
     pub(crate) kyber_seen: Vec<(u32, u32, Vec<u8>)>,
     /// `(address, distributionId)` → `SenderKeyRecord::serialize()` (groups; reserved).
     pub(crate) sender_keys: HashMap<(String, String), Vec<u8>>,
+    /// `sendId` → `Some(entry)` (upsert the pending send) or `None` (delivered — delete).
+    pub(crate) outbox: HashMap<String, Option<OutboxEntry>>,
 }
 
 impl Pending {
@@ -72,6 +94,7 @@ impl Pending {
             && self.kyber_pre_keys.is_empty()
             && self.kyber_seen.is_empty()
             && self.sender_keys.is_empty()
+            && self.outbox.is_empty()
     }
 
     pub(crate) fn clear(&mut self) {
@@ -100,6 +123,11 @@ pub trait ChatDb {
     fn kyber_base_key_seen(&self, kyber_id: u32, ec_id: u32, base_key: &[u8]) -> Result<bool>;
     /// Serialized `SenderKeyRecord` for `(address, distributionId)`.
     fn load_sender_key(&self, address: &str, distribution_id: &str) -> Result<Option<Vec<u8>>>;
+
+    /// The pending outbound send for `send_id`, if any.
+    fn load_outbox(&self, send_id: &str) -> Result<Option<OutboxEntry>>;
+    /// Every pending outbound send (oldest first) — for resend-on-startup.
+    fn list_outbox(&self) -> Result<Vec<OutboxEntry>>;
 
     /// Commit a whole unit of work atomically. Either every staged write lands or
     /// none does; a partial apply MUST NOT be observable after a crash.
