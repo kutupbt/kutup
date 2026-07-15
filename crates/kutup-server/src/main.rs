@@ -106,7 +106,18 @@ async fn main() -> anyhow::Result<()> {
 
     // Background maintenance jobs (version cleanup / quota reconcile / uploads sweeper /
     // trash retention).
-    jobs::spawn_all(pool.clone(), storage.clone(), config.trash_retention_days);
+    let chat_hub = chat_hub::ChatHub::default();
+    jobs::spawn_all(
+        pool.clone(),
+        storage.clone(),
+        config.trash_retention_days,
+        jobs::ChatMaintenancePolicy {
+            mailbox_retention_days: config.chat_mailbox_retention_days,
+            send_retention_days: config.chat_send_retention_days,
+            device_expiry_days: config.chat_device_expiry_days,
+        },
+        chat_hub.clone(),
+    );
 
     // Live SeaweedFS capacity probe (admin dashboard) — None when SEAWEEDFS_MASTER_URL is empty.
     let storage_probe =
@@ -117,7 +128,7 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::new(config),
         storage,
         hub: Arc::new(hub::Hub::new()),
-        chat_hub: chat_hub::ChatHub::default(),
+        chat_hub,
         storage_probe,
     };
 

@@ -480,6 +480,10 @@ pub struct ChatCapabilities {
     /// Max `content` bytes per envelope, enforced on send (mailbox-abuse gate
     /// and the budget for attachment-pointer payloads).
     pub max_content_bytes: u32,
+    /// Unacknowledged mailbox ciphertext retention (`0` means server-disabled).
+    pub mailbox_retention_days: u32,
+    /// Inactive chat-device expiry (`0` means server-disabled).
+    pub device_expiry_days: u32,
     /// [RSV] flips true in the federation phase.
     #[serde(default)]
     pub federation: bool,
@@ -499,6 +503,8 @@ impl Default for ChatCapabilities {
             protocol_version: 1,
             suites: vec![SuiteId::PqxdhTripleRatchetV1.as_u16()],
             max_content_bytes: 65536,
+            mailbox_retention_days: 30,
+            device_expiry_days: 90,
             federation: false,
             manifests: true,
             sealed_sender: false,
@@ -577,6 +583,8 @@ mod tests {
         assert_eq!(v["protocolVersion"], 1);
         assert_eq!(v["suites"], serde_json::json!([1]));
         assert_eq!(v["maxContentBytes"], 65536);
+        assert_eq!(v["mailboxRetentionDays"], 30);
+        assert_eq!(v["deviceExpiryDays"], 90);
         assert_eq!(v["sealedSender"], false);
         assert_eq!(v["manifests"], true);
     }

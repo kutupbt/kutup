@@ -127,11 +127,11 @@ every bundle MUST carry a `kyberPreKey` (one-time or last-resort — PQ is never
 optional); one-time EC prekeys unsigned, signed prekey + all Kyber prekeys
 signed (XEd25519 by the device identity key); upload batches ≤ 100.
 
-**[ADD] Per-account bundle-fetch rate limit.** `GET …/keys` is currently
-IP-limited (30/min). Change to **per authenticated account** (the limiter has
-the user id), keeping a coarse IP limiter only as an outer guard — mobile
-clients behind CGNAT share an IP; a hostile account can drain pools across
-IPs. (`13-…` §7.)
+**[IMPL] Bundle-fetch rate limits.** `GET …/keys` is limited to 30/min per
+authenticated account (`RATE_LIMIT_CHAT_KEYS_PER_MIN`), with a deliberately
+coarser 120/min IP outer wall (`RATE_LIMIT_CHAT_KEYS_IP_PER_MIN`). Mobile
+clients behind CGNAT therefore do not share the primary budget, while a
+hostile account cannot drain pools by moving across IPs. (`13-…` §7.)
 
 **[RSV] Staged prekey deletion.** From XMPP/OMEMO practice (`13-…` §6): a
 consumed one-time prekey MUST NOT be physically deleted while in-flight
@@ -340,12 +340,16 @@ internally to compute `more`. Clients dedupe by `cursor` (or `id`), tolerating
 a WS envelope and its REST-drained twin. Servers MUST strip any client-supplied
 ordering/id fields — the server assigns them.
 
-### 8.4 [RSV] retention + device expiry
+### 8.4 [IMPL] retention + device expiry
 
-Define now (implement with the sweeper family): mailbox rows expire after a
-configured window; chat devices unseen > N days are expired with their prekeys
-(Signal-style). Unbounded mailboxes for dead devices are an abuse vector and a
-fan-out tax. Exposed via the capability block (§10).
+Mailbox rows expire after `CHAT_MAILBOX_RETENTION_DAYS` (default 30), send-id
+dedup rows after `CHAT_SEND_RETENTION_DAYS` (default 30), and chat devices with
+no authenticated device-scoped activity expire after
+`CHAT_DEVICE_EXPIRY_DAYS` (default 90) with their prekeys and mailbox. `0`
+disables each policy. Device expiry deliberately makes the signed manifest
+fail closed until an active account device explicitly authorizes that removal.
+Unbounded mailboxes for dead devices are an abuse vector and a fan-out tax.
+Mailbox/device windows are exposed via the capability block (§10).
 
 ---
 
@@ -384,6 +388,8 @@ lacking the routes. Add a `chat` block to the existing public
   "protocolVersion": 1,
   "suites": [1],
   "maxContentBytes": 65536,        // enforced on send (closes a mailbox-abuse hole)
+  "mailboxRetentionDays": 30,
+  "deviceExpiryDays": 90,
   "federation": false,             // [RSV] flips true in phase 3
   "manifests": true,               // signed device directory is available
   "sealedSender": false            // [RSV] flips true when sealed sender ships

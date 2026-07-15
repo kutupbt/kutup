@@ -101,9 +101,14 @@ services:
       STORAGE_TOTAL_BYTES: ${STORAGE_TOTAL_BYTES:-0}
       # Days a trashed item stays restorable before the sweeper purges it. 0 disables the sweep.
       TRASH_RETENTION_DAYS: ${TRASH_RETENTION_DAYS:-30}
-      # Per-IP rate limits + per-account login lockout (blank → server defaults).
+      CHAT_MAILBOX_RETENTION_DAYS: ${CHAT_MAILBOX_RETENTION_DAYS:-30}
+      CHAT_SEND_RETENTION_DAYS: ${CHAT_SEND_RETENTION_DAYS:-30}
+      CHAT_DEVICE_EXPIRY_DAYS: ${CHAT_DEVICE_EXPIRY_DAYS:-90}
+      # Per-IP/account rate limits + per-account login lockout (blank → server defaults).
       RATE_LIMIT_LOGIN_PER_MIN: ${RATE_LIMIT_LOGIN_PER_MIN:-}
       RATE_LIMIT_PREFLIGHT_PER_MIN: ${RATE_LIMIT_PREFLIGHT_PER_MIN:-}
+      RATE_LIMIT_CHAT_KEYS_PER_MIN: ${RATE_LIMIT_CHAT_KEYS_PER_MIN:-}
+      RATE_LIMIT_CHAT_KEYS_IP_PER_MIN: ${RATE_LIMIT_CHAT_KEYS_IP_PER_MIN:-}
       RATE_LIMIT_REGISTER_PER_HOUR: ${RATE_LIMIT_REGISTER_PER_HOUR:-}
       RATE_LIMIT_RECOVERY_PER_HOUR: ${RATE_LIMIT_RECOVERY_PER_HOUR:-}
       RATE_LIMIT_FED_USERS_PER_MIN: ${RATE_LIMIT_FED_USERS_PER_MIN:-}

@@ -58,7 +58,14 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # empties when users do it themselves). Default: 30.
 # TRASH_RETENTION_DAYS=30
 
-# Rate limits, per client IP (defaults shown). The backend resolves the
+# Chat mailbox/send-id retention and inactive-device expiry. The hourly
+# maintenance job enforces these; 0 disables an individual policy.
+# CHAT_MAILBOX_RETENTION_DAYS=30
+# CHAT_SEND_RETENTION_DAYS=30
+# CHAT_DEVICE_EXPIRY_DAYS=90
+
+# Rate limits (defaults shown). Most are per client IP; chat key fetches use a
+# primary per-account budget plus a coarse IP outer wall. The backend resolves the
 # client IP from the proxy-set X-Real-IP header, so keep the backend
 # unreachable except through nginx.
 # RATE_LIMIT_LOGIN_PER_MIN=10
@@ -68,6 +75,7 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # RATE_LIMIT_FED_USERS_PER_MIN=60
 # RATE_LIMIT_ADMIN_PER_MIN=120
 # RATE_LIMIT_CHAT_KEYS_PER_MIN=30
+# RATE_LIMIT_CHAT_KEYS_IP_PER_MIN=120
 
 # Per-account login lockout: this many failed password attempts lock the
 # email out for the cooldown. Locked attempts return 429; the lock clears

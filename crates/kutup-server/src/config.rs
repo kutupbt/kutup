@@ -30,6 +30,13 @@ pub struct Config {
     /// Days a trashed file/folder is kept before the sweeper purges it permanently.
     /// From `TRASH_RETENTION_DAYS`; 0 disables the automatic purge.
     pub trash_retention_days: i64,
+    /// Unacked chat ciphertext retention. `0` disables expiry.
+    pub chat_mailbox_retention_days: i64,
+    /// Send-id idempotency-record retention. `0` disables expiry.
+    pub chat_send_retention_days: i64,
+    /// Chat devices with no authenticated activity for this many days are
+    /// expired with their prekeys/mailbox. `0` disables expiry.
+    pub chat_device_expiry_days: i64,
 }
 
 impl Config {
@@ -55,6 +62,9 @@ impl Config {
             storage_total_bytes: get_env_i64("STORAGE_TOTAL_BYTES", 0),
             seaweedfs_master_url: get_env("SEAWEEDFS_MASTER_URL", "http://seaweedfs-master:9333"),
             trash_retention_days: get_env_i64("TRASH_RETENTION_DAYS", 30),
+            chat_mailbox_retention_days: get_env_i64("CHAT_MAILBOX_RETENTION_DAYS", 30),
+            chat_send_retention_days: get_env_i64("CHAT_SEND_RETENTION_DAYS", 30),
+            chat_device_expiry_days: get_env_i64("CHAT_DEVICE_EXPIRY_DAYS", 90),
         };
         if cfg.jwt_secret.len() < 32 {
             panic!("JWT_SECRET must be at least 32 characters long");

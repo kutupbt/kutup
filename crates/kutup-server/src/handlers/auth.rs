@@ -168,9 +168,22 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         sqlx::query_scalar("SELECT value FROM site_settings WHERE key='registration_enabled'")
             .fetch_optional(&state.pool)
             .await?;
+    let chat = kutup_chat_proto::ChatCapabilities {
+        mailbox_retention_days: state
+            .config
+            .chat_mailbox_retention_days
+            .try_into()
+            .unwrap_or(u32::MAX),
+        device_expiry_days: state
+            .config
+            .chat_device_expiry_days
+            .try_into()
+            .unwrap_or(u32::MAX),
+        ..Default::default()
+    };
     Ok(Json(SettingsResponse {
         registration_enabled: val.as_deref() != Some("false"),
-        chat: kutup_chat_proto::ChatCapabilities::default(),
+        chat,
     })
     .into_response())
 }

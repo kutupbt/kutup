@@ -773,7 +773,7 @@ Remaining one-time pool sizes: `{ "oneTimePreKeys": n, "oneTimeKyberPreKeys": n 
 
 ### GET /api/chat/users/{username}/keys
 
-PQXDH prekey bundles for **every** chat device of `username` (a message must encrypt to all of them). Each bundle carries `identityKey`, `signedPreKey`, `kyberPreKey` (a one-time Kyber prekey, **consumed** by this fetch, or the reusable last-resort key when the pool is empty) and optionally a consumed one-time EC prekey. Rate-limited per IP (`RATE_LIMIT_CHAT_KEYS_PER_MIN`, default 30) because fetches consume pool keys.
+PQXDH prekey bundles for **every** chat device of `username` (a message must encrypt to all of them), plus the account-signed device manifest. Each bundle carries `identityKey`, `signedPreKey`, `kyberPreKey` (a one-time Kyber prekey, **consumed** by this fetch, or the reusable last-resort key when the pool is empty) and optionally a consumed one-time EC prekey. Fetches are limited to 30/min per authenticated account (`RATE_LIMIT_CHAT_KEYS_PER_MIN`) with a coarse 120/min IP wall (`RATE_LIMIT_CHAT_KEYS_IP_PER_MIN`).
 
 ### POST /api/chat/users/{username}/messages
 

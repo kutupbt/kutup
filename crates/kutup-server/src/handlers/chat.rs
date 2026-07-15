@@ -35,7 +35,7 @@ use crate::chat_hub::ChatWsOut;
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
-use crate::{jwt, AppState};
+use crate::{jwt, ratelimit, AppState};
 
 /// libsignal registration ids are random values in `1..16380`.
 const MAX_REGISTRATION_ID: u32 = 16380;
@@ -466,12 +466,14 @@ pub struct DeviceQuery {
 
 /// Asserts the (user, device) pair exists; used by the device-scoped endpoints.
 async fn require_device(state: &AppState, user_id: Uuid, device_id: i32) -> AppResult<()> {
-    let exists: Option<i32> =
-        sqlx::query_scalar("SELECT 1 FROM chat_devices WHERE user_id = $1 AND device_id = $2")
-            .bind(user_id)
-            .bind(device_id)
-            .fetch_optional(&state.pool)
-            .await?;
+    let exists: Option<i32> = sqlx::query_scalar(
+        "UPDATE chat_devices SET last_seen_at = now()
+         WHERE user_id = $1 AND device_id = $2 RETURNING 1",
+    )
+    .bind(user_id)
+    .bind(device_id)
+    .fetch_optional(&state.pool)
+    .await?;
     if exists.is_none() {
         return Err(AppError::not_found("no such chat device"));
     }
@@ -608,9 +610,14 @@ pub async fn prekey_count(
 )]
 pub async fn get_user_bundles(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    auth: AuthUser,
     Path(username): Path<String>,
 ) -> AppResult<Response> {
+    if !ratelimit::CHAT_KEYS_ACCOUNT.allow(&auth.user_id) {
+        return Err(AppError::too_many_requests(
+            "too many chat key requests for this account",
+        ));
+    }
     let target: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
             .bind(&username)
