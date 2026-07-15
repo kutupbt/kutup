@@ -11,35 +11,23 @@
 //! op, and only if it returns `Ok` do we `commit` (one atomic `apply`) and then ack.
 //! A failure `discard`s the batch and nothing durable moved.
 //!
-//! Every trait method is `async` (libsignal's shape) but does only synchronous
-//! `ChatDb` work, so `now_or_never` drives the whole tree with no executor — on
-//! native and wasm alike.
+//! Every trait method awaits the `ChatDb` port. Native SQLite resolves
+//! immediately; IndexedDB may yield without changing the unit-of-work semantics.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use async_trait::async_trait;
-use futures_util::FutureExt as _;
 use libsignal_protocol::*;
 use uuid::Uuid;
 
-use crate::db::{ChatDb, InboxMessage, LocalIdentity, OutboxEntry, Pending};
+use crate::db::{ChatDb, InboundEnvelope, InboxMessage, LocalIdentity, OutboxEntry, Pending};
 use crate::error::{ChatError, Result as ChatResult};
 
 /// libsignal's store traits return its own `Result` alias, which the crate does
 /// not re-export at its root — so we mirror it here for the trait impls. Our own
 /// fallible methods use [`ChatResult`] instead.
 type Result<T> = std::result::Result<T, SignalProtocolError>;
-
-/// Drives a libsignal store future to completion without an executor. The
-/// futures resolve immediately because every store call underneath is synchronous.
-pub(crate) fn sync<T>(
-    fut: impl std::future::Future<Output = std::result::Result<T, SignalProtocolError>>,
-) -> ChatResult<T> {
-    fut.now_or_never()
-        .expect("libsignal store future did not resolve synchronously")
-        .map_err(Into::into)
-}
 
 /// Wraps a [`ChatDb`] read failure as a libsignal store-callback error, so it
 /// surfaces through `message_decrypt` etc. without inventing a crypto failure.
@@ -102,14 +90,18 @@ impl ChatStore {
 
     /// Flush the current unit of work atomically. Clears the batch either way, so
     /// a retry after a failed commit re-derives from the last durable state.
-    pub(crate) fn commit(&self) -> ChatResult<()> {
-        let mut pending = self.pending.borrow_mut();
+    pub(crate) async fn commit(&self) -> ChatResult<()> {
+        let pending = {
+            let mut staged = self.pending.borrow_mut();
+            if staged.is_empty() {
+                return Ok(());
+            }
+            std::mem::take(&mut *staged)
+        };
         if pending.is_empty() {
             return Ok(());
         }
-        let result = self.db.apply(&pending);
-        pending.clear();
-        result
+        self.db.apply(&pending).await
     }
 
     /// Drop the current unit of work without touching the durable store.
@@ -120,11 +112,11 @@ impl ChatStore {
     /// Whether a session already exists for `address` (overlay before durable) —
     /// lets the engine encrypt with an existing session instead of re-establishing
     /// (which would reset the ratchet).
-    pub(crate) fn has_session(&self, address: &str) -> ChatResult<bool> {
+    pub(crate) async fn has_session(&self, address: &str) -> ChatResult<bool> {
         if let Some(opt) = self.pending.borrow().sessions.get(address) {
             return Ok(opt.is_some());
         }
-        Ok(self.db.load_session(address)?.is_some())
+        Ok(self.db.load_session(address).await?.is_some())
     }
 
     /// Stage a session archive (drop) for a stale/extra device.
@@ -160,16 +152,30 @@ impl ChatStore {
     /// A peer device's stored public identity bytes (overlay before durable), or
     /// `None` — lets the send path detect a reinstall (changed identity key) before
     /// reusing a now-stale session.
-    pub(crate) fn peer_identity(&self, address: &str) -> ChatResult<Option<Vec<u8>>> {
+    pub(crate) async fn peer_identity(&self, address: &str) -> ChatResult<Option<Vec<u8>>> {
         if let Some(bytes) = self.pending.borrow().identities.get(address) {
             return Ok(Some(bytes.clone()));
         }
-        self.db.load_identity(address)
+        self.db.load_identity(address).await
     }
 
     /// Stage a decrypted inbound message.
     pub(crate) fn stage_message(&self, message: InboxMessage) {
         self.pending.borrow_mut().messages.push(message);
+    }
+
+    pub(crate) fn stage_inbound(&self, inbound: InboundEnvelope) {
+        self.pending
+            .borrow_mut()
+            .inbound
+            .insert(inbound.id.clone(), Some(inbound));
+    }
+
+    pub(crate) fn delete_inbound(&self, id: &str) {
+        self.pending
+            .borrow_mut()
+            .inbound
+            .insert(id.to_string(), None);
     }
 
     /// Stage a drain-cursor advance (monotonic — keeps the max).
@@ -180,11 +186,11 @@ impl ChatStore {
 
     /// The highest mailbox cursor processed (overlay before durable) — the drain
     /// resume point.
-    pub(crate) fn last_cursor(&self) -> ChatResult<Option<u64>> {
+    pub(crate) async fn last_cursor(&self) -> ChatResult<Option<u64>> {
         if let Some(cursor) = self.pending.borrow().last_cursor {
             return Ok(Some(cursor));
         }
-        self.db.load_last_cursor()
+        self.db.load_last_cursor().await
     }
 }
 
@@ -204,7 +210,12 @@ impl SessionStore for SessionAdapter {
             Some(None) => return Ok(None), // archived earlier in this unit of work
             None => {}
         }
-        match self.db.load_session(&key).map_err(cb("load_session"))? {
+        match self
+            .db
+            .load_session(&key)
+            .await
+            .map_err(cb("load_session"))?
+        {
             Some(bytes) => Ok(Some(SessionRecord::deserialize(&bytes)?)),
             None => Ok(None),
         }
@@ -234,11 +245,16 @@ pub(crate) struct IdentityAdapter {
 
 impl IdentityAdapter {
     /// A peer's stored public identity (overlay first, then durable), or `None`.
-    fn stored_identity(&self, key: &str) -> Result<Option<IdentityKey>> {
+    async fn stored_identity(&self, key: &str) -> Result<Option<IdentityKey>> {
         if let Some(bytes) = self.pending.borrow().identities.get(key) {
             return Ok(Some(IdentityKey::decode(bytes)?));
         }
-        match self.db.load_identity(key).map_err(cb("get_identity"))? {
+        match self
+            .db
+            .load_identity(key)
+            .await
+            .map_err(cb("get_identity"))?
+        {
             Some(bytes) => Ok(Some(IdentityKey::decode(&bytes)?)),
             None => Ok(None),
         }
@@ -263,7 +279,7 @@ impl IdentityKeyStore for IdentityAdapter {
         let key = address.to_string();
         // TOFU with change detection — mirrors InMemIdentityKeyStore exactly: only
         // (re)write when new or changed, and report whether an existing key moved.
-        match self.stored_identity(&key)? {
+        match self.stored_identity(&key).await? {
             Some(k) if &k == identity => Ok(IdentityChange::NewOrUnchanged),
             existing => {
                 self.pending
@@ -281,14 +297,14 @@ impl IdentityKeyStore for IdentityAdapter {
         identity: &IdentityKey,
         _direction: Direction,
     ) -> Result<bool> {
-        match self.stored_identity(&address.to_string())? {
+        match self.stored_identity(&address.to_string()).await? {
             None => Ok(true), // trust on first use
             Some(k) => Ok(&k == identity),
         }
     }
 
     async fn get_identity(&self, address: &ProtocolAddress) -> Result<Option<IdentityKey>> {
-        self.stored_identity(&address.to_string())
+        self.stored_identity(&address.to_string()).await
     }
 }
 
@@ -308,7 +324,7 @@ impl PreKeyStore for PreKeyAdapter {
             Some(None) => return Err(SignalProtocolError::InvalidPreKeyId),
             None => {}
         }
-        match self.db.load_pre_key(id).map_err(cb("get_pre_key"))? {
+        match self.db.load_pre_key(id).await.map_err(cb("get_pre_key"))? {
             Some(bytes) => PreKeyRecord::deserialize(&bytes),
             None => Err(SignalProtocolError::InvalidPreKeyId),
         }
@@ -350,6 +366,7 @@ impl SignedPreKeyStore for SignedPreKeyAdapter {
         match self
             .db
             .load_signed_pre_key(n)
+            .await
             .map_err(cb("get_signed_pre_key"))?
         {
             Some(bytes) => SignedPreKeyRecord::deserialize(&bytes),
@@ -387,6 +404,7 @@ impl KyberPreKeyStore for KyberAdapter {
         match self
             .db
             .load_kyber_pre_key(n)
+            .await
             .map_err(cb("get_kyber_pre_key"))?
         {
             Some(bytes) => KyberPreKeyRecord::deserialize(&bytes),
@@ -427,6 +445,7 @@ impl KyberPreKeyStore for KyberAdapter {
             || self
                 .db
                 .kyber_base_key_seen(k, e, &bk)
+                .await
                 .map_err(cb("mark_kyber_pre_key_used"))?;
         if seen {
             return Err(SignalProtocolError::InvalidMessage(
@@ -473,6 +492,7 @@ impl SenderKeyStore for SenderKeyAdapter {
         match self
             .db
             .load_sender_key(&key.0, &key.1)
+            .await
             .map_err(cb("load_sender_key"))?
         {
             Some(bytes) => Ok(Some(SenderKeyRecord::deserialize(&bytes)?)),

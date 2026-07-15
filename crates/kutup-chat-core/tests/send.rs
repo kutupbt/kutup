@@ -28,13 +28,13 @@ fn test_rng() -> impl Rng + CryptoRng {
 }
 
 fn device<R: Rng + CryptoRng>(user: &str, device_id: u32, rng: &mut R) -> Session {
-    Session::generate(
+    block_on(Session::generate(
         Rc::new(SqliteChatDb::open_in_memory().unwrap()),
         user,
         device_id,
         10,
         rng,
-    )
+    ))
     .unwrap()
 }
 
@@ -201,7 +201,7 @@ fn decrypt_for<R: Rng + CryptoRng>(
         .iter()
         .find(|e| e.device_id == device_id)
         .expect("an envelope for the device");
-    dst.decrypt(from, &wrap(env, &from.user), rng).unwrap()
+    block_on(dst.decrypt(from, &wrap(env, &from.user), rng)).unwrap()
 }
 
 // ----- the tests -----
@@ -225,7 +225,11 @@ fn fans_out_to_two_devices_and_recovers_missing() {
     assert!(summary.delivered);
     assert_eq!(summary.attempts, 2, "one 409 recovery round, then success");
     assert!(summary.safety_number_changes.is_empty());
-    assert_eq!(alice.pending_send_count().unwrap(), 0, "outbox drained");
+    assert_eq!(
+        block_on(alice.pending_send_count()).unwrap(),
+        0,
+        "outbox drained"
+    );
 
     let alice_addr = ChatAddress::local("alice", 1);
     let delivered = server.last_delivered();
@@ -372,13 +376,21 @@ fn outbox_persists_across_failure_and_flush_resends() {
     // The send fails at the transport, but the ciphertext is already durably queued.
     let err = block_on(alice.send("s4", "bob", &msg, &mut rng));
     assert!(matches!(err, Err(ChatError::Transport(_))));
-    assert_eq!(alice.pending_send_count().unwrap(), 1, "outbox retained");
+    assert_eq!(
+        block_on(alice.pending_send_count()).unwrap(),
+        1,
+        "outbox retained"
+    );
 
     // Later (or after restart) the outbox flush resends the stored ciphertext.
     let summaries = block_on(alice.flush_outbox(&mut rng)).unwrap();
     assert_eq!(summaries.len(), 1);
     assert!(summaries[0].delivered);
-    assert_eq!(alice.pending_send_count().unwrap(), 0, "outbox cleared");
+    assert_eq!(
+        block_on(alice.pending_send_count()).unwrap(),
+        0,
+        "outbox cleared"
+    );
 
     assert_eq!(
         decrypt_for(

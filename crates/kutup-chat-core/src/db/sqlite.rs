@@ -11,9 +11,12 @@
 use std::cell::RefCell;
 use std::path::Path;
 
+use async_trait::async_trait;
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::db::{ChatDb, InboxMessage, LocalIdentity, OutboxEntry, Pending};
+use crate::db::{
+    ChatDb, InboundEnvelope, InboundState, InboxMessage, LocalIdentity, OutboxEntry, Pending,
+};
 use crate::error::{ChatError, Result};
 
 /// Maps a rusqlite error into our typed [`ChatError::Db`].
@@ -22,6 +25,11 @@ fn db<T>(r: rusqlite::Result<T>) -> Result<T> {
 }
 
 const SCHEMA: &str = "\
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version    INTEGER PRIMARY KEY,
+    applied_at INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, 0);
 CREATE TABLE IF NOT EXISTS local_identity (
     id                INTEGER PRIMARY KEY CHECK (id = 1),
     identity_key_pair BLOB    NOT NULL,
@@ -76,6 +84,17 @@ CREATE TABLE IF NOT EXISTS messages (
     received_at      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_by_cursor ON messages (cursor);
+CREATE TABLE IF NOT EXISTS inbound_envelopes (
+    id          TEXT PRIMARY KEY,
+    cursor      INTEGER NOT NULL,
+    envelope    BLOB    NOT NULL,
+    state       INTEGER NOT NULL,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    last_error  TEXT,
+    received_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS inbound_by_cursor ON inbound_envelopes (cursor, id);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, 0);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value INTEGER NOT NULL
@@ -111,8 +130,9 @@ impl SqliteChatDb {
     }
 }
 
+#[async_trait(?Send)]
 impl ChatDb for SqliteChatDb {
-    fn load_local_identity(&self) -> Result<Option<LocalIdentity>> {
+    async fn load_local_identity(&self) -> Result<Option<LocalIdentity>> {
         let conn = self.conn.borrow();
         db(conn
             .query_row(
@@ -128,11 +148,11 @@ impl ChatDb for SqliteChatDb {
             .optional())
     }
 
-    fn load_session(&self, address: &str) -> Result<Option<Vec<u8>>> {
+    async fn load_session(&self, address: &str) -> Result<Option<Vec<u8>>> {
         blob(&self.conn.borrow(), "sessions", "address", address)
     }
 
-    fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>> {
+    async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>> {
         let conn = self.conn.borrow();
         db(conn
             .query_row(
@@ -143,19 +163,24 @@ impl ChatDb for SqliteChatDb {
             .optional())
     }
 
-    fn load_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>> {
+    async fn load_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>> {
         blob_by_id(&self.conn.borrow(), "pre_keys", id)
     }
 
-    fn load_signed_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>> {
+    async fn load_signed_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>> {
         blob_by_id(&self.conn.borrow(), "signed_pre_keys", id)
     }
 
-    fn load_kyber_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>> {
+    async fn load_kyber_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>> {
         blob_by_id(&self.conn.borrow(), "kyber_pre_keys", id)
     }
 
-    fn kyber_base_key_seen(&self, kyber_id: u32, ec_id: u32, base_key: &[u8]) -> Result<bool> {
+    async fn kyber_base_key_seen(
+        &self,
+        kyber_id: u32,
+        ec_id: u32,
+        base_key: &[u8],
+    ) -> Result<bool> {
         let conn = self.conn.borrow();
         let found: Option<i64> = db(conn
             .query_row(
@@ -168,7 +193,11 @@ impl ChatDb for SqliteChatDb {
         Ok(found.is_some())
     }
 
-    fn load_sender_key(&self, address: &str, distribution_id: &str) -> Result<Option<Vec<u8>>> {
+    async fn load_sender_key(
+        &self,
+        address: &str,
+        distribution_id: &str,
+    ) -> Result<Option<Vec<u8>>> {
         let conn = self.conn.borrow();
         db(conn
             .query_row(
@@ -179,7 +208,7 @@ impl ChatDb for SqliteChatDb {
             .optional())
     }
 
-    fn load_outbox(&self, send_id: &str) -> Result<Option<OutboxEntry>> {
+    async fn load_outbox(&self, send_id: &str) -> Result<Option<OutboxEntry>> {
         let conn = self.conn.borrow();
         db(conn
             .query_row(
@@ -191,7 +220,7 @@ impl ChatDb for SqliteChatDb {
             .optional())
     }
 
-    fn list_outbox(&self) -> Result<Vec<OutboxEntry>> {
+    async fn list_outbox(&self) -> Result<Vec<OutboxEntry>> {
         let conn = self.conn.borrow();
         let mut stmt = db(conn.prepare(
             "SELECT send_id, peer, content, envelopes, attempts, created_at \
@@ -205,7 +234,7 @@ impl ChatDb for SqliteChatDb {
         Ok(out)
     }
 
-    fn load_last_cursor(&self) -> Result<Option<u64>> {
+    async fn load_last_cursor(&self) -> Result<Option<u64>> {
         let conn = self.conn.borrow();
         let value: Option<i64> = db(conn
             .query_row(
@@ -217,7 +246,7 @@ impl ChatDb for SqliteChatDb {
         Ok(value.map(|n| n as u64))
     }
 
-    fn list_messages(&self) -> Result<Vec<InboxMessage>> {
+    async fn list_messages(&self) -> Result<Vec<InboxMessage>> {
         let conn = self.conn.borrow();
         let mut stmt = db(conn.prepare(
             "SELECT id, peer, sender_device_id, cursor, content, received_at \
@@ -231,7 +260,21 @@ impl ChatDb for SqliteChatDb {
         Ok(out)
     }
 
-    fn apply(&self, pending: &Pending) -> Result<()> {
+    async fn list_inbound(&self) -> Result<Vec<InboundEnvelope>> {
+        let conn = self.conn.borrow();
+        let mut stmt = db(conn.prepare(
+            "SELECT id, cursor, envelope, state, attempts, last_error, received_at \
+             FROM inbound_envelopes ORDER BY cursor, id",
+        ))?;
+        let rows = db(stmt.query_map([], inbound_row))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(db(row)??);
+        }
+        Ok(out)
+    }
+
+    async fn apply(&self, pending: &Pending) -> Result<()> {
         let mut conn = self.conn.borrow_mut();
         let tx = db(conn.transaction())?;
 
@@ -336,6 +379,29 @@ impl ChatDb for SqliteChatDb {
                 ],
             ))?;
         }
+        for (id, inbound) in &pending.inbound {
+            match inbound {
+                Some(item) => db(tx.execute(
+                    "INSERT INTO inbound_envelopes \
+                     (id, cursor, envelope, state, attempts, last_error, received_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+                     ON CONFLICT(id) DO UPDATE SET \
+                       cursor = excluded.cursor, envelope = excluded.envelope, \
+                       state = excluded.state, attempts = excluded.attempts, \
+                       last_error = excluded.last_error",
+                    rusqlite::params![
+                        id,
+                        item.cursor as i64,
+                        item.envelope,
+                        item.state.code(),
+                        item.attempts,
+                        item.last_error,
+                        item.received_at
+                    ],
+                ))?,
+                None => db(tx.execute("DELETE FROM inbound_envelopes WHERE id = ?1", [id]))?,
+            };
+        }
         if let Some(cursor) = pending.last_cursor {
             // MAX guards monotonicity: the drain cursor never moves backwards.
             db(tx.execute(
@@ -347,6 +413,27 @@ impl ChatDb for SqliteChatDb {
 
         db(tx.commit())
     }
+}
+
+fn inbound_row(row: &rusqlite::Row) -> rusqlite::Result<Result<InboundEnvelope>> {
+    let id = row.get(0)?;
+    let cursor = row.get::<_, i64>(1)? as u64;
+    let envelope = row.get(2)?;
+    let state_code: i64 = row.get(3)?;
+    let attempts = row.get(4)?;
+    let last_error = row.get(5)?;
+    let received_at = row.get(6)?;
+    Ok(
+        InboundState::from_code(state_code).map(|state| InboundEnvelope {
+            id,
+            cursor,
+            envelope,
+            state,
+            attempts,
+            last_error,
+            received_at,
+        }),
+    )
 }
 
 /// Reads one row of the `messages` table into an [`InboxMessage`].

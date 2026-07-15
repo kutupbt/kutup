@@ -12,7 +12,8 @@ use std::rc::Rc;
 use async_trait::async_trait;
 use futures_executor::block_on;
 use kutup_chat_core::{
-    ChatAddress, ChatContent, ChatTransport, Engine, Result, SendOutcome, Session, SqliteChatDb,
+    ChatAddress, ChatContent, ChatTransport, Engine, EngineState, Result, SendOutcome, Session,
+    SqliteChatDb,
 };
 use kutup_chat_proto::{
     DeliveredEnvelope, DevicePreKeyBundle, MailboxPage, OutgoingEnvelope,
@@ -28,13 +29,13 @@ fn test_rng() -> impl Rng + CryptoRng {
 }
 
 fn in_memory<R: Rng + CryptoRng>(user: &str, device_id: u32, rng: &mut R) -> Session {
-    Session::generate(
+    block_on(Session::generate(
         Rc::new(SqliteChatDb::open_in_memory().unwrap()),
         user,
         device_id,
         10,
         rng,
-    )
+    ))
     .unwrap()
 }
 
@@ -152,27 +153,25 @@ fn drains_decrypts_persists_and_acks_resuming_from_cursor() {
     let (env1, env2) = {
         // Generate Bob's device into bob_db (keys persist there); the Session itself
         // is only needed to serve the bundle, then dropped.
-        let bob = Session::generate(bob_db.open(), "bob", 1, 10, &mut rng).unwrap();
+        let bob = block_on(Session::generate(bob_db.open(), "bob", 1, 10, &mut rng)).unwrap();
         let bundle = serve_bundle(bob.registration().unwrap(), 1);
 
         let mut alice = in_memory("alice", 1, &mut rng);
-        alice.establish(&bob_addr, &bundle, &mut rng).unwrap();
-        let e1 = alice
-            .encrypt(
-                &bob_addr,
-                bundle.registration_id,
-                &ChatContent::text("t", 1, "first"),
-                &mut rng,
-            )
-            .unwrap();
-        let e2 = alice
-            .encrypt(
-                &bob_addr,
-                bundle.registration_id,
-                &ChatContent::text("t", 2, "second"),
-                &mut rng,
-            )
-            .unwrap();
+        block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
+        let e1 = block_on(alice.encrypt(
+            &bob_addr,
+            bundle.registration_id,
+            &ChatContent::text("t", 1, "first"),
+            &mut rng,
+        ))
+        .unwrap();
+        let e2 = block_on(alice.encrypt(
+            &bob_addr,
+            bundle.registration_id,
+            &ChatContent::text("t", 2, "second"),
+            &mut rng,
+        ))
+        .unwrap();
         (e1, e2)
     };
 
@@ -183,7 +182,7 @@ fn drains_decrypts_persists_and_acks_resuming_from_cursor() {
     ]);
 
     // Bob reopens his device and drains.
-    let mut bob = Engine::open(bob_db.open(), server.clone(), "bob", 1).unwrap();
+    let mut bob = block_on(Engine::open(bob_db.open(), server.clone(), "bob", 1)).unwrap();
     let report = block_on(bob.receive(&mut rng)).unwrap();
 
     assert_eq!(report.messages.len(), 2);
@@ -203,8 +202,8 @@ fn drains_decrypts_persists_and_acks_resuming_from_cursor() {
     drop(bob);
 
     // History (and the drain cursor) survive a reopen.
-    let reopened = Session::open(bob_db.open(), "bob", 1).unwrap();
-    let history = reopened.history().unwrap();
+    let reopened = block_on(Session::open(bob_db.open(), "bob", 1)).unwrap();
+    let history = block_on(reopened.history()).unwrap();
     assert_eq!(history.len(), 2);
     let texts: Vec<String> = history
         .iter()
@@ -229,15 +228,14 @@ fn dedups_a_redelivered_cursor() {
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
 
     let mut alice = in_memory("alice", 1, &mut rng);
-    alice.establish(&bob_addr, &bundle, &mut rng).unwrap();
-    let env = alice
-        .encrypt(
-            &bob_addr,
-            bundle.registration_id,
-            &ChatContent::text("t", 1, "once"),
-            &mut rng,
-        )
-        .unwrap();
+    block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
+    let env = block_on(alice.encrypt(
+        &bob_addr,
+        bundle.registration_id,
+        &ChatContent::text("t", 1, "once"),
+        &mut rng,
+    ))
+    .unwrap();
 
     // The same message delivered twice (same cursor, different mailbox ids) — the
     // WS-twin case. The second copy must be acked but never re-decrypted (the
@@ -259,4 +257,39 @@ fn dedups_a_redelivered_cursor() {
         acked.contains(&"twin-a".to_string()) && acked.contains(&"twin-b".to_string()),
         "both copies acked"
     );
+}
+
+#[test]
+fn decrypt_failure_is_durable_and_never_silently_acked() {
+    let mut rng = test_rng();
+    let bob = in_memory("bob", 1, &mut rng);
+    let server = Rc::new(Mailbox::default());
+    server.deposit(vec![DeliveredEnvelope {
+        id: "broken-1".into(),
+        cursor: 1,
+        sender: Some("alice".into()),
+        sender_device_id: 1,
+        envelope_type: kutup_chat_proto::EnvelopeType::Message,
+        suite: kutup_chat_proto::SuiteId::PqxdhTripleRatchetV1,
+        content: "not-base64".into(),
+        server_timestamp: "2026-07-14T10:00:00Z".into(),
+    }]);
+
+    let mut engine = Engine::new(bob, server.clone());
+    let first = block_on(engine.receive(&mut rng)).unwrap();
+    assert_eq!(first.errors.len(), 1);
+    assert!(server.acked().is_empty(), "failed ciphertext was not acked");
+    assert_eq!(engine.state(), EngineState::Degraded);
+    let retained = block_on(engine.inbound_attention()).unwrap();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].id, "broken-1");
+    assert_eq!(retained[0].attempts, 1);
+
+    // The server query resumes after cursor 1, but the local journal retries the
+    // ciphertext. It remains unacked and visible rather than disappearing.
+    let second = block_on(engine.receive(&mut rng)).unwrap();
+    assert_eq!(second.errors.len(), 1);
+    assert!(server.acked().is_empty());
+    let retained = block_on(engine.inbound_attention()).unwrap();
+    assert_eq!(retained[0].attempts, 2);
 }

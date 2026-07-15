@@ -3,9 +3,9 @@
 //! [`ChatDb`] is the seam every platform implements: native (Android/iOS/desktop)
 //! over bundled SQLite ([`sqlite::SqliteChatDb`], behind the `sqlite` feature),
 //! the web client over IndexedDB (a separate wasm adapter, `--no-default-features`).
-//! It is a **synchronous** blob store — the libsignal store adapters (`store.rs`)
-//! run every call inside a future that resolves immediately, so no async executor
-//! is required on any platform (the same `now_or_never` trick the wasm spike uses).
+//! It is an **async, `?Send`** blob store: native SQLite completes calls
+//! immediately, while browser IndexedDB is allowed to yield. This matches
+//! libsignal's async store traits without blocking the browser main thread.
 //!
 //! Reads are typed by domain and return the raw libsignal-serialized record bytes;
 //! all writes for one crypto operation are staged in a [`Pending`] and committed in
@@ -14,6 +14,8 @@
 //! the foundation for the decrypt→persist→ack ordering invariant (`docs/chat-protocol.md`).
 
 use std::collections::HashMap;
+
+use async_trait::async_trait;
 
 use crate::error::Result;
 
@@ -66,6 +68,54 @@ pub struct OutboxEntry {
     pub created_at: i64,
 }
 
+/// Durable state of a raw inbound mailbox envelope. Ciphertext is journaled
+/// before the fetch cursor advances, so decrypt/session repair can be retried
+/// without depending on the server returning an older page again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InboundState {
+    /// Fetched and waiting for decrypt (or a retry after repair).
+    PendingDecrypt,
+    /// Decrypted and committed locally; safe to retry the idempotent REST ack.
+    PendingAck,
+    /// Explicitly quarantined after a permanent-policy decision. The ciphertext
+    /// remains locally visible until the application resolves it.
+    DeadLetter,
+}
+
+impl InboundState {
+    pub(crate) fn code(self) -> i64 {
+        match self {
+            Self::PendingDecrypt => 0,
+            Self::PendingAck => 1,
+            Self::DeadLetter => 2,
+        }
+    }
+
+    pub(crate) fn from_code(code: i64) -> Result<Self> {
+        match code {
+            0 => Ok(Self::PendingDecrypt),
+            1 => Ok(Self::PendingAck),
+            2 => Ok(Self::DeadLetter),
+            _ => Err(crate::error::ChatError::Db(format!(
+                "unknown inbound state {code}"
+            ))),
+        }
+    }
+}
+
+/// A server envelope retained until decrypt and acknowledgement have both
+/// completed. `envelope` is the JSON-encoded [`DeliveredEnvelope`].
+#[derive(Clone, Debug)]
+pub struct InboundEnvelope {
+    pub id: String,
+    pub cursor: u64,
+    pub envelope: Vec<u8>,
+    pub state: InboundState,
+    pub attempts: u32,
+    pub last_error: Option<String>,
+    pub received_at: i64,
+}
+
 /// A unit of work. Every mutation libsignal makes during one crypto operation
 /// accumulates here (last-write-wins per key) and is flushed to the [`ChatDb`] in
 /// one atomic `apply`. Reads consult the pending overlay before the durable store,
@@ -99,6 +149,9 @@ pub struct Pending {
     pub(crate) outbox: HashMap<String, Option<OutboxEntry>>,
     /// Decrypted inbound messages to persist (insert-or-ignore by id).
     pub(crate) messages: Vec<InboxMessage>,
+    /// Raw inbound journal updates keyed by mailbox id. `None` removes an entry
+    /// only after its REST acknowledgement succeeds.
+    pub(crate) inbound: HashMap<String, Option<InboundEnvelope>>,
     /// The highest mailbox cursor processed — advanced with each message so a
     /// re-drain never re-decrypts (which the ratchet couldn't do anyway).
     pub(crate) last_cursor: Option<u64>,
@@ -118,6 +171,7 @@ impl Pending {
             && self.sender_keys.is_empty()
             && self.outbox.is_empty()
             && self.messages.is_empty()
+            && self.inbound.is_empty()
             && self.last_cursor.is_none()
     }
 
@@ -129,36 +183,46 @@ impl Pending {
 /// The durable client store. All methods are synchronous; implementors are free
 /// to be `!Send` (the engine drives one session on one thread). Object-safe by
 /// design — the engine holds an `Rc<dyn ChatDb>`.
+#[async_trait(?Send)]
 pub trait ChatDb {
     /// The installed device's identity, or `None` on a fresh store.
-    fn load_local_identity(&self) -> Result<Option<LocalIdentity>>;
+    async fn load_local_identity(&self) -> Result<Option<LocalIdentity>>;
 
     /// Serialized `SessionRecord` for `address` (`name.deviceId`).
-    fn load_session(&self, address: &str) -> Result<Option<Vec<u8>>>;
+    async fn load_session(&self, address: &str) -> Result<Option<Vec<u8>>>;
     /// Serialized peer `IdentityKey` for `address`.
-    fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>>;
+    async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>>;
     /// Serialized one-time `PreKeyRecord` by id.
-    fn load_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>>;
+    async fn load_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>>;
     /// Serialized `SignedPreKeyRecord` by id.
-    fn load_signed_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>>;
+    async fn load_signed_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>>;
     /// Serialized `KyberPreKeyRecord` by id.
-    fn load_kyber_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>>;
+    async fn load_kyber_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>>;
     /// Whether this `(kyberId, ecId, baseKey)` combination was already consumed.
-    fn kyber_base_key_seen(&self, kyber_id: u32, ec_id: u32, base_key: &[u8]) -> Result<bool>;
+    async fn kyber_base_key_seen(&self, kyber_id: u32, ec_id: u32, base_key: &[u8])
+        -> Result<bool>;
     /// Serialized `SenderKeyRecord` for `(address, distributionId)`.
-    fn load_sender_key(&self, address: &str, distribution_id: &str) -> Result<Option<Vec<u8>>>;
+    async fn load_sender_key(
+        &self,
+        address: &str,
+        distribution_id: &str,
+    ) -> Result<Option<Vec<u8>>>;
 
     /// The pending outbound send for `send_id`, if any.
-    fn load_outbox(&self, send_id: &str) -> Result<Option<OutboxEntry>>;
+    async fn load_outbox(&self, send_id: &str) -> Result<Option<OutboxEntry>>;
     /// Every pending outbound send (oldest first) — for resend-on-startup.
-    fn list_outbox(&self) -> Result<Vec<OutboxEntry>>;
+    async fn list_outbox(&self) -> Result<Vec<OutboxEntry>>;
 
     /// The highest mailbox cursor processed so far (the drain resume point).
-    fn load_last_cursor(&self) -> Result<Option<u64>>;
+    async fn load_last_cursor(&self) -> Result<Option<u64>>;
     /// Every persisted inbound message (oldest first, by cursor) — the local history.
-    fn list_messages(&self) -> Result<Vec<InboxMessage>>;
+    async fn list_messages(&self) -> Result<Vec<InboxMessage>>;
+
+    /// Every raw inbound entry, ordered by cursor, including ack retries and
+    /// visible dead letters.
+    async fn list_inbound(&self) -> Result<Vec<InboundEnvelope>>;
 
     /// Commit a whole unit of work atomically. Either every staged write lands or
     /// none does; a partial apply MUST NOT be observable after a crash.
-    fn apply(&self, pending: &Pending) -> Result<()>;
+    async fn apply(&self, pending: &Pending) -> Result<()>;
 }
