@@ -112,8 +112,36 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::admin::activity,
         crate::handlers::admin::get_settings,
         crate::handlers::admin::update_settings,
+        // --- chat (E2EE messaging — phase 2 of docs/research/11-federated-chat.md) ---
+        crate::handlers::chat::register_device,
+        crate::handlers::chat::list_devices,
+        crate::handlers::chat::revoke_device,
+        crate::handlers::chat::replenish_keys,
+        crate::handlers::chat::prekey_count,
+        crate::handlers::chat::get_user_bundles,
+        crate::handlers::chat::send_messages,
+        crate::handlers::chat::drain_mailbox,
+        crate::handlers::chat::ack_messages,
+        crate::handlers::chat::ws,
     ),
     components(schemas(
+        kutup_chat_proto::SuiteId,
+        kutup_chat_proto::EnvelopeType,
+        kutup_chat_proto::EcPreKey,
+        kutup_chat_proto::KemPreKey,
+        kutup_chat_proto::RegisterChatDeviceRequest,
+        kutup_chat_proto::RegisterChatDeviceResponse,
+        kutup_chat_proto::ReplenishKeysRequest,
+        kutup_chat_proto::PreKeyCountResponse,
+        kutup_chat_proto::DevicePreKeyBundle,
+        kutup_chat_proto::UserPreKeyBundlesResponse,
+        kutup_chat_proto::OutgoingEnvelope,
+        kutup_chat_proto::SendMessagesRequest,
+        kutup_chat_proto::DeviceListMismatch,
+        kutup_chat_proto::DeliveredEnvelope,
+        kutup_chat_proto::MailboxPage,
+        kutup_chat_proto::AckRequest,
+        kutup_chat_proto::ChatWsServerMessage,
         models::HealthResponse,
         models::ErrorResponse,
         models::MessageResponse,
@@ -179,7 +207,7 @@ mod tests {
     /// Every HTTP operation registered in `build_router` (74 router entries → 78
     /// method+path pairs, counting each method on a multi-method route). Keep in sync
     /// with `paths(...)` above when routes change.
-    const EXPECTED_OPERATIONS: usize = 78;
+    const EXPECTED_OPERATIONS: usize = 88;
 
     #[test]
     fn spec_lists_every_router_operation() {
@@ -223,6 +251,9 @@ mod tests {
             "/api/admin/activity",
             "/api/admin/users/{id}/rotate-temp-password",
             "/api/admin/users/{id}/wipe",
+            "/api/chat/users/{username}/keys",
+            "/api/chat/messages/ack",
+            "/api/chat/ws",
         ] {
             assert!(paths.contains_key(path), "spec is missing path {path}");
         }

@@ -745,6 +745,54 @@ Returns `410 Gone` if the share has expired, `403` if the file does not belong t
 
 ---
 
+## Chat (E2EE messaging)
+
+The local slice of the federated chat track ("ileti" — design: `docs/research/11-federated-chat.md`). Clients run the Signal protocol (PQXDH + Triple Ratchet, suite `1`); the server stores **public prekeys and opaque ciphertext only**. All endpoints require a Bearer JWT unless noted. Wire types live in `crates/kutup-chat-proto` and are fully described by the OpenAPI document.
+
+### POST /api/chat/device
+
+Register the calling client as a chat device. The server assigns the lowest free device id (`1..=127` per user). Body: `registrationId` (libsignal, `1..16380`), `identityKey`, `signedPreKey` (signature required), `lastResortKyberPreKey` (bundles are never non-PQ), optional `oneTimePreKeys[]` / `oneTimeKyberPreKeys[]` pools, optional `name`. All key material base64.
+
+**Response:** `200 OK` → `{ "deviceId": 1 }` · `409` when all 127 ids are taken.
+
+### GET /api/chat/device
+
+The caller's chat devices: `{ "devices": [{ "deviceId", "suite", "name", "createdAt", "lastSeenAt" }] }`.
+
+### DELETE /api/chat/device/{deviceId}
+
+Revoke a chat device — hard delete; prekey pools and mailbox rows cascade, live sockets close. `204`.
+
+### PUT /api/chat/keys?deviceId=N
+
+Rotate `signedPreKey` / `lastResortKyberPreKey` and/or upload more one-time prekeys (only fields present are changed; pool inserts are idempotent per `keyId`).
+
+### GET /api/chat/keys/count?deviceId=N
+
+Remaining one-time pool sizes: `{ "oneTimePreKeys": n, "oneTimeKyberPreKeys": n }` — clients replenish below a threshold.
+
+### GET /api/chat/users/{username}/keys
+
+PQXDH prekey bundles for **every** chat device of `username` (a message must encrypt to all of them). Each bundle carries `identityKey`, `signedPreKey`, `kyberPreKey` (a one-time Kyber prekey, **consumed** by this fetch, or the reusable last-resort key when the pool is empty) and optionally a consumed one-time EC prekey. Rate-limited per IP (`RATE_LIMIT_CHAT_KEYS_PER_MIN`, default 30) because fetches consume pool keys.
+
+### POST /api/chat/users/{username}/messages
+
+Deliver one logical message as per-device ciphertexts: `{ "senderDeviceId": n, "envelopes": [{ "deviceId", "registrationId", "envelopeType": "preKey"|"message", "suite": 1, "content": "<base64>" }] }`. The device set must exactly match the recipient's current devices — ids **and** registration ids — or the send fails with `409 { "missingDevices": [], "staleDevices": [], "extraDevices": [] }` (Signal's contract: no device can be silently skipped, and reinstalled devices are detected). Stored envelopes are also pushed to the recipient's live chat sockets.
+
+### GET /api/chat/messages?deviceId=N&limit=100
+
+Drain the device's mailbox, oldest first (max 500/page): `{ "envelopes": [{ "id", "sender", "senderDeviceId", "envelopeType", "suite", "content", "serverTimestamp" }], "more": bool }`. Envelopes stay stored until acked.
+
+### POST /api/chat/messages/ack?deviceId=N
+
+`{ "ids": ["<uuid>", …] }` → deletes processed envelopes; returns `{ "acked": n }`.
+
+### GET /api/chat/ws?deviceId=N&token=…
+
+WebSocket. Auth like the collab WS (token via `Authorization` or `?token=`, validated before upgrade). Server → client JSON frames: `{ "type": "drainMailbox" }` once on connect (fetch the backlog over REST), then `{ "type": "envelope", "envelope": {…} }` per newly arrived message. Acks stay on REST — the mailbox is the source of truth.
+
+---
+
 ## Federation — Public Endpoints
 
 These endpoints are called by remote Kutup servers as part of the federation protocol.

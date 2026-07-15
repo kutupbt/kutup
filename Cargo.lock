@@ -2196,6 +2196,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kutup-chat-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "utoipa",
+]
+
+[[package]]
 name = "kutup-cli"
 version = "0.1.0"
 dependencies = [
@@ -2255,6 +2264,7 @@ dependencies = [
  "futures-util",
  "hex",
  "jsonwebtoken",
+ "kutup-chat-proto",
  "kutup-crypto",
  "rand 0.8.6",
  "reqwest",

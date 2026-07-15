@@ -170,6 +170,7 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
             .await?;
     Ok(Json(SettingsResponse {
         registration_enabled: val.as_deref() != Some("false"),
+        chat: kutup_chat_proto::ChatCapabilities::default(),
     })
     .into_response())
 }

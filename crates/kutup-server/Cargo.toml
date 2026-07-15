@@ -11,6 +11,7 @@ name = "kutup-server"
 path = "src/main.rs"
 
 [dependencies]
+kutup-chat-proto = { path = "../kutup-chat-proto", features = ["openapi"] }
 kutup-crypto = { path = "../kutup-crypto" }
 axum.workspace = true
 tokio.workspace = true

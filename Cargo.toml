@@ -13,7 +13,11 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-exclude = ["src-tauri"]
+# Excluded like src-tauri: kutup-chat-core pulls the whole libsignal dependency
+# tree (git, ~large) and needs protoc at build time, so it must not tax the
+# app/server/CLI `cargo build`/`cargo test`. It is its own standalone workspace
+# and depends on kutup-chat-proto by path. The native/wasm chat clients link it.
+exclude = ["src-tauri", "crates/kutup-chat-core"]
 
 [workspace.package]
 edition = "2021"
