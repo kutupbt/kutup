@@ -47,9 +47,28 @@ export interface InboundFailure {
 export interface ReceiveReport {
   messages: unknown[]
   synced: string[]
+  contactSynced: string[]
+  suppressed: string[]
   undecodable: string[]
   errors: InboundFailure[]
   duplicates: string[]
+}
+
+export type ContactState =
+  | 'pendingIncoming'
+  | 'pendingOutgoing'
+  | 'accepted'
+  | 'rejected'
+  | 'blocked'
+
+export interface ContactRecord {
+  peer: string
+  state: ContactState
+  previousState?: ContactState
+  revision: string
+  sourceDeviceId: number
+  updatedAtMs: number
+  syncPending: boolean
 }
 
 export interface InboundAttention {
@@ -103,6 +122,11 @@ export interface ChatTransportPort {
 export interface WasmChatClientHandle {
   readonly deviceId: number
   history(): Promise<ChatHistoryEntry[]>
+  contacts(): Promise<ContactRecord[]>
+  acceptContact(peer: string): Promise<ContactRecord>
+  rejectContact(peer: string): Promise<ContactRecord>
+  blockContact(peer: string): Promise<ContactRecord>
+  unblockContact(peer: string): Promise<ContactRecord>
   inboundAttention(): Promise<InboundAttention[]>
   maintainPrekeys(): Promise<unknown>
   pendingSendCount(): Promise<number>

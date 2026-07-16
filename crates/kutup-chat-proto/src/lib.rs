@@ -20,7 +20,7 @@ pub mod content;
 pub mod federation;
 mod identity;
 
-pub use content::{ChatContent, SentTranscriptBody, TextBody};
+pub use content::{ChatContent, ContactControlBody, ContactState, SentTranscriptBody, TextBody};
 pub use federation::{
     server_key_id, FederatedChatTransaction, FederationAuthorization, FederationDeliveryError,
     FederationDeliveryRejection, FederationDeliveryResponse, FederationDiscovery,

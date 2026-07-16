@@ -2,8 +2,8 @@
 //! §13): an address is `user`, an optional `domain`, and a device id. Local v1
 //! leaves `domain` unset; phase 3 populates it, changing routing, not types.
 
-use libsignal_protocol::{DeviceId, ProtocolAddress};
 use kutup_chat_proto::{AccountAddress, ConversationId};
+use libsignal_protocol::{DeviceId, ProtocolAddress};
 
 use crate::error::{ChatError, Result};
 

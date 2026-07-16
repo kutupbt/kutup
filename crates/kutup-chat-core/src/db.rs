@@ -13,12 +13,13 @@
 //! returns `Ok`, a crash mid-operation leaves the last committed state intact —
 //! the foundation for the decrypt→persist→ack ordering invariant (`docs/chat-protocol.md`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+use kutup_chat_proto::ContactState;
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod indexed_db;
@@ -267,6 +268,51 @@ pub struct ManifestTrust {
     pub continuity_gap: bool,
 }
 
+#[cfg(feature = "sqlite")]
+pub(crate) fn contact_state_code(state: ContactState) -> i64 {
+    match state {
+        ContactState::PendingIncoming => 0,
+        ContactState::PendingOutgoing => 1,
+        ContactState::Accepted => 2,
+        ContactState::Rejected => 3,
+        ContactState::Blocked => 4,
+    }
+}
+
+#[cfg(feature = "sqlite")]
+pub(crate) fn contact_state_from_code(code: i64) -> Result<ContactState> {
+    match code {
+        0 => Ok(ContactState::PendingIncoming),
+        1 => Ok(ContactState::PendingOutgoing),
+        2 => Ok(ContactState::Accepted),
+        3 => Ok(ContactState::Rejected),
+        4 => Ok(ContactState::Blocked),
+        _ => Err(crate::error::ChatError::Db(format!(
+            "unknown contact state {code}"
+        ))),
+    }
+}
+
+/// Client-owned relationship state for a canonical account. This record never
+/// leaves the encrypted/native or account-scoped/browser chat store directly;
+/// linked devices receive only its E2EE [`ContactControlBody`](kutup_chat_proto::ContactControlBody).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContactRecord {
+    pub peer: String,
+    pub state: ContactState,
+    /// State restored by unblock. Present only while `state == Blocked`.
+    pub previous_state: Option<ContactState>,
+    pub revision: u64,
+    pub source_device_id: u32,
+    pub updated_at_ms: i64,
+    /// A local explicit transition still needs encrypted linked-device sync.
+    #[serde(default)]
+    pub sync_pending: bool,
+    /// Stable id for crash-safe retries of that linked-device control message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_send_id: Option<String>,
+}
+
 /// A unit of work. Every mutation libsignal makes during one crypto operation
 /// accumulates here (last-write-wins per key) and is flushed to the [`ChatDb`] in
 /// one atomic `apply`. Reads consult the pending overlay before the durable store,
@@ -307,6 +353,11 @@ pub struct Pending {
     pub(crate) inbound: HashMap<String, Option<InboundEnvelope>>,
     /// Peer username → latest accepted signed-manifest trust record.
     pub(crate) manifest_trust: HashMap<String, ManifestTrust>,
+    /// Canonical peer → local contact/request state.
+    pub(crate) contacts: HashMap<String, ContactRecord>,
+    /// Reject deletes the request plaintext in the same transaction as the
+    /// state change, without touching libsignal session/identity state.
+    pub(crate) delete_messages_for_peers: HashSet<String>,
     /// Serialized `ReplenishKeysRequest` whose private keys are already durable
     /// but whose server response has not yet been confirmed.
     pub(crate) prekey_upload: Option<Option<Vec<u8>>>,
@@ -338,6 +389,8 @@ impl Pending {
             && self.sent_messages.is_empty()
             && self.inbound.is_empty()
             && self.manifest_trust.is_empty()
+            && self.contacts.is_empty()
+            && self.delete_messages_for_peers.is_empty()
             && self.prekey_upload.is_none()
             && self.registration_upload.is_none()
             && self.last_cursor.is_none()
@@ -404,6 +457,11 @@ pub trait ChatDb {
 
     /// Highest accepted manifest and pinned authority for `peer`.
     async fn load_manifest_trust(&self, peer: &str) -> Result<Option<ManifestTrust>>;
+
+    /// Client-owned relationship state for one canonical peer.
+    async fn load_contact(&self, peer: &str) -> Result<Option<ContactRecord>>;
+    /// Every known contact/request state, ordered by canonical peer.
+    async fn list_contacts(&self) -> Result<Vec<ContactRecord>>;
 
     /// Durable prekey publication request, if a prior upload is unconfirmed.
     async fn load_pending_prekey_upload(&self) -> Result<Option<Vec<u8>>>;

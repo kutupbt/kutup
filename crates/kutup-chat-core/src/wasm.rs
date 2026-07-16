@@ -78,6 +78,23 @@ export interface KutupChatHistoryEntry {
   deduplicated: boolean;
   content: KutupChatContentView;
 }
+
+export type KutupChatContactState =
+  | "pendingIncoming"
+  | "pendingOutgoing"
+  | "accepted"
+  | "rejected"
+  | "blocked";
+
+export interface KutupChatContactRecord {
+  peer: string;
+  state: KutupChatContactState;
+  previousState?: KutupChatContactState;
+  revision: string;
+  sourceDeviceId: number;
+  updatedAtMs: number;
+  syncPending: boolean;
+}
 "#;
 
 #[wasm_bindgen]
@@ -389,7 +406,20 @@ impl WasmChatClient {
             .flush_outbox(&mut rng)
             .await
             .map_err(chat_error)?;
+        // Contact controls are durable best-effort account sync. A temporary
+        // failure must not prevent mailbox decrypt/ack; the marker/outbox retry.
+        let _ = self
+            .engine
+            .flush_contact_syncs(&now_rfc3339(), &mut rng)
+            .await;
         let report = self.engine.receive(&mut rng).await.map_err(chat_error)?;
+        // A reply can promote pending-outgoing to accepted (or a new message
+        // can supersede a prior rejection). Publish that newer revision after
+        // the decrypt commit so delayed older controls cannot win elsewhere.
+        let _ = self
+            .engine
+            .flush_contact_syncs(&now_rfc3339(), &mut rng)
+            .await;
         to_output(&ReceiveReportView::from(report))
     }
 
@@ -414,9 +444,15 @@ impl WasmChatClient {
             .map_err(chat_error)?;
         let mut history = Vec::with_capacity(incoming.len() + outgoing.len());
         for message in incoming {
+            if is_contact_control(&message.content).map_err(chat_error)? {
+                continue;
+            }
             history.push(HistoryEntry::incoming(message).map_err(chat_error)?);
         }
         for message in outgoing {
+            if is_contact_control(&message.content).map_err(chat_error)? {
+                continue;
+            }
             history.push(HistoryEntry::outgoing(message).map_err(chat_error)?);
         }
         history.sort_by(|left, right| {
@@ -425,6 +461,62 @@ impl WasmChatClient {
                 .then_with(|| left.id.cmp(&right.id))
         });
         to_output(&history)
+    }
+
+    pub async fn contacts(&self) -> std::result::Result<JsValue, JsValue> {
+        let contacts: Vec<ContactRecordView> = self
+            .engine
+            .contacts()
+            .await
+            .map_err(chat_error)?
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        to_output(&contacts)
+    }
+
+    #[wasm_bindgen(js_name = acceptContact)]
+    pub async fn accept_contact(&mut self, peer: String) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let contact = self
+            .engine
+            .accept_contact(&peer, &now_rfc3339(), &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&ContactRecordView::from(contact))
+    }
+
+    #[wasm_bindgen(js_name = rejectContact)]
+    pub async fn reject_contact(&mut self, peer: String) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let contact = self
+            .engine
+            .reject_contact(&peer, &now_rfc3339(), &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&ContactRecordView::from(contact))
+    }
+
+    #[wasm_bindgen(js_name = blockContact)]
+    pub async fn block_contact(&mut self, peer: String) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let contact = self
+            .engine
+            .block_contact(&peer, &now_rfc3339(), &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&ContactRecordView::from(contact))
+    }
+
+    #[wasm_bindgen(js_name = unblockContact)]
+    pub async fn unblock_contact(&mut self, peer: String) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let contact = self
+            .engine
+            .unblock_contact(&peer, &now_rfc3339(), &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&ContactRecordView::from(contact))
     }
 
     #[wasm_bindgen(js_name = pendingSendCount)]
@@ -498,6 +590,8 @@ impl From<crate::SendSummary> for SendSummaryView {
 struct ReceiveReportView {
     messages: Vec<ReceivedMessageView>,
     synced: Vec<String>,
+    contact_synced: Vec<String>,
+    suppressed: Vec<String>,
     undecodable: Vec<String>,
     errors: Vec<InboundFailureView>,
     duplicates: Vec<String>,
@@ -512,6 +606,8 @@ impl From<ReceiveReport> for ReceiveReportView {
                 .map(ReceivedMessageView::from)
                 .collect(),
             synced: report.synced,
+            contact_synced: report.contact_synced,
+            suppressed: report.suppressed,
             undecodable: report.undecodable,
             errors: report
                 .errors
@@ -519,6 +615,33 @@ impl From<ReceiveReport> for ReceiveReportView {
                 .map(InboundFailureView::from)
                 .collect(),
             duplicates: report.duplicates,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContactRecordView {
+    peer: String,
+    state: kutup_chat_proto::ContactState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_state: Option<kutup_chat_proto::ContactState>,
+    revision: String,
+    source_device_id: u32,
+    updated_at_ms: i64,
+    sync_pending: bool,
+}
+
+impl From<crate::ContactRecord> for ContactRecordView {
+    fn from(contact: crate::ContactRecord) -> Self {
+        Self {
+            peer: contact.peer,
+            state: contact.state,
+            previous_state: contact.previous_state,
+            revision: contact.revision.to_string(),
+            source_device_id: contact.source_device_id,
+            updated_at_ms: contact.updated_at_ms,
+            sync_pending: contact.sync_pending,
         }
     }
 }
@@ -659,6 +782,12 @@ fn direct_conversation(peer: &str) -> Result<ConversationId> {
         .parse::<AccountAddress>()
         .map_err(|error| ChatError::Content(format!("invalid direct conversation: {error}")))?;
     Ok(ConversationId::direct(address))
+}
+
+fn is_contact_control(bytes: &[u8]) -> Result<bool> {
+    let content = serde_json::from_slice::<ChatContent>(bytes)
+        .map_err(|error| ChatError::Content(error.to_string()))?;
+    Ok(content.kind == kutup_chat_proto::content::kind::CONTACT_CONTROL)
 }
 
 #[derive(Serialize)]

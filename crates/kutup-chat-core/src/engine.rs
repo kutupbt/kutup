@@ -14,7 +14,8 @@ use std::rc::Rc;
 use rand::{CryptoRng, Rng};
 
 use crate::db::{
-    ChatDb, InboundEnvelope, InboundFailureKind, InboundState, OutboxEntry, OutboxLeg, SentMessage,
+    ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState, OutboxEntry,
+    OutboxLeg, SentMessage,
 };
 use crate::error::{ChatError, Result};
 use crate::manifest::{AccountAuthority, ManifestPolicy};
@@ -23,7 +24,8 @@ use crate::session::{
 };
 use crate::transport::{ChatTransport, SendOutcome};
 use kutup_chat_proto::{
-    ChatContent, DeviceManifest, OutgoingEnvelope, PreKeyCountResponse, SendMessagesRequest,
+    ChatContent, ContactControlBody, ContactState, DeviceManifest, OutgoingEnvelope,
+    PreKeyCountResponse, SendMessagesRequest,
 };
 
 /// How many send/recovery rounds a single message gets before giving up. Each 409
@@ -42,6 +44,11 @@ pub struct ReceiveReport {
     /// Logical send ids imported as outgoing history from another linked
     /// device of the local account.
     pub synced: Vec<String>,
+    /// Mailbox ids containing authenticated linked-device contact controls.
+    pub contact_synced: Vec<String>,
+    /// Mailbox ids decrypted and acknowledged without retaining plaintext
+    /// because the sender is locally blocked.
+    pub suppressed: Vec<String>,
     /// Ids that decrypted but whose plaintext wasn't a valid content document.
     pub undecodable: Vec<String>,
     /// Envelopes retained for repair/retry.
@@ -163,6 +170,7 @@ impl Engine {
             .clone();
         let device_id = transport.register_device(&request).await?;
         session.complete_registration(device_id).await?;
+        session.bootstrap_contacts().await?;
         Ok(Engine::new(session, transport))
     }
 
@@ -231,6 +239,85 @@ impl Engine {
 
     pub async fn mark_authority_verified(&mut self, peer: &str) -> Result<crate::ManifestTrust> {
         self.session.mark_authority_verified(peer).await
+    }
+
+    pub async fn contacts(&self) -> Result<Vec<ContactRecord>> {
+        self.session.contacts().await
+    }
+
+    /// Apply a contact action locally first, then best-effort its encrypted
+    /// linked-device control. A network outage must never undo a local block or
+    /// leave an accepted request unusable; the durable sync marker retries.
+    pub async fn accept_contact<R: Rng + CryptoRng>(
+        &mut self,
+        peer: &str,
+        sent_at: &str,
+        rng: &mut R,
+    ) -> Result<ContactRecord> {
+        let record = self.session.accept_contact(peer).await?;
+        let _ = self.flush_contact_syncs(sent_at, rng).await;
+        Ok(self.session.contact(peer).await?.unwrap_or(record))
+    }
+
+    pub async fn reject_contact<R: Rng + CryptoRng>(
+        &mut self,
+        peer: &str,
+        sent_at: &str,
+        rng: &mut R,
+    ) -> Result<ContactRecord> {
+        let record = self.session.reject_contact(peer).await?;
+        let _ = self.flush_contact_syncs(sent_at, rng).await;
+        Ok(self.session.contact(peer).await?.unwrap_or(record))
+    }
+
+    pub async fn block_contact<R: Rng + CryptoRng>(
+        &mut self,
+        peer: &str,
+        sent_at: &str,
+        rng: &mut R,
+    ) -> Result<ContactRecord> {
+        let record = self.session.block_contact(peer).await?;
+        let _ = self.flush_contact_syncs(sent_at, rng).await;
+        Ok(self.session.contact(peer).await?.unwrap_or(record))
+    }
+
+    pub async fn unblock_contact<R: Rng + CryptoRng>(
+        &mut self,
+        peer: &str,
+        sent_at: &str,
+        rng: &mut R,
+    ) -> Result<ContactRecord> {
+        let record = self.session.unblock_contact(peer).await?;
+        let _ = self.flush_contact_syncs(sent_at, rng).await;
+        Ok(self.session.contact(peer).await?.unwrap_or(record))
+    }
+
+    /// Retry every explicit contact transition that has not yet reached the
+    /// account's other devices. Controls travel through the same authenticated,
+    /// E2EE Note-to-Self path as sent transcripts.
+    pub async fn flush_contact_syncs<R: Rng + CryptoRng>(
+        &mut self,
+        sent_at: &str,
+        rng: &mut R,
+    ) -> Result<()> {
+        for contact in self.session.pending_contact_syncs().await? {
+            let Some(send_id) = contact.sync_send_id.clone() else {
+                continue;
+            };
+            let seq = self.session.next_sent_seq().await?;
+            let content = ChatContent::contact_control_with_id(
+                &send_id,
+                sent_at,
+                seq,
+                ContactControlBody::from(&contact),
+            );
+            let user = self.session.user().to_string();
+            self.send(&send_id, &user, &content, rng).await?;
+            self.session
+                .mark_contact_synced(&contact.peer, contact.revision, contact.source_device_id)
+                .await?;
+        }
+        Ok(())
     }
 
     /// Add this local device to the account's authenticated device set without
@@ -427,6 +514,23 @@ impl Engine {
                 .enqueue_note_to_self(send_id, &bundles, content, &mut summary, rng)
                 .await?;
         } else {
+            if let Some(contact) = self.session.contact(peer_user).await? {
+                match contact.state {
+                    ContactState::PendingIncoming => {
+                        return Err(ChatError::Invalid(
+                            "accept the message request before sending".into(),
+                        ))
+                    }
+                    ContactState::Blocked => {
+                        return Err(ChatError::Invalid(
+                            "unblock the contact before sending".into(),
+                        ))
+                    }
+                    ContactState::PendingOutgoing
+                    | ContactState::Accepted
+                    | ContactState::Rejected => {}
+                }
+            }
             let recipient_bundles = self.fetch_verified_bundles(peer_user).await?;
             let user = self.session.user().to_string();
             let sync_bundles = self.fetch_verified_bundles(&user).await?;
@@ -444,9 +548,11 @@ impl Engine {
                 )
                 .await?;
         }
-        let entry = self.session.outbox_entry(send_id).await?.ok_or_else(|| {
-            ChatError::Db(format!("send {send_id} was not durably staged"))
-        })?;
+        let entry = self
+            .session
+            .outbox_entry(send_id)
+            .await?
+            .ok_or_else(|| ChatError::Db(format!("send {send_id} was not durably staged")))?;
         let summary = self.deliver_outbox_entry(entry, summary, rng).await?;
         if !summary.safety_number_changes.is_empty() {
             self.events.push_back(ChatEvent::IdentityChanged(
@@ -565,6 +671,14 @@ impl Engine {
                     report.synced.push(message.send_id.clone());
                     self.events.push_back(ChatEvent::MessageSynced(message));
                 }
+                Ok(ReceiveOutcome::ContactSynced { id }) => {
+                    ack_ids.push(id.clone());
+                    report.contact_synced.push(id);
+                }
+                Ok(ReceiveOutcome::Suppressed { id }) => {
+                    ack_ids.push(id.clone());
+                    report.suppressed.push(id);
+                }
                 Ok(ReceiveOutcome::Undecodable { id }) => {
                     ack_ids.push(id.clone());
                     report.undecodable.push(id);
@@ -638,9 +752,8 @@ impl Engine {
         };
 
         let sync = if let Some(sync) = entry.sync {
-            let envelopes = serde_json::from_slice(&sync.envelopes).map_err(|error| {
-                ChatError::Db(format!("decode durable sync outbox: {error}"))
-            })?;
+            let envelopes = serde_json::from_slice(&sync.envelopes)
+                .map_err(|error| ChatError::Db(format!("decode durable sync outbox: {error}")))?;
             let user = self.session.user().to_string();
             let mut sync_summary = SendSummary::default();
             self.deliver_leg(
@@ -700,7 +813,9 @@ impl Engine {
             };
             match outcome {
                 SendOutcome::Delivered { deduplicated } => {
-                    self.session.complete_send(send_id, leg, deduplicated).await?;
+                    self.session
+                        .complete_send(send_id, leg, deduplicated)
+                        .await?;
                     summary.delivered = true;
                     summary.deduplicated = deduplicated;
                     return Ok(());

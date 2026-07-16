@@ -24,8 +24,8 @@ use libsignal_protocol::*;
 use uuid::Uuid;
 
 use crate::db::{
-    ChatDb, InboundEnvelope, InboxMessage, LocalIdentity, ManifestTrust, OutboxEntry, Pending,
-    SentMessage,
+    ChatDb, ContactRecord, InboundEnvelope, InboxMessage, LocalIdentity, ManifestTrust,
+    OutboxEntry, Pending, SentMessage,
 };
 use crate::error::{ChatError, Result as ChatResult};
 
@@ -195,6 +195,20 @@ impl ChatStore {
             .borrow_mut()
             .manifest_trust
             .insert(trust.peer.clone(), trust);
+    }
+
+    pub(crate) fn stage_contact(&self, contact: ContactRecord) {
+        self.pending
+            .borrow_mut()
+            .contacts
+            .insert(contact.peer.clone(), contact);
+    }
+
+    pub(crate) fn delete_messages_for_peer(&self, peer: &str) {
+        self.pending
+            .borrow_mut()
+            .delete_messages_for_peers
+            .insert(peer.to_string());
     }
 
     pub(crate) fn local_manifest_device(&self, device_id: u32) -> ManifestDevice {

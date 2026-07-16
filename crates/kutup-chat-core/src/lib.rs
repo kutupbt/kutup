@@ -33,15 +33,16 @@ pub use db::indexed_db::IndexedDbChatDb;
 #[cfg(feature = "sqlite")]
 pub use db::sqlite::SqliteChatDb;
 pub use db::{
-    AuthorityTrust, ChatDb, InboundEnvelope, InboundFailureKind, InboundState, InboxMessage,
-    LocalIdentity, ManifestTrust, OutboxEntry, OutboxSyncLeg, Pending, SentMessage,
+    AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState,
+    InboxMessage, LocalIdentity, ManifestTrust, OutboxEntry, OutboxSyncLeg, Pending, SentMessage,
 };
 pub use engine::{
     ChatEvent, Engine, EngineState, InboundFailure, PreKeyMaintenanceReport, ReceiveReport,
 };
 pub use error::{ChatError, Result};
 pub use kutup_chat_proto::{
-    AccountAddress, ChatContent, ConversationId, DeliveredEnvelope, OutgoingEnvelope, TextBody,
+    AccountAddress, ChatContent, ContactControlBody, ContactState, ConversationId,
+    DeliveredEnvelope, OutgoingEnvelope, TextBody,
 };
 pub use manifest::{verify_bundle_response, verify_manifest, AccountAuthority, ManifestPolicy};
 pub use session::{ReceivedMessage, SendSummary, Session};

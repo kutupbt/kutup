@@ -23,6 +23,10 @@ pub mod kind {
     /// An encrypted copy of an outgoing logical message for the sender's other
     /// devices. The server only sees ordinary libsignal ciphertext. [IMPL]
     pub const SENT_TRANSCRIPT: &str = "sentTranscript";
+    /// Linked-device synchronization for the local contact/request state. This
+    /// is accepted only from another authenticated device of the local account
+    /// and is never rendered as a chat message. [IMPL]
+    pub const CONTACT_CONTROL: &str = "contactControl";
     /// Delivery/read receipts (E2EE content, never a server feature). [RSV]
     pub const RECEIPT: &str = "receipt";
     /// Typing indicator; ephemeral, a client MAY drop it. [RSV]
@@ -146,6 +150,34 @@ impl ChatContent {
         }
     }
 
+    /// Builds an encrypted linked-device contact-state update. The content is
+    /// wrapped in a [`kind::SENT_TRANSCRIPT`] by the sender's sync path, so the
+    /// receiving client can require an authenticated local-account sender.
+    pub fn contact_control_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        body: ContactControlBody,
+    ) -> Self {
+        ChatContent {
+            v: Self::VERSION,
+            kind: kind::CONTACT_CONTROL.to_string(),
+            sent_at: sent_at.into(),
+            seq,
+            message_id: Some(message_id.into()),
+            body: serde_json::to_value(body).unwrap_or_default(),
+            extra: serde_json::Map::new(),
+        }
+    }
+
+    pub fn as_contact_control(&self) -> Option<ContactControlBody> {
+        if self.kind == kind::CONTACT_CONTROL {
+            serde_json::from_value(self.body.clone()).ok()
+        } else {
+            None
+        }
+    }
+
     /// True when `kind` is one this build has a typed meaning for. A UI renders
     /// unknown kinds as "message from a newer client".
     pub fn is_known_kind(&self) -> bool {
@@ -153,6 +185,7 @@ impl ChatContent {
             self.kind.as_str(),
             kind::TEXT
                 | kind::SENT_TRANSCRIPT
+                | kind::CONTACT_CONTROL
                 | kind::RECEIPT
                 | kind::TYPING
                 | kind::ATTACHMENT
@@ -167,6 +200,35 @@ impl ChatContent {
 #[serde(rename_all = "camelCase")]
 pub struct TextBody {
     pub text: String,
+}
+
+/// Local relationship state for one canonical account. Absence means the peer
+/// has never been observed. These values are client state, not server routing
+/// policy; linked devices exchange them only inside authenticated E2EE control
+/// messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ContactState {
+    PendingIncoming,
+    PendingOutgoing,
+    Accepted,
+    Rejected,
+    Blocked,
+}
+
+/// Convergent linked-device contact update. `revision` is incremented from the
+/// highest record a device has observed; concurrent equal revisions tie-break
+/// by `source_device_id`, so every linked device reaches the same result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactControlBody {
+    pub peer: String,
+    pub state: ContactState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_state: Option<ContactState>,
+    pub revision: u64,
+    pub source_device_id: u32,
+    pub updated_at_ms: i64,
 }
 
 /// Plaintext nested inside a [`kind::SENT_TRANSCRIPT`] wrapper. This whole
@@ -248,5 +310,26 @@ mod tests {
         assert_eq!(body.peer, "alice");
         assert_eq!(body.timestamp_ms, 1234);
         assert_eq!(*body.content, original);
+    }
+
+    #[test]
+    fn contact_control_round_trips_as_a_known_non_rendered_kind() {
+        let body = ContactControlBody {
+            peer: "bob@example.org".into(),
+            state: ContactState::Blocked,
+            previous_state: Some(ContactState::Accepted),
+            revision: 4,
+            source_device_id: 2,
+            updated_at_ms: 1234,
+        };
+        let content = ChatContent::contact_control_with_id(
+            "contact-4-2",
+            "2026-07-16T10:00:00Z",
+            8,
+            body.clone(),
+        );
+        assert!(content.is_known_kind());
+        assert_eq!(content.as_contact_control(), Some(body));
+        assert_eq!(content.as_text(), None);
     }
 }

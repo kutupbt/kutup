@@ -66,8 +66,21 @@
     "attention_other": "{{count}} encrypted messages need attention and remain unacknowledged.",
     "messagePeer": "Message {{peer}}",
     "send": "Send",
-    "safetyNumberChanged": "A recipient device identity changed. Verify the safety number.",
-    "contact": {
+  "safetyNumberChanged": "A recipient device identity changed. Verify the safety number.",
+  "requests": {
+    "title_one": "{{count}} message request",
+    "title_other": "{{count}} message requests",
+    "incoming": "{{peer}} wants to message you",
+    "description": "Accept to reply, reject to remove these messages, or block future messages.",
+    "accept": "Accept",
+    "reject": "Reject",
+    "block": "Block",
+    "unblock": "Unblock",
+    "blocked": "{{peer}} is blocked. New messages are securely discarded on this device.",
+    "acceptBeforeReply": "Accept this request to reply",
+    "unblockBeforeReply": "Unblock this contact to reply"
+  },
+  "contact": {
       "open": "Show my chat address",
       "title": "Your chat address",
       "description": "Share this stable username@server address or let someone scan its QR code.",

@@ -2,12 +2,14 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
+  Ban,
   Bookmark,
   Check,
   CheckCheck,
   Copy,
   Loader2,
   MessageCircle,
+  MessageSquareWarning,
   Plus,
   QrCode,
   RefreshCw,
@@ -43,6 +45,7 @@ import {
 import type {
   ChatCapabilities,
   ChatHistoryEntry,
+  ContactRecord,
   ConversationId,
   InboundAttention,
 } from '@/chat/types'
@@ -95,12 +98,14 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   )
   const [service, setService] = useState<ChatService | null>(null)
   const [history, setHistory] = useState<ChatHistoryEntry[]>([])
+  const [contacts, setContacts] = useState<ContactRecord[]>([])
   const [attention, setAttention] = useState<InboundAttention[]>([])
   const [selectedConversation, setSelectedConversation] = useState<ConversationId | null>(null)
   const [newPeer, setNewPeer] = useState('')
   const [draft, setDraft] = useState('')
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
+  const [contactUpdating, setContactUpdating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const selfAccount = useMemo(
@@ -126,13 +131,15 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     const refresh = async () => {
       if (!opened || cancelled) return
       try {
-        const [nextHistory, nextAttention] = await Promise.all([
+        const [nextHistory, nextAttention, nextContacts] = await Promise.all([
           opened.history(),
           opened.inboundAttention(),
+          opened.contacts(),
         ])
         if (!cancelled) {
           setHistory(nextHistory)
           setAttention(nextAttention)
+          setContacts(nextContacts)
           setError(null)
         }
       } catch (cause) {
@@ -169,6 +176,11 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     }
   }, [auth.userId, auth.username, capabilities, masterKey, t])
 
+  const contactsByPeer = useMemo(
+    () => new Map(contacts.map((contact) => [contact.peer, contact])),
+    [contacts],
+  )
+
   const peers = useMemo(() => {
     const latest = new Map<string, { conversation: ConversationId; message: ChatHistoryEntry }>()
     for (const message of history) {
@@ -179,8 +191,33 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     }
     return Array.from(latest.values())
       .filter(({ conversation }) => directAddress(conversation) !== selfAddress)
+      .filter(({ conversation }) => {
+        const address = directAddress(conversation)
+        const state = address ? contactsByPeer.get(address)?.state : undefined
+        return state !== 'pendingIncoming' && state !== 'rejected'
+      })
       .sort((left, right) => right.message.timestampMs - left.message.timestampMs)
-  }, [history, selfAddress])
+  }, [contactsByPeer, history, selfAddress])
+
+  const requests = useMemo(
+    () =>
+      contacts
+        .filter((contact) => contact.state === 'pendingIncoming')
+        .flatMap((contact) => {
+          const address = parseAccountAddress(contact.peer)
+          return address
+            ? [{
+                contact,
+                conversation: directConversation(address),
+                message: history
+                  .filter((message) => directAddress(message.conversation) === contact.peer)
+                  .at(-1),
+              }]
+            : []
+        })
+        .sort((left, right) => right.contact.updatedAtMs - left.contact.updatedAtMs),
+    [contacts, history],
+  )
 
   useEffect(() => {
     if (!selectedConversation && peers[0]) setSelectedConversation(peers[0].conversation)
@@ -191,6 +228,12 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const selectedLabel = selectedAddress ??
     (selectedConversation?.kind === 'group' ? selectedConversation.groupId : '')
   const noteSelected = selectedAddress === selfAddress
+  const selectedContact = selectedAddress ? contactsByPeer.get(selectedAddress) : undefined
+  const requestSelected = selectedContact?.state === 'pendingIncoming'
+  const blockedSelected = selectedContact?.state === 'blocked'
+  const canSend = Boolean(
+    selectedConversation && !requestSelected && !blockedSelected,
+  )
 
   const messages = useMemo(
     () =>
@@ -233,6 +276,28 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       toast.error(errorMessage(cause, t))
     } finally {
       setSending(false)
+    }
+  }
+
+  async function updateContact(action: 'accept' | 'reject' | 'block' | 'unblock') {
+    if (!service || !selectedAddress || contactUpdating) return
+    setContactUpdating(true)
+    try {
+      if (action === 'accept') await service.acceptContact(selectedAddress)
+      if (action === 'reject') await service.rejectContact(selectedAddress)
+      if (action === 'block') await service.blockContact(selectedAddress)
+      if (action === 'unblock') await service.unblockContact(selectedAddress)
+      const [nextHistory, nextContacts] = await Promise.all([
+        service.history(),
+        service.contacts(),
+      ])
+      setHistory(nextHistory)
+      setContacts(nextContacts)
+      if (action === 'reject') setSelectedConversation(null)
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setContactUpdating(false)
     }
   }
 
@@ -302,6 +367,36 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
               <span className="sr-only">{t('chat.start')}</span>
             </Button>
           </form>
+
+          {requests.length > 0 && (
+            <div className="border-b p-2">
+              <div className="flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <MessageSquareWarning className="h-4 w-4" />
+                {t('chat.requests.title', { count: requests.length })}
+              </div>
+              {requests.map(({ contact, conversation, message }) => (
+                <button
+                  key={contact.peer}
+                  type="button"
+                  onClick={() => setSelectedConversation(conversation)}
+                  className={cn(
+                    'flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors',
+                    selectedAddress === contact.peer ? 'bg-warning-faint' : 'hover:bg-accent',
+                  )}
+                >
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-warning-faint font-semibold text-warning">
+                    {contact.peer.slice(0, 1).toUpperCase()}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">{contact.peer}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {message?.content.text ?? t('chat.newerClient')}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
 
           {selfAccount && (
             <div className="border-b p-2">
@@ -403,6 +498,22 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
               <RefreshCw className="h-4 w-4" />
               <span className="sr-only">{t('chat.sync')}</span>
             </Button>
+            {!noteSelected &&
+              selectedContact &&
+              selectedContact.state !== 'pendingIncoming' &&
+              selectedContact.state !== 'blocked' && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => void updateContact('block')}
+                disabled={contactUpdating}
+                aria-label={t('chat.requests.block')}
+              >
+                {contactUpdating
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                  : <Ban className="h-4 w-4" />}
+              </Button>
+            )}
           </header>
 
           {error && (
@@ -415,6 +526,32 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
             <div className="flex items-center gap-2 border-b border-warning/30 bg-warning-faint px-4 py-2 text-sm">
               <AlertTriangle className="h-4 w-4 text-warning" />
               {t('chat.attention', { count: attention.length })}
+            </div>
+          )}
+          {requestSelected && (
+            <div className="flex flex-wrap items-center gap-2 border-b border-warning/30 bg-warning-faint px-4 py-3 text-sm">
+              <div className="min-w-0 flex-1">
+                <p className="font-medium">{t('chat.requests.incoming', { peer: selectedLabel })}</p>
+                <p className="text-xs text-muted-foreground">{t('chat.requests.description')}</p>
+              </div>
+              <Button size="sm" onClick={() => void updateContact('accept')} disabled={contactUpdating}>
+                {t('chat.requests.accept')}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => void updateContact('reject')} disabled={contactUpdating}>
+                {t('chat.requests.reject')}
+              </Button>
+              <Button size="sm" variant="destructive" onClick={() => void updateContact('block')} disabled={contactUpdating}>
+                {t('chat.requests.block')}
+              </Button>
+            </div>
+          )}
+          {blockedSelected && (
+            <div className="flex items-center gap-3 border-b border-destructive/20 bg-destructive-faint px-4 py-3 text-sm">
+              <Ban className="h-4 w-4 text-destructive" />
+              <span className="min-w-0 flex-1">{t('chat.requests.blocked', { peer: selectedLabel })}</span>
+              <Button size="sm" variant="outline" onClick={() => void updateContact('unblock')} disabled={contactUpdating}>
+                {t('chat.requests.unblock')}
+              </Button>
             </div>
           )}
 
@@ -442,17 +579,21 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 placeholder={
-                  selectedConversation
+                  requestSelected
+                    ? t('chat.requests.acceptBeforeReply')
+                    : blockedSelected
+                      ? t('chat.requests.unblockBeforeReply')
+                      : selectedConversation
                     ? t('chat.messagePeer', {
                         peer: noteSelected ? t('chat.noteToSelf') : selectedLabel,
                       })
                     : t('chat.selectConversation')
                 }
-                disabled={!service || !selectedConversation || sending}
+                disabled={!service || !canSend || sending}
                 maxLength={16_000}
                 autoComplete="off"
               />
-              <Button type="submit" size="icon" disabled={!draft.trim() || !service || sending}>
+              <Button type="submit" size="icon" disabled={!draft.trim() || !service || !canSend || sending}>
                 {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 <span className="sr-only">{t('chat.send')}</span>
               </Button>

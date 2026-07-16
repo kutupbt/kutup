@@ -19,8 +19,8 @@ use serde_wasm_bindgen::Serializer;
 use wasm_bindgen::JsValue;
 
 use crate::db::{
-    ChatDb, InboundEnvelope, InboxMessage, LocalIdentity, ManifestTrust, OutboxEntry, Pending,
-    SentMessage,
+    ChatDb, ContactRecord, InboundEnvelope, InboxMessage, LocalIdentity, ManifestTrust,
+    OutboxEntry, Pending, SentMessage,
 };
 use crate::error::{ChatError, Result};
 
@@ -38,9 +38,10 @@ const MESSAGES: &str = "messages";
 const SENT_MESSAGES: &str = "sent_messages";
 const INBOUND: &str = "inbound";
 const MANIFEST_TRUST: &str = "manifest_trust";
+const CONTACTS: &str = "contacts";
 const META: &str = "meta";
 
-const ALL_STORES: [&str; 15] = [
+const ALL_STORES: [&str; 16] = [
     LOCAL_IDENTITY,
     SESSIONS,
     IDENTITIES,
@@ -55,6 +56,7 @@ const ALL_STORES: [&str; 15] = [
     SENT_MESSAGES,
     INBOUND,
     MANIFEST_TRUST,
+    CONTACTS,
     META,
 ];
 
@@ -82,7 +84,7 @@ impl IndexedDbChatDb {
             ));
         }
 
-        let mut builder = Rexie::builder(name).version(2);
+        let mut builder = Rexie::builder(name).version(3);
         for store in ALL_STORES {
             builder = builder.add_object_store(ObjectStore::new(store));
         }
@@ -254,6 +256,16 @@ impl ChatDb for IndexedDbChatDb {
         self.get(MANIFEST_TRUST, string_key(peer)).await
     }
 
+    async fn load_contact(&self, peer: &str) -> Result<Option<ContactRecord>> {
+        self.get(CONTACTS, string_key(peer)).await
+    }
+
+    async fn list_contacts(&self) -> Result<Vec<ContactRecord>> {
+        let mut contacts = self.all::<ContactRecord>(CONTACTS).await?;
+        contacts.sort_by(|left, right| left.peer.cmp(&right.peer));
+        Ok(contacts)
+    }
+
     async fn load_pending_prekey_upload(&self) -> Result<Option<Vec<u8>>> {
         self.get(META, string_key(PENDING_PREKEY_UPLOAD)).await
     }
@@ -266,6 +278,17 @@ impl ChatDb for IndexedDbChatDb {
         if pending.is_empty() {
             return Ok(());
         }
+
+        let message_deletes = if pending.delete_messages_for_peers.is_empty() {
+            Vec::new()
+        } else {
+            self.all::<InboxMessage>(MESSAGES)
+                .await?
+                .into_iter()
+                .filter(|message| pending.delete_messages_for_peers.contains(&message.peer))
+                .map(|message| message.id)
+                .collect()
+        };
 
         // Serialize before opening the transaction. Serialization cannot leave
         // a partially queued write-set, and 64-bit counters become JS BigInts
@@ -287,6 +310,7 @@ impl ChatDb for IndexedDbChatDb {
         let sent_messages = idb(transaction.store(SENT_MESSAGES))?;
         let inbound = idb(transaction.store(INBOUND))?;
         let manifest_trust = idb(transaction.store(MANIFEST_TRUST))?;
+        let contacts = idb(transaction.store(CONTACTS))?;
         let meta = idb(transaction.store(META))?;
 
         let mut operations = Vec::new();
@@ -324,9 +348,13 @@ impl ChatDb for IndexedDbChatDb {
         for (id, value) in writes.messages {
             operations.push(put_op(&messages, value, string_key(&id)));
         }
+        for id in message_deletes {
+            operations.push(delete_op(&messages, string_key(&id)));
+        }
         stage_puts(&mut operations, &sent_messages, writes.sent_messages);
         stage_map(&mut operations, &inbound, writes.inbound);
         stage_puts(&mut operations, &manifest_trust, writes.manifest_trust);
+        stage_puts(&mut operations, &contacts, writes.contacts);
         if let Some(value) = writes.prekey_upload {
             match value {
                 Some(value) => {
@@ -435,6 +463,7 @@ struct PreparedWrites {
     sent_messages: Vec<(String, JsValue)>,
     inbound: Vec<(String, Option<JsValue>)>,
     manifest_trust: Vec<(String, JsValue)>,
+    contacts: Vec<(String, JsValue)>,
     prekey_upload: Option<Option<JsValue>>,
     registration_upload: Option<Option<JsValue>>,
     last_cursor: Option<JsValue>,
@@ -471,6 +500,7 @@ impl PreparedWrites {
             sent_messages: serialize_map(&pending.sent_messages)?,
             inbound: serialize_optional_map(&pending.inbound)?,
             manifest_trust: serialize_map(&pending.manifest_trust)?,
+            contacts: serialize_map(&pending.contacts)?,
             prekey_upload: pending
                 .prekey_upload
                 .as_ref()

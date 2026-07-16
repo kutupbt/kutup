@@ -17,8 +17,9 @@ use rusqlite::{Connection, OptionalExtension};
 use zeroize::Zeroize as _;
 
 use crate::db::{
-    AuthorityTrust, ChatDb, InboundEnvelope, InboundFailureKind, InboundState, InboxMessage,
-    LocalIdentity, ManifestTrust, OutboxEntry, Pending, SentMessage,
+    contact_state_code, contact_state_from_code, AuthorityTrust, ChatDb, ContactRecord,
+    InboundEnvelope, InboundFailureKind, InboundState, InboxMessage, LocalIdentity, ManifestTrust,
+    OutboxEntry, Pending, SentMessage,
 };
 use crate::error::{ChatError, Result};
 
@@ -132,6 +133,17 @@ CREATE TABLE IF NOT EXISTS pending_chat_registration (
     request BLOB NOT NULL
 );
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, 0);
+CREATE TABLE IF NOT EXISTS contacts (
+    peer             TEXT PRIMARY KEY,
+    state            INTEGER NOT NULL,
+    previous_state   INTEGER,
+    revision         INTEGER NOT NULL,
+    source_device_id INTEGER NOT NULL,
+    updated_at_ms    INTEGER NOT NULL,
+    sync_pending     INTEGER NOT NULL DEFAULT 0,
+    sync_send_id     TEXT
+);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (9, 0);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value INTEGER NOT NULL
@@ -416,6 +428,30 @@ impl ChatDb for SqliteChatDb {
             .optional())
     }
 
+    async fn load_contact(&self, peer: &str) -> Result<Option<ContactRecord>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT peer, state, previous_state, revision, source_device_id,
+                        updated_at_ms, sync_pending, sync_send_id
+                 FROM contacts WHERE peer = ?1",
+                [peer],
+                contact_row,
+            )
+            .optional())
+    }
+
+    async fn list_contacts(&self) -> Result<Vec<ContactRecord>> {
+        let conn = self.conn.borrow();
+        let mut stmt = db(conn.prepare(
+            "SELECT peer, state, previous_state, revision, source_device_id,
+                    updated_at_ms, sync_pending, sync_send_id
+             FROM contacts ORDER BY peer",
+        ))?;
+        let rows = db(stmt.query_map([], contact_row))?;
+        rows.map(db).collect()
+    }
+
     async fn load_pending_prekey_upload(&self) -> Result<Option<Vec<u8>>> {
         let conn = self.conn.borrow();
         db(conn
@@ -560,6 +596,9 @@ impl ChatDb for SqliteChatDb {
                 ],
             ))?;
         }
+        for peer in &pending.delete_messages_for_peers {
+            db(tx.execute("DELETE FROM messages WHERE peer = ?1", [peer]))?;
+        }
         for (send_id, message) in &pending.sent_messages {
             db(tx.execute(
                 "INSERT INTO sent_messages
@@ -626,6 +665,32 @@ impl ChatDb for SqliteChatDb {
                     trust.manifest_hash,
                     trust.trust.code(),
                     i64::from(trust.continuity_gap),
+                ],
+            ))?;
+        }
+        for (peer, contact) in &pending.contacts {
+            db(tx.execute(
+                "INSERT INTO contacts
+                     (peer, state, previous_state, revision, source_device_id,
+                      updated_at_ms, sync_pending, sync_send_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(peer) DO UPDATE SET
+                     state = excluded.state,
+                     previous_state = excluded.previous_state,
+                     revision = excluded.revision,
+                     source_device_id = excluded.source_device_id,
+                     updated_at_ms = excluded.updated_at_ms,
+                     sync_pending = excluded.sync_pending,
+                     sync_send_id = excluded.sync_send_id",
+                rusqlite::params![
+                    peer,
+                    contact_state_code(contact.state),
+                    contact.previous_state.map(contact_state_code),
+                    contact.revision as i64,
+                    contact.source_device_id,
+                    contact.updated_at_ms,
+                    i64::from(contact.sync_pending),
+                    contact.sync_send_id,
                 ],
             ))?;
         }
@@ -727,7 +792,7 @@ fn ensure_schema_upgrades(conn: &Connection) -> Result<()> {
     ))?;
     db(conn.execute(
         "INSERT OR IGNORE INTO schema_migrations (version, applied_at)
-         VALUES (4, 0), (5, 0), (6, 0), (7, 0), (8, 0)",
+         VALUES (4, 0), (5, 0), (6, 0), (7, 0), (8, 0), (9, 0)",
         [],
     ))?;
     Ok(())
@@ -757,6 +822,38 @@ fn message_row(row: &rusqlite::Row) -> rusqlite::Result<InboxMessage> {
         cursor: row.get::<_, i64>(3)? as u64,
         content: row.get(4)?,
         received_at: row.get(5)?,
+    })
+}
+
+fn contact_row(row: &rusqlite::Row) -> rusqlite::Result<ContactRecord> {
+    let state_code: i64 = row.get(1)?;
+    let previous_code: Option<i64> = row.get(2)?;
+    let state = contact_state_from_sql(state_code, 1)?;
+    let previous_state = previous_code
+        .map(|code| contact_state_from_sql(code, 2))
+        .transpose()?;
+    Ok(ContactRecord {
+        peer: row.get(0)?,
+        state,
+        previous_state,
+        revision: row.get::<_, i64>(3)? as u64,
+        source_device_id: row.get(4)?,
+        updated_at_ms: row.get(5)?,
+        sync_pending: row.get::<_, i64>(6)? != 0,
+        sync_send_id: row.get(7)?,
+    })
+}
+
+fn contact_state_from_sql(
+    code: i64,
+    column: usize,
+) -> rusqlite::Result<kutup_chat_proto::ContactState> {
+    contact_state_from_code(code).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            column,
+            rusqlite::types::Type::Integer,
+            Box::new(error),
+        )
     })
 }
 

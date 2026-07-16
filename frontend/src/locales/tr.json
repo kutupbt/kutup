@@ -66,8 +66,21 @@
     "attention_other": "{{count}} şifreli mesaj ilgilenmenizi bekliyor ve henüz onaylanmadı.",
     "messagePeer": "{{peer}} kullanıcısına mesaj",
     "send": "Gönder",
-    "safetyNumberChanged": "Bir alıcı cihazın kimliği değişti. Güvenlik numarasını doğrulayın.",
-    "contact": {
+  "safetyNumberChanged": "Bir alıcı cihazın kimliği değişti. Güvenlik numarasını doğrulayın.",
+  "requests": {
+    "title_one": "{{count}} mesaj isteği",
+    "title_other": "{{count}} mesaj isteği",
+    "incoming": "{{peer}} size mesaj göndermek istiyor",
+    "description": "Yanıtlamak için kabul edin, mesajları kaldırmak için reddedin veya gelecekteki mesajları engelleyin.",
+    "accept": "Kabul et",
+    "reject": "Reddet",
+    "block": "Engelle",
+    "unblock": "Engeli kaldır",
+    "blocked": "{{peer}} engellendi. Yeni mesajlar bu cihazda güvenli biçimde silinir.",
+    "acceptBeforeReply": "Yanıtlamak için bu isteği kabul edin",
+    "unblockBeforeReply": "Yanıtlamak için kişinin engelini kaldırın"
+  },
+  "contact": {
       "open": "Sohbet adresimi göster",
       "title": "Sohbet adresiniz",
       "description": "Bu kalıcı kullanıcı@sunucu adresini paylaşın veya QR kodunu taratın.",

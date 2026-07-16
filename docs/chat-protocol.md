@@ -291,6 +291,7 @@ reference to that synthetic id.
 |---|---|---|
 | `text` | 2b [ADD] | `{ "text": string }` |
 | `sentTranscript` | 2b [IMPL] | `{ "sendId", "peer", "timestampMs", "content": ChatContent }` — encrypted own-device synchronization wrapper (§7.3), never rendered directly |
+| `contactControl` | 4 [IMPL] | `{ "peer", "state", "previousState?", "revision", "sourceDeviceId", "updatedAtMs" }` — authenticated encrypted linked-device relationship update (§7.4), never rendered directly |
 | `receipt` | later [RSV] | `{ "type": "delivered"\|"read", "ids": [seq…] }` — E2EE content, never a server feature |
 | `typing` | later [RSV] | `{ "state": "started"\|"stopped" }` — ephemeral; a client MAY drop |
 | `attachment` | 5 [RSV] | `{ "fileId", "key", "digest", "size", "mimeType", "name" }` — pointer into the E2EE drive (tus); the blob rides the drive, not the mailbox |
@@ -377,7 +378,44 @@ failure; the outbox retains the transcript leg for a later reconcile or restart.
 Conversely, a successful transcript leg is not repeated while a failed recipient
 leg is retried.
 
-### 7.4 [RSV] sealed-sender access token
+### 7.4 Contact state, message requests, and blocking — [IMPL]
+
+Relationship state is client-owned E2EE metadata keyed by the canonical account
+address. It is never uploaded as a server-side social graph. Absence means an
+unknown peer; persisted states are `pendingIncoming`, `pendingOutgoing`,
+`accepted`, `rejected`, and `blocked`.
+
+- A first decrypted message from an unknown or previously rejected peer is
+  atomically stored with `pendingIncoming` and shown only in the request inbox.
+  A first outbound message records `pendingOutgoing`; a valid reply promotes it
+  to `accepted`. A pending incoming request MUST be accepted before replying.
+- Reject atomically changes the relationship to `rejected` and deletes that
+  request's retained plaintext. A later valid message may create a new request.
+- Block retains prior history and the pre-block state for an explicit unblock.
+  New envelopes are still authenticated and decrypted so libsignal's ratchet,
+  replay protection, mailbox cursor, and acknowledgement advance normally, but
+  their plaintext is not retained or surfaced. The server cannot distinguish
+  this from ordinary successful delivery.
+- Existing pre-contact-state stores bootstrap peers already present in local
+  history as `accepted`; an upgrade MUST NOT reclassify established chats as
+  requests.
+
+Explicit accept/reject/block/unblock transitions, plus observed request/reply
+transitions that supersede an older explicit revision, are synchronized to
+linked devices as a `contactControl` nested inside a `sentTranscript`. A receiver grants
+that control meaning only after successful libsignal decryption from another
+device of the local account, with `sourceDeviceId` equal to the envelope sender.
+Controls converge by lexicographic `(revision, sourceDeviceId)`; a local explicit
+change increments the highest observed revision. The deterministic control
+`sendId`, contact record, and pending marker are durable before networking, so
+offline/restart retries are idempotent. Ordinary first-send transcripts let a
+linked device infer `pendingOutgoing` without a separate plaintext social graph.
+
+Profiles, profile-key rotation, key transparency, proof-of-contact abuse gates,
+and sealed sender remain later Phase 4 slices. Receipts and typing are not used
+as implicit acceptance signals.
+
+### 7.5 [RSV] sealed-sender access token
 
 `SendMessagesRequest` gains a **[RSV] `accessToken: b64?`**. When sealed sender
 ships (§11), an authenticated send MAY omit sender auth and instead prove a

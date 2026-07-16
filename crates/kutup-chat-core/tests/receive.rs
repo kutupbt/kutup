@@ -12,8 +12,8 @@ use std::rc::Rc;
 use async_trait::async_trait;
 use futures_executor::block_on;
 use kutup_chat_core::{
-    ChatAddress, ChatContent, ChatTransport, Engine, EngineState, InboundFailureKind, InboundState,
-    Result, SendOutcome, Session, SqliteChatDb,
+    ChatAddress, ChatContent, ChatTransport, ContactState, Engine, EngineState, InboundFailureKind,
+    InboundState, Result, SendOutcome, Session, SqliteChatDb,
 };
 use kutup_chat_proto::{
     DeliveredEnvelope, DevicePreKeyBundle, MailboxPage, OutgoingEnvelope,
@@ -363,4 +363,80 @@ fn a_peer_cannot_turn_a_transcript_shaped_message_into_outgoing_history() {
     assert!(report.synced.is_empty());
     assert!(block_on(bob.session().sent_history()).unwrap().is_empty());
     assert_eq!(block_on(bob.session().history()).unwrap().len(), 1);
+}
+
+#[test]
+fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
+    let mut rng = test_rng();
+    let bob_addr = ChatAddress::local("bob", 1);
+    let bob_session = in_memory("bob", 1, &mut rng);
+    let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
+    let mut alice = in_memory("alice", 1, &mut rng);
+    block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
+    let encrypted = ["first request", "try again", "blocked plaintext"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, text)| {
+            block_on(alice.encrypt(
+                &bob_addr,
+                bundle.registration_id,
+                &ChatContent::text("2026-07-16T12:00:00Z", index as u64 + 1, text),
+                &mut rng,
+            ))
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    let server = Rc::new(Mailbox::default());
+    server.deposit(vec![deliver(&encrypted[0], "alice", "request-1", 1)]);
+    let mut bob = Engine::new(bob_session, server.clone());
+    let first = block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(first.messages.len(), 1);
+    let contact = block_on(bob.contacts()).unwrap().pop().unwrap();
+    assert_eq!(contact.state, ContactState::PendingIncoming);
+    assert!(matches!(
+        block_on(bob.send(
+            "reply-before-accept",
+            "alice",
+            &ChatContent::text_with_id(
+                "reply-before-accept",
+                "2026-07-16T12:00:30Z",
+                1,
+                "must not send",
+            ),
+            &mut rng,
+        )),
+        Err(kutup_chat_core::ChatError::Invalid(message))
+            if message.contains("accept the message request")
+    ));
+
+    let rejected = block_on(bob.reject_contact("alice", "2026-07-16T12:01:00Z", &mut rng)).unwrap();
+    assert_eq!(rejected.state, ContactState::Rejected);
+    assert!(block_on(bob.session().history()).unwrap().is_empty());
+
+    server.deposit(vec![deliver(&encrypted[1], "alice", "request-2", 2)]);
+    let second = block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(
+        second.messages.len(),
+        1,
+        "a later message creates a new request"
+    );
+    assert_eq!(
+        block_on(bob.contacts()).unwrap()[0].state,
+        ContactState::PendingIncoming
+    );
+
+    let blocked = block_on(bob.block_contact("alice", "2026-07-16T12:02:00Z", &mut rng)).unwrap();
+    assert_eq!(blocked.state, ContactState::Blocked);
+    assert_eq!(blocked.previous_state, Some(ContactState::PendingIncoming));
+    server.deposit(vec![deliver(&encrypted[2], "alice", "blocked-3", 3)]);
+    let third = block_on(bob.receive(&mut rng)).unwrap();
+    assert!(third.messages.is_empty());
+    assert_eq!(third.suppressed, vec!["blocked-3"]);
+    assert_eq!(block_on(bob.session().history()).unwrap().len(), 1);
+    assert!(server.acked().contains(&"blocked-3".to_string()));
+
+    let unblocked =
+        block_on(bob.unblock_contact("alice", "2026-07-16T12:03:00Z", &mut rng)).unwrap();
+    assert_eq!(unblocked.state, ContactState::PendingIncoming);
 }

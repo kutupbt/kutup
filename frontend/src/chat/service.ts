@@ -4,6 +4,7 @@ import { ApiChatTransport } from './transport'
 import type {
   ChatCapabilities,
   ChatHistoryEntry,
+  ContactRecord,
   ConversationId,
   InboundAttention,
   ReceiveReport,
@@ -125,6 +126,36 @@ export class ChatService {
     })
   }
 
+  async contacts(): Promise<ContactRecord[]> {
+    const contacts = await this.withLock(() => this.client.contacts())
+    return contacts.map((contact) => {
+      const parsed = parseAccountAddress(contact.peer)
+      if (!parsed) return contact
+      return {
+        ...contact,
+        peer: canonicalAccountAddress(
+          withHomeServer(parsed, this.capabilities.serverName),
+        ),
+      }
+    })
+  }
+
+  acceptContact(peer: string): Promise<ContactRecord> {
+    return this.contactAction(peer, (corePeer) => this.client.acceptContact(corePeer))
+  }
+
+  rejectContact(peer: string): Promise<ContactRecord> {
+    return this.contactAction(peer, (corePeer) => this.client.rejectContact(corePeer))
+  }
+
+  blockContact(peer: string): Promise<ContactRecord> {
+    return this.contactAction(peer, (corePeer) => this.client.blockContact(corePeer))
+  }
+
+  unblockContact(peer: string): Promise<ContactRecord> {
+    return this.contactAction(peer, (corePeer) => this.client.unblockContact(corePeer))
+  }
+
   inboundAttention(): Promise<InboundAttention[]> {
     return this.withLock(() => this.client.inboundAttention())
   }
@@ -198,6 +229,18 @@ export class ChatService {
   private notifyPeers(): void {
     this.channel.postMessage({ type: 'updated' })
     this.emitUpdate()
+  }
+
+  private async contactAction(
+    peer: string,
+    action: (corePeer: string) => Promise<ContactRecord>,
+  ): Promise<ContactRecord> {
+    const address = parseAccountAddress(peer)
+    if (!address) throw new Error('invalid chat account address')
+    const corePeer = toCoreAccountAddress(address, this.capabilities.serverName)
+    const result = await this.withLock(() => action(corePeer))
+    this.notifyPeers()
+    return result
   }
 
   private emitUpdate(): void {

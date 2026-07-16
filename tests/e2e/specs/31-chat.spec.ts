@@ -154,11 +154,39 @@ test.describe('Signal-backed chat', () => {
     const fromA = `from-a-${tag}`
     await startConversation(pageA, usernameB)
     await send(pageA, fromA)
+    await expect(pageB.getByText('1 message request')).toBeVisible({ timeout: 30_000 })
+    await pageB.getByRole('button', { name: new RegExp(usernameA) }).click()
     await expect(messageBubble(pageB, fromA)).toBeVisible({ timeout: 30_000 })
+    await pageB.getByRole('button', { name: 'Reject', exact: true }).click()
+    await expect(messageBubble(pageB, fromA)).toHaveCount(0)
+
+    const afterReject = `after-reject-${tag}`
+    await send(pageA, afterReject)
+    await expect(pageB.getByText('1 message request')).toBeVisible({ timeout: 30_000 })
+    await pageB.getByRole('button', { name: new RegExp(usernameA) }).click()
+    await expect(messageBubble(pageB, afterReject)).toBeVisible({ timeout: 30_000 })
+    await pageB.getByRole('button', { name: 'Accept', exact: true }).click()
     await startConversation(pageA2, usernameB)
     await expect(messageBubble(pageA2, fromA)).toBeVisible({ timeout: 30_000 })
     await pageA2.reload()
     await expect(messageBubble(pageA2, fromA)).toBeVisible({ timeout: 60_000 })
+
+    await pageB.getByRole('button', { name: 'Block', exact: true }).click()
+    const whileBlocked = `while-blocked-${tag}`
+    const blockedAck = pageB.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        response.url().includes('/api/chat/messages/ack') &&
+        response.ok(),
+      { timeout: 30_000 },
+    )
+    await send(pageA, whileBlocked)
+    await blockedAck
+    await expect(messageBubble(pageB, whileBlocked)).toHaveCount(0)
+    await pageB.getByRole('button', { name: 'Unblock', exact: true }).click()
+    const afterUnblock = `after-unblock-${tag}`
+    await send(pageA, afterUnblock)
+    await expect(messageBubble(pageB, afterUnblock)).toBeVisible({ timeout: 30_000 })
 
     const fromB = `from-b-${tag}`
     await send(pageB, fromB)

@@ -19,11 +19,12 @@ use libsignal_protocol::{
     message_decrypt, message_encrypt, process_prekey_bundle, IdentityChange, IdentityKeyStore,
 };
 use rand::{CryptoRng, Rng};
+use sha2::{Digest, Sha256};
 
 use crate::address::ChatAddress;
 use crate::db::{
-    AuthorityTrust, ChatDb, InboundEnvelope, InboundFailureKind, InboundState, InboxMessage,
-    LocalIdentity, ManifestTrust, OutboxEntry, OutboxLeg, OutboxSyncLeg, SentMessage,
+    AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState,
+    InboxMessage, LocalIdentity, ManifestTrust, OutboxEntry, OutboxLeg, OutboxSyncLeg, SentMessage,
 };
 use crate::error::{ChatError, Result};
 use crate::keys;
@@ -31,9 +32,9 @@ use crate::manifest::{verify_bundle_response, ManifestPolicy};
 use crate::store::ChatStore;
 use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_prekey_bundle};
 use kutup_chat_proto::{
-    ChatContent, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, ManifestDevice,
-    OutgoingEnvelope, RegisterChatDeviceRequest, ReplenishKeysRequest, SuiteId,
-    UserPreKeyBundlesResponse,
+    AccountAddress, ChatContent, ContactControlBody, ContactState, DeliveredEnvelope,
+    DeviceListMismatch, DevicePreKeyBundle, ManifestDevice, OutgoingEnvelope,
+    RegisterChatDeviceRequest, ReplenishKeysRequest, SuiteId, UserPreKeyBundlesResponse,
 };
 
 /// What a [`Engine::send`](crate::Engine::send) did: whether it landed, and any
@@ -92,6 +93,12 @@ pub(crate) enum ReceiveOutcome {
         mailbox_id: String,
         message: Box<SentMessage>,
     },
+    /// A linked-device contact control was authenticated and merged. It is
+    /// deliberately absent from user-visible message history.
+    ContactSynced { id: String },
+    /// A blocked peer's envelope was authenticated, decrypted, ratcheted, and
+    /// made safe to ack, but its plaintext was deliberately not retained.
+    Suppressed { id: String },
     /// Decrypted but the plaintext wasn't a valid content document (a buggy/newer
     /// sender). Stored raw so it's never dropped; the app renders a placeholder.
     Undecodable { id: String },
@@ -149,11 +156,13 @@ impl Session {
             }
         }
         let store = ChatStore::attach(db, local)?;
-        Ok(Session {
+        let mut session = Session {
             store,
             registration: None,
             address: ChatAddress::local(user, device_id),
-        })
+        };
+        session.bootstrap_contacts().await?;
+        Ok(session)
     }
 
     /// Resume a fresh install whose exact registration payload was persisted
@@ -397,6 +406,202 @@ impl Session {
         self.store.commit().await
     }
 
+    /// Client-owned contact and message-request state. The delivery service is
+    /// intentionally not involved in these reads or transitions.
+    pub async fn contacts(&self) -> Result<Vec<ContactRecord>> {
+        self.store.db().list_contacts().await
+    }
+
+    pub async fn contact(&self, peer: &str) -> Result<Option<ContactRecord>> {
+        self.store.db().load_contact(peer).await
+    }
+
+    /// Upgrade stores created before contact state existed without turning
+    /// established conversations into message requests after an application
+    /// update. Only peers already present in durable history are accepted.
+    pub(crate) async fn bootstrap_contacts(&mut self) -> Result<()> {
+        let existing = self.store.db().list_contacts().await?;
+        let known: std::collections::HashSet<String> =
+            existing.into_iter().map(|contact| contact.peer).collect();
+        let mut peers = std::collections::BTreeMap::<String, i64>::new();
+        for message in self.store.db().list_messages().await? {
+            peers
+                .entry(message.peer)
+                .and_modify(|time| *time = (*time).max(message.received_at))
+                .or_insert(message.received_at);
+        }
+        for message in self.store.db().list_sent_messages().await? {
+            peers
+                .entry(message.peer)
+                .and_modify(|time| *time = (*time).max(message.created_at))
+                .or_insert(message.created_at);
+        }
+        for (peer, updated_at_ms) in peers {
+            if peer != self.user() && !known.contains(&peer) {
+                self.store.stage_contact(ContactRecord {
+                    peer,
+                    state: ContactState::Accepted,
+                    previous_state: None,
+                    revision: 0,
+                    source_device_id: 0,
+                    updated_at_ms,
+                    sync_pending: false,
+                    sync_send_id: None,
+                });
+            }
+        }
+        self.store.commit().await
+    }
+
+    pub async fn accept_contact(&mut self, peer: &str) -> Result<ContactRecord> {
+        self.transition_contact(peer, ContactTransition::Accept)
+            .await
+    }
+
+    pub async fn reject_contact(&mut self, peer: &str) -> Result<ContactRecord> {
+        self.transition_contact(peer, ContactTransition::Reject)
+            .await
+    }
+
+    pub async fn block_contact(&mut self, peer: &str) -> Result<ContactRecord> {
+        self.transition_contact(peer, ContactTransition::Block)
+            .await
+    }
+
+    pub async fn unblock_contact(&mut self, peer: &str) -> Result<ContactRecord> {
+        self.transition_contact(peer, ContactTransition::Unblock)
+            .await
+    }
+
+    pub(crate) async fn pending_contact_syncs(&self) -> Result<Vec<ContactRecord>> {
+        Ok(self
+            .contacts()
+            .await?
+            .into_iter()
+            .filter(|contact| contact.sync_pending && contact.sync_send_id.is_some())
+            .collect())
+    }
+
+    pub(crate) async fn mark_contact_synced(
+        &mut self,
+        peer: &str,
+        revision: u64,
+        source_device_id: u32,
+    ) -> Result<()> {
+        let Some(mut contact) = self.contact(peer).await? else {
+            return Ok(());
+        };
+        if (contact.revision, contact.source_device_id) != (revision, source_device_id) {
+            return Ok(());
+        }
+        contact.sync_pending = false;
+        contact.sync_send_id = None;
+        self.store.stage_contact(contact);
+        self.store.commit().await
+    }
+
+    async fn transition_contact(
+        &mut self,
+        peer: &str,
+        transition: ContactTransition,
+    ) -> Result<ContactRecord> {
+        let address = peer
+            .parse::<AccountAddress>()
+            .map_err(|error| ChatError::Invalid(error.to_string()))?;
+        if address.canonical() != peer {
+            return Err(ChatError::Invalid(
+                "contact address is not canonical".into(),
+            ));
+        }
+        if peer == self.user() {
+            return Err(ChatError::Invalid(
+                "Note to Self has no contact relationship state".into(),
+            ));
+        }
+        let current = self.contact(peer).await?;
+        let (state, previous_state, delete_messages) = match (transition, current.as_ref()) {
+            (ContactTransition::Accept, Some(contact))
+                if matches!(
+                    contact.state,
+                    ContactState::PendingIncoming | ContactState::PendingOutgoing
+                ) =>
+            {
+                (ContactState::Accepted, None, false)
+            }
+            (ContactTransition::Accept, Some(contact))
+                if contact.state == ContactState::Accepted =>
+            {
+                return Ok(contact.clone())
+            }
+            (ContactTransition::Accept, _) => {
+                return Err(ChatError::Invalid(
+                    "only a pending contact request can be accepted".into(),
+                ))
+            }
+            (ContactTransition::Reject, Some(contact))
+                if contact.state == ContactState::PendingIncoming =>
+            {
+                (ContactState::Rejected, None, true)
+            }
+            (ContactTransition::Reject, Some(contact))
+                if contact.state == ContactState::Rejected =>
+            {
+                return Ok(contact.clone())
+            }
+            (ContactTransition::Reject, _) => {
+                return Err(ChatError::Invalid(
+                    "only an incoming contact request can be rejected".into(),
+                ))
+            }
+            (ContactTransition::Block, Some(contact)) if contact.state == ContactState::Blocked => {
+                return Ok(contact.clone())
+            }
+            (ContactTransition::Block, prior) => (
+                ContactState::Blocked,
+                Some(prior.map_or(ContactState::Rejected, |contact| contact.state)),
+                false,
+            ),
+            (ContactTransition::Unblock, Some(contact))
+                if contact.state == ContactState::Blocked =>
+            {
+                (
+                    contact.previous_state.unwrap_or(ContactState::Rejected),
+                    None,
+                    false,
+                )
+            }
+            (ContactTransition::Unblock, _) => {
+                return Err(ChatError::Invalid("contact is not blocked".into()))
+            }
+        };
+        let revision = current
+            .as_ref()
+            .map_or(Ok(1), |contact| contact.revision.checked_add(1).ok_or(()))
+            .map_err(|()| ChatError::Invalid("contact revision is exhausted".into()))?;
+        let source_device_id = self.device_id();
+        let record = ContactRecord {
+            peer: peer.to_string(),
+            state,
+            previous_state,
+            revision,
+            source_device_id,
+            updated_at_ms: now_millis(),
+            sync_pending: true,
+            sync_send_id: Some(contact_sync_send_id(
+                peer,
+                state,
+                revision,
+                source_device_id,
+            )),
+        };
+        self.store.stage_contact(record.clone());
+        if delete_messages {
+            self.store.delete_messages_for_peer(peer);
+        }
+        self.store.commit().await?;
+        Ok(record)
+    }
+
     /// Decrypt one delivered envelope and persist it: the ratchet advance, the raw
     /// plaintext (as an inbox message), and the drain cursor commit together in a
     /// **single** transaction — *then* the engine acks. So a crash after the commit
@@ -437,28 +642,68 @@ impl Session {
             None
         };
         let received_at = now_millis();
+        let mut contact_synced = false;
+        let mut suppressed = false;
         let synced_message = if let Some(transcript) = transcript {
-            let message = SentMessage {
-                send_id: transcript.send_id,
-                peer: transcript.peer,
-                content: serde_json::to_vec(&transcript.content)
-                    .map_err(|e| ChatError::Content(e.to_string()))?,
-                created_at: transcript.timestamp_ms,
-                delivered_at: Some(received_at),
-                delivered: true,
-                deduplicated: false,
-            };
-            self.store.stage_sent_message(message.clone());
-            Some(message)
+            if let Some(control) = transcript.content.as_contact_control() {
+                if transcript.peer != self.user()
+                    || control.source_device_id != envelope.sender_device_id
+                    || control.revision == 0
+                    || control.peer == self.user()
+                    || control.peer.parse::<AccountAddress>().is_err()
+                {
+                    self.store.discard();
+                    return Err(ChatError::Content(
+                        "invalid authenticated contact control".into(),
+                    ));
+                }
+                let current = self.contact(&control.peer).await?;
+                let incoming_order = (control.revision, control.source_device_id);
+                let current_order = current
+                    .as_ref()
+                    .map(|contact| (contact.revision, contact.source_device_id));
+                if current_order.is_none_or(|order| incoming_order > order) {
+                    self.store.stage_contact(ContactRecord {
+                        peer: control.peer,
+                        state: control.state,
+                        previous_state: control.previous_state,
+                        revision: control.revision,
+                        source_device_id: control.source_device_id,
+                        updated_at_ms: control.updated_at_ms,
+                        sync_pending: false,
+                        sync_send_id: None,
+                    });
+                }
+                contact_synced = true;
+                None
+            } else {
+                self.stage_transcript_contact(&transcript.peer, received_at)
+                    .await?;
+                let message = SentMessage {
+                    send_id: transcript.send_id,
+                    peer: transcript.peer,
+                    content: serde_json::to_vec(&transcript.content)
+                        .map_err(|e| ChatError::Content(e.to_string()))?,
+                    created_at: transcript.timestamp_ms,
+                    delivered_at: Some(received_at),
+                    delivered: true,
+                    deduplicated: false,
+                };
+                self.store.stage_sent_message(message.clone());
+                Some(message)
+            }
         } else {
-            self.store.stage_message(InboxMessage {
-                id: envelope.id.clone(),
-                peer: sender,
-                sender_device_id: envelope.sender_device_id,
-                cursor: envelope.cursor,
-                content: plaintext.clone(),
-                received_at,
-            });
+            suppressed = self.stage_incoming_contact(&sender, received_at).await?;
+            if !suppressed {
+                self.store.stage_message(InboxMessage {
+                    id: envelope.id.clone(),
+                    peer: sender,
+                    sender_device_id: envelope.sender_device_id,
+                    cursor: envelope.cursor,
+                    content: plaintext.clone(),
+                    received_at,
+                });
+            }
             None
         };
         self.store.stage_inbound(InboundEnvelope {
@@ -478,6 +723,16 @@ impl Session {
                 message: Box::new(message),
             });
         }
+        if contact_synced {
+            return Ok(ReceiveOutcome::ContactSynced {
+                id: envelope.id.clone(),
+            });
+        }
+        if suppressed {
+            return Ok(ReceiveOutcome::Suppressed {
+                id: envelope.id.clone(),
+            });
+        }
         match parsed {
             Some(content) => Ok(ReceiveOutcome::Message(Box::new(ReceivedMessage {
                 from,
@@ -489,6 +744,98 @@ impl Session {
                 id: envelope.id.clone(),
             }),
         }
+    }
+
+    async fn stage_incoming_contact(&mut self, peer: &str, updated_at_ms: i64) -> Result<bool> {
+        let current = self.contact(peer).await?;
+        let Some(mut contact) = current else {
+            self.store.stage_contact(ContactRecord {
+                peer: peer.to_string(),
+                state: ContactState::PendingIncoming,
+                previous_state: None,
+                revision: 0,
+                source_device_id: 0,
+                updated_at_ms,
+                sync_pending: false,
+                sync_send_id: None,
+            });
+            return Ok(false);
+        };
+        match contact.state {
+            ContactState::Blocked => Ok(true),
+            ContactState::Rejected => {
+                contact.revision = next_contact_revision(contact.revision)?;
+                contact.source_device_id = self.device_id();
+                contact.state = ContactState::PendingIncoming;
+                contact.previous_state = None;
+                contact.updated_at_ms = updated_at_ms;
+                contact.sync_pending = true;
+                contact.sync_send_id = Some(contact_sync_send_id(
+                    peer,
+                    contact.state,
+                    contact.revision,
+                    contact.source_device_id,
+                ));
+                self.store.stage_contact(contact);
+                Ok(false)
+            }
+            ContactState::PendingOutgoing => {
+                contact.revision = next_contact_revision(contact.revision)?;
+                contact.source_device_id = self.device_id();
+                contact.state = ContactState::Accepted;
+                contact.previous_state = None;
+                contact.updated_at_ms = updated_at_ms;
+                contact.sync_pending = true;
+                contact.sync_send_id = Some(contact_sync_send_id(
+                    peer,
+                    contact.state,
+                    contact.revision,
+                    contact.source_device_id,
+                ));
+                self.store.stage_contact(contact);
+                Ok(false)
+            }
+            ContactState::PendingIncoming | ContactState::Accepted => Ok(false),
+        }
+    }
+
+    async fn stage_transcript_contact(&mut self, peer: &str, updated_at_ms: i64) -> Result<()> {
+        if peer == self.user() {
+            return Ok(());
+        }
+        match self.contact(peer).await? {
+            None => self.store.stage_contact(ContactRecord {
+                peer: peer.to_string(),
+                state: ContactState::PendingOutgoing,
+                previous_state: None,
+                revision: 0,
+                source_device_id: 0,
+                updated_at_ms,
+                sync_pending: false,
+                sync_send_id: None,
+            }),
+            Some(mut contact)
+                if matches!(
+                    contact.state,
+                    ContactState::Rejected | ContactState::PendingIncoming
+                ) =>
+            {
+                contact.revision = next_contact_revision(contact.revision)?;
+                contact.source_device_id = 0;
+                contact.state = if contact.state == ContactState::PendingIncoming {
+                    ContactState::Accepted
+                } else {
+                    ContactState::PendingOutgoing
+                };
+                contact.previous_state = None;
+                contact.updated_at_ms = updated_at_ms;
+                contact.sync_pending = false;
+                contact.sync_send_id = None;
+                self.store.stage_contact(contact);
+            }
+            Some(_) => {}
+        }
+        Ok(())
     }
 
     /// The highest mailbox cursor processed — the drain resume point (`?after=`).
@@ -734,6 +1081,7 @@ impl Session {
                 delivered: false,
                 deduplicated: false,
             });
+            self.stage_outgoing_contact(peer_user, created_at).await?;
             self.store.commit().await?;
             Ok((
                 recipient_envelopes,
@@ -745,6 +1093,43 @@ impl Session {
             self.store.discard();
         }
         result
+    }
+
+    async fn stage_outgoing_contact(&mut self, peer: &str, updated_at_ms: i64) -> Result<()> {
+        match self.contact(peer).await? {
+            None => self.store.stage_contact(ContactRecord {
+                peer: peer.to_string(),
+                state: ContactState::PendingOutgoing,
+                previous_state: None,
+                revision: 0,
+                source_device_id: self.device_id(),
+                updated_at_ms,
+                sync_pending: false,
+                sync_send_id: None,
+            }),
+            Some(mut contact) if contact.state == ContactState::Rejected => {
+                contact.revision = next_contact_revision(contact.revision)?;
+                contact.source_device_id = 0;
+                contact.state = ContactState::PendingOutgoing;
+                contact.previous_state = None;
+                contact.updated_at_ms = updated_at_ms;
+                contact.sync_pending = false;
+                contact.sync_send_id = None;
+                self.store.stage_contact(contact);
+            }
+            Some(contact)
+                if matches!(
+                    contact.state,
+                    ContactState::PendingIncoming | ContactState::Blocked
+                ) =>
+            {
+                return Err(ChatError::Invalid(
+                    "accept the message request or unblock the contact before sending".into(),
+                ));
+            }
+            Some(_) => {}
+        }
+        Ok(())
     }
 
     /// Encrypt a Note to Self as a sent transcript for every other linked
@@ -819,10 +1204,7 @@ impl Session {
         summary: &mut SendSummary,
         rng: &mut R,
     ) -> Result<Vec<OutgoingEnvelope>> {
-        match self
-            .build_amendment(amendment, summary, rng)
-            .await
-        {
+        match self.build_amendment(amendment, summary, rng).await {
             Ok(envelopes) => {
                 self.store.commit().await?;
                 Ok(envelopes)
@@ -856,7 +1238,9 @@ impl Session {
                     .db()
                     .load_sent_message(send_id)
                     .await?
-                    .ok_or_else(|| ChatError::Db(format!("send {send_id} has no history record")))?;
+                    .ok_or_else(|| {
+                        ChatError::Db(format!("send {send_id} has no history record"))
+                    })?;
                 message.delivered = true;
                 message.deduplicated = deduplicated;
                 message.delivered_at = Some(now_millis());
@@ -989,8 +1373,8 @@ impl Session {
             envelopes.push(env);
         }
 
-        let encoded = serde_json::to_vec(&envelopes)
-            .map_err(|e| ChatError::Content(e.to_string()))?;
+        let encoded =
+            serde_json::to_vec(&envelopes).map_err(|e| ChatError::Content(e.to_string()))?;
         match leg {
             OutboxLeg::Primary => {
                 entry.envelopes = encoded;
@@ -1137,4 +1521,54 @@ fn now() -> SystemTime {
 /// Unix-epoch millis, saturating to 0 before the epoch (never in practice).
 fn now_millis() -> i64 {
     crate::clock::unix_millis()
+}
+
+#[derive(Clone, Copy)]
+enum ContactTransition {
+    Accept,
+    Reject,
+    Block,
+    Unblock,
+}
+
+fn contact_sync_send_id(
+    peer: &str,
+    state: ContactState,
+    revision: u64,
+    source_device_id: u32,
+) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"kutup/contact-control/v1\0");
+    hash.update(peer.as_bytes());
+    hash.update([0]);
+    hash.update(match state {
+        ContactState::PendingIncoming => b"pending-incoming".as_slice(),
+        ContactState::PendingOutgoing => b"pending-outgoing".as_slice(),
+        ContactState::Accepted => b"accepted".as_slice(),
+        ContactState::Rejected => b"rejected".as_slice(),
+        ContactState::Blocked => b"blocked".as_slice(),
+    });
+    hash.update(revision.to_be_bytes());
+    hash.update(source_device_id.to_be_bytes());
+    let digest = hash.finalize();
+    format!("contact-{}", hex::encode(&digest[..16]))
+}
+
+fn next_contact_revision(current: u64) -> Result<u64> {
+    current
+        .checked_add(1)
+        .ok_or_else(|| ChatError::Invalid("contact revision is exhausted".into()))
+}
+
+impl From<&ContactRecord> for ContactControlBody {
+    fn from(contact: &ContactRecord) -> Self {
+        Self {
+            peer: contact.peer.clone(),
+            state: contact.state,
+            previous_state: contact.previous_state,
+            revision: contact.revision,
+            source_device_id: contact.source_device_id,
+            updated_at_ms: contact.updated_at_ms,
+        }
+    }
 }

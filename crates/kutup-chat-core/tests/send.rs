@@ -11,8 +11,8 @@ use std::rc::Rc;
 use async_trait::async_trait;
 use futures_executor::block_on;
 use kutup_chat_core::{
-    AccountAuthority, ChatAddress, ChatContent, ChatDb, ChatError, ChatTransport, Engine, Result,
-    SendOutcome, Session, SqliteChatDb,
+    AccountAuthority, ChatAddress, ChatContent, ChatDb, ChatError, ChatTransport, ContactState,
+    Engine, Result, SendOutcome, Session, SqliteChatDb,
 };
 use kutup_chat_proto::{
     DeliveredEnvelope, DeviceListMismatch, DeviceManifest, DevicePreKeyBundle, MailboxPage,
@@ -281,10 +281,7 @@ impl ChatTransport for MockServer {
             }));
         }
 
-        let deduplicated = !self
-            .seen_sync_ids
-            .borrow_mut()
-            .insert(req.send_id.clone());
+        let deduplicated = !self.seen_sync_ids.borrow_mut().insert(req.send_id.clone());
         self.synced
             .borrow_mut()
             .push((req.send_id.clone(), req.envelopes.clone()));
@@ -690,10 +687,7 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
     let server = Rc::new(MockServer::default());
     server.script(vec![vec![bob_bundle]]);
     server.set_active(vec![(1, reg_id(&bob1))]);
-    server.script_sync(vec![vec![
-        alice1_bundle.clone(),
-        bundle_of(&alice2, 2),
-    ]]);
+    server.script_sync(vec![vec![alice1_bundle.clone(), bundle_of(&alice2, 2)]]);
     server.set_sync_active(vec![
         (1, alice1_bundle.registration_id),
         (2, reg_id(&alice2)),
@@ -710,10 +704,16 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
     let summary = block_on(first.send("direct-linked", "bob", &content, &mut rng)).unwrap();
     assert!(summary.delivered, "recipient delivery succeeds");
     assert_eq!(server.delivered.borrow().len(), 1);
-    assert!(server.synced.borrow().is_empty(), "first sync attempt failed");
+    assert!(
+        server.synced.borrow().is_empty(),
+        "first sync attempt failed"
+    );
     assert_eq!(block_on(first.pending_send_count()).unwrap(), 1);
     let sent = block_on(first.session().sent_history()).unwrap();
-    assert!(sent[0].delivered, "recipient status is not downgraded by sync");
+    assert!(
+        sent[0].delivered,
+        "recipient status is not downgraded by sync"
+    );
     let received = decrypt_for(
         &mut bob1,
         &ChatAddress::local("alice", 1),
@@ -745,8 +745,7 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
     let linked_history = block_on(linked.session().sent_history()).unwrap();
     assert_eq!(linked_history.len(), 1);
     assert_eq!(linked_history[0].peer, "bob");
-    let linked_content =
-        serde_json::from_slice::<ChatContent>(&linked_history[0].content).unwrap();
+    let linked_content = serde_json::from_slice::<ChatContent>(&linked_history[0].content).unwrap();
     assert_eq!(linked_content.message_id.as_deref(), Some("direct-linked"));
     assert_eq!(
         linked_content.as_text().unwrap().text,
@@ -846,4 +845,35 @@ fn linked_device_note_arrives_as_outgoing_history_via_encrypted_transcript() {
         "sync this note"
     );
     assert!(block_on(second.session().history()).unwrap().is_empty());
+}
+
+#[test]
+fn explicit_contact_state_converges_over_authenticated_linked_device_sync() {
+    let mut rng = test_rng();
+    let alice1 = device("alice", 1, &mut rng);
+    let alice2 = device("alice", 2, &mut rng);
+    let bundles = vec![bundle_of(&alice1, 1), bundle_of(&alice2, 2)];
+    let server = Rc::new(MockServer::default());
+    server.script_sync(vec![bundles]);
+    server.set_sync_active(vec![(1, reg_id(&alice1)), (2, reg_id(&alice2))]);
+
+    let mut first = Engine::new_for_development(alice1, server.clone());
+    let local = block_on(first.block_contact("bob", "2026-07-16T10:05:00Z", &mut rng)).unwrap();
+    assert_eq!(local.state, ContactState::Blocked);
+    assert!(!local.sync_pending);
+    assert_eq!(server.synced.borrow().len(), 1);
+
+    let mut second = Engine::new_for_development(alice2, server);
+    let report = block_on(second.receive(&mut rng)).unwrap();
+    assert_eq!(report.contact_synced.len(), 1);
+    assert!(report.messages.is_empty() && report.synced.is_empty());
+    let linked = block_on(second.contacts()).unwrap().pop().unwrap();
+    assert_eq!(linked.peer, "bob");
+    assert_eq!(linked.state, ContactState::Blocked);
+    assert_eq!(linked.revision, local.revision);
+    assert_eq!(linked.source_device_id, 1);
+    assert!(block_on(second.session().history()).unwrap().is_empty());
+    assert!(block_on(second.session().sent_history())
+        .unwrap()
+        .is_empty());
 }
