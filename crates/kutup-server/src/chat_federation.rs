@@ -67,10 +67,17 @@ pub struct ChatFederation {
     server_name: String,
     api_base: String,
     signing_key: SigningKey,
+    allow_http: bool,
+    allow_private_test_network: bool,
 }
 
 impl ChatFederation {
     pub fn from_config(config: &Config) -> anyhow::Result<Option<Self>> {
+        if config.chat_federation_test_allow_private && config.app_env != "test" {
+            anyhow::bail!(
+                "CHAT_FEDERATION_TEST_ALLOW_PRIVATE may only be enabled with APP_ENV=test"
+            );
+        }
         if config.chat_federation_signing_key.is_empty() {
             return Ok(None);
         }
@@ -104,6 +111,8 @@ impl ChatFederation {
             server_name,
             api_base,
             signing_key: SigningKey::from_bytes(&seed),
+            allow_http: config.app_env != "production",
+            allow_private_test_network: config.chat_federation_test_allow_private,
         }))
     }
 
@@ -124,11 +133,7 @@ impl ChatFederation {
         }
     }
 
-    async fn discover_remote(
-        &self,
-        destination: &str,
-        allow_http: bool,
-    ) -> AppResult<FederationDiscovery> {
+    async fn discover_remote(&self, destination: &str) -> AppResult<FederationDiscovery> {
         let canonical = AccountAddress::federated("server", destination)
             .map_err(|error| AppError::bad_request(error.to_string()))?;
         if canonical.server.as_deref() != Some(destination) {
@@ -137,13 +142,15 @@ impl ChatFederation {
             ));
         }
 
-        let scheme = if allow_http { "http" } else { "https" };
+        let scheme = if self.allow_http { "http" } else { "https" };
         let discovery_url = format!("{scheme}://{destination}/.well-known/kutup/federation.json");
-        ssrf::validate_federation_url(&discovery_url, allow_http)
-            .await
-            .map_err(|error| {
-                AppError::bad_request(format!("invalid federation server: {error}"))
-            })?;
+        ssrf::validate_chat_federation_url(
+            &discovery_url,
+            self.allow_http,
+            self.allow_private_test_network,
+        )
+        .await
+        .map_err(|error| AppError::bad_request(format!("invalid federation server: {error}")))?;
         let response = FED_CLIENT
             .get(&discovery_url)
             .send()
@@ -178,14 +185,18 @@ impl ChatFederation {
             ));
         }
         validate_discovery_keys(&discovery)?;
-        ssrf::validate_federation_url(&discovery.api_base, allow_http)
-            .await
-            .map_err(|error| {
-                AppError::new(
-                    StatusCode::BAD_GATEWAY,
-                    format!("invalid discovered federation API: {error}"),
-                )
-            })?;
+        ssrf::validate_chat_federation_url(
+            &discovery.api_base,
+            self.allow_http,
+            self.allow_private_test_network,
+        )
+        .await
+        .map_err(|error| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("invalid discovered federation API: {error}"),
+            )
+        })?;
         normalize_api_base(&discovery.api_base).map_err(|error| {
             AppError::new(
                 StatusCode::BAD_GATEWAY,
@@ -198,13 +209,12 @@ impl ChatFederation {
     pub async fn fetch_remote_bundles(
         &self,
         address: &AccountAddress,
-        allow_http: bool,
     ) -> AppResult<UserPreKeyBundlesResponse> {
         let destination = address
             .server
             .as_deref()
             .ok_or_else(|| AppError::bad_request("remote account requires a server"))?;
-        let discovery = self.discover_remote(destination, allow_http).await?;
+        let discovery = self.discover_remote(destination).await?;
         let uri = format!("/api/fed/chat/users/{}/keys", address.username);
         let authorization = FederationAuthorization::sign(
             self.server_name.clone(),
@@ -460,8 +470,7 @@ impl ChatFederation {
             AppError::internal(format!("serialize federation transaction: {error}"))
         })?;
         let uri = "/api/fed/chat/messages";
-        let allow_http = state.config.app_env != "production";
-        let discovery = match self.discover_remote(&row.destination, allow_http).await {
+        let discovery = match self.discover_remote(&row.destination).await {
             Ok(discovery) => discovery,
             Err(error) => {
                 mark_retry(state, &row, &error.to_string()).await?;
@@ -644,7 +653,6 @@ impl ChatFederation {
         method: &str,
         uri: &str,
         body: &[u8],
-        allow_http: bool,
     ) -> AppResult<FederationAuthorization> {
         let header = headers
             .get(AUTHORIZATION)
@@ -665,7 +673,7 @@ impl ChatFederation {
         }
 
         let discovery = self
-            .discover_remote(&authorization.origin, allow_http)
+            .discover_remote(&authorization.origin)
             .await
             .map_err(|_| AppError::unauthorized("cannot authenticate federation origin"))?;
         let key = discovery
@@ -838,13 +846,7 @@ pub async fn get_user_bundles(
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     let uri = format!("/api/fed/chat/users/{}/keys", account.username);
     federation
-        .verify_inbound(
-            &headers,
-            "GET",
-            &uri,
-            &[],
-            state.config.app_env != "production",
-        )
+        .verify_inbound(&headers, "GET", &uri, &[])
         .await?;
     let response_username = format!("{}@{}", account.username, federation.server_name());
     let bundles = crate::handlers::chat::load_user_bundles(
@@ -887,13 +889,7 @@ pub async fn deliver_messages(
         .clone()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
     let authorization = federation
-        .verify_inbound(
-            &headers,
-            "POST",
-            "/api/fed/chat/messages",
-            &body,
-            state.config.app_env != "production",
-        )
+        .verify_inbound(&headers, "POST", "/api/fed/chat/messages", &body)
         .await?;
     let transaction: FederatedChatTransaction = serde_json::from_slice(&body)
         .map_err(|_| AppError::bad_request("invalid federation transaction"))?;
@@ -1194,6 +1190,7 @@ mod tests {
             chat_device_expiry_days: 90,
             chat_federation_server_name: "chat.example".into(),
             chat_federation_signing_key: signing_key,
+            chat_federation_test_allow_private: false,
         };
         let federation = ChatFederation::from_config(&config).unwrap().unwrap();
         let discovery = federation.discovery_document();
@@ -1207,6 +1204,18 @@ mod tests {
         let mut config = test_config();
         config.chat_federation_signing_key.clear();
         assert!(ChatFederation::from_config(&config).unwrap().is_none());
+    }
+
+    #[test]
+    fn private_network_escape_hatch_is_test_only() {
+        let mut config = test_config();
+        config.app_env = "development".into();
+        config.chat_federation_test_allow_private = true;
+        let error = match ChatFederation::from_config(&config) {
+            Err(error) => error,
+            Ok(_) => panic!("private-network escape hatch must be rejected outside tests"),
+        };
+        assert!(error.to_string().contains("APP_ENV=test"));
     }
 
     #[test]
@@ -1269,6 +1278,7 @@ mod tests {
             chat_device_expiry_days: 90,
             chat_federation_server_name: String::new(),
             chat_federation_signing_key: STANDARD.encode([1; 32]),
+            chat_federation_test_allow_private: false,
         }
     }
 }

@@ -595,6 +595,15 @@ persistent signing identity:
   (auto-temporary-block a failing/overloaded remote); a proof-of-contact gate
   before accepting messages from strangers (the delivery token doubles as this).
 
+The transport foundation is exercised by `scripts/test-chat-federation.sh` in
+an isolated `a.test`/`b.test` Docker topology. The live contract covers signed
+discovery and directory reads, canonical sender delivery, replay-safe bundles,
+send-id deduplication, remote device-mismatch recovery, terminal recipient
+rejection, and durable retry across destination outage plus origin restart. The
+harness's private-network allowance is chat-specific and is rejected unless
+`APP_ENV=test`; the production SSRF policy and all other federation consumers
+continue to reject private/internal destinations.
+
 ---
 
 ## 14. Reserved-fields summary (bake into v1 now)

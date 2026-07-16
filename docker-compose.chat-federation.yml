@@ -1,0 +1,133 @@
+# Isolated two-server chat-federation integration topology.
+# Run it through scripts/test-chat-federation.sh; it uses a dedicated Compose
+# project and tmpfs databases, so it cannot alter the ordinary development stack.
+services:
+  postgres-a:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: kutup
+      POSTGRES_USER: kutup
+      POSTGRES_PASSWORD: federation_test_a
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kutup"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  postgres-b:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: kutup
+      POSTGRES_USER: kutup
+      POSTGRES_PASSWORD: federation_test_b
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kutup"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  backend-a:
+    image: ${KUTUP_FEDERATION_IMAGE:-kutup-federation-server:local}
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    environment:
+      DATABASE_URL: postgres://kutup:federation_test_a@postgres-a:5432/kutup?sslmode=disable
+      JWT_SECRET: federation-test-a-jwt-secret-at-least-32-bytes
+      S3_ENDPOINT: http://unused.invalid
+      S3_ACCESS_KEY: test
+      S3_SECRET_KEY: test
+      S3_BUCKET: test
+      S3_REGION: us-east-1
+      APP_ENV: test
+      SERVER_URL: http://a.test
+      ALLOWED_ORIGINS: http://127.0.0.1:39081
+      ADMIN_ACCOUNT: ""
+      SEAWEEDFS_MASTER_URL: ""
+      CHAT_FEDERATION_SERVER_NAME: a.test
+      CHAT_FEDERATION_SIGNING_KEY: ERERERERERERERERERERERERERERERERERERERERERE=
+      CHAT_FEDERATION_TEST_ALLOW_PRIVATE: "true"
+      RATE_LIMIT_LOGIN_PER_MIN: 1000
+      RATE_LIMIT_PREFLIGHT_PER_MIN: 1000
+      RATE_LIMIT_CHAT_KEYS_PER_MIN: 1000
+      RATE_LIMIT_CHAT_KEYS_IP_PER_MIN: 1000
+      RATE_LIMIT_REGISTER_PER_HOUR: 1000
+      RATE_LIMIT_FED_USERS_PER_MIN: 1000
+    depends_on:
+      postgres-a:
+        condition: service_healthy
+
+  backend-b:
+    image: ${KUTUP_FEDERATION_IMAGE:-kutup-federation-server:local}
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    environment:
+      DATABASE_URL: postgres://kutup:federation_test_b@postgres-b:5432/kutup?sslmode=disable
+      JWT_SECRET: federation-test-b-jwt-secret-at-least-32-bytes
+      S3_ENDPOINT: http://unused.invalid
+      S3_ACCESS_KEY: test
+      S3_SECRET_KEY: test
+      S3_BUCKET: test
+      S3_REGION: us-east-1
+      APP_ENV: test
+      SERVER_URL: http://b.test
+      ALLOWED_ORIGINS: http://127.0.0.1:39082
+      ADMIN_ACCOUNT: ""
+      SEAWEEDFS_MASTER_URL: ""
+      CHAT_FEDERATION_SERVER_NAME: b.test
+      CHAT_FEDERATION_SIGNING_KEY: IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI=
+      CHAT_FEDERATION_TEST_ALLOW_PRIVATE: "true"
+      RATE_LIMIT_LOGIN_PER_MIN: 1000
+      RATE_LIMIT_PREFLIGHT_PER_MIN: 1000
+      RATE_LIMIT_CHAT_KEYS_PER_MIN: 1000
+      RATE_LIMIT_CHAT_KEYS_IP_PER_MIN: 1000
+      RATE_LIMIT_REGISTER_PER_HOUR: 1000
+      RATE_LIMIT_FED_USERS_PER_MIN: 1000
+    depends_on:
+      postgres-b:
+        condition: service_healthy
+
+  edge-a:
+    image: nginx:alpine
+    environment:
+      BACKEND: backend-a
+    ports:
+      - "127.0.0.1:${KUTUP_FED_A_PORT:-39081}:80"
+    volumes:
+      - ./tests/chat-federation/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    networks:
+      default:
+        aliases:
+          - a.test
+    depends_on:
+      - backend-a
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/api/health"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+
+  edge-b:
+    image: nginx:alpine
+    environment:
+      BACKEND: backend-b
+    ports:
+      - "127.0.0.1:${KUTUP_FED_B_PORT:-39082}:80"
+    volumes:
+      - ./tests/chat-federation/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    networks:
+      default:
+        aliases:
+          - b.test
+    depends_on:
+      - backend-b
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/api/health"]
+      interval: 1s
+      timeout: 3s
+      retries: 60

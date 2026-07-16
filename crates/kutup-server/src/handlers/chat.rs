@@ -712,9 +712,7 @@ pub async fn get_user_bundles(
                     "linked-device key fetch is limited to the local account",
                 ));
             }
-            let bundles = federation
-                .fetch_remote_bundles(&address, state.config.app_env != "production")
-                .await?;
+            let bundles = federation.fetch_remote_bundles(&address).await?;
             return Ok(Json(bundles).into_response());
         }
     }

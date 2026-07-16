@@ -61,6 +61,27 @@ pub fn is_private_ip(ip: IpAddr) -> bool {
 /// Validates a federation URL — mirrors `ValidateFederationURL`. `Err(msg)` carries the
 /// same human-readable reasons the Go function returns.
 pub async fn validate_federation_url(raw_url: &str, allow_http: bool) -> Result<(), String> {
+    validate_url(raw_url, allow_http, false).await
+}
+
+/// Chat-only validation entry point for the local two-server harness. Callers
+/// must enforce that `allow_private_test_network` can only be enabled under an
+/// explicit test environment. Other federation features always use
+/// [`validate_federation_url`] and therefore cannot opt out of private-address
+/// blocking.
+pub async fn validate_chat_federation_url(
+    raw_url: &str,
+    allow_http: bool,
+    allow_private_test_network: bool,
+) -> Result<(), String> {
+    validate_url(raw_url, allow_http, allow_private_test_network).await
+}
+
+async fn validate_url(
+    raw_url: &str,
+    allow_http: bool,
+    allow_private_test_network: bool,
+) -> Result<(), String> {
     let u = Url::parse(raw_url).map_err(|e| format!("invalid URL: {e}"))?;
 
     let scheme = u.scheme();
@@ -75,7 +96,7 @@ pub async fn validate_federation_url(raw_url: &str, allow_http: bool) -> Result<
 
     // Host is already a literal IP — check it directly.
     if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_private_ip(ip) {
+        if is_private_ip(ip) && !allow_private_test_network {
             return Err("federation to private/internal addresses is not allowed".to_string());
         }
         return Ok(());
@@ -90,7 +111,7 @@ pub async fn validate_federation_url(raw_url: &str, allow_http: bool) -> Result<
         return Err(format!("host {host:?} resolved to no addresses"));
     }
     for addr in addrs {
-        if is_private_ip(addr.ip()) {
+        if is_private_ip(addr.ip()) && !allow_private_test_network {
             return Err("federation to private/internal addresses is not allowed".to_string());
         }
     }
@@ -157,5 +178,22 @@ mod tests {
         assert!(validate_federation_url("https://8.8.8.8/x", false)
             .await
             .is_ok());
+    }
+
+    #[tokio::test]
+    async fn chat_test_policy_can_explicitly_allow_private_networks() {
+        assert!(
+            validate_chat_federation_url("http://127.0.0.1/x", true, true)
+                .await
+                .is_ok()
+        );
+        assert!(
+            validate_chat_federation_url("http://127.0.0.1/x", true, false)
+                .await
+                .is_err()
+        );
+        assert!(validate_federation_url("http://127.0.0.1/x", true)
+            .await
+            .is_err());
     }
 }

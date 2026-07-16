@@ -99,7 +99,14 @@ cargo test                                      # all crates
 cargo test -p kutup-crypto                      # crypto byte-parity vectors
 cargo clippy --all-targets -- -D warnings       # lints (gate)
 cargo fmt --check                               # formatting (gate)
+./scripts/test-chat-federation.sh               # isolated two-server federation + outage/restart
 ```
+
+The federation harness uses its own Compose project, two tmpfs Postgres
+databases, and host ports 39081/39082. It tears the topology down on exit and
+does not touch the ordinary development stack. Set
+`KUTUP_FEDERATION_SKIP_BUILD=1` only when reusing an image already built from
+the current server sources.
 
 ---
 

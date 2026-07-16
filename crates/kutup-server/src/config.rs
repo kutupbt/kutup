@@ -43,6 +43,10 @@ pub struct Config {
     /// Base64 raw 32-byte Ed25519 signing seed. Empty keeps chat federation
     /// disabled; production never generates an ephemeral identity at startup.
     pub chat_federation_signing_key: String,
+    /// Allows chat federation to resolve private Docker-network addresses. This
+    /// escape hatch exists only for the two-server integration harness and is
+    /// rejected unless `APP_ENV=test`.
+    pub chat_federation_test_allow_private: bool,
 }
 
 impl Config {
@@ -73,6 +77,10 @@ impl Config {
             chat_device_expiry_days: get_env_i64("CHAT_DEVICE_EXPIRY_DAYS", 90),
             chat_federation_server_name: get_env("CHAT_FEDERATION_SERVER_NAME", ""),
             chat_federation_signing_key: get_env("CHAT_FEDERATION_SIGNING_KEY", ""),
+            chat_federation_test_allow_private: get_env_bool(
+                "CHAT_FEDERATION_TEST_ALLOW_PRIVATE",
+                false,
+            ),
         };
         if cfg.jwt_secret.len() < 32 {
             panic!("JWT_SECRET must be at least 32 characters long");
@@ -109,6 +117,17 @@ fn get_env(key: &str, fallback: &str) -> String {
 fn get_env_i64(key: &str, fallback: i64) -> i64 {
     match std::env::var(key) {
         Ok(v) if !v.is_empty() => v.parse().ok().filter(|&n| n >= 0).unwrap_or(fallback),
+        _ => fallback,
+    }
+}
+
+fn get_env_bool(key: &str, fallback: bool) -> bool {
+    match std::env::var(key) {
+        Ok(value) if !value.is_empty() => match value.to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" => true,
+            "0" | "false" | "no" => false,
+            _ => fallback,
+        },
         _ => fallback,
     }
 }
