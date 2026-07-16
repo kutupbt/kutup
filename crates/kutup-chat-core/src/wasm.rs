@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    AccountAuthority, ChatContent, ChatError, ChatTransport, Engine, InboundEnvelope,
-    IndexedDbChatDb, ManifestTrust, ReceiveReport, Result, SendOutcome,
+    AccountAddress, AccountAuthority, ChatContent, ChatError, ChatTransport, ConversationId,
+    Engine, InboundEnvelope, IndexedDbChatDb, ManifestTrust, ReceiveReport, Result, SendOutcome,
 };
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -51,12 +51,24 @@ export interface KutupChatContentView {
   kind: string;
   sentAt: string;
   seq: string;
+  messageId?: string;
   body: unknown;
   text?: string;
 }
 
+export interface KutupChatAccountAddress {
+  username: string;
+  server?: string;
+}
+
+export type KutupChatConversationId =
+  | { kind: "direct"; address: KutupChatAccountAddress }
+  | { kind: "group"; groupId: string };
+
 export interface KutupChatHistoryEntry {
   id: string;
+  conversation: KutupChatConversationId;
+  /** @deprecated Use conversation. Retained while existing web/native callers migrate. */
   peer: string;
   direction: "incoming" | "outgoing";
   senderDeviceId?: number;
@@ -360,7 +372,7 @@ impl WasmChatClient {
             .send(
                 &send_id,
                 &peer,
-                &ChatContent::text(sent_at, seq, text),
+                &ChatContent::text_with_id(&send_id, sent_at, seq, text),
                 &mut rng,
             )
             .await
@@ -515,6 +527,7 @@ impl From<ReceiveReport> for ReceiveReportView {
 #[serde(rename_all = "camelCase")]
 struct ReceivedMessageView {
     id: String,
+    conversation: ConversationId,
     peer: String,
     sender_device_id: u32,
     cursor: String,
@@ -525,6 +538,7 @@ impl From<crate::ReceivedMessage> for ReceivedMessageView {
     fn from(message: crate::ReceivedMessage) -> Self {
         Self {
             id: message.id,
+            conversation: message.from.conversation(),
             peer: message.from.name(),
             sender_device_id: message.from.device_id,
             cursor: message.cursor.to_string(),
@@ -558,6 +572,8 @@ struct ContentView {
     kind: String,
     sent_at: String,
     seq: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_id: Option<String>,
     body: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
@@ -571,6 +587,7 @@ impl From<ChatContent> for ContentView {
             kind: content.kind,
             sent_at: content.sent_at,
             seq: content.seq.to_string(),
+            message_id: content.message_id,
             body: content.body,
             text,
         }
@@ -581,6 +598,8 @@ impl From<ChatContent> for ContentView {
 #[serde(rename_all = "camelCase")]
 struct HistoryEntry {
     id: String,
+    conversation: ConversationId,
+    /// Compatibility field for the current direct-only web UI release.
     peer: String,
     direction: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -597,8 +616,14 @@ impl HistoryEntry {
     fn incoming(message: crate::InboxMessage) -> Result<Self> {
         let content = serde_json::from_slice::<ChatContent>(&message.content)
             .map_err(|error| ChatError::Content(error.to_string()))?;
+        let id = content
+            .message_id
+            .clone()
+            .unwrap_or_else(|| message.id.clone());
+        let conversation = direct_conversation(&message.peer)?;
         Ok(Self {
-            id: message.id,
+            id,
+            conversation,
             peer: message.peer,
             direction: "incoming",
             sender_device_id: Some(message.sender_device_id),
@@ -613,8 +638,10 @@ impl HistoryEntry {
     fn outgoing(message: crate::SentMessage) -> Result<Self> {
         let content = serde_json::from_slice::<ChatContent>(&message.content)
             .map_err(|error| ChatError::Content(error.to_string()))?;
+        let conversation = direct_conversation(&message.peer)?;
         Ok(Self {
             id: message.send_id,
+            conversation,
             peer: message.peer,
             direction: "outgoing",
             sender_device_id: None,
@@ -625,6 +652,13 @@ impl HistoryEntry {
             content: content.into(),
         })
     }
+}
+
+fn direct_conversation(peer: &str) -> Result<ConversationId> {
+    let address = peer
+        .parse::<AccountAddress>()
+        .map_err(|error| ChatError::Content(format!("invalid direct conversation: {error}")))?;
+    Ok(ConversationId::direct(address))
 }
 
 #[derive(Serialize)]

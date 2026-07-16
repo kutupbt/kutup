@@ -71,6 +71,27 @@ Three independent asymmetric identities exist per user. **Do not conflate them.*
 | Collab device Ed25519 key (`devices` table) | signs collab frames | per collab device |
 | **Chat device libsignal `IdentityKeyPair` + `registrationId`** | chat E2EE | per chat device |
 
+### 2.1 Account and conversation addressing — [ADD]
+
+An account has one stable routing identity: the existing server-local
+`username`, rendered as `username@server` when federation is enabled. Usernames
+remain lowercase ASCII (`[a-z0-9_-]{3,32}`); federation server names are
+canonical lowercase DNS names. A pre-federation local store may retain the bare
+username form and upgrades it when its home-server identity is known.
+
+There is deliberately no second alias/handle namespace and no reserved alias
+field or resolution endpoint. A changeable, non-unique display name and avatar
+are profile data: neither may be used for routing, session keys, safety numbers,
+blocking, group membership, or transparency proofs. QR codes and contact links
+encode the canonical `username@server` address as
+`kutup://contact/<percent-encoded-address>`. This URI is only a portable wrapper
+for the canonical identity; it adds no alias or resolution layer.
+
+Client APIs and persisted UI state identify conversations as the tagged union
+`Direct { address: AccountAddress } | Group { groupId }`. The current `peer`
+string remains a compatibility projection for direct-message history while web
+callers migrate; it is not the long-term conversation key.
+
 **[RSV] Account self-authority key (device-list authenticity).** The research
 (`13-…` §4.3) makes device-list authenticity a v1 requirement: server-assigned
 device lists otherwise reproduce the malicious-homeserver break that defeated
@@ -252,9 +273,17 @@ serves all clients + fixtures).
   "kind": "text",                // registry below
   "sentAt": "2026-07-13T10:00:00Z", // SENDER clock (serverTimestamp is arrival only)
   "seq": 41,                     // per-(sender,senderDevice) monotonic; enables per-sender ordering
+  "messageId": "018f…",          // stable logical id; equal to transport sendId
   "body": { /* per-kind */ }
 }
 ```
+
+**[ADD] `messageId`.** Every newly authored user-visible event carries its
+sender-generated logical `sendId` inside the ciphertext as `messageId`. Receipts,
+replies, reactions, edits, and tombstones reference this stable id, not a
+recipient mailbox id. Legacy v1 plaintext without `messageId` remains readable;
+the client may use its local history id for display but MUST NOT emit a remote
+reference to that synthetic id.
 
 **`kind` registry:**
 
@@ -444,7 +473,8 @@ lacking the routes. Add a `chat` block to the existing public
   "maxContentBytes": 65536,        // enforced on send (closes a mailbox-abuse hole)
   "mailboxRetentionDays": 30,
   "deviceExpiryDays": 90,
-  "federation": false,             // [RSV] flips true in phase 3
+  "serverName": "chat.example",   // present exactly when federation is true
+  "federation": true,
   "manifests": true,               // signed device directory is available
   "sealedSender": false            // [RSV] flips true when sealed sender ships
 }
@@ -452,8 +482,10 @@ lacking the routes. Add a `chat` block to the existing public
 
 `maxContentBytes` MUST be **enforced** on send (today an envelope can be
 arbitrary size) and is the budget clients use for attachment-pointer payloads.
-The `[RSV]` booleans let a client light up features per server without a
-protocol bump. (`12-…` §3.)
+The optional `serverName` is the stable suffix used to render local accounts as
+`username@server`; clients reject an advertised federation capability without
+it. The remaining `[RSV]` boolean lets a client light up sealed sender without
+a protocol bump. (`12-…` §3.)
 
 ---
 
@@ -511,22 +543,34 @@ No group endpoints in v1. The fields exist so phase 4 is additive.
 
 ---
 
-## 13. Federation — [RSV], transport-only, no room DAG
+## 13. Federation — [PARTIAL], transport-only, no room DAG
 
 Confirmed by CVE-grade evidence (`13-…` §3): **reject** Matrix's replicated
 room DAG + state resolution; keep signed-ciphertext delivery between mailbox
-servers. Reserved for phase 3:
+servers. Discovery, server authentication, canonical routing, remote device
+discovery, durable message delivery, and gap replay are implemented. A server
+advertises `chat.federation: true` only when its administrator configures a
+persistent signing identity:
 
 - **Discovery:** `GET /.well-known/kutup/federation.json` → `{ fedVersion,
-  server: "domain", signingKeys: [ { keyId, publicKey } ] }`.
+  server: "domain", apiBase: "https://edge.domain", signingKeys: [ { keyId,
+  publicKey } ] }`. `apiBase` provides DNS-owner-controlled delegation while
+  keeping the canonical address independent of ports and topology.
 - **Addressing:** `sender`/recipient become `user@domain`. Clients model
-  addresses as `{ user, domain: Option, deviceId }` **now** so phase 3 changes
-  routing, not types.
-- **Request auth — adopt X-Matrix verbatim (`13-…` §3):** sign `{method, uri,
-  origin, destination, body}` as a JSON object with the origin server's Ed25519
-  key; transmit in an authorization header; the receiver MUST reply **401 on
-  destination mismatch** (destination binding defeats cross-server replay).
-- **Delivery — adopt Matrix's retry rule *plus* what Matrix gets for free from
+  account addresses as `{ username, server: Option }` and conversations as a
+  tagged `Direct`/`Group` identity, so phase 3 changes routing, not identity.
+- **Request auth (`13-…` §3):** the `Authorization: Kutup …` signature binds
+  `{method, uri, origin, destination, timestamp, requestId, keyId,
+  SHA-256(exactBody)}` with the origin server's Ed25519 key. The receiver MUST
+  reply **401 on destination mismatch** (destination binding defeats
+  cross-server replay). Requests outside a five-minute clock window fail.
+- **Remote device directory [IMPL]:** the authenticated local endpoint accepts
+  `username@server`, discovers the remote server, and makes a signed lookup.
+  The remote read returns the account-signed manifest and reusable last-resort
+  PQ bundles without consuming one-time keys, so replay cannot exhaust a
+  recipient's prekey pool. Clients still verify the manifest; server signing
+  authenticates transport, not the device set.
+- **Delivery [IMPL] — adopt Matrix's retry rule *plus* what Matrix gets for free from
   its DAG and kutup does not:** a sending server MUST retry a transaction until
   `200 OK` before sending the next transaction to that destination (in-order
   per destination), backed by a **durable** queue. Because kutup has **no DAG
@@ -534,6 +578,18 @@ servers. Reserved for phase 3:
   monotonic sequence number**, and the receiver MUST detect and request missing
   ranges (explicit gap detection). A never-give-up durable queue + sequence
   gaps replaces backfill; without it a long partition silently loses messages.
+  Kutup persists a transaction before attempting HTTPS; transient failure stays
+  queued but also returns 503 so the web engine retains its own encrypted
+  outbox. A remote device mismatch blocks that sequence and is returned to the
+  engine for signed-directory refresh and re-encryption under the same
+  `sendId`. Accepted transactions, mailbox rows, and the inbound sequence
+  advance commit atomically. Retained delivered transactions can be replayed
+  when a receiver reports `sequenceGap`. A missing recipient or an account with
+  no active devices is a typed terminal rejection that still advances the s2s
+  sequence; the originating client sees a delivery error, while later messages
+  to other accounts on that server remain unblocked. If a replay record has
+  expired, the receiver's contiguous sequence high-water mark safely
+  acknowledges the already-consumed sequence without replaying ciphertext.
 - **Abuse controls (from XMPP servers, `13-…` §5/§7):** pre-auth vs post-auth
   size/element caps; per-remote shapers; an overload circuit breaker
   (auto-temporary-block a failing/overloaded remote); a proof-of-contact gate
@@ -593,16 +649,19 @@ servers. Reserved for phase 3:
    — the reinstalled-peer path re-keys TOFU and surfaces a `SafetyNumberChanged`
    event, the Signal-faithful hybrid, with the verified-peer hard-block reserved
    for when manifests land), and a drain/ack receive loop with cursor dedup and
-   persisted history. Covered by roundtrip/send/receive test suites. Not yet in
-   core: sealed sender, groups, federation transport (all reserved), and the
-   attachment `kind`.
+   persisted history. Covered by roundtrip/send/receive test suites. Federation
+   uses the same client transport with canonical remote addresses and is routed
+   server-to-server; no separate federation client stack is needed. Not yet in
+   core: sealed sender, groups, and the attachment `kind`.
 4. **web wasm adapters + minimal 1:1 UI — ✅ implemented**: account-scoped
    IndexedDB, a DTO-only wasm-bindgen transport facade, Web Locks around every
    ratchet transaction, capability-gated navigation, WebSocket hints feeding
    REST reconciliation, durable inbound/outbound history, bilingual UI, and a
-   two-account Playwright roundtrip/reload spec. Native clients now follow their
-   plans (`kutup-android`, `kutup-ios`). The engine's public API (kutup types
-   only — libsignal never leaks) is the UniFFI/wasm binding surface.
+   two-account Playwright roundtrip/reload spec. Web is now the reference client
+   through federation, groups, privacy, media, and PWA completion. Native app
+   integration is intentionally deferred until that shared protocol and
+   conversation model are stable. The engine's public API (kutup types only —
+   libsignal never leaks) remains the eventual UniFFI/wasm binding surface.
 
 ### 16.1 Hardening gate before client bindings — [IMPL]
 

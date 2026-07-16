@@ -57,6 +57,11 @@ pub struct ChatContent {
     pub sent_at: String,
     /// Per-`(sender, senderDevice)` monotonic counter → per-sender ordering.
     pub seq: u64,
+    /// Stable sender-generated logical identifier. New user-visible messages
+    /// use the same UUID as the durable transport `sendId`; legacy v1 content
+    /// omits it and remains readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
     /// Kind-specific payload. Untyped so unknown kinds survive; use the typed
     /// accessors ([`ChatContent::as_text`]) for known kinds.
     pub body: serde_json::Value,
@@ -77,9 +82,23 @@ impl ChatContent {
             kind: kind::TEXT.to_string(),
             sent_at: sent_at.into(),
             seq,
+            message_id: None,
             body: serde_json::to_value(TextBody { text: text.into() }).unwrap_or_default(),
             extra: serde_json::Map::new(),
         }
+    }
+
+    /// Builds a new text message whose stable content id matches its logical
+    /// outbox/send id. References such as receipts and reactions use this id.
+    pub fn text_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        text: impl Into<String>,
+    ) -> Self {
+        let mut content = Self::text(sent_at, seq, text);
+        content.message_id = Some(message_id.into());
+        content
     }
 
     /// Returns the text body if this is a `text` message this reader understands.
@@ -104,6 +123,7 @@ impl ChatContent {
             kind: kind::SENT_TRANSCRIPT.to_string(),
             sent_at: content.sent_at.clone(),
             seq: content.seq,
+            message_id: content.message_id.clone(),
             body: serde_json::to_value(SentTranscriptBody {
                 send_id: send_id.into(),
                 peer: peer.into(),
@@ -179,6 +199,18 @@ mod tests {
         );
         let back: ChatContent = serde_json::from_str(&json).unwrap();
         assert_eq!(back.as_text().unwrap().text, "hi");
+    }
+
+    #[test]
+    fn new_text_carries_the_transport_id_inside_ciphertext() {
+        let content = ChatContent::text_with_id(
+            "018f8ad5-d7db-7c7c-8c4b-4f53467f4431",
+            "2026-07-13T10:00:00Z",
+            41,
+            "hi",
+        );
+        let value = serde_json::to_value(content).unwrap();
+        assert_eq!(value["messageId"], "018f8ad5-d7db-7c7c-8c4b-4f53467f4431");
     }
 
     #[test]

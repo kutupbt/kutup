@@ -88,6 +88,8 @@ pub fn spawn_all(
 pub struct ChatSweepResult {
     pub mailbox_rows: u64,
     pub send_rows: u64,
+    pub federation_send_rows: u64,
+    pub federation_transaction_rows: u64,
     pub devices: u64,
     pub ws_tickets: u64,
 }
@@ -134,6 +136,33 @@ pub async fn chat_maintenance_once(
             Ok(done) => result.send_rows = done.rows_affected(),
             Err(error) => tracing::warn!("chat maintenance: send retention failed: {error}"),
         }
+        match sqlx::query(
+            "DELETE FROM chat_federation_outbox
+             WHERE state = 'delivered'
+               AND updated_at < now() - ($1 * interval '1 day')",
+        )
+        .bind(policy.send_retention_days)
+        .execute(pool)
+        .await
+        {
+            Ok(done) => result.federation_send_rows = done.rows_affected(),
+            Err(error) => {
+                tracing::warn!("chat maintenance: federation send retention failed: {error}")
+            }
+        }
+        match sqlx::query(
+            "DELETE FROM chat_federation_inbound_transactions
+             WHERE created_at < now() - ($1 * interval '1 day')",
+        )
+        .bind(policy.send_retention_days)
+        .execute(pool)
+        .await
+        {
+            Ok(done) => result.federation_transaction_rows = done.rows_affected(),
+            Err(error) => {
+                tracing::warn!("chat maintenance: federation transaction retention failed: {error}")
+            }
+        }
     }
     if policy.device_expiry_days > 0 {
         match sqlx::query_as::<_, (Uuid, i32)>(
@@ -160,6 +189,8 @@ pub async fn chat_maintenance_once(
         tracing::info!(
             mailbox_rows = result.mailbox_rows,
             send_rows = result.send_rows,
+            federation_send_rows = result.federation_send_rows,
+            federation_transaction_rows = result.federation_transaction_rows,
             devices = result.devices,
             ws_tickets = result.ws_tickets,
             "chat maintenance complete"

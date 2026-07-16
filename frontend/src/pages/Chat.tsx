@@ -5,9 +5,11 @@ import {
   Bookmark,
   Check,
   CheckCheck,
+  Copy,
   Loader2,
   MessageCircle,
   Plus,
+  QrCode,
   RefreshCw,
   Send,
   ShieldCheck,
@@ -16,13 +18,36 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { QRCodeSVG } from 'qrcode.react'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { useAppSelector } from '@/store'
 import { ChatService, ChatServiceError } from '@/chat/service'
 import { isSupportedChat, useChatCapabilities } from '@/chat/capabilities'
-import type { ChatCapabilities, ChatHistoryEntry, InboundAttention } from '@/chat/types'
+import {
+  conversationKey,
+  contactUri,
+  directAddress,
+  directConversation,
+  parseAccountAddress,
+  withHomeServer,
+} from '@/chat/identity'
+import type {
+  ChatCapabilities,
+  ChatHistoryEntry,
+  ConversationId,
+  InboundAttention,
+} from '@/chat/types'
 import { cn } from '@/lib/utils'
+import { copyText } from '@/lib/format'
 
 export default function Chat() {
   const { t } = useTranslation()
@@ -71,13 +96,23 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [service, setService] = useState<ChatService | null>(null)
   const [history, setHistory] = useState<ChatHistoryEntry[]>([])
   const [attention, setAttention] = useState<InboundAttention[]>([])
-  const [selectedPeer, setSelectedPeer] = useState('')
+  const [selectedConversation, setSelectedConversation] = useState<ConversationId | null>(null)
   const [newPeer, setNewPeer] = useState('')
   const [draft, setDraft] = useState('')
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
+  const selfAccount = useMemo(
+    () =>
+      auth.username
+        ? withHomeServer({ username: auth.username }, capabilities.serverName)
+        : null,
+    [auth.username, capabilities.serverName],
+  )
+  const selfAddress = selfAccount
+    ? directAddress(directConversation(selfAccount))
+    : null
 
   useEffect(() => {
     if (!auth.userId || !auth.username || !masterKey) {
@@ -135,43 +170,60 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   }, [auth.userId, auth.username, capabilities, masterKey, t])
 
   const peers = useMemo(() => {
-    const latest = new Map<string, ChatHistoryEntry>()
-    for (const message of history) latest.set(message.peer, message)
-    return Array.from(latest.entries())
-      .filter(([peer]) => peer !== auth.username)
-      .sort(([, left], [, right]) => right.timestampMs - left.timestampMs)
-      .map(([peer, message]) => ({ peer, message }))
-  }, [auth.username, history])
+    const latest = new Map<string, { conversation: ConversationId; message: ChatHistoryEntry }>()
+    for (const message of history) {
+      latest.set(conversationKey(message.conversation), {
+        conversation: message.conversation,
+        message,
+      })
+    }
+    return Array.from(latest.values())
+      .filter(({ conversation }) => directAddress(conversation) !== selfAddress)
+      .sort((left, right) => right.message.timestampMs - left.message.timestampMs)
+  }, [history, selfAddress])
 
   useEffect(() => {
-    if (!selectedPeer && peers[0]) setSelectedPeer(peers[0].peer)
-  }, [peers, selectedPeer])
+    if (!selectedConversation && peers[0]) setSelectedConversation(peers[0].conversation)
+  }, [peers, selectedConversation])
+
+  const selectedKey = selectedConversation ? conversationKey(selectedConversation) : null
+  const selectedAddress = selectedConversation ? directAddress(selectedConversation) : null
+  const selectedLabel = selectedAddress ??
+    (selectedConversation?.kind === 'group' ? selectedConversation.groupId : '')
+  const noteSelected = selectedAddress === selfAddress
 
   const messages = useMemo(
-    () => history.filter((message) => message.peer === selectedPeer),
-    [history, selectedPeer],
+    () =>
+      selectedKey
+        ? history.filter((message) => conversationKey(message.conversation) === selectedKey)
+        : [],
+    [history, selectedKey],
   )
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [messages.length, selectedPeer])
+  }, [messages.length, selectedKey])
 
   function startConversation(event: FormEvent) {
     event.preventDefault()
-    const peer = newPeer.trim()
-    if (!peer) return
-    setSelectedPeer(peer)
+    const parsed = parseAccountAddress(newPeer)
+    const address = parsed ? withHomeServer(parsed, capabilities.serverName) : null
+    if (!address) {
+      toast.error(t('chat.errors.invalidAddress'))
+      return
+    }
+    setSelectedConversation(directConversation(address))
     setNewPeer('')
   }
 
   async function sendMessage(event: FormEvent) {
     event.preventDefault()
     const text = draft.trim()
-    if (!service || !selectedPeer || !text || sending) return
+    if (!service || !selectedConversation || !text || sending) return
     setSending(true)
     setDraft('')
     try {
-      const summary = await service.send(selectedPeer, text)
+      const summary = await service.send(selectedConversation, text)
       if (summary.safetyNumberChanges.length > 0) {
         toast.warning(t('chat.safetyNumberChanged'))
       }
@@ -184,7 +236,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     }
   }
 
-  const showPeerList = !isMobile || !selectedPeer
+  const showPeerList = !isMobile || !selectedConversation
 
   return (
     <div className="fixed inset-0 flex bg-background text-foreground">
@@ -202,6 +254,38 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
               </p>
             </div>
             <ShieldCheck className="h-5 w-5 text-success" aria-label={t('chat.encrypted')} />
+            {selfAccount?.server && selfAddress && (
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="ghost" size="icon" aria-label={t('chat.contact.open')}>
+                    <QrCode className="h-5 w-5" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-sm">
+                  <DialogHeader>
+                    <DialogTitle>{t('chat.contact.title')}</DialogTitle>
+                    <DialogDescription>{t('chat.contact.description')}</DialogDescription>
+                  </DialogHeader>
+                  <div className="flex flex-col items-center gap-4 py-2">
+                    <div className="rounded-xl bg-white p-4">
+                      <QRCodeSVG value={contactUri(selfAccount)} size={200} />
+                    </div>
+                    <code className="max-w-full break-all rounded bg-muted px-3 py-2 text-sm">
+                      {selfAddress}
+                    </code>
+                    <Button
+                      className="w-full"
+                      onClick={() =>
+                        void copyText(selfAddress).then(() => toast.success(t('chat.contact.copied')))
+                      }
+                    >
+                      <Copy className="mr-2 h-4 w-4" />
+                      {t('chat.contact.copy')}
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            )}
           </header>
 
           <form className="flex gap-2 border-b p-3" onSubmit={startConversation}>
@@ -213,20 +297,20 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
               autoCapitalize="none"
               autoCorrect="off"
             />
-            <Button type="submit" size="icon" disabled={!newPeer.trim()}>
+            <Button type="submit" size="icon" disabled={!parseAccountAddress(newPeer)}>
               <Plus className="h-4 w-4" />
               <span className="sr-only">{t('chat.start')}</span>
             </Button>
           </form>
 
-          {auth.username && (
+          {selfAccount && (
             <div className="border-b p-2">
               <button
                 type="button"
-                onClick={() => setSelectedPeer(auth.username!)}
+                onClick={() => setSelectedConversation(directConversation(selfAccount))}
                 className={cn(
                   'flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors',
-                  selectedPeer === auth.username ? 'bg-primary/10' : 'hover:bg-accent',
+                  noteSelected ? 'bg-primary/10' : 'hover:bg-accent',
                 )}
               >
                 <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
@@ -256,21 +340,25 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 {t('chat.empty')}
               </div>
             )}
-            {peers.map(({ peer, message }) => (
+            {peers.map(({ conversation, message }) => {
+              const key = conversationKey(conversation)
+              const label = directAddress(conversation) ??
+                (conversation.kind === 'group' ? conversation.groupId : '')
+              return (
               <button
-                key={peer}
+                key={key}
                 type="button"
-                onClick={() => setSelectedPeer(peer)}
+                onClick={() => setSelectedConversation(conversation)}
                 className={cn(
                   'flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors',
-                  selectedPeer === peer ? 'bg-primary/10' : 'hover:bg-accent',
+                  selectedKey === key ? 'bg-primary/10' : 'hover:bg-accent',
                 )}
               >
                 <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/15 font-semibold text-primary">
-                  {peer.slice(0, 1).toUpperCase()}
+                  {label.slice(0, 1).toUpperCase()}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">{peer}</span>
+                  <span className="block truncate text-sm font-medium">{label}</span>
                   <span className="block truncate text-xs text-muted-foreground">
                     {message.content.text ?? t('chat.newerClient')}
                   </span>
@@ -279,27 +367,28 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                   {formatTime(message.content.sentAt)}
                 </span>
               </button>
-            ))}
+              )
+            })}
           </div>
         </aside>
       )}
 
-      {(!isMobile || selectedPeer) && (
+      {(!isMobile || selectedConversation) && (
         <main className="flex min-w-0 flex-1 flex-col">
           <header className="flex h-16 shrink-0 items-center gap-3 border-b bg-card px-4">
             {isMobile && (
-              <Button variant="ghost" size="icon" onClick={() => setSelectedPeer('')}>
+              <Button variant="ghost" size="icon" onClick={() => setSelectedConversation(null)}>
                 <ArrowLeft className="h-5 w-5" />
               </Button>
             )}
             <span className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/15 font-semibold text-primary">
-              {selectedPeer.slice(0, 1).toUpperCase() || '?'}
+              {selectedLabel.slice(0, 1).toUpperCase() || '?'}
             </span>
             <div className="min-w-0 flex-1">
               <h2 className="truncate font-semibold">
-                {selectedPeer === auth.username
+                {noteSelected
                   ? t('chat.noteToSelf')
-                  : selectedPeer || t('chat.selectConversation')}
+                  : selectedLabel || t('chat.selectConversation')}
               </h2>
               <p className="flex items-center gap-1 text-xs text-muted-foreground">
                 <ShieldCheck className="h-3 w-3" /> {t('chat.protocolEncryption')}
@@ -330,7 +419,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
           )}
 
           <div className="flex-1 overflow-y-auto px-4 py-5 md:px-8">
-            {!selectedPeer && (
+            {!selectedConversation && (
               <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                 {t('chat.chooseConversation')}
               </div>
@@ -353,14 +442,13 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 placeholder={
-                  selectedPeer
+                  selectedConversation
                     ? t('chat.messagePeer', {
-                        peer:
-                          selectedPeer === auth.username ? t('chat.noteToSelf') : selectedPeer,
+                        peer: noteSelected ? t('chat.noteToSelf') : selectedLabel,
                       })
                     : t('chat.selectConversation')
                 }
-                disabled={!service || !selectedPeer || sending}
+                disabled={!service || !selectedConversation || sending}
                 maxLength={16_000}
                 autoComplete="off"
               />

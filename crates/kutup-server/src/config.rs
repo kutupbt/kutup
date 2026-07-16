@@ -17,7 +17,7 @@ pub struct Config {
     /// Email of the break-glass admin, derived from `admin_account`. Never demotable/
     /// disableable/deletable via the API/UI. Empty when `ADMIN_ACCOUNT` is unset.
     pub break_glass_admin_email: String,
-    /// e.g. `https://kutup.example.com` — used for federation invite links.
+    /// e.g. `https://kutup.example.com` — published as the federation API base.
     pub server_url: String,
     /// Comma-separated CORS allowlist (`*` allowed in dev only).
     pub allowed_origins: String,
@@ -37,6 +37,12 @@ pub struct Config {
     /// Chat devices with no authenticated activity for this many days are
     /// expired with their prekeys/mailbox. `0` disables expiry.
     pub chat_device_expiry_days: i64,
+    /// Canonical DNS identity used in `username@server`. Empty derives the
+    /// hostname from `SERVER_URL` when chat federation is configured.
+    pub chat_federation_server_name: String,
+    /// Base64 raw 32-byte Ed25519 signing seed. Empty keeps chat federation
+    /// disabled; production never generates an ephemeral identity at startup.
+    pub chat_federation_signing_key: String,
 }
 
 impl Config {
@@ -65,6 +71,8 @@ impl Config {
             chat_mailbox_retention_days: get_env_i64("CHAT_MAILBOX_RETENTION_DAYS", 30),
             chat_send_retention_days: get_env_i64("CHAT_SEND_RETENTION_DAYS", 30),
             chat_device_expiry_days: get_env_i64("CHAT_DEVICE_EXPIRY_DAYS", 90),
+            chat_federation_server_name: get_env("CHAT_FEDERATION_SERVER_NAME", ""),
+            chat_federation_signing_key: get_env("CHAT_FEDERATION_SIGNING_KEY", ""),
         };
         if cfg.jwt_secret.len() < 32 {
             panic!("JWT_SECRET must be at least 32 characters long");

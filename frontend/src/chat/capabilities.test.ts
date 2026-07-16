@@ -21,6 +21,16 @@ describe('isSupportedChat', () => {
     expect(isSupportedChat({ ...supported, protocolVersion: 2 })).toBe(false)
     expect(isSupportedChat({ ...supported, suites: [] })).toBe(false)
     expect(isSupportedChat({ ...supported, manifests: false })).toBe(false)
+    expect(isSupportedChat({ ...supported, federation: true })).toBe(false)
+    expect(
+      isSupportedChat({ ...supported, federation: true, serverName: 'chat.example' }),
+    ).toBe(true)
+    expect(
+      isSupportedChat({ ...supported, federation: true, serverName: 'Chat.Example' }),
+    ).toBe(false)
+    expect(
+      isSupportedChat({ ...supported, federation: true, serverName: '127.0.0.1' }),
+    ).toBe(false)
     expect(isSupportedChat(undefined)).toBe(false)
   })
 })

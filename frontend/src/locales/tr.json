@@ -67,12 +67,20 @@
     "messagePeer": "{{peer}} kullanıcısına mesaj",
     "send": "Gönder",
     "safetyNumberChanged": "Bir alıcı cihazın kimliği değişti. Güvenlik numarasını doğrulayın.",
+    "contact": {
+      "open": "Sohbet adresimi göster",
+      "title": "Sohbet adresiniz",
+      "description": "Bu kalıcı kullanıcı@sunucu adresini paylaşın veya QR kodunu taratın.",
+      "copy": "Adresi kopyala",
+      "copied": "Sohbet adresi kopyalandı"
+    },
     "errors": {
       "sessionMissing": "Hesap oturumunuzda şifreli sohbet için gereken anahtarlar eksik.",
       "browserUnsupported": "Bu tarayıcı, şifreli sohbeti sekmeler arasında güvenli biçimde koordine edemiyor.",
       "serverUnsupported": "Bu sunucu gereken güvenli sohbet protokolünü desteklemiyor.",
       "capabilities": "Kutup bu sunucunun güvenli sohbet desteğini kontrol edemedi.",
-      "unavailable": "Güvenli sohbet geçici olarak kullanılamıyor."
+      "unavailable": "Güvenli sohbet geçici olarak kullanılamıyor.",
+      "invalidAddress": "Geçerli bir kullanıcı adı veya kullanıcı@sunucu adresi girin."
     }
   },
   "trash": {

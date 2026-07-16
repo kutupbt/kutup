@@ -40,7 +40,9 @@ pub use engine::{
     ChatEvent, Engine, EngineState, InboundFailure, PreKeyMaintenanceReport, ReceiveReport,
 };
 pub use error::{ChatError, Result};
-pub use kutup_chat_proto::{ChatContent, DeliveredEnvelope, OutgoingEnvelope, TextBody};
+pub use kutup_chat_proto::{
+    AccountAddress, ChatContent, ConversationId, DeliveredEnvelope, OutgoingEnvelope, TextBody,
+};
 pub use manifest::{verify_bundle_response, verify_manifest, AccountAuthority, ManifestPolicy};
 pub use session::{ReceivedMessage, SendSummary, Session};
 pub use transport::{ChatTransport, SendOutcome};

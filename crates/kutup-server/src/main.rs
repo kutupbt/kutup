@@ -6,6 +6,7 @@
 //! groups (auth, files, collab, federation, …) are added in `build_router` as each
 //! handler slice lands.
 
+mod chat_federation;
 mod chat_hub;
 mod config;
 mod db;
@@ -50,6 +51,7 @@ const BUILD_VERSION: &str = "dev";
 /// Max request body — mirrors the Fiber `BodyLimit: 10 GB`. Streaming upload routes
 /// (tus) disable this per-route once they land (`DefaultBodyLimit::disable()`).
 const BODY_LIMIT_BYTES: usize = 10 * 1024 * 1024 * 1024;
+const FED_CHAT_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Shared application state.
 #[derive(Clone)]
@@ -61,6 +63,9 @@ pub struct AppState {
     pub hub: Arc<hub::Hub>,
     /// Live chat WebSocket connections, keyed by (user, chat device).
     pub chat_hub: chat_hub::ChatHub,
+    /// Server-to-server chat identity and discovery client. `None` means the
+    /// administrator has not configured a persistent federation signing key.
+    pub chat_federation: Option<Arc<chat_federation::ChatFederation>>,
     /// Live SeaweedFS capacity probe for the admin dashboard; `None` disables it (the admin
     /// stats then fall back to `config.storage_total_bytes`).
     pub storage_probe: Option<Arc<storage_probe::StorageProbe>>,
@@ -122,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
     // Live SeaweedFS capacity probe (admin dashboard) — None when SEAWEEDFS_MASTER_URL is empty.
     let storage_probe =
         storage_probe::StorageProbe::new(&config.seaweedfs_master_url).map(Arc::new);
+    let chat_federation = chat_federation::ChatFederation::from_config(&config)?.map(Arc::new);
 
     let state = AppState {
         pool,
@@ -129,8 +135,10 @@ async fn main() -> anyhow::Result<()> {
         storage,
         hub: Arc::new(hub::Hub::new()),
         chat_hub,
+        chat_federation,
         storage_probe,
     };
+    chat_federation::spawn_retry_worker(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
     // `Router::layer` only runs for already-matched paths, so it can't rescue an unmatched
@@ -229,6 +237,10 @@ fn build_router(state: AppState) -> Router {
         // docs/roadmap.md) — the machine-readable spec lives here meanwhile.
         .route("/api-docs/openapi.json", get(openapi_json))
         .route("/api/health", get(health))
+        .route(
+            "/.well-known/kutup/federation.json",
+            get(chat_federation::discovery),
+        )
         // --- Auth routes (anonymous; rate-limited per the Go middleware chain) ---
         .route("/api/auth/settings", get(auth::get_public_settings))
         .route(
@@ -315,9 +327,12 @@ fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/chat/users/:username/messages",
-            post(chat::send_messages),
+            post(chat::send_messages).route_layer(DefaultBodyLimit::max(FED_CHAT_BODY_LIMIT_BYTES)),
         )
-        .route("/api/chat/sync/messages", post(chat::sync_messages))
+        .route(
+            "/api/chat/sync/messages",
+            post(chat::sync_messages).route_layer(DefaultBodyLimit::max(FED_CHAT_BODY_LIMIT_BYTES)),
+        )
         .route("/api/chat/messages", get(chat::drain_mailbox))
         .route("/api/chat/messages/ack", post(chat::ack_messages))
         .route("/api/chat/ws-ticket", post(chat::create_ws_ticket))
@@ -384,6 +399,17 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/fed/users",
             get(federation::get_user_by_username)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/users/:username/keys",
+            get(chat_federation::get_user_bundles)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/messages",
+            post(chat_federation::deliver_messages)
+                .route_layer(DefaultBodyLimit::max(FED_CHAT_BODY_LIMIT_BYTES))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route("/api/fed/invites/:token", get(federation::get_invite))

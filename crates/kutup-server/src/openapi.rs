@@ -127,6 +127,10 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::chat::ack_messages,
         crate::handlers::chat::create_ws_ticket,
         crate::handlers::chat::ws,
+        // --- chat federation (signed server-to-server directory foundation) ---
+        crate::chat_federation::discovery,
+        crate::chat_federation::get_user_bundles,
+        crate::chat_federation::deliver_messages,
     ),
     components(schemas(
         kutup_chat_proto::SuiteId,
@@ -149,6 +153,11 @@ All file content and metadata are encrypted client-side; the server stores only 
         kutup_chat_proto::AckRequest,
         kutup_chat_proto::ChatWsServerMessage,
         kutup_chat_proto::ChatWsTicketResponse,
+        kutup_chat_proto::FederationSigningKey,
+        kutup_chat_proto::FederationDiscovery,
+        kutup_chat_proto::FederatedChatTransaction,
+        kutup_chat_proto::FederationDeliveryResponse,
+        kutup_chat_proto::FederationDeliveryError,
         models::HealthResponse,
         models::ErrorResponse,
         models::MessageResponse,
@@ -261,6 +270,9 @@ mod tests {
             "/api/chat/users/{username}/keys",
             "/api/chat/messages/ack",
             "/api/chat/ws",
+            "/.well-known/kutup/federation.json",
+            "/api/fed/chat/users/{username}/keys",
+            "/api/fed/chat/messages",
         ] {
             assert!(paths.contains_key(path), "spec is missing path {path}");
         }

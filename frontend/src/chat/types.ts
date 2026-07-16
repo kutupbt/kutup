@@ -3,12 +3,24 @@ export interface ChatContentView {
   kind: string
   sentAt: string
   seq: string
+  messageId?: string
   body: unknown
   text?: string
 }
 
+export interface AccountAddress {
+  username: string
+  server?: string
+}
+
+export type ConversationId =
+  | { kind: 'direct'; address: AccountAddress }
+  | { kind: 'group'; groupId: string }
+
 export interface ChatHistoryEntry {
   id: string
+  conversation: ConversationId
+  /** @deprecated Use conversation. */
   peer: string
   direction: 'incoming' | 'outgoing'
   senderDeviceId?: number
@@ -57,6 +69,7 @@ export interface ChatCapabilities {
   maxContentBytes: number
   mailboxRetentionDays: number
   deviceExpiryDays: number
+  serverName?: string
   federation: boolean
   manifests: boolean
   sealedSender: boolean

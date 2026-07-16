@@ -320,7 +320,7 @@ fn worker_main(
                         .send(
                             &send_id,
                             &peer,
-                            &ChatContent::text(sent_at, sequence, text),
+                            &ChatContent::text_with_id(&send_id, sent_at, sequence, text),
                             &mut rng,
                         )
                         .await?;

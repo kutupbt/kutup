@@ -2265,6 +2265,7 @@ dependencies = [
  "axum",
  "base64",
  "bcrypt",
+ "ed25519-dalek",
  "futures-util",
  "hex",
  "jsonwebtoken",

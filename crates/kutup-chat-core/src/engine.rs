@@ -375,6 +375,15 @@ impl Engine {
         content: &ChatContent,
         rng: &mut R,
     ) -> Result<SendSummary> {
+        if content
+            .message_id
+            .as_deref()
+            .is_some_and(|message_id| message_id != send_id)
+        {
+            return Err(ChatError::Invalid(
+                "encrypted content messageId must match transport sendId".into(),
+            ));
+        }
         // A caller retry with the same logical id must never advance the
         // ratchet again. Reuse the exact durable ciphertext, or no-op if its
         // delivery was already confirmed locally.

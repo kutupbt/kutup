@@ -67,12 +67,20 @@
     "messagePeer": "Message {{peer}}",
     "send": "Send",
     "safetyNumberChanged": "A recipient device identity changed. Verify the safety number.",
+    "contact": {
+      "open": "Show my chat address",
+      "title": "Your chat address",
+      "description": "Share this stable username@server address or let someone scan its QR code.",
+      "copy": "Copy address",
+      "copied": "Chat address copied"
+    },
     "errors": {
       "sessionMissing": "Your account session is missing the keys required for encrypted chat.",
       "browserUnsupported": "This browser cannot safely coordinate encrypted chat across tabs.",
       "serverUnsupported": "This server does not support the required secure chat protocol.",
       "capabilities": "Kutup could not check whether this server supports secure chat.",
-      "unavailable": "Secure chat is temporarily unavailable."
+      "unavailable": "Secure chat is temporarily unavailable.",
+      "invalidAddress": "Enter a valid username or username@server address."
     }
   },
   "trash": {

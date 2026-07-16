@@ -700,7 +700,12 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
     ]);
     *server.fail_sync_sends.borrow_mut() = 1;
 
-    let content = ChatContent::text("2026-07-16T10:02:00Z", 1, "hello from my other device");
+    let content = ChatContent::text_with_id(
+        "direct-linked",
+        "2026-07-16T10:02:00Z",
+        1,
+        "hello from my other device",
+    );
     let mut first = Engine::new_for_development(alice1, server.clone());
     let summary = block_on(first.send("direct-linked", "bob", &content, &mut rng)).unwrap();
     assert!(summary.delivered, "recipient delivery succeeds");
@@ -709,17 +714,16 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
     assert_eq!(block_on(first.pending_send_count()).unwrap(), 1);
     let sent = block_on(first.session().sent_history()).unwrap();
     assert!(sent[0].delivered, "recipient status is not downgraded by sync");
+    let received = decrypt_for(
+        &mut bob1,
+        &ChatAddress::local("alice", 1),
+        &server.last_delivered(),
+        1,
+        &mut rng,
+    );
+    assert_eq!(received.message_id.as_deref(), Some("direct-linked"));
     assert_eq!(
-        decrypt_for(
-            &mut bob1,
-            &ChatAddress::local("alice", 1),
-            &server.last_delivered(),
-            1,
-            &mut rng,
-        )
-        .as_text()
-        .unwrap()
-        .text,
+        received.as_text().unwrap().text,
         "hello from my other device"
     );
     drop(first);
@@ -741,12 +745,11 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
     let linked_history = block_on(linked.session().sent_history()).unwrap();
     assert_eq!(linked_history.len(), 1);
     assert_eq!(linked_history[0].peer, "bob");
+    let linked_content =
+        serde_json::from_slice::<ChatContent>(&linked_history[0].content).unwrap();
+    assert_eq!(linked_content.message_id.as_deref(), Some("direct-linked"));
     assert_eq!(
-        serde_json::from_slice::<ChatContent>(&linked_history[0].content)
-            .unwrap()
-            .as_text()
-            .unwrap()
-            .text,
+        linked_content.as_text().unwrap().text,
         "hello from my other device"
     );
 
@@ -756,6 +759,13 @@ fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
     assert!(repeated.delivered && repeated.deduplicated);
     assert_eq!(server.delivered.borrow().len(), direct_count);
     assert_eq!(server.synced.borrow().len(), sync_count);
+
+    let mismatched = ChatContent::text_with_id("content-id", "t", 2, "must not send");
+    assert!(matches!(
+        block_on(restarted.send("transport-id", "bob", &mismatched, &mut rng)),
+        Err(ChatError::Invalid(message))
+            if message.contains("messageId must match transport sendId")
+    ));
 }
 
 #[test]

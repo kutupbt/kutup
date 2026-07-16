@@ -35,9 +35,16 @@ S3_ACCESS_KEY=kutup
 S3_SECRET_KEY=<strong-random-secret>
 S3_BUCKET=kutup-files
 
-# Public URL — used to build federation invite links
+# Public URL — published as the federation API base
 # Must be the address users (and remote servers) reach this instance at
 SERVER_URL=https://kutup.example.com
+
+# Optional chat federation. Generate this seed once and back it up securely:
+#   openssl rand -base64 32
+# The server name is the stable suffix in username@server; when omitted it is
+# derived from SERVER_URL. No alias namespace is created.
+# CHAT_FEDERATION_SERVER_NAME=kutup.example.com
+# CHAT_FEDERATION_SIGNING_KEY=<base64-32-byte-ed25519-seed>
 
 # Break-glass admin bootstrap: a single email:username:password triple.
 # Created on first start; the admin completes setup on first login.
@@ -201,7 +208,18 @@ cp /etc/letsencrypt/live/kutup.example.com/privkey.pem nginx/certs/
 SERVER_URL=https://kutup.example.com
 ```
 
-This value is embedded in federation invite links. If it is wrong, cross-server sharing will not work. After changing it, rebuild the backend:
+When chat federation is configured, this value is published as the delegated
+`apiBase`. If it is wrong, cross-server sharing and chat routing will not work.
+
+Chat federation is disabled by default. To enable it, set a stable
+`CHAT_FEDERATION_SIGNING_KEY` (base64 for exactly 32 random bytes) and optionally
+`CHAT_FEDERATION_SERVER_NAME`. The name must be the lowercase DNS suffix users
+will publish in `username@server`; it defaults to the `SERVER_URL` hostname.
+Back up the signing seed—an ephemeral or silently replaced server identity would
+break remote trust. Production federation requires public HTTPS and refuses
+private/loopback destinations.
+
+After changing these values, rebuild the backend:
 
 ```sh
 docker compose up -d --build backend

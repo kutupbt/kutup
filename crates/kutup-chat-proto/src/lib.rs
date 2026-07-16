@@ -17,7 +17,16 @@
 use serde::{Deserialize, Serialize};
 
 pub mod content;
+pub mod federation;
+mod identity;
+
 pub use content::{ChatContent, SentTranscriptBody, TextBody};
+pub use federation::{
+    server_key_id, FederatedChatTransaction, FederationAuthorization, FederationDeliveryError,
+    FederationDeliveryRejection, FederationDeliveryResponse, FederationDiscovery,
+    FederationRequest, FederationSigningKey, FEDERATION_AUTH_SCHEME, FEDERATION_VERSION,
+};
+pub use identity::{AccountAddress, AddressError, ConversationId};
 
 /// Registry of encryption suites — the algorithm-agility mechanism.
 ///
@@ -405,7 +414,7 @@ pub struct SendMessagesRequest {
 }
 
 /// 409 body when a send's device set is out of date.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", default)]
 pub struct DeviceListMismatch {
@@ -493,6 +502,10 @@ pub struct ChatCapabilities {
     pub mailbox_retention_days: u32,
     /// Inactive chat-device expiry (`0` means server-disabled).
     pub device_expiry_days: u32,
+    /// Canonical DNS suffix in `username@server`. Present exactly when
+    /// federation is enabled; display names never substitute for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_name: Option<String>,
     /// [RSV] flips true in the federation phase.
     #[serde(default)]
     pub federation: bool,
@@ -514,6 +527,7 @@ impl Default for ChatCapabilities {
             max_content_bytes: 65536,
             mailbox_retention_days: 30,
             device_expiry_days: 90,
+            server_name: None,
             federation: false,
             manifests: true,
             sealed_sender: false,

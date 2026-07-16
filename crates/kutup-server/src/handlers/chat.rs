@@ -28,10 +28,11 @@ use uuid::Uuid;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use kutup_chat_proto::{
-    AckRequest, ChatWsServerMessage, ChatWsTicketResponse, DeliveredEnvelope, DeviceListMismatch,
-    DeviceManifest, DevicePreKeyBundle, EcPreKey, EnvelopeType, KemPreKey, MailboxPage,
-    OutgoingEnvelope, PreKeyCountResponse, RegisterChatDeviceRequest, RegisterChatDeviceResponse,
-    ReplenishKeysRequest, SendMessagesRequest, SuiteId, UserPreKeyBundlesResponse,
+    AccountAddress, AckRequest, ChatWsServerMessage, ChatWsTicketResponse, DeliveredEnvelope,
+    DeviceListMismatch, DeviceManifest, DevicePreKeyBundle, EcPreKey, EnvelopeType, KemPreKey,
+    MailboxPage, OutgoingEnvelope, PreKeyCountResponse, RegisterChatDeviceRequest,
+    RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest, SuiteId,
+    UserPreKeyBundlesResponse,
 };
 
 use crate::chat_hub::ChatWsOut;
@@ -86,7 +87,7 @@ fn validate_kem_prekey(name: &'static str, key: &KemPreKey) -> AppResult<()> {
     Ok(())
 }
 
-fn envelope_type_code(t: EnvelopeType) -> i16 {
+pub(crate) fn envelope_type_code(t: EnvelopeType) -> i16 {
     match t {
         EnvelopeType::PreKey => 1,
         EnvelopeType::Message => 2,
@@ -694,22 +695,73 @@ pub async fn get_user_bundles(
             "too many chat key requests for this account",
         ));
     }
-    let target: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
-            .bind(&username)
-            .fetch_optional(&state.pool)
-            .await?;
-    let Some(target_id) = target else {
-        return Err(AppError::not_found("user not found"));
-    };
+    let address: AccountAddress =
+        username
+            .parse()
+            .map_err(|error: kutup_chat_proto::AddressError| {
+                AppError::bad_request(error.to_string())
+            })?;
+    if let Some(server) = address.server.as_deref() {
+        let federation = state
+            .chat_federation
+            .as_ref()
+            .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
+        if server != federation.server_name() {
+            if query.sync_device_id.is_some() {
+                return Err(AppError::forbidden(
+                    "linked-device key fetch is limited to the local account",
+                ));
+            }
+            let bundles = federation
+                .fetch_remote_bundles(&address, state.config.app_env != "production")
+                .await?;
+            return Ok(Json(bundles).into_response());
+        }
+    }
+
     if query.sync_device_id.is_some() {
         let caller_id = trusted_uuid(&auth.user_id)?;
-        if caller_id != target_id {
+        let target_id: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
+                .bind(&address.username)
+                .fetch_optional(&state.pool)
+                .await?;
+        if Some(caller_id) != target_id {
             return Err(AppError::forbidden(
                 "linked-device key fetch is limited to the caller's account",
             ));
         }
     }
+
+    let bundles = load_user_bundles(
+        &state,
+        &address.username,
+        &address.canonical(),
+        query.sync_device_id,
+        true,
+    )
+    .await?;
+    Ok(Json(bundles).into_response())
+}
+
+/// Load one local account's signed device directory. Local client fetches
+/// consume one-time keys. Federated server reads intentionally serve only the
+/// reusable last-resort PQ key so replay cannot exhaust a user's prekey pool.
+pub(crate) async fn load_user_bundles(
+    state: &AppState,
+    username: &str,
+    response_username: &str,
+    sync_device_id: Option<i32>,
+    consume_one_time: bool,
+) -> AppResult<UserPreKeyBundlesResponse> {
+    let target: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
+            .bind(username)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some(target_id) = target else {
+        return Err(AppError::not_found("user not found"));
+    };
 
     let mut tx = state.pool.begin().await?;
 
@@ -719,7 +771,7 @@ pub async fn get_user_bundles(
         .bind(target_id)
         .execute(&mut *tx)
         .await?;
-    if let Some(device_id) = query.sync_device_id {
+    if let Some(device_id) = sync_device_id {
         let exists: Option<i32> = sqlx::query_scalar(
             "UPDATE chat_devices SET last_seen_at = now()
              WHERE user_id = $1 AND device_id = $2 RETURNING 1",
@@ -776,8 +828,8 @@ pub async fn get_user_bundles(
         // A self-sync fetch includes the caller's public bundle so it can be
         // checked against the complete signed manifest, but that bundle is
         // never used for encryption and must not burn a one-time prekey.
-        let current_sync_device = query.sync_device_id == Some(device_id);
-        let ec: Option<(i64, String)> = if current_sync_device {
+        let current_sync_device = sync_device_id == Some(device_id);
+        let ec: Option<(i64, String)> = if current_sync_device || !consume_one_time {
             None
         } else {
             sqlx::query_as(
@@ -795,7 +847,7 @@ pub async fn get_user_bundles(
         };
 
         // Pop one one-time Kyber prekey; fall back to the (reusable) last-resort key.
-        let kem: Option<(i64, String, String)> = if current_sync_device {
+        let kem: Option<(i64, String, String)> = if current_sync_device || !consume_one_time {
             None
         } else {
             sqlx::query_as(
@@ -848,12 +900,11 @@ pub async fn get_user_bundles(
         .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
     tx.commit().await?;
 
-    Ok(Json(UserPreKeyBundlesResponse {
-        username,
+    Ok(UserPreKeyBundlesResponse {
+        username: response_username.to_string(),
         devices: bundles,
         manifest,
     })
-    .into_response())
 }
 
 /// `POST /api/chat/users/{username}/messages` — deliver one logical message as
@@ -882,9 +933,43 @@ pub async fn send_messages(
 ) -> AppResult<Response> {
     let sender_id = trusted_uuid(&auth.user_id)?;
     validate_send_request(&req, false, None)?;
+    let address: AccountAddress =
+        username
+            .parse()
+            .map_err(|error: kutup_chat_proto::AddressError| {
+                AppError::bad_request(error.to_string())
+            })?;
+    if let Some(server) = address.server.as_deref() {
+        let federation = state
+            .chat_federation
+            .as_ref()
+            .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
+        if server != federation.server_name() {
+            let envelope_count = req.envelopes.len();
+            return match federation
+                .enqueue_send(&state, sender_id, &address, req)
+                .await?
+            {
+                crate::chat_federation::FederatedSendOutcome::Delivered { deduplicated } => Ok(
+                    Json(json!({ "stored": envelope_count, "deduplicated": deduplicated }))
+                        .into_response(),
+                ),
+                crate::chat_federation::FederatedSendOutcome::Mismatch(mismatch) => {
+                    Ok((StatusCode::CONFLICT, Json(mismatch)).into_response())
+                }
+                crate::chat_federation::FederatedSendOutcome::Rejected(_) => {
+                    Err(AppError::not_found("remote chat recipient is unavailable"))
+                }
+                crate::chat_federation::FederatedSendOutcome::Pending => Err(AppError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "federated send is durably queued for retry",
+                )),
+            };
+        }
+    }
     let recipient: Option<(Uuid,)> =
         sqlx::query_as("SELECT id FROM users WHERE username = $1 AND is_active = true")
-            .bind(&username)
+            .bind(&address.username)
             .fetch_optional(&state.pool)
             .await?;
     let Some((recipient_id,)) = recipient else {
@@ -1053,11 +1138,14 @@ async fn deliver_messages(
     Ok(Json(json!({ "stored": req.envelopes.len() })).into_response())
 }
 
-fn validate_send_request(
+pub(crate) fn validate_send_request(
     req: &SendMessagesRequest,
     allow_empty: bool,
     excluded_device: Option<i32>,
 ) -> AppResult<()> {
+    if req.sender_device_id == 0 || req.sender_device_id > MAX_DEVICE_ID as u32 {
+        return Err(AppError::bad_request("senderDeviceId out of range"));
+    }
     if !allow_empty && req.envelopes.is_empty() {
         return Err(AppError::bad_request("no envelopes"));
     }
@@ -1091,7 +1179,7 @@ fn validate_send_request(
     Ok(())
 }
 
-fn device_list_mismatch(
+pub(crate) fn device_list_mismatch(
     current: &[(i32, i64)],
     envelopes: &[OutgoingEnvelope],
 ) -> DeviceListMismatch {

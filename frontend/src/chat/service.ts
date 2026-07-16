@@ -4,6 +4,7 @@ import { ApiChatTransport } from './transport'
 import type {
   ChatCapabilities,
   ChatHistoryEntry,
+  ConversationId,
   InboundAttention,
   ReceiveReport,
   SendSummary,
@@ -11,6 +12,12 @@ import type {
 } from './types'
 import { loadChatWasm } from './wasm'
 import { isSupportedChat } from './capabilities'
+import {
+  canonicalAccountAddress,
+  parseAccountAddress,
+  toCoreAccountAddress,
+  withHomeServer,
+} from './identity'
 
 type UpdateListener = () => void
 
@@ -105,15 +112,28 @@ export class ChatService {
     return () => this.listeners.delete(listener)
   }
 
-  history(): Promise<ChatHistoryEntry[]> {
-    return this.withLock(() => this.client.history())
+  async history(): Promise<ChatHistoryEntry[]> {
+    const history = await this.withLock(() => this.client.history())
+    return history.map((entry) => {
+      if (entry.conversation.kind !== 'direct') return entry
+      const address = withHomeServer(entry.conversation.address, this.capabilities.serverName)
+      return {
+        ...entry,
+        conversation: { kind: 'direct' as const, address },
+        peer: canonicalAccountAddress(address),
+      }
+    })
   }
 
   inboundAttention(): Promise<InboundAttention[]> {
     return this.withLock(() => this.client.inboundAttention())
   }
 
-  async send(peer: string, text: string): Promise<SendSummary> {
+  async send(conversation: ConversationId, text: string): Promise<SendSummary> {
+    if (conversation.kind !== 'direct') {
+      throw new Error('group conversations are not enabled by this server')
+    }
+    const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
     const sendId = crypto.randomUUID()
     const summary = await this.withLock(() =>
       this.client.sendText(sendId, peer, new Date().toISOString(), text),
@@ -144,7 +164,11 @@ export class ChatService {
   }
 
   async verifyAuthority(peer: string): Promise<void> {
-    await this.withLock(() => this.client.verifyAuthority(peer))
+    const address = parseAccountAddress(peer)
+    if (!address) throw new Error('invalid chat account address')
+    await this.withLock(() =>
+      this.client.verifyAuthority(toCoreAccountAddress(address, this.capabilities.serverName)),
+    )
     this.notifyPeers()
   }
 

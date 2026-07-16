@@ -409,7 +409,7 @@ impl Session {
         rng: &mut R,
     ) -> Result<ReceiveOutcome> {
         let sender = envelope.sender.clone().ok_or(ChatError::MissingSender)?;
-        let from = ChatAddress::from_sender(&sender, envelope.sender_device_id);
+        let from = ChatAddress::from_sender(&sender, envelope.sender_device_id)?;
         let plaintext = match self.decrypt_bytes_staged(&from, envelope, rng).await {
             Ok(plaintext) => plaintext,
             Err(e) => {
@@ -426,6 +426,11 @@ impl Session {
                     !body.send_id.is_empty()
                         && body.send_id.len() <= 64
                         && !body.peer.is_empty()
+                        && body
+                            .content
+                            .message_id
+                            .as_deref()
+                            .is_none_or(|message_id| message_id == body.send_id)
                         && body.content.kind != kutup_chat_proto::content::kind::SENT_TRANSCRIPT
                 })
         } else {
@@ -900,7 +905,7 @@ impl Session {
     ) -> Result<Vec<OutgoingEnvelope>> {
         let mut envelopes = Vec::with_capacity(bundles.len());
         for bundle in bundles {
-            let peer = ChatAddress::local(peer_user, bundle.device_id);
+            let peer = ChatAddress::from_sender(peer_user, bundle.device_id)?;
             if self.is_self(&peer) {
                 continue;
             }
@@ -946,13 +951,13 @@ impl Session {
         // Extra devices aren't real: drop their ciphertext and archive the session.
         for &device_id in &mismatch.extra_devices {
             envelopes.retain(|e| e.device_id != device_id);
-            let peer = ChatAddress::local(peer_user, device_id);
+            let peer = ChatAddress::from_sender(peer_user, device_id)?;
             self.store.delete_session(&peer.to_protocol()?.to_string());
         }
 
         // Missing devices: establish + encrypt from a fresh bundle, append.
         for &device_id in &mismatch.missing_devices {
-            let peer = ChatAddress::local(peer_user, device_id);
+            let peer = ChatAddress::from_sender(peer_user, device_id)?;
             if self.is_self(&peer) {
                 continue;
             }
@@ -967,7 +972,7 @@ impl Session {
         // Stale devices (reinstalled): accept the changed identity (TOFU re-key),
         // archive the old session, re-establish, re-encrypt. Surface the change.
         for &device_id in &mismatch.stale_devices {
-            let peer = ChatAddress::local(peer_user, device_id);
+            let peer = ChatAddress::from_sender(peer_user, device_id)?;
             if self.is_self(&peer) {
                 continue;
             }

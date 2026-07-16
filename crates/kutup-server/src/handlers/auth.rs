@@ -179,6 +179,11 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
             .chat_device_expiry_days
             .try_into()
             .unwrap_or(u32::MAX),
+        server_name: state
+            .chat_federation
+            .as_ref()
+            .map(|federation| federation.server_name().to_string()),
+        federation: state.chat_federation.is_some(),
         ..Default::default()
     };
     Ok(Json(SettingsResponse {
