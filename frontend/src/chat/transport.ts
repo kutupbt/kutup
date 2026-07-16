@@ -14,6 +14,14 @@ export class ApiChatTransport implements ChatTransportPort {
       .then((response) => response.data)
   }
 
+  async fetchSyncBundles(username: string, currentDeviceId: number): Promise<unknown> {
+    return api
+      .get(`/chat/users/${encodeURIComponent(username)}/keys`, {
+        params: { syncDeviceId: currentDeviceId },
+      })
+      .then((response) => response.data)
+  }
+
   async fetchManifest(username: string): Promise<unknown | null> {
     try {
       return await api
@@ -51,6 +59,26 @@ export class ApiChatTransport implements ChatTransportPort {
         `/chat/users/${encodeURIComponent(username)}/messages`,
         request,
       )
+      return {
+        kind: 'delivered',
+        deduplicated: response.data?.deduplicated === true,
+      }
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        return { kind: 'mismatch', mismatch: error.response.data }
+      }
+      throw error
+    }
+  }
+
+  async sendSyncMessage(
+    request: unknown,
+  ): Promise<
+    | { kind: 'delivered'; deduplicated?: boolean }
+    | { kind: 'mismatch'; mismatch: unknown }
+  > {
+    try {
+      const response = await api.post('/chat/sync/messages', request)
       return {
         kind: 'delivered',
         deduplicated: response.data?.deduplicated === true,

@@ -42,6 +42,19 @@ pub trait ChatTransport {
     /// (consumes one one-time prekey per device server-side).
     async fn fetch_bundles(&self, username: &str) -> Result<UserPreKeyBundlesResponse>;
 
+    /// Fetch the local account's complete signed bundle set for an encrypted
+    /// linked-device sync. The server does not consume one-time prekeys for
+    /// `current_device_id`, because the engine never encrypts to itself.
+    async fn fetch_sync_bundles(
+        &self,
+        _username: &str,
+        _current_device_id: u32,
+    ) -> Result<UserPreKeyBundlesResponse> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement linked-device bundle fetches".into(),
+        ))
+    }
+
     /// Latest account-signed device manifest. `None` maps the endpoint's 404.
     async fn fetch_manifest(&self, _username: &str) -> Result<Option<DeviceManifest>> {
         Err(crate::ChatError::Transport(
@@ -76,6 +89,14 @@ pub trait ChatTransport {
 
     /// `POST /api/chat/users/{username}/messages` — multi-device send.
     async fn send(&self, username: &str, req: &SendMessagesRequest) -> Result<SendOutcome>;
+
+    /// `POST /api/chat/sync/messages` — encrypted transcript delivery to every
+    /// other active device of the authenticated account.
+    async fn send_sync(&self, _req: &SendMessagesRequest) -> Result<SendOutcome> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement linked-device sends".into(),
+        ))
+    }
 
     /// `GET /api/chat/messages?deviceId&after&limit` — a drain page (oldest-first).
     async fn drain(&self, device_id: u32, after: Option<u64>, limit: u32) -> Result<MailboxPage>;

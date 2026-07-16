@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use rand::{CryptoRng, Rng};
 
-use crate::db::{ChatDb, InboundEnvelope, InboundFailureKind, InboundState};
+use crate::db::{ChatDb, InboundEnvelope, InboundFailureKind, InboundState, SentMessage};
 use crate::error::{ChatError, Result};
 use crate::manifest::{AccountAuthority, ManifestPolicy};
 use crate::session::{ReceiveOutcome, ReceivedMessage, SendSummary, Session};
@@ -35,6 +35,9 @@ const USED_PREKEY_GRACE_MS: i64 = 14 * 24 * 60 * 60 * 1000;
 #[derive(Debug, Default)]
 pub struct ReceiveReport {
     pub messages: Vec<ReceivedMessage>,
+    /// Logical send ids imported as outgoing history from another linked
+    /// device of the local account.
+    pub synced: Vec<String>,
     /// Ids that decrypted but whose plaintext wasn't a valid content document.
     pub undecodable: Vec<String>,
     /// Envelopes retained for repair/retry.
@@ -71,6 +74,7 @@ pub enum EngineState {
 pub enum ChatEvent {
     StateChanged(EngineState),
     MessageReceived(Box<ReceivedMessage>),
+    MessageSynced(Box<SentMessage>),
     MessageSent(SendSummary),
     IdentityChanged(Vec<crate::ChatAddress>),
     InboundNeedsAttention {
@@ -407,10 +411,15 @@ impl Engine {
         }
         let bundles = self.fetch_verified_bundles(peer_user).await?;
         let mut summary = SendSummary::default();
-        let envelopes = self
-            .session
-            .enqueue_send(send_id, peer_user, &bundles, content, &mut summary, rng)
-            .await?;
+        let envelopes = if peer_user == self.session.user() {
+            self.session
+                .enqueue_note_to_self(send_id, &bundles, content, &mut summary, rng)
+                .await?
+        } else {
+            self.session
+                .enqueue_send(send_id, peer_user, &bundles, content, &mut summary, rng)
+                .await?
+        };
         self.deliver(send_id, peer_user, envelopes, &mut summary, rng)
             .await?;
         if !summary.safety_number_changes.is_empty() {
@@ -524,6 +533,14 @@ impl Engine {
                         .push_back(ChatEvent::MessageReceived(Box::new((*message).clone())));
                     report.messages.push(*message);
                 }
+                Ok(ReceiveOutcome::Synced {
+                    mailbox_id,
+                    message,
+                }) => {
+                    ack_ids.push(mailbox_id);
+                    report.synced.push(message.send_id.clone());
+                    self.events.push_back(ChatEvent::MessageSynced(message));
+                }
                 Ok(ReceiveOutcome::Undecodable { id }) => {
                     ack_ids.push(id.clone());
                     report.undecodable.push(id);
@@ -581,6 +598,14 @@ impl Engine {
         rng: &mut R,
     ) -> Result<()> {
         let transport = Rc::clone(&self.transport);
+        let self_sync = peer_user == self.session.user();
+        // A single-device Note to Self is already durable local outgoing
+        // history. There is no recipient mailbox and therefore no network POST.
+        if self_sync && envelopes.is_empty() {
+            self.session.complete_send(send_id, false).await?;
+            summary.delivered = true;
+            return Ok(());
+        }
         for attempt in 1..=MAX_SEND_ATTEMPTS {
             summary.attempts = attempt;
             let request = SendMessagesRequest {
@@ -589,7 +614,12 @@ impl Engine {
                 envelopes: envelopes.clone(),
                 access_token: None,
             };
-            match transport.send(peer_user, &request).await? {
+            let outcome = if self_sync {
+                transport.send_sync(&request).await?
+            } else {
+                transport.send(peer_user, &request).await?
+            };
+            match outcome {
                 SendOutcome::Delivered { deduplicated } => {
                     self.session.complete_send(send_id, deduplicated).await?;
                     summary.delivered = true;
@@ -612,7 +642,14 @@ impl Engine {
         &mut self,
         peer_user: &str,
     ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
-        let response = Rc::clone(&self.transport).fetch_bundles(peer_user).await?;
+        let transport = Rc::clone(&self.transport);
+        let response = if peer_user == self.session.user() {
+            transport
+                .fetch_sync_bundles(peer_user, self.session.device_id())
+                .await?
+        } else {
+            transport.fetch_bundles(peer_user).await?
+        };
         self.session
             .accept_bundle_response(peer_user, response, self.manifest_policy)
             .await

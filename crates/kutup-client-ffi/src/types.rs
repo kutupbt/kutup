@@ -229,6 +229,7 @@ impl From<InboundFailure> for ChatInboundFailure {
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct ChatReceiveReport {
     pub messages: Vec<ChatReceivedMessage>,
+    pub synced: Vec<String>,
     pub undecodable: Vec<String>,
     pub errors: Vec<ChatInboundFailure>,
     pub duplicates: Vec<String>,
@@ -238,6 +239,7 @@ impl From<ReceiveReport> for ChatReceiveReport {
     fn from(report: ReceiveReport) -> Self {
         Self {
             messages: report.messages.into_iter().map(Into::into).collect(),
+            synced: report.synced,
             undecodable: report.undecodable,
             errors: report.errors.into_iter().map(Into::into).collect(),
             duplicates: report.duplicates,

@@ -31,7 +31,8 @@ Reports: `playwright-report/index.html` (gitignored).
 - `specs/03-…` regression for the OnlyOffice saveChanges JSON.parse fix (commit `21a7af3`).
 - `specs/04-…` happy-path two-tab xlsx sync.
 - `specs/05-…` race-condition tests for fast simultaneous tab-open. Currently failing — that's the open bug.
-- `specs/31-chat.spec.ts` registers two accounts, opens their Signal-backed WASM
-  clients, exchanges messages both ways, and proves acked history survives an
-  IndexedDB-backed reload. Rebuild the frontend image first so `/chat-wasm/*`
-  contains the current generated module.
+- `specs/31-chat.spec.ts` registers two accounts, links a second install, proves
+  Note to Self reaches it as encrypted outgoing history, exchanges messages
+  both ways, and proves acked history survives an IndexedDB-backed reload.
+  Rebuild the frontend image first so `/chat-wasm/*` contains the current
+  generated module.

@@ -70,6 +70,12 @@ pub struct ReceivedMessage {
 pub(crate) enum ReceiveOutcome {
     /// Decrypted and parsed. Boxed — it dwarfs the other variant.
     Message(Box<ReceivedMessage>),
+    /// An authenticated encrypted transcript from another device of the local
+    /// account. Persisted as outgoing history, never as an incoming bubble.
+    Synced {
+        mailbox_id: String,
+        message: Box<SentMessage>,
+    },
     /// Decrypted but the plaintext wasn't a valid content document (a buggy/newer
     /// sender). Stored raw so it's never dropped; the app renders a placeholder.
     Undecodable { id: String },
@@ -395,14 +401,45 @@ impl Session {
                 return Err(e);
             }
         };
-        self.store.stage_message(InboxMessage {
-            id: envelope.id.clone(),
-            peer: sender,
-            sender_device_id: envelope.sender_device_id,
-            cursor: envelope.cursor,
-            content: plaintext.clone(),
-            received_at: now_millis(),
-        });
+        let parsed = serde_json::from_slice::<ChatContent>(&plaintext).ok();
+        let transcript = if sender == self.user() && envelope.sender_device_id != self.device_id() {
+            parsed
+                .as_ref()
+                .and_then(ChatContent::as_sent_transcript)
+                .filter(|body| {
+                    !body.send_id.is_empty()
+                        && body.send_id.len() <= 64
+                        && !body.peer.is_empty()
+                        && body.content.kind != kutup_chat_proto::content::kind::SENT_TRANSCRIPT
+                })
+        } else {
+            None
+        };
+        let received_at = now_millis();
+        let synced_message = if let Some(transcript) = transcript {
+            let message = SentMessage {
+                send_id: transcript.send_id,
+                peer: transcript.peer,
+                content: serde_json::to_vec(&transcript.content)
+                    .map_err(|e| ChatError::Content(e.to_string()))?,
+                created_at: transcript.timestamp_ms,
+                delivered_at: Some(received_at),
+                delivered: true,
+                deduplicated: false,
+            };
+            self.store.stage_sent_message(message.clone());
+            Some(message)
+        } else {
+            self.store.stage_message(InboxMessage {
+                id: envelope.id.clone(),
+                peer: sender,
+                sender_device_id: envelope.sender_device_id,
+                cursor: envelope.cursor,
+                content: plaintext.clone(),
+                received_at,
+            });
+            None
+        };
         self.store.stage_inbound(InboundEnvelope {
             id: envelope.id.clone(),
             cursor: envelope.cursor,
@@ -411,17 +448,23 @@ impl Session {
             attempts: 0,
             failure_kind: None,
             last_error: None,
-            received_at: now_millis(),
+            received_at,
         });
         self.store.commit().await?;
-        match serde_json::from_slice::<ChatContent>(&plaintext) {
-            Ok(content) => Ok(ReceiveOutcome::Message(Box::new(ReceivedMessage {
+        if let Some(message) = synced_message {
+            return Ok(ReceiveOutcome::Synced {
+                mailbox_id: envelope.id.clone(),
+                message: Box::new(message),
+            });
+        }
+        match parsed {
+            Some(content) => Ok(ReceiveOutcome::Message(Box::new(ReceivedMessage {
                 from,
                 content,
                 cursor: envelope.cursor,
                 id: envelope.id.clone(),
             }))),
-            Err(_) => Ok(ReceiveOutcome::Undecodable {
+            None => Ok(ReceiveOutcome::Undecodable {
                 id: envelope.id.clone(),
             }),
         }
@@ -642,6 +685,64 @@ impl Session {
             Err(e) => {
                 self.store.discard();
                 Err(e)
+            }
+        }
+    }
+
+    /// Encrypt a Note to Self as a sent transcript for every other linked
+    /// device while persisting the original content as local outgoing history.
+    /// The wrapper and ratchet advances share the same atomic outbox commit.
+    pub(crate) async fn enqueue_note_to_self<R: Rng + CryptoRng>(
+        &mut self,
+        send_id: &str,
+        bundles: &[DevicePreKeyBundle],
+        content: &ChatContent,
+        summary: &mut SendSummary,
+        rng: &mut R,
+    ) -> Result<Vec<OutgoingEnvelope>> {
+        if content.kind == kutup_chat_proto::content::kind::SENT_TRANSCRIPT {
+            return Err(ChatError::Invalid(
+                "a sent transcript cannot contain another sent transcript".into(),
+            ));
+        }
+        let created_at = now_millis();
+        let transcript =
+            ChatContent::sent_transcript(send_id, self.user(), created_at, content.clone());
+        let transcript_plaintext =
+            serde_json::to_vec(&transcript).map_err(|e| ChatError::Content(e.to_string()))?;
+        let user = self.user().to_string();
+        match self
+            .build_send(&user, bundles, &transcript_plaintext, summary, rng)
+            .await
+        {
+            Ok(envelopes) => {
+                let content_plaintext =
+                    serde_json::to_vec(content).map_err(|e| ChatError::Content(e.to_string()))?;
+                self.store.stage_outbox(OutboxEntry {
+                    send_id: send_id.to_string(),
+                    peer: user.clone(),
+                    content: transcript_plaintext,
+                    envelopes: serde_json::to_vec(&envelopes)
+                        .map_err(|e| ChatError::Content(e.to_string()))?,
+                    attempts: 1,
+                    created_at,
+                });
+                self.store.stage_sent_seq(content.seq);
+                self.store.stage_sent_message(SentMessage {
+                    send_id: send_id.to_string(),
+                    peer: user,
+                    content: content_plaintext,
+                    created_at,
+                    delivered_at: None,
+                    delivered: false,
+                    deduplicated: false,
+                });
+                self.store.commit().await?;
+                Ok(envelopes)
+            }
+            Err(error) => {
+                self.store.discard();
+                Err(error)
             }
         }
     }

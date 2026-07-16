@@ -337,3 +337,30 @@ fn decrypt_failure_is_durable_and_never_silently_acked() {
     block_on(engine.resolve_dead_letter("broken-1")).unwrap();
     assert!(block_on(engine.inbound_attention()).unwrap().is_empty());
 }
+
+#[test]
+fn a_peer_cannot_turn_a_transcript_shaped_message_into_outgoing_history() {
+    let mut rng = test_rng();
+    let bob_addr = ChatAddress::local("bob", 1);
+    let bob_session = in_memory("bob", 1, &mut rng);
+    let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
+    let mut alice = in_memory("alice", 1, &mut rng);
+    block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
+    let wrapper = ChatContent::sent_transcript(
+        "forged-note",
+        "bob",
+        1,
+        ChatContent::text("2026-07-16T12:00:00Z", 1, "not Bob's note"),
+    );
+    let encrypted =
+        block_on(alice.encrypt(&bob_addr, bundle.registration_id, &wrapper, &mut rng)).unwrap();
+    let server = Rc::new(Mailbox::default());
+    server.deposit(vec![deliver(&encrypted, "alice", "forged-1", 1)]);
+
+    let mut bob = Engine::new(bob_session, server);
+    let report = block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(report.messages.len(), 1);
+    assert!(report.synced.is_empty());
+    assert!(block_on(bob.session().sent_history()).unwrap().is_empty());
+    assert_eq!(block_on(bob.session().history()).unwrap().len(), 1);
+}

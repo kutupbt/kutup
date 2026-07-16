@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
+  Bookmark,
   Check,
   CheckCheck,
   Loader2,
@@ -137,9 +138,10 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     const latest = new Map<string, ChatHistoryEntry>()
     for (const message of history) latest.set(message.peer, message)
     return Array.from(latest.entries())
+      .filter(([peer]) => peer !== auth.username)
       .sort(([, left], [, right]) => right.timestampMs - left.timestampMs)
       .map(([peer, message]) => ({ peer, message }))
-  }, [history])
+  }, [auth.username, history])
 
   useEffect(() => {
     if (!selectedPeer && peers[0]) setSelectedPeer(peers[0].peer)
@@ -217,6 +219,31 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
             </Button>
           </form>
 
+          {auth.username && (
+            <div className="border-b p-2">
+              <button
+                type="button"
+                onClick={() => setSelectedPeer(auth.username!)}
+                className={cn(
+                  'flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors',
+                  selectedPeer === auth.username ? 'bg-primary/10' : 'hover:bg-accent',
+                )}
+              >
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+                  <Bookmark className="h-5 w-5" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">
+                    {t('chat.noteToSelf')}
+                  </span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {t('chat.noteToSelfDescription')}
+                  </span>
+                </span>
+              </button>
+            </div>
+          )}
+
           <div className="flex-1 overflow-y-auto p-2">
             {loading && (
               <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
@@ -270,7 +297,9 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
             </span>
             <div className="min-w-0 flex-1">
               <h2 className="truncate font-semibold">
-                {selectedPeer || t('chat.selectConversation')}
+                {selectedPeer === auth.username
+                  ? t('chat.noteToSelf')
+                  : selectedPeer || t('chat.selectConversation')}
               </h2>
               <p className="flex items-center gap-1 text-xs text-muted-foreground">
                 <ShieldCheck className="h-3 w-3" /> {t('chat.protocolEncryption')}
@@ -325,7 +354,10 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 onChange={(event) => setDraft(event.target.value)}
                 placeholder={
                   selectedPeer
-                    ? t('chat.messagePeer', { peer: selectedPeer })
+                    ? t('chat.messagePeer', {
+                        peer:
+                          selectedPeer === auth.username ? t('chat.noteToSelf') : selectedPeer,
+                      })
                     : t('chat.selectConversation')
                 }
                 disabled={!service || !selectedPeer || sending}

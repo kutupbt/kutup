@@ -841,12 +841,14 @@ mod tests {
         let path = std::env::temp_dir().join(format!("kutup-chat-sqlcipher-{}.db", unix_millis()));
         let key = [7; 32];
         let db = SqliteChatDb::open_encrypted(&path, &key).unwrap();
-        let mut seed = Pending::default();
-        seed.local_identity = Some(LocalIdentity {
-            identity_key_pair: vec![1, 2, 3],
-            registration_id: 42,
-            device_id: Some(1),
-        });
+        let seed = Pending {
+            local_identity: Some(LocalIdentity {
+                identity_key_pair: vec![1, 2, 3],
+                registration_id: 42,
+                device_id: Some(1),
+            }),
+            ..Pending::default()
+        };
         block_on(db.apply(&seed)).unwrap();
         drop(db);
 

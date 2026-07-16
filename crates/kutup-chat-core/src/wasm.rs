@@ -29,11 +29,16 @@ const TRANSPORT_TYPES: &str = r#"
 export interface KutupChatTransport {
   registerDevice(request: unknown): Promise<unknown>;
   fetchBundles(username: string): Promise<unknown>;
+  fetchSyncBundles(username: string, currentDeviceId: number): Promise<unknown>;
   fetchManifest(username: string): Promise<unknown | null>;
   publishManifest(manifest: unknown): Promise<unknown>;
   prekeyCount(deviceId: number): Promise<unknown>;
   replenishPrekeys(deviceId: number, request: unknown): Promise<void>;
   sendMessage(username: string, request: unknown): Promise<
+    | { kind: "delivered"; deduplicated?: boolean }
+    | { kind: "mismatch"; mismatch: unknown }
+  >;
+  sendSyncMessage(request: unknown): Promise<
     | { kind: "delivered"; deduplicated?: boolean }
     | { kind: "mismatch"; mismatch: unknown }
   >;
@@ -80,6 +85,13 @@ extern "C" {
         username: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
+    #[wasm_bindgen(method, catch, js_name = fetchSyncBundles)]
+    async fn js_fetch_sync_bundles(
+        this: &JsChatTransport,
+        username: &str,
+        current_device_id: u32,
+    ) -> std::result::Result<JsValue, JsValue>;
+
     #[wasm_bindgen(method, catch, js_name = fetchManifest)]
     async fn js_fetch_manifest(
         this: &JsChatTransport,
@@ -109,6 +121,12 @@ extern "C" {
     async fn js_send_message(
         this: &JsChatTransport,
         username: &str,
+        request: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = sendSyncMessage)]
+    async fn js_send_sync_message(
+        this: &JsChatTransport,
         request: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
 
@@ -165,6 +183,19 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
+    async fn fetch_sync_bundles(
+        &self,
+        username: &str,
+        current_device_id: u32,
+    ) -> Result<UserPreKeyBundlesResponse> {
+        from_transport(
+            self.js
+                .js_fetch_sync_bundles(username, current_device_id)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
     async fn fetch_manifest(&self, username: &str) -> Result<Option<DeviceManifest>> {
         from_transport(
             self.js
@@ -208,6 +239,21 @@ impl ChatTransport for BrowserTransport {
         let outcome: BrowserSendOutcome = from_transport(
             self.js
                 .js_send_message(username, to_transport(req)?)
+                .await
+                .map_err(transport_error)?,
+        )?;
+        Ok(match outcome {
+            BrowserSendOutcome::Delivered { deduplicated } => {
+                SendOutcome::Delivered { deduplicated }
+            }
+            BrowserSendOutcome::Mismatch { mismatch } => SendOutcome::Mismatch(mismatch),
+        })
+    }
+
+    async fn send_sync(&self, req: &SendMessagesRequest) -> Result<SendOutcome> {
+        let outcome: BrowserSendOutcome = from_transport(
+            self.js
+                .js_send_sync_message(to_transport(req)?)
                 .await
                 .map_err(transport_error)?,
         )?;
@@ -439,6 +485,7 @@ impl From<crate::SendSummary> for SendSummaryView {
 #[serde(rename_all = "camelCase")]
 struct ReceiveReportView {
     messages: Vec<ReceivedMessageView>,
+    synced: Vec<String>,
     undecodable: Vec<String>,
     errors: Vec<InboundFailureView>,
     duplicates: Vec<String>,
@@ -452,6 +499,7 @@ impl From<ReceiveReport> for ReceiveReportView {
                 .into_iter()
                 .map(ReceivedMessageView::from)
                 .collect(),
+            synced: report.synced,
             undecodable: report.undecodable,
             errors: report
                 .errors

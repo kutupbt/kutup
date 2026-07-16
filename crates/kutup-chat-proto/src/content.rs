@@ -13,13 +13,16 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Reserved `kind` values. Only [`TEXT`] ships in phase 2b; the rest are
-/// reserved so a newer client's messages are recognized (not dropped) and the
-/// registry can't be re-used incompatibly. See the table in
-/// `docs/chat-protocol.md` §6.
+/// Reserved `kind` values. [`TEXT`] is user-visible content and
+/// [`SENT_TRANSCRIPT`] is the encrypted linked-device synchronization wrapper;
+/// the rest are reserved so the registry can't be re-used incompatibly. See
+/// the table in `docs/chat-protocol.md` §6.
 pub mod kind {
-    /// A plain text message — the only kind implemented in phase 2b.
+    /// A plain text message.
     pub const TEXT: &str = "text";
+    /// An encrypted copy of an outgoing logical message for the sender's other
+    /// devices. The server only sees ordinary libsignal ciphertext. [IMPL]
+    pub const SENT_TRANSCRIPT: &str = "sentTranscript";
     /// Delivery/read receipts (E2EE content, never a server feature). [RSV]
     pub const RECEIPT: &str = "receipt";
     /// Typing indicator; ephemeral, a client MAY drop it. [RSV]
@@ -88,12 +91,48 @@ impl ChatContent {
         }
     }
 
+    /// Builds the encrypted linked-device wrapper used by Note to Self and,
+    /// later, ordinary sent-message synchronization.
+    pub fn sent_transcript(
+        send_id: impl Into<String>,
+        peer: impl Into<String>,
+        timestamp_ms: i64,
+        content: ChatContent,
+    ) -> Self {
+        ChatContent {
+            v: Self::VERSION,
+            kind: kind::SENT_TRANSCRIPT.to_string(),
+            sent_at: content.sent_at.clone(),
+            seq: content.seq,
+            body: serde_json::to_value(SentTranscriptBody {
+                send_id: send_id.into(),
+                peer: peer.into(),
+                timestamp_ms,
+                content: Box::new(content),
+            })
+            .unwrap_or_default(),
+            extra: serde_json::Map::new(),
+        }
+    }
+
+    /// Returns the linked-device transcript body when this reader understands
+    /// it. Callers must additionally authenticate that the envelope came from
+    /// another device of the local account before treating it as outgoing.
+    pub fn as_sent_transcript(&self) -> Option<SentTranscriptBody> {
+        if self.kind == kind::SENT_TRANSCRIPT {
+            serde_json::from_value(self.body.clone()).ok()
+        } else {
+            None
+        }
+    }
+
     /// True when `kind` is one this build has a typed meaning for. A UI renders
     /// unknown kinds as "message from a newer client".
     pub fn is_known_kind(&self) -> bool {
         matches!(
             self.kind.as_str(),
             kind::TEXT
+                | kind::SENT_TRANSCRIPT
                 | kind::RECEIPT
                 | kind::TYPING
                 | kind::ATTACHMENT
@@ -108,6 +147,22 @@ impl ChatContent {
 #[serde(rename_all = "camelCase")]
 pub struct TextBody {
     pub text: String,
+}
+
+/// Plaintext nested inside a [`kind::SENT_TRANSCRIPT`] wrapper. This whole
+/// structure remains E2EE; it is never interpreted by the delivery server.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentTranscriptBody {
+    /// Stable logical id used to deduplicate outgoing history across devices.
+    pub send_id: String,
+    /// Conversation key. Note to Self uses the local username; future ordinary
+    /// sent transcripts use the remote peer username.
+    pub peer: String,
+    /// Original local history timestamp in Unix-epoch milliseconds.
+    pub timestamp_ms: i64,
+    /// The actual user-visible content, not another transcript wrapper.
+    pub content: Box<ChatContent>,
 }
 
 #[cfg(test)]
@@ -147,5 +202,19 @@ mod tests {
         assert_eq!(c.extra.get("replyTo").and_then(|v| v.as_str()), Some("abc"));
         let back = serde_json::to_value(&c).unwrap();
         assert_eq!(back["replyTo"], "abc");
+    }
+
+    #[test]
+    fn sent_transcript_round_trips_without_exposing_content_metadata() {
+        let original = ChatContent::text("2026-07-16T10:00:00Z", 8, "private note");
+        let wrapper = ChatContent::sent_transcript("note-1", "alice", 1234, original.clone());
+        assert_eq!(wrapper.kind, kind::SENT_TRANSCRIPT);
+        assert_eq!(wrapper.sent_at, original.sent_at);
+        assert_eq!(wrapper.seq, original.seq);
+        let body = wrapper.as_sent_transcript().unwrap();
+        assert_eq!(body.send_id, "note-1");
+        assert_eq!(body.peer, "alice");
+        assert_eq!(body.timestamp_ms, 1234);
+        assert_eq!(*body.content, original);
     }
 }

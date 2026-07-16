@@ -17,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod content;
-pub use content::{ChatContent, TextBody};
+pub use content::{ChatContent, SentTranscriptBody, TextBody};
 
 /// Registry of encryption suites — the algorithm-agility mechanism.
 ///

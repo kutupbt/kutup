@@ -91,6 +91,7 @@ struct MockServer {
     active: RefCell<Vec<(u32, u32)>>,
     fail_sends: RefCell<u32>,
     delivered: RefCell<Vec<(String, Vec<kutup_chat_proto::OutgoingEnvelope>)>>,
+    sync_mailbox: RefCell<Vec<DeliveredEnvelope>>,
     seen_send_ids: RefCell<HashSet<String>>,
 }
 
@@ -134,6 +135,14 @@ impl ChatTransport for MockServer {
             devices,
             manifest,
         })
+    }
+
+    async fn fetch_sync_bundles(
+        &self,
+        username: &str,
+        _current_device_id: u32,
+    ) -> Result<UserPreKeyBundlesResponse> {
+        self.fetch_bundles(username).await
     }
 
     async fn fetch_manifest(&self, _username: &str) -> Result<Option<DeviceManifest>> {
@@ -192,19 +201,87 @@ impl ChatTransport for MockServer {
         }
     }
 
-    async fn drain(
-        &self,
-        _device_id: u32,
-        _after: Option<u64>,
-        _limit: u32,
-    ) -> Result<MailboxPage> {
-        Ok(MailboxPage {
-            envelopes: vec![],
-            more: false,
-        })
+    async fn send_sync(&self, req: &SendMessagesRequest) -> Result<SendOutcome> {
+        let active: Vec<(u32, u32)> = self
+            .active
+            .borrow()
+            .iter()
+            .copied()
+            .filter(|(device_id, _)| *device_id != req.sender_device_id)
+            .collect();
+        let req_ids: Vec<u32> = req.envelopes.iter().map(|e| e.device_id).collect();
+        let missing_devices: Vec<u32> = active
+            .iter()
+            .map(|(device_id, _)| *device_id)
+            .filter(|device_id| !req_ids.contains(device_id))
+            .collect();
+        let extra_devices: Vec<u32> = req_ids
+            .iter()
+            .copied()
+            .filter(|device_id| !active.iter().any(|(active, _)| active == device_id))
+            .collect();
+        let stale_devices: Vec<u32> = req
+            .envelopes
+            .iter()
+            .filter(|envelope| {
+                active.iter().any(|(device_id, registration_id)| {
+                    *device_id == envelope.device_id && *registration_id != envelope.registration_id
+                })
+            })
+            .map(|envelope| envelope.device_id)
+            .collect();
+        if !missing_devices.is_empty() || !stale_devices.is_empty() || !extra_devices.is_empty() {
+            return Ok(SendOutcome::Mismatch(DeviceListMismatch {
+                missing_devices,
+                stale_devices,
+                extra_devices,
+            }));
+        }
+
+        let deduplicated = !self.seen_send_ids.borrow_mut().insert(req.send_id.clone());
+        self.delivered
+            .borrow_mut()
+            .push((req.send_id.clone(), req.envelopes.clone()));
+        if !deduplicated {
+            let mut mailbox = self.sync_mailbox.borrow_mut();
+            let first_cursor = mailbox.len() as u64 + 1;
+            for (offset, envelope) in req.envelopes.iter().enumerate() {
+                mailbox.push(DeliveredEnvelope {
+                    id: format!("sync-{}-{}", req.send_id, envelope.device_id),
+                    cursor: first_cursor + offset as u64,
+                    sender: Some("alice".into()),
+                    sender_device_id: req.sender_device_id,
+                    envelope_type: envelope.envelope_type,
+                    suite: envelope.suite,
+                    content: envelope.content.clone(),
+                    server_timestamp: "2026-07-16T10:00:00Z".into(),
+                });
+            }
+        }
+        Ok(SendOutcome::Delivered { deduplicated })
     }
 
-    async fn ack(&self, _device_id: u32, _ids: &[String]) -> Result<()> {
+    async fn drain(&self, device_id: u32, after: Option<u64>, limit: u32) -> Result<MailboxPage> {
+        let mut envelopes: Vec<_> = self
+            .sync_mailbox
+            .borrow()
+            .iter()
+            .filter(|envelope| {
+                envelope.sender_device_id != device_id
+                    && after.is_none_or(|cursor| envelope.cursor > cursor)
+            })
+            .take(limit as usize)
+            .cloned()
+            .collect();
+        let more = envelopes.len() > limit as usize;
+        envelopes.truncate(limit as usize);
+        Ok(MailboxPage { envelopes, more })
+    }
+
+    async fn ack(&self, _device_id: u32, ids: &[String]) -> Result<()> {
+        self.sync_mailbox
+            .borrow_mut()
+            .retain(|envelope| !ids.contains(&envelope.id));
         Ok(())
     }
 }
@@ -540,4 +617,84 @@ fn outbox_persists_across_failure_and_flush_resends() {
         .text,
         "survives a crash"
     );
+}
+
+#[test]
+fn single_device_note_to_self_is_local_and_never_posts_an_envelope() {
+    let mut rng = test_rng();
+    let alice = device("alice", 1, &mut rng);
+    let bundle = bundle_of(&alice, 1);
+    let server = Rc::new(MockServer::default());
+    server.script(vec![vec![bundle]]);
+    server.set_active(vec![(1, reg_id(&alice))]);
+    let mut engine = Engine::new_for_development(alice, server.clone());
+
+    let summary = block_on(engine.send(
+        "note-local",
+        "alice",
+        &ChatContent::text("2026-07-16T10:00:00Z", 1, "remember this"),
+        &mut rng,
+    ))
+    .unwrap();
+
+    assert!(summary.delivered);
+    assert_eq!(summary.attempts, 0);
+    assert!(server.delivered.borrow().is_empty());
+    assert_eq!(block_on(engine.pending_send_count()).unwrap(), 0);
+    let history = block_on(engine.session().sent_history()).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].peer, "alice");
+    assert_eq!(
+        serde_json::from_slice::<ChatContent>(&history[0].content)
+            .unwrap()
+            .as_text()
+            .unwrap()
+            .text,
+        "remember this"
+    );
+}
+
+#[test]
+fn linked_device_note_arrives_as_outgoing_history_via_encrypted_transcript() {
+    let mut rng = test_rng();
+    let alice1 = device("alice", 1, &mut rng);
+    let alice2 = device("alice", 2, &mut rng);
+    let bundles = vec![bundle_of(&alice1, 1), bundle_of(&alice2, 2)];
+    let server = Rc::new(MockServer::default());
+    server.script(vec![bundles]);
+    server.set_active(vec![(1, reg_id(&alice1)), (2, reg_id(&alice2))]);
+
+    let mut first = Engine::new_for_development(alice1, server.clone());
+    let summary = block_on(first.send(
+        "note-linked",
+        "alice",
+        &ChatContent::text("2026-07-16T10:01:00Z", 1, "sync this note"),
+        &mut rng,
+    ))
+    .unwrap();
+    assert!(summary.delivered);
+    assert_eq!(summary.attempts, 1);
+    assert_eq!(server.last_delivered().len(), 1);
+    assert_eq!(server.last_delivered()[0].device_id, 2);
+
+    let mut second = Engine::new_for_development(alice2, server.clone());
+    let report = block_on(second.receive(&mut rng)).unwrap();
+    assert!(
+        report.messages.is_empty(),
+        "a transcript is not incoming chat"
+    );
+    assert_eq!(report.synced, vec!["note-linked"]);
+    let history = block_on(second.session().sent_history()).unwrap();
+    assert_eq!(history.len(), 1);
+    assert!(history[0].delivered);
+    assert_eq!(history[0].peer, "alice");
+    assert_eq!(
+        serde_json::from_slice::<ChatContent>(&history[0].content)
+            .unwrap()
+            .as_text()
+            .unwrap()
+            .text,
+        "sync this note"
+    );
+    assert!(block_on(second.session().history()).unwrap().is_empty());
 }

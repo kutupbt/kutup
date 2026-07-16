@@ -317,6 +317,7 @@ fn build_router(state: AppState) -> Router {
             "/api/chat/users/:username/messages",
             post(chat::send_messages),
         )
+        .route("/api/chat/sync/messages", post(chat::sync_messages))
         .route("/api/chat/messages", get(chat::drain_mailbox))
         .route("/api/chat/messages/ack", post(chat::ack_messages))
         .route("/api/chat/ws-ticket", post(chat::create_ws_ticket))

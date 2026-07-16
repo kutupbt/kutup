@@ -32,6 +32,23 @@ describe('ApiChatTransport', () => {
     })
   })
 
+  it('uses the authenticated own-device endpoints for encrypted transcripts', async () => {
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: { devices: [] } } as never)
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { stored: 1 } } as never)
+    const transport = new ApiChatTransport()
+
+    await transport.fetchSyncBundles('alice/name', 7)
+    expect(get).toHaveBeenCalledWith('/chat/users/alice%2Fname/keys', {
+      params: { syncDeviceId: 7 },
+    })
+
+    await expect(transport.sendSyncMessage({ sendId: 'note-1' })).resolves.toEqual({
+      kind: 'delivered',
+      deduplicated: false,
+    })
+    expect(post).toHaveBeenCalledWith('/chat/sync/messages', { sendId: 'note-1' })
+  })
+
   it('treats only a manifest 404 as an absent manifest', async () => {
     const get = vi.spyOn(api, 'get').mockRejectedValue({
       isAxiosError: true,

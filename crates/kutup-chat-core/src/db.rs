@@ -78,7 +78,7 @@ pub struct OutboxEntry {
 /// Durable local history for an outbound logical message. The pending outbox
 /// may be deleted after confirmation; this record remains for UI/history and
 /// tracks whether the exact ciphertext is still awaiting delivery.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SentMessage {
     pub send_id: String,
     pub peer: String,

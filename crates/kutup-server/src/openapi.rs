@@ -122,6 +122,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::chat::prekey_count,
         crate::handlers::chat::get_user_bundles,
         crate::handlers::chat::send_messages,
+        crate::handlers::chat::sync_messages,
         crate::handlers::chat::drain_mailbox,
         crate::handlers::chat::ack_messages,
         crate::handlers::chat::create_ws_ticket,

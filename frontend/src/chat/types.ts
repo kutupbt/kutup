@@ -34,6 +34,7 @@ export interface InboundFailure {
 
 export interface ReceiveReport {
   messages: unknown[]
+  synced: string[]
   undecodable: string[]
   errors: InboundFailure[]
   duplicates: string[]
@@ -64,12 +65,19 @@ export interface ChatCapabilities {
 export interface ChatTransportPort {
   registerDevice(request: unknown): Promise<unknown>
   fetchBundles(username: string): Promise<unknown>
+  fetchSyncBundles(username: string, currentDeviceId: number): Promise<unknown>
   fetchManifest(username: string): Promise<unknown | null>
   publishManifest(manifest: unknown): Promise<unknown>
   prekeyCount(deviceId: number): Promise<unknown>
   replenishPrekeys(deviceId: number, request: unknown): Promise<void>
   sendMessage(
     username: string,
+    request: unknown,
+  ): Promise<
+    | { kind: 'delivered'; deduplicated?: boolean }
+    | { kind: 'mismatch'; mismatch: unknown }
+  >
+  sendSyncMessage(
     request: unknown,
   ): Promise<
     | { kind: 'delivered'; deduplicated?: boolean }

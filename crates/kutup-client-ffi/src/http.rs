@@ -51,6 +51,22 @@ impl ChatTransport for NativeTransport {
         .await
     }
 
+    async fn fetch_sync_bundles(
+        &self,
+        username: &str,
+        current_device_id: u32,
+    ) -> CoreResult<UserPreKeyBundlesResponse> {
+        self.json::<(), _>(
+            ChatHttpMethod::Get,
+            format!(
+                "/chat/users/{}/keys?syncDeviceId={current_device_id}",
+                urlencoding::encode(username)
+            ),
+            None,
+        )
+        .await
+    }
+
     async fn fetch_manifest(&self, username: &str) -> CoreResult<Option<DeviceManifest>> {
         let response = self
             .request(
@@ -104,6 +120,30 @@ impl ChatTransport for NativeTransport {
             .request(
                 ChatHttpMethod::Post,
                 format!("/chat/users/{}/messages", urlencoding::encode(username)),
+                Some(encode(request)?),
+            )
+            .await?;
+        if response.status == 409 {
+            return decode::<DeviceListMismatch>(&response.body_json).map(SendOutcome::Mismatch);
+        }
+        ensure_success(&response)?;
+        let delivered = if response.body_json.trim().is_empty() {
+            DeliveredResponse {
+                deduplicated: false,
+            }
+        } else {
+            decode(&response.body_json)?
+        };
+        Ok(SendOutcome::Delivered {
+            deduplicated: delivered.deduplicated,
+        })
+    }
+
+    async fn send_sync(&self, request: &SendMessagesRequest) -> CoreResult<SendOutcome> {
+        let response = self
+            .request(
+                ChatHttpMethod::Post,
+                "/chat/sync/messages".into(),
                 Some(encode(request)?),
             )
             .await?;

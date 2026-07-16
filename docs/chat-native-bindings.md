@@ -13,6 +13,9 @@ Rust owns:
 - Signed account device manifests and peer authority continuity.
 - Endpoint paths, request/response JSON, exact-device recovery, durable outbox,
   mailbox journal/decrypt/ack ordering, and history mapping.
+- Note to Self routing and encrypted sent-transcript import. Native UI code
+  sends to the local username through the same `sendText` API; it never builds
+  a transcript or chooses linked devices itself.
 - The account-scoped SQLCipher connection and all ratchet/message state.
 
 Swift/Kotlin owns:
@@ -94,6 +97,9 @@ The exported object currently covers the phase-2b native engine contract:
 
 Swift receives `async throws`; Kotlin receives `suspend` functions and typed
 `KutupChatException` failures. `ChatHttpClient.execute` is also async/suspend.
+`ChatReceiveReport.synced` contains logical send ids imported as outgoing
+history from another linked device; callers normally refresh `history()` after
+every reconcile, just as they do for newly received messages.
 
 ## Generate bindings
 

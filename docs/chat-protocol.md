@@ -113,8 +113,9 @@ Endpoints (all authenticated; the WS validates its token pre-upgrade):
 | `DELETE /api/chat/device/{deviceId}` | revoke | [IMPL] |
 | `PUT /api/chat/keys` | rotate signed / last-resort; replenish one-time | [IMPL] |
 | `GET /api/chat/keys/count` | pool sizes | [IMPL] |
-| `GET /api/chat/users/{username}/keys` | fetch bundles (consumes one-time keys) | [IMPL] |
+| `GET /api/chat/users/{username}/keys` | fetch bundles (consumes one-time keys; authenticated self-sync mode below) | [IMPL] |
 | `POST /api/chat/users/{username}/messages` | multi-device send | [IMPL] |
+| `POST /api/chat/sync/messages` | encrypted sent transcript to caller's other devices | [IMPL] |
 | `GET /api/chat/messages` | drain (oldest-first) | [IMPL] |
 | `POST /api/chat/messages/ack` | batch ack | [IMPL] |
 | `POST /api/chat/ws-ticket` | mint one-time browser WS credential | [IMPL] |
@@ -131,6 +132,14 @@ authenticated account (`RATE_LIMIT_CHAT_KEYS_PER_MIN`), with a deliberately
 coarser 120/min IP outer wall (`RATE_LIMIT_CHAT_KEYS_IP_PER_MIN`). Mobile
 clients behind CGNAT therefore do not share the primary budget, while a
 hostile account cannot drain pools by moving across IPs. (`13-…` §7.)
+
+**[IMPL] Own-device bundle mode.** A client preparing a linked-device
+transcript calls its own bundle URL with `?syncDeviceId=<current>`. The response
+still contains every device in the signed manifest, so verification remains
+exact. The server serves the current device with its reusable last-resort Kyber
+key and no one-time EC key; it consumes one-time keys only for the other
+devices. The engine verifies the complete response and then omits the current
+device from encryption.
 
 **[IMPL] Staged local EC-prekey deletion.** A server stops serving a one-time
 prekey as soon as it allocates that key to one bundle fetch. The client does not
@@ -247,11 +256,12 @@ serves all clients + fixtures).
 }
 ```
 
-**`kind` registry** (reserve all now; only `text` ships in 2b):
+**`kind` registry:**
 
 | kind | phase | body |
 |---|---|---|
 | `text` | 2b [ADD] | `{ "text": string }` |
+| `sentTranscript` | 2b [IMPL] | `{ "sendId", "peer", "timestampMs", "content": ChatContent }` — encrypted own-device synchronization wrapper (§7.3), never rendered directly |
 | `receipt` | later [RSV] | `{ "type": "delivered"\|"read", "ids": [seq…] }` — E2EE content, never a server feature |
 | `typing` | later [RSV] | `{ "state": "started"\|"stopped" }` — ephemeral; a client MAY drop |
 | `attachment` | 5 [RSV] | `{ "fileId", "key", "digest", "size", "mimeType", "name" }` — pointer into the E2EE drive (tus); the blob rides the drive, not the mailbox |
@@ -304,7 +314,31 @@ re-fetch the bundle, re-establish. On 409 the client re-fetches for
 missing/stale, re-encrypts, resends. Retry only on non-2xx (with `sendId`,
 even a blind retry is now safe).
 
-### 7.3 [RSV] sealed-sender access token
+### 7.3 Note to Self and sent transcripts — [IMPL]
+
+Note to Self is a special self-recipient direct conversation, not a one-member
+group. The originating device atomically persists the original `ChatContent` as
+outgoing history and, for linked devices, encrypts a `sentTranscript` wrapper
+to each other active device. The wrapper carries the stable logical `sendId`,
+conversation `peer`, original history timestamp, and original content. It is
+opaque libsignal ciphertext to the server.
+
+`POST /api/chat/sync/messages` authenticates the sending device and applies the
+same missing/stale/extra exact-set check as a direct send, except the expected
+recipient set is the caller's active devices **minus `senderDeviceId`**. It
+stores rows only in those devices' mailboxes. A receiving client treats a
+`sentTranscript` as outgoing history only when libsignal decryption succeeds
+and the envelope sender is another device of the local account; otherwise it
+cannot acquire this privileged meaning. Decrypt, outgoing-history persistence,
+inbound-journal transition, and later ack retain the normal atomic ordering.
+
+For a single-device account, encryption produces no envelopes. The original
+note is marked delivered locally and no mailbox POST is made. A crash between
+outbox persistence and that completion is still recoverable from the durable
+outbox. This transcript primitive is deliberately reusable for synchronizing
+ordinary outgoing messages in the next multi-device-correctness slice.
+
+### 7.4 [RSV] sealed-sender access token
 
 `SendMessagesRequest` gains a **[RSV] `accessToken: b64?`**. When sealed sender
 ships (§11), an authenticated send MAY omit sender auth and instead prove a
@@ -422,7 +456,7 @@ plaintext sender it MUST ship all three together:
    which signs short-lived per-user sender certs (identity key + expiry). Fully
    self-hostable from libsignal primitives; the recipient validates
    client-side.
-2. **Delivery-token abuse gate** — the `accessToken` (§7.3): the only spam
+2. **Delivery-token abuse gate** — the `accessToken` (§7.4): the only spam
    signal once server-side sender auth is dropped.
 3. **Contacts-only default** with profile-key rotation on block.
 

@@ -9,6 +9,7 @@ use kutup_client_ffi::{
 
 struct MockHttp {
     registrations: AtomicUsize,
+    registration: Mutex<Option<serde_json::Value>>,
     manifest: Mutex<Option<String>>,
 }
 
@@ -16,6 +17,7 @@ impl MockHttp {
     fn new() -> Self {
         Self {
             registrations: AtomicUsize::new(0),
+            registration: Mutex::new(None),
             manifest: Mutex::new(None),
         }
     }
@@ -30,6 +32,7 @@ impl ChatHttpClient for MockHttp {
                 let body = request.body_json.expect("registration body");
                 let value: serde_json::Value = serde_json::from_str(&body).unwrap();
                 assert_eq!(value["suite"], 1);
+                *self.registration.lock().unwrap() = Some(value);
                 Ok(ChatHttpResponse {
                     status: 201,
                     body_json: r#"{"deviceId":7}"#.into(),
@@ -54,6 +57,33 @@ impl ChatHttpClient for MockHttp {
                 Ok(ChatHttpResponse {
                     status: 200,
                     body_json,
+                })
+            }
+            (ChatHttpMethod::Get, "/chat/users/alice/keys?syncDeviceId=7") => {
+                let registration = self.registration.lock().unwrap().clone().unwrap();
+                let manifest: serde_json::Value = serde_json::from_str(
+                    self.manifest
+                        .lock()
+                        .unwrap()
+                        .as_deref()
+                        .expect("published manifest"),
+                )
+                .unwrap();
+                Ok(ChatHttpResponse {
+                    status: 200,
+                    body_json: serde_json::json!({
+                        "username": "alice",
+                        "devices": [{
+                            "deviceId": 7,
+                            "registrationId": registration["registrationId"],
+                            "suite": registration["suite"],
+                            "identityKey": registration["identityKey"],
+                            "signedPreKey": registration["signedPreKey"],
+                            "kyberPreKey": registration["lastResortKyberPreKey"]
+                        }],
+                        "manifest": manifest
+                    })
+                    .to_string(),
                 })
             }
             _ => Err(KutupChatError::Transport {
@@ -87,6 +117,23 @@ fn encrypted_install_registers_once_and_reopens() {
     assert!(futures_executor::block_on(first.history())
         .unwrap()
         .is_empty());
+
+    let note = futures_executor::block_on(first.send_text(
+        "native-note-1".into(),
+        "alice".into(),
+        "2026-07-16T12:00:00Z".into(),
+        "remember on mobile".into(),
+    ))
+    .unwrap();
+    assert!(note.delivered);
+    assert_eq!(note.attempts, 0);
+    let history = futures_executor::block_on(first.history()).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].peer, "alice");
+    assert_eq!(
+        history[0].content.text.as_deref(),
+        Some("remember on mobile")
+    );
 
     drop(first);
     let wrong_key = futures_executor::block_on(open_native_chat_client(

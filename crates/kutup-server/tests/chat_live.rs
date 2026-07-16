@@ -96,7 +96,8 @@ fn register_and_login(c: &Client, base: &str, tag: &str) -> (String, String, Str
 fn register_chat_device(c: &Client, base: &str, token: &str) -> (u32, u32) {
     let mut rng = rand::thread_rng();
     let reg_id = (rng.next_u32() % 16000) + 1;
-    let key = |n: u8| b64(&[n; 33]);
+    let seed = rng.next_u32() as u8;
+    let key = |n: u8| b64(&[seed.wrapping_add(n); 33]);
     let body = json!({
         "suite": 1, "registrationId": reg_id,
         "identityKey": key(1),
@@ -170,6 +171,60 @@ fn chat_v1_contract() {
     let (dev_a, _reg_a) = register_chat_device(&c, &base, &ta);
     let (dev_b, reg_b) = register_chat_device(&c, &base, &tb);
     println!("ok  - chat devices registered (A={dev_a} B={dev_b})");
+
+    // A links a second device. A sync-mode bundle fetch returns the complete
+    // signed-set shape, but does not consume a one-time key for the caller.
+    let (dev_a2, reg_a2) = register_chat_device(&c, &base, &ta);
+    let sync_bundles: Value = c
+        .get(format!(
+            "{base}/api/chat/users/{ua}/keys?syncDeviceId={dev_a}"
+        ))
+        .bearer_auth(&ta)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let sync_devices = sync_bundles["devices"].as_array().unwrap();
+    assert_eq!(sync_devices.len(), 2);
+    let current = sync_devices
+        .iter()
+        .find(|device| device["deviceId"] == dev_a)
+        .unwrap();
+    assert!(current.get("oneTimePreKey").is_none());
+    println!("ok  - linked-device bundle fetch preserves current prekeys");
+
+    let sync_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let sync = c
+        .post(format!("{base}/api/chat/sync/messages"))
+        .bearer_auth(&ta)
+        .json(&json!({
+            "senderDeviceId": dev_a,
+            "sendId": sync_id,
+            "envelopes": [{
+                "deviceId": dev_a2,
+                "registrationId": reg_a2,
+                "envelopeType": "message",
+                "suite": 1,
+                "content": b64(b"encrypted-sent-transcript")
+            }]
+        }))
+        .send()
+        .unwrap();
+    assert!(sync.status().is_success(), "self sync: {}", sync.status());
+    let own_page: Value = c
+        .get(format!(
+            "{base}/api/chat/messages?deviceId={dev_a2}&limit=10"
+        ))
+        .bearer_auth(&ta)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let own_envelopes = own_page["envelopes"].as_array().unwrap();
+    assert_eq!(own_envelopes.len(), 1);
+    assert_eq!(own_envelopes[0]["sender"], ua);
+    assert_eq!(own_envelopes[0]["senderDeviceId"], dev_a);
+    println!("ok  - encrypted transcript routed only to the linked device");
 
     let ticket: Value = c
         .post(format!("{base}/api/chat/ws-ticket?deviceId={dev_a}"))

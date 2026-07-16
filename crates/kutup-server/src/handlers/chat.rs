@@ -30,7 +30,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use kutup_chat_proto::{
     AckRequest, ChatWsServerMessage, ChatWsTicketResponse, DeliveredEnvelope, DeviceListMismatch,
     DeviceManifest, DevicePreKeyBundle, EcPreKey, EnvelopeType, KemPreKey, MailboxPage,
-    PreKeyCountResponse, RegisterChatDeviceRequest, RegisterChatDeviceResponse,
+    OutgoingEnvelope, PreKeyCountResponse, RegisterChatDeviceRequest, RegisterChatDeviceResponse,
     ReplenishKeysRequest, SendMessagesRequest, SuiteId, UserPreKeyBundlesResponse,
 };
 
@@ -366,7 +366,10 @@ pub async fn publish_manifest(
     path = "/api/chat/users/{username}/manifest",
     tag = "chat",
     operation_id = "getChatDeviceManifest",
-    params(("username" = String, Path, description = "Local username")),
+    params(
+        ("username" = String, Path, description = "Local username"),
+        ("syncDeviceId" = Option<u32>, Query, description = "Authenticated current device; preserves its one-time keys for own-device sync")
+    ),
     responses(
         (status = 200, description = "Latest signed manifest", body = DeviceManifest),
         (status = 404, description = "Unknown user or no manifest"),
@@ -516,6 +519,15 @@ pub async fn revoke_device(
 pub struct DeviceQuery {
     #[serde(rename = "deviceId")]
     device_id: i32,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct BundleQuery {
+    /// When present, this is an authenticated own-device sync fetch. The
+    /// current device's public bundle is still returned for signed-manifest
+    /// verification, but its one-time keys are not consumed.
+    #[serde(rename = "syncDeviceId")]
+    sync_device_id: Option<i32>,
 }
 
 /// Asserts the (user, device) pair exists; used by the device-scoped endpoints.
@@ -675,6 +687,7 @@ pub async fn get_user_bundles(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(username): Path<String>,
+    Query(query): Query<BundleQuery>,
 ) -> AppResult<Response> {
     if !ratelimit::CHAT_KEYS_ACCOUNT.allow(&auth.user_id) {
         return Err(AppError::too_many_requests(
@@ -689,6 +702,14 @@ pub async fn get_user_bundles(
     let Some(target_id) = target else {
         return Err(AppError::not_found("user not found"));
     };
+    if query.sync_device_id.is_some() {
+        let caller_id = trusted_uuid(&auth.user_id)?;
+        if caller_id != target_id {
+            return Err(AppError::forbidden(
+                "linked-device key fetch is limited to the caller's account",
+            ));
+        }
+    }
 
     let mut tx = state.pool.begin().await?;
 
@@ -698,6 +719,19 @@ pub async fn get_user_bundles(
         .bind(target_id)
         .execute(&mut *tx)
         .await?;
+    if let Some(device_id) = query.sync_device_id {
+        let exists: Option<i32> = sqlx::query_scalar(
+            "UPDATE chat_devices SET last_seen_at = now()
+             WHERE user_id = $1 AND device_id = $2 RETURNING 1",
+        )
+        .bind(target_id)
+        .bind(device_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if exists.is_none() {
+            return Err(AppError::not_found("no such chat device"));
+        }
+    }
 
     #[allow(clippy::type_complexity)]
     let devices: Vec<(
@@ -739,33 +773,44 @@ pub async fn get_user_bundles(
         lrk_sig,
     ) in devices
     {
-        // Pop one one-time EC prekey (absent is fine — X3DH/PQXDH allow it).
-        let ec: Option<(i64, String)> = sqlx::query_as(
-            "DELETE FROM chat_one_time_pre_keys t
-             WHERE t.ctid IN (
-                 SELECT ctid FROM chat_one_time_pre_keys
-                 WHERE user_id = $1 AND device_id = $2
-                 ORDER BY key_id LIMIT 1 FOR UPDATE SKIP LOCKED)
-             RETURNING key_id, public_key",
-        )
-        .bind(target_id)
-        .bind(device_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+        // A self-sync fetch includes the caller's public bundle so it can be
+        // checked against the complete signed manifest, but that bundle is
+        // never used for encryption and must not burn a one-time prekey.
+        let current_sync_device = query.sync_device_id == Some(device_id);
+        let ec: Option<(i64, String)> = if current_sync_device {
+            None
+        } else {
+            sqlx::query_as(
+                "DELETE FROM chat_one_time_pre_keys t
+                 WHERE t.ctid IN (
+                     SELECT ctid FROM chat_one_time_pre_keys
+                     WHERE user_id = $1 AND device_id = $2
+                     ORDER BY key_id LIMIT 1 FOR UPDATE SKIP LOCKED)
+                 RETURNING key_id, public_key",
+            )
+            .bind(target_id)
+            .bind(device_id)
+            .fetch_optional(&mut *tx)
+            .await?
+        };
 
         // Pop one one-time Kyber prekey; fall back to the (reusable) last-resort key.
-        let kem: Option<(i64, String, String)> = sqlx::query_as(
-            "DELETE FROM chat_one_time_kyber_pre_keys t
-             WHERE t.ctid IN (
-                 SELECT ctid FROM chat_one_time_kyber_pre_keys
-                 WHERE user_id = $1 AND device_id = $2
-                 ORDER BY key_id LIMIT 1 FOR UPDATE SKIP LOCKED)
-             RETURNING key_id, public_key, signature",
-        )
-        .bind(target_id)
-        .bind(device_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+        let kem: Option<(i64, String, String)> = if current_sync_device {
+            None
+        } else {
+            sqlx::query_as(
+                "DELETE FROM chat_one_time_kyber_pre_keys t
+                 WHERE t.ctid IN (
+                     SELECT ctid FROM chat_one_time_kyber_pre_keys
+                     WHERE user_id = $1 AND device_id = $2
+                     ORDER BY key_id LIMIT 1 FOR UPDATE SKIP LOCKED)
+                 RETURNING key_id, public_key, signature",
+            )
+            .bind(target_id)
+            .bind(device_id)
+            .fetch_optional(&mut *tx)
+            .await?
+        };
         let (kyber_id, kyber_pub, kyber_sig) = kem.unwrap_or((lrk_id, lrk, lrk_sig));
 
         bundles.push(DevicePreKeyBundle {
@@ -836,28 +881,7 @@ pub async fn send_messages(
     Json(req): Json<SendMessagesRequest>,
 ) -> AppResult<Response> {
     let sender_id = trusted_uuid(&auth.user_id)?;
-    if req.envelopes.is_empty() {
-        return Err(AppError::bad_request("no envelopes"));
-    }
-    if req.send_id.is_empty() || req.send_id.len() > 64 {
-        return Err(AppError::bad_request("missing or oversized sendId"));
-    }
-    for e in &req.envelopes {
-        let bytes = b64_field("content", &e.content)?;
-        if bytes.len() > MAX_CONTENT_BYTES {
-            return Err(AppError::new(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "envelope content exceeds maxContentBytes",
-            ));
-        }
-    }
-    let unique_devices: HashSet<u32> = req.envelopes.iter().map(|e| e.device_id).collect();
-    if unique_devices.len() != req.envelopes.len() {
-        return Err(AppError::bad_request(
-            "only one envelope is allowed per recipient device",
-        ));
-    }
-
+    validate_send_request(&req, false, None)?;
     let recipient: Option<(Uuid,)> =
         sqlx::query_as("SELECT id FROM users WHERE username = $1 AND is_active = true")
             .bind(&username)
@@ -867,6 +891,46 @@ pub async fn send_messages(
         return Err(AppError::not_found("user not found"));
     };
 
+    deliver_messages(&state, sender_id, recipient_id, req, None).await
+}
+
+/// `POST /api/chat/sync/messages` — deliver an encrypted sent transcript to
+/// every other active device of the authenticated account. The sending device
+/// is excluded from the exact-set check; an empty set is valid for a
+/// single-device account.
+#[utoipa::path(
+    post,
+    path = "/api/chat/sync/messages",
+    tag = "chat",
+    operation_id = "chatSyncMessages",
+    request_body = SendMessagesRequest,
+    responses(
+        (status = 200, description = "Stored for every other linked device"),
+        (status = 404, description = "Unknown sending device"),
+        (status = 409, description = "Linked device list out of date", body = DeviceListMismatch),
+    ),
+    security(("bearerAuth" = []))
+)]
+pub async fn sync_messages(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(req): Json<SendMessagesRequest>,
+) -> AppResult<Response> {
+    let sender_id = trusted_uuid(&auth.user_id)?;
+    let excluded_device = req.sender_device_id as i32;
+    validate_send_request(&req, true, Some(excluded_device))?;
+    deliver_messages(&state, sender_id, sender_id, req, Some(excluded_device)).await
+}
+
+/// Validate, idempotently store, and push one logical ciphertext fan-out. A
+/// self-sync passes `excluded_device`; ordinary direct delivery passes `None`.
+async fn deliver_messages(
+    state: &AppState,
+    sender_id: Uuid,
+    recipient_id: Uuid,
+    req: SendMessagesRequest,
+    excluded_device: Option<i32>,
+) -> AppResult<Response> {
     // Lock both accounts in deterministic UUID order, then keep the recipient
     // device set stable through mailbox insertion. Device registration,
     // revocation, and manifest publication take `FOR UPDATE` on these rows.
@@ -912,24 +976,21 @@ pub async fn send_messages(
     }
 
     // Exact device-set check (Signal's missing/stale/extra contract).
-    let current: Vec<(i32, i64)> =
+    let mut current: Vec<(i32, i64)> =
         sqlx::query_as("SELECT device_id, registration_id FROM chat_devices WHERE user_id = $1")
             .bind(recipient_id)
             .fetch_all(&mut *tx)
             .await?;
-    let mut mismatch = DeviceListMismatch::default();
-    for (dev, reg) in &current {
-        match req.envelopes.iter().find(|e| e.device_id == *dev as u32) {
-            None => mismatch.missing_devices.push(*dev as u32),
-            Some(e) if e.registration_id as i64 != *reg => mismatch.stale_devices.push(*dev as u32),
-            Some(_) => {}
+    if let Some(excluded_device) = excluded_device {
+        if !current
+            .iter()
+            .any(|(device_id, _)| *device_id == excluded_device)
+        {
+            return Err(AppError::not_found("no such chat device"));
         }
+        current.retain(|(device_id, _)| *device_id != excluded_device);
     }
-    for e in &req.envelopes {
-        if !current.iter().any(|(dev, _)| *dev as u32 == e.device_id) {
-            mismatch.extra_devices.push(e.device_id);
-        }
-    }
+    let mismatch = device_list_mismatch(&current, &req.envelopes);
     if !mismatch.missing_devices.is_empty()
         || !mismatch.stale_devices.is_empty()
         || !mismatch.extra_devices.is_empty()
@@ -984,6 +1045,72 @@ pub async fn send_messages(
     }
 
     Ok(Json(json!({ "stored": req.envelopes.len() })).into_response())
+}
+
+fn validate_send_request(
+    req: &SendMessagesRequest,
+    allow_empty: bool,
+    excluded_device: Option<i32>,
+) -> AppResult<()> {
+    if !allow_empty && req.envelopes.is_empty() {
+        return Err(AppError::bad_request("no envelopes"));
+    }
+    if req.send_id.is_empty() || req.send_id.len() > 64 {
+        return Err(AppError::bad_request("missing or oversized sendId"));
+    }
+    for envelope in &req.envelopes {
+        let bytes = b64_field("content", &envelope.content)?;
+        if bytes.len() > MAX_CONTENT_BYTES {
+            return Err(AppError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "envelope content exceeds maxContentBytes",
+            ));
+        }
+    }
+    let unique_devices: HashSet<u32> = req.envelopes.iter().map(|e| e.device_id).collect();
+    if unique_devices.len() != req.envelopes.len() {
+        return Err(AppError::bad_request(
+            "only one envelope is allowed per recipient device",
+        ));
+    }
+    if excluded_device.is_some_and(|device| {
+        req.envelopes
+            .iter()
+            .any(|envelope| envelope.device_id as i32 == device)
+    }) {
+        return Err(AppError::bad_request(
+            "a linked-device sync cannot target its sending device",
+        ));
+    }
+    Ok(())
+}
+
+fn device_list_mismatch(
+    current: &[(i32, i64)],
+    envelopes: &[OutgoingEnvelope],
+) -> DeviceListMismatch {
+    let mut mismatch = DeviceListMismatch::default();
+    for (device_id, registration_id) in current {
+        match envelopes
+            .iter()
+            .find(|envelope| envelope.device_id == *device_id as u32)
+        {
+            None => mismatch.missing_devices.push(*device_id as u32),
+            Some(envelope) if envelope.registration_id as i64 != *registration_id => {
+                mismatch.stale_devices.push(*device_id as u32);
+            }
+            Some(_) => {}
+        }
+    }
+    for envelope in envelopes {
+        if !current
+            .iter()
+            .any(|(device_id, _)| *device_id as u32 == envelope.device_id)
+        {
+            mismatch.extra_devices.push(envelope.device_id);
+        }
+    }
+    mismatch
 }
 
 #[derive(Debug, Deserialize)]
@@ -1281,4 +1408,47 @@ async fn handle_connection(state: AppState, socket: WebSocket, user_id: Uuid, de
 
     state.chat_hub.leave(user_id, device_id, conn.conn_id);
     writer.abort();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn envelope(device_id: u32, registration_id: u32) -> OutgoingEnvelope {
+        OutgoingEnvelope {
+            device_id,
+            registration_id,
+            envelope_type: EnvelopeType::Message,
+            suite: SuiteId::PqxdhTripleRatchetV1,
+            content: STANDARD.encode(b"ciphertext"),
+        }
+    }
+
+    #[test]
+    fn self_sync_exact_set_excludes_only_the_sending_device() {
+        let all_devices = [(1, 101), (2, 202), (3, 303)];
+        let linked_devices: Vec<_> = all_devices
+            .into_iter()
+            .filter(|(device_id, _)| *device_id != 2)
+            .collect();
+
+        let exact = device_list_mismatch(&linked_devices, &[envelope(1, 101), envelope(3, 303)]);
+        assert!(exact.missing_devices.is_empty());
+        assert!(exact.stale_devices.is_empty());
+        assert!(exact.extra_devices.is_empty());
+
+        let wrong = device_list_mismatch(&linked_devices, &[envelope(2, 202), envelope(3, 999)]);
+        assert_eq!(wrong.missing_devices, vec![1]);
+        assert_eq!(wrong.stale_devices, vec![3]);
+        assert_eq!(wrong.extra_devices, vec![2]);
+
+        let request = SendMessagesRequest {
+            sender_device_id: 2,
+            send_id: "note-1".into(),
+            envelopes: vec![envelope(2, 202)],
+            access_token: None,
+        };
+        let error = validate_send_request(&request, true, Some(2)).unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    }
 }
