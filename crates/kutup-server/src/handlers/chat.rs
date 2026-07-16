@@ -959,13 +959,19 @@ async fn deliver_messages(
     // send that was already accepted must return the same success even if a
     // recipient device was added or removed after that acceptance. For a new
     // send, a later mismatch rolls this insert back with the transaction.
+    let delivery_scope = if excluded_device.is_some() {
+        "sync"
+    } else {
+        "direct"
+    };
     let claimed: Option<(String,)> = sqlx::query_as(
-        "INSERT INTO chat_sends (sender_user_id, sender_device_id, send_id)
-         VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING send_id",
+        "INSERT INTO chat_sends (sender_user_id, sender_device_id, send_id, delivery_scope)
+         VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING send_id",
     )
     .bind(sender_id)
     .bind(req.sender_device_id as i32)
     .bind(&req.send_id)
+    .bind(delivery_scope)
     .fetch_optional(&mut *tx)
     .await?;
     if claimed.is_none() {

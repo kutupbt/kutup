@@ -272,13 +272,15 @@ fn chat_v1_contract() {
     };
 
     // Correct send.
-    let sid = "11111111-1111-4111-8111-111111111111";
+    // The same logical sendId was already claimed by the own-device sync
+    // endpoint above. Direct and sync idempotency scopes must not collide.
+    let sid = sync_id;
     let r = send(sid, dev_b, reg_b, &b64(b"ciphertext-one"));
     assert!(r.status().is_success(), "send: {}", r.status());
     let body: Value = r.json().unwrap();
     assert_eq!(body["stored"], 1);
     assert!(body.get("deduplicated").is_none());
-    println!("ok  - send stored");
+    println!("ok  - direct send stored independently of sync scope");
 
     // Idempotent retry: same sendId → deduplicated, no new row.
     let r = send(sid, dev_b, reg_b, &b64(b"ciphertext-one"));

@@ -87,12 +87,18 @@ struct MockServer {
     /// Each `fetch_bundles` pops the front; the last entry repeats.
     fetch_script: RefCell<Vec<Vec<DevicePreKeyBundle>>>,
     manifest_script: RefCell<Vec<Option<DeviceManifest>>>,
+    sync_fetch_script: RefCell<Vec<Vec<DevicePreKeyBundle>>>,
+    sync_manifest_script: RefCell<Vec<Option<DeviceManifest>>>,
     own_manifest: RefCell<Option<DeviceManifest>>,
     active: RefCell<Vec<(u32, u32)>>,
+    sync_active: RefCell<Vec<(u32, u32)>>,
     fail_sends: RefCell<u32>,
+    fail_sync_sends: RefCell<u32>,
     delivered: RefCell<Vec<(String, Vec<kutup_chat_proto::OutgoingEnvelope>)>>,
+    synced: RefCell<Vec<(String, Vec<kutup_chat_proto::OutgoingEnvelope>)>>,
     sync_mailbox: RefCell<Vec<DeliveredEnvelope>>,
     seen_send_ids: RefCell<HashSet<String>>,
+    seen_sync_ids: RefCell<HashSet<String>>,
 }
 
 impl MockServer {
@@ -102,12 +108,24 @@ impl MockServer {
     fn set_active(&self, active: Vec<(u32, u32)>) {
         *self.active.borrow_mut() = active;
     }
+    fn script_sync(&self, pages: Vec<Vec<DevicePreKeyBundle>>) {
+        *self.sync_fetch_script.borrow_mut() = pages;
+    }
+    fn set_sync_active(&self, active: Vec<(u32, u32)>) {
+        *self.sync_active.borrow_mut() = active;
+    }
     fn script_manifests(&self, manifests: Vec<Option<DeviceManifest>>) {
         *self.manifest_script.borrow_mut() = manifests;
+    }
+    fn script_sync_manifests(&self, manifests: Vec<Option<DeviceManifest>>) {
+        *self.sync_manifest_script.borrow_mut() = manifests;
     }
     /// The envelopes of the most recent accepted send.
     fn last_delivered(&self) -> Vec<kutup_chat_proto::OutgoingEnvelope> {
         self.delivered.borrow().last().unwrap().1.clone()
+    }
+    fn last_synced(&self) -> Vec<kutup_chat_proto::OutgoingEnvelope> {
+        self.synced.borrow().last().unwrap().1.clone()
     }
 }
 
@@ -142,7 +160,23 @@ impl ChatTransport for MockServer {
         username: &str,
         _current_device_id: u32,
     ) -> Result<UserPreKeyBundlesResponse> {
-        self.fetch_bundles(username).await
+        let mut script = self.sync_fetch_script.borrow_mut();
+        let devices = if script.len() > 1 {
+            script.remove(0)
+        } else {
+            script.first().cloned().unwrap_or_default()
+        };
+        let mut manifests = self.sync_manifest_script.borrow_mut();
+        let manifest = if manifests.len() > 1 {
+            manifests.remove(0)
+        } else {
+            manifests.first().cloned().unwrap_or(None)
+        };
+        Ok(UserPreKeyBundlesResponse {
+            username: username.to_string(),
+            devices,
+            manifest,
+        })
     }
 
     async fn fetch_manifest(&self, _username: &str) -> Result<Option<DeviceManifest>> {
@@ -202,8 +236,17 @@ impl ChatTransport for MockServer {
     }
 
     async fn send_sync(&self, req: &SendMessagesRequest) -> Result<SendOutcome> {
+        {
+            let mut fail = self.fail_sync_sends.borrow_mut();
+            if *fail > 0 {
+                *fail -= 1;
+                return Err(ChatError::Transport(
+                    "simulated sync network failure".into(),
+                ));
+            }
+        }
         let active: Vec<(u32, u32)> = self
-            .active
+            .sync_active
             .borrow()
             .iter()
             .copied()
@@ -238,8 +281,11 @@ impl ChatTransport for MockServer {
             }));
         }
 
-        let deduplicated = !self.seen_send_ids.borrow_mut().insert(req.send_id.clone());
-        self.delivered
+        let deduplicated = !self
+            .seen_sync_ids
+            .borrow_mut()
+            .insert(req.send_id.clone());
+        self.synced
             .borrow_mut()
             .push((req.send_id.clone(), req.envelopes.clone()));
         if !deduplicated {
@@ -362,6 +408,10 @@ fn production_engine_requires_and_persists_a_matching_signed_manifest() {
         &mut rng,
     ))
     .unwrap();
+    let alice_bundle = bundle_of(&alice_session, 1);
+    server.script_sync(vec![vec![alice_bundle.clone()]]);
+    server.script_sync_manifests(vec![Some(signed_manifest(&alice_bundle))]);
+    server.set_sync_active(vec![(1, reg_id(&alice_session))]);
     let mut alice = Engine::new(alice_session, server);
     let msg = ChatContent::text("secure-1", 1, "manifest required");
 
@@ -620,13 +670,102 @@ fn outbox_persists_across_failure_and_flush_resends() {
 }
 
 #[test]
+fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
+    let mut rng = test_rng();
+    let alice_db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
+    let mut alice1 = block_on(Session::generate(
+        alice_db.clone(),
+        "alice",
+        1,
+        10,
+        &mut rng,
+    ))
+    .unwrap();
+    let alice1_bundle = bundle_of(&alice1, 1);
+    block_on(alice1.complete_registration(1)).unwrap();
+    let alice2 = device("alice", 2, &mut rng);
+    let mut bob1 = device("bob", 1, &mut rng);
+    let bob_bundle = bundle_of(&bob1, 1);
+
+    let server = Rc::new(MockServer::default());
+    server.script(vec![vec![bob_bundle]]);
+    server.set_active(vec![(1, reg_id(&bob1))]);
+    server.script_sync(vec![vec![
+        alice1_bundle.clone(),
+        bundle_of(&alice2, 2),
+    ]]);
+    server.set_sync_active(vec![
+        (1, alice1_bundle.registration_id),
+        (2, reg_id(&alice2)),
+    ]);
+    *server.fail_sync_sends.borrow_mut() = 1;
+
+    let content = ChatContent::text("2026-07-16T10:02:00Z", 1, "hello from my other device");
+    let mut first = Engine::new_for_development(alice1, server.clone());
+    let summary = block_on(first.send("direct-linked", "bob", &content, &mut rng)).unwrap();
+    assert!(summary.delivered, "recipient delivery succeeds");
+    assert_eq!(server.delivered.borrow().len(), 1);
+    assert!(server.synced.borrow().is_empty(), "first sync attempt failed");
+    assert_eq!(block_on(first.pending_send_count()).unwrap(), 1);
+    let sent = block_on(first.session().sent_history()).unwrap();
+    assert!(sent[0].delivered, "recipient status is not downgraded by sync");
+    assert_eq!(
+        decrypt_for(
+            &mut bob1,
+            &ChatAddress::local("alice", 1),
+            &server.last_delivered(),
+            1,
+            &mut rng,
+        )
+        .as_text()
+        .unwrap()
+        .text,
+        "hello from my other device"
+    );
+    drop(first);
+
+    // A process restart reopens the exact ratchet/outbox state. Only the sync
+    // leg is retried; the already-confirmed recipient ciphertext is untouched.
+    let reopened = block_on(Session::open(alice_db, "alice", 1)).unwrap();
+    let mut restarted = Engine::new_for_development(reopened, server.clone());
+    let flushed = block_on(restarted.flush_outbox(&mut rng)).unwrap();
+    assert_eq!(flushed.len(), 1);
+    assert!(flushed[0].delivered);
+    assert_eq!(server.delivered.borrow().len(), 1, "recipient not resent");
+    assert_eq!(server.synced.borrow().len(), 1);
+    assert_eq!(block_on(restarted.pending_send_count()).unwrap(), 0);
+
+    let mut linked = Engine::new_for_development(alice2, server.clone());
+    let report = block_on(linked.receive(&mut rng)).unwrap();
+    assert_eq!(report.synced, vec!["direct-linked"]);
+    let linked_history = block_on(linked.session().sent_history()).unwrap();
+    assert_eq!(linked_history.len(), 1);
+    assert_eq!(linked_history[0].peer, "bob");
+    assert_eq!(
+        serde_json::from_slice::<ChatContent>(&linked_history[0].content)
+            .unwrap()
+            .as_text()
+            .unwrap()
+            .text,
+        "hello from my other device"
+    );
+
+    let direct_count = server.delivered.borrow().len();
+    let sync_count = server.synced.borrow().len();
+    let repeated = block_on(restarted.send("direct-linked", "bob", &content, &mut rng)).unwrap();
+    assert!(repeated.delivered && repeated.deduplicated);
+    assert_eq!(server.delivered.borrow().len(), direct_count);
+    assert_eq!(server.synced.borrow().len(), sync_count);
+}
+
+#[test]
 fn single_device_note_to_self_is_local_and_never_posts_an_envelope() {
     let mut rng = test_rng();
     let alice = device("alice", 1, &mut rng);
     let bundle = bundle_of(&alice, 1);
     let server = Rc::new(MockServer::default());
-    server.script(vec![vec![bundle]]);
-    server.set_active(vec![(1, reg_id(&alice))]);
+    server.script_sync(vec![vec![bundle]]);
+    server.set_sync_active(vec![(1, reg_id(&alice))]);
     let mut engine = Engine::new_for_development(alice, server.clone());
 
     let summary = block_on(engine.send(
@@ -639,7 +778,7 @@ fn single_device_note_to_self_is_local_and_never_posts_an_envelope() {
 
     assert!(summary.delivered);
     assert_eq!(summary.attempts, 0);
-    assert!(server.delivered.borrow().is_empty());
+    assert!(server.synced.borrow().is_empty());
     assert_eq!(block_on(engine.pending_send_count()).unwrap(), 0);
     let history = block_on(engine.session().sent_history()).unwrap();
     assert_eq!(history.len(), 1);
@@ -661,8 +800,8 @@ fn linked_device_note_arrives_as_outgoing_history_via_encrypted_transcript() {
     let alice2 = device("alice", 2, &mut rng);
     let bundles = vec![bundle_of(&alice1, 1), bundle_of(&alice2, 2)];
     let server = Rc::new(MockServer::default());
-    server.script(vec![bundles]);
-    server.set_active(vec![(1, reg_id(&alice1)), (2, reg_id(&alice2))]);
+    server.script_sync(vec![bundles]);
+    server.set_sync_active(vec![(1, reg_id(&alice1)), (2, reg_id(&alice2))]);
 
     let mut first = Engine::new_for_development(alice1, server.clone());
     let summary = block_on(first.send(
@@ -674,8 +813,8 @@ fn linked_device_note_arrives_as_outgoing_history_via_encrypted_transcript() {
     .unwrap();
     assert!(summary.delivered);
     assert_eq!(summary.attempts, 1);
-    assert_eq!(server.last_delivered().len(), 1);
-    assert_eq!(server.last_delivered()[0].device_id, 2);
+    assert_eq!(server.last_synced().len(), 1);
+    assert_eq!(server.last_synced()[0].device_id, 2);
 
     let mut second = Engine::new_for_development(alice2, server.clone());
     let report = block_on(second.receive(&mut rng)).unwrap();

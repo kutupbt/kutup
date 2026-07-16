@@ -34,7 +34,7 @@ pub use db::indexed_db::IndexedDbChatDb;
 pub use db::sqlite::SqliteChatDb;
 pub use db::{
     AuthorityTrust, ChatDb, InboundEnvelope, InboundFailureKind, InboundState, InboxMessage,
-    LocalIdentity, ManifestTrust, OutboxEntry, Pending, SentMessage,
+    LocalIdentity, ManifestTrust, OutboxEntry, OutboxSyncLeg, Pending, SentMessage,
 };
 pub use engine::{
     ChatEvent, Engine, EngineState, InboundFailure, PreKeyMaintenanceReport, ReceiveReport,

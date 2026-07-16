@@ -155,6 +155,10 @@ test.describe('Signal-backed chat', () => {
     await startConversation(pageA, usernameB)
     await send(pageA, fromA)
     await expect(messageBubble(pageB, fromA)).toBeVisible({ timeout: 30_000 })
+    await startConversation(pageA2, usernameB)
+    await expect(messageBubble(pageA2, fromA)).toBeVisible({ timeout: 30_000 })
+    await pageA2.reload()
+    await expect(messageBubble(pageA2, fromA)).toBeVisible({ timeout: 60_000 })
 
     const fromB = `from-b-${tag}`
     await send(pageB, fromB)

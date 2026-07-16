@@ -23,7 +23,7 @@ use rand::{CryptoRng, Rng};
 use crate::address::ChatAddress;
 use crate::db::{
     AuthorityTrust, ChatDb, InboundEnvelope, InboundFailureKind, InboundState, InboxMessage,
-    LocalIdentity, ManifestTrust, OutboxEntry, SentMessage,
+    LocalIdentity, ManifestTrust, OutboxEntry, OutboxLeg, OutboxSyncLeg, SentMessage,
 };
 use crate::error::{ChatError, Result};
 use crate::keys;
@@ -50,6 +50,22 @@ pub struct SendSummary {
     pub safety_number_changes: Vec<ChatAddress>,
     /// Number of send/recovery rounds performed.
     pub attempts: u32,
+}
+
+pub(crate) struct DirectSend<'a> {
+    pub send_id: &'a str,
+    pub peer_user: &'a str,
+    pub recipient_bundles: &'a [DevicePreKeyBundle],
+    pub sync_bundles: &'a [DevicePreKeyBundle],
+    pub content: &'a ChatContent,
+}
+
+pub(crate) struct SendAmendment<'a> {
+    pub send_id: &'a str,
+    pub peer_user: &'a str,
+    pub mismatch: &'a DeviceListMismatch,
+    pub bundles: &'a [DevicePreKeyBundle],
+    pub leg: OutboxLeg,
 }
 
 /// A decrypted inbound message handed up to the app.
@@ -642,51 +658,88 @@ impl Session {
     /// Establish (as needed) + encrypt `content` to every device in `bundles`, and
     /// stage a durable outbox entry — all in one transaction. Returns the per-device
     /// envelopes for the transport. Skips the caller's own device.
-    pub(crate) async fn enqueue_send<R: Rng + CryptoRng>(
+    pub(crate) async fn enqueue_direct_send<R: Rng + CryptoRng>(
         &mut self,
-        send_id: &str,
-        peer_user: &str,
-        bundles: &[DevicePreKeyBundle],
-        content: &ChatContent,
+        send: DirectSend<'_>,
         summary: &mut SendSummary,
         rng: &mut R,
-    ) -> Result<Vec<OutgoingEnvelope>> {
-        let plaintext =
-            serde_json::to_vec(content).map_err(|e| ChatError::Content(e.to_string()))?;
-        match self
-            .build_send(peer_user, bundles, &plaintext, summary, rng)
-            .await
-        {
-            Ok(envelopes) => {
-                let created_at = now_millis();
-                let entry = OutboxEntry {
-                    send_id: send_id.to_string(),
-                    peer: peer_user.to_string(),
-                    content: plaintext.clone(),
-                    envelopes: serde_json::to_vec(&envelopes)
+    ) -> Result<(Vec<OutgoingEnvelope>, Option<Vec<OutgoingEnvelope>>)> {
+        let DirectSend {
+            send_id,
+            peer_user,
+            recipient_bundles,
+            sync_bundles,
+            content,
+        } = send;
+        if content.kind == kutup_chat_proto::content::kind::SENT_TRANSCRIPT {
+            return Err(ChatError::Invalid(
+                "a sent transcript cannot contain another sent transcript".into(),
+            ));
+        }
+        let result = async {
+            let plaintext =
+                serde_json::to_vec(content).map_err(|e| ChatError::Content(e.to_string()))?;
+            let recipient_envelopes = self
+                .build_send(peer_user, recipient_bundles, &plaintext, summary, rng)
+                .await?;
+            let created_at = now_millis();
+            let transcript =
+                ChatContent::sent_transcript(send_id, peer_user, created_at, content.clone());
+            let transcript_plaintext =
+                serde_json::to_vec(&transcript).map_err(|e| ChatError::Content(e.to_string()))?;
+            let mut sync_summary = SendSummary::default();
+            let user = self.user().to_string();
+            let sync_envelopes = self
+                .build_send(
+                    &user,
+                    sync_bundles,
+                    &transcript_plaintext,
+                    &mut sync_summary,
+                    rng,
+                )
+                .await?;
+            let sync = if sync_envelopes.is_empty() {
+                None
+            } else {
+                Some(OutboxSyncLeg {
+                    content: transcript_plaintext,
+                    envelopes: serde_json::to_vec(&sync_envelopes)
                         .map_err(|e| ChatError::Content(e.to_string()))?,
                     attempts: 1,
-                    created_at,
-                };
-                self.store.stage_outbox(entry);
-                self.store.stage_sent_seq(content.seq);
-                self.store.stage_sent_message(SentMessage {
-                    send_id: send_id.to_string(),
-                    peer: peer_user.to_string(),
-                    content: plaintext,
-                    created_at,
-                    delivered_at: None,
-                    delivered: false,
-                    deduplicated: false,
-                });
-                self.store.commit().await?;
-                Ok(envelopes)
-            }
-            Err(e) => {
-                self.store.discard();
-                Err(e)
-            }
+                })
+            };
+            self.store.stage_outbox(OutboxEntry {
+                send_id: send_id.to_string(),
+                peer: peer_user.to_string(),
+                content: plaintext.clone(),
+                envelopes: serde_json::to_vec(&recipient_envelopes)
+                    .map_err(|e| ChatError::Content(e.to_string()))?,
+                attempts: 1,
+                created_at,
+                primary_delivered: false,
+                sync,
+            });
+            self.store.stage_sent_seq(content.seq);
+            self.store.stage_sent_message(SentMessage {
+                send_id: send_id.to_string(),
+                peer: peer_user.to_string(),
+                content: plaintext,
+                created_at,
+                delivered_at: None,
+                delivered: false,
+                deduplicated: false,
+            });
+            self.store.commit().await?;
+            Ok((
+                recipient_envelopes,
+                (!sync_envelopes.is_empty()).then_some(sync_envelopes),
+            ))
         }
+        .await;
+        if result.is_err() {
+            self.store.discard();
+        }
+        result
     }
 
     /// Encrypt a Note to Self as a sent transcript for every other linked
@@ -726,6 +779,8 @@ impl Session {
                         .map_err(|e| ChatError::Content(e.to_string()))?,
                     attempts: 1,
                     created_at,
+                    primary_delivered: false,
+                    sync: None,
                 });
                 self.store.stage_sent_seq(content.seq);
                 self.store.stage_sent_message(SentMessage {
@@ -755,15 +810,12 @@ impl Session {
     /// twice). Persists the updated outbox atomically and returns the corrected set.
     pub(crate) async fn amend_send<R: Rng + CryptoRng>(
         &mut self,
-        send_id: &str,
-        peer_user: &str,
-        mismatch: &DeviceListMismatch,
-        bundles: &[DevicePreKeyBundle],
+        amendment: SendAmendment<'_>,
         summary: &mut SendSummary,
         rng: &mut R,
     ) -> Result<Vec<OutgoingEnvelope>> {
         match self
-            .build_amendment(send_id, peer_user, mismatch, bundles, summary, rng)
+            .build_amendment(amendment, summary, rng)
             .await
         {
             Ok(envelopes) => {
@@ -777,20 +829,49 @@ impl Session {
         }
     }
 
-    /// Mark a send delivered: drop its outbox entry and retain delivered local
-    /// history in the same transaction.
-    pub(crate) async fn complete_send(&mut self, send_id: &str, deduplicated: bool) -> Result<()> {
-        let mut message = self
+    /// Mark one delivery leg complete. The logical outbox record remains until
+    /// both the primary recipient and optional linked-device transcript legs
+    /// have completed.
+    pub(crate) async fn complete_send(
+        &mut self,
+        send_id: &str,
+        leg: OutboxLeg,
+        deduplicated: bool,
+    ) -> Result<()> {
+        let mut entry = self
             .store
             .db()
-            .load_sent_message(send_id)
+            .load_outbox(send_id)
             .await?
-            .ok_or_else(|| ChatError::Db(format!("send {send_id} has no history record")))?;
-        message.delivered = true;
-        message.deduplicated = deduplicated;
-        message.delivered_at = Some(now_millis());
-        self.store.delete_outbox(send_id);
-        self.store.stage_sent_message(message);
+            .ok_or_else(|| ChatError::Db(format!("send {send_id} has no outbox record")))?;
+        match leg {
+            OutboxLeg::Primary => {
+                let mut message = self
+                    .store
+                    .db()
+                    .load_sent_message(send_id)
+                    .await?
+                    .ok_or_else(|| ChatError::Db(format!("send {send_id} has no history record")))?;
+                message.delivered = true;
+                message.deduplicated = deduplicated;
+                message.delivered_at = Some(now_millis());
+                self.store.stage_sent_message(message);
+                if entry.sync.is_some() {
+                    entry.primary_delivered = true;
+                    self.store.stage_outbox(entry);
+                } else {
+                    self.store.delete_outbox(send_id);
+                }
+            }
+            OutboxLeg::Sync => {
+                if entry.primary_delivered {
+                    self.store.delete_outbox(send_id);
+                } else {
+                    entry.sync = None;
+                    self.store.stage_outbox(entry);
+                }
+            }
+        }
         self.store.commit().await
     }
 
@@ -833,20 +914,33 @@ impl Session {
 
     async fn build_amendment<R: Rng + CryptoRng>(
         &mut self,
-        send_id: &str,
-        peer_user: &str,
-        mismatch: &DeviceListMismatch,
-        bundles: &[DevicePreKeyBundle],
+        amendment: SendAmendment<'_>,
         summary: &mut SendSummary,
         rng: &mut R,
     ) -> Result<Vec<OutgoingEnvelope>> {
-        let entry = self
+        let SendAmendment {
+            send_id,
+            peer_user,
+            mismatch,
+            bundles,
+            leg,
+        } = amendment;
+        let mut entry = self
             .store
             .db()
             .load_outbox(send_id)
             .await?
             .ok_or_else(|| ChatError::Invalid(format!("no outbox entry for send {send_id}")))?;
-        let mut envelopes: Vec<OutgoingEnvelope> = serde_json::from_slice(&entry.envelopes)
+        let (content, encoded_envelopes) = match leg {
+            OutboxLeg::Primary => (entry.content.clone(), entry.envelopes.clone()),
+            OutboxLeg::Sync => {
+                let sync = entry.sync.as_ref().ok_or_else(|| {
+                    ChatError::Invalid(format!("send {send_id} has no pending sync leg"))
+                })?;
+                (sync.content.clone(), sync.envelopes.clone())
+            }
+        };
+        let mut envelopes: Vec<OutgoingEnvelope> = serde_json::from_slice(&encoded_envelopes)
             .map_err(|e| ChatError::Content(e.to_string()))?;
 
         // Extra devices aren't real: drop their ciphertext and archive the session.
@@ -864,7 +958,7 @@ impl Session {
             }
             let bundle = find_bundle(bundles, device_id)?;
             let env = self
-                .seal_device(&peer, bundle, &entry.content, summary, rng)
+                .seal_device(&peer, bundle, &content, summary, rng)
                 .await?;
             envelopes.retain(|e| e.device_id != device_id);
             envelopes.push(env);
@@ -884,19 +978,28 @@ impl Session {
             self.store.delete_session(&peer.to_protocol()?.to_string());
             self.establish_staged(&peer, bundle, rng).await?;
             let env = self
-                .encrypt_staged(&peer, bundle.registration_id, &entry.content, rng)
+                .encrypt_staged(&peer, bundle.registration_id, &content, rng)
                 .await?;
             envelopes.retain(|e| e.device_id != device_id);
             envelopes.push(env);
         }
 
-        let updated = OutboxEntry {
-            envelopes: serde_json::to_vec(&envelopes)
-                .map_err(|e| ChatError::Content(e.to_string()))?,
-            attempts: entry.attempts + 1,
-            ..entry
-        };
-        self.store.stage_outbox(updated);
+        let encoded = serde_json::to_vec(&envelopes)
+            .map_err(|e| ChatError::Content(e.to_string()))?;
+        match leg {
+            OutboxLeg::Primary => {
+                entry.envelopes = encoded;
+                entry.attempts += 1;
+            }
+            OutboxLeg::Sync => {
+                let sync = entry.sync.as_mut().ok_or_else(|| {
+                    ChatError::Invalid(format!("send {send_id} has no pending sync leg"))
+                })?;
+                sync.envelopes = encoded;
+                sync.attempts += 1;
+            }
+        }
+        self.store.stage_outbox(entry);
         Ok(envelopes)
     }
 

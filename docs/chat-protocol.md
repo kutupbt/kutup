@@ -295,10 +295,12 @@ SendMessagesRequest {
 **[ADD] `sendId`.** No idempotency today: a client that times out and retries
 `POST …/messages` stores duplicate mailbox rows (the request can succeed while
 the response is lost — the mobile norm). v1 adds a client-generated `sendId`
-(UUID). The server dedupes per `(senderUser, senderDevice, sendId)` within a
-retention window (unique constraint on the insert batch; `ON CONFLICT DO
-NOTHING`; return the original 200). This makes a durable client outbox safe to
-retry blindly — the property every mobile client needs. (`12-…` §2.)
+(UUID). The server dedupes per
+`(senderUser, senderDevice, sendId, deliveryScope)` within a retention window
+(unique constraint on the insert batch; `ON CONFLICT DO NOTHING`; return the
+original 200). `deliveryScope` separates the recipient delivery from the
+same-send-id own-device transcript delivery. This makes each durable outbox leg
+safe to retry blindly — the property every mobile client needs. (`12-…` §2.)
 
 ### 7.2 Device-list contract — [IMPL]
 
@@ -335,8 +337,16 @@ inbound-journal transition, and later ack retain the normal atomic ordering.
 For a single-device account, encryption produces no envelopes. The original
 note is marked delivered locally and no mailbox POST is made. A crash between
 outbox persistence and that completion is still recoverable from the durable
-outbox. This transcript primitive is deliberately reusable for synchronizing
-ordinary outgoing messages in the next multi-device-correctness slice.
+outbox.
+
+An ordinary direct send atomically stages two independently durable legs under
+one logical `sendId`: ciphertext for the peer's active devices and, when linked
+devices exist, an encrypted sent transcript for the sender's other devices.
+Each leg has its own exact-device recovery and retry state. Recipient success is
+the user-visible delivery result and is not downgraded by a transcript transport
+failure; the outbox retains the transcript leg for a later reconcile or restart.
+Conversely, a successful transcript leg is not repeated while a failed recipient
+leg is retried.
 
 ### 7.4 [RSV] sealed-sender access token
 
@@ -639,8 +649,9 @@ device is concurrently added or removed. First-manifest publication also locks
 the account row because `FOR UPDATE` cannot lock a manifest row that does not
 exist yet.
 
-The server claims `sendId` before checking the current recipient set. An
-already-accepted retry returns deduplicated success even if the recipient added
-a device after the original commit; a new send that finds a mismatch rolls the
-claim back with the transaction. Requests with duplicate envelopes for one
-device are rejected.
+The server claims `(sendId, deliveryScope)` before checking the current recipient
+set. `direct` and `sync` requests for the same logical send therefore do not
+deduplicate each other. An already-accepted retry within its scope returns
+deduplicated success even if the recipient added a device after the original
+commit; a new send that finds a mismatch rolls the claim back with the
+transaction. Requests with duplicate envelopes for one device are rejected.

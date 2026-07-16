@@ -73,12 +73,14 @@ CREATE TABLE IF NOT EXISTS sender_keys (
     PRIMARY KEY (address, distribution_id)
 );
 CREATE TABLE IF NOT EXISTS outbox (
-    send_id    TEXT PRIMARY KEY,
-    peer       TEXT    NOT NULL,
-    content    BLOB    NOT NULL,
-    envelopes  BLOB    NOT NULL,
-    attempts   INTEGER NOT NULL,
-    created_at INTEGER NOT NULL
+    send_id          TEXT PRIMARY KEY,
+    peer             TEXT    NOT NULL,
+    content          BLOB    NOT NULL,
+    envelopes        BLOB    NOT NULL,
+    attempts         INTEGER NOT NULL,
+    created_at       INTEGER NOT NULL,
+    primary_delivered INTEGER NOT NULL DEFAULT 0,
+    sync_leg         BLOB
 );
 CREATE TABLE IF NOT EXISTS messages (
     id               TEXT PRIMARY KEY,
@@ -286,7 +288,8 @@ impl ChatDb for SqliteChatDb {
         let conn = self.conn.borrow();
         db(conn
             .query_row(
-                "SELECT send_id, peer, content, envelopes, attempts, created_at \
+                "SELECT send_id, peer, content, envelopes, attempts, created_at, \
+                        primary_delivered, sync_leg \
                  FROM outbox WHERE send_id = ?1",
                 [send_id],
                 outbox_row,
@@ -297,7 +300,8 @@ impl ChatDb for SqliteChatDb {
     async fn list_outbox(&self) -> Result<Vec<OutboxEntry>> {
         let conn = self.conn.borrow();
         let mut stmt = db(conn.prepare(
-            "SELECT send_id, peer, content, envelopes, attempts, created_at \
+            "SELECT send_id, peer, content, envelopes, attempts, created_at, \
+                    primary_delivered, sync_leg \
              FROM outbox ORDER BY created_at, send_id",
         ))?;
         let rows = db(stmt.query_map([], outbox_row))?;
@@ -514,18 +518,27 @@ impl ChatDb for SqliteChatDb {
         for (send_id, entry) in &pending.outbox {
             match entry {
                 Some(e) => db(tx.execute(
-                    "INSERT INTO outbox (send_id, peer, content, envelopes, attempts, created_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                    "INSERT INTO outbox (send_id, peer, content, envelopes, attempts, created_at, \
+                                         primary_delivered, sync_leg) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
                      ON CONFLICT(send_id) DO UPDATE SET \
                        peer = excluded.peer, content = excluded.content, \
-                       envelopes = excluded.envelopes, attempts = excluded.attempts",
+                       envelopes = excluded.envelopes, attempts = excluded.attempts, \
+                       primary_delivered = excluded.primary_delivered, \
+                       sync_leg = excluded.sync_leg",
                     rusqlite::params![
                         send_id,
                         e.peer,
                         e.content,
                         e.envelopes,
                         e.attempts,
-                        e.created_at
+                        e.created_at,
+                        i64::from(e.primary_delivered),
+                        e.sync
+                            .as_ref()
+                            .map(serde_json::to_vec)
+                            .transpose()
+                            .map_err(|error| ChatError::Db(error.to_string()))?
                     ],
                 ))?,
                 None => db(tx.execute("DELETE FROM outbox WHERE send_id = ?1", [send_id]))?,
@@ -698,6 +711,15 @@ fn ensure_schema_upgrades(conn: &Connection) -> Result<()> {
             [],
         ))?;
     }
+    if !has_column(conn, "outbox", "primary_delivered")? {
+        db(conn.execute(
+            "ALTER TABLE outbox ADD COLUMN primary_delivered INTEGER NOT NULL DEFAULT 0",
+            [],
+        ))?;
+    }
+    if !has_column(conn, "outbox", "sync_leg")? {
+        db(conn.execute("ALTER TABLE outbox ADD COLUMN sync_leg BLOB", []))?;
+    }
     db(conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS pending_chat_registration (
              id INTEGER PRIMARY KEY CHECK (id = 1), request BLOB NOT NULL
@@ -705,7 +727,7 @@ fn ensure_schema_upgrades(conn: &Connection) -> Result<()> {
     ))?;
     db(conn.execute(
         "INSERT OR IGNORE INTO schema_migrations (version, applied_at)
-         VALUES (4, 0), (5, 0), (6, 0), (7, 0)",
+         VALUES (4, 0), (5, 0), (6, 0), (7, 0), (8, 0)",
         [],
     ))?;
     Ok(())
@@ -740,6 +762,7 @@ fn message_row(row: &rusqlite::Row) -> rusqlite::Result<InboxMessage> {
 
 /// Reads one row of the `outbox` table into an [`OutboxEntry`].
 fn outbox_row(row: &rusqlite::Row) -> rusqlite::Result<OutboxEntry> {
+    let sync: Option<Vec<u8>> = row.get(7)?;
     Ok(OutboxEntry {
         send_id: row.get(0)?,
         peer: row.get(1)?,
@@ -747,6 +770,18 @@ fn outbox_row(row: &rusqlite::Row) -> rusqlite::Result<OutboxEntry> {
         envelopes: row.get(3)?,
         attempts: row.get(4)?,
         created_at: row.get(5)?,
+        primary_delivered: row.get::<_, i64>(6)? != 0,
+        sync: sync
+            .map(|bytes| {
+                serde_json::from_slice(&bytes).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        bytes.len(),
+                        rusqlite::types::Type::Blob,
+                        Box::new(error),
+                    )
+                })
+            })
+            .transpose()?,
     })
 }
 
@@ -780,6 +815,8 @@ mod tests {
 
     #[test]
     fn upgrades_the_pre_typed_failure_journal_in_place() {
+        use futures_executor::block_on;
+
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
@@ -788,7 +825,12 @@ mod tests {
                  state INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
                  last_error TEXT, received_at INTEGER NOT NULL
              );
-             CREATE TABLE pre_keys (id INTEGER PRIMARY KEY, record BLOB NOT NULL);",
+             CREATE TABLE pre_keys (id INTEGER PRIMARY KEY, record BLOB NOT NULL);
+             CREATE TABLE outbox (
+                 send_id TEXT PRIMARY KEY, peer TEXT NOT NULL, content BLOB NOT NULL,
+                 envelopes BLOB NOT NULL, attempts INTEGER NOT NULL, created_at INTEGER NOT NULL
+             );
+             INSERT INTO outbox VALUES ('legacy-send', 'bob', X'01', X'02', 1, 123);",
         )
         .unwrap();
         let db = SqliteChatDb::from_connection(conn).unwrap();
@@ -804,6 +846,11 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
         assert!(has_column(&db.conn.borrow(), "pre_keys", "used_at").unwrap());
+        assert!(has_column(&db.conn.borrow(), "outbox", "primary_delivered").unwrap());
+        assert!(has_column(&db.conn.borrow(), "outbox", "sync_leg").unwrap());
+        let legacy = block_on(db.load_outbox("legacy-send")).unwrap().unwrap();
+        assert!(!legacy.primary_delivered);
+        assert!(legacy.sync.is_none());
     }
 
     #[test]

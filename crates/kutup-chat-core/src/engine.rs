@@ -13,10 +13,14 @@ use std::rc::Rc;
 
 use rand::{CryptoRng, Rng};
 
-use crate::db::{ChatDb, InboundEnvelope, InboundFailureKind, InboundState, SentMessage};
+use crate::db::{
+    ChatDb, InboundEnvelope, InboundFailureKind, InboundState, OutboxEntry, OutboxLeg, SentMessage,
+};
 use crate::error::{ChatError, Result};
 use crate::manifest::{AccountAuthority, ManifestPolicy};
-use crate::session::{ReceiveOutcome, ReceivedMessage, SendSummary, Session};
+use crate::session::{
+    DirectSend, ReceiveOutcome, ReceivedMessage, SendAmendment, SendSummary, Session,
+};
 use crate::transport::{ChatTransport, SendOutcome};
 use kutup_chat_proto::{
     ChatContent, DeviceManifest, OutgoingEnvelope, PreKeyCountResponse, SendMessagesRequest,
@@ -381,10 +385,8 @@ impl Engine {
                     entry.peer
                 )));
             }
-            let envelopes = serde_json::from_slice(&entry.envelopes)
-                .map_err(|error| ChatError::Db(format!("decode durable outbox: {error}")))?;
-            let mut summary = SendSummary::default();
-            self.deliver(send_id, peer_user, envelopes, &mut summary, rng)
+            let summary = self
+                .deliver_outbox_entry(entry, SendSummary::default(), rng)
                 .await?;
             self.events
                 .push_back(ChatEvent::MessageSent(summary.clone()));
@@ -409,19 +411,34 @@ impl Engine {
                 "send {send_id} is pending but has no durable ciphertext"
             )));
         }
-        let bundles = self.fetch_verified_bundles(peer_user).await?;
         let mut summary = SendSummary::default();
-        let envelopes = if peer_user == self.session.user() {
+        if peer_user == self.session.user() {
+            let bundles = self.fetch_verified_bundles(peer_user).await?;
             self.session
                 .enqueue_note_to_self(send_id, &bundles, content, &mut summary, rng)
-                .await?
+                .await?;
         } else {
+            let recipient_bundles = self.fetch_verified_bundles(peer_user).await?;
+            let user = self.session.user().to_string();
+            let sync_bundles = self.fetch_verified_bundles(&user).await?;
             self.session
-                .enqueue_send(send_id, peer_user, &bundles, content, &mut summary, rng)
-                .await?
-        };
-        self.deliver(send_id, peer_user, envelopes, &mut summary, rng)
-            .await?;
+                .enqueue_direct_send(
+                    DirectSend {
+                        send_id,
+                        peer_user,
+                        recipient_bundles: &recipient_bundles,
+                        sync_bundles: &sync_bundles,
+                        content,
+                    },
+                    &mut summary,
+                    rng,
+                )
+                .await?;
+        }
+        let entry = self.session.outbox_entry(send_id).await?.ok_or_else(|| {
+            ChatError::Db(format!("send {send_id} was not durably staged"))
+        })?;
+        let summary = self.deliver_outbox_entry(entry, summary, rng).await?;
         if !summary.safety_number_changes.is_empty() {
             self.events.push_back(ChatEvent::IdentityChanged(
                 summary.safety_number_changes.clone(),
@@ -441,12 +458,10 @@ impl Engine {
     ) -> Result<Vec<SendSummary>> {
         let mut summaries = Vec::new();
         for entry in self.session.pending_outbox().await? {
-            let envelopes: Vec<OutgoingEnvelope> = serde_json::from_slice(&entry.envelopes)
-                .map_err(|e| ChatError::Content(e.to_string()))?;
-            let mut summary = SendSummary::default();
-            self.deliver(&entry.send_id, &entry.peer, envelopes, &mut summary, rng)
-                .await?;
-            summaries.push(summary);
+            summaries.push(
+                self.deliver_outbox_entry(entry, SendSummary::default(), rng)
+                    .await?,
+            );
         }
         Ok(summaries)
     }
@@ -586,23 +601,78 @@ impl Engine {
         }
     }
 
+    /// Deliver every still-pending leg of one logical send. Transcript errors
+    /// never turn a confirmed recipient delivery into a user-visible failure;
+    /// the durable sync leg remains queued for the next reconciliation.
+    async fn deliver_outbox_entry<R: Rng + CryptoRng>(
+        &mut self,
+        entry: OutboxEntry,
+        mut summary: SendSummary,
+        rng: &mut R,
+    ) -> Result<SendSummary> {
+        let primary = if entry.primary_delivered {
+            summary.delivered = true;
+            summary.deduplicated = true;
+            Ok(())
+        } else {
+            let envelopes = serde_json::from_slice(&entry.envelopes)
+                .map_err(|error| ChatError::Db(format!("decode durable outbox: {error}")))?;
+            self.deliver_leg(
+                &entry.send_id,
+                &entry.peer,
+                envelopes,
+                &mut summary,
+                OutboxLeg::Primary,
+                rng,
+            )
+            .await
+        };
+
+        let sync = if let Some(sync) = entry.sync {
+            let envelopes = serde_json::from_slice(&sync.envelopes).map_err(|error| {
+                ChatError::Db(format!("decode durable sync outbox: {error}"))
+            })?;
+            let user = self.session.user().to_string();
+            let mut sync_summary = SendSummary::default();
+            self.deliver_leg(
+                &entry.send_id,
+                &user,
+                envelopes,
+                &mut sync_summary,
+                OutboxLeg::Sync,
+                rng,
+            )
+            .await
+        } else {
+            Ok(())
+        };
+
+        // Attempt both independent legs even if one fails. Recipient delivery
+        // remains the user-visible result; a sync failure stays durable and is
+        // retried without blocking mailbox reconciliation.
+        primary?;
+        let _ = sync;
+        Ok(summary)
+    }
+
     /// The send/recover loop shared by [`send`](Self::send) and
-    /// [`flush_outbox`](Self::flush_outbox): POST the current envelope set; on a
-    /// mismatch, re-fetch bundles, amend the durable send, and retry.
-    async fn deliver<R: Rng + CryptoRng>(
+    /// [`flush_outbox`](Self::flush_outbox): POST one current envelope set; on a
+    /// mismatch, re-fetch bundles, amend that durable leg, and retry.
+    async fn deliver_leg<R: Rng + CryptoRng>(
         &mut self,
         send_id: &str,
         peer_user: &str,
         mut envelopes: Vec<OutgoingEnvelope>,
         summary: &mut SendSummary,
+        leg: OutboxLeg,
         rng: &mut R,
     ) -> Result<()> {
         let transport = Rc::clone(&self.transport);
-        let self_sync = peer_user == self.session.user();
+        let self_sync = leg == OutboxLeg::Sync || peer_user == self.session.user();
         // A single-device Note to Self is already durable local outgoing
         // history. There is no recipient mailbox and therefore no network POST.
         if self_sync && envelopes.is_empty() {
-            self.session.complete_send(send_id, false).await?;
+            self.session.complete_send(send_id, leg, false).await?;
             summary.delivered = true;
             return Ok(());
         }
@@ -621,7 +691,7 @@ impl Engine {
             };
             match outcome {
                 SendOutcome::Delivered { deduplicated } => {
-                    self.session.complete_send(send_id, deduplicated).await?;
+                    self.session.complete_send(send_id, leg, deduplicated).await?;
                     summary.delivered = true;
                     summary.deduplicated = deduplicated;
                     return Ok(());
@@ -630,7 +700,17 @@ impl Engine {
                     let bundles = self.fetch_verified_bundles(peer_user).await?;
                     envelopes = self
                         .session
-                        .amend_send(send_id, peer_user, &mismatch, &bundles, summary, rng)
+                        .amend_send(
+                            SendAmendment {
+                                send_id,
+                                peer_user,
+                                mismatch: &mismatch,
+                                bundles: &bundles,
+                                leg,
+                            },
+                            summary,
+                            rng,
+                        )
                         .await?;
                 }
             }

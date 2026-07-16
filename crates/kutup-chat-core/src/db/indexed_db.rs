@@ -579,6 +579,8 @@ mod tests {
                 envelopes: vec![12],
                 attempts: 1,
                 created_at: 100,
+                primary_delivered: false,
+                sync: None,
             }),
         );
         pending.messages.push(InboxMessage {

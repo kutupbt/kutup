@@ -56,10 +56,25 @@ pub struct InboxMessage {
     pub received_at: i64,
 }
 
-/// A pending outbound message, keyed by its `sendId`. Because a ratchet advance is
-/// irreversible, a retry MUST resend the exact stored ciphertext (never
-/// re-encrypt); `content` is the plaintext, kept so a `409 DeviceListMismatch`
-/// can re-encrypt for a newly-added device. Deleted once the send is delivered.
+/// The independently retryable encrypted transcript fan-out for an ordinary
+/// direct message. Its presence means the sender's linked-device leg is still
+/// pending; it is removed once that leg is confirmed.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct OutboxSyncLeg {
+    /// `serde_json` of the [`sentTranscript`](kutup_chat_proto::content::kind::SENT_TRANSCRIPT)
+    /// plaintext, retained only for device-list amendment.
+    pub content: Vec<u8>,
+    /// `serde_json` of the per-linked-device ciphertext envelopes.
+    pub envelopes: Vec<u8>,
+    pub attempts: u32,
+}
+
+/// A pending outbound message, keyed by its logical `sendId`. Because ratchet
+/// advances are irreversible, each retry MUST resend the exact stored
+/// ciphertext. `content`/`envelopes` are the primary leg (recipient delivery,
+/// or own-device delivery for Note to Self); [`sync`](Self::sync) is the
+/// independently retryable sent transcript for an ordinary direct message.
+/// The record is deleted only after every present leg is confirmed.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct OutboxEntry {
     pub send_id: String,
@@ -73,6 +88,21 @@ pub struct OutboxEntry {
     pub attempts: u32,
     /// Unix-epoch millis the entry was first enqueued.
     pub created_at: i64,
+    /// The primary recipient leg already completed while linked-device sync is
+    /// still pending. Defaults false when reading pre-sync outbox records.
+    #[serde(default)]
+    pub primary_delivered: bool,
+    /// Pending linked-device transcript leg for an ordinary direct message.
+    #[serde(default)]
+    pub sync: Option<OutboxSyncLeg>,
+}
+
+/// Which independently durable leg of one logical send is being amended or
+/// completed. Kept crate-private; it is not a wire or binding type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OutboxLeg {
+    Primary,
+    Sync,
 }
 
 /// Durable local history for an outbound logical message. The pending outbox

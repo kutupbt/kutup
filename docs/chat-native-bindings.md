@@ -13,9 +13,9 @@ Rust owns:
 - Signed account device manifests and peer authority continuity.
 - Endpoint paths, request/response JSON, exact-device recovery, durable outbox,
   mailbox journal/decrypt/ack ordering, and history mapping.
-- Note to Self routing and encrypted sent-transcript import. Native UI code
-  sends to the local username through the same `sendText` API; it never builds
-  a transcript or chooses linked devices itself.
+- Note to Self routing and encrypted sent-transcript synchronization for all
+  outgoing direct messages. Native UI code always uses the same `sendText` API;
+  it never builds a transcript or chooses linked devices itself.
 - The account-scoped SQLCipher connection and all ratchet/message state.
 
 Swift/Kotlin owns:
