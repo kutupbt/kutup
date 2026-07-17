@@ -788,6 +788,46 @@ Rotate `signedPreKey` / `lastResortKyberPreKey` and/or upload more one-time prek
 
 Remaining one-time pool sizes: `{ "oneTimePreKeys": n, "oneTimeKyberPreKeys": n }` — clients replenish below a threshold.
 
+### POST /api/chat/manifest?transparencyTreeSize=N
+
+Publish the account-authority-signed current device manifest. Versions must
+advance by exactly one and hash-link to the preceding manifest; the authority
+key cannot rotate silently. The signed device ids, registration ids, suites,
+and identity keys must exactly match the server's registered device set.
+`transparencyTreeSize` is the client's highest verified local checkpoint. A
+successful publish transactionally advances both the chronological log and
+current-value sparse map and returns the manifest with its transparency proof.
+Exact replay is idempotent; version, chain, authority, or device-set conflicts
+return `409`.
+
+### GET /api/chat/users/{username}/manifest
+
+Return the current account-signed device manifest for a local user. This direct
+manifest endpoint is authenticated, but new-session directory reads should use
+the keys endpoint below because its response also binds the manifest to key
+transparency and supplies the PQXDH bundles.
+
+### GET /api/chat/profile
+
+Owner-only recovery of the current opaque encrypted profile, including the
+random profile key wrapped under the account master key for linked-device
+recovery. Returns `404` until a profile has been published.
+
+### PUT /api/chat/profile
+
+Publish a new opaque encrypted display-name/avatar profile. The server sees
+only ciphertext, a profile-key-derived version, an access-key verifier, a
+master-key-wrapped profile key, revision, and source device. Revision plus
+source-device ordering resolves concurrent linked-device writes; exact replay
+is idempotent and a stale/conflicting revision returns `409`.
+
+### GET /api/chat/users/{username}/profile/{version}
+
+Capability-gated encrypted profile lookup for a local or federated canonical
+address. The caller supplies the profile access key in the dedicated request
+header rather than the URL. A wrong version or capability is deliberately
+indistinguishable from a missing profile and returns `404`.
+
 ### GET /api/chat/transparency/checkpoint?fromTreeSize=N
 
 Public monitor endpoint; it does not consume prekeys or require a user account.
@@ -832,6 +872,14 @@ PQXDH prekey bundles for **every** chat device of `username` (a message must enc
 
 Deliver one logical message as per-device ciphertexts: `{ "senderDeviceId": n, "envelopes": [{ "deviceId", "registrationId", "envelopeType": "preKey"|"message", "suite": 1, "content": "<base64>" }] }`. The device set must exactly match the recipient's current devices — ids **and** registration ids — or the send fails with `409 { "missingDevices": [], "staleDevices": [], "extraDevices": [] }` (Signal's contract: no device can be silently skipped, and reinstalled devices are detected). Stored envelopes are also pushed to the recipient's live chat sockets.
 
+### POST /api/chat/sync/messages
+
+Deliver an encrypted sent transcript to every other active device belonging to
+the authenticated account. The sending device is excluded from the exact
+device-set check; an empty destination set succeeds for a single-device
+account. Note to Self and ordinary outgoing-message synchronization use this
+same idempotent mailbox path.
+
 ### GET /api/chat/messages?deviceId=N&limit=100
 
 Drain the device's mailbox, oldest first (max 500/page): `{ "envelopes": [{ "id", "sender", "senderDeviceId", "envelopeType", "suite", "content", "serverTimestamp" }], "more": bool }`. Envelopes stay stored until acked.
@@ -847,6 +895,55 @@ Mint a random, one-time browser WebSocket ticket bound to the authenticated user
 ### GET /api/chat/ws?ticket=…
 
 WebSocket. Browsers use the one-time ticket; native clients instead send `Authorization: Bearer …` with `?deviceId=N`. Reusable JWT query parameters are rejected. Server → client JSON frames: `{ "type": "drainMailbox" }` once on connect (fetch the backlog over REST), then `{ "type": "envelope", "envelope": {…} }` per newly arrived message. Acks stay on REST — the mailbox is the source of truth.
+
+---
+
+## Chat Federation — Server-to-Server Endpoints
+
+Chat federation is present only when the administrator configures a persistent
+federation signing identity. With that identity enabled, the current policy is
+open federation: every correctly authenticated public Kutup peer is admitted,
+subject to HTTPS/DNS/SSRF validation, request/body limits, protocol checks, and
+the coarse federation rate limit. There is no administrator-managed server
+allowlist/blocklist yet.
+
+Except for discovery, requests use `Authorization: Kutup …`. The Ed25519
+signature binds method, exact URI, origin, destination, timestamp, request id,
+key id, and the SHA-256 digest of the exact body. A destination mismatch,
+unknown signing key, bad signature, or request outside the five-minute clock
+window returns `401`.
+
+### GET /.well-known/kutup/federation.json
+
+Public discovery document containing `fedVersion`, canonical server name,
+delegated `apiBase`, and current federation signing-key ids/public keys. Returns
+`404` when chat federation is disabled. Production discovery and delegated API
+targets must use public HTTPS.
+
+### GET /api/fed/chat/users/{username}/keys?transparencyTreeSize=N
+
+Authenticated server-to-server directory lookup. Returns the remote user's
+account-signed device manifest, remote transparency proof, and replay-safe
+last-resort PQ bundles. It deliberately does not consume one-time prekeys, so a
+replayed signed read cannot exhaust the remote recipient's pool. The signed URI
+binds the caller's highest verified remote checkpoint.
+
+### GET /api/fed/chat/users/{username}/profile/{version}
+
+Authenticated proxy lookup for an opaque encrypted profile. The server-to-
+server signature authenticates and destination-binds the originating
+homeserver; the separate profile access-key header remains the end-to-end
+capability. Wrong capabilities return `404`.
+
+### POST /api/fed/chat/messages
+
+Receive one signed, ordered `FederatedChatTransaction`. The receiver enforces a
+contiguous per-origin sequence, exact recipient device set, canonical
+origin/sender and destination/recipient binding, and transaction-id replay
+safety. Mailbox rows, the stored idempotent response, and the sequence
+high-water mark commit atomically. Exact replay returns the stored response;
+device mismatch or sequence gap returns typed `409` data so the origin can
+refresh/re-encrypt or replay the missing retained transaction.
 
 ---
 

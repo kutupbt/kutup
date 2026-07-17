@@ -1,7 +1,8 @@
 # kutup chat ("ileti") — wire protocol v1 (normative)
 
-**Status:** normative target for chat phase 2b. This is the contract the three
-clients (web/wasm, Android, iOS) freeze against. It supersedes the
+**Status:** normative v1 contract implemented by the server, shared Rust
+engine, and web/WASM reference client. Android and iOS will freeze against the
+same contract after the web feature milestone. It supersedes the
 wire-affecting parts of `docs/research/11-federated-chat.md`,
 `12-chat-improvements-for-clients.md`, and `13-chat-architecture-comparative-research.md`
 — read those for *why*; read this for *what*.
@@ -12,15 +13,15 @@ The phase-2 server, shared Rust engine, and browser WASM client now consume this
 contract. Kutup remains pre-production, but wire changes are no longer isolated
 server reshapes: they require a coordinated proto/core/web change, shared
 fixtures, and a deliberate protocol-version decision. Android and iOS bind the
-same engine next.
+same engine after the web feature and protocol milestones are complete.
 
 **Element status tags** (every field/endpoint below carries one):
 - **[IMPL]** — built in the server and/or shared client engine. The web client
   freezes against these shapes now.
 - **[ADD]** — folded into the base v1 shape now (content schema, `sendId`,
   `cursor`, `Option` sender, capability block, per-account rate limit).
-- **[RSV]** — a later *subsystem* (sealed sender, groups,
-  federation), but its **fields/shapes are baked into the v1 base types now**
+- **[RSV]** — a later *subsystem* (sealed sender, groups, receipts, typing, or
+  attachments), but its **fields/shapes are baked into the v1 base types now**
   so building the subsystem later touches handlers, not the wire. Clients MUST
   tolerate reserved fields (accept, round-trip, ignore).
 
@@ -92,13 +93,14 @@ Client APIs and persisted UI state identify conversations as the tagged union
 string remains a compatibility projection for direct-message history while web
 callers migrate; it is not the long-term conversation key.
 
-**[RSV] Account self-authority key (device-list authenticity).** The research
+**[IMPL] Account self-authority key (device-list authenticity).** The research
 (`13-…` §4.3) makes device-list authenticity a v1 requirement: server-assigned
 device lists otherwise reproduce the malicious-homeserver break that defeated
 Matrix/Megolm. v1 introduces a **self-signing account key** and a **signed
-device manifest** (§5.3). The manifest format is in v1; verification UX MAY
-land incrementally, but the signed manifest MUST be part of the wire contract
-now so a key-transparency log can later wrap it without a break.
+device manifest** (§5.3). The server and shared engine publish and verify this
+manifest, and key transparency wraps each accepted version. Safety-number and
+directory-change UX may continue to improve without changing the signed wire
+format.
 
 ---
 
@@ -434,10 +436,9 @@ SendMessagesRequest {
 }
 ```
 
-**[ADD] `sendId`.** No idempotency today: a client that times out and retries
-`POST …/messages` stores duplicate mailbox rows (the request can succeed while
-the response is lost — the mobile norm). v1 adds a client-generated `sendId`
-(UUID). The server dedupes per
+**[ADD] `sendId`.** A client-generated UUID prevents a timeout followed by a
+retry from storing duplicate mailbox rows (the request can succeed while the
+response is lost — the mobile norm). The server dedupes per
 `(senderUser, senderDevice, sendId, deliveryScope)` within a retention window
 (unique constraint on the insert batch; `ON CONFLICT DO NOTHING`; return the
 original 200). `deliveryScope` separates the recipient delivery from the
@@ -652,7 +653,7 @@ URLs land in browser history, proxy logs, and tracing. (`12-…` §5.)
 ## 10. Capability advertisement — [ADD]
 
 Clients feature-gate chat per server and must not show chat UI on a server
-lacking the routes. Add a `chat` block to the existing public
+lacking the routes. The server publishes a `chat` block in the existing public
 `GET /api/auth/settings`:
 
 ```jsonc
@@ -678,8 +679,8 @@ lacking the routes. Add a `chat` block to the existing public
 }
 ```
 
-`maxContentBytes` MUST be **enforced** on send (today an envelope can be
-arbitrary size) and is the budget clients use for attachment-pointer payloads.
+`maxContentBytes` is enforced on send and is the budget clients use for
+attachment-pointer payloads.
 The optional `serverName` is the stable suffix used to render local accounts as
 `username@server`; clients reject an advertised federation capability without
 it. A production client also rejects `keyTransparency: true` without a valid
@@ -793,10 +794,15 @@ persistent signing identity:
   to other accounts on that server remain unblocked. If a replay record has
   expired, the receiver's contiguous sequence high-water mark safely
   acknowledges the already-consumed sequence without replaying ciphertext.
-- **Abuse controls (from XMPP servers, `13-…` §5/§7):** pre-auth vs post-auth
-  size/element caps; per-remote shapers; an overload circuit breaker
-  (auto-temporary-block a failing/overloaded remote); a proof-of-contact gate
-  before accepting messages from strangers (the delivery token doubles as this).
+- **Current abuse controls [IMPL]:** authenticated origin signatures, request
+  clock bounds, transaction/body limits, SSRF/private-network rejection, and a
+  coarse per-IP federation rate limit.
+- **Remaining federation controls [TODO]:** administrator-managed open,
+  allowlist, and disabled modes; per-domain inbound/outbound deny rules;
+  per-remote shapers; an overload circuit breaker; authenticated remote-key
+  pinning/rotation; and the proof-of-contact delivery gate needed by sealed
+  sender. A deployment MUST NOT mistake the current coarse rate limit for a
+  server admission policy.
 
 The transport foundation is exercised by `scripts/test-chat-federation.sh` in
 an isolated `a.test`/`b.test` Docker topology. The live contract covers signed
@@ -841,16 +847,16 @@ continue to reject private/internal destinations.
 
 ---
 
-## 16. Phase-2b implementation order
+## 16. Implementation history and current boundary
 
-1. **[ADD] proto + server, additive, ship first** (safe against the current
-   server, unblocks clients): content schema types in `kutup-chat-proto`;
+1. **✅ Proto + server base:** content schema types in `kutup-chat-proto`;
    `sendId` dedupe; `cursor` + `?after=` paging; the `chat` capability block +
    `maxContentBytes` enforcement; per-account bundle rate limit. Plus reserve
    `sender: Option` and `accessToken` in the DTOs.
-2. **Design docs, then implement** (the two consequential pieces): the device
-   manifest / self-authority scheme (§5.3), and the GV2 group-state model
-   (§12) — short decision docs before code (`13-…` §4.1/§4.3).
+2. **Trust and groups:** the device-manifest/self-authority scheme (§5.3), key
+   transparency, witnesses, and local web monitoring are implemented. The GV2
+   group-state model (§12) remains the next major product subsystem after the
+   remote federation-policy/trust slice.
 3. **`kutup-chat-core`**: engine skeleton (transport/db ports, event stream,
    durable outbox with `sendId`, decrypt→persist→ack ordering, 409 recovery) —
    the artifact the Android/iOS clients link. **✅ Done** (branch

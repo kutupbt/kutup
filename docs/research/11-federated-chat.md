@@ -1,7 +1,16 @@
 # Research: Federated E2EE chat ("ileti") — Signal protocol core, Matrix-style transport federation, single-port 443
 
 **Captured:** 2026-07-12
-**Status:** Architecture recommendation, approved as the direction. Code-grounded against a local libsignal checkout at **v0.97.2** (2026). **Phase-1 wasm spike: done same day — verdict GO** (see §5 and `spikes/libsignal-wasm/`); phases 2+ not started.
+**Status:** Original architecture recommendation, approved as the direction and
+code-grounded against a local libsignal checkout at **v0.97.2** (2026).
+
+> **Implementation status (2026-07-17):** This is design rationale, not the
+> current-state contract. The web/WASM shared engine, direct messaging,
+> linked-device sync, Note to Self, transport-only federation, message
+> requests/blocking, encrypted profiles, signed device manifests, key
+> transparency, independent witnesses, and local checkpoint monitoring are now
+> implemented. See [`../chat-protocol.md`](../chat-protocol.md) for normative
+> behavior and [`../roadmap.md`](../roadmap.md) for the remaining work.
 
 > **Superseded in part by `13-chat-architecture-comparative-research.md` (2026-07-13).**
 > That comparative study (Signal/Matrix/XMPP + local libsignal/Prosody/ejabberd/Monal
@@ -185,8 +194,9 @@ frontend/              # ileti app: separate entry/domain, shared design system
 1. **Spike (go/no-go)**: `libsignal-protocol` + `spqr` on `wasm32-unknown-unknown`, thin wasm-bindgen wrapper, IndexedDB store impls. Falls out: whether the web client shares `kutup-chat-core` or needs another plan.
    **→ Done 2026-07-12, verdict GO** (`spikes/libsignal-wasm/`): compiles for `wasm32-unknown-unknown` on stable rustc (831 KB release `.wasm`); full PQXDH(Kyber1024) + Triple-Ratchet round-trip with `SessionUsabilityRequirements::all()` verified *executing in wasm* (Node WASI, 28 ms). Wire sizes: 1762 B PreKeySignalMessage / 105 B steady-state. Friction (all resolved, see the spike README): protoc at build time, dual getrandom-major feature opt-ins, browser clock discipline (`SystemTime::now()` panics on wasm32-unknown-unknown — pass timestamps explicitly, avoid `KyberPreKeyRecord::generate`), IndexedDB stores ⇒ wasm-bindgen-futures. Web client shares `kutup-chat-core`.
 2. **`kutup-chat-proto` + local 1:1 chat**: prekey directory endpoints, per-device mailboxes, WSS drain, sealed envelopes — single server.
-   **→ Server slice done 2026-07-12** (same PR series): proto crate (numeric suite registry), migration 021 (devices/pools/mailbox — public keys + opaque ciphertext only), 10 chat endpoints incl. the Signal missing/stale/extra device-set contract and pool-consuming bundle fetch with last-resort Kyber fallback (rate-limited: `RATE_LIMIT_CHAT_KEYS_PER_MIN`), chat WS hub + nginx upgrade location. Client engine (`kutup-chat-core`) is the remaining half of this phase.
-3. **Federation**: server signing keys, `.well-known/kutup/federation.json`, signed s2s delivery, retry queues, per-domain rate limits.
+   **→ Done:** proto/server, shared core, browser/WASM transport, IndexedDB durability, and the reference web UI are implemented and live verified.
+3. **Federation**: server signing keys, `.well-known/kutup/federation.json`, signed s2s delivery, and durable ordered retry queues.
+   **→ Transport foundation done:** the remaining operational work is per-domain admission/rate policy, authenticated remote-key rotation, and remote transparency monitoring.
 4. **Groups**: sender keys + encrypted group blobs, membership changes → re-key.
 5. **Media**: drive/tus integration + federated capability-token fetch.
 6. **Calls**: 1:1 WebRTC → SFU group calls; TURN + SNI demux on 443 (+ optional udp/443).

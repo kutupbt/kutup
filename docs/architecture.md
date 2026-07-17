@@ -137,6 +137,109 @@ Server A (sharer)                          Server B (recipient)
 
 ---
 
+## Federated E2EE Chat ("ileti")
+
+Chat is a separate cryptographic subsystem from drive encryption and
+collaborative editing. It uses the shared Rust `kutup-chat-core` engine in the
+browser through WebAssembly; Android and iOS will consume the same engine
+through UniFFI after the web protocol and feature set are complete. The
+normative contract is [`chat-protocol.md`](chat-protocol.md).
+
+```mermaid
+flowchart LR
+    A["Browser A<br/>kutup-chat-core/WASM<br/>IndexedDB"]
+    HA["Homeserver A<br/>public prekeys +<br/>opaque mailbox"]
+    HB["Homeserver B<br/>public prekeys +<br/>opaque mailbox"]
+    B["Browser B<br/>kutup-chat-core/WASM<br/>IndexedDB"]
+
+    A -->|"authenticated<br/>PQXDH bundle lookup"| HA
+    A -->|"libsignal ciphertext"| HA
+    HA -->|"signed, ordered<br/>federation transaction"| HB
+    HB -->|"REST drain / WS hint"| B
+    B -->|"ack after durable decrypt"| HB
+```
+
+### Client and server responsibilities
+
+- Each chat device has an independent libsignal identity and publishes signed
+  prekeys plus one-time classical and post-quantum prekeys. New sessions use
+  PQXDH; established sessions use libsignal's Triple Ratchet construction.
+- A logical send encrypts separately to every active recipient device. A
+  server-side device-set mismatch rejects the entire send, causing the client
+  to refresh the signed directory and re-encrypt instead of silently skipping
+  a device.
+- The client persists ratchets, plaintext history, pending ciphertext,
+  message-request state, encrypted-profile capabilities, and transparency
+  trust in an account-scoped IndexedDB database. Web Locks serialize ratchet
+  transactions across tabs. Ciphertext is durably journaled before decrypt and
+  acknowledged only after the ratchet advance and plaintext commit together.
+- The server stores public directory material and opaque per-device mailbox
+  ciphertext. REST drain/ack is the source of truth; a one-use-ticket WebSocket
+  is only a low-latency reconciliation hint. Client-generated `sendId` values
+  make retries idempotent.
+- Note to Self is a self-addressed direct conversation. On multi-device
+  accounts, encrypted sent transcripts synchronize messages to the sender's
+  other devices; a one-device note remains local without creating a fake
+  one-member group.
+
+### Identity, contacts, and profiles
+
+The stable chat address is `username@server`; no alias namespace exists.
+Changeable, non-unique display names and avatars are encrypted profile data and
+never routing identities. Profile keys are capability-distributed inside E2EE
+messages. Incoming strangers begin as durable message requests. Accept,
+reject, block, and unblock are client-held relationship state; blocking also
+rotates the local encrypted-profile capability so the blocked peer cannot read
+future profile versions.
+
+Blocking is not sealed sender: the current mailbox and federation servers can
+still see sender and recipient addresses. A complete sealed-sender feature must
+ship together with its delivery-capability abuse gate rather than merely
+hiding a DTO field.
+
+### Device-directory trust and transparency
+
+An account self-authority key signs the exact chat-device manifest. Every
+accepted manifest version is appended to a chronological Merkle log and the
+current account value is authenticated by a sparse Merkle map. Exact
+checkpoints carry a persistent operator signature and may carry signatures
+from independently deployed witnesses; clients enforce their pinned operator
+and witness-quorum policy.
+
+The web client independently checks its local checkpoint when chat opens,
+connectivity returns, the page becomes visible, the WebSocket reconnects, and
+every 15 minutes while visible. Network unavailability is recorded as an
+availability warning without discarding established trust. A signature,
+consistency, rollback, policy, or witness-quorum failure is durable and blocks
+creation of new sends until a later valid checkpoint recovers the state.
+Existing durable ciphertext is retained.
+
+### Transport-only federation
+
+Federation uses canonical DNS server names, `.well-known` delegation, and
+destination/body-bound Ed25519 request signatures. Outbound transactions are
+persisted and strictly ordered per destination; receivers atomically commit
+mailbox rows, replay records, and a contiguous sequence high-water mark.
+Neither homeserver replicates conversation or room state.
+
+Federation is disabled unless the administrator configures a persistent
+signing key. Once enabled, the current implementation accepts any correctly
+authenticated public Kutup peer that passes HTTPS, DNS/SSRF, protocol, payload,
+and rate-limit checks. There is not yet an administrator-managed server
+allowlist/blocklist or pinned remote-key rotation policy; these are explicit
+hardening work, not properties operators should assume already exist.
+
+### Current product boundary
+
+The web client currently supports direct text messaging, linked-device sync,
+Note to Self, transport federation, message requests/blocking, encrypted
+profiles, signed device manifests, and monitored key transparency. Private
+groups, attachments/media, receipts, typing, disappearing messages, sealed
+sender, calls, push delivery, and native-client integration remain future
+slices tracked in [`roadmap.md`](roadmap.md).
+
+---
+
 ## Storage Layer
 
 Files are stored in **SeaweedFS** accessed via its S3-compatible API. The backend uses the Rust `aws-sdk-s3` crate configured to point at the internal SeaweedFS S3 gateway.
@@ -157,6 +260,10 @@ PostgreSQL 16 is used for all persistent metadata:
 - File records (encrypted metadata, SeaweedFS object keys)
 - Public share tokens
 - Federation share tokens and incoming shares
+- Chat devices and public prekey pools
+- Opaque per-device chat mailboxes and idempotent send records
+- Signed device manifests, transparency log/map nodes, checkpoints, and witness attestations
+- Durable per-destination federation outboxes and inbound replay/high-water records
 - TOTP secrets (encrypted)
 - Global settings and per-user quotas
 

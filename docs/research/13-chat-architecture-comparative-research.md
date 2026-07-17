@@ -7,6 +7,15 @@ native-client plans (`kutup-android`, `kutup-ios`)
 codebases checked out locally: `libsignal`, Prosody, ejabberd, Monal.  
 **Companion docs:** `11-federated-chat.md` (original design), `12-chat-improvements-for-clients.md` (wire-contract fixes)
 
+> **Implementation status (2026-07-17):** The verdict remains the design
+> rationale. Its signed device manifest, durable in-order federation,
+> authenticated request, mailbox-durability, encrypted-profile, key-
+> transparency, and witness recommendations are implemented in the server,
+> shared core, and web client. GV2-pattern private groups, complete sealed
+> sender, richer messaging/media, remote federation-policy distribution, and
+> native integration remain. Current normative behavior lives in
+> [`../chat-protocol.md`](../chat-protocol.md).
+
 This document answers one question: **is kutup's chat architecture correct,
 and what must change before the wire contract freezes?** The bar is
 enterprise-grade — no invented crypto, no quick hacks, every security item
@@ -47,7 +56,7 @@ research explicitly could not verify.
 
 ---
 
-## 1. What kutup has today (baseline)
+## 1. Baseline at research time
 
 From `claude/chat-phase1`: pinned libsignal (PQXDH X25519+ML-KEM + Triple
 Ratchet, PQ always-on, numeric suite registry); a Postgres-backed prekey

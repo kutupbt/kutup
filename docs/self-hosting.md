@@ -226,6 +226,14 @@ Back up the signing seed—an ephemeral or silently replaced server identity wou
 break remote trust. Production federation requires public HTTPS and refuses
 private/loopback destinations.
 
+Enabling the signing key currently enables **open chat federation**: any public
+Kutup peer with valid discovery and request signatures can make authenticated
+federation requests, subject to SSRF checks, body limits, and the coarse
+federation rate limit. There is not yet an administrator-managed allowlist or
+blocklist. If the instance must federate only with selected domains, leave chat
+federation disabled until the server-policy milestone lands; a reverse-proxy
+IP rule is not an equivalent domain-identity policy.
+
 After changing these values, rebuild the backend:
 
 ```sh
@@ -282,6 +290,15 @@ until enough witnesses have polled; clients fail closed and may retry after the
 witness interval. The isolated reference topology and contract test are
 `docker-compose.chat-transparency-witness.yml` and
 `scripts/test-chat-transparency-witness.sh`.
+
+The web client also monitors its homeserver checkpoint independently on chat
+open, reconnect, foreground, restored connectivity, and every 15 minutes while
+visible. Temporary network failure produces an availability warning and keeps
+the last valid trust state. A cryptographic, consistency, rollback, policy, or
+witness-quorum failure is persisted locally and blocks new sends until a later
+valid checkpoint succeeds. Scheduled monitoring of remote federated
+checkpoints is not implemented yet; it depends on authenticated remote
+operator/witness policy distribution and rotation.
 
 ---
 

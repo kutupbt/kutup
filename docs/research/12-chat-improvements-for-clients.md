@@ -1,24 +1,27 @@
 # Chat ("ileti") — improvements to lock in while the feature is young
 
-**Status:** proposal / working brief for chat phase 2b  
-**Baseline:** branch `claude/chat-phase1` (spike ✅, server slice ✅, client
-engine + UI not started), design note `11-federated-chat.md`  
+**Status:** historical proposal; its accepted wire changes are implemented.
+
+**Current reference (2026-07-17):** [`../chat-protocol.md`](../chat-protocol.md)
+is normative. The shared engine and web UI are implemented; this document
+preserves the rationale that led to the content schema, idempotency, capability,
+durability, and client-boundary decisions.
+
 **Written for:** the `kutup-chat-core` work and the native-client plans
 (`kutup-android`, `kutup-ios`), which pin the chat wire contract
 
-The phase-1/2 design is sound: pinned libsignal (PQXDH + Triple Ratchet,
+The phase-1/2 design was sound: pinned libsignal (PQXDH + Triple Ratchet,
 PQ always-on), a dumb prekey-directory + mailbox server, REST drain/ack as
 the source of truth with WS as a latency hint. Nothing below changes that
-architecture. These are the things that are **cheap to fix now and breaking
-to fix later**, ordered by how much future pain they remove — with three
-clients (web/wasm, Android, iOS) about to freeze against this contract.
+architecture. The accepted items below were folded into the v1 contract before
+the web client froze against it. Android and iOS will consume that same shared
+engine only after the web feature milestone is complete.
 
 ## 1. Define the inner content schema now (highest value)
 
-Today nothing specifies what's *inside* the ciphertext. `content` is a
-libsignal envelope around opaque plaintext — and three clients are about to
-invent that plaintext independently. This is the single biggest
-cross-client-compatibility risk in the whole feature.
+At the time of this proposal nothing specified what was inside the ciphertext.
+The resulting versioned `ChatContent` schema now lives in
+`kutup-chat-proto`; clients do not invent plaintext formats independently.
 
 Proposal: a versioned plaintext schema owned by `kutup-chat-proto` (new
 `content` module, so server and clients share one definition even though the
