@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use kutup_chat_core::{ChatError, ChatTransport, Result as CoreResult, SendOutcome};
 use kutup_chat_proto::{
-    DeviceListMismatch, DeviceManifest, MailboxPage, PreKeyCountResponse,
+    DeviceListMismatch, DeviceManifest, MailboxPage, PreKeyCountResponse, PublishManifestResponse,
     RegisterChatDeviceRequest, RegisterChatDeviceResponse, ReplenishKeysRequest,
     SendMessagesRequest, UserPreKeyBundlesResponse,
 };
@@ -42,10 +42,17 @@ impl ChatTransport for NativeTransport {
         Ok(response.device_id)
     }
 
-    async fn fetch_bundles(&self, username: &str) -> CoreResult<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(
+        &self,
+        username: &str,
+        transparency_tree_size: u64,
+    ) -> CoreResult<UserPreKeyBundlesResponse> {
         self.json::<(), _>(
             ChatHttpMethod::Get,
-            format!("/chat/users/{}/keys", urlencoding::encode(username)),
+            format!(
+                "/chat/users/{}/keys?transparencyTreeSize={transparency_tree_size}",
+                urlencoding::encode(username)
+            ),
             None,
         )
         .await
@@ -55,11 +62,12 @@ impl ChatTransport for NativeTransport {
         &self,
         username: &str,
         current_device_id: u32,
+        transparency_tree_size: u64,
     ) -> CoreResult<UserPreKeyBundlesResponse> {
         self.json::<(), _>(
             ChatHttpMethod::Get,
             format!(
-                "/chat/users/{}/keys?syncDeviceId={current_device_id}",
+                "/chat/users/{}/keys?syncDeviceId={current_device_id}&transparencyTreeSize={transparency_tree_size}",
                 urlencoding::encode(username)
             ),
             None,
@@ -82,10 +90,14 @@ impl ChatTransport for NativeTransport {
         decode(&response.body_json).map(Some)
     }
 
-    async fn publish_manifest(&self, manifest: &DeviceManifest) -> CoreResult<DeviceManifest> {
+    async fn publish_manifest(
+        &self,
+        manifest: &DeviceManifest,
+        transparency_tree_size: u64,
+    ) -> CoreResult<PublishManifestResponse> {
         self.json(
             ChatHttpMethod::Post,
-            "/chat/manifest".into(),
+            format!("/chat/manifest?transparencyTreeSize={transparency_tree_size}"),
             Some(manifest),
         )
         .await

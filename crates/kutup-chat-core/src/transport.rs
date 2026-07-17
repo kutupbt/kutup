@@ -14,9 +14,9 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use kutup_chat_proto::{
-    DeviceListMismatch, DeviceManifest, MailboxPage, PreKeyCountResponse,
-    RegisterChatDeviceRequest, ReplenishKeysRequest, SendMessagesRequest,
-    UserPreKeyBundlesResponse,
+    ChatProfileResponse, DeviceListMismatch, DeviceManifest, MailboxPage, OwnChatProfileResponse,
+    PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
+    ReplenishKeysRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
 };
 
 /// The result of a `POST …/messages`. A `409 DeviceListMismatch` is modeled as a
@@ -40,7 +40,11 @@ pub trait ChatTransport {
 
     /// `GET /api/chat/users/{username}/keys` — every active device's bundle
     /// (consumes one one-time prekey per device server-side).
-    async fn fetch_bundles(&self, username: &str) -> Result<UserPreKeyBundlesResponse>;
+    async fn fetch_bundles(
+        &self,
+        username: &str,
+        transparency_tree_size: u64,
+    ) -> Result<UserPreKeyBundlesResponse>;
 
     /// Fetch the local account's complete signed bundle set for an encrypted
     /// linked-device sync. The server does not consume one-time prekeys for
@@ -49,6 +53,7 @@ pub trait ChatTransport {
         &self,
         _username: &str,
         _current_device_id: u32,
+        _transparency_tree_size: u64,
     ) -> Result<UserPreKeyBundlesResponse> {
         Err(crate::ChatError::Transport(
             "transport does not implement linked-device bundle fetches".into(),
@@ -63,9 +68,43 @@ pub trait ChatTransport {
     }
 
     /// Publish the caller's next account-signed manifest.
-    async fn publish_manifest(&self, _manifest: &DeviceManifest) -> Result<DeviceManifest> {
+    async fn publish_manifest(
+        &self,
+        _manifest: &DeviceManifest,
+        _transparency_tree_size: u64,
+    ) -> Result<PublishManifestResponse> {
         Err(crate::ChatError::Transport(
             "transport does not implement device manifests".into(),
+        ))
+    }
+
+    /// Owner-only read of the current opaque profile, including the wrapped
+    /// random profile key used to initialize linked devices.
+    async fn fetch_own_profile(&self) -> Result<Option<OwnChatProfileResponse>> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement encrypted profiles".into(),
+        ))
+    }
+
+    /// Publish one exact encrypted profile revision.
+    async fn publish_profile(
+        &self,
+        _profile: &PutChatProfileRequest,
+    ) -> Result<OwnChatProfileResponse> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement encrypted profiles".into(),
+        ))
+    }
+
+    /// Capability-gated local or federated peer profile read.
+    async fn fetch_profile(
+        &self,
+        _username: &str,
+        _version: &str,
+        _access_key: &[u8],
+    ) -> Result<Option<ChatProfileResponse>> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement encrypted profiles".into(),
         ))
     }
 

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -18,8 +18,8 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use ed25519_dalek::SigningKey;
 use kutup_chat_proto::{
-    AccountAddress, ChatWsServerMessage, DeliveredEnvelope, DeviceListMismatch,
-    FederatedChatTransaction, FederationAuthorization, FederationDeliveryError,
+    AccountAddress, ChatProfileResponse, ChatWsServerMessage, DeliveredEnvelope,
+    DeviceListMismatch, FederatedChatTransaction, FederationAuthorization, FederationDeliveryError,
     FederationDeliveryRejection, FederationDeliveryResponse, FederationDiscovery,
     FederationRequest, FederationSigningKey, SendMessagesRequest, UserPreKeyBundlesResponse,
     FEDERATION_VERSION,
@@ -209,13 +209,17 @@ impl ChatFederation {
     pub async fn fetch_remote_bundles(
         &self,
         address: &AccountAddress,
+        transparency_tree_size: u64,
     ) -> AppResult<UserPreKeyBundlesResponse> {
         let destination = address
             .server
             .as_deref()
             .ok_or_else(|| AppError::bad_request("remote account requires a server"))?;
         let discovery = self.discover_remote(destination).await?;
-        let uri = format!("/api/fed/chat/users/{}/keys", address.username);
+        let uri = format!(
+            "/api/fed/chat/users/{}/keys?transparencyTreeSize={transparency_tree_size}",
+            address.username
+        );
         let authorization = FederationAuthorization::sign(
             self.server_name.clone(),
             destination.to_string(),
@@ -270,6 +274,78 @@ impl ChatFederation {
             ));
         }
         Ok(bundles)
+    }
+
+    pub async fn fetch_remote_profile(
+        &self,
+        address: &AccountAddress,
+        version: &str,
+        access_key: &[u8],
+    ) -> AppResult<ChatProfileResponse> {
+        let destination = address
+            .server
+            .as_deref()
+            .ok_or_else(|| AppError::bad_request("remote account requires a server"))?;
+        let discovery = self.discover_remote(destination).await?;
+        let uri = format!("/api/fed/chat/users/{}/profile/{version}", address.username);
+        let authorization = FederationAuthorization::sign(
+            self.server_name.clone(),
+            destination.to_string(),
+            OffsetDateTime::now_utc().unix_timestamp(),
+            uuid::Uuid::new_v4().to_string(),
+            FederationRequest {
+                method: "GET",
+                uri: &uri,
+                body: &[],
+            },
+            &self.signing_key,
+        )
+        .map_err(AppError::internal)?
+        .to_header_value()
+        .map_err(AppError::internal)?;
+        let url = format!("{}{}", discovery.api_base.trim_end_matches('/'), uri);
+        let response = FED_CLIENT
+            .get(url)
+            .header(AUTHORIZATION.as_str(), authorization)
+            .header(
+                crate::handlers::chat::PROFILE_ACCESS_KEY_HEADER,
+                STANDARD.encode(access_key),
+            )
+            .send()
+            .await
+            .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(AppError::not_found("remote chat profile not found"));
+        }
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(AppError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("remote chat profile returned {}", response.status()),
+            ));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
+        if bytes.len() > MAX_DIRECTORY_RESPONSE_BYTES {
+            return Err(AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "remote chat profile response is too large",
+            ));
+        }
+        let profile: ChatProfileResponse = serde_json::from_slice(&bytes).map_err(|_| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "invalid remote chat profile response",
+            )
+        })?;
+        if profile.version != version {
+            return Err(AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "remote chat profile returned the wrong version",
+            ));
+        }
+        Ok(profile)
     }
 
     /// Persist a remote send before attempting network I/O. A transient remote
@@ -826,7 +902,10 @@ pub async fn discovery(State(state): State<AppState>) -> AppResult<Response> {
     get,
     path = "/api/fed/chat/users/{username}/keys",
     tag = "chat federation",
-    params(("username" = String, Path, description = "Recipient username local to this server")),
+    params(
+        ("username" = String, Path, description = "Recipient username local to this server"),
+        ("transparencyTreeSize" = Option<u64>, Query, description = "Origin client's highest verified checkpoint for this destination log")
+    ),
     responses(
         (status = 200, description = "Signed manifest and replay-safe PQ bundles", body = UserPreKeyBundlesResponse),
         (status = 401, description = "Invalid federation request signature or destination"),
@@ -836,6 +915,7 @@ pub async fn discovery(State(state): State<AppState>) -> AppResult<Response> {
 pub async fn get_user_bundles(
     State(state): State<AppState>,
     Path(username): Path<String>,
+    Query(query): Query<crate::handlers::chat::BundleQuery>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation: Arc<ChatFederation> = state
@@ -844,7 +924,11 @@ pub async fn get_user_bundles(
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
     let account = AccountAddress::local(&username)
         .map_err(|error| AppError::bad_request(error.to_string()))?;
-    let uri = format!("/api/fed/chat/users/{}/keys", account.username);
+    let transparency_tree_size = query.transparency_tree_size.unwrap_or(0);
+    let uri = format!(
+        "/api/fed/chat/users/{}/keys?transparencyTreeSize={transparency_tree_size}",
+        account.username
+    );
     federation
         .verify_inbound(&headers, "GET", &uri, &[])
         .await?;
@@ -855,9 +939,63 @@ pub async fn get_user_bundles(
         &response_username,
         None,
         false,
+        transparency_tree_size,
     )
     .await?;
     Ok(Json(bundles).into_response())
+}
+
+/// Signed server-to-server encrypted profile lookup. The profile access key is
+/// a separate bearer capability; the federation signature authenticates and
+/// destination-binds the proxying homeserver.
+#[utoipa::path(
+    get,
+    path = "/api/fed/chat/users/{username}/profile/{version}",
+    tag = "chat federation",
+    params(
+        ("username" = String, Path, description = "Profile owner local to this server"),
+        ("version" = String, Path, description = "Profile-key-derived version")
+    ),
+    responses(
+        (status = 200, description = "Opaque encrypted profile", body = ChatProfileResponse),
+        (status = 401, description = "Invalid federation request signature"),
+        (status = 404, description = "Profile/version/capability not found")
+    )
+)]
+pub async fn get_user_profile(
+    State(state): State<AppState>,
+    Path((username, version)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    if !crate::handlers::chat::canonical_profile_version(&version) {
+        return Err(AppError::not_found("chat profile not found"));
+    }
+    let federation: Arc<ChatFederation> = state
+        .chat_federation
+        .clone()
+        .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
+    let account = AccountAddress::local(&username)
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    let uri = format!("/api/fed/chat/users/{}/profile/{version}", account.username);
+    federation
+        .verify_inbound(&headers, "GET", &uri, &[])
+        .await?;
+    let encoded = headers
+        .get(crate::handlers::chat::PROFILE_ACCESS_KEY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| AppError::not_found("chat profile not found"))?;
+    let access_key = STANDARD
+        .decode(encoded)
+        .map_err(|_| AppError::not_found("chat profile not found"))?;
+    let profile = crate::handlers::chat::load_public_profile(
+        &state,
+        &account.username,
+        &version,
+        &access_key,
+    )
+    .await?
+    .ok_or_else(|| AppError::not_found("chat profile not found"))?;
+    Ok(Json(profile).into_response())
 }
 
 /// Receive one authenticated, in-order server-to-server ciphertext

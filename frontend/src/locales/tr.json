@@ -87,6 +87,19 @@
       "copy": "Adresi kopyala",
       "copied": "Sohbet adresi kopyalandı"
     },
+    "profile": {
+      "open": "Sohbet profilimi düzenle",
+      "title": "Sohbet profili",
+      "description": "Adınız ve avatarınız bu cihazdan ayrılmadan önce şifrelenir.",
+      "displayName": "Görünen ad",
+      "address": "Kalıcı sohbet adresi",
+      "changeAvatar": "Fotoğraf seç",
+      "removeAvatar": "Kaldır",
+      "avatarHint": "PNG, JPEG veya WebP. Görsel bu cihazda kırpılır ve yeniden boyutlandırılır.",
+      "visibility": "Signal'da olduğu gibi Kutup da bu profili yalnızca mesaj gönderdiğiniz veya kabul ettiğiniz kişilerle paylaşır. Birini engellemek, gelecekteki değişiklikleri alamaması için profil anahtarınızı yeniler.",
+      "saved": "Şifreli sohbet profili güncellendi",
+      "avatarError": "Bu görsel profil fotoğrafı olarak kullanılamadı."
+    },
     "errors": {
       "sessionMissing": "Hesap oturumunuzda şifreli sohbet için gereken anahtarlar eksik.",
       "browserUnsupported": "Bu tarayıcı, şifreli sohbeti sekmeler arasında güvenli biçimde koordine edemiyor.",

@@ -11,6 +11,8 @@ const supported: ChatCapabilities = {
   deviceExpiryDays: 90,
   federation: false,
   manifests: true,
+  profiles: true,
+  keyTransparency: true,
   sealedSender: false,
 }
 
@@ -21,6 +23,8 @@ describe('isSupportedChat', () => {
     expect(isSupportedChat({ ...supported, protocolVersion: 2 })).toBe(false)
     expect(isSupportedChat({ ...supported, suites: [] })).toBe(false)
     expect(isSupportedChat({ ...supported, manifests: false })).toBe(false)
+    expect(isSupportedChat({ ...supported, profiles: false })).toBe(false)
+    expect(isSupportedChat({ ...supported, keyTransparency: false })).toBe(false)
     expect(isSupportedChat({ ...supported, federation: true })).toBe(false)
     expect(
       isSupportedChat({ ...supported, federation: true, serverName: 'chat.example' }),

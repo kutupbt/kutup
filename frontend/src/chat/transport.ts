@@ -8,16 +8,22 @@ export class ApiChatTransport implements ChatTransportPort {
     return api.post('/chat/device', request).then((response) => response.data)
   }
 
-  async fetchBundles(username: string): Promise<unknown> {
+  async fetchBundles(username: string, transparencyTreeSize: string): Promise<unknown> {
     return api
-      .get(`/chat/users/${encodeURIComponent(username)}/keys`)
+      .get(`/chat/users/${encodeURIComponent(username)}/keys`, {
+        params: { transparencyTreeSize },
+      })
       .then((response) => response.data)
   }
 
-  async fetchSyncBundles(username: string, currentDeviceId: number): Promise<unknown> {
+  async fetchSyncBundles(
+    username: string,
+    currentDeviceId: number,
+    transparencyTreeSize: string,
+  ): Promise<unknown> {
     return api
       .get(`/chat/users/${encodeURIComponent(username)}/keys`, {
-        params: { syncDeviceId: currentDeviceId },
+        params: { syncDeviceId: currentDeviceId, transparencyTreeSize },
       })
       .then((response) => response.data)
   }
@@ -33,8 +39,41 @@ export class ApiChatTransport implements ChatTransportPort {
     }
   }
 
-  async publishManifest(manifest: unknown): Promise<unknown> {
-    return api.post('/chat/manifest', manifest).then((response) => response.data)
+  async publishManifest(manifest: unknown, transparencyTreeSize: string): Promise<unknown> {
+    return api
+      .post('/chat/manifest', manifest, { params: { transparencyTreeSize } })
+      .then((response) => response.data)
+  }
+
+  async fetchOwnProfile(): Promise<unknown | null> {
+    try {
+      return await api.get('/chat/profile').then((response) => response.data)
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) return null
+      throw error
+    }
+  }
+
+  async publishProfile(profile: unknown): Promise<unknown> {
+    return api.put('/chat/profile', profile).then((response) => response.data)
+  }
+
+  async fetchProfile(
+    username: string,
+    version: string,
+    accessKey: string,
+  ): Promise<unknown | null> {
+    try {
+      return await api
+        .get(
+          `/chat/users/${encodeURIComponent(username)}/profile/${encodeURIComponent(version)}`,
+          { headers: { 'X-Kutup-Profile-Access-Key': accessKey } },
+        )
+        .then((response) => response.data)
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) return null
+      throw error
+    }
   }
 
   async prekeyCount(deviceId: number): Promise<unknown> {

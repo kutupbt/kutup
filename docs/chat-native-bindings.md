@@ -10,7 +10,9 @@ CLI workspace.
 Rust owns:
 
 - Signal registration, PQXDH/Triple Ratchet sessions, prekeys, and ciphertext.
-- Signed account device manifests and peer authority continuity.
+- Signed account device manifests, peer authority continuity/monitor positions,
+  and durable homeserver transparency checkpoints with chronological,
+  current-map, and consistency verification.
 - Endpoint paths, request/response JSON, exact-device recovery, durable outbox,
   mailbox journal/decrypt/ack ordering, and history mapping.
 - Note to Self routing and encrypted sent-transcript synchronization for all

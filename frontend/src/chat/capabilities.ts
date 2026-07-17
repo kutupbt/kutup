@@ -16,6 +16,8 @@ export function isSupportedChat(capabilities: ChatCapabilities | null | undefine
       capabilities.protocolVersion === PROTOCOL_VERSION &&
       capabilities.suites?.includes(REQUIRED_SUITE) &&
       capabilities.manifests &&
+      capabilities.profiles &&
+      capabilities.keyTransparency &&
       (!capabilities.federation || canonicalServer),
   )
 }

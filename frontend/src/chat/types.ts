@@ -48,6 +48,8 @@ export interface ReceiveReport {
   messages: unknown[]
   synced: string[]
   contactSynced: string[]
+  profileKeyUpdated: string[]
+  profilesRefreshed: string[]
   suppressed: string[]
   undecodable: string[]
   errors: InboundFailure[]
@@ -71,6 +73,17 @@ export interface ContactRecord {
   syncPending: boolean
 }
 
+export interface ChatProfile {
+  displayName: string
+  avatar?: string
+  avatarContentType?: string
+  revision: string
+}
+
+export interface PeerChatProfile extends ChatProfile {
+  peer: string
+}
+
 export interface InboundAttention {
   id: string
   cursor: string
@@ -91,15 +104,24 @@ export interface ChatCapabilities {
   serverName?: string
   federation: boolean
   manifests: boolean
+  profiles: boolean
+  keyTransparency: boolean
   sealedSender: boolean
 }
 
 export interface ChatTransportPort {
   registerDevice(request: unknown): Promise<unknown>
-  fetchBundles(username: string): Promise<unknown>
-  fetchSyncBundles(username: string, currentDeviceId: number): Promise<unknown>
+  fetchBundles(username: string, transparencyTreeSize: string): Promise<unknown>
+  fetchSyncBundles(
+    username: string,
+    currentDeviceId: number,
+    transparencyTreeSize: string,
+  ): Promise<unknown>
   fetchManifest(username: string): Promise<unknown | null>
-  publishManifest(manifest: unknown): Promise<unknown>
+  publishManifest(manifest: unknown, transparencyTreeSize: string): Promise<unknown>
+  fetchOwnProfile(): Promise<unknown | null>
+  publishProfile(profile: unknown): Promise<unknown>
+  fetchProfile(username: string, version: string, accessKey: string): Promise<unknown | null>
   prekeyCount(deviceId: number): Promise<unknown>
   replenishPrekeys(deviceId: number, request: unknown): Promise<void>
   sendMessage(
@@ -123,6 +145,13 @@ export interface WasmChatClientHandle {
   readonly deviceId: number
   history(): Promise<ChatHistoryEntry[]>
   contacts(): Promise<ContactRecord[]>
+  profile(): Promise<ChatProfile>
+  profiles(): Promise<PeerChatProfile[]>
+  setProfile(
+    displayName: string,
+    avatar?: string,
+    avatarContentType?: string,
+  ): Promise<ChatProfile>
   acceptContact(peer: string): Promise<ContactRecord>
   rejectContact(peer: string): Promise<ContactRecord>
   blockContact(peer: string): Promise<ContactRecord>

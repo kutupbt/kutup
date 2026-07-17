@@ -8,16 +8,20 @@
 use std::rc::Rc;
 
 use async_trait::async_trait;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use kutup_chat_proto::{
-    DeviceListMismatch, DeviceManifest, MailboxPage, PreKeyCountResponse,
-    RegisterChatDeviceRequest, RegisterChatDeviceResponse, ReplenishKeysRequest,
-    SendMessagesRequest, UserPreKeyBundlesResponse,
+    ChatProfileResponse, DeviceListMismatch, DeviceManifest, MailboxPage, OwnChatProfileResponse,
+    PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
+    RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest,
+    UserPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::TryRngCore as _;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
+use zeroize::Zeroize as _;
 
 use crate::{
     AccountAddress, AccountAuthority, ChatContent, ChatError, ChatTransport, ConversationId,
@@ -28,10 +32,13 @@ use crate::{
 const TRANSPORT_TYPES: &str = r#"
 export interface KutupChatTransport {
   registerDevice(request: unknown): Promise<unknown>;
-  fetchBundles(username: string): Promise<unknown>;
-  fetchSyncBundles(username: string, currentDeviceId: number): Promise<unknown>;
+  fetchBundles(username: string, transparencyTreeSize: string): Promise<unknown>;
+  fetchSyncBundles(username: string, currentDeviceId: number, transparencyTreeSize: string): Promise<unknown>;
   fetchManifest(username: string): Promise<unknown | null>;
-  publishManifest(manifest: unknown): Promise<unknown>;
+  publishManifest(manifest: unknown, transparencyTreeSize: string): Promise<unknown>;
+  fetchOwnProfile(): Promise<unknown | null>;
+  publishProfile(profile: unknown): Promise<unknown>;
+  fetchProfile(username: string, version: string, accessKey: string): Promise<unknown | null>;
   prekeyCount(deviceId: number): Promise<unknown>;
   replenishPrekeys(deviceId: number, request: unknown): Promise<void>;
   sendMessage(username: string, request: unknown): Promise<
@@ -95,6 +102,17 @@ export interface KutupChatContactRecord {
   updatedAtMs: number;
   syncPending: boolean;
 }
+
+export interface KutupChatProfile {
+  displayName: string;
+  avatar?: string;
+  avatarContentType?: string;
+  revision: string;
+}
+
+export interface KutupChatPeerProfile extends KutupChatProfile {
+  peer: string;
+}
 "#;
 
 #[wasm_bindgen]
@@ -112,6 +130,7 @@ extern "C" {
     async fn js_fetch_bundles(
         this: &JsChatTransport,
         username: &str,
+        transparency_tree_size: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = fetchSyncBundles)]
@@ -119,6 +138,7 @@ extern "C" {
         this: &JsChatTransport,
         username: &str,
         current_device_id: u32,
+        transparency_tree_size: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = fetchManifest)]
@@ -131,6 +151,24 @@ extern "C" {
     async fn js_publish_manifest(
         this: &JsChatTransport,
         manifest: JsValue,
+        transparency_tree_size: &str,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = fetchOwnProfile)]
+    async fn js_fetch_own_profile(this: &JsChatTransport) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = publishProfile)]
+    async fn js_publish_profile(
+        this: &JsChatTransport,
+        profile: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = fetchProfile)]
+    async fn js_fetch_profile(
+        this: &JsChatTransport,
+        username: &str,
+        version: &str,
+        access_key: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = prekeyCount)]
@@ -203,10 +241,15 @@ impl ChatTransport for BrowserTransport {
         Ok(response.device_id)
     }
 
-    async fn fetch_bundles(&self, username: &str) -> Result<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(
+        &self,
+        username: &str,
+        transparency_tree_size: u64,
+    ) -> Result<UserPreKeyBundlesResponse> {
+        let transparency_tree_size = transparency_tree_size.to_string();
         from_transport(
             self.js
-                .js_fetch_bundles(username)
+                .js_fetch_bundles(username, &transparency_tree_size)
                 .await
                 .map_err(transport_error)?,
         )
@@ -216,10 +259,12 @@ impl ChatTransport for BrowserTransport {
         &self,
         username: &str,
         current_device_id: u32,
+        transparency_tree_size: u64,
     ) -> Result<UserPreKeyBundlesResponse> {
+        let transparency_tree_size = transparency_tree_size.to_string();
         from_transport(
             self.js
-                .js_fetch_sync_bundles(username, current_device_id)
+                .js_fetch_sync_bundles(username, current_device_id, &transparency_tree_size)
                 .await
                 .map_err(transport_error)?,
         )
@@ -234,10 +279,50 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
-    async fn publish_manifest(&self, manifest: &DeviceManifest) -> Result<DeviceManifest> {
+    async fn publish_manifest(
+        &self,
+        manifest: &DeviceManifest,
+        transparency_tree_size: u64,
+    ) -> Result<PublishManifestResponse> {
+        let transparency_tree_size = transparency_tree_size.to_string();
         from_transport(
             self.js
-                .js_publish_manifest(to_transport(manifest)?)
+                .js_publish_manifest(to_transport(manifest)?, &transparency_tree_size)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_own_profile(&self) -> Result<Option<OwnChatProfileResponse>> {
+        from_transport(
+            self.js
+                .js_fetch_own_profile()
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn publish_profile(
+        &self,
+        profile: &PutChatProfileRequest,
+    ) -> Result<OwnChatProfileResponse> {
+        from_transport(
+            self.js
+                .js_publish_profile(to_transport(profile)?)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_profile(
+        &self,
+        username: &str,
+        version: &str,
+        access_key: &[u8],
+    ) -> Result<Option<ChatProfileResponse>> {
+        from_transport(
+            self.js
+                .js_fetch_profile(username, version, &STANDARD.encode(access_key))
                 .await
                 .map_err(transport_error)?,
         )
@@ -320,6 +405,13 @@ impl ChatTransport for BrowserTransport {
 pub struct WasmChatClient {
     engine: Engine,
     authority: AccountAuthority,
+    profile_wrapping_key: [u8; 32],
+}
+
+impl Drop for WasmChatClient {
+    fn drop(&mut self) {
+        self.profile_wrapping_key.zeroize();
+    }
 }
 
 #[wasm_bindgen]
@@ -337,6 +429,8 @@ impl WasmChatClient {
             .try_into()
             .map_err(|_| js_error("chat account authority requires a 32-byte master key"))?;
         let authority = AccountAuthority::derive(&master_key).map_err(chat_error)?;
+        let profile_wrapping_key =
+            crate::profile::derive_wrapping_key(&master_key).map_err(chat_error)?;
         let db = Rc::new(
             IndexedDbChatDb::open(&database_name)
                 .await
@@ -344,14 +438,22 @@ impl WasmChatClient {
         );
         let transport: Rc<dyn ChatTransport> = Rc::new(BrowserTransport { js: transport });
         let mut rng = OsRng.unwrap_err();
-        let mut engine = Engine::register(db, transport, user, 50, &mut rng)
+        let mut engine = Engine::register(db, transport, user.clone(), 50, &mut rng)
             .await
             .map_err(chat_error)?;
         engine
             .sync_own_manifest(&authority, now_rfc3339())
             .await
             .map_err(chat_error)?;
-        Ok(Self { engine, authority })
+        engine
+            .initialize_profile(&profile_wrapping_key, &user, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        Ok(Self {
+            engine,
+            authority,
+            profile_wrapping_key,
+        })
     }
 
     #[wasm_bindgen(getter, js_name = deviceId)]
@@ -412,7 +514,11 @@ impl WasmChatClient {
             .engine
             .flush_contact_syncs(&now_rfc3339(), &mut rng)
             .await;
-        let report = self.engine.receive(&mut rng).await.map_err(chat_error)?;
+        let _ = self
+            .engine
+            .flush_profile(&self.profile_wrapping_key, &now_rfc3339(), &mut rng)
+            .await;
+        let mut report = self.engine.receive(&mut rng).await.map_err(chat_error)?;
         // A reply can promote pending-outgoing to accepted (or a new message
         // can supersede a prior rejection). Publish that newer revision after
         // the decrypt commit so delayed older controls cannot win elsewhere.
@@ -420,6 +526,7 @@ impl WasmChatClient {
             .engine
             .flush_contact_syncs(&now_rfc3339(), &mut rng)
             .await;
+        report.profiles_refreshed = self.engine.refresh_profiles().await.unwrap_or_default();
         to_output(&ReceiveReportView::from(report))
     }
 
@@ -475,6 +582,55 @@ impl WasmChatClient {
         to_output(&contacts)
     }
 
+    pub async fn profile(&self) -> std::result::Result<JsValue, JsValue> {
+        let profile = self
+            .engine
+            .local_profile()
+            .await
+            .map_err(chat_error)?
+            .ok_or_else(|| js_error("encrypted profile is not initialized"))?;
+        to_output(&ProfileView::from(profile))
+    }
+
+    pub async fn profiles(&self) -> std::result::Result<JsValue, JsValue> {
+        let profiles: Vec<PeerProfileView> = self
+            .engine
+            .peer_profiles()
+            .await
+            .map_err(chat_error)?
+            .into_iter()
+            .filter_map(PeerProfileView::from_profile)
+            .collect();
+        to_output(&profiles)
+    }
+
+    #[wasm_bindgen(js_name = setProfile)]
+    pub async fn set_profile(
+        &mut self,
+        display_name: String,
+        avatar: Option<String>,
+        avatar_content_type: Option<String>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let avatar = avatar
+            .map(|value| STANDARD.decode(value).map_err(ChatError::from))
+            .transpose()
+            .map_err(chat_error)?;
+        let mut rng = OsRng.unwrap_err();
+        let profile = self
+            .engine
+            .update_profile(
+                &display_name,
+                avatar,
+                avatar_content_type,
+                &self.profile_wrapping_key,
+                &now_rfc3339(),
+                &mut rng,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&ProfileView::from(profile))
+    }
+
     #[wasm_bindgen(js_name = acceptContact)]
     pub async fn accept_contact(&mut self, peer: String) -> std::result::Result<JsValue, JsValue> {
         let mut rng = OsRng.unwrap_err();
@@ -505,6 +661,13 @@ impl WasmChatClient {
             .block_contact(&peer, &now_rfc3339(), &mut rng)
             .await
             .map_err(chat_error)?;
+        // The block is already durable. Profile rotation is best-effort here;
+        // if publication is offline, its exact encrypted upload remains
+        // pending and reconciliation retries it.
+        let _ = self
+            .engine
+            .rotate_profile_key(&self.profile_wrapping_key, &now_rfc3339(), &mut rng)
+            .await;
         to_output(&ContactRecordView::from(contact))
     }
 
@@ -591,6 +754,8 @@ struct ReceiveReportView {
     messages: Vec<ReceivedMessageView>,
     synced: Vec<String>,
     contact_synced: Vec<String>,
+    profile_key_updated: Vec<String>,
+    profiles_refreshed: Vec<String>,
     suppressed: Vec<String>,
     undecodable: Vec<String>,
     errors: Vec<InboundFailureView>,
@@ -607,6 +772,8 @@ impl From<ReceiveReport> for ReceiveReportView {
                 .collect(),
             synced: report.synced,
             contact_synced: report.contact_synced,
+            profile_key_updated: report.profile_key_updated,
+            profiles_refreshed: report.profiles_refreshed,
             suppressed: report.suppressed,
             undecodable: report.undecodable,
             errors: report
@@ -616,6 +783,52 @@ impl From<ReceiveReport> for ReceiveReportView {
                 .collect(),
             duplicates: report.duplicates,
         }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProfileView {
+    display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar_content_type: Option<String>,
+    revision: String,
+}
+
+impl From<crate::LocalProfile> for ProfileView {
+    fn from(profile: crate::LocalProfile) -> Self {
+        Self {
+            display_name: profile.display_name,
+            avatar: profile.avatar.map(|bytes| STANDARD.encode(bytes)),
+            avatar_content_type: profile.avatar_content_type,
+            revision: profile.revision.to_string(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PeerProfileView {
+    peer: String,
+    display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar_content_type: Option<String>,
+    revision: String,
+}
+
+impl PeerProfileView {
+    fn from_profile(profile: crate::PeerProfile) -> Option<Self> {
+        Some(Self {
+            peer: profile.peer,
+            display_name: profile.display_name?,
+            avatar: profile.avatar.map(|bytes| STANDARD.encode(bytes)),
+            avatar_content_type: profile.avatar_content_type,
+            revision: profile.revision.to_string(),
+        })
     }
 }
 
@@ -787,7 +1000,11 @@ fn direct_conversation(peer: &str) -> Result<ConversationId> {
 fn is_contact_control(bytes: &[u8]) -> Result<bool> {
     let content = serde_json::from_slice::<ChatContent>(bytes)
         .map_err(|error| ChatError::Content(error.to_string()))?;
-    Ok(content.kind == kutup_chat_proto::content::kind::CONTACT_CONTROL)
+    Ok(matches!(
+        content.kind.as_str(),
+        kutup_chat_proto::content::kind::CONTACT_CONTROL
+            | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
+    ))
 }
 
 #[derive(Serialize)]
@@ -825,6 +1042,7 @@ struct ManifestTrustView {
     highest_version: String,
     manifest_hash: String,
     trust: String,
+    transparency_position: Option<String>,
     continuity_gap: bool,
 }
 
@@ -837,6 +1055,7 @@ impl From<ManifestTrust> for ManifestTrustView {
             highest_version: trust.highest_version.to_string(),
             manifest_hash: trust.manifest_hash,
             trust: format!("{:?}", trust.trust),
+            transparency_position: trust.transparency_position.map(|value| value.to_string()),
             continuity_gap: trust.continuity_gap,
         }
     }

@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Ban,
   Bookmark,
+  Camera,
   Check,
   CheckCheck,
   Copy,
@@ -15,6 +16,7 @@ import {
   RefreshCw,
   Send,
   ShieldCheck,
+  Trash2,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
@@ -24,6 +26,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -45,9 +48,11 @@ import {
 import type {
   ChatCapabilities,
   ChatHistoryEntry,
+  ChatProfile,
   ContactRecord,
   ConversationId,
   InboundAttention,
+  PeerChatProfile,
 } from '@/chat/types'
 import { cn } from '@/lib/utils'
 import { copyText } from '@/lib/format'
@@ -100,6 +105,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [history, setHistory] = useState<ChatHistoryEntry[]>([])
   const [contacts, setContacts] = useState<ContactRecord[]>([])
   const [attention, setAttention] = useState<InboundAttention[]>([])
+  const [localProfile, setLocalProfile] = useState<ChatProfile | null>(null)
+  const [peerProfiles, setPeerProfiles] = useState<PeerChatProfile[]>([])
   const [selectedConversation, setSelectedConversation] = useState<ConversationId | null>(null)
   const [newPeer, setNewPeer] = useState('')
   const [draft, setDraft] = useState('')
@@ -131,15 +138,19 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     const refresh = async () => {
       if (!opened || cancelled) return
       try {
-        const [nextHistory, nextAttention, nextContacts] = await Promise.all([
+        const [nextHistory, nextAttention, nextContacts, nextProfile, nextProfiles] = await Promise.all([
           opened.history(),
           opened.inboundAttention(),
           opened.contacts(),
+          opened.profile(),
+          opened.profiles(),
         ])
         if (!cancelled) {
           setHistory(nextHistory)
           setAttention(nextAttention)
           setContacts(nextContacts)
+          setLocalProfile(nextProfile)
+          setPeerProfiles(nextProfiles)
           setError(null)
         }
       } catch (cause) {
@@ -179,6 +190,10 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const contactsByPeer = useMemo(
     () => new Map(contacts.map((contact) => [contact.peer, contact])),
     [contacts],
+  )
+  const profilesByPeer = useMemo(
+    () => new Map(peerProfiles.map((profile) => [profile.peer, profile])),
+    [peerProfiles],
   )
 
   const peers = useMemo(() => {
@@ -228,6 +243,12 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const selectedLabel = selectedAddress ??
     (selectedConversation?.kind === 'group' ? selectedConversation.groupId : '')
   const noteSelected = selectedAddress === selfAddress
+  const selectedProfile = selectedAddress && !noteSelected
+    ? profilesByPeer.get(selectedAddress)
+    : undefined
+  const selectedTitle = noteSelected
+    ? t('chat.noteToSelf')
+    : selectedProfile?.displayName || selectedLabel || t('chat.selectConversation')
   const selectedContact = selectedAddress ? contactsByPeer.get(selectedAddress) : undefined
   const requestSelected = selectedContact?.state === 'pendingIncoming'
   const blockedSelected = selectedContact?.state === 'blocked'
@@ -287,18 +308,31 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       if (action === 'reject') await service.rejectContact(selectedAddress)
       if (action === 'block') await service.blockContact(selectedAddress)
       if (action === 'unblock') await service.unblockContact(selectedAddress)
-      const [nextHistory, nextContacts] = await Promise.all([
+      const [nextHistory, nextContacts, nextProfiles] = await Promise.all([
         service.history(),
         service.contacts(),
+        service.profiles(),
       ])
       setHistory(nextHistory)
       setContacts(nextContacts)
+      setPeerProfiles(nextProfiles)
       if (action === 'reject') setSelectedConversation(null)
     } catch (cause) {
       toast.error(errorMessage(cause, t))
     } finally {
       setContactUpdating(false)
     }
+  }
+
+  async function saveProfile(
+    displayName: string,
+    avatar?: string,
+    avatarContentType?: string,
+  ) {
+    if (!service) return
+    const profile = await service.setProfile(displayName, avatar, avatarContentType)
+    setLocalProfile(profile)
+    toast.success(t('chat.profile.saved'))
   }
 
   const showPeerList = !isMobile || !selectedConversation
@@ -312,6 +346,14 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
               <ArrowLeft className="h-5 w-5" />
               <span className="sr-only">{t('chat.backToFiles')}</span>
             </Button>
+            {selfAddress && (
+              <ProfileEditor
+                profile={localProfile}
+                address={selfAddress}
+                disabled={!service || loading}
+                onSave={saveProfile}
+              />
+            )}
             <div className="min-w-0 flex-1">
               <h1 className="font-semibold">{t('chat.title')}</h1>
               <p className="truncate text-xs text-muted-foreground">
@@ -374,7 +416,9 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 <MessageSquareWarning className="h-4 w-4" />
                 {t('chat.requests.title', { count: requests.length })}
               </div>
-              {requests.map(({ contact, conversation, message }) => (
+              {requests.map(({ contact, conversation, message }) => {
+                const profile = profilesByPeer.get(contact.peer)
+                return (
                 <button
                   key={contact.peer}
                   type="button"
@@ -384,17 +428,27 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     selectedAddress === contact.peer ? 'bg-warning-faint' : 'hover:bg-accent',
                   )}
                 >
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-warning-faint font-semibold text-warning">
-                    {contact.peer.slice(0, 1).toUpperCase()}
-                  </span>
+                  <ProfileAvatar
+                    profile={profile}
+                    address={contact.peer}
+                    className="h-10 w-10 bg-warning-faint text-warning"
+                  />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">{contact.peer}</span>
+                    <span className="block truncate text-sm font-medium">
+                      {profile?.displayName || contact.peer}
+                    </span>
+                    {profile?.displayName && (
+                      <span className="block truncate text-[11px] text-muted-foreground">
+                        {contact.peer}
+                      </span>
+                    )}
                     <span className="block truncate text-xs text-muted-foreground">
                       {message?.content.text ?? t('chat.newerClient')}
                     </span>
                   </span>
                 </button>
-              ))}
+                )
+              })}
             </div>
           )}
 
@@ -439,6 +493,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
               const key = conversationKey(conversation)
               const label = directAddress(conversation) ??
                 (conversation.kind === 'group' ? conversation.groupId : '')
+              const profile = profilesByPeer.get(label)
               return (
               <button
                 key={key}
@@ -449,11 +504,20 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                   selectedKey === key ? 'bg-primary/10' : 'hover:bg-accent',
                 )}
               >
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/15 font-semibold text-primary">
-                  {label.slice(0, 1).toUpperCase()}
-                </span>
+                <ProfileAvatar
+                  profile={profile}
+                  address={label}
+                  className="h-10 w-10 bg-primary/15 text-primary"
+                />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">{label}</span>
+                  <span className="block truncate text-sm font-medium">
+                    {profile?.displayName || label}
+                  </span>
+                  {profile?.displayName && (
+                    <span className="block truncate text-[11px] text-muted-foreground">
+                      {label}
+                    </span>
+                  )}
                   <span className="block truncate text-xs text-muted-foreground">
                     {message.content.text ?? t('chat.newerClient')}
                   </span>
@@ -476,17 +540,26 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 <ArrowLeft className="h-5 w-5" />
               </Button>
             )}
-            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/15 font-semibold text-primary">
-              {selectedLabel.slice(0, 1).toUpperCase() || '?'}
-            </span>
+            {noteSelected ? (
+              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/15 text-primary">
+                <Bookmark className="h-4 w-4" />
+              </span>
+            ) : (
+              <ProfileAvatar
+                profile={selectedProfile}
+                address={selectedLabel}
+                className="h-9 w-9 bg-primary/15 text-primary"
+              />
+            )}
             <div className="min-w-0 flex-1">
-              <h2 className="truncate font-semibold">
-                {noteSelected
-                  ? t('chat.noteToSelf')
-                  : selectedLabel || t('chat.selectConversation')}
-              </h2>
+              <h2 className="truncate font-semibold">{selectedTitle}</h2>
               <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                <ShieldCheck className="h-3 w-3" /> {t('chat.protocolEncryption')}
+                <ShieldCheck className="h-3 w-3" />
+                <span className="truncate">
+                  {!noteSelected && selectedProfile?.displayName
+                    ? selectedLabel
+                    : t('chat.protocolEncryption')}
+                </span>
               </p>
             </div>
             <Button
@@ -531,7 +604,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
           {requestSelected && (
             <div className="flex flex-wrap items-center gap-2 border-b border-warning/30 bg-warning-faint px-4 py-3 text-sm">
               <div className="min-w-0 flex-1">
-                <p className="font-medium">{t('chat.requests.incoming', { peer: selectedLabel })}</p>
+                <p className="font-medium">{t('chat.requests.incoming', { peer: selectedTitle })}</p>
                 <p className="text-xs text-muted-foreground">{t('chat.requests.description')}</p>
               </div>
               <Button size="sm" onClick={() => void updateContact('accept')} disabled={contactUpdating}>
@@ -548,7 +621,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
           {blockedSelected && (
             <div className="flex items-center gap-3 border-b border-destructive/20 bg-destructive-faint px-4 py-3 text-sm">
               <Ban className="h-4 w-4 text-destructive" />
-              <span className="min-w-0 flex-1">{t('chat.requests.blocked', { peer: selectedLabel })}</span>
+              <span className="min-w-0 flex-1">{t('chat.requests.blocked', { peer: selectedTitle })}</span>
               <Button size="sm" variant="outline" onClick={() => void updateContact('unblock')} disabled={contactUpdating}>
                 {t('chat.requests.unblock')}
               </Button>
@@ -585,7 +658,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                       ? t('chat.requests.unblockBeforeReply')
                       : selectedConversation
                     ? t('chat.messagePeer', {
-                        peer: noteSelected ? t('chat.noteToSelf') : selectedLabel,
+                        peer: selectedTitle,
                       })
                     : t('chat.selectConversation')
                 }
@@ -602,6 +675,191 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
         </main>
       )}
     </div>
+  )
+}
+
+type AvatarProfile = Pick<ChatProfile, 'displayName' | 'avatar' | 'avatarContentType'>
+
+function ProfileAvatar({
+  profile,
+  address,
+  className,
+}: {
+  profile?: AvatarProfile | null
+  address: string
+  className?: string
+}) {
+  const source = profile?.avatar && profile.avatarContentType
+    ? `data:${profile.avatarContentType};base64,${profile.avatar}`
+    : null
+  const initial = (profile?.displayName || address).trim().slice(0, 1).toUpperCase() || '?'
+  return (
+    <span
+      className={cn(
+        'flex shrink-0 items-center justify-center overflow-hidden rounded-full font-semibold',
+        className,
+      )}
+      aria-hidden="true"
+    >
+      {source
+        ? <img src={source} alt="" className="h-full w-full object-cover" />
+        : initial}
+    </span>
+  )
+}
+
+function ProfileEditor({
+  profile,
+  address,
+  disabled,
+  onSave,
+}: {
+  profile: ChatProfile | null
+  address: string
+  disabled: boolean
+  onSave: (displayName: string, avatar?: string, avatarContentType?: string) => Promise<void>
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [displayName, setDisplayName] = useState('')
+  const [avatar, setAvatar] = useState<string | undefined>()
+  const [avatarContentType, setAvatarContentType] = useState<string | undefined>()
+  const [avatarProcessing, setAvatarProcessing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  function changeOpen(next: boolean) {
+    if (next) {
+      setDisplayName(profile?.displayName ?? '')
+      setAvatar(profile?.avatar)
+      setAvatarContentType(profile?.avatarContentType)
+    }
+    setOpen(next)
+  }
+
+  async function chooseAvatar(file: File | undefined) {
+    if (!file) return
+    setAvatarProcessing(true)
+    try {
+      const normalized = await normalizeAvatar(file)
+      setAvatar(normalized.base64)
+      setAvatarContentType(normalized.contentType)
+    } catch {
+      toast.error(t('chat.profile.avatarError'))
+    } finally {
+      setAvatarProcessing(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    if (!displayName.trim() || saving || avatarProcessing) return
+    setSaving(true)
+    try {
+      await onSave(displayName.trim(), avatar, avatarContentType)
+      setOpen(false)
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const preview: AvatarProfile = { displayName, avatar, avatarContentType }
+  return (
+    <Dialog open={open} onOpenChange={changeOpen}>
+      <DialogTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="rounded-full"
+          disabled={disabled || !profile}
+          aria-label={t('chat.profile.open')}
+        >
+          <ProfileAvatar
+            profile={profile}
+            address={address}
+            className="h-9 w-9 bg-primary/15 text-primary"
+          />
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <form className="grid gap-5" onSubmit={submit}>
+          <DialogHeader>
+            <DialogTitle>{t('chat.profile.title')}</DialogTitle>
+            <DialogDescription>{t('chat.profile.description')}</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col items-center gap-3">
+            <ProfileAvatar
+              profile={preview}
+              address={address}
+              className="h-24 w-24 bg-primary/15 text-2xl text-primary"
+            />
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={(event) => void chooseAvatar(event.target.files?.[0])}
+            />
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={avatarProcessing || saving}
+                onClick={() => fileRef.current?.click()}
+              >
+                {avatarProcessing
+                  ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  : <Camera className="mr-2 h-4 w-4" />}
+                {t('chat.profile.changeAvatar')}
+              </Button>
+              {avatar && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={saving}
+                  onClick={() => {
+                    setAvatar(undefined)
+                    setAvatarContentType(undefined)
+                  }}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  {t('chat.profile.removeAvatar')}
+                </Button>
+              )}
+            </div>
+            <p className="text-center text-xs text-muted-foreground">
+              {t('chat.profile.avatarHint')}
+            </p>
+          </div>
+          <label className="grid gap-2 text-sm font-medium">
+            {t('chat.profile.displayName')}
+            <Input
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+              maxLength={80}
+              required
+              autoComplete="name"
+            />
+          </label>
+          <div className="rounded-lg border bg-muted/40 px-3 py-2.5">
+            <p className="text-xs font-medium">{t('chat.profile.address')}</p>
+            <code className="mt-1 block break-all text-xs text-muted-foreground">{address}</code>
+          </div>
+          <p className="text-xs text-muted-foreground">{t('chat.profile.visibility')}</p>
+          <DialogFooter>
+            <Button type="submit" disabled={!displayName.trim() || saving || avatarProcessing}>
+              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {t('common.save')}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -638,6 +896,77 @@ function MessageBubble({
       </div>
     </div>
   )
+}
+
+const MAX_PROFILE_AVATAR_BYTES = 512 * 1024
+
+async function normalizeAvatar(file: File): Promise<{ base64: string; contentType: string }> {
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+    throw new Error('unsupported avatar type')
+  }
+  const image = await loadImage(file)
+  const sourceSize = Math.min(image.naturalWidth, image.naturalHeight)
+  if (sourceSize < 1) throw new Error('empty avatar')
+  const outputSize = Math.min(512, sourceSize)
+  const canvas = document.createElement('canvas')
+  canvas.width = outputSize
+  canvas.height = outputSize
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('avatar canvas is unavailable')
+  const sourceX = (image.naturalWidth - sourceSize) / 2
+  const sourceY = (image.naturalHeight - sourceSize) / 2
+  context.drawImage(
+    image,
+    sourceX,
+    sourceY,
+    sourceSize,
+    sourceSize,
+    0,
+    0,
+    outputSize,
+    outputSize,
+  )
+
+  let blob: Blob | null = null
+  for (const quality of [0.86, 0.72, 0.56]) {
+    blob = await canvasToBlob(canvas, 'image/webp', quality)
+    if (blob && blob.size <= MAX_PROFILE_AVATAR_BYTES) break
+  }
+  if (!blob || blob.size > MAX_PROFILE_AVATAR_BYTES || blob.type !== 'image/webp') {
+    throw new Error('avatar could not be normalized')
+  }
+  return {
+    base64: bytesToBase64(new Uint8Array(await blob.arrayBuffer())),
+    contentType: blob.type,
+  }
+}
+
+function loadImage(file: File): Promise<HTMLImageElement> {
+  const url = URL.createObjectURL(file)
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => {
+      URL.revokeObjectURL(url)
+      resolve(image)
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('avatar image could not be read'))
+    }
+    image.src = url
+  })
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number): Promise<Blob | null> {
+  return new Promise((resolve) => canvas.toBlob(resolve, type, quality))
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+  }
+  return btoa(binary)
 }
 
 function formatTime(value: string): string {

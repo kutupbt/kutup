@@ -37,9 +37,9 @@ describe('ApiChatTransport', () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { stored: 1 } } as never)
     const transport = new ApiChatTransport()
 
-    await transport.fetchSyncBundles('alice/name', 7)
+    await transport.fetchSyncBundles('alice/name', 7, '18446744073709551615')
     expect(get).toHaveBeenCalledWith('/chat/users/alice%2Fname/keys', {
-      params: { syncDeviceId: 7 },
+      params: { syncDeviceId: 7, transparencyTreeSize: '18446744073709551615' },
     })
 
     await expect(transport.sendSyncMessage({ sendId: 'note-1' })).resolves.toEqual({
@@ -47,6 +47,18 @@ describe('ApiChatTransport', () => {
       deduplicated: false,
     })
     expect(post).toHaveBeenCalledWith('/chat/sync/messages', { sendId: 'note-1' })
+  })
+
+  it('sends transparency checkpoints losslessly on manifest publication', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { manifest: {} } } as never)
+    const transport = new ApiChatTransport()
+
+    await transport.publishManifest({ version: 2 }, '18446744073709551615')
+    expect(post).toHaveBeenCalledWith(
+      '/chat/manifest',
+      { version: 2 },
+      { params: { transparencyTreeSize: '18446744073709551615' } },
+    )
   })
 
   it('treats only a manifest 404 as an absent manifest', async () => {
@@ -62,6 +74,28 @@ describe('ApiChatTransport', () => {
     await expect(transport.fetchManifest('bob')).rejects.toMatchObject({
       response: { status: 503 },
     })
+  })
+
+  it('keeps profile capabilities out of URLs and treats a missing profile as absent', async () => {
+    const get = vi.spyOn(api, 'get')
+      .mockResolvedValueOnce({ data: { version: 'v1' } } as never)
+      .mockRejectedValueOnce({ isAxiosError: true, response: { status: 404 } })
+    const put = vi.spyOn(api, 'put').mockResolvedValue({ data: { revision: 2 } } as never)
+    const transport = new ApiChatTransport()
+
+    await expect(transport.fetchProfile('alice/name', 'version/value', 'secret-key'))
+      .resolves.toEqual({ version: 'v1' })
+    expect(get).toHaveBeenNthCalledWith(
+      1,
+      '/chat/users/alice%2Fname/profile/version%2Fvalue',
+      { headers: { 'X-Kutup-Profile-Access-Key': 'secret-key' } },
+    )
+
+    await expect(transport.fetchOwnProfile()).resolves.toBeNull()
+    expect(get).toHaveBeenNthCalledWith(2, '/chat/profile')
+
+    await expect(transport.publishProfile({ revision: 2 })).resolves.toEqual({ revision: 2 })
+    expect(put).toHaveBeenCalledWith('/chat/profile', { revision: 2 })
   })
 
   it('serializes the lossless cursor and device id as query parameters', async () => {

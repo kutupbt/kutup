@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use kutup_chat_proto::ContactState;
+use kutup_chat_proto::PutChatProfileRequest;
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod indexed_db;
@@ -262,10 +263,26 @@ pub struct ManifestTrust {
     pub highest_version: u64,
     pub manifest_hash: String,
     pub trust: AuthorityTrust,
+    /// Chronological-log position of the accepted manifest event. This is the
+    /// per-account monitoring cursor; an unchanged current-map proof must keep
+    /// the same position and an update must move forward.
+    #[serde(default)]
+    pub transparency_position: Option<u64>,
     /// True if this client first observed a version after v1 or skipped one or
     /// more signed versions while offline. The latest state is still authentic,
     /// but the local client cannot prove the complete update chain.
     pub continuity_gap: bool,
+}
+
+/// Highest globally verified checkpoint for one homeserver namespace.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransparencyTrust {
+    /// Reserved `local` for the authenticated homeserver, otherwise the
+    /// canonical DNS suffix from `username@server`.
+    pub scope: String,
+    pub log_id: String,
+    pub tree_size: u64,
+    pub root_hash: String,
 }
 
 #[cfg(feature = "sqlite")]
@@ -313,6 +330,46 @@ pub struct ContactRecord {
     pub sync_send_id: Option<String>,
 }
 
+/// The local account's Signal-style profile, including the random key. The
+/// containing browser database / native SQLCipher database is account-private;
+/// only `pending_upload` ever leaves it, and that request contains the key only
+/// encrypted under an account-master-key-derived wrapping key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalProfile {
+    pub key: Vec<u8>,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_content_type: Option<String>,
+    pub revision: u64,
+    pub source_device_id: u32,
+    /// Exact encrypted upload retained for idempotent retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_upload: Option<PutChatProfileRequest>,
+    /// After publication, redistribute the current key to every authorized
+    /// conversation. Cleared only after all durable sends are staged.
+    #[serde(default)]
+    pub broadcast_pending: bool,
+}
+
+/// One peer's harvested profile key and most recently decrypted server profile.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerProfile {
+    pub peer: String,
+    pub key: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_content_type: Option<String>,
+    #[serde(default)]
+    pub revision: u64,
+    #[serde(default)]
+    pub source_device_id: u32,
+}
+
 /// A unit of work. Every mutation libsignal makes during one crypto operation
 /// accumulates here (last-write-wins per key) and is flushed to the [`ChatDb`] in
 /// one atomic `apply`. Reads consult the pending overlay before the durable store,
@@ -353,8 +410,14 @@ pub struct Pending {
     pub(crate) inbound: HashMap<String, Option<InboundEnvelope>>,
     /// Peer username → latest accepted signed-manifest trust record.
     pub(crate) manifest_trust: HashMap<String, ManifestTrust>,
+    /// Homeserver scope → highest verified append-only checkpoint.
+    pub(crate) transparency_trust: HashMap<String, TransparencyTrust>,
     /// Canonical peer → local contact/request state.
     pub(crate) contacts: HashMap<String, ContactRecord>,
+    /// The local account's profile singleton.
+    pub(crate) local_profile: Option<LocalProfile>,
+    /// Canonical peer → harvested/decrypted profile state.
+    pub(crate) peer_profiles: HashMap<String, PeerProfile>,
     /// Reject deletes the request plaintext in the same transaction as the
     /// state change, without touching libsignal session/identity state.
     pub(crate) delete_messages_for_peers: HashSet<String>,
@@ -389,7 +452,10 @@ impl Pending {
             && self.sent_messages.is_empty()
             && self.inbound.is_empty()
             && self.manifest_trust.is_empty()
+            && self.transparency_trust.is_empty()
             && self.contacts.is_empty()
+            && self.local_profile.is_none()
+            && self.peer_profiles.is_empty()
             && self.delete_messages_for_peers.is_empty()
             && self.prekey_upload.is_none()
             && self.registration_upload.is_none()
@@ -458,10 +524,20 @@ pub trait ChatDb {
     /// Highest accepted manifest and pinned authority for `peer`.
     async fn load_manifest_trust(&self, peer: &str) -> Result<Option<ManifestTrust>>;
 
+    /// Highest verified append-only checkpoint for one homeserver namespace.
+    async fn load_transparency_trust(&self, scope: &str) -> Result<Option<TransparencyTrust>>;
+
     /// Client-owned relationship state for one canonical peer.
     async fn load_contact(&self, peer: &str) -> Result<Option<ContactRecord>>;
     /// Every known contact/request state, ordered by canonical peer.
     async fn list_contacts(&self) -> Result<Vec<ContactRecord>>;
+
+    /// The local account's encrypted-profile source state.
+    async fn load_local_profile(&self) -> Result<Option<LocalProfile>>;
+    /// One peer profile by canonical address.
+    async fn load_peer_profile(&self, peer: &str) -> Result<Option<PeerProfile>>;
+    /// Every peer profile ordered by canonical address.
+    async fn list_peer_profiles(&self) -> Result<Vec<PeerProfile>>;
 
     /// Durable prekey publication request, if a prior upload is unconfirmed.
     async fn load_pending_prekey_upload(&self) -> Result<Option<Vec<u8>>>;

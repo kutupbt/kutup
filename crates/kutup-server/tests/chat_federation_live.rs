@@ -8,9 +8,14 @@ use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use ed25519_dalek::{Signer as _, SigningKey};
+use kutup_chat_proto::{
+    DeviceManifest, ManifestDevice, TransparencyCheckpoint, UserPreKeyBundlesResponse,
+};
 use rand::RngCore;
 use reqwest::blocking::{Client, Response};
 use serde_json::{json, Value};
+use sha2::{Digest as _, Sha256};
 
 const ALICE_EMAIL: &str = "federation-alice@example.test";
 const ALICE_USERNAME: &str = "alicefed";
@@ -140,6 +145,46 @@ fn register_device(c: &Client, base: &str, token: &str, registration_id: u32, se
     response["deviceId"].as_u64().unwrap() as u32
 }
 
+fn manifest_device(device_id: u32, registration_id: u32, seed: u8) -> ManifestDevice {
+    ManifestDevice {
+        device_id,
+        registration_id,
+        identity_key: b64(&[seed.wrapping_add(1); 33]),
+    }
+}
+
+fn publish_manifest(
+    c: &Client,
+    base: &str,
+    token: &str,
+    signing: &SigningKey,
+    version: u64,
+    previous_hash: Option<String>,
+    devices: Vec<ManifestDevice>,
+) -> DeviceManifest {
+    let public = signing.verifying_key();
+    let mut manifest = DeviceManifest {
+        version,
+        previous_hash,
+        devices,
+        issued_at: time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap(),
+        authority_key_id: hex::encode(Sha256::digest(public.as_bytes())),
+        self_authority_key: b64(public.as_bytes()),
+        signature: String::new(),
+    };
+    manifest.signature = b64(&signing.sign(&manifest.signing_bytes().unwrap()).to_bytes());
+    let response = c
+        .post(format!("{base}/api/chat/manifest"))
+        .bearer_auth(token)
+        .json(&manifest)
+        .send()
+        .unwrap();
+    assert!(response.status().is_success());
+    manifest
+}
+
 fn envelope(device_id: u32, registration_id: u32, content: &[u8]) -> Value {
     json!({
         "deviceId": device_id,
@@ -223,6 +268,16 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         register_device(c, b, &bob_token, BOB_REGISTRATION_ID_1, 20),
         1
     );
+    let bob_authority = SigningKey::from_bytes(&[82; 32]);
+    let bob_manifest_v1 = publish_manifest(
+        c,
+        b,
+        &bob_token,
+        &bob_authority,
+        1,
+        None,
+        vec![manifest_device(1, BOB_REGISTRATION_ID_1, 20)],
+    );
 
     // The local server signs this lookup, B authenticates A through discovery,
     // and replay-safe remote reads do not consume B's one-time prekeys.
@@ -242,6 +297,13 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(bundles_first["username"], remote_address);
     assert_eq!(bundles_first["devices"][0]["deviceId"], 1);
     assert!(bundles_first["devices"][0].get("oneTimePreKey").is_none());
+    let typed_first: UserPreKeyBundlesResponse =
+        serde_json::from_value(bundles_first.clone()).unwrap();
+    let first_proof = typed_first.transparency.as_ref().unwrap();
+    first_proof.verify_inclusion().unwrap();
+    first_proof.verify_current_map().unwrap();
+    first_proof.verify_consistency_from(None).unwrap();
+    let first_checkpoint: TransparencyCheckpoint = first_proof.checkpoint.clone();
 
     let direct_content = b"federated-direct";
     let direct_id = "10000000-0000-4000-8000-000000000001";
@@ -283,6 +345,37 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         register_device(c, b, &bob_token, BOB_REGISTRATION_ID_2, 30),
         2
     );
+    let bob_manifest_v2 = publish_manifest(
+        c,
+        b,
+        &bob_token,
+        &bob_authority,
+        2,
+        Some(bob_manifest_v1.manifest_hash().unwrap()),
+        vec![
+            manifest_device(1, BOB_REGISTRATION_ID_1, 20),
+            manifest_device(2, BOB_REGISTRATION_ID_2, 30),
+        ],
+    );
+    let refreshed_bundles = json_response(
+        c.get(format!(
+            "{a}/api/chat/users/{remote_address}/keys?transparencyTreeSize={}",
+            first_checkpoint.tree_size
+        ))
+        .bearer_auth(&alice_token)
+        .send()
+        .unwrap(),
+        "remote bundle transparency refresh",
+    );
+    let typed_refreshed: UserPreKeyBundlesResponse =
+        serde_json::from_value(refreshed_bundles).unwrap();
+    assert_eq!(typed_refreshed.manifest.as_ref(), Some(&bob_manifest_v2));
+    let refreshed_proof = typed_refreshed.transparency.as_ref().unwrap();
+    refreshed_proof.verify_inclusion().unwrap();
+    refreshed_proof.verify_current_map().unwrap();
+    refreshed_proof
+        .verify_consistency_from(Some(&first_checkpoint))
+        .unwrap();
     let mismatch_id = "10000000-0000-4000-8000-000000000002";
     let mismatch = send(
         c,

@@ -315,6 +315,7 @@ pub struct ChatManifestTrust {
     pub highest_version: u64,
     pub manifest_hash: String,
     pub trust: ChatTrustLevel,
+    pub transparency_position: Option<u64>,
     pub continuity_gap: bool,
 }
 
@@ -330,6 +331,7 @@ impl From<ManifestTrust> for ChatManifestTrust {
                 kutup_chat_core::AuthorityTrust::Tofu => ChatTrustLevel::Tofu,
                 kutup_chat_core::AuthorityTrust::Verified => ChatTrustLevel::Verified,
             },
+            transparency_position: trust.transparency_position,
             continuity_gap: trust.continuity_gap,
         }
     }

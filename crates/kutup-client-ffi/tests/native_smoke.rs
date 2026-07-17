@@ -2,6 +2,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use kutup_chat_proto::{
+    hash_transparency_map_checkpoint, hash_transparency_map_leaf, hash_transparency_node,
+    map_key_bit, transparency_map_empty_hashes, transparency_map_key, DeviceManifest,
+    ManifestTransparencyLeaf, ManifestTransparencyMapProof, ManifestTransparencyProof,
+    PublishManifestResponse, TransparencyCheckpoint,
+};
 use kutup_client_ffi::{
     open_native_chat_client, ChatHttpClient, ChatHttpMethod, ChatHttpRequest, ChatHttpResponse,
     KutupChatError,
@@ -20,6 +26,49 @@ impl MockHttp {
             registration: Mutex::new(None),
             manifest: Mutex::new(None),
         }
+    }
+}
+
+fn transparency_proof(
+    username: &str,
+    manifest: &DeviceManifest,
+    consistency_from: u64,
+) -> ManifestTransparencyProof {
+    let hex_hash = |hash: [u8; 32]| {
+        hash.iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let leaf = ManifestTransparencyLeaf::from_manifest(username, manifest).unwrap();
+    let key = transparency_map_key(username).unwrap();
+    let defaults = transparency_map_empty_hashes();
+    let mut map_root = hash_transparency_map_leaf(&leaf).unwrap();
+    for depth in (0..256).rev() {
+        map_root = if map_key_bit(&key, depth) == 0 {
+            hash_transparency_node(map_root, defaults[depth + 1])
+        } else {
+            hash_transparency_node(defaults[depth + 1], map_root)
+        };
+    }
+    let event_hash = leaf.hash().unwrap();
+    let checkpoint_hash = hash_transparency_map_checkpoint(map_root);
+    ManifestTransparencyProof {
+        leaf_index: 0,
+        checkpoint: TransparencyCheckpoint {
+            log_id: "01".repeat(32),
+            tree_size: 2,
+            root_hash: hex_hash(hash_transparency_node(event_hash, checkpoint_hash)),
+        },
+        leaf,
+        inclusion: vec![hex_hash(checkpoint_hash)],
+        consistency_from,
+        consistency: Vec::new(),
+        map: ManifestTransparencyMapProof {
+            root_hash: hex_hash(map_root),
+            checkpoint_leaf_index: 1,
+            checkpoint_inclusion: vec![hex_hash(event_hash)],
+            siblings: Vec::new(),
+        },
     }
 }
 
@@ -51,17 +100,26 @@ impl ChatHttpClient for MockHttp {
                     },
                 })
             }
-            (ChatHttpMethod::Post, "/chat/manifest") => {
+            (ChatHttpMethod::Post, path) if path.starts_with("/chat/manifest?") => {
                 let body_json = request.body_json.expect("manifest body");
                 *self.manifest.lock().unwrap() = Some(body_json.clone());
+                let manifest: DeviceManifest = serde_json::from_str(&body_json).unwrap();
+                let consistency_from = path.rsplit('=').next().unwrap().parse::<u64>().unwrap();
+                let response = PublishManifestResponse {
+                    transparency: transparency_proof("alice", &manifest, consistency_from),
+                    manifest,
+                };
                 Ok(ChatHttpResponse {
                     status: 200,
-                    body_json,
+                    body_json: serde_json::to_string(&response).unwrap(),
                 })
             }
-            (ChatHttpMethod::Get, "/chat/users/alice/keys?syncDeviceId=7") => {
+            (ChatHttpMethod::Get, path)
+                if path
+                    .starts_with("/chat/users/alice/keys?syncDeviceId=7&transparencyTreeSize=") =>
+            {
                 let registration = self.registration.lock().unwrap().clone().unwrap();
-                let manifest: serde_json::Value = serde_json::from_str(
+                let manifest: DeviceManifest = serde_json::from_str(
                     self.manifest
                         .lock()
                         .unwrap()
@@ -69,6 +127,8 @@ impl ChatHttpClient for MockHttp {
                         .expect("published manifest"),
                 )
                 .unwrap();
+                let consistency_from = path.rsplit('=').next().unwrap().parse::<u64>().unwrap();
+                let transparency = transparency_proof("alice", &manifest, consistency_from);
                 Ok(ChatHttpResponse {
                     status: 200,
                     body_json: serde_json::json!({
@@ -81,7 +141,8 @@ impl ChatHttpClient for MockHttp {
                             "signedPreKey": registration["signedPreKey"],
                             "kyberPreKey": registration["lastResortKyberPreKey"]
                         }],
-                        "manifest": manifest
+                        "manifest": manifest,
+                        "transparency": transparency
                     })
                     .to_string(),
                 })

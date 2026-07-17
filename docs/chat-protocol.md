@@ -123,7 +123,7 @@ this table; it MUST NOT change the meaning of code point `1`.
 
 ---
 
-## 4. Prekey directory — [IMPL] + [RSV] manifest
+## 4. Prekey directory — [IMPL] manifest + transparency
 
 Endpoints (all authenticated; the WS validates its token pre-upgrade):
 
@@ -162,6 +162,12 @@ key and no one-time EC key; it consumes one-time keys only for the other
 devices. The engine verifies the complete response and then omits the current
 device from encryption.
 
+Every bundle request also sends `transparencyTreeSize=<u64>` using the highest
+checkpoint durably verified for that homeserver (`0` on first observation).
+The response carries inclusion of the exact manifest and an append-only
+consistency proof from that size (§5.4). The counter is serialized losslessly;
+browser/WASM transports pass it as a decimal string.
+
 **[IMPL] Staged local EC-prekey deletion.** A server stops serving a one-time
 prekey as soon as it allocates that key to one bundle fetch. The client does not
 physically delete the corresponding private EC prekey when libsignal consumes
@@ -179,10 +185,12 @@ the 100-key-per-type limit.
 
 ### 4.x Device manifest in the bundle response — [IMPL]
 
-`UserPreKeyBundlesResponse` carries an optional `manifest` (§5.3). A verifying
+`UserPreKeyBundlesResponse` carries an optional `manifest` (§5.3) and
+`transparency` proof (§5.4). A verifying
 client checks each returned `deviceId` against the signed manifest before
 establishing a session, so the server cannot inject a device. When the server
-advertises `manifests: true`, absence or any mismatch is a hard failure. A
+advertises `manifests: true` / `keyTransparency: true`, absence or any mismatch
+is a hard failure. A
 development client may explicitly permit TOFU only against a server that
 advertises `manifests: false`.
 
@@ -244,16 +252,79 @@ DeviceManifest {
   differ. The server distributes but cannot forge membership. Device changes
   temporarily fail closed until an authenticated client publishes the next
   manifest.
-- **Key transparency** (future) wraps this: the manifest becomes a leaf in an
-  append-only log. The format above is chosen so that is additive.
+- **Key transparency** (§5.4) wraps every accepted manifest version in an
+  append-only log in the same transaction as publication.
 
 Clients pin the first valid self-authority (TOFU), persist the highest observed
 manifest version/hash, and reject rollback, same-version equivocation, authority
 replacement, or a bad link between consecutive versions. A valid signed jump
 across versions missed while offline is safe to use but records a continuity
 gap for later transparency auditing. Clients retain the existing safety-number-
-change interstitial for identity changes. Key transparency will later replace
-first-contact TOFU without changing this leaf.
+change interstitial for identity changes. The implemented log removes silent
+history rewriting for a returning client, and the authenticated current map
+prevents an operator from selecting an old manifest inside the checkpoint it
+serves. First-contact TOFU remains until independent witnesses/auditors or
+checkpoint gossip make a server-created fork externally detectable.
+
+### 5.4 Manifest transparency log and current map — [IMPL foundation]
+
+Each homeserver database owns a stable random 32-byte `logId`. Publishing a
+non-idempotent manifest appends this canonical leaf:
+
+```
+ManifestTransparencyLeaf {
+  username, manifestVersion, manifestHash, authorityKeyId
+}
+```
+
+Leaves and nodes use RFC 6962 domain separation (`SHA-256(0x00 || leaf)` and
+`SHA-256(0x01 || left || right)`). The database stores every complete aligned
+subtree, so appends plus inclusion/consistency proofs are logarithmic. A bundle
+response contains:
+
+```
+ManifestTransparencyProof {
+  leafIndex, leaf,
+  checkpoint: { logId, treeSize, rootHash },
+  inclusion[], consistencyFrom, consistency[],
+  map: {
+    rootHash, checkpointLeafIndex, checkpointInclusion[],
+    siblings[]: { depth, hash }
+  }
+}
+```
+
+The client verifies that the leaf exactly names the requested account and
+served signed manifest and verifies its chronological inclusion. The server
+also maintains a 256-level sparse Merkle map keyed by a domain-separated
+SHA-256 of the canonical local username. Its value commits to the manifest
+version/hash and authority id. Default siblings are omitted from the wire. A
+map-root commitment is always appended as the **final** chronological-log leaf
+of a publication transaction; the client verifies both sparse membership and
+that final-leaf inclusion before accepting the value. This closes the
+"included somewhere, but not current" gap without creating a second trust root.
+
+The client then verifies consistency from its highest durable checkpoint for
+that homeserver. It also persists the accepted manifest event position per
+account: an unchanged value must retain that position and an update must move
+forward. Manifest trust, the per-account monitor position, and the global
+checkpoint advance atomically before any session is created. A smaller server
+tree, changed `logId`, same-size different root, stale map-root commitment,
+malformed audit/map path, monitor-position rollback, or omitted proof fails
+closed. Federated directory reads carry the remote proof unchanged and
+destination-bind `transparencyTreeSize` in the signed request URI.
+
+This remains an honest **foundation**, not complete Signal-equivalent key
+transparency. A malicious operator can present two internally consistent
+log+map forks to clients that have never exchanged checkpoints. Kutup's map
+uses a domain-separated username hash rather than Signal's VRF-derived index;
+the current API does not publish map keys or an enumeration endpoint, but it
+does not provide Signal's VRF privacy property. Signal also uses a separate KT
+service, distinguished tree heads, richer per-key monitoring paths, and
+auditor signatures. Kutup's next slices are periodic self-monitoring and
+skipped-update audit proofs, followed by independent auditing/witnessing or
+encrypted checkpoint gossip. Safety numbers remain the explicit
+out-of-band verification path throughout.
 
 ---
 
@@ -274,6 +345,7 @@ serves all clients + fixtures).
   "sentAt": "2026-07-13T10:00:00Z", // SENDER clock (serverTimestamp is arrival only)
   "seq": 41,                     // per-(sender,senderDevice) monotonic; enables per-sender ordering
   "messageId": "018f…",          // stable logical id; equal to transport sendId
+  "profileKey": "base64…",       // optional 32-byte profile capability, inside E2EE
   "body": { /* per-kind */ }
 }
 ```
@@ -292,6 +364,7 @@ reference to that synthetic id.
 | `text` | 2b [ADD] | `{ "text": string }` |
 | `sentTranscript` | 2b [IMPL] | `{ "sendId", "peer", "timestampMs", "content": ChatContent }` — encrypted own-device synchronization wrapper (§7.3), never rendered directly |
 | `contactControl` | 4 [IMPL] | `{ "peer", "state", "previousState?", "revision", "sourceDeviceId", "updatedAtMs" }` — authenticated encrypted linked-device relationship update (§7.4), never rendered directly |
+| `profileKeyUpdate` | 4 [IMPL] | `{}` with the key in top-level `profileKey` — Signal-style invisible capability update (§7.5), never rendered directly |
 | `receipt` | later [RSV] | `{ "type": "delivered"\|"read", "ids": [seq…] }` — E2EE content, never a server feature |
 | `typing` | later [RSV] | `{ "state": "started"\|"stopped" }` — ephemeral; a client MAY drop |
 | `attachment` | 5 [RSV] | `{ "fileId", "key", "digest", "size", "mimeType", "name" }` — pointer into the E2EE drive (tus); the blob rides the drive, not the mailbox |
@@ -411,11 +484,51 @@ change increments the highest observed revision. The deterministic control
 offline/restart retries are idempotent. Ordinary first-send transcripts let a
 linked device infer `pendingOutgoing` without a separate plaintext social graph.
 
-Profiles, profile-key rotation, key transparency, proof-of-contact abuse gates,
-and sealed sender remain later Phase 4 slices. Receipts and typing are not used
-as implicit acceptance signals.
+Key transparency, proof-of-contact abuse gates, and sealed sender remain later
+Phase 4 slices. Receipts and typing are not used as implicit acceptance signals.
 
-### 7.5 [RSV] sealed-sender access token
+### 7.5 Encrypted profiles and automatic visibility — [IMPL]
+
+Display names and avatars are non-identifying profile data. Each account has a
+random 32-byte profile key generated on a client. Names use AES-256-GCM with a
+fresh 12-byte nonce after zero-padding UTF-8 to Signal's first fitting 53- or
+257-byte bucket. Avatars are separately encrypted; v1 accepts PNG, JPEG, or
+WebP plaintext up to 512 KiB. The server stores only ciphertext.
+
+The profile key derives two domain-separated capabilities with HKDF-SHA-256: a
+32-byte lowercase-hex `version` and a 16-byte fetch access key. Each versioned
+server row contains the version, `(revision, sourceDeviceId)`, encrypted name/avatar, a
+SHA-256 verifier for the access key, and the random profile key encrypted under
+an account-master-key-derived wrapping key for owner linked-device recovery.
+One row is the owner-visible current head; older ciphertext versions remain
+capability-readable so an in-flight rotation does not break peers still holding
+the old key. A pending new key is never included in an outgoing message before
+its encrypted profile upload is confirmed.
+The owner uses `GET|PUT /api/chat/profile`; a peer presents version plus
+`X-Kutup-Profile-Access-Key` to
+`GET /api/chat/users/{username}/profile/{version}`. Federated lookup uses the
+same bearer capability over the destination-bound signed server channel.
+
+Visibility is automatic, matching Signal rather than a server-hosted privacy
+matrix:
+
+- ordinary first/outgoing messages carry the key inside their existing E2EE
+  `ChatContent`, so an incoming request can show the sender's profile;
+- accepting a request and later profile edits send an invisible
+  `profileKeyUpdate` to accepted or pending-outgoing contacts;
+- a dedicated update from a merely pending-incoming sender is ignored and
+  remains invisible;
+- blocking first commits the local block, then rotates and republishes the
+  random key and redistributes it only to the remaining authorized contacts.
+
+The durable client store records the exact pending opaque upload and profile-key
+fan-out marker before networking. Concurrent linked-device revisions converge
+by `(revision, sourceDeviceId)`; a stale pending edit rebases on the owner-only
+current profile without undoing a profile-key rotation. Old capabilities can
+still read their old ciphertext version, but cannot read future profile changes;
+rotation cannot erase profile plaintext a peer already received or copied.
+
+### 7.6 [RSV] sealed-sender access token
 
 `SendMessagesRequest` gains a **[RSV] `accessToken: b64?`**. When sealed sender
 ships (§11), an authenticated send MAY omit sender auth and instead prove a
@@ -514,6 +627,8 @@ lacking the routes. Add a `chat` block to the existing public
   "serverName": "chat.example",   // present exactly when federation is true
   "federation": true,
   "manifests": true,               // signed device directory is available
+  "profiles": true,                // encrypted profiles + capability lookup
+  "keyTransparency": true,         // manifest inclusion + consistency proofs
   "sealedSender": false            // [RSV] flips true when sealed sender ships
 }
 ```
@@ -536,7 +651,7 @@ plaintext sender it MUST ship all three together:
    which signs short-lived per-user sender certs (identity key + expiry). Fully
    self-hostable from libsignal primitives; the recipient validates
    client-side.
-2. **Delivery-token abuse gate** — the `accessToken` (§7.4): the only spam
+2. **Delivery-token abuse gate** — the `accessToken` (§7.6): the only spam
    signal once server-side sender auth is dropped.
 3. **Contacts-only default** with profile-key rotation on block.
 
@@ -604,10 +719,11 @@ persistent signing identity:
   cross-server replay). Requests outside a five-minute clock window fail.
 - **Remote device directory [IMPL]:** the authenticated local endpoint accepts
   `username@server`, discovers the remote server, and makes a signed lookup.
-  The remote read returns the account-signed manifest and reusable last-resort
-  PQ bundles without consuming one-time keys, so replay cannot exhaust a
-  recipient's prekey pool. Clients still verify the manifest; server signing
-  authenticates transport, not the device set.
+  The remote read returns the account-signed manifest, its remote-log
+  transparency proof, and reusable last-resort PQ bundles without consuming
+  one-time keys, so replay cannot exhaust a recipient's prekey pool. Clients
+  verify both manifest and proof; server signing authenticates transport, not
+  the device set.
 - **Delivery [IMPL] — adopt Matrix's retry rule *plus* what Matrix gets for free from
   its DAG and kutup does not:** a sending server MUST retry a transaction until
   `200 OK` before sending the next transaction to that destination (in-order
@@ -663,9 +779,9 @@ continue to reject private/internal destinations.
 
 ## 15. Open questions (carried from `13-…` §11)
 
-- Device-list authenticity: signed manifest (§5.3) now; is a full key-
-  transparency log the phase-3 wrapper, and does the manifest format above
-  admit it cleanly? (Believed yes — that's why it's shaped this way.)
+- Key-transparency split views: which independent homeservers/witnesses sign or
+  gossip checkpoints, and what threshold can a small self-hosted deployment
+  require without making chat availability depend on one global service?
 - Does GV2-pattern server-held encrypted group state compose with a future
   MLS migration, or does choosing sender keys now foreclose it?
 - Sealed sender across federation: how does a remote server enforce the

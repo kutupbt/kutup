@@ -7,6 +7,8 @@ import type {
   ContactRecord,
   ConversationId,
   InboundAttention,
+  ChatProfile,
+  PeerChatProfile,
   ReceiveReport,
   SendSummary,
   WasmChatClientHandle,
@@ -138,6 +140,36 @@ export class ChatService {
         ),
       }
     })
+  }
+
+  profile(): Promise<ChatProfile> {
+    return this.withLock(() => this.client.profile())
+  }
+
+  async profiles(): Promise<PeerChatProfile[]> {
+    const profiles = await this.withLock(() => this.client.profiles())
+    return profiles.map((profile) => {
+      const parsed = parseAccountAddress(profile.peer)
+      if (!parsed) return profile
+      return {
+        ...profile,
+        peer: canonicalAccountAddress(
+          withHomeServer(parsed, this.capabilities.serverName),
+        ),
+      }
+    })
+  }
+
+  async setProfile(
+    displayName: string,
+    avatar?: string,
+    avatarContentType?: string,
+  ): Promise<ChatProfile> {
+    const profile = await this.withLock(() =>
+      this.client.setProfile(displayName, avatar, avatarContentType),
+    )
+    this.notifyPeers()
+    return profile
   }
 
   acceptContact(peer: string): Promise<ContactRecord> {

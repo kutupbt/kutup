@@ -18,8 +18,8 @@ use zeroize::Zeroize as _;
 
 use crate::db::{
     contact_state_code, contact_state_from_code, AuthorityTrust, ChatDb, ContactRecord,
-    InboundEnvelope, InboundFailureKind, InboundState, InboxMessage, LocalIdentity, ManifestTrust,
-    OutboxEntry, Pending, SentMessage,
+    InboundEnvelope, InboundFailureKind, InboundState, InboxMessage, LocalIdentity, LocalProfile,
+    ManifestTrust, OutboxEntry, PeerProfile, Pending, SentMessage, TransparencyTrust,
 };
 use crate::error::{ChatError, Result};
 
@@ -122,7 +122,14 @@ CREATE TABLE IF NOT EXISTS manifest_trust (
     highest_version    INTEGER NOT NULL,
     manifest_hash      TEXT    NOT NULL,
     trust_state        INTEGER NOT NULL,
+    transparency_position INTEGER,
     continuity_gap     INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS transparency_trust (
+    scope      TEXT PRIMARY KEY,
+    log_id     TEXT    NOT NULL,
+    tree_size  INTEGER NOT NULL,
+    root_hash  TEXT    NOT NULL
 );
 CREATE TABLE IF NOT EXISTS pending_prekey_upload (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
@@ -144,6 +151,17 @@ CREATE TABLE IF NOT EXISTS contacts (
     sync_send_id     TEXT
 );
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (9, 0);
+CREATE TABLE IF NOT EXISTS local_profile (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    profile BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS peer_profiles (
+    peer    TEXT PRIMARY KEY,
+    profile BLOB NOT NULL
+);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (10, 0);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (11, 0);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (12, 0);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value INTEGER NOT NULL
@@ -402,7 +420,7 @@ impl ChatDb for SqliteChatDb {
         db(conn
             .query_row(
                 "SELECT peer, authority_key_id, self_authority_key, highest_version,
-                        manifest_hash, trust_state, continuity_gap
+                        manifest_hash, trust_state, transparency_position, continuity_gap
                  FROM manifest_trust WHERE peer = ?1",
                 [peer],
                 |row| {
@@ -421,7 +439,29 @@ impl ChatDb for SqliteChatDb {
                         highest_version: row.get::<_, i64>(3)? as u64,
                         manifest_hash: row.get(4)?,
                         trust,
-                        continuity_gap: row.get::<_, i64>(6)? != 0,
+                        transparency_position: row
+                            .get::<_, Option<i64>>(6)?
+                            .map(|value| value as u64),
+                        continuity_gap: row.get::<_, i64>(7)? != 0,
+                    })
+                },
+            )
+            .optional())
+    }
+
+    async fn load_transparency_trust(&self, scope: &str) -> Result<Option<TransparencyTrust>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT scope, log_id, tree_size, root_hash
+                 FROM transparency_trust WHERE scope = ?1",
+                [scope],
+                |row| {
+                    Ok(TransparencyTrust {
+                        scope: row.get(0)?,
+                        log_id: row.get(1)?,
+                        tree_size: row.get::<_, i64>(2)? as u64,
+                        root_hash: row.get(3)?,
                     })
                 },
             )
@@ -450,6 +490,52 @@ impl ChatDb for SqliteChatDb {
         ))?;
         let rows = db(stmt.query_map([], contact_row))?;
         rows.map(db).collect()
+    }
+
+    async fn load_local_profile(&self) -> Result<Option<LocalProfile>> {
+        let conn = self.conn.borrow();
+        let encoded: Option<Vec<u8>> = db(conn
+            .query_row(
+                "SELECT profile FROM local_profile WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional())?;
+        encoded
+            .map(|bytes| {
+                serde_json::from_slice(&bytes)
+                    .map_err(|error| ChatError::Db(format!("decode local profile: {error}")))
+            })
+            .transpose()
+    }
+
+    async fn load_peer_profile(&self, peer: &str) -> Result<Option<PeerProfile>> {
+        let conn = self.conn.borrow();
+        let encoded: Option<Vec<u8>> = db(conn
+            .query_row(
+                "SELECT profile FROM peer_profiles WHERE peer = ?1",
+                [peer],
+                |row| row.get(0),
+            )
+            .optional())?;
+        encoded
+            .map(|bytes| {
+                serde_json::from_slice(&bytes)
+                    .map_err(|error| ChatError::Db(format!("decode peer profile: {error}")))
+            })
+            .transpose()
+    }
+
+    async fn list_peer_profiles(&self) -> Result<Vec<PeerProfile>> {
+        let conn = self.conn.borrow();
+        let mut stmt = db(conn.prepare("SELECT profile FROM peer_profiles ORDER BY peer"))?;
+        let rows = db(stmt.query_map([], |row| row.get::<_, Vec<u8>>(0)))?;
+        rows.map(|row| {
+            let bytes = db(row)?;
+            serde_json::from_slice(&bytes)
+                .map_err(|error| ChatError::Db(format!("decode peer profile: {error}")))
+        })
+        .collect()
     }
 
     async fn load_pending_prekey_upload(&self) -> Result<Option<Vec<u8>>> {
@@ -648,14 +734,15 @@ impl ChatDb for SqliteChatDb {
             db(tx.execute(
                 "INSERT INTO manifest_trust
                      (peer, authority_key_id, self_authority_key, highest_version,
-                      manifest_hash, trust_state, continuity_gap)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                      manifest_hash, trust_state, transparency_position, continuity_gap)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(peer) DO UPDATE SET
                      authority_key_id = excluded.authority_key_id,
                      self_authority_key = excluded.self_authority_key,
                      highest_version = excluded.highest_version,
                      manifest_hash = excluded.manifest_hash,
                      trust_state = excluded.trust_state,
+                     transparency_position = excluded.transparency_position,
                      continuity_gap = excluded.continuity_gap",
                 rusqlite::params![
                     peer,
@@ -664,8 +751,20 @@ impl ChatDb for SqliteChatDb {
                     trust.highest_version as i64,
                     trust.manifest_hash,
                     trust.trust.code(),
+                    trust.transparency_position.map(|value| value as i64),
                     i64::from(trust.continuity_gap),
                 ],
+            ))?;
+        }
+        for (scope, trust) in &pending.transparency_trust {
+            db(tx.execute(
+                "INSERT INTO transparency_trust (scope, log_id, tree_size, root_hash)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(scope) DO UPDATE SET
+                     log_id = excluded.log_id,
+                     tree_size = excluded.tree_size,
+                     root_hash = excluded.root_hash",
+                rusqlite::params![scope, trust.log_id, trust.tree_size as i64, trust.root_hash,],
             ))?;
         }
         for (peer, contact) in &pending.contacts {
@@ -692,6 +791,24 @@ impl ChatDb for SqliteChatDb {
                     i64::from(contact.sync_pending),
                     contact.sync_send_id,
                 ],
+            ))?;
+        }
+        if let Some(profile) = &pending.local_profile {
+            let encoded = serde_json::to_vec(profile)
+                .map_err(|error| ChatError::Db(format!("encode local profile: {error}")))?;
+            db(tx.execute(
+                "INSERT INTO local_profile (id, profile) VALUES (1, ?1)
+                 ON CONFLICT(id) DO UPDATE SET profile = excluded.profile",
+                [encoded],
+            ))?;
+        }
+        for (peer, profile) in &pending.peer_profiles {
+            let encoded = serde_json::to_vec(profile)
+                .map_err(|error| ChatError::Db(format!("encode peer profile: {error}")))?;
+            db(tx.execute(
+                "INSERT INTO peer_profiles (peer, profile) VALUES (?1, ?2)
+                 ON CONFLICT(peer) DO UPDATE SET profile = excluded.profile",
+                rusqlite::params![peer, encoded],
             ))?;
         }
         if let Some(upload) = &pending.prekey_upload {
@@ -785,6 +902,12 @@ fn ensure_schema_upgrades(conn: &Connection) -> Result<()> {
     if !has_column(conn, "outbox", "sync_leg")? {
         db(conn.execute("ALTER TABLE outbox ADD COLUMN sync_leg BLOB", []))?;
     }
+    if !has_column(conn, "manifest_trust", "transparency_position")? {
+        db(conn.execute(
+            "ALTER TABLE manifest_trust ADD COLUMN transparency_position INTEGER",
+            [],
+        ))?;
+    }
     db(conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS pending_chat_registration (
              id INTEGER PRIMARY KEY CHECK (id = 1), request BLOB NOT NULL
@@ -792,7 +915,7 @@ fn ensure_schema_upgrades(conn: &Connection) -> Result<()> {
     ))?;
     db(conn.execute(
         "INSERT OR IGNORE INTO schema_migrations (version, applied_at)
-         VALUES (4, 0), (5, 0), (6, 0), (7, 0), (8, 0), (9, 0)",
+         VALUES (4, 0), (5, 0), (6, 0), (7, 0), (8, 0), (9, 0), (10, 0), (11, 0), (12, 0)",
         [],
     ))?;
     Ok(())

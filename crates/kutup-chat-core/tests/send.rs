@@ -5,7 +5,7 @@
 //! polls the engine's async methods to completion with no real runtime.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 
 use async_trait::async_trait;
@@ -15,8 +15,13 @@ use kutup_chat_core::{
     Engine, Result, SendOutcome, Session, SqliteChatDb,
 };
 use kutup_chat_proto::{
-    DeliveredEnvelope, DeviceListMismatch, DeviceManifest, DevicePreKeyBundle, MailboxPage,
-    ManifestDevice, RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
+    hash_transparency_map_checkpoint, hash_transparency_map_leaf, hash_transparency_node,
+    map_key_bit, transparency_map_empty_hashes, transparency_map_key, DeliveredEnvelope,
+    DeviceListMismatch, DeviceManifest, DevicePreKeyBundle, MailboxPage, ManifestDevice,
+    ManifestTransparencyLeaf, ManifestTransparencyMapProof, ManifestTransparencyProof,
+    OwnChatProfileResponse, PublishManifestResponse, PutChatProfileRequest,
+    RegisterChatDeviceRequest, SendMessagesRequest, TransparencyCheckpoint, TransparencyHash,
+    TransparencyMapSibling, UserPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};
@@ -94,11 +99,16 @@ struct MockServer {
     sync_active: RefCell<Vec<(u32, u32)>>,
     fail_sends: RefCell<u32>,
     fail_sync_sends: RefCell<u32>,
+    fail_profile_uploads: RefCell<u32>,
+    own_profile: RefCell<Option<PutChatProfileRequest>>,
     delivered: RefCell<Vec<(String, Vec<kutup_chat_proto::OutgoingEnvelope>)>>,
     synced: RefCell<Vec<(String, Vec<kutup_chat_proto::OutgoingEnvelope>)>>,
     sync_mailbox: RefCell<Vec<DeliveredEnvelope>>,
     seen_send_ids: RefCell<HashSet<String>>,
     seen_sync_ids: RefCell<HashSet<String>>,
+    transparency_events: RefCell<Vec<(ManifestTransparencyLeaf, usize)>>,
+    transparency_hashes: RefCell<Vec<TransparencyHash>>,
+    transparency_map: RefCell<BTreeMap<String, ManifestTransparencyLeaf>>,
 }
 
 impl MockServer {
@@ -127,6 +137,175 @@ impl MockServer {
     fn last_synced(&self) -> Vec<kutup_chat_proto::OutgoingEnvelope> {
         self.synced.borrow().last().unwrap().1.clone()
     }
+
+    fn transparency_proof(
+        &self,
+        username: &str,
+        manifest: &DeviceManifest,
+        consistency_from: u64,
+    ) -> ManifestTransparencyProof {
+        let leaf = ManifestTransparencyLeaf::from_manifest(username, manifest).unwrap();
+        let mut events = self.transparency_events.borrow_mut();
+        let mut hashes = self.transparency_hashes.borrow_mut();
+        let mut current_map = self.transparency_map.borrow_mut();
+        let leaf_index = events
+            .iter()
+            .find_map(|(existing, position)| (existing == &leaf).then_some(*position))
+            .unwrap_or_else(|| {
+                let position = hashes.len();
+                hashes.push(leaf.hash().unwrap());
+                current_map.insert(username.to_string(), leaf.clone());
+                let (map_root, _) = test_map_proof(&current_map, &leaf);
+                hashes.push(hash_transparency_map_checkpoint(map_root));
+                events.push((leaf.clone(), position));
+                position
+            });
+        let (map_root, siblings) = test_map_proof(&current_map, &leaf);
+        let map_checkpoint_index = hashes.len() - 1;
+        assert!(consistency_from <= hashes.len() as u64);
+        let consistency = if consistency_from == 0 || consistency_from == hashes.len() as u64 {
+            Vec::new()
+        } else {
+            test_consistency(consistency_from as usize, &hashes)
+        };
+        ManifestTransparencyProof {
+            leaf_index: leaf_index as u64,
+            leaf,
+            checkpoint: TransparencyCheckpoint {
+                log_id: "01".repeat(32),
+                tree_size: hashes.len() as u64,
+                root_hash: hex::encode(test_merkle_root(&hashes)),
+            },
+            inclusion: test_inclusion(leaf_index, &hashes)
+                .into_iter()
+                .map(hex::encode)
+                .collect(),
+            consistency_from,
+            consistency: consistency.into_iter().map(hex::encode).collect(),
+            map: ManifestTransparencyMapProof {
+                root_hash: hex::encode(map_root),
+                checkpoint_leaf_index: map_checkpoint_index as u64,
+                checkpoint_inclusion: test_inclusion(map_checkpoint_index, &hashes)
+                    .into_iter()
+                    .map(hex::encode)
+                    .collect(),
+                siblings,
+            },
+        }
+    }
+}
+
+fn test_map_proof(
+    values: &BTreeMap<String, ManifestTransparencyLeaf>,
+    target: &ManifestTransparencyLeaf,
+) -> (TransparencyHash, Vec<TransparencyMapSibling>) {
+    let defaults = transparency_map_empty_hashes();
+    let mut nodes = BTreeMap::<(usize, TransparencyHash), TransparencyHash>::new();
+    for leaf in values.values() {
+        let key = transparency_map_key(&leaf.username).unwrap();
+        let mut node = hash_transparency_map_leaf(leaf).unwrap();
+        nodes.insert((256, key), node);
+        for depth in (0..256).rev() {
+            let sibling = nodes
+                .get(&(depth + 1, test_map_sibling_prefix(&key, depth)))
+                .copied()
+                .unwrap_or(defaults[depth + 1]);
+            node = if map_key_bit(&key, depth) == 0 {
+                hash_transparency_node(node, sibling)
+            } else {
+                hash_transparency_node(sibling, node)
+            };
+            nodes.insert((depth, test_map_prefix(&key, depth)), node);
+        }
+    }
+    let root = nodes[&(0, [0; 32])];
+    let target_key = transparency_map_key(&target.username).unwrap();
+    let siblings = (0..256)
+        .filter_map(|depth| {
+            nodes
+                .get(&(depth + 1, test_map_sibling_prefix(&target_key, depth)))
+                .copied()
+                .filter(|hash| *hash != defaults[depth + 1])
+                .map(|hash| TransparencyMapSibling {
+                    depth: depth as u16,
+                    hash: hex::encode(hash),
+                })
+        })
+        .collect();
+    (root, siblings)
+}
+
+fn test_map_prefix(key: &TransparencyHash, depth: usize) -> TransparencyHash {
+    let mut path = *key;
+    let full_bytes = depth / 8;
+    let remaining_bits = depth % 8;
+    if remaining_bits == 0 {
+        path[full_bytes..].fill(0);
+    } else {
+        path[full_bytes] &= 0xff << (8 - remaining_bits);
+        path[full_bytes + 1..].fill(0);
+    }
+    path
+}
+
+fn test_map_sibling_prefix(key: &TransparencyHash, depth: usize) -> TransparencyHash {
+    let mut path = test_map_prefix(key, depth + 1);
+    path[depth / 8] ^= 1 << (7 - (depth % 8));
+    path
+}
+
+fn test_merkle_root(leaves: &[TransparencyHash]) -> TransparencyHash {
+    if leaves.len() == 1 {
+        return leaves[0];
+    }
+    let split = 1usize << ((leaves.len() - 1).ilog2());
+    hash_transparency_node(
+        test_merkle_root(&leaves[..split]),
+        test_merkle_root(&leaves[split..]),
+    )
+}
+
+fn test_inclusion(index: usize, leaves: &[TransparencyHash]) -> Vec<TransparencyHash> {
+    if leaves.len() == 1 {
+        return Vec::new();
+    }
+    let split = 1usize << ((leaves.len() - 1).ilog2());
+    if index < split {
+        let mut proof = test_inclusion(index, &leaves[..split]);
+        proof.push(test_merkle_root(&leaves[split..]));
+        proof
+    } else {
+        let mut proof = test_inclusion(index - split, &leaves[split..]);
+        proof.push(test_merkle_root(&leaves[..split]));
+        proof
+    }
+}
+
+fn test_consistency(old_size: usize, leaves: &[TransparencyHash]) -> Vec<TransparencyHash> {
+    fn subproof(
+        old_size: usize,
+        leaves: &[TransparencyHash],
+        complete: bool,
+        out: &mut Vec<TransparencyHash>,
+    ) {
+        if old_size == leaves.len() {
+            if !complete {
+                out.push(test_merkle_root(leaves));
+            }
+            return;
+        }
+        let split = 1usize << ((leaves.len() - 1).ilog2());
+        if old_size <= split {
+            subproof(old_size, &leaves[..split], complete, out);
+            out.push(test_merkle_root(&leaves[split..]));
+        } else {
+            subproof(old_size - split, &leaves[split..], false, out);
+            out.push(test_merkle_root(&leaves[..split]));
+        }
+    }
+    let mut proof = Vec::new();
+    subproof(old_size, leaves, true, &mut proof);
+    proof
 }
 
 #[async_trait(?Send)]
@@ -135,7 +314,11 @@ impl ChatTransport for MockServer {
         Ok(1)
     }
 
-    async fn fetch_bundles(&self, username: &str) -> Result<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(
+        &self,
+        username: &str,
+        transparency_tree_size: u64,
+    ) -> Result<UserPreKeyBundlesResponse> {
         let mut script = self.fetch_script.borrow_mut();
         let devices = if script.len() > 1 {
             script.remove(0)
@@ -148,10 +331,14 @@ impl ChatTransport for MockServer {
         } else {
             manifests.first().cloned().unwrap_or(None)
         };
+        let transparency = manifest
+            .as_ref()
+            .map(|manifest| self.transparency_proof(username, manifest, transparency_tree_size));
         Ok(UserPreKeyBundlesResponse {
             username: username.to_string(),
             devices,
             manifest,
+            transparency,
         })
     }
 
@@ -159,6 +346,7 @@ impl ChatTransport for MockServer {
         &self,
         username: &str,
         _current_device_id: u32,
+        transparency_tree_size: u64,
     ) -> Result<UserPreKeyBundlesResponse> {
         let mut script = self.sync_fetch_script.borrow_mut();
         let devices = if script.len() > 1 {
@@ -172,10 +360,14 @@ impl ChatTransport for MockServer {
         } else {
             manifests.first().cloned().unwrap_or(None)
         };
+        let transparency = manifest
+            .as_ref()
+            .map(|manifest| self.transparency_proof(username, manifest, transparency_tree_size));
         Ok(UserPreKeyBundlesResponse {
             username: username.to_string(),
             devices,
             manifest,
+            transparency,
         })
     }
 
@@ -183,9 +375,35 @@ impl ChatTransport for MockServer {
         Ok(self.own_manifest.borrow().clone())
     }
 
-    async fn publish_manifest(&self, manifest: &DeviceManifest) -> Result<DeviceManifest> {
+    async fn publish_manifest(
+        &self,
+        manifest: &DeviceManifest,
+        transparency_tree_size: u64,
+    ) -> Result<PublishManifestResponse> {
         *self.own_manifest.borrow_mut() = Some(manifest.clone());
-        Ok(manifest.clone())
+        Ok(PublishManifestResponse {
+            manifest: manifest.clone(),
+            transparency: self.transparency_proof("alice", manifest, transparency_tree_size),
+        })
+    }
+
+    async fn fetch_own_profile(&self) -> Result<Option<OwnChatProfileResponse>> {
+        Ok(self.own_profile.borrow().clone())
+    }
+
+    async fn publish_profile(
+        &self,
+        profile: &PutChatProfileRequest,
+    ) -> Result<OwnChatProfileResponse> {
+        let mut failures = self.fail_profile_uploads.borrow_mut();
+        if *failures > 0 {
+            *failures -= 1;
+            return Err(ChatError::Transport(
+                "simulated profile publication failure".into(),
+            ));
+        }
+        *self.own_profile.borrow_mut() = Some(profile.clone());
+        Ok(profile.clone())
     }
 
     async fn send(&self, _username: &str, req: &SendMessagesRequest) -> Result<SendOutcome> {
@@ -425,6 +643,12 @@ fn production_engine_requires_and_persists_a_matching_signed_manifest() {
         .unwrap();
     assert_eq!(pin.highest_version, 1);
     assert_eq!(pin.authority_key_id, manifest.authority_key_id);
+    assert_eq!(pin.transparency_position, Some(0));
+    let checkpoint = block_on(alice_db.load_transparency_trust("local"))
+        .unwrap()
+        .unwrap();
+    assert!(checkpoint.tree_size >= 1);
+    assert_eq!(checkpoint.log_id, "01".repeat(32));
 }
 
 #[test]
@@ -876,4 +1100,66 @@ fn explicit_contact_state_converges_over_authenticated_linked_device_sync() {
     assert!(block_on(second.session().sent_history())
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn pending_profile_key_is_withheld_until_its_ciphertext_is_published() {
+    let mut rng = test_rng();
+    let mut bob = device("bob", 1, &mut rng);
+    let bob_bundle = bundle_of(&bob, 1);
+    let server = Rc::new(MockServer::default());
+    server.script(vec![vec![bob_bundle.clone()]]);
+    server.set_active(vec![(1, bob_bundle.registration_id)]);
+    *server.fail_profile_uploads.borrow_mut() = 1;
+
+    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
+    let wrapping = kutup_chat_core::derive_wrapping_key(&[42; 32]).unwrap();
+    assert!(block_on(alice.initialize_profile(&wrapping, "Alice", &mut rng)).is_err());
+
+    let first = ChatContent::text_with_id(
+        "profile-pending-text",
+        "2026-07-16T11:00:00Z",
+        1,
+        "before publication",
+    );
+    block_on(alice.send("profile-pending-text", "bob", &first, &mut rng)).unwrap();
+    let alice_address = ChatAddress::local("alice", 1);
+    let received = decrypt_for(
+        &mut bob,
+        &alice_address,
+        &server.last_delivered(),
+        1,
+        &mut rng,
+    );
+    assert!(received.profile_key.is_none());
+
+    block_on(alice.flush_profile(&wrapping, "2026-07-16T11:01:00Z", &mut rng)).unwrap();
+    let update = decrypt_for(
+        &mut bob,
+        &alice_address,
+        &server.last_delivered(),
+        1,
+        &mut rng,
+    );
+    assert_eq!(
+        update.kind,
+        kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
+    );
+    assert!(update.profile_key.is_some());
+
+    let second = ChatContent::text_with_id(
+        "profile-published-text",
+        "2026-07-16T11:02:00Z",
+        3,
+        "after publication",
+    );
+    block_on(alice.send("profile-published-text", "bob", &second, &mut rng)).unwrap();
+    let received = decrypt_for(
+        &mut bob,
+        &alice_address,
+        &server.last_delivered(),
+        1,
+        &mut rng,
+    );
+    assert!(received.profile_key.is_some());
 }

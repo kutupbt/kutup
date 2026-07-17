@@ -27,6 +27,10 @@ pub mod kind {
     /// is accepted only from another authenticated device of the local account
     /// and is never rendered as a chat message. [IMPL]
     pub const CONTACT_CONTROL: &str = "contactControl";
+    /// Invisible profile-key distribution message. Like Signal's
+    /// `PROFILE_KEY_UPDATE`, it contains no user-visible body; the key itself
+    /// is the encrypted top-level [`ChatContent::profile_key`] field. [IMPL]
+    pub const PROFILE_KEY_UPDATE: &str = "profileKeyUpdate";
     /// Delivery/read receipts (E2EE content, never a server feature). [RSV]
     pub const RECEIPT: &str = "receipt";
     /// Typing indicator; ephemeral, a client MAY drop it. [RSV]
@@ -66,6 +70,11 @@ pub struct ChatContent {
     /// omits it and remains readable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
+    /// The sender's current 32-byte profile key, encoded with standard base64.
+    /// This field is inside the libsignal ciphertext and is harvested from
+    /// normal messages as well as dedicated `profileKeyUpdate` controls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_key: Option<String>,
     /// Kind-specific payload. Untyped so unknown kinds survive; use the typed
     /// accessors ([`ChatContent::as_text`]) for known kinds.
     pub body: serde_json::Value,
@@ -87,6 +96,7 @@ impl ChatContent {
             sent_at: sent_at.into(),
             seq,
             message_id: None,
+            profile_key: None,
             body: serde_json::to_value(TextBody { text: text.into() }).unwrap_or_default(),
             extra: serde_json::Map::new(),
         }
@@ -103,6 +113,31 @@ impl ChatContent {
         let mut content = Self::text(sent_at, seq, text);
         content.message_id = Some(message_id.into());
         content
+    }
+
+    /// Attaches the sender's encrypted-channel profile capability.
+    pub fn with_profile_key(mut self, profile_key: impl Into<String>) -> Self {
+        self.profile_key = Some(profile_key.into());
+        self
+    }
+
+    /// Builds an invisible Signal-style profile-key update.
+    pub fn profile_key_update_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        profile_key: impl Into<String>,
+    ) -> Self {
+        ChatContent {
+            v: Self::VERSION,
+            kind: kind::PROFILE_KEY_UPDATE.to_string(),
+            sent_at: sent_at.into(),
+            seq,
+            message_id: Some(message_id.into()),
+            profile_key: Some(profile_key.into()),
+            body: serde_json::Value::Object(serde_json::Map::new()),
+            extra: serde_json::Map::new(),
+        }
     }
 
     /// Returns the text body if this is a `text` message this reader understands.
@@ -128,6 +163,7 @@ impl ChatContent {
             sent_at: content.sent_at.clone(),
             seq: content.seq,
             message_id: content.message_id.clone(),
+            profile_key: content.profile_key.clone(),
             body: serde_json::to_value(SentTranscriptBody {
                 send_id: send_id.into(),
                 peer: peer.into(),
@@ -165,6 +201,7 @@ impl ChatContent {
             sent_at: sent_at.into(),
             seq,
             message_id: Some(message_id.into()),
+            profile_key: None,
             body: serde_json::to_value(body).unwrap_or_default(),
             extra: serde_json::Map::new(),
         }
@@ -186,6 +223,7 @@ impl ChatContent {
             kind::TEXT
                 | kind::SENT_TRANSCRIPT
                 | kind::CONTACT_CONTROL
+                | kind::PROFILE_KEY_UPDATE
                 | kind::RECEIPT
                 | kind::TYPING
                 | kind::ATTACHMENT
@@ -330,6 +368,22 @@ mod tests {
         );
         assert!(content.is_known_kind());
         assert_eq!(content.as_contact_control(), Some(body));
+        assert_eq!(content.as_text(), None);
+    }
+
+    #[test]
+    fn profile_key_update_is_known_and_keeps_the_capability_inside_content() {
+        let content = ChatContent::profile_key_update_with_id(
+            "profile-1",
+            "2026-07-16T10:00:00Z",
+            9,
+            "cHJvZmlsZS1rZXk=",
+        );
+        let value = serde_json::to_value(&content).unwrap();
+        assert!(content.is_known_kind());
+        assert_eq!(content.kind, kind::PROFILE_KEY_UPDATE);
+        assert_eq!(value["profileKey"], "cHJvZmlsZS1rZXk=");
+        assert_eq!(value["body"], serde_json::json!({}));
         assert_eq!(content.as_text(), None);
     }
 }

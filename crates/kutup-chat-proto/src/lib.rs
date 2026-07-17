@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 pub mod content;
 pub mod federation;
 mod identity;
+mod profile;
+mod transparency;
 
 pub use content::{ChatContent, ContactControlBody, ContactState, SentTranscriptBody, TextBody};
 pub use federation::{
@@ -27,6 +29,13 @@ pub use federation::{
     FederationRequest, FederationSigningKey, FEDERATION_AUTH_SCHEME, FEDERATION_VERSION,
 };
 pub use identity::{AccountAddress, AddressError, ConversationId};
+pub use profile::{ChatProfileResponse, OwnChatProfileResponse, PutChatProfileRequest};
+pub use transparency::{
+    empty_transparency_root, hash_transparency_map_checkpoint, hash_transparency_map_leaf,
+    hash_transparency_node, map_key_bit, transparency_map_empty_hashes, transparency_map_key,
+    ManifestTransparencyLeaf, ManifestTransparencyMapProof, ManifestTransparencyProof,
+    TransparencyCheckpoint, TransparencyHash, TransparencyMapSibling,
+};
 
 /// Registry of encryption suites — the algorithm-agility mechanism.
 ///
@@ -275,6 +284,16 @@ impl DeviceManifest {
     }
 }
 
+/// Successful manifest publication, including evidence that the exact new
+/// version was appended before the server acknowledged it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct PublishManifestResponse {
+    pub manifest: DeviceManifest,
+    pub transparency: ManifestTransparencyProof,
+}
+
 fn push_string(out: &mut Vec<u8>, value: &str) -> Result<(), String> {
     let len = u32::try_from(value.len()).map_err(|_| "manifest string is too long")?;
     out.extend_from_slice(&len.to_be_bytes());
@@ -369,6 +388,12 @@ pub struct UserPreKeyBundlesResponse {
     /// client explicitly enables development TOFU.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifest: Option<DeviceManifest>,
+    /// Inclusion of the exact manifest above in the homeserver's append-only
+    /// log, authenticated current-map membership, and consistency from the
+    /// checkpoint requested by the client. Production clients require this
+    /// when the server advertises `keyTransparency: true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transparency: Option<ManifestTransparencyProof>,
 }
 
 /// One per-device ciphertext inside a send request.
@@ -512,6 +537,12 @@ pub struct ChatCapabilities {
     /// Signed device manifests are available and included with prekey bundles.
     #[serde(default)]
     pub manifests: bool,
+    /// Signal-style opaque encrypted profiles and profile-key capabilities.
+    #[serde(default)]
+    pub profiles: bool,
+    /// Append-only manifest-log, current-map, and consistency proofs.
+    #[serde(default)]
+    pub key_transparency: bool,
     /// [RSV] flips true when sealed sender ships.
     #[serde(default)]
     pub sealed_sender: bool,
@@ -530,6 +561,8 @@ impl Default for ChatCapabilities {
             server_name: None,
             federation: false,
             manifests: true,
+            profiles: true,
+            key_transparency: true,
             sealed_sender: false,
         }
     }
@@ -610,6 +643,7 @@ mod tests {
         assert_eq!(v["deviceExpiryDays"], 90);
         assert_eq!(v["sealedSender"], false);
         assert_eq!(v["manifests"], true);
+        assert_eq!(v["profiles"], true);
     }
 
     #[test]

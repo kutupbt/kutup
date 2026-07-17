@@ -14,8 +14,8 @@ use std::rc::Rc;
 use rand::{CryptoRng, Rng};
 
 use crate::db::{
-    ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState, OutboxEntry,
-    OutboxLeg, SentMessage,
+    ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState, LocalProfile,
+    OutboxEntry, OutboxLeg, PeerProfile, SentMessage,
 };
 use crate::error::{ChatError, Result};
 use crate::manifest::{AccountAuthority, ManifestPolicy};
@@ -46,6 +46,10 @@ pub struct ReceiveReport {
     pub synced: Vec<String>,
     /// Mailbox ids containing authenticated linked-device contact controls.
     pub contact_synced: Vec<String>,
+    /// Canonical peers whose invisible profile-key control was processed.
+    pub profile_key_updated: Vec<String>,
+    /// Canonical peers whose encrypted server profile was refreshed.
+    pub profiles_refreshed: Vec<String>,
     /// Mailbox ids decrypted and acknowledged without retaining plaintext
     /// because the sender is locally blocked.
     pub suppressed: Vec<String>,
@@ -245,6 +249,226 @@ impl Engine {
         self.session.contacts().await
     }
 
+    pub async fn local_profile(&self) -> Result<Option<LocalProfile>> {
+        self.session.local_profile().await
+    }
+
+    pub async fn peer_profiles(&self) -> Result<Vec<PeerProfile>> {
+        self.session.peer_profiles().await
+    }
+
+    /// Initialize from the owner-only encrypted server profile or create the
+    /// first random profile key and default display name. Exact pending uploads
+    /// survive transport failures in the local profile record.
+    pub async fn initialize_profile<R: Rng + CryptoRng>(
+        &mut self,
+        wrapping_key: &[u8; 32],
+        default_display_name: &str,
+        rng: &mut R,
+    ) -> Result<LocalProfile> {
+        let local = self.session.local_profile().await?;
+        let remote = Rc::clone(&self.transport).fetch_own_profile().await?;
+        let selected = match (local, remote) {
+            (Some(local), Some(remote))
+                if (remote.revision, remote.source_device_id)
+                    > (local.revision, local.source_device_id) =>
+            {
+                crate::profile::open_own_profile(&remote, wrapping_key)?
+            }
+            (Some(local), _) => local,
+            (None, Some(remote)) => crate::profile::open_own_profile(&remote, wrapping_key)?,
+            (None, None) => crate::profile::create_local_profile(
+                default_display_name,
+                None,
+                None,
+                self.session.device_id(),
+                wrapping_key,
+                rng,
+            )?,
+        };
+        self.session.save_local_profile(selected).await?;
+        self.flush_profile(wrapping_key, "1970-01-01T00:00:00Z", rng)
+            .await?;
+        self.session
+            .local_profile()
+            .await?
+            .ok_or_else(|| ChatError::Db("local profile disappeared after initialization".into()))
+    }
+
+    pub async fn update_profile<R: Rng + CryptoRng>(
+        &mut self,
+        display_name: &str,
+        avatar: Option<Vec<u8>>,
+        avatar_content_type: Option<String>,
+        wrapping_key: &[u8; 32],
+        sent_at: &str,
+        rng: &mut R,
+    ) -> Result<LocalProfile> {
+        let current = self
+            .session
+            .local_profile()
+            .await?
+            .ok_or_else(|| ChatError::Invalid("encrypted profile is not initialized".into()))?;
+        let updated = crate::profile::update_local_profile(
+            &current,
+            display_name,
+            avatar,
+            avatar_content_type,
+            self.session.device_id(),
+            wrapping_key,
+            rng,
+        )?;
+        self.session.save_local_profile(updated).await?;
+        self.flush_profile(wrapping_key, sent_at, rng).await?;
+        self.session
+            .local_profile()
+            .await?
+            .ok_or_else(|| ChatError::Db("local profile disappeared after update".into()))
+    }
+
+    /// Rotate the random profile key after a block, publish the new encrypted
+    /// version, then redistribute only to still-authorized conversations.
+    pub async fn rotate_profile_key<R: Rng + CryptoRng>(
+        &mut self,
+        wrapping_key: &[u8; 32],
+        sent_at: &str,
+        rng: &mut R,
+    ) -> Result<LocalProfile> {
+        let current = self
+            .session
+            .local_profile()
+            .await?
+            .ok_or_else(|| ChatError::Invalid("encrypted profile is not initialized".into()))?;
+        let rotated = crate::profile::rotate_local_profile(
+            &current,
+            self.session.device_id(),
+            wrapping_key,
+            rng,
+        )?;
+        self.session.save_local_profile(rotated).await?;
+        self.flush_profile(wrapping_key, sent_at, rng).await?;
+        self.session
+            .local_profile()
+            .await?
+            .ok_or_else(|| ChatError::Db("local profile disappeared after rotation".into()))
+    }
+
+    /// Publish a crash-surviving encrypted profile and fan out its current key.
+    pub async fn flush_profile<R: Rng + CryptoRng>(
+        &mut self,
+        wrapping_key: &[u8; 32],
+        sent_at: &str,
+        rng: &mut R,
+    ) -> Result<()> {
+        // A linked device may have published while this device was offline.
+        // Rebase a still-pending local edit on the owner-only current row and
+        // retry, while preserving rotation semantics. The exact rebased upload
+        // is committed before each retry.
+        for conflict_attempt in 0..3 {
+            let Some(profile) = self.session.local_profile().await? else {
+                return Ok(());
+            };
+            let Some(upload) = profile.pending_upload.clone() else {
+                break;
+            };
+            match Rc::clone(&self.transport).publish_profile(&upload).await {
+                Ok(published) if published == upload => {
+                    self.session
+                        .mark_profile_published(profile.revision, profile.source_device_id)
+                        .await?;
+                    break;
+                }
+                Ok(_) => {
+                    return Err(ChatError::Trust(
+                        "server returned a different encrypted profile after publication".into(),
+                    ));
+                }
+                Err(publish_error) => {
+                    let remote = match Rc::clone(&self.transport).fetch_own_profile().await {
+                        Ok(Some(remote)) => remote,
+                        _ => return Err(publish_error),
+                    };
+                    if remote == upload {
+                        self.session
+                            .mark_profile_published(profile.revision, profile.source_device_id)
+                            .await?;
+                        break;
+                    }
+                    if (remote.revision, remote.source_device_id)
+                        < (upload.revision, upload.source_device_id)
+                        || conflict_attempt == 2
+                    {
+                        return Err(publish_error);
+                    }
+                    let remote = crate::profile::open_own_profile(&remote, wrapping_key)?;
+                    let rebased = crate::profile::rebase_local_profile(
+                        &profile,
+                        &remote,
+                        self.session.device_id(),
+                        wrapping_key,
+                        rng,
+                    )?;
+                    self.session.save_local_profile(rebased).await?;
+                }
+            }
+        }
+
+        let Some(profile) = self.session.local_profile().await? else {
+            return Ok(());
+        };
+        if !profile.broadcast_pending {
+            return Ok(());
+        }
+        for contact in self.session.contacts().await? {
+            if matches!(
+                contact.state,
+                ContactState::PendingOutgoing | ContactState::Accepted
+            ) {
+                self.send_profile_key_update(&contact.peer, sent_at, rng)
+                    .await?;
+            }
+        }
+        self.session
+            .mark_profile_broadcast(profile.revision, profile.source_device_id)
+            .await
+    }
+
+    /// Fetch and decrypt every known, non-blocked peer profile. Missing old
+    /// versions retain the last locally decrypted value, matching Signal's
+    /// inability to remotely erase already received profile data.
+    pub async fn refresh_profiles(&mut self) -> Result<Vec<String>> {
+        let mut refreshed = Vec::new();
+        for cached in self.session.peer_profiles().await? {
+            if self
+                .session
+                .contact(&cached.peer)
+                .await?
+                .is_some_and(|contact| contact.state == ContactState::Blocked)
+            {
+                continue;
+            }
+            let version = crate::profile::profile_version(&cached.key)?;
+            let access = crate::profile::profile_access_key(&cached.key)?;
+            let Some(encrypted) = Rc::clone(&self.transport)
+                .fetch_profile(&cached.peer, &version, &access)
+                .await?
+            else {
+                continue;
+            };
+            if cached.display_name.is_some()
+                && (encrypted.revision, encrypted.source_device_id)
+                    <= (cached.revision, cached.source_device_id)
+            {
+                continue;
+            }
+            let profile =
+                crate::profile::open_peer_profile(cached.peer.clone(), &encrypted, &cached.key)?;
+            self.session.save_peer_profile(profile).await?;
+            refreshed.push(cached.peer);
+        }
+        Ok(refreshed)
+    }
+
     /// Apply a contact action locally first, then best-effort its encrypted
     /// linked-device control. A network outage must never undo a local block or
     /// leave an accepted request unusable; the durable sync marker retries.
@@ -256,6 +480,10 @@ impl Engine {
     ) -> Result<ContactRecord> {
         let record = self.session.accept_contact(peer).await?;
         let _ = self.flush_contact_syncs(sent_at, rng).await;
+        // Signal shares the recipient's profile when a request is accepted.
+        // The send path journals ciphertext before networking; a transient
+        // delivery failure remains in the normal durable outbox.
+        let _ = self.send_profile_key_update(peer, sent_at, rng).await;
         Ok(self.session.contact(peer).await?.unwrap_or(record))
     }
 
@@ -320,6 +548,30 @@ impl Engine {
         Ok(())
     }
 
+    async fn send_profile_key_update<R: Rng + CryptoRng>(
+        &mut self,
+        peer: &str,
+        sent_at: &str,
+        rng: &mut R,
+    ) -> Result<()> {
+        let profile = self
+            .session
+            .local_profile()
+            .await?
+            .ok_or_else(|| ChatError::Invalid("encrypted profile is not initialized".into()))?;
+        if profile.pending_upload.is_some() {
+            return Err(ChatError::Invalid(
+                "profile key cannot be shared before profile publication".into(),
+            ));
+        }
+        let encoded_key = crate::profile::profile_key_base64(&profile)?;
+        let send_id = profile_key_send_id(peer, &profile)?;
+        let seq = self.session.next_sent_seq().await?;
+        let content = ChatContent::profile_key_update_with_id(&send_id, sent_at, seq, encoded_key);
+        self.send(&send_id, peer, &content, rng).await?;
+        Ok(())
+    }
+
     /// Add this local device to the account's authenticated device set without
     /// trusting a server-provided list. An existing signed manifest is the only
     /// source for other devices; this device contributes only its own locally
@@ -371,14 +623,30 @@ impl Engine {
             }
         };
         let expected_hash = candidate.manifest_hash().map_err(ChatError::Trust)?;
-        let published = transport.publish_manifest(&candidate).await?;
-        published.verify().map_err(ChatError::Trust)?;
-        if published.manifest_hash().map_err(ChatError::Trust)? != expected_hash {
+        let account = self.session.user().to_string();
+        let transparency_tree_size = self
+            .session
+            .transparency_trust(&account)
+            .await?
+            .map_or(0, |trust| trust.tree_size);
+        let published = transport
+            .publish_manifest(&candidate, transparency_tree_size)
+            .await?;
+        published.manifest.verify().map_err(ChatError::Trust)?;
+        if published
+            .manifest
+            .manifest_hash()
+            .map_err(ChatError::Trust)?
+            != expected_hash
+        {
             return Err(ChatError::Trust(
                 "server returned a different manifest after publication".into(),
             ));
         }
-        Ok(published)
+        self.session
+            .accept_manifest_publication(&account, &published.manifest, &published.transparency)
+            .await?;
+        Ok(published.manifest)
     }
 
     /// How many sends are still pending in the durable outbox (undelivered) — for a
@@ -507,11 +775,23 @@ impl Engine {
                 "send {send_id} is pending but has no durable ciphertext"
             )));
         }
+        let mut content = content.clone();
+        if peer_user != self.session.user() && content.profile_key.is_none() {
+            if let Some(profile) = self.session.local_profile().await? {
+                // Signal uploads a rotated profile before allowing the new key
+                // into messages. A pending first upload/edit/rotation is not a
+                // fetchable capability yet, so reconciliation must publish it
+                // before new conversations receive it.
+                if profile.pending_upload.is_none() {
+                    content.profile_key = Some(crate::profile::profile_key_base64(&profile)?);
+                }
+            }
+        }
         let mut summary = SendSummary::default();
         if peer_user == self.session.user() {
             let bundles = self.fetch_verified_bundles(peer_user).await?;
             self.session
-                .enqueue_note_to_self(send_id, &bundles, content, &mut summary, rng)
+                .enqueue_note_to_self(send_id, &bundles, &content, &mut summary, rng)
                 .await?;
         } else {
             if let Some(contact) = self.session.contact(peer_user).await? {
@@ -541,7 +821,7 @@ impl Engine {
                         peer_user,
                         recipient_bundles: &recipient_bundles,
                         sync_bundles: &sync_bundles,
-                        content,
+                        content: &content,
                     },
                     &mut summary,
                     rng,
@@ -674,6 +954,12 @@ impl Engine {
                 Ok(ReceiveOutcome::ContactSynced { id }) => {
                     ack_ids.push(id.clone());
                     report.contact_synced.push(id);
+                }
+                Ok(ReceiveOutcome::ProfileKeyUpdate { id, peer }) => {
+                    ack_ids.push(id);
+                    if let Some(peer) = peer {
+                        report.profile_key_updated.push(peer);
+                    }
                 }
                 Ok(ReceiveOutcome::Suppressed { id }) => {
                     ack_ids.push(id.clone());
@@ -847,17 +1133,36 @@ impl Engine {
         peer_user: &str,
     ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
         let transport = Rc::clone(&self.transport);
+        let transparency_tree_size = self
+            .session
+            .transparency_trust(peer_user)
+            .await?
+            .map_or(0, |trust| trust.tree_size);
         let response = if peer_user == self.session.user() {
             transport
-                .fetch_sync_bundles(peer_user, self.session.device_id())
+                .fetch_sync_bundles(peer_user, self.session.device_id(), transparency_tree_size)
                 .await?
         } else {
-            transport.fetch_bundles(peer_user).await?
+            transport
+                .fetch_bundles(peer_user, transparency_tree_size)
+                .await?
         };
         self.session
             .accept_bundle_response(peer_user, response, self.manifest_policy)
             .await
     }
+}
+
+fn profile_key_send_id(peer: &str, profile: &LocalProfile) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let version = crate::profile::profile_version(&profile.key)?;
+    let mut digest = Sha256::new();
+    digest.update(b"kutup-profile-key-update-v1\0");
+    digest.update(peer.as_bytes());
+    digest.update(version.as_bytes());
+    digest.update(profile.revision.to_be_bytes());
+    let digest = digest.finalize();
+    Ok(format!("pk:{}", hex::encode(&digest[..30])))
 }
 
 fn unix_millis() -> i64 {

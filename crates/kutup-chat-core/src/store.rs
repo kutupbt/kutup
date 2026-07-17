@@ -197,11 +197,29 @@ impl ChatStore {
             .insert(trust.peer.clone(), trust);
     }
 
+    pub(crate) fn stage_transparency_trust(&self, trust: crate::TransparencyTrust) {
+        self.pending
+            .borrow_mut()
+            .transparency_trust
+            .insert(trust.scope.clone(), trust);
+    }
+
     pub(crate) fn stage_contact(&self, contact: ContactRecord) {
         self.pending
             .borrow_mut()
             .contacts
             .insert(contact.peer.clone(), contact);
+    }
+
+    pub(crate) fn stage_local_profile(&self, profile: crate::LocalProfile) {
+        self.pending.borrow_mut().local_profile = Some(profile);
+    }
+
+    pub(crate) fn stage_peer_profile(&self, profile: crate::PeerProfile) {
+        self.pending
+            .borrow_mut()
+            .peer_profiles
+            .insert(profile.peer.clone(), profile);
     }
 
     pub(crate) fn delete_messages_for_peer(&self, peer: &str) {

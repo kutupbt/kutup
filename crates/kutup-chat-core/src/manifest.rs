@@ -3,11 +3,14 @@
 use base64::Engine as _;
 use ed25519_dalek::{Signer as _, SigningKey};
 use hkdf::Hkdf;
-use kutup_chat_proto::{DeviceManifest, ManifestDevice, UserPreKeyBundlesResponse};
+use kutup_chat_proto::{
+    AccountAddress, DeviceManifest, ManifestDevice, ManifestTransparencyProof,
+    TransparencyCheckpoint, UserPreKeyBundlesResponse,
+};
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroize as _;
 
-use crate::db::{AuthorityTrust, ManifestTrust};
+use crate::db::{AuthorityTrust, ManifestTrust, TransparencyTrust};
 use crate::error::{ChatError, Result};
 
 const AUTHORITY_KDF_INFO: &[u8] = b"kutup/chat/self-authority/v1";
@@ -19,6 +22,123 @@ const AUTHORITY_KDF_INFO: &[u8] = b"kutup/chat/self-authority/v1";
 pub enum ManifestPolicy {
     Required,
     AllowMissingForDevelopment,
+}
+
+pub(crate) struct VerifiedBundleTrust {
+    pub manifest: Option<ManifestTrust>,
+    pub transparency: Option<TransparencyTrust>,
+}
+
+pub(crate) fn transparency_scope(peer: &str) -> Result<String> {
+    let address: AccountAddress = peer
+        .parse()
+        .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
+    Ok(address.server.unwrap_or_else(|| "local".into()))
+}
+
+pub(crate) fn verify_manifest_publication(
+    expected_account: &str,
+    manifest: &DeviceManifest,
+    proof: &ManifestTransparencyProof,
+    prior_transparency: Option<&TransparencyTrust>,
+) -> Result<TransparencyTrust> {
+    let address: AccountAddress = expected_account
+        .parse()
+        .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
+    proof
+        .leaf
+        .matches_manifest(&address.username, manifest)
+        .map_err(ChatError::Trust)?;
+    proof.verify_inclusion().map_err(ChatError::Trust)?;
+    proof.verify_current_map().map_err(ChatError::Trust)?;
+    let scope = address.server.unwrap_or_else(|| "local".into());
+    let prior_checkpoint = prior_transparency
+        .map(|prior| {
+            if prior.scope != scope {
+                return Err(ChatError::Trust(
+                    "transparency checkpoint belongs to another homeserver".into(),
+                ));
+            }
+            Ok(TransparencyCheckpoint {
+                log_id: prior.log_id.clone(),
+                tree_size: prior.tree_size,
+                root_hash: prior.root_hash.clone(),
+            })
+        })
+        .transpose()?;
+    proof
+        .verify_consistency_from(prior_checkpoint.as_ref())
+        .map_err(ChatError::Trust)?;
+    Ok(TransparencyTrust {
+        scope,
+        log_id: proof.checkpoint.log_id.clone(),
+        tree_size: proof.checkpoint.tree_size,
+        root_hash: proof.checkpoint.root_hash.clone(),
+    })
+}
+
+/// Verify the signed manifest and its inclusion in the homeserver's append-only
+/// log. The checkpoint is global per homeserver, so fetching any peer advances
+/// the same durable consistency pin.
+pub(crate) fn verify_transparent_bundle_response(
+    expected_peer: &str,
+    response: &UserPreKeyBundlesResponse,
+    policy: ManifestPolicy,
+    prior_manifest: Option<&ManifestTrust>,
+    prior_transparency: Option<&TransparencyTrust>,
+) -> Result<VerifiedBundleTrust> {
+    let mut manifest = verify_bundle_response(expected_peer, response, policy, prior_manifest)?;
+    let Some(served_manifest) = response.manifest.as_ref() else {
+        if response.transparency.is_some() {
+            return Err(ChatError::Trust(
+                "server returned transparency without a signed manifest".into(),
+            ));
+        }
+        return Ok(VerifiedBundleTrust {
+            manifest,
+            transparency: prior_transparency.cloned(),
+        });
+    };
+    let Some(proof) = response.transparency.as_ref() else {
+        return match policy {
+            ManifestPolicy::Required => Err(ChatError::Trust(
+                "server omitted the required manifest transparency proof".into(),
+            )),
+            ManifestPolicy::AllowMissingForDevelopment => Ok(VerifiedBundleTrust {
+                manifest,
+                transparency: prior_transparency.cloned(),
+            }),
+        };
+    };
+
+    let next =
+        verify_manifest_publication(expected_peer, served_manifest, proof, prior_transparency)?;
+    if let Some(trust) = manifest.as_mut() {
+        if let Some(prior) = prior_manifest {
+            if let Some(prior_position) = prior.transparency_position {
+                if served_manifest.version == prior.highest_version
+                    && proof.leaf_index != prior_position
+                {
+                    return Err(ChatError::Trust(
+                        "unchanged manifest moved to another transparency log position".into(),
+                    ));
+                }
+                if served_manifest.version > prior.highest_version
+                    && proof.leaf_index <= prior_position
+                {
+                    return Err(ChatError::Trust(
+                        "updated manifest did not advance its transparency monitor position".into(),
+                    ));
+                }
+            }
+        }
+        trust.transparency_position = Some(proof.leaf_index);
+    }
+
+    Ok(VerifiedBundleTrust {
+        manifest,
+        transparency: Some(next),
+    })
 }
 
 /// Deterministic account authority derived from the recoverable account master
@@ -188,6 +308,7 @@ pub fn verify_bundle_response(
         highest_version: manifest.version,
         manifest_hash,
         trust,
+        transparency_position: prior.and_then(|prior| prior.transparency_position),
         continuity_gap,
     }))
 }
@@ -196,7 +317,10 @@ pub fn verify_bundle_response(
 mod tests {
     use super::*;
     use kutup_chat_proto::{
-        DevicePreKeyBundle, EcPreKey, KemPreKey, SuiteId, UserPreKeyBundlesResponse,
+        hash_transparency_map_checkpoint, hash_transparency_map_leaf, hash_transparency_node,
+        map_key_bit, transparency_map_empty_hashes, transparency_map_key, DevicePreKeyBundle,
+        EcPreKey, KemPreKey, ManifestTransparencyLeaf, ManifestTransparencyMapProof,
+        ManifestTransparencyProof, SuiteId, TransparencyCheckpoint, UserPreKeyBundlesResponse,
     };
 
     fn bundle(device_id: u32, registration_id: u32, identity_key: &str) -> DevicePreKeyBundle {
@@ -224,6 +348,7 @@ mod tests {
             username: "bob".into(),
             devices: vec![bundle(1, 42, "identity")],
             manifest: Some(manifest),
+            transparency: None,
         }
     }
 
@@ -313,6 +438,7 @@ mod tests {
             username: "bob".into(),
             devices: vec![],
             manifest: None,
+            transparency: None,
         };
         assert!(verify_bundle_response("bob", &unsigned, ManifestPolicy::Required, None).is_err());
         assert!(verify_bundle_response(
@@ -331,6 +457,7 @@ mod tests {
             highest_version: 1,
             manifest_hash: "hash".into(),
             trust: AuthorityTrust::Tofu,
+            transparency_position: None,
             continuity_gap: false,
         };
         assert!(verify_bundle_response(
@@ -338,6 +465,95 @@ mod tests {
             &unsigned,
             ManifestPolicy::AllowMissingForDevelopment,
             Some(&pin)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn production_requires_manifest_inclusion_and_pins_the_global_checkpoint() {
+        let authority = AccountAuthority::derive(&[33; 32]).unwrap();
+        let manifest = authority
+            .sign_manifest(
+                1,
+                None,
+                vec![ManifestDevice {
+                    device_id: 1,
+                    identity_key: "identity".into(),
+                    registration_id: 42,
+                }],
+                "2026-07-16T12:00:00Z",
+            )
+            .unwrap();
+        let mut response = response(manifest.clone());
+        assert!(verify_transparent_bundle_response(
+            "bob",
+            &response,
+            ManifestPolicy::Required,
+            None,
+            None,
+        )
+        .is_err());
+
+        let leaf = ManifestTransparencyLeaf::from_manifest("bob", &manifest).unwrap();
+        let key = transparency_map_key("bob").unwrap();
+        let defaults = transparency_map_empty_hashes();
+        let mut map_root = hash_transparency_map_leaf(&leaf).unwrap();
+        for depth in (0..256).rev() {
+            map_root = if map_key_bit(&key, depth) == 0 {
+                hash_transparency_node(map_root, defaults[depth + 1])
+            } else {
+                hash_transparency_node(defaults[depth + 1], map_root)
+            };
+        }
+        let event_hash = leaf.hash().unwrap();
+        let map_checkpoint_hash = hash_transparency_map_checkpoint(map_root);
+        response.transparency = Some(ManifestTransparencyProof {
+            leaf_index: 0,
+            checkpoint: TransparencyCheckpoint {
+                log_id: "01".repeat(32),
+                tree_size: 2,
+                root_hash: hex::encode(hash_transparency_node(event_hash, map_checkpoint_hash)),
+            },
+            leaf,
+            inclusion: vec![hex::encode(map_checkpoint_hash)],
+            consistency_from: 0,
+            consistency: Vec::new(),
+            map: ManifestTransparencyMapProof {
+                root_hash: hex::encode(map_root),
+                checkpoint_leaf_index: 1,
+                checkpoint_inclusion: vec![hex::encode(event_hash)],
+                siblings: Vec::new(),
+            },
+        });
+        let verified = verify_transparent_bundle_response(
+            "bob",
+            &response,
+            ManifestPolicy::Required,
+            None,
+            None,
+        )
+        .unwrap();
+        let checkpoint = verified.transparency.unwrap();
+        assert_eq!(checkpoint.scope, "local");
+        assert_eq!(checkpoint.tree_size, 2);
+
+        response.transparency.as_mut().unwrap().map.root_hash = "03".repeat(32);
+        assert!(verify_transparent_bundle_response(
+            "bob",
+            &response,
+            ManifestPolicy::Required,
+            None,
+            None,
+        )
+        .is_err());
+        response.transparency.as_mut().unwrap().map.root_hash = hex::encode(map_root);
+        response.transparency.as_mut().unwrap().checkpoint.root_hash = "02".repeat(32);
+        assert!(verify_transparent_bundle_response(
+            "bob",
+            &response,
+            ManifestPolicy::Required,
+            None,
+            None,
         )
         .is_err());
     }

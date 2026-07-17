@@ -13,9 +13,15 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use ed25519_dalek::{Signer as _, SigningKey};
+use kutup_chat_proto::{
+    DeviceManifest, ManifestDevice, PublishManifestResponse, TransparencyCheckpoint,
+    UserPreKeyBundlesResponse,
+};
 use rand::RngCore;
 use reqwest::blocking::Client;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 fn b64(b: &[u8]) -> String {
     STANDARD.encode(b)
@@ -93,14 +99,15 @@ fn register_and_login(c: &Client, base: &str, tag: &str) -> (String, String, Str
 }
 
 /// A synthetic (base64-valid, crypto-meaningless) chat device registration.
-fn register_chat_device(c: &Client, base: &str, token: &str) -> (u32, u32) {
+fn register_chat_device(c: &Client, base: &str, token: &str) -> (u32, u32, String) {
     let mut rng = rand::thread_rng();
     let reg_id = (rng.next_u32() % 16000) + 1;
     let seed = rng.next_u32() as u8;
     let key = |n: u8| b64(&[seed.wrapping_add(n); 33]);
+    let identity_key = key(1);
     let body = json!({
         "suite": 1, "registrationId": reg_id,
-        "identityKey": key(1),
+        "identityKey": identity_key,
         "signedPreKey": { "keyId": 1, "publicKey": key(2), "signature": key(3) },
         "lastResortKyberPreKey": { "keyId": 1, "publicKey": key(4), "signature": key(5) },
         "oneTimePreKeys": [ { "keyId": 10, "publicKey": key(6) } ],
@@ -134,7 +141,48 @@ fn register_chat_device(c: &Client, base: &str, token: &str) -> (u32, u32) {
     let retry_body: Value = retry.json().unwrap();
     assert_eq!(retry_body["deviceId"], device_id);
 
-    (device_id, reg_id)
+    (device_id, reg_id, identity_key)
+}
+
+fn publish_manifest(
+    c: &Client,
+    base: &str,
+    token: &str,
+    signing: &SigningKey,
+    version: u64,
+    previous_hash: Option<String>,
+    devices: Vec<ManifestDevice>,
+) -> DeviceManifest {
+    let public = signing.verifying_key();
+    let mut manifest = DeviceManifest {
+        version,
+        previous_hash,
+        devices,
+        issued_at: time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap(),
+        authority_key_id: hex::encode(Sha256::digest(public.as_bytes())),
+        self_authority_key: b64(public.as_bytes()),
+        signature: String::new(),
+    };
+    manifest.signature = b64(&signing.sign(&manifest.signing_bytes().unwrap()).to_bytes());
+    manifest.verify().unwrap();
+    let response = c
+        .post(format!("{base}/api/chat/manifest"))
+        .bearer_auth(token)
+        .json(&manifest)
+        .send()
+        .unwrap();
+    assert!(
+        response.status().is_success(),
+        "publish manifest v{version}: {}",
+        response.status()
+    );
+    let published = response.json::<PublishManifestResponse>().unwrap();
+    assert_eq!(published.manifest, manifest);
+    published.transparency.verify_inclusion().unwrap();
+    published.transparency.verify_current_map().unwrap();
+    manifest
 }
 
 #[test]
@@ -160,6 +208,8 @@ fn chat_v1_contract() {
     assert_eq!(max, 65536);
     assert_eq!(chat["sealedSender"], false);
     assert_eq!(chat["manifests"], true);
+    assert_eq!(chat["profiles"], true);
+    assert_eq!(chat["keyTransparency"], true);
     assert!(chat["mailboxRetentionDays"].is_number());
     assert!(chat["deviceExpiryDays"].is_number());
     println!("ok  - capability block");
@@ -168,22 +218,166 @@ fn chat_v1_contract() {
     let (_eb, ub, tb) = register_and_login(&c, &base, "b");
     println!("ok  - two accounts registered + logged in");
 
-    let (dev_a, _reg_a) = register_chat_device(&c, &base, &ta);
-    let (dev_b, reg_b) = register_chat_device(&c, &base, &tb);
+    let (dev_a, reg_a, identity_a) = register_chat_device(&c, &base, &ta);
+    let (dev_b, reg_b, identity_b) = register_chat_device(&c, &base, &tb);
     println!("ok  - chat devices registered (A={dev_a} B={dev_b})");
+
+    let authority_a = SigningKey::from_bytes(&[71; 32]);
+    let authority_b = SigningKey::from_bytes(&[72; 32]);
+    let manifest_a1 = publish_manifest(
+        &c,
+        &base,
+        &ta,
+        &authority_a,
+        1,
+        None,
+        vec![ManifestDevice {
+            device_id: dev_a,
+            identity_key: identity_a.clone(),
+            registration_id: reg_a,
+        }],
+    );
+    publish_manifest(
+        &c,
+        &base,
+        &tb,
+        &authority_b,
+        1,
+        None,
+        vec![ManifestDevice {
+            device_id: dev_b,
+            identity_key: identity_b,
+            registration_id: reg_b,
+        }],
+    );
+
+    // Opaque encrypted profiles are owner-writable and bearer-capability
+    // readable. Rotation advances the owner head without deleting the old
+    // ciphertext version while its key update is in flight.
+    let access_v1 = [21u8; 16];
+    let profile_v1 = json!({
+        "version": "11".repeat(32),
+        "revision": 1,
+        "sourceDeviceId": dev_a,
+        "name": b64(&[31u8; 12 + 53 + 16]),
+        "wrappedKey": b64(&[41u8; 12 + 32 + 16]),
+        "accessKeyVerifier": hex::encode(Sha256::digest(access_v1)),
+    });
+    let put = c
+        .put(format!("{base}/api/chat/profile"))
+        .bearer_auth(&ta)
+        .json(&profile_v1)
+        .send()
+        .unwrap();
+    assert!(put.status().is_success(), "put profile: {}", put.status());
+    assert_eq!(put.json::<Value>().unwrap(), profile_v1);
+
+    let denied = c
+        .get(format!(
+            "{base}/api/chat/users/{ua}/profile/{}",
+            profile_v1["version"].as_str().unwrap()
+        ))
+        .bearer_auth(&tb)
+        .header("X-Kutup-Profile-Access-Key", b64(&[0u8; 16]))
+        .send()
+        .unwrap();
+    assert_eq!(denied.status().as_u16(), 404);
+
+    let visible_v1: Value = c
+        .get(format!(
+            "{base}/api/chat/users/{ua}/profile/{}",
+            profile_v1["version"].as_str().unwrap()
+        ))
+        .bearer_auth(&tb)
+        .header("X-Kutup-Profile-Access-Key", b64(&access_v1))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(visible_v1["name"], profile_v1["name"]);
+    assert!(visible_v1.get("wrappedKey").is_none());
+    assert!(visible_v1.get("accessKeyVerifier").is_none());
+
+    let access_v2 = [22u8; 16];
+    let profile_v2 = json!({
+        "version": "12".repeat(32),
+        "revision": 2,
+        "sourceDeviceId": dev_a,
+        "name": b64(&[32u8; 12 + 53 + 16]),
+        "wrappedKey": b64(&[42u8; 12 + 32 + 16]),
+        "accessKeyVerifier": hex::encode(Sha256::digest(access_v2)),
+    });
+    let rotated = c
+        .put(format!("{base}/api/chat/profile"))
+        .bearer_auth(&ta)
+        .json(&profile_v2)
+        .send()
+        .unwrap();
+    assert!(rotated.status().is_success());
+    let owner: Value = c
+        .get(format!("{base}/api/chat/profile"))
+        .bearer_auth(&ta)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(owner, profile_v2);
+    let old_still_visible = c
+        .get(format!(
+            "{base}/api/chat/users/{ua}/profile/{}",
+            profile_v1["version"].as_str().unwrap()
+        ))
+        .bearer_auth(&tb)
+        .header("X-Kutup-Profile-Access-Key", b64(&access_v1))
+        .send()
+        .unwrap();
+    assert!(old_still_visible.status().is_success());
+    println!("ok  - encrypted profile capability + version-safe rotation");
 
     // A links a second device. A sync-mode bundle fetch returns the complete
     // signed-set shape, but does not consume a one-time key for the caller.
-    let (dev_a2, reg_a2) = register_chat_device(&c, &base, &ta);
-    let sync_bundles: Value = c
+    let (dev_a2, reg_a2, identity_a2) = register_chat_device(&c, &base, &ta);
+    let manifest_a2 = publish_manifest(
+        &c,
+        &base,
+        &ta,
+        &authority_a,
+        2,
+        Some(manifest_a1.manifest_hash().unwrap()),
+        vec![
+            ManifestDevice {
+                device_id: dev_a,
+                identity_key: identity_a.clone(),
+                registration_id: reg_a,
+            },
+            ManifestDevice {
+                device_id: dev_a2,
+                identity_key: identity_a2,
+                registration_id: reg_a2,
+            },
+        ],
+    );
+    let sync_bundles_value: Value = c
         .get(format!(
-            "{base}/api/chat/users/{ua}/keys?syncDeviceId={dev_a}"
+            "{base}/api/chat/users/{ua}/keys?syncDeviceId={dev_a}&transparencyTreeSize=0"
         ))
         .bearer_auth(&ta)
         .send()
         .unwrap()
         .json()
         .unwrap();
+    let sync_bundles: UserPreKeyBundlesResponse =
+        serde_json::from_value(sync_bundles_value.clone()).unwrap();
+    let sync_proof = sync_bundles.transparency.as_ref().unwrap();
+    sync_proof.verify_inclusion().unwrap();
+    sync_proof.verify_current_map().unwrap();
+    sync_proof.verify_consistency_from(None).unwrap();
+    sync_proof
+        .leaf
+        .matches_manifest(&ua, sync_bundles.manifest.as_ref().unwrap())
+        .unwrap();
+    let first_checkpoint: TransparencyCheckpoint = sync_proof.checkpoint.clone();
+    let sync_bundles = sync_bundles_value;
     let sync_devices = sync_bundles["devices"].as_array().unwrap();
     assert_eq!(sync_devices.len(), 2);
     let current = sync_devices
@@ -192,6 +386,18 @@ fn chat_v1_contract() {
         .unwrap();
     assert!(current.get("oneTimePreKey").is_none());
     println!("ok  - linked-device bundle fetch preserves current prekeys");
+
+    // Grow the log, then require a non-trivial consistency proof from the
+    // checkpoint just pinned above.
+    publish_manifest(
+        &c,
+        &base,
+        &ta,
+        &authority_a,
+        3,
+        Some(manifest_a2.manifest_hash().unwrap()),
+        manifest_a2.devices.clone(),
+    );
 
     let sync_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     let sync = c
@@ -240,13 +446,29 @@ fn chat_v1_contract() {
     println!("ok  - one-time chat WebSocket ticket minted");
 
     // A fetches B's bundles: kyber always present, one-time EC consumed.
-    let bundles: Value = c
-        .get(format!("{base}/api/chat/users/{ub}/keys"))
+    let bundles_value: Value = c
+        .get(format!(
+            "{base}/api/chat/users/{ub}/keys?transparencyTreeSize={}",
+            first_checkpoint.tree_size
+        ))
         .bearer_auth(&ta)
         .send()
         .unwrap()
         .json()
         .unwrap();
+    let typed_bundles: UserPreKeyBundlesResponse =
+        serde_json::from_value(bundles_value.clone()).unwrap();
+    let proof = typed_bundles.transparency.as_ref().unwrap();
+    proof.verify_inclusion().unwrap();
+    proof.verify_current_map().unwrap();
+    proof
+        .verify_consistency_from(Some(&first_checkpoint))
+        .unwrap();
+    proof
+        .leaf
+        .matches_manifest(&ub, typed_bundles.manifest.as_ref().unwrap())
+        .unwrap();
+    let bundles = bundles_value;
     let devs = bundles["devices"].as_array().unwrap();
     assert_eq!(devs.len(), 1, "B has one device");
     let d = &devs[0];
@@ -256,7 +478,7 @@ fn chat_v1_contract() {
         d["oneTimePreKey"].is_object(),
         "one-time EC consumed by fetch"
     );
-    println!("ok  - bundle fetch shape");
+    println!("ok  - bundle fetch + current-map and append-only transparency proofs");
 
     let send = |send_id: &str, dev: u32, reg: u32, content: &str| {
         c.post(format!("{base}/api/chat/users/{ub}/messages"))

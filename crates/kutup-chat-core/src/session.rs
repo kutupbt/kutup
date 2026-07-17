@@ -24,17 +24,22 @@ use sha2::{Digest, Sha256};
 use crate::address::ChatAddress;
 use crate::db::{
     AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState,
-    InboxMessage, LocalIdentity, ManifestTrust, OutboxEntry, OutboxLeg, OutboxSyncLeg, SentMessage,
+    InboxMessage, LocalIdentity, LocalProfile, ManifestTrust, OutboxEntry, OutboxLeg,
+    OutboxSyncLeg, PeerProfile, SentMessage, TransparencyTrust,
 };
 use crate::error::{ChatError, Result};
 use crate::keys;
-use crate::manifest::{verify_bundle_response, ManifestPolicy};
+use crate::manifest::{
+    transparency_scope, verify_manifest_publication, verify_transparent_bundle_response,
+    ManifestPolicy,
+};
 use crate::store::ChatStore;
 use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_prekey_bundle};
 use kutup_chat_proto::{
     AccountAddress, ChatContent, ContactControlBody, ContactState, DeliveredEnvelope,
-    DeviceListMismatch, DevicePreKeyBundle, ManifestDevice, OutgoingEnvelope,
-    RegisterChatDeviceRequest, ReplenishKeysRequest, SuiteId, UserPreKeyBundlesResponse,
+    DeviceListMismatch, DevicePreKeyBundle, ManifestDevice, ManifestTransparencyProof,
+    OutgoingEnvelope, RegisterChatDeviceRequest, ReplenishKeysRequest, SuiteId,
+    UserPreKeyBundlesResponse,
 };
 
 /// What a [`Engine::send`](crate::Engine::send) did: whether it landed, and any
@@ -96,6 +101,13 @@ pub(crate) enum ReceiveOutcome {
     /// A linked-device contact control was authenticated and merged. It is
     /// deliberately absent from user-visible message history.
     ContactSynced { id: String },
+    /// An invisible profile-key update (or linked-device transcript of one)
+    /// was harvested and persisted.
+    ProfileKeyUpdate {
+        id: String,
+        /// Present only when this device actually adopted a new peer key.
+        peer: Option<String>,
+    },
     /// A blocked peer's envelope was authenticated, decrypted, ratcheted, and
     /// made safe to ack, but its plaintext was deliberately not retained.
     Suppressed { id: String },
@@ -416,6 +428,60 @@ impl Session {
         self.store.db().load_contact(peer).await
     }
 
+    pub async fn local_profile(&self) -> Result<Option<LocalProfile>> {
+        self.store.db().load_local_profile().await
+    }
+
+    pub async fn peer_profile(&self, peer: &str) -> Result<Option<PeerProfile>> {
+        self.store.db().load_peer_profile(peer).await
+    }
+
+    pub async fn peer_profiles(&self) -> Result<Vec<PeerProfile>> {
+        self.store.db().list_peer_profiles().await
+    }
+
+    pub(crate) async fn save_local_profile(&mut self, profile: LocalProfile) -> Result<()> {
+        self.store.stage_local_profile(profile);
+        self.store.commit().await
+    }
+
+    pub(crate) async fn save_peer_profile(&mut self, profile: PeerProfile) -> Result<()> {
+        self.store.stage_peer_profile(profile);
+        self.store.commit().await
+    }
+
+    pub(crate) async fn mark_profile_published(
+        &mut self,
+        revision: u64,
+        source_device_id: u32,
+    ) -> Result<()> {
+        let Some(mut profile) = self.local_profile().await? else {
+            return Ok(());
+        };
+        if (profile.revision, profile.source_device_id) != (revision, source_device_id) {
+            return Ok(());
+        }
+        profile.pending_upload = None;
+        self.store.stage_local_profile(profile);
+        self.store.commit().await
+    }
+
+    pub(crate) async fn mark_profile_broadcast(
+        &mut self,
+        revision: u64,
+        source_device_id: u32,
+    ) -> Result<()> {
+        let Some(mut profile) = self.local_profile().await? else {
+            return Ok(());
+        };
+        if (profile.revision, profile.source_device_id) != (revision, source_device_id) {
+            return Ok(());
+        }
+        profile.broadcast_pending = false;
+        self.store.stage_local_profile(profile);
+        self.store.commit().await
+    }
+
     /// Upgrade stores created before contact state existed without turning
     /// established conversations into message requests after an application
     /// update. Only peers already present in durable history are accepted.
@@ -643,6 +709,8 @@ impl Session {
         };
         let received_at = now_millis();
         let mut contact_synced = false;
+        let mut profile_control = false;
+        let mut profile_key_updated: Option<String> = None;
         let mut suppressed = false;
         let synced_message = if let Some(transcript) = transcript {
             if let Some(control) = transcript.content.as_contact_control() {
@@ -676,6 +744,13 @@ impl Session {
                 }
                 contact_synced = true;
                 None
+            } else if transcript.content.kind == kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
+            {
+                // This is an outgoing control mirrored to a linked device. It
+                // must remain invisible, but it does not describe the peer's
+                // profile and therefore must not mutate the peer cache.
+                profile_control = true;
+                None
             } else {
                 self.stage_transcript_contact(&transcript.peer, received_at)
                     .await?;
@@ -693,16 +768,55 @@ impl Session {
                 Some(message)
             }
         } else {
-            suppressed = self.stage_incoming_contact(&sender, received_at).await?;
-            if !suppressed {
-                self.store.stage_message(InboxMessage {
-                    id: envelope.id.clone(),
-                    peer: sender,
-                    sender_device_id: envelope.sender_device_id,
-                    cursor: envelope.cursor,
-                    content: plaintext.clone(),
-                    received_at,
+            let prior_contact = self.contact(&sender).await?;
+            let is_profile_update = parsed.as_ref().is_some_and(|content| {
+                content.kind == kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
+            });
+            profile_control = is_profile_update;
+            if is_profile_update {
+                // A control message alone cannot create or reopen a message
+                // request. Only an already outgoing/accepted relationship can
+                // authorize its key; blocked and unknown controls are invisible
+                // ack-only traffic after authentication.
+                suppressed = prior_contact
+                    .as_ref()
+                    .is_some_and(|contact| contact.state == ContactState::Blocked);
+                let can_accept_control = prior_contact.as_ref().is_some_and(|contact| {
+                    matches!(
+                        contact.state,
+                        ContactState::PendingOutgoing | ContactState::Accepted
+                    )
                 });
+                if can_accept_control {
+                    if let Some(encoded_key) = parsed
+                        .as_ref()
+                        .and_then(|content| content.profile_key.as_deref())
+                    {
+                        if self.stage_peer_profile_key(&sender, encoded_key).await? {
+                            profile_key_updated = Some(sender.clone());
+                        }
+                    }
+                }
+            } else {
+                suppressed = self.stage_incoming_contact(&sender, received_at).await?;
+                if !suppressed {
+                    if let Some(encoded_key) = parsed
+                        .as_ref()
+                        .and_then(|content| content.profile_key.as_deref())
+                    {
+                        if self.stage_peer_profile_key(&sender, encoded_key).await? {
+                            profile_key_updated = Some(sender.clone());
+                        }
+                    }
+                    self.store.stage_message(InboxMessage {
+                        id: envelope.id.clone(),
+                        peer: sender,
+                        sender_device_id: envelope.sender_device_id,
+                        cursor: envelope.cursor,
+                        content: plaintext.clone(),
+                        received_at,
+                    });
+                }
             }
             None
         };
@@ -728,6 +842,12 @@ impl Session {
                 id: envelope.id.clone(),
             });
         }
+        if profile_control {
+            return Ok(ReceiveOutcome::ProfileKeyUpdate {
+                id: envelope.id.clone(),
+                peer: profile_key_updated,
+            });
+        }
         if suppressed {
             return Ok(ReceiveOutcome::Suppressed {
                 id: envelope.id.clone(),
@@ -744,6 +864,41 @@ impl Session {
                 id: envelope.id.clone(),
             }),
         }
+    }
+
+    async fn stage_peer_profile_key(&mut self, peer: &str, encoded_key: &str) -> Result<bool> {
+        let key = match crate::profile::decode_shared_profile_key(encoded_key) {
+            Ok(key) => key,
+            // Signal treats a malformed optional harvested key as non-fatal to
+            // the user message. Ignore it rather than losing valid plaintext.
+            Err(_) => return Ok(false),
+        };
+        let current = self.peer_profile(peer).await?;
+        if current.as_ref().is_some_and(|profile| profile.key == key) {
+            return Ok(false);
+        }
+        // Keep already decrypted presentation data while the new version is
+        // fetched. Revision zero forces refresh; an offline rotation should
+        // not make a known contact's name/avatar flicker away.
+        let (display_name, avatar, avatar_content_type) = current
+            .map(|profile| {
+                (
+                    profile.display_name,
+                    profile.avatar,
+                    profile.avatar_content_type,
+                )
+            })
+            .unwrap_or((None, None, None));
+        self.store.stage_peer_profile(PeerProfile {
+            peer: peer.to_string(),
+            key,
+            display_name,
+            avatar,
+            avatar_content_type,
+            revision: 0,
+            source_device_id: 0,
+        });
+        Ok(true)
     }
 
     async fn stage_incoming_contact(&mut self, peer: &str, updated_at_ms: i64) -> Result<bool> {
@@ -947,6 +1102,30 @@ impl Session {
         self.store.db().load_manifest_trust(peer).await
     }
 
+    /// Highest verified global checkpoint for the peer's homeserver.
+    pub async fn transparency_trust(&self, peer: &str) -> Result<Option<TransparencyTrust>> {
+        self.store
+            .db()
+            .load_transparency_trust(&transparency_scope(peer)?)
+            .await
+    }
+
+    pub(crate) async fn accept_manifest_publication(
+        &mut self,
+        account: &str,
+        manifest: &kutup_chat_proto::DeviceManifest,
+        proof: &ManifestTransparencyProof,
+    ) -> Result<()> {
+        let scope = transparency_scope(account)?;
+        let prior = self.store.db().load_transparency_trust(&scope).await?;
+        let next = verify_manifest_publication(account, manifest, proof, prior.as_ref())?;
+        if prior.as_ref() != Some(&next) {
+            self.store.stage_transparency_trust(next);
+            self.store.commit().await?;
+        }
+        Ok(())
+    }
+
     /// Mark the current TOFU authority as verified after the application has
     /// completed an out-of-band safety-number or QR comparison.
     pub async fn mark_authority_verified(&mut self, peer: &str) -> Result<ManifestTrust> {
@@ -968,13 +1147,31 @@ impl Session {
         response: UserPreKeyBundlesResponse,
         policy: ManifestPolicy,
     ) -> Result<Vec<DevicePreKeyBundle>> {
-        let prior = self.store.db().load_manifest_trust(peer).await?;
-        let next = verify_bundle_response(peer, &response, policy, prior.as_ref())?;
-        if let Some(next) = next {
-            if prior.as_ref() != Some(&next) {
-                self.store.stage_manifest_trust(next);
-                self.store.commit().await?;
+        let prior_manifest = self.store.db().load_manifest_trust(peer).await?;
+        let scope = transparency_scope(peer)?;
+        let prior_transparency = self.store.db().load_transparency_trust(&scope).await?;
+        let next = verify_transparent_bundle_response(
+            peer,
+            &response,
+            policy,
+            prior_manifest.as_ref(),
+            prior_transparency.as_ref(),
+        )?;
+        let mut changed = false;
+        if let Some(manifest) = next.manifest {
+            if prior_manifest.as_ref() != Some(&manifest) {
+                self.store.stage_manifest_trust(manifest);
+                changed = true;
             }
+        }
+        if let Some(transparency) = next.transparency {
+            if prior_transparency.as_ref() != Some(&transparency) {
+                self.store.stage_transparency_trust(transparency);
+                changed = true;
+            }
+        }
+        if changed {
+            self.store.commit().await?;
         }
         Ok(response.devices)
     }

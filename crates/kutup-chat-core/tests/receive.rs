@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use async_trait::async_trait;
+use base64::Engine as _;
 use futures_executor::block_on;
 use kutup_chat_core::{
     ChatAddress, ChatContent, ChatTransport, ContactState, Engine, EngineState, InboundFailureKind,
@@ -112,7 +113,11 @@ impl ChatTransport for Mailbox {
     async fn register_device(&self, _req: &RegisterChatDeviceRequest) -> Result<u32> {
         unreachable!("receive path does not register")
     }
-    async fn fetch_bundles(&self, _username: &str) -> Result<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(
+        &self,
+        _username: &str,
+        _transparency_tree_size: u64,
+    ) -> Result<UserPreKeyBundlesResponse> {
         unreachable!("receive path does not fetch bundles")
     }
     async fn send(&self, _username: &str, _req: &SendMessagesRequest) -> Result<SendOutcome> {
@@ -373,27 +378,59 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
     let mut alice = in_memory("alice", 1, &mut rng);
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
-    let encrypted = ["first request", "try again", "blocked plaintext"]
-        .into_iter()
-        .enumerate()
-        .map(|(index, text)| {
-            block_on(alice.encrypt(
-                &bob_addr,
-                bundle.registration_id,
-                &ChatContent::text("2026-07-16T12:00:00Z", index as u64 + 1, text),
-                &mut rng,
-            ))
-            .unwrap()
+    let unknown_key = base64::engine::general_purpose::STANDARD.encode([6u8; 32]);
+    let first_key = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
+    let rotated_key = base64::engine::general_purpose::STANDARD.encode([8u8; 32]);
+    let contents = [
+        ChatContent::profile_key_update_with_id(
+            "profile-from-unknown",
+            "2026-07-16T11:59:50Z",
+            1,
+            &unknown_key,
+        ),
+        ChatContent::text("2026-07-16T12:00:00Z", 2, "first request").with_profile_key(&first_key),
+        ChatContent::profile_key_update_with_id(
+            "profile-before-accept",
+            "2026-07-16T12:00:10Z",
+            3,
+            &rotated_key,
+        ),
+        ChatContent::text("2026-07-16T12:00:20Z", 4, "try again"),
+        ChatContent::text("2026-07-16T12:00:30Z", 5, "blocked plaintext"),
+    ];
+    let encrypted = contents
+        .iter()
+        .map(|content| {
+            block_on(alice.encrypt(&bob_addr, bundle.registration_id, content, &mut rng)).unwrap()
         })
         .collect::<Vec<_>>();
 
     let server = Rc::new(Mailbox::default());
-    server.deposit(vec![deliver(&encrypted[0], "alice", "request-1", 1)]);
     let mut bob = Engine::new(bob_session, server.clone());
+
+    // An unsolicited control cannot manufacture an empty message request.
+    server.deposit(vec![deliver(&encrypted[0], "alice", "profile-1", 1)]);
+    let unknown_profile = block_on(bob.receive(&mut rng)).unwrap();
+    assert!(unknown_profile.messages.is_empty());
+    assert!(block_on(bob.contacts()).unwrap().is_empty());
+    assert!(block_on(bob.peer_profiles()).unwrap().is_empty());
+
+    server.deposit(vec![deliver(&encrypted[1], "alice", "request-2", 2)]);
     let first = block_on(bob.receive(&mut rng)).unwrap();
     assert_eq!(first.messages.len(), 1);
     let contact = block_on(bob.contacts()).unwrap().pop().unwrap();
     assert_eq!(contact.state, ContactState::PendingIncoming);
+    let request_profile = block_on(bob.peer_profiles()).unwrap().pop().unwrap();
+    assert_eq!(request_profile.peer, "alice");
+    assert_eq!(request_profile.key, [7u8; 32]);
+
+    // A dedicated profile update is never a visible message and cannot grant
+    // itself permission while the sender is still only an incoming request.
+    server.deposit(vec![deliver(&encrypted[2], "alice", "profile-3", 3)]);
+    let ignored_profile = block_on(bob.receive(&mut rng)).unwrap();
+    assert!(ignored_profile.messages.is_empty());
+    assert!(ignored_profile.profile_key_updated.is_empty());
+    assert_eq!(block_on(bob.peer_profiles()).unwrap()[0].key, [7u8; 32]);
     assert!(matches!(
         block_on(bob.send(
             "reply-before-accept",
@@ -414,7 +451,7 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
     assert_eq!(rejected.state, ContactState::Rejected);
     assert!(block_on(bob.session().history()).unwrap().is_empty());
 
-    server.deposit(vec![deliver(&encrypted[1], "alice", "request-2", 2)]);
+    server.deposit(vec![deliver(&encrypted[3], "alice", "request-4", 4)]);
     let second = block_on(bob.receive(&mut rng)).unwrap();
     assert_eq!(
         second.messages.len(),
@@ -429,12 +466,12 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
     let blocked = block_on(bob.block_contact("alice", "2026-07-16T12:02:00Z", &mut rng)).unwrap();
     assert_eq!(blocked.state, ContactState::Blocked);
     assert_eq!(blocked.previous_state, Some(ContactState::PendingIncoming));
-    server.deposit(vec![deliver(&encrypted[2], "alice", "blocked-3", 3)]);
+    server.deposit(vec![deliver(&encrypted[4], "alice", "blocked-5", 5)]);
     let third = block_on(bob.receive(&mut rng)).unwrap();
     assert!(third.messages.is_empty());
-    assert_eq!(third.suppressed, vec!["blocked-3"]);
+    assert_eq!(third.suppressed, vec!["blocked-5"]);
     assert_eq!(block_on(bob.session().history()).unwrap().len(), 1);
-    assert!(server.acked().contains(&"blocked-3".to_string()));
+    assert!(server.acked().contains(&"blocked-5".to_string()));
 
     let unblocked =
         block_on(bob.unblock_contact("alice", "2026-07-16T12:03:00Z", &mut rng)).unwrap();

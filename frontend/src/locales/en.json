@@ -87,6 +87,19 @@
       "copy": "Copy address",
       "copied": "Chat address copied"
     },
+    "profile": {
+      "open": "Edit my chat profile",
+      "title": "Chat profile",
+      "description": "Your name and avatar are encrypted before they leave this device.",
+      "displayName": "Display name",
+      "address": "Stable chat address",
+      "changeAvatar": "Choose photo",
+      "removeAvatar": "Remove",
+      "avatarHint": "PNG, JPEG, or WebP. The image is cropped and resized on this device.",
+      "visibility": "Like Signal, Kutup shares this profile only with people you message or accept. Blocking someone rotates your profile key so they cannot fetch future changes.",
+      "saved": "Encrypted chat profile updated",
+      "avatarError": "That image could not be used as a profile photo."
+    },
     "errors": {
       "sessionMissing": "Your account session is missing the keys required for encrypted chat.",
       "browserUnsupported": "This browser cannot safely coordinate encrypted chat across tabs.",

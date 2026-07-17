@@ -19,8 +19,8 @@ use serde_wasm_bindgen::Serializer;
 use wasm_bindgen::JsValue;
 
 use crate::db::{
-    ChatDb, ContactRecord, InboundEnvelope, InboxMessage, LocalIdentity, ManifestTrust,
-    OutboxEntry, Pending, SentMessage,
+    ChatDb, ContactRecord, InboundEnvelope, InboxMessage, LocalIdentity, LocalProfile,
+    ManifestTrust, OutboxEntry, PeerProfile, Pending, SentMessage, TransparencyTrust,
 };
 use crate::error::{ChatError, Result};
 
@@ -38,10 +38,13 @@ const MESSAGES: &str = "messages";
 const SENT_MESSAGES: &str = "sent_messages";
 const INBOUND: &str = "inbound";
 const MANIFEST_TRUST: &str = "manifest_trust";
+const TRANSPARENCY_TRUST: &str = "transparency_trust";
 const CONTACTS: &str = "contacts";
+const LOCAL_PROFILE: &str = "local_profile";
+const PEER_PROFILES: &str = "peer_profiles";
 const META: &str = "meta";
 
-const ALL_STORES: [&str; 16] = [
+const ALL_STORES: [&str; 19] = [
     LOCAL_IDENTITY,
     SESSIONS,
     IDENTITIES,
@@ -56,7 +59,10 @@ const ALL_STORES: [&str; 16] = [
     SENT_MESSAGES,
     INBOUND,
     MANIFEST_TRUST,
+    TRANSPARENCY_TRUST,
     CONTACTS,
+    LOCAL_PROFILE,
+    PEER_PROFILES,
     META,
 ];
 
@@ -84,7 +90,7 @@ impl IndexedDbChatDb {
             ));
         }
 
-        let mut builder = Rexie::builder(name).version(3);
+        let mut builder = Rexie::builder(name).version(5);
         for store in ALL_STORES {
             builder = builder.add_object_store(ObjectStore::new(store));
         }
@@ -256,6 +262,10 @@ impl ChatDb for IndexedDbChatDb {
         self.get(MANIFEST_TRUST, string_key(peer)).await
     }
 
+    async fn load_transparency_trust(&self, scope: &str) -> Result<Option<TransparencyTrust>> {
+        self.get(TRANSPARENCY_TRUST, string_key(scope)).await
+    }
+
     async fn load_contact(&self, peer: &str) -> Result<Option<ContactRecord>> {
         self.get(CONTACTS, string_key(peer)).await
     }
@@ -264,6 +274,20 @@ impl ChatDb for IndexedDbChatDb {
         let mut contacts = self.all::<ContactRecord>(CONTACTS).await?;
         contacts.sort_by(|left, right| left.peer.cmp(&right.peer));
         Ok(contacts)
+    }
+
+    async fn load_local_profile(&self) -> Result<Option<LocalProfile>> {
+        self.get(LOCAL_PROFILE, string_key(SINGLETON)).await
+    }
+
+    async fn load_peer_profile(&self, peer: &str) -> Result<Option<PeerProfile>> {
+        self.get(PEER_PROFILES, string_key(peer)).await
+    }
+
+    async fn list_peer_profiles(&self) -> Result<Vec<PeerProfile>> {
+        let mut profiles = self.all::<PeerProfile>(PEER_PROFILES).await?;
+        profiles.sort_by(|left, right| left.peer.cmp(&right.peer));
+        Ok(profiles)
     }
 
     async fn load_pending_prekey_upload(&self) -> Result<Option<Vec<u8>>> {
@@ -310,7 +334,10 @@ impl ChatDb for IndexedDbChatDb {
         let sent_messages = idb(transaction.store(SENT_MESSAGES))?;
         let inbound = idb(transaction.store(INBOUND))?;
         let manifest_trust = idb(transaction.store(MANIFEST_TRUST))?;
+        let transparency_trust = idb(transaction.store(TRANSPARENCY_TRUST))?;
         let contacts = idb(transaction.store(CONTACTS))?;
+        let local_profile = idb(transaction.store(LOCAL_PROFILE))?;
+        let peer_profiles = idb(transaction.store(PEER_PROFILES))?;
         let meta = idb(transaction.store(META))?;
 
         let mut operations = Vec::new();
@@ -354,7 +381,16 @@ impl ChatDb for IndexedDbChatDb {
         stage_puts(&mut operations, &sent_messages, writes.sent_messages);
         stage_map(&mut operations, &inbound, writes.inbound);
         stage_puts(&mut operations, &manifest_trust, writes.manifest_trust);
+        stage_puts(
+            &mut operations,
+            &transparency_trust,
+            writes.transparency_trust,
+        );
         stage_puts(&mut operations, &contacts, writes.contacts);
+        if let Some(value) = writes.local_profile.take() {
+            operations.push(put_op(&local_profile, value, string_key(SINGLETON)));
+        }
+        stage_puts(&mut operations, &peer_profiles, writes.peer_profiles);
         if let Some(value) = writes.prekey_upload {
             match value {
                 Some(value) => {
@@ -463,7 +499,10 @@ struct PreparedWrites {
     sent_messages: Vec<(String, JsValue)>,
     inbound: Vec<(String, Option<JsValue>)>,
     manifest_trust: Vec<(String, JsValue)>,
+    transparency_trust: Vec<(String, JsValue)>,
     contacts: Vec<(String, JsValue)>,
+    local_profile: Option<JsValue>,
+    peer_profiles: Vec<(String, JsValue)>,
     prekey_upload: Option<Option<JsValue>>,
     registration_upload: Option<Option<JsValue>>,
     last_cursor: Option<JsValue>,
@@ -500,7 +539,10 @@ impl PreparedWrites {
             sent_messages: serialize_map(&pending.sent_messages)?,
             inbound: serialize_optional_map(&pending.inbound)?,
             manifest_trust: serialize_map(&pending.manifest_trust)?,
+            transparency_trust: serialize_map(&pending.transparency_trust)?,
             contacts: serialize_map(&pending.contacts)?,
+            local_profile: pending.local_profile.as_ref().map(to_js).transpose()?,
+            peer_profiles: serialize_map(&pending.peer_profiles)?,
             prekey_upload: pending
                 .prekey_upload
                 .as_ref()
@@ -655,6 +697,7 @@ mod tests {
                 highest_version: u64::MAX,
                 manifest_hash: "hash".into(),
                 trust: AuthorityTrust::Verified,
+                transparency_position: Some(u64::MAX),
                 continuity_gap: false,
             },
         );

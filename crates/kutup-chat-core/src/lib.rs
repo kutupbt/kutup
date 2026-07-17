@@ -20,6 +20,7 @@ mod engine;
 mod error;
 mod keys;
 mod manifest;
+mod profile;
 mod session;
 mod store;
 mod transport;
@@ -34,7 +35,8 @@ pub use db::indexed_db::IndexedDbChatDb;
 pub use db::sqlite::SqliteChatDb;
 pub use db::{
     AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState,
-    InboxMessage, LocalIdentity, ManifestTrust, OutboxEntry, OutboxSyncLeg, Pending, SentMessage,
+    InboxMessage, LocalIdentity, LocalProfile, ManifestTrust, OutboxEntry, OutboxSyncLeg,
+    PeerProfile, Pending, SentMessage, TransparencyTrust,
 };
 pub use engine::{
     ChatEvent, Engine, EngineState, InboundFailure, PreKeyMaintenanceReport, ReceiveReport,
@@ -45,6 +47,7 @@ pub use kutup_chat_proto::{
     DeliveredEnvelope, OutgoingEnvelope, TextBody,
 };
 pub use manifest::{verify_bundle_response, verify_manifest, AccountAuthority, ManifestPolicy};
+pub use profile::{derive_wrapping_key, MAX_AVATAR_BYTES};
 pub use session::{ReceivedMessage, SendSummary, Session};
 pub use transport::{ChatTransport, SendOutcome};
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]

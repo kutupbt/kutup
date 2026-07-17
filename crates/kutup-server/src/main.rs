@@ -8,6 +8,7 @@
 
 mod chat_federation;
 mod chat_hub;
+mod chat_transparency;
 mod config;
 mod db;
 mod error;
@@ -84,6 +85,20 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::connect(&config.database_url).await?;
     db::migrate(&pool).await?;
     tracing::info!("migrations applied");
+    let transparency_backfill = chat_transparency::backfill_existing_manifests(&pool).await?;
+    if transparency_backfill > 0 {
+        tracing::info!(
+            manifests = transparency_backfill,
+            "seeded chat manifest transparency log"
+        );
+    }
+    let transparency_map_backfill = chat_transparency::backfill_current_map(&pool).await?;
+    if transparency_map_backfill > 0 {
+        tracing::info!(
+            manifests = transparency_map_backfill,
+            "seeded current-manifest transparency map"
+        );
+    }
 
     // S3 (SeaweedFS) storage client — mirrors services.NewStorage in main.go.
     let storage = storage::StorageService::new(
@@ -316,6 +331,16 @@ fn build_router(state: AppState) -> Router {
         .route("/api/chat/device/:deviceId", delete(chat::revoke_device))
         .route("/api/chat/manifest", post(chat::publish_manifest))
         .route(
+            "/api/chat/profile",
+            get(chat::get_own_profile)
+                .put(chat::put_profile)
+                .route_layer(DefaultBodyLimit::max(1024 * 1024)),
+        )
+        .route(
+            "/api/chat/users/:username/profile/:version",
+            get(chat::get_user_profile),
+        )
+        .route(
             "/api/chat/users/:username/manifest",
             get(chat::get_user_manifest),
         )
@@ -404,6 +429,11 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/fed/chat/users/:username/keys",
             get(chat_federation::get_user_bundles)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/users/:username/profile/:version",
+            get(chat_federation::get_user_profile)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
