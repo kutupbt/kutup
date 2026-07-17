@@ -89,12 +89,24 @@ export class ChatService {
     const databaseName = `kutup-chat-v2:${scope}`
     const wasm = await loadChatWasm()
     const transport = new ApiChatTransport()
+    const transparencyPolicy = {
+      scopes: [
+        {
+          scope: 'local',
+          operatorKeyId: capabilities.transparencyOperatorKeyId!,
+          operatorPublicKey: capabilities.transparencyOperatorPublicKey!,
+          witnesses: capabilities.transparencyWitnesses ?? [],
+          witnessQuorum: capabilities.transparencyWitnessQuorum ?? 0,
+        },
+      ],
+    }
     const client = await navigator.locks.request(lockName, { mode: 'exclusive' }, () =>
       wasm.WasmChatClient.open(
         databaseName,
         options.username,
         options.masterKey,
         transport,
+        transparencyPolicy,
       ),
     )
 

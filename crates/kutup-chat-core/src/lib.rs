@@ -36,7 +36,7 @@ pub use db::sqlite::SqliteChatDb;
 pub use db::{
     AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState,
     InboxMessage, LocalIdentity, LocalProfile, ManifestTrust, OutboxEntry, OutboxSyncLeg,
-    PeerProfile, Pending, SentMessage, TransparencyTrust,
+    PeerProfile, Pending, SentMessage, TransparencyTrust, TransparencyWitnessTrust,
 };
 pub use engine::{
     ChatEvent, Engine, EngineState, InboundFailure, PreKeyMaintenanceReport, ReceiveReport,
@@ -44,9 +44,12 @@ pub use engine::{
 pub use error::{ChatError, Result};
 pub use kutup_chat_proto::{
     AccountAddress, ChatContent, ContactControlBody, ContactState, ConversationId,
-    DeliveredEnvelope, OutgoingEnvelope, TextBody,
+    DeliveredEnvelope, OutgoingEnvelope, TextBody, TransparencyVerifierKey,
 };
-pub use manifest::{verify_bundle_response, verify_manifest, AccountAuthority, ManifestPolicy};
+pub use manifest::{
+    verify_bundle_response, verify_manifest, AccountAuthority, ManifestPolicy, TransparencyPolicy,
+    TransparencyScopePolicy,
+};
 pub use profile::{derive_wrapping_key, MAX_AVATAR_BYTES};
 pub use session::{ReceivedMessage, SendSummary, Session};
 pub use transport::{ChatTransport, SendOutcome};

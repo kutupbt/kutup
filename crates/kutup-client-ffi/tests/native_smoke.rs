@@ -2,6 +2,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
+use ed25519_dalek::SigningKey;
 use kutup_chat_proto::{
     hash_transparency_map_checkpoint, hash_transparency_map_leaf, hash_transparency_node,
     map_key_bit, transparency_map_empty_hashes, transparency_map_key, DeviceManifest,
@@ -10,8 +13,21 @@ use kutup_chat_proto::{
 };
 use kutup_client_ffi::{
     open_native_chat_client, ChatHttpClient, ChatHttpMethod, ChatHttpRequest, ChatHttpResponse,
-    KutupChatError,
+    ChatTransparencyPolicy, ChatTransparencyScopePolicy, KutupChatError,
 };
+
+fn transparency_policy() -> ChatTransparencyPolicy {
+    let key = SigningKey::from_bytes(&[93; 32]).verifying_key();
+    ChatTransparencyPolicy {
+        scopes: vec![ChatTransparencyScopePolicy {
+            scope: "local".into(),
+            operator_key_id: kutup_chat_proto::transparency_signing_key_id(&key),
+            operator_public_key: STANDARD.encode(key.as_bytes()),
+            witnesses: Vec::new(),
+            witness_quorum: 0,
+        }],
+    }
+}
 
 struct MockHttp {
     registrations: AtomicUsize,
@@ -52,23 +68,33 @@ fn transparency_proof(
     }
     let event_hash = leaf.hash().unwrap();
     let checkpoint_hash = hash_transparency_map_checkpoint(map_root);
+    let checkpoint = TransparencyCheckpoint {
+        log_id: "01".repeat(32),
+        tree_size: 2,
+        root_hash: hex_hash(hash_transparency_node(event_hash, checkpoint_hash)),
+    };
+    let map_root = hex_hash(map_root);
+    let authentication = kutup_chat_proto::TransparencyCheckpointAuthentication::sign(
+        &checkpoint,
+        &map_root,
+        1_752_688_000,
+        &SigningKey::from_bytes(&[93; 32]),
+    )
+    .unwrap();
     ManifestTransparencyProof {
         leaf_index: 0,
-        checkpoint: TransparencyCheckpoint {
-            log_id: "01".repeat(32),
-            tree_size: 2,
-            root_hash: hex_hash(hash_transparency_node(event_hash, checkpoint_hash)),
-        },
+        checkpoint,
         leaf,
         inclusion: vec![hex_hash(checkpoint_hash)],
         consistency_from,
         consistency: Vec::new(),
         map: ManifestTransparencyMapProof {
-            root_hash: hex_hash(map_root),
+            root_hash: map_root,
             checkpoint_leaf_index: 1,
             checkpoint_inclusion: vec![hex_hash(event_hash)],
             siblings: Vec::new(),
         },
+        authentication,
     }
 }
 
@@ -166,6 +192,7 @@ fn encrypted_install_registers_once_and_reopens() {
         vec![3; 32],
         "alice".into(),
         vec![9; 32],
+        transparency_policy(),
         http.clone(),
     ))
     .unwrap();
@@ -202,6 +229,7 @@ fn encrypted_install_registers_once_and_reopens() {
         vec![4; 32],
         "alice".into(),
         vec![9; 32],
+        transparency_policy(),
         http.clone(),
     ));
     assert!(matches!(wrong_key, Err(KutupChatError::Storage { .. })));
@@ -211,6 +239,7 @@ fn encrypted_install_registers_once_and_reopens() {
         vec![3; 32],
         "alice".into(),
         vec![9; 32],
+        transparency_policy(),
         http.clone(),
     ))
     .unwrap();

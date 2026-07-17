@@ -18,7 +18,7 @@ use crate::db::{
     OutboxEntry, OutboxLeg, PeerProfile, SentMessage,
 };
 use crate::error::{ChatError, Result};
-use crate::manifest::{AccountAuthority, ManifestPolicy};
+use crate::manifest::{AccountAuthority, ManifestPolicy, TransparencyPolicy};
 use crate::session::{
     DirectSend, ReceiveOutcome, ReceivedMessage, SendAmendment, SendSummary, Session,
 };
@@ -110,6 +110,7 @@ pub struct Engine {
     state: EngineState,
     events: VecDeque<ChatEvent>,
     manifest_policy: ManifestPolicy,
+    transparency_policy: TransparencyPolicy,
 }
 
 impl Engine {
@@ -139,7 +140,16 @@ impl Engine {
             state: EngineState::Stopped,
             events: VecDeque::new(),
             manifest_policy,
+            transparency_policy: TransparencyPolicy::default(),
         }
+    }
+
+    /// Install application-owned operator/witness trust roots before the first
+    /// manifest publication or peer bundle fetch.
+    pub fn set_transparency_policy(&mut self, policy: TransparencyPolicy) -> Result<()> {
+        policy.validate()?;
+        self.transparency_policy = policy;
+        Ok(())
     }
 
     /// Register a brand-new device end-to-end: generate keys, `POST` the
@@ -644,7 +654,12 @@ impl Engine {
             ));
         }
         self.session
-            .accept_manifest_publication(&account, &published.manifest, &published.transparency)
+            .accept_manifest_publication(
+                &account,
+                &published.manifest,
+                &published.transparency,
+                &self.transparency_policy,
+            )
             .await?;
         Ok(published.manifest)
     }
@@ -1148,7 +1163,12 @@ impl Engine {
                 .await?
         };
         self.session
-            .accept_bundle_response(peer_user, response, self.manifest_policy)
+            .accept_bundle_response(
+                peer_user,
+                response,
+                self.manifest_policy,
+                &self.transparency_policy,
+            )
             .await
     }
 }

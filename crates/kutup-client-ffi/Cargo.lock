@@ -969,6 +969,8 @@ name = "kutup-client-ffi"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
+ "ed25519-dalek",
  "futures-channel",
  "futures-executor",
  "kutup-chat-core",

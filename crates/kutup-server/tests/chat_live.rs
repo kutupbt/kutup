@@ -182,6 +182,7 @@ fn publish_manifest(
     assert_eq!(published.manifest, manifest);
     published.transparency.verify_inclusion().unwrap();
     published.transparency.verify_current_map().unwrap();
+    published.transparency.verify_authentication().unwrap();
     manifest
 }
 
@@ -210,6 +211,15 @@ fn chat_v1_contract() {
     assert_eq!(chat["manifests"], true);
     assert_eq!(chat["profiles"], true);
     assert_eq!(chat["keyTransparency"], true);
+    assert_eq!(
+        chat["transparencyOperatorKeyId"].as_str().unwrap().len(),
+        64
+    );
+    assert!(chat["transparencyOperatorPublicKey"].is_string());
+    assert!(
+        chat["transparencyWitnessQuorum"].as_u64().unwrap()
+            <= chat["transparencyWitnesses"].as_array().map_or(0, Vec::len) as u64
+    );
     assert!(chat["mailboxRetentionDays"].is_number());
     assert!(chat["deviceExpiryDays"].is_number());
     println!("ok  - capability block");
@@ -371,6 +381,7 @@ fn chat_v1_contract() {
     let sync_proof = sync_bundles.transparency.as_ref().unwrap();
     sync_proof.verify_inclusion().unwrap();
     sync_proof.verify_current_map().unwrap();
+    sync_proof.verify_authentication().unwrap();
     sync_proof.verify_consistency_from(None).unwrap();
     sync_proof
         .leaf
@@ -461,6 +472,7 @@ fn chat_v1_contract() {
     let proof = typed_bundles.transparency.as_ref().unwrap();
     proof.verify_inclusion().unwrap();
     proof.verify_current_map().unwrap();
+    proof.verify_authentication().unwrap();
     proof
         .verify_consistency_from(Some(&first_checkpoint))
         .unwrap();

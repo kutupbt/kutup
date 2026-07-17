@@ -1,9 +1,57 @@
 use kutup_chat_core::{
     ChatContent, ChatError, InboundEnvelope, InboundFailure, InboundFailureKind, ManifestTrust,
-    PreKeyMaintenanceReport, ReceiveReport, ReceivedMessage, SendSummary,
+    PreKeyMaintenanceReport, ReceiveReport, ReceivedMessage, SendSummary, TransparencyPolicy,
+    TransparencyScopePolicy, TransparencyVerifierKey,
 };
 
 pub type Result<T> = std::result::Result<T, KutupChatError>;
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ChatTransparencyVerifierKey {
+    pub witness_id: String,
+    pub key_id: String,
+    pub public_key: String,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ChatTransparencyScopePolicy {
+    pub scope: String,
+    pub operator_key_id: String,
+    pub operator_public_key: String,
+    pub witnesses: Vec<ChatTransparencyVerifierKey>,
+    pub witness_quorum: u16,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ChatTransparencyPolicy {
+    pub scopes: Vec<ChatTransparencyScopePolicy>,
+}
+
+impl From<ChatTransparencyPolicy> for TransparencyPolicy {
+    fn from(policy: ChatTransparencyPolicy) -> Self {
+        Self {
+            scopes: policy
+                .scopes
+                .into_iter()
+                .map(|scope| TransparencyScopePolicy {
+                    scope: scope.scope,
+                    operator_key_id: scope.operator_key_id,
+                    operator_public_key: scope.operator_public_key,
+                    witnesses: scope
+                        .witnesses
+                        .into_iter()
+                        .map(|witness| TransparencyVerifierKey {
+                            witness_id: witness.witness_id,
+                            key_id: witness.key_id,
+                            public_key: witness.public_key,
+                        })
+                        .collect(),
+                    witness_quorum: scope.witness_quorum,
+                })
+                .collect(),
+        }
+    }
+}
 
 /// Stable error taxonomy shared by Swift and Kotlin. Messages never contain
 /// key material, HTTP response bodies, or database keys.

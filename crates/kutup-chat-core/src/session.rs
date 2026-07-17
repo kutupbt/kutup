@@ -31,7 +31,7 @@ use crate::error::{ChatError, Result};
 use crate::keys;
 use crate::manifest::{
     transparency_scope, verify_manifest_publication, verify_transparent_bundle_response,
-    ManifestPolicy,
+    ManifestPolicy, TransparencyPolicy,
 };
 use crate::store::ChatStore;
 use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_prekey_bundle};
@@ -1115,10 +1115,11 @@ impl Session {
         account: &str,
         manifest: &kutup_chat_proto::DeviceManifest,
         proof: &ManifestTransparencyProof,
+        policy: &TransparencyPolicy,
     ) -> Result<()> {
         let scope = transparency_scope(account)?;
         let prior = self.store.db().load_transparency_trust(&scope).await?;
-        let next = verify_manifest_publication(account, manifest, proof, prior.as_ref())?;
+        let next = verify_manifest_publication(account, manifest, proof, prior.as_ref(), policy)?;
         if prior.as_ref() != Some(&next) {
             self.store.stage_transparency_trust(next);
             self.store.commit().await?;
@@ -1146,6 +1147,7 @@ impl Session {
         peer: &str,
         response: UserPreKeyBundlesResponse,
         policy: ManifestPolicy,
+        transparency_policy: &TransparencyPolicy,
     ) -> Result<Vec<DevicePreKeyBundle>> {
         let prior_manifest = self.store.db().load_manifest_trust(peer).await?;
         let scope = transparency_scope(peer)?;
@@ -1156,6 +1158,7 @@ impl Session {
             policy,
             prior_manifest.as_ref(),
             prior_transparency.as_ref(),
+            transparency_policy,
         )?;
         let mut changed = false;
         if let Some(manifest) = next.manifest {

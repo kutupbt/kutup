@@ -17,11 +17,28 @@ Returns public server settings (e.g. registration enabled/disabled).
 **Auth:** None
 
 **Response:**
-```json
+```jsonc
 {
-  "registrationEnabled": true
+  "registrationEnabled": true,
+  "chat": {
+    "enabled": true,
+    "protocolVersion": 1,
+    "keyTransparency": true,
+    "transparencyOperatorKeyId": "<64 lowercase hex>",
+    "transparencyOperatorPublicKey": "<base64 Ed25519 public key>",
+    "transparencyWitnesses": [
+      { "witnessId": "audit.example", "keyId": "<hex>", "publicKey": "<base64>" }
+    ],
+    "transparencyWitnessQuorum": 1
+  }
 }
 ```
+
+The chat block also advertises suites, size/retention limits, federation,
+manifests, profiles, and sealed-sender support. Browser clients use the
+operator/witness fields as their local transparency policy. Applications that
+need an independent trust root must pin the same policy out of band rather than
+treating this same-origin response as authoritative.
 
 ---
 
@@ -771,9 +788,41 @@ Rotate `signedPreKey` / `lastResortKyberPreKey` and/or upload more one-time prek
 
 Remaining one-time pool sizes: `{ "oneTimePreKeys": n, "oneTimeKyberPreKeys": n }` — clients replenish below a threshold.
 
+### GET /api/chat/transparency/checkpoint?fromTreeSize=N
+
+Public monitor endpoint; it does not consume prekeys or require a user account.
+Returns the current chronological checkpoint, sparse-map root, the persistent
+operator signature, cached independent witness attestations, and an RFC 6962
+consistency path from `N` (`0` for first observation). Returns `404` while the
+log is empty and `409` when `N` is newer than the presented view. Clients and
+witnesses verify the response before advancing durable state.
+
+### POST /api/chat/transparency/witness
+
+Public, rate-limited submission endpoint for an administrator-allowlisted
+independent witness. Body:
+
+```json
+{
+  "treeSize": 42,
+  "attestation": {
+    "witnessId": "audit.example",
+    "observedAt": 1784250000,
+    "keyId": "<64 lowercase hex>",
+    "publicKey": "<base64 Ed25519 public key>",
+    "signature": "<base64 signature over the exact operator checkpoint>"
+  }
+}
+```
+
+The server verifies the configured identity/key and exact checkpoint.
+Identical replay succeeds with `{ "accepted": true, "deduplicated": true }`;
+an unknown key returns `401`, an unknown checkpoint `404`, and equivocation at
+one tree size `409`.
+
 ### GET /api/chat/users/{username}/keys?transparencyTreeSize=N
 
-PQXDH prekey bundles for **every** chat device of `username` (a message must encrypt to all of them), plus the account-signed device manifest and its transparency proof. `transparencyTreeSize` is the client's highest verified homeserver checkpoint (`0` initially); the response proves chronological inclusion of the exact manifest, sparse-map membership as the account's current value, inclusion of that map root as the checkpoint's final leaf, and RFC 6962 consistency from the requested size. Each bundle carries `identityKey`, `signedPreKey`, `kyberPreKey` (a one-time Kyber prekey, **consumed** by this fetch, or the reusable last-resort key when the pool is empty) and optionally a consumed one-time EC prekey. Fetches are limited to 30/min per authenticated account (`RATE_LIMIT_CHAT_KEYS_PER_MIN`) with a coarse 120/min IP wall (`RATE_LIMIT_CHAT_KEYS_IP_PER_MIN`).
+PQXDH prekey bundles for **every** chat device of `username` (a message must encrypt to all of them), plus the account-signed device manifest and its transparency proof. `transparencyTreeSize` is the client's highest verified homeserver checkpoint (`0` initially); the response proves chronological inclusion of the exact manifest, sparse-map membership as the account's current value, inclusion of that map root as the checkpoint's final leaf, RFC 6962 consistency from the requested size, and the operator signature plus configured witness quorum for the exact checkpoint. Each bundle carries `identityKey`, `signedPreKey`, `kyberPreKey` (a one-time Kyber prekey, **consumed** by this fetch, or the reusable last-resort key when the pool is empty) and optionally a consumed one-time EC prekey. Fetches are limited to 30/min per authenticated account (`RATE_LIMIT_CHAT_KEYS_PER_MIN`) with a coarse 120/min IP wall (`RATE_LIMIT_CHAT_KEYS_IP_PER_MIN`).
 
 ### POST /api/chat/users/{username}/messages
 

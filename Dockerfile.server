@@ -11,9 +11,11 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
-# Build only the server binary in release mode (pulls in kutup-crypto; not kutup-cli).
-RUN cargo build --release -p kutup-server --bin kutup-server \
-    && cp target/release/kutup-server /kutup-server
+# Build the log server and the separately runnable witness binary.
+RUN cargo build --release -p kutup-server \
+        --bin kutup-server --bin kutup-transparency-witness \
+    && cp target/release/kutup-server /kutup-server \
+    && cp target/release/kutup-transparency-witness /kutup-transparency-witness
 
 # Minimal runtime: rustls is used throughout (no OpenSSL), so only CA certs are needed.
 FROM debian:bookworm-slim
@@ -21,6 +23,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /kutup-server /usr/local/bin/kutup-server
+COPY --from=builder /kutup-transparency-witness /usr/local/bin/kutup-transparency-witness
 
 EXPOSE 3000
 ENTRYPOINT ["kutup-server"]

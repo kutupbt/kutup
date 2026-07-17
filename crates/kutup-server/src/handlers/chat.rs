@@ -32,7 +32,8 @@ use kutup_chat_proto::{
     DeliveredEnvelope, DeviceListMismatch, DeviceManifest, DevicePreKeyBundle, EcPreKey,
     EnvelopeType, KemPreKey, MailboxPage, OutgoingEnvelope, OwnChatProfileResponse,
     PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
-    RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest, SuiteId,
+    RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest,
+    SubmitTransparencyWitnessRequest, SuiteId, TransparencyCheckpointResponse,
     UserPreKeyBundlesResponse,
 };
 
@@ -66,6 +67,66 @@ type OwnProfileRow = (String, i64, i32, String, Option<String>, String, Vec<u8>)
 pub struct TransparencyQuery {
     #[serde(rename = "transparencyTreeSize")]
     transparency_tree_size: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct CheckpointQuery {
+    #[serde(rename = "fromTreeSize")]
+    from_tree_size: Option<u64>,
+}
+
+/// Public signed head for client monitors and independent witnesses. This does
+/// not touch a user directory or consume one-time keys.
+#[utoipa::path(
+    get,
+    path = "/api/chat/transparency/checkpoint",
+    tag = "chat",
+    operation_id = "getChatTransparencyCheckpoint",
+    params(("fromTreeSize" = Option<u64>, Query, description = "Previously verified tree size")),
+    responses(
+        (status = 200, description = "Signed head and append-only consistency proof", body = TransparencyCheckpointResponse),
+        (status = 404, description = "Transparency log is empty"),
+        (status = 409, description = "Requested prior head is newer than this view")
+    )
+)]
+pub async fn get_transparency_checkpoint(
+    State(state): State<AppState>,
+    Query(query): Query<CheckpointQuery>,
+) -> AppResult<Response> {
+    let mut tx = state.pool.begin().await?;
+    let response =
+        crate::chat_transparency::prove_checkpoint(&mut tx, query.from_tree_size.unwrap_or(0))
+            .await?;
+    tx.commit().await?;
+    Ok(Json(response).into_response())
+}
+
+/// Cache a statement made with an administrator-selected independent witness
+/// key. Replays are idempotent; contradictory submissions fail closed.
+#[utoipa::path(
+    post,
+    path = "/api/chat/transparency/witness",
+    tag = "chat",
+    operation_id = "submitChatTransparencyWitness",
+    request_body = SubmitTransparencyWitnessRequest,
+    responses(
+        (status = 200, description = "Witness statement accepted"),
+        (status = 401, description = "Witness is not in deployment policy"),
+        (status = 404, description = "Checkpoint is unknown"),
+        (status = 409, description = "Witness equivocated at this tree size")
+    )
+)]
+pub async fn submit_transparency_witness(
+    State(state): State<AppState>,
+    Json(request): Json<SubmitTransparencyWitnessRequest>,
+) -> AppResult<Response> {
+    let inserted = crate::chat_transparency::submit_witness_attestation(
+        &state.pool,
+        &state.transparency_authority,
+        &request,
+    )
+    .await?;
+    Ok(Json(json!({ "accepted": true, "deduplicated": !inserted })).into_response())
 }
 
 /// Validates a base64 field and returns the decoded bytes (callers that only
@@ -444,8 +505,14 @@ pub async fn publish_manifest(
     .bind(value)
     .execute(&mut *tx)
     .await?;
-    crate::chat_transparency::append_manifest_update(&mut tx, user_id, &username, &manifest)
-        .await?;
+    crate::chat_transparency::append_manifest_update(
+        &mut tx,
+        user_id,
+        &username,
+        &manifest,
+        &state.transparency_authority,
+    )
+    .await?;
     let transparency = crate::chat_transparency::prove_manifest(
         &mut tx,
         user_id,

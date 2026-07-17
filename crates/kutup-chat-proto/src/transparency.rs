@@ -6,6 +6,9 @@
 
 use std::collections::BTreeMap;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
+use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
@@ -18,6 +21,8 @@ const MAP_KEY_DOMAIN: &[u8] = b"kutup-chat-transparency-map-key-v1\0";
 const MAP_LEAF_DOMAIN: &[u8] = b"kutup-chat-transparency-map-leaf-v1\0";
 const MAP_EMPTY_DOMAIN: &[u8] = b"kutup-chat-transparency-map-empty-v1\0";
 const MAP_CHECKPOINT_DOMAIN: &[u8] = b"kutup-chat-transparency-map-checkpoint-v1\0";
+const SIGNED_CHECKPOINT_DOMAIN: &[u8] = b"kutup-chat-transparency-signed-checkpoint-v1\0";
+const WITNESS_ATTESTATION_DOMAIN: &[u8] = b"kutup-chat-transparency-witness-v1\0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -123,6 +128,9 @@ pub struct ManifestTransparencyProof {
     /// Proof that this manifest is the account's current value in the sparse
     /// account map committed by the final leaf of `checkpoint`.
     pub map: ManifestTransparencyMapProof,
+    /// Stable operator signature plus independently verifiable witness
+    /// attestations for this exact log/map checkpoint.
+    pub authentication: TransparencyCheckpointAuthentication,
 }
 
 impl ManifestTransparencyProof {
@@ -175,6 +183,368 @@ impl ManifestTransparencyProof {
     pub fn verify_current_map(&self) -> Result<(), String> {
         self.map.verify(&self.leaf, &self.checkpoint)
     }
+
+    pub fn verify_authentication(&self) -> Result<(), String> {
+        self.authentication
+            .verify(&self.checkpoint, &self.map.root_hash)
+    }
+}
+
+/// Operator signature and optional independent observations of one exact
+/// transparency checkpoint. Witness public keys are carried for routing and
+/// first-observation UX only; a client enforcing a quorum MUST compare them to
+/// keys supplied by its own trusted policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct TransparencyCheckpointAuthentication {
+    /// Unix epoch seconds. Persisted with the checkpoint, so every client sees
+    /// the same signed object rather than a freshly timestamped response.
+    pub issued_at: i64,
+    pub operator_key_id: String,
+    pub operator_public_key: String,
+    pub operator_signature: String,
+    #[serde(default)]
+    pub witnesses: Vec<TransparencyWitnessAttestation>,
+}
+
+impl TransparencyCheckpointAuthentication {
+    pub fn sign(
+        checkpoint: &TransparencyCheckpoint,
+        map_root: &str,
+        issued_at: i64,
+        signing_key: &SigningKey,
+    ) -> Result<Self, String> {
+        if issued_at <= 0 {
+            return Err("transparency checkpoint issuedAt must be positive".into());
+        }
+        let verifying_key = signing_key.verifying_key();
+        let operator_key_id = transparency_signing_key_id(&verifying_key);
+        let bytes = signed_checkpoint_bytes(checkpoint, map_root, issued_at, &operator_key_id)?;
+        Ok(Self {
+            issued_at,
+            operator_key_id,
+            operator_public_key: STANDARD.encode(verifying_key.as_bytes()),
+            operator_signature: STANDARD.encode(signing_key.sign(&bytes).to_bytes()),
+            witnesses: Vec::new(),
+        })
+    }
+
+    pub fn verify(
+        &self,
+        checkpoint: &TransparencyCheckpoint,
+        map_root: &str,
+    ) -> Result<(), String> {
+        if self.issued_at <= 0 {
+            return Err("transparency checkpoint issuedAt must be positive".into());
+        }
+        let public = decode_verifying_key("operatorPublicKey", &self.operator_public_key)?;
+        if transparency_signing_key_id(&public) != self.operator_key_id {
+            return Err("transparency operator key id does not match its public key".into());
+        }
+        let signature = decode_signature("operatorSignature", &self.operator_signature)?;
+        let bytes =
+            signed_checkpoint_bytes(checkpoint, map_root, self.issued_at, &self.operator_key_id)?;
+        public
+            .verify(&bytes, &signature)
+            .map_err(|_| "invalid transparency operator signature".to_string())?;
+
+        let mut witnesses = BTreeMap::new();
+        for witness in &self.witnesses {
+            witness.verify(self, checkpoint, map_root)?;
+            if witnesses
+                .insert(witness.witness_id.as_str(), witness.key_id.as_str())
+                .is_some()
+            {
+                return Err("transparency checkpoint repeats a witness id".into());
+            }
+        }
+        Ok(())
+    }
+
+    pub fn add_witness(
+        &mut self,
+        checkpoint: &TransparencyCheckpoint,
+        map_root: &str,
+        witness_id: impl Into<String>,
+        observed_at: i64,
+        signing_key: &SigningKey,
+    ) -> Result<(), String> {
+        let witness = TransparencyWitnessAttestation::sign(
+            self,
+            checkpoint,
+            map_root,
+            witness_id,
+            observed_at,
+            signing_key,
+        )?;
+        if self
+            .witnesses
+            .iter()
+            .any(|existing| existing.witness_id == witness.witness_id)
+        {
+            return Err("transparency checkpoint repeats a witness id".into());
+        }
+        self.witnesses.push(witness);
+        self.witnesses
+            .sort_by(|left, right| left.witness_id.cmp(&right.witness_id));
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct TransparencyWitnessAttestation {
+    /// Stable deployment identity selected by client policy, such as a DNS
+    /// name. It is not trusted merely because it appears in this response.
+    pub witness_id: String,
+    pub observed_at: i64,
+    pub key_id: String,
+    pub public_key: String,
+    pub signature: String,
+}
+
+/// Public identity selected outside the log server and pinned by clients.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct TransparencyVerifierKey {
+    pub witness_id: String,
+    pub key_id: String,
+    pub public_key: String,
+}
+
+impl TransparencyVerifierKey {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_witness_id(&self.witness_id)?;
+        let key = decode_verifying_key("witness publicKey", &self.public_key)?;
+        if transparency_signing_key_id(&key) != self.key_id {
+            return Err("transparency witness key id does not match its public key".into());
+        }
+        Ok(())
+    }
+
+    pub fn matches(&self, attestation: &TransparencyWitnessAttestation) -> bool {
+        self.witness_id == attestation.witness_id
+            && self.key_id == attestation.key_id
+            && self.public_key == attestation.public_key
+    }
+}
+
+/// Public monitoring response used by clients and independently deployed
+/// witnesses without consuming a user's prekeys.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct TransparencyCheckpointResponse {
+    pub checkpoint: TransparencyCheckpoint,
+    pub map_root: String,
+    pub authentication: TransparencyCheckpointAuthentication,
+    pub consistency_from: u64,
+    pub consistency: Vec<String>,
+}
+
+impl TransparencyCheckpointResponse {
+    pub fn verify(&self, prior: Option<&TransparencyCheckpoint>) -> Result<(), String> {
+        self.authentication
+            .verify(&self.checkpoint, &self.map_root)?;
+        let new_root = self.checkpoint.validate()?;
+        let proof = decode_path("consistency", &self.consistency)?;
+        match prior {
+            None => {
+                if self.consistency_from != 0 || !proof.is_empty() {
+                    return Err("first transparency checkpoint must start at size zero".into());
+                }
+                Ok(())
+            }
+            Some(prior) => {
+                let old_root = prior.validate()?;
+                if prior.log_id != self.checkpoint.log_id {
+                    return Err("transparency log identity changed".into());
+                }
+                if self.consistency_from != prior.tree_size {
+                    return Err(
+                        "transparency consistency proof starts at the wrong tree size".into(),
+                    );
+                }
+                verify_consistency(
+                    prior.tree_size,
+                    self.checkpoint.tree_size,
+                    old_root,
+                    new_root,
+                    &proof,
+                )
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitTransparencyWitnessRequest {
+    pub tree_size: u64,
+    pub attestation: TransparencyWitnessAttestation,
+}
+
+impl TransparencyWitnessAttestation {
+    pub fn sign(
+        authentication: &TransparencyCheckpointAuthentication,
+        checkpoint: &TransparencyCheckpoint,
+        map_root: &str,
+        witness_id: impl Into<String>,
+        observed_at: i64,
+        signing_key: &SigningKey,
+    ) -> Result<Self, String> {
+        let witness_id = witness_id.into();
+        validate_witness_id(&witness_id)?;
+        if observed_at <= 0 {
+            return Err("transparency witness observedAt must be positive".into());
+        }
+        // Refuse to witness an invalid operator statement.
+        authentication.verify(checkpoint, map_root)?;
+        let verifying_key = signing_key.verifying_key();
+        let key_id = transparency_signing_key_id(&verifying_key);
+        let bytes = witness_attestation_bytes(
+            authentication,
+            checkpoint,
+            map_root,
+            &witness_id,
+            observed_at,
+            &key_id,
+        )?;
+        Ok(Self {
+            witness_id,
+            observed_at,
+            key_id,
+            public_key: STANDARD.encode(verifying_key.as_bytes()),
+            signature: STANDARD.encode(signing_key.sign(&bytes).to_bytes()),
+        })
+    }
+
+    pub fn verify(
+        &self,
+        authentication: &TransparencyCheckpointAuthentication,
+        checkpoint: &TransparencyCheckpoint,
+        map_root: &str,
+    ) -> Result<(), String> {
+        validate_witness_id(&self.witness_id)?;
+        if self.observed_at < authentication.issued_at {
+            return Err("transparency witness predates the operator checkpoint".into());
+        }
+        let public = decode_verifying_key("witness publicKey", &self.public_key)?;
+        if transparency_signing_key_id(&public) != self.key_id {
+            return Err("transparency witness key id does not match its public key".into());
+        }
+        let signature = decode_signature("witness signature", &self.signature)?;
+        let bytes = witness_attestation_bytes(
+            authentication,
+            checkpoint,
+            map_root,
+            &self.witness_id,
+            self.observed_at,
+            &self.key_id,
+        )?;
+        public
+            .verify(&bytes, &signature)
+            .map_err(|_| "invalid transparency witness signature".to_string())
+    }
+}
+
+pub fn transparency_signing_key_id(key: &VerifyingKey) -> String {
+    hex::encode(Sha256::digest(key.as_bytes()))
+}
+
+fn signed_checkpoint_bytes(
+    checkpoint: &TransparencyCheckpoint,
+    map_root: &str,
+    issued_at: i64,
+    key_id: &str,
+) -> Result<Vec<u8>, String> {
+    let log_id = decode_hash("logId", &checkpoint.log_id)?;
+    let root_hash = checkpoint.validate()?;
+    let map_root = decode_hash("map rootHash", map_root)?;
+    let key_id = decode_hash("operatorKeyId", key_id)?;
+    if checkpoint.tree_size == 0 {
+        return Err("signed transparency checkpoint must be non-empty".into());
+    }
+    let mut out = Vec::with_capacity(SIGNED_CHECKPOINT_DOMAIN.len() + 120);
+    out.extend_from_slice(SIGNED_CHECKPOINT_DOMAIN);
+    out.extend_from_slice(&log_id);
+    out.extend_from_slice(&checkpoint.tree_size.to_be_bytes());
+    out.extend_from_slice(&root_hash);
+    out.extend_from_slice(&map_root);
+    out.extend_from_slice(&issued_at.to_be_bytes());
+    out.extend_from_slice(&key_id);
+    Ok(out)
+}
+
+fn witness_attestation_bytes(
+    authentication: &TransparencyCheckpointAuthentication,
+    checkpoint: &TransparencyCheckpoint,
+    map_root: &str,
+    witness_id: &str,
+    observed_at: i64,
+    witness_key_id: &str,
+) -> Result<Vec<u8>, String> {
+    let operator = signed_checkpoint_bytes(
+        checkpoint,
+        map_root,
+        authentication.issued_at,
+        &authentication.operator_key_id,
+    )?;
+    let operator_signature =
+        decode_signature("operatorSignature", &authentication.operator_signature)?;
+    let witness_key_id = decode_hash("witness keyId", witness_key_id)?;
+    let witness_id_len = u16::try_from(witness_id.len())
+        .map_err(|_| "transparency witness id is too long".to_string())?;
+    let mut out = Vec::with_capacity(
+        WITNESS_ATTESTATION_DOMAIN.len() + operator.len() + witness_id.len() + 110,
+    );
+    out.extend_from_slice(WITNESS_ATTESTATION_DOMAIN);
+    out.extend_from_slice(&operator);
+    out.extend_from_slice(&operator_signature.to_bytes());
+    out.extend_from_slice(&witness_id_len.to_be_bytes());
+    out.extend_from_slice(witness_id.as_bytes());
+    out.extend_from_slice(&observed_at.to_be_bytes());
+    out.extend_from_slice(&witness_key_id);
+    Ok(out)
+}
+
+fn validate_witness_id(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 255
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+    {
+        return Err("transparency witness id is invalid".into());
+    }
+    Ok(())
+}
+
+fn decode_verifying_key(name: &str, value: &str) -> Result<VerifyingKey, String> {
+    let bytes = STANDARD
+        .decode(value)
+        .map_err(|_| format!("{name} must be canonical base64"))?;
+    if STANDARD.encode(&bytes) != value {
+        return Err(format!("{name} must be canonical base64"));
+    }
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| format!("{name} must be 32 bytes"))?;
+    VerifyingKey::from_bytes(&bytes).map_err(|_| format!("{name} is not a valid Ed25519 key"))
+}
+
+fn decode_signature(name: &str, value: &str) -> Result<Signature, String> {
+    let bytes = STANDARD
+        .decode(value)
+        .map_err(|_| format!("{name} must be canonical base64"))?;
+    if STANDARD.encode(&bytes) != value {
+        return Err(format!("{name} must be canonical base64"));
+    }
+    Signature::from_slice(&bytes).map_err(|_| format!("{name} must be 64 bytes"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -550,6 +920,45 @@ mod tests {
         path[0][0] ^= 1;
         assert!(verify_inclusion(leaves[3], 3, 5, &path, root(&leaves)).is_err());
         assert!(verify_consistency(5, 5, root(&leaves), leaf(99), &[]).is_err());
+    }
+
+    #[test]
+    fn operator_and_witness_signatures_bind_the_exact_checkpoint() {
+        let checkpoint = TransparencyCheckpoint {
+            log_id: "11".repeat(32),
+            tree_size: 7,
+            root_hash: "22".repeat(32),
+        };
+        let map_root = "33".repeat(32);
+        let operator = SigningKey::from_bytes(&[44; 32]);
+        let witness = SigningKey::from_bytes(&[55; 32]);
+        let mut authentication = TransparencyCheckpointAuthentication::sign(
+            &checkpoint,
+            &map_root,
+            1_752_688_000,
+            &operator,
+        )
+        .unwrap();
+        authentication
+            .add_witness(
+                &checkpoint,
+                &map_root,
+                "witness.example",
+                1_752_688_001,
+                &witness,
+            )
+            .unwrap();
+        authentication.verify(&checkpoint, &map_root).unwrap();
+
+        let mut fork = checkpoint.clone();
+        fork.root_hash = "23".repeat(32);
+        assert!(authentication.verify(&fork, &map_root).is_err());
+        let mut forged = authentication.clone();
+        forged.witnesses[0].witness_id = "other.example".into();
+        assert!(forged.verify(&checkpoint, &map_root).is_err());
+        let mut duplicate = authentication.clone();
+        duplicate.witnesses.push(duplicate.witnesses[0].clone());
+        assert!(duplicate.verify(&checkpoint, &map_root).is_err());
     }
 
     #[test]

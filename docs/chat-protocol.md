@@ -125,7 +125,8 @@ this table; it MUST NOT change the meaning of code point `1`.
 
 ## 4. Prekey directory — [IMPL] manifest + transparency
 
-Endpoints (all authenticated; the WS validates its token pre-upgrade):
+Endpoints (authenticated unless marked public; the WS validates its token
+pre-upgrade):
 
 | Method | Path | Status |
 |---|---|---|
@@ -134,6 +135,8 @@ Endpoints (all authenticated; the WS validates its token pre-upgrade):
 | `DELETE /api/chat/device/{deviceId}` | revoke | [IMPL] |
 | `PUT /api/chat/keys` | rotate signed / last-resort; replenish one-time | [IMPL] |
 | `GET /api/chat/keys/count` | pool sizes | [IMPL] |
+| `GET /api/chat/transparency/checkpoint` | public signed monitor head + consistency proof | [IMPL] |
+| `POST /api/chat/transparency/witness` | public allowlisted witness submission | [IMPL] |
 | `GET /api/chat/users/{username}/keys` | fetch bundles (consumes one-time keys; authenticated self-sync mode below) | [IMPL] |
 | `POST /api/chat/users/{username}/messages` | multi-device send | [IMPL] |
 | `POST /api/chat/sync/messages` | encrypted sent transcript to caller's other devices | [IMPL] |
@@ -263,10 +266,13 @@ gap for later transparency auditing. Clients retain the existing safety-number-
 change interstitial for identity changes. The implemented log removes silent
 history rewriting for a returning client, and the authenticated current map
 prevents an operator from selecting an old manifest inside the checkpoint it
-serves. First-contact TOFU remains until independent witnesses/auditors or
-checkpoint gossip make a server-created fork externally detectable.
+serves. Operator-signed checkpoints and optional independent witness quorum
+(§5.4) now make a fork attributable and detectable when the application obtains
+those verifier keys independently. A web app that downloads both its code and
+trust policy from the same compromised origin cannot create that independence
+by itself; safety-number comparison remains the user-visible out-of-band path.
 
-### 5.4 Manifest transparency log and current map — [IMPL foundation]
+### 5.4 Signed manifest transparency and independent witnesses — [IMPL]
 
 Each homeserver database owns a stable random 32-byte `logId`. Publishing a
 non-idempotent manifest appends this canonical leaf:
@@ -290,6 +296,10 @@ ManifestTransparencyProof {
   map: {
     rootHash, checkpointLeafIndex, checkpointInclusion[],
     siblings[]: { depth, hash }
+  },
+  authentication: {
+    issuedAt, operatorKeyId, operatorPublicKey, operatorSignature,
+    witnesses[]: { witnessId, observedAt, keyId, publicKey, signature }
   }
 }
 ```
@@ -314,16 +324,34 @@ malformed audit/map path, monitor-position rollback, or omitted proof fails
 closed. Federated directory reads carry the remote proof unchanged and
 destination-bind `transparencyTreeSize` in the signed request URI.
 
-This remains an honest **foundation**, not complete Signal-equivalent key
-transparency. A malicious operator can present two internally consistent
-log+map forks to clients that have never exchanged checkpoints. Kutup's map
-uses a domain-separated username hash rather than Signal's VRF-derived index;
-the current API does not publish map keys or an enumeration endpoint, but it
-does not provide Signal's VRF privacy property. Signal also uses a separate KT
-service, distinguished tree heads, richer per-key monitoring paths, and
-auditor signatures. Kutup's next slices are periodic self-monitoring and
-skipped-update audit proofs, followed by independent auditing/witnessing or
-encrypted checkpoint gossip. Safety numbers remain the explicit
+Every non-empty checkpoint is signed once by a persistent, dedicated Ed25519
+operator key over the exact `logId`, tree size/root, sparse-map root, issuance
+time, and operator key id. The signed record is stored transactionally rather
+than regenerated per request. The server refuses a silent operator-key change.
+Clients verify the signature, pin the operator identity and issuance time with
+the checkpoint, and reject rollback, same-size mutation, or key replacement
+without a future authenticated rotation record.
+
+An independently deployed `kutup-transparency-witness` polls the public
+`GET /api/chat/transparency/checkpoint?fromTreeSize=N` endpoint, verifies the
+operator policy and consistency from its own durable state, signs that exact
+operator statement, submits it to `POST /api/chat/transparency/witness`, and
+only then advances its local state. The server accepts only configured witness
+identities/keys, makes replay idempotent, and rejects a contradictory statement
+at the same tree size. A client policy contains verifier keys and a quorum per
+homeserver scope; response-carried keys never add trust. Missing quorum fails
+closed before manifest or session state mutates.
+
+This is materially closer to Signal's distinguished-head/auditor trust shape,
+but it is not wire-compatible with Signal's private KT service. Kutup uses a
+domain-separated username hash rather than Signal's VRF-derived index, so it
+does not claim Signal's VRF index-privacy property. The remaining work is
+scheduled self-monitoring and skipped-update/range proofs, cross-witness gossip
+or an auditor that compares views, and authenticated distribution/rotation of
+remote homeserver policies. Today the web client pins its local capability
+policy but that policy shares the web origin; unknown remote federation scopes
+are first-observation pinned. Native/static clients can supply independent
+local and remote policy roots at open time. Safety numbers remain the explicit
 out-of-band verification path throughout.
 
 ---
@@ -629,6 +657,12 @@ lacking the routes. Add a `chat` block to the existing public
   "manifests": true,               // signed device directory is available
   "profiles": true,                // encrypted profiles + capability lookup
   "keyTransparency": true,         // manifest inclusion + consistency proofs
+  "transparencyOperatorKeyId": "<64 lowercase hex>",
+  "transparencyOperatorPublicKey": "<base64 Ed25519 public key>",
+  "transparencyWitnesses": [
+    { "witnessId": "audit.example", "keyId": "<hex>", "publicKey": "<base64>" }
+  ],
+  "transparencyWitnessQuorum": 1,
   "sealedSender": false            // [RSV] flips true when sealed sender ships
 }
 ```
@@ -637,8 +671,12 @@ lacking the routes. Add a `chat` block to the existing public
 arbitrary size) and is the budget clients use for attachment-pointer payloads.
 The optional `serverName` is the stable suffix used to render local accounts as
 `username@server`; clients reject an advertised federation capability without
-it. The remaining `[RSV]` boolean lets a client light up sealed sender without
-a protocol bump. (`12-…` §3.)
+it. A production client also rejects `keyTransparency: true` without a valid
+operator key or with a witness quorum larger than the advertised verifier set.
+These capability values describe deployment policy; a high-assurance client
+must obtain/pin the same values independently of the homeserver response. The
+remaining `[RSV]` boolean lets a client light up sealed sender without a
+protocol bump. (`12-…` §3.)
 
 ---
 
@@ -779,9 +817,10 @@ continue to reject private/internal destinations.
 
 ## 15. Open questions (carried from `13-…` §11)
 
-- Key-transparency split views: which independent homeservers/witnesses sign or
-  gossip checkpoints, and what threshold can a small self-hosted deployment
-  require without making chat availability depend on one global service?
+- Key transparency now supports an operator signature and configurable
+  independent witness quorum. Remaining questions are authenticated remote
+  policy distribution/rotation and cross-witness gossip without making small
+  self-hosted deployments depend on one global service.
 - Does GV2-pattern server-held encrypted group state compose with a future
   MLS migration, or does choosing sender keys now foreclose it?
 - Sealed sender across federation: how does a remote server enforce the

@@ -13,6 +13,10 @@ const supported: ChatCapabilities = {
   manifests: true,
   profiles: true,
   keyTransparency: true,
+  transparencyOperatorKeyId: '11'.repeat(32),
+  transparencyOperatorPublicKey: 'MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM=',
+  transparencyWitnesses: [],
+  transparencyWitnessQuorum: 0,
   sealedSender: false,
 }
 
@@ -25,6 +29,10 @@ describe('isSupportedChat', () => {
     expect(isSupportedChat({ ...supported, manifests: false })).toBe(false)
     expect(isSupportedChat({ ...supported, profiles: false })).toBe(false)
     expect(isSupportedChat({ ...supported, keyTransparency: false })).toBe(false)
+    expect(isSupportedChat({ ...supported, transparencyOperatorKeyId: undefined })).toBe(false)
+    expect(
+      isSupportedChat({ ...supported, transparencyWitnessQuorum: 1 }),
+    ).toBe(false)
     expect(isSupportedChat({ ...supported, federation: true })).toBe(false)
     expect(
       isSupportedChat({ ...supported, federation: true, serverName: 'chat.example' }),

@@ -302,6 +302,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     let first_proof = typed_first.transparency.as_ref().unwrap();
     first_proof.verify_inclusion().unwrap();
     first_proof.verify_current_map().unwrap();
+    first_proof.verify_authentication().unwrap();
     first_proof.verify_consistency_from(None).unwrap();
     let first_checkpoint: TransparencyCheckpoint = first_proof.checkpoint.clone();
 
@@ -373,6 +374,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     let refreshed_proof = typed_refreshed.transparency.as_ref().unwrap();
     refreshed_proof.verify_inclusion().unwrap();
     refreshed_proof.verify_current_map().unwrap();
+    refreshed_proof.verify_authentication().unwrap();
     refreshed_proof
         .verify_consistency_from(Some(&first_checkpoint))
         .unwrap();

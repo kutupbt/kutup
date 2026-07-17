@@ -46,6 +46,13 @@ SERVER_URL=https://kutup.example.com
 # CHAT_FEDERATION_SERVER_NAME=kutup.example.com
 # CHAT_FEDERATION_SIGNING_KEY=<base64-32-byte-ed25519-seed>
 
+# Required dedicated key-transparency operator identity. Generate a different
+# seed once, back it up, and do not reuse the federation identity.
+CHAT_TRANSPARENCY_SIGNING_KEY=<base64-32-byte-ed25519-seed>
+# Optional independent witnesses (witness-id=base64-public-key) and threshold.
+# CHAT_TRANSPARENCY_WITNESSES=audit.example=<base64-ed25519-public-key>
+# CHAT_TRANSPARENCY_WITNESS_QUORUM=1
+
 # Break-glass admin bootstrap: a single email:username:password triple.
 # Created on first start; the admin completes setup on first login.
 # This account is the protected break-glass admin — it can never be
@@ -224,6 +231,57 @@ After changing these values, rebuild the backend:
 ```sh
 docker compose up -d --build backend
 ```
+
+---
+
+## Chat key transparency and independent witnesses
+
+Chat key transparency requires a persistent operator seed even when chat
+federation is disabled:
+
+```sh
+openssl rand -base64 32
+```
+
+Store that output as `CHAT_TRANSPARENCY_SIGNING_KEY`, separately from the
+federation key, and back it up. The database pins the derived public identity
+and refuses a silent replacement; planned rotation will require an
+authenticated transition rather than an environment-variable swap.
+
+For split-view resistance, run `kutup-transparency-witness` under a different
+administrative boundary with its own secret seed and persistent state volume.
+The server Docker image includes this second binary. Derive the public values
+that are safe to copy to the server:
+
+```sh
+KUTUP_WITNESS_SIGNING_KEY='<base64-32-byte-seed>' \
+  kutup-transparency-witness --print-public-key
+```
+
+Configure the returned public key on the server as
+`CHAT_TRANSPARENCY_WITNESSES=audit.example=<publicKey>` and set
+`CHAT_TRANSPARENCY_WITNESS_QUORUM=1`. Obtain the operator key id/public key from
+the server's public `/api/auth/settings` chat block, verify them through your
+deployment channel, and configure the independent process with:
+
+```text
+KUTUP_WITNESS_TARGET=https://kutup.example.com/
+KUTUP_WITNESS_ID=audit.example
+KUTUP_WITNESS_SIGNING_KEY=<private witness seed; never copy to the server>
+KUTUP_WITNESS_OPERATOR_KEY_ID=<pinned operator key id>
+KUTUP_WITNESS_OPERATOR_PUBLIC_KEY=<pinned operator public key>
+KUTUP_WITNESS_STATE_FILE=/state/checkpoint.json
+KUTUP_WITNESS_INTERVAL_SECONDS=30
+```
+
+The witness requires HTTPS, refuses redirects, verifies append-only consistency
+from its own state, submits its signature, and advances that state only after
+the server accepts it. Keep `/state` durable and backed up. A nonzero client
+quorum deliberately makes a newly published manifest temporarily unavailable
+until enough witnesses have polled; clients fail closed and may retry after the
+witness interval. The isolated reference topology and contract test are
+`docker-compose.chat-transparency-witness.yml` and
+`scripts/test-chat-transparency-witness.sh`.
 
 ---
 

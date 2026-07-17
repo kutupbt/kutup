@@ -6,21 +6,121 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use kutup_chat_proto::{
     hash_transparency_map_checkpoint, hash_transparency_map_leaf, hash_transparency_node,
     map_key_bit, transparency_map_empty_hashes, transparency_map_key, DeviceManifest,
     ManifestTransparencyLeaf, ManifestTransparencyMapProof, ManifestTransparencyProof,
-    TransparencyCheckpoint, TransparencyHash, TransparencyMapSibling,
+    SubmitTransparencyWitnessRequest, TransparencyCheckpoint, TransparencyCheckpointAuthentication,
+    TransparencyCheckpointResponse, TransparencyHash, TransparencyMapSibling,
+    TransparencyVerifierKey, TransparencyWitnessAttestation,
 };
 use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::config::Config;
 use crate::error::{AppError, AppResult};
+
+/// Long-term operator identity for distinguished transparency checkpoints.
+/// Witness private keys never enter this process.
+pub struct TransparencyAuthority {
+    signing_key: SigningKey,
+    trusted_witnesses: BTreeMap<String, TransparencyVerifierKey>,
+    witness_quorum: u16,
+}
+
+impl TransparencyAuthority {
+    pub fn from_config(config: &Config) -> anyhow::Result<Self> {
+        if config.chat_transparency_signing_key.is_empty() {
+            anyhow::bail!(
+                "CHAT_TRANSPARENCY_SIGNING_KEY is required while key transparency is enabled"
+            );
+        }
+        let seed = STANDARD
+            .decode(&config.chat_transparency_signing_key)
+            .map_err(|_| anyhow::anyhow!("CHAT_TRANSPARENCY_SIGNING_KEY must be base64"))?;
+        let seed: [u8; 32] = seed.try_into().map_err(|_| {
+            anyhow::anyhow!("CHAT_TRANSPARENCY_SIGNING_KEY must decode to exactly 32 bytes")
+        })?;
+        let mut trusted_witnesses = BTreeMap::new();
+        for entry in config
+            .chat_transparency_witnesses
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+        {
+            let (witness_id, encoded) = entry.split_once('=').ok_or_else(|| {
+                anyhow::anyhow!("CHAT_TRANSPARENCY_WITNESSES entries must be witness-id=base64-key")
+            })?;
+            let public = STANDARD.decode(encoded).map_err(|_| {
+                anyhow::anyhow!("CHAT_TRANSPARENCY_WITNESSES contains invalid base64")
+            })?;
+            let public: [u8; 32] = public.try_into().map_err(|_| {
+                anyhow::anyhow!("CHAT_TRANSPARENCY_WITNESSES keys must be exactly 32 bytes")
+            })?;
+            let public = VerifyingKey::from_bytes(&public).map_err(|_| {
+                anyhow::anyhow!("CHAT_TRANSPARENCY_WITNESSES contains an invalid Ed25519 key")
+            })?;
+            let verifier = TransparencyVerifierKey {
+                witness_id: witness_id.to_string(),
+                key_id: kutup_chat_proto::transparency_signing_key_id(&public),
+                public_key: STANDARD.encode(public.as_bytes()),
+            };
+            verifier.validate().map_err(anyhow::Error::msg)?;
+            if trusted_witnesses
+                .insert(verifier.witness_id.clone(), verifier)
+                .is_some()
+            {
+                anyhow::bail!("CHAT_TRANSPARENCY_WITNESSES repeats a witness id");
+            }
+        }
+        let witness_quorum = u16::try_from(config.chat_transparency_witness_quorum)
+            .map_err(|_| anyhow::anyhow!("CHAT_TRANSPARENCY_WITNESS_QUORUM is too large"))?;
+        if usize::from(witness_quorum) > trusted_witnesses.len() {
+            anyhow::bail!("CHAT_TRANSPARENCY_WITNESS_QUORUM exceeds configured witnesses");
+        }
+        Ok(Self {
+            signing_key: SigningKey::from_bytes(&seed),
+            trusted_witnesses,
+            witness_quorum,
+        })
+    }
+
+    pub fn public_key_base64(&self) -> String {
+        STANDARD.encode(self.signing_key.verifying_key().as_bytes())
+    }
+
+    pub fn key_id(&self) -> String {
+        kutup_chat_proto::transparency_signing_key_id(&self.signing_key.verifying_key())
+    }
+
+    pub fn witnesses(&self) -> Vec<TransparencyVerifierKey> {
+        self.trusted_witnesses.values().cloned().collect()
+    }
+
+    pub fn witness_quorum(&self) -> u16 {
+        self.witness_quorum
+    }
+}
 
 #[derive(Clone, Debug)]
 enum HashExpr {
     Stored { level: i16, node_index: i64 },
     Parent(Box<HashExpr>, Box<HashExpr>),
+}
+
+#[derive(sqlx::FromRow)]
+struct SignedCheckpointRow {
+    log_id: String,
+    root_hash: Vec<u8>,
+    map_root: Vec<u8>,
+    issued_at: i64,
+    operator_key_id: String,
+    operator_public_key: String,
+    operator_signature: String,
 }
 
 /// Atomically seed a newly migrated empty log with the current manifest of
@@ -60,7 +160,10 @@ pub async fn backfill_existing_manifests(pool: &PgPool) -> anyhow::Result<u64> {
 /// is appended to the already deployed chronological log, so clients holding a
 /// pre-map checkpoint can verify an ordinary consistency proof across the
 /// upgrade instead of resetting trust.
-pub async fn backfill_current_map(pool: &PgPool) -> anyhow::Result<u64> {
+pub async fn backfill_current_map(
+    pool: &PgPool,
+    authority: &TransparencyAuthority,
+) -> anyhow::Result<u64> {
     let mut tx = pool.begin().await?;
     let existing: Option<i64> = sqlx::query_scalar(
         "SELECT position FROM chat_transparency_map_checkpoints ORDER BY position DESC LIMIT 1",
@@ -69,6 +172,7 @@ pub async fn backfill_current_map(pool: &PgPool) -> anyhow::Result<u64> {
     .await?;
     if existing.is_some() {
         tx.rollback().await?;
+        ensure_signed_head(pool, authority).await?;
         return Ok(0);
     }
 
@@ -102,7 +206,7 @@ pub async fn backfill_current_map(pool: &PgPool) -> anyhow::Result<u64> {
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?,
         );
     }
-    append_map_checkpoint(&mut tx, root.expect("non-empty map has a root"))
+    append_map_checkpoint(&mut tx, root.expect("non-empty map has a root"), authority)
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     tx.commit().await?;
@@ -116,13 +220,63 @@ pub async fn append_manifest_update(
     user_id: Uuid,
     username: &str,
     manifest: &DeviceManifest,
+    authority: &TransparencyAuthority,
 ) -> AppResult<()> {
     append_manifest(tx, user_id, username, manifest).await?;
     let leaf =
         ManifestTransparencyLeaf::from_manifest(username, manifest).map_err(AppError::internal)?;
     let map_root = update_current_map(tx, &leaf).await?;
-    append_map_checkpoint(tx, map_root).await?;
+    append_map_checkpoint(tx, map_root, authority).await?;
     Ok(())
+}
+
+/// Sign the current head after upgrading a database that already had the map
+/// but predates migration 030. Refuse silent operator-key replacement.
+pub async fn ensure_signed_head(
+    pool: &PgPool,
+    authority: &TransparencyAuthority,
+) -> anyhow::Result<bool> {
+    let mut tx = pool.begin().await?;
+    let _: i64 = sqlx::query_scalar(
+        "SELECT tree_size FROM chat_transparency_log WHERE singleton = true FOR UPDATE",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    let current: Option<(i64, Vec<u8>)> = sqlx::query_as(
+        "SELECT position, map_root FROM chat_transparency_map_checkpoints
+         ORDER BY position DESC LIMIT 1",
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((position, map_root)) = current else {
+        tx.rollback().await?;
+        return Ok(false);
+    };
+    let existing_key: Option<String> = sqlx::query_scalar(
+        "SELECT operator_key_id FROM chat_transparency_signed_checkpoints
+         ORDER BY tree_size DESC LIMIT 1",
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(existing_key) = existing_key {
+        if existing_key.trim_end() != authority.key_id() {
+            anyhow::bail!(
+                "configured transparency signing key does not match the persisted operator key"
+            );
+        }
+        tx.rollback().await?;
+        return Ok(false);
+    }
+    let tree_size = position
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("transparency tree size overflow"))?;
+    let map_root =
+        hash_from_bytes(&map_root).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    sign_checkpoint(&mut tx, tree_size, map_root, authority)
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 pub async fn append_manifest(
@@ -301,7 +455,10 @@ pub async fn prove_manifest(
         })
         .collect();
 
-    Ok(ManifestTransparencyProof {
+    let authentication =
+        load_checkpoint_authentication(tx, tree_size, &log_id, root, map_root).await?;
+
+    let proof = ManifestTransparencyProof {
         leaf_index,
         leaf,
         checkpoint: TransparencyCheckpoint {
@@ -318,6 +475,230 @@ pub async fn prove_manifest(
             checkpoint_inclusion: map_checkpoint_inclusion,
             siblings,
         },
+        authentication,
+    };
+    proof
+        .verify_authentication()
+        .map_err(|error| AppError::internal(format!("stored transparency signature: {error}")))?;
+    Ok(proof)
+}
+
+/// Return the independently monitorable signed head without touching any user
+/// bundle or one-time prekey state.
+pub async fn prove_checkpoint(
+    tx: &mut Transaction<'_, Postgres>,
+    known_tree_size: u64,
+) -> AppResult<TransparencyCheckpointResponse> {
+    let (log_id, tree_size): (String, i64) = sqlx::query_as(
+        "SELECT log_id, tree_size FROM chat_transparency_log
+         WHERE singleton = true FOR SHARE",
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    let tree_size = u64::try_from(tree_size)
+        .map_err(|_| AppError::internal("invalid transparency tree size"))?;
+    if tree_size == 0 {
+        return Err(AppError::not_found("transparency log is empty"));
+    }
+    if known_tree_size > tree_size {
+        return Err(AppError::conflict(
+            "transparency checkpoint is newer than this server view",
+        ));
+    }
+    let (position, map_root): (i64, Vec<u8>) = sqlx::query_as(
+        "SELECT position, map_root FROM chat_transparency_map_checkpoints
+         ORDER BY position DESC LIMIT 1",
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    let position = u64::try_from(position)
+        .map_err(|_| AppError::internal("invalid transparency map position"))?;
+    if position.checked_add(1) != Some(tree_size) {
+        return Err(AppError::internal(
+            "transparency map checkpoint is not the log head",
+        ));
+    }
+    let map_root = hash_from_bytes(&map_root)?;
+    let root_expr = range_expr(0, tree_size)?;
+    let mut consistency_exprs = Vec::new();
+    if known_tree_size != 0 && known_tree_size != tree_size {
+        consistency_path(known_tree_size, 0, tree_size, true, &mut consistency_exprs)?;
+    }
+    let mut coordinates = BTreeSet::new();
+    collect_stored(&root_expr, &mut coordinates);
+    for expr in &consistency_exprs {
+        collect_stored(expr, &mut coordinates);
+    }
+    let mut hashes = BTreeMap::new();
+    for (level, node_index) in coordinates {
+        hashes.insert((level, node_index), load_node(tx, level, node_index).await?);
+    }
+    let root = evaluate(&root_expr, &hashes)?;
+    let checkpoint = TransparencyCheckpoint {
+        log_id: log_id.trim_end().to_string(),
+        tree_size,
+        root_hash: hex::encode(root),
+    };
+    let authentication =
+        load_checkpoint_authentication(tx, tree_size, &log_id, root, map_root).await?;
+    let response = TransparencyCheckpointResponse {
+        checkpoint,
+        map_root: hex::encode(map_root),
+        authentication,
+        consistency_from: known_tree_size,
+        consistency: consistency_exprs
+            .iter()
+            .map(|expr| evaluate(expr, &hashes).map(hex::encode))
+            .collect::<AppResult<Vec<_>>>()?,
+    };
+    response
+        .authentication
+        .verify(&response.checkpoint, &response.map_root)
+        .map_err(|error| AppError::internal(format!("stored transparency head: {error}")))?;
+    Ok(response)
+}
+
+/// Accept a self-authenticating observation only when its public identity is
+/// present in the administrator's out-of-band witness allowlist.
+pub async fn submit_witness_attestation(
+    pool: &PgPool,
+    authority: &TransparencyAuthority,
+    request: &SubmitTransparencyWitnessRequest,
+) -> AppResult<bool> {
+    let trusted = authority
+        .trusted_witnesses
+        .get(&request.attestation.witness_id)
+        .ok_or_else(|| AppError::unauthorized("untrusted transparency witness"))?;
+    if !trusted.matches(&request.attestation) {
+        return Err(AppError::unauthorized(
+            "transparency witness key does not match policy",
+        ));
+    }
+    let tree_size = i64::try_from(request.tree_size)
+        .map_err(|_| AppError::bad_request("transparency tree size is too large"))?;
+    let mut tx = pool.begin().await?;
+    let signed: Option<(String, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+        "SELECT log_id, root_hash, map_root
+         FROM chat_transparency_signed_checkpoints WHERE tree_size = $1",
+    )
+    .bind(tree_size)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (log_id, root, map_root) =
+        signed.ok_or_else(|| AppError::not_found("transparency checkpoint is unknown"))?;
+    let root = hash_from_bytes(&root)?;
+    let map_root = hash_from_bytes(&map_root)?;
+    let checkpoint = TransparencyCheckpoint {
+        log_id: log_id.trim_end().to_string(),
+        tree_size: request.tree_size,
+        root_hash: hex::encode(root),
+    };
+    let authentication =
+        load_checkpoint_authentication(&mut tx, request.tree_size, &log_id, root, map_root).await?;
+    request
+        .attestation
+        .verify(&authentication, &checkpoint, &hex::encode(map_root))
+        .map_err(AppError::bad_request)?;
+    if request.attestation.observed_at > OffsetDateTime::now_utc().unix_timestamp() + 300 {
+        return Err(AppError::bad_request(
+            "transparency witness observation is too far in the future",
+        ));
+    }
+    let inserted = sqlx::query(
+        "INSERT INTO chat_transparency_witness_attestations
+             (tree_size, witness_id, observed_at, key_id, public_key, signature)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (tree_size, witness_id) DO NOTHING",
+    )
+    .bind(tree_size)
+    .bind(&request.attestation.witness_id)
+    .bind(request.attestation.observed_at)
+    .bind(&request.attestation.key_id)
+    .bind(&request.attestation.public_key)
+    .bind(&request.attestation.signature)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+        == 1;
+    if !inserted {
+        let existing: (i64, String, String, String) = sqlx::query_as(
+            "SELECT observed_at, key_id, public_key, signature
+             FROM chat_transparency_witness_attestations
+             WHERE tree_size = $1 AND witness_id = $2",
+        )
+        .bind(tree_size)
+        .bind(&request.attestation.witness_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if existing
+            != (
+                request.attestation.observed_at,
+                request.attestation.key_id.clone(),
+                request.attestation.public_key.clone(),
+                request.attestation.signature.clone(),
+            )
+        {
+            return Err(AppError::conflict(
+                "witness already submitted a different statement for this checkpoint",
+            ));
+        }
+    }
+    tx.commit().await?;
+    Ok(inserted)
+}
+
+async fn load_checkpoint_authentication(
+    tx: &mut Transaction<'_, Postgres>,
+    tree_size: u64,
+    log_id: &str,
+    root: TransparencyHash,
+    map_root: TransparencyHash,
+) -> AppResult<TransparencyCheckpointAuthentication> {
+    let tree_size = i64::try_from(tree_size)
+        .map_err(|_| AppError::internal("transparency tree size does not fit the database"))?;
+    let signed: Option<SignedCheckpointRow> = sqlx::query_as(
+        "SELECT log_id, root_hash, map_root, issued_at, operator_key_id,
+                operator_public_key, operator_signature
+         FROM chat_transparency_signed_checkpoints WHERE tree_size = $1",
+    )
+    .bind(tree_size)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let signed =
+        signed.ok_or_else(|| AppError::internal("transparency head is not operator-signed"))?;
+    if signed.log_id.trim_end() != log_id.trim_end()
+        || hash_from_bytes(&signed.root_hash)? != root
+        || hash_from_bytes(&signed.map_root)? != map_root
+    {
+        return Err(AppError::internal(
+            "signed transparency checkpoint contradicts the log head",
+        ));
+    }
+    let witnesses: Vec<(String, i64, String, String, String)> = sqlx::query_as(
+        "SELECT witness_id, observed_at, key_id, public_key, signature
+         FROM chat_transparency_witness_attestations
+         WHERE tree_size = $1 ORDER BY witness_id",
+    )
+    .bind(tree_size)
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(TransparencyCheckpointAuthentication {
+        issued_at: signed.issued_at,
+        operator_key_id: signed.operator_key_id.trim_end().to_string(),
+        operator_public_key: signed.operator_public_key,
+        operator_signature: signed.operator_signature,
+        witnesses: witnesses
+            .into_iter()
+            .map(|(witness_id, observed_at, key_id, public_key, signature)| {
+                TransparencyWitnessAttestation {
+                    witness_id,
+                    observed_at,
+                    key_id: key_id.trim_end().to_string(),
+                    public_key,
+                    signature,
+                }
+            })
+            .collect(),
     })
 }
 
@@ -412,6 +793,7 @@ fn map_sibling_prefix(key: &TransparencyHash, depth: usize) -> TransparencyHash 
 async fn append_map_checkpoint(
     tx: &mut Transaction<'_, Postgres>,
     map_root: TransparencyHash,
+    authority: &TransparencyAuthority,
 ) -> AppResult<()> {
     let leaf_hash = hash_transparency_map_checkpoint(map_root);
     let position = append_log_leaf(tx, leaf_hash).await?;
@@ -422,6 +804,69 @@ async fn append_map_checkpoint(
     .bind(position)
     .bind(map_root.as_slice())
     .bind(leaf_hash.as_slice())
+    .execute(&mut **tx)
+    .await?;
+    sign_checkpoint(tx, position + 1, map_root, authority).await?;
+    Ok(())
+}
+
+async fn sign_checkpoint(
+    tx: &mut Transaction<'_, Postgres>,
+    tree_size: i64,
+    map_root: TransparencyHash,
+    authority: &TransparencyAuthority,
+) -> AppResult<()> {
+    if tree_size <= 0 {
+        return Err(AppError::internal(
+            "cannot sign an empty transparency checkpoint",
+        ));
+    }
+    let (log_id, stored_size): (String, i64) = sqlx::query_as(
+        "SELECT log_id, tree_size FROM chat_transparency_log WHERE singleton = true",
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    if stored_size != tree_size {
+        return Err(AppError::internal(
+            "transparency log moved before checkpoint signing",
+        ));
+    }
+    let size = u64::try_from(tree_size)
+        .map_err(|_| AppError::internal("invalid transparency tree size"))?;
+    let root_expr = range_expr(0, size)?;
+    let mut coordinates = BTreeSet::new();
+    collect_stored(&root_expr, &mut coordinates);
+    let mut hashes = BTreeMap::new();
+    for (level, node_index) in coordinates {
+        hashes.insert((level, node_index), load_node(tx, level, node_index).await?);
+    }
+    let root = evaluate(&root_expr, &hashes)?;
+    let checkpoint = TransparencyCheckpoint {
+        log_id: log_id.trim_end().to_string(),
+        tree_size: size,
+        root_hash: hex::encode(root),
+    };
+    let authentication = TransparencyCheckpointAuthentication::sign(
+        &checkpoint,
+        &hex::encode(map_root),
+        OffsetDateTime::now_utc().unix_timestamp(),
+        &authority.signing_key,
+    )
+    .map_err(AppError::internal)?;
+    sqlx::query(
+        "INSERT INTO chat_transparency_signed_checkpoints
+             (tree_size, log_id, root_hash, map_root, issued_at,
+              operator_key_id, operator_public_key, operator_signature)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+    )
+    .bind(tree_size)
+    .bind(&checkpoint.log_id)
+    .bind(root.as_slice())
+    .bind(map_root.as_slice())
+    .bind(authentication.issued_at)
+    .bind(&authentication.operator_key_id)
+    .bind(&authentication.operator_public_key)
+    .bind(&authentication.operator_signature)
     .execute(&mut **tx)
     .await?;
     Ok(())

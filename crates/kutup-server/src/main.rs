@@ -67,6 +67,8 @@ pub struct AppState {
     /// Server-to-server chat identity and discovery client. `None` means the
     /// administrator has not configured a persistent federation signing key.
     pub chat_federation: Option<Arc<chat_federation::ChatFederation>>,
+    /// Persistent operator identity for distinguished key-transparency heads.
+    pub transparency_authority: Arc<chat_transparency::TransparencyAuthority>,
     /// Live SeaweedFS capacity probe for the admin dashboard; `None` disables it (the admin
     /// stats then fall back to `config.storage_total_bytes`).
     pub storage_probe: Option<Arc<storage_probe::StorageProbe>>,
@@ -82,6 +84,9 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = Config::load();
+    let transparency_authority = Arc::new(chat_transparency::TransparencyAuthority::from_config(
+        &config,
+    )?);
     let pool = db::connect(&config.database_url).await?;
     db::migrate(&pool).await?;
     tracing::info!("migrations applied");
@@ -92,7 +97,8 @@ async fn main() -> anyhow::Result<()> {
             "seeded chat manifest transparency log"
         );
     }
-    let transparency_map_backfill = chat_transparency::backfill_current_map(&pool).await?;
+    let transparency_map_backfill =
+        chat_transparency::backfill_current_map(&pool, &transparency_authority).await?;
     if transparency_map_backfill > 0 {
         tracing::info!(
             manifests = transparency_map_backfill,
@@ -151,6 +157,7 @@ async fn main() -> anyhow::Result<()> {
         hub: Arc::new(hub::Hub::new()),
         chat_hub,
         chat_federation,
+        transparency_authority,
         storage_probe,
     };
     chat_federation::spawn_retry_worker(state.clone());
@@ -330,6 +337,17 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/api/chat/device/:deviceId", delete(chat::revoke_device))
         .route("/api/chat/manifest", post(chat::publish_manifest))
+        .route(
+            "/api/chat/transparency/checkpoint",
+            get(chat::get_transparency_checkpoint)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/chat/transparency/witness",
+            post(chat::submit_transparency_witness)
+                .route_layer(DefaultBodyLimit::max(16 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
         .route(
             "/api/chat/profile",
             get(chat::get_own_profile)

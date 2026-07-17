@@ -43,6 +43,13 @@ pub struct Config {
     /// Base64 raw 32-byte Ed25519 signing seed. Empty keeps chat federation
     /// disabled; production never generates an ephemeral identity at startup.
     pub chat_federation_signing_key: String,
+    /// Base64 raw 32-byte Ed25519 seed for stable transparency checkpoints.
+    /// This key is deliberately distinct from federation request signing.
+    pub chat_transparency_signing_key: String,
+    /// Comma-separated `witness-id=base64-ed25519-public-key` allowlist.
+    pub chat_transparency_witnesses: String,
+    /// Minimum configured witness attestations clients require on a head.
+    pub chat_transparency_witness_quorum: i64,
     /// Allows chat federation to resolve private Docker-network addresses. This
     /// escape hatch exists only for the two-server integration harness and is
     /// rejected unless `APP_ENV=test`.
@@ -77,6 +84,9 @@ impl Config {
             chat_device_expiry_days: get_env_i64("CHAT_DEVICE_EXPIRY_DAYS", 90),
             chat_federation_server_name: get_env("CHAT_FEDERATION_SERVER_NAME", ""),
             chat_federation_signing_key: get_env("CHAT_FEDERATION_SIGNING_KEY", ""),
+            chat_transparency_signing_key: get_env("CHAT_TRANSPARENCY_SIGNING_KEY", ""),
+            chat_transparency_witnesses: get_env("CHAT_TRANSPARENCY_WITNESSES", ""),
+            chat_transparency_witness_quorum: get_env_i64("CHAT_TRANSPARENCY_WITNESS_QUORUM", 0),
             chat_federation_test_allow_private: get_env_bool(
                 "CHAT_FEDERATION_TEST_ALLOW_PRIVATE",
                 false,

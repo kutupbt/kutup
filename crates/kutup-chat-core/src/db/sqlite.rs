@@ -126,10 +126,14 @@ CREATE TABLE IF NOT EXISTS manifest_trust (
     continuity_gap     INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS transparency_trust (
-    scope      TEXT PRIMARY KEY,
-    log_id     TEXT    NOT NULL,
-    tree_size  INTEGER NOT NULL,
-    root_hash  TEXT    NOT NULL
+    scope                TEXT PRIMARY KEY,
+    log_id               TEXT    NOT NULL,
+    tree_size            INTEGER NOT NULL,
+    root_hash            TEXT    NOT NULL,
+    operator_key_id      TEXT    NOT NULL DEFAULT '',
+    operator_public_key  TEXT    NOT NULL DEFAULT '',
+    checkpoint_issued_at INTEGER NOT NULL DEFAULT 0,
+    witnesses_json       TEXT    NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS pending_prekey_upload (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
@@ -162,6 +166,7 @@ CREATE TABLE IF NOT EXISTS peer_profiles (
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (10, 0);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (11, 0);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (12, 0);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (13, 0);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value INTEGER NOT NULL
@@ -453,15 +458,27 @@ impl ChatDb for SqliteChatDb {
         let conn = self.conn.borrow();
         db(conn
             .query_row(
-                "SELECT scope, log_id, tree_size, root_hash
+                "SELECT scope, log_id, tree_size, root_hash, operator_key_id,
+                        operator_public_key, checkpoint_issued_at, witnesses_json
                  FROM transparency_trust WHERE scope = ?1",
                 [scope],
                 |row| {
+                    let witnesses: String = row.get(7)?;
                     Ok(TransparencyTrust {
                         scope: row.get(0)?,
                         log_id: row.get(1)?,
                         tree_size: row.get::<_, i64>(2)? as u64,
                         root_hash: row.get(3)?,
+                        operator_key_id: row.get(4)?,
+                        operator_public_key: row.get(5)?,
+                        checkpoint_issued_at: row.get(6)?,
+                        witnesses: serde_json::from_str(&witnesses).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                7,
+                                rusqlite::types::Type::Text,
+                                Box::new(error),
+                            )
+                        })?,
                     })
                 },
             )
@@ -758,13 +775,30 @@ impl ChatDb for SqliteChatDb {
         }
         for (scope, trust) in &pending.transparency_trust {
             db(tx.execute(
-                "INSERT INTO transparency_trust (scope, log_id, tree_size, root_hash)
-                 VALUES (?1, ?2, ?3, ?4)
+                "INSERT INTO transparency_trust
+                     (scope, log_id, tree_size, root_hash, operator_key_id,
+                      operator_public_key, checkpoint_issued_at, witnesses_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(scope) DO UPDATE SET
                      log_id = excluded.log_id,
                      tree_size = excluded.tree_size,
-                     root_hash = excluded.root_hash",
-                rusqlite::params![scope, trust.log_id, trust.tree_size as i64, trust.root_hash,],
+                     root_hash = excluded.root_hash,
+                     operator_key_id = excluded.operator_key_id,
+                     operator_public_key = excluded.operator_public_key,
+                     checkpoint_issued_at = excluded.checkpoint_issued_at,
+                     witnesses_json = excluded.witnesses_json",
+                rusqlite::params![
+                    scope,
+                    trust.log_id,
+                    trust.tree_size as i64,
+                    trust.root_hash,
+                    trust.operator_key_id,
+                    trust.operator_public_key,
+                    trust.checkpoint_issued_at,
+                    serde_json::to_string(&trust.witnesses).map_err(|error| {
+                        ChatError::Db(format!("serialize transparency witnesses: {error}"))
+                    })?,
+                ],
             ))?;
         }
         for (peer, contact) in &pending.contacts {
@@ -908,6 +942,19 @@ fn ensure_schema_upgrades(conn: &Connection) -> Result<()> {
             [],
         ))?;
     }
+    for (column, definition) in [
+        ("operator_key_id", "TEXT NOT NULL DEFAULT ''"),
+        ("operator_public_key", "TEXT NOT NULL DEFAULT ''"),
+        ("checkpoint_issued_at", "INTEGER NOT NULL DEFAULT 0"),
+        ("witnesses_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ] {
+        if !has_column(conn, "transparency_trust", column)? {
+            db(conn.execute(
+                &format!("ALTER TABLE transparency_trust ADD COLUMN {column} {definition}"),
+                [],
+            ))?;
+        }
+    }
     db(conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS pending_chat_registration (
              id INTEGER PRIMARY KEY CHECK (id = 1), request BLOB NOT NULL
@@ -915,7 +962,7 @@ fn ensure_schema_upgrades(conn: &Connection) -> Result<()> {
     ))?;
     db(conn.execute(
         "INSERT OR IGNORE INTO schema_migrations (version, applied_at)
-         VALUES (4, 0), (5, 0), (6, 0), (7, 0), (8, 0), (9, 0), (10, 0), (11, 0), (12, 0)",
+         VALUES (4, 0), (5, 0), (6, 0), (7, 0), (8, 0), (9, 0), (10, 0), (11, 0), (12, 0), (13, 0)",
         [],
     ))?;
     Ok(())

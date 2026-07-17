@@ -424,6 +424,7 @@ impl WasmChatClient {
         user: String,
         master_key: Vec<u8>,
         transport: JsChatTransport,
+        transparency_policy: JsValue,
     ) -> std::result::Result<WasmChatClient, JsValue> {
         let master_key: [u8; 32] = master_key
             .try_into()
@@ -440,6 +441,9 @@ impl WasmChatClient {
         let mut rng = OsRng.unwrap_err();
         let mut engine = Engine::register(db, transport, user.clone(), 50, &mut rng)
             .await
+            .map_err(chat_error)?;
+        engine
+            .set_transparency_policy(from_transport(transparency_policy).map_err(chat_error)?)
             .map_err(chat_error)?;
         engine
             .sync_own_manifest(&authority, now_rfc3339())

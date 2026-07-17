@@ -170,6 +170,7 @@ pub async fn open_native_chat_client(
     database_key: Vec<u8>,
     user: String,
     master_key: Vec<u8>,
+    transparency_policy: ChatTransparencyPolicy,
     http: Arc<dyn ChatHttpClient>,
 ) -> Result<Arc<NativeChatClient>> {
     if database_path.trim().is_empty() {
@@ -196,6 +197,7 @@ pub async fn open_native_chat_client(
                     database_key,
                     master_key,
                     user: worker_user,
+                    transparency_policy: transparency_policy.into(),
                     http,
                 },
                 receiver,
@@ -231,6 +233,7 @@ struct WorkerConfig {
     database_key: [u8; 32],
     master_key: [u8; 32],
     user: String,
+    transparency_policy: kutup_chat_core::TransparencyPolicy,
     http: Arc<dyn ChatHttpClient>,
 }
 
@@ -280,6 +283,7 @@ fn worker_main(
         let mut rng = OsRng.unwrap_err();
         let mut engine =
             Engine::register(database, transport, config.user, INITIAL_PREKEYS, &mut rng).await?;
+        engine.set_transparency_policy(config.transparency_policy)?;
         engine.sync_own_manifest(&authority, now_rfc3339()?).await?;
         Result::<_>::Ok((engine, authority))
     });

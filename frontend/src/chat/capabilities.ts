@@ -18,6 +18,10 @@ export function isSupportedChat(capabilities: ChatCapabilities | null | undefine
       capabilities.manifests &&
       capabilities.profiles &&
       capabilities.keyTransparency &&
+      /^[0-9a-f]{64}$/.test(capabilities.transparencyOperatorKeyId ?? '') &&
+      Boolean(capabilities.transparencyOperatorPublicKey) &&
+      (capabilities.transparencyWitnessQuorum ?? 0) <=
+        (capabilities.transparencyWitnesses?.length ?? 0) &&
       (!capabilities.federation || canonicalServer),
   )
 }

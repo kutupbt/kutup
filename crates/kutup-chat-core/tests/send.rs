@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 
 use async_trait::async_trait;
+use ed25519_dalek::SigningKey;
 use futures_executor::block_on;
 use kutup_chat_core::{
     AccountAuthority, ChatAddress, ChatContent, ChatDb, ChatError, ChatTransport, ContactState,
@@ -168,14 +169,23 @@ impl MockServer {
         } else {
             test_consistency(consistency_from as usize, &hashes)
         };
+        let checkpoint = TransparencyCheckpoint {
+            log_id: "01".repeat(32),
+            tree_size: hashes.len() as u64,
+            root_hash: hex::encode(test_merkle_root(&hashes)),
+        };
+        let map_root = hex::encode(map_root);
+        let authentication = kutup_chat_proto::TransparencyCheckpointAuthentication::sign(
+            &checkpoint,
+            &map_root,
+            1_752_688_000 + hashes.len() as i64,
+            &SigningKey::from_bytes(&[91; 32]),
+        )
+        .unwrap();
         ManifestTransparencyProof {
             leaf_index: leaf_index as u64,
             leaf,
-            checkpoint: TransparencyCheckpoint {
-                log_id: "01".repeat(32),
-                tree_size: hashes.len() as u64,
-                root_hash: hex::encode(test_merkle_root(&hashes)),
-            },
+            checkpoint,
             inclusion: test_inclusion(leaf_index, &hashes)
                 .into_iter()
                 .map(hex::encode)
@@ -183,7 +193,7 @@ impl MockServer {
             consistency_from,
             consistency: consistency.into_iter().map(hex::encode).collect(),
             map: ManifestTransparencyMapProof {
-                root_hash: hex::encode(map_root),
+                root_hash: map_root,
                 checkpoint_leaf_index: map_checkpoint_index as u64,
                 checkpoint_inclusion: test_inclusion(map_checkpoint_index, &hashes)
                     .into_iter()
@@ -191,6 +201,7 @@ impl MockServer {
                     .collect(),
                 siblings,
             },
+            authentication,
         }
     }
 }

@@ -106,7 +106,17 @@ export interface ChatCapabilities {
   manifests: boolean
   profiles: boolean
   keyTransparency: boolean
+  transparencyOperatorKeyId?: string
+  transparencyOperatorPublicKey?: string
+  transparencyWitnesses?: TransparencyVerifierKey[]
+  transparencyWitnessQuorum?: number
   sealedSender: boolean
+}
+
+export interface TransparencyVerifierKey {
+  witnessId: string
+  keyId: string
+  publicKey: string
 }
 
 export interface ChatTransportPort {
@@ -181,6 +191,7 @@ export interface ChatWasmModule {
       user: string,
       masterKey: Uint8Array,
       transport: ChatTransportPort,
+      transparencyPolicy: unknown,
     ): Promise<WasmChatClientHandle>
   }
 }

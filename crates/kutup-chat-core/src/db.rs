@@ -283,6 +283,29 @@ pub struct TransparencyTrust {
     pub log_id: String,
     pub tree_size: u64,
     pub root_hash: String,
+    /// Pinned long-term operator identity. Empty only while upgrading a store
+    /// that predates signed checkpoints; the next verified proof fills it.
+    #[serde(default)]
+    pub operator_key_id: String,
+    #[serde(default)]
+    pub operator_public_key: String,
+    #[serde(default)]
+    pub checkpoint_issued_at: i64,
+    /// Last valid observation from each independently trusted witness. Merely
+    /// receiving an attestation does not make its key trusted; policy controls
+    /// which entries are retained here.
+    #[serde(default)]
+    pub witnesses: Vec<TransparencyWitnessTrust>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransparencyWitnessTrust {
+    pub witness_id: String,
+    pub key_id: String,
+    pub public_key: String,
+    pub tree_size: u64,
+    pub root_hash: String,
+    pub observed_at: i64,
 }
 
 #[cfg(feature = "sqlite")]

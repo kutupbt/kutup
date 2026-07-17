@@ -1328,6 +1328,9 @@ mod tests {
             chat_device_expiry_days: 90,
             chat_federation_server_name: "chat.example".into(),
             chat_federation_signing_key: signing_key,
+            chat_transparency_signing_key: STANDARD.encode([3; 32]),
+            chat_transparency_witnesses: String::new(),
+            chat_transparency_witness_quorum: 0,
             chat_federation_test_allow_private: false,
         };
         let federation = ChatFederation::from_config(&config).unwrap().unwrap();
@@ -1416,6 +1419,9 @@ mod tests {
             chat_device_expiry_days: 90,
             chat_federation_server_name: String::new(),
             chat_federation_signing_key: STANDARD.encode([1; 32]),
+            chat_transparency_signing_key: STANDARD.encode([3; 32]),
+            chat_transparency_witnesses: String::new(),
+            chat_transparency_witness_quorum: 0,
             chat_federation_test_allow_private: false,
         }
     }

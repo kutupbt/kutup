@@ -33,8 +33,10 @@ pub use profile::{ChatProfileResponse, OwnChatProfileResponse, PutChatProfileReq
 pub use transparency::{
     empty_transparency_root, hash_transparency_map_checkpoint, hash_transparency_map_leaf,
     hash_transparency_node, map_key_bit, transparency_map_empty_hashes, transparency_map_key,
-    ManifestTransparencyLeaf, ManifestTransparencyMapProof, ManifestTransparencyProof,
-    TransparencyCheckpoint, TransparencyHash, TransparencyMapSibling,
+    transparency_signing_key_id, ManifestTransparencyLeaf, ManifestTransparencyMapProof,
+    ManifestTransparencyProof, SubmitTransparencyWitnessRequest, TransparencyCheckpoint,
+    TransparencyCheckpointAuthentication, TransparencyCheckpointResponse, TransparencyHash,
+    TransparencyMapSibling, TransparencyVerifierKey, TransparencyWitnessAttestation,
 };
 
 /// Registry of encryption suites — the algorithm-agility mechanism.
@@ -543,6 +545,18 @@ pub struct ChatCapabilities {
     /// Append-only manifest-log, current-map, and consistency proofs.
     #[serde(default)]
     pub key_transparency: bool,
+    /// Local log operator identity. Native/reproducibly distributed clients
+    /// pin this out of band; the browser also checks it against every proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transparency_operator_key_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transparency_operator_public_key: Option<String>,
+    /// Independently administered witness identities selected by deployment
+    /// policy, never inferred from attestations returned by the log.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transparency_witnesses: Vec<TransparencyVerifierKey>,
+    #[serde(default)]
+    pub transparency_witness_quorum: u16,
     /// [RSV] flips true when sealed sender ships.
     #[serde(default)]
     pub sealed_sender: bool,
@@ -563,6 +577,10 @@ impl Default for ChatCapabilities {
             manifests: true,
             profiles: true,
             key_transparency: true,
+            transparency_operator_key_id: None,
+            transparency_operator_public_key: None,
+            transparency_witnesses: Vec::new(),
+            transparency_witness_quorum: 0,
             sealed_sender: false,
         }
     }

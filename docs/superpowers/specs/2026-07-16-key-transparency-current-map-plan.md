@@ -36,7 +36,9 @@ verify continuity across the upgrade instead of resetting its prior log pin.
 
 - This is not wire-compatible with Signal's missing private KT service.
 - The SHA-256 map key does not claim Signal's VRF index-privacy property.
-- A server can still create two internally consistent log+map forks until
-  checkpoints are independently audited, witnessed, or gossiped.
+- A server can still target two internally consistent log+map forks at clients
+  that lack independently distributed witness policy. Signed checkpoints and
+  a configurable independent witness quorum are now implemented; cross-witness
+  view comparison and remote policy distribution remain.
 - A multi-version offline jump remains visibly marked as a continuity gap until
   range monitoring proves every skipped update.

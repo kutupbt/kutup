@@ -12,7 +12,8 @@ Rust owns:
 - Signal registration, PQXDH/Triple Ratchet sessions, prekeys, and ciphertext.
 - Signed account device manifests, peer authority continuity/monitor positions,
   and durable homeserver transparency checkpoints with chronological,
-  current-map, and consistency verification.
+  current-map, consistency, operator-signature, and witness-quorum
+  verification.
 - Endpoint paths, request/response JSON, exact-device recovery, durable outbox,
   mailbox journal/decrypt/ack ordering, and history mapping.
 - Note to Self routing and encrypted sent-transcript synchronization for all
@@ -66,9 +67,20 @@ openNativeChatClient(
   databaseKey,
   username,
   accountMasterKey,
+  transparencyPolicy,
   authenticatedHttpClient
 )
 ```
+
+`transparencyPolicy` is application-supplied and contains one or more
+`ChatTransparencyScopePolicy` records: the scope (`local` or a federation
+server name), pinned operator key id/public key, trusted witness verifier keys,
+and required quorum. An empty witness list with quorum zero still verifies and
+pins the operator signature; production apps should bundle or securely fetch
+the local deployment policy independently of the chat API. Unknown remote
+scopes use durable first-observation pinning until an authenticated remote
+policy distribution mechanism lands. A response-carried witness key never
+becomes trusted merely by appearing in a proof.
 
 The FFI crate has only a SQLCipher feature and fails if SQLCipher is absent or
 the key cannot unlock an existing database. Input vectors are zeroized in Rust
@@ -84,7 +96,9 @@ documented in the native plans:
 
 Opening is restart-safe. A partially registered install reuses its persisted
 registration request; an installed device reopens without registering again.
-The call publishes or confirms the account-signed local device manifest before
+The supplied policy is validated before the worker opens, and every verified
+operator/witness observation is committed with the manifest checkpoint. The
+call publishes or confirms the account-signed local device manifest before
 returning.
 
 ## Generated API
