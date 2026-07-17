@@ -204,6 +204,16 @@ impl ChatStore {
             .insert(trust.scope.clone(), trust);
     }
 
+    pub(crate) fn stage_transparency_monitor_status(
+        &self,
+        status: crate::TransparencyMonitorStatus,
+    ) {
+        self.pending
+            .borrow_mut()
+            .transparency_monitor_status
+            .insert(status.scope.clone(), status);
+    }
+
     pub(crate) fn stage_contact(&self, contact: ContactRecord) {
         self.pending
             .borrow_mut()

@@ -342,16 +342,27 @@ at the same tree size. A client policy contains verifier keys and a quorum per
 homeserver scope; response-carried keys never add trust. Missing quorum fails
 closed before manifest or session state mutates.
 
+The web client independently polls the public checkpoint endpoint on chat open,
+network recovery, foreground return, WebSocket reconnect, and every 15 minutes
+while visible. It commits the verified head and monitor status atomically.
+Endpoint unavailability retains the last valid pin and is displayed as a
+warning; signature, consistency, operator-policy, or witness-quorum failure is
+persisted across reload and blocks creation of new sends until a later valid
+head verifies. Existing durable ciphertext may still retry, and receiving an
+established session does not require a new directory lookup. The browser
+currently schedules only its authenticated `local` scope; remote monitoring
+requires the authenticated federation policy/proxy slice below.
+
 This is materially closer to Signal's distinguished-head/auditor trust shape,
 but it is not wire-compatible with Signal's private KT service. Kutup uses a
 domain-separated username hash rather than Signal's VRF-derived index, so it
 does not claim Signal's VRF index-privacy property. The remaining work is
-scheduled self-monitoring and skipped-update/range proofs, cross-witness gossip
-or an auditor that compares views, and authenticated distribution/rotation of
+skipped-update/range proofs, cross-witness gossip or an auditor that compares
+views, and authenticated distribution/rotation plus scheduled monitoring of
 remote homeserver policies. Today the web client pins its local capability
 policy but that policy shares the web origin; unknown remote federation scopes
-are first-observation pinned. Native/static clients can supply independent
-local and remote policy roots at open time. Safety numbers remain the explicit
+are first-observation pinned. Native/static clients can supply independent local
+and remote policy roots at open time. Safety numbers remain the explicit
 out-of-band verification path throughout.
 
 ---

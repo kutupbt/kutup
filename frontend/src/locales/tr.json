@@ -100,6 +100,12 @@
       "saved": "Şifreli sohbet profili güncellendi",
       "avatarError": "Bu görsel profil fotoğrafı olarak kullanılamadı."
     },
+    "transparency": {
+      "healthy": "Anahtar dizini kontrol noktası doğrulandı",
+      "verificationFailed": "Sunucunun anahtar şeffaflığı kontrol noktası doğrulanamadı. Geçerli bir kontrol noktası görülene kadar yeni mesajlar engellendi.",
+      "unavailable": "Anahtar şeffaflığı izleme geçici olarak kullanılamıyor. Son doğrulanmış kontrol noktanız sabitlenmiş durumda.",
+      "retry": "Doğrulamayı yeniden dene"
+    },
     "errors": {
       "sessionMissing": "Hesap oturumunuzda şifreli sohbet için gereken anahtarlar eksik.",
       "browserUnsupported": "Bu tarayıcı, şifreli sohbeti sekmeler arasında güvenli biçimde koordine edemiyor.",

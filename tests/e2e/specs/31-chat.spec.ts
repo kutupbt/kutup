@@ -72,6 +72,9 @@ async function openChat(page: Page): Promise<void> {
   await expect(page.getByText(/End-to-end encrypted · device \d+/)).toBeVisible({
     timeout: 60_000,
   })
+  await expect(page.getByLabel('Key-directory checkpoint verified')).toBeVisible({
+    timeout: 60_000,
+  })
 }
 
 async function cloneAuthenticatedInstall(

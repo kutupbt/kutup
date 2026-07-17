@@ -14,7 +14,7 @@ use kutup_chat_proto::{
     ChatProfileResponse, DeviceListMismatch, DeviceManifest, MailboxPage, OwnChatProfileResponse,
     PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
     RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest,
-    UserPreKeyBundlesResponse,
+    TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::TryRngCore as _;
@@ -26,6 +26,7 @@ use zeroize::Zeroize as _;
 use crate::{
     AccountAddress, AccountAuthority, ChatContent, ChatError, ChatTransport, ConversationId,
     Engine, InboundEnvelope, IndexedDbChatDb, ManifestTrust, ReceiveReport, Result, SendOutcome,
+    TransparencyMonitorState, TransparencyMonitorStatus,
 };
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -34,6 +35,7 @@ export interface KutupChatTransport {
   registerDevice(request: unknown): Promise<unknown>;
   fetchBundles(username: string, transparencyTreeSize: string): Promise<unknown>;
   fetchSyncBundles(username: string, currentDeviceId: number, transparencyTreeSize: string): Promise<unknown>;
+  fetchTransparencyCheckpoint(scope: string, fromTreeSize: string): Promise<unknown>;
   fetchManifest(username: string): Promise<unknown | null>;
   publishManifest(manifest: unknown, transparencyTreeSize: string): Promise<unknown>;
   fetchOwnProfile(): Promise<unknown | null>;
@@ -139,6 +141,13 @@ extern "C" {
         username: &str,
         current_device_id: u32,
         transparency_tree_size: &str,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = fetchTransparencyCheckpoint)]
+    async fn js_fetch_transparency_checkpoint(
+        this: &JsChatTransport,
+        scope: &str,
+        from_tree_size: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = fetchManifest)]
@@ -265,6 +274,20 @@ impl ChatTransport for BrowserTransport {
         from_transport(
             self.js
                 .js_fetch_sync_bundles(username, current_device_id, &transparency_tree_size)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_transparency_checkpoint(
+        &self,
+        scope: &str,
+        from_tree_size: u64,
+    ) -> Result<TransparencyCheckpointResponse> {
+        let from_tree_size = from_tree_size.to_string();
+        from_transport(
+            self.js
+                .js_fetch_transparency_checkpoint(scope, &from_tree_size)
                 .await
                 .map_err(transport_error)?,
         )
@@ -545,6 +568,35 @@ impl WasmChatClient {
         to_output(&report)
     }
 
+    #[wasm_bindgen(js_name = monitorTransparency)]
+    pub async fn monitor_transparency(
+        &mut self,
+        scope: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let status = self
+            .engine
+            .monitor_transparency(&scope)
+            .await
+            .map_err(chat_error)?;
+        to_output(&TransparencyMonitorStatusView::from(status))
+    }
+
+    #[wasm_bindgen(js_name = transparencyMonitorStatus)]
+    pub async fn transparency_monitor_status(
+        &self,
+        scope: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let status = self
+            .engine
+            .transparency_monitor_status(&scope)
+            .await
+            .map_err(chat_error)?;
+        match status {
+            Some(status) => to_output(&TransparencyMonitorStatusView::from(status)),
+            None => Ok(JsValue::UNDEFINED),
+        }
+    }
+
     pub async fn history(&self) -> std::result::Result<JsValue, JsValue> {
         let incoming = self.engine.session().history().await.map_err(chat_error)?;
         let outgoing = self
@@ -764,6 +816,33 @@ struct ReceiveReportView {
     undecodable: Vec<String>,
     errors: Vec<InboundFailureView>,
     duplicates: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TransparencyMonitorStatusView {
+    scope: String,
+    state: TransparencyMonitorState,
+    last_checked_at_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_success_at_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tree_size: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+impl From<TransparencyMonitorStatus> for TransparencyMonitorStatusView {
+    fn from(status: TransparencyMonitorStatus) -> Self {
+        Self {
+            scope: status.scope,
+            state: status.state,
+            last_checked_at_ms: status.last_checked_at_ms,
+            last_success_at_ms: status.last_success_at_ms,
+            tree_size: status.tree_size.map(|value| value.to_string()),
+            detail: status.detail,
+        }
+    }
 }
 
 impl From<ReceiveReport> for ReceiveReportView {

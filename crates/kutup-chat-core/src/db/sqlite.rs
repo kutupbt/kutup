@@ -17,9 +17,10 @@ use rusqlite::{Connection, OptionalExtension};
 use zeroize::Zeroize as _;
 
 use crate::db::{
-    contact_state_code, contact_state_from_code, AuthorityTrust, ChatDb, ContactRecord,
-    InboundEnvelope, InboundFailureKind, InboundState, InboxMessage, LocalIdentity, LocalProfile,
-    ManifestTrust, OutboxEntry, PeerProfile, Pending, SentMessage, TransparencyTrust,
+    contact_state_code, contact_state_from_code, transparency_monitor_state_code,
+    transparency_monitor_state_from_code, AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope,
+    InboundFailureKind, InboundState, InboxMessage, LocalIdentity, LocalProfile, ManifestTrust,
+    OutboxEntry, PeerProfile, Pending, SentMessage, TransparencyMonitorStatus, TransparencyTrust,
 };
 use crate::error::{ChatError, Result};
 
@@ -135,6 +136,14 @@ CREATE TABLE IF NOT EXISTS transparency_trust (
     checkpoint_issued_at INTEGER NOT NULL DEFAULT 0,
     witnesses_json       TEXT    NOT NULL DEFAULT '[]'
 );
+CREATE TABLE IF NOT EXISTS transparency_monitor_status (
+    scope                TEXT PRIMARY KEY,
+    state                INTEGER NOT NULL,
+    last_checked_at_ms   INTEGER NOT NULL,
+    last_success_at_ms   INTEGER,
+    tree_size            INTEGER,
+    detail               TEXT
+);
 CREATE TABLE IF NOT EXISTS pending_prekey_upload (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
     request BLOB NOT NULL
@@ -167,6 +176,7 @@ INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (10, 0);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (11, 0);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (12, 0);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (13, 0);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (14, 0);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value INTEGER NOT NULL
@@ -479,6 +489,39 @@ impl ChatDb for SqliteChatDb {
                                 Box::new(error),
                             )
                         })?,
+                    })
+                },
+            )
+            .optional())
+    }
+
+    async fn load_transparency_monitor_status(
+        &self,
+        scope: &str,
+    ) -> Result<Option<TransparencyMonitorStatus>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT scope, state, last_checked_at_ms, last_success_at_ms,
+                        tree_size, detail
+                 FROM transparency_monitor_status WHERE scope = ?1",
+                [scope],
+                |row| {
+                    let state =
+                        transparency_monitor_state_from_code(row.get(1)?).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                1,
+                                rusqlite::types::Type::Integer,
+                                Box::new(error),
+                            )
+                        })?;
+                    Ok(TransparencyMonitorStatus {
+                        scope: row.get(0)?,
+                        state,
+                        last_checked_at_ms: row.get(2)?,
+                        last_success_at_ms: row.get(3)?,
+                        tree_size: row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
+                        detail: row.get(5)?,
                     })
                 },
             )
@@ -801,6 +844,28 @@ impl ChatDb for SqliteChatDb {
                 ],
             ))?;
         }
+        for (scope, status) in &pending.transparency_monitor_status {
+            db(tx.execute(
+                "INSERT INTO transparency_monitor_status
+                     (scope, state, last_checked_at_ms, last_success_at_ms,
+                      tree_size, detail)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(scope) DO UPDATE SET
+                     state = excluded.state,
+                     last_checked_at_ms = excluded.last_checked_at_ms,
+                     last_success_at_ms = excluded.last_success_at_ms,
+                     tree_size = excluded.tree_size,
+                     detail = excluded.detail",
+                rusqlite::params![
+                    scope,
+                    transparency_monitor_state_code(status.state),
+                    status.last_checked_at_ms,
+                    status.last_success_at_ms,
+                    status.tree_size.map(|value| value as i64),
+                    status.detail,
+                ],
+            ))?;
+        }
         for (peer, contact) in &pending.contacts {
             db(tx.execute(
                 "INSERT INTO contacts
@@ -958,11 +1023,19 @@ fn ensure_schema_upgrades(conn: &Connection) -> Result<()> {
     db(conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS pending_chat_registration (
              id INTEGER PRIMARY KEY CHECK (id = 1), request BLOB NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS transparency_monitor_status (
+             scope TEXT PRIMARY KEY,
+             state INTEGER NOT NULL,
+             last_checked_at_ms INTEGER NOT NULL,
+             last_success_at_ms INTEGER,
+             tree_size INTEGER,
+             detail TEXT
          );",
     ))?;
     db(conn.execute(
         "INSERT OR IGNORE INTO schema_migrations (version, applied_at)
-         VALUES (4, 0), (5, 0), (6, 0), (7, 0), (8, 0), (9, 0), (10, 0), (11, 0), (12, 0), (13, 0)",
+         VALUES (4, 0), (5, 0), (6, 0), (7, 0), (8, 0), (9, 0), (10, 0), (11, 0), (12, 0), (13, 0), (14, 0)",
         [],
     ))?;
     Ok(())

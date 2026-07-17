@@ -28,6 +28,18 @@ export class ApiChatTransport implements ChatTransportPort {
       .then((response) => response.data)
   }
 
+  async fetchTransparencyCheckpoint(
+    scope: string,
+    fromTreeSize: string,
+  ): Promise<unknown> {
+    if (scope !== 'local') {
+      throw new Error('remote transparency monitoring is not available yet')
+    }
+    return api
+      .get('/chat/transparency/checkpoint', { params: { fromTreeSize } })
+      .then((response) => response.data)
+  }
+
   async fetchManifest(username: string): Promise<unknown | null> {
     try {
       return await api

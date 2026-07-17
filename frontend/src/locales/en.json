@@ -100,6 +100,12 @@
       "saved": "Encrypted chat profile updated",
       "avatarError": "That image could not be used as a profile photo."
     },
+    "transparency": {
+      "healthy": "Key-directory checkpoint verified",
+      "verificationFailed": "The server's key-transparency checkpoint could not be verified. New messages are blocked until a valid checkpoint is observed.",
+      "unavailable": "Key-transparency monitoring is temporarily unavailable. Your last verified checkpoint remains pinned.",
+      "retry": "Retry verification"
+    },
     "errors": {
       "sessionMissing": "Your account session is missing the keys required for encrypted chat.",
       "browserUnsupported": "This browser cannot safely coordinate encrypted chat across tabs.",

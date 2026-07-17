@@ -61,6 +61,21 @@ describe('ApiChatTransport', () => {
     )
   })
 
+  it('polls only the authenticated local transparency scope with a lossless cursor', async () => {
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: { checkpoint: {} } } as never)
+    const transport = new ApiChatTransport()
+
+    await expect(
+      transport.fetchTransparencyCheckpoint('local', '18446744073709551615'),
+    ).resolves.toEqual({ checkpoint: {} })
+    expect(get).toHaveBeenCalledWith('/chat/transparency/checkpoint', {
+      params: { fromTreeSize: '18446744073709551615' },
+    })
+    await expect(
+      transport.fetchTransparencyCheckpoint('remote.example', '0'),
+    ).rejects.toThrow('remote transparency monitoring is not available yet')
+  })
+
   it('treats only a manifest 404 as an absent manifest', async () => {
     const get = vi.spyOn(api, 'get').mockRejectedValue({
       isAxiosError: true,

@@ -795,7 +795,11 @@ Returns the current chronological checkpoint, sparse-map root, the persistent
 operator signature, cached independent witness attestations, and an RFC 6962
 consistency path from `N` (`0` for first observation). Returns `404` while the
 log is empty and `409` when `N` is newer than the presented view. Clients and
-witnesses verify the response before advancing durable state.
+witnesses verify the response before advancing durable state. The web client
+polls this endpoint on open, online/foreground/reconnect transitions, and every
+15 visible minutes. It preserves the last valid pin on network failure and
+blocks new sends when authentication, consistency, policy, or witness quorum
+verification fails.
 
 ### POST /api/chat/transparency/witness
 

@@ -53,6 +53,7 @@ import type {
   ConversationId,
   InboundAttention,
   PeerChatProfile,
+  TransparencyMonitorStatus,
 } from '@/chat/types'
 import { cn } from '@/lib/utils'
 import { copyText } from '@/lib/format'
@@ -107,6 +108,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [attention, setAttention] = useState<InboundAttention[]>([])
   const [localProfile, setLocalProfile] = useState<ChatProfile | null>(null)
   const [peerProfiles, setPeerProfiles] = useState<PeerChatProfile[]>([])
+  const [transparencyStatus, setTransparencyStatus] =
+    useState<TransparencyMonitorStatus | null>(null)
   const [selectedConversation, setSelectedConversation] = useState<ConversationId | null>(null)
   const [newPeer, setNewPeer] = useState('')
   const [draft, setDraft] = useState('')
@@ -138,12 +141,13 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     const refresh = async () => {
       if (!opened || cancelled) return
       try {
-        const [nextHistory, nextAttention, nextContacts, nextProfile, nextProfiles] = await Promise.all([
+        const [nextHistory, nextAttention, nextContacts, nextProfile, nextProfiles, nextTransparency] = await Promise.all([
           opened.history(),
           opened.inboundAttention(),
           opened.contacts(),
           opened.profile(),
           opened.profiles(),
+          opened.transparencyStatus(),
         ])
         if (!cancelled) {
           setHistory(nextHistory)
@@ -151,6 +155,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
           setContacts(nextContacts)
           setLocalProfile(nextProfile)
           setPeerProfiles(nextProfiles)
+          setTransparencyStatus(nextTransparency ?? null)
           setError(null)
         }
       } catch (cause) {
@@ -360,7 +365,26 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 {t('chat.encryptedDevice', { device: service?.deviceId ?? '…' })}
               </p>
             </div>
-            <ShieldCheck className="h-5 w-5 text-success" aria-label={t('chat.encrypted')} />
+            {transparencyStatus?.state === 'verificationFailed' ? (
+              <AlertTriangle
+                className="h-5 w-5 text-destructive"
+                aria-label={t('chat.transparency.verificationFailed')}
+              />
+            ) : (
+              <ShieldCheck
+                className={cn(
+                  'h-5 w-5',
+                  transparencyStatus?.state === 'unavailable'
+                    ? 'text-warning'
+                    : 'text-success',
+                )}
+                aria-label={
+                  transparencyStatus?.state === 'unavailable'
+                    ? t('chat.transparency.unavailable')
+                    : t('chat.transparency.healthy')
+                }
+              />
+            )}
             {selfAccount?.server && selfAddress && (
               <Dialog>
                 <DialogTrigger asChild>
@@ -593,6 +617,34 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
             <div className="flex items-center gap-2 border-b border-destructive/20 bg-destructive-faint px-4 py-2 text-sm text-destructive">
               <AlertTriangle className="h-4 w-4 shrink-0" />
               <span className="flex-1">{error}</span>
+            </div>
+          )}
+          {transparencyStatus?.state === 'verificationFailed' && (
+            <div className="flex items-center gap-2 border-b border-destructive/30 bg-destructive-faint px-4 py-2 text-sm text-destructive">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span className="flex-1">{t('chat.transparency.verificationFailed')}</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void service?.monitorTransparency()}
+                disabled={!service}
+              >
+                {t('chat.transparency.retry')}
+              </Button>
+            </div>
+          )}
+          {transparencyStatus?.state === 'unavailable' && (
+            <div className="flex items-center gap-2 border-b border-warning/30 bg-warning-faint px-4 py-2 text-sm">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+              <span className="flex-1">{t('chat.transparency.unavailable')}</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void service?.monitorTransparency()}
+                disabled={!service}
+              >
+                {t('chat.transparency.retry')}
+              </Button>
             </div>
           )}
           {attention.length > 0 && (

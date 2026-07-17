@@ -11,6 +11,7 @@ import type {
   PeerChatProfile,
   ReceiveReport,
   SendSummary,
+  TransparencyMonitorStatus,
   WasmChatClientHandle,
 } from './types'
 import { loadChatWasm } from './wasm'
@@ -23,6 +24,8 @@ import {
 } from './identity'
 
 type UpdateListener = () => void
+
+const TRANSPARENCY_MONITOR_INTERVAL_MS = 15 * 60 * 1000
 
 export type ChatServiceErrorCode = 'browserUnsupported' | 'serverUnsupported'
 
@@ -55,9 +58,11 @@ export class ChatService {
   private readonly listeners = new Set<UpdateListener>()
   private socket: WebSocket | null = null
   private socketRetry: ReturnType<typeof setTimeout> | null = null
+  private transparencyTimer: ReturnType<typeof setInterval> | null = null
   private retryAttempt = 0
   private disposed = false
   private reconcilePromise: Promise<ReceiveReport> | null = null
+  private transparencyPromise: Promise<TransparencyMonitorStatus> | null = null
 
   private constructor(
     client: WasmChatClientHandle,
@@ -71,6 +76,8 @@ export class ChatService {
     this.capabilities = capabilities
     this.channel = new BroadcastChannel(channelName)
     this.channel.onmessage = () => this.emitUpdate()
+    window.addEventListener('online', this.handleOnline)
+    document.addEventListener('visibilitychange', this.handleVisibilityChange)
   }
 
   static async open(options: ChatServiceOptions): Promise<ChatService> {
@@ -113,6 +120,8 @@ export class ChatService {
     const service = new ChatService(client, lockName, channelName, capabilities)
     try {
       await service.reconcile()
+      await service.monitorTransparency()
+      service.startTransparencyMonitor()
       void service.maintainPrekeys()
       void service.connectSocket()
       return service
@@ -238,6 +247,23 @@ export class ChatService {
     }
   }
 
+  monitorTransparency(): Promise<TransparencyMonitorStatus> {
+    if (this.transparencyPromise) return this.transparencyPromise
+    this.transparencyPromise = this.withLock(() => this.client.monitorTransparency('local'))
+      .then((status) => {
+        this.notifyPeers()
+        return status
+      })
+      .finally(() => {
+        this.transparencyPromise = null
+      })
+    return this.transparencyPromise
+  }
+
+  transparencyStatus(): Promise<TransparencyMonitorStatus | undefined> {
+    return this.withLock(() => this.client.transparencyMonitorStatus('local'))
+  }
+
   async verifyAuthority(peer: string): Promise<void> {
     const address = parseAccountAddress(peer)
     if (!address) throw new Error('invalid chat account address')
@@ -256,7 +282,10 @@ export class ChatService {
     if (this.disposed) return
     this.disposed = true
     if (this.socketRetry) clearTimeout(this.socketRetry)
+    if (this.transparencyTimer) clearInterval(this.transparencyTimer)
     this.socket?.close()
+    window.removeEventListener('online', this.handleOnline)
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange)
     this.channel.close()
     this.listeners.clear()
     this.client.free()
@@ -291,6 +320,21 @@ export class ChatService {
     for (const listener of this.listeners) listener()
   }
 
+  private readonly handleOnline = (): void => {
+    void this.monitorTransparency()
+  }
+
+  private readonly handleVisibilityChange = (): void => {
+    if (document.visibilityState === 'visible') void this.monitorTransparency()
+  }
+
+  private startTransparencyMonitor(): void {
+    if (this.transparencyTimer) return
+    this.transparencyTimer = setInterval(() => {
+      if (document.visibilityState === 'visible') void this.monitorTransparency()
+    }, TRANSPARENCY_MONITOR_INTERVAL_MS)
+  }
+
   private async connectSocket(): Promise<void> {
     if (this.disposed || this.socket?.readyState === WebSocket.OPEN) return
     try {
@@ -307,6 +351,7 @@ export class ChatService {
       socket.onopen = () => {
         this.retryAttempt = 0
         void this.maintainPrekeys()
+        void this.monitorTransparency()
       }
       socket.onmessage = () => {
         void this.reconcile()

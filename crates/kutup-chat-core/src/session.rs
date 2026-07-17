@@ -25,7 +25,7 @@ use crate::address::ChatAddress;
 use crate::db::{
     AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState,
     InboxMessage, LocalIdentity, LocalProfile, ManifestTrust, OutboxEntry, OutboxLeg,
-    OutboxSyncLeg, PeerProfile, SentMessage, TransparencyTrust,
+    OutboxSyncLeg, PeerProfile, SentMessage, TransparencyMonitorStatus, TransparencyTrust,
 };
 use crate::error::{ChatError, Result};
 use crate::keys;
@@ -1104,10 +1104,37 @@ impl Session {
 
     /// Highest verified global checkpoint for the peer's homeserver.
     pub async fn transparency_trust(&self, peer: &str) -> Result<Option<TransparencyTrust>> {
+        self.transparency_trust_for_scope(&transparency_scope(peer)?)
+            .await
+    }
+
+    pub async fn transparency_trust_for_scope(
+        &self,
+        scope: &str,
+    ) -> Result<Option<TransparencyTrust>> {
+        self.store.db().load_transparency_trust(scope).await
+    }
+
+    pub async fn transparency_monitor_status(
+        &self,
+        scope: &str,
+    ) -> Result<Option<TransparencyMonitorStatus>> {
         self.store
             .db()
-            .load_transparency_trust(&transparency_scope(peer)?)
+            .load_transparency_monitor_status(scope)
             .await
+    }
+
+    pub(crate) async fn record_transparency_monitor(
+        &mut self,
+        status: TransparencyMonitorStatus,
+        trust: Option<TransparencyTrust>,
+    ) -> Result<()> {
+        if let Some(trust) = trust {
+            self.store.stage_transparency_trust(trust);
+        }
+        self.store.stage_transparency_monitor_status(status);
+        self.store.commit().await
     }
 
     pub(crate) async fn accept_manifest_publication(

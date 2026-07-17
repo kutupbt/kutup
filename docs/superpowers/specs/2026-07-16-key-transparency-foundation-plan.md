@@ -1,8 +1,8 @@
 # Federated manifest key-transparency foundation
 
-**Status:** append-only log, authenticated current map, signed checkpoints, and
-independent witness quorum implemented; periodic/range monitoring and
-cross-witness gossip follow-up remains
+**Status:** append-only log, authenticated current map, signed checkpoints,
+independent witness quorum, and scheduled local web monitoring implemented;
+range/remote monitoring and cross-witness gossip follow-up remains
 
 ## Decision
 
@@ -45,9 +45,9 @@ in the operator's presented checkpoint, and clients persist a per-account event
 position for update/non-update monitoring. Dedicated operator signatures and
 an independently deployed witness/quorum layer now authenticate that exact
 checkpoint; see `2026-07-17-key-transparency-witness-plan.md`. Remaining work is
-periodic self-checks plus skipped-update/range proofs, authenticated remote
-policy distribution/rotation, and cross-witness gossip/auditing. Safety-number
-verification remains available throughout.
+skipped-update/range proofs, authenticated remote policy distribution/rotation
+and monitoring, and cross-witness gossip/auditing. Safety-number verification
+remains available throughout.
 
 ## Validation gates
 

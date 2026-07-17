@@ -15,10 +15,14 @@ use rand::{CryptoRng, Rng};
 
 use crate::db::{
     ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState, LocalProfile,
-    OutboxEntry, OutboxLeg, PeerProfile, SentMessage,
+    OutboxEntry, OutboxLeg, PeerProfile, SentMessage, TransparencyMonitorState,
+    TransparencyMonitorStatus,
 };
 use crate::error::{ChatError, Result};
-use crate::manifest::{AccountAuthority, ManifestPolicy, TransparencyPolicy};
+use crate::manifest::{
+    transparency_scope, verify_transparency_checkpoint_response, AccountAuthority, ManifestPolicy,
+    TransparencyPolicy,
+};
 use crate::session::{
     DirectSend, ReceiveOutcome, ReceivedMessage, SendAmendment, SendSummary, Session,
 };
@@ -150,6 +154,87 @@ impl Engine {
         policy.validate()?;
         self.transparency_policy = policy;
         Ok(())
+    }
+
+    /// Poll and verify one homeserver checkpoint independently of a peer bundle
+    /// fetch. Verification failures are durable security state; ordinary
+    /// endpoint unavailability is recorded separately and leaves the last valid
+    /// pin intact.
+    pub async fn monitor_transparency(&mut self, scope: &str) -> Result<TransparencyMonitorStatus> {
+        if scope.trim().is_empty() {
+            return Err(ChatError::Invalid(
+                "transparency monitor scope is empty".into(),
+            ));
+        }
+        let checked_at = unix_millis();
+        let prior = self.session.transparency_trust_for_scope(scope).await?;
+        let previous_status = self.session.transparency_monitor_status(scope).await?;
+        let from_tree_size = prior.as_ref().map_or(0, |trust| trust.tree_size);
+        let response = Rc::clone(&self.transport)
+            .fetch_transparency_checkpoint(scope, from_tree_size)
+            .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(_) => {
+                let status = TransparencyMonitorStatus {
+                    scope: scope.to_string(),
+                    state: TransparencyMonitorState::Unavailable,
+                    last_checked_at_ms: checked_at,
+                    last_success_at_ms: previous_status
+                        .as_ref()
+                        .and_then(|status| status.last_success_at_ms),
+                    tree_size: prior.as_ref().map(|trust| trust.tree_size),
+                    detail: Some("checkpoint endpoint unavailable".into()),
+                };
+                self.session
+                    .record_transparency_monitor(status.clone(), None)
+                    .await?;
+                return Ok(status);
+            }
+        };
+        let next = match verify_transparency_checkpoint_response(
+            scope,
+            &response,
+            prior.as_ref(),
+            &self.transparency_policy,
+        ) {
+            Ok(next) => next,
+            Err(error) => {
+                let status = TransparencyMonitorStatus {
+                    scope: scope.to_string(),
+                    state: TransparencyMonitorState::VerificationFailed,
+                    last_checked_at_ms: checked_at,
+                    last_success_at_ms: previous_status
+                        .as_ref()
+                        .and_then(|status| status.last_success_at_ms),
+                    tree_size: prior.as_ref().map(|trust| trust.tree_size),
+                    detail: Some(error.to_string()),
+                };
+                self.session
+                    .record_transparency_monitor(status.clone(), None)
+                    .await?;
+                return Ok(status);
+            }
+        };
+        let status = TransparencyMonitorStatus {
+            scope: scope.to_string(),
+            state: TransparencyMonitorState::Healthy,
+            last_checked_at_ms: checked_at,
+            last_success_at_ms: Some(checked_at),
+            tree_size: Some(next.tree_size),
+            detail: None,
+        };
+        self.session
+            .record_transparency_monitor(status.clone(), Some(next))
+            .await?;
+        Ok(status)
+    }
+
+    pub async fn transparency_monitor_status(
+        &self,
+        scope: &str,
+    ) -> Result<Option<TransparencyMonitorStatus>> {
+        self.session.transparency_monitor_status(scope).await
     }
 
     /// Register a brand-new device end-to-end: generate keys, `POST` the
@@ -790,6 +875,8 @@ impl Engine {
                 "send {send_id} is pending but has no durable ciphertext"
             )));
         }
+        self.ensure_transparency_monitor_allows_new_send(peer_user)
+            .await?;
         let mut content = content.clone();
         if peer_user != self.session.user() && content.profile_key.is_none() {
             if let Some(profile) = self.session.local_profile().await? {
@@ -1170,6 +1257,23 @@ impl Engine {
                 &self.transparency_policy,
             )
             .await
+    }
+
+    async fn ensure_transparency_monitor_allows_new_send(&self, peer_user: &str) -> Result<()> {
+        let peer_scope = transparency_scope(peer_user)?;
+        for scope in ["local", peer_scope.as_str()] {
+            if self
+                .session
+                .transparency_monitor_status(scope)
+                .await?
+                .is_some_and(|status| status.state == TransparencyMonitorState::VerificationFailed)
+            {
+                return Err(ChatError::Trust(format!(
+                    "transparency monitor verification failed for {scope}"
+                )));
+            }
+        }
+        Ok(())
     }
 }
 

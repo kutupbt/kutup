@@ -308,6 +308,48 @@ pub struct TransparencyWitnessTrust {
     pub observed_at: i64,
 }
 
+/// Durable result of the most recent independent checkpoint poll. Transport
+/// unavailability is distinct from a cryptographic/policy verification failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TransparencyMonitorState {
+    Healthy,
+    Unavailable,
+    VerificationFailed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransparencyMonitorStatus {
+    pub scope: String,
+    pub state: TransparencyMonitorState,
+    pub last_checked_at_ms: i64,
+    pub last_success_at_ms: Option<i64>,
+    pub tree_size: Option<u64>,
+    pub detail: Option<String>,
+}
+
+#[cfg(feature = "sqlite")]
+pub(crate) fn transparency_monitor_state_code(state: TransparencyMonitorState) -> i64 {
+    match state {
+        TransparencyMonitorState::Healthy => 0,
+        TransparencyMonitorState::Unavailable => 1,
+        TransparencyMonitorState::VerificationFailed => 2,
+    }
+}
+
+#[cfg(feature = "sqlite")]
+pub(crate) fn transparency_monitor_state_from_code(code: i64) -> Result<TransparencyMonitorState> {
+    match code {
+        0 => Ok(TransparencyMonitorState::Healthy),
+        1 => Ok(TransparencyMonitorState::Unavailable),
+        2 => Ok(TransparencyMonitorState::VerificationFailed),
+        _ => Err(crate::error::ChatError::Db(format!(
+            "unknown transparency monitor state {code}"
+        ))),
+    }
+}
+
 #[cfg(feature = "sqlite")]
 pub(crate) fn contact_state_code(state: ContactState) -> i64 {
     match state {
@@ -435,6 +477,8 @@ pub struct Pending {
     pub(crate) manifest_trust: HashMap<String, ManifestTrust>,
     /// Homeserver scope → highest verified append-only checkpoint.
     pub(crate) transparency_trust: HashMap<String, TransparencyTrust>,
+    /// Homeserver scope → most recent independent checkpoint monitor result.
+    pub(crate) transparency_monitor_status: HashMap<String, TransparencyMonitorStatus>,
     /// Canonical peer → local contact/request state.
     pub(crate) contacts: HashMap<String, ContactRecord>,
     /// The local account's profile singleton.
@@ -476,6 +520,7 @@ impl Pending {
             && self.inbound.is_empty()
             && self.manifest_trust.is_empty()
             && self.transparency_trust.is_empty()
+            && self.transparency_monitor_status.is_empty()
             && self.contacts.is_empty()
             && self.local_profile.is_none()
             && self.peer_profiles.is_empty()
@@ -549,6 +594,12 @@ pub trait ChatDb {
 
     /// Highest verified append-only checkpoint for one homeserver namespace.
     async fn load_transparency_trust(&self, scope: &str) -> Result<Option<TransparencyTrust>>;
+
+    /// Most recent scheduled/foreground checkpoint monitor result.
+    async fn load_transparency_monitor_status(
+        &self,
+        scope: &str,
+    ) -> Result<Option<TransparencyMonitorStatus>>;
 
     /// Client-owned relationship state for one canonical peer.
     async fn load_contact(&self, peer: &str) -> Result<Option<ContactRecord>>;

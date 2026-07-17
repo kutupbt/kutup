@@ -20,7 +20,8 @@ use wasm_bindgen::JsValue;
 
 use crate::db::{
     ChatDb, ContactRecord, InboundEnvelope, InboxMessage, LocalIdentity, LocalProfile,
-    ManifestTrust, OutboxEntry, PeerProfile, Pending, SentMessage, TransparencyTrust,
+    ManifestTrust, OutboxEntry, PeerProfile, Pending, SentMessage, TransparencyMonitorStatus,
+    TransparencyTrust,
 };
 use crate::error::{ChatError, Result};
 
@@ -39,12 +40,13 @@ const SENT_MESSAGES: &str = "sent_messages";
 const INBOUND: &str = "inbound";
 const MANIFEST_TRUST: &str = "manifest_trust";
 const TRANSPARENCY_TRUST: &str = "transparency_trust";
+const TRANSPARENCY_MONITOR_STATUS: &str = "transparency_monitor_status";
 const CONTACTS: &str = "contacts";
 const LOCAL_PROFILE: &str = "local_profile";
 const PEER_PROFILES: &str = "peer_profiles";
 const META: &str = "meta";
 
-const ALL_STORES: [&str; 19] = [
+const ALL_STORES: [&str; 20] = [
     LOCAL_IDENTITY,
     SESSIONS,
     IDENTITIES,
@@ -60,6 +62,7 @@ const ALL_STORES: [&str; 19] = [
     INBOUND,
     MANIFEST_TRUST,
     TRANSPARENCY_TRUST,
+    TRANSPARENCY_MONITOR_STATUS,
     CONTACTS,
     LOCAL_PROFILE,
     PEER_PROFILES,
@@ -90,7 +93,7 @@ impl IndexedDbChatDb {
             ));
         }
 
-        let mut builder = Rexie::builder(name).version(5);
+        let mut builder = Rexie::builder(name).version(6);
         for store in ALL_STORES {
             builder = builder.add_object_store(ObjectStore::new(store));
         }
@@ -266,6 +269,14 @@ impl ChatDb for IndexedDbChatDb {
         self.get(TRANSPARENCY_TRUST, string_key(scope)).await
     }
 
+    async fn load_transparency_monitor_status(
+        &self,
+        scope: &str,
+    ) -> Result<Option<TransparencyMonitorStatus>> {
+        self.get(TRANSPARENCY_MONITOR_STATUS, string_key(scope))
+            .await
+    }
+
     async fn load_contact(&self, peer: &str) -> Result<Option<ContactRecord>> {
         self.get(CONTACTS, string_key(peer)).await
     }
@@ -335,6 +346,7 @@ impl ChatDb for IndexedDbChatDb {
         let inbound = idb(transaction.store(INBOUND))?;
         let manifest_trust = idb(transaction.store(MANIFEST_TRUST))?;
         let transparency_trust = idb(transaction.store(TRANSPARENCY_TRUST))?;
+        let transparency_monitor_status = idb(transaction.store(TRANSPARENCY_MONITOR_STATUS))?;
         let contacts = idb(transaction.store(CONTACTS))?;
         let local_profile = idb(transaction.store(LOCAL_PROFILE))?;
         let peer_profiles = idb(transaction.store(PEER_PROFILES))?;
@@ -385,6 +397,11 @@ impl ChatDb for IndexedDbChatDb {
             &mut operations,
             &transparency_trust,
             writes.transparency_trust,
+        );
+        stage_puts(
+            &mut operations,
+            &transparency_monitor_status,
+            writes.transparency_monitor_status,
         );
         stage_puts(&mut operations, &contacts, writes.contacts);
         if let Some(value) = writes.local_profile.take() {
@@ -500,6 +517,7 @@ struct PreparedWrites {
     inbound: Vec<(String, Option<JsValue>)>,
     manifest_trust: Vec<(String, JsValue)>,
     transparency_trust: Vec<(String, JsValue)>,
+    transparency_monitor_status: Vec<(String, JsValue)>,
     contacts: Vec<(String, JsValue)>,
     local_profile: Option<JsValue>,
     peer_profiles: Vec<(String, JsValue)>,
@@ -540,6 +558,7 @@ impl PreparedWrites {
             inbound: serialize_optional_map(&pending.inbound)?,
             manifest_trust: serialize_map(&pending.manifest_trust)?,
             transparency_trust: serialize_map(&pending.transparency_trust)?,
+            transparency_monitor_status: serialize_map(&pending.transparency_monitor_status)?,
             contacts: serialize_map(&pending.contacts)?,
             local_profile: pending.local_profile.as_ref().map(to_js).transpose()?,
             peer_profiles: serialize_map(&pending.peer_profiles)?,

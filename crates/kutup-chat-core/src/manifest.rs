@@ -6,8 +6,8 @@ use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
 use kutup_chat_proto::{
     AccountAddress, DeviceManifest, ManifestDevice, ManifestTransparencyProof,
-    TransparencyCheckpoint, TransparencyVerifierKey, TransparencyWitnessAttestation,
-    UserPreKeyBundlesResponse,
+    TransparencyCheckpoint, TransparencyCheckpointAuthentication, TransparencyCheckpointResponse,
+    TransparencyVerifierKey, TransparencyWitnessAttestation, UserPreKeyBundlesResponse,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -69,8 +69,7 @@ impl TransparencyPolicy {
                 .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
                 .and_then(|bytes| VerifyingKey::from_bytes(&bytes).ok())
                 .is_some_and(|key| {
-                    kutup_chat_proto::transparency_signing_key_id(&key)
-                        == policy.operator_key_id
+                    kutup_chat_proto::transparency_signing_key_id(&key) == policy.operator_key_id
                 });
             if !valid_key_id || !valid_public_key {
                 return Err(ChatError::Invalid(
@@ -130,17 +129,46 @@ pub(crate) fn verify_manifest_publication(
     proof.verify_current_map().map_err(ChatError::Trust)?;
     proof.verify_authentication().map_err(ChatError::Trust)?;
     let scope = address.server.unwrap_or_else(|| "local".into());
-    let scope_policy = policy.for_scope(&scope);
-    if let Some(scope_policy) = scope_policy {
-        if proof.authentication.operator_key_id != scope_policy.operator_key_id
-            || proof.authentication.operator_public_key != scope_policy.operator_public_key
-        {
-            return Err(ChatError::Trust(
-                "transparency operator does not match application policy".into(),
-            ));
-        }
-    }
-    let prior_checkpoint = prior_transparency
+    let prior_checkpoint = prior_checkpoint(&scope, prior_transparency)?;
+    proof
+        .verify_consistency_from(prior_checkpoint.as_ref())
+        .map_err(ChatError::Trust)?;
+    verify_authenticated_checkpoint(
+        scope,
+        &proof.checkpoint,
+        &proof.authentication,
+        prior_transparency,
+        policy,
+    )
+}
+
+/// Verify a monitor response against the same application policy and durable
+/// pin used by manifest/bundle acceptance, without touching account/session
+/// state.
+pub(crate) fn verify_transparency_checkpoint_response(
+    scope: &str,
+    response: &TransparencyCheckpointResponse,
+    prior: Option<&TransparencyTrust>,
+    policy: &TransparencyPolicy,
+) -> Result<TransparencyTrust> {
+    let prior_checkpoint = prior_checkpoint(scope, prior)?;
+    response
+        .verify(prior_checkpoint.as_ref())
+        .map_err(ChatError::Trust)?;
+    verify_authenticated_checkpoint(
+        scope.to_string(),
+        &response.checkpoint,
+        &response.authentication,
+        prior,
+        policy,
+    )
+}
+
+fn prior_checkpoint(
+    scope: &str,
+    prior: Option<&TransparencyTrust>,
+) -> Result<Option<TransparencyCheckpoint>> {
+    prior
         .map(|prior| {
             if prior.scope != scope {
                 return Err(ChatError::Trust(
@@ -153,43 +181,55 @@ pub(crate) fn verify_manifest_publication(
                 root_hash: prior.root_hash.clone(),
             })
         })
-        .transpose()?;
-    proof
-        .verify_consistency_from(prior_checkpoint.as_ref())
-        .map_err(ChatError::Trust)?;
-    if let Some(prior) = prior_transparency {
+        .transpose()
+}
+
+fn verify_authenticated_checkpoint(
+    scope: String,
+    checkpoint: &TransparencyCheckpoint,
+    authentication: &TransparencyCheckpointAuthentication,
+    prior: Option<&TransparencyTrust>,
+    policy: &TransparencyPolicy,
+) -> Result<TransparencyTrust> {
+    let scope_policy = policy.for_scope(&scope);
+    if let Some(scope_policy) = scope_policy {
+        if authentication.operator_key_id != scope_policy.operator_key_id
+            || authentication.operator_public_key != scope_policy.operator_public_key
+        {
+            return Err(ChatError::Trust(
+                "transparency operator does not match application policy".into(),
+            ));
+        }
+    }
+    if let Some(prior) = prior {
         if !prior.operator_key_id.is_empty()
-            && (prior.operator_key_id != proof.authentication.operator_key_id
-                || prior.operator_public_key != proof.authentication.operator_public_key)
+            && (prior.operator_key_id != authentication.operator_key_id
+                || prior.operator_public_key != authentication.operator_public_key)
         {
             return Err(ChatError::Trust(
                 "transparency operator key changed without an authenticated transition".into(),
             ));
         }
-        if proof.authentication.issued_at < prior.checkpoint_issued_at
-            || (proof.checkpoint.tree_size == prior.tree_size
+        if authentication.issued_at < prior.checkpoint_issued_at
+            || (checkpoint.tree_size == prior.tree_size
                 && prior.checkpoint_issued_at != 0
-                && proof.authentication.issued_at != prior.checkpoint_issued_at)
+                && authentication.issued_at != prior.checkpoint_issued_at)
         {
             return Err(ChatError::Trust(
                 "transparency checkpoint signing time rolled back or changed in place".into(),
             ));
         }
     }
-    let witnesses = verify_witness_policy(
-        &proof.authentication.witnesses,
-        scope_policy,
-        prior_transparency,
-        proof,
-    )?;
+    let witnesses =
+        verify_witness_policy(&authentication.witnesses, scope_policy, prior, checkpoint)?;
     Ok(TransparencyTrust {
         scope,
-        log_id: proof.checkpoint.log_id.clone(),
-        tree_size: proof.checkpoint.tree_size,
-        root_hash: proof.checkpoint.root_hash.clone(),
-        operator_key_id: proof.authentication.operator_key_id.clone(),
-        operator_public_key: proof.authentication.operator_public_key.clone(),
-        checkpoint_issued_at: proof.authentication.issued_at,
+        log_id: checkpoint.log_id.clone(),
+        tree_size: checkpoint.tree_size,
+        root_hash: checkpoint.root_hash.clone(),
+        operator_key_id: authentication.operator_key_id.clone(),
+        operator_public_key: authentication.operator_public_key.clone(),
+        checkpoint_issued_at: authentication.issued_at,
         witnesses,
     })
 }
@@ -198,7 +238,7 @@ fn verify_witness_policy(
     attestations: &[TransparencyWitnessAttestation],
     policy: Option<&TransparencyScopePolicy>,
     prior: Option<&TransparencyTrust>,
-    proof: &ManifestTransparencyProof,
+    checkpoint: &TransparencyCheckpoint,
 ) -> Result<Vec<TransparencyWitnessTrust>> {
     let Some(policy) = policy else {
         return Ok(prior
@@ -227,9 +267,9 @@ fn verify_witness_policy(
         if let Some(current) = current {
             if let Some(previous) = previous {
                 if current.observed_at < previous.observed_at
-                    || proof.checkpoint.tree_size < previous.tree_size
-                    || (proof.checkpoint.tree_size == previous.tree_size
-                        && proof.checkpoint.root_hash != previous.root_hash)
+                    || checkpoint.tree_size < previous.tree_size
+                    || (checkpoint.tree_size == previous.tree_size
+                        && checkpoint.root_hash != previous.root_hash)
                 {
                     return Err(ChatError::Trust(
                         "transparency witness observation rolled back or equivocated".into(),
@@ -241,8 +281,8 @@ fn verify_witness_policy(
                 witness_id: current.witness_id.clone(),
                 key_id: current.key_id.clone(),
                 public_key: current.public_key.clone(),
-                tree_size: proof.checkpoint.tree_size,
-                root_hash: proof.checkpoint.root_hash.clone(),
+                tree_size: checkpoint.tree_size,
+                root_hash: checkpoint.root_hash.clone(),
                 observed_at: current.observed_at,
             });
         } else if let Some(previous) = previous {

@@ -51,9 +51,10 @@ web application and its advertised policy. It also does not yet compare views
 between multiple witnesses. Remote federation scopes without application policy
 remain durably first-observation pinned.
 
-The next transparency work is scheduled client monitoring and skipped-update
-range proofs, authenticated policy distribution/rotation for remote scopes,
-and cross-witness gossip or an auditor that compares checkpoint views. Kutup's
+Scheduled monitoring of the local web scope is now implemented. The next
+transparency work is skipped-update range proofs, authenticated policy
+distribution/rotation and monitoring for remote scopes, and cross-witness
+gossip or an auditor that compares checkpoint views. Kutup's
 username-hash map also intentionally does not claim Signal's VRF index privacy.
 
 ## Verification gates

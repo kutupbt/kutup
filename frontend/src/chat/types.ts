@@ -119,6 +119,17 @@ export interface TransparencyVerifierKey {
   publicKey: string
 }
 
+export type TransparencyMonitorState = 'healthy' | 'unavailable' | 'verificationFailed'
+
+export interface TransparencyMonitorStatus {
+  scope: string
+  state: TransparencyMonitorState
+  lastCheckedAtMs: number
+  lastSuccessAtMs?: number
+  treeSize?: string
+  detail?: string
+}
+
 export interface ChatTransportPort {
   registerDevice(request: unknown): Promise<unknown>
   fetchBundles(username: string, transparencyTreeSize: string): Promise<unknown>
@@ -127,6 +138,7 @@ export interface ChatTransportPort {
     currentDeviceId: number,
     transparencyTreeSize: string,
   ): Promise<unknown>
+  fetchTransparencyCheckpoint(scope: string, fromTreeSize: string): Promise<unknown>
   fetchManifest(username: string): Promise<unknown | null>
   publishManifest(manifest: unknown, transparencyTreeSize: string): Promise<unknown>
   fetchOwnProfile(): Promise<unknown | null>
@@ -168,6 +180,7 @@ export interface WasmChatClientHandle {
   unblockContact(peer: string): Promise<ContactRecord>
   inboundAttention(): Promise<InboundAttention[]>
   maintainPrekeys(): Promise<unknown>
+  monitorTransparency(scope: string): Promise<TransparencyMonitorStatus>
   pendingSendCount(): Promise<number>
   quarantineInbound(id: string): Promise<void>
   reconcile(): Promise<ReceiveReport>
@@ -179,6 +192,7 @@ export interface WasmChatClientHandle {
     text: string,
   ): Promise<SendSummary>
   syncManifest(): Promise<unknown>
+  transparencyMonitorStatus(scope: string): Promise<TransparencyMonitorStatus | undefined>
   verifyAuthority(peer: string): Promise<unknown>
   free(): void
 }

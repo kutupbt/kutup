@@ -16,7 +16,8 @@ use crate::error::Result;
 use kutup_chat_proto::{
     ChatProfileResponse, DeviceListMismatch, DeviceManifest, MailboxPage, OwnChatProfileResponse,
     PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
-    ReplenishKeysRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
+    ReplenishKeysRequest, SendMessagesRequest, TransparencyCheckpointResponse,
+    UserPreKeyBundlesResponse,
 };
 
 /// The result of a `POST …/messages`. A `409 DeviceListMismatch` is modeled as a
@@ -57,6 +58,19 @@ pub trait ChatTransport {
     ) -> Result<UserPreKeyBundlesResponse> {
         Err(crate::ChatError::Transport(
             "transport does not implement linked-device bundle fetches".into(),
+        ))
+    }
+
+    /// Public checkpoint monitor endpoint. `scope` is `local` for the
+    /// authenticated homeserver; transports may reject remote scopes until an
+    /// authenticated federation monitor proxy is available.
+    async fn fetch_transparency_checkpoint(
+        &self,
+        _scope: &str,
+        _from_tree_size: u64,
+    ) -> Result<TransparencyCheckpointResponse> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement transparency monitoring".into(),
         ))
     }
 
