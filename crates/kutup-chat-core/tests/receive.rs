@@ -305,7 +305,7 @@ fn decrypt_failure_is_durable_and_never_silently_acked() {
         sender: Some("alice".into()),
         sender_device_id: 1,
         envelope_type: kutup_chat_proto::EnvelopeType::Message,
-        suite: kutup_chat_proto::SuiteId::PqxdhTripleRatchetV1,
+        suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
         content: "not-base64".into(),
         server_timestamp: "2026-07-14T10:00:00Z".into(),
     }]);

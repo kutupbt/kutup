@@ -548,15 +548,16 @@ mod tests {
     use kutup_chat_proto::{
         hash_transparency_map_checkpoint, hash_transparency_map_leaf, hash_transparency_node,
         map_key_bit, transparency_map_empty_hashes, transparency_map_key, DevicePreKeyBundle,
-        EcPreKey, KemPreKey, ManifestTransparencyLeaf, ManifestTransparencyMapProof,
-        ManifestTransparencyProof, SuiteId, TransparencyCheckpoint, UserPreKeyBundlesResponse,
+        DirectChatSuiteId, EcPreKey, KemPreKey, ManifestTransparencyLeaf,
+        ManifestTransparencyMapProof, ManifestTransparencyProof, TransparencyCheckpoint,
+        UserPreKeyBundlesResponse,
     };
 
     fn bundle(device_id: u32, registration_id: u32, identity_key: &str) -> DevicePreKeyBundle {
         DevicePreKeyBundle {
             device_id,
             registration_id,
-            suite: SuiteId::PqxdhTripleRatchetV1,
+            suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
             identity_key: identity_key.into(),
             signed_pre_key: EcPreKey {
                 key_id: 1,

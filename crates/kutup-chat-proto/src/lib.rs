@@ -42,25 +42,24 @@ pub use transparency::{
 /// Registry of encryption suites — the algorithm-agility mechanism.
 ///
 /// A suite pins the *whole* cryptographic construction: key-agreement, ratchet, KEM, and
-/// wire format. Capability is advertised by publishing prekey bundles for a suite (signed
-/// by the device identity key); enforcement is client policy ("require PQ"), never an
-/// in-band negotiation that a middleman could bid down. Per the locked decision in
-/// `docs/research/11-federated-chat.md` §4.2 there is exactly one suite at launch and it
-/// is post-quantum; a future suite is a new registry entry, not a toggle on this one.
+/// wire format. Server availability is advertised separately; authenticated per-device
+/// suite capabilities will be added to the signed manifest before there is a second suite.
+/// Until then there is no suite negotiation: the one launch suite is mandatory and
+/// post-quantum. A future suite is a new registry entry, not a toggle on this one.
 /// On the wire a suite is its registry number (like a TLS ciphersuite code point), so
 /// non-Rust implementations never parse Rust variant names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(into = "u16", try_from = "u16")]
 #[repr(u16)]
-pub enum SuiteId {
+pub enum DirectChatSuiteId {
     /// libsignal message-version 4. **PQXDH handshake:** X25519 + **ML-KEM-1024**.
     /// **Triple Ratchet messaging** (Double Ratchet + SPQR): **ML-KEM-768** — note the
     /// ongoing ratchet's KEM is 768, not 1024; 1024 is the handshake parameter only.
     PqxdhTripleRatchetV1 = 1,
 }
 
-impl SuiteId {
+impl DirectChatSuiteId {
     pub fn as_u16(self) -> u16 {
         self as u16
     }
@@ -73,17 +72,17 @@ impl SuiteId {
     }
 }
 
-impl From<SuiteId> for u16 {
-    fn from(s: SuiteId) -> u16 {
+impl From<DirectChatSuiteId> for u16 {
+    fn from(s: DirectChatSuiteId) -> u16 {
         s.as_u16()
     }
 }
 
-impl TryFrom<u16> for SuiteId {
+impl TryFrom<u16> for DirectChatSuiteId {
     type Error = String;
 
     fn try_from(v: u16) -> Result<Self, Self::Error> {
-        SuiteId::from_u16(v).ok_or_else(|| format!("unknown encryption suite {v}"))
+        DirectChatSuiteId::from_u16(v).ok_or_else(|| format!("unknown direct chat suite {v}"))
     }
 }
 
@@ -135,7 +134,7 @@ pub struct KemPreKey {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterChatDeviceRequest {
-    pub suite: SuiteId,
+    pub suite: DirectChatSuiteId,
     /// libsignal registration id (random u32 < 16384, generated at install time).
     pub registration_id: u32,
     /// base64 serialized public `IdentityKey`.
@@ -364,7 +363,7 @@ pub struct ChatWsTicketResponse {
 pub struct DevicePreKeyBundle {
     pub device_id: u32,
     pub registration_id: u32,
-    pub suite: SuiteId,
+    pub suite: DirectChatSuiteId,
     pub identity_key: String,
     pub signed_pre_key: EcPreKey,
     /// A one-time Kyber prekey when the pool has one (consumed by this fetch),
@@ -410,7 +409,7 @@ pub struct OutgoingEnvelope {
     /// was reinstalled and must re-establish its session.
     pub registration_id: u32,
     pub envelope_type: EnvelopeType,
-    pub suite: SuiteId,
+    pub suite: DirectChatSuiteId,
     /// base64 serialized `PreKeySignalMessage` / `SignalMessage`. Opaque to the server.
     pub content: String,
 }
@@ -472,7 +471,7 @@ pub struct DeliveredEnvelope {
     pub sender: Option<String>,
     pub sender_device_id: u32,
     pub envelope_type: EnvelopeType,
-    pub suite: SuiteId,
+    pub suite: DirectChatSuiteId,
     /// base64 ciphertext, exactly as sent.
     pub content: String,
     /// Server receive time, RFC 3339 (the server clock, not the sender's).
@@ -521,7 +520,7 @@ pub struct ChatCapabilities {
     /// The `docs/chat-protocol.md` protocol version this server speaks.
     pub protocol_version: u16,
     /// Suites the server will route (it doesn't decrypt; this bounds bundles).
-    pub suites: Vec<u16>,
+    pub suites: Vec<DirectChatSuiteId>,
     /// Max `content` bytes per envelope, enforced on send (mailbox-abuse gate
     /// and the budget for attachment-pointer payloads).
     pub max_content_bytes: u32,
@@ -568,7 +567,7 @@ impl Default for ChatCapabilities {
         ChatCapabilities {
             enabled: true,
             protocol_version: 1,
-            suites: vec![SuiteId::PqxdhTripleRatchetV1.as_u16()],
+            suites: vec![DirectChatSuiteId::PqxdhTripleRatchetV1],
             max_content_bytes: 65536,
             mailbox_retention_days: 30,
             device_expiry_days: 90,
@@ -593,11 +592,22 @@ mod tests {
     #[test]
     fn suite_id_round_trips() {
         assert_eq!(
-            SuiteId::from_u16(SuiteId::PqxdhTripleRatchetV1.as_u16()),
-            Some(SuiteId::PqxdhTripleRatchetV1)
+            DirectChatSuiteId::from_u16(DirectChatSuiteId::PqxdhTripleRatchetV1.as_u16()),
+            Some(DirectChatSuiteId::PqxdhTripleRatchetV1)
         );
-        assert_eq!(SuiteId::from_u16(0), None);
-        assert_eq!(SuiteId::from_u16(2), None);
+        assert_eq!(DirectChatSuiteId::from_u16(0), None);
+        assert_eq!(DirectChatSuiteId::from_u16(2), None);
+        assert_eq!(DirectChatSuiteId::from_u16(u16::MAX), None);
+        assert_eq!(
+            serde_json::to_string(&DirectChatSuiteId::PqxdhTripleRatchetV1).unwrap(),
+            "1"
+        );
+        for value in ["0", "2", "65535", "-1", "1.5", "\"1\""] {
+            assert!(
+                serde_json::from_str::<DirectChatSuiteId>(value).is_err(),
+                "unexpectedly accepted {value}"
+            );
+        }
     }
 
     #[test]
@@ -606,7 +616,7 @@ mod tests {
             device_id: 1,
             registration_id: 42,
             envelope_type: EnvelopeType::PreKey,
-            suite: SuiteId::PqxdhTripleRatchetV1,
+            suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
             content: "AAEC".into(),
         };
         let json = serde_json::to_string(&env).unwrap();
@@ -616,6 +626,11 @@ mod tests {
         );
         let back: OutgoingEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(back.registration_id, 42);
+
+        let unknown = json.replace(r#""suite":1"#, r#""suite":2"#);
+        assert!(serde_json::from_str::<OutgoingEnvelope>(&unknown).is_err());
+        let missing = json.replace(r#","suite":1"#, "");
+        assert!(serde_json::from_str::<OutgoingEnvelope>(&missing).is_err());
     }
 
     #[test]

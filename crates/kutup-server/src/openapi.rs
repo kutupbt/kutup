@@ -143,7 +143,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::chat_federation::deliver_messages,
     ),
     components(schemas(
-        kutup_chat_proto::SuiteId,
+        kutup_chat_proto::DirectChatSuiteId,
         kutup_chat_proto::EnvelopeType,
         kutup_chat_proto::EcPreKey,
         kutup_chat_proto::KemPreKey,
@@ -301,5 +301,14 @@ mod tests {
         ] {
             assert!(paths.contains_key(path), "spec is missing path {path}");
         }
+    }
+
+    #[test]
+    fn direct_chat_suite_schema_is_a_closed_numeric_registry() {
+        let spec = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        let schema = &spec["components"]["schemas"]["DirectChatSuiteId"];
+
+        assert_eq!(schema["type"], "integer");
+        assert_eq!(schema["enum"], serde_json::json!([1]));
     }
 }

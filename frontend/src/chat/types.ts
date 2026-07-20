@@ -97,6 +97,7 @@ export interface InboundAttention {
 export interface ChatCapabilities {
   enabled: boolean
   protocolVersion: number
+  /** Untrusted, forward-compatible registry codes; select through suites.ts. */
   suites: number[]
   maxContentBytes: number
   mailboxRetentionDays: number

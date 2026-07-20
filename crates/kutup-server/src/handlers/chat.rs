@@ -29,12 +29,11 @@ use uuid::Uuid;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use kutup_chat_proto::{
     AccountAddress, AckRequest, ChatProfileResponse, ChatWsServerMessage, ChatWsTicketResponse,
-    DeliveredEnvelope, DeviceListMismatch, DeviceManifest, DevicePreKeyBundle, EcPreKey,
-    EnvelopeType, KemPreKey, MailboxPage, OutgoingEnvelope, OwnChatProfileResponse,
+    DeliveredEnvelope, DeviceListMismatch, DeviceManifest, DevicePreKeyBundle, DirectChatSuiteId,
+    EcPreKey, EnvelopeType, KemPreKey, MailboxPage, OutgoingEnvelope, OwnChatProfileResponse,
     PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
     RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest,
-    SubmitTransparencyWitnessRequest, SuiteId, TransparencyCheckpointResponse,
-    UserPreKeyBundlesResponse,
+    SubmitTransparencyWitnessRequest, TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
 };
 
 use crate::chat_hub::ChatWsOut;
@@ -49,6 +48,21 @@ const MAX_REGISTRATION_ID: u32 = 16380;
 const MAX_DEVICE_ID: i32 = 127;
 /// Mailbox drain page cap.
 const MAX_DRAIN_LIMIT: i64 = 500;
+
+/// Convert PostgreSQL's signed `SMALLINT` representation into the closed Direct
+/// Chat suite registry without wrapping negative values or applying a default.
+fn direct_chat_suite_from_db(value: i16, source: &'static str) -> AppResult<DirectChatSuiteId> {
+    let code = u16::try_from(value).map_err(|_| {
+        AppError::internal(format!(
+            "invalid direct chat suite {value} stored in {source}"
+        ))
+    })?;
+    DirectChatSuiteId::try_from(code).map_err(|_| {
+        AppError::internal(format!(
+            "unknown direct chat suite {value} stored in {source}"
+        ))
+    })
+}
 const DEFAULT_DRAIN_LIMIT: i64 = 100;
 /// Max decoded ciphertext bytes per envelope (advertised as `maxContentBytes`).
 /// Kilobyte-scale headroom over a `PreKeySignalMessage` (~1.8 KB with the PQ KEM).
@@ -880,15 +894,16 @@ pub async fn list_devices(State(state): State<AppState>, auth: AuthUser) -> AppR
     let devices: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|(id, suite, name, created, seen)| {
-            json!({
+            let suite = direct_chat_suite_from_db(suite, "chat_devices")?;
+            Ok(json!({
                 "deviceId": id,
                 "suite": suite,
                 "name": name,
                 "createdAt": created.format(&Rfc3339).unwrap_or_default(),
                 "lastSeenAt": seen.and_then(|t| t.format(&Rfc3339).ok()),
-            })
+            }))
         })
-        .collect();
+        .collect::<AppResult<_>>()?;
     Ok(Json(json!({ "devices": devices })).into_response())
 }
 
@@ -1296,8 +1311,7 @@ pub(crate) async fn load_user_bundles(
         bundles.push(DevicePreKeyBundle {
             device_id: device_id as u32,
             registration_id: registration_id as u32,
-            suite: SuiteId::from_u16(suite as u16)
-                .ok_or_else(|| AppError::internal("unknown suite in chat_devices"))?,
+            suite: direct_chat_suite_from_db(suite, "chat_devices")?,
             identity_key,
             signed_pre_key: EcPreKey {
                 key_id: spk_id as u32,
@@ -1711,18 +1725,20 @@ pub async fn drain_mailbox(
         .into_iter()
         .take(limit as usize)
         .map(
-            |(id, cursor, sender, sender_dev, etype, suite, content, ts)| DeliveredEnvelope {
-                id: id.to_string(),
-                cursor: cursor as u64,
-                sender,
-                sender_device_id: sender_dev as u32,
-                envelope_type: envelope_type_from_code(etype),
-                suite: SuiteId::from_u16(suite as u16).unwrap_or(SuiteId::PqxdhTripleRatchetV1),
-                content,
-                server_timestamp: ts.format(&Rfc3339).unwrap_or_default(),
+            |(id, cursor, sender, sender_dev, etype, suite, content, ts)| {
+                Ok(DeliveredEnvelope {
+                    id: id.to_string(),
+                    cursor: cursor as u64,
+                    sender,
+                    sender_device_id: sender_dev as u32,
+                    envelope_type: envelope_type_from_code(etype),
+                    suite: direct_chat_suite_from_db(suite, "chat_mailbox")?,
+                    content,
+                    server_timestamp: ts.format(&Rfc3339).unwrap_or_default(),
+                })
             },
         )
-        .collect();
+        .collect::<AppResult<_>>()?;
 
     Ok(Json(MailboxPage { envelopes, more }).into_response())
 }
@@ -1962,8 +1978,22 @@ mod tests {
             device_id,
             registration_id,
             envelope_type: EnvelopeType::Message,
-            suite: SuiteId::PqxdhTripleRatchetV1,
+            suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
             content: STANDARD.encode(b"ciphertext"),
+        }
+    }
+
+    #[test]
+    fn database_suite_conversion_is_closed_and_never_wraps() {
+        assert_eq!(
+            direct_chat_suite_from_db(1, "test").unwrap(),
+            DirectChatSuiteId::PqxdhTripleRatchetV1
+        );
+        for value in [-1, 0, 2, i16::MAX] {
+            let error = direct_chat_suite_from_db(value, "test").unwrap_err();
+            assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert!(error.message.contains(&value.to_string()));
+            assert!(error.message.contains("test"));
         }
     }
 

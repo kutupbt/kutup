@@ -37,7 +37,7 @@ lockstep change to the others.
 
 | Axis | Where | Rule |
 |---|---|---|
-| **Suite** | `suite: u16` in bundles/envelopes | Pins the whole crypto construction (KA + ratchet + KEM + libsignal wire). A new construction is a **new registry number**, never a mutation of an existing one. §4. |
+| **Suite** | `suite: u16` in bundles/envelopes; `DirectChatSuiteId` in Rust | Pins the whole crypto construction (KA + ratchet + KEM + libsignal wire). A new construction is a **new registry number**, never a mutation of an existing one. §4. |
 | **Content schema** | `v: u16` inside the decrypted plaintext | The application payload shape. Unknown `kind` or higher `v` → render a placeholder, never drop. §6. |
 | **Protocol/API** | `protocolVersion` in the capability block | The REST+WS envelope contract in this document. Additive by default; breaking bumps the integer and is advertised. §10. |
 | **Federation** | `fedVersion` in `.well-known` + per-transaction | Server-to-server delivery format. §13. |
@@ -50,7 +50,7 @@ lockstep change to the others.
    rather than failing silently.
 2. **No in-band downgrade a middleman can force.** Capability is advertised by
    *what a party publishes* (a bundle for a suite, a capability block). A
-   client's "require PQ / require ≥ vN" policy is enforced locally. The one
+   client's explicit allowed-suite policy is enforced locally. The one
    permitted downgrade is libsignal's session-start SPQR negotiation, which is
    MAC-authenticated and locked in for the session (§4).
 3. **Reserved fields are load-bearing.** A v1 implementation MUST serialize
@@ -106,8 +106,9 @@ format.
 
 ## 3. Suite registry — [IMPL], one correction
 
-`suite` is a `u16` registry code point (like a TLS ciphersuite), never a Rust
-variant name on the wire.
+`suite` is a `u16` registry code point (like a TLS ciphersuite) and a closed
+`DirectChatSuiteId` in Rust, never a Rust variant name on the wire. Unknown
+selected suites fail closed; database rows cannot omit or default this value.
 
 | Code | Name | Construction |
 |---|---|---|
@@ -120,8 +121,9 @@ mailbox sizing MUST budget kilobyte-scale ratchet headers (measured:
 `PreKeySignalMessage` ~1.8 KB, steady `SignalMessage` ~100 B) arriving as
 erasure-coded chunks.
 
-A future suite (e.g. a post-libsignal migration) is code point `2`, added to
-this table; it MUST NOT change the meaning of code point `1`.
+A future suite (e.g. a post-libsignal migration) receives a new code point when
+its complete construction is specified; no future value is reserved here. It
+MUST NOT change the meaning of code point `1`.
 
 ---
 
@@ -678,6 +680,12 @@ lacking the routes. The server publishes a `chat` block in the existing public
   "sealedSender": false            // [RSV] flips true when sealed sender ships
 }
 ```
+
+This public block advertises server availability, not an authenticated device
+capability. Clients select only locally implemented suite codes; unknown extra
+codes are ignored and never treated as supported. Authenticated per-device
+suite capability belongs in the next signed-manifest format and must ship
+before a second Direct Chat suite.
 
 `maxContentBytes` is enforced on send and is the budget clients use for
 attachment-pointer payloads.

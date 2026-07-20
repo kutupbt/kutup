@@ -792,8 +792,10 @@ Remaining one-time pool sizes: `{ "oneTimePreKeys": n, "oneTimeKyberPreKeys": n 
 
 Publish the account-authority-signed current device manifest. Versions must
 advance by exactly one and hash-link to the preceding manifest; the authority
-key cannot rotate silently. The signed device ids, registration ids, suites,
-and identity keys must exactly match the server's registered device set.
+key cannot rotate silently. The signed device ids, registration ids, and
+identity keys must exactly match the server's registered device set. Suite 1 is
+currently server-bounded and mandatory; authenticated per-device suite lists
+will be added to the next manifest format before another suite ships.
 `transparencyTreeSize` is the client's highest verified local checkpoint. A
 successful publish transactionally advances both the chronological log and
 current-value sparse map and returns the manifest with its transparency proof.

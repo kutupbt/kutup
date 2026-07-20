@@ -86,7 +86,7 @@ tempfile = "3"
 # OpenAPI — replaces swaggo/swag. The interactive swagger-ui crate downloads its UI
 # bundle from GitHub at build time, which breaks offline/sandboxed builds; we generate
 # the spec with utoipa and serve the raw JSON instead (see docs/roadmap.md).
-utoipa = { version = "5", features = ["axum_extras", "time", "uuid", "preserve_order"] }
+utoipa = { version = "5", features = ["axum_extras", "time", "uuid", "preserve_order", "repr"] }
 # Auth + 2FA (server slice 2).
 # jsonwebtoken v10 ships no crypto backend by default — `rust_crypto` keeps the
 # pure-Rust posture (the alternative, `aws_lc_rs`, drags in a C/asm build).

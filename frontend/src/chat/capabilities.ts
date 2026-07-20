@@ -2,9 +2,10 @@ import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 import type { ChatCapabilities } from './types'
 import { parseAccountAddress } from './identity'
+import { DIRECT_CHAT_SUITE, isDirectChatSuiteId } from './suites'
 
 const PROTOCOL_VERSION = 1
-const REQUIRED_SUITE = 1
+const REQUIRED_SUITE = DIRECT_CHAT_SUITE.PqxdhTripleRatchetV1
 
 export function isSupportedChat(capabilities: ChatCapabilities | null | undefined): boolean {
   const serverName = capabilities?.serverName
@@ -14,7 +15,10 @@ export function isSupportedChat(capabilities: ChatCapabilities | null | undefine
   return Boolean(
     capabilities?.enabled &&
       capabilities.protocolVersion === PROTOCOL_VERSION &&
-      capabilities.suites?.includes(REQUIRED_SUITE) &&
+      Array.isArray(capabilities.suites) &&
+      capabilities.suites.some(
+        suite => isDirectChatSuiteId(suite) && suite === REQUIRED_SUITE,
+      ) &&
       capabilities.manifests &&
       capabilities.profiles &&
       capabilities.keyTransparency &&

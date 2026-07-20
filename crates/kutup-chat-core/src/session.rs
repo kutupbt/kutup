@@ -37,8 +37,8 @@ use crate::store::ChatStore;
 use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_prekey_bundle};
 use kutup_chat_proto::{
     AccountAddress, ChatContent, ContactControlBody, ContactState, DeliveredEnvelope,
-    DeviceListMismatch, DevicePreKeyBundle, ManifestDevice, ManifestTransparencyProof,
-    OutgoingEnvelope, RegisterChatDeviceRequest, ReplenishKeysRequest, SuiteId,
+    DeviceListMismatch, DevicePreKeyBundle, DirectChatSuiteId, ManifestDevice,
+    ManifestTransparencyProof, OutgoingEnvelope, RegisterChatDeviceRequest, ReplenishKeysRequest,
     UserPreKeyBundlesResponse,
 };
 
@@ -1699,7 +1699,7 @@ impl Session {
             device_id: peer.device_id,
             registration_id: recipient_reg_id,
             envelope_type,
-            suite: SuiteId::PqxdhTripleRatchetV1,
+            suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
             content,
         })
     }

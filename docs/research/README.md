@@ -32,7 +32,7 @@ A planned major feature: real-time collaborative editing of files inside kutup, 
 
 ### Federated E2EE chat — "ileti" (July 2026)
 
-These three files preserve the research trail. They do not describe current
+These files preserve the research trail. They do not describe current
 implementation status; [`../chat-protocol.md`](../chat-protocol.md) is
 normative and [`../roadmap.md`](../roadmap.md) tracks the remaining product and
 hardening slices.
@@ -42,3 +42,4 @@ hardening slices.
 | [`11-federated-chat.md`](./11-federated-chat.md) | Original architecture for a Signal-class federated chat feature (libsignal v0.97.2 study, Matrix take-vs-leave, single-443 topology, phased plan). The direct-message and transport-federation foundation it proposed is implemented; its original group-blob direction is superseded by `13-…`. |
 | [`12-chat-improvements-for-clients.md`](./12-chat-improvements-for-clients.md) | Historical wire-freeze proposal. Its versioned content schema, `sendId` idempotency, capability block, account-scoped prekey limiting, WS tickets, and shared-core durability boundaries are implemented by the server/core/web stack. |
 | [`13-chat-architecture-comparative-research.md`](./13-chat-architecture-comparative-research.md) | **The verdict.** Confirms the dumb mailbox, pinned libsignal, and DAG-free transport federation; changes groups to the GV2 pattern, treats sealed sender as a complete abuse-gated system, requires signed device manifests, and corrects the SPQR parameter. The manifest, federation-delivery, durability, encrypted-profile, transparency, and witness recommendations are implemented; groups, sealed sender, richer messaging/media, remote policy, and native integration remain. |
+| [`14-enterprise-federation-identity.md`](./14-enterprise-federation-identity.md) | Deferred high-assurance profile: configurable threshold domain roots, TUF-style old/new quorum rotation, and per-peer quorums of manually pinned independent authority domains. Preserved for enterprise adoption; the current implementation path intentionally uses single-key TOFU pinning and authenticated rotation. |

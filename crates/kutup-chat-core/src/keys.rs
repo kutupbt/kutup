@@ -15,7 +15,7 @@ use rand::{CryptoRng, Rng};
 use crate::db::{LocalIdentity, Pending};
 use crate::error::{crypto, Result};
 use kutup_chat_proto::{
-    EcPreKey, KemPreKey, RegisterChatDeviceRequest, ReplenishKeysRequest, SuiteId,
+    DirectChatSuiteId, EcPreKey, KemPreKey, RegisterChatDeviceRequest, ReplenishKeysRequest,
 };
 
 /// libsignal registration ids must fit the reserved range (`< 16380`).
@@ -131,7 +131,7 @@ pub(crate) fn generate<R: Rng + CryptoRng>(
     }
 
     let registration = RegisterChatDeviceRequest {
-        suite: SuiteId::PqxdhTripleRatchetV1,
+        suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
         registration_id,
         identity_key: b64(&identity_pair.identity_key().serialize()),
         signed_pre_key: EcPreKey {

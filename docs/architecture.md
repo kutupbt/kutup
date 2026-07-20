@@ -2,6 +2,12 @@
 
 Kutup is a zero-knowledge file storage system. The server stores only ciphertext — it never sees plaintext file content, filenames, or cryptographic keys.
 
+Kutup-owned cryptographic protocols follow the purpose-specific suite,
+authenticated-capability, policy-floor, suite-locking, and explicit-migration
+rules in [`crypto-agility.md`](crypto-agility.md). That decision is authoritative
+for protocol evolution; the constructions below describe the currently
+implemented formats.
+
 ---
 
 ## Key Hierarchy
