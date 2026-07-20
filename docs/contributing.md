@@ -103,7 +103,9 @@ cargo fmt --check                               # formatting (gate)
 ```
 
 The federation harness uses its own Compose project, two tmpfs Postgres
-databases, and host ports 39081/39082. It tears the topology down on exit and
+databases, and host ports 39081/39082. In addition to delivery/retry, it checks
+all four admission modes, directional domain rules, disabled discovery and
+capabilities, and policy audit entries. It tears the topology down on exit and
 does not touch the ordinary development stack. Set
 `KUTUP_FEDERATION_SKIP_BUILD=1` only when reusing an image already built from
 the current server sources.

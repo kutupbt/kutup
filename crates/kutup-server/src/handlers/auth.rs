@@ -168,6 +168,9 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         sqlx::query_scalar("SELECT value FROM site_settings WHERE key='registration_enabled'")
             .fetch_optional(&state.pool)
             .await?;
+    let federation_enabled = state.chat_federation.is_some()
+        && crate::chat_federation_policy::load_mode(&state.pool).await?
+            != crate::chat_federation_policy::FederationMode::Disabled;
     let chat = kutup_chat_proto::ChatCapabilities {
         mailbox_retention_days: state
             .config
@@ -179,11 +182,15 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
             .chat_device_expiry_days
             .try_into()
             .unwrap_or(u32::MAX),
-        server_name: state
-            .chat_federation
-            .as_ref()
-            .map(|federation| federation.server_name().to_string()),
-        federation: state.chat_federation.is_some(),
+        server_name: federation_enabled.then(|| {
+            state
+                .chat_federation
+                .as_ref()
+                .expect("federation enabled only with configured identity")
+                .server_name()
+                .to_string()
+        }),
+        federation: federation_enabled,
         transparency_operator_key_id: Some(state.transparency_authority.key_id()),
         transparency_operator_public_key: Some(state.transparency_authority.public_key_base64()),
         transparency_witnesses: state.transparency_authority.witnesses(),

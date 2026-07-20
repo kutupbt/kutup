@@ -795,21 +795,26 @@ persistent signing identity:
   expired, the receiver's contiguous sequence high-water mark safely
   acknowledges the already-consumed sequence without replaying ciphertext.
 - **Current abuse controls [IMPL]:** authenticated origin signatures, request
-  clock bounds, transaction/body limits, SSRF/private-network rejection, and a
-  coarse per-IP federation rate limit.
-- **Remaining federation controls [TODO]:** administrator-managed open,
-  allowlist, and disabled modes; per-domain inbound/outbound deny rules;
-  per-remote shapers; an overload circuit breaker; authenticated remote-key
+  clock bounds, transaction/body limits, SSRF/private-network rejection, a
+  coarse per-IP federation rate limit, administrator-managed `disabled`,
+  `allowlist`, `blocklist`, and `open` modes, and independent per-domain
+  inbound/outbound `inherit`/`allow`/`block` actions. Fresh installations start
+  in allowlist mode; pre-policy databases with users migrate to open so an
+  upgrade does not silently break existing federation. Open ignores saved
+  rules; disabled also hides discovery and capability advertisement.
+- **Remaining federation controls [TODO]:** per-remote shapers; an overload
+  circuit breaker; authenticated remote-key
   pinning/rotation; and the proof-of-contact delivery gate needed by sealed
-  sender. A deployment MUST NOT mistake the current coarse rate limit for a
-  server admission policy.
+  sender. Admission policy is not a substitute for remote identity pinning.
 
 The transport foundation is exercised by `scripts/test-chat-federation.sh` in
 an isolated `a.test`/`b.test` Docker topology. The live contract covers signed
 discovery and directory reads, canonical sender delivery, replay-safe bundles,
 send-id deduplication, remote device-mismatch recovery, terminal recipient
 rejection, and durable retry across destination outage plus origin restart. The
-harness's private-network allowance is chat-specific and is rejected unless
+harness also covers the four admission modes, directional inbound/outbound
+rules, disabled discovery/capabilities, and policy audit entries. Its
+private-network allowance is chat-specific and is rejected unless
 `APP_ENV=test`; the production SSRF policy and all other federation consumers
 continue to reject private/internal destinations.
 

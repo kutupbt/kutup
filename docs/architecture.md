@@ -223,11 +223,18 @@ mailbox rows, replay records, and a contiguous sequence high-water mark.
 Neither homeserver replicates conversation or room state.
 
 Federation is disabled unless the administrator configures a persistent
-signing key. Once enabled, the current implementation accepts any correctly
-authenticated public Kutup peer that passes HTTPS, DNS/SSRF, protocol, payload,
-and rate-limit checks. There is not yet an administrator-managed server
-allowlist/blocklist or pinned remote-key rotation policy; these are explicit
-hardening work, not properties operators should assume already exist.
+signing key. A database-backed admission policy then selects `disabled`,
+`allowlist`, `blocklist`, or `open`. Directional per-domain actions are
+`inherit`, `allow`, or `block`: allowlist denies inherited directions,
+blocklist allows them, open deliberately ignores saved rules, and disabled
+denies everything and hides discovery/capability advertisement. Rules survive
+mode changes. Policy is enforced before outbound discovery/queuing and before
+an inbound request can trigger origin discovery; admitted requests must still
+pass HTTPS, DNS/SSRF, protocol, signature, payload, and rate-limit checks.
+
+This is operational admission control, not cryptographic remote identity
+trust. Persistent remote-key pinning and authenticated rotation remain explicit
+hardening work and are not properties operators should assume already exist.
 
 ### Current product boundary
 

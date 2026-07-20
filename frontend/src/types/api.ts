@@ -104,6 +104,25 @@ export interface AdminSettings {
   registrationEnabled: boolean
 }
 
+export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'
+export type FederationRuleAction = 'inherit' | 'allow' | 'block'
+
+export interface FederationDomainRule {
+  domain: string
+  inbound: FederationRuleAction
+  outbound: FederationRuleAction
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AdminFederationPolicy {
+  /** False when the server has no persistent CHAT_FEDERATION_SIGNING_KEY. */
+  configured: boolean
+  serverName: string | null
+  mode: FederationMode
+  rules: FederationDomainRule[]
+}
+
 /**
  * One admin audit-log row — `GET /admin/activity`. `adminEmail`/`targetEmail`
  * are the LIVE identities and go `null` once the referenced account is
@@ -111,7 +130,7 @@ export interface AdminSettings {
  */
 export interface AdminActivityEntry {
   id: number
-  /** `user.create` | `user.update` | `user.delete` | `user.2fa_disable` | `settings.update` | future actions */
+  /** User, settings, and `federation.*` mutation action identifiers. */
   action: string
   adminUserId: string
   adminEmail: string | null

@@ -62,6 +62,24 @@ export function activityText(e: AdminActivityEntry, t: TFunction): string {
       return t('admin.activity.action.settingsUpdate', '{{admin}} updated server settings', {
         admin,
       })
+    case 'federation.policy.update':
+      return t(
+        'admin.activity.action.federationPolicyUpdate',
+        '{{admin}} changed chat federation mode to {{mode}}',
+        { admin, mode: String(e.payload.mode ?? '') },
+      )
+    case 'federation.rule.upsert':
+      return t(
+        'admin.activity.action.federationRuleUpsert',
+        '{{admin}} updated the federation rule for {{domain}}',
+        { admin, domain: String(e.payload.domain ?? '') },
+      )
+    case 'federation.rule.delete':
+      return t(
+        'admin.activity.action.federationRuleDelete',
+        '{{admin}} removed the federation rule for {{domain}}',
+        { admin, domain: String(e.payload.domain ?? '') },
+      )
     default:
       return t('admin.activity.action.unknown', '{{admin}}: {{action}}', {
         admin,
@@ -85,6 +103,10 @@ export function activityIcon(action: string): string {
       return ICONS.shield
     case 'settings.update':
       return ICONS.settings
+    case 'federation.policy.update':
+    case 'federation.rule.upsert':
+    case 'federation.rule.delete':
+      return ICONS.globe
     default:
       return ICONS.userCheck
   }

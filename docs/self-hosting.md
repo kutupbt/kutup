@@ -226,13 +226,22 @@ Back up the signing seed—an ephemeral or silently replaced server identity wou
 break remote trust. Production federation requires public HTTPS and refuses
 private/loopback destinations.
 
-Enabling the signing key currently enables **open chat federation**: any public
-Kutup peer with valid discovery and request signatures can make authenticated
-federation requests, subject to SSRF checks, body limits, and the coarse
-federation rate limit. There is not yet an administrator-managed allowlist or
-blocklist. If the instance must federate only with selected domains, leave chat
-federation disabled until the server-policy milestone lands; a reverse-proxy
-IP rule is not an equivalent domain-identity policy.
+After configuring the signing key, manage admission in **Admin → Settings →
+Chat federation**. Available modes are `disabled`, `allowlist`, `blocklist`, and
+`open`, with independent inbound/outbound `inherit`, `allow`, or `block`
+actions per canonical server domain. Fresh databases start in `allowlist`.
+Existing databases with users migrate to `open` because federation was
+implicitly open before this control existed; administrators should review and
+switch them deliberately. `disabled` hides discovery and capability
+advertisement as well as denying both directions. Saved rules survive mode
+changes, and `open` intentionally ignores them.
+
+Admission policy is applied before outbound discovery/queuing and inbound
+origin discovery. Valid peers must still pass SSRF, signature, body, protocol,
+and rate-limit checks. This list is operational admission control, not
+cryptographic trust: persistent remote identity pinning and authenticated key
+rotation are still pending. A reverse-proxy IP rule is not an equivalent
+domain-identity policy.
 
 After changing these values, rebuild the backend:
 

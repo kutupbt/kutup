@@ -1,7 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '../client'
-import type { UserRow, AdminStats, AdminSettings, AdminActivityResponse } from '@/types/api'
+import type {
+  UserRow,
+  AdminStats,
+  AdminSettings,
+  AdminActivityResponse,
+  AdminFederationPolicy,
+  FederationMode,
+  FederationRuleAction,
+} from '@/types/api'
 
 export function useAdminUsers() {
   return useQuery<UserRow[]>({
@@ -30,6 +38,75 @@ export function useAdminSettings() {
   return useQuery<AdminSettings>({
     queryKey: ['admin', 'settings'],
     queryFn: () => api.get<AdminSettings>('/admin/settings').then((r) => r.data),
+  })
+}
+
+export function useAdminFederationPolicy() {
+  return useQuery<AdminFederationPolicy>({
+    queryKey: ['admin', 'chat-federation'],
+    queryFn: () =>
+      api.get<AdminFederationPolicy>('/admin/chat-federation').then((r) => r.data),
+  })
+}
+
+export function useUpdateAdminFederationPolicy() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (mode: FederationMode) =>
+      api.put<AdminFederationPolicy>('/admin/chat-federation', { mode }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'chat-federation'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
+      toast.success('Federation policy updated')
+    },
+    onError: (err: any) => {
+      toast.error(err.response?.data?.error ?? 'Federation policy update failed')
+    },
+  })
+}
+
+export function useUpsertAdminFederationRule() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      domain,
+      inbound,
+      outbound,
+    }: {
+      domain: string
+      inbound: FederationRuleAction
+      outbound: FederationRuleAction
+    }) =>
+      api.put<AdminFederationPolicy>(
+        `/admin/chat-federation/servers/${encodeURIComponent(domain)}`,
+        { inbound, outbound },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'chat-federation'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
+      toast.success('Federation server rule saved')
+    },
+    onError: (err: any) => {
+      toast.error(err.response?.data?.error ?? 'Federation server rule update failed')
+    },
+  })
+}
+
+export function useDeleteAdminFederationRule() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (domain: string) =>
+      api.delete<AdminFederationPolicy>(
+        `/admin/chat-federation/servers/${encodeURIComponent(domain)}`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'chat-federation'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
+      toast.success('Federation server rule removed')
+    },
+    onError: (err: any) => {
+      toast.error(err.response?.data?.error ?? 'Federation server rule removal failed')
+    },
   })
 }
 

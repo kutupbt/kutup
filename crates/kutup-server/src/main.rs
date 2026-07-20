@@ -7,6 +7,7 @@
 //! handler slice lands.
 
 mod chat_federation;
+mod chat_federation_policy;
 mod chat_hub;
 mod chat_transparency;
 mod config;
@@ -522,6 +523,15 @@ fn build_router(state: AppState) -> Router {
                 .route(
                     "/api/admin/settings",
                     get(admin::get_settings).put(admin::update_settings),
+                )
+                .route(
+                    "/api/admin/chat-federation",
+                    get(admin::get_federation_policy).put(admin::update_federation_policy),
+                )
+                .route(
+                    "/api/admin/chat-federation/servers/:domain",
+                    put(admin::upsert_federation_domain_rule)
+                        .delete(admin::delete_federation_domain_rule),
                 )
                 .route_layer(from_fn(middleware::rate_limit_admin)),
         )

@@ -22,6 +22,9 @@ const ALICE_USERNAME: &str = "alicefed";
 const BOB_EMAIL: &str = "federation-bob@example.test";
 const BOB_USERNAME: &str = "bobfed";
 const PASSWORD: &str = "federation-live-password";
+const ADMIN_TEMP_PASSWORD: &str = "federation-admin-temp";
+const ADMIN_A_EMAIL: &str = "federation-admin-a@example.test";
+const ADMIN_B_EMAIL: &str = "federation-admin-b@example.test";
 const ALICE_REGISTRATION_ID: u32 = 4101;
 const BOB_REGISTRATION_ID_1: u32 = 4201;
 const BOB_REGISTRATION_ID_2: u32 = 4202;
@@ -48,7 +51,7 @@ fn json_response(response: Response, context: &str) -> Value {
         .unwrap_or_else(|error| panic!("{context}: invalid JSON ({error}): {body}"))
 }
 
-fn register_account(c: &Client, base: &str, email: &str, username: &str) -> String {
+fn registration_payload(email: &str, username: &str) -> Value {
     let mut rng = rand::thread_rng();
     let mut master_key = [0u8; 32];
     let mut recovery_entropy = [0u8; 32];
@@ -69,27 +72,95 @@ fn register_account(c: &Client, base: &str, email: &str, username: &str) -> Stri
     let (encrypted_private_key, private_key_nonce) =
         kutup_crypto::secretbox::seal(&secret_key, &master_key).unwrap();
 
+    json!({
+        "email": email,
+        "username": username,
+        "loginKey": b64(login_key.as_slice()),
+        "encryptedMasterKey": b64(&encrypted_master_key),
+        "masterKeyNonce": b64(&master_key_nonce),
+        "encryptedRecoveryKey": b64(&encrypted_recovery_key),
+        "recoveryKeyNonce": b64(&recovery_key_nonce),
+        "encryptedPrivateKey": b64(&encrypted_private_key),
+        "privateKeyNonce": b64(&private_key_nonce),
+        "publicKey": b64(&public_key),
+        "kdfSalt": b64(&kdf_salt),
+        "loginKeySalt": b64(&login_key_salt),
+        "recoveryProof": b64(&recovery_entropy),
+    })
+}
+
+fn register_account(c: &Client, base: &str, email: &str, username: &str) -> String {
     let response = c
         .post(format!("{base}/api/auth/register"))
-        .json(&json!({
-            "email": email,
-            "username": username,
-            "loginKey": b64(login_key.as_slice()),
-            "encryptedMasterKey": b64(&encrypted_master_key),
-            "masterKeyNonce": b64(&master_key_nonce),
-            "encryptedRecoveryKey": b64(&encrypted_recovery_key),
-            "recoveryKeyNonce": b64(&recovery_key_nonce),
-            "encryptedPrivateKey": b64(&encrypted_private_key),
-            "privateKeyNonce": b64(&private_key_nonce),
-            "publicKey": b64(&public_key),
-            "kdfSalt": b64(&kdf_salt),
-            "loginKeySalt": b64(&login_key_salt),
-            "recoveryProof": b64(&recovery_entropy),
-        }))
+        .json(&registration_payload(email, username))
         .send()
         .unwrap();
     json_response(response, &format!("register {username}"));
     login(c, base, email)
+}
+
+fn setup_admin(c: &Client, base: &str, email: &str, username: &str) -> String {
+    let login = json_response(
+        c.post(format!("{base}/api/auth/login"))
+            .json(&json!({
+                "email": email,
+                "loginKey": b64(ADMIN_TEMP_PASSWORD.as_bytes()),
+            }))
+            .send()
+            .unwrap(),
+        "bootstrap admin login",
+    );
+    assert_eq!(login["requiresSetup"], true);
+    let setup_token = login["setupToken"].as_str().unwrap();
+    let setup = json_response(
+        c.post(format!("{base}/api/auth/complete-setup"))
+            .bearer_auth(setup_token)
+            .json(&registration_payload(email, username))
+            .send()
+            .unwrap(),
+        "bootstrap admin setup",
+    );
+    assert_eq!(setup["isAdmin"], true);
+    setup["accessToken"].as_str().unwrap().to_string()
+}
+
+fn update_federation_mode(c: &Client, base: &str, admin: &str, mode: &str) -> Value {
+    json_response(
+        c.put(format!("{base}/api/admin/chat-federation"))
+            .bearer_auth(admin)
+            .json(&json!({"mode": mode}))
+            .send()
+            .unwrap(),
+        "update federation mode",
+    )
+}
+
+fn upsert_federation_rule(
+    c: &Client,
+    base: &str,
+    admin: &str,
+    domain: &str,
+    inbound: &str,
+    outbound: &str,
+) -> Value {
+    json_response(
+        c.put(format!("{base}/api/admin/chat-federation/servers/{domain}"))
+            .bearer_auth(admin)
+            .json(&json!({"inbound": inbound, "outbound": outbound}))
+            .send()
+            .unwrap(),
+        "upsert federation rule",
+    )
+}
+
+fn delete_federation_rule(c: &Client, base: &str, admin: &str, domain: &str) -> Value {
+    json_response(
+        c.delete(format!("{base}/api/admin/chat-federation/servers/{domain}"))
+            .bearer_auth(admin)
+            .send()
+            .unwrap(),
+        "delete federation rule",
+    )
 }
 
 fn login(c: &Client, base: &str, email: &str) -> String {
@@ -258,6 +329,21 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(discovery_b["apiBase"], "http://b.test");
     assert_ne!(discovery_a["signingKeys"], discovery_b["signingKeys"]);
 
+    let admin_a = setup_admin(c, a, ADMIN_A_EMAIL, "admina");
+    let admin_b = setup_admin(c, b, ADMIN_B_EMAIL, "adminb");
+    let initial_policy = json_response(
+        c.get(format!("{a}/api/admin/chat-federation"))
+            .bearer_auth(&admin_a)
+            .send()
+            .unwrap(),
+        "get initial federation policy",
+    );
+    assert_eq!(initial_policy["configured"], true);
+    assert_eq!(initial_policy["serverName"], "a.test");
+    assert_eq!(initial_policy["mode"], "allowlist");
+    update_federation_mode(c, a, &admin_a, "open");
+    update_federation_mode(c, b, &admin_b, "open");
+
     let alice_token = register_account(c, a, ALICE_EMAIL, ALICE_USERNAME);
     let bob_token = register_account(c, b, BOB_EMAIL, BOB_USERNAME);
     assert_eq!(
@@ -297,6 +383,115 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(bundles_first["username"], remote_address);
     assert_eq!(bundles_first["devices"][0]["deviceId"], 1);
     assert!(bundles_first["devices"][0].get("oneTimePreKey").is_none());
+
+    // The four modes and directional rules are enforced before discovery or
+    // delivery. Existing deployments migrate to open, while list rules remain
+    // durable and are ignored only in the explicitly open mode.
+    assert_eq!(
+        update_federation_mode(c, a, &admin_a, "disabled")["mode"],
+        "disabled"
+    );
+    assert_eq!(
+        c.get(format!("{a}/.well-known/kutup/federation.json"))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        404
+    );
+    let disabled_capabilities = json_response(
+        c.get(format!("{a}/api/auth/settings")).send().unwrap(),
+        "disabled federation capabilities",
+    );
+    assert_eq!(disabled_capabilities["chat"]["federation"], false);
+    assert_eq!(
+        c.get(format!("{a}/api/chat/users/{remote_address}/keys"))
+            .bearer_auth(&alice_token)
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        403
+    );
+
+    assert_eq!(
+        update_federation_mode(c, a, &admin_a, "allowlist")["mode"],
+        "allowlist"
+    );
+    assert_eq!(
+        c.get(format!("{a}/api/chat/users/{remote_address}/keys"))
+            .bearer_auth(&alice_token)
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        403
+    );
+    upsert_federation_rule(c, a, &admin_a, "b.test", "inherit", "allow");
+    fetch();
+
+    upsert_federation_rule(c, a, &admin_a, "b.test", "allow", "block");
+    assert_eq!(
+        update_federation_mode(c, a, &admin_a, "open")["mode"],
+        "open"
+    );
+    fetch(); // Open mode deliberately ignores the saved block.
+    assert_eq!(
+        update_federation_mode(c, a, &admin_a, "blocklist")["mode"],
+        "blocklist"
+    );
+    assert_eq!(
+        c.get(format!("{a}/api/chat/users/{remote_address}/keys"))
+            .bearer_auth(&alice_token)
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        403
+    );
+    upsert_federation_rule(c, a, &admin_a, "b.test", "inherit", "inherit");
+    fetch();
+
+    assert_eq!(
+        update_federation_mode(c, b, &admin_b, "blocklist")["mode"],
+        "blocklist"
+    );
+    upsert_federation_rule(c, b, &admin_b, "a.test", "block", "inherit");
+    assert_eq!(
+        c.get(format!("{a}/api/chat/users/{remote_address}/keys"))
+            .bearer_auth(&alice_token)
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        502
+    );
+    upsert_federation_rule(c, b, &admin_b, "a.test", "allow", "inherit");
+    fetch();
+
+    delete_federation_rule(c, a, &admin_a, "b.test");
+    delete_federation_rule(c, b, &admin_b, "a.test");
+    update_federation_mode(c, a, &admin_a, "open");
+    update_federation_mode(c, b, &admin_b, "open");
+
+    let activity = json_response(
+        c.get(format!("{a}/api/admin/activity?limit=20"))
+            .bearer_auth(&admin_a)
+            .send()
+            .unwrap(),
+        "federation policy audit activity",
+    );
+    assert!(activity["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["action"] == "federation.policy.update"));
+    assert!(activity["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["action"] == "federation.rule.upsert"));
+
     let typed_first: UserPreKeyBundlesResponse =
         serde_json::from_value(bundles_first.clone()).unwrap();
     let first_proof = typed_first.transparency.as_ref().unwrap();

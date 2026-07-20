@@ -727,7 +727,7 @@ pub async fn get_user_profile(
             .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
         if server != federation.server_name() {
             let profile = federation
-                .fetch_remote_profile(&address, &version, &access_key)
+                .fetch_remote_profile(&state, &address, &version, &access_key)
                 .await?;
             return Ok(Json(profile).into_response());
         }
@@ -1139,7 +1139,7 @@ pub async fn get_user_bundles(
                 ));
             }
             let bundles = federation
-                .fetch_remote_bundles(&address, query.transparency_tree_size.unwrap_or(0))
+                .fetch_remote_bundles(&state, &address, query.transparency_tree_size.unwrap_or(0))
                 .await?;
             return Ok(Json(bundles).into_response());
         }

@@ -901,11 +901,13 @@ WebSocket. Browsers use the one-time ticket; native clients instead send `Author
 ## Chat Federation — Server-to-Server Endpoints
 
 Chat federation is present only when the administrator configures a persistent
-federation signing identity. With that identity enabled, the current policy is
-open federation: every correctly authenticated public Kutup peer is admitted,
-subject to HTTPS/DNS/SSRF validation, request/body limits, protocol checks, and
-the coarse federation rate limit. There is no administrator-managed server
-allowlist/blocklist yet.
+federation signing identity. Admission then follows the administrator's
+`disabled`, `allowlist`, `blocklist`, or `open` policy and independent
+per-domain inbound/outbound actions. Policy is evaluated before discovery or
+delivery; admitted traffic remains subject to HTTPS/DNS/SSRF validation,
+request/body limits, signature/protocol checks, and the coarse federation rate
+limit. See the admin endpoints below. Admission does not yet pin remote server
+identity keys or authenticate their rotation.
 
 Except for discovery, requests use `Authorization: Kutup …`. The Ed25519
 signature binds method, exact URI, origin, destination, timestamp, request id,
@@ -917,7 +919,8 @@ window returns `401`.
 
 Public discovery document containing `fedVersion`, canonical server name,
 delegated `apiBase`, and current federation signing-key ids/public keys. Returns
-`404` when chat federation is disabled. Production discovery and delegated API
+`404` when the signing identity is absent or policy mode is `disabled`.
+Production discovery and delegated API
 targets must use public HTTPS.
 
 ### GET /api/fed/chat/users/{username}/keys?transparencyTreeSize=N
@@ -1277,7 +1280,7 @@ The admin audit-log feed, newest first.
 }
 ```
 
-Actions: `user.create`, `user.update` (payload carries a `changes` object with only the fields that were modified), `user.delete`, `user.2fa_disable`, `settings.update`. `adminEmail`/`targetEmail` are the live identities and become `null` once the referenced account is deleted — the `payload` snapshot keeps the trail readable. `nextBefore` is non-null while older pages remain.
+Actions: `user.create`, `user.update` (payload carries a `changes` object with only the fields that were modified), `user.delete`, `user.2fa_disable`, `settings.update`, `federation.policy.update`, `federation.rule.upsert`, and `federation.rule.delete`. `adminEmail`/`targetEmail` are the live identities and become `null` once the referenced account is deleted — the `payload` snapshot keeps the trail readable. `nextBefore` is non-null while older pages remain.
 
 ---
 
@@ -1310,6 +1313,64 @@ Update global server settings.
 ```
 
 **Response:** Same shape as `GET /api/admin/settings`.
+
+---
+
+### GET /api/admin/chat-federation
+
+Return the operational chat-federation admission policy and every saved domain
+rule. Rules remain visible and durable while inactive in `open` or `disabled`.
+
+**Auth:** Bearer JWT (admin)
+
+```json
+{
+  "configured": true,
+  "serverName": "chat.example.com",
+  "mode": "allowlist",
+  "rules": [
+    {
+      "domain": "friend.example",
+      "inbound": "allow",
+      "outbound": "allow",
+      "createdAt": "2026-07-20T10:00:00Z",
+      "updatedAt": "2026-07-20T10:00:00Z"
+    }
+  ]
+}
+```
+
+`configured` reports whether a persistent signing identity exists. Fresh
+databases start in `allowlist`; an existing database with users migrates to
+`open` to preserve its previous connectivity.
+
+### PUT /api/admin/chat-federation
+
+Set the global mode. Body: `{"mode":"disabled|allowlist|blocklist|open"}`.
+Returns the full policy response and writes `federation.policy.update` to the
+admin audit log. `disabled` denies both directions and hides public discovery
+and federation capability advertisement. `allowlist` denies unless the
+direction is explicitly `allow`; `blocklist` allows unless explicitly `block`;
+`open` allows all authenticated servers and deliberately ignores saved rules.
+
+### PUT /api/admin/chat-federation/servers/:domain
+
+Create or replace a canonical lowercase DNS domain rule. The local server name
+cannot be added. Body:
+
+```json
+{ "inbound": "allow", "outbound": "block" }
+```
+
+Each value is `inherit`, `allow`, or `block`. Returns the full policy response,
+wakes any pending outbox head for that destination, and audits
+`federation.rule.upsert`.
+
+### DELETE /api/admin/chat-federation/servers/:domain
+
+Remove the rule so both directions use the active mode's default. Returns the
+full policy response, or `404` when no rule exists, and audits
+`federation.rule.delete`.
 
 ---
 

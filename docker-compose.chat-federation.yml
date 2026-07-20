@@ -46,7 +46,7 @@ services:
       APP_ENV: test
       SERVER_URL: http://a.test
       ALLOWED_ORIGINS: http://127.0.0.1:39081
-      ADMIN_ACCOUNT: ""
+      ADMIN_ACCOUNT: federation-admin-a@example.test:admina:federation-admin-temp
       SEAWEEDFS_MASTER_URL: ""
       CHAT_FEDERATION_SERVER_NAME: a.test
       CHAT_FEDERATION_SIGNING_KEY: ERERERERERERERERERERERERERERERERERERERERERE=
@@ -78,7 +78,7 @@ services:
       APP_ENV: test
       SERVER_URL: http://b.test
       ALLOWED_ORIGINS: http://127.0.0.1:39082
-      ADMIN_ACCOUNT: ""
+      ADMIN_ACCOUNT: federation-admin-b@example.test:adminb:federation-admin-temp
       SEAWEEDFS_MASTER_URL: ""
       CHAT_FEDERATION_SERVER_NAME: b.test
       CHAT_FEDERATION_SIGNING_KEY: IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI=

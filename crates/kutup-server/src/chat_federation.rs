@@ -31,6 +31,7 @@ use time::OffsetDateTime;
 use url::Url;
 use uuid::Uuid;
 
+use crate::chat_federation_policy::{self, FederationDirection, FederationMode};
 use crate::chat_hub::ChatWsOut;
 use crate::config::Config;
 use crate::error::{AppError, AppResult};
@@ -133,7 +134,12 @@ impl ChatFederation {
         }
     }
 
-    async fn discover_remote(&self, destination: &str) -> AppResult<FederationDiscovery> {
+    async fn discover_remote(
+        &self,
+        state: &AppState,
+        direction: FederationDirection,
+        destination: &str,
+    ) -> AppResult<FederationDiscovery> {
         let canonical = AccountAddress::federated("server", destination)
             .map_err(|error| AppError::bad_request(error.to_string()))?;
         if canonical.server.as_deref() != Some(destination) {
@@ -141,6 +147,7 @@ impl ChatFederation {
                 "federation destination must be canonical lowercase DNS",
             ));
         }
+        chat_federation_policy::require_allowed(&state.pool, direction, destination).await?;
 
         let scheme = if self.allow_http { "http" } else { "https" };
         let discovery_url = format!("{scheme}://{destination}/.well-known/kutup/federation.json");
@@ -208,6 +215,7 @@ impl ChatFederation {
 
     pub async fn fetch_remote_bundles(
         &self,
+        state: &AppState,
         address: &AccountAddress,
         transparency_tree_size: u64,
     ) -> AppResult<UserPreKeyBundlesResponse> {
@@ -215,7 +223,9 @@ impl ChatFederation {
             .server
             .as_deref()
             .ok_or_else(|| AppError::bad_request("remote account requires a server"))?;
-        let discovery = self.discover_remote(destination).await?;
+        let discovery = self
+            .discover_remote(state, FederationDirection::Outbound, destination)
+            .await?;
         let uri = format!(
             "/api/fed/chat/users/{}/keys?transparencyTreeSize={transparency_tree_size}",
             address.username
@@ -278,6 +288,7 @@ impl ChatFederation {
 
     pub async fn fetch_remote_profile(
         &self,
+        state: &AppState,
         address: &AccountAddress,
         version: &str,
         access_key: &[u8],
@@ -286,7 +297,9 @@ impl ChatFederation {
             .server
             .as_deref()
             .ok_or_else(|| AppError::bad_request("remote account requires a server"))?;
-        let discovery = self.discover_remote(destination).await?;
+        let discovery = self
+            .discover_remote(state, FederationDirection::Outbound, destination)
+            .await?;
         let uri = format!("/api/fed/chat/users/{}/profile/{version}", address.username);
         let authorization = FederationAuthorization::sign(
             self.server_name.clone(),
@@ -546,7 +559,10 @@ impl ChatFederation {
             AppError::internal(format!("serialize federation transaction: {error}"))
         })?;
         let uri = "/api/fed/chat/messages";
-        let discovery = match self.discover_remote(&row.destination).await {
+        let discovery = match self
+            .discover_remote(state, FederationDirection::Outbound, &row.destination)
+            .await
+        {
             Ok(discovery) => discovery,
             Err(error) => {
                 mark_retry(state, &row, &error.to_string()).await?;
@@ -725,6 +741,7 @@ impl ChatFederation {
 
     async fn verify_inbound(
         &self,
+        state: &AppState,
         headers: &HeaderMap,
         method: &str,
         uri: &str,
@@ -748,8 +765,17 @@ impl ChatFederation {
             ));
         }
 
+        // Apply admission before performing discovery or any other outbound
+        // network work on behalf of the untrusted origin.
+        chat_federation_policy::require_allowed(
+            &state.pool,
+            FederationDirection::Inbound,
+            &authorization.origin,
+        )
+        .await?;
+
         let discovery = self
-            .discover_remote(&authorization.origin)
+            .discover_remote(state, FederationDirection::Inbound, &authorization.origin)
             .await
             .map_err(|_| AppError::unauthorized("cannot authenticate federation origin"))?;
         let key = discovery
@@ -892,6 +918,9 @@ pub async fn discovery(State(state): State<AppState>) -> AppResult<Response> {
         .chat_federation
         .as_ref()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
+    if chat_federation_policy::load_mode(&state.pool).await? == FederationMode::Disabled {
+        return Err(AppError::not_found("chat federation is disabled by policy"));
+    }
     Ok(Json(federation.discovery_document()).into_response())
 }
 
@@ -930,7 +959,7 @@ pub async fn get_user_bundles(
         account.username
     );
     federation
-        .verify_inbound(&headers, "GET", &uri, &[])
+        .verify_inbound(&state, &headers, "GET", &uri, &[])
         .await?;
     let response_username = format!("{}@{}", account.username, federation.server_name());
     let bundles = crate::handlers::chat::load_user_bundles(
@@ -978,7 +1007,7 @@ pub async fn get_user_profile(
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     let uri = format!("/api/fed/chat/users/{}/profile/{version}", account.username);
     federation
-        .verify_inbound(&headers, "GET", &uri, &[])
+        .verify_inbound(&state, &headers, "GET", &uri, &[])
         .await?;
     let encoded = headers
         .get(crate::handlers::chat::PROFILE_ACCESS_KEY_HEADER)
@@ -1027,7 +1056,7 @@ pub async fn deliver_messages(
         .clone()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
     let authorization = federation
-        .verify_inbound(&headers, "POST", "/api/fed/chat/messages", &body)
+        .verify_inbound(&state, &headers, "POST", "/api/fed/chat/messages", &body)
         .await?;
     let transaction: FederatedChatTransaction = serde_json::from_slice(&body)
         .map_err(|_| AppError::bad_request("invalid federation transaction"))?;
