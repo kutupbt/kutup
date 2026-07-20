@@ -64,19 +64,6 @@ pub async fn validate_federation_url(raw_url: &str, allow_http: bool) -> Result<
     validate_url(raw_url, allow_http, false).await
 }
 
-/// Chat-only validation entry point for the local two-server harness. Callers
-/// must enforce that `allow_private_test_network` can only be enabled under an
-/// explicit test environment. Other federation features always use
-/// [`validate_federation_url`] and therefore cannot opt out of private-address
-/// blocking.
-pub async fn validate_chat_federation_url(
-    raw_url: &str,
-    allow_http: bool,
-    allow_private_test_network: bool,
-) -> Result<(), String> {
-    validate_url(raw_url, allow_http, allow_private_test_network).await
-}
-
 async fn validate_url(
     raw_url: &str,
     allow_http: bool,
@@ -178,22 +165,5 @@ mod tests {
         assert!(validate_federation_url("https://8.8.8.8/x", false)
             .await
             .is_ok());
-    }
-
-    #[tokio::test]
-    async fn chat_test_policy_can_explicitly_allow_private_networks() {
-        assert!(
-            validate_chat_federation_url("http://127.0.0.1/x", true, true)
-                .await
-                .is_ok()
-        );
-        assert!(
-            validate_chat_federation_url("http://127.0.0.1/x", true, false)
-                .await
-                .is_err()
-        );
-        assert!(validate_federation_url("http://127.0.0.1/x", true)
-            .await
-            .is_err());
     }
 }

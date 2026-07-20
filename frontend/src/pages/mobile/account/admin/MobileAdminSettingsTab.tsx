@@ -6,7 +6,7 @@ import { AdminFederationPolicyCard } from '@/components/admin/AdminFederationPol
 
 /**
  * MobileAdminSettingsTab — responsive controls for registration and the
- * separate chat-federation admission-policy API.
+ * unified federation control plane.
  *
  *   Registration
  *     ▢ Public registration   [switch]

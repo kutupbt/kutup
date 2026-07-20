@@ -8,7 +8,9 @@ import type {
   AdminActivityResponse,
   AdminFederationPolicy,
   FederationMode,
+  FederationMinimumTrust,
   FederationRuleAction,
+  FederationTrustRequirement,
 } from '@/types/api'
 
 export function useAdminUsers() {
@@ -43,19 +45,23 @@ export function useAdminSettings() {
 
 export function useAdminFederationPolicy() {
   return useQuery<AdminFederationPolicy>({
-    queryKey: ['admin', 'chat-federation'],
+    queryKey: ['admin', 'federation'],
     queryFn: () =>
-      api.get<AdminFederationPolicy>('/admin/chat-federation').then((r) => r.data),
+      api.get<AdminFederationPolicy>('/admin/federation').then((r) => r.data),
   })
 }
 
 export function useUpdateAdminFederationPolicy() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (mode: FederationMode) =>
-      api.put<AdminFederationPolicy>('/admin/chat-federation', { mode }),
+    mutationFn: (policy: {
+      globalEnabled: boolean
+      feature: 'chat' | 'drive'
+      mode: FederationMode
+      minimumTrust: FederationMinimumTrust
+    }) => api.put<AdminFederationPolicy>('/admin/federation', policy),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['admin', 'chat-federation'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'federation'] })
       qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
       toast.success('Federation policy updated')
     },
@@ -72,17 +78,19 @@ export function useUpsertAdminFederationRule() {
       domain,
       inbound,
       outbound,
+      trustRequirement,
     }: {
       domain: string
       inbound: FederationRuleAction
       outbound: FederationRuleAction
+      trustRequirement: FederationTrustRequirement
     }) =>
       api.put<AdminFederationPolicy>(
-        `/admin/chat-federation/servers/${encodeURIComponent(domain)}`,
-        { inbound, outbound },
+        `/admin/federation/rules/chat/${encodeURIComponent(domain)}`,
+        { inbound, outbound, trustRequirement },
       ),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['admin', 'chat-federation'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'federation'] })
       qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
       toast.success('Federation server rule saved')
     },
@@ -97,10 +105,10 @@ export function useDeleteAdminFederationRule() {
   return useMutation({
     mutationFn: (domain: string) =>
       api.delete<AdminFederationPolicy>(
-        `/admin/chat-federation/servers/${encodeURIComponent(domain)}`,
+        `/admin/federation/rules/chat/${encodeURIComponent(domain)}`,
       ),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['admin', 'chat-federation'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'federation'] })
       qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
       toast.success('Federation server rule removed')
     },
@@ -109,6 +117,38 @@ export function useDeleteAdminFederationRule() {
     },
   })
 }
+
+function peerMutation(
+  path: (domain: string) => string,
+  success: string,
+) {
+  return function usePeerMutation() {
+    const qc = useQueryClient()
+    return useMutation({
+      mutationFn: ({ domain, body }: { domain: string; body?: Record<string, string> }) =>
+        api.post<AdminFederationPolicy>(path(domain), body ?? {}),
+      onSuccess: () => {
+        qc.invalidateQueries({ queryKey: ['admin', 'federation'] })
+        qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
+        toast.success(success)
+      },
+      onError: (err: any) => toast.error(err.response?.data?.error ?? 'Federation peer action failed'),
+    })
+  }
+}
+
+export const useVerifyAdminFederationPeer = peerMutation(
+  (domain) => `/admin/federation/peers/${encodeURIComponent(domain)}/verify`,
+  'Federation peer verified',
+)
+export const useRetryAdminFederationPeer = peerMutation(
+  (domain) => `/admin/federation/peers/${encodeURIComponent(domain)}/retry`,
+  'Federation discovery retried',
+)
+export const useRepinAdminFederationPeer = peerMutation(
+  (domain) => `/admin/federation/peers/${encodeURIComponent(domain)}/repin`,
+  'Federation peer re-pinned',
+)
 
 export function useCreateUser() {
   const qc = useQueryClient()

@@ -7,13 +7,14 @@ use sha2::{Digest as _, Sha256};
 use url::Url;
 
 use crate::{
-    decode_base64, federation_key_id, validate_server_name, FederationProtocolError,
+    decode_base64, federation_key_id, push_string, validate_server_name, FederationProtocolError,
     FederationProtocolVersion, CLOCK_SKEW_SECONDS, FEDERATION_SIGNATURE_LABEL,
     FEDERATION_SIGNATURE_TAG, MAX_SIGNATURE_LIFETIME_SECONDS,
 };
 
 const REQUEST_COMPONENTS: &str = "(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"content-type\" \"kutup-federation-version\" \"kutup-federation-feature\" \"kutup-origin\" \"kutup-destination\")";
 const RESPONSE_COMPONENTS: &str = "(\"@status\" \"content-digest\" \"content-type\" \"kutup-federation-version\" \"kutup-federation-feature\" \"kutup-origin\" \"kutup-destination\" \"@method\";req \"@authority\";req \"@path\";req \"@query\";req \"content-digest\";req \"content-type\";req \"kutup-federation-version\";req \"kutup-federation-feature\";req \"kutup-origin\";req \"kutup-destination\";req)";
+const REPLAY_HASH_DOMAIN: &[u8] = b"kutup-federation-request-replay-hash-v1\0";
 
 /// Feature protocol selected independently from federation authentication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +100,50 @@ struct FederationRequestContext {
     request: FederationHttpRequest,
     request_content_digest: String,
     nonce: String,
+    created: i64,
+    expires: i64,
+}
+
+/// Authenticated inputs for the shared replay store. The request hash covers
+/// the stable signed request content but deliberately excludes signature time
+/// parameters, allowing an exact logical retry to be freshly signed with the
+/// same nonce without being misclassified as conflicting content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FederationReplayMetadata {
+    origin: String,
+    request_id: String,
+    request_hash: String,
+    created: i64,
+    expires: i64,
+    /// Keep the reservation through the verifier's permitted post-expiry
+    /// clock skew, not merely through the signed `expires` second.
+    store_until: i64,
+}
+
+impl FederationReplayMetadata {
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
+
+    pub fn request_id(&self) -> &str {
+        &self.request_id
+    }
+
+    pub fn request_hash(&self) -> &str {
+        &self.request_hash
+    }
+
+    pub const fn created(&self) -> i64 {
+        self.created
+    }
+
+    pub const fn expires(&self) -> i64 {
+        self.expires
+    }
+
+    pub const fn store_until(&self) -> i64 {
+        self.store_until
+    }
 }
 
 /// Locally signed request plus the context required to authenticate its
@@ -149,6 +194,8 @@ impl FederationSignedRequest {
             request: request.clone(),
             request_content_digest: content_digest,
             nonce,
+            created,
+            expires,
         };
         Ok(Self {
             request,
@@ -202,11 +249,36 @@ impl FederationVerifiedRequest {
             request: request.clone(),
             request_content_digest: expected_digest,
             nonce: parsed.nonce,
+            created: parsed.created,
+            expires: parsed.expires,
         };
         Ok(Self {
             request,
             headers,
             context,
+        })
+    }
+
+    /// Return replay inputs only after the request profile, digest, time
+    /// window, key ID, and Ed25519 signature have all verified.
+    pub fn replay_metadata(&self) -> Result<FederationReplayMetadata, FederationProtocolError> {
+        Ok(FederationReplayMetadata {
+            origin: self.context.request.origin.clone(),
+            request_id: self.context.nonce.clone(),
+            request_hash: request_replay_hash(
+                &self.context.request,
+                &self.context.request_content_digest,
+            )?,
+            created: self.context.created,
+            expires: self.context.expires,
+            // Verification accepts the inclusive `expires + skew` second;
+            // retain the nonce until the following second so a request valid
+            // at that boundary can still be reserved.
+            store_until: self
+                .context
+                .expires
+                .saturating_add(CLOCK_SKEW_SECONDS)
+                .saturating_add(1),
         })
     }
 
@@ -266,6 +338,33 @@ pub fn content_digest_sha256(body: &[u8]) -> String {
         "sha-256=:{}:",
         base64::engine::general_purpose::STANDARD.encode(Sha256::digest(body))
     )
+}
+
+fn request_replay_hash(
+    request: &FederationHttpRequest,
+    content_digest: &str,
+) -> Result<String, FederationProtocolError> {
+    validate_request(request)?;
+    if content_digest != content_digest_sha256(&request.body) {
+        return Err(FederationProtocolError::ContentDigestMismatch);
+    }
+    let mut bytes = Vec::with_capacity(512);
+    bytes.extend_from_slice(REPLAY_HASH_DOMAIN);
+    push_string(&mut bytes, "@method", &request.method)?;
+    push_string(&mut bytes, "@authority", &request.authority)?;
+    push_string(&mut bytes, "@path", &request.path)?;
+    push_string(&mut bytes, "@query", &request.query)?;
+    push_string(&mut bytes, "content-digest", content_digest)?;
+    push_string(&mut bytes, "content-type", &request.content_type)?;
+    bytes.extend_from_slice(&u16::from(request.federation_version).to_be_bytes());
+    push_string(
+        &mut bytes,
+        "kutup-federation-feature",
+        request.feature.as_str(),
+    )?;
+    push_string(&mut bytes, "kutup-origin", &request.origin)?;
+    push_string(&mut bytes, "kutup-destination", &request.destination)?;
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 fn verify_response(
@@ -704,6 +803,72 @@ mod tests {
             content_digest_sha256(b""),
             "sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:"
         );
+    }
+
+    #[test]
+    fn replay_metadata_is_authenticated_stable_and_content_sensitive() {
+        let signing_key = key(1);
+        let first = FederationSignedRequest::sign(
+            request(FederationFeature::ChatV1),
+            "stable-request-id",
+            100,
+            200,
+            &signing_key,
+        )
+        .unwrap();
+        let first = FederationVerifiedRequest::verify(
+            first.request,
+            first.headers,
+            &signing_key.verifying_key().to_bytes(),
+            150,
+        )
+        .unwrap()
+        .replay_metadata()
+        .unwrap();
+        assert_eq!(first.origin(), "alpha.example");
+        assert_eq!(first.request_id(), "stable-request-id");
+        assert_eq!((first.created(), first.expires()), (100, 200));
+        assert_eq!(first.store_until(), 261);
+
+        let resigned = FederationSignedRequest::sign(
+            request(FederationFeature::ChatV1),
+            "stable-request-id",
+            110,
+            210,
+            &signing_key,
+        )
+        .unwrap();
+        let resigned = FederationVerifiedRequest::verify(
+            resigned.request,
+            resigned.headers,
+            &signing_key.verifying_key().to_bytes(),
+            150,
+        )
+        .unwrap()
+        .replay_metadata()
+        .unwrap();
+        assert_eq!(first.request_hash(), resigned.request_hash());
+
+        let mut changed_request = request(FederationFeature::ChatV1);
+        changed_request.body.push(b' ');
+        let changed = FederationSignedRequest::sign(
+            changed_request,
+            "stable-request-id",
+            110,
+            210,
+            &signing_key,
+        )
+        .unwrap();
+        let changed = FederationVerifiedRequest::verify(
+            changed.request,
+            changed.headers,
+            &signing_key.verifying_key().to_bytes(),
+            150,
+        )
+        .unwrap()
+        .replay_metadata()
+        .unwrap();
+        assert_ne!(first.request_hash(), changed.request_hash());
     }
 
     #[test]

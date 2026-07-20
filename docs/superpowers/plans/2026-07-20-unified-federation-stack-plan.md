@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-20
 
-**Status:** proposed; implementation must not begin until this plan is accepted
+**Status:** accepted; Phases A-C implemented, Phase D is next
 
 **Compatibility decision:** Kutup has no live federation deployment. Replace
 the current experimental Chat and Drive protocols atomically; do not preserve
@@ -451,9 +451,10 @@ documented short maintenance window; mixed old/new discovery behind a load
 balancer is forbidden. This is safer than pretending an unsafe rolling key
 change is supported.
 
-Seeds remain in secret management, never PostgreSQL or the admin API. The
-self-hosting guide will include backup, rotation, rollback, and lost-key
-runbooks. A later offline signer can produce the same public document format
+Seeds remain in secret management, never PostgreSQL or the admin API, and the
+v2 identity seed must be distinct from temporary v1 and key-transparency
+seeds. The self-hosting guide includes backup, rotation, rollback, and lost-key
+behavior. A later offline signer can produce the same public document format
 without changing peer verification.
 
 ## 7. Staged persistence and clean schema cut-overs
@@ -479,10 +480,12 @@ federation_local_identity_documents
 federation_peer_identities
   domain PK, trust_state, current_sequence, current_document_hash,
   current_key_id, current_public_key, first_seen_at, last_seen_at,
-  verified_at, quarantine_reason, pending_document, updated_at
+  verified_at, quarantine_reason, pending_document, pending_identity_chain,
+  pending_document_hash, updated_at
 
 federation_peer_identity_documents
-  (domain, sequence) PK, document_hash, document, acceptance, accepted_at
+  (domain, sequence, document_hash) PK, key_id, document, acceptance, recorded_at
+  // partial unique index: one accepted document per (domain, sequence)
 
 federation_request_replays
   (origin, request_id) PK, request_hash, first_seen_at, expires_at
@@ -749,28 +752,37 @@ cut-over.
 
 ### Phase B — generic persistence and local identity
 
-1. Add migration `033` with the generic identity/replay/policy tables only;
+**Status (2026-07-20): implemented.** The v2 stack is constructed and tested
+but deliberately has no public routes. Migration `033` is additive; the
+temporary Chat v1 and Drive runtimes remain unchanged until their atomic
+cut-over phases.
+
+1. ✅ Add migration `033` with the generic identity/replay/policy tables only;
    leave all v1 Chat and Drive tables intact and add migration isolation tests.
-2. Implement local genesis loading and the explicit current-to-next-key
+2. ✅ Implement local genesis loading and the explicit current-to-next-key
    rotation command, including its audit event.
-3. Implement transactional peer trust-state transitions.
-4. Implement and test signed discovery and immutable-history services, but do
+3. ✅ Implement transactional peer trust-state transitions.
+4. ✅ Implement and test signed discovery and immutable-history services, but do
    not mount them on the public `.well-known` routes yet.
-5. Add the generic `FEDERATION_*` configuration for the unpublished stack while
+5. ✅ Add the generic `FEDERATION_*` configuration for the unpublished stack while
    keeping `CHAT_FEDERATION_*` scoped exclusively to the running v1 module.
 
 ### Phase C — common transport and Chat cut-over
 
-1. Implement one resolver, SSRF-safe client, signed request/response transport,
+**Status (2026-07-20): implemented and live two-server verified.** Migration
+`034` performs the deliberate Chat-only destructive cut-over. The legacy Chat
+stack, routes, policy tables, and configuration no longer exist.
+
+1. ✅ Implement one resolver, SSRF-safe client, signed request/response transport,
    discovery single-flight/cache, and inbound auth.
-2. Atomically mount v2 signed discovery/history, switch the generic
+2. ✅ Atomically mount v2 signed discovery/history, switch the generic
    `FEDERATION_*` configuration, and remove all `CHAT_FEDERATION_*` handling.
-3. Ship `/api/admin/federation` plus the peer list, verify, retry, and tightly
+3. ✅ Ship `/api/admin/federation` plus the peer list, verify, retry, and tightly
    confirmed re-pin endpoints, their audit events, and the web policy/trust UI;
    remove the chat-named admin routes and policy storage.
-4. Cut Chat directory/profile/delivery over to the common stack and add
+4. ✅ Cut Chat directory/profile/delivery over to the common stack and add
    quarantine behavior plus post-recovery wake-up to the durable retry path.
-5. In the same stop-migrate-start release, clear v1 Chat federation transaction
+5. ✅ In the same stop-migrate-start release, clear v1 Chat federation transaction
    state and delete `legacy_chat_federation_v1` plus the duplicate
    identity/discovery/auth code. Do not leave a fallback second stack.
 

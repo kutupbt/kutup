@@ -1,7 +1,8 @@
 # Unified federation protocol
 
-**Status:** v2 protocol and pure verification implemented; server persistence
-and runtime cut-over are pending
+**Status:** v2 protocol and common runtime are implemented; Chat is cut over to
+the shared resolver, trust, policy, replay, and authenticated transport. Drive
+cut-over remains Phase D.
 
 **Version:** 2
 
@@ -99,7 +100,9 @@ FederationDiscoveryV2 {
 Capabilities are unique and byte-sorted; `identity.v1` is mandatory. `apiBase`
 is canonical HTTPS without credentials, query, fragment, a default `:443`, or
 a trailing slash. Delegation to a different DNS host is allowed because the
-server identity signs that endpoint.
+server identity signs that endpoint. Plain HTTP and private addresses exist
+only behind an explicit `APP_ENV=test` harness guard and are not accepted by
+the production profile.
 
 The identity's current key signs these deterministic bytes:
 
@@ -164,11 +167,31 @@ cross-destination replay, cross-feature replay, and request/response mismatch.
 The HTTP `Signature` and `Signature-Input` fields themselves are not covered,
 as required by the RFC construction.
 
-## Runtime transition
+After verification, `FederationVerifiedRequest::replay_metadata()` exposes the
+authenticated nonce, signed time window, skew-adjusted reservation expiry, and
+a domain-separated SHA-256 hash of the stable covered request content. The
+hash excludes signature timestamps so an exact logical retry can be freshly
+signed with the same nonce; changing any method, target, body digest, content
+type, version, feature, origin, or destination changes the hash.
 
-The currently deployed experimental Chat federation v1 implementation is
-isolated in the server-private `legacy_chat_federation_v1` module. It is not a
-public Chat protocol type and is not a fallback from v2. Phase B adds common
-identity and trust persistence. Phase C atomically moves the server transport
-and Chat adapter to this v2 profile and deletes the private v1 module. Drive is
-cut over to the same stack afterward.
+## Runtime behavior
+
+The resolver applies feature admission before DNS, fetches discovery from the
+canonical server name, verifies the signed endpoint and complete identity
+history, then connects only to the already-validated address set. Redirects
+are disabled, response sizes and identity history are bounded, successful
+discovery is cached only through its signed expiry, failures have a short
+negative cache, and concurrent first contact is single-flight per domain.
+
+Only the persisted pinned key authenticates feature requests and responses.
+An exact signed-request replay is distinguishable from reuse of a nonce with
+different content; the latter is rejected. Feature protocols keep their own
+semantic idempotency keys. In particular, a Chat device-list correction keeps
+its stable Chat transaction ID but derives a different transport nonce for the
+corrected payload; byte-identical retries retain that payload-version nonce.
+
+The Phase C migration deliberately clears only experimental Chat federation
+transport sequence/outbox/inbound state and removes the old Chat-only policy
+tables. Local Chat data, local Drive data, and the existing Drive federation
+state are retained. There is no v1 route, configuration alias, or downgrade
+fallback. Drive is cut over to this same stack in Phase D.

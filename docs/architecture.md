@@ -10,9 +10,10 @@ implemented formats.
 
 Chat and Drive federation share the versioned identity, discovery, and HTTP
 authentication boundary specified in
-[`federation-protocol.md`](federation-protocol.md). Its pure v2 protocol is
-implemented; persistence and runtime cut-over are staged separately so no
-mixed v1/v2 trust path is deployed.
+[`federation-protocol.md`](federation-protocol.md). Its pure v2 protocol and
+additive identity/trust/policy persistence are implemented; public routing and
+runtime cut-over are staged separately so no mixed v1/v2 trust path is
+deployed.
 
 ---
 
@@ -234,13 +235,15 @@ persisted and strictly ordered per destination; receivers atomically commit
 mailbox rows, replay records, and a contiguous sequence high-water mark.
 Neither homeserver replicates conversation or room state.
 
-The target common stack is defined by
+The common stack is defined by
 [`federation-protocol.md`](federation-protocol.md): hash-linked server identity
 rotation, signed endpoint/capability discovery, and a strict RFC 9421/9530
-request-and-response profile shared by Chat and Drive. The pure v2 verifier and
-golden vectors are implemented. The live experimental Chat v1 transport stays
-server-private until the Phase C atomic cut-over; it is never a v2 downgrade
-fallback.
+request-and-response profile shared by Chat and Drive. It owns DNS/SSRF-safe
+resolution, discovery caching, immutable TOFU/verified/quarantined identity
+history, admission policy, signed transport, and replay reservation. Chat is a
+feature adapter above that stack and owns only its E2EE directory, profile, and
+ordered ciphertext-delivery payloads. Drive will move onto the same transport
+without sharing Chat's payload authorization rules.
 
 Federation is disabled unless the administrator configures a persistent
 signing key. A database-backed admission policy then selects `disabled`,
@@ -252,9 +255,12 @@ mode changes. Policy is enforced before outbound discovery/queuing and before
 an inbound request can trigger origin discovery; admitted requests must still
 pass HTTPS, DNS/SSRF, protocol, signature, payload, and rate-limit checks.
 
-This is operational admission control, not cryptographic remote identity
-trust. Persistent remote-key pinning and authenticated rotation remain explicit
-hardening work and are not properties operators should assume already exist.
+Every admitted first contact is cryptographically validated before it becomes
+a persistent TOFU pin. Administrators may raise a feature or domain to verified
+trust, compare the full key fingerprint out of band, retry discovery, and use a
+tightly confirmed, audited break-glass re-pin only for a quarantined competing
+history. Valid old-and-new-key-signed rotations advance automatically;
+rollback, gaps, silent replacement, and downgrade are rejected.
 
 ### Current product boundary
 
@@ -290,6 +296,8 @@ PostgreSQL 16 is used for all persistent metadata:
 - Chat devices and public prekey pools
 - Opaque per-device chat mailboxes and idempotent send records
 - Signed device manifests, transparency log/map nodes, checkpoints, and witness attestations
+- Unified federation local/peer identity history, trust/quarantine evidence,
+  replay reservations, and feature-scoped policy
 - Durable per-destination federation outboxes and inbound replay/high-water records
 - TOTP secrets (encrypted)
 - Global settings and per-user quotas

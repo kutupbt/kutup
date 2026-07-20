@@ -37,12 +37,14 @@ pub struct Config {
     /// Chat devices with no authenticated activity for this many days are
     /// expired with their prekeys/mailbox. `0` disables expiry.
     pub chat_device_expiry_days: i64,
-    /// Canonical DNS identity used in `username@server`. Empty derives the
-    /// hostname from `SERVER_URL` when chat federation is configured.
-    pub chat_federation_server_name: String,
-    /// Base64 raw 32-byte Ed25519 signing seed. Empty keeps chat federation
-    /// disabled; production never generates an ephemeral identity at startup.
-    pub chat_federation_signing_key: String,
+    /// Canonical DNS identity for the unified federation v2 stack.
+    pub federation_server_name: String,
+    /// Base64 raw 32-byte Ed25519 seed for unified federation v2.
+    pub federation_signing_key: String,
+    /// Rotation candidate consumed only by the explicit maintenance command.
+    pub federation_next_signing_key: String,
+    /// Test-only HTTP/private-network escape hatch for the v2 stack.
+    pub federation_test_allow_private: bool,
     /// Base64 raw 32-byte Ed25519 seed for stable transparency checkpoints.
     /// This key is deliberately distinct from federation request signing.
     pub chat_transparency_signing_key: String,
@@ -50,10 +52,6 @@ pub struct Config {
     pub chat_transparency_witnesses: String,
     /// Minimum configured witness attestations clients require on a head.
     pub chat_transparency_witness_quorum: i64,
-    /// Allows chat federation to resolve private Docker-network addresses. This
-    /// escape hatch exists only for the two-server integration harness and is
-    /// rejected unless `APP_ENV=test`.
-    pub chat_federation_test_allow_private: bool,
 }
 
 impl Config {
@@ -82,15 +80,13 @@ impl Config {
             chat_mailbox_retention_days: get_env_i64("CHAT_MAILBOX_RETENTION_DAYS", 30),
             chat_send_retention_days: get_env_i64("CHAT_SEND_RETENTION_DAYS", 30),
             chat_device_expiry_days: get_env_i64("CHAT_DEVICE_EXPIRY_DAYS", 90),
-            chat_federation_server_name: get_env("CHAT_FEDERATION_SERVER_NAME", ""),
-            chat_federation_signing_key: get_env("CHAT_FEDERATION_SIGNING_KEY", ""),
+            federation_server_name: get_env("FEDERATION_SERVER_NAME", ""),
+            federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
+            federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
+            federation_test_allow_private: get_env_bool("FEDERATION_TEST_ALLOW_PRIVATE", false),
             chat_transparency_signing_key: get_env("CHAT_TRANSPARENCY_SIGNING_KEY", ""),
             chat_transparency_witnesses: get_env("CHAT_TRANSPARENCY_WITNESSES", ""),
             chat_transparency_witness_quorum: get_env_i64("CHAT_TRANSPARENCY_WITNESS_QUORUM", 0),
-            chat_federation_test_allow_private: get_env_bool(
-                "CHAT_FEDERATION_TEST_ALLOW_PRIVATE",
-                false,
-            ),
         };
         if cfg.jwt_secret.len() < 32 {
             panic!("JWT_SECRET must be at least 32 characters long");

@@ -15,11 +15,14 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-pub use discovery::{FederationCapabilityId, FederationDiscoveryV2};
+pub use discovery::{
+    FederationCapabilityId, FederationDiscoveryTransportPolicy, FederationDiscoveryV2,
+};
 pub use error::FederationProtocolError;
 pub use http_signatures::{
     content_digest_sha256, FederationFeature, FederationHttpRequest, FederationHttpResponse,
-    FederationSignatureHeaders, FederationSignedRequest, FederationVerifiedRequest,
+    FederationReplayMetadata, FederationSignatureHeaders, FederationSignedRequest,
+    FederationVerifiedRequest,
 };
 pub use identity::{
     verify_identity_chain, FederationIdentityDocumentV1, FederationIdentityKeyAlgorithm,

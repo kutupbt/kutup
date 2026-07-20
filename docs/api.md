@@ -903,27 +903,35 @@ WebSocket. Browsers use the one-time ticket; native clients instead send `Author
 ## Chat Federation — Server-to-Server Endpoints
 
 Chat federation is present only when the administrator configures a persistent
-federation signing identity. Admission then follows the administrator's
-`disabled`, `allowlist`, `blocklist`, or `open` policy and independent
-per-domain inbound/outbound actions. Policy is evaluated before discovery or
-delivery; admitted traffic remains subject to HTTPS/DNS/SSRF validation,
-request/body limits, signature/protocol checks, and the coarse federation rate
-limit. See the admin endpoints below. Admission does not yet pin remote server
-identity keys or authenticate their rotation.
+v2 identity. Admission follows the global stop plus Chat's `disabled`,
+`allowlist`, `blocklist`, or `open` mode, trust floor, and directional domain
+rules. Policy is evaluated before DNS/discovery or delivery. Admitted traffic
+must then pass signed discovery and complete identity-history verification,
+persistent pin/rotation/quarantine policy, public-HTTPS and DNS/SSRF checks,
+strict RFC 9421/9530 request and response signatures, replay reservation,
+request/body bounds, protocol checks, and coarse rate limiting. The normative
+common transport contract is in `docs/federation-protocol.md`.
 
-Except for discovery, requests use `Authorization: Kutup …`. The Ed25519
-signature binds method, exact URI, origin, destination, timestamp, request id,
-key id, and the SHA-256 digest of the exact body. A destination mismatch,
-unknown signing key, bad signature, or request outside the five-minute clock
-window returns `401`.
+The v2 Ed25519 signature binds method, authority, path/query, exact-body digest,
+content type, federation version, feature, origin, destination, key ID, nonce,
+and a maximum five-minute lifetime. Authenticated responses bind those request
+components in reverse origin/destination order. A destination mismatch,
+unknown pinned key, bad signature, nonce/content conflict, or invalid time
+window is rejected.
 
 ### GET /.well-known/kutup/federation.json
 
-Public discovery document containing `fedVersion`, canonical server name,
-delegated `apiBase`, and current federation signing-key ids/public keys. Returns
-`404` when the signing identity is absent or policy mode is `disabled`.
-Production discovery and delegated API
-targets must use public HTTPS.
+Signed v2 discovery containing the canonical server, delegated `apiBase`,
+typed capabilities, embedded current identity document and hash, validity
+window, and signature. Returns `404` when the shared identity is absent, the
+global stop is active, or Chat is disabled. Production discovery and delegated
+API targets require public HTTPS.
+
+### GET /.well-known/kutup/federation/identity/{sequence}.json
+
+Return one immutable identity document from the locally verified, contiguous
+history. Genesis is sequence zero. Every rotation hash-links its predecessor
+and is signed by both old and new keys.
 
 ### GET /api/fed/chat/users/{username}/keys?transparencyTreeSize=N
 
@@ -1318,10 +1326,10 @@ Update global server settings.
 
 ---
 
-### GET /api/admin/chat-federation
+### GET /api/admin/federation
 
-Return the operational chat-federation admission policy and every saved domain
-rule. Rules remain visible and durable while inactive in `open` or `disabled`.
+Return the unified federation identity, feature policies, domain rules, and
+persisted peer trust/discovery state. Rules remain visible while inactive.
 
 **Auth:** Bearer JWT (admin)
 
@@ -1329,50 +1337,122 @@ rule. Rules remain visible and durable while inactive in `open` or `disabled`.
 {
   "configured": true,
   "serverName": "chat.example.com",
-  "mode": "allowlist",
+  "fingerprint": "64-lowercase-hex-characters",
+  "fingerprintDisplay": "grouped full fingerprint",
+  "identitySequence": 0,
+  "capabilities": ["identity.v1", "chat.v1"],
+  "globalEnabled": true,
+  "features": [
+    { "feature": "chat", "mode": "allowlist", "minimumTrust": "verified" },
+    { "feature": "drive", "mode": "allowlist", "minimumTrust": "verified" }
+  ],
   "rules": [
     {
       "domain": "friend.example",
+      "feature": "chat",
       "inbound": "allow",
       "outbound": "allow",
+      "trustRequirement": "inherit",
       "createdAt": "2026-07-20T10:00:00Z",
       "updatedAt": "2026-07-20T10:00:00Z"
+    }
+  ],
+  "peers": [
+    {
+      "domain": "friend.example",
+      "trust": "tofu",
+      "sequence": 0,
+      "fingerprint": "64-lowercase-hex-characters",
+      "fingerprintDisplay": "grouped full fingerprint",
+      "apiBase": "https://friend.example",
+      "capabilities": ["chat.v1", "identity.v1"],
+      "firstSeenAt": "2026-07-20T10:00:00Z",
+      "lastSeenAt": "2026-07-20T10:00:00Z",
+      "verifiedAt": null,
+      "discoveryExpiresAt": "2026-07-20T11:00:00Z",
+      "quarantineReason": null,
+      "pendingFingerprint": null,
+      "lastDiscoveryError": null
     }
   ]
 }
 ```
 
-`configured` reports whether a persistent signing identity exists. Fresh
-databases start in `allowlist`; an existing database with users migrates to
-`open` to preserve its previous connectivity.
+`configured` reports whether the persistent v2 identity exists. Fingerprints
+are always returned in full; the grouped form is display-only.
 
-### PUT /api/admin/chat-federation
+### PUT /api/admin/federation
 
-Set the global mode. Body: `{"mode":"disabled|allowlist|blocklist|open"}`.
-Returns the full policy response and writes `federation.policy.update` to the
-admin audit log. `disabled` denies both directions and hides public discovery
-and federation capability advertisement. `allowlist` denies unless the
-direction is explicitly `allow`; `blocklist` allows unless explicitly `block`;
-`open` allows all authenticated servers and deliberately ignores saved rules.
-
-### PUT /api/admin/chat-federation/servers/:domain
-
-Create or replace a canonical lowercase DNS domain rule. The local server name
-cannot be added. Body:
+Update the emergency stop and one feature policy:
 
 ```json
-{ "inbound": "allow", "outbound": "block" }
+{
+  "globalEnabled": true,
+  "feature": "chat",
+  "mode": "disabled|allowlist|blocklist|open",
+  "minimumTrust": "tofu|verified"
+}
 ```
 
-Each value is `inherit`, `allow`, or `block`. Returns the full policy response,
-wakes any pending outbox head for that destination, and audits
-`federation.rule.upsert`.
+Returns the full control-plane response, wakes the Chat outbox, and audits
+`federation.policy.update`. The global stop denies every feature. A disabled
+Chat feature also hides public discovery. `allowlist` requires an explicit
+directional allow, `blocklist` permits inherited directions except explicit
+blocks, and `open` permits every admitted direction. Admission never bypasses
+the effective trust requirement.
 
-### DELETE /api/admin/chat-federation/servers/:domain
+### PUT /api/admin/federation/rules/:feature/:domain
 
-Remove the rule so both directions use the active mode's default. Returns the
-full policy response, or `404` when no rule exists, and audits
+Create or replace a rule for `chat` or `drive` and a canonical lowercase DNS
+domain. The local domain cannot be added.
+
+```json
+{
+  "inbound": "inherit|allow|block",
+  "outbound": "inherit|allow|block",
+  "trustRequirement": "inherit|tofu|verified"
+}
+```
+
+Returns the full response, wakes pending Chat delivery for the domain, and
+audits `federation.rule.upsert`.
+
+### DELETE /api/admin/federation/rules/:feature/:domain
+
+Delete the feature-scoped rule. Returns the full response, or `404` when the
+rule does not exist, wakes pending Chat delivery, and audits
 `federation.rule.delete`.
+
+### POST /api/admin/federation/peers/:domain/verify
+
+Promote the current TOFU pin to verified trust after comparing its full
+fingerprint through an independent channel. Body:
+
+```json
+{ "fingerprint": "64-lowercase-hex-characters" }
+```
+
+### POST /api/admin/federation/peers/:domain/retry
+
+Evict positive and negative discovery caches, retry authenticated Chat
+discovery, and wake pending delivery. The returned control-plane state exposes
+the new discovery result or `lastDiscoveryError`.
+
+### POST /api/admin/federation/peers/:domain/repin
+
+Break-glass replacement for a quarantined competing identity only. It requires
+the exact old fingerprint, pending new fingerprint, and domain:
+
+```json
+{
+  "oldFingerprint": "64-lowercase-hex-characters",
+  "newFingerprint": "64-lowercase-hex-characters",
+  "confirmDomain": "friend.example"
+}
+```
+
+The re-pin is persisted with administrator identity and old/new evidence; it
+is not an automatic fallback for failed rotation.
 
 ---
 

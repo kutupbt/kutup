@@ -125,14 +125,26 @@ fn setup_admin(c: &Client, base: &str, email: &str, username: &str) -> String {
 }
 
 fn update_federation_mode(c: &Client, base: &str, admin: &str, mode: &str) -> Value {
-    json_response(
-        c.put(format!("{base}/api/admin/chat-federation"))
+    let response = json_response(
+        c.put(format!("{base}/api/admin/federation"))
             .bearer_auth(admin)
-            .json(&json!({"mode": mode}))
+            .json(&json!({
+                "globalEnabled": true,
+                "feature": "chat",
+                "mode": mode,
+                "minimumTrust": "tofu"
+            }))
             .send()
             .unwrap(),
         "update federation mode",
-    )
+    );
+    response["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|feature| feature["feature"] == "chat")
+        .unwrap()
+        .clone()
 }
 
 fn upsert_federation_rule(
@@ -144,9 +156,13 @@ fn upsert_federation_rule(
     outbound: &str,
 ) -> Value {
     json_response(
-        c.put(format!("{base}/api/admin/chat-federation/servers/{domain}"))
+        c.put(format!("{base}/api/admin/federation/rules/chat/{domain}"))
             .bearer_auth(admin)
-            .json(&json!({"inbound": inbound, "outbound": outbound}))
+            .json(&json!({
+                "inbound": inbound,
+                "outbound": outbound,
+                "trustRequirement": "inherit"
+            }))
             .send()
             .unwrap(),
         "upsert federation rule",
@@ -155,7 +171,7 @@ fn upsert_federation_rule(
 
 fn delete_federation_rule(c: &Client, base: &str, admin: &str, domain: &str) -> Value {
     json_response(
-        c.delete(format!("{base}/api/admin/chat-federation/servers/{domain}"))
+        c.delete(format!("{base}/api/admin/federation/rules/chat/{domain}"))
             .bearer_auth(admin)
             .send()
             .unwrap(),
@@ -327,12 +343,31 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(discovery_a["apiBase"], "http://a.test");
     assert_eq!(discovery_b["server"], "b.test");
     assert_eq!(discovery_b["apiBase"], "http://b.test");
-    assert_ne!(discovery_a["signingKeys"], discovery_b["signingKeys"]);
+    assert_eq!(discovery_a["fedVersion"], 2);
+    assert_eq!(discovery_b["fedVersion"], 2);
+    let identity_a = json_response(
+        c.get(format!("{a}/.well-known/kutup/federation/identity/0.json"))
+            .send()
+            .unwrap(),
+        "server A immutable identity history",
+    );
+    let identity_b = json_response(
+        c.get(format!("{b}/.well-known/kutup/federation/identity/0.json"))
+            .send()
+            .unwrap(),
+        "server B immutable identity history",
+    );
+    assert_eq!(identity_a, discovery_a["identity"]);
+    assert_eq!(identity_b, discovery_b["identity"]);
+    assert_ne!(
+        discovery_a["identity"]["key"],
+        discovery_b["identity"]["key"]
+    );
 
     let admin_a = setup_admin(c, a, ADMIN_A_EMAIL, "admina");
     let admin_b = setup_admin(c, b, ADMIN_B_EMAIL, "adminb");
     let initial_policy = json_response(
-        c.get(format!("{a}/api/admin/chat-federation"))
+        c.get(format!("{a}/api/admin/federation"))
             .bearer_auth(&admin_a)
             .send()
             .unwrap(),
@@ -340,7 +375,8 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     );
     assert_eq!(initial_policy["configured"], true);
     assert_eq!(initial_policy["serverName"], "a.test");
-    assert_eq!(initial_policy["mode"], "allowlist");
+    assert_eq!(initial_policy["features"][0]["feature"], "chat");
+    assert_eq!(initial_policy["features"][0]["mode"], "allowlist");
     update_federation_mode(c, a, &admin_a, "open");
     update_federation_mode(c, b, &admin_b, "open");
 
@@ -385,14 +421,22 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert!(bundles_first["devices"][0].get("oneTimePreKey").is_none());
 
     // The four modes and directional rules are enforced before discovery or
-    // delivery. Existing deployments migrate to open, while list rules remain
-    // durable and are ignored only in the explicitly open mode.
+    // delivery. Rules remain durable and their admission actions are ignored
+    // only in the explicitly open mode.
     assert_eq!(
         update_federation_mode(c, a, &admin_a, "disabled")["mode"],
         "disabled"
     );
     assert_eq!(
         c.get(format!("{a}/.well-known/kutup/federation.json"))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        404
+    );
+    assert_eq!(
+        c.get(format!("{a}/.well-known/kutup/federation/identity/0.json"))
             .send()
             .unwrap()
             .status()

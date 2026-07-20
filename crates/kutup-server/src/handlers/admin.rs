@@ -17,8 +17,8 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::chat_federation_policy::{self, FederationMode, FederationRuleAction};
 use crate::error::{AppError, AppResult};
+use crate::federation::{FederationDirection, FederationPolicyFeature};
 use crate::jobs;
 use crate::middleware::AdminUser;
 use crate::AppState;
@@ -548,12 +548,78 @@ pub async fn update_settings(
     Ok(Json(json!({"registrationEnabled": req.registration_enabled})).into_response())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum FederationMode {
+    Disabled,
+    Allowlist,
+    Blocklist,
+    Open,
+}
+
+impl FederationMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Allowlist => "allowlist",
+            Self::Blocklist => "blocklist",
+            Self::Open => "open",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum FederationRuleAction {
+    Inherit,
+    Allow,
+    Block,
+}
+
+impl FederationRuleAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Inherit => "inherit",
+            Self::Allow => "allow",
+            Self::Block => "block",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum FederationTrustRequirement {
+    Inherit,
+    Tofu,
+    Verified,
+}
+
+impl FederationTrustRequirement {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Inherit => "inherit",
+            Self::Tofu => "tofu",
+            Self::Verified => "verified",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FederationFeaturePolicyResponse {
+    feature: String,
+    mode: String,
+    minimum_trust: String,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FederationDomainRuleResponse {
     domain: String,
-    inbound: FederationRuleAction,
-    outbound: FederationRuleAction,
+    feature: String,
+    inbound: String,
+    outbound: String,
+    trust_requirement: String,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -562,17 +628,49 @@ pub struct FederationDomainRuleResponse {
 
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct FederationPolicyResponse {
+pub struct FederationPeerResponse {
+    domain: String,
+    trust: String,
+    sequence: u64,
+    fingerprint: String,
+    fingerprint_display: String,
+    api_base: Option<String>,
+    capabilities: Vec<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    first_seen_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    last_seen_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
+    verified_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    discovery_expires_at: Option<OffsetDateTime>,
+    quarantine_reason: Option<String>,
+    pending_fingerprint: Option<String>,
+    last_discovery_error: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FederationControlPlaneResponse {
     configured: bool,
     server_name: Option<String>,
-    mode: FederationMode,
+    fingerprint: Option<String>,
+    fingerprint_display: Option<String>,
+    identity_sequence: Option<u64>,
+    capabilities: Vec<String>,
+    global_enabled: bool,
+    features: Vec<FederationFeaturePolicyResponse>,
     rules: Vec<FederationDomainRuleResponse>,
+    peers: Vec<FederationPeerResponse>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateFederationPolicyRequest {
+    global_enabled: bool,
+    feature: String,
     mode: FederationMode,
+    minimum_trust: FederationTrustRequirement,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -580,201 +678,455 @@ pub struct UpdateFederationPolicyRequest {
 pub struct UpsertFederationDomainRuleRequest {
     inbound: FederationRuleAction,
     outbound: FederationRuleAction,
+    trust_requirement: FederationTrustRequirement,
 }
 
-/// `GET /api/admin/chat-federation` — operational federation mode and all
-/// persisted directional domain rules. Rules are returned even in open or
-/// disabled mode because they are intentionally preserved across mode changes.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifyFederationPeerRequest {
+    fingerprint: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RepinFederationPeerRequest {
+    old_fingerprint: String,
+    new_fingerprint: String,
+    confirm_domain: String,
+}
+
 #[utoipa::path(
     get,
-    path = "/api/admin/chat-federation",
+    path = "/api/admin/federation",
     tag = "admin",
     security(("BearerAuth" = [])),
-    responses((status = 200, description = "Chat federation admission policy", body = FederationPolicyResponse))
+    responses((status = 200, description = "Unified federation policy and peer trust state", body = FederationControlPlaneResponse))
 )]
-pub async fn get_federation_policy(
+pub async fn get_federation_control_plane(
     State(state): State<AppState>,
     _admin: AdminUser,
 ) -> AppResult<Response> {
-    type RuleRow = (String, String, String, OffsetDateTime, OffsetDateTime);
-    let rows: Vec<RuleRow> = sqlx::query_as(
-        "SELECT domain, inbound_action, outbound_action, created_at, updated_at \
-         FROM chat_federation_domain_rules ORDER BY domain",
+    type FeatureRow = (String, String, String);
+    let global_enabled: bool =
+        sqlx::query_scalar("SELECT global_enabled FROM federation_policy WHERE singleton = TRUE")
+            .fetch_one(&state.pool)
+            .await?;
+    let features = sqlx::query_as::<_, FeatureRow>(
+        "SELECT feature, mode, minimum_trust FROM federation_feature_policies ORDER BY feature",
     )
     .fetch_all(&state.pool)
-    .await?;
-    let rules = rows
-        .into_iter()
-        .map(|(domain, inbound, outbound, created_at, updated_at)| {
-            let inbound = inbound
-                .parse()
-                .map_err(|_| AppError::internal("invalid stored inbound federation rule"))?;
-            let outbound = outbound
-                .parse()
-                .map_err(|_| AppError::internal("invalid stored outbound federation rule"))?;
-            Ok(FederationDomainRuleResponse {
+    .await?
+    .into_iter()
+    .map(
+        |(feature, mode, minimum_trust)| FederationFeaturePolicyResponse {
+            feature,
+            mode,
+            minimum_trust,
+        },
+    )
+    .collect();
+
+    type RuleRow = (
+        String,
+        String,
+        String,
+        String,
+        String,
+        OffsetDateTime,
+        OffsetDateTime,
+    );
+    let rules = sqlx::query_as::<_, RuleRow>(
+        "SELECT domain, feature, inbound_action, outbound_action, trust_requirement,
+                created_at, updated_at
+         FROM federation_domain_rules ORDER BY domain, feature",
+    )
+    .fetch_all(&state.pool)
+    .await?
+    .into_iter()
+    .map(
+        |(domain, feature, inbound, outbound, trust_requirement, created_at, updated_at)| {
+            FederationDomainRuleResponse {
                 domain,
+                feature,
                 inbound,
                 outbound,
+                trust_requirement,
                 created_at,
                 updated_at,
+            }
+        },
+    )
+    .collect();
+
+    type PeerRow = (
+        String,
+        String,
+        i64,
+        String,
+        Option<String>,
+        serde_json::Value,
+        OffsetDateTime,
+        OffsetDateTime,
+        Option<OffsetDateTime>,
+        Option<OffsetDateTime>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let peers = sqlx::query_as::<_, PeerRow>(
+        "SELECT domain, trust_state, current_sequence, current_key_id,
+                current_api_base, capabilities, first_seen_at, last_seen_at,
+                verified_at, discovery_expires_at, quarantine_reason,
+                pending_document->'key'->>'keyId', last_discovery_error
+         FROM federation_peer_identities ORDER BY domain",
+    )
+    .fetch_all(&state.pool)
+    .await?
+    .into_iter()
+    .map(
+        |(
+            domain,
+            trust,
+            sequence,
+            fingerprint,
+            api_base,
+            capabilities,
+            first_seen_at,
+            last_seen_at,
+            verified_at,
+            discovery_expires_at,
+            quarantine_reason,
+            pending_fingerprint,
+            last_discovery_error,
+        )| {
+            let capabilities: Vec<kutup_federation_proto::FederationCapabilityId> =
+                serde_json::from_value(capabilities)
+                    .map_err(|_| AppError::internal("invalid stored federation capabilities"))?;
+            Ok(FederationPeerResponse {
+                domain,
+                trust,
+                sequence: u64::try_from(sequence)
+                    .map_err(|_| AppError::internal("invalid stored federation sequence"))?,
+                fingerprint_display: kutup_federation_proto::grouped_fingerprint(&fingerprint)
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+                fingerprint,
+                api_base,
+                capabilities: capabilities.into_iter().map(String::from).collect(),
+                first_seen_at,
+                last_seen_at,
+                verified_at,
+                discovery_expires_at,
+                quarantine_reason,
+                pending_fingerprint,
+                last_discovery_error,
             })
-        })
-        .collect::<AppResult<Vec<_>>>()?;
-    let server_name = state
-        .chat_federation
-        .as_ref()
-        .map(|federation| federation.server_name().to_string());
-    Ok(Json(FederationPolicyResponse {
+        },
+    )
+    .collect::<AppResult<Vec<_>>>()?;
+
+    let (server_name, fingerprint, fingerprint_display, identity_sequence, capabilities) =
+        match state.federation.as_ref() {
+            Some(federation) => {
+                let fingerprint = federation.local_identity().fingerprint().to_owned();
+                (
+                    Some(federation.server_name().to_owned()),
+                    Some(fingerprint.clone()),
+                    Some(
+                        kutup_federation_proto::grouped_fingerprint(&fingerprint)
+                            .map_err(|error| AppError::internal(error.to_string()))?,
+                    ),
+                    Some(federation.local_identity().document().sequence),
+                    vec!["identity.v1".into(), "chat.v1".into()],
+                )
+            }
+            None => (None, None, None, None, Vec::new()),
+        };
+    Ok(Json(FederationControlPlaneResponse {
         configured: server_name.is_some(),
         server_name,
-        mode: chat_federation_policy::load_mode(&state.pool).await?,
+        fingerprint,
+        fingerprint_display,
+        identity_sequence,
+        capabilities,
+        global_enabled,
+        features,
         rules,
+        peers,
     })
     .into_response())
 }
 
-/// `PUT /api/admin/chat-federation` — switch the global admission mode.
 #[utoipa::path(
     put,
-    path = "/api/admin/chat-federation",
+    path = "/api/admin/federation",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = UpdateFederationPolicyRequest,
-    responses((status = 200, description = "Federation mode updated", body = FederationPolicyResponse))
+    responses((status = 200, description = "Unified federation policy updated", body = FederationControlPlaneResponse))
 )]
 pub async fn update_federation_policy(
     State(state): State<AppState>,
     admin: AdminUser,
     Json(req): Json<UpdateFederationPolicyRequest>,
 ) -> AppResult<Response> {
-    let previous = chat_federation_policy::load_mode(&state.pool).await?;
-    sqlx::query(
-        "UPDATE chat_federation_policy SET mode = $1, updated_at = now() \
-         WHERE singleton = TRUE",
-    )
-    .bind(req.mode.to_string())
-    .execute(&state.pool)
-    .await?;
-    if req.mode != FederationMode::Disabled {
-        sqlx::query(
-            "UPDATE chat_federation_outbox SET next_attempt_at = now() \
-             WHERE state = 'pending'",
-        )
-        .execute(&state.pool)
-        .await?;
+    let feature = canonical_federation_feature(&req.feature)?;
+    if matches!(req.minimum_trust, FederationTrustRequirement::Inherit) {
+        return Err(AppError::bad_request(
+            "feature minimumTrust must be tofu or verified",
+        ));
     }
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("UPDATE federation_policy SET global_enabled = $1, updated_at = now() WHERE singleton = TRUE")
+        .bind(req.global_enabled)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE federation_feature_policies
+         SET mode = $2, minimum_trust = $3, updated_at = now() WHERE feature = $1",
+    )
+    .bind(feature)
+    .bind(req.mode.as_str())
+    .bind(req.minimum_trust.as_str())
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    wake_federation_outbox(&state.pool, None).await?;
     audit(
         &state.pool,
         &admin.user_id,
         "federation.policy.update",
         None,
-        json!({"previousMode": previous, "mode": req.mode}),
+        json!({"globalEnabled": req.global_enabled, "feature": feature,
+               "mode": req.mode, "minimumTrust": req.minimum_trust}),
     )
     .await;
-    get_federation_policy(State(state), admin).await
+    get_federation_control_plane(State(state), admin).await
 }
 
-/// `PUT /api/admin/chat-federation/servers/{domain}` — create or replace the
-/// domain's independent inbound and outbound actions.
 #[utoipa::path(
     put,
-    path = "/api/admin/chat-federation/servers/{domain}",
+    path = "/api/admin/federation/rules/{feature}/{domain}",
     tag = "admin",
     security(("BearerAuth" = [])),
-    params(("domain" = String, Path, description = "Canonical lowercase DNS homeserver name")),
+    params(("feature" = String, Path), ("domain" = String, Path)),
     request_body = UpsertFederationDomainRuleRequest,
-    responses((status = 200, description = "Directional domain rule stored", body = FederationPolicyResponse))
+    responses((status = 200, description = "Feature-scoped domain rule stored", body = FederationControlPlaneResponse))
 )]
 pub async fn upsert_federation_domain_rule(
     State(state): State<AppState>,
     admin: AdminUser,
-    Path(domain): Path<String>,
+    Path((feature, domain)): Path<(String, String)>,
     Json(req): Json<UpsertFederationDomainRuleRequest>,
 ) -> AppResult<Response> {
-    let domain = chat_federation_policy::canonical_domain(&domain)?;
+    let feature = canonical_federation_feature(&feature)?;
+    let domain = canonical_federation_domain(&domain)?;
     if state
-        .chat_federation
+        .federation
         .as_ref()
-        .is_some_and(|federation| federation.server_name() == domain)
+        .is_some_and(|stack| stack.server_name() == domain)
     {
         return Err(AppError::bad_request(
             "cannot create a federation rule for the local server",
         ));
     }
     sqlx::query(
-        "INSERT INTO chat_federation_domain_rules \
-            (domain, inbound_action, outbound_action) \
-         VALUES ($1, $2, $3) \
-         ON CONFLICT (domain) DO UPDATE SET \
-            inbound_action = EXCLUDED.inbound_action, \
-            outbound_action = EXCLUDED.outbound_action, updated_at = now()",
+        "INSERT INTO federation_domain_rules
+            (domain, feature, inbound_action, outbound_action, trust_requirement)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (domain, feature) DO UPDATE SET
+            inbound_action = EXCLUDED.inbound_action,
+            outbound_action = EXCLUDED.outbound_action,
+            trust_requirement = EXCLUDED.trust_requirement, updated_at = now()",
     )
     .bind(&domain)
-    .bind(req.inbound.to_string())
-    .bind(req.outbound.to_string())
+    .bind(feature)
+    .bind(req.inbound.as_str())
+    .bind(req.outbound.as_str())
+    .bind(req.trust_requirement.as_str())
     .execute(&state.pool)
     .await?;
-    sqlx::query(
-        "UPDATE chat_federation_outbox SET next_attempt_at = now() \
-         WHERE destination = $1 AND state = 'pending'",
-    )
-    .bind(&domain)
-    .execute(&state.pool)
-    .await?;
+    wake_federation_outbox(&state.pool, Some(&domain)).await?;
     audit(
         &state.pool,
         &admin.user_id,
         "federation.rule.upsert",
         None,
-        json!({"domain": domain, "inbound": req.inbound, "outbound": req.outbound}),
+        json!({"domain": domain, "feature": feature, "inbound": req.inbound,
+                 "outbound": req.outbound, "trustRequirement": req.trust_requirement}),
     )
     .await;
-    get_federation_policy(State(state), admin).await
+    get_federation_control_plane(State(state), admin).await
 }
 
-/// `DELETE /api/admin/chat-federation/servers/{domain}` — remove the explicit
-/// actions and return that domain to the active mode's default.
 #[utoipa::path(
     delete,
-    path = "/api/admin/chat-federation/servers/{domain}",
+    path = "/api/admin/federation/rules/{feature}/{domain}",
     tag = "admin",
     security(("BearerAuth" = [])),
-    params(("domain" = String, Path, description = "Canonical lowercase DNS homeserver name")),
-    responses(
-        (status = 200, description = "Domain rule removed", body = FederationPolicyResponse),
-        (status = 404, description = "No rule exists for the domain")
-    )
+    params(("feature" = String, Path), ("domain" = String, Path)),
+    responses((status = 200, description = "Feature-scoped domain rule removed", body = FederationControlPlaneResponse))
 )]
 pub async fn delete_federation_domain_rule(
     State(state): State<AppState>,
     admin: AdminUser,
-    Path(domain): Path<String>,
+    Path((feature, domain)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    let domain = chat_federation_policy::canonical_domain(&domain)?;
-    let result = sqlx::query("DELETE FROM chat_federation_domain_rules WHERE domain = $1")
-        .bind(&domain)
-        .execute(&state.pool)
-        .await?;
+    let feature = canonical_federation_feature(&feature)?;
+    let domain = canonical_federation_domain(&domain)?;
+    let result =
+        sqlx::query("DELETE FROM federation_domain_rules WHERE domain = $1 AND feature = $2")
+            .bind(&domain)
+            .bind(feature)
+            .execute(&state.pool)
+            .await?;
     if result.rows_affected() == 0 {
         return Err(AppError::not_found("federation domain rule not found"));
     }
-    sqlx::query(
-        "UPDATE chat_federation_outbox SET next_attempt_at = now() \
-         WHERE destination = $1 AND state = 'pending'",
-    )
-    .bind(&domain)
-    .execute(&state.pool)
-    .await?;
+    wake_federation_outbox(&state.pool, Some(&domain)).await?;
     audit(
         &state.pool,
         &admin.user_id,
         "federation.rule.delete",
         None,
-        json!({"domain": domain}),
+        json!({"domain": domain, "feature": feature}),
     )
     .await;
-    get_federation_policy(State(state), admin).await
+    get_federation_control_plane(State(state), admin).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/admin/federation/peers/{domain}/verify",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("domain" = String, Path)),
+    request_body = VerifyFederationPeerRequest,
+    responses((status = 200, description = "Pinned peer fingerprint verified", body = FederationControlPlaneResponse))
+)]
+pub async fn verify_federation_peer(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(domain): Path<String>,
+    Json(req): Json<VerifyFederationPeerRequest>,
+) -> AppResult<Response> {
+    let domain = canonical_federation_domain(&domain)?;
+    let federation = state
+        .federation
+        .as_ref()
+        .ok_or_else(|| AppError::bad_request("federation is not configured"))?;
+    let admin_id = Uuid::parse_str(&admin.user_id)
+        .map_err(|_| AppError::internal("invalid administrator identity"))?;
+    federation
+        .trust()
+        .verify_peer(
+            &domain,
+            &req.fingerprint,
+            admin_id,
+            OffsetDateTime::now_utc(),
+        )
+        .await?;
+    federation.evict_peer_cache(&domain).await;
+    wake_federation_outbox(&state.pool, Some(&domain)).await?;
+    get_federation_control_plane(State(state), admin).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/admin/federation/peers/{domain}/retry",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("domain" = String, Path)),
+    responses((status = 200, description = "Peer discovery retried", body = FederationControlPlaneResponse))
+)]
+pub async fn retry_federation_peer(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(domain): Path<String>,
+) -> AppResult<Response> {
+    let domain = canonical_federation_domain(&domain)?;
+    let federation = state
+        .federation
+        .as_ref()
+        .ok_or_else(|| AppError::bad_request("federation is not configured"))?;
+    federation.evict_peer_cache(&domain).await;
+    let _ = federation
+        .resolve_peer(
+            &domain,
+            kutup_federation_proto::FederationFeature::ChatV1,
+            FederationDirection::Outbound,
+            OffsetDateTime::now_utc(),
+        )
+        .await;
+    wake_federation_outbox(&state.pool, Some(&domain)).await?;
+    get_federation_control_plane(State(state), admin).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/admin/federation/peers/{domain}/repin",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("domain" = String, Path)),
+    request_body = RepinFederationPeerRequest,
+    responses((status = 200, description = "Quarantined peer explicitly re-pinned", body = FederationControlPlaneResponse))
+)]
+pub async fn repin_federation_peer(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(domain): Path<String>,
+    Json(req): Json<RepinFederationPeerRequest>,
+) -> AppResult<Response> {
+    let domain = canonical_federation_domain(&domain)?;
+    let federation = state
+        .federation
+        .as_ref()
+        .ok_or_else(|| AppError::bad_request("federation is not configured"))?;
+    let admin_id = Uuid::parse_str(&admin.user_id)
+        .map_err(|_| AppError::internal("invalid administrator identity"))?;
+    federation
+        .trust()
+        .repin_quarantined_peer(
+            &domain,
+            &req.old_fingerprint,
+            &req.new_fingerprint,
+            &req.confirm_domain,
+            admin_id,
+            OffsetDateTime::now_utc(),
+        )
+        .await?;
+    federation.evict_peer_cache(&domain).await;
+    wake_federation_outbox(&state.pool, Some(&domain)).await?;
+    get_federation_control_plane(State(state), admin).await
+}
+
+fn canonical_federation_feature(value: &str) -> AppResult<&'static str> {
+    match value {
+        "chat" => Ok(FederationPolicyFeature::Chat.as_str()),
+        "drive" => Ok(FederationPolicyFeature::Drive.as_str()),
+        _ => Err(AppError::bad_request(
+            "federation feature must be chat or drive",
+        )),
+    }
+}
+
+fn canonical_federation_domain(value: &str) -> AppResult<String> {
+    kutup_federation_proto::validate_server_name(value)
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    Ok(value.to_owned())
+}
+
+async fn wake_federation_outbox(pool: &PgPool, domain: Option<&str>) -> AppResult<()> {
+    if let Some(domain) = domain {
+        sqlx::query("UPDATE chat_federation_outbox SET next_attempt_at = now() WHERE destination = $1 AND state = 'pending'")
+            .bind(domain).execute(pool).await?;
+    } else {
+        sqlx::query(
+            "UPDATE chat_federation_outbox SET next_attempt_at = now() WHERE state = 'pending'",
+        )
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Default, Deserialize, ToSchema)]

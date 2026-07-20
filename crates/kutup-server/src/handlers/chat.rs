@@ -736,13 +736,17 @@ pub async fn get_user_profile(
             })?;
     if let Some(server) = address.server.as_deref() {
         let federation = state
-            .chat_federation
+            .federation
             .as_ref()
             .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
         if server != federation.server_name() {
-            let profile = federation
-                .fetch_remote_profile(&state, &address, &version, &access_key)
-                .await?;
+            let profile = crate::chat_federation::fetch_remote_profile(
+                &state,
+                &address,
+                &version,
+                &access_key,
+            )
+            .await?;
             return Ok(Json(profile).into_response());
         }
     }
@@ -1144,7 +1148,7 @@ pub async fn get_user_bundles(
             })?;
     if let Some(server) = address.server.as_deref() {
         let federation = state
-            .chat_federation
+            .federation
             .as_ref()
             .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
         if server != federation.server_name() {
@@ -1153,9 +1157,12 @@ pub async fn get_user_bundles(
                     "linked-device key fetch is limited to the local account",
                 ));
             }
-            let bundles = federation
-                .fetch_remote_bundles(&state, &address, query.transparency_tree_size.unwrap_or(0))
-                .await?;
+            let bundles = crate::chat_federation::fetch_remote_bundles(
+                &state,
+                &address,
+                query.transparency_tree_size.unwrap_or(0),
+            )
+            .await?;
             return Ok(Json(bundles).into_response());
         }
     }
@@ -1392,13 +1399,12 @@ pub async fn send_messages(
             })?;
     if let Some(server) = address.server.as_deref() {
         let federation = state
-            .chat_federation
+            .federation
             .as_ref()
             .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
         if server != federation.server_name() {
             let envelope_count = req.envelopes.len();
-            return match federation
-                .enqueue_send(&state, sender_id, &address, req)
+            return match crate::chat_federation::enqueue_send(&state, sender_id, &address, req)
                 .await?
             {
                 crate::chat_federation::FederatedSendOutcome::Delivered { deduplicated } => Ok(

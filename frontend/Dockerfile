@@ -7,6 +7,7 @@ RUN cargo install wasm-bindgen-cli --version 0.2.126 --locked
 
 WORKDIR /src
 COPY Cargo.toml Cargo.toml
+COPY crates/kutup-federation-proto crates/kutup-federation-proto
 COPY crates/kutup-chat-proto crates/kutup-chat-proto
 COPY crates/kutup-chat-core crates/kutup-chat-core
 COPY scripts/build-chat-wasm.sh scripts/build-chat-wasm.sh

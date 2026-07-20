@@ -13,6 +13,19 @@ use crate::{
 
 const DISCOVERY_SIGNING_DOMAIN: &[u8] = b"kutup-federation-discovery-v2\0";
 
+/// URL policy used while producing or verifying a signed discovery document.
+///
+/// The default protocol surface always uses [`Self::HttpsOnly`]. The testing
+/// variant exists solely so an explicitly isolated server harness can exercise
+/// the complete signed protocol without terminating TLS inside every test
+/// container; production callers must never select it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FederationDiscoveryTransportPolicy {
+    #[default]
+    HttpsOnly,
+    AllowHttpForTesting,
+}
+
 /// A closed-format, extensible capability identifier. Capabilities select
 /// feature protocols; they do not negotiate cryptographic primitives.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -89,11 +102,37 @@ impl FederationDiscoveryV2 {
     pub fn sign(
         server: impl Into<String>,
         api_base: impl Into<String>,
+        capabilities: Vec<FederationCapabilityId>,
+        identity: FederationIdentityDocumentV1,
+        signed_at: i64,
+        expires_at: i64,
+        signing_key: &SigningKey,
+    ) -> Result<Self, FederationProtocolError> {
+        Self::sign_with_transport_policy(
+            server,
+            api_base,
+            capabilities,
+            identity,
+            signed_at,
+            expires_at,
+            signing_key,
+            FederationDiscoveryTransportPolicy::HttpsOnly,
+        )
+    }
+
+    /// Explicit test-harness variant of [`Self::sign`]. It does not alter the
+    /// signed bytes; it only permits a canonical HTTP `apiBase` when the caller
+    /// has already enforced its test-only runtime guard.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sign_with_transport_policy(
+        server: impl Into<String>,
+        api_base: impl Into<String>,
         mut capabilities: Vec<FederationCapabilityId>,
         identity: FederationIdentityDocumentV1,
         signed_at: i64,
         expires_at: i64,
         signing_key: &SigningKey,
+        transport_policy: FederationDiscoveryTransportPolicy,
     ) -> Result<Self, FederationProtocolError> {
         capabilities.sort();
         let mut discovery = Self {
@@ -107,7 +146,7 @@ impl FederationDiscoveryV2 {
             expires_at,
             signature: String::new(),
         };
-        discovery.validate_unsigned_shape()?;
+        discovery.validate_unsigned_shape(transport_policy)?;
         discovery.identity.verify_current()?;
         if discovery.identity.server != discovery.server {
             return Err(FederationProtocolError::InvalidDiscovery(
@@ -119,8 +158,11 @@ impl FederationDiscoveryV2 {
                 "signing key does not match the embedded identity",
             ));
         }
-        discovery.signature = base64::engine::general_purpose::STANDARD
-            .encode(signing_key.sign(&discovery.signing_bytes()?).to_bytes());
+        discovery.signature = base64::engine::general_purpose::STANDARD.encode(
+            signing_key
+                .sign(&discovery.signing_bytes_with_transport_policy(transport_policy)?)
+                .to_bytes(),
+        );
         Ok(discovery)
     }
 
@@ -131,7 +173,22 @@ impl FederationDiscoveryV2 {
         expected_server: &str,
         now: i64,
     ) -> Result<(), FederationProtocolError> {
-        self.validate_shape()?;
+        self.verify_at_with_transport_policy(
+            expected_server,
+            now,
+            FederationDiscoveryTransportPolicy::HttpsOnly,
+        )
+    }
+
+    /// Explicit test-harness variant of [`Self::verify_at`]. Production
+    /// verification remains HTTPS-only by construction.
+    pub fn verify_at_with_transport_policy(
+        &self,
+        expected_server: &str,
+        now: i64,
+        transport_policy: FederationDiscoveryTransportPolicy,
+    ) -> Result<(), FederationProtocolError> {
+        self.validate_shape(transport_policy)?;
         if self.server != expected_server || self.identity.server != expected_server {
             return Err(FederationProtocolError::InvalidDiscovery(
                 "server is not bound to the expected peer identity",
@@ -157,7 +214,10 @@ impl FederationDiscoveryV2 {
         self.identity
             .key
             .verifying_key()?
-            .verify_strict(&self.signing_bytes()?, &signature)
+            .verify_strict(
+                &self.signing_bytes_with_transport_policy(transport_policy)?,
+                &signature,
+            )
             .map_err(|_| FederationProtocolError::InvalidDiscovery("signature verification failed"))
     }
 
@@ -171,7 +231,14 @@ impl FederationDiscoveryV2 {
     }
 
     pub fn signing_bytes(&self) -> Result<Vec<u8>, FederationProtocolError> {
-        self.validate_unsigned_shape()?;
+        self.signing_bytes_with_transport_policy(FederationDiscoveryTransportPolicy::HttpsOnly)
+    }
+
+    pub fn signing_bytes_with_transport_policy(
+        &self,
+        transport_policy: FederationDiscoveryTransportPolicy,
+    ) -> Result<Vec<u8>, FederationProtocolError> {
+        self.validate_unsigned_shape(transport_policy)?;
         let mut output = Vec::with_capacity(512);
         output.extend_from_slice(DISCOVERY_SIGNING_DOMAIN);
         output.extend_from_slice(&u16::from(self.fed_version).to_be_bytes());
@@ -193,9 +260,12 @@ impl FederationDiscoveryV2 {
         Ok(output)
     }
 
-    fn validate_unsigned_shape(&self) -> Result<(), FederationProtocolError> {
+    fn validate_unsigned_shape(
+        &self,
+        transport_policy: FederationDiscoveryTransportPolicy,
+    ) -> Result<(), FederationProtocolError> {
         validate_server_name(&self.server)?;
-        let canonical_api_base = normalize_api_base(&self.api_base)?;
+        let canonical_api_base = normalize_api_base(&self.api_base, transport_policy)?;
         if canonical_api_base != self.api_base {
             return Err(crate::error::invalid_field(
                 "apiBase",
@@ -231,8 +301,11 @@ impl FederationDiscoveryV2 {
         Ok(())
     }
 
-    fn validate_shape(&self) -> Result<(), FederationProtocolError> {
-        self.validate_unsigned_shape()?;
+    fn validate_shape(
+        &self,
+        transport_policy: FederationDiscoveryTransportPolicy,
+    ) -> Result<(), FederationProtocolError> {
+        self.validate_unsigned_shape(transport_policy)?;
         decode_base64::<64>("signature", &self.signature)?;
         Ok(())
     }
@@ -262,10 +335,16 @@ fn validate_capability(value: &str) -> Result<(), FederationProtocolError> {
     Ok(())
 }
 
-fn normalize_api_base(value: &str) -> Result<String, FederationProtocolError> {
+fn normalize_api_base(
+    value: &str,
+    transport_policy: FederationDiscoveryTransportPolicy,
+) -> Result<String, FederationProtocolError> {
     let parsed = Url::parse(value)
         .map_err(|_| crate::error::invalid_field("apiBase", "must be an absolute HTTPS URL"))?;
-    if parsed.scheme() != "https"
+    let allowed_scheme = parsed.scheme() == "https"
+        || (transport_policy == FederationDiscoveryTransportPolicy::AllowHttpForTesting
+            && parsed.scheme() == "http");
+    if !allowed_scheme
         || !parsed.username().is_empty()
         || parsed.password().is_some()
         || parsed.query().is_some()
@@ -288,7 +367,7 @@ fn normalize_api_base(value: &str) -> Result<String, FederationProtocolError> {
         ));
     }
 
-    let mut canonical = format!("https://{host}");
+    let mut canonical = format!("{}://{host}", parsed.scheme());
     if let Some(port) = parsed.port() {
         canonical.push(':');
         canonical.push_str(&port.to_string());
@@ -342,6 +421,40 @@ mod tests {
             ["chat.v1", "drive.v1", "identity.v1"]
         );
         discovery.verify_genesis_at("alpha.example", 500).unwrap();
+    }
+
+    #[test]
+    fn http_discovery_requires_the_explicit_test_transport_policy_on_both_sides() {
+        let (key, identity) = identity();
+        assert!(FederationDiscoveryV2::sign(
+            "alpha.example",
+            "http://alpha.example",
+            vec![FederationCapabilityId::identity_v1()],
+            identity.clone(),
+            200,
+            3_800,
+            &key,
+        )
+        .is_err());
+        let document = FederationDiscoveryV2::sign_with_transport_policy(
+            "alpha.example",
+            "http://alpha.example",
+            vec![FederationCapabilityId::identity_v1()],
+            identity,
+            200,
+            3_800,
+            &key,
+            FederationDiscoveryTransportPolicy::AllowHttpForTesting,
+        )
+        .unwrap();
+        assert!(document.verify_at("alpha.example", 500).is_err());
+        document
+            .verify_at_with_transport_policy(
+                "alpha.example",
+                500,
+                FederationDiscoveryTransportPolicy::AllowHttpForTesting,
+            )
+            .unwrap();
     }
 
     #[test]

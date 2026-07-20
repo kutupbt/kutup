@@ -8,13 +8,13 @@ import { AdminFederationPolicyCard } from '@/components/admin/AdminFederationPol
 /**
  * AdminSettingsTab — Settings surface for the desktop admin redesign.
  *
- * The page combines general site settings with the separate chat-federation
- * policy API. Defaults / Security toggles / Danger zone still need backend
+ * The page combines general site settings with the unified federation control
+ * plane. Defaults / Security toggles / Danger zone still need backend
  * support and remain hidden.
  *
  * What IS rendered:
  *  - **Registration** — single toggle, wired to `useUpdateAdminSettings`.
- *  - **Chat federation** — mode plus directional per-domain rules.
+ *  - **Federation** — Chat mode, trust floor, peer trust, and domain rules.
  *  - **Storage backend** — driver (static label, SeaweedFS S3-compatible),
  *    a real "Storage used: X of Y · Z free" row + bar if the new
  *    `storageTotalBytes` value is configured (env-var `STORAGE_TOTAL_BYTES`),

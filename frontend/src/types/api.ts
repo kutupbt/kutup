@@ -106,21 +106,54 @@ export interface AdminSettings {
 
 export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'
 export type FederationRuleAction = 'inherit' | 'allow' | 'block'
+export type FederationMinimumTrust = 'tofu' | 'verified'
+export type FederationTrustRequirement = 'inherit' | FederationMinimumTrust
+
+export interface FederationFeaturePolicy {
+  feature: 'chat' | 'drive'
+  mode: FederationMode
+  minimumTrust: FederationMinimumTrust
+}
 
 export interface FederationDomainRule {
   domain: string
+  feature: 'chat' | 'drive'
   inbound: FederationRuleAction
   outbound: FederationRuleAction
+  trustRequirement: FederationTrustRequirement
   createdAt: string
   updatedAt: string
 }
 
+export interface FederationPeer {
+  domain: string
+  trust: 'tofu' | 'verified' | 'quarantined'
+  sequence: number
+  fingerprint: string
+  fingerprintDisplay: string
+  apiBase: string | null
+  capabilities: string[]
+  firstSeenAt: string
+  lastSeenAt: string
+  verifiedAt: string | null
+  discoveryExpiresAt: string | null
+  quarantineReason: string | null
+  pendingFingerprint: string | null
+  lastDiscoveryError: string | null
+}
+
 export interface AdminFederationPolicy {
-  /** False when the server has no persistent CHAT_FEDERATION_SIGNING_KEY. */
+  /** False when the server has no persistent FEDERATION_SIGNING_KEY. */
   configured: boolean
   serverName: string | null
-  mode: FederationMode
+  fingerprint: string | null
+  fingerprintDisplay: string | null
+  identitySequence: number | null
+  capabilities: string[]
+  globalEnabled: boolean
+  features: FederationFeaturePolicy[]
   rules: FederationDomainRule[]
+  peers: FederationPeer[]
 }
 
 /**

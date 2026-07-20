@@ -763,18 +763,20 @@ discovery, durable message delivery, and gap replay are implemented. A server
 advertises `chat.federation: true` only when its administrator configures a
 persistent signing identity:
 
-- **Discovery:** `GET /.well-known/kutup/federation.json` → `{ fedVersion,
-  server: "domain", apiBase: "https://edge.domain", signingKeys: [ { keyId,
-  publicKey } ] }`. `apiBase` provides DNS-owner-controlled delegation while
-  keeping the canonical address independent of ports and topology.
+- **Discovery:** `GET /.well-known/kutup/federation.json` returns the signed
+  federation v2 document: canonical server, delegated `apiBase`, typed
+  capabilities, current identity document/hash, validity window, and
+  signature. Immutable history lives at
+  `/.well-known/kutup/federation/identity/{sequence}.json`. See the normative
+  common transport contract in [`federation-protocol.md`](federation-protocol.md).
 - **Addressing:** `sender`/recipient become `user@domain`. Clients model
   account addresses as `{ username, server: Option }` and conversations as a
   tagged `Direct`/`Group` identity, so phase 3 changes routing, not identity.
-- **Request auth (`13-…` §3):** the `Authorization: Kutup …` signature binds
-  `{method, uri, origin, destination, timestamp, requestId, keyId,
-  SHA-256(exactBody)}` with the origin server's Ed25519 key. The receiver MUST
-  reply **401 on destination mismatch** (destination binding defeats
-  cross-server replay). Requests outside a five-minute clock window fail.
+- **Request auth (`13-…` §3):** the strict federation v2 RFC 9421/9530 profile
+  binds the method, authority, path/query, exact-body digest, content type,
+  version, typed feature, origin, destination, time window, key ID, and nonce.
+  The receiver MUST reply **401 on destination mismatch**. Every authenticated
+  success or typed application error is response-signed and request-bound.
 - **Remote device directory [IMPL]:** the authenticated local endpoint accepts
   `username@server`, discovers the remote server, and makes a signed lookup.
   The remote read returns the account-signed manifest, its remote-log
@@ -802,18 +804,18 @@ persistent signing identity:
   to other accounts on that server remain unblocked. If a replay record has
   expired, the receiver's contiguous sequence high-water mark safely
   acknowledges the already-consumed sequence without replaying ciphertext.
-- **Current abuse controls [IMPL]:** authenticated origin signatures, request
-  clock bounds, transaction/body limits, SSRF/private-network rejection, a
-  coarse per-IP federation rate limit, administrator-managed `disabled`,
-  `allowlist`, `blocklist`, and `open` modes, and independent per-domain
-  inbound/outbound `inherit`/`allow`/`block` actions. Fresh installations start
-  in allowlist mode; pre-policy databases with users migrate to open so an
-  upgrade does not silently break existing federation. Open ignores saved
-  rules; disabled also hides discovery and capability advertisement.
-- **Remaining federation controls [TODO]:** per-remote shapers; an overload
-  circuit breaker; authenticated remote-key
-  pinning/rotation; and the proof-of-contact delivery gate needed by sealed
-  sender. Admission policy is not a substitute for remote identity pinning.
+- **Current abuse and trust controls [IMPL]:** authenticated request/response
+  signatures, clock/replay/body bounds, DNS-rebinding/SSRF rejection, coarse
+  per-IP rate limiting, a global stop, feature-scoped `disabled`, `allowlist`,
+  `blocklist`, and `open` modes, trust floors, and per-domain directional
+  admission/trust rules. Cryptographically verified first contact creates an
+  immutable TOFU pin; administrators can verify the full fingerprint. Valid
+  dual-signed rotation advances automatically, while rollback, gaps, silent
+  replacement, and competing history quarantine the peer. Disabled Chat also
+  hides discovery.
+- **Remaining federation controls [TODO]:** per-remote shapers, an overload
+  circuit breaker, remote transparency-operator/witness pinning and monitoring,
+  and the proof-of-contact delivery gate needed by sealed sender.
 
 The transport foundation is exercised by `scripts/test-chat-federation.sh` in
 an isolated `a.test`/`b.test` Docker topology. The live contract covers signed
@@ -821,10 +823,10 @@ discovery and directory reads, canonical sender delivery, replay-safe bundles,
 send-id deduplication, remote device-mismatch recovery, terminal recipient
 rejection, and durable retry across destination outage plus origin restart. The
 harness also covers the four admission modes, directional inbound/outbound
-rules, disabled discovery/capabilities, and policy audit entries. Its
-private-network allowance is chat-specific and is rejected unless
-`APP_ENV=test`; the production SSRF policy and all other federation consumers
-continue to reject private/internal destinations.
+rules, disabled discovery/capabilities, and policy audit entries. Its common
+transport private-network/HTTP allowance is explicit and rejected unless
+`APP_ENV=test`; production continues to require HTTPS and public resolved
+destinations.
 
 ---
 

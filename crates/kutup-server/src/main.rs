@@ -7,17 +7,16 @@
 //! handler slice lands.
 
 mod chat_federation;
-mod chat_federation_policy;
 mod chat_hub;
 mod chat_transparency;
 mod config;
 mod db;
 mod error;
+mod federation;
 mod handlers;
 mod hub;
 mod jobs;
 mod jwt;
-mod legacy_chat_federation_v1;
 mod middleware;
 mod models;
 mod openapi;
@@ -66,9 +65,9 @@ pub struct AppState {
     pub hub: Arc<hub::Hub>,
     /// Live chat WebSocket connections, keyed by (user, chat device).
     pub chat_hub: chat_hub::ChatHub,
-    /// Server-to-server chat identity and discovery client. `None` means the
-    /// administrator has not configured a persistent federation signing key.
-    pub chat_federation: Option<Arc<chat_federation::ChatFederation>>,
+    /// One shared v2 federation identity, resolver, trust store, policy engine,
+    /// replay store, and signed transport for every feature protocol.
+    pub(crate) federation: Option<Arc<federation::FederationStack>>,
     /// Persistent operator identity for distinguished key-transparency heads.
     pub transparency_authority: Arc<chat_transparency::TransparencyAuthority>,
     /// Live SeaweedFS capacity probe for the admin dashboard; `None` disables it (the admin
@@ -86,12 +85,39 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = Config::load();
-    let transparency_authority = Arc::new(chat_transparency::TransparencyAuthority::from_config(
-        &config,
-    )?);
     let pool = db::connect(&config.database_url).await?;
     db::migrate(&pool).await?;
     tracing::info!("migrations applied");
+    let args: Vec<String> = std::env::args().collect();
+    if args
+        .get(1)
+        .is_some_and(|value| value == "federation-identity")
+    {
+        if args.get(2).is_some_and(|value| value == "rotate") && args.len() == 3 {
+            run_federation_identity_rotation(&pool, &config).await?;
+            return Ok(());
+        }
+        anyhow::bail!("usage: kutup-server federation-identity rotate");
+    }
+
+    let transparency_authority = Arc::new(chat_transparency::TransparencyAuthority::from_config(
+        &config,
+    )?);
+    let federation = federation::FederationStack::from_config(
+        pool.clone(),
+        &config,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await?
+    .map(Arc::new);
+    if let Some(federation) = &federation {
+        tracing::info!(
+            domain = federation.server_name(),
+            sequence = federation.local_identity().document().sequence,
+            fingerprint = federation.local_identity().fingerprint(),
+            "loaded unified federation identity"
+        );
+    }
     let transparency_backfill = chat_transparency::backfill_existing_manifests(&pool).await?;
     if transparency_backfill > 0 {
         tracing::info!(
@@ -120,7 +146,6 @@ async fn main() -> anyhow::Result<()> {
     // Subcommand dispatch — admin tooling that reuses the DB pool + storage without starting
     // the HTTP server. Mirrors the `os.Args[1]` switch in main.go (orphan-sweep). Runs to
     // completion and exits.
-    let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && args[1] == "orphan-sweep" {
         let code = run_orphan_sweep_cmd(&pool, &storage, &args[2..]).await;
         std::process::exit(code);
@@ -150,18 +175,19 @@ async fn main() -> anyhow::Result<()> {
     // Live SeaweedFS capacity probe (admin dashboard) — None when SEAWEEDFS_MASTER_URL is empty.
     let storage_probe =
         storage_probe::StorageProbe::new(&config.seaweedfs_master_url).map(Arc::new);
-    let chat_federation = chat_federation::ChatFederation::from_config(&config)?.map(Arc::new);
-
     let state = AppState {
         pool,
         config: Arc::new(config),
         storage,
         hub: Arc::new(hub::Hub::new()),
         chat_hub,
-        chat_federation,
+        federation,
         transparency_authority,
         storage_probe,
     };
+    if let Some(federation) = state.federation.as_ref() {
+        federation.spawn_maintenance();
+    }
     chat_federation::spawn_retry_worker(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
@@ -181,6 +207,28 @@ async fn main() -> anyhow::Result<()> {
         ),
     )
     .await?;
+    Ok(())
+}
+
+async fn run_federation_identity_rotation(pool: &PgPool, config: &Config) -> anyhow::Result<()> {
+    let runtime = federation::FederationRuntimeConfig::from_server_config(config)?
+        .ok_or_else(|| anyhow::anyhow!("unified federation is not configured"))?;
+    let previous_fingerprint = runtime.signing_key.verifying_key().to_bytes();
+    let previous_fingerprint = kutup_federation_proto::federation_key_id(&previous_fingerprint);
+    let result =
+        federation::rotate_local_identity(pool, &runtime, time::OffsetDateTime::now_utc()).await?;
+    let status = if result.already_rotated {
+        "already rotated"
+    } else {
+        "rotated"
+    };
+    println!(
+        "federation identity {status}: domain={} sequence={} old={} new={}",
+        runtime.server_name,
+        result.document.sequence,
+        kutup_federation_proto::grouped_fingerprint(&previous_fingerprint)?,
+        kutup_federation_proto::grouped_fingerprint(&result.document.key.key_id)?,
+    );
     Ok(())
 }
 
@@ -263,7 +311,13 @@ fn build_router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route(
             "/.well-known/kutup/federation.json",
-            get(chat_federation::discovery),
+            get(crate::federation::public_discovery)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/.well-known/kutup/federation/identity/:sequence",
+            get(crate::federation::public_identity_document)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         // --- Auth routes (anonymous; rate-limited per the Go middleware chain) ---
         .route("/api/auth/settings", get(auth::get_public_settings))
@@ -439,8 +493,9 @@ fn build_router(state: AppState) -> Router {
             "/api/share/:token/download/:fileId",
             get(shares::download_public_share_file),
         )
-        // --- Federation public endpoints (no auth — the access token is the capability;
-        // called by remote kutup servers). `/fed/users` is rate-limited (60/min/IP). ---
+        // --- Server-to-server endpoints. Chat v2 is identity-authenticated;
+        // the older Drive endpoints below remain capability-only until their
+        // Phase D cut-over. Coarse pre-auth limits are applied per source IP. ---
         .route(
             "/api/fed/users",
             get(federation::get_user_by_username)
@@ -526,13 +581,25 @@ fn build_router(state: AppState) -> Router {
                     get(admin::get_settings).put(admin::update_settings),
                 )
                 .route(
-                    "/api/admin/chat-federation",
-                    get(admin::get_federation_policy).put(admin::update_federation_policy),
+                    "/api/admin/federation",
+                    get(admin::get_federation_control_plane).put(admin::update_federation_policy),
                 )
                 .route(
-                    "/api/admin/chat-federation/servers/:domain",
+                    "/api/admin/federation/rules/:feature/:domain",
                     put(admin::upsert_federation_domain_rule)
                         .delete(admin::delete_federation_domain_rule),
+                )
+                .route(
+                    "/api/admin/federation/peers/:domain/verify",
+                    post(admin::verify_federation_peer),
+                )
+                .route(
+                    "/api/admin/federation/peers/:domain/retry",
+                    post(admin::retry_federation_peer),
+                )
+                .route(
+                    "/api/admin/federation/peers/:domain/repin",
+                    post(admin::repin_federation_peer),
                 )
                 .route_layer(from_fn(middleware::rate_limit_admin)),
         )

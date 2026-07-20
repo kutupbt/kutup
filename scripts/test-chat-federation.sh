@@ -19,6 +19,18 @@ run_phase() {
       chat_federation_live -- --exact --nocapture
 }
 
+wait_server() {
+  local url="$1"
+  local deadline=$((SECONDS + 60))
+  until curl --fail --silent --show-error "$url/api/health" >/dev/null; do
+    if (( SECONDS >= deadline )); then
+      echo "timed out waiting for $url/api/health" >&2
+      return 1
+    fi
+    sleep 1
+  done
+}
+
 cleanup() {
   compose down --volumes --remove-orphans
 }
@@ -37,7 +49,13 @@ run_phase setup
 compose stop edge-b
 run_phase queue
 compose restart backend-a
+# The nginx test edge resolves its upstream when nginx starts. Refresh it after
+# the origin process restart so this test exercises the restarted backend rather
+# than a stale disposable proxy connection.
+compose restart edge-a
 compose start edge-b
 compose up --detach --wait
+wait_server "http://127.0.0.1:$port_a"
+wait_server "http://127.0.0.1:$port_b"
 
 run_phase verify-retry

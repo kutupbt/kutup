@@ -39,12 +39,10 @@ S3_BUCKET=kutup-files
 # Must be the address users (and remote servers) reach this instance at
 SERVER_URL=https://kutup.example.com
 
-# Optional chat federation. Generate this seed once and back it up securely:
+# Unified federation v2 identity used by Chat and, after its cut-over, Drive:
 #   openssl rand -base64 32
-# The server name is the stable suffix in username@server; when omitted it is
-# derived from SERVER_URL. No alias namespace is created.
-# CHAT_FEDERATION_SERVER_NAME=kutup.example.com
-# CHAT_FEDERATION_SIGNING_KEY=<base64-32-byte-ed25519-seed>
+# FEDERATION_SERVER_NAME=kutup.example.com
+# FEDERATION_SIGNING_KEY=<base64-32-byte-ed25519-seed>
 
 # Required dedicated key-transparency operator identity. Generate a different
 # seed once, back it up, and do not reuse the federation identity.
@@ -218,30 +216,49 @@ SERVER_URL=https://kutup.example.com
 When chat federation is configured, this value is published as the delegated
 `apiBase`. If it is wrong, cross-server sharing and chat routing will not work.
 
-Chat federation is disabled by default. To enable it, set a stable
-`CHAT_FEDERATION_SIGNING_KEY` (base64 for exactly 32 random bytes) and optionally
-`CHAT_FEDERATION_SERVER_NAME`. The name must be the lowercase DNS suffix users
-will publish in `username@server`; it defaults to the `SERVER_URL` hostname.
-Back up the signing seed—an ephemeral or silently replaced server identity would
-break remote trust. Production federation requires public HTTPS and refuses
-private/loopback destinations.
+The unified v2 stack uses `FEDERATION_SERVER_NAME` and
+`FEDERATION_SIGNING_KEY`. The name is the stable suffix in
+`username@server`; no alias namespace is created. The stack persists a
+self-signed genesis document and refuses startup if the configured seed is
+silently changed. Use a distinct random seed for key transparency. Production
+federation requires public HTTPS and rejects loopback, private, link-local, and
+other non-public resolved addresses; redirects are disabled.
 
-After configuring the signing key, manage admission in **Admin → Settings →
-Chat federation**. Available modes are `disabled`, `allowlist`, `blocklist`, and
-`open`, with independent inbound/outbound `inherit`, `allow`, or `block`
-actions per canonical server domain. Fresh databases start in `allowlist`.
-Existing databases with users migrate to `open` because federation was
-implicitly open before this control existed; administrators should review and
-switch them deliberately. `disabled` hides discovery and capability
-advertisement as well as denying both directions. Saved rules survive mode
-changes, and `open` intentionally ignores them.
+To rotate the federation identity, keep the current seed in
+`FEDERATION_SIGNING_KEY`, set a distinct `FEDERATION_NEXT_SIGNING_KEY`, stop
+other replicas, and run:
+
+```sh
+docker compose run --rm backend federation-identity rotate
+```
+
+The command verifies and dual-signs one transition and is safe to retry. Then
+move the new seed into `FEDERATION_SIGNING_KEY`, remove
+`FEDERATION_NEXT_SIGNING_KEY`, and restart every replica. Losing the current
+seed does not authorize replacement; remote peers will quarantine a competing
+history and require an explicitly confirmed break-glass re-pin.
+
+Federation is unavailable until both generic identity variables are set. Back
+up the signing seed: losing it does not authorize silent replacement, and
+remote servers will quarantine a conflicting history.
+
+After configuring the identity, manage the unified control plane in **Admin →
+Settings → Federation**. It has an emergency global stop and a feature-scoped
+mode (`disabled`, `allowlist`, `blocklist`, or `open`), minimum trust
+(`tofu` or `verified`), and per-domain inbound/outbound action (`inherit`,
+`allow`, or `block`) with an optional trust override. Fresh databases start in
+`allowlist`. `disabled` hides discovery/capability advertisement as well as
+denying both directions. Saved rules survive mode changes, and `open`
+intentionally ignores their admission actions; trust requirements still apply.
 
 Admission policy is applied before outbound discovery/queuing and inbound
-origin discovery. Valid peers must still pass SSRF, signature, body, protocol,
-and rate-limit checks. This list is operational admission control, not
-cryptographic trust: persistent remote identity pinning and authenticated key
-rotation are still pending. A reverse-proxy IP rule is not an equivalent
-domain-identity policy.
+origin discovery. Admitted peers must still pass discovery/history signatures,
+pinned-identity trust, SSRF, request/response signatures, replay, body,
+protocol, and rate-limit checks. First contact creates a TOFU pin only after
+cryptographic verification. The admin UI shows full fingerprints for out-of-
+band verification, discovery failures, rotations, and quarantine; break-glass
+re-pin requires the old and new full fingerprints plus the exact domain and is
+audited. A reverse-proxy IP rule is not an equivalent domain-identity policy.
 
 After changing these values, rebuild the backend:
 
