@@ -19,10 +19,9 @@ use base64::Engine as _;
 use ed25519_dalek::SigningKey;
 use kutup_chat_proto::{
     AccountAddress, ChatProfileResponse, ChatWsServerMessage, DeliveredEnvelope,
-    DeviceListMismatch, FederatedChatTransaction, FederationAuthorization, FederationDeliveryError,
-    FederationDeliveryRejection, FederationDeliveryResponse, FederationDiscovery,
-    FederationRequest, FederationSigningKey, SendMessagesRequest, UserPreKeyBundlesResponse,
-    FEDERATION_VERSION,
+    DeviceListMismatch, FederatedChatTransaction, FederationDeliveryError,
+    FederationDeliveryRejection, FederationDeliveryResponse, SendMessagesRequest,
+    UserPreKeyBundlesResponse,
 };
 use rand::Rng as _;
 use serde_json::Value;
@@ -36,6 +35,10 @@ use crate::chat_hub::ChatWsOut;
 use crate::config::Config;
 use crate::error::{AppError, AppResult};
 use crate::handlers::FED_CLIENT;
+use crate::legacy_chat_federation_v1::{
+    FederationAuthorization, FederationDiscovery, FederationRequest, FederationSigningKey,
+    FEDERATION_VERSION,
+};
 use crate::{ssrf, AppState};
 
 const MAX_CLOCK_SKEW_SECONDS: i64 = 5 * 60;
@@ -121,14 +124,14 @@ impl ChatFederation {
         &self.server_name
     }
 
-    pub fn discovery_document(&self) -> FederationDiscovery {
+    pub(crate) fn discovery_document(&self) -> FederationDiscovery {
         let public = self.signing_key.verifying_key();
         FederationDiscovery {
             fed_version: FEDERATION_VERSION,
             server: self.server_name.clone(),
             api_base: self.api_base.clone(),
             signing_keys: vec![FederationSigningKey {
-                key_id: kutup_chat_proto::server_key_id(public.as_bytes()),
+                key_id: kutup_federation_proto::federation_key_id(public.as_bytes()),
                 public_key: STANDARD.encode(public.as_bytes()),
             }],
         }
@@ -892,7 +895,7 @@ fn validate_discovery_keys(discovery: &FederationDiscovery) -> AppResult<()> {
         let public: [u8; 32] = public.try_into().map_err(|_| {
             AppError::new(StatusCode::BAD_GATEWAY, "invalid federation signing key")
         })?;
-        if kutup_chat_proto::server_key_id(&public) != key.key_id {
+        if kutup_federation_proto::federation_key_id(&public) != key.key_id {
             return Err(AppError::new(
                 StatusCode::BAD_GATEWAY,
                 "federation signing key id mismatch",

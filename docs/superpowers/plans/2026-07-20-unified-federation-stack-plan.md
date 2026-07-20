@@ -417,9 +417,12 @@ FEDERATION_NEXT_SIGNING_KEY           # explicit rotation command only
 FEDERATION_TEST_ALLOW_PRIVATE
 ```
 
-The existing `CHAT_FEDERATION_*` variables are removed from code, Compose,
-tests, and documentation in the same change. Unknown old names do not enable
-federation, and there is no second configuration path.
+Phase B introduces the generic variables for the new, not-yet-routed stack.
+The existing `CHAT_FEDERATION_*` variables continue to feed only the isolated
+v1 runtime during that phase. Phase C atomically removes those old variables
+from code, Compose, tests, and documentation when it deletes v1. They are never
+aliases for the generic variables, and no runtime probes one after the other as
+a fallback.
 
 After migrations, startup behaves as follows:
 
@@ -453,13 +456,19 @@ self-hosting guide will include backup, rotation, rollback, and lost-key
 runbooks. A later offline signer can produce the same public document format
 without changing peer verification.
 
-## 7. Persistence and clean schema replacement
+## 7. Staged persistence and clean schema cut-overs
 
-Add one migration after `031` that deliberately replaces the experimental
-federation state. It may delete federated Drive shares, pending/received Chat
-federation transactions, old admission rules, and old peer data. It must not
-touch local collections/files, local shares, local Chat mailboxes, user keys,
-or plaintext/ciphertext client history.
+Schema changes are staged so every completed phase remains runnable. There is
+no requirement to preserve experimental federation data, but a migration must
+not invalidate handlers that have not yet been cut over. The destructive work
+therefore happens atomically with the owning feature's code change rather than
+in an earlier phase.
+
+Migration `033` in Phase B is additive. It creates the generic identity,
+authentication, replay, and policy tables below without dropping or renaming
+the tables still used by the v1 Chat and Drive runtimes. It must not touch
+local collections/files, local shares, local Chat mailboxes, user keys, or
+plaintext/ciphertext client history.
 
 Create the generic identity/authentication tables:
 
@@ -502,9 +511,20 @@ global and cannot be weakened per feature.
 
 Both feature policies start in `allowlist + verified`, with the emergency stop
 released. No old chat rules are copied because their meaning was chat-only and
-the new control plane should begin explicitly.
+the new control plane should begin explicitly. During Phase B the old
+chat-named policy tables remain readable only by the isolated v1 runtime; no
+generic-stack decision consults them.
 
-Drop and recreate the two federated Drive share tables with canonical fields:
+The Phase C cut-over migration clears the experimental v1 Chat federation
+outbox/sequence/inbound transaction state because it was authenticated under a
+removed wire protocol, then removes the old chat-only policy tables after the
+Chat runtime and admin policy service use the generic tables. It keeps all
+local Chat state. Mixed v1/v2 server replicas are not supported during this
+breaking cut-over: old replicas are stopped before migration and only v2
+replicas start afterward.
+
+The Phase D migration drops and recreates the two federated Drive share tables
+in the same release that switches every Drive handler to the new schema:
 
 - incoming shares contain `remote_domain`, never `remote_server`/`apiBase`;
 - outgoing shares contain `recipient_domain`, never `recipient_server` URL;
@@ -512,14 +532,17 @@ Drop and recreate the two federated Drive share tables with canonical fields:
 - feature idempotency tables retain mutation request/result records;
 - canonical-domain indexes support quarantine and operations reporting.
 
-Clear the experimental v1 Chat federation outbox/sequence/inbound transaction
-state, because it is authenticated under a removed wire protocol. Keep all
-local Chat state. Migration tests assert this destructive boundary exactly.
+The Phase C and D migration fixtures independently prove their destructive
+boundaries. Neither cut-over may remove local users, collections, files, local
+shares, local Chat mailboxes, user keys, or client-held history.
 
 ## 8. Shared admission and request authentication
 
-Replace the admin contract with `/api/admin/federation`. Remove
-`/api/admin/chat-federation`; there is no route alias or second DTO.
+At the Phase C Chat cut-over, replace the admin contract with
+`/api/admin/federation` and update the web UI in the same release. Remove
+`/api/admin/chat-federation`; there is no route alias or second DTO. This is
+required at Chat cut-over—not deferred polish—because the default `verified`
+trust floor needs an operable fingerprint-verification path.
 
 Each feature's mode keeps the current semantics:
 
@@ -695,9 +718,23 @@ pretending an administrator initiated them.
 
 ## 12. Implementation phases
 
-Each phase must compile and have focused tests before the next begins.
+Each phase must compile, pass its focused tests, and leave every still-routed
+feature operational before the next begins. New v2 services may be constructed
+and tested before routing, but a public endpoint, environment name, or database
+schema switches only in the same phase as all of its consumers. Breaking
+cut-overs use a documented stop-migrate-start maintenance boundary; mixed
+old/new replicas are not supported.
 
 ### Phase A — protocol and pure verification
+
+**Status (2026-07-20): implemented and focused-test verified.** The common v2
+crate owns the typed profile registry, identity chain, signed discovery, strict
+RFC 9421/9530 request/response profile, and published deterministic vectors.
+The former common definitions were removed from `kutup-chat-proto`; its direct
+dependency now supplies the Chat feature identifier while only Chat DTOs stay
+there. The still-running experimental v1 code is explicitly server-private and
+is deleted—not retained as a fallback—during the atomic Phase C runtime
+cut-over.
 
 1. Create `kutup-federation-proto`, move common concepts, and delete their old
    chat-owned definitions.
@@ -712,46 +749,62 @@ Each phase must compile and have focused tests before the next begins.
 
 ### Phase B — generic persistence and local identity
 
-1. Add the identity/replay/policy tables and clean Drive schema replacement.
+1. Add migration `033` with the generic identity/replay/policy tables only;
+   leave all v1 Chat and Drive tables intact and add migration isolation tests.
 2. Implement local genesis loading and the explicit current-to-next-key
-   rotation command.
+   rotation command, including its audit event.
 3. Implement transactional peer trust-state transitions.
-4. Publish signed discovery and immutable history from the shared stack.
+4. Implement and test signed discovery and immutable-history services, but do
+   not mount them on the public `.well-known` routes yet.
+5. Add the generic `FEDERATION_*` configuration for the unpublished stack while
+   keeping `CHAT_FEDERATION_*` scoped exclusively to the running v1 module.
 
 ### Phase C — common transport and Chat cut-over
 
 1. Implement one resolver, SSRF-safe client, signed request/response transport,
    discovery single-flight/cache, and inbound auth.
-2. Cut directory/profile/delivery over to it.
-3. Add quarantine behavior to the durable Chat retry path.
-4. Remove the duplicate identity/discovery/auth code from
-   `chat_federation.rs`; do not leave a fallback second stack.
+2. Atomically mount v2 signed discovery/history, switch the generic
+   `FEDERATION_*` configuration, and remove all `CHAT_FEDERATION_*` handling.
+3. Ship `/api/admin/federation` plus the peer list, verify, retry, and tightly
+   confirmed re-pin endpoints, their audit events, and the web policy/trust UI;
+   remove the chat-named admin routes and policy storage.
+4. Cut Chat directory/profile/delivery over to the common stack and add
+   quarantine behavior plus post-recovery wake-up to the durable retry path.
+5. In the same stop-migrate-start release, clear v1 Chat federation transaction
+   state and delete `legacy_chat_federation_v1` plus the duplicate
+   identity/discovery/auth code. Do not leave a fallback second stack.
 
 ### Phase D — Drive cut-over
 
-1. Add signed `/api/fed/drive/*` endpoints with separate capability headers.
-2. Change remote account lookup and new share creation to canonical domains.
-3. Change invite acceptance and all proxy operations to resolve the pinned
+1. In the same stop-migrate-start release, replace the experimental Drive
+   federation tables with their canonical-domain/capability-hash schema and
+   test that local Drive data survives.
+2. Add signed `/api/fed/drive/*` endpoints with separate capability headers.
+3. Change remote account lookup and new share creation to canonical domains.
+4. Change invite acceptance and all proxy operations to resolve the pinned
    peer on every operation.
-4. Persist ciphertext SHA-256 during upload, add the resumable ciphertext-only
+5. Persist ciphertext SHA-256 during upload, add the resumable ciphertext-only
    digest backfill, and verify signed streamed-download digests before commit.
-5. Remove the unsigned raw-URL/token-path Drive federation code.
+6. Remove the unsigned raw-URL/token-path Drive federation code.
 
-### Phase E — unified control plane
+### Phase E — control-plane completion
 
-1. Rename policy modules/tables/API/UI wording to generic federation and add
-   the feature dimension plus emergency stop.
-2. Add peer identity list, verify, retry, and re-pin endpoints and UI.
-3. Add audit events and wake pending Chat retries after trust recovery.
-4. Remove old admin routes and Chat-prefixed federation configuration.
+1. Complete the shared Chat/Drive operational views, filters, diagnostics, and
+   responsive UI around the generic control plane introduced in Phase C.
+2. Add operational evidence inspection and bulk retry conveniences without
+   creating another trust or policy path.
+3. Complete audit-event presentation and export for both features.
+4. Prove no feature-owned policy, identity, signing-key, or peer-cache path
+   remains.
 
 ### Phase F — documentation, integration, and cleanup
 
 1. Update architecture, API, protocol, self-hosting, roadmap, and test docs.
 2. Extend the two-server harness to exercise both Chat and Drive through the
    same identity and policy.
-3. Add a destructive-migration fixture proving only experimental federation
-   state is reset and all local data is retained.
+3. Run the separate Phase C Chat and Phase D Drive destructive-migration
+   fixtures proving only their experimental federation state is reset and all
+   local data is retained.
 4. Run Rust tests, frontend tests/typecheck/lint, OpenAPI checks, migration
    up/down checks, and the live federation harness.
 5. Confirm with `rg` that feature modules no longer create federation clients,
@@ -783,8 +836,10 @@ Each phase must compile and have focused tests before the next begins.
 - replay reservation is atomic and expires;
 - effective `tofu`/`verified` policy and domain overrides cannot admit a
   quarantined peer;
-- destructive migration removes only experimental federation rows and retains
-  every local user, collection, file, local share, and local Chat mailbox row.
+- the additive Phase B migration leaves v1 Chat and Drive tables usable;
+- the Phase C Chat and Phase D Drive destructive migrations remove only their
+  respective experimental federation rows and retain every local user,
+  collection, file, local share, and local Chat mailbox row.
 
 ### Two/three-server integration
 

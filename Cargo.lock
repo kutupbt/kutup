@@ -2202,6 +2202,7 @@ dependencies = [
  "base64",
  "ed25519-dalek",
  "hex",
+ "kutup-federation-proto",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2255,6 +2256,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kutup-federation-proto"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "url",
+ "utoipa",
+]
+
+[[package]]
 name = "kutup-server"
 version = "0.1.0"
 dependencies = [
@@ -2271,6 +2287,7 @@ dependencies = [
  "jsonwebtoken",
  "kutup-chat-proto",
  "kutup-crypto",
+ "kutup-federation-proto",
  "rand 0.8.6",
  "reqwest",
  "serde",

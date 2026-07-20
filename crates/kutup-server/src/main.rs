@@ -17,6 +17,7 @@ mod handlers;
 mod hub;
 mod jobs;
 mod jwt;
+mod legacy_chat_federation_v1;
 mod middleware;
 mod models;
 mod openapi;

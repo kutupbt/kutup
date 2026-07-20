@@ -8,6 +8,12 @@ rules in [`crypto-agility.md`](crypto-agility.md). That decision is authoritativ
 for protocol evolution; the constructions below describe the currently
 implemented formats.
 
+Chat and Drive federation share the versioned identity, discovery, and HTTP
+authentication boundary specified in
+[`federation-protocol.md`](federation-protocol.md). Its pure v2 protocol is
+implemented; persistence and runtime cut-over are staged separately so no
+mixed v1/v2 trust path is deployed.
+
 ---
 
 ## Key Hierarchy
@@ -227,6 +233,14 @@ destination/body-bound Ed25519 request signatures. Outbound transactions are
 persisted and strictly ordered per destination; receivers atomically commit
 mailbox rows, replay records, and a contiguous sequence high-water mark.
 Neither homeserver replicates conversation or room state.
+
+The target common stack is defined by
+[`federation-protocol.md`](federation-protocol.md): hash-linked server identity
+rotation, signed endpoint/capability discovery, and a strict RFC 9421/9530
+request-and-response profile shared by Chat and Drive. The pure v2 verifier and
+golden vectors are implemented. The live experimental Chat v1 transport stays
+server-private until the Phase C atomic cut-over; it is never a v2 downgrade
+fallback.
 
 Federation is disabled unless the administrator configures a persistent
 signing key. A database-backed admission policy then selects `disabled`,

@@ -1,0 +1,104 @@
+{
+  "description": "Kutup unified federation v2 deterministic Ed25519 conformance vector; seeds are test-only",
+  "identity": {
+    "genesisSeedBase64": "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws=",
+    "rotatedSeedBase64": "DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw=",
+    "genesis": {
+      "identityVersion": 1,
+      "server": "alpha.example",
+      "sequence": 0,
+      "key": {
+        "algorithm": "ed25519",
+        "keyId": "fdf72a088f18f7399e8c52bce448441501f759a595a86980e5d9a422a01e5d55",
+        "publicKey": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo="
+      },
+      "issuedAt": 1700000000,
+      "currentSignature": "uLmY6SefwJzXJ5jDp0gnux/nXMWSsrw42yWfZLWtg5njW9aCOkG2hqssZWv+o7TgviRmHnmFACGq757hRApVCQ=="
+    },
+    "genesisDocumentHash": "bd1a7db9e57d7a83d80109c026160defa2fc4ac9cf989bacc2a7860b34a234e2",
+    "rotation": {
+      "identityVersion": 1,
+      "server": "alpha.example",
+      "sequence": 1,
+      "key": {
+        "algorithm": "ed25519",
+        "keyId": "ed23d853125a3acff2782dddf84e018ebc85942ebf328ff1287202a479964207",
+        "publicKey": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0="
+      },
+      "previousDocumentHash": "bd1a7db9e57d7a83d80109c026160defa2fc4ac9cf989bacc2a7860b34a234e2",
+      "issuedAt": 1700000100,
+      "previousSignature": "kaT0jsidUra6tJvneQWxS6JfEn0mFYbCLaHBviIPgl3mfojY3POQ22N9DxW4kM+3Mi6zXzqVV230y3NqNxmKCA==",
+      "currentSignature": "MEtI8X6YuivBvzTZujsyNqlLoPdRT3WZjyCrF1sGROpZFiL5buVXy+cPH8g/FcULbWjVn3J8v6duxTWYo5L+AQ=="
+    },
+    "rotationDocumentHash": "f2490dda597a09beb4029a4a92ed3d985e917b3a341afb89e3287f04c2bc15fc",
+    "rotationFingerprint": "ed23d853 125a3acf f2782ddd f84e018e bc85942e bf328ff1 287202a4 79964207"
+  },
+  "discovery": {
+    "fedVersion": 2,
+    "server": "alpha.example",
+    "apiBase": "https://federation.alpha.example/api/fed",
+    "capabilities": [
+      "chat.v1",
+      "drive.v1",
+      "identity.v1"
+    ],
+    "identity": {
+      "identityVersion": 1,
+      "server": "alpha.example",
+      "sequence": 1,
+      "key": {
+        "algorithm": "ed25519",
+        "keyId": "ed23d853125a3acff2782dddf84e018ebc85942ebf328ff1287202a479964207",
+        "publicKey": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0="
+      },
+      "previousDocumentHash": "bd1a7db9e57d7a83d80109c026160defa2fc4ac9cf989bacc2a7860b34a234e2",
+      "issuedAt": 1700000100,
+      "previousSignature": "kaT0jsidUra6tJvneQWxS6JfEn0mFYbCLaHBviIPgl3mfojY3POQ22N9DxW4kM+3Mi6zXzqVV230y3NqNxmKCA==",
+      "currentSignature": "MEtI8X6YuivBvzTZujsyNqlLoPdRT3WZjyCrF1sGROpZFiL5buVXy+cPH8g/FcULbWjVn3J8v6duxTWYo5L+AQ=="
+    },
+    "identityDocumentHash": "f2490dda597a09beb4029a4a92ed3d985e917b3a341afb89e3287f04c2bc15fc",
+    "signedAt": 1700000200,
+    "expiresAt": 1700003800,
+    "signature": "prfDRmxKWFilrwsjwVrIcHLFdaOYA3N2PotEKLuQVz5SsTfiMWlGM2dppTcX+lKBr/bZRGGoVmM7hhrvcCZsCA=="
+  },
+  "httpSignature": {
+    "requestSignerPublicKeyBase64": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",
+    "requestSignerKeyId": "ed23d853125a3acff2782dddf84e018ebc85942ebf328ff1287202a479964207",
+    "request": {
+      "method": "POST",
+      "authority": "beta.example",
+      "path": "/api/fed/chat/v1/transactions",
+      "query": "?batch=1%2F2",
+      "contentType": "application/json",
+      "bodyBase64": "eyJ0cmFuc2FjdGlvbklkIjoiMDFIWFlaIn0=",
+      "fedVersion": 2,
+      "feature": "chat.v1",
+      "origin": "alpha.example",
+      "destination": "beta.example"
+    },
+    "requestHeaders": {
+      "contentDigest": "sha-256=:w2mUVLrlDRWqAvbUXp4ty65CN2mpKFlWg/sN1mjCmrQ=:",
+      "signatureInput": "kutup=(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"content-type\" \"kutup-federation-version\" \"kutup-federation-feature\" \"kutup-origin\" \"kutup-destination\");created=1700000300;expires=1700000600;keyid=\"ed23d853125a3acff2782dddf84e018ebc85942ebf328ff1287202a479964207\";alg=\"ed25519\";nonce=\"01HZX-test-nonce\";tag=\"kutup-federation-v2\"",
+      "signature": "kutup=:s5gcHnOWorIbpe2/h62zw+oZc8MHaGLRueo1r1fmhdeDT3GIEpL5r8Mvn/bayRrg26Jg2plL8HHwQwQZ5UV8DQ==:"
+    },
+    "requestSignatureBase": "\"@method\": POST\n\"@authority\": beta.example\n\"@path\": /api/fed/chat/v1/transactions\n\"@query\": ?batch=1%2F2\n\"content-digest\": sha-256=:w2mUVLrlDRWqAvbUXp4ty65CN2mpKFlWg/sN1mjCmrQ=:\n\"content-type\": application/json\n\"kutup-federation-version\": 2\n\"kutup-federation-feature\": chat.v1\n\"kutup-origin\": alpha.example\n\"kutup-destination\": beta.example\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"content-type\" \"kutup-federation-version\" \"kutup-federation-feature\" \"kutup-origin\" \"kutup-destination\");created=1700000300;expires=1700000600;keyid=\"ed23d853125a3acff2782dddf84e018ebc85942ebf328ff1287202a479964207\";alg=\"ed25519\";nonce=\"01HZX-test-nonce\";tag=\"kutup-federation-v2\"",
+    "responseSignerSeedBase64": "DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0=",
+    "responseSignerPublicKeyBase64": "kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo=",
+    "responseSignerKeyId": "defe6330f78fcc11efd0fb28614f0d29d7b60d6e66c25c1c5b0f98fe505fc8bb",
+    "response": {
+      "status": 202,
+      "contentType": "application/json",
+      "bodyBase64": "eyJhY2NlcHRlZCI6dHJ1ZX0=",
+      "fedVersion": 2,
+      "feature": "chat.v1",
+      "origin": "beta.example",
+      "destination": "alpha.example"
+    },
+    "responseHeaders": {
+      "contentDigest": "sha-256=:EaSfhT64vv6U/vJ41IcSXNIJMLnkHEwJNDlEQ+fwCHg=:",
+      "signatureInput": "kutup=(\"@status\" \"content-digest\" \"content-type\" \"kutup-federation-version\" \"kutup-federation-feature\" \"kutup-origin\" \"kutup-destination\" \"@method\";req \"@authority\";req \"@path\";req \"@query\";req \"content-digest\";req \"content-type\";req \"kutup-federation-version\";req \"kutup-federation-feature\";req \"kutup-origin\";req \"kutup-destination\";req);created=1700000401;expires=1700000601;keyid=\"defe6330f78fcc11efd0fb28614f0d29d7b60d6e66c25c1c5b0f98fe505fc8bb\";alg=\"ed25519\";nonce=\"01HZX-test-nonce\";tag=\"kutup-federation-v2\"",
+      "signature": "kutup=:Pt5YfEXk4DalW7KcYPiqGr0BwbZOHMLGxXUvjEbIyESu2vwVLaXqiR+1SS+cLPFK/LdNuxRT3ZPxwBi1tybrAw==:"
+    },
+    "responseSignatureBase": "\"@status\": 202\n\"content-digest\": sha-256=:EaSfhT64vv6U/vJ41IcSXNIJMLnkHEwJNDlEQ+fwCHg=:\n\"content-type\": application/json\n\"kutup-federation-version\": 2\n\"kutup-federation-feature\": chat.v1\n\"kutup-origin\": beta.example\n\"kutup-destination\": alpha.example\n\"@method\";req: POST\n\"@authority\";req: beta.example\n\"@path\";req: /api/fed/chat/v1/transactions\n\"@query\";req: ?batch=1%2F2\n\"content-digest\";req: sha-256=:w2mUVLrlDRWqAvbUXp4ty65CN2mpKFlWg/sN1mjCmrQ=:\n\"content-type\";req: application/json\n\"kutup-federation-version\";req: 2\n\"kutup-federation-feature\";req: chat.v1\n\"kutup-origin\";req: alpha.example\n\"kutup-destination\";req: beta.example\n\"@signature-params\": (\"@status\" \"content-digest\" \"content-type\" \"kutup-federation-version\" \"kutup-federation-feature\" \"kutup-origin\" \"kutup-destination\" \"@method\";req \"@authority\";req \"@path\";req \"@query\";req \"content-digest\";req \"content-type\";req \"kutup-federation-version\";req \"kutup-federation-feature\";req \"kutup-origin\";req \"kutup-destination\";req);created=1700000401;expires=1700000601;keyid=\"defe6330f78fcc11efd0fb28614f0d29d7b60d6e66c25c1c5b0f98fe505fc8bb\";alg=\"ed25519\";nonce=\"01HZX-test-nonce\";tag=\"kutup-federation-v2\""
+  }
+}

@@ -114,6 +114,23 @@ fn register_chat_device(c: &Client, base: &str, token: &str) -> (u32, u32, Strin
         "oneTimeKyberPreKeys": [ { "keyId": 20, "publicKey": key(7), "signature": key(8) } ],
         "name": "live-test-device"
     });
+
+    // The deployed JSON boundary must reject an unknown selected suite before
+    // it can create device state or silently fall back to suite 1.
+    let mut unsupported_body = body.clone();
+    unsupported_body["suite"] = json!(2);
+    let unsupported = c
+        .post(format!("{base}/api/chat/device"))
+        .bearer_auth(token)
+        .json(&unsupported_body)
+        .send()
+        .unwrap();
+    assert_eq!(
+        unsupported.status().as_u16(),
+        422,
+        "unknown suite must fail at the JSON boundary"
+    );
+
     let r = c
         .post(format!("{base}/api/chat/device"))
         .bearer_auth(token)
@@ -140,6 +157,23 @@ fn register_chat_device(c: &Client, base: &str, token: &str) -> (u32, u32, Strin
     );
     let retry_body: Value = retry.json().unwrap();
     assert_eq!(retry_body["deviceId"], device_id);
+
+    // The database read path and public JSON shape must preserve the numeric
+    // registry code rather than defaulting or serializing a Rust variant name.
+    let devices: Value = c
+        .get(format!("{base}/api/chat/device"))
+        .bearer_auth(token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let listed = devices["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|device| device["deviceId"] == device_id)
+        .expect("registered device is listed");
+    assert_eq!(listed["suite"], json!(1));
 
     (device_id, reg_id, identity_key)
 }

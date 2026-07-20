@@ -24,9 +24,8 @@ mod transparency;
 
 pub use content::{ChatContent, ContactControlBody, ContactState, SentTranscriptBody, TextBody};
 pub use federation::{
-    server_key_id, FederatedChatTransaction, FederationAuthorization, FederationDeliveryError,
-    FederationDeliveryRejection, FederationDeliveryResponse, FederationDiscovery,
-    FederationRequest, FederationSigningKey, FEDERATION_AUTH_SCHEME, FEDERATION_VERSION,
+    FederatedChatTransaction, FederationDeliveryError, FederationDeliveryRejection,
+    FederationDeliveryResponse, FEDERATED_CHAT_FEATURE,
 };
 pub use identity::{AccountAddress, AddressError, ConversationId};
 pub use profile::{ChatProfileResponse, OwnChatProfileResponse, PutChatProfileRequest};

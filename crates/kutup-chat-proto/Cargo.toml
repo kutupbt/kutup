@@ -18,6 +18,7 @@ rust-version.workspace = true
 openapi = ["dep:utoipa"]
 
 [dependencies]
+kutup-federation-proto = { path = "../kutup-federation-proto" }
 serde = { workspace = true }
 # The inner content schema (content.rs) carries an untyped `body`/`extra` so
 # unknown message kinds from newer clients survive round-trips — that needs
