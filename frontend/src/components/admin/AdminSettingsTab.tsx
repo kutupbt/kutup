@@ -14,7 +14,7 @@ import { AdminFederationPolicyCard } from '@/components/admin/AdminFederationPol
  *
  * What IS rendered:
  *  - **Registration** — single toggle, wired to `useUpdateAdminSettings`.
- *  - **Federation** — Chat mode, trust floor, peer trust, and domain rules.
+ *  - **Federation** — per-feature modes, trust floors, peer trust, and domain rules.
  *  - **Storage backend** — driver (static label, SeaweedFS S3-compatible),
  *    a real "Storage used: X of Y · Z free" row + bar if the new
  *    `storageTotalBytes` value is configured (env-var `STORAGE_TOTAL_BYTES`),

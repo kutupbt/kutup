@@ -2,6 +2,8 @@
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Historical filename retained for developer muscle memory; the suite now
+# exercises the shared v2 stack through both Drive and Chat.
 compose_file="$root_dir/docker-compose.chat-federation.yml"
 project="${KUTUP_FEDERATION_PROJECT:-kutup-chat-federation-test}"
 port_a="${KUTUP_FED_A_PORT:-39081}"

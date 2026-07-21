@@ -1,16 +1,7 @@
-//! Outbound-federation URL guard — mirrors `backend/utils/ssrf.go`.
-//!
-//! Blocks requests to private/internal address ranges (SSRF defense) and requires
-//! HTTPS (unless `allow_http` for local/dev). When the host is a name it is resolved
-//! and *every* returned address is checked, matching the Go `net.LookupHost` loop.
-//!
-//! Consumed by the federation/fed-proxy handlers (server slice 6); ported now with its
-//! own unit tests, so `dead_code` is allowed until those call sites land.
-#![allow(dead_code)]
+//! IP classification shared by the unified federation resolver. Feature
+//! adapters never validate or dereference caller-supplied URLs themselves.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-
-use url::Url;
 
 /// The blocked CIDRs from `ssrf.go`'s `privateCIDRs` list, as `(network, prefix_bits)`.
 const PRIVATE_V4: &[(Ipv4Addr, u8)] = &[
@@ -58,53 +49,6 @@ pub fn is_private_ip(ip: IpAddr) -> bool {
     }
 }
 
-/// Validates a federation URL — mirrors `ValidateFederationURL`. `Err(msg)` carries the
-/// same human-readable reasons the Go function returns.
-pub async fn validate_federation_url(raw_url: &str, allow_http: bool) -> Result<(), String> {
-    validate_url(raw_url, allow_http, false).await
-}
-
-async fn validate_url(
-    raw_url: &str,
-    allow_http: bool,
-    allow_private_test_network: bool,
-) -> Result<(), String> {
-    let u = Url::parse(raw_url).map_err(|e| format!("invalid URL: {e}"))?;
-
-    let scheme = u.scheme();
-    if scheme != "https" && !(allow_http && scheme == "http") {
-        return Err("federation URLs must use HTTPS".to_string());
-    }
-
-    let host = u.host_str().unwrap_or("");
-    if host.is_empty() {
-        return Err("invalid URL: missing host".to_string());
-    }
-
-    // Host is already a literal IP — check it directly.
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_private_ip(ip) && !allow_private_test_network {
-            return Err("federation to private/internal addresses is not allowed".to_string());
-        }
-        return Ok(());
-    }
-
-    // Resolve and check every returned address (port is irrelevant to the IP check).
-    let addrs: Vec<_> = tokio::net::lookup_host((host, 0u16))
-        .await
-        .map_err(|e| format!("cannot resolve host {host:?}: {e}"))?
-        .collect();
-    if addrs.is_empty() {
-        return Err(format!("host {host:?} resolved to no addresses"));
-    }
-    for addr in addrs {
-        if is_private_ip(addr.ip()) && !allow_private_test_network {
-            return Err("federation to private/internal addresses is not allowed".to_string());
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,37 +77,5 @@ mod tests {
         for ip in ["8.8.8.8", "1.1.1.1", "172.32.0.1", "2606:4700:4700::1111"] {
             assert!(!is_private_ip(ip.parse().unwrap()), "{ip} should be public");
         }
-    }
-
-    #[tokio::test]
-    async fn rejects_non_https() {
-        let err = validate_federation_url("http://example.com/x", false)
-            .await
-            .unwrap_err();
-        assert!(err.contains("HTTPS"));
-        // …but http is allowed in dev mode.
-        // (uses an IP literal so the test never hits real DNS)
-        assert!(validate_federation_url("http://8.8.8.8/x", true)
-            .await
-            .is_ok());
-    }
-
-    #[tokio::test]
-    async fn rejects_private_ip_literal() {
-        let err = validate_federation_url("https://127.0.0.1/x", false)
-            .await
-            .unwrap_err();
-        assert!(err.contains("private/internal"));
-        let err = validate_federation_url("https://169.254.169.254/latest/meta-data", false)
-            .await
-            .unwrap_err();
-        assert!(err.contains("private/internal"));
-    }
-
-    #[tokio::test]
-    async fn allows_public_ip_literal() {
-        assert!(validate_federation_url("https://8.8.8.8/x", false)
-            .await
-            .is_ok());
     }
 }

@@ -194,33 +194,6 @@ pub struct ShareCollectionRequest {
     pub upload_quota_bytes: Option<i64>,
 }
 
-/// `POST /api/collections/{id}/share-federated` body — mirrors `handlers.ShareFederatedRequest`.
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ShareFederatedRequest {
-    pub recipient_username: String,
-    pub recipient_server: String,
-    pub encrypted_collection_key: String,
-    pub can_upload: bool,
-    pub can_delete: bool,
-    pub upload_quota_bytes: Option<i64>,
-}
-
-/// `POST /api/collections/{id}/share-federated` result — mirrors `handlers.ShareFederatedResult`.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ShareFederatedResult {
-    pub invite_token: String,
-    pub invite_url: String,
-}
-
-/// Federation pubkey lookup — mirrors `handlers.PubkeyResponse`.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct PubkeyResponse {
-    pub public_key: String,
-}
-
 /// File listing row — mirrors `handlers.FileRow`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -317,25 +290,6 @@ pub struct PublicShareResponse {
     pub encrypted_collection_key_nonce: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
-}
-
-/// `GET /api/fed/invites/{token}` — mirrors `handlers.FedInviteResponse`.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct FedInviteResponse {
-    pub wrapped_key: String,
-    pub encrypted_name: String,
-    pub name_nonce: String,
-    pub can_upload: bool,
-    pub can_delete: bool,
-    pub upload_quota_bytes: Option<i64>,
-}
-
-/// `POST /api/fed-proxy/incoming` body — mirrors `handlers.AddIncomingShareRequest`.
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct AddIncomingShareRequest {
-    pub invite_url: String,
 }
 
 /// Admin user row — mirrors `handlers.UserRow`.

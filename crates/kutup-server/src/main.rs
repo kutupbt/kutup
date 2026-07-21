@@ -11,6 +11,7 @@ mod chat_hub;
 mod chat_transparency;
 mod config;
 mod db;
+mod drive_federation;
 mod error;
 mod federation;
 mod handlers;
@@ -189,6 +190,7 @@ async fn main() -> anyhow::Result<()> {
         federation.spawn_maintenance();
     }
     chat_federation::spawn_retry_worker(state.clone());
+    drive_federation::spawn_digest_backfill(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
     // `Router::layer` only runs for already-matched paths, so it can't rescue an unmatched
@@ -299,8 +301,8 @@ fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
 
     use handlers::{
-        admin, auth, chat, collab, collections, devices, federation, fedproxy, file_assets,
-        file_versions, files, shares, trash, tus,
+        admin, auth, chat, collab, collections, devices, file_assets, file_versions, files, shares,
+        trash, tus,
     };
 
     Router::new()
@@ -358,10 +360,9 @@ fn build_router(state: AppState) -> Router {
             "/api/collections",
             get(collections::list_collections).post(collections::create_collection),
         )
-        // Static segment registered alongside `:id` (matchit prefers the literal).
         .route(
-            "/api/collections/fed-pubkey",
-            get(collections::fetch_remote_pubkey),
+            "/api/drive/federation/users/:username",
+            get(drive_federation::fetch_remote_user),
         )
         .route(
             "/api/collections/:id",
@@ -378,8 +379,8 @@ fn build_router(state: AppState) -> Router {
             post(collections::share_collection),
         )
         .route(
-            "/api/collections/:id/share-federated",
-            post(collections::share_federated),
+            "/api/collections/:id/federated-shares",
+            post(drive_federation::create_federated_share),
         )
         .route("/api/collections/:id/files", get(files::list_files))
         // --- Devices (authenticated) ---
@@ -493,14 +494,8 @@ fn build_router(state: AppState) -> Router {
             "/api/share/:token/download/:fileId",
             get(shares::download_public_share_file),
         )
-        // --- Server-to-server endpoints. Chat v2 is identity-authenticated;
-        // the older Drive endpoints below remain capability-only until their
-        // Phase D cut-over. Coarse pre-auth limits are applied per source IP. ---
-        .route(
-            "/api/fed/users",
-            get(federation::get_user_by_username)
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
+        // --- Server-to-server endpoints. Every feature uses the shared v2
+        // identity, discovery, policy, pinning, replay, and signed transport. ---
         .route(
             "/api/fed/chat/users/:username/keys",
             get(chat_federation::get_user_bundles)
@@ -517,44 +512,53 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(DefaultBodyLimit::max(FED_CHAT_BODY_LIMIT_BYTES))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
-        .route("/api/fed/invites/:token", get(federation::get_invite))
         .route(
-            "/api/fed/shares/:token/files",
-            get(federation::list_share_files).post(federation::upload_share_file),
+            "/api/fed/drive/users/:username",
+            get(drive_federation::get_user).route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/shares/:token/files/:fileId/download",
-            get(federation::download_share_file),
+            "/api/fed/drive/invite",
+            get(drive_federation::get_invite)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/shares/:token/files/:fileId",
-            delete(federation::delete_share_file),
-        )
-        // --- Federation proxy (authenticated; the recipient's browser proxies to the
-        // remote server through these so it never holds the remote token). ---
-        .route(
-            "/api/fed-proxy/incoming",
-            post(fedproxy::add_incoming_share).get(fedproxy::list_incoming_shares),
+            "/api/fed/drive/files",
+            get(drive_federation::list_files)
+                .post(drive_federation::upload_file)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed-proxy/incoming/:shareId",
-            delete(fedproxy::remove_incoming_share),
+            "/api/fed/drive/files/:fileId/content",
+            get(drive_federation::download_file)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed-proxy/:shareId/files",
-            get(fedproxy::proxy_list_files),
+            "/api/fed/drive/files/:fileId",
+            delete(drive_federation::delete_file)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        // --- Authenticated local Drive adapter. The browser never receives a
+        // stored remote capability after invite acceptance. ---
+        .route(
+            "/api/drive/federation/shares",
+            post(drive_federation::accept_incoming_share)
+                .get(drive_federation::list_incoming_shares),
         )
         .route(
-            "/api/fed-proxy/:shareId/files/:fileId/download",
-            get(fedproxy::proxy_download),
+            "/api/drive/federation/shares/:shareId",
+            delete(drive_federation::remove_incoming_share),
         )
         .route(
-            "/api/fed-proxy/:shareId/upload",
-            post(fedproxy::proxy_upload),
+            "/api/drive/federation/shares/:shareId/files",
+            get(drive_federation::proxy_list_files).post(drive_federation::proxy_upload),
         )
         .route(
-            "/api/fed-proxy/:shareId/files/:fileId",
-            delete(fedproxy::proxy_delete),
+            "/api/drive/federation/shares/:shareId/files/:fileId/content",
+            get(drive_federation::proxy_download),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId",
+            delete(drive_federation::proxy_delete),
         )
         // --- Admin (authenticated + isAdmin via the AdminUser extractor; a stricter
         //     per-IP rate limit fronts every admin route). ---

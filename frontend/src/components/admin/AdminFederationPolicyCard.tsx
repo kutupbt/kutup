@@ -28,7 +28,7 @@ const ACTIONS: FederationRuleAction[] = ['inherit', 'allow', 'block']
 const TRUST: FederationTrustRequirement[] = ['inherit', 'tofu', 'verified']
 
 const MODE_COPY: Record<FederationMode, string> = {
-  disabled: 'Deny all inbound and outbound Chat federation.',
+  disabled: 'Deny all inbound and outbound traffic for this feature.',
   allowlist: 'Deny by default; only explicitly allowed directions can federate.',
   blocklist: 'Allow by default; explicitly blocked directions are denied.',
   open: 'Allow every authenticated server; saved trust requirements still apply.',
@@ -51,9 +51,11 @@ export function AdminFederationPolicyCard({ className, compact = false }: Props)
   const [inbound, setInbound] = useState<FederationRuleAction>('inherit')
   const [outbound, setOutbound] = useState<FederationRuleAction>('inherit')
   const [trustRequirement, setTrustRequirement] = useState<FederationTrustRequirement>('inherit')
-  const chat = policy?.features.find((feature) => feature.feature === 'chat')
-  const mode = chat?.mode ?? 'allowlist'
-  const minimumTrust = chat?.minimumTrust ?? 'verified'
+  const [selectedFeature, setSelectedFeature] = useState<'chat' | 'drive'>('chat')
+  const featurePolicy = policy?.features.find((feature) => feature.feature === selectedFeature)
+  const mode = featurePolicy?.mode ?? 'allowlist'
+  const minimumTrust = featurePolicy?.minimumTrust ?? 'verified'
+  const featureLabel = titleCase(selectedFeature)
 
   const savePolicy = (next: {
     globalEnabled?: boolean
@@ -63,7 +65,7 @@ export function AdminFederationPolicyCard({ className, compact = false }: Props)
     if (!policy) return
     updatePolicy.mutate({
       globalEnabled: next.globalEnabled ?? policy.globalEnabled,
-      feature: 'chat',
+      feature: selectedFeature,
       mode: next.mode ?? mode,
       minimumTrust: next.minimumTrust ?? minimumTrust,
     })
@@ -74,7 +76,7 @@ export function AdminFederationPolicyCard({ className, compact = false }: Props)
     const canonical = domain.trim()
     if (!canonical) return
     upsertRule.mutate(
-      { domain: canonical, inbound, outbound, trustRequirement },
+      { feature: selectedFeature, domain: canonical, inbound, outbound, trustRequirement },
       { onSuccess: () => setDomain('') },
     )
   }
@@ -89,7 +91,7 @@ export function AdminFederationPolicyCard({ className, compact = false }: Props)
               {t('admin.federation.title', 'Federation')}
             </div>
             <div className="text-[12.5px] text-text-tertiary mt-0.5">
-              {t('admin.federation.description', 'Manage the shared server identity, Chat admission policy, and pinned peers.')}
+              {t('admin.federation.description', 'Manage the shared server identity, feature admission policies, and pinned peers.')}
             </div>
           </div>
         </div>
@@ -131,14 +133,22 @@ export function AdminFederationPolicyCard({ className, compact = false }: Props)
             </label>
             <div className={cn('grid gap-3', compact ? 'grid-cols-1' : 'grid-cols-2')}>
               <label className="text-[12px] text-text-tertiary">
-                Chat admission mode
+                Feature
+                <select value={selectedFeature} onChange={(event) => setSelectedFeature(event.target.value as 'chat' | 'drive')} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2.5 text-[13px] text-text-primary">
+                  <option value="chat">Chat</option>
+                  <option value="drive">Drive</option>
+                </select>
+                <span className="mt-1 block">Policies are independent; identity trust and quarantine are shared.</span>
+              </label>
+              <label className="text-[12px] text-text-tertiary">
+                {featureLabel} admission mode
                 <select value={mode} disabled={updatePolicy.isPending} onChange={(event) => savePolicy({ mode: event.target.value as FederationMode })} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2.5 text-[13px] text-text-primary">
                   {MODES.map((value) => <option key={value} value={value}>{titleCase(value)}{value === 'allowlist' ? ' · recommended' : ''}</option>)}
                 </select>
                 <span className="mt-1 block">{MODE_COPY[mode]}</span>
               </label>
               <label className="text-[12px] text-text-tertiary">
-                Chat minimum identity trust
+                {featureLabel} minimum identity trust
                 <select value={minimumTrust} disabled={updatePolicy.isPending} onChange={(event) => savePolicy({ minimumTrust: event.target.value as FederationMinimumTrust })} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2.5 text-[13px] text-text-primary">
                   <option value="verified">Verified · recommended</option>
                   <option value="tofu">TOFU</option>
@@ -149,7 +159,7 @@ export function AdminFederationPolicyCard({ className, compact = false }: Props)
           </div>
 
           <form onSubmit={submitRule} className={cn('border-b border-border-light', compact ? 'px-3.5 py-3' : 'px-[18px] py-4')}>
-            <div className="text-[13.5px] font-medium text-text-primary">Add or replace a Chat server rule</div>
+            <div className="text-[13.5px] font-medium text-text-primary">Add or replace a {featureLabel} server rule</div>
             <div className={cn('mt-3 grid gap-2', compact ? 'grid-cols-1' : 'grid-cols-[minmax(170px,1fr)_125px_125px_125px_auto]')}>
               <Input value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="chat.example.com" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
               <Select value={inbound} values={ACTIONS} label="Inbound" onChange={(value) => setInbound(value as FederationRuleAction)} />
@@ -160,9 +170,9 @@ export function AdminFederationPolicyCard({ className, compact = false }: Props)
           </form>
 
           <div className="border-b border-border-light">
-            {policy.rules.filter((rule) => rule.feature === 'chat').length === 0 ? (
-              <div className="px-[18px] py-4 text-[12.5px] text-text-tertiary">No Chat server rules configured.</div>
-            ) : policy.rules.filter((rule) => rule.feature === 'chat').map((rule) => (
+            {policy.rules.filter((rule) => rule.feature === selectedFeature).length === 0 ? (
+              <div className="px-[18px] py-4 text-[12.5px] text-text-tertiary">No {featureLabel} server rules configured.</div>
+            ) : policy.rules.filter((rule) => rule.feature === selectedFeature).map((rule) => (
               <FederationRuleRow key={`${rule.feature}:${rule.domain}`} rule={rule} compact={compact} />
             ))}
           </div>
@@ -202,8 +212,8 @@ function FederationRuleRow({ rule, compact }: { rule: FederationDomainRule; comp
       <Select value={outbound} values={ACTIONS} label="Outbound" onChange={(value) => setOutbound(value as FederationRuleAction)} />
       <Select value={trustRequirement} values={TRUST} label="Trust" onChange={(value) => setTrustRequirement(value as FederationTrustRequirement)} />
       <div className="flex justify-end gap-1.5">
-        {changed && <Button size="sm" onClick={() => upsert.mutate({ domain: rule.domain, inbound, outbound, trustRequirement })}>Save</Button>}
-        <Button size="sm" variant="outline" onClick={() => remove.mutate(rule.domain)}>Remove</Button>
+        {changed && <Button size="sm" onClick={() => upsert.mutate({ feature: rule.feature, domain: rule.domain, inbound, outbound, trustRequirement })}>Save</Button>}
+        <Button size="sm" variant="outline" onClick={() => remove.mutate({ feature: rule.feature, domain: rule.domain })}>Remove</Button>
       </div>
     </div>
   )

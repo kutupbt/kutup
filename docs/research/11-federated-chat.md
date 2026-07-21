@@ -129,7 +129,7 @@ Matrix = **replicated state machine**: rooms are DAGs of signed events replicate
 
 Per recipient domain, the sender's server:
 
-1. **Discovers** the peer via `/.well-known/kutup/federation.json` — SSRF-validated exactly like today's `crates/kutup-server/src/ssrf.rs` + `handlers/fedproxy.rs` discipline (no redirects, address checks).
+1. **Discovers** the peer via `/.well-known/kutup/federation.json` through the implemented common resolver (signed endpoint delegation, persistent identity pins, no redirects, and validated-address connections).
 2. **Delivers**: `POST /api/fed/chat/messages`, request signed with the server key, body = opaque sealed envelopes. The receiving server drops them into per-device **mailboxes**.
 3. **Queues + retries** with backoff while the peer is down; per-sender ordering preserved.
 
@@ -140,7 +140,7 @@ Clients drain their mailboxes over a **WSS stream on 443** (the collab hub alrea
 Signal attachments already work exactly like kutup's E2EE files: encrypt client-side → upload to dumb blob storage → send *pointer + key + digest* through the E2EE channel. So:
 
 - Attachments are encrypted client-side and uploaded via the existing **tus** path into the **sender's drive quota**.
-- Cross-server recipients fetch via **per-object capability tokens** — the same mechanism `handlers/federation.rs` uses for federated shares today.
+- Cross-server recipients fetch via **per-object capability tokens** above the authenticated common federation transport, following the implemented Drive model rather than the removed token-in-path handlers.
 - Quota, retention, and `orphan-sweep` come free from existing drive machinery.
 
 ### 4.5 Voice/video on 443

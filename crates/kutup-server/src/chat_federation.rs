@@ -65,7 +65,7 @@ pub async fn fetch_remote_bundles(
                 method: Method::GET,
                 path,
                 query: Some(query),
-                content_type: JSON_CONTENT_TYPE,
+                content_type: JSON_CONTENT_TYPE.into(),
                 body: Vec::new(),
                 request_id: Uuid::new_v4().to_string(),
                 extra_headers: Vec::new(),
@@ -121,7 +121,7 @@ pub async fn fetch_remote_profile(
                 method: Method::GET,
                 path: format!("/api/fed/chat/users/{}/profile/{version}", address.username),
                 query: None,
-                content_type: JSON_CONTENT_TYPE,
+                content_type: JSON_CONTENT_TYPE.into(),
                 body: Vec::new(),
                 request_id: Uuid::new_v4().to_string(),
                 extra_headers: vec![(profile_header, profile_value)],
@@ -388,7 +388,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
                 method: Method::POST,
                 path: "/api/fed/chat/messages".into(),
                 query: None,
-                content_type: JSON_CONTENT_TYPE,
+                content_type: JSON_CONTENT_TYPE.into(),
                 body,
                 // The Chat transaction ID is stable across a device-list
                 // correction. The transport nonce is stable only for one

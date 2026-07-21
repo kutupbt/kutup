@@ -711,7 +711,7 @@ pub async fn get_federation_control_plane(
         sqlx::query_scalar("SELECT global_enabled FROM federation_policy WHERE singleton = TRUE")
             .fetch_one(&state.pool)
             .await?;
-    let features = sqlx::query_as::<_, FeatureRow>(
+    let features: Vec<FederationFeaturePolicyResponse> = sqlx::query_as::<_, FeatureRow>(
         "SELECT feature, mode, minimum_trust FROM federation_feature_policies ORDER BY feature",
     )
     .fetch_all(&state.pool)
@@ -824,6 +824,22 @@ pub async fn get_federation_control_plane(
     )
     .collect::<AppResult<Vec<_>>>()?;
 
+    let enabled_capabilities = if global_enabled {
+        let mut capabilities = vec!["identity.v1".to_owned()];
+        for feature in &features {
+            if feature.mode == "disabled" {
+                continue;
+            }
+            match feature.feature.as_str() {
+                "chat" => capabilities.push("chat.v1".to_owned()),
+                "drive" => capabilities.push("drive.v1".to_owned()),
+                _ => {}
+            }
+        }
+        capabilities
+    } else {
+        Vec::new()
+    };
     let (server_name, fingerprint, fingerprint_display, identity_sequence, capabilities) =
         match state.federation.as_ref() {
             Some(federation) => {
@@ -836,7 +852,7 @@ pub async fn get_federation_control_plane(
                             .map_err(|error| AppError::internal(error.to_string()))?,
                     ),
                     Some(federation.local_identity().document().sequence),
-                    vec!["identity.v1".into(), "chat.v1".into()],
+                    enabled_capabilities,
                 )
             }
             None => (None, None, None, None, Vec::new()),
@@ -1049,14 +1065,24 @@ pub async fn retry_federation_peer(
         .as_ref()
         .ok_or_else(|| AppError::bad_request("federation is not configured"))?;
     federation.evict_peer_cache(&domain).await;
-    let _ = federation
-        .resolve_peer(
-            &domain,
-            kutup_federation_proto::FederationFeature::ChatV1,
-            FederationDirection::Outbound,
-            OffsetDateTime::now_utc(),
-        )
-        .await;
+    for feature in [
+        kutup_federation_proto::FederationFeature::ChatV1,
+        kutup_federation_proto::FederationFeature::DriveV1,
+    ] {
+        if federation
+            .resolve_peer(
+                &domain,
+                feature,
+                FederationDirection::Outbound,
+                OffsetDateTime::now_utc(),
+            )
+            .await
+            .is_ok()
+        {
+            break;
+        }
+        federation.evict_peer_cache(&domain).await;
+    }
     wake_federation_outbox(&state.pool, Some(&domain)).await?;
     get_federation_control_plane(State(state), admin).await
 }

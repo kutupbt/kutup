@@ -75,18 +75,20 @@ export function useUpsertAdminFederationRule() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({
+      feature,
       domain,
       inbound,
       outbound,
       trustRequirement,
     }: {
+      feature: 'chat' | 'drive'
       domain: string
       inbound: FederationRuleAction
       outbound: FederationRuleAction
       trustRequirement: FederationTrustRequirement
     }) =>
       api.put<AdminFederationPolicy>(
-        `/admin/federation/rules/chat/${encodeURIComponent(domain)}`,
+        `/admin/federation/rules/${feature}/${encodeURIComponent(domain)}`,
         { inbound, outbound, trustRequirement },
       ),
     onSuccess: () => {
@@ -103,9 +105,9 @@ export function useUpsertAdminFederationRule() {
 export function useDeleteAdminFederationRule() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (domain: string) =>
+    mutationFn: ({ feature, domain }: { feature: 'chat' | 'drive'; domain: string }) =>
       api.delete<AdminFederationPolicy>(
-        `/admin/federation/rules/chat/${encodeURIComponent(domain)}`,
+        `/admin/federation/rules/${feature}/${encodeURIComponent(domain)}`,
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'federation'] })

@@ -413,7 +413,7 @@
       "title": "Add remote share",
       "description": "Paste the invite link you received from someone on another Kutup server.",
       "inviteLink": "Invite link",
-      "placeholder": "https://other-server.com/invite/…",
+      "placeholder": "https://other-server.com/invite#server=…&capability=…",
       "cancel": "Cancel",
       "adding": "Adding…",
       "addShare": "Add share"

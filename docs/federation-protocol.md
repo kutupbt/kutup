@@ -1,8 +1,8 @@
 # Unified federation protocol
 
-**Status:** v2 protocol and common runtime are implemented; Chat is cut over to
-the shared resolver, trust, policy, replay, and authenticated transport. Drive
-cut-over remains Phase D.
+**Status:** implemented. Chat and Drive both use the shared v2 identity,
+resolver, admission, trust, replay, and authenticated transport. The old
+feature-specific federation stacks and v1 downgrade paths have been removed.
 
 **Version:** 2
 
@@ -190,8 +190,32 @@ semantic idempotency keys. In particular, a Chat device-list correction keeps
 its stable Chat transaction ID but derives a different transport nonce for the
 corrected payload; byte-identical retries retain that payload-version nonce.
 
+Drive capabilities remain feature authorization, not server authentication.
+They travel in the dedicated `Kutup-Share-Capability` header after the v2
+request has authenticated its origin. An outgoing share is bound to that
+canonical origin domain and stores only a SHA-256 verifier; the plaintext
+capability is returned once inside the invite URL fragment, which is not sent
+to the web origin in an HTTP request. A recipient server retains the capability
+only for its local user's accepted share. It never returns it in list APIs.
+
+Drive mutations use a stable feature request ID derived from the local user,
+accepted share, operation, and exact upload body or file ID. The source stores
+the authenticated request hash and exact response under that ID. Exact retries
+return the stored result; reuse for different covered content fails. Uploads
+hash the exact ciphertext while spooling it, persist that digest with the file
+row, and never inspect plaintext.
+
+Large Drive downloads are authenticated before release to the browser. The
+source signs a precomputed RFC 9530 digest and streams the ciphertext. The
+recipient server spools the response to an unnamed temporary file while
+hashing it, verifies the pinned peer's response signature and exact digest,
+then exposes the verified stream to its local client. A digest, signature,
+origin, destination, or request mismatch releases no bytes.
+
 The Phase C migration deliberately clears only experimental Chat federation
-transport sequence/outbox/inbound state and removes the old Chat-only policy
-tables. Local Chat data, local Drive data, and the existing Drive federation
-state are retained. There is no v1 route, configuration alias, or downgrade
-fallback. Drive is cut over to this same stack in Phase D.
+transport state and removes the old Chat-only trust stack. The breaking Phase D
+migration drops the experimental Drive federation share state, recreates it
+with canonical domains and capability verifiers, and adds persistent mutation
+results and ciphertext digests. Local users, collections, files, and ordinary
+same-server shares remain intact. There is no legacy route, raw remote URL,
+configuration alias, or downgrade fallback.

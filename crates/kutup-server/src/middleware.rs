@@ -154,7 +154,7 @@ pub async fn rate_limit_recovery(
     limit(addr, &ratelimit::RECOVERY, req, next).await
 }
 
-/// 60/min/IP — mirrors `FedUsersRateLimit` (the `/api/fed/users` route layer).
+/// 60/min/IP — coarse pre-authentication limit for server-to-server directory routes.
 pub async fn rate_limit_fed_users(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request,

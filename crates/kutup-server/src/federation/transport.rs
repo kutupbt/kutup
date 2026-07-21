@@ -8,13 +8,16 @@ use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::Response;
 use futures_util::StreamExt as _;
 use kutup_federation_proto::{
-    validate_server_name, FederationCapabilityId, FederationDiscoveryTransportPolicy,
-    FederationDiscoveryV2, FederationFeature, FederationHttpRequest, FederationHttpResponse,
-    FederationIdentityDocumentV1, FederationProtocolVersion, FederationSignatureHeaders,
-    FederationSignedRequest, FederationVerifiedRequest, MAX_SIGNATURE_LIFETIME_SECONDS,
+    content_digest_sha256_from_digest, validate_server_name, FederationCapabilityId,
+    FederationDiscoveryTransportPolicy, FederationDiscoveryV2, FederationFeature,
+    FederationHttpRequest, FederationHttpResponse, FederationIdentityDocumentV1,
+    FederationProtocolVersion, FederationSignatureHeaders, FederationSignedRequest,
+    FederationVerifiedRequest, MAX_SIGNATURE_LIFETIME_SECONDS,
 };
 use reqwest::{Method, Url};
+use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
+use tokio::io::{AsyncSeekExt as _, AsyncWriteExt as _};
 use tokio::sync::Mutex;
 
 use super::policy::{
@@ -75,7 +78,7 @@ pub(crate) struct FederationRequestSpec {
     pub path: String,
     /// Raw query without a leading `?`.
     pub query: Option<String>,
-    pub content_type: &'static str,
+    pub content_type: String,
     pub body: Vec<u8>,
     pub request_id: String,
     pub extra_headers: Vec<(HeaderName, HeaderValue)>,
@@ -86,6 +89,13 @@ pub(crate) struct FederationRequestSpec {
 pub(crate) struct AuthenticatedFederationResponse {
     pub status: StatusCode,
     pub body: Vec<u8>,
+}
+
+pub(crate) struct AuthenticatedFederationStreamResponse {
+    pub status: StatusCode,
+    pub content_type: String,
+    pub content_length: u64,
+    pub file: tokio::fs::File,
 }
 
 pub(crate) struct AuthenticatedFederationRequest {
@@ -99,6 +109,15 @@ impl AuthenticatedFederationRequest {
 
     pub fn destination(&self) -> &str {
         &self.verified.request.destination
+    }
+
+    /// Stable, authenticated operation identity for feature-level
+    /// idempotency. This metadata is available only after the complete signed
+    /// request profile and content digest have verified.
+    pub fn replay_metadata(&self) -> AppResult<kutup_federation_proto::FederationReplayMetadata> {
+        self.verified
+            .replay_metadata()
+            .map_err(|error| AppError::unauthorized(error.to_string()))
     }
 }
 
@@ -324,7 +343,7 @@ impl FederationStack {
             authority,
             path,
             query,
-            content_type: spec.content_type.into(),
+            content_type: spec.content_type.clone(),
             body: spec.body.clone(),
             federation_version: FederationProtocolVersion::V2,
             feature: spec.feature,
@@ -387,6 +406,132 @@ impl FederationStack {
         Ok(AuthenticatedFederationResponse {
             status: StatusCode::from_u16(verified.status)?,
             body: verified.body,
+        })
+    }
+
+    /// Send a signed operation and authenticate a potentially large response
+    /// after hashing it into an unnamed temporary file. No response bytes are
+    /// released to a feature handler before the pinned peer signature and
+    /// exact ciphertext digest verify.
+    pub(crate) async fn send_streamed(
+        &self,
+        destination: &str,
+        spec: FederationRequestSpec,
+    ) -> anyhow::Result<AuthenticatedFederationStreamResponse> {
+        validate_request_spec(&spec)?;
+        let now = OffsetDateTime::now_utc();
+        let peer = self
+            .resolve_peer(
+                destination,
+                spec.feature,
+                FederationDirection::Outbound,
+                now,
+            )
+            .await?;
+        let target = operation_url(&peer.api_base, &spec.path, spec.query.as_deref())?;
+        let authority = canonical_authority(&target)?;
+        let path = target.path().to_owned();
+        let query = target
+            .query()
+            .map(|value| format!("?{value}"))
+            .unwrap_or_else(|| "?".into());
+        let request = FederationHttpRequest {
+            method: spec.method.as_str().to_owned(),
+            authority,
+            path,
+            query,
+            content_type: spec.content_type.clone(),
+            body: spec.body.clone(),
+            federation_version: FederationProtocolVersion::V2,
+            feature: spec.feature,
+            origin: self.server_name().to_owned(),
+            destination: destination.to_owned(),
+        };
+        let created = now.unix_timestamp();
+        let signed = FederationSignedRequest::sign(
+            request,
+            spec.request_id,
+            created,
+            created + MAX_SIGNATURE_LIFETIME_SECONDS,
+            self.local_identity.signing_key(),
+        )?;
+        let mut headers = signature_request_headers(&signed.headers, &signed.request)?;
+        for (name, value) in spec.extra_headers {
+            if headers.contains_key(&name) {
+                anyhow::bail!(
+                    "feature header attempts to replace federation authentication metadata"
+                );
+            }
+            headers.insert(name, value);
+        }
+
+        let client = bound_client(&target, self.config.allow_private_test_network).await?;
+        let response = client
+            .request(spec.method, target)
+            .headers(headers)
+            .body(spec.body)
+            .send()
+            .await?;
+        let status = StatusCode::from_u16(response.status().as_u16())?;
+        let response_headers = response.headers().clone();
+        require_metadata_headers(
+            &response_headers,
+            spec.feature,
+            destination,
+            self.server_name(),
+        )?;
+        let signature_headers = parse_signature_headers(&response_headers)?;
+        let content_type = required_header(&response_headers, header::CONTENT_TYPE.as_str())?;
+        let content_type = content_type.to_owned();
+        if response
+            .content_length()
+            .is_some_and(|length| length > spec.response_limit as u64)
+        {
+            anyhow::bail!("federation response exceeds the configured byte limit");
+        }
+
+        let std_file = tempfile::tempfile()?;
+        let mut file = tokio::fs::File::from_std(std_file);
+        let mut stream = response.bytes_stream();
+        let mut length = 0_u64;
+        let mut digest = Sha256::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            length = length.saturating_add(chunk.len() as u64);
+            if length > spec.response_limit as u64 {
+                anyhow::bail!("federation response exceeds the configured byte limit");
+            }
+            digest.update(&chunk);
+            file.write_all(&chunk).await?;
+        }
+        file.flush().await?;
+        let digest: [u8; 32] = digest.finalize().into();
+        let actual_content_digest = content_digest_sha256_from_digest(&digest);
+        let federation_response = FederationHttpResponse {
+            status: status.as_u16(),
+            content_type: content_type.clone(),
+            body: Vec::new(),
+            federation_version: FederationProtocolVersion::V2,
+            feature: spec.feature,
+            origin: destination.to_owned(),
+            destination: self.server_name().to_owned(),
+        };
+        if let Err(error) = signed.verify_response_with_content_digest(
+            federation_response,
+            &signature_headers,
+            &actual_content_digest,
+            &peer.public_key,
+            OffsetDateTime::now_utc().unix_timestamp(),
+        ) {
+            self.evict_peer_cache(destination).await;
+            return Err(error.into());
+        }
+        file.rewind().await?;
+        Ok(AuthenticatedFederationStreamResponse {
+            status,
+            content_type,
+            content_length: length,
+            file,
         })
     }
 
@@ -520,6 +665,51 @@ impl FederationStack {
             .body(Body::from(body))
             .map_err(|error| AppError::internal(error.to_string()))?;
         Ok(response)
+    }
+
+    /// Sign response metadata around an already-hashed streaming body.
+    pub(crate) fn signed_stream_response(
+        &self,
+        authenticated: &AuthenticatedFederationRequest,
+        status: StatusCode,
+        content_type: &'static str,
+        content_digest: &str,
+        content_length: u64,
+        body: Body,
+    ) -> AppResult<Response> {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let metadata = FederationHttpResponse {
+            status: status.as_u16(),
+            content_type: content_type.into(),
+            body: Vec::new(),
+            federation_version: FederationProtocolVersion::V2,
+            feature: authenticated.verified.request.feature,
+            origin: self.server_name().to_owned(),
+            destination: authenticated.origin().to_owned(),
+        };
+        let signature = authenticated
+            .verified
+            .sign_response_with_content_digest(
+                &metadata,
+                content_digest,
+                now,
+                now + MAX_SIGNATURE_LIFETIME_SECONDS,
+                self.local_identity.signing_key(),
+            )
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        Response::builder()
+            .status(status)
+            .header(header::CONTENT_TYPE, content_type)
+            .header(header::CONTENT_LENGTH, content_length)
+            .header(CONTENT_DIGEST_HEADER, signature.content_digest)
+            .header(SIGNATURE_INPUT_HEADER, signature.signature_input)
+            .header(SIGNATURE_HEADER, signature.signature)
+            .header(FEDERATION_VERSION_HEADER, "2")
+            .header(FEDERATION_FEATURE_HEADER, metadata.feature.as_str())
+            .header(FEDERATION_ORIGIN_HEADER, self.server_name())
+            .header(FEDERATION_DESTINATION_HEADER, authenticated.origin())
+            .body(body)
+            .map_err(|error| AppError::internal(error.to_string()))
     }
 
     pub(crate) async fn evict_peer_cache(&self, domain: &str) {
@@ -803,7 +993,7 @@ mod tests {
             method: Method::GET,
             path: "/api/fed/chat/users/alice/keys".into(),
             query: None,
-            content_type: "application/json",
+            content_type: "application/json".into(),
             body: vec![],
             request_id: Uuid::new_v4().to_string(),
             extra_headers: vec![],

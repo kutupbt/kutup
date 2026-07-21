@@ -2,7 +2,9 @@
 
 **Date:** 2026-07-20
 
-**Status:** accepted; Phases A-C implemented, Phase D is next
+**Status:** accepted; Phases A-D implemented and two-server live verified;
+Phase E is next. Phase F's Drive/Chat harness, migration fixtures, and primary
+documentation are implemented alongside Phase D.
 
 **Compatibility decision:** Kutup has no live federation deployment. Replace
 the current experimental Chat and Drive protocols atomically; do not preserve
@@ -652,9 +654,9 @@ prevent the genuine remote server from lying about an account key. Account-key
 signatures or transparency are a separate later hardening item and must be
 documented honestly.
 
-`share-federated` stores `recipient_domain`, not an API URL. The generated link
-uses a fragment so the bearer capability is not sent in an HTTP path or
-referrer:
+`POST /api/collections/{id}/federated-shares` stores `recipient_domain`, not an
+API URL. The generated link uses a fragment so the bearer capability is not
+sent in an HTTP path or referrer:
 
 ```text
 https://<sharer-web-origin>/invite#server=<sharer-domain>&capability=<secret>
@@ -788,16 +790,16 @@ stack, routes, policy tables, and configuration no longer exist.
 
 ### Phase D — Drive cut-over
 
-1. In the same stop-migrate-start release, replace the experimental Drive
+1. ✅ In the same stop-migrate-start release, replace the experimental Drive
    federation tables with their canonical-domain/capability-hash schema and
    test that local Drive data survives.
-2. Add signed `/api/fed/drive/*` endpoints with separate capability headers.
-3. Change remote account lookup and new share creation to canonical domains.
-4. Change invite acceptance and all proxy operations to resolve the pinned
+2. ✅ Add signed `/api/fed/drive/*` endpoints with separate capability headers.
+3. ✅ Change remote account lookup and new share creation to canonical domains.
+4. ✅ Change invite acceptance and all proxy operations to resolve the pinned
    peer on every operation.
-5. Persist ciphertext SHA-256 during upload, add the resumable ciphertext-only
+5. ✅ Persist ciphertext SHA-256 during upload, add the resumable ciphertext-only
    digest backfill, and verify signed streamed-download digests before commit.
-6. Remove the unsigned raw-URL/token-path Drive federation code.
+6. ✅ Remove the unsigned raw-URL/token-path Drive federation code.
 
 ### Phase E — control-plane completion
 

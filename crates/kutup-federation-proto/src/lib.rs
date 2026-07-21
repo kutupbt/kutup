@@ -20,9 +20,9 @@ pub use discovery::{
 };
 pub use error::FederationProtocolError;
 pub use http_signatures::{
-    content_digest_sha256, FederationFeature, FederationHttpRequest, FederationHttpResponse,
-    FederationReplayMetadata, FederationSignatureHeaders, FederationSignedRequest,
-    FederationVerifiedRequest,
+    content_digest_sha256, content_digest_sha256_from_digest, FederationFeature,
+    FederationHttpRequest, FederationHttpResponse, FederationReplayMetadata,
+    FederationSignatureHeaders, FederationSignedRequest, FederationVerifiedRequest,
 };
 pub use identity::{
     verify_identity_chain, FederationIdentityDocumentV1, FederationIdentityKeyAlgorithm,

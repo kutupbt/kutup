@@ -413,7 +413,7 @@
       "title": "Uzak paylaşım ekle",
       "description": "Başka bir Kutup sunucusundaki birinden aldığınız davet bağlantısını yapıştırın.",
       "inviteLink": "Davet bağlantısı",
-      "placeholder": "https://baska-sunucu.com/invite/…",
+      "placeholder": "https://baska-sunucu.com/invite#server=…&capability=…",
       "cancel": "İptal",
       "adding": "Ekleniyor…",
       "addShare": "Paylaşım ekle"

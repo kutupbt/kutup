@@ -39,7 +39,7 @@ S3_BUCKET=kutup-files
 # Must be the address users (and remote servers) reach this instance at
 SERVER_URL=https://kutup.example.com
 
-# Unified federation v2 identity used by Chat and, after its cut-over, Drive:
+# Unified federation v2 identity used by both Chat and Drive:
 #   openssl rand -base64 32
 # FEDERATION_SERVER_NAME=kutup.example.com
 # FEDERATION_SIGNING_KEY=<base64-32-byte-ed25519-seed>

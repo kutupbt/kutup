@@ -52,7 +52,7 @@ test.describe('tus.io streaming upload', () => {
 
     // Track which upload endpoint(s) get hit. We want the new tus path
     // (/api/uploads) and explicitly *not* the legacy multipart
-    // (/api/files/upload). The federated /fed-proxy/.../upload still
+    // (/api/files/upload). Federated Drive upload still
     // uses multipart, but we don't trigger that here.
     const tusPostCount: number[] = []
     const tusPatchCount: number[] = []

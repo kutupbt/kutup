@@ -124,13 +124,13 @@ fn setup_admin(c: &Client, base: &str, email: &str, username: &str) -> String {
     setup["accessToken"].as_str().unwrap().to_string()
 }
 
-fn update_federation_mode(c: &Client, base: &str, admin: &str, mode: &str) -> Value {
+fn update_feature_mode(c: &Client, base: &str, admin: &str, feature: &str, mode: &str) -> Value {
     let response = json_response(
         c.put(format!("{base}/api/admin/federation"))
             .bearer_auth(admin)
             .json(&json!({
                 "globalEnabled": true,
-                "feature": "chat",
+                "feature": feature,
                 "mode": mode,
                 "minimumTrust": "tofu"
             }))
@@ -142,9 +142,13 @@ fn update_federation_mode(c: &Client, base: &str, admin: &str, mode: &str) -> Va
         .as_array()
         .unwrap()
         .iter()
-        .find(|feature| feature["feature"] == "chat")
+        .find(|item| item["feature"] == feature)
         .unwrap()
         .clone()
+}
+
+fn update_federation_mode(c: &Client, base: &str, admin: &str, mode: &str) -> Value {
+    update_feature_mode(c, base, admin, "chat", mode)
 }
 
 fn upsert_federation_rule(
@@ -155,26 +159,46 @@ fn upsert_federation_rule(
     inbound: &str,
     outbound: &str,
 ) -> Value {
+    upsert_feature_rule(c, base, admin, "chat", domain, inbound, outbound)
+}
+
+fn upsert_feature_rule(
+    c: &Client,
+    base: &str,
+    admin: &str,
+    feature: &str,
+    domain: &str,
+    inbound: &str,
+    outbound: &str,
+) -> Value {
     json_response(
-        c.put(format!("{base}/api/admin/federation/rules/chat/{domain}"))
-            .bearer_auth(admin)
-            .json(&json!({
-                "inbound": inbound,
-                "outbound": outbound,
-                "trustRequirement": "inherit"
-            }))
-            .send()
-            .unwrap(),
+        c.put(format!(
+            "{base}/api/admin/federation/rules/{feature}/{domain}"
+        ))
+        .bearer_auth(admin)
+        .json(&json!({
+            "inbound": inbound,
+            "outbound": outbound,
+            "trustRequirement": "inherit"
+        }))
+        .send()
+        .unwrap(),
         "upsert federation rule",
     )
 }
 
 fn delete_federation_rule(c: &Client, base: &str, admin: &str, domain: &str) -> Value {
+    delete_feature_rule(c, base, admin, "chat", domain)
+}
+
+fn delete_feature_rule(c: &Client, base: &str, admin: &str, feature: &str, domain: &str) -> Value {
     json_response(
-        c.delete(format!("{base}/api/admin/federation/rules/chat/{domain}"))
-            .bearer_auth(admin)
-            .send()
-            .unwrap(),
+        c.delete(format!(
+            "{base}/api/admin/federation/rules/{feature}/{domain}"
+        ))
+        .bearer_auth(admin)
+        .send()
+        .unwrap(),
         "delete federation rule",
     )
 }
@@ -326,6 +350,219 @@ fn assert_content_once(messages: &[Value], content: &[u8]) {
     );
 }
 
+fn drive_upload_body(boundary: &str, ciphertext: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for (name, value) in [
+        ("encryptedMetadata", "drive-encrypted-metadata"),
+        ("metadataNonce", "drive-metadata-nonce"),
+        ("encryptedFileKey", "drive-wrapped-file-key"),
+        ("fileKeyNonce", "drive-file-key-nonce"),
+    ] {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"ciphertext\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(ciphertext);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
+}
+
+fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: &str) {
+    let collection = json_response(
+        c.post(format!("{a}/api/collections"))
+            .bearer_auth(alice_token)
+            .json(&json!({
+                "encryptedName": "drive-encrypted-name",
+                "nameNonce": "drive-name-nonce",
+                "encryptedKey": "drive-owner-key",
+                "encryptedKeyNonce": "drive-owner-key-nonce"
+            }))
+            .send()
+            .unwrap(),
+        "create Drive collection",
+    );
+    let collection_id = collection["id"].as_str().unwrap();
+
+    let remote_user = json_response(
+        c.get(format!(
+            "{a}/api/drive/federation/users/{BOB_USERNAME}?server=b.test"
+        ))
+        .bearer_auth(alice_token)
+        .send()
+        .unwrap(),
+        "signed Drive remote user lookup",
+    );
+    assert_eq!(remote_user["username"], BOB_USERNAME);
+    assert_eq!(remote_user["server"], "b.test");
+    assert!(!remote_user["publicKey"].as_str().unwrap().is_empty());
+
+    let share = json_response(
+        c.post(format!(
+            "{a}/api/collections/{collection_id}/federated-shares"
+        ))
+        .bearer_auth(alice_token)
+        .json(&json!({
+            "recipientUsername": BOB_USERNAME,
+            "recipientServer": "b.test",
+            "encryptedCollectionKey": "drive-recipient-wrapped-key",
+            "canUpload": true,
+            "canDelete": true,
+            "uploadQuotaBytes": 1048576
+        }))
+        .send()
+        .unwrap(),
+        "create federated Drive share",
+    );
+    let invite_url = share["inviteUrl"].as_str().unwrap();
+    assert!(!invite_url.contains("/invite/"));
+    let invite = url::Url::parse(invite_url).unwrap();
+    assert_eq!(invite.path(), "/invite");
+    let invite_values: std::collections::HashMap<_, _> =
+        url::form_urlencoded::parse(invite.fragment().unwrap().as_bytes())
+            .into_owned()
+            .collect();
+    assert_eq!(invite_values["server"], "a.test");
+    let capability = &invite_values["capability"];
+    assert!(capability.len() >= 32);
+
+    let accepted = json_response(
+        c.post(format!("{b}/api/drive/federation/shares"))
+            .bearer_auth(bob_token)
+            .json(&json!({"server": "a.test", "capability": capability}))
+            .send()
+            .unwrap(),
+        "accept federated Drive share",
+    );
+    assert_eq!(accepted["remoteDomain"], "a.test");
+    let incoming_id = accepted["id"].as_str().unwrap();
+
+    let incoming = json_response(
+        c.get(format!("{b}/api/drive/federation/shares"))
+            .bearer_auth(bob_token)
+            .send()
+            .unwrap(),
+        "list incoming Drive shares",
+    );
+    assert_eq!(incoming.as_array().unwrap().len(), 1);
+    assert!(incoming[0].get("capability").is_none());
+    assert!(incoming[0].get("remoteCapability").is_none());
+
+    let empty = json_response(
+        c.get(format!(
+            "{b}/api/drive/federation/shares/{incoming_id}/files"
+        ))
+        .bearer_auth(bob_token)
+        .send()
+        .unwrap(),
+        "list empty remote Drive share",
+    );
+    assert!(empty.as_array().unwrap().is_empty());
+
+    let boundary = "kutup-drive-live-boundary";
+    let ciphertext = b"phase-d-encrypted-drive-object";
+    let upload_body = drive_upload_body(boundary, ciphertext);
+    let upload = |body: Vec<u8>| {
+        c.post(format!(
+            "{b}/api/drive/federation/shares/{incoming_id}/files"
+        ))
+        .bearer_auth(bob_token)
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(body)
+        .send()
+        .unwrap()
+    };
+    let first_upload = json_response(upload(upload_body.clone()), "federated Drive upload");
+    let retried_upload = json_response(upload(upload_body), "idempotent Drive upload retry");
+    assert_eq!(first_upload["id"], retried_upload["id"]);
+    let file_id = first_upload["id"].as_str().unwrap();
+
+    let files = json_response(
+        c.get(format!(
+            "{b}/api/drive/federation/shares/{incoming_id}/files"
+        ))
+        .bearer_auth(bob_token)
+        .send()
+        .unwrap(),
+        "list populated remote Drive share",
+    );
+    assert_eq!(files.as_array().unwrap().len(), 1);
+    assert_eq!(files[0]["id"], file_id);
+    assert_eq!(files[0]["encryptedMetadata"], "drive-encrypted-metadata");
+
+    let download = c
+        .get(format!(
+            "{b}/api/drive/federation/shares/{incoming_id}/files/{file_id}/content"
+        ))
+        .bearer_auth(bob_token)
+        .send()
+        .unwrap();
+    assert_eq!(download.status().as_u16(), 200);
+    assert_eq!(download.bytes().unwrap().as_ref(), ciphertext);
+
+    let delete = || {
+        c.delete(format!(
+            "{b}/api/drive/federation/shares/{incoming_id}/files/{file_id}"
+        ))
+        .bearer_auth(bob_token)
+        .send()
+        .unwrap()
+    };
+    assert_eq!(delete().status().as_u16(), 204);
+    assert_eq!(delete().status().as_u16(), 204);
+
+    let raw_url_share = c
+        .post(format!(
+            "{a}/api/collections/{collection_id}/federated-shares"
+        ))
+        .bearer_auth(alice_token)
+        .json(&json!({
+            "recipientUsername": BOB_USERNAME,
+            "recipientServer": "http://b.test",
+            "encryptedCollectionKey": "wrapped",
+            "canUpload": false,
+            "canDelete": false
+        }))
+        .send()
+        .unwrap();
+    assert_eq!(raw_url_share.status().as_u16(), 400);
+    assert_eq!(
+        c.get(format!("{a}/api/fed/drive/invite"))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        401
+    );
+    for legacy in [
+        "/api/fed/users?username=bobfed",
+        "/api/fed/invites/legacy-token",
+        "/api/fed/shares/legacy-token/files",
+        "/api/fed-proxy/incoming",
+    ] {
+        assert_eq!(
+            c.get(format!("{a}{legacy}"))
+                .send()
+                .unwrap()
+                .status()
+                .as_u16(),
+            404,
+            "legacy route {legacy} must be absent"
+        );
+    }
+}
+
 fn setup_phase(c: &Client, a: &str, b: &str) {
     let discovery_a = json_response(
         c.get(format!("{a}/.well-known/kutup/federation.json"))
@@ -345,6 +582,11 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(discovery_b["apiBase"], "http://b.test");
     assert_eq!(discovery_a["fedVersion"], 2);
     assert_eq!(discovery_b["fedVersion"], 2);
+    assert!(discovery_a["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|capability| capability == "drive.v1"));
     let identity_a = json_response(
         c.get(format!("{a}/.well-known/kutup/federation/identity/0.json"))
             .send()
@@ -379,9 +621,12 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(initial_policy["features"][0]["mode"], "allowlist");
     update_federation_mode(c, a, &admin_a, "open");
     update_federation_mode(c, b, &admin_b, "open");
+    update_feature_mode(c, a, &admin_a, "drive", "open");
+    update_feature_mode(c, b, &admin_b, "drive", "open");
 
     let alice_token = register_account(c, a, ALICE_EMAIL, ALICE_USERNAME);
     let bob_token = register_account(c, b, BOB_EMAIL, BOB_USERNAME);
+    drive_round_trip(c, a, b, &alice_token, &bob_token);
     assert_eq!(
         register_device(c, a, &alice_token, ALICE_REGISTRATION_ID, 10),
         1
@@ -427,21 +672,29 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         update_federation_mode(c, a, &admin_a, "disabled")["mode"],
         "disabled"
     );
-    assert_eq!(
+    let drive_only_discovery = json_response(
         c.get(format!("{a}/.well-known/kutup/federation.json"))
             .send()
-            .unwrap()
-            .status()
-            .as_u16(),
-        404
+            .unwrap(),
+        "Drive-only discovery",
     );
+    assert!(drive_only_discovery["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|capability| capability == "drive.v1"));
+    assert!(!drive_only_discovery["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|capability| capability == "chat.v1"));
     assert_eq!(
         c.get(format!("{a}/.well-known/kutup/federation/identity/0.json"))
             .send()
             .unwrap()
             .status()
             .as_u16(),
-        404
+        200
     );
     let disabled_capabilities = json_response(
         c.get(format!("{a}/api/auth/settings")).send().unwrap(),

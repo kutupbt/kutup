@@ -96,8 +96,33 @@ impl FederationStack {
     }
 }
 
-/// Public v2 discovery is visible only while Chat is actually enabled on the
-/// shared stack. Drive is not advertised until its Phase D cut-over.
+async fn enabled_capabilities(
+    federation: &FederationStack,
+) -> anyhow::Result<Vec<FederationCapabilityId>> {
+    let chat = federation
+        .policy()
+        .feature_is_publicly_enabled(FederationPolicyFeature::Chat)
+        .await?;
+    let drive = federation
+        .policy()
+        .feature_is_publicly_enabled(FederationPolicyFeature::Drive)
+        .await?;
+    if !chat && !drive {
+        return Ok(Vec::new());
+    }
+    let mut capabilities = vec![FederationCapabilityId::identity_v1()];
+    if chat {
+        capabilities.push(FederationCapabilityId::chat_v1());
+    }
+    if drive {
+        capabilities.push(FederationCapabilityId::drive_v1());
+    }
+    capabilities.sort();
+    Ok(capabilities)
+}
+
+/// Public v2 discovery is visible while at least one feature is enabled and
+/// advertises only the feature capabilities admitted by the shared policy.
 #[utoipa::path(
     get,
     path = "/.well-known/kutup/federation.json",
@@ -112,20 +137,11 @@ pub(crate) async fn public_discovery(State(state): State<AppState>) -> AppResult
         .federation
         .as_ref()
         .ok_or_else(|| AppError::not_found("federation is not configured"))?;
-    if !federation
-        .policy()
-        .feature_is_publicly_enabled(FederationPolicyFeature::Chat)
-        .await?
-    {
+    let capabilities = enabled_capabilities(federation).await?;
+    if capabilities.is_empty() {
         return Err(AppError::not_found("federation is disabled by policy"));
     }
-    let document = federation.signed_discovery(
-        vec![
-            FederationCapabilityId::identity_v1(),
-            FederationCapabilityId::chat_v1(),
-        ],
-        OffsetDateTime::now_utc(),
-    )?;
+    let document = federation.signed_discovery(capabilities, OffsetDateTime::now_utc())?;
     Ok(Json(document).into_response())
 }
 
@@ -152,11 +168,7 @@ pub(crate) async fn public_identity_document(
         .federation
         .as_ref()
         .ok_or_else(|| AppError::not_found("federation is not configured"))?;
-    if !federation
-        .policy()
-        .feature_is_publicly_enabled(FederationPolicyFeature::Chat)
-        .await?
-    {
+    if enabled_capabilities(federation).await?.is_empty() {
         return Err(AppError::not_found("federation is disabled by policy"));
     }
     let document = federation

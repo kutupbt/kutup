@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # Build image for the Rust kutup-server (replaces the Go backend/Dockerfile).
 # Build context is the workspace root so the root Cargo.toml + all crates (incl. the
 # embedded migrations under crates/kutup-server/migrations) are available.
@@ -7,12 +9,15 @@ FROM rust:1-bookworm AS builder
 WORKDIR /build
 
 # Copy the workspace manifests + sources. src-tauri is excluded from the workspace and not
-# needed here. A single COPY keeps the build cache simple; the dep graph is small enough.
+# needed here. BuildKit caches Cargo downloads and compiled artifacts independently from
+# this source layer so an application-only change does not rebuild the whole dependency graph.
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
 # Build the log server and the separately runnable witness binary.
-RUN cargo build --release -p kutup-server \
+RUN --mount=type=cache,id=kutup-server-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=kutup-server-release-target,target=/build/target,sharing=locked \
+    cargo build --release -p kutup-server \
         --bin kutup-server --bin kutup-transparency-witness \
     && cp target/release/kutup-server /kutup-server \
     && cp target/release/kutup-transparency-witness /kutup-transparency-witness

@@ -69,7 +69,7 @@ export interface LoginResponse {
 
 export interface IncomingShare {
   id: string
-  remoteServer: string
+  remoteDomain: string
   encryptedCollectionKey: string
   encryptedName: string
   nameNonce: string

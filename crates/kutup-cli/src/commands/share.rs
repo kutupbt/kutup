@@ -29,7 +29,7 @@ pub enum ShareCmd {
         #[arg(long)]
         delete: bool,
     },
-    /// Share a folder with a user on another Kutup server (user@server-url).
+    /// Share a folder with a user on another Kutup server (user@server).
     Federated {
         collection_id: String,
         target: String,
@@ -61,7 +61,7 @@ pub enum ShareCmd {
 pub enum IncomingCmd {
     /// List federated shares accepted on this account.
     List,
-    /// Accept a federated share invite (URL of the form .../invite/{token}).
+    /// Accept a federated share invite (capability is carried in the URL fragment).
     Accept { invite_url: String },
     /// Forget a federated share (doesn't notify the remote owner).
     Remove {
@@ -167,9 +167,7 @@ fn share_federated(
     let (username, server) = target
         .rsplit_once('@')
         .filter(|(u, _)| !u.is_empty())
-        .ok_or_else(|| {
-            anyhow!("format must be username@server-url (e.g. alice@https://other.com)")
-        })?;
+        .ok_or_else(|| anyhow!("format must be username@server (e.g. alice@other.example)"))?;
 
     let ctx = require_session(profile)?;
     let collection_key = owned_collection_key(&ctx, collection_id)?;
@@ -455,8 +453,8 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
 #[derive(Serialize)]
 struct IncomingDisplay {
     id: String,
-    #[serde(rename = "remoteServer")]
-    remote_server: String,
+    #[serde(rename = "remoteDomain")]
+    remote_domain: String,
     name: String,
     #[serde(rename = "canUpload")]
     can_upload: bool,
@@ -480,7 +478,7 @@ fn incoming_list(profile: &str, json: bool) -> Result<()> {
         .iter()
         .map(|s| IncomingDisplay {
             id: s.id.clone(),
-            remote_server: s.remote_server.clone(),
+            remote_domain: s.remote_domain.clone(),
             name: decrypt_incoming_name(s, &ctx.session)
                 .unwrap_or_else(|_| "(undecryptable)".into()),
             can_upload: s.can_upload,
@@ -517,24 +515,39 @@ fn incoming_list(profile: &str, json: bool) -> Result<()> {
         }
         println!(
             "{:<36}  {:<30}  {:<30}  {}",
-            d.id, d.remote_server, d.name, perms
+            d.id, d.remote_domain, d.name, perms
         );
     }
     Ok(())
 }
 
 fn incoming_accept(profile: &str, json: bool, invite_url: &str) -> Result<()> {
-    if !invite_url.contains("/invite/") {
-        bail!("invalid invite URL: must contain /invite/");
+    let invite = url::Url::parse(invite_url).context("invalid invite URL")?;
+    if invite.path().trim_end_matches('/') != "/invite" {
+        bail!("invalid invite URL: path must be /invite");
     }
+    let fragment = invite
+        .fragment()
+        .ok_or_else(|| anyhow!("invalid invite URL: missing fragment"))?;
+    let values: std::collections::HashMap<_, _> = url::form_urlencoded::parse(fragment.as_bytes())
+        .into_owned()
+        .collect();
+    let server = values
+        .get("server")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("invalid invite URL: missing server"))?;
+    let capability = values
+        .get("capability")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("invalid invite URL: missing capability"))?;
     let ctx = require_session(profile)?;
-    let share = ctx.client.add_incoming_share(invite_url)?;
+    let share = ctx.client.add_incoming_share(server, capability)?;
     if json {
         crate::output::print_json(&share)?;
     } else {
         println!(
             "Accepted federated share {} from {}",
-            share.id, share.remote_server
+            share.id, share.remote_domain
         );
     }
     Ok(())

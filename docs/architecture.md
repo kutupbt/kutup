@@ -11,9 +11,8 @@ implemented formats.
 Chat and Drive federation share the versioned identity, discovery, and HTTP
 authentication boundary specified in
 [`federation-protocol.md`](federation-protocol.md). Its pure v2 protocol and
-additive identity/trust/policy persistence are implemented; public routing and
-runtime cut-over are staged separately so no mixed v1/v2 trust path is
-deployed.
+identity/trust/policy persistence are implemented and both feature protocols
+are cut over. No mixed v1/v2 trust path or raw remote URL remains.
 
 ---
 
@@ -114,39 +113,53 @@ The server stores the encrypted collection key — it cannot read it.
 
 ## Federation Model
 
-Federation allows sharing a collection with a user on a **different Kutup server**.
+Federation allows sharing a collection with a user on a **different Kutup
+server**. Drive and Chat are feature adapters over one server identity,
+discovery, peer pin, admission policy, replay store, and signed transport.
+Drive's capability grants access to one encrypted share; it does not replace
+server authentication.
 
 ```
 Server A (sharer)                          Server B (recipient)
 ─────────────────                          ────────────────────
-1. Look up recipient's pubkey
-   GET /api/fed/users?username=...
-   on Server B
-                                           ← returns publicKey
+1. Resolve and pin b.example
+   via signed v2 discovery
 
-2. Encrypt collection key to pubkey
-   POST /api/collections/:id/share-federated
-   (creates a federated share token)
+2. Signed Drive directory lookup
+   GET /api/fed/drive/users/bob
+                                           ← signed bob@b.example publicKey
 
-3. Return invite link:
-   Server B URL + /accept?token=...
-   + inviteToken (for Server A's API)
+3. Browser seals collection key to Bob
+   POST /api/collections/:id/federated-shares
+   (stores canonical b.example + capability hash)
 
-                                           4. Recipient opens invite link
-                                              POST /api/fed-proxy/incoming
-                                              (registers the share on Server B)
+4. Return /invite#server=a.example&capability=...
+   (fragment keeps capability out of HTTP requests/logs)
 
-                                           5. Recipient browses via proxy:
-                                              GET /api/fed-proxy/:shareId/files
-                                              → Server B proxies to Server A
-                                              GET /api/fed/shares/:token/files
+                                           5. Recipient opens invite link
+                                              POST /api/drive/federation/shares
+                                              Server B fetches signed invite
+                                              and checks intended username
 
-                                           6. File downloads proxied similarly.
+                                           6. Recipient browses local proxy API
+                                              Server B sends signed drive.v1
+                                              requests plus the separate share
+                                              capability to Server A
+
+                                           7. Download is spooled and its signed
+                                              ciphertext digest verified before
+                                              bytes reach the browser.
 ```
 
-**SSRF protection:** Before proxying requests to the remote server URL, the backend validates that the target hostname is not a private/loopback address.
+Production federation accepts canonical DNS identities and public HTTPS only.
+The shared resolver verifies signed endpoint delegation, pins the peer
+identity, resolves and connects to the already-validated address set, disables
+redirects, and rejects private/loopback/link-local destinations. Plain HTTP and
+private networks are available only to the explicit isolated test harness.
 
-**Cross-server upload/delete** is gated by the `canUpload` and `canDelete` boolean grants set at share time.
+**Cross-server upload/delete** is gated by the `canUpload` and `canDelete`
+grants. Mutations are idempotent under stable request IDs; changing the signed
+content under an existing ID is rejected.
 
 ---
 

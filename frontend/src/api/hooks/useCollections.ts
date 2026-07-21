@@ -112,7 +112,7 @@ export function useShareFederated() {
       }
     }) =>
       api
-        .post<{ inviteUrl: string }>(`/collections/${id}/share-federated`, body)
+        .post<{ inviteUrl: string }>(`/collections/${id}/federated-shares`, body)
         .then((r) => r.data),
     onError: (err: any) => {
       toast.error(err.response?.data?.error ?? 'Federated share failed')

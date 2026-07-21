@@ -180,7 +180,7 @@ Phases (each lands as its own PR-series; do not start N+1 with N unmerged):
 | 1 | **Spike**: `libsignal-protocol` + `spqr` on wasm32 | ✅ **GO** (2026-07-12, `spikes/libsignal-wasm/`) — compiles for the browser target on stable, full PQXDH+Triple-Ratchet round-trip executes in wasm; web client shares `kutup-chat-core` |
 | 2 | Server slice: `kutup-chat-proto` + prekey directory, per-device mailboxes, WSS drain | ✅ landed — `crates/kutup-chat-proto`, migration 021, `handlers/chat.rs`, `chat_hub.rs`, nginx `/api/chat/ws`; full REST + WS contract smoke-verified against the live stack (incl. one-time-prekey consumption, last-resort fallback, the 409 missing/stale/extra device contract, live envelope push). Playwright chat spec lands with phase 2b |
 | 2b | Shared core + minimal 1:1 reference web UI | **Implemented and live-stack verified on `codex/chat-architecture-hardening`.** Includes durable typed inbound journal/quarantine, SQLCipher/IndexedDB stores, crash-safe registration/prekeys, signed manifests, WASM transport, Web Locks, REST+WS reconciliation, history, Note to Self, and ordinary linked-device sent transcripts. Web remains the product client until the messaging milestone is complete; native packaging/integration is not a gate. |
-| 3 | Web federation foundation | **Implemented and two-server live verified:** canonical `username@server`, typed conversations, one persistent v2 server identity, signed `.well-known` endpoint/capability discovery, immutable identity history and authenticated rotation, strict RFC 9421/9530 request/response authentication, replay reservation, DNS-rebinding/SSRF-safe resolution, durable per-destination in-order Chat delivery, device-mismatch recovery, terminal rejection, and sequence-gap replay. The isolated harness also proves retry survives an origin restart while the destination is offline. The generic admin control plane provides a global stop, feature-scoped `disabled`/`allowlist`/`blocklist`/`open` admission and trust floors, directional domain rules, TOFU verification, discovery retry, quarantine evidence/re-pin, audit logging, and responsive UI. Disabled Chat policy suppresses discovery. The old Chat-only identity, routes, policy, configuration, and auth runtime were removed; there is no v1 downgrade. Drive cut-over onto this stack is Phase D of the unified-federation plan. No alias namespace. See `docs/federation-protocol.md`. |
+| 3 | Web federation foundation | **Implemented and two-server live verified:** canonical `username@server`, typed conversations, one persistent v2 server identity, signed `.well-known` endpoint/capability discovery, immutable identity history and authenticated rotation, strict RFC 9421/9530 request/response authentication, replay reservation, DNS-rebinding/SSRF-safe resolution, durable per-destination in-order Chat delivery, device-mismatch recovery, terminal rejection, and sequence-gap replay. Drive now uses that same stack for signed account lookup, domain-bound fragment capabilities, invite acceptance, file lists, idempotent upload/delete, persisted ciphertext digests, and verify-before-release streaming downloads. The isolated harness proves the Drive round trip, that Chat reuses a Drive-established pin, and that Chat retry survives an origin restart while the destination is offline. The generic admin control plane provides a global stop, feature-scoped `disabled`/`allowlist`/`blocklist`/`open` admission and trust floors, directional domain rules, TOFU verification, discovery retry, quarantine evidence/re-pin, audit logging, and responsive UI. A disabled feature is omitted from discovery while the other remains available. Both old feature-specific federation stacks and raw remote URL routes were removed; there is no v1 downgrade. No alias namespace. See `docs/federation-protocol.md`. |
 | 4 | Web contact privacy and trust | **In progress:** client-only durable message requests/blocking and Signal-style encrypted profiles are implemented and live verified. Key transparency transactionally logs every manifest, authenticates the current value with a sparse Merkle map, and supplies inclusion/consistency/map proofs across local and federated reads. Every exact log/map head has a persistent operator signature; a separately deployed witness verifies consistency and attests it, while client policies enforce pinned operator/witness keys and quorum. The web client now independently monitors its local head on open/online/foreground/reconnect and every 15 visible minutes, persists healthy/unavailable/verification-failed state, displays it, and blocks new sends after verification failure. Production WASM/web plus the full Chromium messaging E2E, local HTTPS contract, isolated quorum-1 witness topology, and two-server offline/restart federation harness are live verified. Unified federation v2 now protects Chat server identity with persistent pins, authenticated rotation, and quarantine. **Next:** remote transparency-operator/witness pinning and scheduled monitoring. Remaining later trust work: skipped-update/range proofs and cross-witness gossip/auditing; then sealed sender with its delivery-capability abuse gate. |
 | 5 | Web private groups | Sender keys plus GV2-pattern encrypted/versioned group state, zkgroup authorization, linked-device state, roles, and a 256-member target. |
 | 6 | Web messaging and media | Replies, reactions, edits/deletes, receipts, typing, disappearing messages, local search, encrypted drive/tus attachments, and voice notes. |
@@ -209,12 +209,15 @@ The mobile UI pulled ahead. The desktop Drive page hasn't gotten the color-palet
 
 ### Federation polish
 
-Cross-server presence indicators in collab, share-revocation on remote federations, federation discovery UX. Federation works today but rough.
+Cross-server presence indicators in collab, outgoing Drive-share revocation,
+and federation discovery UX. The common Chat/Drive trust and transport stack is
+implemented; these are product-lifecycle improvements above it.
 
 ### Test coverage gaps
 
 - Tauri session-persistence — no E2E test today
-- Federation flows — limited coverage
+- Browser-level Drive federation UI coverage (the isolated two-server server
+  harness already covers the complete Drive and Chat transport lifecycle)
 - Mobile flows — Playwright doesn't exercise the mobile shell
 
 ### Performance baselines
@@ -238,7 +241,7 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
 - **Share lifecycle management (needs server slices first).** There is no
   endpoint to list a collection's outgoing user shares, revoke one, or
   list/delete public links (the web UI can't either — only recipient-side
-  `DELETE /fed-proxy/incoming/:shareId` exists). Server work:
+  `DELETE /api/drive/federation/shares/:shareId` exists). Server work:
   `GET /api/collections/:id/shares`, `DELETE /api/collections/:id/share/:userId`,
   `GET`/`DELETE /api/user/shares` (public links, owner-scoped via
   `public_shares.created_by`); then `kutup share ls / revoke / unlink` and
@@ -255,7 +258,7 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
   files as opaque bytes; the extract/hydrate steps only run in
   `upload`/`download`. Wire `crate::whiteboard` into the engine's
   push/pull paths.
-- **Streaming multipart uploads** for `share upload` (fed-proxy) — still
+- **Streaming multipart uploads** for remote `share upload` — still
   buffers the whole encrypted file in memory (`Part::bytes`); switch to
   `Part::reader` with an encrypting reader for large-file parity with tus.
 - **`kutup versions restore` vs collab snapshots.** CLI restore re-encrypts

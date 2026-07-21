@@ -224,6 +224,27 @@ impl FederationSignedRequest {
     ) -> Result<FederationHttpResponse, FederationProtocolError> {
         verify_response(&self.context, response, headers, pinned_public_key, now)
     }
+
+    /// Authenticate a response whose body was hashed while streaming rather
+    /// than retained in memory. `actual_content_digest` must describe the
+    /// exact received bytes.
+    pub fn verify_response_with_content_digest(
+        &self,
+        response: FederationHttpResponse,
+        headers: &FederationSignatureHeaders,
+        actual_content_digest: &str,
+        pinned_public_key: &[u8; 32],
+        now: i64,
+    ) -> Result<FederationHttpResponse, FederationProtocolError> {
+        verify_response_with_content_digest(
+            &self.context,
+            response,
+            headers,
+            actual_content_digest,
+            pinned_public_key,
+            now,
+        )
+    }
 }
 
 impl FederationVerifiedRequest {
@@ -307,6 +328,35 @@ impl FederationVerifiedRequest {
         })
     }
 
+    /// Sign response metadata using a digest computed while reading the body.
+    /// This keeps the signature bound to the exact bytes without requiring the
+    /// signer to buffer a potentially large encrypted Drive object.
+    pub fn sign_response_with_content_digest(
+        &self,
+        response: &FederationHttpResponse,
+        content_digest: &str,
+        created: i64,
+        expires: i64,
+        signing_key: &SigningKey,
+    ) -> Result<FederationSignatureHeaders, FederationProtocolError> {
+        validate_response_for_request(response, &self.context.request)?;
+        validate_content_digest(content_digest)?;
+        validate_signed_window(created, expires, created)?;
+        let parameters = signature_parameters(
+            RESPONSE_COMPONENTS,
+            created,
+            expires,
+            &federation_key_id(&signing_key.verifying_key().to_bytes()),
+            &self.context.nonce,
+        );
+        let base = response_signature_base(response, content_digest, &self.context, &parameters);
+        Ok(FederationSignatureHeaders {
+            content_digest: content_digest.to_owned(),
+            signature_input: format!("{FEDERATION_SIGNATURE_LABEL}={parameters}"),
+            signature: encode_signature_header(&signing_key.sign(base.as_bytes())),
+        })
+    }
+
     /// The exact response signature base, including the original request's
     /// `;req` components, for cross-language conformance checks.
     pub fn response_signature_base(
@@ -334,9 +384,14 @@ impl FederationVerifiedRequest {
 }
 
 pub fn content_digest_sha256(body: &[u8]) -> String {
+    content_digest_sha256_from_digest(&Sha256::digest(body).into())
+}
+
+/// Format an already-computed raw SHA-256 digest as RFC 9530 content digest.
+pub fn content_digest_sha256_from_digest(digest: &[u8; 32]) -> String {
     format!(
         "sha-256=:{}:",
-        base64::engine::general_purpose::STANDARD.encode(Sha256::digest(body))
+        base64::engine::general_purpose::STANDARD.encode(digest)
     )
 }
 
@@ -374,9 +429,28 @@ fn verify_response(
     pinned_public_key: &[u8; 32],
     now: i64,
 ) -> Result<FederationHttpResponse, FederationProtocolError> {
-    validate_response_for_request(&response, &context.request)?;
     let expected_digest = content_digest_sha256(&response.body);
-    if headers.content_digest != expected_digest {
+    verify_response_with_content_digest(
+        context,
+        response,
+        headers,
+        &expected_digest,
+        pinned_public_key,
+        now,
+    )
+}
+
+fn verify_response_with_content_digest(
+    context: &FederationRequestContext,
+    response: FederationHttpResponse,
+    headers: &FederationSignatureHeaders,
+    actual_content_digest: &str,
+    pinned_public_key: &[u8; 32],
+    now: i64,
+) -> Result<FederationHttpResponse, FederationProtocolError> {
+    validate_response_for_request(&response, &context.request)?;
+    validate_content_digest(actual_content_digest)?;
+    if headers.content_digest != actual_content_digest {
         return Err(FederationProtocolError::ContentDigestMismatch);
     }
     let parsed = parse_signature_input(&headers.signature_input, RESPONSE_COMPONENTS)?;
@@ -397,6 +471,21 @@ fn verify_response(
     );
     verify_signature_header(&headers.signature, pinned_public_key, base.as_bytes())?;
     Ok(response)
+}
+
+fn validate_content_digest(value: &str) -> Result<(), FederationProtocolError> {
+    let encoded = value
+        .strip_prefix("sha-256=:")
+        .and_then(|value| value.strip_suffix(':'))
+        .ok_or(FederationProtocolError::ContentDigestMismatch)?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| FederationProtocolError::ContentDigestMismatch)?;
+    if decoded.len() != 32 || base64::engine::general_purpose::STANDARD.encode(&decoded) != encoded
+    {
+        return Err(FederationProtocolError::ContentDigestMismatch);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -795,6 +884,64 @@ mod tests {
                 1_700_000_150,
             )
             .unwrap();
+    }
+
+    #[test]
+    fn streamed_response_digest_is_signed_and_verified_without_buffering() {
+        let client = key(1);
+        let server = key(2);
+        let signed = FederationSignedRequest::sign(
+            request(FederationFeature::DriveV1),
+            "drive-download-1",
+            1_700_000_000,
+            1_700_000_300,
+            &client,
+        )
+        .unwrap();
+        let verified = FederationVerifiedRequest::verify(
+            signed.request.clone(),
+            signed.headers.clone(),
+            &client.verifying_key().to_bytes(),
+            1_700_000_100,
+        )
+        .unwrap();
+        let mut metadata = response(FederationFeature::DriveV1);
+        metadata.content_type = "application/octet-stream".into();
+        metadata.body.clear();
+        let ciphertext = b"encrypted object bytes hashed chunk by chunk";
+        let digest = content_digest_sha256(ciphertext);
+        let headers = verified
+            .sign_response_with_content_digest(
+                &metadata,
+                &digest,
+                1_700_000_101,
+                1_700_000_201,
+                &server,
+            )
+            .unwrap();
+        signed
+            .verify_response_with_content_digest(
+                metadata.clone(),
+                &headers,
+                &digest,
+                &server.verifying_key().to_bytes(),
+                1_700_000_150,
+            )
+            .unwrap();
+
+        let altered = content_digest_sha256(b"altered encrypted object bytes");
+        assert_eq!(
+            signed
+                .verify_response_with_content_digest(
+                    metadata,
+                    &headers,
+                    &altered,
+                    &server.verifying_key().to_bytes(),
+                    1_700_000_150,
+                )
+                .unwrap_err(),
+            FederationProtocolError::ContentDigestMismatch
+        );
     }
 
     #[test]

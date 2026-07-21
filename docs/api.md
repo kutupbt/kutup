@@ -476,9 +476,31 @@ Share a collection with another user on this server.
 
 ---
 
-### POST /api/collections/:id/share-federated
+### GET /api/drive/federation/users/:username
 
-Share a collection with a user on a remote Kutup instance.
+Resolve a remote Drive user through authenticated v2 federation before sealing
+the collection key.
+
+**Auth:** Bearer JWT
+**Query:** `?server=other.example.com` (canonical DNS identity, not a URL)
+
+**Response:**
+```json
+{
+  "username": "bob",
+  "server": "other.example.com",
+  "publicKey": "<base64>"
+}
+```
+
+The response is accepted only after signed discovery, peer pin/rotation policy,
+admission, request authentication, and response authentication succeed.
+
+---
+
+### POST /api/collections/:id/federated-shares
+
+Create a domain-bound share for a user on a remote Kutup instance.
 
 **Auth:** Bearer JWT
 
@@ -486,7 +508,7 @@ Share a collection with a user on a remote Kutup instance.
 ```json
 {
   "recipientUsername": "bob",
-  "recipientServer": "https://other.kutup.example.com",
+  "recipientServer": "other.example.com",
   "encryptedCollectionKey": "<base64>",
   "canUpload": true,
   "canDelete": false,
@@ -494,33 +516,21 @@ Share a collection with a user on a remote Kutup instance.
 }
 ```
 
-`encryptedCollectionKey` is the collection key sealed to the recipient's public key (fetched via `GET /api/collections/fed-pubkey`).
+`encryptedCollectionKey` is the collection key sealed to the exact
+`bob@other.example.com` public key returned by the lookup above. The server
+stores the canonical recipient domain and a SHA-256 capability verifier, not a
+remote URL or plaintext capability.
 
 **Response:** `201 Created`
 ```json
 {
-  "inviteToken": "<hex32>",
-  "inviteUrl": "https://this.kutup.example.com/invite/<hex32>"
+  "inviteUrl": "https://this.example.com/invite#server=this.example.com&capability=<base64url>"
 }
 ```
 
-`inviteUrl` is built from the **sharer's** `SERVER_URL` (this server). The recipient hands the `inviteToken` to their own server via `POST /api/fed-proxy/incoming` to accept.
-
----
-
-### GET /api/collections/fed-pubkey
-
-Fetch the public key of a remote user (used before federated sharing).
-
-**Auth:** Bearer JWT
-**Query:** `?username=bob&server=https://other.kutup.example.com`
-
-**Response:**
-```json
-{
-  "publicKey": "<base64>"
-}
-```
+The capability appears only in the fragment so browsers do not send it to the
+sharer's web origin. It is shown once and cannot be recovered from the outgoing
+share row.
 
 ---
 
@@ -602,7 +612,7 @@ Move a file to the trash (soft delete). The file disappears from every normal en
 
 ## Trash
 
-Trash is **owner-scoped**: an item lives in the trash of the user who owns the collection it belongs to (a share recipient's delete lands in the owner's trash — the Google Drive model). Every entry is a *trash root*: a deleted file, or a deleted folder carrying its whole subtree. A background sweeper purges roots older than `TRASH_RETENTION_DAYS` (default 30; `0` disables the sweeper). Federated deletes (`DELETE /api/fed/shares/...`) remain permanent — there is no cross-server trash.
+Trash is **owner-scoped**: an item lives in the trash of the user who owns the collection it belongs to (a share recipient's delete lands in the owner's trash — the Google Drive model). Every entry is a *trash root*: a deleted file, or a deleted folder carrying its whole subtree. A background sweeper purges roots older than `TRASH_RETENTION_DAYS` (default 30; `0` disables the sweeper). Federated Drive deletes (`DELETE /api/fed/drive/files/:fileId`) remain permanent — there is no cross-server trash.
 
 ### GET /api/trash
 
@@ -924,8 +934,10 @@ window is rejected.
 Signed v2 discovery containing the canonical server, delegated `apiBase`,
 typed capabilities, embedded current identity document and hash, validity
 window, and signature. Returns `404` when the shared identity is absent, the
-global stop is active, or Chat is disabled. Production discovery and delegated
-API targets require public HTTPS.
+global stop is active, or both Chat and Drive are disabled. An individually
+disabled feature is omitted from `capabilities` while the other remains
+discoverable. Production discovery and delegated API targets require public
+HTTPS.
 
 ### GET /.well-known/kutup/federation/identity/{sequence}.json
 
@@ -960,163 +972,117 @@ refresh/re-encrypt or replay the missing retained transaction.
 
 ---
 
-## Federation — Public Endpoints
+## Drive Federation — Local Authenticated Endpoints
 
-These endpoints are called by remote Kutup servers as part of the federation protocol.
+These routes let a local browser interact with a remote encrypted share. The
+local server performs all remote discovery, admission, identity pinning, and
+message authentication; browsers never submit a remote API URL.
 
-### GET /api/fed/users
+### POST /api/drive/federation/shares
 
-Look up a user on this server by username and return their public key. Rate-limited (60/min/IP).
-
-**Auth:** None
-**Query:** `?username=alice`
-
-**Response:**
-```json
-{
-  "publicKey": "<base64>"
-}
-```
-
-Returns `404` for unknown or inactive users.
-
----
-
-### GET /api/fed/invites/:token
-
-Retrieve federated share invite metadata by token. The token itself is the credential — there is no auth header.
-
-**Auth:** None
-
-**Response:**
-```json
-{
-  "wrappedKey": "<base64>",
-  "encryptedName": "<base64>",
-  "nameNonce": "<base64>",
-  "canUpload": true,
-  "canDelete": false,
-  "uploadQuotaBytes": null
-}
-```
-
-`wrappedKey` is the collection key sealed to the recipient's NaCl box public key by the original sharer. The recipient unseals it with their own private key.
-
----
-
-### GET /api/fed/shares/:token/files
-
-List files in a federated share. Called by remote server when proxying for its local user.
-
-**Auth:** None (token provides access)
-
----
-
-### GET /api/fed/shares/:token/files/:fileId/download
-
-Download a file from a federated share.
-
-**Auth:** None (token provides access)
-
----
-
-### POST /api/fed/shares/:token/files
-
-Upload a file to a federated share (if permission allows).
-
-**Auth:** None (token provides access)
-**Body:** Multipart (same fields as `POST /api/files/upload`)
-
----
-
-### DELETE /api/fed/shares/:token/files/:fileId
-
-Delete a file from a federated share (if permission allows).
-
-**Auth:** None (token provides access)
-
----
-
-## Federation Proxy — Authenticated Endpoints
-
-These endpoints are called by the local Kutup client to interact with collections shared from remote servers.
-
-### POST /api/fed-proxy/incoming
-
-Accept a federated share invite. The client only needs to paste the invite URL — this server parses out the remote host + token, calls the remote `GET /api/fed/invites/{token}`, and persists the resulting wrapped key.
+Accept an invite after the browser parses its fragment.
 
 **Auth:** Bearer JWT
 
-**Request body:**
 ```json
 {
-  "inviteUrl": "https://other.kutup.example.com/invite/<token>"
+  "server": "sharer.example.com",
+  "capability": "<base64url>"
 }
 ```
 
-**Response:** `201 Created`
+The server fetches the signed invite and verifies that its source domain and
+intended recipient username match the authenticated local account. Success is
+`201 Created` with:
+
 ```json
 {
   "id": "<uuid>",
-  "remoteServer": "https://other.kutup.example.com",
+  "remoteDomain": "sharer.example.com",
   "encryptedCollectionKey": "<base64>",
   "encryptedName": "<base64>",
   "nameNonce": "<base64>",
   "canUpload": true,
   "canDelete": false,
-  "uploadQuotaBytes": null
+  "uploadQuotaBytes": null,
+  "createdAt": "<RFC3339>"
 }
 ```
 
-`502` if the remote server is unreachable or returns invalid invite data.
+The retained remote capability is secret server-side state and is omitted from
+all responses.
+
+### GET /api/drive/federation/shares
+
+List the authenticated user's accepted remote shares. Returns the same public
+shape as acceptance, without any capability.
+
+### DELETE /api/drive/federation/shares/:shareId
+
+Remove one accepted remote share for the authenticated user. Returns `204`.
+
+### GET /api/drive/federation/shares/:shareId/files
+
+Return the signed and verified remote ciphertext metadata list.
+
+### GET /api/drive/federation/shares/:shareId/files/:fileId/content
+
+Stream remote ciphertext. The local server first spools and hashes the complete
+remote response, verifies its signed RFC 9530 digest under the pinned peer key,
+then releases the verified stream to the browser.
+
+### POST /api/drive/federation/shares/:shareId/files
+
+Upload encrypted multipart fields (`encryptedMetadata`, `metadataNonce`,
+`encryptedFileKey`, `fileKeyNonce`, and `file`). Exact retries are idempotent
+and return the same `201 { "id": "<uuid>" }` result.
+
+### DELETE /api/drive/federation/shares/:shareId/files/:fileId
+
+Delete a remote ciphertext object when `canDelete` permits it. Exact retries
+are idempotent and return `204`.
 
 ---
 
-### GET /api/fed-proxy/incoming
+## Drive Federation — Server-to-Server Endpoints
 
-List all accepted incoming federated shares for the current user.
+All `/api/fed/drive/*` routes require the unified `drive.v1` RFC 9421/9530
+request signature and return an authenticated response. Except for user lookup,
+they also require `Kutup-Share-Capability`; the capability is checked only
+after the request's canonical origin domain has authenticated, and the share
+must be bound to that same domain.
 
-**Auth:** Bearer JWT
+### GET /api/fed/drive/users/:username
 
----
+Return `{ "username", "server", "publicKey" }` for one active local user.
 
-### DELETE /api/fed-proxy/incoming/:shareId
+### GET /api/fed/drive/invite
 
-Remove an incoming federated share.
+Return the encrypted collection metadata, wrapped key, intended recipient, and
+grants for the capability-authorized share.
 
-**Auth:** Bearer JWT
+### GET /api/fed/drive/files
 
----
+List ciphertext file metadata for the capability-authorized collection.
 
-### GET /api/fed-proxy/:shareId/files
+### GET /api/fed/drive/files/:fileId/content
 
-List files in an incoming federated share. Proxies the request to the remote server.
+Stream ciphertext with its precomputed signed content digest and exact length.
 
-**Auth:** Bearer JWT
+### POST /api/fed/drive/files
 
----
+Store one encrypted multipart upload. The exact ciphertext is hashed while it
+is spooled and the digest is persisted with the file row. A stable request ID
+plus authenticated request hash provides persistent idempotency.
 
-### GET /api/fed-proxy/:shareId/files/:fileId/download
+### DELETE /api/fed/drive/files/:fileId
 
-Download a file from an incoming federated share. Proxied to the remote server.
+Delete one ciphertext file under a persistent idempotent mutation result.
 
-**Auth:** Bearer JWT
-
----
-
-### POST /api/fed-proxy/:shareId/upload
-
-Upload a file to an incoming federated share (if permitted). Proxied to the remote server.
-
-**Auth:** Bearer JWT
-
----
-
-### DELETE /api/fed-proxy/:shareId/files/:fileId
-
-Delete a file in an incoming federated share (if permitted). Proxied to the remote server.
-
-**Auth:** Bearer JWT
+The removed `/api/fed/users`, `/api/fed/invites/*`, `/api/fed/shares/*`,
+`/api/fed-proxy/*`, `/api/collections/:id/share-federated`, and
+`/api/collections/fed-pubkey` routes have no compatibility handlers and return
+`404`.
 
 ---
 
@@ -1340,7 +1306,7 @@ persisted peer trust/discovery state. Rules remain visible while inactive.
   "fingerprint": "64-lowercase-hex-characters",
   "fingerprintDisplay": "grouped full fingerprint",
   "identitySequence": 0,
-  "capabilities": ["identity.v1", "chat.v1"],
+  "capabilities": ["chat.v1", "drive.v1", "identity.v1"],
   "globalEnabled": true,
   "features": [
     { "feature": "chat", "mode": "allowlist", "minimumTrust": "verified" },
@@ -1365,7 +1331,7 @@ persisted peer trust/discovery state. Rules remain visible while inactive.
       "fingerprint": "64-lowercase-hex-characters",
       "fingerprintDisplay": "grouped full fingerprint",
       "apiBase": "https://friend.example",
-      "capabilities": ["chat.v1", "identity.v1"],
+      "capabilities": ["chat.v1", "drive.v1", "identity.v1"],
       "firstSeenAt": "2026-07-20T10:00:00Z",
       "lastSeenAt": "2026-07-20T10:00:00Z",
       "verifiedAt": null,

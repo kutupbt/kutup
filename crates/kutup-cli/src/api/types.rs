@@ -281,8 +281,6 @@ pub struct FederatedShareRequest {
 #[serde(rename_all = "camelCase")]
 pub struct FederatedShareResponse {
     #[serde(default)]
-    pub invite_token: String,
-    #[serde(default)]
     pub invite_url: String,
 }
 

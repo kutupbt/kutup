@@ -2288,6 +2288,7 @@ dependencies = [
  "kutup-chat-proto",
  "kutup-crypto",
  "kutup-federation-proto",
+ "multer",
  "rand 0.8.6",
  "reqwest",
  "serde",

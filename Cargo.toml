@@ -83,6 +83,7 @@ tokio-util = { version = "0.7", features = ["io"] }
 # Split the collab WebSocket into independent read/write halves.
 futures-util = { version = "0.3", default-features = false }
 tempfile = "3"
+multer = "3"
 # OpenAPI — replaces swaggo/swag. The interactive swagger-ui crate downloads its UI
 # bundle from GitHub at build time, which breaks offline/sandboxed builds; we generate
 # the spec with utoipa and serve the raw JSON instead (see docs/roadmap.md).
