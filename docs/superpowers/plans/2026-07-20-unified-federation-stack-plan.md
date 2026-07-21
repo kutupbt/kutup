@@ -2,9 +2,9 @@
 
 **Date:** 2026-07-20
 
-**Status:** accepted; Phases A-E implemented; Phases A-D two-server live
-verified. Phase F's Drive/Chat harness, migration fixtures, and primary
-documentation were implemented alongside Phases D-E.
+**Status:** complete; Phases A-F implemented and verified. The unified
+Drive/Chat live harness, destructive migration fixtures, control plane,
+documentation, and repeatable single-stack architecture audit are green.
 
 **Compatibility decision:** Kutup has no live federation deployment. Replace
 the current experimental Chat and Drive protocols atomically; do not preserve
@@ -813,16 +813,18 @@ stack, routes, policy tables, and configuration no longer exist.
 
 ### Phase F — documentation, integration, and cleanup
 
-1. Update architecture, API, protocol, self-hosting, roadmap, and test docs.
-2. Extend the two-server harness to exercise both Chat and Drive through the
+1. ✅ Update architecture, API, protocol, self-hosting, roadmap, and test docs.
+2. ✅ Extend the two-server harness to exercise both Chat and Drive through the
    same identity and policy.
-3. Run the separate Phase C Chat and Phase D Drive destructive-migration
+3. ✅ Run the separate Phase C Chat and Phase D Drive destructive-migration
    fixtures proving only their experimental federation state is reset and all
    local data is retained.
-4. Run Rust tests, frontend tests/typecheck/lint, OpenAPI checks, migration
+4. ✅ Run Rust tests, frontend tests/typecheck/build, OpenAPI checks, migration
    up/down checks, and the live federation harness.
-5. Confirm with `rg` that feature modules no longer create federation clients,
-   accept new raw remote URLs, or load independent signing keys.
+5. ✅ Confirm with the repeatable `scripts/audit-unified-federation.sh` `rg`
+   gate that feature modules no longer create federation clients, accept new
+   raw remote URLs, load independent signing keys, or own shared trust/policy
+   persistence.
 
 ## 13. Required test matrix
 

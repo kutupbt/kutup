@@ -51,6 +51,25 @@ fn json_response(response: Response, context: &str) -> Value {
         .unwrap_or_else(|error| panic!("{context}: invalid JSON ({error}): {body}"))
 }
 
+fn federation_control_plane(c: &Client, base: &str, admin: &str, context: &str) -> Value {
+    json_response(
+        c.get(format!("{base}/api/admin/federation"))
+            .bearer_auth(admin)
+            .send()
+            .unwrap(),
+        context,
+    )
+}
+
+fn federation_peer<'a>(control_plane: &'a Value, domain: &str) -> &'a Value {
+    control_plane["peers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|peer| peer["domain"] == domain)
+        .unwrap_or_else(|| panic!("missing federation peer {domain}"))
+}
+
 fn registration_payload(email: &str, username: &str) -> Value {
     let mut rng = rand::thread_rng();
     let mut master_key = [0u8; 32];
@@ -125,11 +144,22 @@ fn setup_admin(c: &Client, base: &str, email: &str, username: &str) -> String {
 }
 
 fn update_feature_mode(c: &Client, base: &str, admin: &str, feature: &str, mode: &str) -> Value {
+    update_feature_policy(c, base, admin, feature, mode, true)
+}
+
+fn update_feature_policy(
+    c: &Client,
+    base: &str,
+    admin: &str,
+    feature: &str,
+    mode: &str,
+    global_enabled: bool,
+) -> Value {
     let response = json_response(
         c.put(format!("{base}/api/admin/federation"))
             .bearer_auth(admin)
             .json(&json!({
-                "globalEnabled": true,
+                "globalEnabled": global_enabled,
                 "feature": feature,
                 "mode": mode,
                 "minimumTrust": "tofu"
@@ -145,6 +175,15 @@ fn update_feature_mode(c: &Client, base: &str, admin: &str, feature: &str, mode:
         .find(|item| item["feature"] == feature)
         .unwrap()
         .clone()
+}
+
+fn drive_remote_user(c: &Client, base: &str, token: &str) -> Response {
+    c.get(format!(
+        "{base}/api/drive/federation/users/{BOB_USERNAME}?server=b.test"
+    ))
+    .bearer_auth(token)
+    .send()
+    .unwrap()
 }
 
 fn update_federation_mode(c: &Client, base: &str, admin: &str, mode: &str) -> Value {
@@ -393,12 +432,7 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
     let collection_id = collection["id"].as_str().unwrap();
 
     let remote_user = json_response(
-        c.get(format!(
-            "{a}/api/drive/federation/users/{BOB_USERNAME}?server=b.test"
-        ))
-        .bearer_auth(alice_token)
-        .send()
-        .unwrap(),
+        drive_remote_user(c, a, alice_token),
         "signed Drive remote user lookup",
     );
     assert_eq!(remote_user["username"], BOB_USERNAME);
@@ -627,6 +661,37 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     let alice_token = register_account(c, a, ALICE_EMAIL, ALICE_USERNAME);
     let bob_token = register_account(c, b, BOB_EMAIL, BOB_USERNAME);
     drive_round_trip(c, a, b, &alice_token, &bob_token);
+
+    // Drive is deliberately the first feature to contact B. Capture the one
+    // shared identity pin before Chat uses the same federation stack.
+    let after_drive = federation_control_plane(c, a, &admin_a, "control plane after Drive");
+    assert_eq!(after_drive["operational"]["peerTotal"], 1);
+    assert_eq!(after_drive["operational"]["driveOutgoingShares"], 1);
+    let drive_peer = federation_peer(&after_drive, "b.test");
+    assert_eq!(drive_peer["trust"], "tofu");
+    assert_eq!(drive_peer["diagnostics"]["driveOutgoingShares"], 1);
+    let shared_fingerprint = drive_peer["fingerprint"].as_str().unwrap().to_owned();
+    let shared_first_seen = drive_peer["firstSeenAt"].as_str().unwrap().to_owned();
+    let drive_evidence = json_response(
+        c.get(format!("{a}/api/admin/federation/peers/b.test/evidence"))
+            .bearer_auth(&admin_a)
+            .send()
+            .unwrap(),
+        "immutable identity evidence after Drive first contact",
+    );
+    assert_eq!(drive_evidence["domain"], "b.test");
+    assert_eq!(drive_evidence["trust"], "tofu");
+    assert_eq!(drive_evidence["documents"].as_array().unwrap().len(), 1);
+    assert_eq!(drive_evidence["documents"][0]["acceptance"], "accepted");
+    assert_eq!(
+        drive_evidence["documents"][0]["document"],
+        discovery_b["identity"]
+    );
+    assert_eq!(
+        drive_evidence["documents"][0]["documentHash"],
+        drive_evidence["currentDocumentHash"]
+    );
+
     assert_eq!(
         register_device(c, a, &alice_token, ALICE_REGISTRATION_ID, 10),
         1
@@ -665,6 +730,166 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(bundles_first["devices"][0]["deviceId"], 1);
     assert!(bundles_first["devices"][0].get("oneTimePreKey").is_none());
 
+    // Chat must reuse Drive's peer row and immutable evidence rather than
+    // creating a feature-owned trust record or silently replacing the pin.
+    let after_chat = federation_control_plane(c, a, &admin_a, "control plane after Chat");
+    assert_eq!(after_chat["operational"]["peerTotal"], 1);
+    let chat_peer = federation_peer(&after_chat, "b.test");
+    assert_eq!(chat_peer["fingerprint"], shared_fingerprint);
+    assert_eq!(chat_peer["firstSeenAt"], shared_first_seen);
+    let chat_evidence = json_response(
+        c.get(format!("{a}/api/admin/federation/peers/b.test/evidence"))
+            .bearer_auth(&admin_a)
+            .send()
+            .unwrap(),
+        "immutable identity evidence after Chat reuse",
+    );
+    assert_eq!(chat_evidence, drive_evidence);
+
+    let bulk_retry = json_response(
+        c.post(format!("{a}/api/admin/federation/peers/retry"))
+            .bearer_auth(&admin_a)
+            .json(&json!({"domains": ["b.test", "b.test"]}))
+            .send()
+            .unwrap(),
+        "bounded deduplicated federation peer retry",
+    );
+    assert_eq!(bulk_retry["results"].as_array().unwrap().len(), 1);
+    assert_eq!(bulk_retry["results"][0]["domain"], "b.test");
+    assert_eq!(bulk_retry["results"][0]["refreshed"], true);
+    assert!(bulk_retry["results"][0]["error"].is_null());
+
+    let filtered_activity = json_response(
+        c.get(format!(
+            "{a}/api/admin/activity?actionPrefix=federation.&domain=b.test&limit=100"
+        ))
+        .bearer_auth(&admin_a)
+        .send()
+        .unwrap(),
+        "domain-filtered federation audit activity",
+    );
+    let filtered_entries = filtered_activity["entries"].as_array().unwrap();
+    assert!(!filtered_entries.is_empty());
+    assert!(filtered_entries
+        .iter()
+        .all(|entry| entry["action"].as_str().unwrap().starts_with("federation.")));
+    assert!(filtered_entries
+        .iter()
+        .any(|entry| entry["action"] == "federation.peer.retry-bulk"));
+
+    let audit_export = c
+        .get(format!(
+            "{a}/api/admin/activity/export?actionPrefix=federation.&domain=b.test&limit=100"
+        ))
+        .bearer_auth(&admin_a)
+        .send()
+        .unwrap();
+    assert_eq!(audit_export.status().as_u16(), 200);
+    assert!(audit_export
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("text/csv"));
+    let audit_csv = audit_export.text().unwrap();
+    assert!(audit_csv.contains("federation.peer.retry-bulk"));
+    assert!(audit_csv.contains("b.test"));
+    assert!(!audit_csv.contains("capability"));
+
+    // The global emergency stop withdraws the public federation surface and
+    // denies both features. Preserved identity evidence remains inspectable
+    // only through the authenticated local administration surface.
+    update_feature_policy(c, a, &admin_a, "chat", "open", false);
+    assert_eq!(
+        c.get(format!("{a}/.well-known/kutup/federation.json"))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        404
+    );
+    assert_eq!(
+        c.get(format!("{a}/.well-known/kutup/federation/identity/0.json"))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        404
+    );
+    let stopped_evidence = json_response(
+        c.get(format!("{a}/api/admin/federation/peers/b.test/evidence"))
+            .bearer_auth(&admin_a)
+            .send()
+            .unwrap(),
+        "preserved peer evidence during global stop",
+    );
+    assert_eq!(stopped_evidence, drive_evidence);
+    assert_eq!(
+        c.get(format!("{a}/api/chat/users/{remote_address}/keys"))
+            .bearer_auth(&alice_token)
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        403
+    );
+    assert_eq!(drive_remote_user(c, a, &alice_token).status().as_u16(), 403);
+    update_feature_policy(c, a, &admin_a, "chat", "open", true);
+
+    // Drive independently traverses the same four policy modes and
+    // directional rules that Chat exercises below.
+    assert_eq!(
+        update_feature_mode(c, a, &admin_a, "drive", "disabled")["mode"],
+        "disabled"
+    );
+    assert_eq!(drive_remote_user(c, a, &alice_token).status().as_u16(), 403);
+    fetch(); // Disabling Drive cannot disable Chat.
+
+    assert_eq!(
+        update_feature_mode(c, a, &admin_a, "drive", "allowlist")["mode"],
+        "allowlist"
+    );
+    assert_eq!(drive_remote_user(c, a, &alice_token).status().as_u16(), 403);
+    upsert_feature_rule(c, a, &admin_a, "drive", "b.test", "inherit", "allow");
+    json_response(
+        drive_remote_user(c, a, &alice_token),
+        "allowlisted Drive lookup",
+    );
+
+    upsert_feature_rule(c, a, &admin_a, "drive", "b.test", "allow", "block");
+    assert_eq!(
+        update_feature_mode(c, a, &admin_a, "drive", "open")["mode"],
+        "open"
+    );
+    json_response(
+        drive_remote_user(c, a, &alice_token),
+        "open Drive lookup ignores saved block",
+    );
+    assert_eq!(
+        update_feature_mode(c, a, &admin_a, "drive", "blocklist")["mode"],
+        "blocklist"
+    );
+    assert_eq!(drive_remote_user(c, a, &alice_token).status().as_u16(), 403);
+    upsert_feature_rule(c, a, &admin_a, "drive", "b.test", "inherit", "inherit");
+    json_response(
+        drive_remote_user(c, a, &alice_token),
+        "unblocked Drive lookup",
+    );
+
+    update_feature_mode(c, b, &admin_b, "drive", "blocklist");
+    upsert_feature_rule(c, b, &admin_b, "drive", "a.test", "block", "inherit");
+    assert_eq!(drive_remote_user(c, a, &alice_token).status().as_u16(), 502);
+    upsert_feature_rule(c, b, &admin_b, "drive", "a.test", "allow", "inherit");
+    json_response(
+        drive_remote_user(c, a, &alice_token),
+        "inbound-allowed Drive lookup",
+    );
+    delete_feature_rule(c, a, &admin_a, "drive", "b.test");
+    delete_feature_rule(c, b, &admin_b, "drive", "a.test");
+    update_feature_mode(c, a, &admin_a, "drive", "open");
+    update_feature_mode(c, b, &admin_b, "drive", "open");
+
     // The four modes and directional rules are enforced before discovery or
     // delivery. Rules remain durable and their admission actions are ignored
     // only in the explicitly open mode.
@@ -701,6 +926,10 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         "disabled federation capabilities",
     );
     assert_eq!(disabled_capabilities["chat"]["federation"], false);
+    json_response(
+        drive_remote_user(c, a, &alice_token),
+        "Drive remains enabled while Chat is disabled",
+    );
     assert_eq!(
         c.get(format!("{a}/api/chat/users/{remote_address}/keys"))
             .bearer_auth(&alice_token)
