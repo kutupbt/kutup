@@ -580,6 +580,7 @@ fn build_router(state: AppState) -> Router {
                 .route("/api/admin/users/:id/wipe", post(admin::wipe_user))
                 .route("/api/admin/stats", get(admin::get_stats))
                 .route("/api/admin/activity", get(admin::activity))
+                .route("/api/admin/activity/export", get(admin::activity_export))
                 .route(
                     "/api/admin/settings",
                     get(admin::get_settings).put(admin::update_settings),
@@ -592,6 +593,14 @@ fn build_router(state: AppState) -> Router {
                     "/api/admin/federation/rules/:feature/:domain",
                     put(admin::upsert_federation_domain_rule)
                         .delete(admin::delete_federation_domain_rule),
+                )
+                .route(
+                    "/api/admin/federation/peers/retry",
+                    post(admin::bulk_retry_federation_peers),
+                )
+                .route(
+                    "/api/admin/federation/peers/:domain/evidence",
+                    get(admin::get_federation_peer_evidence),
                 )
                 .route(
                     "/api/admin/federation/peers/:domain/verify",

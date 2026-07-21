@@ -255,8 +255,8 @@ request-and-response profile shared by Chat and Drive. It owns DNS/SSRF-safe
 resolution, discovery caching, immutable TOFU/verified/quarantined identity
 history, admission policy, signed transport, and replay reservation. Chat is a
 feature adapter above that stack and owns only its E2EE directory, profile, and
-ordered ciphertext-delivery payloads. Drive will move onto the same transport
-without sharing Chat's payload authorization rules.
+ordered ciphertext-delivery payloads. Drive uses the same transport while
+retaining separate domain-bound share capabilities and mutation idempotency.
 
 Federation is disabled unless the administrator configures a persistent
 signing key. A database-backed admission policy then selects `disabled`,
@@ -274,6 +274,13 @@ trust, compare the full key fingerprint out of band, retry discovery, and use a
 tightly confirmed, audited break-glass re-pin only for a quarantined competing
 history. Valid old-and-new-key-signed rotations advance automatically;
 rollback, gaps, silent replacement, and downgrade are rejected.
+
+The desktop and mobile admin settings render the same generic operational
+projection: shared peer trust plus feature diagnostics, server/fingerprint
+filters, retry-one/retry-visible workflows, immutable identity evidence, and a
+filtered federation audit feed with CSV export. These are read-only views over
+the common trust, policy, replay, Chat outbox, and Drive share tables. They do
+not create a feature-owned identity, cache, client, or admission path.
 
 ### Current product boundary
 

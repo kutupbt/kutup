@@ -7,6 +7,8 @@ import type {
   AdminSettings,
   AdminActivityResponse,
   AdminFederationPolicy,
+  BulkFederationPeerRetryResponse,
+  FederationPeerEvidence,
   FederationMode,
   FederationMinimumTrust,
   FederationRuleAction,
@@ -36,6 +38,44 @@ export function useAdminActivity(limit = 10) {
   })
 }
 
+export function useAdminFederationActivity(limit = 20, domain?: string) {
+  return useQuery<AdminActivityResponse>({
+    queryKey: ['admin', 'activity', 'federation', limit, domain ?? ''],
+    queryFn: () => {
+      const params = new URLSearchParams({ limit: String(limit), actionPrefix: 'federation.' })
+      if (domain) params.set('domain', domain)
+      return api
+        .get<AdminActivityResponse>(`/admin/activity?${params.toString()}`)
+        .then((response) => response.data)
+    },
+  })
+}
+
+export function useExportAdminFederationActivity() {
+  return useMutation({
+    mutationFn: async (domain?: string) => {
+      const params = new URLSearchParams({ limit: '5000', actionPrefix: 'federation.' })
+      if (domain) params.set('domain', domain)
+      const response = await api.get<Blob>(`/admin/activity/export?${params.toString()}`, {
+        responseType: 'blob',
+      })
+      const url = URL.createObjectURL(response.data)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = domain
+        ? `kutup-federation-audit-${domain}.csv`
+        : 'kutup-federation-audit.csv'
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 0)
+    },
+    onError: (err: any) => {
+      toast.error(err.response?.data?.error ?? 'Federation audit export failed')
+    },
+  })
+}
+
 export function useAdminSettings() {
   return useQuery<AdminSettings>({
     queryKey: ['admin', 'settings'],
@@ -48,6 +88,41 @@ export function useAdminFederationPolicy() {
     queryKey: ['admin', 'federation'],
     queryFn: () =>
       api.get<AdminFederationPolicy>('/admin/federation').then((r) => r.data),
+  })
+}
+
+export function useAdminFederationPeerEvidence(domain: string, enabled: boolean) {
+  return useQuery<FederationPeerEvidence>({
+    queryKey: ['admin', 'federation', 'evidence', domain],
+    queryFn: () =>
+      api
+        .get<FederationPeerEvidence>(
+          `/admin/federation/peers/${encodeURIComponent(domain)}/evidence`,
+        )
+        .then((response) => response.data),
+    enabled,
+  })
+}
+
+export function useBulkRetryAdminFederationPeers() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (domains: string[]) =>
+      api
+        .post<BulkFederationPeerRetryResponse>('/admin/federation/peers/retry', { domains })
+        .then((response) => response.data),
+    onSuccess: (response) => {
+      qc.invalidateQueries({ queryKey: ['admin', 'federation'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
+      const failed = response.results.filter((result) => !result.refreshed).length
+      if (failed === 0) toast.success(`Retried ${response.results.length} federation peers`)
+      else toast.warning(
+        `Retried ${response.results.length} federation peers; ${failed} still need attention`,
+      )
+    },
+    onError: (err: any) => {
+      toast.error(err.response?.data?.error ?? 'Federation peer retry failed')
+    },
   })
 }
 

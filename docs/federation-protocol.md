@@ -219,3 +219,20 @@ with canonical domains and capability verifiers, and adds persistent mutation
 results and ciphertext digests. Local users, collections, files, and ordinary
 same-server shares remain intact. There is no legacy route, raw remote URL,
 configuration alias, or downgrade fallback.
+
+## Operational control plane
+
+The admin control plane is a projection over this one stack. It reports the
+local identity/capabilities, feature policies, directional domain rules,
+TOFU/verified/quarantined peers, Chat outbox health, Drive incoming/outgoing
+share counts, and active replay reservations. Search/trust filters and
+single/bulk retry only select peers and evict the common resolver cache; they do
+not alter the authentication or admission rules.
+
+Accepted, superseded, and quarantined peer identity documents remain immutable
+in `federation_peer_identity_documents` and are inspectable with their exact
+document hash, key fingerprint, sequence, acceptance state, and recorded time.
+Quarantine never replaces the accepted document. Verification and break-glass
+re-pin still call the same transactional trust state machine and write the same
+audit store. Federation audit reads and CSV export filter that generic store;
+there is no Chat audit store, Drive audit store, or alternate trust cache.

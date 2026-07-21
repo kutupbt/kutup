@@ -2,9 +2,9 @@
 
 **Date:** 2026-07-20
 
-**Status:** accepted; Phases A-D implemented and two-server live verified;
-Phase E is next. Phase F's Drive/Chat harness, migration fixtures, and primary
-documentation are implemented alongside Phase D.
+**Status:** accepted; Phases A-E implemented; Phases A-D two-server live
+verified. Phase F's Drive/Chat harness, migration fixtures, and primary
+documentation were implemented alongside Phases D-E.
 
 **Compatibility decision:** Kutup has no live federation deployment. Replace
 the current experimental Chat and Drive protocols atomically; do not preserve
@@ -803,12 +803,12 @@ stack, routes, policy tables, and configuration no longer exist.
 
 ### Phase E — control-plane completion
 
-1. Complete the shared Chat/Drive operational views, filters, diagnostics, and
+1. ✅ Complete the shared Chat/Drive operational views, filters, diagnostics, and
    responsive UI around the generic control plane introduced in Phase C.
-2. Add operational evidence inspection and bulk retry conveniences without
+2. ✅ Add operational evidence inspection and bulk retry conveniences without
    creating another trust or policy path.
-3. Complete audit-event presentation and export for both features.
-4. Prove no feature-owned policy, identity, signing-key, or peer-cache path
+3. ✅ Complete audit-event presentation and export for both features.
+4. ✅ Prove no feature-owned policy, identity, signing-key, or peer-cache path
    remains.
 
 ### Phase F — documentation, integration, and cleanup

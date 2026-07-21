@@ -129,3 +129,37 @@ curl -s -X DELETE http://localhost/api/files/$FILE_ID \
 curl -s -X DELETE http://localhost/api/collections/$COLL_ID \
   -H "Authorization: Bearer $TOKEN" -w "\nHTTP %{http_code}\n"
 ```
+
+## 12. Inspect the federation control plane (admin)
+
+Set `ADMIN_TOKEN` to an administrator access token. The projection should show
+one shared identity plus Chat/Drive operational counts; it must not contain a
+signing seed or plaintext Drive capability.
+
+```sh
+curl -s http://localhost/api/admin/federation \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  | jq '{serverName, features, operational, peers}'
+```
+
+For a pinned domain, inspect immutable public identity history and retry that
+peer through the common resolver:
+
+```sh
+PEER=friend.example
+curl -s "http://localhost/api/admin/federation/peers/$PEER/evidence" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" | jq
+
+curl -s -X POST http://localhost/api/admin/federation/peers/retry \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{\"domains\":[\"$PEER\"]}" | jq
+```
+
+Export only federation audit events:
+
+```sh
+curl -s 'http://localhost/api/admin/activity/export?actionPrefix=federation.&limit=5000' \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -o /tmp/kutup-federation-audit.csv
+```

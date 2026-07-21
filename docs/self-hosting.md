@@ -260,6 +260,15 @@ band verification, discovery failures, rotations, and quarantine; break-glass
 re-pin requires the old and new full fingerprints plus the exact domain and is
 audited. A reverse-proxy IP rule is not an equivalent domain-identity policy.
 
+The same responsive panel shows per-peer Chat delivery and Drive share counts,
+quarantined/failed filters, authenticated discovery timestamps, and the exact
+preserved signed identity documents behind a pin or quarantine. “Retry visible”
+re-resolves up to 100 filtered peers without treating one failure as a batch
+failure. The federation-only audit feed can be filtered to one domain and
+exported as spreadsheet-safe CSV; exported evidence contains public identity
+material and operational errors, never the server signing seed or plaintext
+Drive share capabilities.
+
 After changing these values, rebuild the backend:
 
 ```sh

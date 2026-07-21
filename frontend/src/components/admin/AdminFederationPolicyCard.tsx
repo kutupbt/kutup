@@ -1,11 +1,15 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Icon, ICONS } from '@/components/mobile/Icon'
 import {
   useAdminFederationPolicy,
+  useAdminFederationPeerEvidence,
+  useAdminFederationActivity,
+  useBulkRetryAdminFederationPeers,
   useDeleteAdminFederationRule,
+  useExportAdminFederationActivity,
   useRepinAdminFederationPeer,
   useRetryAdminFederationPeer,
   useUpdateAdminFederationPolicy,
@@ -13,6 +17,7 @@ import {
   useVerifyAdminFederationPeer,
 } from '@/api/hooks/useAdmin'
 import type {
+  AdminFederationPolicy,
   FederationDomainRule,
   FederationMinimumTrust,
   FederationMode,
@@ -22,6 +27,7 @@ import type {
 } from '@/types/api'
 import { copyText } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { activityDetails, activityText } from './activity'
 
 const MODES: FederationMode[] = ['disabled', 'allowlist', 'blocklist', 'open']
 const ACTIONS: FederationRuleAction[] = ['inherit', 'allow', 'block']
@@ -35,6 +41,7 @@ const MODE_COPY: Record<FederationMode, string> = {
 }
 
 const titleCase = (value: string) => value.charAt(0).toUpperCase() + value.slice(1)
+type PeerFilter = 'all' | FederationPeer['trust'] | 'issues'
 
 interface Props {
   className?: string
@@ -52,10 +59,25 @@ export function AdminFederationPolicyCard({ className, compact = false }: Props)
   const [outbound, setOutbound] = useState<FederationRuleAction>('inherit')
   const [trustRequirement, setTrustRequirement] = useState<FederationTrustRequirement>('inherit')
   const [selectedFeature, setSelectedFeature] = useState<'chat' | 'drive'>('chat')
+  const [peerQuery, setPeerQuery] = useState('')
+  const [peerFilter, setPeerFilter] = useState<PeerFilter>('all')
+  const bulkRetry = useBulkRetryAdminFederationPeers()
   const featurePolicy = policy?.features.find((feature) => feature.feature === selectedFeature)
   const mode = featurePolicy?.mode ?? 'allowlist'
   const minimumTrust = featurePolicy?.minimumTrust ?? 'verified'
   const featureLabel = titleCase(selectedFeature)
+  const filteredPeers = useMemo(() => {
+    const query = peerQuery.trim().toLowerCase()
+    return (policy?.peers ?? []).filter((peer) => {
+      const matchesQuery = !query || peer.domain.toLowerCase().includes(query)
+        || peer.fingerprint.includes(query)
+      const hasIssue = peer.trust === 'quarantined' || Boolean(peer.lastDiscoveryError)
+        || peer.diagnostics.chatMismatchTransactions > 0
+      const matchesState = peerFilter === 'all'
+        || (peerFilter === 'issues' ? hasIssue : peer.trust === peerFilter)
+      return matchesQuery && matchesState
+    })
+  }, [peerFilter, peerQuery, policy?.peers])
 
   const savePolicy = (next: {
     globalEnabled?: boolean
@@ -118,6 +140,7 @@ export function AdminFederationPolicyCard({ className, compact = false }: Props)
                 <div className="mt-1">Capabilities: {policy.capabilities.join(', ')}</div>
               </div>
             )}
+            <OperationalSummary policy={policy} compact={compact} />
             <label className="flex items-center justify-between gap-3 text-[13px] text-text-primary">
               <span>
                 <span className="font-medium">Federation globally enabled</span>
@@ -177,13 +200,76 @@ export function AdminFederationPolicyCard({ className, compact = false }: Props)
             ))}
           </div>
 
-          <div className="px-[18px] py-3 text-[13.5px] font-medium text-text-primary">Pinned server identities</div>
+          <div className={cn('border-b border-border-light space-y-2', compact ? 'px-3.5 py-3' : 'px-[18px] py-3')}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-[13.5px] font-medium text-text-primary">Pinned server identities</div>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={filteredPeers.length === 0 || filteredPeers.length > 100 || bulkRetry.isPending}
+                title={filteredPeers.length > 100 ? 'Narrow the filters to at most 100 peers.' : undefined}
+                onClick={() => {
+                  if (window.confirm(`Retry authenticated discovery for ${filteredPeers.length} visible peer${filteredPeers.length === 1 ? '' : 's'}?`)) {
+                    bulkRetry.mutate(filteredPeers.map((peer) => peer.domain))
+                  }
+                }}
+              >
+                Retry visible ({filteredPeers.length})
+              </Button>
+            </div>
+            <div className={cn('grid gap-2', compact ? 'grid-cols-1' : 'grid-cols-[minmax(180px,1fr)_180px]')}>
+              <Input
+                value={peerQuery}
+                onChange={(event) => setPeerQuery(event.target.value)}
+                placeholder="Search domain or fingerprint"
+                aria-label="Search pinned federation peers"
+              />
+              <select
+                value={peerFilter}
+                onChange={(event) => setPeerFilter(event.target.value as PeerFilter)}
+                className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-[12.5px] text-text-primary"
+                aria-label="Filter pinned federation peers"
+              >
+                <option value="all">All trust states</option>
+                <option value="issues">Needs attention</option>
+                <option value="tofu">TOFU</option>
+                <option value="verified">Verified</option>
+                <option value="quarantined">Quarantined</option>
+              </select>
+            </div>
+          </div>
           {policy.peers.length === 0 ? (
             <div className="px-[18px] pb-4 text-[12.5px] text-text-tertiary">No remote server has completed authenticated discovery yet.</div>
-          ) : policy.peers.map((peer) => <FederationPeerRow key={peer.domain} peer={peer} compact={compact} />)}
+          ) : filteredPeers.length === 0 ? (
+            <div className="px-[18px] py-4 text-[12.5px] text-text-tertiary">No pinned server matches these filters.</div>
+          ) : filteredPeers.map((peer) => <FederationPeerRow key={peer.domain} peer={peer} compact={compact} />)}
+          <FederationAuditPanel compact={compact} domain={peerQuery.trim() && filteredPeers.length === 1 ? filteredPeers[0].domain : undefined} />
         </>
       )}
     </section>
+  )
+}
+
+function OperationalSummary({ policy, compact }: { policy: AdminFederationPolicy; compact: boolean }) {
+  const operational = policy.operational
+  const chatPendingAge = operational.oldestChatPendingAt
+    ? ` · oldest ${formatTimestamp(operational.oldestChatPendingAt)}`
+    : ''
+  const items = [
+    ['Peer trust', `${operational.verifiedPeers} verified · ${operational.tofuPeers} TOFU · ${operational.quarantinedPeers} quarantined`],
+    ['Chat delivery', `${operational.chatPendingTransactions} pending${chatPendingAge} · ${operational.chatMismatchTransactions} terminal mismatch`],
+    ['Drive federation', `${operational.driveIncomingShares} incoming · ${operational.driveOutgoingShares} outgoing`],
+    ['Replay defense', `${operational.activeReplayReservations} active reservations`],
+  ]
+  return (
+    <div className={cn('grid gap-2', compact ? 'grid-cols-1' : 'grid-cols-2')}>
+      {items.map(([label, value]) => (
+        <div key={label} className="rounded-md border border-border-light bg-background/40 px-2.5 py-2">
+          <div className="text-[10.5px] font-medium uppercase tracking-wide text-text-tertiary">{label}</div>
+          <div className="mt-0.5 text-[11.5px] text-text-secondary">{value}</div>
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -223,6 +309,8 @@ function FederationPeerRow({ peer, compact }: { peer: FederationPeer; compact: b
   const verify = useVerifyAdminFederationPeer()
   const retry = useRetryAdminFederationPeer()
   const repin = useRepinAdminFederationPeer()
+  const [showEvidence, setShowEvidence] = useState(false)
+  const evidence = useAdminFederationPeerEvidence(peer.domain, showEvidence)
   const confirmVerify = () => {
     const fingerprint = window.prompt(`Type the full fingerprint shown for ${peer.domain}`)
     if (fingerprint === peer.fingerprint) verify.mutate({ domain: peer.domain, body: { fingerprint } })
@@ -238,28 +326,105 @@ function FederationPeerRow({ peer, compact }: { peer: FederationPeer; compact: b
     repin.mutate({ domain: peer.domain, body: { oldFingerprint: old, newFingerprint: next, confirmDomain: domain } })
   }
   return (
-    <div className={cn('border-t border-border-light px-[18px] py-3', compact ? 'space-y-2' : 'flex items-start justify-between gap-4')}>
-      <div className="min-w-0 text-[11.5px] text-text-tertiary">
-        <div className="flex items-center gap-2"><code className="text-[12.5px] font-medium text-text-primary">{peer.domain}</code><span className={cn('rounded px-1.5 py-0.5 text-[10px] uppercase', peer.trust === 'quarantined' ? 'bg-destructive/10 text-destructive' : 'bg-primary/10 text-primary')}>{peer.trust}</span></div>
-        <div className="mt-1 flex items-start gap-2">
-          <code className="block min-w-0 break-all text-[10.5px]" title={peer.fingerprint}>{peer.fingerprintDisplay}</code>
-          <button type="button" className="shrink-0 text-primary hover:underline" onClick={() => void copyText(peer.fingerprint)}>Copy full</button>
-        </div>
-        <div className="mt-1">Sequence {peer.sequence} · {peer.capabilities.join(', ') || 'capabilities unavailable'}</div>
-        {peer.quarantineReason && <div className="mt-1 text-destructive">{peer.quarantineReason}</div>}
-        {peer.pendingFingerprint && (
-          <div className="mt-1">
-            Pending: <code className="break-all">{peer.pendingFingerprint}</code>{' '}
-            <button type="button" className="text-primary hover:underline" onClick={() => void copyText(peer.pendingFingerprint!)}>Copy full</button>
+    <div className="border-t border-border-light px-[18px] py-3">
+      <div className={cn(compact ? 'space-y-2' : 'flex items-start justify-between gap-4')}>
+        <div className="min-w-0 text-[11.5px] text-text-tertiary">
+          <div className="flex items-center gap-2"><code className="text-[12.5px] font-medium text-text-primary">{peer.domain}</code><span className={cn('rounded px-1.5 py-0.5 text-[10px] uppercase', peer.trust === 'quarantined' ? 'bg-destructive/10 text-destructive' : 'bg-primary/10 text-primary')}>{peer.trust}</span></div>
+          <div className="mt-1 flex items-start gap-2">
+            <code className="block min-w-0 break-all text-[10.5px]" title={peer.fingerprint}>{peer.fingerprintDisplay}</code>
+            <button type="button" className="shrink-0 text-primary hover:underline" onClick={() => void copyText(peer.fingerprint)}>Copy full</button>
           </div>
-        )}
-        {peer.lastDiscoveryError && <div className="mt-1 text-warning">Discovery: {peer.lastDiscoveryError}</div>}
+          <div className="mt-1">Sequence {peer.sequence} · {peer.capabilities.join(', ') || 'capabilities unavailable'}</div>
+          <div className="mt-1">
+            Chat: {peer.diagnostics.chatPendingTransactions} pending, {peer.diagnostics.chatMismatchTransactions} mismatch · Drive: {peer.diagnostics.driveIncomingShares} incoming, {peer.diagnostics.driveOutgoingShares} outgoing
+          </div>
+          {peer.apiBase && <div className="mt-1 break-all">Authenticated API: {peer.apiBase}</div>}
+          <div className="mt-1">Last authenticated observation: {formatTimestamp(peer.lastSeenAt)}</div>
+          {peer.discoveryExpiresAt && <div className="mt-1">Discovery expires: {formatTimestamp(peer.discoveryExpiresAt)}</div>}
+          {peer.quarantineReason && <div className="mt-1 text-destructive">{peer.quarantineReason}</div>}
+          {peer.pendingFingerprint && (
+            <div className="mt-1">
+              Pending: <code className="break-all">{peer.pendingFingerprint}</code>{' '}
+              <button type="button" className="text-primary hover:underline" onClick={() => void copyText(peer.pendingFingerprint!)}>Copy full</button>
+            </div>
+          )}
+          {peer.lastDiscoveryError && <div className="mt-1 text-warning">Discovery: {peer.lastDiscoveryError}</div>}
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-1.5">
+          <Button size="sm" variant="outline" onClick={() => setShowEvidence((value) => !value)}>{showEvidence ? 'Hide evidence' : 'Evidence'}</Button>
+          <Button size="sm" variant="outline" disabled={retry.isPending} onClick={() => retry.mutate({ domain: peer.domain })}>Retry</Button>
+          {peer.trust === 'tofu' && <Button size="sm" onClick={confirmVerify}>Verify</Button>}
+          {peer.trust === 'quarantined' && peer.pendingFingerprint && <Button size="sm" variant="outline" onClick={confirmRepin}>Re-pin</Button>}
+        </div>
       </div>
-      <div className="flex shrink-0 flex-wrap gap-1.5">
-        <Button size="sm" variant="outline" onClick={() => retry.mutate({ domain: peer.domain })}>Retry</Button>
-        {peer.trust === 'tofu' && <Button size="sm" onClick={confirmVerify}>Verify</Button>}
-        {peer.trust === 'quarantined' && peer.pendingFingerprint && <Button size="sm" variant="outline" onClick={confirmRepin}>Re-pin</Button>}
+      {showEvidence && <FederationPeerEvidenceView query={evidence} />}
+    </div>
+  )
+}
+
+function FederationPeerEvidenceView({ query }: { query: ReturnType<typeof useAdminFederationPeerEvidence> }) {
+  if (query.isLoading) return <div className="mt-3 text-[11.5px] text-text-tertiary">Loading immutable identity evidence…</div>
+  if (query.isError || !query.data) return <div className="mt-3 text-[11.5px] text-destructive">Identity evidence could not be loaded.</div>
+  const evidence = query.data
+  return (
+    <div className="mt-3 rounded-md border border-border-light bg-background/50 p-3 text-[11px] text-text-tertiary">
+      <div className="font-medium text-text-secondary">Authenticated identity evidence</div>
+      <div className="mt-1 break-all">Current document hash: <code>{evidence.currentDocumentHash}</code></div>
+      {evidence.pendingDocumentHash && <div className="mt-1 break-all text-warning">Pending document hash: <code>{evidence.pendingDocumentHash}</code></div>}
+      {evidence.truncated && <div className="mt-1 text-warning">Showing the newest 200 preserved documents.</div>}
+      <div className="mt-2 space-y-2">
+        {evidence.documents.map((document) => (
+          <details key={`${document.sequence}:${document.documentHash}`} className="rounded border border-border-light px-2.5 py-2">
+            <summary className="cursor-pointer text-text-secondary">
+              Sequence {document.sequence} · {document.acceptance} · {formatTimestamp(document.recordedAt)}
+            </summary>
+            <div className="mt-2 break-all">Document hash: <code>{document.documentHash}</code></div>
+            <div className="mt-1 flex items-start gap-2">
+              <code className="min-w-0 break-all">{document.fingerprintDisplay}</code>
+              <button type="button" className="shrink-0 text-primary hover:underline" onClick={() => void copyText(document.fingerprint)}>Copy fingerprint</button>
+            </div>
+            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-surface p-2 text-[10px] text-text-secondary">{JSON.stringify(document.document, null, 2)}</pre>
+          </details>
+        ))}
       </div>
     </div>
   )
+}
+
+function FederationAuditPanel({ compact, domain }: { compact: boolean; domain?: string }) {
+  const { t } = useTranslation()
+  const activity = useAdminFederationActivity(20, domain)
+  const exportActivity = useExportAdminFederationActivity()
+  return (
+    <div className={cn('border-t border-border-light', compact ? 'px-3.5 py-3' : 'px-[18px] py-4')}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-[13.5px] font-medium text-text-primary">Federation audit</div>
+          <div className="text-[11.5px] text-text-tertiary">Shared identity, policy, Chat, and Drive control-plane events.</div>
+        </div>
+        <Button size="sm" variant="outline" disabled={exportActivity.isPending} onClick={() => exportActivity.mutate(domain)}>
+          Export CSV{domain ? ` · ${domain}` : ''}
+        </Button>
+      </div>
+      {activity.isLoading ? (
+        <div className="mt-3 text-[11.5px] text-text-tertiary">Loading federation audit…</div>
+      ) : !activity.data?.entries.length ? (
+        <div className="mt-3 text-[11.5px] text-text-tertiary">No matching federation audit events.</div>
+      ) : (
+        <div className="mt-3 divide-y divide-border-light rounded-md border border-border-light">
+          {activity.data.entries.map((entry) => (
+            <div key={entry.id} className="px-3 py-2 text-[11.5px]">
+              <div className="text-text-secondary">{activityText(entry, t)}</div>
+              <div className="mt-0.5 text-[10.5px] text-text-tertiary">{formatTimestamp(entry.occurredAt)}</div>
+              {activityDetails(entry).map((detail) => <div key={detail} className="mt-0.5 break-all font-mono text-[10px] text-text-tertiary">{detail}</div>)}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function formatTimestamp(value: string): string {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 }

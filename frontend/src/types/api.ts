@@ -140,6 +140,40 @@ export interface FederationPeer {
   quarantineReason: string | null
   pendingFingerprint: string | null
   lastDiscoveryError: string | null
+  diagnostics: {
+    chatPendingTransactions: number
+    chatMismatchTransactions: number
+    driveIncomingShares: number
+    driveOutgoingShares: number
+  }
+}
+
+export interface FederationPeerEvidenceDocument {
+  sequence: number
+  documentHash: string
+  fingerprint: string
+  fingerprintDisplay: string
+  acceptance: 'accepted' | 'quarantined' | 'superseded'
+  document: Record<string, unknown>
+  recordedAt: string
+}
+
+export interface FederationPeerEvidence {
+  domain: string
+  trust: FederationPeer['trust']
+  currentDocumentHash: string
+  pendingDocumentHash: string | null
+  quarantineReason: string | null
+  documents: FederationPeerEvidenceDocument[]
+  truncated: boolean
+}
+
+export interface BulkFederationPeerRetryResponse {
+  results: Array<{
+    domain: string
+    refreshed: boolean
+    error: string | null
+  }>
 }
 
 export interface AdminFederationPolicy {
@@ -154,6 +188,18 @@ export interface AdminFederationPolicy {
   features: FederationFeaturePolicy[]
   rules: FederationDomainRule[]
   peers: FederationPeer[]
+  operational: {
+    peerTotal: number
+    tofuPeers: number
+    verifiedPeers: number
+    quarantinedPeers: number
+    chatPendingTransactions: number
+    chatMismatchTransactions: number
+    oldestChatPendingAt: string | null
+    driveIncomingShares: number
+    driveOutgoingShares: number
+    activeReplayReservations: number
+  }
 }
 
 /**

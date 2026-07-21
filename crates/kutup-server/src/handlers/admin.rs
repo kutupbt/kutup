@@ -7,12 +7,14 @@
 //! fails the admin action itself.
 
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use futures_util::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::PgPool;
+use std::collections::BTreeSet;
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -647,6 +649,32 @@ pub struct FederationPeerResponse {
     quarantine_reason: Option<String>,
     pending_fingerprint: Option<String>,
     last_discovery_error: Option<String>,
+    diagnostics: FederationPeerDiagnosticsResponse,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FederationPeerDiagnosticsResponse {
+    chat_pending_transactions: i64,
+    chat_mismatch_transactions: i64,
+    drive_incoming_shares: i64,
+    drive_outgoing_shares: i64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FederationOperationalSummaryResponse {
+    peer_total: usize,
+    tofu_peers: usize,
+    verified_peers: usize,
+    quarantined_peers: usize,
+    chat_pending_transactions: i64,
+    chat_mismatch_transactions: i64,
+    #[serde(with = "time::serde::rfc3339::option")]
+    oldest_chat_pending_at: Option<OffsetDateTime>,
+    drive_incoming_shares: i64,
+    drive_outgoing_shares: i64,
+    active_replay_reservations: i64,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -662,6 +690,52 @@ pub struct FederationControlPlaneResponse {
     features: Vec<FederationFeaturePolicyResponse>,
     rules: Vec<FederationDomainRuleResponse>,
     peers: Vec<FederationPeerResponse>,
+    operational: FederationOperationalSummaryResponse,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FederationPeerEvidenceDocumentResponse {
+    sequence: u64,
+    document_hash: String,
+    fingerprint: String,
+    fingerprint_display: String,
+    acceptance: String,
+    document: serde_json::Value,
+    #[serde(with = "time::serde::rfc3339")]
+    recorded_at: OffsetDateTime,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FederationPeerEvidenceResponse {
+    domain: String,
+    trust: String,
+    current_document_hash: String,
+    pending_document_hash: Option<String>,
+    quarantine_reason: Option<String>,
+    documents: Vec<FederationPeerEvidenceDocumentResponse>,
+    truncated: bool,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkRetryFederationPeersRequest {
+    domains: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FederationPeerRetryResultResponse {
+    domain: String,
+    refreshed: bool,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkRetryFederationPeersResponse {
+    results: Vec<FederationPeerRetryResultResponse>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -758,71 +832,114 @@ pub async fn get_federation_control_plane(
     )
     .collect();
 
-    type PeerRow = (
-        String,
-        String,
-        i64,
-        String,
-        Option<String>,
-        serde_json::Value,
-        OffsetDateTime,
-        OffsetDateTime,
-        Option<OffsetDateTime>,
-        Option<OffsetDateTime>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    );
+    #[derive(sqlx::FromRow)]
+    struct PeerRow {
+        domain: String,
+        trust_state: String,
+        current_sequence: i64,
+        current_key_id: String,
+        current_api_base: Option<String>,
+        capabilities: serde_json::Value,
+        first_seen_at: OffsetDateTime,
+        last_seen_at: OffsetDateTime,
+        verified_at: Option<OffsetDateTime>,
+        discovery_expires_at: Option<OffsetDateTime>,
+        quarantine_reason: Option<String>,
+        pending_fingerprint: Option<String>,
+        last_discovery_error: Option<String>,
+        chat_pending_transactions: i64,
+        chat_mismatch_transactions: i64,
+        drive_incoming_shares: i64,
+        drive_outgoing_shares: i64,
+    }
     let peers = sqlx::query_as::<_, PeerRow>(
         "SELECT domain, trust_state, current_sequence, current_key_id,
                 current_api_base, capabilities, first_seen_at, last_seen_at,
                 verified_at, discovery_expires_at, quarantine_reason,
-                pending_document->'key'->>'keyId', last_discovery_error
+                pending_document->'key'->>'keyId' AS pending_fingerprint,
+                last_discovery_error,
+                (SELECT COUNT(*) FROM chat_federation_outbox o
+                 WHERE o.destination = federation_peer_identities.domain AND o.state = 'pending')
+                    AS chat_pending_transactions,
+                (SELECT COUNT(*) FROM chat_federation_outbox o
+                 WHERE o.destination = federation_peer_identities.domain AND o.state = 'mismatch')
+                    AS chat_mismatch_transactions,
+                (SELECT COUNT(*) FROM federated_incoming_shares s
+                 WHERE s.remote_domain = federation_peer_identities.domain)
+                    AS drive_incoming_shares,
+                (SELECT COUNT(*) FROM federated_outgoing_shares s
+                 WHERE s.recipient_domain = federation_peer_identities.domain)
+                    AS drive_outgoing_shares
          FROM federation_peer_identities ORDER BY domain",
     )
     .fetch_all(&state.pool)
     .await?
     .into_iter()
-    .map(
-        |(
-            domain,
-            trust,
-            sequence,
-            fingerprint,
-            api_base,
-            capabilities,
-            first_seen_at,
-            last_seen_at,
-            verified_at,
-            discovery_expires_at,
-            quarantine_reason,
-            pending_fingerprint,
-            last_discovery_error,
-        )| {
-            let capabilities: Vec<kutup_federation_proto::FederationCapabilityId> =
-                serde_json::from_value(capabilities)
-                    .map_err(|_| AppError::internal("invalid stored federation capabilities"))?;
-            Ok(FederationPeerResponse {
-                domain,
-                trust,
-                sequence: u64::try_from(sequence)
-                    .map_err(|_| AppError::internal("invalid stored federation sequence"))?,
-                fingerprint_display: kutup_federation_proto::grouped_fingerprint(&fingerprint)
-                    .map_err(|error| AppError::internal(error.to_string()))?,
-                fingerprint,
-                api_base,
-                capabilities: capabilities.into_iter().map(String::from).collect(),
-                first_seen_at,
-                last_seen_at,
-                verified_at,
-                discovery_expires_at,
-                quarantine_reason,
-                pending_fingerprint,
-                last_discovery_error,
-            })
-        },
-    )
+    .map(|row| {
+        let capabilities: Vec<kutup_federation_proto::FederationCapabilityId> =
+            serde_json::from_value(row.capabilities)
+                .map_err(|_| AppError::internal("invalid stored federation capabilities"))?;
+        Ok(FederationPeerResponse {
+            domain: row.domain,
+            trust: row.trust_state,
+            sequence: u64::try_from(row.current_sequence)
+                .map_err(|_| AppError::internal("invalid stored federation sequence"))?,
+            fingerprint_display: kutup_federation_proto::grouped_fingerprint(&row.current_key_id)
+                .map_err(|error| AppError::internal(error.to_string()))?,
+            fingerprint: row.current_key_id,
+            api_base: row.current_api_base,
+            capabilities: capabilities.into_iter().map(String::from).collect(),
+            first_seen_at: row.first_seen_at,
+            last_seen_at: row.last_seen_at,
+            verified_at: row.verified_at,
+            discovery_expires_at: row.discovery_expires_at,
+            quarantine_reason: row.quarantine_reason,
+            pending_fingerprint: row.pending_fingerprint,
+            last_discovery_error: row.last_discovery_error,
+            diagnostics: FederationPeerDiagnosticsResponse {
+                chat_pending_transactions: row.chat_pending_transactions,
+                chat_mismatch_transactions: row.chat_mismatch_transactions,
+                drive_incoming_shares: row.drive_incoming_shares,
+                drive_outgoing_shares: row.drive_outgoing_shares,
+            },
+        })
+    })
     .collect::<AppResult<Vec<_>>>()?;
+
+    type OperationalRow = (i64, i64, Option<OffsetDateTime>, i64, i64, i64);
+    let (
+        chat_pending_transactions,
+        chat_mismatch_transactions,
+        oldest_chat_pending_at,
+        drive_incoming_shares,
+        drive_outgoing_shares,
+        active_replay_reservations,
+    ): OperationalRow = sqlx::query_as(
+        "SELECT
+            (SELECT COUNT(*) FROM chat_federation_outbox WHERE state = 'pending'),
+            (SELECT COUNT(*) FROM chat_federation_outbox WHERE state = 'mismatch'),
+            (SELECT MIN(created_at) FROM chat_federation_outbox WHERE state = 'pending'),
+            (SELECT COUNT(*) FROM federated_incoming_shares),
+            (SELECT COUNT(*) FROM federated_outgoing_shares),
+            (SELECT COUNT(*) FROM federation_request_replays WHERE expires_at > now())",
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    let operational = FederationOperationalSummaryResponse {
+        peer_total: peers.len(),
+        tofu_peers: peers.iter().filter(|peer| peer.trust == "tofu").count(),
+        verified_peers: peers.iter().filter(|peer| peer.trust == "verified").count(),
+        quarantined_peers: peers
+            .iter()
+            .filter(|peer| peer.trust == "quarantined")
+            .count(),
+        chat_pending_transactions,
+        chat_mismatch_transactions,
+        oldest_chat_pending_at,
+        drive_incoming_shares,
+        drive_outgoing_shares,
+        active_replay_reservations,
+    };
 
     let enabled_capabilities = if global_enabled {
         let mut capabilities = vec!["identity.v1".to_owned()];
@@ -868,6 +985,7 @@ pub async fn get_federation_control_plane(
         features,
         rules,
         peers,
+        operational,
     })
     .into_response())
 }
@@ -1011,6 +1129,83 @@ pub async fn delete_federation_domain_rule(
 }
 
 #[utoipa::path(
+    get,
+    path = "/api/admin/federation/peers/{domain}/evidence",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("domain" = String, Path)),
+    responses(
+        (status = 200, description = "Immutable accepted and quarantined peer identity evidence", body = FederationPeerEvidenceResponse),
+        (status = 404, description = "Federation peer is not pinned")
+    )
+)]
+pub async fn get_federation_peer_evidence(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Path(domain): Path<String>,
+) -> AppResult<Response> {
+    let domain = canonical_federation_domain(&domain)?;
+    type PeerEvidenceRow = (String, String, Option<String>, Option<String>);
+    let peer: PeerEvidenceRow = sqlx::query_as(
+        "SELECT trust_state, current_document_hash, pending_document_hash, quarantine_reason
+         FROM federation_peer_identities WHERE domain = $1",
+    )
+    .bind(&domain)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("federation peer not found"))?;
+
+    type DocumentRow = (
+        i64,
+        String,
+        String,
+        serde_json::Value,
+        String,
+        OffsetDateTime,
+    );
+    let mut rows: Vec<DocumentRow> = sqlx::query_as(
+        "SELECT sequence, document_hash, key_id, document, acceptance, recorded_at
+         FROM federation_peer_identity_documents
+         WHERE domain = $1
+         ORDER BY sequence DESC, recorded_at DESC, document_hash
+         LIMIT 201",
+    )
+    .bind(&domain)
+    .fetch_all(&state.pool)
+    .await?;
+    let truncated = rows.len() > 200;
+    rows.truncate(200);
+    let documents = rows
+        .into_iter()
+        .map(
+            |(sequence, document_hash, fingerprint, document, acceptance, recorded_at)| {
+                Ok(FederationPeerEvidenceDocumentResponse {
+                    sequence: u64::try_from(sequence)
+                        .map_err(|_| AppError::internal("invalid stored federation sequence"))?,
+                    fingerprint_display: kutup_federation_proto::grouped_fingerprint(&fingerprint)
+                        .map_err(|error| AppError::internal(error.to_string()))?,
+                    fingerprint,
+                    document_hash,
+                    acceptance,
+                    document,
+                    recorded_at,
+                })
+            },
+        )
+        .collect::<AppResult<Vec<_>>>()?;
+    Ok(Json(FederationPeerEvidenceResponse {
+        domain,
+        trust: peer.0,
+        current_document_hash: peer.1,
+        pending_document_hash: peer.2,
+        quarantine_reason: peer.3,
+        documents,
+        truncated,
+    })
+    .into_response())
+}
+
+#[utoipa::path(
     post,
     path = "/api/admin/federation/peers/{domain}/verify",
     tag = "admin",
@@ -1060,31 +1255,120 @@ pub async fn retry_federation_peer(
     Path(domain): Path<String>,
 ) -> AppResult<Response> {
     let domain = canonical_federation_domain(&domain)?;
-    let federation = state
-        .federation
-        .as_ref()
-        .ok_or_else(|| AppError::bad_request("federation is not configured"))?;
-    federation.evict_peer_cache(&domain).await;
+    let result = retry_peer_resolution(&state, &domain).await;
+    wake_federation_outbox(&state.pool, Some(&domain)).await?;
+    audit(
+        &state.pool,
+        &admin.user_id,
+        "federation.peer.retry",
+        None,
+        json!({"domain": domain, "refreshed": result.is_ok(), "error": result.err()}),
+    )
+    .await;
+    get_federation_control_plane(State(state), admin).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/admin/federation/peers/retry",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    request_body = BulkRetryFederationPeersRequest,
+    responses((status = 200, description = "Selected peer discoveries retried independently", body = BulkRetryFederationPeersResponse))
+)]
+pub async fn bulk_retry_federation_peers(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Json(req): Json<BulkRetryFederationPeersRequest>,
+) -> AppResult<Response> {
+    if req.domains.is_empty() {
+        return Err(AppError::bad_request(
+            "at least one federation peer is required",
+        ));
+    }
+    if req.domains.len() > 100 {
+        return Err(AppError::bad_request(
+            "at most 100 federation peers may be retried at once",
+        ));
+    }
+    let mut domains = BTreeSet::new();
+    for domain in req.domains {
+        domains.insert(canonical_federation_domain(&domain)?);
+    }
+    let mut results: Vec<FederationPeerRetryResultResponse> =
+        stream::iter(domains.into_iter().map(|domain| {
+            let state = state.clone();
+            async move {
+                let result = retry_peer_resolution(&state, &domain).await;
+                let wake_error = wake_federation_outbox(&state.pool, Some(&domain))
+                    .await
+                    .err()
+                    .map(|error| error.to_string());
+                FederationPeerRetryResultResponse {
+                    domain,
+                    refreshed: result.is_ok() && wake_error.is_none(),
+                    error: result.err().or(wake_error),
+                }
+            }
+        }))
+        .buffer_unordered(8)
+        .collect()
+        .await;
+    results.sort_by(|left, right| left.domain.cmp(&right.domain));
+    audit(
+        &state.pool,
+        &admin.user_id,
+        "federation.peer.retry-bulk",
+        None,
+        json!({"results": results.iter().map(|result| json!({
+            "domain": result.domain,
+            "refreshed": result.refreshed,
+            "error": result.error,
+        })).collect::<Vec<_>>() }),
+    )
+    .await;
+    Ok(Json(BulkRetryFederationPeersResponse { results }).into_response())
+}
+
+async fn retry_peer_resolution(state: &AppState, domain: &str) -> Result<(), String> {
+    match sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM federation_peer_identities WHERE domain = $1)",
+    )
+    .bind(domain)
+    .fetch_one(&state.pool)
+    .await
+    {
+        Ok(true) => {}
+        Ok(false) => return Err("federation peer is not pinned".to_owned()),
+        Err(error) => return Err(format!("could not load federation peer: {error}")),
+    }
+    let Some(federation) = state.federation.as_ref() else {
+        return Err("federation is not configured".to_owned());
+    };
+    federation.evict_peer_cache(domain).await;
+    let mut errors = Vec::new();
     for feature in [
         kutup_federation_proto::FederationFeature::ChatV1,
         kutup_federation_proto::FederationFeature::DriveV1,
     ] {
-        if federation
+        match federation
             .resolve_peer(
-                &domain,
+                domain,
                 feature,
                 FederationDirection::Outbound,
                 OffsetDateTime::now_utc(),
             )
             .await
-            .is_ok()
         {
-            break;
+            Ok(_) => return Ok(()),
+            Err(error) => {
+                errors.push(error.to_string());
+                federation.evict_peer_cache(domain).await;
+            }
         }
-        federation.evict_peer_cache(&domain).await;
     }
-    wake_federation_outbox(&state.pool, Some(&domain)).await?;
-    get_federation_control_plane(State(state), admin).await
+    let error = errors.join("; ");
+    Err(error.chars().take(500).collect())
 }
 
 #[utoipa::path(
@@ -1366,6 +1650,10 @@ pub struct ActivityQuery {
     limit: Option<i64>,
     /// Cursor: return entries with `id <` this (from the previous page's `nextBefore`).
     before: Option<i64>,
+    /// Optional action prefix, for example `federation.`.
+    action_prefix: Option<String>,
+    /// Optional exact federation domain from the structured audit payload.
+    domain: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1394,7 +1682,7 @@ struct ActivityResponse {
     next_before: Option<i64>,
 }
 
-/// `GET /api/admin/activity?limit=50&before=<id>` — the audit-log feed, newest first.
+/// `GET /api/admin/activity?limit=50&before=<id>` — the filterable audit-log feed.
 #[utoipa::path(
     get,
     path = "/api/admin/activity",
@@ -1402,7 +1690,9 @@ struct ActivityResponse {
     security(("BearerAuth" = [])),
     params(
         ("limit" = Option<i64>, Query, description = "Page size, clamped to 1..=100 (default 50)"),
-        ("before" = Option<i64>, Query, description = "Cursor: entries with id < this (previous page's nextBefore)")
+        ("before" = Option<i64>, Query, description = "Cursor: entries with id < this (previous page's nextBefore)"),
+        ("actionPrefix" = Option<String>, Query, description = "Exact action namespace prefix, such as federation."),
+        ("domain" = Option<String>, Query, description = "Exact federation domain in the structured audit payload")
     ),
     responses((status = 200, description = "Audit-log page, newest first", body = ActivityResponse))
 )]
@@ -1412,7 +1702,101 @@ pub async fn activity(
     Query(q): Query<ActivityQuery>,
 ) -> AppResult<Response> {
     let limit = q.limit.unwrap_or(50).clamp(1, 100);
+    validate_activity_query(&q)?;
+    let entries = load_activity_entries(&state.pool, &q, limit).await?;
+    let next_before = if entries.len() as i64 == limit {
+        entries.last().map(|entry| entry.id)
+    } else {
+        None
+    };
+    Ok(Json(ActivityResponse {
+        entries,
+        next_before,
+    })
+    .into_response())
+}
 
+#[utoipa::path(
+    get,
+    path = "/api/admin/activity/export",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(
+        ("limit" = Option<i64>, Query, description = "Export size, clamped to 1..=5000 (default 1000)"),
+        ("before" = Option<i64>, Query, description = "Optional older-than cursor"),
+        ("actionPrefix" = Option<String>, Query, description = "Exact action namespace prefix, such as federation."),
+        ("domain" = Option<String>, Query, description = "Exact federation domain in the structured audit payload")
+    ),
+    responses((status = 200, description = "Filtered audit events as spreadsheet-safe CSV", content_type = "text/csv"))
+)]
+pub async fn activity_export(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Query(q): Query<ActivityQuery>,
+) -> AppResult<Response> {
+    validate_activity_query(&q)?;
+    let limit = q.limit.unwrap_or(1000).clamp(1, 5000);
+    let entries = load_activity_entries(&state.pool, &q, limit).await?;
+    let mut csv = String::from(
+        "id,occurred_at,action,admin_user_id,admin_email,admin_username,target_user_id,target_email,payload\n",
+    );
+    for entry in entries {
+        let values = [
+            entry.id.to_string(),
+            entry
+                .occurred_at
+                .format(&time::format_description::well_known::Rfc3339)
+                .map_err(|_| AppError::internal("could not format audit timestamp"))?,
+            entry.action,
+            entry.admin_user_id.to_string(),
+            entry.admin_email.unwrap_or_default(),
+            entry.admin_username.unwrap_or_default(),
+            entry
+                .target_user_id
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+            entry.target_email.unwrap_or_default(),
+            serde_json::to_string(&entry.payload)
+                .map_err(|_| AppError::internal("could not serialize audit payload"))?,
+        ];
+        csv.push_str(&values.map(|value| csv_cell(&value)).join(","));
+        csv.push('\n');
+    }
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"kutup-admin-audit.csv\"",
+            ),
+        ],
+        csv,
+    )
+        .into_response())
+}
+
+fn validate_activity_query(q: &ActivityQuery) -> AppResult<()> {
+    if let Some(prefix) = q.action_prefix.as_deref() {
+        if prefix.is_empty()
+            || prefix.len() > 80
+            || !prefix
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return Err(AppError::bad_request("invalid audit action prefix"));
+        }
+    }
+    if let Some(domain) = q.domain.as_deref() {
+        canonical_federation_domain(domain)?;
+    }
+    Ok(())
+}
+
+async fn load_activity_entries(
+    pool: &PgPool,
+    q: &ActivityQuery,
+    limit: i64,
+) -> AppResult<Vec<ActivityEntry>> {
     type Row = (
         i64,
         String,
@@ -1431,17 +1815,29 @@ pub async fn activity(
            LEFT JOIN users a ON a.id = l.admin_user_id
            LEFT JOIN users t ON t.id = l.target_user_id
            WHERE ($1::bigint IS NULL OR l.id < $1)
+             AND ($2::text IS NULL OR left(l.action, char_length($2)) = $2)
+             AND ($3::text IS NULL
+                  OR l.payload->>'domain' = $3
+                  OR EXISTS (
+                      SELECT 1
+                      FROM jsonb_array_elements(
+                          CASE WHEN jsonb_typeof(l.payload->'results') = 'array'
+                               THEN l.payload->'results' ELSE '[]'::jsonb END
+                      ) result
+                      WHERE result->>'domain' = $3
+                  ))
            ORDER BY l.id DESC
-           LIMIT $2"#,
+           LIMIT $4"#,
     )
     .bind(q.before)
+    .bind(&q.action_prefix)
+    .bind(&q.domain)
     .bind(limit)
-    .fetch_all(&state.pool)
+    .fetch_all(pool)
     .await
     .map_err(|_| AppError::internal("internal error"))?;
 
-    let full_page = rows.len() as i64 == limit;
-    let entries: Vec<ActivityEntry> = rows
+    Ok(rows
         .into_iter()
         .map(
             |(id, action, admin_id, a_email, a_username, target_id, t_email, payload, at)| {
@@ -1458,17 +1854,20 @@ pub async fn activity(
                 }
             },
         )
-        .collect();
-    let next_before = if full_page {
-        entries.last().map(|e| e.id)
+        .collect())
+}
+
+fn csv_cell(value: &str) -> String {
+    let spreadsheet_safe = if value
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| matches!(byte, b'=' | b'+' | b'-' | b'@' | b'\t' | b'\r'))
+    {
+        format!("'{value}")
     } else {
-        None
+        value.to_owned()
     };
-    Ok(Json(ActivityResponse {
-        entries,
-        next_before,
-    })
-    .into_response())
+    format!("\"{}\"", spreadsheet_safe.replace('"', "\"\""))
 }
 
 /// Maps a unique-violation INSERT error to the right 409 — mirrors the Go duplicate check.
@@ -1482,4 +1881,39 @@ fn map_insert_conflict(err: sqlx::Error) -> AppError {
         }
     }
     AppError::internal("internal error")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audit_csv_cells_escape_quotes_and_spreadsheet_formulas() {
+        assert_eq!(csv_cell("plain"), "\"plain\"");
+        assert_eq!(csv_cell("a\"b"), "\"a\"\"b\"");
+        assert_eq!(csv_cell("=HYPERLINK(\"x\")"), "\"'=HYPERLINK(\"\"x\"\")\"");
+        assert_eq!(csv_cell("-1"), "\"'-1\"");
+    }
+
+    #[test]
+    fn audit_filters_accept_only_bounded_prefixes_and_canonical_domains() {
+        let valid = ActivityQuery {
+            action_prefix: Some("federation.identity.".to_owned()),
+            domain: Some("chat.example.com".to_owned()),
+            ..ActivityQuery::default()
+        };
+        assert!(validate_activity_query(&valid).is_ok());
+
+        let wildcard = ActivityQuery {
+            action_prefix: Some("federation.%".to_owned()),
+            ..ActivityQuery::default()
+        };
+        assert!(validate_activity_query(&wildcard).is_err());
+
+        let noncanonical_domain = ActivityQuery {
+            domain: Some("https://chat.example.com".to_owned()),
+            ..ActivityQuery::default()
+        };
+        assert!(validate_activity_query(&noncanonical_domain).is_err());
+    }
 }

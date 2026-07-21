@@ -109,14 +109,17 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::admin::wipe_user,
         crate::handlers::admin::get_stats,
         crate::handlers::admin::activity,
+        crate::handlers::admin::activity_export,
         crate::handlers::admin::get_settings,
         crate::handlers::admin::update_settings,
         crate::handlers::admin::get_federation_control_plane,
         crate::handlers::admin::update_federation_policy,
         crate::handlers::admin::upsert_federation_domain_rule,
         crate::handlers::admin::delete_federation_domain_rule,
+        crate::handlers::admin::get_federation_peer_evidence,
         crate::handlers::admin::verify_federation_peer,
         crate::handlers::admin::retry_federation_peer,
+        crate::handlers::admin::bulk_retry_federation_peers,
         crate::handlers::admin::repin_federation_peer,
         crate::federation::discovery::public_discovery,
         crate::federation::discovery::public_identity_document,
@@ -253,7 +256,7 @@ mod tests {
     /// Every HTTP operation registered in `build_router` (74 router entries → 78
     /// method+path pairs, counting each method on a multi-method route). Keep in sync
     /// with `paths(...)` above when routes change.
-    const EXPECTED_OPERATIONS: usize = 88;
+    const EXPECTED_OPERATIONS: usize = 91;
 
     #[test]
     fn spec_lists_every_router_operation() {
@@ -295,12 +298,15 @@ mod tests {
             "/api/fed/drive/files",
             "/api/drive/federation/shares/{shareId}/files",
             "/api/admin/activity",
+            "/api/admin/activity/export",
             "/api/admin/users/{id}/rotate-temp-password",
             "/api/admin/users/{id}/wipe",
             "/api/admin/federation",
             "/api/admin/federation/rules/{feature}/{domain}",
+            "/api/admin/federation/peers/{domain}/evidence",
             "/api/admin/federation/peers/{domain}/verify",
             "/api/admin/federation/peers/{domain}/retry",
+            "/api/admin/federation/peers/retry",
             "/api/admin/federation/peers/{domain}/repin",
             "/api/chat/users/{username}/keys",
             "/api/chat/messages/ack",

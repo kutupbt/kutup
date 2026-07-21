@@ -1234,7 +1234,11 @@ The admin audit-log feed, newest first.
 
 **Auth:** Bearer JWT (admin)
 
-**Query parameters:** `limit` (1–100, default 50) · `before` (cursor: return entries with `id` lower than this — pass the previous page's `nextBefore`).
+**Query parameters:** `limit` (1–100, default 50) · `before` (cursor: return
+entries with `id` lower than this — pass the previous page's `nextBefore`) ·
+`actionPrefix` (for example `federation.`) · `domain` (an exact canonical
+federation domain in the structured event payload). Filters compose and the
+cursor remains stable.
 
 **Response:**
 ```json
@@ -1256,7 +1260,21 @@ The admin audit-log feed, newest first.
 }
 ```
 
-Actions: `user.create`, `user.update` (payload carries a `changes` object with only the fields that were modified), `user.delete`, `user.2fa_disable`, `settings.update`, `federation.policy.update`, `federation.rule.upsert`, and `federation.rule.delete`. `adminEmail`/`targetEmail` are the live identities and become `null` once the referenced account is deleted — the `payload` snapshot keeps the trail readable. `nextBefore` is non-null while older pages remain.
+Actions include user/settings changes plus `federation.policy.*`,
+`federation.rule.*`, `federation.peer.*`, and `federation.identity.*`. Identity
+pin, authenticated rotation, quarantine, verification, and break-glass re-pin
+events retain full fingerprints, sequences, and reasons but never private
+signing keys or Drive capabilities. `adminEmail`/`targetEmail` are the live
+identities and become `null` once the referenced account is deleted — the
+`payload` snapshot keeps the trail readable. `nextBefore` is non-null while
+older pages remain.
+
+### GET /api/admin/activity/export
+
+Export the same filtered audit stream as spreadsheet-safe UTF-8 CSV. It accepts
+`before`, `actionPrefix`, and `domain`; `limit` is clamped to 1–5000 and defaults
+to 1000. Cells beginning with spreadsheet formula markers are neutralized and
+the response is downloaded as `kutup-admin-audit.csv`.
 
 ---
 
@@ -1338,9 +1356,27 @@ persisted peer trust/discovery state. Rules remain visible while inactive.
       "discoveryExpiresAt": "2026-07-20T11:00:00Z",
       "quarantineReason": null,
       "pendingFingerprint": null,
-      "lastDiscoveryError": null
+      "lastDiscoveryError": null,
+      "diagnostics": {
+        "chatPendingTransactions": 0,
+        "chatMismatchTransactions": 0,
+        "driveIncomingShares": 1,
+        "driveOutgoingShares": 0
+      }
     }
-  ]
+  ],
+  "operational": {
+    "peerTotal": 1,
+    "tofuPeers": 1,
+    "verifiedPeers": 0,
+    "quarantinedPeers": 0,
+    "chatPendingTransactions": 0,
+    "chatMismatchTransactions": 0,
+    "oldestChatPendingAt": null,
+    "driveIncomingShares": 1,
+    "driveOutgoingShares": 0,
+    "activeReplayReservations": 0
+  }
 }
 ```
 
@@ -1400,9 +1436,32 @@ fingerprint through an independent channel. Body:
 
 ### POST /api/admin/federation/peers/:domain/retry
 
-Evict positive and negative discovery caches, retry authenticated Chat
-discovery, and wake pending delivery. The returned control-plane state exposes
-the new discovery result or `lastDiscoveryError`.
+Evict positive and negative discovery caches, retry authenticated discovery
+through either enabled Chat or Drive capability, and wake pending Chat
+delivery. The returned control-plane state exposes the new discovery result or
+`lastDiscoveryError`. The outcome is audited as `federation.peer.retry`.
+
+### POST /api/admin/federation/peers/retry
+
+Retry up to 100 selected canonical domains independently. One failed peer does
+not abort the others.
+
+```json
+{ "domains": ["one.example", "two.example"] }
+```
+
+The response contains `{domain, refreshed, error}` per peer and the complete
+batch result is retained in `federation.peer.retry-bulk` audit evidence.
+
+### GET /api/admin/federation/peers/:domain/evidence
+
+Return the immutable accepted, superseded, and quarantined signed identity
+documents preserved by the generic trust store. Each entry includes sequence,
+document hash, full fingerprint, acceptance state, recorded time, and the exact
+public signed document. The response also identifies the current and pending
+document hashes and quarantine reason. Results are newest-first and bounded to
+200 documents with `truncated: true` when older history exists. This endpoint
+does not expose federation private keys or Drive capabilities.
 
 ### POST /api/admin/federation/peers/:domain/repin
 
