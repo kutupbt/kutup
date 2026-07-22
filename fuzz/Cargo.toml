@@ -1,0 +1,31 @@
+[package]
+name = "kutup-security-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+base64 = "0.22"
+futures-executor = "0.3"
+libfuzzer-sys = "0.4"
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0.97.2" }
+serde_json = "1"
+kutup-chat-proto = { path = "../crates/kutup-chat-proto" }
+kutup-federation-proto = { path = "../crates/kutup-federation-proto" }
+
+[[bin]]
+name = "policy_transparency_parsers"
+path = "fuzz_targets/policy_transparency_parsers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sealed_sender_parsers"
+path = "fuzz_targets/sealed_sender_parsers.rs"
+test = false
+doc = false
+bench = false

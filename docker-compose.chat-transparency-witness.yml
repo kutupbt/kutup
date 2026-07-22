@@ -1,0 +1,66 @@
+name: kutup-chat-transparency-witness-test
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: kutup
+      POSTGRES_PASSWORD: kutup-witness-test
+      POSTGRES_DB: kutup
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kutup"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    image: kutup-transparency-witness-server:local
+    environment:
+      DATABASE_URL: postgres://kutup:kutup-witness-test@postgres:5432/kutup?sslmode=disable
+      JWT_SECRET: witness-test-jwt-secret-at-least-32-bytes
+      S3_ENDPOINT: http://unused.invalid
+      S3_ACCESS_KEY: unused
+      S3_SECRET_KEY: unused
+      S3_BUCKET: unused
+      S3_REGION: us-east-1
+      APP_ENV: test
+      SERVER_URL: http://backend:3000
+      ADMIN_ACCOUNT: ""
+      SEAWEEDFS_MASTER_URL: ""
+      CHAT_TRANSPARENCY_SIGNING_KEY: MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM=
+      CHAT_TRANSPARENCY_WITNESSES: audit.test=xoImN8fTEOxXYnvgC6JZ0lN0n0qvZERwz/vlOjX3MkI=
+      CHAT_TRANSPARENCY_WITNESS_QUORUM: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:39001:3000"
+
+  witness:
+    image: kutup-transparency-witness-server:local
+    entrypoint: ["/usr/local/bin/kutup-transparency-witness"]
+    restart: on-failure
+    environment:
+      KUTUP_WITNESS_TARGET: http://backend:3000/
+      KUTUP_WITNESS_ALLOW_HTTP: "1"
+      KUTUP_WITNESS_ID: audit.test
+      KUTUP_WITNESS_SIGNING_KEY: VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=
+      KUTUP_WITNESS_OPERATOR_KEY_ID: 6c8f8607dbe87077a62a2990ce07d94aaf749df76f87b98eb786a6d10f030765
+      KUTUP_WITNESS_OPERATOR_PUBLIC_KEY: F8t5+ytBIPKx7GXkGY1uCLKOgT/rAeSkAIObheGAgM4=
+      KUTUP_WITNESS_STATE_FILE: /state/checkpoint.json
+      # Stay below the shared 60/minute public transparency endpoint limit;
+      # the POST attestation is an additional request in the same window.
+      KUTUP_WITNESS_INTERVAL_SECONDS: "2"
+      KUTUP_WITNESS_LISTEN: 0.0.0.0:3001
+    volumes:
+      - witness-state:/state
+    ports:
+      - "127.0.0.1:39002:3001"
+    depends_on:
+      - backend
+
+volumes:
+  witness-state:

@@ -163,6 +163,35 @@ Self-hosters need an easy way to back up + restore the full encrypted dataset (D
 
 ---
 
+## Post-v1 major track · Federated E2EE chat ("ileti")
+
+A Signal-class chat feature — 1:1 + group text, media, voice/video — federated between kutup instances, E2EE on the Signal protocol, media stored in the user's existing E2EE drive, everything (client *and* server, including calls) on port 443 only. Chat UI at its own domain (e.g. `ileti.` vs `depo.` for the drive) but the same backend binary and port.
+
+The full architecture is captured in `docs/research/11-federated-chat.md` (libsignal v0.97.2 study, Matrix take-vs-leave, single-443 topology, risks), the wire-contract fixes in `docs/research/12-chat-improvements-for-clients.md`, and — decisively — the adversarially-verified comparative study `docs/research/13-chat-architecture-comparative-research.md` (Signal/Matrix/XMPP + local libsignal/Prosody/ejabberd/Monal code). Direction is committed and validated. **Locked decisions:** libsignal-protocol as a pinned wrapped dependency (AGPL-compatible, never reimplement the ratchet); transport-only federation (signed s2s over 443 + `.well-known`, no Matrix-style replicated room state — the DAG is CVE-confirmed as the mistake); PQ (PQXDH + SPQR) always-on with a versioned suite registry, algorithm agility as a protocol mechanism **not** a user downgrade toggle.
+
+The normative wire contract the three clients freeze against is **`docs/chat-protocol.md`** (v1) — it consolidates the wire-affecting decisions from `11-`/`12-`/`13-` into one spec, tagging every field **[IMPL]** (phase-2 server, frozen), **[ADD]** (additive, phase-2b), or **[RSV]** (reserved now, implemented later so it's not a breaking migration). Implement against that.
+
+**Changes from the comparative study (read `13-…` before implementing phase 2b+):** groups move to the **GV2 pattern** (server-held *encrypted, versioned* authoritative state + signed membership manifest, sender keys for fan-out) — **not** client-managed blobs (Signal's abandoned 2014 design); **device-list authenticity** (a signed per-account device manifest / cross-signing) becomes a **v1 wire-contract requirement**, not deferred research, because server-assigned device lists otherwise reproduce the malicious-homeserver break that defeated Matrix/Megolm; **sealed sender** ships as a whole system (sender certs + delivery-token abuse gate + contacts-only default) or not at all, with `Option`-typed sender fields reserved now; s2s delivery adds **durable in-order retry + per-destination sequence numbers + gap detection** (Matrix's retry rule minus its DAG backfill) and **X-Matrix-style Ed25519 request signing with destination binding + 401-on-mismatch**; the SPQR ratchet is **ML-KEM-768** (ML-KEM-1024 is PQXDH-handshake-only).
+
+Phases (each lands as its own PR-series; do not start N+1 with N unmerged):
+
+| # | Slice | Gate |
+|---|---|---|
+| 1 | **Spike**: `libsignal-protocol` + `spqr` on wasm32 | ✅ **GO** (2026-07-12, `spikes/libsignal-wasm/`) — compiles for the browser target on stable, full PQXDH+Triple-Ratchet round-trip executes in wasm; web client shares `kutup-chat-core` |
+| 2 | Server slice: `kutup-chat-proto` + prekey directory, per-device mailboxes, WSS drain | ✅ landed — `crates/kutup-chat-proto`, migration 021, `handlers/chat.rs`, `chat_hub.rs`, nginx `/api/chat/ws`; full REST + WS contract smoke-verified against the live stack (incl. one-time-prekey consumption, last-resort fallback, the 409 missing/stale/extra device contract, live envelope push). Playwright chat spec lands with phase 2b |
+| 2b | Shared core + minimal 1:1 reference web UI | **Implemented and live-stack verified on `codex/chat-architecture-hardening`.** Includes durable typed inbound journal/quarantine, SQLCipher/IndexedDB stores, crash-safe registration/prekeys, signed manifests, WASM transport, Web Locks, REST+WS reconciliation, history, Note to Self, and ordinary linked-device sent transcripts. Web remains the product client until the messaging milestone is complete; native packaging/integration is not a gate. |
+| 3 | Web federation foundation | **Implemented and two-server live verified:** canonical `username@server`, typed conversations, one persistent v2 server identity, signed `.well-known` endpoint/capability discovery, immutable identity history and authenticated rotation, strict RFC 9421/9530 request/response authentication, replay reservation, DNS-rebinding/SSRF-safe resolution, durable per-destination in-order Chat delivery, device-mismatch recovery, terminal rejection, and sequence-gap replay. Drive now uses that same stack for signed account lookup, domain-bound fragment capabilities, invite acceptance, file lists, idempotent upload/delete, persisted ciphertext digests, and verify-before-release streaming downloads. The isolated harness proves the Drive round trip, that Chat reuses a Drive-established pin, and that Chat retry survives an origin restart while the destination is offline. The generic responsive admin control plane provides a global stop, feature-scoped `disabled`/`allowlist`/`blocklist`/`open` admission and trust floors, directional domain rules, shared Chat/Drive diagnostics, peer search/trust filters, retry-one/retry-visible workflows, TOFU verification, exact immutable quarantine/history evidence, break-glass re-pin, and filtered audit presentation/CSV export. A disabled feature is omitted from discovery while the other remains available. Both old feature-specific federation stacks and raw remote URL routes were removed; there is no v1 downgrade. No alias namespace. See `docs/federation-protocol.md`. |
+| 4 | Web contact privacy and trust | **Implemented, final live gate pending:** durable message requests/blocking and Signal-style encrypted profiles; authenticated local/remote transparency policy histories and 15-minute restart-safe monitoring; checkpoint-bound multi-page skipped-manifest recovery; bounded witness views, shared server/standalone cross-view auditing, immutable fork evidence, and explicit audited recovery; contacts-only libsignal sealed sender with offline-root/online-certificate policy, transparency-bound identity validation, database-backed capability/origin rate limits, anonymous local/federated delivery, capability rotation on block, and no identified fallback. Rust/native/WASM and production web build gates pass; the expanded two-server browser/Compose adversarial gate remains to be run. |
+| 5 | Web private groups | Sender keys plus GV2-pattern encrypted/versioned group state, zkgroup authorization, linked-device state, roles, and a 256-member target. |
+| 6 | Web messaging and media | Replies, reactions, edits/deletes, receipts, typing, disappearing messages, local search, encrypted drive/tus attachments, and voice notes. |
+| 7 | Web PWA completion | Generic content-free Web Push, offline/restart recovery, responsive/accessibility/browser matrix, security/load tests, and protocol freeze. |
+| 8 | Calls | 1:1 WebRTC → SFU group calls; TURN + SNI demux on 443. Separate from the messaging-complete web milestone. |
+| 9 | Native clients | Freeze UniFFI APIs, package XCFramework/AAR, add Keychain/Keystore, then integrate iOS and Android against the proven web protocol. |
+
+Device-list authenticity (the signed per-account device manifest) is **not** in phase 7 — it is a phase-2b/2 wire-contract requirement per the comparative study.
+
+---
+
 ## Polish / smaller items (future)
 
 ### Desktop Drive redesign (chat1.md in the design bundle)
@@ -180,12 +209,15 @@ The mobile UI pulled ahead. The desktop Drive page hasn't gotten the color-palet
 
 ### Federation polish
 
-Cross-server presence indicators in collab, share-revocation on remote federations, federation discovery UX. Federation works today but rough.
+Cross-server presence indicators in collab, outgoing Drive-share revocation,
+and federation discovery UX. The common Chat/Drive trust and transport stack is
+implemented; these are product-lifecycle improvements above it.
 
 ### Test coverage gaps
 
 - Tauri session-persistence — no E2E test today
-- Federation flows — limited coverage
+- Browser-level Drive federation UI coverage (the isolated two-server server
+  harness already covers the complete Drive and Chat transport lifecycle)
 - Mobile flows — Playwright doesn't exercise the mobile shell
 
 ### Performance baselines
@@ -209,7 +241,7 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
 - **Share lifecycle management (needs server slices first).** There is no
   endpoint to list a collection's outgoing user shares, revoke one, or
   list/delete public links (the web UI can't either — only recipient-side
-  `DELETE /fed-proxy/incoming/:shareId` exists). Server work:
+  `DELETE /api/drive/federation/shares/:shareId` exists). Server work:
   `GET /api/collections/:id/shares`, `DELETE /api/collections/:id/share/:userId`,
   `GET`/`DELETE /api/user/shares` (public links, owner-scoped via
   `public_shares.created_by`); then `kutup share ls / revoke / unlink` and
@@ -226,7 +258,7 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
   files as opaque bytes; the extract/hydrate steps only run in
   `upload`/`download`. Wire `crate::whiteboard` into the engine's
   push/pull paths.
-- **Streaming multipart uploads** for `share upload` (fed-proxy) — still
+- **Streaming multipart uploads** for remote `share upload` — still
   buffers the whole encrypted file in memory (`Part::bytes`); switch to
   `Part::reader` with an encrypting reader for large-file parity with tus.
 - **`kutup versions restore` vs collab snapshots.** CLI restore re-encrypts
@@ -260,6 +292,7 @@ These live in `docs/research/` because the design hasn't been chosen yet:
 - **Version history** — `docs/research/03-version-history-design.md`. Two-tier checkpoint+delta model recommended; not yet specced.
 - **WebDAV mount** — `docs/research/06-webdav-support.md`. Client-side proxy is the only viable path because server-side WebDAV breaks E2EE. Long-term work.
 - **WebAuthn / passkey support** — not yet captured in `docs/research/`. Would supplement TOTP for second-factor. Useful research before adding.
+- **Chat open questions** — `docs/research/11-federated-chat.md` §7: sealed sender across federation (certificate-root trust with N mutually-distrusting servers), mailbox retention under E2EE, group-blob placement, an MLS suite slot for very large rooms. The chat *track* itself is committed (see the post-v1 section above); these sub-designs aren't.
 
 ---
 

@@ -17,11 +17,28 @@ Returns public server settings (e.g. registration enabled/disabled).
 **Auth:** None
 
 **Response:**
-```json
+```jsonc
 {
-  "registrationEnabled": true
+  "registrationEnabled": true,
+  "chat": {
+    "enabled": true,
+    "protocolVersion": 1,
+    "keyTransparency": true,
+    "transparencyOperatorKeyId": "<64 lowercase hex>",
+    "transparencyOperatorPublicKey": "<base64 Ed25519 public key>",
+    "transparencyWitnesses": [
+      { "witnessId": "audit.example", "keyId": "<hex>", "publicKey": "<base64>" }
+    ],
+    "transparencyWitnessQuorum": 1
+  }
 }
 ```
+
+The chat block also advertises suites, size/retention limits, federation,
+manifests, profiles, and sealed-sender support. Browser clients use the
+operator/witness fields as their local transparency policy. Applications that
+need an independent trust root must pin the same policy out of band rather than
+treating this same-origin response as authoritative.
 
 ---
 
@@ -459,9 +476,31 @@ Share a collection with another user on this server.
 
 ---
 
-### POST /api/collections/:id/share-federated
+### GET /api/drive/federation/users/:username
 
-Share a collection with a user on a remote Kutup instance.
+Resolve a remote Drive user through authenticated v2 federation before sealing
+the collection key.
+
+**Auth:** Bearer JWT
+**Query:** `?server=other.example.com` (canonical DNS identity, not a URL)
+
+**Response:**
+```json
+{
+  "username": "bob",
+  "server": "other.example.com",
+  "publicKey": "<base64>"
+}
+```
+
+The response is accepted only after signed discovery, peer pin/rotation policy,
+admission, request authentication, and response authentication succeed.
+
+---
+
+### POST /api/collections/:id/federated-shares
+
+Create a domain-bound share for a user on a remote Kutup instance.
 
 **Auth:** Bearer JWT
 
@@ -469,7 +508,7 @@ Share a collection with a user on a remote Kutup instance.
 ```json
 {
   "recipientUsername": "bob",
-  "recipientServer": "https://other.kutup.example.com",
+  "recipientServer": "other.example.com",
   "encryptedCollectionKey": "<base64>",
   "canUpload": true,
   "canDelete": false,
@@ -477,33 +516,21 @@ Share a collection with a user on a remote Kutup instance.
 }
 ```
 
-`encryptedCollectionKey` is the collection key sealed to the recipient's public key (fetched via `GET /api/collections/fed-pubkey`).
+`encryptedCollectionKey` is the collection key sealed to the exact
+`bob@other.example.com` public key returned by the lookup above. The server
+stores the canonical recipient domain and a SHA-256 capability verifier, not a
+remote URL or plaintext capability.
 
 **Response:** `201 Created`
 ```json
 {
-  "inviteToken": "<hex32>",
-  "inviteUrl": "https://this.kutup.example.com/invite/<hex32>"
+  "inviteUrl": "https://this.example.com/invite#server=this.example.com&capability=<base64url>"
 }
 ```
 
-`inviteUrl` is built from the **sharer's** `SERVER_URL` (this server). The recipient hands the `inviteToken` to their own server via `POST /api/fed-proxy/incoming` to accept.
-
----
-
-### GET /api/collections/fed-pubkey
-
-Fetch the public key of a remote user (used before federated sharing).
-
-**Auth:** Bearer JWT
-**Query:** `?username=bob&server=https://other.kutup.example.com`
-
-**Response:**
-```json
-{
-  "publicKey": "<base64>"
-}
-```
+The capability appears only in the fragment so browsers do not send it to the
+sharer's web origin. It is shown once and cannot be recovered from the outgoing
+share row.
 
 ---
 
@@ -585,7 +612,7 @@ Move a file to the trash (soft delete). The file disappears from every normal en
 
 ## Trash
 
-Trash is **owner-scoped**: an item lives in the trash of the user who owns the collection it belongs to (a share recipient's delete lands in the owner's trash — the Google Drive model). Every entry is a *trash root*: a deleted file, or a deleted folder carrying its whole subtree. A background sweeper purges roots older than `TRASH_RETENTION_DAYS` (default 30; `0` disables the sweeper). Federated deletes (`DELETE /api/fed/shares/...`) remain permanent — there is no cross-server trash.
+Trash is **owner-scoped**: an item lives in the trash of the user who owns the collection it belongs to (a share recipient's delete lands in the owner's trash — the Google Drive model). Every entry is a *trash root*: a deleted file, or a deleted folder carrying its whole subtree. A background sweeper purges roots older than `TRASH_RETENTION_DAYS` (default 30; `0` disables the sweeper). Federated Drive deletes (`DELETE /api/fed/drive/files/:fileId`) remain permanent — there is no cross-server trash.
 
 ### GET /api/trash
 
@@ -745,163 +772,317 @@ Returns `410 Gone` if the share has expired, `403` if the file does not belong t
 
 ---
 
-## Federation — Public Endpoints
+## Chat (E2EE messaging)
 
-These endpoints are called by remote Kutup servers as part of the federation protocol.
+The local slice of the federated chat track ("ileti" — design: `docs/research/11-federated-chat.md`). Clients run the Signal protocol (PQXDH + Triple Ratchet, suite `1`); the server stores **public prekeys and opaque ciphertext only**. All endpoints require a Bearer JWT unless noted. Wire types live in `crates/kutup-chat-proto` and are fully described by the OpenAPI document.
 
-### GET /api/fed/users
+### POST /api/chat/device
 
-Look up a user on this server by username and return their public key. Rate-limited (60/min/IP).
+Register the calling client as a chat device. The server assigns the lowest free device id (`1..=127` per user). Body: `registrationId` (libsignal, `1..16380`), `identityKey`, `signedPreKey` (signature required), `lastResortKyberPreKey` (bundles are never non-PQ), optional `oneTimePreKeys[]` / `oneTimeKyberPreKeys[]` pools, optional `name`. All key material base64.
 
-**Auth:** None
-**Query:** `?username=alice`
+**Response:** `200 OK` → `{ "deviceId": 1 }` · `409` when all 127 ids are taken.
 
-**Response:**
+### GET /api/chat/device
+
+The caller's chat devices: `{ "devices": [{ "deviceId", "suite", "name", "createdAt", "lastSeenAt" }] }`.
+
+### DELETE /api/chat/device/{deviceId}
+
+Revoke a chat device — hard delete; prekey pools and mailbox rows cascade, live sockets close. `204`.
+
+### PUT /api/chat/keys?deviceId=N
+
+Rotate `signedPreKey` / `lastResortKyberPreKey` and/or upload more one-time prekeys (only fields present are changed; pool inserts are idempotent per `keyId`).
+
+### GET /api/chat/keys/count?deviceId=N
+
+Remaining one-time pool sizes: `{ "oneTimePreKeys": n, "oneTimeKyberPreKeys": n }` — clients replenish below a threshold.
+
+### POST /api/chat/manifest?transparencyTreeSize=N
+
+Publish the account-authority-signed current device manifest. Versions must
+advance by exactly one and hash-link to the preceding manifest; the authority
+key cannot rotate silently. The signed device ids, registration ids, and
+identity keys must exactly match the server's registered device set. Suite 1 is
+currently server-bounded and mandatory; authenticated per-device suite lists
+will be added to the next manifest format before another suite ships.
+`transparencyTreeSize` is the client's highest verified local checkpoint. A
+successful publish transactionally advances both the chronological log and
+current-value sparse map and returns the manifest with its transparency proof.
+Exact replay is idempotent; version, chain, authority, or device-set conflicts
+return `409`.
+
+### GET /api/chat/users/{username}/manifest
+
+Return the current account-signed device manifest for a local user. This direct
+manifest endpoint is authenticated, but new-session directory reads should use
+the keys endpoint below because its response also binds the manifest to key
+transparency and supplies the PQXDH bundles.
+
+### GET /api/chat/profile
+
+Owner-only recovery of the current opaque encrypted profile, including the
+random profile key wrapped under the account master key for linked-device
+recovery. Returns `404` until a profile has been published.
+
+### PUT /api/chat/profile
+
+Publish a new opaque encrypted display-name/avatar profile. The server sees
+only ciphertext, a profile-key-derived version, an access-key verifier, a
+master-key-wrapped profile key, revision, and source device. Revision plus
+source-device ordering resolves concurrent linked-device writes; exact replay
+is idempotent and a stale/conflicting revision returns `409`.
+
+### GET /api/chat/users/{username}/profile/{version}
+
+Capability-gated encrypted profile lookup for a local or federated canonical
+address. The caller supplies the profile access key in the dedicated request
+header rather than the URL. A wrong version or capability is deliberately
+indistinguishable from a missing profile and returns `404`.
+
+### GET /api/chat/transparency/checkpoint?fromTreeSize=N
+
+Public monitor endpoint; it does not consume prekeys or require a user account.
+Returns the current chronological checkpoint, sparse-map root, the persistent
+operator signature, cached independent witness attestations, and an RFC 6962
+consistency path from `N` (`0` for first observation). Returns `404` while the
+log is empty and `409` when `N` is newer than the presented view. Clients and
+witnesses verify the response before advancing durable state. The web client
+polls this endpoint on open, online/foreground/reconnect transitions, and every
+15 visible minutes. It preserves the last valid pin on network failure and
+blocks new sends when authentication, consistency, policy, or witness quorum
+verification fails.
+
+### POST /api/chat/transparency/witness
+
+Public, rate-limited submission endpoint for an administrator-allowlisted
+independent witness. Body:
+
 ```json
 {
-  "publicKey": "<base64>"
+  "treeSize": 42,
+  "attestation": {
+    "witnessId": "audit.example",
+    "observedAt": 1784250000,
+    "keyId": "<64 lowercase hex>",
+    "publicKey": "<base64 Ed25519 public key>",
+    "signature": "<base64 signature over the exact operator checkpoint>"
+  }
 }
 ```
 
-Returns `404` for unknown or inactive users.
+The server verifies the configured identity/key and exact checkpoint.
+Identical replay succeeds with `{ "accepted": true, "deduplicated": true }`;
+an unknown key returns `401`, an unknown checkpoint `404`, and equivocation at
+one tree size `409`.
+
+### GET /api/chat/users/{username}/keys?transparencyTreeSize=N
+
+PQXDH prekey bundles for **every** chat device of `username` (a message must encrypt to all of them), plus the account-signed device manifest and its transparency proof. `transparencyTreeSize` is the client's highest verified homeserver checkpoint (`0` initially); the response proves chronological inclusion of the exact manifest, sparse-map membership as the account's current value, inclusion of that map root as the checkpoint's final leaf, RFC 6962 consistency from the requested size, and the operator signature plus configured witness quorum for the exact checkpoint. Each bundle carries `identityKey`, `signedPreKey`, `kyberPreKey` (a one-time Kyber prekey, **consumed** by this fetch, or the reusable last-resort key when the pool is empty) and optionally a consumed one-time EC prekey. Fetches are limited to 30/min per authenticated account (`RATE_LIMIT_CHAT_KEYS_PER_MIN`) with a coarse 120/min IP wall (`RATE_LIMIT_CHAT_KEYS_IP_PER_MIN`).
+
+### POST /api/chat/users/{username}/messages
+
+Deliver one logical message as per-device ciphertexts: `{ "senderDeviceId": n, "envelopes": [{ "deviceId", "registrationId", "envelopeType": "preKey"|"message", "suite": 1, "content": "<base64>" }] }`. The device set must exactly match the recipient's current devices — ids **and** registration ids — or the send fails with `409 { "missingDevices": [], "staleDevices": [], "extraDevices": [] }` (Signal's contract: no device can be silently skipped, and reinstalled devices are detected). Stored envelopes are also pushed to the recipient's live chat sockets.
+
+### POST /api/chat/sync/messages
+
+Deliver an encrypted sent transcript to every other active device belonging to
+the authenticated account. The sending device is excluded from the exact
+device-set check; an empty destination set succeeds for a single-device
+account. Note to Self and ordinary outgoing-message synchronization use this
+same idempotent mailbox path.
+
+### GET /api/chat/messages?deviceId=N&limit=100
+
+Drain the device's mailbox, oldest first (max 500/page): `{ "envelopes": [{ "id", "sender", "senderDeviceId", "envelopeType", "suite", "content", "serverTimestamp" }], "more": bool }`. Envelopes stay stored until acked.
+
+### POST /api/chat/messages/ack?deviceId=N
+
+`{ "ids": ["<uuid>", …] }` → deletes processed envelopes; returns `{ "acked": n }`.
+
+### POST /api/chat/ws-ticket?deviceId=N
+
+Mint a random, one-time browser WebSocket ticket bound to the authenticated user and chat device. The ticket expires in 60 seconds and is returned as `{ "ticket", "expiresAt" }`.
+
+### GET /api/chat/ws?ticket=…
+
+WebSocket. Browsers use the one-time ticket; native clients instead send `Authorization: Bearer …` with `?deviceId=N`. Reusable JWT query parameters are rejected. Server → client JSON frames: `{ "type": "drainMailbox" }` once on connect (fetch the backlog over REST), then `{ "type": "envelope", "envelope": {…} }` per newly arrived message. Acks stay on REST — the mailbox is the source of truth.
 
 ---
 
-### GET /api/fed/invites/:token
+## Chat Federation — Server-to-Server Endpoints
 
-Retrieve federated share invite metadata by token. The token itself is the credential — there is no auth header.
+Chat federation is present only when the administrator configures a persistent
+v2 identity. Admission follows the global stop plus Chat's `disabled`,
+`allowlist`, `blocklist`, or `open` mode, trust floor, and directional domain
+rules. Policy is evaluated before DNS/discovery or delivery. Admitted traffic
+must then pass signed discovery and complete identity-history verification,
+persistent pin/rotation/quarantine policy, public-HTTPS and DNS/SSRF checks,
+strict RFC 9421/9530 request and response signatures, replay reservation,
+request/body bounds, protocol checks, and coarse rate limiting. The normative
+common transport contract is in `docs/federation-protocol.md`.
 
-**Auth:** None
+The v2 Ed25519 signature binds method, authority, path/query, exact-body digest,
+content type, federation version, feature, origin, destination, key ID, nonce,
+and a maximum five-minute lifetime. Authenticated responses bind those request
+components in reverse origin/destination order. A destination mismatch,
+unknown pinned key, bad signature, nonce/content conflict, or invalid time
+window is rejected.
 
-**Response:**
-```json
-{
-  "wrappedKey": "<base64>",
-  "encryptedName": "<base64>",
-  "nameNonce": "<base64>",
-  "canUpload": true,
-  "canDelete": false,
-  "uploadQuotaBytes": null
-}
-```
+### GET /.well-known/kutup/federation.json
 
-`wrappedKey` is the collection key sealed to the recipient's NaCl box public key by the original sharer. The recipient unseals it with their own private key.
+Signed v2 discovery containing the canonical server, delegated `apiBase`,
+typed capabilities, embedded current identity document and hash, validity
+window, and signature. Returns `404` when the shared identity is absent, the
+global stop is active, or both Chat and Drive are disabled. An individually
+disabled feature is omitted from `capabilities` while the other remains
+discoverable. Production discovery and delegated API targets require public
+HTTPS.
+
+### GET /.well-known/kutup/federation/identity/{sequence}.json
+
+Return one immutable identity document from the locally verified, contiguous
+history. Genesis is sequence zero. Every rotation hash-links its predecessor
+and is signed by both old and new keys.
+
+### GET /api/fed/chat/users/{username}/keys?transparencyTreeSize=N
+
+Authenticated server-to-server directory lookup. Returns the remote user's
+account-signed device manifest, remote transparency proof, and replay-safe
+last-resort PQ bundles. It deliberately does not consume one-time prekeys, so a
+replayed signed read cannot exhaust the remote recipient's pool. The signed URI
+binds the caller's highest verified remote checkpoint.
+
+### GET /api/fed/chat/users/{username}/profile/{version}
+
+Authenticated proxy lookup for an opaque encrypted profile. The server-to-
+server signature authenticates and destination-binds the originating
+homeserver; the separate profile access-key header remains the end-to-end
+capability. Wrong capabilities return `404`.
+
+### POST /api/fed/chat/messages
+
+Receive one signed, ordered `FederatedChatTransaction`. The receiver enforces a
+contiguous per-origin sequence, exact recipient device set, canonical
+origin/sender and destination/recipient binding, and transaction-id replay
+safety. Mailbox rows, the stored idempotent response, and the sequence
+high-water mark commit atomically. Exact replay returns the stored response;
+device mismatch or sequence gap returns typed `409` data so the origin can
+refresh/re-encrypt or replay the missing retained transaction.
 
 ---
 
-### GET /api/fed/shares/:token/files
+## Drive Federation — Local Authenticated Endpoints
 
-List files in a federated share. Called by remote server when proxying for its local user.
+These routes let a local browser interact with a remote encrypted share. The
+local server performs all remote discovery, admission, identity pinning, and
+message authentication; browsers never submit a remote API URL.
 
-**Auth:** None (token provides access)
+### POST /api/drive/federation/shares
 
----
-
-### GET /api/fed/shares/:token/files/:fileId/download
-
-Download a file from a federated share.
-
-**Auth:** None (token provides access)
-
----
-
-### POST /api/fed/shares/:token/files
-
-Upload a file to a federated share (if permission allows).
-
-**Auth:** None (token provides access)
-**Body:** Multipart (same fields as `POST /api/files/upload`)
-
----
-
-### DELETE /api/fed/shares/:token/files/:fileId
-
-Delete a file from a federated share (if permission allows).
-
-**Auth:** None (token provides access)
-
----
-
-## Federation Proxy — Authenticated Endpoints
-
-These endpoints are called by the local Kutup client to interact with collections shared from remote servers.
-
-### POST /api/fed-proxy/incoming
-
-Accept a federated share invite. The client only needs to paste the invite URL — this server parses out the remote host + token, calls the remote `GET /api/fed/invites/{token}`, and persists the resulting wrapped key.
+Accept an invite after the browser parses its fragment.
 
 **Auth:** Bearer JWT
 
-**Request body:**
 ```json
 {
-  "inviteUrl": "https://other.kutup.example.com/invite/<token>"
+  "server": "sharer.example.com",
+  "capability": "<base64url>"
 }
 ```
 
-**Response:** `201 Created`
+The server fetches the signed invite and verifies that its source domain and
+intended recipient username match the authenticated local account. Success is
+`201 Created` with:
+
 ```json
 {
   "id": "<uuid>",
-  "remoteServer": "https://other.kutup.example.com",
+  "remoteDomain": "sharer.example.com",
   "encryptedCollectionKey": "<base64>",
   "encryptedName": "<base64>",
   "nameNonce": "<base64>",
   "canUpload": true,
   "canDelete": false,
-  "uploadQuotaBytes": null
+  "uploadQuotaBytes": null,
+  "createdAt": "<RFC3339>"
 }
 ```
 
-`502` if the remote server is unreachable or returns invalid invite data.
+The retained remote capability is secret server-side state and is omitted from
+all responses.
+
+### GET /api/drive/federation/shares
+
+List the authenticated user's accepted remote shares. Returns the same public
+shape as acceptance, without any capability.
+
+### DELETE /api/drive/federation/shares/:shareId
+
+Remove one accepted remote share for the authenticated user. Returns `204`.
+
+### GET /api/drive/federation/shares/:shareId/files
+
+Return the signed and verified remote ciphertext metadata list.
+
+### GET /api/drive/federation/shares/:shareId/files/:fileId/content
+
+Stream remote ciphertext. The local server first spools and hashes the complete
+remote response, verifies its signed RFC 9530 digest under the pinned peer key,
+then releases the verified stream to the browser.
+
+### POST /api/drive/federation/shares/:shareId/files
+
+Upload encrypted multipart fields (`encryptedMetadata`, `metadataNonce`,
+`encryptedFileKey`, `fileKeyNonce`, and `file`). Exact retries are idempotent
+and return the same `201 { "id": "<uuid>" }` result.
+
+### DELETE /api/drive/federation/shares/:shareId/files/:fileId
+
+Delete a remote ciphertext object when `canDelete` permits it. Exact retries
+are idempotent and return `204`.
 
 ---
 
-### GET /api/fed-proxy/incoming
+## Drive Federation — Server-to-Server Endpoints
 
-List all accepted incoming federated shares for the current user.
+All `/api/fed/drive/*` routes require the unified `drive.v1` RFC 9421/9530
+request signature and return an authenticated response. Except for user lookup,
+they also require `Kutup-Share-Capability`; the capability is checked only
+after the request's canonical origin domain has authenticated, and the share
+must be bound to that same domain.
 
-**Auth:** Bearer JWT
+### GET /api/fed/drive/users/:username
 
----
+Return `{ "username", "server", "publicKey" }` for one active local user.
 
-### DELETE /api/fed-proxy/incoming/:shareId
+### GET /api/fed/drive/invite
 
-Remove an incoming federated share.
+Return the encrypted collection metadata, wrapped key, intended recipient, and
+grants for the capability-authorized share.
 
-**Auth:** Bearer JWT
+### GET /api/fed/drive/files
 
----
+List ciphertext file metadata for the capability-authorized collection.
 
-### GET /api/fed-proxy/:shareId/files
+### GET /api/fed/drive/files/:fileId/content
 
-List files in an incoming federated share. Proxies the request to the remote server.
+Stream ciphertext with its precomputed signed content digest and exact length.
 
-**Auth:** Bearer JWT
+### POST /api/fed/drive/files
 
----
+Store one encrypted multipart upload. The exact ciphertext is hashed while it
+is spooled and the digest is persisted with the file row. A stable request ID
+plus authenticated request hash provides persistent idempotency.
 
-### GET /api/fed-proxy/:shareId/files/:fileId/download
+### DELETE /api/fed/drive/files/:fileId
 
-Download a file from an incoming federated share. Proxied to the remote server.
+Delete one ciphertext file under a persistent idempotent mutation result.
 
-**Auth:** Bearer JWT
-
----
-
-### POST /api/fed-proxy/:shareId/upload
-
-Upload a file to an incoming federated share (if permitted). Proxied to the remote server.
-
-**Auth:** Bearer JWT
-
----
-
-### DELETE /api/fed-proxy/:shareId/files/:fileId
-
-Delete a file in an incoming federated share (if permitted). Proxied to the remote server.
-
-**Auth:** Bearer JWT
+The removed `/api/fed/users`, `/api/fed/invites/*`, `/api/fed/shares/*`,
+`/api/fed-proxy/*`, `/api/collections/:id/share-federated`, and
+`/api/collections/fed-pubkey` routes have no compatibility handlers and return
+`404`.
 
 ---
 
@@ -1053,7 +1234,11 @@ The admin audit-log feed, newest first.
 
 **Auth:** Bearer JWT (admin)
 
-**Query parameters:** `limit` (1–100, default 50) · `before` (cursor: return entries with `id` lower than this — pass the previous page's `nextBefore`).
+**Query parameters:** `limit` (1–100, default 50) · `before` (cursor: return
+entries with `id` lower than this — pass the previous page's `nextBefore`) ·
+`actionPrefix` (for example `federation.`) · `domain` (an exact canonical
+federation domain in the structured event payload). Filters compose and the
+cursor remains stable.
 
 **Response:**
 ```json
@@ -1075,7 +1260,21 @@ The admin audit-log feed, newest first.
 }
 ```
 
-Actions: `user.create`, `user.update` (payload carries a `changes` object with only the fields that were modified), `user.delete`, `user.2fa_disable`, `settings.update`. `adminEmail`/`targetEmail` are the live identities and become `null` once the referenced account is deleted — the `payload` snapshot keeps the trail readable. `nextBefore` is non-null while older pages remain.
+Actions include user/settings changes plus `federation.policy.*`,
+`federation.rule.*`, `federation.peer.*`, and `federation.identity.*`. Identity
+pin, authenticated rotation, quarantine, verification, and break-glass re-pin
+events retain full fingerprints, sequences, and reasons but never private
+signing keys or Drive capabilities. `adminEmail`/`targetEmail` are the live
+identities and become `null` once the referenced account is deleted — the
+`payload` snapshot keeps the trail readable. `nextBefore` is non-null while
+older pages remain.
+
+### GET /api/admin/activity/export
+
+Export the same filtered audit stream as spreadsheet-safe UTF-8 CSV. It accepts
+`before`, `actionPrefix`, and `domain`; `limit` is clamped to 1–5000 and defaults
+to 1000. Cells beginning with spreadsheet formula markers are neutralized and
+the response is downloaded as `kutup-admin-audit.csv`.
 
 ---
 
@@ -1108,6 +1307,177 @@ Update global server settings.
 ```
 
 **Response:** Same shape as `GET /api/admin/settings`.
+
+---
+
+### GET /api/admin/federation
+
+Return the unified federation identity, feature policies, domain rules, and
+persisted peer trust/discovery state. Rules remain visible while inactive.
+
+**Auth:** Bearer JWT (admin)
+
+```json
+{
+  "configured": true,
+  "serverName": "chat.example.com",
+  "fingerprint": "64-lowercase-hex-characters",
+  "fingerprintDisplay": "grouped full fingerprint",
+  "identitySequence": 0,
+  "capabilities": ["chat.v1", "drive.v1", "identity.v1"],
+  "globalEnabled": true,
+  "features": [
+    { "feature": "chat", "mode": "allowlist", "minimumTrust": "verified" },
+    { "feature": "drive", "mode": "allowlist", "minimumTrust": "verified" }
+  ],
+  "rules": [
+    {
+      "domain": "friend.example",
+      "feature": "chat",
+      "inbound": "allow",
+      "outbound": "allow",
+      "trustRequirement": "inherit",
+      "createdAt": "2026-07-20T10:00:00Z",
+      "updatedAt": "2026-07-20T10:00:00Z"
+    }
+  ],
+  "peers": [
+    {
+      "domain": "friend.example",
+      "trust": "tofu",
+      "sequence": 0,
+      "fingerprint": "64-lowercase-hex-characters",
+      "fingerprintDisplay": "grouped full fingerprint",
+      "apiBase": "https://friend.example",
+      "capabilities": ["chat.v1", "drive.v1", "identity.v1"],
+      "firstSeenAt": "2026-07-20T10:00:00Z",
+      "lastSeenAt": "2026-07-20T10:00:00Z",
+      "verifiedAt": null,
+      "discoveryExpiresAt": "2026-07-20T11:00:00Z",
+      "quarantineReason": null,
+      "pendingFingerprint": null,
+      "lastDiscoveryError": null,
+      "diagnostics": {
+        "chatPendingTransactions": 0,
+        "chatMismatchTransactions": 0,
+        "driveIncomingShares": 1,
+        "driveOutgoingShares": 0
+      }
+    }
+  ],
+  "operational": {
+    "peerTotal": 1,
+    "tofuPeers": 1,
+    "verifiedPeers": 0,
+    "quarantinedPeers": 0,
+    "chatPendingTransactions": 0,
+    "chatMismatchTransactions": 0,
+    "oldestChatPendingAt": null,
+    "driveIncomingShares": 1,
+    "driveOutgoingShares": 0,
+    "activeReplayReservations": 0
+  }
+}
+```
+
+`configured` reports whether the persistent v2 identity exists. Fingerprints
+are always returned in full; the grouped form is display-only.
+
+### PUT /api/admin/federation
+
+Update the emergency stop and one feature policy:
+
+```json
+{
+  "globalEnabled": true,
+  "feature": "chat",
+  "mode": "disabled|allowlist|blocklist|open",
+  "minimumTrust": "tofu|verified"
+}
+```
+
+Returns the full control-plane response, wakes the Chat outbox, and audits
+`federation.policy.update`. The global stop denies every feature. A disabled
+Chat feature also hides public discovery. `allowlist` requires an explicit
+directional allow, `blocklist` permits inherited directions except explicit
+blocks, and `open` permits every admitted direction. Admission never bypasses
+the effective trust requirement.
+
+### PUT /api/admin/federation/rules/:feature/:domain
+
+Create or replace a rule for `chat` or `drive` and a canonical lowercase DNS
+domain. The local domain cannot be added.
+
+```json
+{
+  "inbound": "inherit|allow|block",
+  "outbound": "inherit|allow|block",
+  "trustRequirement": "inherit|tofu|verified"
+}
+```
+
+Returns the full response, wakes pending Chat delivery for the domain, and
+audits `federation.rule.upsert`.
+
+### DELETE /api/admin/federation/rules/:feature/:domain
+
+Delete the feature-scoped rule. Returns the full response, or `404` when the
+rule does not exist, wakes pending Chat delivery, and audits
+`federation.rule.delete`.
+
+### POST /api/admin/federation/peers/:domain/verify
+
+Promote the current TOFU pin to verified trust after comparing its full
+fingerprint through an independent channel. Body:
+
+```json
+{ "fingerprint": "64-lowercase-hex-characters" }
+```
+
+### POST /api/admin/federation/peers/:domain/retry
+
+Evict positive and negative discovery caches, retry authenticated discovery
+through either enabled Chat or Drive capability, and wake pending Chat
+delivery. The returned control-plane state exposes the new discovery result or
+`lastDiscoveryError`. The outcome is audited as `federation.peer.retry`.
+
+### POST /api/admin/federation/peers/retry
+
+Retry up to 100 selected canonical domains independently. One failed peer does
+not abort the others.
+
+```json
+{ "domains": ["one.example", "two.example"] }
+```
+
+The response contains `{domain, refreshed, error}` per peer and the complete
+batch result is retained in `federation.peer.retry-bulk` audit evidence.
+
+### GET /api/admin/federation/peers/:domain/evidence
+
+Return the immutable accepted, superseded, and quarantined signed identity
+documents preserved by the generic trust store. Each entry includes sequence,
+document hash, full fingerprint, acceptance state, recorded time, and the exact
+public signed document. The response also identifies the current and pending
+document hashes and quarantine reason. Results are newest-first and bounded to
+200 documents with `truncated: true` when older history exists. This endpoint
+does not expose federation private keys or Drive capabilities.
+
+### POST /api/admin/federation/peers/:domain/repin
+
+Break-glass replacement for a quarantined competing identity only. It requires
+the exact old fingerprint, pending new fingerprint, and domain:
+
+```json
+{
+  "oldFingerprint": "64-lowercase-hex-characters",
+  "newFingerprint": "64-lowercase-hex-characters",
+  "confirmDomain": "friend.example"
+}
+```
+
+The re-pin is persisted with administrator identity and old/new evidence; it
+is not an automatic fallback for failed rotation.
 
 ---
 

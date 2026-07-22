@@ -2,10 +2,11 @@ import { useTranslation } from 'react-i18next'
 import { Icon, ICONS } from '@/components/mobile/Icon'
 import { Surface } from '@/components/ui/surface'
 import { useAdminSettings, useUpdateAdminSettings } from '@/api/hooks/useAdmin'
+import { AdminFederationPolicyCard } from '@/components/admin/AdminFederationPolicyCard'
 
 /**
- * MobileAdminSettingsTab — kutup's admin-settings surface today is just a
- * single boolean (`registrationEnabled`), so this tab is short:
+ * MobileAdminSettingsTab — responsive controls for registration and the
+ * unified federation control plane.
  *
  *   Registration
  *     ▢ Public registration   [switch]
@@ -62,6 +63,8 @@ export function MobileAdminSettingsTab() {
           </button>
         </div>
       </Surface>
+
+      <AdminFederationPolicyCard compact className="mb-4" />
 
       <p className="text-[12px] text-text-tertiary px-1">
         {t(

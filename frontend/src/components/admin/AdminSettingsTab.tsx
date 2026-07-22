@@ -3,17 +3,19 @@ import { Icon, ICONS } from '@/components/mobile/Icon'
 import { useAdminSettings, useUpdateAdminSettings, useAdminStats } from '@/api/hooks/useAdmin'
 import { formatBytes } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { AdminFederationPolicyCard } from '@/components/admin/AdminFederationPolicyCard'
+import { AdminTransparencyCard } from '@/components/admin/AdminTransparencyCard'
 
 /**
  * AdminSettingsTab — Settings surface for the desktop admin redesign.
  *
- * Honest cut: kutup's `/admin/settings` only exposes `registrationEnabled`
- * today. The design's other settings groups (Defaults / Security toggles /
- * Danger zone) need backend support before they can ship. Hidden here so
- * we don't render lying UI.
+ * The page combines general site settings with the unified federation control
+ * plane. Defaults / Security toggles / Danger zone still need backend
+ * support and remain hidden.
  *
  * What IS rendered:
  *  - **Registration** — single toggle, wired to `useUpdateAdminSettings`.
+ *  - **Federation** — per-feature modes, trust floors, peer trust, and domain rules.
  *  - **Storage backend** — driver (static label, SeaweedFS S3-compatible),
  *    a real "Storage used: X of Y · Z free" row + bar if the new
  *    `storageTotalBytes` value is configured (env-var `STORAGE_TOTAL_BYTES`),
@@ -66,6 +68,10 @@ export function AdminSettingsTab() {
           />
         </SettingsRow>
       </SettingsCard>
+
+      <AdminFederationPolicyCard className="mb-5" />
+
+      <AdminTransparencyCard />
 
       {/* Storage backend */}
       <SettingsCard

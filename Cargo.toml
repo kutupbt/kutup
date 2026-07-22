@@ -13,7 +13,11 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-exclude = ["src-tauri"]
+# Excluded like src-tauri: kutup-chat-core pulls the whole libsignal dependency
+# tree (git, ~large) and needs protoc at build time, so it must not tax the
+# app/server/CLI `cargo build`/`cargo test`. It is its own standalone workspace
+# and depends on kutup-chat-proto by path. The native/wasm chat clients link it.
+exclude = ["src-tauri", "crates/kutup-chat-core", "crates/kutup-client-ffi", "fuzz"]
 
 [workspace.package]
 edition = "2021"
@@ -69,6 +73,10 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit", "catch-panic", "normalize-path"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-opentelemetry = "0.33"
+opentelemetry = { version = "0.32", features = ["metrics", "trace"] }
+opentelemetry_sdk = { version = "0.32", features = ["metrics", "trace"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "tls-ring", "metrics", "trace"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 # S3 (SeaweedFS) — replaces aws-sdk-go-v2.
 aws-config = "1"
@@ -79,10 +87,11 @@ tokio-util = { version = "0.7", features = ["io"] }
 # Split the collab WebSocket into independent read/write halves.
 futures-util = { version = "0.3", default-features = false }
 tempfile = "3"
+multer = "3"
 # OpenAPI — replaces swaggo/swag. The interactive swagger-ui crate downloads its UI
 # bundle from GitHub at build time, which breaks offline/sandboxed builds; we generate
 # the spec with utoipa and serve the raw JSON instead (see docs/roadmap.md).
-utoipa = { version = "5", features = ["axum_extras", "time", "uuid", "preserve_order"] }
+utoipa = { version = "5", features = ["axum_extras", "time", "uuid", "preserve_order", "repr"] }
 # Auth + 2FA (server slice 2).
 # jsonwebtoken v10 ships no crypto backend by default — `rust_crypto` keeps the
 # pure-Rust posture (the alternative, `aws_lc_rs`, drags in a C/asm build).

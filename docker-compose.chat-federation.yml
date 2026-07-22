@@ -1,0 +1,253 @@
+# Isolated two-server unified Chat + Drive federation integration topology.
+# Run it through scripts/test-chat-federation.sh; it uses a dedicated Compose
+# project and tmpfs databases, so it cannot alter the ordinary development stack.
+services:
+  postgres-a:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: kutup
+      POSTGRES_USER: kutup
+      POSTGRES_PASSWORD: federation_test_a
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kutup"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  postgres-b:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: kutup
+      POSTGRES_USER: kutup
+      POSTGRES_PASSWORD: federation_test_b
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kutup"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  seaweedfs-master:
+    image: chrislusf/seaweedfs:latest
+    command: master -mdir=/data -defaultReplication=000
+    tmpfs:
+      - /data
+
+  seaweedfs-volume:
+    image: chrislusf/seaweedfs:latest
+    command: volume -mserver=seaweedfs-master:9333 -dir=/data -max=10
+    tmpfs:
+      - /data
+    depends_on:
+      - seaweedfs-master
+
+  seaweedfs-filer:
+    image: chrislusf/seaweedfs:latest
+    command: filer -master=seaweedfs-master:9333
+    depends_on:
+      - seaweedfs-master
+      - seaweedfs-volume
+
+  seaweedfs-s3:
+    image: chrislusf/seaweedfs:latest
+    command: s3 -filer=seaweedfs-filer:8888 -port=8333 -config=/etc/seaweedfs/s3.json
+    volumes:
+      - ./seaweedfs-s3.json:/etc/seaweedfs/s3.json:ro
+    depends_on:
+      - seaweedfs-filer
+
+  seaweedfs-init-a:
+    image: amazon/aws-cli:latest
+    environment:
+      AWS_ACCESS_KEY_ID: kutup
+      AWS_SECRET_ACCESS_KEY: kutup_dev_s3_secret
+      AWS_DEFAULT_REGION: us-east-1
+      S3_BUCKET: kutup-federation-a
+    volumes:
+      - ./seaweedfs-init.sh:/seaweedfs-init.sh:ro
+      - ./lifecycle.json:/etc/kutup/lifecycle.json:ro
+    entrypoint: ["sh", "/seaweedfs-init.sh"]
+    depends_on:
+      - seaweedfs-s3
+
+  seaweedfs-init-b:
+    image: amazon/aws-cli:latest
+    environment:
+      AWS_ACCESS_KEY_ID: kutup
+      AWS_SECRET_ACCESS_KEY: kutup_dev_s3_secret
+      AWS_DEFAULT_REGION: us-east-1
+      S3_BUCKET: kutup-federation-b
+    volumes:
+      - ./seaweedfs-init.sh:/seaweedfs-init.sh:ro
+      - ./lifecycle.json:/etc/kutup/lifecycle.json:ro
+    entrypoint: ["sh", "/seaweedfs-init.sh"]
+    depends_on:
+      - seaweedfs-s3
+
+  backend-a:
+    image: ${KUTUP_FEDERATION_IMAGE:-kutup-federation-server:local}
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    environment:
+      DATABASE_URL: postgres://kutup:federation_test_a@postgres-a:5432/kutup?sslmode=disable
+      JWT_SECRET: federation-test-a-jwt-secret-at-least-32-bytes
+      S3_ENDPOINT: http://seaweedfs-s3:8333
+      S3_ACCESS_KEY: kutup
+      S3_SECRET_KEY: kutup_dev_s3_secret
+      S3_BUCKET: kutup-federation-a
+      S3_REGION: us-east-1
+      APP_ENV: test
+      SERVER_URL: http://a.test
+      ALLOWED_ORIGINS: http://127.0.0.1:39081
+      ADMIN_ACCOUNT: federation-admin-a@example.test:admina:federation-admin-temp
+      SEAWEEDFS_MASTER_URL: ""
+      FEDERATION_SERVER_NAME: a.test
+      FEDERATION_SIGNING_KEY: VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=
+      FEDERATION_TEST_ALLOW_PRIVATE: "true"
+      CHAT_TRANSPARENCY_SIGNING_KEY: MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM=
+      CHAT_TRANSPARENCY_WITNESSES: witness-a.test=xoImN8fTEOxXYnvgC6JZ0lN0n0qvZERwz/vlOjX3MkI=
+      CHAT_TRANSPARENCY_WITNESS_ENDPOINTS: witness-a.test=https://witness-a.test/v1/view
+      CHAT_TRANSPARENCY_WITNESS_QUORUM: "1"
+      CHAT_REMOTE_TRANSPARENCY_MIN_QUORUM: "1"
+      CHAT_SEALED_SENDER_POLICY: '{"policyVersion":1,"canonicalDomain":"a.test","suite":1,"roots":[{"rootId":"6bd42eda5a2a7dea39e542961af827b14066a65649c9867437f07d882f076a2b","publicKey":"Bcgj9bmc+8OqKwWos4IzA9hc2cLItxOTZPcKjA7PptBi","activatesAt":0}],"serverCertificates":[{"certificateId":1001,"rootId":"6bd42eda5a2a7dea39e542961af827b14066a65649c9867437f07d882f076a2b","certificate":"CiYI6QcSIQUvslThY0S8VFBEbhLtBC9jvpme+XGdf4C8qn7yNg3VchJAGA7i+/Upk2Hmm//XaKvThXf8anTsZyzDv9DGD5lsprF1MqI75xa36Xpi2ML7hHM3cOlmOer2jUGR9XA1/t1DjQ==","activatesAt":0,"expiresAt":4102444800}],"senderCertificateLifetimeSeconds":86400,"maximumClockSkewSeconds":300,"directChatSuite":1}'
+      CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY: mCqE4wC1lUNmYH3ToO60pCl4QGu8STnZJUI6OhnLNGA=
+      RATE_LIMIT_LOGIN_PER_MIN: 1000
+      RATE_LIMIT_PREFLIGHT_PER_MIN: 1000
+      RATE_LIMIT_CHAT_KEYS_PER_MIN: 1000
+      RATE_LIMIT_CHAT_KEYS_IP_PER_MIN: 1000
+      RATE_LIMIT_REGISTER_PER_HOUR: 1000
+      RATE_LIMIT_FED_USERS_PER_MIN: 1000
+    depends_on:
+      postgres-a:
+        condition: service_healthy
+      seaweedfs-init-a:
+        condition: service_completed_successfully
+
+  backend-b:
+    image: ${KUTUP_FEDERATION_IMAGE:-kutup-federation-server:local}
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    environment:
+      DATABASE_URL: postgres://kutup:federation_test_b@postgres-b:5432/kutup?sslmode=disable
+      JWT_SECRET: federation-test-b-jwt-secret-at-least-32-bytes
+      S3_ENDPOINT: http://seaweedfs-s3:8333
+      S3_ACCESS_KEY: kutup
+      S3_SECRET_KEY: kutup_dev_s3_secret
+      S3_BUCKET: kutup-federation-b
+      S3_REGION: us-east-1
+      APP_ENV: test
+      SERVER_URL: http://b.test
+      ALLOWED_ORIGINS: http://127.0.0.1:39082
+      ADMIN_ACCOUNT: federation-admin-b@example.test:adminb:federation-admin-temp
+      SEAWEEDFS_MASTER_URL: ""
+      FEDERATION_SERVER_NAME: b.test
+      FEDERATION_SIGNING_KEY: ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=
+      FEDERATION_TEST_ALLOW_PRIVATE: "true"
+      CHAT_TRANSPARENCY_SIGNING_KEY: REREREREREREREREREREREREREREREREREREREREREQ=
+      CHAT_TRANSPARENCY_WITNESSES: witness-b.test=NLTZBDFWy23PC+sKKUm3VZyUDSvLbb6MU6mzAnjjp0Y=
+      CHAT_TRANSPARENCY_WITNESS_ENDPOINTS: witness-b.test=https://witness-b.test/v1/view
+      CHAT_TRANSPARENCY_WITNESS_QUORUM: "1"
+      CHAT_REMOTE_TRANSPARENCY_MIN_QUORUM: "1"
+      CHAT_SEALED_SENDER_POLICY: '{"policyVersion":1,"canonicalDomain":"b.test","suite":1,"roots":[{"rootId":"5ed789aa5eecb1f3ed0796c63a239d216e60b9a35a71764ecc2ffab2a2056d87","publicKey":"BZ6TyjkRS/lF8WzpRMUf6+RcHa8Fnt71SmksHdExK6o2","activatesAt":0}],"serverCertificates":[{"certificateId":2001,"rootId":"5ed789aa5eecb1f3ed0796c63a239d216e60b9a35a71764ecc2ffab2a2056d87","certificate":"CiYI0Q8SIQW7kkXV3BgpWEU5E+TvYkY4xLesorhLDnmQt6YjDx7kTxJAUAc1No6JDsOpAscz0FQrlL9GwEs+qqp8DsxeceeA7ITIlXi4XKtg7s0oavo190YvKxTnId8CuSbB0VoDICCVjw==","activatesAt":0,"expiresAt":4102444800}],"senderCertificateLifetimeSeconds":86400,"maximumClockSkewSeconds":300,"directChatSuite":1}'
+      CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY: GOLN7fF5VgnzycQY39P0VdvANiJR2doFH2xaatQLilM=
+      RATE_LIMIT_LOGIN_PER_MIN: 1000
+      RATE_LIMIT_PREFLIGHT_PER_MIN: 1000
+      RATE_LIMIT_CHAT_KEYS_PER_MIN: 1000
+      RATE_LIMIT_CHAT_KEYS_IP_PER_MIN: 1000
+      RATE_LIMIT_REGISTER_PER_HOUR: 1000
+      RATE_LIMIT_FED_USERS_PER_MIN: 1000
+    depends_on:
+      postgres-b:
+        condition: service_healthy
+      seaweedfs-init-b:
+        condition: service_completed_successfully
+
+  witness-a:
+    image: ${KUTUP_FEDERATION_IMAGE:-kutup-federation-server:local}
+    entrypoint: ["/usr/local/bin/kutup-transparency-witness"]
+    environment:
+      KUTUP_WITNESS_TARGET: http://backend-a:3000/
+      KUTUP_WITNESS_ALLOW_HTTP: "1"
+      KUTUP_WITNESS_ID: witness-a.test
+      KUTUP_WITNESS_SIGNING_KEY: VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=
+      KUTUP_WITNESS_OPERATOR_KEY_ID: 6c8f8607dbe87077a62a2990ce07d94aaf749df76f87b98eb786a6d10f030765
+      KUTUP_WITNESS_OPERATOR_PUBLIC_KEY: F8t5+ytBIPKx7GXkGY1uCLKOgT/rAeSkAIObheGAgM4=
+      KUTUP_WITNESS_STATE_FILE: /state/checkpoint.json
+      KUTUP_WITNESS_INTERVAL_SECONDS: "2"
+      KUTUP_WITNESS_LISTEN: 0.0.0.0:3001
+    tmpfs:
+      - /state
+    depends_on:
+      - backend-a
+
+  witness-b:
+    image: ${KUTUP_FEDERATION_IMAGE:-kutup-federation-server:local}
+    entrypoint: ["/usr/local/bin/kutup-transparency-witness"]
+    environment:
+      KUTUP_WITNESS_TARGET: http://backend-b:3000/
+      KUTUP_WITNESS_ALLOW_HTTP: "1"
+      KUTUP_WITNESS_ID: witness-b.test
+      KUTUP_WITNESS_SIGNING_KEY: ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=
+      KUTUP_WITNESS_OPERATOR_KEY_ID: b14705888f4a68391a09aa5968dd25d16c3bba7bb3b6d15bf354d8dcaae85a47
+      KUTUP_WITNESS_OPERATOR_PUBLIC_KEY: 11l5O7wTooGagnx2rbb7qKSa7gB/SfLQmS2ZuCWtLEg=
+      KUTUP_WITNESS_STATE_FILE: /state/checkpoint.json
+      KUTUP_WITNESS_INTERVAL_SECONDS: "2"
+      KUTUP_WITNESS_LISTEN: 0.0.0.0:3001
+    tmpfs:
+      - /state
+    depends_on:
+      - backend-b
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+
+  edge-a:
+    image: nginx:alpine
+    environment:
+      BACKEND: backend-a
+      FRONTEND: frontend
+    ports:
+      - "127.0.0.1:${KUTUP_FED_A_PORT:-39081}:80"
+    volumes:
+      - ./tests/chat-federation/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    networks:
+      default:
+        aliases:
+          - a.test
+    depends_on:
+      - backend-a
+      - frontend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/api/health"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+
+  edge-b:
+    image: nginx:alpine
+    environment:
+      BACKEND: backend-b
+      FRONTEND: frontend
+    ports:
+      - "127.0.0.1:${KUTUP_FED_B_PORT:-39082}:80"
+    volumes:
+      - ./tests/chat-federation/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    networks:
+      default:
+        aliases:
+          - b.test
+    depends_on:
+      - backend-b
+      - frontend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/api/health"]
+      interval: 1s
+      timeout: 3s
+      retries: 60

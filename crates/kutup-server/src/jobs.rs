@@ -11,6 +11,7 @@ use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::chat_hub::ChatHub;
 use crate::storage::StorageService;
 
 // --- intervals / retention policy (mirror the Go defaults) ---
@@ -21,11 +22,25 @@ const QUOTA_RECONCILE_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 const UPLOADS_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 const UPLOADS_STALE_AFTER_SECS: i64 = 24 * 3600;
 const TRASH_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
+const CHAT_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
+
+#[derive(Clone, Copy)]
+pub struct ChatMaintenancePolicy {
+    pub mailbox_retention_days: i64,
+    pub send_retention_days: i64,
+    pub device_expiry_days: i64,
+}
 
 /// Spawns the lifetime background jobs (version cleanup, quota reconcile, uploads sweeper,
 /// trash retention). Each runs once immediately, then on its interval.
 /// `trash_retention_days == 0` disables the trash sweeper.
-pub fn spawn_all(pool: PgPool, storage: StorageService, trash_retention_days: i64) {
+pub fn spawn_all(
+    pool: PgPool,
+    storage: StorageService,
+    trash_retention_days: i64,
+    chat: ChatMaintenancePolicy,
+    chat_hub: ChatHub,
+) {
     let (p1, s1) = (pool.clone(), storage.clone());
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(VERSION_CLEANUP_INTERVAL);
@@ -52,6 +67,14 @@ pub fn spawn_all(pool: PgPool, storage: StorageService, trash_retention_days: i6
             }
         });
     }
+    let chat_pool = pool.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(CHAT_SWEEP_INTERVAL);
+        loop {
+            tick.tick().await;
+            chat_maintenance_once(&chat_pool, chat, Some(&chat_hub)).await;
+        }
+    });
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(UPLOADS_SWEEP_INTERVAL);
         loop {
@@ -59,6 +82,121 @@ pub fn spawn_all(pool: PgPool, storage: StorageService, trash_retention_days: i6
             uploads_sweep_once(&pool, &storage).await;
         }
     });
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ChatSweepResult {
+    pub mailbox_rows: u64,
+    pub send_rows: u64,
+    pub federation_send_rows: u64,
+    pub federation_transaction_rows: u64,
+    pub devices: u64,
+    pub ws_tickets: u64,
+}
+
+/// Bound offline-ciphertext and idempotency storage and retire abandoned chat
+/// devices. Device deletion cascades its prekeys and mailbox. Its account's
+/// signed manifest intentionally becomes fail-closed until an active device
+/// explicitly authorizes and publishes the removal.
+pub async fn chat_maintenance_once(
+    pool: &PgPool,
+    policy: ChatMaintenancePolicy,
+    chat_hub: Option<&ChatHub>,
+) -> ChatSweepResult {
+    let mut result = ChatSweepResult::default();
+    match sqlx::query("DELETE FROM chat_ws_tickets WHERE expires_at <= now()")
+        .execute(pool)
+        .await
+    {
+        Ok(done) => result.ws_tickets = done.rows_affected(),
+        Err(error) => tracing::warn!("chat maintenance: WS ticket cleanup failed: {error}"),
+    }
+    if policy.mailbox_retention_days > 0 {
+        match sqlx::query(
+            "DELETE FROM chat_mailbox
+             WHERE server_ts < now() - ($1 * interval '1 day')",
+        )
+        .bind(policy.mailbox_retention_days)
+        .execute(pool)
+        .await
+        {
+            Ok(done) => result.mailbox_rows = done.rows_affected(),
+            Err(error) => tracing::warn!("chat maintenance: mailbox retention failed: {error}"),
+        }
+    }
+    if policy.send_retention_days > 0 {
+        match sqlx::query(
+            "DELETE FROM chat_sends
+             WHERE created_at < now() - ($1 * interval '1 day')",
+        )
+        .bind(policy.send_retention_days)
+        .execute(pool)
+        .await
+        {
+            Ok(done) => result.send_rows = done.rows_affected(),
+            Err(error) => tracing::warn!("chat maintenance: send retention failed: {error}"),
+        }
+        match sqlx::query(
+            "DELETE FROM chat_federation_outbox
+             WHERE state = 'delivered'
+               AND updated_at < now() - ($1 * interval '1 day')",
+        )
+        .bind(policy.send_retention_days)
+        .execute(pool)
+        .await
+        {
+            Ok(done) => result.federation_send_rows = done.rows_affected(),
+            Err(error) => {
+                tracing::warn!("chat maintenance: federation send retention failed: {error}")
+            }
+        }
+        match sqlx::query(
+            "DELETE FROM chat_federation_inbound_transactions
+             WHERE created_at < now() - ($1 * interval '1 day')",
+        )
+        .bind(policy.send_retention_days)
+        .execute(pool)
+        .await
+        {
+            Ok(done) => result.federation_transaction_rows = done.rows_affected(),
+            Err(error) => {
+                tracing::warn!("chat maintenance: federation transaction retention failed: {error}")
+            }
+        }
+    }
+    if policy.device_expiry_days > 0 {
+        match sqlx::query_as::<_, (Uuid, i32)>(
+            "DELETE FROM chat_devices
+             WHERE COALESCE(last_seen_at, created_at) < now() - ($1 * interval '1 day')
+             RETURNING user_id, device_id",
+        )
+        .bind(policy.device_expiry_days)
+        .fetch_all(pool)
+        .await
+        {
+            Ok(expired) => {
+                result.devices = expired.len() as u64;
+                if let Some(hub) = chat_hub {
+                    for (user_id, device_id) in expired {
+                        hub.close_device(user_id, device_id);
+                    }
+                }
+            }
+            Err(error) => tracing::warn!("chat maintenance: device expiry failed: {error}"),
+        }
+    }
+    if result != ChatSweepResult::default() {
+        tracing::info!(
+            mailbox_rows = result.mailbox_rows,
+            send_rows = result.send_rows,
+            federation_send_rows = result.federation_send_rows,
+            federation_transaction_rows = result.federation_transaction_rows,
+            devices = result.devices,
+            ws_tickets = result.ws_tickets,
+            "chat maintenance complete"
+        );
+    }
+    result
 }
 
 /// Prunes file_versions rows that are BOTH older than KEEP_DAYS AND beyond KEEP_N per file

@@ -1,0 +1,33 @@
+# kutup-chat-proto — wire types for the federated E2EE chat track ("ileti").
+#
+# Wire data and validation: the envelope formats, the encryption-suite registry,
+# canonical manifest verification, and the prekey/mailbox DTOs shared by the
+# server, clients, and federation layer. No I/O; message ciphertext stays opaque.
+# Design: docs/research/11-federated-chat.md §4.2–§4.3.
+
+[package]
+name = "kutup-chat-proto"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+# The server derives utoipa::ToSchema for the OpenAPI document; wasm/client builds
+# must not drag utoipa in, so it's opt-in.
+openapi = ["dep:utoipa"]
+
+[dependencies]
+kutup-federation-proto = { path = "../kutup-federation-proto" }
+serde = { workspace = true }
+# The inner content schema (content.rs) carries an untyped `body`/`extra` so
+# unknown message kinds from newer clients survive round-trips — that needs
+# serde_json::Value in the public API, not just tests.
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hkdf = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }
+ed25519-dalek = { workspace = true }
+url = { workspace = true }
+utoipa = { workspace = true, optional = true }

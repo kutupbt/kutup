@@ -17,7 +17,7 @@ pub struct Config {
     /// Email of the break-glass admin, derived from `admin_account`. Never demotable/
     /// disableable/deletable via the API/UI. Empty when `ADMIN_ACCOUNT` is unset.
     pub break_glass_admin_email: String,
-    /// e.g. `https://kutup.example.com` — used for federation invite links.
+    /// e.g. `https://kutup.example.com` — published as the federation API base.
     pub server_url: String,
     /// Comma-separated CORS allowlist (`*` allowed in dev only).
     pub allowed_origins: String,
@@ -30,12 +30,46 @@ pub struct Config {
     /// Days a trashed file/folder is kept before the sweeper purges it permanently.
     /// From `TRASH_RETENTION_DAYS`; 0 disables the automatic purge.
     pub trash_retention_days: i64,
+    /// Unacked chat ciphertext retention. `0` disables expiry.
+    pub chat_mailbox_retention_days: i64,
+    /// Send-id idempotency-record retention. `0` disables expiry.
+    pub chat_send_retention_days: i64,
+    /// Chat devices with no authenticated activity for this many days are
+    /// expired with their prekeys/mailbox. `0` disables expiry.
+    pub chat_device_expiry_days: i64,
+    /// Canonical DNS identity for the unified federation v2 stack.
+    pub federation_server_name: String,
+    /// Base64 raw 32-byte Ed25519 seed for unified federation v2.
+    pub federation_signing_key: String,
+    /// Rotation candidate consumed only by the explicit maintenance command.
+    pub federation_next_signing_key: String,
+    /// Test-only HTTP/private-network escape hatch for the v2 stack.
+    pub federation_test_allow_private: bool,
+    /// Base64 raw 32-byte Ed25519 seed for stable transparency checkpoints.
+    /// This key is deliberately distinct from federation request signing.
+    pub chat_transparency_signing_key: String,
+    /// Comma-separated `witness-id=base64-ed25519-public-key` allowlist.
+    pub chat_transparency_witnesses: String,
+    /// Optional comma-separated `witness-id=https://endpoint` overrides.
+    pub chat_transparency_witness_endpoints: String,
+    /// Minimum configured witness attestations clients require on a head.
+    pub chat_transparency_witness_quorum: i64,
+    /// Reject authenticated remote policies below this independent quorum.
+    pub chat_remote_transparency_min_quorum: i64,
+    /// Complete authenticated sealed-sender service policy JSON. It contains
+    /// public roots and root-signed online certificates, never an offline root.
+    pub chat_sealed_sender_policy: String,
+    /// Canonical base64 raw libsignal private key for the active online server
+    /// certificate. This purpose-specific key issues only sender certificates.
+    pub chat_sealed_sender_online_private_key: String,
 }
 
 impl Config {
     /// Loads config from the environment, panicking on missing required vars or
     /// a too-short JWT secret (mirrors the Go `Load`).
     pub fn load() -> Config {
+        let app_env = get_env("APP_ENV", "development");
+        let default_remote_quorum = if app_env == "production" { 1 } else { 0 };
         let cfg = Config {
             database_url: must_env("DATABASE_URL"),
             jwt_secret: must_env("JWT_SECRET"),
@@ -44,7 +78,7 @@ impl Config {
             s3_secret_key: must_env("S3_SECRET_KEY"),
             s3_bucket: get_env("S3_BUCKET", "kutup-files"),
             s3_region: get_env("S3_REGION", "us-east-1"),
-            app_env: get_env("APP_ENV", "development"),
+            app_env,
             admin_account: get_env("ADMIN_ACCOUNT", ""),
             break_glass_admin_email: break_glass_email(&get_env("ADMIN_ACCOUNT", "")),
             server_url: get_env("SERVER_URL", "http://kutup.local"),
@@ -55,6 +89,26 @@ impl Config {
             storage_total_bytes: get_env_i64("STORAGE_TOTAL_BYTES", 0),
             seaweedfs_master_url: get_env("SEAWEEDFS_MASTER_URL", "http://seaweedfs-master:9333"),
             trash_retention_days: get_env_i64("TRASH_RETENTION_DAYS", 30),
+            chat_mailbox_retention_days: get_env_i64("CHAT_MAILBOX_RETENTION_DAYS", 30),
+            chat_send_retention_days: get_env_i64("CHAT_SEND_RETENTION_DAYS", 30),
+            chat_device_expiry_days: get_env_i64("CHAT_DEVICE_EXPIRY_DAYS", 90),
+            federation_server_name: get_env("FEDERATION_SERVER_NAME", ""),
+            federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
+            federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
+            federation_test_allow_private: get_env_bool("FEDERATION_TEST_ALLOW_PRIVATE", false),
+            chat_transparency_signing_key: get_env("CHAT_TRANSPARENCY_SIGNING_KEY", ""),
+            chat_transparency_witnesses: get_env("CHAT_TRANSPARENCY_WITNESSES", ""),
+            chat_transparency_witness_endpoints: get_env("CHAT_TRANSPARENCY_WITNESS_ENDPOINTS", ""),
+            chat_transparency_witness_quorum: get_env_i64("CHAT_TRANSPARENCY_WITNESS_QUORUM", 0),
+            chat_remote_transparency_min_quorum: get_env_i64(
+                "CHAT_REMOTE_TRANSPARENCY_MIN_QUORUM",
+                default_remote_quorum,
+            ),
+            chat_sealed_sender_policy: get_env("CHAT_SEALED_SENDER_POLICY", ""),
+            chat_sealed_sender_online_private_key: get_env(
+                "CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY",
+                "",
+            ),
         };
         if cfg.jwt_secret.len() < 32 {
             panic!("JWT_SECRET must be at least 32 characters long");
@@ -91,6 +145,17 @@ fn get_env(key: &str, fallback: &str) -> String {
 fn get_env_i64(key: &str, fallback: i64) -> i64 {
     match std::env::var(key) {
         Ok(v) if !v.is_empty() => v.parse().ok().filter(|&n| n >= 0).unwrap_or(fallback),
+        _ => fallback,
+    }
+}
+
+fn get_env_bool(key: &str, fallback: bool) -> bool {
+    match std::env::var(key) {
+        Ok(value) if !value.is_empty() => match value.to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" => true,
+            "0" | "false" | "no" => false,
+            _ => fallback,
+        },
         _ => fallback,
     }
 }

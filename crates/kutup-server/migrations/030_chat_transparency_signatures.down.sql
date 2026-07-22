@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS chat_transparency_witness_attestations;
+DROP TABLE IF EXISTS chat_transparency_signed_checkpoints;

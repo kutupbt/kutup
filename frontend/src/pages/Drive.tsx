@@ -23,7 +23,7 @@ import {
   type FolderEntry,
 } from '@/upload/uploadFolder'
 import {
-  encrypt, decrypt, generateKey, encryptStream, decryptStream,
+  encrypt, decrypt, generateKey, encryptStream,
   wrapKeyForRecipient, unwrapKeyFromSender,
   toBase64, fromBase64,
 } from '@/crypto'
@@ -214,7 +214,7 @@ export default function Drive() {
 
       // Load federated incoming shares
       try {
-        const remoteRes = await api.get('/fed-proxy/incoming')
+        const remoteRes = await api.get('/drive/federation/shares')
         const remoteDecrypted: Collection[] = (
           await Promise.all(
             remoteRes.data.map(async (share: any) => {
@@ -260,7 +260,7 @@ export default function Drive() {
     if (!collection.collectionKey) return []
     try {
       const res = collection.isRemote
-        ? await api.get(`/fed-proxy/${collection.remoteShareId}/files`)
+        ? await api.get(`/drive/federation/shares/${collection.remoteShareId}/files`)
         : await api.get(`/collections/${collection.id}/files`)
       const decrypted: DecryptedFile[] = await Promise.all(
         res.data.map(async (file: DecryptedFile) => {
@@ -374,7 +374,7 @@ export default function Drive() {
     const tid = toast.loading(t('drive.toast.zipPreparing'))
     try {
       const res = col.isRemote
-        ? await api.get(`/fed-proxy/${col.remoteShareId}/files`, { signal: ac.signal })
+        ? await api.get(`/drive/federation/shares/${col.remoteShareId}/files`, { signal: ac.signal })
         : await api.get(`/collections/${col.id}/files`, { signal: ac.signal })
 
       const zipFiles = (
@@ -461,7 +461,7 @@ export default function Drive() {
       form.append('encryptedFileKey', toBase64(encFileKey.ciphertext))
       form.append('fileKeyNonce', toBase64(encFileKey.nonce))
       form.append('file', new Blob([encryptedData.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'encrypted')
-      await api.post(`/fed-proxy/${collection.remoteShareId}/upload`, form, {
+      await api.post(`/drive/federation/shares/${collection.remoteShareId}/files`, form, {
         onUploadProgress: (e) => { if (e.total && onProgress) onProgress(e.loaded, e.total) },
       })
       return
@@ -529,32 +529,10 @@ export default function Drive() {
 
   async function handleDownload(file: DecryptedFile) {
     if (!file._fileKey) return
-    // Federated downloads stay on the old buffered path until the
-    // peer's download endpoint can stream — there's no streaming
-    // wire contract over `/fed-proxy/.../download` yet.
-    if (currentFolder?.isRemote) {
-      try {
-        const res = await api.get(
-          `/fed-proxy/${currentFolder.remoteShareId}/files/${file.id}/download`,
-          { responseType: 'arraybuffer' },
-        )
-        const plaintext = await decryptStream(new Uint8Array(res.data), file._fileKey)
-        const blob = new Blob([plaintext.buffer as ArrayBuffer], { type: file.decryptedMimeType ?? 'application/octet-stream' })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = file.decryptedName ?? 'file'
-        a.click()
-        URL.revokeObjectURL(url)
-      } catch {
-        toast.error(t('drive.toast.downloadFailed'))
-      }
-      return
-    }
-
-    // Local files: streaming-decrypt path. RAM stays bounded at
-    // ~10 MB on Chromium (FSA writes per chunk); Firefox / Safari
-    // degrade to a Blob accumulator inside streamDownload.
+    // Local and federated downloads use the same bounded client-side
+    // decrypt-and-save pipeline. The recipient server verifies the remote
+    // server signature and complete ciphertext digest before exposing a
+    // federated stream here.
     const accessToken = auth.accessToken
     if (!accessToken) {
       toast.error(t('drive.toast.downloadFailed'))
@@ -565,8 +543,11 @@ export default function Drive() {
       // user-selected backend, not `tauri://localhost/api/...`). On the
       // web this is just `/api`, unchanged.
       const base = await resolveApiBase()
+      const url = currentFolder?.isRemote
+        ? `${base}/drive/federation/shares/${currentFolder.remoteShareId}/files/${file.id}/content`
+        : `${base}/files/${file.id}/download`
       await streamDownload({
-        url: `${base}/files/${file.id}/download`,
+        url,
         fileKey: file._fileKey,
         filename: file.decryptedName ?? 'file',
         mimeType: file.decryptedMimeType ?? 'application/octet-stream',
@@ -584,7 +565,7 @@ export default function Drive() {
   async function handleDeleteFile(file: DecryptedFile, silent = false) {
     try {
       if (currentFolder?.isRemote) {
-        await api.delete(`/fed-proxy/${currentFolder.remoteShareId}/files/${file.id}`)
+        await api.delete(`/drive/federation/shares/${currentFolder.remoteShareId}/files/${file.id}`)
       } else {
         await api.delete(`/files/${file.id}`)
       }
@@ -814,12 +795,11 @@ export default function Drive() {
       const at = params.recipient.lastIndexOf('@')
       const username = params.recipient.slice(0, at)
       const server = params.recipient.slice(at + 1)
-      const serverUrl = server.startsWith('http') ? server : `https://${server}`
-      const pkRes = await api.get(`/collections/fed-pubkey?username=${encodeURIComponent(username)}&server=${encodeURIComponent(serverUrl)}`)
+      const pkRes = await api.get(`/drive/federation/users/${encodeURIComponent(username)}?server=${encodeURIComponent(server)}`)
       const sealedKey = await wrapKeyForRecipient(shareTarget.collectionKey, fromBase64(pkRes.data.publicKey))
-      const res = await api.post(`/collections/${shareTarget.id}/share-federated`, {
+      const res = await api.post(`/collections/${shareTarget.id}/federated-shares`, {
         recipientUsername: username,
-        recipientServer: serverUrl,
+        recipientServer: server,
         encryptedCollectionKey: toBase64(sealedKey),
         canUpload: params.canUpload,
         canDelete: params.canDelete,
@@ -846,14 +826,14 @@ export default function Drive() {
     setPublicShareUrl(link)
   }
 
-  async function handleAddRemoteShare(inviteUrl: string) {
-    await api.post('/fed-proxy/incoming', { inviteUrl })
+  async function handleAddRemoteShare(invite: { server: string; capability: string }) {
+    await api.post('/drive/federation/shares', invite)
     await loadCollections()
     toast.success(t('drive.toast.remoteAdded'))
   }
 
   async function handleRevokeRemoteShare(col: Collection) {
-    await api.delete(`/fed-proxy/incoming/${col.remoteShareId}`)
+    await api.delete(`/drive/federation/shares/${col.remoteShareId}`)
     setCollections((prev) => prev.filter((c) => c.id !== col.id))
     if (currentFolder?.id === col.id) goToShared()
     toast.success(t('drive.toast.remoteRemoved'))

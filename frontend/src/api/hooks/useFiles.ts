@@ -16,7 +16,7 @@ export function useRemoteFiles(remoteShareId: string | null) {
   return useQuery<FileRow[]>({
     queryKey: ['remote-files', remoteShareId],
     queryFn: () =>
-      api.get<FileRow[]>(`/fed-proxy/${remoteShareId}/files`).then((r) => r.data),
+      api.get<FileRow[]>(`/drive/federation/shares/${remoteShareId}/files`).then((r) => r.data),
     enabled: remoteShareId !== null,
   })
 }
@@ -34,7 +34,7 @@ export function useDeleteFile() {
       remoteShareId?: string
     }) => {
       const url = remoteShareId
-        ? `/fed-proxy/${remoteShareId}/files/${fileId}`
+        ? `/drive/federation/shares/${remoteShareId}/files/${fileId}`
         : `/files/${fileId}`
       return api.delete(url)
     },

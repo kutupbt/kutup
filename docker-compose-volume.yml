@@ -93,6 +93,13 @@ services:
       S3_BUCKET: ${S3_BUCKET:-kutup-files}
       S3_REGION: ${S3_REGION:-us-east-1}
       APP_ENV: ${APP_ENV:-production}
+      CHAT_TRANSPARENCY_SIGNING_KEY: ${CHAT_TRANSPARENCY_SIGNING_KEY}
+      CHAT_TRANSPARENCY_WITNESSES: ${CHAT_TRANSPARENCY_WITNESSES:-}
+      CHAT_TRANSPARENCY_WITNESS_QUORUM: ${CHAT_TRANSPARENCY_WITNESS_QUORUM:-0}
+      CHAT_TRANSPARENCY_WITNESS_ENDPOINTS: ${CHAT_TRANSPARENCY_WITNESS_ENDPOINTS:-}
+      CHAT_REMOTE_TRANSPARENCY_MIN_QUORUM: ${CHAT_REMOTE_TRANSPARENCY_MIN_QUORUM:-1}
+      CHAT_SEALED_SENDER_POLICY: ${CHAT_SEALED_SENDER_POLICY:-}
+      CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY: ${CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY:-}
       # Single break-glass admin (email:username:password) — created on first boot; it can
       # never be demoted/disabled/deleted via the API.
       ADMIN_ACCOUNT: ${ADMIN_ACCOUNT:-}
@@ -101,9 +108,14 @@ services:
       STORAGE_TOTAL_BYTES: ${STORAGE_TOTAL_BYTES:-0}
       # Days a trashed item stays restorable before the sweeper purges it. 0 disables the sweep.
       TRASH_RETENTION_DAYS: ${TRASH_RETENTION_DAYS:-30}
-      # Per-IP rate limits + per-account login lockout (blank → server defaults).
+      CHAT_MAILBOX_RETENTION_DAYS: ${CHAT_MAILBOX_RETENTION_DAYS:-30}
+      CHAT_SEND_RETENTION_DAYS: ${CHAT_SEND_RETENTION_DAYS:-30}
+      CHAT_DEVICE_EXPIRY_DAYS: ${CHAT_DEVICE_EXPIRY_DAYS:-90}
+      # Per-IP/account rate limits + per-account login lockout (blank → server defaults).
       RATE_LIMIT_LOGIN_PER_MIN: ${RATE_LIMIT_LOGIN_PER_MIN:-}
       RATE_LIMIT_PREFLIGHT_PER_MIN: ${RATE_LIMIT_PREFLIGHT_PER_MIN:-}
+      RATE_LIMIT_CHAT_KEYS_PER_MIN: ${RATE_LIMIT_CHAT_KEYS_PER_MIN:-}
+      RATE_LIMIT_CHAT_KEYS_IP_PER_MIN: ${RATE_LIMIT_CHAT_KEYS_IP_PER_MIN:-}
       RATE_LIMIT_REGISTER_PER_HOUR: ${RATE_LIMIT_REGISTER_PER_HOUR:-}
       RATE_LIMIT_RECOVERY_PER_HOUR: ${RATE_LIMIT_RECOVERY_PER_HOUR:-}
       RATE_LIMIT_FED_USERS_PER_MIN: ${RATE_LIMIT_FED_USERS_PER_MIN:-}
@@ -118,8 +130,8 @@ services:
 
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
     restart: unless-stopped
 
   nginx:

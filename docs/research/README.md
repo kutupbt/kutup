@@ -29,3 +29,17 @@ A planned major feature: real-time collaborative editing of files inside kutup, 
 | File | Topic |
 |---|---|
 | [`09-mobile-strategy.md`](./09-mobile-strategy.md) | Why we're on Tauri-mobile (not React Native or Capacitor) given the DOM-bound editor stack — with prior-art table (Spacedrive, OneKeePass, Padloc). Survey of Tauri-mobile secure-storage plugins for the Android Keystore follow-up — recommends `tauri-plugin-keystore` + `tauri-plugin-biometric`. iOS half shipped (`feat/ios-keychain`); Android half is the open follow-up. |
+
+### Federated E2EE chat — "ileti" (July 2026)
+
+These files preserve the research trail. They do not describe current
+implementation status; [`../chat-protocol.md`](../chat-protocol.md) is
+normative and [`../roadmap.md`](../roadmap.md) tracks the remaining product and
+hardening slices.
+
+| File | Topic |
+|---|---|
+| [`11-federated-chat.md`](./11-federated-chat.md) | Original architecture for a Signal-class federated chat feature (libsignal v0.97.2 study, Matrix take-vs-leave, single-443 topology, phased plan). The direct-message and transport-federation foundation it proposed is implemented; its original group-blob direction is superseded by `13-…`. |
+| [`12-chat-improvements-for-clients.md`](./12-chat-improvements-for-clients.md) | Historical wire-freeze proposal. Its versioned content schema, `sendId` idempotency, capability block, account-scoped prekey limiting, WS tickets, and shared-core durability boundaries are implemented by the server/core/web stack. |
+| [`13-chat-architecture-comparative-research.md`](./13-chat-architecture-comparative-research.md) | **The verdict.** Confirms the dumb mailbox, pinned libsignal, and DAG-free transport federation; changes groups to the GV2 pattern, treats sealed sender as a complete abuse-gated system, requires signed device manifests, and corrects the SPQR parameter. Manifest history/range recovery, federation delivery, durability, encrypted profiles, authenticated remote transparency policy/monitoring, witnesses/auditing, and contacts-only sealed sender are implemented; groups, richer messaging/media, and native integration remain. |
+| [`14-enterprise-federation-identity.md`](./14-enterprise-federation-identity.md) | Deferred high-assurance profile: configurable threshold domain roots, TUF-style old/new quorum rotation, and per-peer quorums of manually pinned independent authority domains. Preserved for enterprise adoption; the current implementation path intentionally uses single-key TOFU pinning and authenticated rotation. |

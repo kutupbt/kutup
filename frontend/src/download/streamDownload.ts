@@ -15,8 +15,8 @@ import { fetchDecryptedChunks } from './fetchDecrypt'
 import { isTauri } from '@/lib/isTauri'
 
 export interface StreamDownloadOptions {
-  /** Full URL — already includes `/api/files/<id>/download` or the
-   *  federated `/fed-proxy/.../download` path. */
+  /** Full URL — either a local file download or a verified federated
+   *  Drive share content path. */
   url: string
   /** Per-file content key (unwrapped from the collection key by the
    *  caller — same flow as the existing handleDownload). */

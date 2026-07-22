@@ -1,0 +1,162 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  format-and-fuzz:
+    name: Formatting and fuzz targets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: security-fuzz
+          workspaces: |
+            . -> target
+            fuzz -> fuzz/target
+      - name: Check formatting
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path crates/kutup-chat-core/Cargo.toml -- --check
+          cargo fmt --manifest-path fuzz/Cargo.toml -- --check
+      - name: Compile all parser fuzz targets
+        run: cargo check --locked --manifest-path fuzz/Cargo.toml --bins
+
+  rust-workspace:
+    name: Rust workspace
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-workspace
+      - name: Run workspace tests
+        run: cargo test --locked --workspace --all-targets
+
+  chat-core:
+    name: Chat core
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: chat-core
+          workspaces: crates/kutup-chat-core -> crates/kutup-chat-core/target
+      - name: Run standalone Chat core tests
+        run: cargo test --locked --manifest-path crates/kutup-chat-core/Cargo.toml --all-targets
+
+  web:
+    name: Web, WASM, and frontend tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Set up Rust and WASM target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: chat-wasm
+          workspaces: crates/kutup-chat-core -> crates/kutup-chat-core/target
+      - name: Install wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install frontend dependencies
+        run: pnpm -C frontend install --frozen-lockfile
+      - name: Run frontend tests
+        run: pnpm -C frontend exec vitest run --reporter=dot
+      - name: Build Chat WASM
+        run: pnpm -C frontend run build:chat-wasm
+      - name: Build production web app
+        run: pnpm -C frontend run build:web
+
+  chat-security-e2e:
+    name: Witness and two-server browser security
+    needs:
+      - format-and-fuzz
+      - rust-workspace
+      - chat-core
+      - web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: security-e2e-host
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/e2e/package-lock.json
+      - name: Install browser test dependencies
+        run: npm ci --prefix tests/e2e
+      - name: Install Chromium
+        run: npx --prefix tests/e2e playwright install --with-deps chromium
+      - name: Verify Docker Compose
+        run: docker compose version
+      - name: Run independent witness gate
+        run: scripts/test-chat-transparency-witness.sh
+      - name: Run two-server federation and browser gate
+        run: scripts/test-chat-federation.sh
+      - name: Upload browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-security-playwright-results
+          if-no-files-found: ignore
+          retention-days: 14
+          path: |
+            tests/e2e/test-results/**
+            tests/e2e/playwright-report/**

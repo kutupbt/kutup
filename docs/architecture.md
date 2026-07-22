@@ -2,6 +2,18 @@
 
 Kutup is a zero-knowledge file storage system. The server stores only ciphertext — it never sees plaintext file content, filenames, or cryptographic keys.
 
+Kutup-owned cryptographic protocols follow the purpose-specific suite,
+authenticated-capability, policy-floor, suite-locking, and explicit-migration
+rules in [`crypto-agility.md`](crypto-agility.md). That decision is authoritative
+for protocol evolution; the constructions below describe the currently
+implemented formats.
+
+Chat and Drive federation share the versioned identity, discovery, and HTTP
+authentication boundary specified in
+[`federation-protocol.md`](federation-protocol.md). Its pure v2 protocol and
+identity/trust/policy persistence are implemented and both feature protocols
+are cut over. No mixed v1/v2 trust path or raw remote URL remains.
+
 ---
 
 ## Key Hierarchy
@@ -101,39 +113,187 @@ The server stores the encrypted collection key — it cannot read it.
 
 ## Federation Model
 
-Federation allows sharing a collection with a user on a **different Kutup server**.
+Federation allows sharing a collection with a user on a **different Kutup
+server**. Drive and Chat are feature adapters over one server identity,
+discovery, peer pin, admission policy, replay store, and signed transport.
+Drive's capability grants access to one encrypted share; it does not replace
+server authentication.
 
 ```
 Server A (sharer)                          Server B (recipient)
 ─────────────────                          ────────────────────
-1. Look up recipient's pubkey
-   GET /api/fed/users?username=...
-   on Server B
-                                           ← returns publicKey
+1. Resolve and pin b.example
+   via signed v2 discovery
 
-2. Encrypt collection key to pubkey
-   POST /api/collections/:id/share-federated
-   (creates a federated share token)
+2. Signed Drive directory lookup
+   GET /api/fed/drive/users/bob
+                                           ← signed bob@b.example publicKey
 
-3. Return invite link:
-   Server B URL + /accept?token=...
-   + inviteToken (for Server A's API)
+3. Browser seals collection key to Bob
+   POST /api/collections/:id/federated-shares
+   (stores canonical b.example + capability hash)
 
-                                           4. Recipient opens invite link
-                                              POST /api/fed-proxy/incoming
-                                              (registers the share on Server B)
+4. Return /invite#server=a.example&capability=...
+   (fragment keeps capability out of HTTP requests/logs)
 
-                                           5. Recipient browses via proxy:
-                                              GET /api/fed-proxy/:shareId/files
-                                              → Server B proxies to Server A
-                                              GET /api/fed/shares/:token/files
+                                           5. Recipient opens invite link
+                                              POST /api/drive/federation/shares
+                                              Server B fetches signed invite
+                                              and checks intended username
 
-                                           6. File downloads proxied similarly.
+                                           6. Recipient browses local proxy API
+                                              Server B sends signed drive.v1
+                                              requests plus the separate share
+                                              capability to Server A
+
+                                           7. Download is spooled and its signed
+                                              ciphertext digest verified before
+                                              bytes reach the browser.
 ```
 
-**SSRF protection:** Before proxying requests to the remote server URL, the backend validates that the target hostname is not a private/loopback address.
+Production federation accepts canonical DNS identities and public HTTPS only.
+The shared resolver verifies signed endpoint delegation, pins the peer
+identity, resolves and connects to the already-validated address set, disables
+redirects, and rejects private/loopback/link-local destinations. Plain HTTP and
+private networks are available only to the explicit isolated test harness.
 
-**Cross-server upload/delete** is gated by the `canUpload` and `canDelete` boolean grants set at share time.
+**Cross-server upload/delete** is gated by the `canUpload` and `canDelete`
+grants. Mutations are idempotent under stable request IDs; changing the signed
+content under an existing ID is rejected.
+
+---
+
+## Federated E2EE Chat ("ileti")
+
+Chat is a separate cryptographic subsystem from drive encryption and
+collaborative editing. It uses the shared Rust `kutup-chat-core` engine in the
+browser through WebAssembly; Android and iOS will consume the same engine
+through UniFFI after the web protocol and feature set are complete. The
+normative contract is [`chat-protocol.md`](chat-protocol.md).
+
+```mermaid
+flowchart LR
+    A["Browser A<br/>kutup-chat-core/WASM<br/>IndexedDB"]
+    HA["Homeserver A<br/>public prekeys +<br/>opaque mailbox"]
+    HB["Homeserver B<br/>public prekeys +<br/>opaque mailbox"]
+    B["Browser B<br/>kutup-chat-core/WASM<br/>IndexedDB"]
+
+    A -->|"authenticated<br/>PQXDH bundle lookup"| HA
+    A -->|"libsignal ciphertext"| HA
+    HA -->|"signed, ordered<br/>federation transaction"| HB
+    HB -->|"REST drain / WS hint"| B
+    B -->|"ack after durable decrypt"| HB
+```
+
+### Client and server responsibilities
+
+- Each chat device has an independent libsignal identity and publishes signed
+  prekeys plus one-time classical and post-quantum prekeys. New sessions use
+  PQXDH; established sessions use libsignal's Triple Ratchet construction.
+- A logical send encrypts separately to every active recipient device. A
+  server-side device-set mismatch rejects the entire send, causing the client
+  to refresh the signed directory and re-encrypt instead of silently skipping
+  a device.
+- The client persists ratchets, plaintext history, pending ciphertext,
+  message-request state, encrypted-profile capabilities, and transparency
+  trust in an account-scoped IndexedDB database. Web Locks serialize ratchet
+  transactions across tabs. Ciphertext is durably journaled before decrypt and
+  acknowledged only after the ratchet advance and plaintext commit together.
+- The server stores public directory material and opaque per-device mailbox
+  ciphertext. REST drain/ack is the source of truth; a one-use-ticket WebSocket
+  is only a low-latency reconciliation hint. Client-generated `sendId` values
+  make retries idempotent.
+- Note to Self is a self-addressed direct conversation. On multi-device
+  accounts, encrypted sent transcripts synchronize messages to the sender's
+  other devices; a one-device note remains local without creating a fake
+  one-member group.
+
+### Identity, contacts, and profiles
+
+The stable chat address is `username@server`; no alias namespace exists.
+Changeable, non-unique display names and avatars are encrypted profile data and
+never routing identities. Profile keys are capability-distributed inside E2EE
+messages. Incoming strangers begin as durable message requests. Accept,
+reject, block, and unblock are client-held relationship state; blocking also
+rotates the local encrypted-profile capability so the blocked peer cannot read
+future profile versions.
+
+Accepted contacts use sealed sender when both servers advertise a complete
+authenticated service policy. The destination receives only an origin domain,
+recipient, capability, send id, and opaque per-device envelopes; mailbox rows
+do not contain the sender. First contact, Note to Self, and linked-device sync
+remain identified. Blocking rotates the profile key and delivery capability
+before redistributing the new key to remaining contacts.
+
+### Device-directory trust and transparency
+
+An account self-authority key signs the exact chat-device manifest. Every
+accepted manifest version is appended to a chronological Merkle log and the
+current account value is authenticated by a sparse Merkle map. Exact
+checkpoints carry a persistent operator signature and may carry signatures
+from independently deployed witnesses; clients enforce their pinned operator
+and witness-quorum policy.
+
+The web client independently verifies local and authenticated remote policy and
+checkpoint histories when chat opens, connectivity returns, the page becomes
+visible, the WebSocket reconnects, and before stale evidence is used. The
+server also runs restart-safe 15-minute remote monitoring and scheduled
+operator/witness cross-view auditing. Network/witness unavailability warns
+without discarding established trust; a cryptographic contradiction durably
+blocks new sends for that domain. Skipped manifest versions are recovered from
+checkpoint-bound pages and committed only after the entire chain verifies.
+Existing durable ciphertext is retained.
+
+### Transport-only federation
+
+Federation uses canonical DNS server names, `.well-known` delegation, and
+destination/body-bound Ed25519 request signatures. Outbound transactions are
+persisted and strictly ordered per destination; receivers atomically commit
+mailbox rows, replay records, and a contiguous sequence high-water mark.
+Neither homeserver replicates conversation or room state.
+
+The common stack is defined by
+[`federation-protocol.md`](federation-protocol.md): hash-linked server identity
+rotation, signed endpoint/capability discovery, and a strict RFC 9421/9530
+request-and-response profile shared by Chat and Drive. It owns DNS/SSRF-safe
+resolution, discovery caching, immutable TOFU/verified/quarantined identity
+history, admission policy, signed transport, and replay reservation. Chat is a
+feature adapter above that stack and owns only its E2EE directory, profile, and
+ordered ciphertext-delivery payloads. Drive uses the same transport while
+retaining separate domain-bound share capabilities and mutation idempotency.
+
+Federation is disabled unless the administrator configures a persistent
+signing key. A database-backed admission policy then selects `disabled`,
+`allowlist`, `blocklist`, or `open`. Directional per-domain actions are
+`inherit`, `allow`, or `block`: allowlist denies inherited directions,
+blocklist allows them, open deliberately ignores saved rules, and disabled
+denies everything and hides discovery/capability advertisement. Rules survive
+mode changes. Policy is enforced before outbound discovery/queuing and before
+an inbound request can trigger origin discovery; admitted requests must still
+pass HTTPS, DNS/SSRF, protocol, signature, payload, and rate-limit checks.
+
+Every admitted first contact is cryptographically validated before it becomes
+a persistent TOFU pin. Administrators may raise a feature or domain to verified
+trust, compare the full key fingerprint out of band, retry discovery, and use a
+tightly confirmed, audited break-glass re-pin only for a quarantined competing
+history. Valid old-and-new-key-signed rotations advance automatically;
+rollback, gaps, silent replacement, and downgrade are rejected.
+
+The desktop and mobile admin settings render the same generic operational
+projection: shared peer trust plus feature diagnostics, server/fingerprint
+filters, retry-one/retry-visible workflows, immutable identity evidence, and a
+filtered federation audit feed with CSV export. These are read-only views over
+the common trust, policy, replay, Chat outbox, and Drive share tables. They do
+not create a feature-owned identity, cache, client, or admission path.
+
+### Current product boundary
+
+The web client currently supports direct text messaging, linked-device sync,
+Note to Self, transport federation, message requests/blocking, encrypted
+profiles, signed device manifests, and monitored key transparency. Private
+groups, attachments/media, receipts, typing, disappearing messages, sealed
+sender, calls, push delivery, and native-client integration remain future
+slices tracked in [`roadmap.md`](roadmap.md).
 
 ---
 
@@ -157,6 +317,12 @@ PostgreSQL 16 is used for all persistent metadata:
 - File records (encrypted metadata, SeaweedFS object keys)
 - Public share tokens
 - Federation share tokens and incoming shares
+- Chat devices and public prekey pools
+- Opaque per-device chat mailboxes and idempotent send records
+- Signed device manifests, transparency log/map nodes, checkpoints, and witness attestations
+- Unified federation local/peer identity history, trust/quarantine evidence,
+  replay reservations, and feature-scoped policy
+- Durable per-destination federation outboxes and inbound replay/high-water records
 - TOTP secrets (encrypted)
 - Global settings and per-user quotas
 

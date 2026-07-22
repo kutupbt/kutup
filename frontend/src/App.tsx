@@ -24,6 +24,7 @@ import PublicShare from './pages/PublicShare'
 import FileEditorPage from './pages/FileEditorPage'
 import ServerSelect from './pages/ServerSelect'
 import TrashPage from './pages/TrashPage'
+import Chat from './pages/Chat'
 import MobileSharedPage from './pages/mobile/MobileSharedPage'
 import MobileAccountPage from './pages/mobile/MobileAccountPage'
 import MobileProfilePage from './pages/mobile/account/MobileProfilePage'
@@ -171,6 +172,7 @@ export default function App() {
 
         <Route element={<ProtectedRoute />} errorElement={<RouteErrorBoundary />}>
           <Route path="/drive" element={<Drive />} />
+          <Route path="/chat" element={<Chat />} />
           {/* Mobile-only bottom-tab sibling routes — desktop redirects via useIsMobile.
               `/drive/trash` is served on both; the page forks its layout. */}
           <Route path="/drive/shared" element={<MobileSharedPage />} />

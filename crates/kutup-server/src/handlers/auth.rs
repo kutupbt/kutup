@@ -168,8 +168,61 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         sqlx::query_scalar("SELECT value FROM site_settings WHERE key='registration_enabled'")
             .fetch_optional(&state.pool)
             .await?;
+    let federation_enabled = match state.federation.as_ref() {
+        Some(federation) => {
+            federation
+                .policy()
+                .feature_is_publicly_enabled(crate::federation::FederationPolicyFeature::Chat)
+                .await?
+        }
+        None => false,
+    };
+    let sealed_sender_policy = if federation_enabled && state.sealed_sender.is_some() {
+        let federation = state
+            .federation
+            .as_ref()
+            .expect("sealed sender requires federation");
+        federation
+            .feature_policies()
+            .local_history(
+                federation.server_name(),
+                kutup_federation_proto::FederatedFeaturePolicyTypeV1::SealedSenderService,
+            )
+            .await?
+    } else {
+        None
+    };
+    let chat = kutup_chat_proto::ChatCapabilities {
+        mailbox_retention_days: state
+            .config
+            .chat_mailbox_retention_days
+            .try_into()
+            .unwrap_or(u32::MAX),
+        device_expiry_days: state
+            .config
+            .chat_device_expiry_days
+            .try_into()
+            .unwrap_or(u32::MAX),
+        server_name: federation_enabled.then(|| {
+            state
+                .federation
+                .as_ref()
+                .expect("federation enabled only with configured identity")
+                .server_name()
+                .to_string()
+        }),
+        federation: federation_enabled,
+        transparency_operator_key_id: Some(state.transparency_authority.key_id()),
+        transparency_operator_public_key: Some(state.transparency_authority.public_key_base64()),
+        transparency_witnesses: state.transparency_authority.witnesses(),
+        transparency_witness_quorum: state.transparency_authority.witness_quorum(),
+        sealed_sender: sealed_sender_policy.is_some(),
+        sealed_sender_policy,
+        ..Default::default()
+    };
     Ok(Json(SettingsResponse {
         registration_enabled: val.as_deref() != Some("false"),
+        chat,
     })
     .into_response())
 }

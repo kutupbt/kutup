@@ -35,9 +35,30 @@ S3_ACCESS_KEY=kutup
 S3_SECRET_KEY=<strong-random-secret>
 S3_BUCKET=kutup-files
 
-# Public URL — used to build federation invite links
+# Public URL — published as the federation API base
 # Must be the address users (and remote servers) reach this instance at
 SERVER_URL=https://kutup.example.com
+
+# Unified federation v2 identity used by both Chat and Drive:
+#   openssl rand -base64 32
+# FEDERATION_SERVER_NAME=kutup.example.com
+# FEDERATION_SIGNING_KEY=<base64-32-byte-ed25519-seed>
+
+# Required dedicated key-transparency operator identity. Generate a different
+# seed once, back it up, and do not reuse the federation identity.
+CHAT_TRANSPARENCY_SIGNING_KEY=<base64-32-byte-ed25519-seed>
+# Optional independent witnesses (witness-id=base64-public-key) and threshold.
+# CHAT_TRANSPARENCY_WITNESSES=audit.example=<base64-ed25519-public-key>
+# CHAT_TRANSPARENCY_WITNESS_ENDPOINTS=audit.example=https://audit.example/v1/view
+# CHAT_TRANSPARENCY_WITNESS_QUORUM=1
+# Reject authenticated remote policies below this local floor (production default: 1).
+# CHAT_REMOTE_TRANSPARENCY_MIN_QUORUM=1
+
+# Optional contacts-only sealed sender. The policy contains public offline roots
+# and root-signed online certificates; the normal server receives only the
+# active online private key.
+# CHAT_SEALED_SENDER_POLICY=<canonical one-line JSON>
+# CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY=<base64-32-byte-libsignal-private-key>
 
 # Break-glass admin bootstrap: a single email:username:password triple.
 # Created on first start; the admin completes setup on first login.
@@ -58,7 +79,14 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # empties when users do it themselves). Default: 30.
 # TRASH_RETENTION_DAYS=30
 
-# Rate limits, per client IP (defaults shown). The backend resolves the
+# Chat mailbox/send-id retention and inactive-device expiry. The hourly
+# maintenance job enforces these; 0 disables an individual policy.
+# CHAT_MAILBOX_RETENTION_DAYS=30
+# CHAT_SEND_RETENTION_DAYS=30
+# CHAT_DEVICE_EXPIRY_DAYS=90
+
+# Rate limits (defaults shown). Most are per client IP; chat key fetches use a
+# primary per-account budget plus a coarse IP outer wall. The backend resolves the
 # client IP from the proxy-set X-Real-IP header, so keep the backend
 # unreachable except through nginx.
 # RATE_LIMIT_LOGIN_PER_MIN=10
@@ -67,6 +95,16 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # RATE_LIMIT_RECOVERY_PER_HOUR=5
 # RATE_LIMIT_FED_USERS_PER_MIN=60
 # RATE_LIMIT_ADMIN_PER_MIN=120
+# RATE_LIMIT_CHAT_KEYS_PER_MIN=30
+# RATE_LIMIT_CHAT_KEYS_IP_PER_MIN=120
+
+# Optional OTLP/gRPC traces and metrics. Leave all endpoints unset for
+# logs-only operation. Configure one shared endpoint, or both signal-specific
+# endpoints; a partial exporter configuration fails startup.
+# OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.com:4317
+# OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://collector.example.com:4317
+# OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://collector.example.com:4317
+# OTEL_SERVICE_NAME=kutup-server
 
 # Per-account login lockout: this many failed password attempts lock the
 # email out for the cooldown. Locked attempts return 429; the lock clears
@@ -74,6 +112,23 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # LOGIN_LOCKOUT_THRESHOLD=5
 # LOGIN_LOCKOUT_MINUTES=15
 ```
+
+### OpenTelemetry
+
+The backend can export security-path traces and metrics to an OTLP/gRPC
+collector. Set `OTEL_EXPORTER_OTLP_ENDPOINT` for a shared collector endpoint,
+or set both `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`. If no endpoint is set, the server keeps
+normal structured logs without installing an exporter. Once export is
+configured, an incomplete or invalid exporter setup is a startup error rather
+than a silent fallback.
+
+The Chat security instruments cover authenticated policy lifecycle, monitor
+freshness, proof sizes and outcomes, witness quorum, fork detection,
+certificate issuance, sealed-send outcomes, and limiter rejection. Their
+attributes are bounded outcome or feature classes; usernames, account/device
+identifiers, send IDs, capabilities and hashes, certificates, ciphertext, and
+sender-recipient correlations are never metric labels or trace fields.
 
 ---
 
@@ -192,11 +247,207 @@ cp /etc/letsencrypt/live/kutup.example.com/privkey.pem nginx/certs/
 SERVER_URL=https://kutup.example.com
 ```
 
-This value is embedded in federation invite links. If it is wrong, cross-server sharing will not work. After changing it, rebuild the backend:
+When chat federation is configured, this value is published as the delegated
+`apiBase`. If it is wrong, cross-server sharing and chat routing will not work.
+
+The unified v2 stack uses `FEDERATION_SERVER_NAME` and
+`FEDERATION_SIGNING_KEY`. The name is the stable suffix in
+`username@server`; no alias namespace is created. The stack persists a
+self-signed genesis document and refuses startup if the configured seed is
+silently changed. Use a distinct random seed for key transparency. Production
+federation requires public HTTPS and rejects loopback, private, link-local, and
+other non-public resolved addresses; redirects are disabled.
+
+To rotate the federation identity, keep the current seed in
+`FEDERATION_SIGNING_KEY`, set a distinct `FEDERATION_NEXT_SIGNING_KEY`, stop
+other replicas, and run:
+
+```sh
+docker compose run --rm backend federation-identity rotate
+```
+
+The command verifies and dual-signs one transition and is safe to retry. Then
+move the new seed into `FEDERATION_SIGNING_KEY`, remove
+`FEDERATION_NEXT_SIGNING_KEY`, and restart every replica. Losing the current
+seed does not authorize replacement; remote peers will quarantine a competing
+history and require an explicitly confirmed break-glass re-pin.
+
+Federation is unavailable until both generic identity variables are set. Back
+up the signing seed: losing it does not authorize silent replacement, and
+remote servers will quarantine a conflicting history.
+
+After configuring the identity, manage the unified control plane in **Admin →
+Settings → Federation**. It has an emergency global stop and a feature-scoped
+mode (`disabled`, `allowlist`, `blocklist`, or `open`), minimum trust
+(`tofu` or `verified`), and per-domain inbound/outbound action (`inherit`,
+`allow`, or `block`) with an optional trust override. Fresh databases start in
+`allowlist`. `disabled` hides discovery/capability advertisement as well as
+denying both directions. Saved rules survive mode changes, and `open`
+intentionally ignores their admission actions; trust requirements still apply.
+
+Admission policy is applied before outbound discovery/queuing and inbound
+origin discovery. Admitted peers must still pass discovery/history signatures,
+pinned-identity trust, SSRF, request/response signatures, replay, body,
+protocol, and rate-limit checks. First contact creates a TOFU pin only after
+cryptographic verification. The admin UI shows full fingerprints for out-of-
+band verification, discovery failures, rotations, and quarantine; break-glass
+re-pin requires the old and new full fingerprints plus the exact domain and is
+audited. A reverse-proxy IP rule is not an equivalent domain-identity policy.
+
+The same responsive panel shows per-peer Chat delivery and Drive share counts,
+quarantined/failed filters, authenticated discovery timestamps, and the exact
+preserved signed identity documents behind a pin or quarantine. “Retry visible”
+re-resolves up to 100 filtered peers without treating one failure as a batch
+failure. The federation-only audit feed can be filtered to one domain and
+exported as spreadsheet-safe CSV; exported evidence contains public identity
+material and operational errors, never the server signing seed or plaintext
+Drive share capabilities.
+
+After changing these values, rebuild the backend:
 
 ```sh
 docker compose up -d --build backend
 ```
+
+---
+
+## Chat key transparency and independent witnesses
+
+Chat key transparency requires a persistent operator seed even when chat
+federation is disabled:
+
+```sh
+openssl rand -base64 32
+```
+
+Store that output as `CHAT_TRANSPARENCY_SIGNING_KEY`, separately from the
+federation key, and back it up. The database pins the derived public identity
+and refuses a silent replacement; planned rotation will require an
+authenticated transition rather than an environment-variable swap.
+
+For split-view resistance, run `kutup-transparency-witness` under a different
+administrative boundary with its own secret seed and persistent state volume.
+The server Docker image includes this second binary. Derive the public values
+that are safe to copy to the server:
+
+```sh
+KUTUP_WITNESS_SIGNING_KEY='<base64-32-byte-seed>' \
+  kutup-transparency-witness --print-public-key
+```
+
+Configure the returned public key on the server as
+`CHAT_TRANSPARENCY_WITNESSES=audit.example=<publicKey>` and set
+`CHAT_TRANSPARENCY_WITNESS_QUORUM=1`. Obtain the operator key id/public key from
+the server's public `/api/auth/settings` chat block, verify them through your
+deployment channel, and configure the independent process with:
+
+```text
+KUTUP_WITNESS_TARGET=https://kutup.example.com/
+KUTUP_WITNESS_ID=audit.example
+KUTUP_WITNESS_SIGNING_KEY=<private witness seed; never copy to the server>
+KUTUP_WITNESS_OPERATOR_KEY_ID=<pinned operator key id>
+KUTUP_WITNESS_OPERATOR_PUBLIC_KEY=<pinned operator public key>
+KUTUP_WITNESS_STATE_FILE=/state/checkpoint.json
+KUTUP_WITNESS_INTERVAL_SECONDS=30
+KUTUP_WITNESS_LISTEN=127.0.0.1:3001
+```
+
+The witness requires HTTPS, refuses redirects, verifies append-only consistency
+from its own state, submits its signature, and advances that state only after
+the server accepts it. It fsyncs a bounded, witness-signed history and serves
+that history at `GET /v1/view`; publish this endpoint through a separate HTTPS
+reverse proxy and configure its exact URL in
+`CHAT_TRANSPARENCY_WITNESS_ENDPOINTS`. Keep `/state` durable and backed up. A nonzero client
+quorum deliberately makes a newly published manifest temporarily unavailable
+until enough witnesses have polled; clients fail closed and may retry after the
+witness interval. The isolated reference topology and contract test are
+`docker-compose.chat-transparency-witness.yml` and
+`scripts/test-chat-transparency-witness.sh`.
+
+With federation enabled, the server publishes the complete transparency policy
+inside the federation-identity-signed feature-policy chain. Production refuses
+to publish a policy without an independent witness. Change a key, endpoint,
+quorum, or security parameter only with an explicit authenticated rotation:
+
+```sh
+docker compose run --rm backend feature-policy rotate chat-transparency
+```
+
+Remote policy histories and monitor cursors survive restarts. The monitor runs
+every 15 minutes with jitter/retry and never follows a browser-provided URL.
+The browser independently verifies the proxied policy chain and checkpoint on
+Chat open, first remote use, reconnect, foreground, restored connectivity, and
+before stale evidence is used. Unavailability or a missing witness warns and
+retains the last valid pin. Rollback, signature/proof failure, policy-chain
+failure, log/key replacement, or signed fork evidence blocks new sends to only
+that domain.
+
+The server also collects each policy-authenticated `/v1/view` through its
+DNS-bound, redirect-free, SSRF-checked, time/size-bounded transport. It compares
+operator/witness and witness/witness views with the same verifier shipped in
+the standalone `kutup-transparency-auditor` binary. The binary accepts immutable
+JSON captures:
+
+```sh
+kutup-transparency-auditor \
+  --domain remote.example \
+  --operator operator-statement.json \
+  --witness witness-a.json \
+  --witness witness-b.json
+```
+
+Signed evidence is never rewritten. Administrators can inspect it at
+`GET /api/admin/chat/transparency/domains/{domain}/evidence`, submit an
+out-of-band view at the corresponding `witness-views` endpoint, and trigger a
+break-glass recovery at `POST .../recover` with the active `evidenceDigest`
+and a reason. Recovery requires a fresh valid monitor observation, retains and
+acknowledges the evidence, and is audit logged.
+
+## Contacts-only sealed sender
+
+Provision the trust root on a machine that is not the Kutup application server.
+The image contains an offline helper; copying that binary to the offline system
+does not require copying the server configuration or database:
+
+```sh
+kutup-sealed-sender-provision root-generate /secure/kutup-sealed-root.key
+
+kutup-sealed-sender-provision server-issue \
+  --domain kutup.example.com \
+  --root-key /secure/kutup-sealed-root.key \
+  --online-key /secure/kutup-sealed-online.key \
+  --certificate-id 1001 \
+  --activates-at <unix-seconds> \
+  --expires-at <unix-seconds> > sealed-policy.json
+```
+
+Both secret files are created once with mode `0600`; the helper refuses to
+overwrite them or read an overly permissive root file. Keep the root offline.
+Install the canonical policy JSON as `CHAT_SEALED_SENDER_POLICY` and the exact
+contents of `kutup-sealed-online.key` as
+`CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY`. The server validates the root chain,
+certificate window, online public/private match, suite, and domain at startup.
+It advertises sealed sender only after the signed service policy is durable:
+
+```sh
+docker compose run --rm backend feature-policy rotate sealed-sender
+```
+
+The first deployment bootstraps sequence 1 automatically; the explicit command
+is required whenever persisted policy and configured policy differ. For root
+rotation, first publish both roots, activate a new root-signed online
+certificate, wait at least 24 hours plus the configured clock skew, then remove
+the old root in another policy sequence. Never delete an active old root in the
+same policy that introduces its replacement.
+
+Sealed delivery is contacts-only. The 16-byte delivery capability is derived
+from the recipient profile key and only its SHA-256 verifier is stored. Blocking
+publishes a new profile key/verifier before redistributing that key to remaining
+contacts. Anonymous prekey and send routes accept neither cookies nor bearer
+tokens; destination mailboxes and federation transactions contain no sender
+account/device. First-contact requests, Note to Self, and linked-device sync
+remain identified, and an established sealed conversation never silently falls
+back to identified delivery.
 
 ---
 

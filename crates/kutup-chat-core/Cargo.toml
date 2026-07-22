@@ -1,0 +1,95 @@
+# kutup-chat-core — the shared client chat engine.
+#
+# Wraps libsignal-protocol (PQXDH + Triple Ratchet) behind kutup-owned types and
+# speaks the kutup-chat-proto wire contract (docs/chat-protocol.md). One crate,
+# three consumers: the web client compiles it to wasm; Android/iOS link it
+# natively via UniFFI. libsignal types must not leak through the public API.
+#
+# Standalone workspace (excluded from the root): it pulls the whole libsignal
+# tree and needs protoc at build time, which the drive/server/CLI must not.
+[package]
+name = "kutup-chat-core"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+rust-version = "1.91.1"
+
+[workspace]
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+# Tests/dev use bundled plaintext SQLite. Public native apps build with
+# `--no-default-features --features sqlcipher`; web supplies IndexedDB with no
+# SQLite feature. Keeping the backends mutually selected avoids accidentally
+# linking ordinary SQLite in a release that expects SQLCipher.
+default = ["sqlite-bundled"]
+sqlite = ["dep:rusqlite"]
+sqlite-bundled = ["sqlite", "rusqlite/bundled"]
+sqlcipher = ["sqlite", "rusqlite/bundled-sqlcipher-vendored-openssl"]
+wasm = [
+    "dep:rexie",
+    "dep:serde-wasm-bindgen",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+]
+
+[dependencies]
+# The wire contract (path dep across the workspace boundary).
+kutup-chat-proto = { path = "../kutup-chat-proto" }
+kutup-federation-proto = { path = "../kutup-federation-proto" }
+# Pinned to the tag studied in docs/research/11-federated-chat.md and proven on
+# wasm32 by spikes/libsignal-wasm. Resolves the in-repo `spqr` git dep (SPQR
+# v1.5.1) transitively. libsignal needs protoc at build time.
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0.97.2" }
+# Match libsignal's rand major so its `impl Rng + CryptoRng` bounds line up.
+rand = "0.9"
+futures-util = { version = "0.3", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+thiserror = "2"
+hkdf = "0.12"
+sha2 = "0.10"
+aes-gcm = "0.10"
+ed25519-dalek = "2"
+hex = "0.4"
+zeroize = "1"
+# We implement libsignal's own `#[async_trait(?Send)]` store traits; match its
+# major so the desugared future types line up.
+async-trait = "0.1"
+# `SenderKeyStore` keys on `uuid::Uuid`; same major as libsignal's re-export.
+uuid = "1"
+# Native ChatDb: bundled SQLite so no system libsqlite is required. Optional so
+# a wasm build (which can't link it) drops it via `--no-default-features`.
+rusqlite = { version = "0.32", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# `SystemTime::now()` is unavailable in browsers; the clock boundary uses
+# `Date.now()` instead.
+js-sys = "0.3"
+# IndexedDB transactions are the browser's atomic persistence boundary.
+rexie = { version = "0.6.2", optional = true }
+serde-wasm-bindgen = { version = "0.6", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+# Both getrandom majors are present transitively and require explicit browser
+# backends. The 0.3 backend also needs the rustflag in `.cargo/config.toml`.
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+# Integration tests (tests/) are separate crates: they see only the crate under
+# test + dev-deps, so the wire types and helpers used directly in tests repeat here.
+kutup-chat-proto = { path = "../kutup-chat-proto" }
+rand = "0.9"
+base64 = "0.22"
+async-trait = "0.1"
+serde_json = "1"
+# Drives the engine's async orchestration in tests; the mock transport's futures
+# are immediately ready, so this just polls them to completion (no real runtime).
+futures-executor = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"

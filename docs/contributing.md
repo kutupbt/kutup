@@ -99,6 +99,32 @@ cargo test                                      # all crates
 cargo test -p kutup-crypto                      # crypto byte-parity vectors
 cargo clippy --all-targets -- -D warnings       # lints (gate)
 cargo fmt --check                               # formatting (gate)
+./scripts/audit-unified-federation.sh           # no feature-owned federation stack
+./scripts/test-chat-federation.sh               # isolated two-server federation + outage/restart
+```
+
+The federation harness uses its own Compose project, two tmpfs Postgres
+databases, and host ports 39081/39082. Despite its historical filename, it is
+the unified Chat + Drive gate: Drive establishes the first peer pin, Chat must
+reuse that same identity and policy, and the suite checks the shared admin
+evidence/retry/audit control plane. It also covers the Drive share lifecycle,
+Chat delivery and durable retry, the global emergency stop, all four admission
+modes and directional domain rules independently for both features, and
+disabled feature capabilities. It tears the topology down on exit and does not
+touch the ordinary development stack. Set
+`KUTUP_FEDERATION_SKIP_BUILD=1` only when reusing an image already built from
+the current server sources.
+
+The intentionally breaking Chat and Drive cutovers have separate up/down
+isolation fixtures. Point `KUTUP_TEST_DB` at a disposable PostgreSQL database;
+each test creates and removes its own randomized schema while proving local
+product rows survive:
+
+```sh
+KUTUP_TEST_DB=postgres://... cargo test -p kutup-server \
+  --test federation_phase_c_migration_live -- --nocapture
+KUTUP_TEST_DB=postgres://... cargo test -p kutup-server \
+  --test federation_phase_d_migration_live -- --nocapture
 ```
 
 ---

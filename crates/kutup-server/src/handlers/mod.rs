@@ -2,20 +2,16 @@
 
 pub mod admin;
 pub mod auth;
+pub mod chat;
 pub mod collab;
 pub mod collections;
 pub mod devices;
-pub mod federation;
-pub mod fedproxy;
 pub mod file_assets;
 pub mod file_versions;
 pub mod files;
 pub mod shares;
 pub mod trash;
 pub mod tus;
-
-use std::sync::LazyLock;
-use std::time::Duration;
 
 use aws_sdk_s3::primitives::ByteStream;
 use axum::body::Body;
@@ -26,17 +22,6 @@ use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-
-/// Shared outbound HTTP client for federation calls — mirrors `fedHTTPClient`. Never follows
-/// redirects (so a malicious federation server can't 30x to an internal address and bypass
-/// the SSRF check applied to the original host) and times out at 30 s.
-pub(crate) static FED_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("build federation http client")
-});
 
 /// A random URL-safe token (base64, no padding) — mirrors `utils.RandomToken`.
 pub(crate) fn random_token(byte_len: usize) -> String {

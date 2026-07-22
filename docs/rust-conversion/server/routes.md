@@ -1,5 +1,10 @@
 # Route inventory + sqlx notes
 
+> Historical Go-to-Rust conversion inventory. It is not the current route
+> contract; use [`../../api.md`](../../api.md) and the generated OpenAPI document.
+> In particular, the legacy Drive `/fed`, `/fed-proxy`, `share-federated`, and
+> `fed-pubkey` routes listed below were removed by unified federation Phase D.
+
 Register each group in `build_router` (`crates/kutup-server/src/main.rs`) as its handlers
 land. `/api/health` is done. The full source of truth is `backend/main.go` (~lines
 117–230).

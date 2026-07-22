@@ -61,7 +61,7 @@ async function pumpFileIntoZip(
   signal?: AbortSignal,
 ): Promise<void> {
   const url = f.isRemote
-    ? `${base}/fed-proxy/${f.remoteShareId}/files/${f.id}/download`
+    ? `${base}/drive/federation/shares/${f.remoteShareId}/files/${f.id}/content`
     : `${base}/files/${f.id}/download`
   const entry = new ZipPassThrough(f.name)
   zip.add(entry)

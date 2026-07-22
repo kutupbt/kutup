@@ -1,0 +1,9 @@
+[bindings.kotlin]
+package_name = "dev.kutup.core"
+cdylib_name = "kutup_client_ffi"
+
+[bindings.swift]
+module_name = "KutupCore"
+ffi_module_name = "KutupCoreFFI"
+generate_module_map = true
+cdylib_name = "kutup_client_ffi"

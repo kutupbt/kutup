@@ -6,9 +6,16 @@
 //! groups (auth, files, collab, federation, …) are added in `build_router` as each
 //! handler slice lands.
 
+mod chat_federation;
+mod chat_hub;
+mod chat_transparency;
+mod chat_transparency_auditor;
+mod chat_transparency_monitor;
 mod config;
 mod db;
+mod drive_federation;
 mod error;
+mod federation;
 mod handlers;
 mod hub;
 mod jobs;
@@ -17,9 +24,11 @@ mod middleware;
 mod models;
 mod openapi;
 mod ratelimit;
+mod sealed_sender_service;
 mod ssrf;
 mod storage;
 mod storage_probe;
+mod telemetry;
 mod totp;
 
 use std::net::SocketAddr;
@@ -49,6 +58,7 @@ const BUILD_VERSION: &str = "dev";
 /// Max request body — mirrors the Fiber `BodyLimit: 10 GB`. Streaming upload routes
 /// (tus) disable this per-route once they land (`DefaultBodyLimit::disable()`).
 const BODY_LIMIT_BYTES: usize = 10 * 1024 * 1024 * 1024;
+const FED_CHAT_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Shared application state.
 #[derive(Clone)]
@@ -58,6 +68,16 @@ pub struct AppState {
     pub storage: storage::StorageService,
     /// In-memory collab-room registry (one room per fileId) — mirrors the Go `Hub`.
     pub hub: Arc<hub::Hub>,
+    /// Live chat WebSocket connections, keyed by (user, chat device).
+    pub chat_hub: chat_hub::ChatHub,
+    /// One shared v2 federation identity, resolver, trust store, policy engine,
+    /// replay store, and signed transport for every feature protocol.
+    pub(crate) federation: Option<Arc<federation::FederationStack>>,
+    /// Persistent operator identity for distinguished key-transparency heads.
+    pub transparency_authority: Arc<chat_transparency::TransparencyAuthority>,
+    /// Active root-signed online sealed-sender issuer. `None` keeps the
+    /// capability unadvertised and all issuance routes closed.
+    pub(crate) sealed_sender: Option<Arc<sealed_sender_service::SealedSenderService>>,
     /// Live SeaweedFS capacity probe for the admin dashboard; `None` disables it (the admin
     /// stats then fall back to `config.storage_total_bytes`).
     pub storage_probe: Option<Arc<storage_probe::StorageProbe>>,
@@ -65,17 +85,165 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,sqlx=warn".into()),
-        )
-        .init();
+    let _telemetry = telemetry::init()?;
 
     let config = Config::load();
     let pool = db::connect(&config.database_url).await?;
     db::migrate(&pool).await?;
     tracing::info!("migrations applied");
+    let args: Vec<String> = std::env::args().collect();
+    if args
+        .get(1)
+        .is_some_and(|value| value == "federation-identity")
+    {
+        if args.get(2).is_some_and(|value| value == "rotate") && args.len() == 3 {
+            run_federation_identity_rotation(&pool, &config).await?;
+            return Ok(());
+        }
+        anyhow::bail!("usage: kutup-server federation-identity rotate");
+    }
+    let rotate_transparency_policy = args
+        .get(1..)
+        .is_some_and(|args| args == ["feature-policy", "rotate", "chat-transparency"]);
+    let rotate_sealed_sender_policy = args
+        .get(1..)
+        .is_some_and(|args| args == ["feature-policy", "rotate", "sealed-sender"]);
+    if args.get(1).is_some_and(|value| value == "feature-policy")
+        && !rotate_transparency_policy
+        && !rotate_sealed_sender_policy
+    {
+        anyhow::bail!(
+            "usage: kutup-server feature-policy rotate <chat-transparency|sealed-sender>"
+        );
+    }
+
+    let transparency_authority = Arc::new(chat_transparency::TransparencyAuthority::from_config(
+        &config,
+    )?);
+    let federation = federation::FederationStack::from_config(
+        pool.clone(),
+        &config,
+        time::OffsetDateTime::now_utc(),
+    )
+    .await?
+    .map(Arc::new);
+    if let Some(federation) = &federation {
+        tracing::info!(
+            domain = federation.server_name(),
+            sequence = federation.local_identity().document().sequence,
+            fingerprint = federation.local_identity().fingerprint(),
+            "loaded unified federation identity"
+        );
+    }
+    let sealed_sender = sealed_sender_service::SealedSenderService::from_config(
+        &config,
+        time::OffsetDateTime::now_utc(),
+    )?;
+    let local_transparency_policy =
+        chat_transparency::local_transparency_policy(&pool, &config, &transparency_authority)
+            .await?;
+    if federation.is_some() && config.app_env == "production" && local_transparency_policy.is_none()
+    {
+        anyhow::bail!(
+            "production chat federation requires at least one independent transparency witness"
+        );
+    }
+    if let (Some(federation), Some(policy)) =
+        (federation.as_deref(), local_transparency_policy.as_ref())
+    {
+        let envelope = federation
+            .feature_policies()
+            .ensure_local(
+                federation,
+                kutup_federation_proto::FederatedFeaturePolicyTypeV1::ChatTransparency,
+                &policy.canonical_bytes().map_err(anyhow::Error::msg)?,
+                rotate_transparency_policy,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await?;
+        tracing::info!(
+            sequence = envelope.sequence,
+            policy_hash = envelope.policy_hash()?,
+            "loaded authenticated chat transparency policy"
+        );
+        telemetry::policy_event(
+            "chat_transparency",
+            if rotate_transparency_policy {
+                "rotated"
+            } else {
+                "loaded"
+            },
+        );
+        if rotate_transparency_policy {
+            println!(
+                "chat transparency policy rotated: domain={} sequence={} hash={}",
+                envelope.domain,
+                envelope.sequence,
+                envelope.policy_hash()?
+            );
+            return Ok(());
+        }
+    } else if rotate_transparency_policy {
+        anyhow::bail!(
+            "chat transparency policy rotation requires federation and a non-zero witness quorum"
+        );
+    }
+    if let (Some(federation), Some(service)) = (federation.as_deref(), sealed_sender.as_ref()) {
+        let envelope = federation
+            .feature_policies()
+            .ensure_local(
+                federation,
+                kutup_federation_proto::FederatedFeaturePolicyTypeV1::SealedSenderService,
+                &service
+                    .policy()
+                    .canonical_bytes()
+                    .map_err(anyhow::Error::msg)?,
+                rotate_sealed_sender_policy,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await?;
+        tracing::info!(
+            sequence = envelope.sequence,
+            policy_hash = envelope.policy_hash()?,
+            "loaded authenticated sealed sender service policy"
+        );
+        telemetry::policy_event(
+            "sealed_sender",
+            if rotate_sealed_sender_policy {
+                "rotated"
+            } else {
+                "loaded"
+            },
+        );
+        if rotate_sealed_sender_policy {
+            println!(
+                "sealed sender policy rotated: domain={} sequence={} hash={}",
+                envelope.domain,
+                envelope.sequence,
+                envelope.policy_hash()?
+            );
+            return Ok(());
+        }
+    } else if rotate_sealed_sender_policy {
+        anyhow::bail!(
+            "sealed sender policy rotation requires federation, policy JSON, and an online signer"
+        );
+    }
+    let transparency_backfill = chat_transparency::backfill_existing_manifests(&pool).await?;
+    if transparency_backfill > 0 {
+        tracing::info!(
+            manifests = transparency_backfill,
+            "seeded chat manifest transparency log"
+        );
+    }
+    let transparency_map_backfill =
+        chat_transparency::backfill_current_map(&pool, &transparency_authority).await?;
+    if transparency_map_backfill > 0 {
+        tracing::info!(
+            manifests = transparency_map_backfill,
+            "seeded current-manifest transparency map"
+        );
+    }
 
     // S3 (SeaweedFS) storage client — mirrors services.NewStorage in main.go.
     let storage = storage::StorageService::new(
@@ -89,7 +257,6 @@ async fn main() -> anyhow::Result<()> {
     // Subcommand dispatch — admin tooling that reuses the DB pool + storage without starting
     // the HTTP server. Mirrors the `os.Args[1]` switch in main.go (orphan-sweep). Runs to
     // completion and exits.
-    let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && args[1] == "orphan-sweep" {
         let code = run_orphan_sweep_cmd(&pool, &storage, &args[2..]).await;
         std::process::exit(code);
@@ -103,19 +270,40 @@ async fn main() -> anyhow::Result<()> {
 
     // Background maintenance jobs (version cleanup / quota reconcile / uploads sweeper /
     // trash retention).
-    jobs::spawn_all(pool.clone(), storage.clone(), config.trash_retention_days);
+    let chat_hub = chat_hub::ChatHub::default();
+    jobs::spawn_all(
+        pool.clone(),
+        storage.clone(),
+        config.trash_retention_days,
+        jobs::ChatMaintenancePolicy {
+            mailbox_retention_days: config.chat_mailbox_retention_days,
+            send_retention_days: config.chat_send_retention_days,
+            device_expiry_days: config.chat_device_expiry_days,
+        },
+        chat_hub.clone(),
+    );
 
     // Live SeaweedFS capacity probe (admin dashboard) — None when SEAWEEDFS_MASTER_URL is empty.
     let storage_probe =
         storage_probe::StorageProbe::new(&config.seaweedfs_master_url).map(Arc::new);
-
     let state = AppState {
         pool,
         config: Arc::new(config),
         storage,
         hub: Arc::new(hub::Hub::new()),
+        chat_hub,
+        federation,
+        transparency_authority,
+        sealed_sender,
         storage_probe,
     };
+    if let Some(federation) = state.federation.as_ref() {
+        federation.spawn_maintenance();
+    }
+    chat_federation::spawn_retry_worker(state.clone());
+    chat_transparency_monitor::spawn_monitor(state.clone());
+    chat_transparency_auditor::spawn_auditor(state.clone());
+    drive_federation::spawn_digest_backfill(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
     // `Router::layer` only runs for already-matched paths, so it can't rescue an unmatched
@@ -134,6 +322,28 @@ async fn main() -> anyhow::Result<()> {
         ),
     )
     .await?;
+    Ok(())
+}
+
+async fn run_federation_identity_rotation(pool: &PgPool, config: &Config) -> anyhow::Result<()> {
+    let runtime = federation::FederationRuntimeConfig::from_server_config(config)?
+        .ok_or_else(|| anyhow::anyhow!("unified federation is not configured"))?;
+    let previous_fingerprint = runtime.signing_key.verifying_key().to_bytes();
+    let previous_fingerprint = kutup_federation_proto::federation_key_id(&previous_fingerprint);
+    let result =
+        federation::rotate_local_identity(pool, &runtime, time::OffsetDateTime::now_utc()).await?;
+    let status = if result.already_rotated {
+        "already rotated"
+    } else {
+        "rotated"
+    };
+    println!(
+        "federation identity {status}: domain={} sequence={} old={} new={}",
+        runtime.server_name,
+        result.document.sequence,
+        kutup_federation_proto::grouped_fingerprint(&previous_fingerprint)?,
+        kutup_federation_proto::grouped_fingerprint(&result.document.key.key_id)?,
+    );
     Ok(())
 }
 
@@ -204,8 +414,8 @@ fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
 
     use handlers::{
-        admin, auth, collab, collections, devices, federation, fedproxy, file_assets,
-        file_versions, files, shares, trash, tus,
+        admin, auth, chat, collab, collections, devices, file_assets, file_versions, files, shares,
+        trash, tus,
     };
 
     Router::new()
@@ -214,6 +424,20 @@ fn build_router(state: AppState) -> Router {
         // docs/roadmap.md) — the machine-readable spec lives here meanwhile.
         .route("/api-docs/openapi.json", get(openapi_json))
         .route("/api/health", get(health))
+        .route(
+            "/.well-known/kutup/federation.json",
+            get(crate::federation::public_discovery)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/.well-known/kutup/federation/identity/:sequence",
+            get(crate::federation::public_identity_document)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/federation/policies/:feature",
+            get(crate::federation::get_local_feature_policy),
+        )
         // --- Auth routes (anonymous; rate-limited per the Go middleware chain) ---
         .route("/api/auth/settings", get(auth::get_public_settings))
         .route(
@@ -253,10 +477,9 @@ fn build_router(state: AppState) -> Router {
             "/api/collections",
             get(collections::list_collections).post(collections::create_collection),
         )
-        // Static segment registered alongside `:id` (matchit prefers the literal).
         .route(
-            "/api/collections/fed-pubkey",
-            get(collections::fetch_remote_pubkey),
+            "/api/drive/federation/users/:username",
+            get(drive_federation::fetch_remote_user),
         )
         .route(
             "/api/collections/:id",
@@ -273,13 +496,105 @@ fn build_router(state: AppState) -> Router {
             post(collections::share_collection),
         )
         .route(
-            "/api/collections/:id/share-federated",
-            post(collections::share_federated),
+            "/api/collections/:id/federated-shares",
+            post(drive_federation::create_federated_share),
         )
         .route("/api/collections/:id/files", get(files::list_files))
         // --- Devices (authenticated) ---
         .route("/api/devices", post(devices::register).get(devices::list))
         .route("/api/devices/:id", delete(devices::revoke))
+        // --- Chat (E2EE messaging; authenticated via AuthUser except the WS, which
+        // validates its token pre-upgrade like the collab WS) ---
+        .route(
+            "/api/chat/device",
+            post(chat::register_device).get(chat::list_devices),
+        )
+        .route("/api/chat/device/:deviceId", delete(chat::revoke_device))
+        .route("/api/chat/manifest", post(chat::publish_manifest))
+        .route(
+            "/api/chat/transparency/checkpoint",
+            get(chat::get_transparency_checkpoint)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/chat/transparency/witness",
+            post(chat::submit_transparency_witness)
+                .route_layer(DefaultBodyLimit::max(16 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/chat/transparency/domains/:domain/status",
+            get(chat_transparency_monitor::get_status),
+        )
+        .route(
+            "/api/chat/transparency/domains/:domain/verify",
+            post(chat_transparency_monitor::verify_now),
+        )
+        .route(
+            "/api/chat/transparency/domains/:domain/policy",
+            get(chat_transparency_monitor::get_policy_history),
+        )
+        .route(
+            "/api/chat/transparency/domains/:domain/checkpoint",
+            get(chat_transparency_monitor::get_remote_checkpoint),
+        )
+        .route(
+            "/api/chat/profile",
+            get(chat::get_own_profile)
+                .put(chat::put_profile)
+                .route_layer(DefaultBodyLimit::max(1024 * 1024)),
+        )
+        .route(
+            "/api/chat/sealed-sender/certificate",
+            post(sealed_sender_service::issue_sender_certificate)
+                .route_layer(DefaultBodyLimit::max(8 * 1024)),
+        )
+        .route(
+            "/api/chat/sealed-sender/domains/:domain/policy",
+            get(sealed_sender_service::get_domain_policy),
+        )
+        .route(
+            "/api/chat/users/:username/profile/:version",
+            get(chat::get_user_profile),
+        )
+        .route(
+            "/api/chat/users/:username/manifest",
+            get(chat::get_user_manifest),
+        )
+        .route(
+            "/api/chat/users/:username/manifest-history",
+            get(chat::get_manifest_history).route_layer(from_fn(middleware::rate_limit_chat_keys)),
+        )
+        .route("/api/chat/keys", put(chat::replenish_keys))
+        .route("/api/chat/keys/count", get(chat::prekey_count))
+        .route(
+            "/api/chat/users/:username/keys",
+            get(chat::get_user_bundles).route_layer(from_fn(middleware::rate_limit_chat_keys)),
+        )
+        .route(
+            "/api/chat/anonymous/users/:username/keys",
+            post(chat::get_anonymous_bundles)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
+        )
+        .route(
+            "/api/chat/anonymous/users/:username/messages",
+            post(chat::send_sealed_messages)
+                .route_layer(DefaultBodyLimit::max(1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
+        )
+        .route(
+            "/api/chat/users/:username/messages",
+            post(chat::send_messages).route_layer(DefaultBodyLimit::max(FED_CHAT_BODY_LIMIT_BYTES)),
+        )
+        .route(
+            "/api/chat/sync/messages",
+            post(chat::sync_messages).route_layer(DefaultBodyLimit::max(FED_CHAT_BODY_LIMIT_BYTES)),
+        )
+        .route("/api/chat/messages", get(chat::drain_mailbox))
+        .route("/api/chat/messages/ack", post(chat::ack_messages))
+        .route("/api/chat/ws-ticket", post(chat::create_ws_ticket))
+        .route("/api/chat/ws", get(chat::ws))
         // --- tus.io resumable uploads. The OPTIONS discovery is served by the
         // `tus_options_passthrough` layer (mirroring Fiber, which lets non-preflight
         // OPTIONS reach the handler); the rest authenticate via the AuthUser extractor
@@ -337,51 +652,98 @@ fn build_router(state: AppState) -> Router {
             "/api/share/:token/download/:fileId",
             get(shares::download_public_share_file),
         )
-        // --- Federation public endpoints (no auth — the access token is the capability;
-        // called by remote kutup servers). `/fed/users` is rate-limited (60/min/IP). ---
+        // --- Server-to-server endpoints. Every feature uses the shared v2
+        // identity, discovery, policy, pinning, replay, and signed transport. ---
         .route(
-            "/api/fed/users",
-            get(federation::get_user_by_username)
+            "/api/fed/chat/users/:username/keys",
+            get(chat_federation::get_user_bundles)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
-        .route("/api/fed/invites/:token", get(federation::get_invite))
         .route(
-            "/api/fed/shares/:token/files",
-            get(federation::list_share_files).post(federation::upload_share_file),
+            "/api/fed/chat/sealed/users/:username/keys",
+            post(chat_federation::get_sealed_user_bundles)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/shares/:token/files/:fileId/download",
-            get(federation::download_share_file),
+            "/api/fed/chat/sealed/messages",
+            post(chat_federation::deliver_sealed_messages)
+                .route_layer(DefaultBodyLimit::max(1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/shares/:token/files/:fileId",
-            delete(federation::delete_share_file),
-        )
-        // --- Federation proxy (authenticated; the recipient's browser proxies to the
-        // remote server through these so it never holds the remote token). ---
-        .route(
-            "/api/fed-proxy/incoming",
-            post(fedproxy::add_incoming_share).get(fedproxy::list_incoming_shares),
+            "/api/fed/policies/:feature",
+            get(crate::federation::get_federated_feature_policy)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed-proxy/incoming/:shareId",
-            delete(fedproxy::remove_incoming_share),
+            "/api/fed/chat/transparency/checkpoint",
+            get(chat_federation::get_transparency_checkpoint)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed-proxy/:shareId/files",
-            get(fedproxy::proxy_list_files),
+            "/api/fed/chat/users/:username/profile/:version",
+            get(chat_federation::get_user_profile)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed-proxy/:shareId/files/:fileId/download",
-            get(fedproxy::proxy_download),
+            "/api/fed/chat/users/:username/manifest-history",
+            get(chat_federation::get_manifest_history)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed-proxy/:shareId/upload",
-            post(fedproxy::proxy_upload),
+            "/api/fed/chat/messages",
+            post(chat_federation::deliver_messages)
+                .route_layer(DefaultBodyLimit::max(FED_CHAT_BODY_LIMIT_BYTES))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed-proxy/:shareId/files/:fileId",
-            delete(fedproxy::proxy_delete),
+            "/api/fed/drive/users/:username",
+            get(drive_federation::get_user).route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/invite",
+            get(drive_federation::get_invite)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/files",
+            get(drive_federation::list_files)
+                .post(drive_federation::upload_file)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/files/:fileId/content",
+            get(drive_federation::download_file)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/files/:fileId",
+            delete(drive_federation::delete_file)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        // --- Authenticated local Drive adapter. The browser never receives a
+        // stored remote capability after invite acceptance. ---
+        .route(
+            "/api/drive/federation/shares",
+            post(drive_federation::accept_incoming_share)
+                .get(drive_federation::list_incoming_shares),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId",
+            delete(drive_federation::remove_incoming_share),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/files",
+            get(drive_federation::proxy_list_files).post(drive_federation::proxy_upload),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId/content",
+            get(drive_federation::proxy_download),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/files/:fileId",
+            delete(drive_federation::proxy_delete),
         )
         // --- Admin (authenticated + isAdmin via the AdminUser extractor; a stricter
         //     per-IP rate limit fronts every admin route). ---
@@ -403,9 +765,51 @@ fn build_router(state: AppState) -> Router {
                 .route("/api/admin/users/:id/wipe", post(admin::wipe_user))
                 .route("/api/admin/stats", get(admin::get_stats))
                 .route("/api/admin/activity", get(admin::activity))
+                .route("/api/admin/activity/export", get(admin::activity_export))
                 .route(
                     "/api/admin/settings",
                     get(admin::get_settings).put(admin::update_settings),
+                )
+                .route(
+                    "/api/admin/federation",
+                    get(admin::get_federation_control_plane).put(admin::update_federation_policy),
+                )
+                .route(
+                    "/api/admin/federation/rules/:feature/:domain",
+                    put(admin::upsert_federation_domain_rule)
+                        .delete(admin::delete_federation_domain_rule),
+                )
+                .route(
+                    "/api/admin/federation/peers/retry",
+                    post(admin::bulk_retry_federation_peers),
+                )
+                .route(
+                    "/api/admin/federation/peers/:domain/evidence",
+                    get(admin::get_federation_peer_evidence),
+                )
+                .route(
+                    "/api/admin/federation/peers/:domain/verify",
+                    post(admin::verify_federation_peer),
+                )
+                .route(
+                    "/api/admin/federation/peers/:domain/retry",
+                    post(admin::retry_federation_peer),
+                )
+                .route(
+                    "/api/admin/federation/peers/:domain/repin",
+                    post(admin::repin_federation_peer),
+                )
+                .route(
+                    "/api/admin/chat/transparency/domains/:domain/witness-views",
+                    post(chat_transparency_auditor::submit_witness_view),
+                )
+                .route(
+                    "/api/admin/chat/transparency/domains/:domain/evidence",
+                    get(chat_transparency_auditor::list_evidence),
+                )
+                .route(
+                    "/api/admin/chat/transparency/domains/:domain/recover",
+                    post(chat_transparency_auditor::recover_domain),
                 )
                 .route_layer(from_fn(middleware::rate_limit_admin)),
         )
