@@ -59,12 +59,12 @@ run_phase setup
 compose stop edge-b
 run_phase queue
 compose restart backend-a
-# The nginx test edge resolves its upstream when nginx starts. Refresh it after
-# the origin process restart so this test exercises the restarted backend rather
-# than a stale disposable proxy connection.
-compose restart edge-a
 compose start edge-b
 compose up --detach --wait
+# The nginx test edges resolve their upstreams when nginx starts. Compose may
+# recreate a build-backed dependency such as the frontend above, so restart both
+# edges only after every dependency has settled on its final container address.
+compose restart edge-a edge-b
 wait_url "http://127.0.0.1:$port_a/api/health"
 wait_url "http://127.0.0.1:$port_b/api/health"
 
