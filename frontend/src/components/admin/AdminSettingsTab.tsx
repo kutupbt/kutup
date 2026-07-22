@@ -4,6 +4,7 @@ import { useAdminSettings, useUpdateAdminSettings, useAdminStats } from '@/api/h
 import { formatBytes } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { AdminFederationPolicyCard } from '@/components/admin/AdminFederationPolicyCard'
+import { AdminTransparencyCard } from '@/components/admin/AdminTransparencyCard'
 
 /**
  * AdminSettingsTab — Settings surface for the desktop admin redesign.
@@ -69,6 +70,8 @@ export function AdminSettingsTab() {
       </SettingsCard>
 
       <AdminFederationPolicyCard className="mb-5" />
+
+      <AdminTransparencyCard />
 
       {/* Storage backend */}
       <SettingsCard

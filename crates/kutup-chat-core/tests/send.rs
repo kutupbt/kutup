@@ -75,6 +75,7 @@ fn wrap(env: &kutup_chat_proto::OutgoingEnvelope, sender: &str) -> DeliveredEnve
         id: format!("m-{}", env.device_id),
         cursor: 1,
         sender: Some(sender.to_string()),
+        sealed_sender: false,
         sender_device_id: 1,
         envelope_type: env.envelope_type,
         suite: env.suite,
@@ -522,6 +523,7 @@ impl ChatTransport for MockServer {
                     id: format!("sync-{}-{}", req.send_id, envelope.device_id),
                     cursor: first_cursor + offset as u64,
                     sender: Some("alice".into()),
+                    sealed_sender: false,
                     sender_device_id: req.sender_device_id,
                     envelope_type: envelope.envelope_type,
                     suite: envelope.suite,
@@ -1093,7 +1095,8 @@ fn explicit_contact_state_converges_over_authenticated_linked_device_sync() {
     server.set_sync_active(vec![(1, reg_id(&alice1)), (2, reg_id(&alice2))]);
 
     let mut first = Engine::new_for_development(alice1, server.clone());
-    let local = block_on(first.block_contact("bob", "2026-07-16T10:05:00Z", &mut rng)).unwrap();
+    let local =
+        block_on(first.block_contact("bob", &[0; 32], "2026-07-16T10:05:00Z", &mut rng)).unwrap();
     assert_eq!(local.state, ContactState::Blocked);
     assert!(!local.sync_pending);
     assert_eq!(server.synced.borrow().len(), 1);
@@ -1124,6 +1127,7 @@ fn pending_profile_key_is_withheld_until_its_ciphertext_is_published() {
     *server.fail_profile_uploads.borrow_mut() = 1;
 
     let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
+    alice.set_local_server("chat.example").unwrap();
     let wrapping = kutup_chat_core::derive_wrapping_key(&[42; 32]).unwrap();
     assert!(block_on(alice.initialize_profile(&wrapping, "Alice", &mut rng)).is_err());
 

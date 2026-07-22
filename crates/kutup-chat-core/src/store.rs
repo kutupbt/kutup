@@ -24,8 +24,8 @@ use libsignal_protocol::*;
 use uuid::Uuid;
 
 use crate::db::{
-    ChatDb, ContactRecord, InboundEnvelope, InboxMessage, LocalIdentity, ManifestTrust,
-    OutboxEntry, Pending, SentMessage,
+    ChatDb, ContactRecord, InboundEnvelope, InboxMessage, LocalIdentity, ManifestHistoryRecord,
+    ManifestTrust, OutboxEntry, Pending, SentMessage,
 };
 use crate::error::{ChatError, Result as ChatResult};
 
@@ -195,6 +195,13 @@ impl ChatStore {
             .borrow_mut()
             .manifest_trust
             .insert(trust.peer.clone(), trust);
+    }
+
+    pub(crate) fn stage_manifest_history(&self, record: ManifestHistoryRecord) {
+        self.pending
+            .borrow_mut()
+            .manifest_history
+            .insert((record.peer.clone(), record.version), record);
     }
 
     pub(crate) fn stage_transparency_trust(&self, trust: crate::TransparencyTrust) {

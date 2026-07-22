@@ -108,10 +108,14 @@ fn client_ip(addr: SocketAddr, req: &Request) -> String {
 async fn limit(
     addr: SocketAddr,
     limiter: &ratelimit::RateLimiter,
+    telemetry_scope: Option<&'static str>,
     req: Request,
     next: Next,
 ) -> Response {
     if !limiter.allow(&client_ip(addr, &req)) {
+        if let Some(scope) = telemetry_scope {
+            crate::telemetry::rate_limit_rejection(scope);
+        }
         return AppError::too_many_requests("too many requests").into_response();
     }
     next.run(req).await
@@ -123,7 +127,7 @@ pub async fn rate_limit_login(
     req: Request,
     next: Next,
 ) -> Response {
-    limit(addr, &ratelimit::LOGIN, req, next).await
+    limit(addr, &ratelimit::LOGIN, None, req, next).await
 }
 
 /// 20/min/IP — mirrors `PreflightRateLimit`.
@@ -132,7 +136,7 @@ pub async fn rate_limit_preflight(
     req: Request,
     next: Next,
 ) -> Response {
-    limit(addr, &ratelimit::PREFLIGHT, req, next).await
+    limit(addr, &ratelimit::PREFLIGHT, None, req, next).await
 }
 
 /// Coarse 120/min/IP outer wall. The handler additionally applies the primary
@@ -142,7 +146,22 @@ pub async fn rate_limit_chat_keys(
     req: Request,
     next: Next,
 ) -> Response {
-    limit(addr, &ratelimit::CHAT_KEYS_IP, req, next).await
+    limit(addr, &ratelimit::CHAT_KEYS_IP, Some("prekey_ip"), req, next).await
+}
+
+pub async fn rate_limit_chat_anonymous(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    limit(
+        addr,
+        &ratelimit::CHAT_ANONYMOUS_IP,
+        Some("anonymous_ip"),
+        req,
+        next,
+    )
+    .await
 }
 
 /// 5/hr/IP — mirrors `RecoveryRateLimit`.
@@ -151,7 +170,7 @@ pub async fn rate_limit_recovery(
     req: Request,
     next: Next,
 ) -> Response {
-    limit(addr, &ratelimit::RECOVERY, req, next).await
+    limit(addr, &ratelimit::RECOVERY, None, req, next).await
 }
 
 /// 60/min/IP — coarse pre-authentication limit for server-to-server directory routes.
@@ -160,7 +179,14 @@ pub async fn rate_limit_fed_users(
     req: Request,
     next: Next,
 ) -> Response {
-    limit(addr, &ratelimit::FED_USERS, req, next).await
+    limit(
+        addr,
+        &ratelimit::FED_USERS,
+        Some("federation_ip"),
+        req,
+        next,
+    )
+    .await
 }
 
 /// 10/hr/IP — `/api/auth/register`.
@@ -169,7 +195,7 @@ pub async fn rate_limit_register(
     req: Request,
     next: Next,
 ) -> Response {
-    limit(addr, &ratelimit::REGISTER, req, next).await
+    limit(addr, &ratelimit::REGISTER, None, req, next).await
 }
 
 /// 120/min/IP — every `/api/admin/*` route.
@@ -178,7 +204,7 @@ pub async fn rate_limit_admin(
     req: Request,
     next: Next,
 ) -> Response {
-    limit(addr, &ratelimit::ADMIN, req, next).await
+    limit(addr, &ratelimit::ADMIN, None, req, next).await
 }
 
 #[cfg(test)]
@@ -199,7 +225,7 @@ mod tests {
         req: Request,
         next: Next,
     ) -> Response {
-        limit(addr, &TEST_LIMITER, req, next).await
+        limit(addr, &TEST_LIMITER, None, req, next).await
     }
 
     fn req(ip: &str, real_ip: Option<&str>) -> Request<Body> {

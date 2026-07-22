@@ -26,7 +26,7 @@ export function isSupportedChat(capabilities: ChatCapabilities | null | undefine
       Boolean(capabilities.transparencyOperatorPublicKey) &&
       (capabilities.transparencyWitnessQuorum ?? 0) <=
         (capabilities.transparencyWitnesses?.length ?? 0) &&
-      (!capabilities.federation || canonicalServer),
+      canonicalServer,
   )
 }
 

@@ -130,6 +130,7 @@ fn scheduled_monitor_persists_status_and_blocks_after_verification_failure() {
     let policy = TransparencyPolicy {
         scopes: vec![TransparencyScopePolicy {
             scope: "local".into(),
+            log_id: None,
             operator_key_id: kutup_chat_proto::transparency_signing_key_id(&public),
             operator_public_key: base64::Engine::encode(
                 &base64::engine::general_purpose::STANDARD,
@@ -144,6 +145,8 @@ fn scheduled_monitor_persists_status_and_blocks_after_verification_failure() {
                 ),
             }],
             witness_quorum: 1,
+            maximum_checkpoint_age_seconds: None,
+            maximum_clock_skew_seconds: None,
         }],
     };
 

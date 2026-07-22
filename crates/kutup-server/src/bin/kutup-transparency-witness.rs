@@ -5,14 +5,23 @@
 //! statement, submits that attestation, and only then advances its local state.
 //! Its signing seed and state file must live outside the log-server deployment.
 
+use std::fs::OpenOptions;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use axum::{Json, Router};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use ed25519_dalek::SigningKey;
 use kutup_chat_proto::{
     SubmitTransparencyWitnessRequest, TransparencyCheckpoint, TransparencyCheckpointResponse,
+    TransparencySignedStatementV1, WitnessViewV1, MAX_WITNESS_VIEW_STATEMENTS,
 };
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -27,12 +36,14 @@ struct Config {
     operator_public_key: String,
     state_file: PathBuf,
     interval: Duration,
+    listen: Option<std::net::SocketAddr>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WitnessState {
     checkpoint: TransparencyCheckpoint,
+    view: WitnessViewV1,
 }
 
 #[tokio::main]
@@ -57,8 +68,23 @@ async fn main() -> anyhow::Result<()> {
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(30))
         .build()?;
+    let published = Arc::new(RwLock::new(
+        load_state(&config.state_file)?.map(|state| state.view),
+    ));
+    if let Some(listen) = config.listen {
+        let listener = tokio::net::TcpListener::bind(listen).await?;
+        let app = Router::new()
+            .route("/v1/view", get(get_view))
+            .with_state(Arc::clone(&published));
+        tokio::spawn(async move {
+            if let Err(error) = axum::serve(listener, app).await {
+                tracing::error!(%error, "witness view endpoint stopped");
+            }
+        });
+        tracing::info!(%listen, "serving bounded signed witness views");
+    }
     loop {
-        if let Err(error) = observe_once(&client, &config).await {
+        if let Err(error) = observe_once(&client, &config, &published).await {
             tracing::error!(%error, "transparency witness observation failed");
             if config.interval.is_zero() {
                 return Err(error);
@@ -102,6 +128,9 @@ impl Config {
             operator_public_key: required("KUTUP_WITNESS_OPERATOR_PUBLIC_KEY")?,
             state_file: PathBuf::from(required("KUTUP_WITNESS_STATE_FILE")?),
             interval: Duration::from_secs(interval),
+            listen: optional("KUTUP_WITNESS_LISTEN")
+                .map(|value| value.parse())
+                .transpose()?,
         })
     }
 }
@@ -116,7 +145,11 @@ fn signing_key() -> anyhow::Result<SigningKey> {
     Ok(SigningKey::from_bytes(&seed))
 }
 
-async fn observe_once(client: &reqwest::Client, config: &Config) -> anyhow::Result<()> {
+async fn observe_once(
+    client: &reqwest::Client,
+    config: &Config,
+    published: &Arc<RwLock<Option<WitnessViewV1>>>,
+) -> anyhow::Result<()> {
     let prior = load_state(&config.state_file)?;
     let prior_size = prior.as_ref().map_or(0, |state| state.checkpoint.tree_size);
     let checkpoint_url = config.target.join("api/chat/transparency/checkpoint")?;
@@ -136,6 +169,35 @@ async fn observe_once(client: &reqwest::Client, config: &Config) -> anyhow::Resu
     {
         anyhow::bail!("operator key does not match witness policy");
     }
+    if let Some(prior) = prior
+        .as_ref()
+        .filter(|state| state.checkpoint.tree_size == head.checkpoint.tree_size)
+    {
+        let statement = prior
+            .view
+            .statements
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("witness state has no signed statement"))?;
+        let same_operator_statement = statement.checkpoint == head.checkpoint
+            && statement.map_root == head.map_root
+            && statement.authentication.issued_at == head.authentication.issued_at
+            && statement.authentication.operator_key_id == head.authentication.operator_key_id
+            && statement.authentication.operator_public_key
+                == head.authentication.operator_public_key
+            && statement.authentication.operator_signature
+                == head.authentication.operator_signature;
+        if !same_operator_statement {
+            anyhow::bail!(
+                "operator equivocation at transparency tree size {}",
+                head.checkpoint.tree_size
+            );
+        }
+        tracing::debug!(
+            tree_size = head.checkpoint.tree_size,
+            "transparency checkpoint is unchanged"
+        );
+        return Ok(());
+    }
 
     // Existing witness statements do not participate in the bytes signed by
     // another witness. Remove them from the submitted object for clarity.
@@ -154,25 +216,66 @@ async fn observe_once(client: &reqwest::Client, config: &Config) -> anyhow::Resu
         .post(submit_url)
         .json(&SubmitTransparencyWitnessRequest {
             tree_size: head.checkpoint.tree_size,
-            attestation,
+            attestation: attestation.clone(),
         })
         .send()
         .await?;
     if !response.status().is_success() {
         anyhow::bail!("witness submission returned {}", response.status());
     }
-    store_state(
-        &config.state_file,
-        &WitnessState {
+    if prior_size < head.checkpoint.tree_size {
+        head.authentication.witnesses.push(attestation);
+        let statement = TransparencySignedStatementV1 {
             checkpoint: head.checkpoint.clone(),
-        },
-    )?;
+            map_root: head.map_root,
+            authentication: head.authentication,
+        };
+        let mut statements = prior
+            .as_ref()
+            .map(|state| state.view.statements.clone())
+            .unwrap_or_default();
+        statements.push(statement);
+        if statements.len() > MAX_WITNESS_VIEW_STATEMENTS {
+            statements.drain(..statements.len() - MAX_WITNESS_VIEW_STATEMENTS);
+        }
+        let view = WitnessViewV1::sign(
+            config.witness_id.clone(),
+            OffsetDateTime::now_utc().unix_timestamp(),
+            statements,
+            &config.signing_key,
+        )
+        .map_err(anyhow::Error::msg)?;
+        store_state(
+            &config.state_file,
+            &WitnessState {
+                checkpoint: head.checkpoint.clone(),
+                view: view.clone(),
+            },
+        )?;
+        *published
+            .write()
+            .map_err(|_| anyhow::anyhow!("witness view lock is poisoned"))? = Some(view);
+    }
     tracing::info!(
         tree_size = head.checkpoint.tree_size,
         root_hash = head.checkpoint.root_hash,
         "transparency checkpoint witnessed"
     );
     Ok(())
+}
+
+async fn get_view(State(published): State<Arc<RwLock<Option<WitnessViewV1>>>>) -> Response {
+    match published.read() {
+        Ok(view) => match view.clone() {
+            Some(view) => Json(view).into_response(),
+            None => (StatusCode::NOT_FOUND, "witness has no observation").into_response(),
+        },
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "witness state unavailable",
+        )
+            .into_response(),
+    }
 }
 
 fn load_state(path: &Path) -> anyhow::Result<Option<WitnessState>> {
@@ -190,8 +293,16 @@ fn store_state(path: &Path, state: &WitnessState) -> anyhow::Result<()> {
     std::fs::create_dir_all(parent)?;
     let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
     let bytes = serde_json::to_vec(state)?;
-    std::fs::write(&temporary, bytes)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    drop(file);
     std::fs::rename(&temporary, path)?;
+    OpenOptions::new().read(true).open(parent)?.sync_all()?;
     Ok(())
 }
 

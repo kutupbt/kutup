@@ -62,7 +62,7 @@ export class ChatService {
   private retryAttempt = 0
   private disposed = false
   private reconcilePromise: Promise<ReceiveReport> | null = null
-  private transparencyPromise: Promise<TransparencyMonitorStatus> | null = null
+  private readonly transparencyPromises = new Map<string, Promise<TransparencyMonitorStatus>>()
 
   private constructor(
     client: WasmChatClientHandle,
@@ -111,6 +111,8 @@ export class ChatService {
       wasm.WasmChatClient.open(
         databaseName,
         options.username,
+        capabilities.serverName!,
+        capabilities.sealedSender,
         options.masterKey,
         transport,
         transparencyPolicy,
@@ -247,21 +249,23 @@ export class ChatService {
     }
   }
 
-  monitorTransparency(): Promise<TransparencyMonitorStatus> {
-    if (this.transparencyPromise) return this.transparencyPromise
-    this.transparencyPromise = this.withLock(() => this.client.monitorTransparency('local'))
+  monitorTransparency(scope = 'local'): Promise<TransparencyMonitorStatus> {
+    const existing = this.transparencyPromises.get(scope)
+    if (existing) return existing
+    const pending = this.withLock(() => this.client.monitorTransparency(scope))
       .then((status) => {
         this.notifyPeers()
         return status
       })
       .finally(() => {
-        this.transparencyPromise = null
+        this.transparencyPromises.delete(scope)
       })
-    return this.transparencyPromise
+    this.transparencyPromises.set(scope, pending)
+    return pending
   }
 
-  transparencyStatus(): Promise<TransparencyMonitorStatus | undefined> {
-    return this.withLock(() => this.client.transparencyMonitorStatus('local'))
+  transparencyStatus(scope = 'local'): Promise<TransparencyMonitorStatus | undefined> {
+    return this.withLock(() => this.client.transparencyMonitorStatus(scope))
   }
 
   async verifyAuthority(peer: string): Promise<void> {

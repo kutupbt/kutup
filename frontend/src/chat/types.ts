@@ -140,7 +140,23 @@ export interface ChatTransportPort {
     transparencyTreeSize: string,
   ): Promise<unknown>
   fetchTransparencyCheckpoint(scope: string, fromTreeSize: string): Promise<unknown>
+  fetchTransparencyPolicy(domain: string): Promise<unknown>
   fetchManifest(username: string): Promise<unknown | null>
+  fetchManifestRange(
+    username: string,
+    fromVersion: string,
+    toVersion: string,
+    pageFromVersion: string,
+    cursor: string | null,
+    transparencyTreeSize: string,
+  ): Promise<unknown>
+  fetchSealedSenderPolicy(domain: string): Promise<unknown>
+  fetchSenderCertificate(deviceId: number): Promise<unknown>
+  fetchSealedBundles(
+    username: string,
+    capability: string,
+    transparencyTreeSize: string,
+  ): Promise<unknown>
   publishManifest(manifest: unknown, transparencyTreeSize: string): Promise<unknown>
   fetchOwnProfile(): Promise<unknown | null>
   publishProfile(profile: unknown): Promise<unknown>
@@ -148,6 +164,13 @@ export interface ChatTransportPort {
   prekeyCount(deviceId: number): Promise<unknown>
   replenishPrekeys(deviceId: number, request: unknown): Promise<void>
   sendMessage(
+    username: string,
+    request: unknown,
+  ): Promise<
+    | { kind: 'delivered'; deduplicated?: boolean }
+    | { kind: 'mismatch'; mismatch: unknown }
+  >
+  sendSealedMessage(
     username: string,
     request: unknown,
   ): Promise<
@@ -204,6 +227,8 @@ export interface ChatWasmModule {
     open(
       databaseName: string,
       user: string,
+      serverName: string,
+      sealedSenderEnabled: boolean,
       masterKey: Uint8Array,
       transport: ChatTransportPort,
       transparencyPolicy: unknown,

@@ -21,6 +21,7 @@ mod error;
 mod keys;
 mod manifest;
 mod profile;
+mod sealed_sender;
 mod session;
 mod store;
 mod transport;
@@ -35,9 +36,9 @@ pub use db::indexed_db::IndexedDbChatDb;
 pub use db::sqlite::SqliteChatDb;
 pub use db::{
     AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState,
-    InboxMessage, LocalIdentity, LocalProfile, ManifestTrust, OutboxEntry, OutboxSyncLeg,
-    PeerProfile, Pending, SentMessage, TransparencyMonitorState, TransparencyMonitorStatus,
-    TransparencyTrust, TransparencyWitnessTrust,
+    InboxMessage, LocalIdentity, LocalProfile, ManifestHistoryRecord, ManifestTrust, OutboxEntry,
+    OutboxSyncLeg, PeerProfile, Pending, SentMessage, TransparencyMonitorState,
+    TransparencyMonitorStatus, TransparencyTrust, TransparencyWitnessTrust,
 };
 pub use engine::{
     ChatEvent, Engine, EngineState, InboundFailure, PreKeyMaintenanceReport, ReceiveReport,

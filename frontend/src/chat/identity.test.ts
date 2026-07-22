@@ -38,11 +38,11 @@ describe('canonical chat identity', () => {
     expect(conversationKey(directConversation(address))).toBe('direct:alice@example.org')
   })
 
-  it('keeps canonical UI identity separate from the legacy local core key', () => {
+  it('keeps the canonical federation identity at the core boundary', () => {
     const local = { username: 'alice' }
     const canonical = withHomeServer(local, 'chat.example')
     expect(canonicalAccountAddress(canonical)).toBe('alice@chat.example')
-    expect(toCoreAccountAddress(canonical, 'chat.example')).toBe('alice')
+    expect(toCoreAccountAddress(canonical, 'chat.example')).toBe('alice@chat.example')
     expect(toCoreAccountAddress({ username: 'bob', server: 'remote.example' }, 'chat.example')).toBe(
       'bob@remote.example',
     )

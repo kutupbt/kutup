@@ -299,6 +299,7 @@ fn chat_v1_contract() {
     // readable. Rotation advances the owner head without deleting the old
     // ciphertext version while its key update is in flight.
     let access_v1 = [21u8; 16];
+    let delivery_v1 = [23u8; 16];
     let profile_v1 = json!({
         "version": "11".repeat(32),
         "revision": 1,
@@ -306,6 +307,7 @@ fn chat_v1_contract() {
         "name": b64(&[31u8; 12 + 53 + 16]),
         "wrappedKey": b64(&[41u8; 12 + 32 + 16]),
         "accessKeyVerifier": hex::encode(Sha256::digest(access_v1)),
+        "deliveryCapabilityVerifier": hex::encode(Sha256::digest(delivery_v1)),
     });
     let put = c
         .put(format!("{base}/api/chat/profile"))
@@ -341,8 +343,10 @@ fn chat_v1_contract() {
     assert_eq!(visible_v1["name"], profile_v1["name"]);
     assert!(visible_v1.get("wrappedKey").is_none());
     assert!(visible_v1.get("accessKeyVerifier").is_none());
+    assert!(visible_v1.get("deliveryCapabilityVerifier").is_none());
 
     let access_v2 = [22u8; 16];
+    let delivery_v2 = [24u8; 16];
     let profile_v2 = json!({
         "version": "12".repeat(32),
         "revision": 2,
@@ -350,6 +354,7 @@ fn chat_v1_contract() {
         "name": b64(&[32u8; 12 + 53 + 16]),
         "wrappedKey": b64(&[42u8; 12 + 32 + 16]),
         "accessKeyVerifier": hex::encode(Sha256::digest(access_v2)),
+        "deliveryCapabilityVerifier": hex::encode(Sha256::digest(delivery_v2)),
     });
     let rotated = c
         .put(format!("{base}/api/chat/profile"))

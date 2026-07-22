@@ -16,7 +16,9 @@ use sha2::{Digest, Sha256};
 
 use crate::db::{LocalProfile, PeerProfile};
 use crate::error::{ChatError, Result};
-use kutup_chat_proto::{ChatProfileResponse, PutChatProfileRequest};
+use kutup_chat_proto::{
+    capability_hash, derive_delivery_capability, ChatProfileResponse, PutChatProfileRequest,
+};
 
 pub const PROFILE_KEY_BYTES: usize = 32;
 pub const PROFILE_ACCESS_KEY_BYTES: usize = 16;
@@ -89,6 +91,7 @@ pub fn create_local_profile<R: Rng + CryptoRng>(
     avatar_content_type: Option<String>,
     source_device_id: u32,
     wrapping_key: &[u8; 32],
+    canonical_recipient: &str,
     rng: &mut R,
 ) -> Result<LocalProfile> {
     let mut key = vec![0u8; PROFILE_KEY_BYTES];
@@ -103,6 +106,7 @@ pub fn create_local_profile<R: Rng + CryptoRng>(
             source_device_id,
         },
         wrapping_key,
+        canonical_recipient,
         rng,
     )
 }
@@ -114,6 +118,7 @@ pub fn update_local_profile<R: Rng + CryptoRng>(
     avatar_content_type: Option<String>,
     source_device_id: u32,
     wrapping_key: &[u8; 32],
+    canonical_recipient: &str,
     rng: &mut R,
 ) -> Result<LocalProfile> {
     let revision = current
@@ -130,6 +135,7 @@ pub fn update_local_profile<R: Rng + CryptoRng>(
             source_device_id,
         },
         wrapping_key,
+        canonical_recipient,
         rng,
     )
 }
@@ -138,6 +144,7 @@ pub fn rotate_local_profile<R: Rng + CryptoRng>(
     current: &LocalProfile,
     source_device_id: u32,
     wrapping_key: &[u8; 32],
+    canonical_recipient: &str,
     rng: &mut R,
 ) -> Result<LocalProfile> {
     let mut key = vec![0u8; PROFILE_KEY_BYTES];
@@ -156,6 +163,7 @@ pub fn rotate_local_profile<R: Rng + CryptoRng>(
             source_device_id,
         },
         wrapping_key,
+        canonical_recipient,
         rng,
     )
 }
@@ -168,6 +176,7 @@ pub(crate) fn rebase_local_profile<R: Rng + CryptoRng>(
     remote: &LocalProfile,
     source_device_id: u32,
     wrapping_key: &[u8; 32],
+    canonical_recipient: &str,
     rng: &mut R,
 ) -> Result<LocalProfile> {
     let rebased = update_local_profile(
@@ -177,18 +186,26 @@ pub(crate) fn rebase_local_profile<R: Rng + CryptoRng>(
         desired.avatar_content_type.clone(),
         source_device_id,
         wrapping_key,
+        canonical_recipient,
         rng,
     )?;
     if desired.key == remote.key {
         Ok(rebased)
     } else {
-        rotate_local_profile(&rebased, source_device_id, wrapping_key, rng)
+        rotate_local_profile(
+            &rebased,
+            source_device_id,
+            wrapping_key,
+            canonical_recipient,
+            rng,
+        )
     }
 }
 
 pub fn open_own_profile(
     encrypted: &PutChatProfileRequest,
     wrapping_key: &[u8; 32],
+    canonical_recipient: &str,
 ) -> Result<LocalProfile> {
     let key = decrypt_b64(&encrypted.wrapped_key, wrapping_key)?;
     profile_key(&key)?;
@@ -201,6 +218,18 @@ pub fn open_own_profile(
     if access_key_verifier(&access) != encrypted.access_key_verifier {
         return Err(ChatError::Content(
             "wrapped profile key does not match access verifier".into(),
+        ));
+    }
+    let delivery = derive_delivery_capability(
+        key.as_slice()
+            .try_into()
+            .map_err(|_| ChatError::Content("wrapped profile key has an invalid length".into()))?,
+        canonical_recipient,
+    )
+    .map_err(ChatError::Content)?;
+    if hex::encode(capability_hash(&delivery)) != encrypted.delivery_capability_verifier {
+        return Err(ChatError::Content(
+            "wrapped profile key does not match delivery capability verifier".into(),
         ));
     }
     let (display_name, avatar, avatar_content_type) =
@@ -265,6 +294,7 @@ struct LocalProfileDraft<'a> {
 fn prepare_local_profile<R: Rng + CryptoRng>(
     draft: LocalProfileDraft<'_>,
     wrapping_key: &[u8; 32],
+    canonical_recipient: &str,
     rng: &mut R,
 ) -> Result<LocalProfile> {
     let LocalProfileDraft {
@@ -283,6 +313,13 @@ fn prepare_local_profile<R: Rng + CryptoRng>(
         encrypt_avatar(avatar.as_deref(), avatar_content_type.as_deref(), &key, rng)?;
     let wrapped_key = encrypt_b64(&key, wrapping_key, rng)?;
     let access_key = profile_access_key(&key)?;
+    let delivery_capability = derive_delivery_capability(
+        key.as_slice()
+            .try_into()
+            .map_err(|_| ChatError::Invalid("profile key has an invalid length".into()))?,
+        canonical_recipient,
+    )
+    .map_err(ChatError::Invalid)?;
     let pending_upload = PutChatProfileRequest {
         version: profile_version(&key)?,
         revision,
@@ -291,6 +328,7 @@ fn prepare_local_profile<R: Rng + CryptoRng>(
         avatar: avatar_ciphertext,
         wrapped_key,
         access_key_verifier: access_key_verifier(&access_key),
+        delivery_capability_verifier: hex::encode(capability_hash(&delivery_capability)),
     };
     Ok(LocalProfile {
         key,
@@ -446,6 +484,8 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
+    const RECIPIENT: &str = "alice@example.com";
+
     #[test]
     fn signal_style_name_padding_and_profile_round_trip() {
         let mut rng = StdRng::seed_from_u64(7);
@@ -456,6 +496,7 @@ mod tests {
             Some("image/png".into()),
             3,
             &wrapping,
+            RECIPIENT,
             &mut rng,
         )
         .unwrap();
@@ -463,7 +504,7 @@ mod tests {
         let encrypted_name = STANDARD.decode(&upload.name).unwrap();
         assert_eq!(encrypted_name.len(), NONCE_BYTES + 53 + TAG_BYTES);
 
-        let restored = open_own_profile(upload, &wrapping).unwrap();
+        let restored = open_own_profile(upload, &wrapping, RECIPIENT).unwrap();
         assert_eq!(restored.display_name, "Alice Example");
         assert_eq!(restored.avatar, Some(vec![1, 2, 3, 4]));
         assert_eq!(restored.avatar_content_type.as_deref(), Some("image/png"));
@@ -474,8 +515,9 @@ mod tests {
     fn rotation_revokes_the_old_version_and_access_capability() {
         let mut rng = StdRng::seed_from_u64(8);
         let wrapping = derive_wrapping_key(&[4; 32]).unwrap();
-        let before = create_local_profile("Alice", None, None, 1, &wrapping, &mut rng).unwrap();
-        let after = rotate_local_profile(&before, 1, &wrapping, &mut rng).unwrap();
+        let before =
+            create_local_profile("Alice", None, None, 1, &wrapping, RECIPIENT, &mut rng).unwrap();
+        let after = rotate_local_profile(&before, 1, &wrapping, RECIPIENT, &mut rng).unwrap();
         assert_ne!(
             profile_version(&before.key).unwrap(),
             profile_version(&after.key).unwrap()
@@ -491,7 +533,8 @@ mod tests {
     fn decryption_rejects_the_wrong_profile_key() {
         let mut rng = StdRng::seed_from_u64(9);
         let wrapping = derive_wrapping_key(&[5; 32]).unwrap();
-        let profile = create_local_profile("Alice", None, None, 1, &wrapping, &mut rng).unwrap();
+        let profile =
+            create_local_profile("Alice", None, None, 1, &wrapping, RECIPIENT, &mut rng).unwrap();
         let response = ChatProfileResponse::from(profile.pending_upload.as_ref().unwrap());
         assert!(open_peer_profile("alice", &response, &[7; 32]).is_err());
     }
@@ -500,7 +543,8 @@ mod tests {
     fn stale_linked_device_rebase_preserves_edit_without_undoing_rotation() {
         let mut rng = StdRng::seed_from_u64(10);
         let wrapping = derive_wrapping_key(&[6; 32]).unwrap();
-        let original = create_local_profile("Alice", None, None, 1, &wrapping, &mut rng).unwrap();
+        let original =
+            create_local_profile("Alice", None, None, 1, &wrapping, RECIPIENT, &mut rng).unwrap();
         let desired = update_local_profile(
             &original,
             "Alice Local Edit",
@@ -508,12 +552,14 @@ mod tests {
             None,
             1,
             &wrapping,
+            RECIPIENT,
             &mut rng,
         )
         .unwrap();
-        let remote = rotate_local_profile(&original, 2, &wrapping, &mut rng).unwrap();
+        let remote = rotate_local_profile(&original, 2, &wrapping, RECIPIENT, &mut rng).unwrap();
 
-        let rebased = rebase_local_profile(&desired, &remote, 1, &wrapping, &mut rng).unwrap();
+        let rebased =
+            rebase_local_profile(&desired, &remote, 1, &wrapping, RECIPIENT, &mut rng).unwrap();
         assert_eq!(rebased.display_name, "Alice Local Edit");
         assert!(rebased.revision > remote.revision);
         assert_ne!(rebased.key, original.key);

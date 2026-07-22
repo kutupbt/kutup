@@ -17,7 +17,7 @@ members = ["crates/*"]
 # tree (git, ~large) and needs protoc at build time, so it must not tax the
 # app/server/CLI `cargo build`/`cargo test`. It is its own standalone workspace
 # and depends on kutup-chat-proto by path. The native/wasm chat clients link it.
-exclude = ["src-tauri", "crates/kutup-chat-core", "crates/kutup-client-ffi"]
+exclude = ["src-tauri", "crates/kutup-chat-core", "crates/kutup-client-ffi", "fuzz"]
 
 [workspace.package]
 edition = "2021"
@@ -73,6 +73,10 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit", "catch-panic", "normalize-path"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-opentelemetry = "0.33"
+opentelemetry = { version = "0.32", features = ["metrics", "trace"] }
+opentelemetry_sdk = { version = "0.32", features = ["metrics", "trace"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "tls-ring", "metrics", "trace"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 # S3 (SeaweedFS) — replaces aws-sdk-go-v2.
 aws-config = "1"

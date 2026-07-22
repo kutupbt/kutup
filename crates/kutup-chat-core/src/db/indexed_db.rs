@@ -20,8 +20,8 @@ use wasm_bindgen::JsValue;
 
 use crate::db::{
     ChatDb, ContactRecord, InboundEnvelope, InboxMessage, LocalIdentity, LocalProfile,
-    ManifestTrust, OutboxEntry, PeerProfile, Pending, SentMessage, TransparencyMonitorStatus,
-    TransparencyTrust,
+    ManifestHistoryRecord, ManifestTrust, OutboxEntry, PeerProfile, Pending, SentMessage,
+    TransparencyMonitorStatus, TransparencyTrust,
 };
 use crate::error::{ChatError, Result};
 
@@ -39,6 +39,7 @@ const MESSAGES: &str = "messages";
 const SENT_MESSAGES: &str = "sent_messages";
 const INBOUND: &str = "inbound";
 const MANIFEST_TRUST: &str = "manifest_trust";
+const MANIFEST_HISTORY: &str = "manifest_history";
 const TRANSPARENCY_TRUST: &str = "transparency_trust";
 const TRANSPARENCY_MONITOR_STATUS: &str = "transparency_monitor_status";
 const CONTACTS: &str = "contacts";
@@ -46,7 +47,7 @@ const LOCAL_PROFILE: &str = "local_profile";
 const PEER_PROFILES: &str = "peer_profiles";
 const META: &str = "meta";
 
-const ALL_STORES: [&str; 20] = [
+const ALL_STORES: [&str; 21] = [
     LOCAL_IDENTITY,
     SESSIONS,
     IDENTITIES,
@@ -61,6 +62,7 @@ const ALL_STORES: [&str; 20] = [
     SENT_MESSAGES,
     INBOUND,
     MANIFEST_TRUST,
+    MANIFEST_HISTORY,
     TRANSPARENCY_TRUST,
     TRANSPARENCY_MONITOR_STATUS,
     CONTACTS,
@@ -93,7 +95,7 @@ impl IndexedDbChatDb {
             ));
         }
 
-        let mut builder = Rexie::builder(name).version(6);
+        let mut builder = Rexie::builder(name).version(7);
         for store in ALL_STORES {
             builder = builder.add_object_store(ObjectStore::new(store));
         }
@@ -265,6 +267,15 @@ impl ChatDb for IndexedDbChatDb {
         self.get(MANIFEST_TRUST, string_key(peer)).await
     }
 
+    async fn load_manifest_history(
+        &self,
+        peer: &str,
+        version: u64,
+    ) -> Result<Option<ManifestHistoryRecord>> {
+        self.get(MANIFEST_HISTORY, pair_key(peer, &version.to_string()))
+            .await
+    }
+
     async fn load_transparency_trust(&self, scope: &str) -> Result<Option<TransparencyTrust>> {
         self.get(TRANSPARENCY_TRUST, string_key(scope)).await
     }
@@ -325,6 +336,19 @@ impl ChatDb for IndexedDbChatDb {
                 .collect()
         };
 
+        // IndexedDB has one writer in this engine. Check immutable records
+        // before opening the atomic write transaction; an existing different
+        // value is a durable cryptographic contradiction, never an upsert.
+        for ((peer, version), record) in &pending.manifest_history {
+            if let Some(existing) = self.load_manifest_history(peer, *version).await? {
+                if existing != *record {
+                    return Err(ChatError::Trust(format!(
+                        "immutable manifest history conflicts at {peer} version {version}"
+                    )));
+                }
+            }
+        }
+
         // Serialize before opening the transaction. Serialization cannot leave
         // a partially queued write-set, and 64-bit counters become JS BigInts
         // instead of lossy Numbers.
@@ -345,6 +369,7 @@ impl ChatDb for IndexedDbChatDb {
         let sent_messages = idb(transaction.store(SENT_MESSAGES))?;
         let inbound = idb(transaction.store(INBOUND))?;
         let manifest_trust = idb(transaction.store(MANIFEST_TRUST))?;
+        let manifest_history = idb(transaction.store(MANIFEST_HISTORY))?;
         let transparency_trust = idb(transaction.store(TRANSPARENCY_TRUST))?;
         let transparency_monitor_status = idb(transaction.store(TRANSPARENCY_MONITOR_STATUS))?;
         let contacts = idb(transaction.store(CONTACTS))?;
@@ -393,6 +418,13 @@ impl ChatDb for IndexedDbChatDb {
         stage_puts(&mut operations, &sent_messages, writes.sent_messages);
         stage_map(&mut operations, &inbound, writes.inbound);
         stage_puts(&mut operations, &manifest_trust, writes.manifest_trust);
+        for ((peer, version), value) in writes.manifest_history {
+            operations.push(put_op(
+                &manifest_history,
+                value,
+                pair_key(&peer, &version.to_string()),
+            ));
+        }
         stage_puts(
             &mut operations,
             &transparency_trust,
@@ -516,6 +548,7 @@ struct PreparedWrites {
     sent_messages: Vec<(String, JsValue)>,
     inbound: Vec<(String, Option<JsValue>)>,
     manifest_trust: Vec<(String, JsValue)>,
+    manifest_history: Vec<((String, u64), JsValue)>,
     transparency_trust: Vec<(String, JsValue)>,
     transparency_monitor_status: Vec<(String, JsValue)>,
     contacts: Vec<(String, JsValue)>,
@@ -557,6 +590,7 @@ impl PreparedWrites {
             sent_messages: serialize_map(&pending.sent_messages)?,
             inbound: serialize_optional_map(&pending.inbound)?,
             manifest_trust: serialize_map(&pending.manifest_trust)?,
+            manifest_history: serialize_map(&pending.manifest_history)?,
             transparency_trust: serialize_map(&pending.transparency_trust)?,
             transparency_monitor_status: serialize_map(&pending.transparency_monitor_status)?,
             contacts: serialize_map(&pending.contacts)?,
@@ -671,6 +705,8 @@ mod tests {
                 attempts: 1,
                 created_at: 100,
                 primary_delivered: false,
+                sealed_sender: false,
+                sealed_capability: None,
                 sync: None,
             }),
         );

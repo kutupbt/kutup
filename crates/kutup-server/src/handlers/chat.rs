@@ -28,12 +28,15 @@ use uuid::Uuid;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use kutup_chat_proto::{
-    AccountAddress, AckRequest, ChatProfileResponse, ChatWsServerMessage, ChatWsTicketResponse,
+    capability_hash, constant_time_capability_hash_eq, AccountAddress, AckRequest,
+    AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsServerMessage, ChatWsTicketResponse,
     DeliveredEnvelope, DeviceListMismatch, DeviceManifest, DevicePreKeyBundle, DirectChatSuiteId,
-    EcPreKey, EnvelopeType, KemPreKey, MailboxPage, OutgoingEnvelope, OwnChatProfileResponse,
-    PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
-    RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest,
-    SubmitTransparencyWitnessRequest, TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
+    EcPreKey, EnvelopeType, KemPreKey, MailboxPage, ManifestUpdateRangeProofV1, OutgoingEnvelope,
+    OwnChatProfileResponse, PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest,
+    RegisterChatDeviceRequest, RegisterChatDeviceResponse, ReplenishKeysRequest,
+    SealedDeliveryResponseV1, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1,
+    SendMessagesRequest, SubmitTransparencyWitnessRequest, TransparencyCheckpointResponse,
+    UserPreKeyBundlesResponse,
 };
 
 use crate::chat_hub::ChatWsOut;
@@ -75,7 +78,16 @@ const PROFILE_NAME_CIPHERTEXT_LENGTHS: [usize; 2] = [12 + 53 + 16, 12 + 257 + 16
 const MAX_PROFILE_AVATAR_CIPHERTEXT_BYTES: usize = 512 * 1024 + 1 + 12 + 16;
 const WRAPPED_PROFILE_KEY_BYTES: usize = 12 + 32 + 16;
 type PublicProfileRow = (String, i64, i32, String, Option<String>, Vec<u8>);
-type OwnProfileRow = (String, i64, i32, String, Option<String>, String, Vec<u8>);
+type OwnProfileRow = (
+    String,
+    i64,
+    i32,
+    String,
+    Option<String>,
+    String,
+    Vec<u8>,
+    Vec<u8>,
+);
 
 #[derive(Debug, Default, Deserialize)]
 pub struct TransparencyQuery {
@@ -86,7 +98,20 @@ pub struct TransparencyQuery {
 #[derive(Debug, Default, Deserialize)]
 pub struct CheckpointQuery {
     #[serde(rename = "fromTreeSize")]
-    from_tree_size: Option<u64>,
+    pub from_tree_size: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ManifestRangeQuery {
+    #[serde(rename = "fromVersion")]
+    pub from_version: u64,
+    #[serde(rename = "toVersion")]
+    pub to_version: u64,
+    #[serde(rename = "pageFromVersion")]
+    pub page_from_version: Option<u64>,
+    pub cursor: Option<String>,
+    #[serde(rename = "transparencyTreeSize")]
+    pub transparency_tree_size: Option<u64>,
 }
 
 /// Public signed head for client monitors and independent witnesses. This does
@@ -134,12 +159,20 @@ pub async fn submit_transparency_witness(
     State(state): State<AppState>,
     Json(request): Json<SubmitTransparencyWitnessRequest>,
 ) -> AppResult<Response> {
-    let inserted = crate::chat_transparency::submit_witness_attestation(
+    let inserted = match crate::chat_transparency::submit_witness_attestation(
         &state.pool,
         &state.transparency_authority,
         &request,
     )
-    .await?;
+    .await
+    {
+        Ok(inserted) => inserted,
+        Err(error) => {
+            crate::telemetry::witness_event("rejected", 0);
+            return Err(error);
+        }
+    };
+    crate::telemetry::witness_event(if inserted { "accepted" } else { "deduplicated" }, 1);
     Ok(Json(json!({ "accepted": true, "deduplicated": !inserted })).into_response())
 }
 
@@ -206,7 +239,7 @@ fn validate_manifest(manifest: &DeviceManifest) -> AppResult<()> {
     Ok(())
 }
 
-fn validate_profile(profile: &PutChatProfileRequest) -> AppResult<Vec<u8>> {
+fn validate_profile(profile: &PutChatProfileRequest) -> AppResult<(Vec<u8>, Vec<u8>)> {
     if !canonical_profile_version(&profile.version) {
         return Err(AppError::bad_request(
             "profile version must be lowercase SHA-256 hex",
@@ -246,7 +279,16 @@ fn validate_profile(profile: &PutChatProfileRequest) -> AppResult<Vec<u8>> {
             "profile access verifier must be lowercase SHA-256 hex",
         ));
     }
-    Ok(verifier)
+    let delivery_verifier = hex::decode(&profile.delivery_capability_verifier)
+        .map_err(|_| AppError::bad_request("delivery capability verifier must be SHA-256 hex"))?;
+    if delivery_verifier.len() != 32
+        || hex::encode(&delivery_verifier) != profile.delivery_capability_verifier
+    {
+        return Err(AppError::bad_request(
+            "delivery capability verifier must be lowercase SHA-256 hex",
+        ));
+    }
+    Ok((verifier, delivery_verifier))
 }
 
 pub(crate) fn canonical_profile_version(value: &str) -> bool {
@@ -485,13 +527,10 @@ pub async fn publish_manifest(
         ));
     }
     if idempotent {
-        let transparency = crate::chat_transparency::prove_manifest(
-            &mut tx,
-            user_id,
-            query.transparency_tree_size.unwrap_or(0),
-        )
-        .await?;
         tx.commit().await?;
+        let transparency =
+            prove_manifest_with_quorum(&state, user_id, query.transparency_tree_size.unwrap_or(0))
+                .await?;
         return Ok(Json(PublishManifestResponse {
             manifest,
             transparency,
@@ -527,19 +566,48 @@ pub async fn publish_manifest(
         &state.transparency_authority,
     )
     .await?;
-    let transparency = crate::chat_transparency::prove_manifest(
-        &mut tx,
-        user_id,
-        query.transparency_tree_size.unwrap_or(0),
-    )
-    .await?;
     tx.commit().await?;
+    let transparency =
+        prove_manifest_with_quorum(&state, user_id, query.transparency_tree_size.unwrap_or(0))
+            .await?;
 
     Ok(Json(PublishManifestResponse {
         manifest,
         transparency,
     })
     .into_response())
+}
+
+/// The manifest/log/map/checkpoint mutation has already committed atomically,
+/// so an independent witness can now observe it. Bound the availability wait;
+/// a timeout returns 503 while leaving the exact idempotent manifest retryable.
+async fn prove_manifest_with_quorum(
+    state: &AppState,
+    user_id: Uuid,
+    known_tree_size: u64,
+) -> AppResult<kutup_chat_proto::ManifestTransparencyProof> {
+    let required = usize::from(state.transparency_authority.witness_quorum());
+    for attempt in 0..=50 {
+        let mut tx = state.pool.begin().await?;
+        let proof =
+            crate::chat_transparency::prove_manifest(&mut tx, user_id, known_tree_size).await?;
+        tx.commit().await?;
+        if proof.authentication.witnesses.len() >= required {
+            crate::telemetry::witness_event(
+                "quorum_satisfied",
+                proof.authentication.witnesses.len() as u64,
+            );
+            return Ok(proof);
+        }
+        if attempt < 50 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+    crate::telemetry::witness_event("quorum_unavailable", 0);
+    Err(AppError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "transparency witness quorum has not observed the committed manifest",
+    ))
 }
 
 /// `GET /api/chat/users/{username}/manifest` — fetch a local account's latest
@@ -579,6 +647,81 @@ pub async fn get_user_manifest(
     Ok(Json(manifest).into_response())
 }
 
+/// Retrieve every skipped manifest version as checkpoint-bound pages of at
+/// most 64 complete, individually included records.
+#[tracing::instrument(name = "chat.transparency.manifest_range", skip_all)]
+pub async fn get_manifest_history(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+    Path(username): Path<String>,
+    Query(query): Query<ManifestRangeQuery>,
+) -> AppResult<Response> {
+    let address: AccountAddress =
+        username
+            .parse()
+            .map_err(|error: kutup_chat_proto::AddressError| {
+                AppError::bad_request(error.to_string())
+            })?;
+    if let Some(server) = address.server.as_deref() {
+        let federation = state
+            .federation
+            .as_ref()
+            .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
+        if server != federation.server_name() {
+            let proof =
+                match crate::chat_federation::fetch_remote_manifest_range(&state, &address, &query)
+                    .await
+                {
+                    Ok(proof) => proof,
+                    Err(error) => {
+                        crate::telemetry::proof_event("manifest_range_remote", "failed", 0);
+                        return Err(error);
+                    }
+                };
+            crate::telemetry::proof_event(
+                "manifest_range_remote",
+                "served",
+                proof.entries.len() as u64,
+            );
+            return Ok(Json(proof).into_response());
+        }
+    }
+    let target_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
+            .bind(&address.username)
+            .fetch_optional(&state.pool)
+            .await?;
+    let target_id = target_id.ok_or_else(|| AppError::not_found("chat manifest not found"))?;
+    let account = if address.server.is_some() {
+        address.canonical()
+    } else {
+        address.username.clone()
+    };
+    let page_from = query.page_from_version.unwrap_or(query.from_version);
+    let mut tx = state.pool.begin().await?;
+    let proof = match crate::chat_transparency::prove_manifest_range(
+        &mut tx,
+        target_id,
+        &account,
+        query.from_version,
+        query.to_version,
+        page_from,
+        query.cursor.as_deref(),
+        query.transparency_tree_size.unwrap_or(0),
+    )
+    .await
+    {
+        Ok(proof) => proof,
+        Err(error) => {
+            crate::telemetry::proof_event("manifest_range_local", "failed", 0);
+            return Err(error);
+        }
+    };
+    tx.commit().await?;
+    crate::telemetry::proof_event("manifest_range_local", "served", proof.entries.len() as u64);
+    Ok(Json::<ManifestUpdateRangeProofV1>(proof).into_response())
+}
+
 /// `PUT /api/chat/profile` — replace the caller's current opaque encrypted
 /// profile. Revision/source-device ordering makes concurrent linked-device
 /// writes deterministic; an exact replay is idempotent.
@@ -602,7 +745,7 @@ pub async fn put_profile(
     Json(profile): Json<PutChatProfileRequest>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
-    let verifier = validate_profile(&profile)?;
+    let (verifier, delivery_verifier) = validate_profile(&profile)?;
     let mut tx = state.pool.begin().await?;
     sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
         .bind(user_id)
@@ -671,6 +814,22 @@ pub async fn put_profile(
     .bind(&profile.avatar)
     .bind(&profile.wrapped_key)
     .bind(verifier)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO chat_delivery_capabilities
+             (user_id, profile_version, profile_revision, capability_hash, rotated_at)
+         VALUES ($1,$2,$3,$4,now())
+         ON CONFLICT (user_id) DO UPDATE SET
+             profile_version = EXCLUDED.profile_version,
+             profile_revision = EXCLUDED.profile_revision,
+             capability_hash = EXCLUDED.capability_hash,
+             rotated_at = now()",
+    )
+    .bind(user_id)
+    .bind(&profile.version)
+    .bind(profile.revision as i64)
+    .bind(delivery_verifier)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -810,16 +969,29 @@ async fn load_own_profile_in(
 ) -> AppResult<Option<OwnChatProfileResponse>> {
     let suffix = if lock { " FOR UPDATE" } else { "" };
     let sql = format!(
-        "SELECT version, revision, source_device_id, name_ciphertext,
-                avatar_ciphertext, wrapped_key, access_key_verifier
-         FROM chat_profiles WHERE user_id = $1 AND is_current = true{suffix}"
+        "SELECT p.version, p.revision, p.source_device_id, p.name_ciphertext,
+                p.avatar_ciphertext, p.wrapped_key, p.access_key_verifier,
+                c.capability_hash
+         FROM chat_profiles p
+         JOIN chat_delivery_capabilities c ON c.user_id = p.user_id
+              AND c.profile_version = p.version AND c.profile_revision = p.revision
+         WHERE p.user_id = $1 AND p.is_current = true{suffix}"
     );
     let row: Option<OwnProfileRow> = sqlx::query_as(&sql)
         .bind(user_id)
         .fetch_optional(&mut **tx)
         .await?;
     Ok(row.map(
-        |(version, revision, source_device_id, name, avatar, wrapped_key, verifier)| {
+        |(
+            version,
+            revision,
+            source_device_id,
+            name,
+            avatar,
+            wrapped_key,
+            verifier,
+            delivery_verifier,
+        )| {
             PutChatProfileRequest {
                 version,
                 revision: revision as u64,
@@ -828,6 +1000,7 @@ async fn load_own_profile_in(
                 avatar,
                 wrapped_key,
                 access_key_verifier: hex::encode(verifier),
+                delivery_capability_verifier: hex::encode(delivery_verifier),
             }
         },
     ))
@@ -1136,6 +1309,7 @@ pub async fn get_user_bundles(
     Query(query): Query<BundleQuery>,
 ) -> AppResult<Response> {
     if !ratelimit::CHAT_KEYS_ACCOUNT.allow(&auth.user_id) {
+        crate::telemetry::rate_limit_rejection("prekey_account");
         return Err(AppError::too_many_requests(
             "too many chat key requests for this account",
         ));
@@ -1188,9 +1362,91 @@ pub async fn get_user_bundles(
         query.sync_device_id,
         true,
         query.transparency_tree_size.unwrap_or(0),
+        None,
     )
     .await?;
     Ok(Json(bundles).into_response())
+}
+
+/// Cookie- and bearer-free contacts-only prekey retrieval. Unknown users and
+/// invalid/stale capabilities deliberately share the exact response.
+pub async fn get_anonymous_bundles(
+    State(state): State<AppState>,
+    Path(username): Path<String>,
+    Json(request): Json<AnonymousPreKeyRequestV1>,
+) -> AppResult<Response> {
+    let capability = request
+        .capability_bytes()
+        .map_err(|_| AppError::not_found("sealed delivery unavailable"))?;
+    let capability_hash = capability_hash(&capability);
+    let address: AccountAddress = username
+        .parse()
+        .map_err(|_| AppError::not_found("sealed delivery unavailable"))?;
+    if let Some(server) = address.server.as_deref() {
+        let federation = state
+            .federation
+            .as_ref()
+            .ok_or_else(|| AppError::not_found("sealed delivery unavailable"))?;
+        if server != federation.server_name() {
+            let bundles =
+                crate::chat_federation::fetch_remote_sealed_bundles(&state, &address, &request)
+                    .await?;
+            return Ok(Json(bundles).into_response());
+        }
+    }
+    let bundles = load_user_bundles(
+        &state,
+        &address.username,
+        &address.canonical(),
+        None,
+        true,
+        request.transparency_tree_size,
+        Some(&capability_hash),
+    )
+    .await?;
+    Ok(Json(bundles).into_response())
+}
+
+pub(crate) async fn consume_anonymous_rate(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    scope_type: &str,
+    scope_digest: &[u8; 32],
+    limit: i64,
+    window_seconds: i64,
+) -> AppResult<()> {
+    let count: i64 = sqlx::query_scalar(
+        "INSERT INTO chat_anonymous_rate_counters
+             (scope_type, scope_digest, window_start, count, expires_at)
+         VALUES (
+             $1, $2,
+             to_timestamp(floor(extract(epoch FROM now()) / $3) * $3),
+             1,
+             to_timestamp(floor(extract(epoch FROM now()) / $3) * $3) + make_interval(secs => $3 * 2)
+         )
+         ON CONFLICT (scope_type, scope_digest, window_start)
+         DO UPDATE SET count = chat_anonymous_rate_counters.count + 1
+         RETURNING count",
+    )
+    .bind(scope_type)
+    .bind(scope_digest.as_slice())
+    .bind(window_seconds)
+    .fetch_one(&mut **tx)
+    .await?;
+    if count > limit {
+        let metric_scope = match scope_type {
+            "capability_bundle" => "capability_bundle",
+            "capability_minute" => "capability_minute",
+            "capability_day" => "capability_day",
+            "recipient" => "recipient",
+            "federation_origin" => "federation_origin",
+            _ => "unknown",
+        };
+        crate::telemetry::rate_limit_rejection(metric_scope);
+        return Err(AppError::too_many_requests(
+            "anonymous delivery rate limit exceeded",
+        ));
+    }
+    Ok(())
 }
 
 /// Load one local account's signed device directory. Local client fetches
@@ -1203,17 +1459,35 @@ pub(crate) async fn load_user_bundles(
     sync_device_id: Option<i32>,
     consume_one_time: bool,
     transparency_tree_size: u64,
+    delivery_capability: Option<&[u8; 32]>,
 ) -> AppResult<UserPreKeyBundlesResponse> {
-    let target: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
-            .bind(username)
-            .fetch_optional(&state.pool)
-            .await?;
-    let Some(target_id) = target else {
-        return Err(AppError::not_found("user not found"));
-    };
-
     let mut tx = state.pool.begin().await?;
+    let target: Option<(Uuid, Option<Vec<u8>>)> = sqlx::query_as(
+        "SELECT u.id, c.capability_hash
+         FROM users u
+         LEFT JOIN chat_delivery_capabilities c ON c.user_id = u.id
+         WHERE u.username = $1 AND u.is_active = true",
+    )
+    .bind(username)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((target_id, stored_capability)) = target else {
+        return Err(AppError::not_found(if delivery_capability.is_some() {
+            "sealed delivery unavailable"
+        } else {
+            "user not found"
+        }));
+    };
+    if let Some(capability) = delivery_capability {
+        let Some(stored) = stored_capability.and_then(|value| <[u8; 32]>::try_from(value).ok())
+        else {
+            return Err(AppError::not_found("sealed delivery unavailable"));
+        };
+        if !constant_time_capability_hash_eq(capability, &stored) {
+            return Err(AppError::not_found("sealed delivery unavailable"));
+        }
+        consume_anonymous_rate(&mut tx, "capability_bundle", capability, 30, 60).await?;
+    }
 
     // Hold a stable account/device/manifest snapshot until the one-time keys
     // have been allocated. Writers take `FOR UPDATE` on this same row.
@@ -1436,6 +1710,296 @@ pub async fn send_messages(
     deliver_messages(&state, sender_id, recipient_id, req, None).await
 }
 
+/// Contacts-only, cookie- and bearer-free sealed submission. There is no
+/// identified fallback on this route: federation or capability failure is
+/// returned to the client as-is.
+pub async fn send_sealed_messages(
+    State(state): State<AppState>,
+    Path(username): Path<String>,
+    Json(request): Json<SealedMessageSubmissionV1>,
+) -> AppResult<Response> {
+    request.validate().map_err(AppError::bad_request)?;
+    let address: AccountAddress = username
+        .parse()
+        .map_err(|_| AppError::not_found("sealed delivery unavailable"))?;
+    if let Some(server) = address.server.as_deref() {
+        let federation = state
+            .federation
+            .as_ref()
+            .ok_or_else(|| AppError::not_found("sealed delivery unavailable"))?;
+        if server != federation.server_name() {
+            let outcome =
+                crate::chat_federation::enqueue_sealed_send(&state, &address, request).await?;
+            return match outcome {
+                crate::chat_federation::FederatedSealedOutcome::Delivered(response) => {
+                    Ok(Json(response).into_response())
+                }
+                crate::chat_federation::FederatedSealedOutcome::Mismatch(mismatch) => {
+                    Ok((StatusCode::CONFLICT, Json(mismatch)).into_response())
+                }
+                crate::chat_federation::FederatedSealedOutcome::Pending => Err(AppError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "sealed federation delivery is durably queued",
+                )),
+            };
+        }
+    }
+
+    let mut tx = state.pool.begin().await?;
+    let outcome = store_sealed_messages(&mut tx, &address.username, &request, None).await?;
+    match outcome {
+        SealedStoreOutcome::Mismatch(mismatch) => {
+            tx.rollback().await?;
+            Ok((StatusCode::CONFLICT, Json(mismatch)).into_response())
+        }
+        SealedStoreOutcome::Delivered { response, stored } => {
+            tx.commit().await?;
+            push_sealed(&state, stored).await;
+            Ok(Json(response).into_response())
+        }
+    }
+}
+
+pub(crate) enum SealedStoreOutcome {
+    Mismatch(DeviceListMismatch),
+    Delivered {
+        response: SealedDeliveryResponseV1,
+        stored: Vec<(Uuid, i32, DeliveredEnvelope)>,
+    },
+}
+
+#[tracing::instrument(name = "chat.sealed_sender.store", skip_all)]
+pub(crate) async fn store_sealed_messages(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    username: &str,
+    request: &SealedMessageSubmissionV1,
+    federation_origin: Option<&str>,
+) -> AppResult<SealedStoreOutcome> {
+    let metric_stage = if federation_origin.is_some() {
+        "federated_destination"
+    } else {
+        "local_destination"
+    };
+    if let Err(error) = request.validate() {
+        crate::telemetry::sealed_send_event(
+            metric_stage,
+            "malformed",
+            request.envelopes.len() as u64,
+        );
+        return Err(AppError::bad_request(error));
+    }
+    let capability = match request.capability_bytes() {
+        Ok(capability) => capability,
+        Err(_) => {
+            crate::telemetry::sealed_send_event(
+                metric_stage,
+                "not_found",
+                request.envelopes.len() as u64,
+            );
+            return Err(AppError::not_found("sealed delivery unavailable"));
+        }
+    };
+    let presented_hash = capability_hash(&capability);
+    let target: Option<(Uuid, Vec<u8>)> = sqlx::query_as(
+        "SELECT u.id, c.capability_hash
+         FROM users u
+         JOIN chat_delivery_capabilities c ON c.user_id = u.id
+         WHERE u.username = $1 AND u.is_active = true
+         FOR SHARE OF u, c",
+    )
+    .bind(username)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((recipient_id, stored_hash)) = target else {
+        crate::telemetry::sealed_send_event(
+            metric_stage,
+            "not_found",
+            request.envelopes.len() as u64,
+        );
+        return Err(AppError::not_found("sealed delivery unavailable"));
+    };
+    let Some(stored_hash) = <[u8; 32]>::try_from(stored_hash).ok() else {
+        return Err(AppError::internal(
+            "stored sealed delivery verifier has an invalid length",
+        ));
+    };
+    if !constant_time_capability_hash_eq(&presented_hash, &stored_hash) {
+        crate::telemetry::sealed_send_event(
+            metric_stage,
+            "not_found",
+            request.envelopes.len() as u64,
+        );
+        return Err(AppError::not_found("sealed delivery unavailable"));
+    }
+
+    consume_anonymous_rate(tx, "capability_minute", &presented_hash, 120, 60).await?;
+    consume_anonymous_rate(tx, "capability_day", &presented_hash, 10_000, 86_400).await?;
+    let recipient_digest: [u8; 32] = Sha256::digest(
+        [
+            b"kutup/sealed-recipient-rate/v1\0".as_slice(),
+            recipient_id.as_bytes(),
+        ]
+        .concat(),
+    )
+    .into();
+    consume_anonymous_rate(tx, "recipient", &recipient_digest, 120, 60).await?;
+    if let Some(origin) = federation_origin {
+        let origin_digest: [u8; 32] = Sha256::digest(
+            [
+                b"kutup/sealed-origin-rate/v1\0".as_slice(),
+                origin.as_bytes(),
+            ]
+            .concat(),
+        )
+        .into();
+        consume_anonymous_rate(tx, "federation_origin", &origin_digest, 600, 60).await?;
+    }
+
+    let send_id = Uuid::parse_str(&request.send_id)
+        .map_err(|_| AppError::bad_request("sealed sendId is invalid"))?;
+    let claimed: Option<i32> = sqlx::query_scalar(
+        "INSERT INTO chat_anonymous_send_ids
+             (recipient_user_id, capability_hash, send_id, stored_count)
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT DO NOTHING RETURNING stored_count",
+    )
+    .bind(recipient_id)
+    .bind(presented_hash.as_slice())
+    .bind(send_id)
+    .bind(request.envelopes.len() as i32)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if claimed.is_none() {
+        let stored: i32 = sqlx::query_scalar(
+            "SELECT stored_count FROM chat_anonymous_send_ids
+             WHERE recipient_user_id = $1 AND capability_hash = $2 AND send_id = $3",
+        )
+        .bind(recipient_id)
+        .bind(presented_hash.as_slice())
+        .bind(send_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        crate::telemetry::sealed_send_event(metric_stage, "deduplicated", stored as u64);
+        return Ok(SealedStoreOutcome::Delivered {
+            response: SealedDeliveryResponseV1 {
+                stored: stored as usize,
+                deduplicated: true,
+            },
+            stored: Vec::new(),
+        });
+    }
+
+    let current: Vec<(i32, i64)> =
+        sqlx::query_as("SELECT device_id, registration_id FROM chat_devices WHERE user_id = $1")
+            .bind(recipient_id)
+            .fetch_all(&mut **tx)
+            .await?;
+    let mismatch = sealed_device_list_mismatch(&current, &request.envelopes);
+    if !mismatch.missing_devices.is_empty()
+        || !mismatch.stale_devices.is_empty()
+        || !mismatch.extra_devices.is_empty()
+    {
+        crate::telemetry::sealed_send_event(
+            metric_stage,
+            "device_mismatch",
+            request.envelopes.len() as u64,
+        );
+        return Ok(SealedStoreOutcome::Mismatch(mismatch));
+    }
+
+    let mut stored = Vec::with_capacity(request.envelopes.len());
+    for envelope in &request.envelopes {
+        let (id, cursor, server_ts): (Uuid, i64, OffsetDateTime) = sqlx::query_as(
+            "INSERT INTO chat_mailbox
+                (recipient_user_id, recipient_device_id, sender, sealed_sender,
+                 sender_device_id, envelope_type, suite, content)
+             VALUES ($1,$2,NULL,true,0,$3,$4,$5)
+             RETURNING id, cursor, server_ts",
+        )
+        .bind(recipient_id)
+        .bind(envelope.device_id as i32)
+        .bind(envelope_type_code(EnvelopeType::Message))
+        .bind(envelope.suite.as_u16() as i16)
+        .bind(&envelope.content)
+        .fetch_one(&mut **tx)
+        .await?;
+        stored.push((
+            recipient_id,
+            envelope.device_id as i32,
+            DeliveredEnvelope {
+                id: id.to_string(),
+                cursor: cursor as u64,
+                sender: None,
+                sealed_sender: true,
+                sender_device_id: 0,
+                envelope_type: EnvelopeType::Message,
+                suite: envelope.suite,
+                content: envelope.content.clone(),
+                server_timestamp: server_ts.format(&Rfc3339).unwrap_or_default(),
+            },
+        ));
+    }
+    crate::telemetry::sealed_send_event(metric_stage, "stored", stored.len() as u64);
+    Ok(SealedStoreOutcome::Delivered {
+        response: SealedDeliveryResponseV1 {
+            stored: stored.len(),
+            deduplicated: false,
+        },
+        stored,
+    })
+}
+
+fn sealed_device_list_mismatch(
+    current: &[(i32, i64)],
+    envelopes: &[SealedOutgoingEnvelopeV1],
+) -> DeviceListMismatch {
+    let current: std::collections::BTreeMap<u32, u32> = current
+        .iter()
+        .filter_map(|(device, registration)| {
+            Some((
+                u32::try_from(*device).ok()?,
+                u32::try_from(*registration).ok()?,
+            ))
+        })
+        .collect();
+    let supplied: std::collections::BTreeMap<u32, u32> = envelopes
+        .iter()
+        .map(|envelope| (envelope.device_id, envelope.registration_id))
+        .collect();
+    DeviceListMismatch {
+        missing_devices: current
+            .keys()
+            .filter(|device| !supplied.contains_key(device))
+            .copied()
+            .collect(),
+        stale_devices: current
+            .iter()
+            .filter(|(device, registration)| {
+                supplied
+                    .get(device)
+                    .is_some_and(|seen| seen != *registration)
+            })
+            .map(|(device, _)| *device)
+            .collect(),
+        extra_devices: supplied
+            .keys()
+            .filter(|device| !current.contains_key(device))
+            .copied()
+            .collect(),
+    }
+}
+
+pub(crate) async fn push_sealed(state: &AppState, stored: Vec<(Uuid, i32, DeliveredEnvelope)>) {
+    for (user, device, envelope) in stored {
+        let message = ChatWsServerMessage::Envelope { envelope };
+        if let Ok(text) = serde_json::to_string(&message) {
+            for connection in state.chat_hub.connections(user, device) {
+                connection.write(ChatWsOut::Text(text.clone())).await;
+            }
+        }
+    }
+}
+
 /// `POST /api/chat/sync/messages` — deliver an encrypted sent transcript to
 /// every other active device of the authenticated account. The sending device
 /// is excluded from the exact-set check; an empty set is valid for a
@@ -1573,6 +2137,7 @@ async fn deliver_messages(
                 id: id.to_string(),
                 cursor: cursor as u64,
                 sender: Some(sender_username.clone()),
+                sealed_sender: false,
                 sender_device_id: req.sender_device_id,
                 envelope_type: e.envelope_type,
                 suite: e.suite,
@@ -1706,13 +2271,14 @@ pub async fn drain_mailbox(
         Uuid,
         i64,
         Option<String>,
+        bool,
         i32,
         i16,
         i16,
         String,
         OffsetDateTime,
     )> = sqlx::query_as(
-        "SELECT id, cursor, sender, sender_device_id, envelope_type, suite, content, server_ts
+        "SELECT id, cursor, sender, sealed_sender, sender_device_id, envelope_type, suite, content, server_ts
              FROM chat_mailbox
              WHERE recipient_user_id = $1 AND recipient_device_id = $2
                AND ($4::BIGINT IS NULL OR cursor > $4)
@@ -1731,11 +2297,12 @@ pub async fn drain_mailbox(
         .into_iter()
         .take(limit as usize)
         .map(
-            |(id, cursor, sender, sender_dev, etype, suite, content, ts)| {
+            |(id, cursor, sender, sealed_sender, sender_dev, etype, suite, content, ts)| {
                 Ok(DeliveredEnvelope {
                     id: id.to_string(),
                     cursor: cursor as u64,
                     sender,
+                    sealed_sender,
                     sender_device_id: sender_dev as u32,
                     envelope_type: envelope_type_from_code(etype),
                     suite: direct_chat_suite_from_db(suite, "chat_mailbox")?,
@@ -1976,6 +2543,7 @@ mod tests {
             avatar: None,
             wrapped_key: STANDARD.encode(vec![0u8; WRAPPED_PROFILE_KEY_BYTES]),
             access_key_verifier: "02".repeat(32),
+            delivery_capability_verifier: "03".repeat(32),
         }
     }
 
@@ -2034,7 +2602,10 @@ mod tests {
     #[test]
     fn encrypted_profile_validation_accepts_only_bounded_opaque_fields() {
         let profile = valid_profile();
-        assert_eq!(validate_profile(&profile).unwrap(), vec![2u8; 32]);
+        assert_eq!(
+            validate_profile(&profile).unwrap(),
+            (vec![2u8; 32], vec![3u8; 32])
+        );
 
         let mut oversized_avatar = profile.clone();
         oversized_avatar.avatar =

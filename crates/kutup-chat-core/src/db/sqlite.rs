@@ -19,8 +19,9 @@ use zeroize::Zeroize as _;
 use crate::db::{
     contact_state_code, contact_state_from_code, transparency_monitor_state_code,
     transparency_monitor_state_from_code, AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope,
-    InboundFailureKind, InboundState, InboxMessage, LocalIdentity, LocalProfile, ManifestTrust,
-    OutboxEntry, PeerProfile, Pending, SentMessage, TransparencyMonitorStatus, TransparencyTrust,
+    InboundFailureKind, InboundState, InboxMessage, LocalIdentity, LocalProfile,
+    ManifestHistoryRecord, ManifestTrust, OutboxEntry, PeerProfile, Pending, SentMessage,
+    TransparencyMonitorStatus, TransparencyTrust,
 };
 use crate::error::{ChatError, Result};
 
@@ -82,7 +83,9 @@ CREATE TABLE IF NOT EXISTS outbox (
     attempts         INTEGER NOT NULL,
     created_at       INTEGER NOT NULL,
     primary_delivered INTEGER NOT NULL DEFAULT 0,
-    sync_leg         BLOB
+    sync_leg         BLOB,
+    sealed_sender    INTEGER NOT NULL DEFAULT 0,
+    sealed_capability BLOB
 );
 CREATE TABLE IF NOT EXISTS messages (
     id               TEXT PRIMARY KEY,
@@ -125,6 +128,13 @@ CREATE TABLE IF NOT EXISTS manifest_trust (
     trust_state        INTEGER NOT NULL,
     transparency_position INTEGER,
     continuity_gap     INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS manifest_history (
+    peer          TEXT    NOT NULL,
+    version       INTEGER NOT NULL,
+    manifest_json TEXT    NOT NULL,
+    leaf_index    INTEGER NOT NULL,
+    PRIMARY KEY (peer, version)
 );
 CREATE TABLE IF NOT EXISTS transparency_trust (
     scope                TEXT PRIMARY KEY,
@@ -334,7 +344,7 @@ impl ChatDb for SqliteChatDb {
         db(conn
             .query_row(
                 "SELECT send_id, peer, content, envelopes, attempts, created_at, \
-                        primary_delivered, sync_leg \
+                        primary_delivered, sync_leg, sealed_sender, sealed_capability \
                  FROM outbox WHERE send_id = ?1",
                 [send_id],
                 outbox_row,
@@ -346,7 +356,7 @@ impl ChatDb for SqliteChatDb {
         let conn = self.conn.borrow();
         let mut stmt = db(conn.prepare(
             "SELECT send_id, peer, content, envelopes, attempts, created_at, \
-                    primary_delivered, sync_leg \
+                    primary_delivered, sync_leg, sealed_sender, sealed_capability \
              FROM outbox ORDER BY created_at, send_id",
         ))?;
         let rows = db(stmt.query_map([], outbox_row))?;
@@ -462,6 +472,33 @@ impl ChatDb for SqliteChatDb {
                 },
             )
             .optional())
+    }
+
+    async fn load_manifest_history(
+        &self,
+        peer: &str,
+        version: u64,
+    ) -> Result<Option<ManifestHistoryRecord>> {
+        let conn = self.conn.borrow();
+        let row: Option<(String, i64)> = db(conn
+            .query_row(
+                "SELECT manifest_json, leaf_index FROM manifest_history
+                 WHERE peer = ?1 AND version = ?2",
+                rusqlite::params![peer, version as i64],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional())?;
+        row.map(|(manifest, leaf_index)| {
+            Ok(ManifestHistoryRecord {
+                peer: peer.to_string(),
+                version,
+                manifest: serde_json::from_str(&manifest)
+                    .map_err(|error| ChatError::Db(error.to_string()))?,
+                leaf_index: u64::try_from(leaf_index)
+                    .map_err(|_| ChatError::Db("negative manifest history position".into()))?,
+            })
+        })
+        .transpose()
     }
 
     async fn load_transparency_trust(&self, scope: &str) -> Result<Option<TransparencyTrust>> {
@@ -701,13 +738,14 @@ impl ChatDb for SqliteChatDb {
             match entry {
                 Some(e) => db(tx.execute(
                     "INSERT INTO outbox (send_id, peer, content, envelopes, attempts, created_at, \
-                                         primary_delivered, sync_leg) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+                                         primary_delivered, sync_leg, sealed_sender, sealed_capability) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
                      ON CONFLICT(send_id) DO UPDATE SET \
                        peer = excluded.peer, content = excluded.content, \
                        envelopes = excluded.envelopes, attempts = excluded.attempts, \
                        primary_delivered = excluded.primary_delivered, \
-                       sync_leg = excluded.sync_leg",
+                       sync_leg = excluded.sync_leg, sealed_sender = excluded.sealed_sender, \
+                       sealed_capability = excluded.sealed_capability",
                     rusqlite::params![
                         send_id,
                         e.peer,
@@ -720,7 +758,9 @@ impl ChatDb for SqliteChatDb {
                             .as_ref()
                             .map(serde_json::to_vec)
                             .transpose()
-                            .map_err(|error| ChatError::Db(error.to_string()))?
+                            .map_err(|error| ChatError::Db(error.to_string()))?,
+                        i64::from(e.sealed_sender),
+                        e.sealed_capability.as_ref().map(|value| value.as_slice()),
                     ],
                 ))?,
                 None => db(tx.execute("DELETE FROM outbox WHERE send_id = ?1", [send_id]))?,
@@ -815,6 +855,30 @@ impl ChatDb for SqliteChatDb {
                     i64::from(trust.continuity_gap),
                 ],
             ))?;
+        }
+        for ((peer, version), record) in &pending.manifest_history {
+            let manifest_json = serde_json::to_string(&record.manifest)
+                .map_err(|error| ChatError::Db(error.to_string()))?;
+            let changed = db(tx.execute(
+                "INSERT INTO manifest_history (peer, version, manifest_json, leaf_index)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(peer, version) DO UPDATE SET
+                   manifest_json = excluded.manifest_json,
+                   leaf_index = excluded.leaf_index
+                 WHERE manifest_history.manifest_json = excluded.manifest_json
+                   AND manifest_history.leaf_index = excluded.leaf_index",
+                rusqlite::params![
+                    peer,
+                    *version as i64,
+                    manifest_json,
+                    record.leaf_index as i64
+                ],
+            ))?;
+            if changed != 1 {
+                return Err(ChatError::Trust(format!(
+                    "immutable manifest history conflicts at {peer} version {version}"
+                )));
+            }
         }
         for (scope, trust) in &pending.transparency_trust {
             db(tx.execute(
@@ -1001,6 +1065,15 @@ fn ensure_schema_upgrades(conn: &Connection) -> Result<()> {
     if !has_column(conn, "outbox", "sync_leg")? {
         db(conn.execute("ALTER TABLE outbox ADD COLUMN sync_leg BLOB", []))?;
     }
+    if !has_column(conn, "outbox", "sealed_sender")? {
+        db(conn.execute(
+            "ALTER TABLE outbox ADD COLUMN sealed_sender INTEGER NOT NULL DEFAULT 0",
+            [],
+        ))?;
+    }
+    if !has_column(conn, "outbox", "sealed_capability")? {
+        db(conn.execute("ALTER TABLE outbox ADD COLUMN sealed_capability BLOB", []))?;
+    }
     if !has_column(conn, "manifest_trust", "transparency_position")? {
         db(conn.execute(
             "ALTER TABLE manifest_trust ADD COLUMN transparency_position INTEGER",
@@ -1118,6 +1191,19 @@ fn outbox_row(row: &rusqlite::Row) -> rusqlite::Result<OutboxEntry> {
                         bytes.len(),
                         rusqlite::types::Type::Blob,
                         Box::new(error),
+                    )
+                })
+            })
+            .transpose()?,
+        sealed_sender: row.get::<_, i64>(8)? != 0,
+        sealed_capability: row
+            .get::<_, Option<Vec<u8>>>(9)?
+            .map(|bytes| {
+                bytes.try_into().map_err(|bytes: Vec<u8>| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        bytes.len(),
+                        rusqlite::types::Type::Blob,
+                        "sealed capability must be 16 bytes".into(),
                     )
                 })
             })

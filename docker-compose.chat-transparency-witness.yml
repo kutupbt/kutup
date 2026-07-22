@@ -52,8 +52,11 @@ services:
       KUTUP_WITNESS_OPERATOR_PUBLIC_KEY: F8t5+ytBIPKx7GXkGY1uCLKOgT/rAeSkAIObheGAgM4=
       KUTUP_WITNESS_STATE_FILE: /state/checkpoint.json
       KUTUP_WITNESS_INTERVAL_SECONDS: "1"
+      KUTUP_WITNESS_LISTEN: 0.0.0.0:3001
     volumes:
       - witness-state:/state
+    ports:
+      - "127.0.0.1:39002:3001"
     depends_on:
       - backend
 

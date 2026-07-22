@@ -61,3 +61,10 @@ wait_server "http://127.0.0.1:$port_a"
 wait_server "http://127.0.0.1:$port_b"
 
 run_phase verify-retry
+
+if [[ "${KUTUP_FEDERATION_SKIP_BROWSER:-0}" != "1" ]]; then
+  E2E_BASE_URL="http://127.0.0.1:$port_a" \
+  E2E_SECONDARY_BASE_URL="http://127.0.0.1:$port_b" \
+    pnpm --dir "$root_dir/tests/e2e" exec playwright test \
+      specs/32-chat-two-server-security.spec.ts --project=chromium
+fi

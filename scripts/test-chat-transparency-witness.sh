@@ -34,6 +34,14 @@ witnesses = value["authentication"].get("witnesses", [])
 raise SystemExit(0 if any(item.get("witnessId") == "audit.test" for item in witnesses) else 1)
 PY
   then
+    curl --fail --silent http://127.0.0.1:39002/v1/view | python3 -c '
+import json, sys
+view = json.load(sys.stdin)
+assert view["version"] == 1
+assert view["witnessId"] == "audit.test"
+assert 1 <= len(view["statements"]) <= 64
+assert view["statements"][-1]["authentication"]["witnesses"]
+'
     echo "SIGNED CHECKPOINT + INDEPENDENT WITNESS VERIFIED"
     exit 0
   fi

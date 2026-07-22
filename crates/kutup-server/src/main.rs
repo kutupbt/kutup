@@ -9,6 +9,8 @@
 mod chat_federation;
 mod chat_hub;
 mod chat_transparency;
+mod chat_transparency_auditor;
+mod chat_transparency_monitor;
 mod config;
 mod db;
 mod drive_federation;
@@ -22,9 +24,11 @@ mod middleware;
 mod models;
 mod openapi;
 mod ratelimit;
+mod sealed_sender_service;
 mod ssrf;
 mod storage;
 mod storage_probe;
+mod telemetry;
 mod totp;
 
 use std::net::SocketAddr;
@@ -71,6 +75,9 @@ pub struct AppState {
     pub(crate) federation: Option<Arc<federation::FederationStack>>,
     /// Persistent operator identity for distinguished key-transparency heads.
     pub transparency_authority: Arc<chat_transparency::TransparencyAuthority>,
+    /// Active root-signed online sealed-sender issuer. `None` keeps the
+    /// capability unadvertised and all issuance routes closed.
+    pub(crate) sealed_sender: Option<Arc<sealed_sender_service::SealedSenderService>>,
     /// Live SeaweedFS capacity probe for the admin dashboard; `None` disables it (the admin
     /// stats then fall back to `config.storage_total_bytes`).
     pub storage_probe: Option<Arc<storage_probe::StorageProbe>>,
@@ -78,12 +85,7 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,sqlx=warn".into()),
-        )
-        .init();
+    let _telemetry = telemetry::init()?;
 
     let config = Config::load();
     let pool = db::connect(&config.database_url).await?;
@@ -99,6 +101,20 @@ async fn main() -> anyhow::Result<()> {
             return Ok(());
         }
         anyhow::bail!("usage: kutup-server federation-identity rotate");
+    }
+    let rotate_transparency_policy = args
+        .get(1..)
+        .is_some_and(|args| args == ["feature-policy", "rotate", "chat-transparency"]);
+    let rotate_sealed_sender_policy = args
+        .get(1..)
+        .is_some_and(|args| args == ["feature-policy", "rotate", "sealed-sender"]);
+    if args.get(1).is_some_and(|value| value == "feature-policy")
+        && !rotate_transparency_policy
+        && !rotate_sealed_sender_policy
+    {
+        anyhow::bail!(
+            "usage: kutup-server feature-policy rotate <chat-transparency|sealed-sender>"
+        );
     }
 
     let transparency_authority = Arc::new(chat_transparency::TransparencyAuthority::from_config(
@@ -117,6 +133,100 @@ async fn main() -> anyhow::Result<()> {
             sequence = federation.local_identity().document().sequence,
             fingerprint = federation.local_identity().fingerprint(),
             "loaded unified federation identity"
+        );
+    }
+    let sealed_sender = sealed_sender_service::SealedSenderService::from_config(
+        &config,
+        time::OffsetDateTime::now_utc(),
+    )?;
+    let local_transparency_policy =
+        chat_transparency::local_transparency_policy(&pool, &config, &transparency_authority)
+            .await?;
+    if federation.is_some() && config.app_env == "production" && local_transparency_policy.is_none()
+    {
+        anyhow::bail!(
+            "production chat federation requires at least one independent transparency witness"
+        );
+    }
+    if let (Some(federation), Some(policy)) =
+        (federation.as_deref(), local_transparency_policy.as_ref())
+    {
+        let envelope = federation
+            .feature_policies()
+            .ensure_local(
+                federation,
+                kutup_federation_proto::FederatedFeaturePolicyTypeV1::ChatTransparency,
+                &policy.canonical_bytes().map_err(anyhow::Error::msg)?,
+                rotate_transparency_policy,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await?;
+        tracing::info!(
+            sequence = envelope.sequence,
+            policy_hash = envelope.policy_hash()?,
+            "loaded authenticated chat transparency policy"
+        );
+        telemetry::policy_event(
+            "chat_transparency",
+            if rotate_transparency_policy {
+                "rotated"
+            } else {
+                "loaded"
+            },
+        );
+        if rotate_transparency_policy {
+            println!(
+                "chat transparency policy rotated: domain={} sequence={} hash={}",
+                envelope.domain,
+                envelope.sequence,
+                envelope.policy_hash()?
+            );
+            return Ok(());
+        }
+    } else if rotate_transparency_policy {
+        anyhow::bail!(
+            "chat transparency policy rotation requires federation and a non-zero witness quorum"
+        );
+    }
+    if let (Some(federation), Some(service)) = (federation.as_deref(), sealed_sender.as_ref()) {
+        let envelope = federation
+            .feature_policies()
+            .ensure_local(
+                federation,
+                kutup_federation_proto::FederatedFeaturePolicyTypeV1::SealedSenderService,
+                &service
+                    .policy()
+                    .canonical_bytes()
+                    .map_err(anyhow::Error::msg)?,
+                rotate_sealed_sender_policy,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await?;
+        tracing::info!(
+            sequence = envelope.sequence,
+            policy_hash = envelope.policy_hash()?,
+            "loaded authenticated sealed sender service policy"
+        );
+        telemetry::policy_event(
+            "sealed_sender",
+            if rotate_sealed_sender_policy {
+                "rotated"
+            } else {
+                "loaded"
+            },
+        );
+        if rotate_sealed_sender_policy {
+            println!(
+                "sealed sender policy rotated: domain={} sequence={} hash={}",
+                envelope.domain,
+                envelope.sequence,
+                envelope.policy_hash()?
+            );
+            return Ok(());
+        }
+    } else if rotate_sealed_sender_policy {
+        anyhow::bail!(
+            "sealed sender policy rotation requires federation, policy JSON, and an online signer"
         );
     }
     let transparency_backfill = chat_transparency::backfill_existing_manifests(&pool).await?;
@@ -184,12 +294,15 @@ async fn main() -> anyhow::Result<()> {
         chat_hub,
         federation,
         transparency_authority,
+        sealed_sender,
         storage_probe,
     };
     if let Some(federation) = state.federation.as_ref() {
         federation.spawn_maintenance();
     }
     chat_federation::spawn_retry_worker(state.clone());
+    chat_transparency_monitor::spawn_monitor(state.clone());
+    chat_transparency_auditor::spawn_auditor(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
@@ -321,6 +434,10 @@ fn build_router(state: AppState) -> Router {
             get(crate::federation::public_identity_document)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
+        .route(
+            "/api/federation/policies/:feature",
+            get(crate::federation::get_local_feature_policy),
+        )
         // --- Auth routes (anonymous; rate-limited per the Go middleware chain) ---
         .route("/api/auth/settings", get(auth::get_public_settings))
         .route(
@@ -406,10 +523,35 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
+            "/api/chat/transparency/domains/:domain/status",
+            get(chat_transparency_monitor::get_status),
+        )
+        .route(
+            "/api/chat/transparency/domains/:domain/verify",
+            post(chat_transparency_monitor::verify_now),
+        )
+        .route(
+            "/api/chat/transparency/domains/:domain/policy",
+            get(chat_transparency_monitor::get_policy_history),
+        )
+        .route(
+            "/api/chat/transparency/domains/:domain/checkpoint",
+            get(chat_transparency_monitor::get_remote_checkpoint),
+        )
+        .route(
             "/api/chat/profile",
             get(chat::get_own_profile)
                 .put(chat::put_profile)
                 .route_layer(DefaultBodyLimit::max(1024 * 1024)),
+        )
+        .route(
+            "/api/chat/sealed-sender/certificate",
+            post(sealed_sender_service::issue_sender_certificate)
+                .route_layer(DefaultBodyLimit::max(8 * 1024)),
+        )
+        .route(
+            "/api/chat/sealed-sender/domains/:domain/policy",
+            get(sealed_sender_service::get_domain_policy),
         )
         .route(
             "/api/chat/users/:username/profile/:version",
@@ -419,11 +561,27 @@ fn build_router(state: AppState) -> Router {
             "/api/chat/users/:username/manifest",
             get(chat::get_user_manifest),
         )
+        .route(
+            "/api/chat/users/:username/manifest-history",
+            get(chat::get_manifest_history).route_layer(from_fn(middleware::rate_limit_chat_keys)),
+        )
         .route("/api/chat/keys", put(chat::replenish_keys))
         .route("/api/chat/keys/count", get(chat::prekey_count))
         .route(
             "/api/chat/users/:username/keys",
             get(chat::get_user_bundles).route_layer(from_fn(middleware::rate_limit_chat_keys)),
+        )
+        .route(
+            "/api/chat/anonymous/users/:username/keys",
+            post(chat::get_anonymous_bundles)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
+        )
+        .route(
+            "/api/chat/anonymous/users/:username/messages",
+            post(chat::send_sealed_messages)
+                .route_layer(DefaultBodyLimit::max(1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
         )
         .route(
             "/api/chat/users/:username/messages",
@@ -502,8 +660,35 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
+            "/api/fed/chat/sealed/users/:username/keys",
+            post(chat_federation::get_sealed_user_bundles)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/sealed/messages",
+            post(chat_federation::deliver_sealed_messages)
+                .route_layer(DefaultBodyLimit::max(1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/policies/:feature",
+            get(crate::federation::get_federated_feature_policy)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/transparency/checkpoint",
+            get(chat_federation::get_transparency_checkpoint)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
             "/api/fed/chat/users/:username/profile/:version",
             get(chat_federation::get_user_profile)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/users/:username/manifest-history",
+            get(chat_federation::get_manifest_history)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
@@ -613,6 +798,18 @@ fn build_router(state: AppState) -> Router {
                 .route(
                     "/api/admin/federation/peers/:domain/repin",
                     post(admin::repin_federation_peer),
+                )
+                .route(
+                    "/api/admin/chat/transparency/domains/:domain/witness-views",
+                    post(chat_transparency_auditor::submit_witness_view),
+                )
+                .route(
+                    "/api/admin/chat/transparency/domains/:domain/evidence",
+                    get(chat_transparency_auditor::list_evidence),
+                )
+                .route(
+                    "/api/admin/chat/transparency/domains/:domain/recover",
+                    post(chat_transparency_auditor::recover_domain),
                 )
                 .route_layer(from_fn(middleware::rate_limit_admin)),
         )

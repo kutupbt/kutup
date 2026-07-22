@@ -61,6 +61,7 @@ fn deliver(env: &OutgoingEnvelope, sender: &str, id: &str, cursor: u64) -> Deliv
         id: id.to_string(),
         cursor,
         sender: Some(sender.to_string()),
+        sealed_sender: false,
         sender_device_id: 1,
         envelope_type: env.envelope_type,
         suite: env.suite,
@@ -303,6 +304,7 @@ fn decrypt_failure_is_durable_and_never_silently_acked() {
         id: "broken-1".into(),
         cursor: 1,
         sender: Some("alice".into()),
+        sealed_sender: false,
         sender_device_id: 1,
         envelope_type: kutup_chat_proto::EnvelopeType::Message,
         suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
@@ -463,7 +465,8 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
         ContactState::PendingIncoming
     );
 
-    let blocked = block_on(bob.block_contact("alice", "2026-07-16T12:02:00Z", &mut rng)).unwrap();
+    let blocked =
+        block_on(bob.block_contact("alice", &[0; 32], "2026-07-16T12:02:00Z", &mut rng)).unwrap();
     assert_eq!(blocked.state, ContactState::Blocked);
     assert_eq!(blocked.previous_state, Some(ContactState::PendingIncoming));
     server.deposit(vec![deliver(&encrypted[4], "alice", "blocked-5", 5)]);

@@ -10,6 +10,7 @@ const supported: ChatCapabilities = {
   maxContentBytes: 65_536,
   mailboxRetentionDays: 30,
   deviceExpiryDays: 90,
+  serverName: 'chat.example',
   federation: false,
   manifests: true,
   profiles: true,
@@ -54,7 +55,7 @@ describe('isSupportedChat', () => {
     expect(
       isSupportedChat({ ...supported, transparencyWitnessQuorum: 1 }),
     ).toBe(false)
-    expect(isSupportedChat({ ...supported, federation: true })).toBe(false)
+    expect(isSupportedChat({ ...supported, federation: true, serverName: undefined })).toBe(false)
     expect(
       isSupportedChat({ ...supported, federation: true, serverName: 'chat.example' }),
     ).toBe(true)

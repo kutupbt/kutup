@@ -12,7 +12,7 @@ use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, Verifying
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::DeviceManifest;
+use crate::{ChatTransparencyPolicyV1, DeviceManifest};
 
 pub type TransparencyHash = [u8; 32];
 
@@ -23,6 +23,27 @@ const MAP_EMPTY_DOMAIN: &[u8] = b"kutup-chat-transparency-map-empty-v1\0";
 const MAP_CHECKPOINT_DOMAIN: &[u8] = b"kutup-chat-transparency-map-checkpoint-v1\0";
 const SIGNED_CHECKPOINT_DOMAIN: &[u8] = b"kutup-chat-transparency-signed-checkpoint-v1\0";
 const WITNESS_ATTESTATION_DOMAIN: &[u8] = b"kutup-chat-transparency-witness-v1\0";
+const WITNESS_VIEW_DOMAIN: &[u8] = b"kutup-chat-transparency-witness-view-v1\0";
+
+pub const MAX_MANIFEST_RANGE_PAGE_ENTRIES: usize = 64;
+pub const MAX_WITNESS_VIEW_STATEMENTS: usize = 64;
+
+/// Purpose-scoped operator signing interface. Provider/HSM implementations can
+/// sign canonical checkpoint bytes without exposing private key material.
+pub trait TransparencyOperatorSigner {
+    fn public_key_bytes(&self) -> [u8; 32];
+    fn sign_transparency_checkpoint(&self, message: &[u8]) -> Result<[u8; 64], String>;
+}
+
+impl TransparencyOperatorSigner for SigningKey {
+    fn public_key_bytes(&self) -> [u8; 32] {
+        self.verifying_key().to_bytes()
+    }
+
+    fn sign_transparency_checkpoint(&self, message: &[u8]) -> Result<[u8; 64], String> {
+        Ok(self.sign(message).to_bytes())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -213,19 +234,20 @@ impl TransparencyCheckpointAuthentication {
         checkpoint: &TransparencyCheckpoint,
         map_root: &str,
         issued_at: i64,
-        signing_key: &SigningKey,
+        signing_key: &impl TransparencyOperatorSigner,
     ) -> Result<Self, String> {
         if issued_at <= 0 {
             return Err("transparency checkpoint issuedAt must be positive".into());
         }
-        let verifying_key = signing_key.verifying_key();
+        let verifying_key = VerifyingKey::from_bytes(&signing_key.public_key_bytes())
+            .map_err(|_| "transparency signer returned an invalid public key".to_string())?;
         let operator_key_id = transparency_signing_key_id(&verifying_key);
         let bytes = signed_checkpoint_bytes(checkpoint, map_root, issued_at, &operator_key_id)?;
         Ok(Self {
             issued_at,
             operator_key_id,
             operator_public_key: STANDARD.encode(verifying_key.as_bytes()),
-            operator_signature: STANDARD.encode(signing_key.sign(&bytes).to_bytes()),
+            operator_signature: STANDARD.encode(signing_key.sign_transparency_checkpoint(&bytes)?),
             witnesses: Vec::new(),
         })
     }
@@ -345,6 +367,58 @@ pub struct TransparencyCheckpointResponse {
     pub consistency: Vec<String>,
 }
 
+/// Shared server/client/auditor verification of a checkpoint against an
+/// authenticated feature policy. Status labels supplied by a server are never
+/// inputs to this decision.
+pub fn verify_checkpoint_against_policy(
+    policy: &ChatTransparencyPolicyV1,
+    response: &TransparencyCheckpointResponse,
+    prior: Option<&TransparencyCheckpoint>,
+    now: i64,
+) -> Result<(), String> {
+    policy.validate()?;
+    response.verify(prior)?;
+    if response.checkpoint.log_id != policy.log_id
+        || response.authentication.operator_key_id != policy.operator_key_id
+        || response.authentication.operator_public_key != policy.operator_public_key
+    {
+        return Err("transparency checkpoint does not match authenticated policy".into());
+    }
+    let minimum_time = now.saturating_sub(policy.maximum_checkpoint_age_seconds as i64);
+    let maximum_time = now.saturating_add(policy.maximum_clock_skew_seconds as i64);
+    if response.authentication.issued_at < minimum_time
+        || response.authentication.issued_at > maximum_time
+    {
+        return Err("transparency checkpoint is stale or from the future".into());
+    }
+    let mut observed = BTreeMap::new();
+    for trusted in &policy.witnesses {
+        if let Some(attestation) = response.authentication.witnesses.iter().find(|candidate| {
+            candidate.witness_id == trusted.witness_id
+                && candidate.key_id == trusted.key_id
+                && candidate.public_key == trusted.public_key
+        }) {
+            attestation.verify(
+                &response.authentication,
+                &response.checkpoint,
+                &response.map_root,
+            )?;
+            observed.insert(
+                &trusted.witness_id,
+                (attestation.observed_at, &trusted.key_id),
+            );
+        }
+    }
+    if observed.len() < usize::from(policy.required_quorum) {
+        return Err(format!(
+            "transparency checkpoint has {} authenticated policy witnesses; {} required",
+            observed.len(),
+            policy.required_quorum
+        ));
+    }
+    Ok(())
+}
+
 impl TransparencyCheckpointResponse {
     pub fn verify(&self, prior: Option<&TransparencyCheckpoint>) -> Result<(), String> {
         self.authentication
@@ -386,6 +460,439 @@ impl TransparencyCheckpointResponse {
 pub struct SubmitTransparencyWitnessRequest {
     pub tree_size: u64,
     pub attestation: TransparencyWitnessAttestation,
+}
+
+/// One complete account update and its individual RFC 6962 inclusion proof.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManifestUpdateRangeEntryV1 {
+    pub manifest: DeviceManifest,
+    pub leaf_index: u64,
+    pub leaf: ManifestTransparencyLeaf,
+    pub inclusion: Vec<String>,
+}
+
+/// A page from one immutable checkpoint snapshot. `fromVersion` and
+/// `toVersion` name the complete requested interval; page bounds name the
+/// exact records present in this response. A cursor is valid only for the
+/// checkpoint and next version encoded in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManifestUpdateRangeProofV1 {
+    pub account: String,
+    pub from_version: u64,
+    pub to_version: u64,
+    pub page_from_version: u64,
+    pub page_to_version: u64,
+    pub entries: Vec<ManifestUpdateRangeEntryV1>,
+    pub checkpoint: TransparencyCheckpoint,
+    pub authentication: TransparencyCheckpointAuthentication,
+    pub consistency_from: u64,
+    pub consistency: Vec<String>,
+    /// Current map leaf at the fixed checkpoint. It must describe `toVersion`.
+    pub latest_leaf: ManifestTransparencyLeaf,
+    pub latest_map: ManifestTransparencyMapProof,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+impl ManifestUpdateRangeProofV1 {
+    pub fn verify_page(
+        &self,
+        expected_account: &str,
+        expected_from_version: u64,
+        prior_manifest: Option<&DeviceManifest>,
+        prior_checkpoint: Option<&TransparencyCheckpoint>,
+    ) -> Result<(), String> {
+        if self.account != expected_account
+            || self.from_version != expected_from_version
+            || self.from_version == 0
+            || self.to_version < self.from_version
+            || self.entries.is_empty()
+            || self.entries.len() > MAX_MANIFEST_RANGE_PAGE_ENTRIES
+            || self.page_from_version
+                != self.from_version.max(
+                    prior_manifest
+                        .map(|manifest| manifest.version.saturating_add(1))
+                        .unwrap_or(self.from_version),
+                )
+            || self.page_to_version < self.page_from_version
+        {
+            return Err("manifest range page has invalid account or version bounds".into());
+        }
+        let username = expected_account
+            .split_once('@')
+            .map(|(username, _)| username)
+            .unwrap_or(expected_account);
+        let mut expected_version = self.page_from_version;
+        let mut prior = prior_manifest;
+        for entry in &self.entries {
+            if entry.manifest.version != expected_version
+                || entry.leaf.manifest_version != expected_version
+            {
+                return Err("manifest range page is missing, duplicated, or reordered".into());
+            }
+            entry.manifest.verify()?;
+            entry.leaf.matches_manifest(username, &entry.manifest)?;
+            let root = self.checkpoint.validate()?;
+            let path = decode_path("range inclusion", &entry.inclusion)?;
+            verify_inclusion(
+                entry.leaf.hash()?,
+                entry.leaf_index,
+                self.checkpoint.tree_size,
+                &path,
+                root,
+            )?;
+            if let Some(previous) = prior {
+                if entry.manifest.authority_key_id != previous.authority_key_id
+                    || entry.manifest.self_authority_key != previous.self_authority_key
+                    || entry.manifest.previous_hash.as_deref()
+                        != Some(previous.manifest_hash()?.as_str())
+                {
+                    return Err(
+                        "manifest range breaks account authority or previousHash continuity".into(),
+                    );
+                }
+            } else if entry.manifest.version != 1 || entry.manifest.previous_hash.is_some() {
+                return Err("first-observation manifest history must begin at version 1".into());
+            }
+            prior = Some(&entry.manifest);
+            expected_version = expected_version
+                .checked_add(1)
+                .ok_or_else(|| "manifest version overflow".to_string())?;
+        }
+        if expected_version.saturating_sub(1) != self.page_to_version {
+            return Err("manifest range page bounds do not match its entries".into());
+        }
+        self.authentication
+            .verify(&self.checkpoint, &self.latest_map.root_hash)?;
+        verify_checkpoint_consistency(
+            &self.checkpoint,
+            self.consistency_from,
+            &self.consistency,
+            prior_checkpoint,
+        )?;
+        if self.latest_leaf.manifest_version != self.to_version
+            || self.latest_leaf.username != username
+        {
+            return Err("manifest range latest map leaf does not match the requested range".into());
+        }
+        self.latest_map
+            .verify(&self.latest_leaf, &self.checkpoint)?;
+        let expected_next = if self.page_to_version < self.to_version {
+            Some(manifest_range_cursor(
+                &self.account,
+                self.from_version,
+                self.to_version,
+                self.page_to_version + 1,
+                &self.checkpoint,
+            )?)
+        } else {
+            None
+        };
+        if self.next_cursor != expected_next {
+            return Err("manifest range pagination cursor is not bound to the checkpoint".into());
+        }
+        Ok(())
+    }
+}
+
+pub fn manifest_range_cursor(
+    account: &str,
+    from_version: u64,
+    to_version: u64,
+    next_version: u64,
+    checkpoint: &TransparencyCheckpoint,
+) -> Result<String, String> {
+    if account.is_empty()
+        || from_version == 0
+        || next_version < from_version
+        || next_version > to_version
+    {
+        return Err("invalid manifest range cursor coordinates".into());
+    }
+    let mut bytes = Vec::with_capacity(160);
+    bytes.extend_from_slice(b"kutup-chat-manifest-range-cursor-v1\0");
+    bytes.extend_from_slice(&(account.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(account.as_bytes());
+    bytes.extend_from_slice(&from_version.to_be_bytes());
+    bytes.extend_from_slice(&to_version.to_be_bytes());
+    bytes.extend_from_slice(&next_version.to_be_bytes());
+    bytes.extend_from_slice(&decode_hash("logId", &checkpoint.log_id)?);
+    bytes.extend_from_slice(&checkpoint.tree_size.to_be_bytes());
+    bytes.extend_from_slice(&decode_hash("rootHash", &checkpoint.root_hash)?);
+    Ok(STANDARD.encode(bytes))
+}
+
+/// Exact operator statement. The contained authentication retains the
+/// original operator signature and any original witness attestations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TransparencySignedStatementV1 {
+    pub checkpoint: TransparencyCheckpoint,
+    pub map_root: String,
+    pub authentication: TransparencyCheckpointAuthentication,
+}
+
+impl TransparencySignedStatementV1 {
+    pub fn verify(&self) -> Result<(), String> {
+        decode_hash("mapRoot", &self.map_root)?;
+        self.checkpoint.validate()?;
+        self.authentication.verify(&self.checkpoint, &self.map_root)
+    }
+}
+
+/// Bounded, witness-signed history used for independent cross-view auditing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WitnessViewV1 {
+    pub version: u16,
+    pub witness_id: String,
+    pub issued_at: i64,
+    pub key_id: String,
+    pub public_key: String,
+    pub statements: Vec<TransparencySignedStatementV1>,
+    pub signature: String,
+}
+
+impl WitnessViewV1 {
+    pub fn sign(
+        witness_id: impl Into<String>,
+        issued_at: i64,
+        statements: Vec<TransparencySignedStatementV1>,
+        signing_key: &SigningKey,
+    ) -> Result<Self, String> {
+        let public = signing_key.verifying_key();
+        let mut view = Self {
+            version: 1,
+            witness_id: witness_id.into(),
+            issued_at,
+            key_id: transparency_signing_key_id(&public),
+            public_key: STANDARD.encode(public.as_bytes()),
+            statements,
+            signature: String::new(),
+        };
+        let bytes = view.signing_bytes()?;
+        view.signature = STANDARD.encode(signing_key.sign(&bytes).to_bytes());
+        view.verify()?;
+        Ok(view)
+    }
+
+    pub fn verify(&self) -> Result<(), String> {
+        let public = decode_verifying_key("witness view publicKey", &self.public_key)?;
+        if transparency_signing_key_id(&public) != self.key_id {
+            return Err("witness view key id does not match its public key".into());
+        }
+        let signature = decode_signature("witness view signature", &self.signature)?;
+        public
+            .verify(&self.signing_bytes()?, &signature)
+            .map_err(|_| "invalid witness view signature".to_string())
+    }
+
+    pub fn signing_bytes(&self) -> Result<Vec<u8>, String> {
+        if self.version != 1
+            || self.issued_at <= 0
+            || self.statements.is_empty()
+            || self.statements.len() > MAX_WITNESS_VIEW_STATEMENTS
+        {
+            return Err("witness view version, time, or statement count is invalid".into());
+        }
+        validate_witness_id(&self.witness_id)?;
+        let public = decode_verifying_key("witness view publicKey", &self.public_key)?;
+        if transparency_signing_key_id(&public) != self.key_id {
+            return Err("witness view key id does not match its public key".into());
+        }
+        let mut out = Vec::with_capacity(512 * self.statements.len());
+        out.extend_from_slice(WITNESS_VIEW_DOMAIN);
+        out.extend_from_slice(&self.version.to_be_bytes());
+        out.extend_from_slice(&(self.witness_id.len() as u16).to_be_bytes());
+        out.extend_from_slice(self.witness_id.as_bytes());
+        out.extend_from_slice(&self.issued_at.to_be_bytes());
+        out.extend_from_slice(&decode_hash("witness view keyId", &self.key_id)?);
+        out.extend_from_slice(&(self.statements.len() as u16).to_be_bytes());
+        let mut previous = None;
+        for statement in &self.statements {
+            statement.verify()?;
+            if let Some((log_id, tree_size)) = &previous {
+                if statement.checkpoint.log_id != *log_id
+                    || statement.checkpoint.tree_size <= *tree_size
+                {
+                    return Err(
+                        "witness view history regresses, changes logs, or is reordered".into(),
+                    );
+                }
+            }
+            let witness = statement
+                .authentication
+                .witnesses
+                .iter()
+                .find(|attestation| {
+                    attestation.witness_id == self.witness_id
+                        && attestation.key_id == self.key_id
+                        && attestation.public_key == self.public_key
+                })
+                .ok_or_else(|| {
+                    "witness view statement lacks its original witness attestation".to_string()
+                })?;
+            witness.verify(
+                &statement.authentication,
+                &statement.checkpoint,
+                &statement.map_root,
+            )?;
+            let encoded = serde_json::to_vec(statement).map_err(|error| error.to_string())?;
+            out.extend_from_slice(&(encoded.len() as u32).to_be_bytes());
+            out.extend_from_slice(&encoded);
+            previous = Some((
+                statement.checkpoint.log_id.clone(),
+                statement.checkpoint.tree_size,
+            ));
+        }
+        Ok(out)
+    }
+}
+
+/// Immutable cryptographic contradiction. Both fields are the original signed
+/// statements; no trust is placed in the auditor's conclusion alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TransparencyForkEvidenceV1 {
+    pub version: u16,
+    pub domain: String,
+    pub detected_at: i64,
+    pub operator_statement: TransparencySignedStatementV1,
+    pub witness_statement: TransparencySignedStatementV1,
+}
+
+impl TransparencyForkEvidenceV1 {
+    pub fn verify_contradiction(&self) -> Result<(), String> {
+        if self.version != 1 || self.detected_at <= 0 {
+            return Err("fork evidence version or detection time is invalid".into());
+        }
+        kutup_federation_proto::validate_server_name(&self.domain)
+            .map_err(|error| error.to_string())?;
+        self.operator_statement.verify()?;
+        self.witness_statement.verify()?;
+        let left = &self.operator_statement;
+        let right = &self.witness_statement;
+        let contradictory = left.checkpoint.log_id != right.checkpoint.log_id
+            || (left.checkpoint.tree_size == right.checkpoint.tree_size
+                && (left.checkpoint.root_hash != right.checkpoint.root_hash
+                    || left.map_root != right.map_root));
+        if !contradictory {
+            return Err("statements do not contain an independently verifiable fork".into());
+        }
+        Ok(())
+    }
+}
+
+/// Shared server/auditor comparison. `Ok(None)` means the signed views contain
+/// no directly provable contradiction; availability gaps and missing
+/// cross-size consistency proofs are intentionally not upgraded to forks.
+pub fn audit_operator_witness_view(
+    domain: &str,
+    detected_at: i64,
+    operator: &TransparencySignedStatementV1,
+    witness: &WitnessViewV1,
+) -> Result<Option<TransparencyForkEvidenceV1>, String> {
+    kutup_federation_proto::validate_server_name(domain).map_err(|error| error.to_string())?;
+    if detected_at <= 0 {
+        return Err("audit detection time must be positive".into());
+    }
+    operator.verify()?;
+    witness.verify()?;
+    for statement in &witness.statements {
+        if statements_contradict(operator, statement) {
+            let evidence = TransparencyForkEvidenceV1 {
+                version: 1,
+                domain: domain.to_string(),
+                detected_at,
+                operator_statement: operator.clone(),
+                witness_statement: statement.clone(),
+            };
+            evidence.verify_contradiction()?;
+            return Ok(Some(evidence));
+        }
+    }
+    Ok(None)
+}
+
+/// Compare two independently witness-signed histories for equivocation. The
+/// returned evidence retains the original operator statements and therefore
+/// remains verifiable without trusting this function's conclusion.
+pub fn audit_witness_views(
+    domain: &str,
+    detected_at: i64,
+    left: &WitnessViewV1,
+    right: &WitnessViewV1,
+) -> Result<Option<TransparencyForkEvidenceV1>, String> {
+    kutup_federation_proto::validate_server_name(domain).map_err(|error| error.to_string())?;
+    if detected_at <= 0 {
+        return Err("audit detection time must be positive".into());
+    }
+    left.verify()?;
+    right.verify()?;
+    for left_statement in &left.statements {
+        for right_statement in &right.statements {
+            if statements_contradict(left_statement, right_statement) {
+                let evidence = TransparencyForkEvidenceV1 {
+                    version: 1,
+                    domain: domain.to_string(),
+                    detected_at,
+                    operator_statement: left_statement.clone(),
+                    witness_statement: right_statement.clone(),
+                };
+                evidence.verify_contradiction()?;
+                return Ok(Some(evidence));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn statements_contradict(
+    left: &TransparencySignedStatementV1,
+    right: &TransparencySignedStatementV1,
+) -> bool {
+    left.checkpoint.log_id != right.checkpoint.log_id
+        || (left.checkpoint.tree_size == right.checkpoint.tree_size
+            && (left.checkpoint.root_hash != right.checkpoint.root_hash
+                || left.map_root != right.map_root))
+}
+
+fn verify_checkpoint_consistency(
+    checkpoint: &TransparencyCheckpoint,
+    consistency_from: u64,
+    consistency: &[String],
+    prior: Option<&TransparencyCheckpoint>,
+) -> Result<(), String> {
+    let proof = decode_path("range consistency", consistency)?;
+    match prior {
+        None => {
+            if consistency_from != 0 || !proof.is_empty() {
+                return Err("first manifest range proof must start at tree size zero".into());
+            }
+            Ok(())
+        }
+        Some(prior) => {
+            if prior.log_id != checkpoint.log_id || consistency_from != prior.tree_size {
+                return Err(
+                    "manifest range consistency proof starts from the wrong checkpoint".into(),
+                );
+            }
+            verify_consistency(
+                prior.tree_size,
+                checkpoint.tree_size,
+                prior.validate()?,
+                checkpoint.validate()?,
+                &proof,
+            )
+        }
+    }
 }
 
 impl TransparencyWitnessAttestation {
@@ -959,6 +1466,61 @@ mod tests {
         let mut duplicate = authentication.clone();
         duplicate.witnesses.push(duplicate.witnesses[0].clone());
         assert!(duplicate.verify(&checkpoint, &map_root).is_err());
+    }
+
+    #[test]
+    fn shared_auditor_emits_only_original_signed_fork_evidence() {
+        fn statement(
+            root: &str,
+            operator: &SigningKey,
+            witness_id: &str,
+            witness: &SigningKey,
+        ) -> TransparencySignedStatementV1 {
+            let checkpoint = TransparencyCheckpoint {
+                log_id: "11".repeat(32),
+                tree_size: 9,
+                root_hash: root.repeat(32),
+            };
+            let map_root = "33".repeat(32);
+            let mut authentication = TransparencyCheckpointAuthentication::sign(
+                &checkpoint,
+                &map_root,
+                1_752_688_000,
+                operator,
+            )
+            .unwrap();
+            authentication
+                .add_witness(&checkpoint, &map_root, witness_id, 1_752_688_001, witness)
+                .unwrap();
+            TransparencySignedStatementV1 {
+                checkpoint,
+                map_root,
+                authentication,
+            }
+        }
+
+        let operator = SigningKey::from_bytes(&[61; 32]);
+        let witness = SigningKey::from_bytes(&[62; 32]);
+        let operator_view = statement("22", &operator, "witness.example", &witness);
+        let forked = statement("44", &operator, "witness.example", &witness);
+        let witness_view = WitnessViewV1::sign(
+            "witness.example",
+            1_752_688_010,
+            vec![forked.clone()],
+            &witness,
+        )
+        .unwrap();
+        let evidence = audit_operator_witness_view(
+            "chat.example",
+            1_752_688_020,
+            &operator_view,
+            &witness_view,
+        )
+        .unwrap()
+        .expect("same-size roots conflict");
+        evidence.verify_contradiction().unwrap();
+        assert_eq!(evidence.operator_statement, operator_view);
+        assert_eq!(evidence.witness_statement, forked);
     }
 
     #[test]

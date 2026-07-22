@@ -8,19 +8,25 @@
 FROM rust:1-bookworm AS builder
 WORKDIR /build
 
+# Pinned libsignal/SPQR generate their Rust protocol bindings at build time.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy the workspace manifests + sources. src-tauri is excluded from the workspace and not
 # needed here. BuildKit caches Cargo downloads and compiled artifacts independently from
 # this source layer so an application-only change does not rebuild the whole dependency graph.
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
-# Build the log server and the separately runnable witness binary.
+# Build the server, independent witness, and offline sealed-sender provisioner.
 RUN --mount=type=cache,id=kutup-server-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=kutup-server-release-target,target=/build/target,sharing=locked \
     cargo build --release -p kutup-server \
-        --bin kutup-server --bin kutup-transparency-witness \
+        --bin kutup-server --bin kutup-transparency-witness --bin kutup-sealed-sender-provision \
     && cp target/release/kutup-server /kutup-server \
-    && cp target/release/kutup-transparency-witness /kutup-transparency-witness
+    && cp target/release/kutup-transparency-witness /kutup-transparency-witness \
+    && cp target/release/kutup-sealed-sender-provision /kutup-sealed-sender-provision
 
 # Minimal runtime: rustls is used throughout (no OpenSSL), so only CA certs are needed.
 FROM debian:bookworm-slim
@@ -29,6 +35,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /kutup-server /usr/local/bin/kutup-server
 COPY --from=builder /kutup-transparency-witness /usr/local/bin/kutup-transparency-witness
+COPY --from=builder /kutup-sealed-sender-provision /usr/local/bin/kutup-sealed-sender-provision
 
 EXPOSE 3000
 ENTRYPOINT ["kutup-server"]

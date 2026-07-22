@@ -1,5 +1,6 @@
 import axios from 'axios'
 import api from '@/api/client'
+import { apiBase } from '@/lib/apiBase'
 import type { ChatTransportPort } from './types'
 
 /** Authenticated REST adapter consumed by the Rust engine. */
@@ -32,11 +33,17 @@ export class ApiChatTransport implements ChatTransportPort {
     scope: string,
     fromTreeSize: string,
   ): Promise<unknown> {
-    if (scope !== 'local') {
-      throw new Error('remote transparency monitoring is not available yet')
-    }
+    const path = scope === 'local'
+      ? '/chat/transparency/checkpoint'
+      : `/chat/transparency/domains/${encodeURIComponent(scope)}/checkpoint`
     return api
-      .get('/chat/transparency/checkpoint', { params: { fromTreeSize } })
+      .get(path, { params: { fromTreeSize } })
+      .then((response) => response.data)
+  }
+
+  async fetchTransparencyPolicy(domain: string): Promise<unknown> {
+    return api
+      .get(`/chat/transparency/domains/${encodeURIComponent(domain)}/policy`)
       .then((response) => response.data)
   }
 
@@ -49,6 +56,53 @@ export class ApiChatTransport implements ChatTransportPort {
       if (axios.isAxiosError(error) && error.response?.status === 404) return null
       throw error
     }
+  }
+
+  async fetchManifestRange(
+    username: string,
+    fromVersion: string,
+    toVersion: string,
+    pageFromVersion: string,
+    cursor: string | null,
+    transparencyTreeSize: string,
+  ): Promise<unknown> {
+    return api
+      .get(`/chat/users/${encodeURIComponent(username)}/manifest-history`, {
+        params: {
+          fromVersion,
+          toVersion,
+          pageFromVersion,
+          ...(cursor === null ? {} : { cursor }),
+          transparencyTreeSize,
+        },
+      })
+      .then((response) => response.data)
+  }
+
+  async fetchSealedSenderPolicy(domain: string): Promise<unknown> {
+    return api
+      .get(`/chat/sealed-sender/domains/${encodeURIComponent(domain)}/policy`)
+      .then((response) => response.data)
+  }
+
+  async fetchSenderCertificate(deviceId: number): Promise<unknown> {
+    return api
+      .post('/chat/sealed-sender/certificate', undefined, { params: { deviceId } })
+      .then((response) => response.data)
+  }
+
+  async fetchSealedBundles(
+    username: string,
+    capability: string,
+    transparencyTreeSize: string,
+  ): Promise<unknown> {
+    return axios
+      .post(
+        `${apiBase()}/chat/anonymous/users/${encodeURIComponent(username)}/keys`,
+        { capability, transparencyTreeSize },
+        { withCredentials: false, headers: { Authorization: undefined } },
+      )
+      .then((response) => response.data)
   }
 
   async publishManifest(manifest: unknown, transparencyTreeSize: string): Promise<unknown> {
@@ -114,6 +168,28 @@ export class ApiChatTransport implements ChatTransportPort {
         kind: 'delivered',
         deduplicated: response.data?.deduplicated === true,
       }
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        return { kind: 'mismatch', mismatch: error.response.data }
+      }
+      throw error
+    }
+  }
+
+  async sendSealedMessage(
+    username: string,
+    request: unknown,
+  ): Promise<
+    | { kind: 'delivered'; deduplicated?: boolean }
+    | { kind: 'mismatch'; mismatch: unknown }
+  > {
+    try {
+      const response = await axios.post(
+        `${apiBase()}/chat/anonymous/users/${encodeURIComponent(username)}/messages`,
+        request,
+        { withCredentials: false, headers: { Authorization: undefined } },
+      )
+      return { kind: 'delivered', deduplicated: response.data?.deduplicated === true }
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 409) {
         return { kind: 'mismatch', mismatch: error.response.data }

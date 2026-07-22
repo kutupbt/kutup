@@ -218,10 +218,12 @@ reject, block, and unblock are client-held relationship state; blocking also
 rotates the local encrypted-profile capability so the blocked peer cannot read
 future profile versions.
 
-Blocking is not sealed sender: the current mailbox and federation servers can
-still see sender and recipient addresses. A complete sealed-sender feature must
-ship together with its delivery-capability abuse gate rather than merely
-hiding a DTO field.
+Accepted contacts use sealed sender when both servers advertise a complete
+authenticated service policy. The destination receives only an origin domain,
+recipient, capability, send id, and opaque per-device envelopes; mailbox rows
+do not contain the sender. First contact, Note to Self, and linked-device sync
+remain identified. Blocking rotates the profile key and delivery capability
+before redistributing the new key to remaining contacts.
 
 ### Device-directory trust and transparency
 
@@ -232,12 +234,14 @@ checkpoints carry a persistent operator signature and may carry signatures
 from independently deployed witnesses; clients enforce their pinned operator
 and witness-quorum policy.
 
-The web client independently checks its local checkpoint when chat opens,
-connectivity returns, the page becomes visible, the WebSocket reconnects, and
-every 15 minutes while visible. Network unavailability is recorded as an
-availability warning without discarding established trust. A signature,
-consistency, rollback, policy, or witness-quorum failure is durable and blocks
-creation of new sends until a later valid checkpoint recovers the state.
+The web client independently verifies local and authenticated remote policy and
+checkpoint histories when chat opens, connectivity returns, the page becomes
+visible, the WebSocket reconnects, and before stale evidence is used. The
+server also runs restart-safe 15-minute remote monitoring and scheduled
+operator/witness cross-view auditing. Network/witness unavailability warns
+without discarding established trust; a cryptographic contradiction durably
+blocks new sends for that domain. Skipped manifest versions are recovered from
+checkpoint-bound pages and committed only after the entire chain verifies.
 Existing durable ciphertext is retained.
 
 ### Transport-only federation

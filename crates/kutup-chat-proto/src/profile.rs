@@ -26,6 +26,9 @@ pub struct PutChatProfileRequest {
     pub wrapped_key: String,
     /// Lowercase SHA-256 hex of the derived 16-byte fetch access key.
     pub access_key_verifier: String,
+    /// Lowercase SHA-256 hex of the contacts-only sealed-delivery capability.
+    /// The raw 16-byte capability is never uploaded with the profile.
+    pub delivery_capability_verifier: String,
 }
 
 /// The owner-only response, including the wrapped random profile key.
@@ -71,6 +74,7 @@ mod tests {
             avatar: None,
             wrapped_key: "d3JhcHBlZA==".into(),
             access_key_verifier: "02".repeat(32),
+            delivery_capability_verifier: "03".repeat(32),
         };
         let value = serde_json::to_value(ChatProfileResponse::from(&owner)).unwrap();
         assert!(value.get("wrappedKey").is_none());

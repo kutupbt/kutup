@@ -122,6 +122,46 @@ impl AuthenticatedFederationRequest {
 }
 
 impl FederationStack {
+    /// Fetch a self-authenticating public object whose exact URL came from an
+    /// already verified feature policy. The object is not a federation HTTP
+    /// response, so its feature-specific signature is verified by the caller;
+    /// DNS binding, SSRF rejection, redirects, timeout, and response limits
+    /// remain identical to the unified federation transport.
+    pub(crate) async fn fetch_signed_public_object(
+        &self,
+        endpoint: &str,
+        response_limit: usize,
+    ) -> anyhow::Result<Vec<u8>> {
+        if response_limit == 0 {
+            anyhow::bail!("public-object response limit must be positive");
+        }
+        let url = Url::parse(endpoint)?;
+        if url.query().is_some() {
+            anyhow::bail!("public-object endpoint cannot contain a query");
+        }
+        let response = self
+            .bounded_request(
+                Method::GET,
+                url,
+                HeaderMap::new(),
+                Vec::new(),
+                response_limit,
+            )
+            .await?;
+        if response.status != StatusCode::OK {
+            anyhow::bail!("public-object endpoint returned status {}", response.status);
+        }
+        let content_type = response
+            .headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if content_type.split(';').next() != Some("application/json") {
+            anyhow::bail!("public-object endpoint did not return application/json");
+        }
+        Ok(response.body)
+    }
+
     pub(crate) async fn resolve_peer(
         &self,
         domain: &str,
@@ -811,14 +851,17 @@ fn has_feature(discovery: &FederationDiscoveryV2, feature: FederationFeature) ->
 }
 
 fn validate_request_spec(spec: &FederationRequestSpec) -> anyhow::Result<()> {
-    let required_prefix = match spec.feature {
-        FederationFeature::ChatV1 => "/api/fed/chat/",
-        FederationFeature::DriveV1 => "/api/fed/drive/",
+    let valid_namespace = match spec.feature {
+        FederationFeature::ChatV1 => {
+            spec.path.starts_with("/api/fed/chat/")
+                || matches!(
+                    spec.path.as_str(),
+                    "/api/fed/policies/chat-transparency" | "/api/fed/policies/sealed-sender"
+                )
+        }
+        FederationFeature::DriveV1 => spec.path.starts_with("/api/fed/drive/"),
     };
-    if !spec.path.starts_with(required_prefix)
-        || spec.path.contains(['?', '#'])
-        || !spec.path.is_ascii()
-    {
+    if !valid_namespace || spec.path.contains(['?', '#']) || !spec.path.is_ascii() {
         anyhow::bail!("federation operation is outside its feature-owned endpoint namespace");
     }
     if spec
@@ -1000,6 +1043,12 @@ mod tests {
             response_limit: 1024,
         };
         validate_request_spec(&spec).unwrap();
+        spec.path = "/api/fed/policies/chat-transparency".into();
+        validate_request_spec(&spec).unwrap();
+        spec.path = "/api/fed/policies/sealed-sender".into();
+        validate_request_spec(&spec).unwrap();
+        spec.path = "/api/fed/policies/unknown".into();
+        assert!(validate_request_spec(&spec).is_err());
         spec.path = "/api/fed/drive/users/alice".into();
         assert!(validate_request_spec(&spec).is_err());
         spec.path = "https://internal.example/api/fed/chat/users/alice/keys".into();

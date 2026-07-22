@@ -166,7 +166,7 @@ pub(crate) async fn rotate_local_identity(
     })
 }
 
-pub(super) async fn insert_system_audit(
+pub(crate) async fn insert_system_audit(
     transaction: &mut Transaction<'_, Postgres>,
     action: &str,
     payload: serde_json::Value,

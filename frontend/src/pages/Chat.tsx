@@ -35,6 +35,7 @@ import { Input } from '@/components/ui/input'
 import { QRCodeSVG } from 'qrcode.react'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { useAppSelector } from '@/store'
+import api from '@/api/client'
 import { ChatService, ChatServiceError } from '@/chat/service'
 import { isSupportedChat, useChatCapabilities } from '@/chat/capabilities'
 import {
@@ -108,8 +109,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [attention, setAttention] = useState<InboundAttention[]>([])
   const [localProfile, setLocalProfile] = useState<ChatProfile | null>(null)
   const [peerProfiles, setPeerProfiles] = useState<PeerChatProfile[]>([])
-  const [transparencyStatus, setTransparencyStatus] =
-    useState<TransparencyMonitorStatus | null>(null)
+  const [transparencyStatuses, setTransparencyStatuses] =
+    useState<Record<string, TransparencyMonitorStatus>>({})
   const [selectedConversation, setSelectedConversation] = useState<ConversationId | null>(null)
   const [newPeer, setNewPeer] = useState('')
   const [draft, setDraft] = useState('')
@@ -155,7 +156,9 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
           setContacts(nextContacts)
           setLocalProfile(nextProfile)
           setPeerProfiles(nextProfiles)
-          setTransparencyStatus(nextTransparency ?? null)
+          if (nextTransparency) {
+            setTransparencyStatuses((current) => ({ ...current, local: nextTransparency }))
+          }
           setError(null)
         }
       } catch (cause) {
@@ -255,11 +258,48 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     ? t('chat.noteToSelf')
     : selectedProfile?.displayName || selectedLabel || t('chat.selectConversation')
   const selectedContact = selectedAddress ? contactsByPeer.get(selectedAddress) : undefined
+  const selectedAccount = selectedAddress ? parseAccountAddress(selectedAddress) : null
+  const selectedTransparencyScope = selectedAccount?.server &&
+    selectedAccount.server !== capabilities.serverName
+    ? selectedAccount.server
+    : 'local'
+  const transparencyStatus = transparencyStatuses[selectedTransparencyScope]
   const requestSelected = selectedContact?.state === 'pendingIncoming'
   const blockedSelected = selectedContact?.state === 'blocked'
   const canSend = Boolean(
     selectedConversation && !requestSelected && !blockedSelected,
   )
+
+  useEffect(() => {
+    if (!service || selectedTransparencyScope === 'local') return
+    let cancelled = false
+    void service.monitorTransparency(selectedTransparencyScope)
+      .then((status) => {
+        if (!cancelled) {
+          setTransparencyStatuses((current) => ({
+            ...current,
+            [selectedTransparencyScope]: status,
+          }))
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [selectedTransparencyScope, service])
+
+  async function retryTransparency() {
+    if (!service) return
+    try {
+      const status = await service.monitorTransparency(selectedTransparencyScope)
+      setTransparencyStatuses((current) => ({
+        ...current,
+        [selectedTransparencyScope]: status,
+      }))
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    }
+  }
 
   const messages = useMemo(
     () =>
@@ -595,6 +635,11 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
               <RefreshCw className="h-4 w-4" />
               <span className="sr-only">{t('chat.sync')}</span>
             </Button>
+            <TransparencyDetails
+              scope={selectedTransparencyScope}
+              capabilities={capabilities}
+              status={transparencyStatus}
+            />
             {!noteSelected &&
               selectedContact &&
               selectedContact.state !== 'pendingIncoming' &&
@@ -626,7 +671,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => void service?.monitorTransparency()}
+                onClick={() => void retryTransparency()}
                 disabled={!service}
               >
                 {t('chat.transparency.retry')}
@@ -640,7 +685,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => void service?.monitorTransparency()}
+                onClick={() => void retryTransparency()}
                 disabled={!service}
               >
                 {t('chat.transparency.retry')}
@@ -728,6 +773,260 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       )}
     </div>
   )
+}
+
+interface TransparencyPolicyEnvelope {
+  sequence: string | number
+  payloadDigest: string
+  issuedAt: number
+  payload: string
+}
+
+interface TransparencyPolicyHistory {
+  domain: string
+  policies: TransparencyPolicyEnvelope[]
+}
+
+interface TransparencyPolicyPayload {
+  logId: string
+  operatorKeyId: string
+  operatorPublicKey: string
+  requiredQuorum: number
+  witnesses: Array<{
+    witnessId: string
+    keyId: string
+    publicKey: string
+    publicEndpoint: string
+  }>
+  maximumCheckpointAgeSeconds: number
+}
+
+interface TransparencyCheckpointDetails {
+  checkpoint: { logId: string; treeSize: string | number; rootHash: string }
+  mapRoot: string
+  authentication: {
+    issuedAt: number
+    operatorKeyId: string
+    operatorPublicKey: string
+    witnesses: Array<{ witnessId: string; keyId: string }>
+  }
+}
+
+interface TransparencyServerStatus {
+  policySequence: string | number
+  lastSuccessfulAt?: string
+  nextAttemptAt: string
+  failureClass?: string
+  warning: boolean
+  blocked: boolean
+  evidenceDigest?: string
+}
+
+function TransparencyDetails({
+  scope,
+  capabilities,
+  status,
+}: {
+  scope: string
+  capabilities: ChatCapabilities
+  status?: TransparencyMonitorStatus
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [failure, setFailure] = useState(false)
+  const [history, setHistory] = useState<TransparencyPolicyHistory | null>(null)
+  const [policy, setPolicy] = useState<TransparencyPolicyPayload | null>(null)
+  const [checkpoint, setCheckpoint] = useState<TransparencyCheckpointDetails | null>(null)
+  const [serverStatus, setServerStatus] = useState<TransparencyServerStatus | null>(null)
+  const domain = scope === 'local' ? capabilities.serverName : scope
+
+  useEffect(() => {
+    if (!open || !domain) return
+    let cancelled = false
+    setLoading(true)
+    setFailure(false)
+    const policyRequest = api
+      .get<TransparencyPolicyHistory>(
+        `/chat/transparency/domains/${encodeURIComponent(domain)}/policy`,
+      )
+      .then((response) => response.data)
+    const checkpointRequest = api
+      .get<TransparencyCheckpointDetails>(
+        scope === 'local'
+          ? '/chat/transparency/checkpoint'
+          : `/chat/transparency/domains/${encodeURIComponent(domain)}/checkpoint`,
+        { params: { fromTreeSize: '0' } },
+      )
+      .then((response) => response.data)
+    const statusRequest = scope === 'local'
+      ? Promise.resolve(null)
+      : api
+          .get<TransparencyServerStatus>(
+            `/chat/transparency/domains/${encodeURIComponent(domain)}/status`,
+          )
+          .then((response) => response.data)
+    void Promise.all([policyRequest, checkpointRequest, statusRequest])
+      .then(([nextHistory, nextCheckpoint, nextServerStatus]) => {
+        const current = nextHistory.policies.at(-1)
+        if (!current) throw new Error('empty transparency policy history')
+        const nextPolicy = decodePolicyPayload(current.payload)
+        if (!cancelled) {
+          setHistory(nextHistory)
+          setPolicy(nextPolicy)
+          setCheckpoint(nextCheckpoint)
+          setServerStatus(nextServerStatus)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setFailure(true)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [domain, open, scope])
+
+  const failed = status?.state === 'verificationFailed' || serverStatus?.blocked
+  const warning = status?.state === 'unavailable' || serverStatus?.warning
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          disabled={!domain}
+          aria-label={t('chat.transparency.details', { defaultValue: 'Transparency details' })}
+        >
+          {failed
+            ? <AlertTriangle className="h-4 w-4 text-destructive" />
+            : <ShieldCheck className={cn('h-4 w-4', warning ? 'text-warning' : 'text-success')} />}
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>
+            {t('chat.transparency.details', { defaultValue: 'Transparency details' })}
+          </DialogTitle>
+          <DialogDescription className="break-all">{domain}</DialogDescription>
+        </DialogHeader>
+        {loading && (
+          <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {t('common.loading', { defaultValue: 'Loading…' })}
+          </div>
+        )}
+        {failure && (
+          <div className="rounded-lg border border-warning/30 bg-warning-faint p-3 text-sm">
+            {t('chat.transparency.detailsUnavailable', {
+              defaultValue: 'Detailed transparency evidence is temporarily unavailable.',
+            })}
+          </div>
+        )}
+        {!loading && policy && checkpoint && history && (
+          <div className="grid gap-4 text-sm">
+            <div className="grid grid-cols-2 gap-3 rounded-lg border bg-muted/30 p-3">
+              <Detail label="Client state" value={status?.state ?? 'unknown'} />
+              <Detail label="Policy sequence" value={String(history.policies.at(-1)?.sequence)} />
+              <Detail label="History length" value={String(history.policies.length)} />
+              <Detail label="Required quorum" value={String(policy.requiredQuorum)} />
+              <Detail label="Tree size" value={String(checkpoint.checkpoint.treeSize)} />
+              <Detail
+                label="Checkpoint age"
+                value={formatAge(checkpoint.authentication.issuedAt)}
+              />
+              {serverStatus?.lastSuccessfulAt && (
+                <Detail label="Server last verified" value={serverStatus.lastSuccessfulAt} />
+              )}
+              {serverStatus?.nextAttemptAt && (
+                <Detail label="Server next attempt" value={serverStatus.nextAttemptAt} />
+              )}
+              {serverStatus?.failureClass && (
+                <Detail label="Failure class" value={serverStatus.failureClass} />
+              )}
+            </div>
+            <Fingerprint label="Log ID" value={policy.logId} />
+            <Fingerprint label="Checkpoint root" value={checkpoint.checkpoint.rootHash} />
+            <Fingerprint label="Sparse-map root" value={checkpoint.mapRoot} />
+            <Fingerprint label="Operator key ID" value={policy.operatorKeyId} />
+            <Fingerprint label="Operator public key" value={policy.operatorPublicKey} />
+            {serverStatus?.evidenceDigest && (
+              <Fingerprint label="Blocking evidence digest" value={serverStatus.evidenceDigest} />
+            )}
+            <div>
+              <h3 className="mb-2 font-medium">Witnesses</h3>
+              <div className="grid gap-2">
+                {policy.witnesses.map((witness) => (
+                  <div key={witness.witnessId} className="rounded-lg border p-3">
+                    <div className="font-medium">{witness.witnessId}</div>
+                    <code className="mt-1 block break-all text-xs text-muted-foreground">
+                      {witness.keyId}
+                    </code>
+                    <code className="mt-1 block break-all text-xs text-muted-foreground">
+                      {witness.publicKey}
+                    </code>
+                    <div className="mt-1 break-all text-xs text-muted-foreground">
+                      {witness.publicEndpoint}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <details className="rounded-lg border p-3">
+              <summary className="cursor-pointer font-medium">Authenticated policy history</summary>
+              <div className="mt-3 grid gap-2">
+                {history.policies.map((entry) => (
+                  <div key={String(entry.sequence)} className="rounded bg-muted/40 p-2 text-xs">
+                    <div>Sequence {String(entry.sequence)} · {formatTimestamp(entry.issuedAt)}</div>
+                    <code className="mt-1 block break-all text-muted-foreground">
+                      {entry.payloadDigest}
+                    </code>
+                  </div>
+                ))}
+              </div>
+            </details>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function Detail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="break-all font-medium">{value}</div>
+    </div>
+  )
+}
+
+function Fingerprint({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="mb-1 text-xs font-medium text-muted-foreground">{label}</div>
+      <code className="block break-all rounded-lg border bg-muted/30 p-2 text-xs">{value}</code>
+    </div>
+  )
+}
+
+function decodePolicyPayload(payload: string): TransparencyPolicyPayload {
+  const binary = atob(payload)
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
+  return JSON.parse(new TextDecoder().decode(bytes)) as TransparencyPolicyPayload
+}
+
+function formatAge(unixSeconds: number): string {
+  const seconds = Math.max(0, Math.round(Date.now() / 1000) - unixSeconds)
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
+  return `${Math.floor(seconds / 3600)}h`
+}
+
+function formatTimestamp(unixSeconds: number): string {
+  return new Date(unixSeconds * 1000).toLocaleString()
 }
 
 type AvatarProfile = Pick<ChatProfile, 'displayName' | 'avatar' | 'avatarContentType'>

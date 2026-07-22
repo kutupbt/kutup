@@ -11,11 +11,13 @@ use base64::Engine as _;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use kutup_chat_proto::{
     hash_transparency_map_checkpoint, hash_transparency_map_leaf, hash_transparency_node,
-    map_key_bit, transparency_map_empty_hashes, transparency_map_key, DeviceManifest,
-    ManifestTransparencyLeaf, ManifestTransparencyMapProof, ManifestTransparencyProof,
-    SubmitTransparencyWitnessRequest, TransparencyCheckpoint, TransparencyCheckpointAuthentication,
-    TransparencyCheckpointResponse, TransparencyHash, TransparencyMapSibling,
-    TransparencyVerifierKey, TransparencyWitnessAttestation,
+    manifest_range_cursor, map_key_bit, transparency_map_empty_hashes, transparency_map_key,
+    ChatTransparencyPolicyV1, DeviceManifest, ManifestTransparencyLeaf,
+    ManifestTransparencyMapProof, ManifestTransparencyProof, ManifestUpdateRangeEntryV1,
+    ManifestUpdateRangeProofV1, SubmitTransparencyWitnessRequest, TransparencyCheckpoint,
+    TransparencyCheckpointAuthentication, TransparencyCheckpointResponse, TransparencyHash,
+    TransparencyMapSibling, TransparencyProofProfileV1, TransparencyVerifierKey,
+    TransparencyWitnessAttestation, TransparencyWitnessPolicyV1,
 };
 use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
 use time::OffsetDateTime;
@@ -103,6 +105,86 @@ impl TransparencyAuthority {
 
     pub fn witness_quorum(&self) -> u16 {
         self.witness_quorum
+    }
+}
+
+pub async fn local_transparency_policy(
+    pool: &PgPool,
+    config: &Config,
+    authority: &TransparencyAuthority,
+) -> anyhow::Result<Option<ChatTransparencyPolicyV1>> {
+    if authority.witness_quorum() == 0 {
+        return Ok(None);
+    }
+    let log_id: String =
+        sqlx::query_scalar("SELECT log_id FROM chat_transparency_log WHERE singleton = true")
+            .fetch_one(pool)
+            .await?;
+    let mut endpoints = BTreeMap::new();
+    for entry in config
+        .chat_transparency_witness_endpoints
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        let (id, endpoint) = entry.split_once('=').ok_or_else(|| {
+            anyhow::anyhow!(
+                "CHAT_TRANSPARENCY_WITNESS_ENDPOINTS entries must be witness-id=https-url"
+            )
+        })?;
+        if endpoints
+            .insert(id.to_owned(), endpoint.to_owned())
+            .is_some()
+        {
+            anyhow::bail!("CHAT_TRANSPARENCY_WITNESS_ENDPOINTS repeats a witness id");
+        }
+    }
+    let witnesses = authority
+        .witnesses()
+        .into_iter()
+        .map(|witness| TransparencyWitnessPolicyV1 {
+            public_endpoint: endpoints
+                .remove(&witness.witness_id)
+                .unwrap_or_else(|| default_witness_endpoint(&witness.witness_id)),
+            witness_id: witness.witness_id,
+            key_id: witness.key_id,
+            public_key: witness.public_key,
+        })
+        .collect();
+    if !endpoints.is_empty() {
+        anyhow::bail!("CHAT_TRANSPARENCY_WITNESS_ENDPOINTS names an unconfigured witness");
+    }
+    let policy = ChatTransparencyPolicyV1 {
+        policy_version: 1,
+        log_id: log_id.trim_end().to_owned(),
+        operator_key_id: authority.key_id(),
+        operator_public_key: authority.public_key_base64(),
+        witnesses,
+        required_quorum: authority.witness_quorum(),
+        proof_profile: TransparencyProofProfileV1::Rfc6962IndividualInclusionV1,
+        maximum_checkpoint_age_seconds: 60 * 60,
+        maximum_clock_skew_seconds: 60,
+        maximum_range_page_entries: 64,
+        maximum_range_response_bytes: 2 * 1024 * 1024,
+    };
+    policy.validate().map_err(anyhow::Error::msg)?;
+    Ok(Some(policy))
+}
+
+fn default_witness_endpoint(witness_id: &str) -> String {
+    format!("https://{witness_id}/v1/view")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_witness_endpoint;
+
+    #[test]
+    fn generated_witness_endpoint_is_a_canonical_signed_view_path() {
+        assert_eq!(
+            default_witness_endpoint("audit.example"),
+            "https://audit.example/v1/view"
+        );
     }
 }
 
@@ -222,7 +304,23 @@ pub async fn append_manifest_update(
     manifest: &DeviceManifest,
     authority: &TransparencyAuthority,
 ) -> AppResult<()> {
-    append_manifest(tx, user_id, username, manifest).await?;
+    let leaf_position = append_manifest(tx, user_id, username, manifest).await?;
+    let manifest_hash = manifest.manifest_hash().map_err(AppError::internal)?;
+    let manifest_value = serde_json::to_value(manifest)
+        .map_err(|error| AppError::internal(format!("serialize manifest history: {error}")))?;
+    sqlx::query(
+        "INSERT INTO chat_device_manifest_history
+             (user_id, version, manifest_hash, authority_key_id, manifest, leaf_position)
+         VALUES ($1,$2,$3,$4,$5,$6)",
+    )
+    .bind(user_id)
+    .bind(manifest.version as i64)
+    .bind(manifest_hash)
+    .bind(&manifest.authority_key_id)
+    .bind(manifest_value)
+    .bind(leaf_position)
+    .execute(&mut **tx)
+    .await?;
     let leaf =
         ManifestTransparencyLeaf::from_manifest(username, manifest).map_err(AppError::internal)?;
     let map_root = update_current_map(tx, &leaf).await?;
@@ -284,7 +382,7 @@ pub async fn append_manifest(
     user_id: Uuid,
     username: &str,
     manifest: &DeviceManifest,
-) -> AppResult<()> {
+) -> AppResult<i64> {
     let leaf =
         ManifestTransparencyLeaf::from_manifest(username, manifest).map_err(AppError::internal)?;
     let leaf_hash = leaf.hash().map_err(AppError::internal)?;
@@ -306,7 +404,7 @@ pub async fn append_manifest(
     .execute(&mut **tx)
     .await?;
 
-    Ok(())
+    Ok(position)
 }
 
 pub async fn prove_manifest(
@@ -481,6 +579,161 @@ pub async fn prove_manifest(
         .verify_authentication()
         .map_err(|error| AppError::internal(format!("stored transparency signature: {error}")))?;
     Ok(proof)
+}
+
+/// Return at most 64 complete accepted manifests from a checkpoint-stable
+/// interval. The current mutable manifest table is never used as history.
+#[allow(clippy::too_many_arguments)]
+pub async fn prove_manifest_range(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    account: &str,
+    from_version: u64,
+    to_version: u64,
+    page_from_version: u64,
+    cursor: Option<&str>,
+    known_tree_size: u64,
+) -> AppResult<ManifestUpdateRangeProofV1> {
+    if from_version == 0
+        || to_version < from_version
+        || page_from_version < from_version
+        || page_from_version > to_version
+    {
+        return Err(AppError::bad_request(
+            "manifest history versions must be positive and ordered",
+        ));
+    }
+    let latest_version: Option<i64> = sqlx::query_scalar(
+        "SELECT MAX(version) FROM chat_device_manifest_history WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    let latest_version = latest_version
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or_else(|| AppError::not_found("chat manifest history not found"))?;
+    if to_version > latest_version {
+        return Err(AppError::not_found(
+            "requested manifest history range does not exist",
+        ));
+    }
+
+    // This obtains one shared log snapshot and all current map/authentication
+    // material. The transaction keeps the head stable while page proofs load.
+    let current = prove_manifest(tx, user_id, known_tree_size).await?;
+    let expected_cursor = if page_from_version == from_version {
+        None
+    } else {
+        Some(
+            manifest_range_cursor(
+                account,
+                from_version,
+                to_version,
+                page_from_version,
+                &current.checkpoint,
+            )
+            .map_err(AppError::internal)?,
+        )
+    };
+    if cursor != expected_cursor.as_deref() {
+        return Err(AppError::conflict(
+            "manifest range cursor does not match the fixed checkpoint",
+        ));
+    }
+
+    let page_to_limit = page_from_version.saturating_add(63).min(to_version);
+    let rows: Vec<(i64, serde_json::Value, i64, String, String, String)> = sqlx::query_as(
+        "SELECT h.version, h.manifest, h.leaf_position, l.username,
+                l.manifest_hash, l.authority_key_id
+         FROM chat_device_manifest_history h
+         JOIN chat_transparency_leaves l ON l.position = h.leaf_position
+         WHERE h.user_id = $1 AND h.version BETWEEN $2 AND $3
+         ORDER BY h.version",
+    )
+    .bind(user_id)
+    .bind(page_from_version as i64)
+    .bind(page_to_limit as i64)
+    .fetch_all(&mut **tx)
+    .await?;
+    if rows.len() != (page_to_limit - page_from_version + 1) as usize {
+        return Err(AppError::conflict(
+            "manifest history is incomplete for the requested range",
+        ));
+    }
+    let mut entries = Vec::with_capacity(rows.len());
+    for (version, value, position, username, manifest_hash, authority_key_id) in rows {
+        let version = u64::try_from(version)
+            .map_err(|_| AppError::internal("negative manifest history version"))?;
+        let leaf_index = u64::try_from(position)
+            .map_err(|_| AppError::internal("negative manifest history position"))?;
+        let manifest: DeviceManifest = serde_json::from_value(value).map_err(|error| {
+            AppError::internal(format!("stored manifest history is invalid: {error}"))
+        })?;
+        let leaf = ManifestTransparencyLeaf {
+            username,
+            manifest_version: version,
+            manifest_hash,
+            authority_key_id,
+        };
+        leaf.matches_manifest(&leaf.username, &manifest)
+            .map_err(AppError::internal)?;
+        entries.push(ManifestUpdateRangeEntryV1 {
+            manifest,
+            leaf_index,
+            leaf,
+            inclusion: prove_leaf_inclusion(tx, leaf_index, current.checkpoint.tree_size).await?,
+        });
+    }
+    let next_cursor = if page_to_limit < to_version {
+        Some(
+            manifest_range_cursor(
+                account,
+                from_version,
+                to_version,
+                page_to_limit + 1,
+                &current.checkpoint,
+            )
+            .map_err(AppError::internal)?,
+        )
+    } else {
+        None
+    };
+    Ok(ManifestUpdateRangeProofV1 {
+        account: account.to_string(),
+        from_version,
+        to_version,
+        page_from_version,
+        page_to_version: page_to_limit,
+        entries,
+        checkpoint: current.checkpoint,
+        authentication: current.authentication,
+        consistency_from: current.consistency_from,
+        consistency: current.consistency,
+        latest_leaf: current.leaf,
+        latest_map: current.map,
+        next_cursor,
+    })
+}
+
+async fn prove_leaf_inclusion(
+    tx: &mut Transaction<'_, Postgres>,
+    leaf_index: u64,
+    tree_size: u64,
+) -> AppResult<Vec<String>> {
+    let mut expressions = Vec::new();
+    inclusion_path(0, tree_size, leaf_index, &mut expressions)?;
+    let mut coordinates = BTreeSet::new();
+    for expression in &expressions {
+        collect_stored(expression, &mut coordinates);
+    }
+    let mut hashes = BTreeMap::new();
+    for (level, node_index) in coordinates {
+        hashes.insert((level, node_index), load_node(tx, level, node_index).await?);
+    }
+    expressions
+        .iter()
+        .map(|expression| evaluate(expression, &hashes).map(hex::encode))
+        .collect()
 }
 
 /// Return the independently monitorable signed head without touching any user

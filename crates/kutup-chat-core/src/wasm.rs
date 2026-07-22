@@ -36,7 +36,12 @@ export interface KutupChatTransport {
   fetchBundles(username: string, transparencyTreeSize: string): Promise<unknown>;
   fetchSyncBundles(username: string, currentDeviceId: number, transparencyTreeSize: string): Promise<unknown>;
   fetchTransparencyCheckpoint(scope: string, fromTreeSize: string): Promise<unknown>;
+  fetchTransparencyPolicy(domain: string): Promise<unknown>;
   fetchManifest(username: string): Promise<unknown | null>;
+  fetchManifestRange(username: string, fromVersion: string, toVersion: string, pageFromVersion: string, cursor: string | null, transparencyTreeSize: string): Promise<unknown>;
+  fetchSealedSenderPolicy(domain: string): Promise<unknown>;
+  fetchSenderCertificate(deviceId: number): Promise<unknown>;
+  fetchSealedBundles(username: string, capability: string, transparencyTreeSize: string): Promise<unknown>;
   publishManifest(manifest: unknown, transparencyTreeSize: string): Promise<unknown>;
   fetchOwnProfile(): Promise<unknown | null>;
   publishProfile(profile: unknown): Promise<unknown>;
@@ -44,6 +49,10 @@ export interface KutupChatTransport {
   prekeyCount(deviceId: number): Promise<unknown>;
   replenishPrekeys(deviceId: number, request: unknown): Promise<void>;
   sendMessage(username: string, request: unknown): Promise<
+    | { kind: "delivered"; deduplicated?: boolean }
+    | { kind: "mismatch"; mismatch: unknown }
+  >;
+  sendSealedMessage(username: string, request: unknown): Promise<
     | { kind: "delivered"; deduplicated?: boolean }
     | { kind: "mismatch"; mismatch: unknown }
   >;
@@ -150,10 +159,47 @@ extern "C" {
         from_tree_size: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
+    #[wasm_bindgen(method, catch, js_name = fetchTransparencyPolicy)]
+    async fn js_fetch_transparency_policy(
+        this: &JsChatTransport,
+        domain: &str,
+    ) -> std::result::Result<JsValue, JsValue>;
+
     #[wasm_bindgen(method, catch, js_name = fetchManifest)]
     async fn js_fetch_manifest(
         this: &JsChatTransport,
         username: &str,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = fetchManifestRange)]
+    async fn js_fetch_manifest_range(
+        this: &JsChatTransport,
+        username: &str,
+        from_version: &str,
+        to_version: &str,
+        page_from_version: &str,
+        cursor: JsValue,
+        transparency_tree_size: &str,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = fetchSealedSenderPolicy)]
+    async fn js_fetch_sealed_sender_policy(
+        this: &JsChatTransport,
+        domain: &str,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = fetchSenderCertificate)]
+    async fn js_fetch_sender_certificate(
+        this: &JsChatTransport,
+        device_id: u32,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = fetchSealedBundles)]
+    async fn js_fetch_sealed_bundles(
+        this: &JsChatTransport,
+        username: &str,
+        capability: &str,
+        transparency_tree_size: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = publishManifest)]
@@ -195,6 +241,13 @@ extern "C" {
 
     #[wasm_bindgen(method, catch, js_name = sendMessage)]
     async fn js_send_message(
+        this: &JsChatTransport,
+        username: &str,
+        request: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = sendSealedMessage)]
+    async fn js_send_sealed_message(
         this: &JsChatTransport,
         username: &str,
         request: JsValue,
@@ -293,10 +346,88 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
+    async fn fetch_transparency_policy(
+        &self,
+        domain: &str,
+    ) -> Result<kutup_federation_proto::FederatedFeaturePolicyHistoryV1> {
+        from_transport(
+            self.js
+                .js_fetch_transparency_policy(domain)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
     async fn fetch_manifest(&self, username: &str) -> Result<Option<DeviceManifest>> {
         from_transport(
             self.js
                 .js_fetch_manifest(username)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_manifest_range(
+        &self,
+        username: &str,
+        from_version: u64,
+        to_version: u64,
+        page_from_version: u64,
+        cursor: Option<&str>,
+        transparency_tree_size: u64,
+    ) -> Result<kutup_chat_proto::ManifestUpdateRangeProofV1> {
+        from_transport(
+            self.js
+                .js_fetch_manifest_range(
+                    username,
+                    &from_version.to_string(),
+                    &to_version.to_string(),
+                    &page_from_version.to_string(),
+                    cursor.map(JsValue::from_str).unwrap_or(JsValue::NULL),
+                    &transparency_tree_size.to_string(),
+                )
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_sealed_sender_policy(
+        &self,
+        domain: &str,
+    ) -> Result<kutup_federation_proto::FederatedFeaturePolicyHistoryV1> {
+        from_transport(
+            self.js
+                .js_fetch_sealed_sender_policy(domain)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_sender_certificate(
+        &self,
+        device_id: u32,
+    ) -> Result<kutup_chat_proto::SenderCertificateResponseV1> {
+        from_transport(
+            self.js
+                .js_fetch_sender_certificate(device_id)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_sealed_bundles(
+        &self,
+        username: &str,
+        capability: &[u8; 16],
+        transparency_tree_size: u64,
+    ) -> Result<UserPreKeyBundlesResponse> {
+        from_transport(
+            self.js
+                .js_fetch_sealed_bundles(
+                    username,
+                    &STANDARD.encode(capability),
+                    &transparency_tree_size.to_string(),
+                )
                 .await
                 .map_err(transport_error)?,
         )
@@ -387,6 +518,25 @@ impl ChatTransport for BrowserTransport {
         })
     }
 
+    async fn send_sealed(
+        &self,
+        username: &str,
+        request: &kutup_chat_proto::SealedMessageSubmissionV1,
+    ) -> Result<SendOutcome> {
+        let outcome: BrowserSendOutcome = from_transport(
+            self.js
+                .js_send_sealed_message(username, to_transport(request)?)
+                .await
+                .map_err(transport_error)?,
+        )?;
+        Ok(match outcome {
+            BrowserSendOutcome::Delivered { deduplicated } => {
+                SendOutcome::Delivered { deduplicated }
+            }
+            BrowserSendOutcome::Mismatch { mismatch } => SendOutcome::Mismatch(mismatch),
+        })
+    }
+
     async fn send_sync(&self, req: &SendMessagesRequest) -> Result<SendOutcome> {
         let outcome: BrowserSendOutcome = from_transport(
             self.js
@@ -445,6 +595,8 @@ impl WasmChatClient {
     pub async fn open(
         database_name: String,
         user: String,
+        server_name: String,
+        sealed_sender_enabled: bool,
         master_key: Vec<u8>,
         transport: JsChatTransport,
         transparency_policy: JsValue,
@@ -465,6 +617,8 @@ impl WasmChatClient {
         let mut engine = Engine::register(db, transport, user.clone(), 50, &mut rng)
             .await
             .map_err(chat_error)?;
+        engine.set_local_server(&server_name).map_err(chat_error)?;
+        engine.set_sealed_sender_enabled(sealed_sender_enabled);
         engine
             .set_transparency_policy(from_transport(transparency_policy).map_err(chat_error)?)
             .map_err(chat_error)?;
@@ -714,16 +868,9 @@ impl WasmChatClient {
         let mut rng = OsRng.unwrap_err();
         let contact = self
             .engine
-            .block_contact(&peer, &now_rfc3339(), &mut rng)
+            .block_contact(&peer, &self.profile_wrapping_key, &now_rfc3339(), &mut rng)
             .await
             .map_err(chat_error)?;
-        // The block is already durable. Profile rotation is best-effort here;
-        // if publication is offline, its exact encrypted upload remains
-        // pending and reconciliation retries it.
-        let _ = self
-            .engine
-            .rotate_profile_key(&self.profile_wrapping_key, &now_rfc3339(), &mut rng)
-            .await;
         to_output(&ContactRecordView::from(contact))
     }
 

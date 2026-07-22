@@ -8,6 +8,7 @@ mod discovery;
 mod error;
 mod http_signatures;
 mod identity;
+mod policy;
 
 use std::net::IpAddr;
 
@@ -27,6 +28,11 @@ pub use http_signatures::{
 pub use identity::{
     verify_identity_chain, FederationIdentityDocumentV1, FederationIdentityKeyAlgorithm,
     FederationIdentityKeyV1, FederationIdentityVersion,
+};
+pub use policy::{
+    Ed25519FederationAuthSigner, FederatedFeaturePolicyEnvelopeV1, FederatedFeaturePolicyHistoryV1,
+    FederatedFeaturePolicyTypeV1, FederationAuthSigner, FEDERATED_FEATURE_POLICY_VERSION,
+    MAX_FEDERATED_FEATURE_POLICY_PAYLOAD_BYTES,
 };
 
 use error::invalid_field;

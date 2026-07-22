@@ -177,6 +177,21 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         }
         None => false,
     };
+    let sealed_sender_policy = if federation_enabled && state.sealed_sender.is_some() {
+        let federation = state
+            .federation
+            .as_ref()
+            .expect("sealed sender requires federation");
+        federation
+            .feature_policies()
+            .local_history(
+                federation.server_name(),
+                kutup_federation_proto::FederatedFeaturePolicyTypeV1::SealedSenderService,
+            )
+            .await?
+    } else {
+        None
+    };
     let chat = kutup_chat_proto::ChatCapabilities {
         mailbox_retention_days: state
             .config
@@ -201,6 +216,8 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         transparency_operator_public_key: Some(state.transparency_authority.public_key_base64()),
         transparency_witnesses: state.transparency_authority.witnesses(),
         transparency_witness_quorum: state.transparency_authority.witness_quorum(),
+        sealed_sender: sealed_sender_policy.is_some(),
+        sealed_sender_policy,
         ..Default::default()
     };
     Ok(Json(SettingsResponse {

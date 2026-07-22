@@ -10,7 +10,8 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ed25519_dalek::{Signer as _, SigningKey};
 use kutup_chat_proto::{
-    DeviceManifest, ManifestDevice, TransparencyCheckpoint, UserPreKeyBundlesResponse,
+    DeviceManifest, ManifestDevice, ManifestUpdateRangeProofV1, TransparencyCheckpoint,
+    UserPreKeyBundlesResponse,
 };
 use rand::RngCore;
 use reqwest::blocking::{Client, Response};
@@ -1099,6 +1100,77 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     refreshed_proof
         .verify_consistency_from(Some(&first_checkpoint))
         .unwrap();
+
+    // Materialize enough complete, signed account history to cross the
+    // protocol's 64-entry page boundary. Fetch it through A's same-origin
+    // route, which in turn uses the signed federation route on B. Both pages
+    // must describe one immutable checkpoint snapshot and an exact chain.
+    let bob_devices = vec![
+        manifest_device(1, BOB_REGISTRATION_ID_1, 20),
+        manifest_device(2, BOB_REGISTRATION_ID_2, 30),
+    ];
+    let mut latest_manifest = bob_manifest_v2.clone();
+    for version in 3..=66 {
+        latest_manifest = publish_manifest(
+            c,
+            b,
+            &bob_token,
+            &bob_authority,
+            version,
+            Some(latest_manifest.manifest_hash().unwrap()),
+            bob_devices.clone(),
+        );
+    }
+    let history_url = format!("{a}/api/chat/users/{remote_address}/manifest-history");
+    let first_page: ManifestUpdateRangeProofV1 = serde_json::from_value(json_response(
+        c.get(&history_url)
+            .bearer_auth(&alice_token)
+            .query(&[
+                ("fromVersion", "1"),
+                ("toVersion", "66"),
+                ("pageFromVersion", "1"),
+                ("transparencyTreeSize", "0"),
+            ])
+            .send()
+            .unwrap(),
+        "first federated manifest-history page",
+    ))
+    .unwrap();
+    assert_eq!(first_page.entries.len(), 64);
+    assert_eq!(first_page.page_to_version, 64);
+    assert!(!first_page.authentication.witnesses.is_empty());
+    first_page
+        .verify_page(&remote_address, 1, None, None)
+        .unwrap();
+    let cursor = first_page.next_cursor.clone().unwrap();
+    let first_page_last = first_page.entries.last().unwrap().manifest.clone();
+    let second_page: ManifestUpdateRangeProofV1 = serde_json::from_value(json_response(
+        c.get(&history_url)
+            .bearer_auth(&alice_token)
+            .query(&[
+                ("fromVersion", "1"),
+                ("toVersion", "66"),
+                ("pageFromVersion", "65"),
+                ("cursor", cursor.as_str()),
+                ("transparencyTreeSize", "0"),
+            ])
+            .send()
+            .unwrap(),
+        "second federated manifest-history page",
+    ))
+    .unwrap();
+    assert_eq!(second_page.entries.len(), 2);
+    assert_eq!(
+        second_page.entries.last().unwrap().manifest,
+        latest_manifest
+    );
+    assert!(second_page.next_cursor.is_none());
+    assert_eq!(second_page.checkpoint, first_page.checkpoint);
+    assert_eq!(second_page.authentication, first_page.authentication);
+    second_page
+        .verify_page(&remote_address, 1, Some(&first_page_last), None)
+        .unwrap();
+
     let mismatch_id = "10000000-0000-4000-8000-000000000002";
     let mismatch = send(
         c,
@@ -1205,6 +1277,21 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
     }
 
     let alice_token = login(c, a, ALICE_EMAIL);
+    let monitor = json_response(
+        c.get(format!("{a}/api/chat/transparency/domains/b.test/status"))
+            .bearer_auth(&alice_token)
+            .send()
+            .unwrap(),
+        "restart-restored remote transparency monitor cursor",
+    );
+    assert_eq!(monitor["domain"], "b.test");
+    assert_eq!(monitor["policySequence"], 1);
+    assert_eq!(monitor["blocked"], false);
+    assert!(monitor["lastSuccessfulAt"].as_str().is_some());
+    assert!(monitor["checkpoint"]["checkpoint"]["treeSize"]
+        .as_u64()
+        .is_some_and(|tree_size| tree_size >= 2));
+
     let follow_up = b"after-origin-restart";
     json_response(
         send(

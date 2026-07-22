@@ -15,8 +15,12 @@
 use std::rc::Rc;
 use std::time::SystemTime;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use libsignal_protocol::{
-    message_decrypt, message_encrypt, process_prekey_bundle, IdentityChange, IdentityKeyStore,
+    message_decrypt, message_encrypt, process_prekey_bundle, sealed_sender_decrypt,
+    sealed_sender_decrypt_to_usmc, sealed_sender_encrypt, IdentityChange, IdentityKeyStore,
+    PublicKey, SenderCertificate, Timestamp,
 };
 use rand::{CryptoRng, Rng};
 use sha2::{Digest, Sha256};
@@ -24,8 +28,9 @@ use sha2::{Digest, Sha256};
 use crate::address::ChatAddress;
 use crate::db::{
     AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState,
-    InboxMessage, LocalIdentity, LocalProfile, ManifestTrust, OutboxEntry, OutboxLeg,
-    OutboxSyncLeg, PeerProfile, SentMessage, TransparencyMonitorStatus, TransparencyTrust,
+    InboxMessage, LocalIdentity, LocalProfile, ManifestHistoryRecord, ManifestTrust, OutboxEntry,
+    OutboxLeg, OutboxSyncLeg, PeerProfile, SentMessage, TransparencyMonitorStatus,
+    TransparencyTrust,
 };
 use crate::error::{ChatError, Result};
 use crate::keys;
@@ -39,7 +44,7 @@ use kutup_chat_proto::{
     AccountAddress, ChatContent, ContactControlBody, ContactState, DeliveredEnvelope,
     DeviceListMismatch, DevicePreKeyBundle, DirectChatSuiteId, ManifestDevice,
     ManifestTransparencyProof, OutgoingEnvelope, RegisterChatDeviceRequest, ReplenishKeysRequest,
-    UserPreKeyBundlesResponse,
+    SealedOutgoingEnvelopeV1, UserPreKeyBundlesResponse,
 };
 
 /// What a [`Engine::send`](crate::Engine::send) did: whether it landed, and any
@@ -64,6 +69,27 @@ pub(crate) struct DirectSend<'a> {
     pub recipient_bundles: &'a [DevicePreKeyBundle],
     pub sync_bundles: &'a [DevicePreKeyBundle],
     pub content: &'a ChatContent,
+}
+
+pub(crate) struct SealedDirectSend<'a> {
+    pub send_id: &'a str,
+    pub peer_user: &'a str,
+    pub recipient_bundles: &'a [DevicePreKeyBundle],
+    pub sync_bundles: &'a [DevicePreKeyBundle],
+    pub content: &'a ChatContent,
+    pub sender_certificate: &'a SenderCertificate,
+    pub capability: [u8; 16],
+}
+
+/// Authenticated information exposed by libsignal's outer sealed envelope.
+/// The engine must validate this certificate against authenticated service
+/// policy and a transparency-pinned manifest before asking the session to
+/// advance the inner Signal ratchet.
+pub(crate) struct SealedEnvelopeInspection {
+    pub sender: String,
+    pub sender_device_id: u32,
+    pub identity_key: PublicKey,
+    pub certificate: SenderCertificate,
 }
 
 pub(crate) struct SendAmendment<'a> {
@@ -214,6 +240,46 @@ impl Session {
 
     pub fn user(&self) -> &str {
         &self.address.user
+    }
+
+    pub(crate) fn local_identity_public_key(&self) -> PublicKey {
+        *self
+            .store
+            .local_identity_key_pair()
+            .identity_key()
+            .public_key()
+    }
+
+    pub(crate) async fn transparent_identity_key(
+        &self,
+        peer: &str,
+        device_id: u32,
+    ) -> Result<Option<PublicKey>> {
+        let Some(trust) = self.manifest_trust(peer).await? else {
+            return Ok(None);
+        };
+        if trust.continuity_gap {
+            return Ok(None);
+        }
+        let Some(history) = self.manifest_history(peer, trust.highest_version).await? else {
+            return Ok(None);
+        };
+        if history.manifest.manifest_hash().map_err(ChatError::Trust)? != trust.manifest_hash {
+            return Err(ChatError::Trust(
+                "manifest history contradicts the current trust pin".into(),
+            ));
+        }
+        let Some(device) = history
+            .manifest
+            .devices
+            .iter()
+            .find(|device| device.device_id == device_id)
+        else {
+            return Ok(None);
+        };
+        Ok(Some(
+            *decode_identity_key(&device.identity_key)?.public_key(),
+        ))
     }
 
     /// Public identity and registration id for this local device, suitable for
@@ -688,8 +754,111 @@ impl Session {
                 return Err(e);
             }
         };
+        self.finish_received_envelope(envelope, sender, envelope.sender_device_id, from, plaintext)
+            .await
+    }
+
+    pub(crate) async fn inspect_sealed_envelope(
+        &self,
+        envelope: &DeliveredEnvelope,
+    ) -> Result<SealedEnvelopeInspection> {
+        if !envelope.sealed_sender
+            || envelope.sender.is_some()
+            || envelope.sender_device_id != 0
+            || envelope.envelope_type != kutup_chat_proto::EnvelopeType::Message
+        {
+            return Err(ChatError::Trust(
+                "sealed delivery contains forbidden sender metadata or framing".into(),
+            ));
+        }
+        let bytes = STANDARD
+            .decode(&envelope.content)
+            .map_err(|error| ChatError::Wire(error.to_string()))?;
+        if bytes.is_empty()
+            || bytes.len() > 1024 * 1024
+            || STANDARD.encode(&bytes) != envelope.content
+        {
+            return Err(ChatError::Wire(
+                "sealed envelope is empty, oversized, or non-canonical".into(),
+            ));
+        }
+        let content = sealed_sender_decrypt_to_usmc(&bytes, &self.store.identity_store).await?;
+        let certificate = content.sender()?.clone();
+        let sender = certificate.sender_uuid()?.to_string();
+        let sender_device_id = u32::from(certificate.sender_device_id()?);
+        let identity_key = certificate.key()?;
+        ChatAddress::from_sender(&sender, sender_device_id)?;
+        Ok(SealedEnvelopeInspection {
+            sender,
+            sender_device_id,
+            identity_key,
+            certificate,
+        })
+    }
+
+    pub(crate) async fn receive_sealed_envelope(
+        &mut self,
+        envelope: &DeliveredEnvelope,
+        inspection: &SealedEnvelopeInspection,
+        local_canonical_address: &str,
+        validating_root: &PublicKey,
+    ) -> Result<ReceiveOutcome> {
+        let bytes = STANDARD
+            .decode(&envelope.content)
+            .map_err(|error| ChatError::Wire(error.to_string()))?;
+        let result = sealed_sender_decrypt(
+            &bytes,
+            validating_root,
+            Timestamp::from_epoch_millis(
+                u64::try_from(now_millis())
+                    .map_err(|_| ChatError::Trust("system clock predates the epoch".into()))?,
+            ),
+            None,
+            local_canonical_address.to_string(),
+            crate::address::device_id_u8(self.device_id())?,
+            &mut self.store.identity_store,
+            &mut self.store.session_store,
+            &mut self.store.pre_key_store,
+            &self.store.signed_pre_key_store,
+            &mut self.store.kyber_pre_key_store,
+        )
+        .await;
+        let decrypted = match result {
+            Ok(decrypted) => decrypted,
+            Err(error) => {
+                self.store.discard();
+                return Err(error.into());
+            }
+        };
+        let sender = decrypted.sender_uuid()?.to_string();
+        let sender_device_id = u32::from(decrypted.device_id()?);
+        if sender != inspection.sender || sender_device_id != inspection.sender_device_id {
+            self.store.discard();
+            return Err(ChatError::Trust(
+                "sealed envelope identity changed between validation and decryption".into(),
+            ));
+        }
+        let from = ChatAddress::from_sender(&sender, sender_device_id)?;
+        self.finish_received_envelope(
+            envelope,
+            sender,
+            sender_device_id,
+            from,
+            decrypted.message()?.to_vec(),
+        )
+        .await
+    }
+
+    async fn finish_received_envelope(
+        &mut self,
+        envelope: &DeliveredEnvelope,
+        sender: String,
+        sender_device_id: u32,
+        from: ChatAddress,
+        plaintext: Vec<u8>,
+    ) -> Result<ReceiveOutcome> {
         let parsed = serde_json::from_slice::<ChatContent>(&plaintext).ok();
-        let transcript = if sender == self.user() && envelope.sender_device_id != self.device_id() {
+        let transcript = if sender == self.user() && sender_device_id != self.device_id() {
             parsed
                 .as_ref()
                 .and_then(ChatContent::as_sent_transcript)
@@ -715,7 +884,7 @@ impl Session {
         let synced_message = if let Some(transcript) = transcript {
             if let Some(control) = transcript.content.as_contact_control() {
                 if transcript.peer != self.user()
-                    || control.source_device_id != envelope.sender_device_id
+                    || control.source_device_id != sender_device_id
                     || control.revision == 0
                     || control.peer == self.user()
                     || control.peer.parse::<AccountAddress>().is_err()
@@ -811,7 +980,7 @@ impl Session {
                     self.store.stage_message(InboxMessage {
                         id: envelope.id.clone(),
                         peer: sender,
-                        sender_device_id: envelope.sender_device_id,
+                        sender_device_id,
                         cursor: envelope.cursor,
                         content: plaintext.clone(),
                         received_at,
@@ -1102,6 +1271,14 @@ impl Session {
         self.store.db().load_manifest_trust(peer).await
     }
 
+    pub(crate) async fn manifest_history(
+        &self,
+        peer: &str,
+        version: u64,
+    ) -> Result<Option<ManifestHistoryRecord>> {
+        self.store.db().load_manifest_history(peer, version).await
+    }
+
     /// Highest verified global checkpoint for the peer's homeserver.
     pub async fn transparency_trust(&self, peer: &str) -> Result<Option<TransparencyTrust>> {
         self.transparency_trust_for_scope(&transparency_scope(peer)?)
@@ -1194,6 +1371,17 @@ impl Session {
                 changed = true;
             }
         }
+        if let (Some(manifest), Some(proof)) =
+            (response.manifest.as_ref(), response.transparency.as_ref())
+        {
+            self.store.stage_manifest_history(ManifestHistoryRecord {
+                peer: peer.to_string(),
+                version: manifest.version,
+                manifest: manifest.clone(),
+                leaf_index: proof.leaf_index,
+            });
+            changed = true;
+        }
         if let Some(transparency) = next.transparency {
             if prior_transparency.as_ref() != Some(&transparency) {
                 self.store.stage_transparency_trust(transparency);
@@ -1203,6 +1391,64 @@ impl Session {
         if changed {
             self.store.commit().await?;
         }
+        Ok(response.devices)
+    }
+
+    /// Atomically accept a bundle only after the engine has fetched and
+    /// verified every missing manifest through the range-proof endpoint.
+    pub(crate) async fn accept_bundle_response_with_history(
+        &mut self,
+        peer: &str,
+        response: UserPreKeyBundlesResponse,
+        history: Vec<ManifestHistoryRecord>,
+        range_transparency: TransparencyTrust,
+        policy: ManifestPolicy,
+        transparency_policy: &TransparencyPolicy,
+    ) -> Result<Vec<DevicePreKeyBundle>> {
+        let prior_manifest = self.store.db().load_manifest_trust(peer).await?;
+        let scope = transparency_scope(peer)?;
+        let prior_transparency = self.store.db().load_transparency_trust(&scope).await?;
+        let mut next = verify_transparent_bundle_response(
+            peer,
+            &response,
+            policy,
+            prior_manifest.as_ref(),
+            prior_transparency.as_ref(),
+            transparency_policy,
+        )?;
+        let served = response
+            .manifest
+            .as_ref()
+            .ok_or_else(|| ChatError::Trust("range recovery requires a signed manifest".into()))?;
+        let last = history.last().ok_or_else(|| {
+            ChatError::Trust("manifest range recovery returned no complete history".into())
+        })?;
+        if last.peer != peer || last.manifest != *served || last.version != served.version {
+            return Err(ChatError::Trust(
+                "manifest range does not terminate at the pending bundle manifest".into(),
+            ));
+        }
+        let trust = next.manifest.as_mut().ok_or_else(|| {
+            ChatError::Trust("range recovery did not produce a manifest trust pin".into())
+        })?;
+        trust.continuity_gap = false;
+        trust.transparency_position = Some(last.leaf_index);
+        if range_transparency.scope != scope {
+            return Err(ChatError::Trust(
+                "manifest range checkpoint belongs to another homeserver".into(),
+            ));
+        }
+        for record in history {
+            if record.peer != peer || record.version != record.manifest.version {
+                return Err(ChatError::Trust(
+                    "manifest history record has inconsistent ownership or version".into(),
+                ));
+            }
+            self.store.stage_manifest_history(record);
+        }
+        self.store.stage_manifest_trust(trust.clone());
+        self.store.stage_transparency_trust(range_transparency);
+        self.store.commit().await?;
         Ok(response.devices)
     }
 
@@ -1296,6 +1542,8 @@ impl Session {
                 attempts: 1,
                 created_at,
                 primary_delivered: false,
+                sealed_sender: false,
+                sealed_capability: None,
                 sync,
             });
             self.store.stage_sent_seq(content.seq);
@@ -1320,6 +1568,140 @@ impl Session {
             self.store.discard();
         }
         result
+    }
+
+    pub(crate) async fn enqueue_sealed_direct_send<R: Rng + CryptoRng>(
+        &mut self,
+        send: SealedDirectSend<'_>,
+        summary: &mut SendSummary,
+        rng: &mut R,
+    ) -> Result<(Vec<SealedOutgoingEnvelopeV1>, Option<Vec<OutgoingEnvelope>>)> {
+        let SealedDirectSend {
+            send_id,
+            peer_user,
+            recipient_bundles,
+            sync_bundles,
+            content,
+            sender_certificate,
+            capability,
+        } = send;
+        let result = async {
+            let plaintext =
+                serde_json::to_vec(content).map_err(|e| ChatError::Content(e.to_string()))?;
+            let recipient_envelopes = self
+                .build_sealed_send(
+                    peer_user,
+                    recipient_bundles,
+                    sender_certificate,
+                    &plaintext,
+                    summary,
+                    rng,
+                )
+                .await?;
+            let created_at = now_millis();
+            let transcript =
+                ChatContent::sent_transcript(send_id, peer_user, created_at, content.clone());
+            let transcript_plaintext =
+                serde_json::to_vec(&transcript).map_err(|e| ChatError::Content(e.to_string()))?;
+            let mut sync_summary = SendSummary::default();
+            let user = self.user().to_string();
+            let sync_envelopes = self
+                .build_send(
+                    &user,
+                    sync_bundles,
+                    &transcript_plaintext,
+                    &mut sync_summary,
+                    rng,
+                )
+                .await?;
+            let sync = (!sync_envelopes.is_empty()).then(|| OutboxSyncLeg {
+                content: transcript_plaintext,
+                envelopes: serde_json::to_vec(&sync_envelopes)
+                    .expect("outgoing envelope serialization is infallible"),
+                attempts: 1,
+            });
+            self.store.stage_outbox(OutboxEntry {
+                send_id: send_id.to_string(),
+                peer: peer_user.to_string(),
+                content: plaintext.clone(),
+                envelopes: serde_json::to_vec(&recipient_envelopes)
+                    .map_err(|error| ChatError::Content(error.to_string()))?,
+                sealed_sender: true,
+                sealed_capability: Some(capability),
+                attempts: 1,
+                created_at,
+                primary_delivered: false,
+                sync,
+            });
+            self.store.stage_sent_seq(content.seq);
+            self.store.stage_sent_message(SentMessage {
+                send_id: send_id.to_string(),
+                peer: peer_user.to_string(),
+                content: plaintext,
+                created_at,
+                delivered_at: None,
+                delivered: false,
+                deduplicated: false,
+            });
+            self.stage_outgoing_contact(peer_user, created_at).await?;
+            self.store.commit().await?;
+            Ok((
+                recipient_envelopes,
+                (!sync_envelopes.is_empty()).then_some(sync_envelopes),
+            ))
+        }
+        .await;
+        if result.is_err() {
+            self.store.discard();
+        }
+        result
+    }
+
+    pub(crate) async fn amend_sealed_send<R: Rng + CryptoRng>(
+        &mut self,
+        send_id: &str,
+        peer_user: &str,
+        bundles: &[DevicePreKeyBundle],
+        sender_certificate: &SenderCertificate,
+        summary: &mut SendSummary,
+        rng: &mut R,
+    ) -> Result<Vec<SealedOutgoingEnvelopeV1>> {
+        let mut entry = self
+            .store
+            .db()
+            .load_outbox(send_id)
+            .await?
+            .ok_or_else(|| ChatError::Invalid(format!("unknown pending send {send_id}")))?;
+        if !entry.sealed_sender || entry.peer != peer_user {
+            return Err(ChatError::Trust(
+                "sealed send retry cannot fall back to identified delivery".into(),
+            ));
+        }
+        let plaintext = entry.content.clone();
+        let result = self
+            .build_sealed_send(
+                peer_user,
+                bundles,
+                sender_certificate,
+                &plaintext,
+                summary,
+                rng,
+            )
+            .await;
+        match result {
+            Ok(envelopes) => {
+                entry.envelopes = serde_json::to_vec(&envelopes)
+                    .map_err(|error| ChatError::Content(error.to_string()))?;
+                entry.attempts = entry.attempts.saturating_add(1);
+                self.store.stage_outbox(entry);
+                self.store.commit().await?;
+                Ok(envelopes)
+            }
+            Err(error) => {
+                self.store.discard();
+                Err(error)
+            }
+        }
     }
 
     async fn stage_outgoing_contact(&mut self, peer: &str, updated_at_ms: i64) -> Result<()> {
@@ -1397,6 +1779,8 @@ impl Session {
                     attempts: 1,
                     created_at,
                     primary_delivered: false,
+                    sealed_sender: false,
+                    sealed_capability: None,
                     sync: None,
                 });
                 self.store.stage_sent_seq(content.seq);
@@ -1524,6 +1908,53 @@ impl Session {
                 self.seal_device(&peer, bundle, plaintext, summary, rng)
                     .await?,
             );
+        }
+        Ok(envelopes)
+    }
+
+    async fn build_sealed_send<R: Rng + CryptoRng>(
+        &mut self,
+        peer_user: &str,
+        bundles: &[DevicePreKeyBundle],
+        sender_certificate: &SenderCertificate,
+        plaintext: &[u8],
+        summary: &mut SendSummary,
+        rng: &mut R,
+    ) -> Result<Vec<SealedOutgoingEnvelopeV1>> {
+        let mut envelopes = Vec::with_capacity(bundles.len());
+        for bundle in bundles {
+            let peer = ChatAddress::from_sender(peer_user, bundle.device_id)?;
+            let key = peer.to_protocol()?.to_string();
+            if self.store.has_session(&key).await? {
+                let served = decode_identity_key(&bundle.identity_key)?
+                    .serialize()
+                    .to_vec();
+                if self.store.peer_identity(&key).await?.as_deref() != Some(served.as_slice()) {
+                    if self.accept_identity_staged(&peer, bundle).await? {
+                        summary.safety_number_changes.push(peer.clone());
+                    }
+                    self.store.delete_session(&key);
+                    self.establish_staged(&peer, bundle, rng).await?;
+                }
+            } else {
+                self.establish_staged(&peer, bundle, rng).await?;
+            }
+            let content = sealed_sender_encrypt(
+                &peer.to_protocol()?,
+                sender_certificate,
+                plaintext,
+                &mut self.store.session_store,
+                &mut self.store.identity_store,
+                now(),
+                rng,
+            )
+            .await?;
+            envelopes.push(SealedOutgoingEnvelopeV1 {
+                device_id: bundle.device_id,
+                registration_id: bundle.registration_id,
+                suite: bundle.suite,
+                content: STANDARD.encode(content),
+            });
         }
         Ok(envelopes)
     }
@@ -1797,5 +2228,135 @@ impl From<&ContactRecord> for ContactControlBody {
             source_device_id: contact.source_device_id,
             updated_at_ms: contact.updated_at_ms,
         }
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod sealed_tests {
+    use super::*;
+    use futures_executor::block_on;
+    use libsignal_protocol::{KeyPair, ServerCertificate};
+    use rand::rngs::OsRng;
+    use rand::TryRngCore as _;
+
+    use crate::SqliteChatDb;
+    use kutup_chat_proto::{DeliveredEnvelope, DevicePreKeyBundle, EnvelopeType};
+
+    fn bundle(session: &Session) -> DevicePreKeyBundle {
+        let registration = session.registration().expect("fresh registration");
+        DevicePreKeyBundle {
+            device_id: session.device_id(),
+            registration_id: registration.registration_id,
+            suite: registration.suite,
+            identity_key: registration.identity_key.clone(),
+            signed_pre_key: registration.signed_pre_key.clone(),
+            kyber_pre_key: registration
+                .one_time_kyber_pre_keys
+                .first()
+                .cloned()
+                .unwrap_or_else(|| registration.last_resort_kyber_pre_key.clone()),
+            one_time_pre_key: registration.one_time_pre_keys.first().cloned(),
+        }
+    }
+
+    #[test]
+    fn sealed_outer_certificate_is_checked_before_inner_ratchet() {
+        let mut rng = OsRng.unwrap_err();
+        let alice_db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
+        let bob_db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
+        let mut alice = block_on(Session::generate(
+            alice_db,
+            "alice@chat.example",
+            1,
+            4,
+            &mut rng,
+        ))
+        .unwrap();
+        let mut bob = block_on(Session::generate(
+            bob_db,
+            "bob@chat.example",
+            1,
+            4,
+            &mut rng,
+        ))
+        .unwrap();
+
+        let trust_root = KeyPair::generate(&mut rng);
+        let wrong_root = KeyPair::generate(&mut rng);
+        let server_key = KeyPair::generate(&mut rng);
+        let server_certificate =
+            ServerCertificate::new(1, server_key.public_key, &trust_root.private_key, &mut rng)
+                .unwrap();
+        let expiration =
+            Timestamp::from_epoch_millis(u64::try_from(now_millis()).unwrap() + 60 * 60 * 1000);
+        let sender_certificate = SenderCertificate::new(
+            "alice@chat.example".into(),
+            None,
+            alice.local_identity_public_key(),
+            crate::address::device_id_u8(1).unwrap(),
+            expiration,
+            server_certificate,
+            &server_key.private_key,
+            &mut rng,
+        )
+        .unwrap();
+        let content = ChatContent::text_with_id(
+            "00000000-0000-4000-8000-000000000001",
+            "2026-07-22T00:00:00Z",
+            1,
+            "sealed hello",
+        );
+        let mut summary = SendSummary::default();
+        let (outgoing, _) = block_on(alice.enqueue_sealed_direct_send(
+            SealedDirectSend {
+                send_id: "00000000-0000-4000-8000-000000000001",
+                peer_user: "bob@chat.example",
+                recipient_bundles: &[bundle(&bob)],
+                sync_bundles: &[],
+                content: &content,
+                sender_certificate: &sender_certificate,
+                capability: [7; 16],
+            },
+            &mut summary,
+            &mut rng,
+        ))
+        .unwrap();
+        let envelope = DeliveredEnvelope {
+            id: "sealed-mailbox-1".into(),
+            cursor: 1,
+            sender: None,
+            sealed_sender: true,
+            sender_device_id: 0,
+            envelope_type: EnvelopeType::Message,
+            suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+            content: outgoing[0].content.clone(),
+            server_timestamp: "2026-07-22T00:00:01Z".into(),
+        };
+        let inspection = block_on(bob.inspect_sealed_envelope(&envelope)).unwrap();
+        assert_eq!(inspection.sender, "alice@chat.example");
+        assert_eq!(inspection.identity_key, alice.local_identity_public_key());
+
+        assert!(block_on(bob.receive_sealed_envelope(
+            &envelope,
+            &inspection,
+            "bob@chat.example",
+            &wrong_root.public_key,
+        ))
+        .is_err());
+        let outcome = block_on(bob.receive_sealed_envelope(
+            &envelope,
+            &inspection,
+            "bob@chat.example",
+            &trust_root.public_key,
+        ))
+        .unwrap();
+        let ReceiveOutcome::Message(message) = outcome else {
+            panic!("sealed content should be a user message")
+        };
+        assert_eq!(message.from.name(), "alice@chat.example");
+        assert_eq!(
+            message.content.as_text().map(|body| body.text),
+            Some("sealed hello".into())
+        );
     }
 }

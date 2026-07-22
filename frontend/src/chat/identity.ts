@@ -56,11 +56,11 @@ export function withHomeServer(address: AccountAddress, homeServer?: string): Ac
   return !address.server && homeServer ? { ...address, server: homeServer } : address
 }
 
-/** Translate a canonical same-server address at the transport/core boundary. */
+/** Keep every conversation key canonical. Sealed certificates bind the exact
+ * `username@server` form, so same-server peers must not be collapsed to a bare
+ * legacy username at the crypto boundary. */
 export function toCoreAccountAddress(address: AccountAddress, homeServer?: string): string {
-  return address.server && address.server === homeServer
-    ? address.username
-    : canonicalAccountAddress(address)
+  return canonicalAccountAddress(withHomeServer(address, homeServer))
 }
 
 export function contactUri(address: AccountAddress): string {

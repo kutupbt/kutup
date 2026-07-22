@@ -38,6 +38,7 @@ wasm = [
 [dependencies]
 # The wire contract (path dep across the workspace boundary).
 kutup-chat-proto = { path = "../kutup-chat-proto" }
+kutup-federation-proto = { path = "../kutup-federation-proto" }
 # Pinned to the tag studied in docs/research/11-federated-chat.md and proven on
 # wasm32 by spikes/libsignal-wasm. Resolves the in-repo `spqr` git dep (SPQR
 # v1.5.1) transitively. libsignal needs protoc at build time.

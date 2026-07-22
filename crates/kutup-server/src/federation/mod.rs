@@ -3,6 +3,7 @@
 
 mod config;
 pub(crate) mod discovery;
+mod feature_policy;
 mod identity;
 mod policy;
 mod replay;
@@ -20,7 +21,11 @@ use time::OffsetDateTime;
 
 pub(crate) use config::FederationRuntimeConfig;
 pub(crate) use discovery::{public_discovery, public_identity_document};
-pub(crate) use identity::{rotate_local_identity, LocalFederationIdentity};
+pub(crate) use feature_policy::{
+    get_federated_feature_policy, get_local_feature_policy, FeaturePolicyStore,
+    RemotePolicySyncError,
+};
+pub(crate) use identity::{insert_system_audit, rotate_local_identity, LocalFederationIdentity};
 use policy::FederationPolicyStore;
 use replay::FederationReplayStore;
 use transport::FederationTransportState;
@@ -40,6 +45,7 @@ pub(crate) struct FederationStack {
     trust: FederationTrustStore,
     replay: FederationReplayStore,
     policy: FederationPolicyStore,
+    feature_policies: FeaturePolicyStore,
     transport: FederationTransportState,
 }
 
@@ -59,6 +65,7 @@ impl FederationStack {
             trust: FederationTrustStore::new(pool.clone()),
             replay: FederationReplayStore::new(pool.clone()),
             policy: FederationPolicyStore::new(pool.clone()),
+            feature_policies: FeaturePolicyStore::new(pool.clone()),
             transport: FederationTransportState::default(),
             pool,
             config,
@@ -80,6 +87,10 @@ impl FederationStack {
 
     pub fn policy(&self) -> &FederationPolicyStore {
         &self.policy
+    }
+
+    pub fn feature_policies(&self) -> &FeaturePolicyStore {
+        &self.feature_policies
     }
 
     /// Remove expired transport nonces. Replay reservations are deliberately

@@ -132,6 +132,15 @@ pub static CHAT_KEYS_IP: LazyLock<RateLimiter> = LazyLock::new(|| {
     )
 });
 
+/// Anonymous sealed-delivery outer wall: 60 attempts/minute/IP. Durable
+/// capability, recipient, and origin counters remain the authoritative layer.
+pub static CHAT_ANONYMOUS_IP: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_ANONYMOUS_IP_PER_MIN", 60) as usize,
+        Duration::from_secs(60),
+    )
+});
+
 // --- per-account login lockout ---
 
 /// Failed-password tracker keyed by (hashed, lowercased) email. Separate from the

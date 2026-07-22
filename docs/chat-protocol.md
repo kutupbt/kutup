@@ -7,6 +7,11 @@ wire-affecting parts of `docs/research/11-federated-chat.md`,
 `12-chat-improvements-for-clients.md`, and `13-chat-architecture-comparative-research.md`
 — read those for *why*; read this for *what*.
 
+The authenticated remote-policy, manifest-range, witness-audit, and
+contacts-only sealed-sender extensions are also implemented. Their threat and
+failure model is normative in
+[`chat-security-threat-model.md`](./chat-security-threat-model.md).
+
 **Normative language:** MUST / MUST NOT / SHOULD / MAY per RFC 2119.
 
 The phase-2 server, shared Rust engine, and browser WASM client now consume this
@@ -20,7 +25,7 @@ same engine after the web feature and protocol milestones are complete.
   freezes against these shapes now.
 - **[ADD]** — folded into the base v1 shape now (content schema, `sendId`,
   `cursor`, `Option` sender, capability block, per-account rate limit).
-- **[RSV]** — a later *subsystem* (sealed sender, groups, receipts, typing, or
+- **[RSV]** — a later *subsystem* (groups, receipts, typing, or
   attachments), but its **fields/shapes are baked into the v1 base types now**
   so building the subsystem later touches handlers, not the wire. Clients MUST
   tolerate reserved fields (accept, round-trip, ignore).
@@ -346,28 +351,38 @@ at the same tree size. A client policy contains verifier keys and a quorum per
 homeserver scope; response-carried keys never add trust. Missing quorum fails
 closed before manifest or session state mutates.
 
-The web client independently polls the public checkpoint endpoint on chat open,
-network recovery, foreground return, WebSocket reconnect, and every 15 minutes
-while visible. It commits the verified head and monitor status atomically.
-Endpoint unavailability retains the last valid pin and is displayed as a
-warning; signature, consistency, operator-policy, or witness-quorum failure is
-persisted across reload and blocks creation of new sends until a later valid
-head verifies. Existing durable ciphertext may still retry, and receiving an
-established session does not require a new directory lookup. The browser
-currently schedules only its authenticated `local` scope; remote monitoring
-requires the authenticated federation policy/proxy slice below.
+The web client independently polls local and remote checkpoints on chat open,
+first remote use, network recovery, foreground return, WebSocket reconnect, and
+before stale evidence is used. Remote requests go to a same-origin domain route;
+the server resolves the destination through the unified federation transport,
+never from a client URL. The client verifies the complete federation identity
+and typed policy history before accepting the checkpoint. Endpoint
+unavailability retains the last valid pin and is displayed as a warning;
+rollback, signature/proof, policy-chain, silent key/log replacement, or signed
+fork failure persists across reload and blocks new sends for that domain.
+Existing durable ciphertext may still retry, and receiving an established
+session does not require a new directory lookup.
 
 This is materially closer to Signal's distinguished-head/auditor trust shape,
 but it is not wire-compatible with Signal's private KT service. Kutup uses a
 domain-separated username hash rather than Signal's VRF-derived index, so it
-does not claim Signal's VRF index-privacy property. The remaining work is
-skipped-update/range proofs, cross-witness gossip or an auditor that compares
-views, and authenticated distribution/rotation plus scheduled monitoring of
-remote homeserver policies. Today the web client pins its local capability
-policy but that policy shares the web origin; unknown remote federation scopes
-are first-observation pinned. Native/static clients can supply independent local
-and remote policy roots at open time. Safety numbers remain the explicit
-out-of-band verification path throughout.
+does not claim Signal's VRF index-privacy property.
+
+Every accepted manifest is retained in append-only history. A skipped client
+version remains pending while the client retrieves checkpoint-bound pages of at
+most 64 complete manifests, transparency leaves, individual RFC6962 inclusion
+paths, consistency proof, and latest sparse-map proof. Exact version increments,
+`previousHash`, signatures, authority continuity, leaves, one shared checkpoint,
+and current-map binding must all verify before one atomic commit. First
+observation above version 1 starts at version 1.
+
+Each witness serves a bounded signed `WitnessViewV1`. The scheduled server
+auditor and independently deployable `kutup-transparency-auditor` use the same
+verifier for operator/witness and witness/witness comparisons. A
+`TransparencyForkEvidenceV1` retains the original signed statements. Only a
+directly verifiable contradiction blocks; unavailable or withholding witnesses
+warn without overriding a checkpoint that already meets quorum. Safety numbers
+remain the explicit out-of-band verification path throughout.
 
 ---
 
@@ -526,8 +541,7 @@ change increments the highest observed revision. The deterministic control
 offline/restart retries are idempotent. Ordinary first-send transcripts let a
 linked device infer `pendingOutgoing` without a separate plaintext social graph.
 
-Key transparency, proof-of-contact abuse gates, and sealed sender remain later
-Phase 4 slices. Receipts and typing are not used as implicit acceptance signals.
+Receipts and typing are not used as implicit acceptance signals.
 
 ### 7.5 Encrypted profiles and automatic visibility — [IMPL]
 
@@ -570,12 +584,14 @@ current profile without undoing a profile-key rotation. Old capabilities can
 still read their old ciphertext version, but cannot read future profile changes;
 rotation cannot erase profile plaintext a peer already received or copied.
 
-### 7.6 [RSV] sealed-sender access token
+### 7.6 [IMPL] sealed-delivery capability
 
-`SendMessagesRequest` gains a **[RSV] `accessToken: b64?`**. When sealed sender
-ships (§11), an authenticated send MAY omit sender auth and instead prove a
-delivery token derived from the recipient's profile key; the server gates
-delivery on it. Absent in v1; MUST be accepted when present.
+Contacts derive a 16-byte capability with HKDF-SHA-256 from the profile key,
+canonical recipient address, and `kutup/sealed-delivery-capability/v1`. The
+profile transaction stores only its SHA-256 verifier. Anonymous bundle and send
+requests carry the raw capability in their bounded JSON body; it never appears
+in a URL, log, metric label, or mailbox. Unknown recipients and invalid
+capabilities return the same response.
 
 ---
 
@@ -677,7 +693,7 @@ lacking the routes. The server publishes a `chat` block in the existing public
     { "witnessId": "audit.example", "keyId": "<hex>", "publicKey": "<base64>" }
   ],
   "transparencyWitnessQuorum": 1,
-  "sealedSender": false            // [RSV] flips true when sealed sender ships
+  "sealedSender": true             // only with a complete authenticated service policy
 }
 ```
 
@@ -694,30 +710,48 @@ The optional `serverName` is the stable suffix used to render local accounts as
 it. A production client also rejects `keyTransparency: true` without a valid
 operator key or with a witness quorum larger than the advertised verifier set.
 These capability values describe deployment policy; a high-assurance client
-must obtain/pin the same values independently of the homeserver response. The
-remaining `[RSV]` boolean lets a client light up sealed sender without a
-protocol bump. (`12-…` §3.)
+must obtain/pin the same values independently of the homeserver response.
+Clients use sealed delivery only when the flag and authenticated service policy
+are both present and locally supported. (`12-…` §3.)
 
 ---
 
-## 11. Sealed sender — [RSV], ship whole or not at all
+## 11. Sealed sender — [IMPL], contacts only
 
-Per `13-…` §4.2, sealed sender is a **three-part system**; if kutup ever drops
-plaintext sender it MUST ship all three together:
+Per `13-…` §4.2, sealed sender ships as one gated three-part system:
 
 1. **Sender certificates** — a trust-root key signs a server certificate,
    which signs short-lived per-user sender certs (identity key + expiry). Fully
    self-hostable from libsignal primitives; the recipient validates
    client-side.
-2. **Delivery-token abuse gate** — the `accessToken` (§7.6): the only spam
-   signal once server-side sender auth is dropped.
-3. **Contacts-only default** with profile-key rotation on block.
+2. **Delivery-capability abuse gate** (§7.6): the only spam signal once
+   server-side sender auth is dropped.
+3. **Contacts-only delivery** with profile-key/capability rotation on block.
 
-v1 reserves the fields (`sender: Option`, `accessToken`, capability flag). It
-does **not** implement sealed sender. Sealed sender is metadata *minimization*,
-not elimination (it does not defeat traffic analysis) — document honestly.
-Sealed-sender-across-federation (a remote server enforcing the token gate
-without learning the sender) is an open research question (§14).
+The offline trust root signs an online libsignal server certificate; normal
+operation has only the online private key. Its authenticated federation feature
+policy publishes roots, activation/revocation windows, server-certificate IDs,
+suite, 24-hour sender-certificate lifetime, and clock skew. A sender certificate
+binds canonical `username@server`, device ID, manifest identity key, expiry, and
+server certificate. After outer decryption the recipient validates the policy
+chain, root/server/sender chain, time/domain/suite, envelope identity, and the
+transparency-verified complete manifest before advancing the inner ratchet.
+
+Local anonymous routes send no bearer token, cookie, or authenticated session.
+Federated transactions contain only origin domain, recipient, random send ID,
+capability, origin sequence, and opaque per-device envelopes. Destination
+transactions, mailbox rows, pushes, and logs have no sender identity. The
+origin may retain its authenticated sender only in its private retry outbox.
+First contact remains identified; Note to Self and linked-device sync remain
+authenticated. Once a relationship establishes sealed delivery, failure never
+causes identified fallback.
+
+Database counters enforce 30 bundle requests/minute per capability; 120 sealed
+sends/minute and 10,000/day per recipient capability; 600/minute per federation
+origin; 32 envelopes and 1 MiB/request. A 60/minute/IP process-local limiter is
+only an outer wall. Local dedupe binds recipient, capability hash, and UUID send
+ID; federation retains signed origin sequences. Sealed sender is metadata
+*minimization*, not traffic-analysis resistance.
 
 ---
 
@@ -813,9 +847,9 @@ persistent signing identity:
   dual-signed rotation advances automatically, while rollback, gaps, silent
   replacement, and competing history quarantine the peer. Disabled Chat also
   hides discovery.
-- **Remaining federation controls [TODO]:** per-remote shapers, an overload
-  circuit breaker, remote transparency-operator/witness pinning and monitoring,
-  and the proof-of-contact delivery gate needed by sealed sender.
+- **Remaining federation controls [TODO]:** general per-remote shapers and an
+  overload circuit breaker. Sealed delivery has its own durable per-origin
+  shaper; authenticated remote transparency policy/monitoring is implemented.
 
 The transport foundation is exercised by `scripts/test-chat-federation.sh` in
 an isolated `a.test`/`b.test` Docker topology. The live contract covers signed
@@ -834,13 +868,13 @@ destinations.
 
 | Field / shape | Where | Unlocks | Phase |
 |---|---|---|---|
-| `sender: Option<String>` | `DeliveredEnvelope` | sealed sender / federation addr | 3 / later |
+| `sender: Option<String>` | `DeliveredEnvelope` | sealed sender / federation addr | **implemented** |
 | `sendId: uuid` | `SendMessagesRequest` | idempotent retries | **2b [ADD]** |
 | `cursor: u64` | `DeliveredEnvelope` + `?after=` | paging + dedup | **2b [ADD]** |
 | content schema `{v,kind,sentAt,seq,body}` | decrypted plaintext | all app payloads | **2b [ADD]** |
 | `chat` capability block | `/api/auth/settings` | per-server feature gating | **2b [ADD]** |
 | `deviceSignature` + `DeviceManifest` + manifest endpoints | device reg + directory | device-list authenticity | 2/3 |
-| `accessToken: b64?` | `SendMessagesRequest` | sealed-sender abuse gate | later |
+| capability body field | anonymous bundle/send DTOs | sealed-sender abuse gate | **implemented** |
 | `ws-ticket` endpoint | WS auth | keep JWT out of logs | 2b/later |
 | `GroupState { groupId, version, encryptedState, membershipManifest }` | group endpoints | GV2 groups | 4 |
 | `.well-known` + `user@domain` addr + per-destination sequence | federation | transport federation | 3 |
@@ -849,15 +883,13 @@ destinations.
 
 ## 15. Open questions (carried from `13-…` §11)
 
-- Key transparency now supports an operator signature and configurable
-  independent witness quorum. Remaining questions are authenticated remote
-  policy distribution/rotation and cross-witness gossip without making small
-  self-hosted deployments depend on one global service.
+- Key transparency uses authenticated remote policy chains, independent
+  witnesses, range recovery, scheduled monitoring, and shared cross-view
+  auditing without depending on one global service.
 - Does GV2-pattern server-held encrypted group state compose with a future
   MLS migration, or does choosing sender keys now foreclose it?
-- Sealed sender across federation: how does a remote server enforce the
-  delivery-token gate without learning the sender? (Signal is single-server;
-  genuinely new territory.)
+- Future metadata work includes anonymous relays and traffic obfuscation;
+  sealed delivery itself is capability-gated across federation.
 - Mailbox retention + device-expiry defaults, and interaction with quota.
 
 ---
@@ -867,11 +899,12 @@ destinations.
 1. **✅ Proto + server base:** content schema types in `kutup-chat-proto`;
    `sendId` dedupe; `cursor` + `?after=` paging; the `chat` capability block +
    `maxContentBytes` enforcement; per-account bundle rate limit. Plus reserve
-   `sender: Option` and `accessToken` in the DTOs.
-2. **Trust and groups:** the device-manifest/self-authority scheme (§5.3), key
-   transparency, witnesses, and local web monitoring are implemented. The GV2
-   group-state model (§12) remains the next major product subsystem after the
-   remote federation-policy/trust slice.
+   `sender: Option` and the legacy reserved `accessToken` in identified DTOs;
+   sealed delivery uses its dedicated capability-authenticated DTOs.
+2. **Trust and groups:** the device-manifest/self-authority scheme (§5.3),
+   authenticated remote transparency policies, range recovery, witnesses,
+   scheduled web/server monitoring, and cross-view auditing are implemented.
+   The GV2 group-state model (§12) remains the next major product subsystem.
 3. **`kutup-chat-core`**: engine skeleton (transport/db ports, event stream,
    durable outbox with `sendId`, decrypt→persist→ack ordering, 409 recovery) —
    the artifact the Android/iOS clients link. **✅ Done** (branch
@@ -885,8 +918,10 @@ destinations.
    for when manifests land), and a drain/ack receive loop with cursor dedup and
    persisted history. Covered by roundtrip/send/receive test suites. Federation
    uses the same client transport with canonical remote addresses and is routed
-   server-to-server; no separate federation client stack is needed. Not yet in
-   core: sealed sender, groups, and the attachment `kind`.
+   server-to-server; no separate federation client stack is needed. Contacts-
+   only sealed sender is implemented with libsignal outer envelopes,
+   transparency-bound sender certificates, and no identified fallback. Not yet
+   in core: groups and the attachment `kind`.
 4. **web wasm adapters + minimal 1:1 UI — ✅ implemented**: account-scoped
    IndexedDB, a DTO-only wasm-bindgen transport facade, Web Locks around every
    ratchet transaction, capability-gated navigation, WebSocket hints feeding

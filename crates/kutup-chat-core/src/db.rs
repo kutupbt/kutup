@@ -19,8 +19,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use kutup_chat_proto::ContactState;
 use kutup_chat_proto::PutChatProfileRequest;
+use kutup_chat_proto::{ContactState, DeviceManifest};
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod indexed_db;
@@ -86,6 +86,16 @@ pub struct OutboxEntry {
     pub content: Vec<u8>,
     /// `serde_json` of the per-device `Vec<OutgoingEnvelope>` ciphertexts.
     pub envelopes: Vec<u8>,
+    /// Primary envelopes are serialized `SealedOutgoingEnvelopeV1` values and
+    /// must only use the anonymous transport. A failure never clears this bit.
+    #[serde(default)]
+    pub sealed_sender: bool,
+    /// Exact contacts-only delivery capability used for this sealed send. It is
+    /// local encrypted-database state and is never included in logs or linked-
+    /// device transcripts. Persisting it keeps retries bound to the original
+    /// idempotency tuple even if a newer peer profile arrives meanwhile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sealed_capability: Option<[u8; 16]>,
     /// Send attempts so far (bounds the 409 recovery loop).
     pub attempts: u32,
     /// Unix-epoch millis the entry was first enqueued.
@@ -272,6 +282,17 @@ pub struct ManifestTrust {
     /// more signed versions while offline. The latest state is still authentic,
     /// but the local client cannot prove the complete update chain.
     pub continuity_gap: bool,
+}
+
+/// One complete, transparency-included account manifest. These records are
+/// append-only and are committed in the same client transaction as the latest
+/// trust pin, so a recovered version gap can never be partially accepted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestHistoryRecord {
+    pub peer: String,
+    pub version: u64,
+    pub manifest: DeviceManifest,
+    pub leaf_index: u64,
 }
 
 /// Highest globally verified checkpoint for one homeserver namespace.
@@ -475,6 +496,8 @@ pub struct Pending {
     pub(crate) inbound: HashMap<String, Option<InboundEnvelope>>,
     /// Peer username → latest accepted signed-manifest trust record.
     pub(crate) manifest_trust: HashMap<String, ManifestTrust>,
+    /// `(peer, version)` → immutable complete manifest and log position.
+    pub(crate) manifest_history: HashMap<(String, u64), ManifestHistoryRecord>,
     /// Homeserver scope → highest verified append-only checkpoint.
     pub(crate) transparency_trust: HashMap<String, TransparencyTrust>,
     /// Homeserver scope → most recent independent checkpoint monitor result.
@@ -519,6 +542,7 @@ impl Pending {
             && self.sent_messages.is_empty()
             && self.inbound.is_empty()
             && self.manifest_trust.is_empty()
+            && self.manifest_history.is_empty()
             && self.transparency_trust.is_empty()
             && self.transparency_monitor_status.is_empty()
             && self.contacts.is_empty()
@@ -591,6 +615,13 @@ pub trait ChatDb {
 
     /// Highest accepted manifest and pinned authority for `peer`.
     async fn load_manifest_trust(&self, peer: &str) -> Result<Option<ManifestTrust>>;
+
+    /// One immutable accepted manifest version, if it has been observed.
+    async fn load_manifest_history(
+        &self,
+        peer: &str,
+        version: u64,
+    ) -> Result<Option<ManifestHistoryRecord>>;
 
     /// Highest verified append-only checkpoint for one homeserver namespace.
     async fn load_transparency_trust(&self, scope: &str) -> Result<Option<TransparencyTrust>>;

@@ -44,6 +44,7 @@ fn wrap(env: kutup_chat_proto::OutgoingEnvelope, sender: &str, cursor: u64) -> D
         id: format!("mailbox-{cursor}"),
         cursor,
         sender: Some(sender.to_string()),
+        sealed_sender: false,
         sender_device_id: 1,
         envelope_type: env.envelope_type,
         suite: env.suite,

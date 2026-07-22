@@ -11,8 +11,8 @@ use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 use super::{
-    identity::LocalFederationIdentity, policy, replay, trust, FederationRuntimeConfig,
-    FederationStack,
+    feature_policy::FeaturePolicyStore, identity::LocalFederationIdentity, policy, replay, trust,
+    FederationRuntimeConfig, FederationStack,
 };
 
 const MIGRATION: &str = include_str!("../../migrations/033_unified_federation_foundation.up.sql");
@@ -105,6 +105,7 @@ async fn live_identity_trust_policy_and_replay_invariants() {
         trust: trust::FederationTrustStore::new(pool.clone()),
         replay: replay::FederationReplayStore::new(pool.clone()),
         policy: policy::FederationPolicyStore::new(pool.clone()),
+        feature_policies: FeaturePolicyStore::new(pool.clone()),
         transport: Default::default(),
     };
     let local_discovery = federation_stack

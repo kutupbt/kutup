@@ -14,11 +14,13 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use kutup_chat_proto::{
-    ChatProfileResponse, DeviceListMismatch, DeviceManifest, MailboxPage, OwnChatProfileResponse,
-    PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
+    ChatProfileResponse, DeviceListMismatch, DeviceManifest, MailboxPage,
+    ManifestUpdateRangeProofV1, OwnChatProfileResponse, PreKeyCountResponse,
+    PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
     ReplenishKeysRequest, SendMessagesRequest, TransparencyCheckpointResponse,
     UserPreKeyBundlesResponse,
 };
+use kutup_federation_proto::FederatedFeaturePolicyHistoryV1;
 
 /// The result of a `POST …/messages`. A `409 DeviceListMismatch` is modeled as a
 /// value (not an error) because it is the expected, recoverable fan-out signal.
@@ -74,10 +76,77 @@ pub trait ChatTransport {
         ))
     }
 
+    /// Complete authenticated feature-policy history for a transparency
+    /// namespace. Clients verify it independently before accepting any remote
+    /// checkpoint, manifest, or bundle evidence.
+    async fn fetch_transparency_policy(
+        &self,
+        _domain: &str,
+    ) -> Result<FederatedFeaturePolicyHistoryV1> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement transparency policy retrieval".into(),
+        ))
+    }
+
     /// Latest account-signed device manifest. `None` maps the endpoint's 404.
     async fn fetch_manifest(&self, _username: &str) -> Result<Option<DeviceManifest>> {
         Err(crate::ChatError::Transport(
             "transport does not implement device manifests".into(),
+        ))
+    }
+
+    /// Fetch one page of the exact missing manifest interval. `cursor` is
+    /// opaque and checkpoint-bound; transports must pass it unchanged.
+    async fn fetch_manifest_range(
+        &self,
+        _username: &str,
+        _from_version: u64,
+        _to_version: u64,
+        _page_from_version: u64,
+        _cursor: Option<&str>,
+        _transparency_tree_size: u64,
+    ) -> Result<ManifestUpdateRangeProofV1> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement manifest range proofs".into(),
+        ))
+    }
+
+    async fn fetch_sealed_sender_policy(
+        &self,
+        _domain: &str,
+    ) -> Result<FederatedFeaturePolicyHistoryV1> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement sealed sender policy retrieval".into(),
+        ))
+    }
+
+    async fn fetch_sender_certificate(
+        &self,
+        _device_id: u32,
+    ) -> Result<kutup_chat_proto::SenderCertificateResponseV1> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement sender certificate issuance".into(),
+        ))
+    }
+
+    async fn fetch_sealed_bundles(
+        &self,
+        _username: &str,
+        _capability: &[u8; 16],
+        _transparency_tree_size: u64,
+    ) -> Result<UserPreKeyBundlesResponse> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement anonymous prekey retrieval".into(),
+        ))
+    }
+
+    async fn send_sealed(
+        &self,
+        _username: &str,
+        _request: &kutup_chat_proto::SealedMessageSubmissionV1,
+    ) -> Result<SendOutcome> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement sealed delivery".into(),
         ))
     }
 

@@ -41,12 +41,20 @@ pub struct TransparencyPolicy {
 #[serde(rename_all = "camelCase")]
 pub struct TransparencyScopePolicy {
     pub scope: String,
+    /// Authenticated log identity. Legacy application-supplied local policies
+    /// may omit it; federated policy conversion always supplies it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_id: Option<String>,
     pub operator_key_id: String,
     pub operator_public_key: String,
     #[serde(default)]
     pub witnesses: Vec<TransparencyVerifierKey>,
     #[serde(default)]
     pub witness_quorum: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_checkpoint_age_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_clock_skew_seconds: Option<u32>,
 }
 
 impl TransparencyPolicy {
@@ -56,6 +64,25 @@ impl TransparencyPolicy {
             if policy.scope.is_empty() || !scopes.insert(policy.scope.as_str()) {
                 return Err(ChatError::Invalid(
                     "transparency policy has an empty or repeated scope".into(),
+                ));
+            }
+            if policy.log_id.as_ref().is_some_and(|log_id| {
+                hex::decode(log_id)
+                    .ok()
+                    .filter(|bytes| bytes.len() == 32 && hex::encode(bytes) == *log_id)
+                    .is_none()
+            }) {
+                return Err(ChatError::Invalid(
+                    "transparency policy has an invalid log id".into(),
+                ));
+            }
+            if policy.maximum_checkpoint_age_seconds == Some(0)
+                || policy
+                    .maximum_clock_skew_seconds
+                    .is_some_and(|value| value > 15 * 60)
+            {
+                return Err(ChatError::Invalid(
+                    "transparency freshness policy is invalid".into(),
                 ));
             }
             let valid_key_id = hex::decode(&policy.operator_key_id)
@@ -193,12 +220,34 @@ fn verify_authenticated_checkpoint(
 ) -> Result<TransparencyTrust> {
     let scope_policy = policy.for_scope(&scope);
     if let Some(scope_policy) = scope_policy {
+        if scope_policy
+            .log_id
+            .as_deref()
+            .is_some_and(|log_id| log_id != checkpoint.log_id)
+        {
+            return Err(ChatError::Trust(
+                "transparency log id does not match authenticated policy".into(),
+            ));
+        }
         if authentication.operator_key_id != scope_policy.operator_key_id
             || authentication.operator_public_key != scope_policy.operator_public_key
         {
             return Err(ChatError::Trust(
                 "transparency operator does not match application policy".into(),
             ));
+        }
+        if let Some(maximum_age) = scope_policy.maximum_checkpoint_age_seconds {
+            let now = crate::clock::unix_millis().div_euclid(1000);
+            let skew = i64::from(scope_policy.maximum_clock_skew_seconds.unwrap_or(0));
+            let maximum_age = i64::try_from(maximum_age)
+                .map_err(|_| ChatError::Trust("checkpoint freshness bound is invalid".into()))?;
+            if authentication.issued_at > now.saturating_add(skew)
+                || authentication.issued_at < now.saturating_sub(maximum_age)
+            {
+                return Err(ChatError::Trust(
+                    "transparency checkpoint is stale or from the future".into(),
+                ));
+            }
         }
     }
     if let Some(prior) = prior {
@@ -782,6 +831,7 @@ mod tests {
         let policy = TransparencyPolicy {
             scopes: vec![TransparencyScopePolicy {
                 scope: "local".into(),
+                log_id: None,
                 operator_key_id: proof.authentication.operator_key_id.clone(),
                 operator_public_key: proof.authentication.operator_public_key.clone(),
                 witnesses: vec![TransparencyVerifierKey {
@@ -791,6 +841,8 @@ mod tests {
                         .encode(witness_key.as_bytes()),
                 }],
                 witness_quorum: 1,
+                maximum_checkpoint_age_seconds: None,
+                maximum_clock_skew_seconds: None,
             }],
         };
         policy.validate().unwrap();

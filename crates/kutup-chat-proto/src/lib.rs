@@ -20,6 +20,8 @@ pub mod content;
 pub mod federation;
 mod identity;
 mod profile;
+mod sealed_sender;
+mod security_policy;
 mod transparency;
 
 pub use content::{ChatContent, ContactControlBody, ContactState, SentTranscriptBody, TextBody};
@@ -29,13 +31,28 @@ pub use federation::{
 };
 pub use identity::{AccountAddress, AddressError, ConversationId};
 pub use profile::{ChatProfileResponse, OwnChatProfileResponse, PutChatProfileRequest};
+pub use sealed_sender::{
+    capability_hash, constant_time_capability_hash_eq, derive_delivery_capability,
+    AnonymousPreKeyRequestV1, FederatedSealedTransactionV1, SealedDeliveryResponseV1,
+    SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1, SenderCertificateResponseV1,
+    DELIVERY_CAPABILITY_CONTEXT,
+};
+pub use security_policy::{
+    ChatTransparencyPolicyV1, SealedSenderRootV1, SealedSenderServerCertificateV1,
+    SealedSenderServicePolicyV1, SealedSenderSuiteId, TransparencyProofProfileV1,
+    TransparencyWitnessPolicyV1,
+};
 pub use transparency::{
-    empty_transparency_root, hash_transparency_map_checkpoint, hash_transparency_map_leaf,
-    hash_transparency_node, map_key_bit, transparency_map_empty_hashes, transparency_map_key,
-    transparency_signing_key_id, ManifestTransparencyLeaf, ManifestTransparencyMapProof,
-    ManifestTransparencyProof, SubmitTransparencyWitnessRequest, TransparencyCheckpoint,
-    TransparencyCheckpointAuthentication, TransparencyCheckpointResponse, TransparencyHash,
-    TransparencyMapSibling, TransparencyVerifierKey, TransparencyWitnessAttestation,
+    audit_operator_witness_view, audit_witness_views, empty_transparency_root,
+    hash_transparency_map_checkpoint, hash_transparency_map_leaf, hash_transparency_node,
+    manifest_range_cursor, map_key_bit, transparency_map_empty_hashes, transparency_map_key,
+    transparency_signing_key_id, verify_checkpoint_against_policy, ManifestTransparencyLeaf,
+    ManifestTransparencyMapProof, ManifestTransparencyProof, ManifestUpdateRangeEntryV1,
+    ManifestUpdateRangeProofV1, SubmitTransparencyWitnessRequest, TransparencyCheckpoint,
+    TransparencyCheckpointAuthentication, TransparencyCheckpointResponse,
+    TransparencyForkEvidenceV1, TransparencyHash, TransparencyMapSibling,
+    TransparencyOperatorSigner, TransparencySignedStatementV1, TransparencyVerifierKey,
+    TransparencyWitnessAttestation, WitnessViewV1, MAX_WITNESS_VIEW_STATEMENTS,
 };
 
 /// Registry of encryption suites — the algorithm-agility mechanism.
@@ -468,6 +485,10 @@ pub struct DeliveredEnvelope {
     /// sealed sender. See `docs/chat-protocol.md` §8.1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender: Option<String>,
+    /// True when `content` is a serialized libsignal unidentified-sender
+    /// message. Such rows intentionally carry no sender metadata.
+    #[serde(default)]
+    pub sealed_sender: bool,
     pub sender_device_id: u32,
     pub envelope_type: EnvelopeType,
     pub suite: DirectChatSuiteId,
@@ -558,6 +579,11 @@ pub struct ChatCapabilities {
     /// [RSV] flips true when sealed sender ships.
     #[serde(default)]
     pub sealed_sender: bool,
+    /// Complete authenticated local service-policy history. Present only when
+    /// the certificate, anonymous bundle, local delivery, and federation paths
+    /// are all enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sealed_sender_policy: Option<kutup_federation_proto::FederatedFeaturePolicyHistoryV1>,
 }
 
 impl Default for ChatCapabilities {
@@ -580,6 +606,7 @@ impl Default for ChatCapabilities {
             transparency_witnesses: Vec::new(),
             transparency_witness_quorum: 0,
             sealed_sender: false,
+            sealed_sender_policy: None,
         }
     }
 }
