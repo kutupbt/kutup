@@ -19,7 +19,7 @@ use kutup_chat_proto::{
     UserPreKeyBundlesResponse,
 };
 use rand::RngCore;
-use reqwest::blocking::Client;
+use reqwest::{blocking::Client, StatusCode};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -201,12 +201,25 @@ fn publish_manifest(
     };
     manifest.signature = b64(&signing.sign(&manifest.signing_bytes().unwrap()).to_bytes());
     manifest.verify().unwrap();
-    let response = c
-        .post(format!("{base}/api/chat/manifest"))
-        .bearer_auth(token)
-        .json(&manifest)
-        .send()
-        .unwrap();
+    // The manifest/log/map/checkpoint transaction commits before the server
+    // waits for the independently running witness. If that bounded wait
+    // expires, the server deliberately returns 503 and requires an exact,
+    // idempotent retry rather than rolling back or publishing new bytes.
+    let mut response = None;
+    for attempt in 0..3 {
+        let candidate = c
+            .post(format!("{base}/api/chat/manifest"))
+            .bearer_auth(token)
+            .json(&manifest)
+            .send()
+            .unwrap();
+        if candidate.status() != StatusCode::SERVICE_UNAVAILABLE || attempt == 2 {
+            response = Some(candidate);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    let response = response.expect("manifest publication retry loop returns a response");
     assert!(
         response.status().is_success(),
         "publish manifest v{version}: {}",

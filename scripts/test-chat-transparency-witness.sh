@@ -5,7 +5,15 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 COMPOSE=(docker compose -f "$ROOT/docker-compose.chat-transparency-witness.yml")
 
 cleanup() {
+  status=$?
+  trap - EXIT
+  set +e
+  if (( status != 0 )); then
+    "${COMPOSE[@]}" ps
+    "${COMPOSE[@]}" logs --no-color backend witness
+  fi
   "${COMPOSE[@]}" down --volumes --remove-orphans
+  exit "$status"
 }
 trap cleanup EXIT
 
