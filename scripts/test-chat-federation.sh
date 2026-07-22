@@ -21,12 +21,12 @@ run_phase() {
       chat_federation_live -- --exact --nocapture
 }
 
-wait_server() {
+wait_url() {
   local url="$1"
   local deadline=$((SECONDS + 60))
-  until curl --fail --silent --show-error "$url/api/health" >/dev/null; do
+  until curl --fail --silent --show-error "$url" >/dev/null; do
     if (( SECONDS >= deadline )); then
-      echo "timed out waiting for $url/api/health" >&2
+      echo "timed out waiting for $url" >&2
       return 1
     fi
     sleep 1
@@ -34,11 +34,19 @@ wait_server() {
 }
 
 cleanup() {
+  local status=$?
+  trap - EXIT
+  set +e
+  if (( status != 0 )); then
+    compose ps >&2
+    compose logs --no-color frontend edge-a edge-b >&2
+  fi
   compose down --volumes --remove-orphans
+  exit "$status"
 }
 trap cleanup EXIT
 
-cleanup
+compose down --volumes --remove-orphans
 if [[ "${KUTUP_FEDERATION_SKIP_BUILD:-0}" != "1" ]]; then
   compose build backend-a
 fi
@@ -57,12 +65,16 @@ compose restart backend-a
 compose restart edge-a
 compose start edge-b
 compose up --detach --wait
-wait_server "http://127.0.0.1:$port_a"
-wait_server "http://127.0.0.1:$port_b"
+wait_url "http://127.0.0.1:$port_a/api/health"
+wait_url "http://127.0.0.1:$port_b/api/health"
 
 run_phase verify-retry
 
 if [[ "${KUTUP_FEDERATION_SKIP_BROWSER:-0}" != "1" ]]; then
+  # The API may be healthy while nginx is still reconnecting its separate
+  # frontend upstream after the deliberate edge/backend restart above.
+  wait_url "http://127.0.0.1:$port_a/register"
+  wait_url "http://127.0.0.1:$port_b/register"
   (
     cd "$root_dir/tests/e2e"
     E2E_BASE_URL="http://127.0.0.1:$port_a" \
