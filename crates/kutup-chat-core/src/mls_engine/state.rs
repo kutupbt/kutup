@@ -21,9 +21,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     decode_canonical_base64, validate_group_id, validate_metadata, validate_pending_commit,
-    LocalMlsConversationRecord, MlsDevicePublicMaterial, PendingMlsCommit, MAX_PENDING_COMMITS,
-    MAX_STATE_BYTES, MAX_STATE_RECORDS, MAX_STATE_RECORD_BYTES,
-    MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256, STATE_FORMAT_VERSION,
+    validate_pending_membership_change, LocalMlsConversationRecord, MlsDevicePublicMaterial,
+    PendingMlsCommit, PendingMlsMembershipChange, MAX_PENDING_COMMITS, MAX_STATE_BYTES,
+    MAX_STATE_RECORDS, MAX_STATE_RECORD_BYTES, MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256,
+    STATE_FORMAT_VERSION,
 };
 use crate::error::{ChatError, Result};
 
@@ -56,6 +57,7 @@ pub(super) struct SnapshotMetadata {
     pub(super) credential_public_key: Vec<u8>,
     pub(super) anonymous_delivery_private_key: Vec<u8>,
     pub(super) pending_commits: BTreeMap<String, PendingMlsCommit>,
+    pub(super) pending_membership_changes: BTreeMap<String, PendingMlsMembershipChange>,
     pub(super) group_control_private_keys: BTreeMap<String, Vec<u8>>,
     pub(super) group_owner_private_keys: BTreeMap<String, Vec<u8>>,
     pub(super) conversations: BTreeMap<String, LocalMlsConversationRecord>,
@@ -96,13 +98,14 @@ impl SnapshotMetadata {
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PersistedMlsStateV3 {
+struct PersistedMlsStateV4 {
     format_version: u16,
     ciphersuite: u16,
     credential_identity: String,
     credential_public_key: String,
     anonymous_delivery_private_key: String,
     pending_commits: Vec<PendingMlsCommit>,
+    pending_membership_changes: Vec<PendingMlsMembershipChange>,
     group_control_keys: Vec<PersistedMlsGroupControlKeyV1>,
     group_owner_keys: Vec<PersistedMlsGroupOwnerKeyV1>,
     conversations: Vec<LocalMlsConversationRecord>,
@@ -157,13 +160,18 @@ pub(super) fn snapshot_provider(
             value: BASE64.encode(value),
         });
     }
-    let state = PersistedMlsStateV3 {
+    let state = PersistedMlsStateV4 {
         format_version: STATE_FORMAT_VERSION,
         ciphersuite: MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256,
         credential_identity: metadata.credential_identity.clone(),
         credential_public_key: BASE64.encode(&metadata.credential_public_key),
         anonymous_delivery_private_key: BASE64.encode(&metadata.anonymous_delivery_private_key),
         pending_commits: metadata.pending_commits.values().cloned().collect(),
+        pending_membership_changes: metadata
+            .pending_membership_changes
+            .values()
+            .cloned()
+            .collect(),
         group_control_keys: metadata
             .group_control_private_keys
             .iter()
@@ -194,12 +202,13 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
     if bytes.is_empty() || bytes.len() > MAX_STATE_BYTES {
         return Err(ChatError::Db("OpenMLS state size is invalid".into()));
     }
-    let state: PersistedMlsStateV3 =
+    let state: PersistedMlsStateV4 =
         serde_json::from_slice(bytes).map_err(|error| ChatError::Db(error.to_string()))?;
     if state.format_version != STATE_FORMAT_VERSION
         || state.ciphersuite != MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256
         || state.records.len() > MAX_STATE_RECORDS
         || state.pending_commits.len() > MAX_PENDING_COMMITS
+        || state.pending_membership_changes.len() > MAX_PENDING_COMMITS
         || state.group_control_keys.len() > MAX_PENDING_COMMITS
         || state.group_owner_keys.len() > MAX_PENDING_COMMITS
         || state.conversations.len() > MAX_PENDING_COMMITS
@@ -232,6 +241,26 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
         if pending_commits.insert(key, pending).is_some() {
             return Err(ChatError::Db(
                 "OpenMLS state contains duplicate pending Commit material".into(),
+            ));
+        }
+    }
+    let mut pending_membership_changes = BTreeMap::new();
+    let mut previous_membership_key: Option<String> = None;
+    for pending in state.pending_membership_changes {
+        validate_pending_membership_change(&pending)?;
+        let key = BASE64.encode(&pending.mls_group_id);
+        if previous_membership_key
+            .as_ref()
+            .is_some_and(|previous| key <= *previous)
+        {
+            return Err(ChatError::Db(
+                "MLS pending membership records are not strictly ordered".into(),
+            ));
+        }
+        previous_membership_key = Some(key.clone());
+        if pending_membership_changes.insert(key, pending).is_some() {
+            return Err(ChatError::Db(
+                "OpenMLS state contains duplicate pending membership material".into(),
             ));
         }
     }
@@ -328,6 +357,7 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
             32,
         )?,
         pending_commits,
+        pending_membership_changes,
         group_control_private_keys,
         group_owner_private_keys,
         conversations,

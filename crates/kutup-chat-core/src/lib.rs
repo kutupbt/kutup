@@ -57,9 +57,10 @@ pub use manifest::{
 };
 pub use mls_engine::{
     AnonymousMlsRecipientDevice, ClaimedMlsCredential, DecryptedMlsApplication,
-    DerivedMlsDeliveryCapability, LocalMlsConversationRecord, LocalMlsConversationStatus,
-    LocalMlsGroupState, MlsClient, MlsDevicePublicMaterial, MlsGroupControlCredential,
-    MlsGroupOwnerCredential, MlsWelcomeInspection, PendingMlsCommit, PreparedMlsGroupGenesis,
+    DerivedMlsDeliveryCapability, FinalizedMlsMembershipChange, LocalMlsConversationRecord,
+    LocalMlsConversationStatus, LocalMlsGroupState, MlsClient, MlsDevicePublicMaterial,
+    MlsGroupControlCredential, MlsGroupOwnerCredential, MlsWelcomeInspection, PendingMlsCommit,
+    PendingMlsMembershipChange, PreparedMlsGroupGenesis, PreparedMlsMembershipChange,
     VerifiedMlsCredential, VerifiedMlsKeyPackage, KUTUP_MLS_V1_CIPHERSUITE,
     KUTUP_MLS_V1_MAX_PAST_EPOCHS,
 };

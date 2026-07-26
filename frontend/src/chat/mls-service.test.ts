@@ -16,6 +16,8 @@ const welcome = btoa(String.fromCharCode(...new Uint8Array(32).fill(9)))
 const genesisGroupBytes = new Uint8Array(32).fill(5)
 const genesisGroupId = btoa(String.fromCharCode(...genesisGroupBytes))
 const genesisHash = 'ab'.repeat(32)
+const proposalId = '44444444-4444-4444-8444-444444444444'
+const controlBlockHash = 'ef'.repeat(32)
 
 function pendingGenesis(): LocalMlsConversationRecord {
   return {
@@ -62,6 +64,36 @@ function pendingGenesis(): LocalMlsConversationRecord {
       ],
     },
     status: 'pending_genesis',
+    lastFinalizedHeight: 0,
+    lastFinalizedEpoch: 0,
+    currentRoster: [
+      {
+        address: { username: 'alice', server: 'alpha.example' },
+        isAdmin: true,
+        ownerId: '22'.repeat(32),
+      },
+    ],
+    currentAuthoritySet: {
+      sequence: 1,
+      authorities: [
+        {
+          domain: 'alpha.example',
+          keyId: '11'.repeat(32),
+          publicKey: btoa(String.fromCharCode(...new Uint8Array(32).fill(1))),
+        },
+      ],
+      requiredQuorum: 1,
+    },
+    currentOwnerSet: {
+      sequence: 1,
+      owners: [
+        {
+          ownerId: '22'.repeat(32),
+          publicKey: btoa(String.fromCharCode(...new Uint8Array(32).fill(2))),
+        },
+      ],
+      requiredQuorum: 1,
+    },
   }
 }
 
@@ -83,7 +115,60 @@ function invitation(): PendingMlsInvitation {
   }
 }
 
-function harness(existing: LocalMlsGroupState | null = null) {
+function pendingMembership() {
+  return {
+    mlsGroupId: [...genesisGroupBytes],
+    nextRoster: [
+      {
+        address: { username: 'alice', server: 'alpha.example' },
+        isAdmin: true,
+        ownerId: '22'.repeat(32),
+      },
+      {
+        address: { username: 'bobby', server: 'beta.example' },
+        isAdmin: false,
+      },
+    ],
+    deliveries: [
+      { destination: 'alpha.example', deliveryDigest: '31'.repeat(32) },
+      { destination: 'beta.example', deliveryDigest: '32'.repeat(32) },
+    ],
+    transition: {
+      conversationId,
+      incarnation: 1,
+      proposalId,
+    },
+    voteRequest: {
+      block: {
+        conversationId,
+        incarnation: 1,
+        height: 1,
+        epochBefore: 0,
+        epochAfter: 1,
+      },
+    },
+    commitHash: 'cd'.repeat(32),
+  }
+}
+
+function finalizedMembership() {
+  const conversation = {
+    ...activeGenesis(),
+    lastFinalizedHeight: 1,
+    lastFinalizedEpoch: 1,
+    lastBlockHash: controlBlockHash,
+    currentRoster: pendingMembership().nextRoster,
+  }
+  return {
+    group: { mlsGroupId: [...genesisGroupBytes], epoch: 1 },
+    conversation,
+  }
+}
+
+function harness(
+  existing: LocalMlsGroupState | null = null,
+  localRecords: LocalMlsConversationRecord[] = [pendingGenesis()],
+) {
   const client = {
     deviceId: 7,
     mlsKeyPackageCount: vi.fn(),
@@ -95,8 +180,22 @@ function harness(existing: LocalMlsGroupState | null = null) {
       group: { mlsGroupId: [...genesisGroupBytes], epoch: 0 },
       conversation: pendingGenesis(),
     }),
-    localMlsConversations: vi.fn().mockResolvedValue([pendingGenesis()]),
+    localMlsConversations: vi.fn().mockResolvedValue(localRecords),
     markMlsGroupGenesisPublished: vi.fn().mockResolvedValue(activeGenesis()),
+    prepareMlsMembershipChange: vi.fn().mockResolvedValue({
+      pending: {
+        mlsGroupId: [...genesisGroupBytes],
+        epochBefore: 0,
+        epochAfter: 1,
+        commitHash: 'cd'.repeat(32),
+        commit: [1, 2, 3],
+        welcome: [4, 5, 6],
+      },
+      control: pendingMembership(),
+    }),
+    pendingMlsMembershipChanges: vi.fn().mockResolvedValue([pendingMembership()]),
+    buildMlsMembershipCommitRequest: vi.fn().mockResolvedValue({ finalized: 'request' }),
+    finalizeMlsMembershipChange: vi.fn().mockResolvedValue(finalizedMembership()),
     mlsGroupState: vi.fn().mockResolvedValue(existing),
     inspectMlsWelcome: vi.fn().mockResolvedValue({
       mlsGroupId: [...new Uint8Array(16).fill(7)],
@@ -129,6 +228,16 @@ function harness(existing: LocalMlsGroupState | null = null) {
       conversationId,
       incarnation: 1,
       genesisHash,
+      idempotent: false,
+    }),
+    stageMlsMembershipDelivery: vi.fn().mockResolvedValue({}),
+    collectMlsOrderingVotes: vi.fn().mockResolvedValue({ votes: ['authority'] }),
+    commitMlsControlBlock: vi.fn().mockResolvedValue({
+      conversationId,
+      incarnation: 1,
+      height: 1,
+      epoch: 1,
+      blockHash: controlBlockHash,
       idempotent: false,
     }),
     listMlsInvitations: vi.fn().mockResolvedValue([invitation()]),
@@ -258,6 +367,97 @@ describe('MlsConversationService', () => {
       /invalid MLS conversation genesis acknowledgement/,
     )
     expect(client.markMlsGroupGenesisPublished).not.toHaveBeenCalled()
+  })
+
+  it('stages, quorum-finalizes, and merges exact membership control material', async () => {
+    vi.stubGlobal('crypto', {
+      randomUUID: () => proposalId,
+      getRandomValues: (value: Uint8Array) => value,
+    })
+    const { client, transport, service } = harness(null, [activeGenesis()])
+    const nextRoster = pendingMembership().nextRoster
+    const additions = [{ wire: { deviceId: 7 }, credential: { credentialIdentity: 'bobby@beta.example#7' } }]
+    await expect(
+      service.changeGroupMembership(conversationId, nextRoster, additions),
+    ).resolves.toEqual(finalizedMembership())
+    expect(client.prepareMlsMembershipChange).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      proposalId,
+      nextRoster,
+      additions,
+      expect.stringMatching(/^[0-9]+$/),
+    )
+    expect(transport.stageMlsMembershipDelivery).toHaveBeenCalledTimes(2)
+    expect(transport.collectMlsOrderingVotes).toHaveBeenCalledWith(
+      pendingMembership().voteRequest,
+    )
+    expect(client.buildMlsMembershipCommitRequest).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      { votes: ['authority'] },
+    )
+    expect(transport.commitMlsControlBlock).toHaveBeenCalledWith({
+      finalized: 'request',
+    })
+    expect(client.finalizeMlsMembershipChange).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      expect.objectContaining({ blockHash: controlBlockHash }),
+    )
+  })
+
+  it('replays the exact pending membership operation after a network failure', async () => {
+    vi.stubGlobal('crypto', {
+      randomUUID: () => proposalId,
+      getRandomValues: (value: Uint8Array) => value,
+    })
+    const { client, transport, service } = harness(null, [activeGenesis()])
+    vi.mocked(transport.commitMlsControlBlock)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({
+        conversationId,
+        incarnation: 1,
+        height: 1,
+        epoch: 1,
+        blockHash: controlBlockHash,
+        idempotent: true,
+      })
+    await expect(
+      service.changeGroupMembership(
+        conversationId,
+        pendingMembership().nextRoster,
+        [{ package: 'verified' }],
+      ),
+    ).rejects.toThrow('offline')
+    expect(client.finalizeMlsMembershipChange).not.toHaveBeenCalled()
+    vi.mocked(client.pendingMlsMembershipChanges).mockResolvedValueOnce([
+      {
+        ...pendingMembership(),
+        finalRequest: { finalized: 'request' },
+      },
+    ])
+    await expect(service.reconcilePendingMembershipChanges()).resolves.toEqual([
+      finalizedMembership(),
+    ])
+    expect(client.prepareMlsMembershipChange).toHaveBeenCalledTimes(1)
+    expect(transport.collectMlsOrderingVotes).toHaveBeenCalledTimes(1)
+    expect(client.buildMlsMembershipCommitRequest).toHaveBeenCalledTimes(1)
+    expect(transport.stageMlsMembershipDelivery).toHaveBeenCalledTimes(4)
+    expect(transport.commitMlsControlBlock).toHaveBeenCalledTimes(2)
+  })
+
+  it('never merges local MLS state for a malformed control acknowledgement', async () => {
+    const { client, transport, service } = harness(null, [activeGenesis()])
+    vi.mocked(transport.commitMlsControlBlock).mockResolvedValueOnce({
+      conversationId,
+      incarnation: 1,
+      height: 2,
+      epoch: 1,
+      blockHash: controlBlockHash,
+      idempotent: false,
+    })
+    await expect(service.reconcilePendingMembershipChanges()).rejects.toThrow(
+      /invalid MLS control-block acknowledgement/,
+    )
+    expect(client.finalizeMlsMembershipChange).not.toHaveBeenCalled()
   })
 
   it('replenishes exact durable KeyPackages to the target', async () => {

@@ -11,9 +11,10 @@ use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    AnonymousMlsDeviceEnvelopeV1, ChatProfileResponse, DeviceListMismatch, DeviceManifest,
-    MailboxPage, MlsControlActionTypeV1, OwnChatProfileResponse, PreKeyCountResponse,
-    PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
+    AnonymousMlsDeviceEnvelopeV1, ChatProfileResponse, CommitMlsControlBlockResponseV1,
+    DeviceListMismatch, DeviceManifest, MailboxPage, MlsControlActionTypeV1,
+    MlsConversationMemberV1, MlsOrderingQuorumCertificateV1, OwnChatProfileResponse,
+    PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
     RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest,
     TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
 };
@@ -819,40 +820,75 @@ impl WasmChatClient {
         to_output(&state)
     }
 
-    #[wasm_bindgen(js_name = prepareMlsAddMembers)]
-    pub async fn prepare_mls_add_members(
+    #[wasm_bindgen(js_name = prepareMlsMembershipChange)]
+    pub async fn prepare_mls_membership_change(
         &self,
         mls_group_id: Vec<u8>,
+        proposal_id: String,
+        next_roster: JsValue,
         additions: JsValue,
         now_seconds: String,
     ) -> std::result::Result<JsValue, JsValue> {
+        let proposal_id = uuid::Uuid::parse_str(&proposal_id)
+            .map_err(|_| js_error("MLS proposal id must be a UUID"))?;
+        let next_roster: Vec<MlsConversationMemberV1> =
+            from_transport(next_roster).map_err(chat_error)?;
         let additions: Vec<VerifiedMlsKeyPackage> =
             from_transport(additions).map_err(chat_error)?;
-        let pending = self
+        let prepared = self
             .mls_client()
-            .prepare_add_members(
+            .prepare_membership_change(
                 &mls_group_id,
+                proposal_id,
+                &next_roster,
                 &additions,
                 parse_i64_string("MLS clock", &now_seconds)?,
             )
             .await
             .map_err(chat_error)?;
-        to_output(&pending)
+        to_output(&prepared)
     }
 
-    #[wasm_bindgen(js_name = prepareMlsRemoveMembers)]
-    pub async fn prepare_mls_remove_members(
-        &self,
-        mls_group_id: Vec<u8>,
-        credential_identities: JsValue,
-    ) -> std::result::Result<JsValue, JsValue> {
-        let identities: Vec<String> = from_transport(credential_identities).map_err(chat_error)?;
+    #[wasm_bindgen(js_name = pendingMlsMembershipChanges)]
+    pub async fn pending_mls_membership_changes(&self) -> std::result::Result<JsValue, JsValue> {
         let pending = self
             .mls_client()
-            .prepare_remove_members(&mls_group_id, &identities)
+            .pending_membership_changes()
             .await
             .map_err(chat_error)?;
         to_output(&pending)
+    }
+
+    #[wasm_bindgen(js_name = buildMlsMembershipCommitRequest)]
+    pub async fn build_mls_membership_commit_request(
+        &self,
+        mls_group_id: Vec<u8>,
+        quorum_certificate: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let certificate: MlsOrderingQuorumCertificateV1 =
+            from_transport(quorum_certificate).map_err(chat_error)?;
+        let request = self
+            .mls_client()
+            .build_membership_commit_request(&mls_group_id, certificate)
+            .await
+            .map_err(chat_error)?;
+        to_output(&request)
+    }
+
+    #[wasm_bindgen(js_name = finalizeMlsMembershipChange)]
+    pub async fn finalize_mls_membership_change(
+        &self,
+        mls_group_id: Vec<u8>,
+        acknowledgement: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let acknowledgement: CommitMlsControlBlockResponseV1 =
+            from_transport(acknowledgement).map_err(chat_error)?;
+        let finalized = self
+            .mls_client()
+            .finalize_membership_change(&mls_group_id, &acknowledgement)
+            .await
+            .map_err(chat_error)?;
+        to_output(&finalized)
     }
 
     #[wasm_bindgen(js_name = pendingMlsCommit)]

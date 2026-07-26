@@ -102,38 +102,6 @@ impl MlsRepository {
             })?;
         let current_member_count = u32::try_from(current_member_count)
             .map_err(|_| AppError::internal("stored MLS member count is invalid"))?;
-        if let Some(origin) = federated_origin {
-            if participant_domains
-                .binary_search_by(|domain| domain.as_str().cmp(origin))
-                .is_err()
-            {
-                return Err(AppError::forbidden(
-                    "federation origin is not a participant server",
-                ));
-            }
-        }
-        if let Some(local_submitter) = local_submitter {
-            let is_member: bool = sqlx::query_scalar(
-                "SELECT EXISTS(
-                    SELECT 1 FROM chat_mls_local_members
-                    WHERE conversation_id = $1 AND incarnation = $2
-                      AND user_id = $3 AND removed_epoch IS NULL
-                      AND membership_status = 'active'
-                 )",
-            )
-            .bind(block.conversation_id)
-            .bind(block.incarnation as i64)
-            .bind(local_submitter)
-            .fetch_one(&mut *tx)
-            .await?;
-            if !is_member {
-                return Err(AppError::forbidden("not an active local MLS member"));
-            }
-        }
-        if incarnation_status != "active" {
-            return Err(AppError::conflict("MLS incarnation is not writable"));
-        }
-
         if block.height as i64 <= last_height {
             let existing: Option<String> = sqlx::query_scalar(
                 "SELECT block_hash
@@ -160,6 +128,45 @@ impl MlsRepository {
                 "conflicting MLS control block exists at this height",
             ));
         }
+        if let Some(origin) = federated_origin {
+            if participant_domains
+                .binary_search_by(|domain| domain.as_str().cmp(origin))
+                .is_err()
+            {
+                return Err(AppError::forbidden(
+                    "federation origin is not a participant server",
+                ));
+            }
+        }
+        if let Some(local_submitter) = local_submitter {
+            let is_admin: Option<bool> = sqlx::query_scalar(
+                "SELECT is_admin
+                 FROM chat_mls_local_members
+                 WHERE conversation_id = $1 AND incarnation = $2
+                   AND user_id = $3 AND removed_epoch IS NULL
+                   AND membership_status = 'active'",
+            )
+            .bind(block.conversation_id)
+            .bind(block.incarnation as i64)
+            .bind(local_submitter)
+            .fetch_optional(&mut *tx)
+            .await?;
+            let is_admin =
+                is_admin.ok_or_else(|| AppError::forbidden("not an active local MLS member"))?;
+            if matches!(
+                block.proposal.action_type,
+                MlsControlActionTypeV1::RoutineAdmin | MlsControlActionTypeV1::MembershipChange
+            ) && !is_admin
+            {
+                return Err(AppError::forbidden(
+                    "MLS routine and membership finalization requires a local administrator",
+                ));
+            }
+        }
+        if incarnation_status != "active" {
+            return Err(AppError::conflict("MLS incarnation is not writable"));
+        }
+
         if block.height as i64 != last_height + 1
             || block.epoch_before as i64 != last_epoch
             || block.previous_block_hash.as_deref() != last_hash.as_deref()

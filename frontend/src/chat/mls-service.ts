@@ -1,10 +1,13 @@
 import type {
   AccountAddress,
   ChatTransportPort,
+  FinalizedMlsMembershipChange,
   LocalMlsConversationRecord,
   LocalMlsGroupState,
+  MlsConversationMember,
   MlsMailboxEnvelope,
   MlsWelcomeInspection,
+  PendingMlsMembershipChange,
   PendingMlsInvitation,
   PreparedMlsGroupGenesis,
   VerifiedMlsCredential,
@@ -106,6 +109,59 @@ export class MlsConversationService {
       }
     }
     return published
+  }
+
+  /**
+   * Atomically stage one add-only or remove-only MLS membership transition,
+   * then replay its exact destination deliveries and quorum request. All
+   * signature and quorum decisions remain inside the shared Rust engine.
+   */
+  async changeGroupMembership(
+    conversationId: string,
+    nextRoster: MlsConversationMember[],
+    additions: unknown[],
+  ): Promise<FinalizedMlsMembershipChange> {
+    const browserCrypto = requireBrowserCrypto()
+    const records = await this.withCryptoLock(() =>
+      this.client.localMlsConversations(),
+    )
+    const conversation = records.find(
+      (record) =>
+        record.request.genesis.conversationId === conversationId
+        && record.status === 'active',
+    )
+    if (!conversation) {
+      throw new Error('active local MLS conversation is unavailable')
+    }
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const prepared = await this.withCryptoLock(() =>
+      this.client.prepareMlsMembershipChange(
+        groupId,
+        browserCrypto.randomUUID(),
+        nextRoster,
+        additions,
+        String(Math.floor(Date.now() / 1000)),
+      ),
+    )
+    validatePendingMembershipChange(prepared.control, groupId)
+    return this.publishPendingMembershipChange(prepared.control)
+  }
+
+  /** Replay exact staged deliveries and the exact signed block after restart. */
+  async reconcilePendingMembershipChanges(): Promise<FinalizedMlsMembershipChange[]> {
+    const pending = await this.withCryptoLock(() =>
+      this.client.pendingMlsMembershipChanges(),
+    )
+    const finalized: FinalizedMlsMembershipChange[] = []
+    for (const control of pending) {
+      validatePendingMembershipChange(control, Uint8Array.from(control.mlsGroupId))
+      finalized.push(await this.publishPendingMembershipChange(control))
+    }
+    return finalized
   }
 
   async maintainKeyPackages(
@@ -357,6 +413,40 @@ export class MlsConversationService {
     }
     return active
   }
+
+  private async publishPendingMembershipChange(
+    control: PendingMlsMembershipChange,
+  ): Promise<FinalizedMlsMembershipChange> {
+    const groupId = Uint8Array.from(control.mlsGroupId)
+    validatePendingMembershipChange(control, groupId)
+    for (const delivery of control.deliveries) {
+      await this.transport.stageMlsMembershipDelivery(delivery)
+    }
+    const request = control.finalRequest ?? await (async () => {
+      const quorumCertificate = await this.transport.collectMlsOrderingVotes(
+        control.voteRequest,
+      )
+      return this.withCryptoLock(() =>
+        this.client.buildMlsMembershipCommitRequest(groupId, quorumCertificate),
+      )
+    })()
+    const acknowledgement = requireControlBlockResponse(
+      await this.transport.commitMlsControlBlock(request),
+      control,
+    )
+    const finalized = await this.withCryptoLock(() =>
+      this.client.finalizeMlsMembershipChange(groupId, acknowledgement),
+    )
+    if (
+      finalized.group.epoch !== control.voteRequest.block.epochAfter
+      || finalized.conversation.lastFinalizedHeight
+        !== control.voteRequest.block.height
+      || finalized.conversation.lastBlockHash !== acknowledgement.blockHash
+    ) {
+      throw new Error('durable MLS membership state differs from its finalized block')
+    }
+    return finalized
+  }
 }
 
 interface BrowserCrypto {
@@ -425,6 +515,22 @@ function validateLocalGenesisRecord(record: LocalMlsConversationRecord): void {
     || genesis.initialEpoch !== 0
     || genesis.memberCount !== 1
     || record.request.members.length !== 1
+    || !Number.isSafeInteger(record.lastFinalizedHeight)
+    || record.lastFinalizedHeight < 0
+    || !Number.isSafeInteger(record.lastFinalizedEpoch)
+    || record.lastFinalizedEpoch < 0
+    || record.currentRoster.length < 1
+    || record.currentRoster.length > 1000
+    || record.currentAuthoritySet.authorities.length < 1
+    || record.currentOwnerSet.owners.length < 1
+    || (
+      record.lastFinalizedHeight === 0
+      && (record.lastFinalizedEpoch !== 0 || record.lastBlockHash !== undefined)
+    )
+    || (
+      record.lastFinalizedHeight > 0
+      && !isSha256(record.lastBlockHash)
+    )
     || (record.status !== 'pending_genesis' && record.status !== 'active')
     || (record.status === 'pending_genesis' && record.serverGenesisHash !== undefined)
     || (
@@ -435,6 +541,76 @@ function validateLocalGenesisRecord(record: LocalMlsConversationRecord): void {
     throw new Error('invalid durable MLS group genesis record')
   }
   decodeCanonicalBase64(genesis.mlsGroupId, 16, 255)
+}
+
+function validatePendingMembershipChange(
+  control: PendingMlsMembershipChange,
+  expectedGroupId: Uint8Array,
+): void {
+  const block = control?.voteRequest?.block
+  if (
+    !control
+    || !equalBytes(control.mlsGroupId, expectedGroupId)
+    || !isSha256(control.commitHash)
+    || !Array.isArray(control.nextRoster)
+    || control.nextRoster.length < 2
+    || control.nextRoster.length > 1000
+    || !Array.isArray(control.deliveries)
+    || control.deliveries.length < 1
+    || !block
+    || !isUuid(block.conversationId)
+    || block.conversationId !== control.transition?.conversationId
+    || block.incarnation !== control.transition?.incarnation
+    || !isUuid(control.transition?.proposalId)
+    || !Number.isSafeInteger(block.height)
+    || block.height < 1
+    || !Number.isSafeInteger(block.epochBefore)
+    || block.epochBefore < 0
+    || !Number.isSafeInteger(block.epochAfter)
+    || block.epochAfter !== block.epochBefore + 1
+  ) {
+    throw new Error('invalid durable MLS membership control record')
+  }
+}
+
+function requireControlBlockResponse(
+  value: unknown,
+  control: PendingMlsMembershipChange,
+): {
+  conversationId: string
+  incarnation: number
+  height: number
+  epoch: number
+  blockHash: string
+  idempotent: boolean
+} {
+  const block = control.voteRequest.block
+  if (
+    typeof value !== 'object'
+    || value === null
+    || !('conversationId' in value)
+    || value.conversationId !== block.conversationId
+    || !('incarnation' in value)
+    || value.incarnation !== block.incarnation
+    || !('height' in value)
+    || value.height !== block.height
+    || !('epoch' in value)
+    || value.epoch !== block.epochAfter
+    || !('blockHash' in value)
+    || !isSha256(value.blockHash)
+    || !('idempotent' in value)
+    || typeof value.idempotent !== 'boolean'
+  ) {
+    throw new Error('server returned an invalid MLS control-block acknowledgement')
+  }
+  return value as {
+    conversationId: string
+    incarnation: number
+    height: number
+    epoch: number
+    blockHash: string
+    idempotent: boolean
+  }
 }
 
 function requireCreateConversationResponse(
@@ -578,8 +754,8 @@ function equalBytes(left: number[], right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
-function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value,
   )
 }

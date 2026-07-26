@@ -226,14 +226,81 @@ export interface LocalMlsConversationRecord {
     members: Array<{
       address: AccountAddress
       isAdmin: boolean
-      ownerId: string
+      ownerId?: string
     }>
   }
   status: 'pending_genesis' | 'active'
   serverGenesisHash?: string
+  lastFinalizedHeight: number
+  lastFinalizedEpoch: number
+  lastBlockHash?: string
+  currentRoster: MlsConversationMember[]
+  currentAuthoritySet: MlsAuthoritySet
+  currentOwnerSet: MlsOwnerSet
 }
 
 export interface PreparedMlsGroupGenesis {
+  group: LocalMlsGroupState
+  conversation: LocalMlsConversationRecord
+}
+
+export interface MlsConversationMember {
+  address: AccountAddress
+  isAdmin: boolean
+  ownerId?: string
+}
+
+export interface MlsAuthoritySet {
+  sequence: number
+  authorities: Array<{
+    domain: string
+    keyId: string
+    publicKey: string
+  }>
+  requiredQuorum: number
+}
+
+export interface MlsOwnerSet {
+  sequence: number
+  owners: Array<{ ownerId: string; publicKey: string }>
+  requiredQuorum: number
+}
+
+export interface PendingMlsMembershipChange {
+  mlsGroupId: number[]
+  nextRoster: MlsConversationMember[]
+  deliveries: unknown[]
+  transition: {
+    conversationId: string
+    incarnation: number
+    proposalId: string
+  }
+  voteRequest: {
+    block: {
+      conversationId: string
+      incarnation: number
+      height: number
+      epochBefore: number
+      epochAfter: number
+    }
+  }
+  commitHash: string
+  finalRequest?: unknown
+}
+
+export interface PreparedMlsMembershipChange {
+  pending: {
+    mlsGroupId: number[]
+    epochBefore: number
+    epochAfter: number
+    commitHash: string
+    commit: number[]
+    welcome?: number[]
+  }
+  control: PendingMlsMembershipChange
+}
+
+export interface FinalizedMlsMembershipChange {
   group: LocalMlsGroupState
   conversation: LocalMlsConversationRecord
 }
@@ -339,15 +406,22 @@ export interface WasmChatClientHandle {
   ): Promise<LocalMlsConversationRecord>
   mlsGroupOwnerCredential(mlsGroupId: Uint8Array): Promise<unknown>
   mlsGroupState(mlsGroupId: Uint8Array): Promise<LocalMlsGroupState | null>
-  prepareMlsAddMembers(
+  prepareMlsMembershipChange(
     mlsGroupId: Uint8Array,
+    proposalId: string,
+    nextRoster: MlsConversationMember[],
     additions: unknown,
     nowSeconds: string,
-  ): Promise<unknown>
-  prepareMlsRemoveMembers(
+  ): Promise<PreparedMlsMembershipChange>
+  pendingMlsMembershipChanges(): Promise<PendingMlsMembershipChange[]>
+  buildMlsMembershipCommitRequest(
     mlsGroupId: Uint8Array,
-    credentialIdentities: string[],
+    quorumCertificate: unknown,
   ): Promise<unknown>
+  finalizeMlsMembershipChange(
+    mlsGroupId: Uint8Array,
+    acknowledgement: unknown,
+  ): Promise<FinalizedMlsMembershipChange>
   pendingMlsCommit(mlsGroupId: Uint8Array): Promise<unknown | null>
   mergePendingMlsCommit(mlsGroupId: Uint8Array, commitHash: string): Promise<unknown>
   rejectPendingMlsCommit(mlsGroupId: Uint8Array, commitHash: string): Promise<void>

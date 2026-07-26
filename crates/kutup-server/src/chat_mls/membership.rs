@@ -111,11 +111,11 @@ pub(crate) async fn stage_membership_delivery(
         .bind(&delivery.destination)
         .fetch_optional(&state.pool)
         .await?;
-        if !existing
-            .is_some_and(|(existing_digest, state)| existing_digest == digest && state == "staged")
-        {
+        if !existing.is_some_and(|(existing_digest, state)| {
+            existing_digest == digest && matches!(state.as_str(), "staged" | "finalized")
+        }) {
             return Err(AppError::conflict(
-                "a different or finalized MLS membership delivery already exists",
+                "a different MLS membership delivery already exists",
             ));
         }
     }

@@ -206,6 +206,21 @@ state first, activates the server invitation second, and acknowledges the
 Welcome last. If the network fails after the local commit, retry reads the
 existing group and resumes activation without attempting a second join.
 
+For locally authored ordinary membership changes, the shared Rust engine now
+atomically commits the OpenMLS pending Commit together with the exact signed
+control proposal, public roster transition, destination-private Commit/Welcome
+deliveries, pinned authority-set vote request, and next roster. The browser
+only stages those exact deliveries, asks the server to collect votes, returns
+the certificate to Rust for quorum verification, and submits the resulting
+typed finalization request. A restart replays the stored operation without
+regenerating a Commit, Welcome, proposal, envelope identifier, or block.
+OpenMLS state and the local control-log pin advance only after the server
+acknowledges the exact block hash, height, incarnation, and epoch. Additions and
+removals are separate V1 transitions; neither can change administrator or
+owner assignments. Server finalization independently requires an active local
+administrator, while exact already-committed retries are checked by immutable
+block hash before consulting the post-transition roster.
+
 ## Federation privacy
 
 Genesis replication sends each participant server only accounts hosted on
@@ -254,9 +269,9 @@ sender/recipient correlations.
 
 Do not advertise MLS until all of the following pass together:
 
-- browser orchestration for destination-specific add/remove, voting, Commit
-  merging, application delivery, and UI integration of the implemented
-  authenticated invitation-roster verifier;
+- browser orchestration for routine administrator/owner actions, inbound
+  ordered Commit verification, application delivery, and UI integration of
+  the implemented membership and authenticated invitation-roster verifiers;
 - federated invitation-rejection feedback and administrator removal flow;
 - group conversation, invitation, admin/owner, and exact
   policy/fingerprint UI;
