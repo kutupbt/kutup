@@ -112,6 +112,8 @@ export interface ChatCapabilities {
   transparencyWitnesses?: TransparencyVerifierKey[]
   transparencyWitnessQuorum?: number
   sealedSender: boolean
+  /** Complete browser + local + federated MLS group path is available. */
+  mlsGroups?: boolean
 }
 
 export interface TransparencyVerifierKey {
@@ -350,6 +352,80 @@ export interface MlsControlHistoryPage {
   nextHeight?: string
 }
 
+export interface DerivedMlsDeliveryCapability {
+  epoch: number
+  capability: number[]
+  verifierHash: number[]
+}
+
+export interface MlsOutboxDelivery {
+  recipient: string
+  submission: number[]
+  attempts: number
+  delivered: boolean
+}
+
+export interface MlsOutboxEntry {
+  sendId: string
+  conversationId: number[]
+  incarnation: number
+  mlsGroupId: number[]
+  epoch: number
+  contentDigest: number[]
+  content: number[]
+  ciphertext: number[]
+  expectedRecipients: string[]
+  deliveries: MlsOutboxDelivery[]
+  createdAt: number
+  attempts: number
+}
+
+export interface AnonymousMlsDeviceEnvelope {
+  deviceId: number
+  encapsulatedKey: string
+  ciphertext: string
+}
+
+export interface AnonymousMlsSubmission {
+  protocolVersion: number
+  recipient: AccountAddress
+  sendId: string
+  capability: string
+  suite: string
+  envelopes: AnonymousMlsDeviceEnvelope[]
+}
+
+export interface MlsApplicationInspection {
+  mlsGroupId: number[]
+  conversationId: string
+  incarnation: number
+  epoch: number
+  claimedSender: ClaimedMlsCredential
+}
+
+export interface MlsHistoryMessage {
+  recordId: string
+  messageId: string
+  conversationId: number[]
+  incarnation: number
+  mlsGroupId: number[]
+  epoch: number
+  sender: string
+  senderDeviceId: number
+  outgoing: boolean
+  cursor?: number
+  transportDigest: number[]
+  content: number[]
+  timestampMs: number
+  delivered: boolean
+  deduplicated: boolean
+}
+
+export interface AppliedInboundMlsApplication {
+  message: MlsHistoryMessage
+  idempotent: boolean
+}
+
 export interface ChatTransportPort {
   registerDevice(request: unknown): Promise<unknown>
   fetchBundles(username: string, transparencyTreeSize: string): Promise<unknown>
@@ -410,6 +486,7 @@ export interface ChatTransportPort {
   ): Promise<MlsMailboxPage>
   ackMlsMailbox(deviceId: number, envelopeIds: string[]): Promise<void>
   publishMlsDeliveryCapability(request: unknown): Promise<void>
+  fetchIdentifiedMlsKeyPackages(request: unknown): Promise<unknown>
   fetchAnonymousMlsKeyPackages(request: unknown): Promise<unknown>
   submitAnonymousMlsMessage(request: unknown): Promise<unknown>
   sendMessage(
@@ -498,6 +575,12 @@ export interface WasmChatClientHandle {
     capability: Uint8Array,
     nowSeconds: string,
   ): Promise<unknown[]>
+  fetchVerifiedIdentifiedMlsKeyPackages(
+    recipient: AccountAddress,
+    conversationId: string,
+    incarnation: string,
+    nowSeconds: string,
+  ): Promise<unknown[]>
   processedMlsControlEnvelope(
     envelopeId: string,
   ): Promise<ProcessedMlsControlEnvelope | null>
@@ -533,6 +616,53 @@ export interface WasmChatClientHandle {
     plaintext: Uint8Array,
     createdAtMs: string,
   ): Promise<unknown>
+  createMlsTextMessage(
+    sendId: string,
+    conversationId: string,
+    incarnation: string,
+    mlsGroupId: Uint8Array,
+    sentAt: string,
+    text: string,
+    createdAtMs: string,
+  ): Promise<MlsOutboxEntry>
+  pendingMlsApplicationMessages(): Promise<MlsOutboxEntry[]>
+  stageMlsApplicationDelivery(
+    sendId: string,
+    recipient: AccountAddress,
+    capability: Uint8Array,
+    packages: unknown[],
+    nowSeconds: string,
+  ): Promise<{
+    entry: MlsOutboxEntry
+    submission: AnonymousMlsSubmission
+    idempotent: boolean
+  }>
+  noteMlsApplicationDeliveryAttempt(
+    sendId: string,
+    recipient: string,
+  ): Promise<AnonymousMlsSubmission>
+  markMlsApplicationRecipientDelivered(
+    sendId: string,
+    recipient: string,
+    deduplicated: boolean,
+  ): Promise<MlsHistoryMessage | null>
+  inspectAnonymousMlsApplicationEnvelope(
+    recipient: AccountAddress,
+    sendId: string,
+    envelope: AnonymousMlsDeviceEnvelope,
+  ): Promise<MlsApplicationInspection>
+  processedMlsApplicationEnvelope(
+    envelopeId: string,
+  ): Promise<MlsHistoryMessage | null>
+  applyAnonymousMlsApplicationEnvelope(
+    envelopeId: string,
+    cursor: string,
+    sendId: string,
+    serverTimestamp: string,
+    recipient: AccountAddress,
+    envelope: AnonymousMlsDeviceEnvelope,
+    expectedSender: VerifiedMlsCredential,
+  ): Promise<AppliedInboundMlsApplication>
   markMlsApplicationDelivered(sendId: string): Promise<void>
   noteMlsApplicationAttempt(sendId: string): Promise<unknown>
   decryptMlsApplicationMessage(
@@ -545,7 +675,7 @@ export interface WasmChatClientHandle {
     conversationId: string,
     incarnation: string,
     recipient: AccountAddress,
-  ): Promise<unknown>
+  ): Promise<DerivedMlsDeliveryCapability>
   createAnonymousMlsSubmission(
     recipient: AccountAddress,
     sendId: string,

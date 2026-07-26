@@ -1240,6 +1240,16 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(unsigned.status().as_u16(), 401);
 }
 
+/// Minimal control-plane bootstrap for focused browser debugging. The complete
+/// `setup` phase remains the release gate; this phase avoids replaying its
+/// manifest-range and Drive scenarios when iterating on Playwright failures.
+fn browser_setup_phase(c: &Client, a: &str, b: &str) {
+    let admin_a = setup_admin(c, a, ADMIN_A_EMAIL, "admina");
+    let admin_b = setup_admin(c, b, ADMIN_B_EMAIL, "adminb");
+    update_federation_mode(c, a, &admin_a, "open");
+    update_federation_mode(c, b, &admin_b, "open");
+}
+
 fn queue_phase(c: &Client, a: &str) {
     let alice_token = login(c, a, ALICE_EMAIL);
     let response = send(
@@ -1324,6 +1334,7 @@ fn chat_federation_live() {
 
     match phase.as_str() {
         "setup" => setup_phase(&c, &a, &b),
+        "browser-setup" => browser_setup_phase(&c, &a, &b),
         "queue" => queue_phase(&c, &a),
         "verify-retry" => verify_retry_phase(&c, &a, &b),
         _ => panic!("unknown KUTUP_FEDERATION_PHASE: {phase}"),

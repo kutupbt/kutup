@@ -28,8 +28,8 @@ use zeroize::Zeroize as _;
 use crate::{
     AccountAddress, AccountAuthority, AnonymousMlsRecipientDevice, ChatContent, ChatError,
     ChatTransport, ConversationId, Engine, InboundEnvelope, IndexedDbChatDb, ManifestTrust,
-    MlsClient, MlsControlEnvelopeContext, ReceiveReport, Result, SendOutcome,
-    TransparencyMonitorState, TransparencyMonitorStatus, VerifiedMlsCredential,
+    MlsApplicationEnvelopeContext, MlsClient, MlsControlEnvelopeContext, ReceiveReport, Result,
+    SendOutcome, TransparencyMonitorState, TransparencyMonitorStatus, VerifiedMlsCredential,
     VerifiedMlsKeyPackage,
 };
 
@@ -46,6 +46,7 @@ export interface KutupChatTransport {
   fetchManifestPublication(username: string, transparencyTreeSize: string): Promise<unknown>;
   fetchManifestRange(username: string, fromVersion: string, toVersion: string, pageFromVersion: string, cursor: string | null, transparencyTreeSize: string): Promise<unknown>;
   fetchAnonymousMlsKeyPackages(request: unknown): Promise<unknown>;
+  fetchIdentifiedMlsKeyPackages(request: unknown): Promise<unknown>;
   fetchSealedSenderPolicy(domain: string): Promise<unknown>;
   fetchSenderCertificate(deviceId: number): Promise<unknown>;
   fetchSealedBundles(username: string, capability: string, transparencyTreeSize: string): Promise<unknown>;
@@ -204,6 +205,12 @@ extern "C" {
 
     #[wasm_bindgen(method, catch, js_name = fetchAnonymousMlsKeyPackages)]
     async fn js_fetch_anonymous_mls_key_packages(
+        this: &JsChatTransport,
+        request: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = fetchIdentifiedMlsKeyPackages)]
+    async fn js_fetch_identified_mls_key_packages(
         this: &JsChatTransport,
         request: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
@@ -445,10 +452,22 @@ impl ChatTransport for BrowserTransport {
     async fn fetch_anonymous_mls_key_packages(
         &self,
         request: &kutup_chat_proto::AnonymousMlsKeyPackageRequestV1,
-    ) -> Result<kutup_chat_proto::AnonymousMlsKeyPackageResponseV1> {
+    ) -> Result<kutup_chat_proto::MlsKeyPackageBundleV1> {
         from_transport(
             self.js
                 .js_fetch_anonymous_mls_key_packages(to_transport(request)?)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_identified_mls_key_packages(
+        &self,
+        request: &kutup_chat_proto::IdentifiedMlsKeyPackageRequestV1,
+    ) -> Result<kutup_chat_proto::MlsKeyPackageBundleV1> {
+        from_transport(
+            self.js
+                .js_fetch_identified_mls_key_packages(to_transport(request)?)
                 .await
                 .map_err(transport_error)?,
         )
@@ -1035,6 +1054,30 @@ impl WasmChatClient {
         to_output(&verified)
     }
 
+    #[wasm_bindgen(js_name = fetchVerifiedIdentifiedMlsKeyPackages)]
+    pub async fn fetch_verified_identified_mls_key_packages(
+        &mut self,
+        recipient: JsValue,
+        conversation_id: String,
+        incarnation: String,
+        now_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let conversation_id = uuid::Uuid::parse_str(&conversation_id)
+            .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
+        let verified = self
+            .engine
+            .fetch_verified_identified_mls_key_packages(
+                &recipient,
+                conversation_id,
+                parse_u64_string("MLS incarnation", &incarnation)?,
+                parse_i64_string("MLS clock", &now_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&verified)
+    }
+
     #[wasm_bindgen(js_name = processedMlsControlEnvelope)]
     pub async fn processed_mls_control_envelope(
         &self,
@@ -1181,6 +1224,179 @@ impl WasmChatClient {
             .await
             .map_err(chat_error)?;
         to_output(&entry)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = createMlsTextMessage)]
+    pub async fn create_mls_text_message(
+        &self,
+        send_id: String,
+        conversation_id: String,
+        incarnation: String,
+        mls_group_id: Vec<u8>,
+        sent_at: String,
+        text: String,
+        created_at_ms: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let conversation_id = uuid::Uuid::parse_str(&conversation_id)
+            .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
+        let entry = self
+            .mls_client()
+            .create_text_application_message(
+                &send_id,
+                conversation_id,
+                parse_u64_string("MLS incarnation", &incarnation)?,
+                &mls_group_id,
+                &sent_at,
+                &text,
+                parse_i64_string("MLS message clock", &created_at_ms)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&entry)
+    }
+
+    #[wasm_bindgen(js_name = pendingMlsApplicationMessages)]
+    pub async fn pending_mls_application_messages(
+        &self,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let pending = self
+            .mls_client()
+            .pending_application_messages()
+            .await
+            .map_err(chat_error)?;
+        to_output(&pending)
+    }
+
+    #[wasm_bindgen(js_name = stageMlsApplicationDelivery)]
+    pub async fn stage_mls_application_delivery(
+        &self,
+        send_id: String,
+        recipient: JsValue,
+        capability: Vec<u8>,
+        packages: JsValue,
+        now_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let capability: [u8; 16] = capability
+            .try_into()
+            .map_err(|_| js_error("MLS delivery capability must be 16 bytes"))?;
+        let packages: Vec<VerifiedMlsKeyPackage> =
+            from_transport(packages).map_err(chat_error)?;
+        let staged = self
+            .mls_client()
+            .stage_application_delivery(
+                &send_id,
+                &recipient,
+                capability,
+                &packages,
+                parse_i64_string("MLS delivery clock", &now_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&staged)
+    }
+
+    #[wasm_bindgen(js_name = noteMlsApplicationDeliveryAttempt)]
+    pub async fn note_mls_application_delivery_attempt(
+        &self,
+        send_id: String,
+        recipient: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let submission = self
+            .mls_client()
+            .note_application_delivery_attempt(&send_id, &recipient)
+            .await
+            .map_err(chat_error)?;
+        to_output(&submission)
+    }
+
+    #[wasm_bindgen(js_name = markMlsApplicationRecipientDelivered)]
+    pub async fn mark_mls_application_recipient_delivered(
+        &self,
+        send_id: String,
+        recipient: String,
+        deduplicated: bool,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let history = self
+            .mls_client()
+            .mark_application_recipient_delivered(&send_id, &recipient, deduplicated)
+            .await
+            .map_err(chat_error)?;
+        to_output(&history)
+    }
+
+    #[wasm_bindgen(js_name = inspectAnonymousMlsApplicationEnvelope)]
+    pub async fn inspect_anonymous_mls_application_envelope(
+        &self,
+        recipient: JsValue,
+        send_id: String,
+        envelope: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let send_id = uuid::Uuid::parse_str(&send_id)
+            .map_err(|_| js_error("MLS application send id must be a UUID"))?;
+        let envelope: AnonymousMlsDeviceEnvelopeV1 =
+            from_transport(envelope).map_err(chat_error)?;
+        let inspection = self
+            .mls_client()
+            .inspect_anonymous_application_envelope(&recipient, send_id, &envelope)
+            .await
+            .map_err(chat_error)?;
+        to_output(&inspection)
+    }
+
+    #[wasm_bindgen(js_name = processedMlsApplicationEnvelope)]
+    pub async fn processed_mls_application_envelope(
+        &self,
+        envelope_id: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let envelope_id = uuid::Uuid::parse_str(&envelope_id)
+            .map_err(|_| js_error("MLS mailbox envelope id must be a UUID"))?;
+        let receipt = self
+            .mls_client()
+            .processed_application_envelope(envelope_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&receipt)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = applyAnonymousMlsApplicationEnvelope)]
+    pub async fn apply_anonymous_mls_application_envelope(
+        &self,
+        envelope_id: String,
+        cursor: String,
+        send_id: String,
+        server_timestamp: String,
+        recipient: JsValue,
+        envelope: JsValue,
+        expected_sender: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let context = MlsApplicationEnvelopeContext {
+            envelope_id: uuid::Uuid::parse_str(&envelope_id)
+                .map_err(|_| js_error("MLS mailbox envelope id must be a UUID"))?,
+            cursor,
+            send_id: uuid::Uuid::parse_str(&send_id)
+                .map_err(|_| js_error("MLS mailbox send id must be a UUID"))?,
+            server_timestamp: parse_i64_string("MLS server timestamp", &server_timestamp)?,
+        };
+        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let envelope: AnonymousMlsDeviceEnvelopeV1 =
+            from_transport(envelope).map_err(chat_error)?;
+        let expected_sender: VerifiedMlsCredential =
+            from_transport(expected_sender).map_err(chat_error)?;
+        let applied = self
+            .mls_client()
+            .apply_anonymous_application_envelope(
+                &context,
+                &recipient,
+                &envelope,
+                &expected_sender,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&applied)
     }
 
     #[wasm_bindgen(js_name = markMlsApplicationDelivered)]
@@ -1398,7 +1614,12 @@ impl WasmChatClient {
             .sent_history()
             .await
             .map_err(chat_error)?;
-        let mut history = Vec::with_capacity(incoming.len() + outgoing.len());
+        let mls = self
+            .mls_client()
+            .mls_application_history()
+            .await
+            .map_err(chat_error)?;
+        let mut history = Vec::with_capacity(incoming.len() + outgoing.len() + mls.len());
         for message in incoming {
             if is_contact_control(&message.content).map_err(chat_error)? {
                 continue;
@@ -1410,6 +1631,9 @@ impl WasmChatClient {
                 continue;
             }
             history.push(HistoryEntry::outgoing(message).map_err(chat_error)?);
+        }
+        for message in mls {
+            history.push(HistoryEntry::mls(message).map_err(chat_error)?);
         }
         history.sort_by(|left, right| {
             left.timestamp_ms
@@ -1852,6 +2076,34 @@ impl HistoryEntry {
             sender_device_id: None,
             cursor: None,
             timestamp_ms: message.created_at,
+            delivered: message.delivered,
+            deduplicated: message.deduplicated,
+            content: content.into(),
+        })
+    }
+
+    fn mls(message: crate::MlsHistoryMessage) -> Result<Self> {
+        let content = serde_json::from_slice::<ChatContent>(&message.content)
+            .map_err(|error| ChatError::Content(error.to_string()))?;
+        let group_id = uuid::Uuid::from_bytes(message.conversation_id).to_string();
+        Ok(Self {
+            id: message.message_id,
+            conversation: ConversationId::Group {
+                group_id: group_id.clone(),
+            },
+            peer: if message.outgoing {
+                group_id
+            } else {
+                message.sender
+            },
+            direction: if message.outgoing {
+                "outgoing"
+            } else {
+                "incoming"
+            },
+            sender_device_id: (!message.outgoing).then_some(message.sender_device_id),
+            cursor: message.cursor.map(|cursor| cursor.to_string()),
+            timestamp_ms: message.timestamp_ms,
             delivered: message.delivered,
             deduplicated: message.deduplicated,
             content: content.into(),

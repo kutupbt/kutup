@@ -54,11 +54,24 @@ async function send(page: Page, text: string): Promise<void> {
   await page.getByRole('button', { name: 'Send' }).click()
 }
 
+async function requireResponseOrUiError(
+  page: Page,
+  response: Promise<import('@playwright/test').Response>,
+): Promise<import('@playwright/test').Response> {
+  const uiError = page.locator('[data-sonner-toast][data-type="error"]')
+  return Promise.race([
+    response,
+    uiError.waitFor({ state: 'visible', timeout: 15_000 }).then(async () => {
+      throw new Error(`browser operation failed: ${(await uiError.textContent())?.trim() || 'unknown error'}`)
+    }),
+  ])
+}
+
 function bubble(page: Page, text: string) {
   return page.getByRole('main').getByText(text, { exact: true })
 }
 
-test.describe('two-server transparency and sealed sender', () => {
+test.describe('two-server secure chat', () => {
   test.skip(!SECONDARY, 'set E2E_SECONDARY_BASE_URL for the isolated federation topology')
 
   test('pins remote policy, establishes sealed delivery, rotates capability, and never falls back', async ({ browser, baseURL }) => {
@@ -175,5 +188,208 @@ test.describe('two-server transparency and sealed sender', () => {
 
     await contextA.close()
     await contextB.close()
+  })
+
+  test('manages a federated MLS group and exchanges anonymous durable messages', async ({ browser, baseURL }) => {
+    test.slow()
+    if (!baseURL || !SECONDARY) throw new Error('two-server base URLs are required')
+    const contextA = await browser.newContext({ baseURL })
+    const contextB = await browser.newContext({ baseURL: SECONDARY })
+    const contextC = await browser.newContext({ baseURL })
+    const tag = Date.now() % 1_000_000
+    const alice = `mlsalice${tag}`
+    const bob = `mlsbob${tag}`
+    const charlie = `mlscarol${tag}`
+    const aliceEmail = `${alice}@example.test`
+    const bobEmail = `${bob}@example.test`
+    const charlieEmail = `${charlie}@example.test`
+
+    await register(contextA, aliceEmail, alice)
+    await register(contextB, bobEmail, bob)
+    await register(contextC, charlieEmail, charlie)
+    const pageA = await login(contextA, aliceEmail)
+    const pageB = await login(contextB, bobEmail)
+    const pageC = await login(contextC, charlieEmail)
+    await openChat(pageA)
+    await openChat(pageB)
+    await openChat(pageC)
+
+    const genesisResponse = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/conversations'
+    })
+    const identifiedPackages = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/key-packages/identified'
+    })
+    const membershipCommit = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/control/blocks'
+    })
+    await pageA.getByTestId('chat-create-group').click()
+    await pageA.getByTestId('chat-group-initial-member').fill(`${bob}@b.test`)
+    await pageA.getByTestId('chat-group-create-submit').click()
+    const genesis = await genesisResponse
+    expect(genesis.ok()).toBe(true)
+    const { conversationId } = await genesis.json() as { conversationId: string }
+    expect(conversationId).toMatch(/^[0-9a-f-]{36}$/)
+    const identifiedPackageResponse = await identifiedPackages
+    expect(identifiedPackageResponse.ok()).toBe(true)
+    const identifiedPackageRequest = identifiedPackageResponse.request().postDataJSON()
+    expect((await membershipCommit).ok()).toBe(true)
+    await expect(pageA.getByTestId(`chat-group-${conversationId}`)).toBeVisible({ timeout: 90_000 })
+
+    // No manual Sync action: the destination server sends only a generic
+    // DrainMailbox WebSocket hint after committing the federated Welcome.
+    await expect(pageB.getByTestId('chat-group-invitations')).toBeVisible({ timeout: 90_000 })
+    const invitationAcceptance = pageB.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/invitations'
+    })
+    await pageB.getByTestId('chat-group-accept').click()
+    const invitationAcceptanceResponse = await invitationAcceptance
+    expect(invitationAcceptanceResponse.ok()).toBe(true)
+    await expect(pageB.getByTestId(`chat-group-${conversationId}`)).toBeVisible({ timeout: 90_000 })
+
+    // Membership alone must not authorize first-contact package claims. This
+    // protects local and remote users from package exhaustion by non-admins.
+    const bobAuthorization = await invitationAcceptanceResponse.request().headerValue('authorization')
+    expect(bobAuthorization).toMatch(/^Bearer /)
+    const unauthorizedClaimStatus = await pageB.evaluate(
+      async ({ authorization, request }) => {
+        const response = await fetch('/api/chat/mls/key-packages/identified', {
+          method: 'POST',
+          headers: {
+            Authorization: authorization!,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(request),
+        })
+        return response.status
+      },
+      { authorization: bobAuthorization, request: identifiedPackageRequest },
+    )
+    expect(unauthorizedClaimStatus).toBe(403)
+
+    // Routine administrator changes use the same encrypted roster transition,
+    // but preserve member count and routing domains and require no owner vote.
+    const administratorCommit = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/control/blocks'
+    })
+    await pageA.getByTestId('chat-group-members').click()
+    const bobOnAlice = pageA.getByTestId(`chat-group-member-${bob}@b.test`)
+    await bobOnAlice.getByRole('button', {
+      name: `Make administrator ${bob}@b.test`,
+    }).click()
+    expect((await requireResponseOrUiError(pageA, administratorCommit)).ok()).toBe(true)
+    await expect(bobOnAlice.getByText('Administrator', { exact: true })).toBeVisible({ timeout: 90_000 })
+    await pageA.keyboard.press('Escape')
+
+    await pageB.getByTestId('chat-group-members').click()
+    await expect(
+      pageB.getByTestId(`chat-group-member-${bob}@b.test`)
+        .getByText('Administrator', { exact: true }),
+    ).toBeVisible({ timeout: 90_000 })
+    await pageB.keyboard.press('Escape')
+
+    const administratorAddCommit = pageB.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/control/blocks'
+    })
+    await pageB.getByTestId('chat-group-add-member').click()
+    await pageB.getByLabel('Group member address').fill(`${charlie}@a.test`)
+    await pageB.getByRole('button', { name: 'Invite member' }).click()
+    expect((await requireResponseOrUiError(pageB, administratorAddCommit)).ok()).toBe(true)
+    await expect(pageC.getByTestId('chat-group-invitations')).toBeVisible({ timeout: 90_000 })
+    await pageC.getByTestId('chat-group-accept').click()
+    await expect(pageC.getByTestId(`chat-group-${conversationId}`)).toBeVisible({ timeout: 90_000 })
+
+    await pageA.getByTestId('chat-group-members').click()
+    await expect(
+      pageA.getByTestId(`chat-group-member-${charlie}@a.test`),
+    ).toBeVisible({ timeout: 90_000 })
+    await pageA.keyboard.press('Escape')
+
+    const administratorRemoveCommit = pageB.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/control/blocks'
+    })
+    await pageB.getByTestId('chat-group-members').click()
+    await pageB.getByRole('button', {
+      name: `Remove ${charlie}@a.test from group`,
+    }).click()
+    expect((await requireResponseOrUiError(pageB, administratorRemoveCommit)).ok()).toBe(true)
+    await expect(
+      pageB.getByTestId(`chat-group-member-${charlie}@a.test`),
+    ).toHaveCount(0, { timeout: 90_000 })
+    await pageB.keyboard.press('Escape')
+
+    await pageA.getByTestId('chat-group-members').click()
+    await expect(
+      pageA.getByTestId(`chat-group-member-${charlie}@a.test`),
+    ).toHaveCount(0, { timeout: 90_000 })
+    await pageA.keyboard.press('Escape')
+
+    const destinationMailbox: Array<Record<string, unknown>> = []
+    pageB.on('response', (response) => {
+      const url = new URL(response.url())
+      if (
+        response.request().method() !== 'GET'
+        || !/^\/api\/chat\/mls\/messages\/\d+$/.test(url.pathname)
+        || !response.ok()
+      ) return
+      void response.json()
+        .then((body: { envelopes?: Array<Record<string, unknown>> }) => {
+          destinationMailbox.push(...(body.envelopes ?? []))
+        })
+        .catch(() => {})
+    })
+
+    await expect(pageA.locator('[data-sonner-toast][data-type="error"]')).toHaveCount(0)
+
+    const sentToBob = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/anonymous/messages'
+    })
+    const fromAlice = `mls-from-alice-${tag}`
+    await send(pageA, fromAlice)
+    expect((await requireResponseOrUiError(pageA, sentToBob)).ok()).toBe(true)
+    await expect(bubble(pageB, fromAlice)).toBeVisible({ timeout: 90_000 })
+    await expect.poll(
+      () => destinationMailbox.some(envelope => envelope.deliveryKind === 'anonymous'),
+      { timeout: 45_000 },
+    ).toBe(true)
+    const anonymous = destinationMailbox.find(envelope => envelope.deliveryKind === 'anonymous')
+    expect(anonymous).not.toHaveProperty('conversationId')
+    expect(anonymous).not.toHaveProperty('incarnation')
+
+    const sentToAlice = pageB.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/anonymous/messages'
+    })
+    const fromBob = `mls-from-bob-${tag}`
+    await send(pageB, fromBob)
+    expect((await requireResponseOrUiError(pageB, sentToAlice)).ok()).toBe(true)
+    await expect(bubble(pageA, fromBob)).toBeVisible({ timeout: 90_000 })
+
+    await pageB.reload()
+    await expect(pageB.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+    await expect(pageB.getByTestId(`chat-group-${conversationId}`)).toBeVisible({ timeout: 90_000 })
+    await expect(bubble(pageB, fromAlice)).toBeVisible({ timeout: 90_000 })
+    await expect(bubble(pageB, fromBob)).toBeVisible({ timeout: 90_000 })
+
+    await contextA.close()
+    await contextB.close()
+    await contextC.close()
   })
 })

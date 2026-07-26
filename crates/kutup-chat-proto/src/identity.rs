@@ -83,8 +83,13 @@ impl fmt::Display for AccountAddress {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ConversationId {
-    Direct { address: AccountAddress },
-    Group { group_id: String },
+    Direct {
+        address: AccountAddress,
+    },
+    Group {
+        #[serde(rename = "groupId")]
+        group_id: String,
+    },
 }
 
 impl ConversationId {
@@ -189,6 +194,16 @@ mod tests {
             serde_json::json!({
                 "kind": "direct",
                 "address": { "username": "alice", "server": "example.org" }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ConversationId::Group {
+                group_id: "11111111-1111-4111-8111-111111111111".into(),
+            })
+            .unwrap(),
+            serde_json::json!({
+                "kind": "group",
+                "groupId": "11111111-1111-4111-8111-111111111111"
             })
         );
     }

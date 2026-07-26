@@ -48,7 +48,10 @@ trap cleanup EXIT
 
 compose down --volumes --remove-orphans
 if [[ "${KUTUP_FEDERATION_SKIP_BUILD:-0}" != "1" ]]; then
-  compose build backend-a
+  # The browser exercises the generated Chat WASM as well as the TypeScript
+  # coordinator. Reusing an older frontend image can otherwise produce a false
+  # green API gate while omitting a newly advertised browser capability.
+  compose build backend-a frontend
 fi
 compose up --detach --wait
 

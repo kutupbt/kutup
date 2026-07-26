@@ -12,8 +12,8 @@ use kutup_chat_proto::{
 use reqwest::StatusCode;
 
 use super::{
-    active_policy, bootstrap_new_authorities, replicate_genesis, request_remote_ordering_vote,
-    MlsRepository,
+    active_policy, bootstrap_new_authorities, notify_mls_conversation_mailbox, replicate_genesis,
+    request_remote_ordering_vote, MlsRepository,
 };
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
@@ -80,7 +80,7 @@ pub(crate) async fn commit_control_block(
         .as_ref()
         .expect("active MLS policy requires federation")
         .server_name();
-    let response = MlsRepository::new(state.pool)
+    let response = MlsRepository::new(state.pool.clone())
         .commit_control_block(
             local_domain,
             Some(trusted_uuid(&auth.user_id)?),
@@ -91,6 +91,7 @@ pub(crate) async fn commit_control_block(
             false,
         )
         .await?;
+    notify_mls_conversation_mailbox(&state, request.finalized.block.conversation_id).await;
     telemetry::mls_control_event("commit_control_block", "accepted");
     Ok(Json(response).into_response())
 }

@@ -15,8 +15,11 @@ import {
   QrCode,
   RefreshCw,
   Send,
+  Shield,
   ShieldCheck,
   Trash2,
+  UserMinus,
+  Users,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
@@ -37,9 +40,11 @@ import { useIsMobile } from '@/hooks/useIsMobile'
 import { useAppSelector } from '@/store'
 import api from '@/api/client'
 import { ChatService, ChatServiceError } from '@/chat/service'
+import { MlsSendError } from '@/chat/mls-service'
 import { isSupportedChat, useChatCapabilities } from '@/chat/capabilities'
 import {
   conversationKey,
+  canonicalAccountAddress,
   contactUri,
   directAddress,
   directConversation,
@@ -53,6 +58,9 @@ import type {
   ContactRecord,
   ConversationId,
   InboundAttention,
+  LocalMlsConversationRecord,
+  MlsConversationMember,
+  PendingMlsInvitation,
   PeerChatProfile,
   TransparencyMonitorStatus,
 } from '@/chat/types'
@@ -109,6 +117,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [attention, setAttention] = useState<InboundAttention[]>([])
   const [localProfile, setLocalProfile] = useState<ChatProfile | null>(null)
   const [peerProfiles, setPeerProfiles] = useState<PeerChatProfile[]>([])
+  const [groups, setGroups] = useState<LocalMlsConversationRecord[]>([])
+  const [groupInvitations, setGroupInvitations] = useState<PendingMlsInvitation[]>([])
   const [transparencyStatuses, setTransparencyStatuses] =
     useState<Record<string, TransparencyMonitorStatus>>({})
   const [selectedConversation, setSelectedConversation] = useState<ConversationId | null>(null)
@@ -117,6 +127,12 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [contactUpdating, setContactUpdating] = useState(false)
+  const [groupUpdating, setGroupUpdating] = useState(false)
+  const [newGroupOpen, setNewGroupOpen] = useState(false)
+  const [newGroupMember, setNewGroupMember] = useState('')
+  const [addGroupMemberOpen, setAddGroupMemberOpen] = useState(false)
+  const [groupMembersOpen, setGroupMembersOpen] = useState(false)
+  const [groupMember, setGroupMember] = useState('')
   const [error, setError] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const selfAccount = useMemo(
@@ -142,13 +158,15 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     const refresh = async () => {
       if (!opened || cancelled) return
       try {
-        const [nextHistory, nextAttention, nextContacts, nextProfile, nextProfiles, nextTransparency] = await Promise.all([
+        const [nextHistory, nextAttention, nextContacts, nextProfile, nextProfiles, nextTransparency, nextGroups, nextInvitations] = await Promise.all([
           opened.history(),
           opened.inboundAttention(),
           opened.contacts(),
           opened.profile(),
           opened.profiles(),
           opened.transparencyStatus(),
+          capabilities.mlsGroups ? opened.groups() : Promise.resolve([]),
+          capabilities.mlsGroups ? opened.groupInvitations() : Promise.resolve([]),
         ])
         if (!cancelled) {
           setHistory(nextHistory)
@@ -156,6 +174,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
           setContacts(nextContacts)
           setLocalProfile(nextProfile)
           setPeerProfiles(nextProfiles)
+          setGroups(nextGroups)
+          setGroupInvitations(nextInvitations)
           if (nextTransparency) {
             setTransparencyStatuses((current) => ({ ...current, local: nextTransparency }))
           }
@@ -213,6 +233,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       })
     }
     return Array.from(latest.values())
+      .filter(({ conversation }) => conversation.kind === 'direct')
       .filter(({ conversation }) => directAddress(conversation) !== selfAddress)
       .filter(({ conversation }) => {
         const address = directAddress(conversation)
@@ -244,12 +265,30 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
 
   useEffect(() => {
     if (!selectedConversation && peers[0]) setSelectedConversation(peers[0].conversation)
-  }, [peers, selectedConversation])
+    else if (!selectedConversation && groups[0]) {
+      setSelectedConversation({
+        kind: 'group',
+        groupId: groups[0].request.genesis.conversationId,
+      })
+    }
+  }, [groups, peers, selectedConversation])
 
   const selectedKey = selectedConversation ? conversationKey(selectedConversation) : null
   const selectedAddress = selectedConversation ? directAddress(selectedConversation) : null
+  const selectedGroup = selectedConversation?.kind === 'group'
+    ? groups.find(group =>
+        group.request.genesis.conversationId === selectedConversation.groupId)
+    : undefined
+  const selectedGroupSelfMember = selectedGroup?.currentRoster.find(member =>
+    canonicalAccountAddress(member.address) === selfAddress)
+  const canManageSelectedGroup = selectedGroupSelfMember?.isAdmin === true
+  const selectedGroupAdministratorCount = selectedGroup?.currentRoster.filter(
+    member => member.isAdmin,
+  ).length ?? 0
   const selectedLabel = selectedAddress ??
-    (selectedConversation?.kind === 'group' ? selectedConversation.groupId : '')
+    (selectedConversation?.kind === 'group'
+      ? `Group ${selectedConversation.groupId.slice(0, 8)}`
+      : '')
   const noteSelected = selectedAddress === selfAddress
   const selectedProfile = selectedAddress && !noteSelected
     ? profilesByPeer.get(selectedAddress)
@@ -380,6 +419,107 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     toast.success(t('chat.profile.saved'))
   }
 
+  async function createGroup(event: FormEvent) {
+    event.preventDefault()
+    if (!service || groupUpdating) return
+    const parsed = parseAccountAddress(newGroupMember)
+    const member = parsed ? withHomeServer(parsed, capabilities.serverName) : null
+    if (!member?.server) {
+      toast.error(t('chat.errors.invalidAddress'))
+      return
+    }
+    setGroupUpdating(true)
+    try {
+      const group = await service.createGroup(member)
+      setGroups(await service.groups())
+      setGroupInvitations(await service.groupInvitations())
+      setSelectedConversation({
+        kind: 'group',
+        groupId: group.request.genesis.conversationId,
+      })
+      setNewGroupMember('')
+      setNewGroupOpen(false)
+      toast.success('Encrypted group created')
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setGroupUpdating(false)
+    }
+  }
+
+  async function respondGroupInvitation(
+    invitation: PendingMlsInvitation,
+    accept: boolean,
+  ) {
+    if (!service || groupUpdating) return
+    setGroupUpdating(true)
+    try {
+      if (accept) await service.acceptGroupInvitation(invitation)
+      else await service.rejectGroupInvitation(invitation)
+      setGroups(await service.groups())
+      setGroupInvitations(await service.groupInvitations())
+      if (accept) {
+        setSelectedConversation({ kind: 'group', groupId: invitation.conversationId })
+      }
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setGroupUpdating(false)
+    }
+  }
+
+  async function addMemberToSelectedGroup(event: FormEvent) {
+    event.preventDefault()
+    if (!service || !selectedGroup || groupUpdating) return
+    const parsed = parseAccountAddress(groupMember)
+    const member = parsed ? withHomeServer(parsed, capabilities.serverName) : null
+    if (!member?.server) {
+      toast.error(t('chat.errors.invalidAddress'))
+      return
+    }
+    setGroupUpdating(true)
+    try {
+      await service.addGroupMember(selectedGroup.request.genesis.conversationId, member)
+      setGroups(await service.groups())
+      setGroupMember('')
+      setAddGroupMemberOpen(false)
+      toast.success('Member invited with MLS')
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setGroupUpdating(false)
+    }
+  }
+
+  async function updateSelectedGroupMember(
+    member: MlsConversationMember,
+    action: 'administrator' | 'remove',
+  ) {
+    if (!service || !selectedGroup || !canManageSelectedGroup || groupUpdating) return
+    setGroupUpdating(true)
+    try {
+      if (action === 'remove') {
+        await service.removeGroupMember(
+          selectedGroup.request.genesis.conversationId,
+          member.address,
+        )
+        toast.success('Member removed with MLS')
+      } else {
+        await service.setGroupAdministrator(
+          selectedGroup.request.genesis.conversationId,
+          member.address,
+          !member.isAdmin,
+        )
+        toast.success(member.isAdmin ? 'Administrator removed' : 'Administrator added')
+      }
+      setGroups(await service.groups())
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setGroupUpdating(false)
+    }
+  }
+
   const showPeerList = !isMobile || !selectedConversation
 
   return (
@@ -457,6 +597,50 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 </DialogContent>
               </Dialog>
             )}
+            {capabilities.mlsGroups && (
+              <Dialog open={newGroupOpen} onOpenChange={setNewGroupOpen}>
+                <DialogTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    disabled={!service}
+                    aria-label="Create encrypted group"
+                    data-testid="chat-create-group"
+                  >
+                    <Plus className="h-5 w-5" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-md">
+                  <form className="grid gap-4" onSubmit={createGroup}>
+                    <DialogHeader>
+                      <DialogTitle>Create encrypted group</DialogTitle>
+                      <DialogDescription>
+                        The first member is invited with an authenticated MLS Welcome. More members can be added later.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <Input
+                      value={newGroupMember}
+                      onChange={event => setNewGroupMember(event.target.value)}
+                      placeholder="member@example.com"
+                      aria-label="Initial group member"
+                      data-testid="chat-group-initial-member"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                    />
+                    <DialogFooter>
+                      <Button
+                        type="submit"
+                        disabled={!parseAccountAddress(newGroupMember) || groupUpdating}
+                        data-testid="chat-group-create-submit"
+                      >
+                        {groupUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        Create group
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            )}
           </header>
 
           <form className="flex gap-2 border-b p-3" onSubmit={startConversation}>
@@ -511,6 +695,83 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     </span>
                   </span>
                 </button>
+                )
+              })}
+            </div>
+          )}
+
+          {groupInvitations.length > 0 && (
+            <div className="border-b p-2" data-testid="chat-group-invitations">
+              <div className="flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <MessageSquareWarning className="h-4 w-4" />
+                Encrypted group invitations ({groupInvitations.length})
+              </div>
+              {groupInvitations.map(invitation => (
+                <div
+                  key={`${invitation.conversationId}:${invitation.incarnation}`}
+                  className="grid gap-2 rounded-lg px-3 py-3"
+                >
+                  <code className="truncate text-xs">
+                    Group {invitation.conversationId.slice(0, 8)}
+                  </code>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      disabled={groupUpdating}
+                      onClick={() => void respondGroupInvitation(invitation, true)}
+                      data-testid="chat-group-accept"
+                    >
+                      Accept
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={groupUpdating}
+                      onClick={() => void respondGroupInvitation(invitation, false)}
+                    >
+                      Reject
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {groups.length > 0 && (
+            <div className="border-b p-2" data-testid="chat-groups">
+              <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                MLS groups
+              </div>
+              {groups.filter(group => group.status === 'active').map(group => {
+                const groupId = group.request.genesis.conversationId
+                const conversation: ConversationId = { kind: 'group', groupId }
+                const latest = history.filter(message =>
+                  conversationKey(message.conversation) === conversationKey(conversation)).at(-1)
+                return (
+                  <button
+                    key={groupId}
+                    type="button"
+                    onClick={() => setSelectedConversation(conversation)}
+                    className={cn(
+                      'flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors',
+                      selectedKey === conversationKey(conversation)
+                        ? 'bg-primary/10'
+                        : 'hover:bg-accent',
+                    )}
+                    data-testid={`chat-group-${groupId}`}
+                  >
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+                      <MessageCircle className="h-5 w-5" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">
+                        Group {groupId.slice(0, 8)}
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {latest?.content.text ?? `${group.currentRoster.length} members · epoch ${group.lastFinalizedEpoch}`}
+                      </span>
+                    </span>
+                  </button>
                 )
               })}
             </div>
@@ -626,6 +887,121 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 </span>
               </p>
             </div>
+            {selectedGroup && (
+              <Dialog open={groupMembersOpen} onOpenChange={setGroupMembersOpen}>
+                <DialogTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    disabled={!service || groupUpdating}
+                    aria-label="Group members"
+                    data-testid="chat-group-members"
+                  >
+                    <Users className="h-4 w-4" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>MLS group members</DialogTitle>
+                    <DialogDescription>
+                      Administrator roles are encrypted into the MLS control state. Owners cannot be changed by a routine administrator action.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="grid max-h-[60vh] gap-2 overflow-y-auto">
+                    {selectedGroup.currentRoster.map(member => {
+                      const address = canonicalAccountAddress(member.address)
+                      const isSelf = address === selfAddress
+                      const canDemote = member.isAdmin
+                        && !member.ownerId
+                        && selectedGroupAdministratorCount > 1
+                      return (
+                        <div
+                          key={address}
+                          className="flex items-center gap-3 rounded-lg border p-3"
+                          data-testid={`chat-group-member-${address}`}
+                        >
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium">{address}</span>
+                            <span className="mt-1 flex gap-2 text-xs text-muted-foreground">
+                              {member.ownerId && <span>Owner</span>}
+                              {member.isAdmin && <span>Administrator</span>}
+                              {isSelf && <span>You</span>}
+                            </span>
+                          </span>
+                          {canManageSelectedGroup && !isSelf && (
+                            <>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={groupUpdating || (member.isAdmin && !canDemote)}
+                                onClick={() => void updateSelectedGroupMember(member, 'administrator')}
+                                aria-label={`${member.isAdmin ? 'Remove administrator from' : 'Make administrator'} ${address}`}
+                              >
+                                <Shield className="mr-2 h-4 w-4" />
+                                {member.isAdmin ? 'Demote' : 'Promote'}
+                              </Button>
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                disabled={groupUpdating || Boolean(member.ownerId)}
+                                onClick={() => void updateSelectedGroupMember(member, 'remove')}
+                                aria-label={`Remove ${address} from group`}
+                              >
+                                <UserMinus className="h-4 w-4" />
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </DialogContent>
+              </Dialog>
+            )}
+            {selectedGroup && canManageSelectedGroup && (
+              <Dialog open={addGroupMemberOpen} onOpenChange={setAddGroupMemberOpen}>
+                <DialogTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    disabled={!service || groupUpdating}
+                    aria-label="Add group member"
+                    data-testid="chat-group-add-member"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-md">
+                  <form className="grid gap-4" onSubmit={addMemberToSelectedGroup}>
+                    <DialogHeader>
+                      <DialogTitle>Add MLS group member</DialogTitle>
+                      <DialogDescription>
+                        A fresh KeyPackage is verified through key transparency before the membership commit is ordered.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <Input
+                      value={groupMember}
+                      onChange={event => setGroupMember(event.target.value)}
+                      placeholder="member@example.com"
+                      aria-label="Group member address"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                    />
+                    <DialogFooter>
+                      <Button
+                        type="submit"
+                        disabled={!parseAccountAddress(groupMember) || groupUpdating}
+                      >
+                        {groupUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        Invite member
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            )}
             <Button
               variant="ghost"
               size="icon"
@@ -1331,5 +1707,7 @@ function errorMessage(
   t: (key: string, options?: Record<string, unknown>) => string,
 ): string {
   if (error instanceof ChatServiceError) return t(`chat.errors.${error.code}`)
+  if (error instanceof MlsSendError) return error.message
+  if (error instanceof Error && error.message.startsWith('MLS ')) return error.message
   return t('chat.errors.unavailable')
 }

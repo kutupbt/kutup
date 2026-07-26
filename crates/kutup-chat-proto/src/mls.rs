@@ -1672,6 +1672,11 @@ impl MlsControlBlockV1 {
                         .ok_or("MLS set transition is missing its public digest")?,
                 )?;
             }
+            MlsControlActionTypeV1::RoutineAdmin => {
+                if let Some(digest) = self.transition_digest.as_deref() {
+                    validate_hash("transitionDigest", digest)?;
+                }
+            }
             _ if self.transition_digest.is_some() => {
                 return Err("unrelated MLS control block carries a transition digest".into());
             }
@@ -1765,11 +1770,13 @@ impl CommitMlsControlBlockV1 {
     pub fn validate_shape(&self) -> Result<(), String> {
         self.finalized.block.validate()?;
         match self.finalized.block.proposal.action_type {
-            MlsControlActionTypeV1::MembershipChange => {
+            MlsControlActionTypeV1::MembershipChange | MlsControlActionTypeV1::RoutineAdmin
+                if self.membership_transition.is_some() =>
+            {
                 let transition = self
                     .membership_transition
                     .as_ref()
-                    .ok_or("membership change requires its public transition")?;
+                    .expect("guarded roster transition");
                 if self.next_authority_set.is_some()
                     || self.authority_transition.is_some()
                     || self.next_owner_set.is_some()
@@ -1781,8 +1788,28 @@ impl CommitMlsControlBlockV1 {
                 }
                 let expected = transition.transition_digest()?;
                 if self.finalized.block.transition_digest.as_deref() != Some(expected.as_str()) {
-                    return Err("membership transition does not match the finalized block".into());
+                    return Err("roster transition does not match the finalized block".into());
                 }
+                match self.finalized.block.proposal.action_type {
+                    MlsControlActionTypeV1::MembershipChange
+                        if transition.previous_member_count == transition.next_member_count =>
+                    {
+                        return Err("membership change must add or remove an account".into())
+                    }
+                    MlsControlActionTypeV1::RoutineAdmin
+                        if transition.previous_member_count != transition.next_member_count
+                            || transition.previous_participant_domains
+                                != transition.next_participant_domains =>
+                    {
+                        return Err(
+                            "routine administrator change cannot alter membership routing".into(),
+                        )
+                    }
+                    _ => {}
+                }
+            }
+            MlsControlActionTypeV1::MembershipChange => {
+                return Err("membership change requires its public transition".into())
             }
             MlsControlActionTypeV1::AuthoritySetChange => {
                 if self.next_authority_set.is_none()
@@ -2576,16 +2603,20 @@ fn replay_mls_control_history(
                 .ok_or("MLS authority history transition omits its joint certificate")?
                 .verify(&block_hash, &replayed.authorities, next)?;
             replayed.authorities = next.clone();
-        } else if block.proposal.action_type == MlsControlActionTypeV1::MembershipChange {
+        } else if matches!(
+            block.proposal.action_type,
+            MlsControlActionTypeV1::MembershipChange | MlsControlActionTypeV1::RoutineAdmin
+        ) && request.membership_transition.is_some()
+        {
             let transition = request
                 .membership_transition
                 .as_ref()
-                .ok_or("MLS membership history omits its public transition")?;
+                .expect("guarded transition");
             if transition.previous_roster_commitment != replayed.roster_commitment
                 || transition.previous_member_count != replayed.member_count
                 || replayed.participant_domains != transition.previous_participant_domains
             {
-                return Err("MLS membership history is not contiguous".into());
+                return Err("MLS roster history is not contiguous".into());
             }
             replayed.roster_commitment = transition.next_roster_commitment.clone();
             replayed.member_count = transition.next_member_count;
@@ -2974,6 +3005,66 @@ pub struct AnonymousMlsKeyPackageRequestV1 {
     pub transparency_tree_size: String,
 }
 
+/// Identified first-contact KeyPackage claim used only to construct an MLS
+/// membership invitation. Unlike established application delivery, the
+/// destination is allowed to learn the requester account.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdentifiedMlsKeyPackageRequestV1 {
+    pub protocol_version: u16,
+    pub recipient: AccountAddress,
+    pub conversation_id: Uuid,
+    pub incarnation: u64,
+    pub transparency_tree_size: String,
+}
+
+impl IdentifiedMlsKeyPackageRequestV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.protocol_version != MLS_PROTOCOL_VERSION
+            || self.recipient.server.is_none()
+            || self.conversation_id.is_nil()
+            || self.incarnation == 0
+        {
+            return Err("identified MLS KeyPackage request has invalid identifiers".into());
+        }
+        self.known_tree_size()?;
+        Ok(())
+    }
+
+    pub fn known_tree_size(&self) -> Result<u64, String> {
+        let value = self
+            .transparency_tree_size
+            .parse::<u64>()
+            .map_err(|_| "transparencyTreeSize must be canonical decimal".to_string())?;
+        if value.to_string() != self.transparency_tree_size {
+            return Err("transparencyTreeSize must be canonical decimal".into());
+        }
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FederatedIdentifiedMlsKeyPackageRequestV1 {
+    pub origin_domain: String,
+    pub requester: AccountAddress,
+    pub request: IdentifiedMlsKeyPackageRequestV1,
+}
+
+impl FederatedIdentifiedMlsKeyPackageRequestV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        kutup_federation_proto::validate_server_name(&self.origin_domain)
+            .map_err(|error| error.to_string())?;
+        self.request.validate()?;
+        if self.requester.server.as_deref() != Some(self.origin_domain.as_str()) {
+            return Err("federated identified MLS request has the wrong requester identity".into());
+        }
+        Ok(())
+    }
+}
+
 impl AnonymousMlsKeyPackageRequestV1 {
     pub fn validate(&self) -> Result<(), String> {
         if self.protocol_version != MLS_PROTOCOL_VERSION || self.recipient.server.is_none() {
@@ -2999,14 +3090,14 @@ impl AnonymousMlsKeyPackageRequestV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AnonymousMlsKeyPackageResponseV1 {
+pub struct MlsKeyPackageBundleV1 {
     pub recipient: AccountAddress,
     pub manifest: DeviceManifest,
     pub transparency: ManifestTransparencyProof,
     pub key_packages: Vec<MlsKeyPackageV1>,
 }
 
-impl AnonymousMlsKeyPackageResponseV1 {
+impl MlsKeyPackageBundleV1 {
     pub fn validate(&self, now: i64) -> Result<(), String> {
         if self.recipient.server.is_none()
             || self.key_packages.is_empty()
@@ -3485,8 +3576,8 @@ mod tests {
             is_admin: false,
             owner_id: None,
         };
-        let previous_roster = roster_commitment(&[alice.clone(), bob]).unwrap();
-        let next_roster = roster_commitment(&[alice.clone(), carol.clone()]).unwrap();
+        let previous_roster = roster_commitment(&[alice.clone(), bob.clone()]).unwrap();
+        let next_roster = roster_commitment(&[alice.clone(), bob.clone(), carol.clone()]).unwrap();
         let delivery_a0 = MlsMembershipDeliveryV1 {
             protocol_version: MLS_PROTOCOL_VERSION,
             conversation_id,
@@ -3495,13 +3586,17 @@ mod tests {
             destination: "a0.example".into(),
             epoch_after: 1,
             next_roster_commitment: next_roster.clone(),
-            next_participant_domains: vec!["a0.example".into(), "a2.example".into()],
+            next_participant_domains: vec![
+                "a0.example".into(),
+                "a1.example".into(),
+                "a2.example".into(),
+            ],
             local_members_after: vec![alice],
             envelopes: Vec::new(),
         };
         let delivery_a1 = MlsMembershipDeliveryV1 {
             destination: "a1.example".into(),
-            local_members_after: Vec::new(),
+            local_members_after: vec![bob],
             ..delivery_a0.clone()
         };
         let delivery_a2 = MlsMembershipDeliveryV1 {
@@ -3517,9 +3612,13 @@ mod tests {
             previous_roster_commitment: previous_roster.clone(),
             next_roster_commitment: next_roster,
             previous_member_count: 2,
-            next_member_count: 2,
+            next_member_count: 3,
             previous_participant_domains: vec!["a0.example".into(), "a1.example".into()],
-            next_participant_domains: vec!["a0.example".into(), "a2.example".into()],
+            next_participant_domains: vec![
+                "a0.example".into(),
+                "a1.example".into(),
+                "a2.example".into(),
+            ],
             deliveries: vec![
                 MlsMembershipDeliveryCommitmentV1 {
                     destination: "a0.example".into(),

@@ -33,10 +33,11 @@ use crate::session::{
 use crate::transport::{ChatTransport, SendOutcome};
 use kutup_chat_proto::{
     AccountAddress, AnonymousMlsKeyPackageRequestV1, ChatContent, ChatTransparencyPolicyV1,
-    ContactControlBody, ContactState, DeviceManifest, MlsCipherSuiteId, OutgoingEnvelope,
-    PreKeyCountResponse, PublishManifestResponse, SealedMessageSubmissionV1,
-    SealedOutgoingEnvelopeV1, SendMessagesRequest, TransparencyCheckpoint,
-    TransparencyCheckpointResponse, TransparencyVerifierKey, MLS_PROTOCOL_VERSION,
+    ContactControlBody, ContactState, DeviceManifest, IdentifiedMlsKeyPackageRequestV1,
+    MlsCipherSuiteId, MlsKeyPackageBundleV1, OutgoingEnvelope, PreKeyCountResponse,
+    PublishManifestResponse, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1,
+    SendMessagesRequest, TransparencyCheckpoint, TransparencyCheckpointResponse,
+    TransparencyVerifierKey, MLS_PROTOCOL_VERSION,
 };
 use kutup_federation_proto::FederatedFeaturePolicyTypeV1;
 
@@ -989,6 +990,74 @@ impl Engine {
         let response = Rc::clone(&self.transport)
             .fetch_anonymous_mls_key_packages(&request)
             .await?;
+        self.verify_mls_key_package_bundle(
+            recipient,
+            &account,
+            known_tree_size,
+            response,
+            now_seconds,
+        )
+        .await
+    }
+
+    /// Fetch first-contact KeyPackages through the authenticated, identified
+    /// invitation route. The destination learns the requester; subsequent
+    /// application delivery never uses this path.
+    pub async fn fetch_verified_identified_mls_key_packages(
+        &mut self,
+        recipient: &AccountAddress,
+        conversation_id: uuid::Uuid,
+        incarnation: u64,
+        now_seconds: i64,
+    ) -> Result<Vec<crate::VerifiedMlsKeyPackage>> {
+        if recipient.server.is_none()
+            || conversation_id.is_nil()
+            || incarnation == 0
+            || now_seconds < 0
+        {
+            return Err(ChatError::Invalid(
+                "identified MLS KeyPackage retrieval requires canonical identifiers and clock"
+                    .into(),
+            ));
+        }
+        let account = recipient.canonical();
+        let scope = transparency_scope(&account)?;
+        self.ensure_authenticated_transparency_policy(&scope)
+            .await?;
+        let known_tree_size = self
+            .session
+            .transparency_trust_for_scope(&scope)
+            .await?
+            .map_or(0, |trust| trust.tree_size);
+        let request = IdentifiedMlsKeyPackageRequestV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            recipient: recipient.clone(),
+            conversation_id,
+            incarnation,
+            transparency_tree_size: known_tree_size.to_string(),
+        };
+        request.validate().map_err(ChatError::Invalid)?;
+        let response = Rc::clone(&self.transport)
+            .fetch_identified_mls_key_packages(&request)
+            .await?;
+        self.verify_mls_key_package_bundle(
+            recipient,
+            &account,
+            known_tree_size,
+            response,
+            now_seconds,
+        )
+        .await
+    }
+
+    async fn verify_mls_key_package_bundle(
+        &mut self,
+        recipient: &AccountAddress,
+        account: &str,
+        known_tree_size: u64,
+        response: MlsKeyPackageBundleV1,
+        now_seconds: i64,
+    ) -> Result<Vec<crate::VerifiedMlsKeyPackage>> {
         response.validate(now_seconds).map_err(ChatError::Trust)?;
         if response.recipient != *recipient
             || response.transparency.consistency_from != known_tree_size
@@ -1002,7 +1071,7 @@ impl Engine {
             transparency: response.transparency.clone(),
         };
         let manifest = self
-            .accept_current_manifest_evidence(&account, &publication)
+            .accept_current_manifest_evidence(account, &publication)
             .await?;
 
         let manifest_devices: BTreeMap<u32, _> = manifest
@@ -1039,7 +1108,18 @@ impl Engine {
                         .decode(&binding.credential_public_key)
                         .map_err(|_| ChatError::Trust("manifest MLS key is not base64".into()))?,
                 )?;
-                let verified = crate::VerifiedMlsKeyPackage { wire, credential };
+                let anonymous_delivery_public_key = STANDARD
+                    .decode(&binding.anonymous_delivery_public_key)
+                    .map_err(|_| {
+                        ChatError::Trust(
+                            "manifest MLS anonymous-delivery key is not base64".into(),
+                        )
+                    })?;
+                let verified = crate::VerifiedMlsKeyPackage {
+                    wire,
+                    credential,
+                    anonymous_delivery_public_key,
+                };
                 crate::MlsClient::validate_verified_key_package(&verified, now_seconds)?;
                 Ok(verified)
             })

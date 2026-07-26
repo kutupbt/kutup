@@ -39,8 +39,8 @@ pub use db::sqlite::SqliteChatDb;
 pub use db::{
     AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState,
     InboxMessage, LocalIdentity, LocalProfile, ManifestHistoryRecord, ManifestTrust,
-    MlsOutboxEntry, OutboxEntry, OutboxSyncLeg, PeerProfile, Pending, SentMessage,
-    TransparencyMonitorState, TransparencyMonitorStatus, TransparencyTrust,
+    MlsHistoryMessage, MlsOutboxDelivery, MlsOutboxEntry, OutboxEntry, OutboxSyncLeg, PeerProfile,
+    Pending, SentMessage, TransparencyMonitorState, TransparencyMonitorStatus, TransparencyTrust,
     TransparencyWitnessTrust,
 };
 pub use engine::{
@@ -56,14 +56,16 @@ pub use manifest::{
     TransparencyScopePolicy,
 };
 pub use mls_engine::{
-    AnonymousMlsRecipientDevice, AppliedInboundMlsCommit, ClaimedMlsCredential,
-    DecryptedMlsApplication, DerivedMlsDeliveryCapability, FinalizedMlsMembershipChange,
-    JoinedMlsConversation, LocalMlsConversationRecord, LocalMlsConversationStatus,
-    LocalMlsGroupState, MlsClient, MlsControlEnvelopeContext, MlsDevicePublicMaterial,
+    AnonymousMlsRecipientDevice, AppliedInboundMlsApplication, AppliedInboundMlsCommit,
+    ClaimedMlsCredential, DecryptedMlsApplication, DerivedMlsDeliveryCapability,
+    FinalizedMlsMembershipChange, JoinedMlsConversation, LocalMlsConversationRecord,
+    LocalMlsConversationStatus, LocalMlsGroupState, MlsApplicationEnvelopeContext,
+    MlsApplicationInspection, MlsClient, MlsControlEnvelopeContext, MlsDevicePublicMaterial,
     MlsGroupControlCredential, MlsGroupOwnerCredential, MlsInboundCommitInspection,
     MlsWelcomeInspection, PendingMlsCommit, PendingMlsMembershipChange, PreparedMlsGroupGenesis,
-    PreparedMlsMembershipChange, ProcessedMlsControlEnvelope, VerifiedMlsCredential,
-    VerifiedMlsKeyPackage, KUTUP_MLS_V1_CIPHERSUITE, KUTUP_MLS_V1_MAX_PAST_EPOCHS,
+    PreparedMlsMembershipChange, ProcessedMlsControlEnvelope, StagedMlsApplicationDelivery,
+    VerifiedMlsCredential, VerifiedMlsKeyPackage, KUTUP_MLS_V1_CIPHERSUITE,
+    KUTUP_MLS_V1_MAX_PAST_EPOCHS,
 };
 pub use mls_policy::verify_mls_ordering_policy_history;
 pub use profile::{derive_wrapping_key, MAX_AVATAR_BYTES};

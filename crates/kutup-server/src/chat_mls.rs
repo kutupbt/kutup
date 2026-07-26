@@ -15,6 +15,7 @@ mod control_store;
 mod conversation_store;
 mod delivery_store;
 mod federation_control;
+mod identified_packages;
 mod invitation_routes;
 mod mailbox_routes;
 mod membership;
@@ -41,6 +42,9 @@ pub(crate) use control_routes::{
     collect_ordering_votes, commit_control_block, create_conversation,
 };
 use federation_control::{replicate_genesis, request_remote_ordering_vote};
+pub(crate) use identified_packages::{
+    federated_get_identified_key_packages, get_identified_key_packages,
+};
 pub(crate) use invitation_routes::{list_invitations, respond_invitation};
 pub(crate) use mailbox_routes::{ack as ack_mailbox, drain as drain_mailbox};
 use membership::prepare_membership_finalization;
@@ -64,10 +68,14 @@ use axum::http::header::{AUTHORIZATION, COOKIE};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::Response;
+use kutup_chat_proto::ChatWsServerMessage;
 use sqlx::PgPool;
+use uuid::Uuid;
 
+use crate::chat_hub::ChatWsOut;
 use crate::error::{AppError, AppResult};
 use crate::federation::{AuthenticatedFederationRequest, FederationStack};
+use crate::AppState;
 
 const MAX_DEVICE_ID: u32 = 127;
 
@@ -79,6 +87,54 @@ pub(crate) struct MlsRepository {
 impl MlsRepository {
     pub(crate) fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+}
+
+/// Wake live browser sessions after durable MLS mailbox writes. The mailbox is
+/// still the source of truth: this deliberately sends only a generic drain
+/// hint, so neither group identifiers nor anonymous sender metadata enter the
+/// WebSocket frame.
+async fn notify_mls_mailbox_targets(state: &AppState, targets: Vec<(Uuid, i32)>) {
+    let Ok(text) = serde_json::to_string(&ChatWsServerMessage::DrainMailbox) else {
+        return;
+    };
+    for (user_id, device_id) in targets {
+        for connection in state.chat_hub.connections(user_id, device_id) {
+            connection.write(ChatWsOut::Text(text.clone())).await;
+        }
+    }
+}
+
+pub(super) async fn notify_mls_conversation_mailbox(state: &AppState, conversation_id: Uuid) {
+    let targets: Result<Vec<(Uuid, i32)>, _> = sqlx::query_as(
+        "SELECT DISTINCT recipient_user_id, recipient_device_id
+         FROM chat_mls_mailbox
+         WHERE conversation_id = $1
+         ORDER BY recipient_user_id, recipient_device_id",
+    )
+    .bind(conversation_id)
+    .fetch_all(&state.pool)
+    .await;
+    match targets {
+        Ok(targets) => notify_mls_mailbox_targets(state, targets).await,
+        Err(error) => tracing::warn!(error = %error, "MLS mailbox WebSocket wake-up query failed"),
+    }
+}
+
+pub(super) async fn notify_mls_recipient_mailbox(state: &AppState, username: &str) {
+    let targets: Result<Vec<(Uuid, i32)>, _> = sqlx::query_as(
+        "SELECT DISTINCT m.recipient_user_id, m.recipient_device_id
+         FROM chat_mls_mailbox m
+         JOIN users u ON u.id = m.recipient_user_id
+         WHERE u.username = $1
+         ORDER BY m.recipient_user_id, m.recipient_device_id",
+    )
+    .bind(username)
+    .fetch_all(&state.pool)
+    .await;
+    match targets {
+        Ok(targets) => notify_mls_mailbox_targets(state, targets).await,
+        Err(error) => tracing::warn!(error = %error, "MLS mailbox WebSocket wake-up query failed"),
     }
 }
 

@@ -20,8 +20,8 @@ use wasm_bindgen::JsValue;
 
 use crate::db::{
     ChatDb, ContactRecord, InboundEnvelope, InboxMessage, LocalIdentity, LocalProfile,
-    ManifestHistoryRecord, ManifestTrust, MlsOutboxEntry, OutboxEntry, PeerProfile, Pending,
-    SentMessage, TransparencyMonitorStatus, TransparencyTrust,
+    ManifestHistoryRecord, ManifestTrust, MlsHistoryMessage, MlsOutboxEntry, OutboxEntry,
+    PeerProfile, Pending, SentMessage, TransparencyMonitorStatus, TransparencyTrust,
 };
 use crate::error::{ChatError, Result};
 
@@ -37,6 +37,7 @@ const SENDER_KEYS: &str = "sender_keys";
 const OUTBOX: &str = "outbox";
 const MLS_STATE: &str = "mls_state";
 const MLS_OUTBOX: &str = "mls_outbox";
+const MLS_MESSAGES: &str = "mls_messages";
 const MESSAGES: &str = "messages";
 const SENT_MESSAGES: &str = "sent_messages";
 const INBOUND: &str = "inbound";
@@ -49,7 +50,7 @@ const LOCAL_PROFILE: &str = "local_profile";
 const PEER_PROFILES: &str = "peer_profiles";
 const META: &str = "meta";
 
-const ALL_STORES: [&str; 23] = [
+const ALL_STORES: [&str; 24] = [
     LOCAL_IDENTITY,
     SESSIONS,
     IDENTITIES,
@@ -62,6 +63,7 @@ const ALL_STORES: [&str; 23] = [
     OUTBOX,
     MLS_STATE,
     MLS_OUTBOX,
+    MLS_MESSAGES,
     MESSAGES,
     SENT_MESSAGES,
     INBOUND,
@@ -99,7 +101,7 @@ impl IndexedDbChatDb {
             ));
         }
 
-        let mut builder = Rexie::builder(name).version(8);
+        let mut builder = Rexie::builder(name).version(9);
         for store in ALL_STORES {
             builder = builder.add_object_store(ObjectStore::new(store));
         }
@@ -237,6 +239,20 @@ impl ChatDb for IndexedDbChatDb {
                 .then_with(|| left.send_id.cmp(&right.send_id))
         });
         Ok(entries)
+    }
+
+    async fn load_mls_message(&self, record_id: &str) -> Result<Option<MlsHistoryMessage>> {
+        self.get(MLS_MESSAGES, string_key(record_id)).await
+    }
+
+    async fn list_mls_messages(&self) -> Result<Vec<MlsHistoryMessage>> {
+        let mut messages = self.all::<MlsHistoryMessage>(MLS_MESSAGES).await?;
+        messages.sort_by(|left, right| {
+            left.timestamp_ms
+                .cmp(&right.timestamp_ms)
+                .then_with(|| left.record_id.cmp(&right.record_id))
+        });
+        Ok(messages)
     }
 
     async fn load_mls_state(&self) -> Result<Option<Vec<u8>>> {
@@ -389,6 +405,7 @@ impl ChatDb for IndexedDbChatDb {
         let outbox = idb(transaction.store(OUTBOX))?;
         let mls_state = idb(transaction.store(MLS_STATE))?;
         let mls_outbox = idb(transaction.store(MLS_OUTBOX))?;
+        let mls_messages = idb(transaction.store(MLS_MESSAGES))?;
         let messages = idb(transaction.store(MESSAGES))?;
         let sent_messages = idb(transaction.store(SENT_MESSAGES))?;
         let inbound = idb(transaction.store(INBOUND))?;
@@ -437,6 +454,7 @@ impl ChatDb for IndexedDbChatDb {
             operations.push(put_op(&mls_state, value, string_key(SINGLETON)));
         }
         stage_map(&mut operations, &mls_outbox, writes.mls_outbox);
+        stage_puts(&mut operations, &mls_messages, writes.mls_messages);
         for (id, value) in writes.messages {
             operations.push(put_op(&messages, value, string_key(&id)));
         }
@@ -574,6 +592,7 @@ struct PreparedWrites {
     outbox: Vec<(String, Option<JsValue>)>,
     mls_state: Option<JsValue>,
     mls_outbox: Vec<(String, Option<JsValue>)>,
+    mls_messages: Vec<(String, JsValue)>,
     messages: Vec<(String, JsValue)>,
     sent_messages: Vec<(String, JsValue)>,
     inbound: Vec<(String, Option<JsValue>)>,
@@ -614,6 +633,7 @@ impl PreparedWrites {
             outbox: serialize_optional_map(&pending.outbox)?,
             mls_state: pending.mls_state.as_ref().map(to_js).transpose()?,
             mls_outbox: serialize_optional_map(&pending.mls_outbox)?,
+            mls_messages: serialize_map(&pending.mls_messages)?,
             messages: pending
                 .messages
                 .iter()

@@ -114,6 +114,7 @@ pub struct OutboxEntry {
 /// another MLS message for the same logical send would consume a different
 /// generation and could make the original message permanently undecryptable.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MlsOutboxEntry {
     /// Application-assigned UUID string, unique within this device store.
     pub send_id: String,
@@ -128,12 +129,66 @@ pub struct MlsOutboxEntry {
     pub epoch: u64,
     /// SHA-256 of the application plaintext, used only to reject accidental
     /// `sendId` reuse with different content. The plaintext is not retained in
-    /// this cryptographic retry record.
+    /// logs or server state.
     pub content_digest: [u8; 32],
+    /// Exact canonical [`ChatContent`](kutup_chat_proto::ChatContent) bytes.
+    /// This encrypted local value becomes durable outgoing history only after
+    /// every account delivery leg is confirmed.
+    #[serde(default)]
+    pub content: Vec<u8>,
     /// Complete TLS-encoded OpenMLS `MlsMessageOut`.
     pub ciphertext: Vec<u8>,
+    /// Canonical account destinations captured from the MLS-authenticated
+    /// roster at message creation. A later epoch cannot silently change the
+    /// recipients of this already-generated ciphertext.
+    #[serde(default)]
+    pub expected_recipients: Vec<String>,
+    /// Exact anonymous submissions staged before their first network write.
+    /// Retries never re-wrap an MLS generation or consume a different remote
+    /// KeyPackage after this record exists.
+    #[serde(default)]
+    pub deliveries: Vec<MlsOutboxDelivery>,
     pub created_at: i64,
     pub attempts: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsOutboxDelivery {
+    pub recipient: String,
+    /// Canonical JSON of `AnonymousMlsSubmissionV1`, including the raw
+    /// capability. The account-private database is encrypted; the value is
+    /// never emitted to metrics or destination logs.
+    pub submission: Vec<u8>,
+    pub attempts: u32,
+    pub delivered: bool,
+}
+
+/// Durable local MLS application history. Inbound rows are inserted in the
+/// same transaction as the consumed OpenMLS secret-tree generation. Outbound
+/// rows are inserted when every immutable delivery leg is confirmed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsHistoryMessage {
+    /// `in:<mailbox UUID>` or `out:<send UUID>`.
+    pub record_id: String,
+    pub message_id: String,
+    pub conversation_id: [u8; 16],
+    pub incarnation: u64,
+    pub mls_group_id: Vec<u8>,
+    pub epoch: u64,
+    pub sender: String,
+    pub sender_device_id: u32,
+    pub outgoing: bool,
+    pub cursor: Option<u64>,
+    /// SHA-256 of the exact HPKE envelope for inbound rows or exact OpenMLS
+    /// ciphertext for outbound rows. Idempotent retries must reproduce it.
+    pub transport_digest: [u8; 32],
+    /// Canonical `ChatContent` bytes.
+    pub content: Vec<u8>,
+    pub timestamp_ms: i64,
+    pub delivered: bool,
+    pub deduplicated: bool,
 }
 
 /// Which independently durable leg of one logical send is being amended or
@@ -516,6 +571,8 @@ pub struct Pending {
     pub(crate) outbox: HashMap<String, Option<OutboxEntry>>,
     /// `sendId` → exact MLS ciphertext retry record.
     pub(crate) mls_outbox: HashMap<String, Option<MlsOutboxEntry>>,
+    /// Stable record id → immutable/de-duplicated MLS application history.
+    pub(crate) mls_messages: HashMap<String, MlsHistoryMessage>,
     /// Complete versioned OpenMLS provider snapshot. It contains private key
     /// material and belongs only in the account-private encrypted client DB.
     pub(crate) mls_state: Option<Vec<u8>>,
@@ -571,6 +628,7 @@ impl Pending {
             && self.sender_keys.is_empty()
             && self.outbox.is_empty()
             && self.mls_outbox.is_empty()
+            && self.mls_messages.is_empty()
             && self.mls_state.is_none()
             && self.messages.is_empty()
             && self.sent_messages.is_empty()
@@ -642,6 +700,17 @@ pub trait ChatDb {
         Ok(Vec::new())
     }
 
+    /// One durable MLS application history/receipt record.
+    async fn load_mls_message(&self, record_id: &str) -> Result<Option<MlsHistoryMessage>> {
+        let _ = record_id;
+        Ok(None)
+    }
+
+    /// Complete MLS application history, ordered for presentation.
+    async fn list_mls_messages(&self) -> Result<Vec<MlsHistoryMessage>> {
+        Ok(Vec::new())
+    }
+
     /// Complete private OpenMLS provider snapshot, or `None` before MLS device
     /// initialization. Production backends persist this in encrypted storage.
     async fn load_mls_state(&self) -> Result<Option<Vec<u8>>> {
@@ -705,4 +774,59 @@ pub trait ChatDb {
     /// Commit a whole unit of work atomically. Either every staged write lands or
     /// none does; a partial apply MUST NOT be observable after a crash.
     async fn apply(&self, pending: &Pending) -> Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MlsHistoryMessage, MlsOutboxDelivery, MlsOutboxEntry};
+
+    #[test]
+    fn mls_browser_records_use_one_camel_case_contract() {
+        let entry = MlsOutboxEntry {
+            send_id: "33333333-3333-4333-8333-333333333333".into(),
+            conversation_id: [1; 16],
+            incarnation: 1,
+            mls_group_id: vec![2; 16],
+            epoch: 1,
+            content_digest: [3; 32],
+            content: vec![4],
+            ciphertext: vec![5],
+            expected_recipients: vec!["bob@example.test".into()],
+            deliveries: vec![MlsOutboxDelivery {
+                recipient: "bob@example.test".into(),
+                submission: vec![6],
+                attempts: 0,
+                delivered: false,
+            }],
+            created_at: 1_700_000_000_000,
+            attempts: 0,
+        };
+        let encoded = serde_json::to_value(&entry).unwrap();
+        assert!(encoded.get("sendId").is_some());
+        assert!(encoded.get("expectedRecipients").is_some());
+        assert!(encoded.get("send_id").is_none());
+        assert!(encoded["deliveries"][0].get("submission").is_some());
+
+        let history = MlsHistoryMessage {
+            record_id: "out:33333333-3333-4333-8333-333333333333".into(),
+            message_id: "33333333-3333-4333-8333-333333333333".into(),
+            conversation_id: [1; 16],
+            incarnation: 1,
+            mls_group_id: vec![2; 16],
+            epoch: 1,
+            sender: "alice@example.test".into(),
+            sender_device_id: 7,
+            outgoing: true,
+            cursor: None,
+            transport_digest: [8; 32],
+            content: vec![9],
+            timestamp_ms: 1_700_000_000_000,
+            delivered: true,
+            deduplicated: false,
+        };
+        let encoded = serde_json::to_value(&history).unwrap();
+        assert!(encoded.get("recordId").is_some());
+        assert!(encoded.get("senderDeviceId").is_some());
+        assert!(encoded.get("record_id").is_none());
+    }
 }

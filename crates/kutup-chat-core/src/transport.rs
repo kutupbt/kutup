@@ -14,10 +14,10 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use kutup_chat_proto::{
-    AnonymousMlsKeyPackageRequestV1, AnonymousMlsKeyPackageResponseV1, ChatProfileResponse,
-    DeviceListMismatch, DeviceManifest, MailboxPage, ManifestUpdateRangeProofV1,
-    OwnChatProfileResponse, PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest,
-    RegisterChatDeviceRequest, ReplenishKeysRequest, SendMessagesRequest,
+    AnonymousMlsKeyPackageRequestV1, ChatProfileResponse, DeviceListMismatch, DeviceManifest,
+    IdentifiedMlsKeyPackageRequestV1, MailboxPage, ManifestUpdateRangeProofV1,
+    MlsKeyPackageBundleV1, OwnChatProfileResponse, PreKeyCountResponse, PublishManifestResponse,
+    PutChatProfileRequest, RegisterChatDeviceRequest, ReplenishKeysRequest, SendMessagesRequest,
     TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
 };
 use kutup_federation_proto::FederatedFeaturePolicyHistoryV1;
@@ -141,9 +141,18 @@ pub trait ChatTransport {
     async fn fetch_anonymous_mls_key_packages(
         &self,
         _request: &AnonymousMlsKeyPackageRequestV1,
-    ) -> Result<AnonymousMlsKeyPackageResponseV1> {
+    ) -> Result<MlsKeyPackageBundleV1> {
         Err(crate::ChatError::Transport(
             "transport does not implement anonymous MLS KeyPackage retrieval".into(),
+        ))
+    }
+
+    async fn fetch_identified_mls_key_packages(
+        &self,
+        _request: &IdentifiedMlsKeyPackageRequestV1,
+    ) -> Result<MlsKeyPackageBundleV1> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement identified MLS KeyPackage retrieval".into(),
         ))
     }
 

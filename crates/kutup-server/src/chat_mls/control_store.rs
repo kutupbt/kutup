@@ -710,12 +710,18 @@ async fn insert_ordering_vote(
         MlsOrderingVoteTypeV1::Prevote => 1i16,
         MlsOrderingVoteTypeV1::Precommit => 2,
     };
-    sqlx::query(
+    let encoded_vote = serde_json::to_value(vote)
+        .map_err(|error| AppError::internal(format!("serialize MLS vote: {error}")))?;
+    let result = sqlx::query(
         "INSERT INTO chat_mls_ordering_votes
              (conversation_id, incarnation, authority_set_sequence,
               height, round, vote_type, block_hash, authority_domain,
               authority_key_id, vote)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         ON CONFLICT (
+             conversation_id, incarnation, authority_set_sequence,
+             height, round, vote_type, authority_domain
+         ) DO NOTHING",
     )
     .bind(vote.conversation_id)
     .bind(vote.incarnation as i64)
@@ -726,11 +732,37 @@ async fn insert_ordering_vote(
     .bind(&vote.block_hash)
     .bind(&vote.authority_domain)
     .bind(&vote.authority_key_id)
-    .bind(
-        serde_json::to_value(vote)
-            .map_err(|error| AppError::internal(format!("serialize MLS vote: {error}")))?,
-    )
+    .bind(&encoded_vote)
     .execute(&mut **tx)
     .await?;
+    if result.rows_affected() == 0 {
+        let existing: Option<(String, String, Value)> = sqlx::query_as(
+            "SELECT block_hash, authority_key_id, vote
+             FROM chat_mls_ordering_votes
+             WHERE conversation_id = $1 AND incarnation = $2
+               AND authority_set_sequence = $3 AND height = $4
+               AND round = $5 AND vote_type = $6 AND authority_domain = $7",
+        )
+        .bind(vote.conversation_id)
+        .bind(vote.incarnation as i64)
+        .bind(vote.authority_set_sequence as i64)
+        .bind(vote.height as i64)
+        .bind(vote.round as i32)
+        .bind(vote_type)
+        .bind(&vote.authority_domain)
+        .fetch_optional(&mut **tx)
+        .await?;
+        let (block_hash, authority_key_id, stored_vote) = existing.ok_or_else(|| {
+            AppError::internal("conflicting MLS vote disappeared during idempotency check")
+        })?;
+        if block_hash != vote.block_hash
+            || authority_key_id != vote.authority_key_id
+            || stored_vote != encoded_vote
+        {
+            return Err(AppError::conflict(
+                "MLS authority equivocation detected for this height and round",
+            ));
+        }
+    }
     Ok(())
 }

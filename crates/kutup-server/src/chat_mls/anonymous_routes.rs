@@ -9,8 +9,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use kutup_chat_proto::{
-    AnonymousMlsDeliveryResponseV1, AnonymousMlsKeyPackageRequestV1,
-    AnonymousMlsKeyPackageResponseV1, AnonymousMlsSubmissionV1, FederatedAnonymousMlsTransactionV1,
+    AnonymousMlsDeliveryResponseV1, AnonymousMlsKeyPackageRequestV1, AnonymousMlsSubmissionV1,
+    FederatedAnonymousMlsTransactionV1, MlsKeyPackageBundleV1,
 };
 use kutup_federation_proto::FederationFeature;
 use reqwest::Method;
@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use super::{
     active_policy, authenticated_remote_policy, decode_capability, ensure_anonymous_context,
-    unavailable, MlsRepository,
+    notify_mls_recipient_mailbox, unavailable, MlsRepository,
 };
 use crate::error::{AppError, AppResult};
 use crate::federation::FederationRequestSpec;
@@ -84,8 +84,8 @@ pub(crate) async fn get_anonymous_key_packages(
                 format!("remote MLS KeyPackage request returned {}", response.status),
             ));
         }
-        let bundles: AnonymousMlsKeyPackageResponseV1 = serde_json::from_slice(&response.body)
-            .map_err(|_| {
+        let bundles: MlsKeyPackageBundleV1 =
+            serde_json::from_slice(&response.body).map_err(|_| {
                 AppError::new(
                     StatusCode::BAD_GATEWAY,
                     "remote MLS KeyPackage response is invalid",
@@ -119,7 +119,7 @@ pub(super) async fn claim_local_anonymous_key_packages(
     state: &AppState,
     request: &AnonymousMlsKeyPackageRequestV1,
     limits: &kutup_chat_proto::MlsAbuseLimitsV1,
-) -> AppResult<AnonymousMlsKeyPackageResponseV1> {
+) -> AppResult<MlsKeyPackageBundleV1> {
     let capability = decode_capability(&request.capability)?;
     let username = request.recipient.username.clone();
     let now = OffsetDateTime::now_utc();
@@ -139,7 +139,7 @@ pub(super) async fn claim_local_anonymous_key_packages(
     let key_packages = repository
         .claim_anonymous_key_packages(&username, &capability, user_id, manifest_version, now)
         .await?;
-    let response = AnonymousMlsKeyPackageResponseV1 {
+    let response = MlsKeyPackageBundleV1 {
         recipient: request.recipient.clone(),
         manifest: publication.manifest,
         transparency: publication.transparency,
@@ -327,7 +327,7 @@ pub(crate) async fn submit_anonymous_message(
         return Ok(Json(response).into_response());
     }
     let capability = decode_capability(&submission.capability)?;
-    let response = MlsRepository::new(state.pool)
+    let response = MlsRepository::new(state.pool.clone())
         .store_anonymous_submission(
             &submission.recipient.username,
             &submission,
@@ -336,6 +336,7 @@ pub(crate) async fn submit_anonymous_message(
             OffsetDateTime::now_utc(),
         )
         .await?;
+    notify_mls_recipient_mailbox(&state, &submission.recipient.username).await;
     telemetry::mls_anonymous_delivery_event(
         "local_destination",
         if response.deduplicated {

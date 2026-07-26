@@ -10,8 +10,8 @@ use serde_json::Value;
 use time::OffsetDateTime;
 
 use super::{
-    active_policy, decode_capability, increment_counter, scoped_digest, signed_federation_error,
-    signed_federation_json, unavailable, MlsRepository,
+    active_policy, decode_capability, increment_counter, notify_mls_recipient_mailbox,
+    scoped_digest, signed_federation_error, signed_federation_json, unavailable, MlsRepository,
 };
 use crate::error::{AppError, AppResult};
 use crate::AppState;
@@ -244,5 +244,8 @@ pub(crate) async fn federated_submit_anonymous_message(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    if status == StatusCode::OK {
+        notify_mls_recipient_mailbox(&state, &transaction.submission.recipient.username).await;
+    }
     signed_federation_json(federation, &authenticated, status, &response)
 }

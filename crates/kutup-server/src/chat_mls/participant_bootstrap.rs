@@ -17,8 +17,8 @@ use uuid::Uuid;
 
 use super::authority_bootstrap::bounded_history_chunks;
 use super::{
-    active_policy, authenticated_remote_policy, signed_federation_error, signed_federation_json,
-    MlsRepository,
+    active_policy, authenticated_remote_policy, notify_mls_conversation_mailbox,
+    signed_federation_error, signed_federation_json, MlsRepository,
 };
 use crate::error::{AppError, AppResult};
 use crate::federation::FederationRequestSpec;
@@ -495,6 +495,7 @@ async fn materialize_participant_bootstrap(
     .bind(bootstrap_id)
     .execute(&state.pool)
     .await?;
+    notify_mls_conversation_mailbox(state, first.descriptor.genesis.conversation_id).await;
     telemetry::mls_bootstrap_event("participant", "materialized", pages.len() as u64);
     Ok(true)
 }

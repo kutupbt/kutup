@@ -1,8 +1,10 @@
 //! Manifest-bound MLS KeyPackage and epoch-capability persistence.
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use kutup_chat_proto::{
-    DeviceManifest, MlsDeliveryCapabilityKindV1, PublishMlsDeliveryCapabilityV1,
-    PublishMlsKeyPackagesRequestV1,
+    DeviceManifest, MlsCipherSuiteId, MlsDeliveryCapabilityKindV1, MlsKeyPackageV1,
+    PublishMlsDeliveryCapabilityV1, PublishMlsKeyPackagesRequestV1,
 };
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -12,6 +14,79 @@ use super::{decode_canonical_base64, MlsRepository, MAX_DEVICE_ID};
 use crate::error::{AppError, AppResult};
 
 impl MlsRepository {
+    pub(super) async fn claim_identified_key_packages(
+        &self,
+        user_id: Uuid,
+        manifest_version: u64,
+        conversation_id: Uuid,
+        now: OffsetDateTime,
+    ) -> AppResult<Vec<MlsKeyPackageV1>> {
+        if manifest_version == 0 || conversation_id.is_nil() {
+            return Err(AppError::bad_request(
+                "identified MLS KeyPackage claim has invalid identifiers",
+            ));
+        }
+        let mut tx = self.pool.begin().await?;
+        let device_ids: Vec<i32> = sqlx::query_scalar(
+            "SELECT device_id
+             FROM chat_mls_devices
+             WHERE user_id = $1 AND manifest_version = $2
+             ORDER BY device_id",
+        )
+        .bind(user_id)
+        .bind(manifest_version as i64)
+        .fetch_all(&mut *tx)
+        .await?;
+        if device_ids.is_empty() || device_ids.len() > 32 {
+            return Err(super::unavailable());
+        }
+        let mut packages = Vec::with_capacity(device_ids.len());
+        for device_id in device_ids {
+            let row: Option<(String, Vec<u8>, OffsetDateTime)> = sqlx::query_as(
+                "SELECT key_package_ref, key_package, expires_at
+                 FROM chat_mls_key_packages
+                 WHERE user_id = $1 AND device_id = $2
+                   AND manifest_version = $3
+                   AND claimed_at IS NULL AND expires_at > $4
+                 ORDER BY created_at, key_package_ref
+                 LIMIT 1
+                 FOR UPDATE SKIP LOCKED",
+            )
+            .bind(user_id)
+            .bind(device_id)
+            .bind(manifest_version as i64)
+            .bind(now)
+            .fetch_optional(&mut *tx)
+            .await?;
+            let Some((key_package_ref, key_package, expires_at)) = row else {
+                return Err(super::unavailable());
+            };
+            sqlx::query(
+                "UPDATE chat_mls_key_packages
+                 SET claimed_at = $1, claimed_conversation = $2
+                 WHERE user_id = $3 AND device_id = $4 AND key_package_ref = $5
+                   AND claimed_at IS NULL",
+            )
+            .bind(now)
+            .bind(conversation_id)
+            .bind(user_id)
+            .bind(device_id)
+            .bind(&key_package_ref)
+            .execute(&mut *tx)
+            .await?;
+            packages.push(MlsKeyPackageV1 {
+                device_id: device_id as u32,
+                manifest_version,
+                suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+                key_package_ref,
+                key_package: STANDARD.encode(key_package),
+                expires_at: expires_at.unix_timestamp(),
+            });
+        }
+        tx.commit().await?;
+        Ok(packages)
+    }
+
     pub(super) async fn publish_key_packages(
         &self,
         user_id: Uuid,

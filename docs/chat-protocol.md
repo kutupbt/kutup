@@ -946,8 +946,12 @@ destinations.
    scheduled web/server monitoring, and cross-view auditing are implemented.
    The unadvertised unified MLS foundation (§12) now provides durable
    client/server state, multi-authority ordering, private participant
-   transitions, invitation decisions, and anonymous delivery. Browser product
-   orchestration and two-server E2E remain the next major boundary.
+   transitions, invitation decisions, anonymous delivery, and routine
+   administrator changes. The browser and two-server E2E cover group creation,
+   invitation, administrator-authored add/remove, promotion, anonymous
+   bidirectional messages, and reload persistence. Owner/authority rotation,
+   linked-device group state, and the remaining adversarial gates are still
+   unadvertised work.
 3. **`kutup-chat-core`**: engine skeleton (transport/db ports, event stream,
    durable outbox with `sendId`, decrypt→persist→ack ordering, 409 recovery) —
    the artifact the Android/iOS clients link. **✅ Done** (branch
@@ -962,9 +966,10 @@ destinations.
    persisted history. Covered by roundtrip/send/receive test suites. Federation
    uses the same client transport with canonical remote addresses and is routed
    server-to-server; no separate federation client stack is needed. Contacts-
-   only sealed sender is implemented with libsignal outer envelopes,
+   sealed sender is implemented with libsignal outer envelopes,
    transparency-bound sender certificates, and no identified fallback. Not yet
-   in core: groups and the attachment `kind`.
+   in core: the attachment `kind`; MLS groups are implemented through the
+   shared OpenMLS engine but remain capability-gated until the completion gate.
 4. **web wasm adapters + minimal 1:1 UI — ✅ implemented**: account-scoped
    IndexedDB, a DTO-only wasm-bindgen transport facade, Web Locks around every
    ratchet transaction, capability-gated navigation, WebSocket hints feeding

@@ -10,7 +10,10 @@ use kutup_chat_proto::{
 };
 use kutup_federation_proto::FederationFeature;
 
-use super::{active_policy, signed_federation_error, signed_federation_json, MlsRepository};
+use super::{
+    active_policy, notify_mls_conversation_mailbox, signed_federation_error,
+    signed_federation_json, MlsRepository,
+};
 use crate::error::{AppError, AppResult};
 use crate::AppState;
 
@@ -213,6 +216,8 @@ pub(crate) async fn federated_commit_control_block(
         .await
     {
         Ok(response) => {
+            notify_mls_conversation_mailbox(&state, replica.commit.finalized.block.conversation_id)
+                .await;
             signed_federation_json(federation, &authenticated, StatusCode::OK, &response)
         }
         Err(error) => signed_federation_error(federation, &authenticated, error),

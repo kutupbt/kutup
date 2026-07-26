@@ -348,8 +348,8 @@ CREATE TABLE chat_mls_anonymous_send_ids (
 
 CREATE TABLE chat_mls_rate_counters (
     scope_type   TEXT        NOT NULL CHECK (scope_type IN (
-        'capability_bundle', 'capability_minute', 'capability_day',
-        'recipient', 'federation_origin'
+        'capability_bundle', 'identified_bundle', 'capability_minute',
+        'capability_day', 'recipient', 'federation_origin'
     )),
     scope_digest BYTEA       NOT NULL CHECK (octet_length(scope_digest) = 32),
     window_start TIMESTAMPTZ NOT NULL,

@@ -257,6 +257,54 @@ function harness(
     fetchVerifiedMlsKeyPackages: vi.fn().mockResolvedValue([
       { wire: { deviceId: 7 }, credential: { credentialIdentity: 'bob@example.test#7' } },
     ]),
+    createMlsTextMessage: vi.fn().mockResolvedValue({
+      sendId,
+      conversationId: [...genesisGroupBytes.subarray(0, 16)],
+      incarnation: 1,
+      mlsGroupId: [...genesisGroupBytes],
+      epoch: 1,
+      contentDigest: [...new Uint8Array(32).fill(6)],
+      content: [1, 2, 3],
+      ciphertext: [4, 5, 6],
+      expectedRecipients: ['bobby@beta.example'],
+      deliveries: [],
+      createdAt: 1_700_000_000_000,
+      attempts: 0,
+    }),
+    deriveMlsDeliveryCapability: vi.fn().mockResolvedValue({
+      epoch: 1,
+      capability: [...new Uint8Array(16).fill(8)],
+      verifierHash: [...new Uint8Array(32).fill(9)],
+    }),
+    stageMlsApplicationDelivery: vi.fn().mockImplementation(async (
+      _sendId: string,
+      recipient: { username: string; server: string },
+    ) => ({
+      entry: {
+        sendId,
+        conversationId: [...genesisGroupBytes.subarray(0, 16)],
+        incarnation: 1,
+        mlsGroupId: [...genesisGroupBytes],
+        epoch: 1,
+        contentDigest: [...new Uint8Array(32).fill(6)],
+        content: [1, 2, 3],
+        ciphertext: [4, 5, 6],
+        expectedRecipients: ['bobby@beta.example'],
+        deliveries: [{
+          recipient: `${recipient.username}@${recipient.server}`,
+          submission: [7, 8, 9],
+          attempts: 0,
+          delivered: false,
+        }],
+        createdAt: 1_700_000_000_000,
+        attempts: 0,
+      },
+    })),
+    noteMlsApplicationDeliveryAttempt: vi.fn().mockResolvedValue({
+      envelopes: [{ deviceId: 7 }],
+    }),
+    markMlsApplicationRecipientDelivered: vi.fn().mockResolvedValue(undefined),
+    pendingMlsApplicationMessages: vi.fn().mockResolvedValue([]),
     joinMlsFromWelcomeWithControlHistory: vi.fn().mockResolvedValue({
       group: {
         mlsGroupId: [...new Uint8Array(16).fill(7)],
@@ -313,6 +361,11 @@ function harness(
     }),
     ackMlsMailbox: vi.fn().mockResolvedValue(undefined),
     fetchAnonymousMlsKeyPackages: vi.fn(),
+    submitAnonymousMlsMessage: vi.fn().mockResolvedValue({
+      accepted: true,
+      storedDevices: 1,
+      deduplicated: false,
+    }),
   } as unknown as ChatTransportPort
   const lockCalls = vi.fn()
   const lock = async <T>(operation: () => Promise<T>): Promise<T> => {
@@ -322,7 +375,7 @@ function harness(
   return {
     client,
     transport,
-    service: new MlsConversationService(client, transport, lock),
+    service: new MlsConversationService(client, transport, lock, client.deviceId),
     lock: lockCalls,
   }
 }
@@ -453,6 +506,50 @@ describe('MlsConversationService', () => {
     )
   })
 
+  it('stages an administrator-only roster transition without KeyPackages', async () => {
+    vi.stubGlobal('crypto', {
+      randomUUID: () => proposalId,
+      getRandomValues: (value: Uint8Array) => value,
+    })
+    const active = {
+      ...activeGenesis(),
+      currentRoster: pendingMembership().nextRoster,
+    }
+    const { client, service } = harness(null, [active])
+    await expect(service.setAdministrator(
+      conversationId,
+      { username: 'bobby', server: 'beta.example' },
+      true,
+    )).resolves.toEqual(finalizedMembership())
+    expect(client.prepareMlsMembershipChange).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      proposalId,
+      [
+        pendingMembership().nextRoster[0],
+        {
+          address: { username: 'bobby', server: 'beta.example' },
+          isAdmin: true,
+        },
+      ],
+      [],
+      expect.stringMatching(/^[0-9]+$/),
+    )
+  })
+
+  it('rejects a no-op administrator change before staging MLS state', async () => {
+    const active = {
+      ...activeGenesis(),
+      currentRoster: pendingMembership().nextRoster,
+    }
+    const { client, service } = harness(null, [active])
+    await expect(service.setAdministrator(
+      conversationId,
+      { username: 'bobby', server: 'beta.example' },
+      false,
+    )).rejects.toThrow(/already in the requested state/)
+    expect(client.prepareMlsMembershipChange).not.toHaveBeenCalled()
+  })
+
   it('replays the exact pending membership operation after a network failure', async () => {
     vi.stubGlobal('crypto', {
       randomUUID: () => proposalId,
@@ -537,6 +634,39 @@ describe('MlsConversationService', () => {
       expect.stringMatching(/^[0-9]+$/),
     )
     expect(transport.fetchAnonymousMlsKeyPackages).not.toHaveBeenCalled()
+  })
+
+  it('stages an anonymous envelope before recording its first durable attempt', async () => {
+    vi.stubGlobal('crypto', {
+      randomUUID: () => sendId,
+      getRandomValues: (value: Uint8Array) => value,
+    })
+    const { client, transport, service } = harness(null, [activeGenesis()])
+
+    await expect(service.sendText(conversationId, 'federated group message')).resolves.toEqual({
+      delivered: true,
+      deduplicated: false,
+      attempts: 1,
+    })
+
+    expect(client.fetchVerifiedMlsKeyPackages).toHaveBeenCalledWith(
+      { username: 'bobby', server: 'beta.example' },
+      new Uint8Array(16).fill(8),
+      expect.stringMatching(/^[0-9]+$/),
+    )
+    expect(client.stageMlsApplicationDelivery).toHaveBeenCalledOnce()
+    expect(client.noteMlsApplicationDeliveryAttempt).toHaveBeenCalledWith(
+      sendId,
+      'bobby@beta.example',
+    )
+    expect(transport.submitAnonymousMlsMessage).toHaveBeenCalledWith({
+      envelopes: [{ deviceId: 7 }],
+    })
+    expect(client.markMlsApplicationRecipientDelivered).toHaveBeenCalledWith(
+      sendId,
+      'bobby@beta.example',
+      false,
+    )
   })
 
   it('joins only with matching verified evidence, then activates and acknowledges', async () => {

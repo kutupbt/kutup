@@ -152,13 +152,17 @@ pub(super) async fn prepare_membership_finalization(
         }
         return Ok(None);
     };
-    if block.proposal.action_type != MlsControlActionTypeV1::MembershipChange {
+    if !matches!(
+        block.proposal.action_type,
+        MlsControlActionTypeV1::MembershipChange | MlsControlActionTypeV1::RoutineAdmin
+    ) {
         return Err(AppError::bad_request(
-            "unrelated MLS control action carries a membership transition",
+            "unrelated MLS control action carries a roster transition",
         ));
     }
     validate_transition_against_state(
         transition,
+        block.proposal.action_type,
         conversation_kind,
         current_roster_commitment,
         current_member_count,
@@ -202,7 +206,7 @@ pub(super) async fn prepare_membership_finalization(
     };
 
     if let Some(delivery) = deliveries.get(local_domain) {
-        apply_local_snapshot(tx, delivery, block.epoch_after).await?;
+        apply_local_snapshot(tx, delivery, block.epoch_after, local_submitter).await?;
     }
     finalize_delivery_records(
         tx,
@@ -224,6 +228,7 @@ pub(super) async fn prepare_membership_finalization(
 
 fn validate_transition_against_state(
     transition: &MlsMembershipTransitionV1,
+    action_type: MlsControlActionTypeV1,
     conversation_kind: i16,
     current_roster_commitment: &str,
     current_member_count: u32,
@@ -238,6 +243,25 @@ fn validate_transition_against_state(
         return Err(AppError::conflict(
             "MLS membership transition does not extend the current roster",
         ));
+    }
+    match action_type {
+        MlsControlActionTypeV1::MembershipChange
+            if transition.previous_member_count == transition.next_member_count =>
+        {
+            return Err(AppError::bad_request(
+                "MLS membership change must add or remove an account",
+            ))
+        }
+        MlsControlActionTypeV1::RoutineAdmin
+            if transition.previous_member_count != transition.next_member_count
+                || transition.previous_participant_domains
+                    != transition.next_participant_domains =>
+        {
+            return Err(AppError::bad_request(
+                "MLS routine administrator change cannot alter membership routing",
+            ))
+        }
+        _ => {}
     }
     let valid_count = match conversation_kind {
         1 => transition.next_member_count == 1,
@@ -330,6 +354,7 @@ async fn apply_local_snapshot(
     tx: &mut Transaction<'_, Postgres>,
     delivery: &MlsMembershipDeliveryV1,
     epoch_after: u64,
+    local_submitter: Option<Uuid>,
 ) -> AppResult<()> {
     let active: Vec<(Uuid, String, bool, Option<String>, String)> = sqlx::query_as(
         "SELECT m.user_id, u.username, m.is_owner, m.owner_id, m.membership_status
@@ -441,11 +466,23 @@ async fn apply_local_snapshot(
             )
         })
         .collect::<Vec<_>>();
-    if supplied_after.len() != required_envelopes.len()
-        || supplied_after.into_iter().collect::<BTreeSet<_>>() != required_envelopes
+    let supplied_set = supplied_after.iter().cloned().collect::<BTreeSet<_>>();
+    let missing = required_envelopes
+        .difference(&supplied_set)
+        .cloned()
+        .collect::<Vec<_>>();
+    let submitter_address = local_submitter
+        .and_then(|user_id| next_users.get(&user_id))
+        .map(|member| member.address.canonical());
+    let initiator_omission = missing.len() == 1
+        && submitter_address.as_deref() == Some(missing[0].0.as_str())
+        && missing[0].2 == u16::from(MlsMembershipEnvelopeKindV1::Commit);
+    if supplied_after.len() != supplied_set.len()
+        || !supplied_set.is_subset(&required_envelopes)
+        || !(missing.is_empty() || (local_submitter.is_some() && initiator_omission))
     {
         return Err(AppError::conflict(
-            "MLS membership delivery does not cover every active local device exactly once",
+            "MLS membership delivery does not cover every required local device exactly once",
         ));
     }
 

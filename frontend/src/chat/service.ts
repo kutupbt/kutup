@@ -2,6 +2,7 @@ import api from '@/api/client'
 import { resolveApiBase } from '@/lib/apiBase'
 import { ApiChatTransport } from './transport'
 import type {
+  AccountAddress,
   ChatCapabilities,
   ChatHistoryEntry,
   ContactRecord,
@@ -12,6 +13,8 @@ import type {
   ReceiveReport,
   SendSummary,
   TransparencyMonitorStatus,
+  LocalMlsConversationRecord,
+  PendingMlsInvitation,
   WasmChatClientHandle,
 } from './types'
 import { loadChatWasm } from './wasm'
@@ -22,6 +25,7 @@ import {
   toCoreAccountAddress,
   withHomeServer,
 } from './identity'
+import { MlsConversationService } from './mls-service'
 
 type UpdateListener = () => void
 
@@ -63,17 +67,29 @@ export class ChatService {
   private disposed = false
   private reconcilePromise: Promise<ReceiveReport> | null = null
   private readonly transparencyPromises = new Map<string, Promise<TransparencyMonitorStatus>>()
+  private readonly mls: MlsConversationService | null
 
   private constructor(
     client: WasmChatClientHandle,
     lockName: string,
     channelName: string,
     capabilities: ChatCapabilities,
+    transport: ApiChatTransport,
+    private readonly username: string,
   ) {
     this.client = client
     this.deviceId = client.deviceId
     this.lockName = lockName
     this.capabilities = capabilities
+    this.mls = capabilities.mlsGroups === true
+      ? new MlsConversationService(
+          client,
+          transport,
+          operation => this.withLock(operation),
+          this.deviceId,
+          { username, server: capabilities.serverName! },
+        )
+      : null
     this.channel = new BroadcastChannel(channelName)
     this.channel.onmessage = () => this.emitUpdate()
     window.addEventListener('online', this.handleOnline)
@@ -119,8 +135,16 @@ export class ChatService {
       ),
     )
 
-    const service = new ChatService(client, lockName, channelName, capabilities)
+    const service = new ChatService(
+      client,
+      lockName,
+      channelName,
+      capabilities,
+      transport,
+      options.username,
+    )
     try {
+      await service.initializeMls()
       await service.reconcile()
       await service.monitorTransparency()
       service.startTransparencyMonitor()
@@ -216,8 +240,11 @@ export class ChatService {
   }
 
   async send(conversation: ConversationId, text: string): Promise<SendSummary> {
-    if (conversation.kind !== 'direct') {
-      throw new Error('group conversations are not enabled by this server')
+    if (conversation.kind === 'group') {
+      const mls = this.requireMls()
+      const summary = await mls.sendText(conversation.groupId, text)
+      this.notifyPeers()
+      return { ...summary, safetyNumberChanges: [] }
     }
     const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
     const sendId = crypto.randomUUID()
@@ -231,7 +258,8 @@ export class ChatService {
   reconcile(): Promise<ReceiveReport> {
     if (this.reconcilePromise) return this.reconcilePromise
     this.reconcilePromise = this.withLock(() => this.client.reconcile())
-      .then((report) => {
+      .then(async (report) => {
+        await this.mls?.reconcile()
         this.notifyPeers()
         return report
       })
@@ -239,6 +267,74 @@ export class ChatService {
         this.reconcilePromise = null
       })
     return this.reconcilePromise
+  }
+
+  async groups(): Promise<LocalMlsConversationRecord[]> {
+    return this.requireMls().conversations()
+  }
+
+  async groupInvitations(): Promise<PendingMlsInvitation[]> {
+    return this.requireMls().invitations()
+  }
+
+  async createGroup(initialMember?: AccountAddress): Promise<LocalMlsConversationRecord> {
+    const mls = this.requireMls()
+    const self: AccountAddress = {
+      username: this.currentUsername(),
+      server: this.capabilities.serverName!,
+    }
+    const authorities = new Set([self.server!])
+    if (initialMember) {
+      const member = withHomeServer(initialMember, this.capabilities.serverName)
+      if (!member.server) throw new Error('group member requires a server')
+      authorities.add(member.server)
+      initialMember = member
+    }
+    const created = await mls.createGroup(self, [...authorities].sort())
+    const result = initialMember
+      ? await mls.addMember(created.conversation.request.genesis.conversationId, initialMember)
+      : created
+    this.notifyPeers()
+    return result.conversation
+  }
+
+  async acceptGroupInvitation(invitation: PendingMlsInvitation): Promise<void> {
+    await this.requireMls().acceptInvitation(invitation)
+    this.notifyPeers()
+  }
+
+  async rejectGroupInvitation(invitation: PendingMlsInvitation): Promise<void> {
+    await this.requireMls().rejectInvitation(invitation)
+    this.notifyPeers()
+  }
+
+  async addGroupMember(conversationId: string, member: AccountAddress): Promise<void> {
+    await this.requireMls().addMember(
+      conversationId,
+      withHomeServer(member, this.capabilities.serverName),
+    )
+    this.notifyPeers()
+  }
+
+  async removeGroupMember(conversationId: string, member: AccountAddress): Promise<void> {
+    await this.requireMls().removeMember(
+      conversationId,
+      withHomeServer(member, this.capabilities.serverName),
+    )
+    this.notifyPeers()
+  }
+
+  async setGroupAdministrator(
+    conversationId: string,
+    member: AccountAddress,
+    isAdmin: boolean,
+  ): Promise<void> {
+    await this.requireMls().setAdministrator(
+      conversationId,
+      withHomeServer(member, this.capabilities.serverName),
+      isAdmin,
+    )
+    this.notifyPeers()
   }
 
   async maintainPrekeys(): Promise<void> {
@@ -303,6 +399,22 @@ export class ChatService {
     )
   }
 
+  private requireMls(): MlsConversationService {
+    if (!this.mls) throw new Error('MLS groups are not enabled by this server')
+    return this.mls
+  }
+
+  private currentUsername(): string {
+    return this.username
+  }
+
+  private async initializeMls(): Promise<void> {
+    if (!this.mls) return
+    const manifest = await this.withLock(() => this.client.syncManifest())
+    const version = requireManifestVersion(manifest)
+    await this.mls.maintainKeyPackages(version)
+  }
+
   private notifyPeers(): void {
     this.channel.postMessage({ type: 'updated' })
     this.emitUpdate()
@@ -326,6 +438,7 @@ export class ChatService {
 
   private readonly handleOnline = (): void => {
     void this.monitorTransparency()
+    void this.initializeMls().then(() => this.reconcile())
   }
 
   private readonly handleVisibilityChange = (): void => {
@@ -356,6 +469,7 @@ export class ChatService {
         this.retryAttempt = 0
         void this.maintainPrekeys()
         void this.monitorTransparency()
+        void this.initializeMls().then(() => this.reconcile())
       }
       socket.onmessage = () => {
         void this.reconcile()
@@ -391,4 +505,18 @@ async function accountScope(userId: string): Promise<string> {
   return Array.from(new Uint8Array(digest).slice(0, 16), (byte) =>
     byte.toString(16).padStart(2, '0'),
   ).join('')
+}
+
+function requireManifestVersion(value: unknown): number {
+  if (
+    typeof value !== 'object'
+    || value === null
+    || !('version' in value)
+    || typeof value.version !== 'number'
+    || !Number.isSafeInteger(value.version)
+    || value.version < 1
+  ) {
+    throw new Error('signed device manifest returned an invalid version')
+  }
+  return value.version
 }

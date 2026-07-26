@@ -9,10 +9,13 @@ library support stabilize.
 The feature is intentionally **not advertised yet**. Protocol types, durable
 storage, authenticated federation routes, OpenMLS client state, WASM bindings,
 anonymous delivery, authority catch-up, participant membership transitions,
-identified invitation decisions, privacy-bounded telemetry, and admin
-inspection routes exist. Advertisement remains gated on browser product
-orchestration/UI, federated invitation-rejection feedback, and the complete
-two-server adversarial E2E.
+identified invitation decisions, routine administrator changes, browser group
+management and messaging, privacy-bounded telemetry, and admin inspection
+routes exist. The live browser gate covers creation, cross-server invitation,
+promotion, administrator-authored add/remove, anonymous bidirectional messages,
+and reload persistence. Advertisement remains gated on owner/authority product
+orchestration, federated invitation-rejection feedback, linked-device group
+state, and the remaining adversarial suites.
 
 ## Conversation model
 
@@ -240,7 +243,19 @@ owner assignments. Server finalization independently requires an active local
 administrator, while exact already-committed retries are checked by immutable
 block hash before consulting the post-transition roster.
 
-For inbound ordinary membership changes, the browser processes mailbox rows in
+A routine administrator change uses the same committed private-roster delivery
+shape but must preserve member count and participant-domain routing exactly. It
+carries no KeyPackage or Welcome, advances MLS with a self-update Commit, must
+change at least one administrator bit, and cannot change an owner assignment.
+The initiating shared engine checks its own account against the previously
+pinned administrator roster. Receiving engines independently authenticate the
+actual MLS Commit sender credential and require that account to be an
+administrator in the previous encrypted roster before merging. Consequently a
+malicious participant server can withhold or disorder control traffic, but it
+cannot make an honest client accept a non-administrator's role or membership
+change.
+
+For inbound roster changes, the browser processes mailbox rows in
 cursor order, stages each Commit without writing state, resolves every claimed
 MLS device key through the transparency verifier, and fetches exactly the next
 canonical public history entry. Rust requires that the quorum-certified block,
@@ -298,12 +313,10 @@ sender/recipient correlations.
 
 Do not advertise MLS until all of the following pass together:
 
-- browser orchestration for routine administrator/owner actions, inbound
-  ordered Commit verification, application delivery, and UI integration of
-  the implemented membership and authenticated invitation-roster verifiers;
+- browser orchestration and explicit approval UI for owner, authority,
+  recovery, close, and suite-policy actions;
 - federated invitation-rejection feedback and administrator removal flow;
-- group conversation, invitation, admin/owner, and exact
-  policy/fingerprint UI;
+- group owner and exact authority-policy/fingerprint UI;
 - WebSocket/restart reconciliation and multi-device linked-state flow;
 - native Rust, WASM, web, Playwright, PostgreSQL migration, Docker Compose,
   witness/auditor, and two-server federation suites;

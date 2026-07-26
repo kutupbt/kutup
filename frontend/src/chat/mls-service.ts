@@ -1,12 +1,16 @@
 import type {
   AccountAddress,
+  AnonymousMlsDeviceEnvelope,
   AppliedInboundMlsCommit,
+  AppliedInboundMlsApplication,
   ChatTransportPort,
+  DerivedMlsDeliveryCapability,
   FinalizedMlsMembershipChange,
   LocalMlsConversationRecord,
   LocalMlsGroupState,
   MlsConversationMember,
   MlsMailboxEnvelope,
+  MlsOutboxEntry,
   MlsWelcomeInspection,
   PendingMlsMembershipChange,
   PendingMlsInvitation,
@@ -14,6 +18,10 @@ import type {
   VerifiedMlsCredential,
   WasmChatClientHandle,
 } from './types'
+import {
+  canonicalAccountAddress,
+  parseAccountAddress,
+} from './identity'
 
 const MLS_PROTOCOL_VERSION = 1
 const DEFAULT_KEY_PACKAGE_TARGET = 20
@@ -22,6 +30,26 @@ const MAX_MAILBOX_PAGES = 64
 const MAX_CONTROL_HISTORY_PAGES = 1024
 
 type CryptoLock = <T>(operation: () => Promise<T>) => Promise<T>
+
+export type MlsSendFailureStage =
+  | 'conversation'
+  | 'encryption'
+  | 'recipient'
+  | 'capability'
+  | 'capability_binding'
+  | 'key_packages'
+  | 'envelope_staging'
+  | 'outbox_attempt'
+  | 'submission'
+  | 'receipt'
+
+/** A stable, identifier-free failure stage suitable for user and test diagnostics. */
+export class MlsSendError extends Error {
+  constructor(readonly stage: MlsSendFailureStage, cause: unknown) {
+    super(`MLS group send failed during ${stage.replace('_', ' ')}.`, { cause })
+    this.name = 'MlsSendError'
+  }
+}
 
 export interface VerifiedMlsInvitation {
   conversationId: string
@@ -59,6 +87,8 @@ export class MlsConversationService {
     private readonly client: WasmChatClientHandle,
     private readonly transport: ChatTransportPort,
     private readonly withCryptoLock: CryptoLock,
+    private readonly deviceId: number,
+    private readonly selfAddress?: AccountAddress,
   ) {}
 
   /**
@@ -93,7 +123,75 @@ export class MlsConversationService {
     )
     validatePreparedGenesis(prepared, conversationId, groupId)
     const published = await this.publishPreparedGenesis(prepared.conversation)
+    await this.publishCurrentDeliveryCapability(published)
     return { group: prepared.group, conversation: published }
+  }
+
+  async conversations(): Promise<LocalMlsConversationRecord[]> {
+    return this.withCryptoLock(() => this.client.localMlsConversations())
+  }
+
+  async addMember(
+    conversationId: string,
+    recipient: AccountAddress,
+  ): Promise<FinalizedMlsMembershipChange> {
+    const conversation = await this.requireActiveConversation(conversationId)
+      .catch(cause => { throw new MlsSendError('conversation', cause) })
+    requireCanonicalAddress(recipient)
+    const canonical = canonicalAccountAddress(recipient)
+    if (conversation.currentRoster.some(
+      member => canonicalAccountAddress(member.address) === canonical,
+    )) {
+      throw new Error('account is already an MLS group member')
+    }
+    const additions = await this.withCryptoLock(() =>
+      this.client.fetchVerifiedIdentifiedMlsKeyPackages(
+        recipient,
+        conversationId,
+        String(conversation.request.genesis.incarnation),
+        String(Math.floor(Date.now() / 1000)),
+      ),
+    )
+    if (!Array.isArray(additions) || additions.length < 1 || additions.length > 32) {
+      throw new Error('identified MLS KeyPackage claim returned no destination devices')
+    }
+    const nextRoster = [...conversation.currentRoster, {
+      address: recipient,
+      isAdmin: false,
+    }].sort(compareMembers)
+    return this.changeGroupMembership(conversationId, nextRoster, additions)
+  }
+
+  async removeMember(
+    conversationId: string,
+    member: AccountAddress,
+  ): Promise<FinalizedMlsMembershipChange> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const canonical = canonicalAccountAddress(requireCanonicalAddress(member))
+    const nextRoster = conversation.currentRoster.filter(
+      current => canonicalAccountAddress(current.address) !== canonical,
+    )
+    if (nextRoster.length === conversation.currentRoster.length) {
+      throw new Error('account is not an MLS group member')
+    }
+    return this.changeGroupMembership(conversationId, nextRoster, [])
+  }
+
+  async setAdministrator(
+    conversationId: string,
+    member: AccountAddress,
+    isAdmin: boolean,
+  ): Promise<FinalizedMlsMembershipChange> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const canonical = canonicalAccountAddress(requireCanonicalAddress(member))
+    let changed = false
+    const nextRoster = conversation.currentRoster.map((current) => {
+      if (canonicalAccountAddress(current.address) !== canonical) return current
+      changed = current.isAdmin !== isAdmin
+      return { ...current, isAdmin }
+    })
+    if (!changed) throw new Error('MLS administrator role is already in the requested state')
+    return this.changeGroupMembership(conversationId, nextRoster, [])
   }
 
   /**
@@ -114,9 +212,10 @@ export class MlsConversationService {
   }
 
   /**
-   * Atomically stage one add-only or remove-only MLS membership transition,
-   * then replay its exact destination deliveries and quorum request. All
-   * signature and quorum decisions remain inside the shared Rust engine.
+   * Atomically stage one add-only, remove-only, or administrator-only MLS
+   * roster transition, then replay its exact destination deliveries and
+   * quorum request. All signature and quorum decisions remain inside the
+   * shared Rust engine.
    */
   async changeGroupMembership(
     conversationId: string,
@@ -150,7 +249,9 @@ export class MlsConversationService {
       ),
     )
     validatePendingMembershipChange(prepared.control, groupId)
-    return this.publishPendingMembershipChange(prepared.control)
+    const finalized = await this.publishPendingMembershipChange(prepared.control)
+    await this.publishCurrentDeliveryCapability(finalized.conversation)
+    return finalized
   }
 
   /** Replay exact staged deliveries and the exact signed block after restart. */
@@ -161,7 +262,9 @@ export class MlsConversationService {
     const finalized: FinalizedMlsMembershipChange[] = []
     for (const control of pending) {
       validatePendingMembershipChange(control, Uint8Array.from(control.mlsGroupId))
-      finalized.push(await this.publishPendingMembershipChange(control))
+      const result = await this.publishPendingMembershipChange(control)
+      await this.publishCurrentDeliveryCapability(result.conversation)
+      finalized.push(result)
     }
     return finalized
   }
@@ -175,8 +278,8 @@ export class MlsConversationService {
       throw new Error('MLS KeyPackage target must be between 1 and 100')
     }
     const count = requireKeyPackageCount(
-      await this.transport.mlsKeyPackageCount(this.client.deviceId),
-      this.client.deviceId,
+      await this.transport.mlsKeyPackageCount(this.deviceId),
+      this.deviceId,
     )
     if (count.available >= target) return count.available
 
@@ -197,10 +300,10 @@ export class MlsConversationService {
       await this.transport.publishMlsKeyPackages({
         protocolVersion: MLS_PROTOCOL_VERSION,
         manifestVersion,
-        deviceId: this.client.deviceId,
+        deviceId: this.deviceId,
         keyPackages: packages,
       }),
-      this.client.deviceId,
+      this.deviceId,
     )
     if (response.available < target) {
       throw new Error('MLS KeyPackage publication did not reach the requested target')
@@ -226,6 +329,56 @@ export class MlsConversationService {
         String(Math.floor(Date.now() / 1000)),
       ),
     )
+  }
+
+  async sendText(conversationId: string, text: string): Promise<{
+    delivered: boolean
+    deduplicated: boolean
+    attempts: number
+  }> {
+    if (!text.trim() || text.length > 64 * 1024) {
+      throw new Error('MLS group message must contain 1-65536 characters')
+    }
+    const conversation = await this.requireActiveConversation(conversationId)
+    let groupId: Uint8Array
+    let sendId: string
+    try {
+      groupId = decodeCanonicalBase64(
+        conversation.request.genesis.mlsGroupId,
+        16,
+        255,
+      )
+      sendId = requireBrowserCrypto().randomUUID()
+    } catch (cause) {
+      throw new MlsSendError('encryption', cause)
+    }
+    const entry = await this.withCryptoLock(() => this.client.createMlsTextMessage(
+        sendId,
+        conversationId,
+        String(conversation.request.genesis.incarnation),
+        groupId,
+        new Date().toISOString(),
+        text,
+        String(Date.now()),
+      ))
+      .catch(cause => { throw new MlsSendError('encryption', cause) })
+    await this.deliverApplicationEntry(entry).catch(cause => {
+      if (cause instanceof MlsSendError) throw cause
+      throw new MlsSendError('envelope_staging', cause)
+    })
+    return {
+      delivered: true,
+      deduplicated: entry.attempts > 0,
+      attempts: Math.max(1, entry.expectedRecipients.length),
+    }
+  }
+
+  async reconcilePendingApplicationMessages(): Promise<number> {
+    const pending = await this.withCryptoLock(() =>
+      this.client.pendingMlsApplicationMessages(),
+    )
+    for (const entry of pending) await this.deliverApplicationEntry(entry)
+    return pending.length
   }
 
   async invitations(): Promise<PendingMlsInvitation[]> {
@@ -341,7 +494,7 @@ export class MlsConversationService {
         ) {
           throw new Error('MLS mailbox replay differs from its durable receipt')
         }
-        await this.transport.ackMlsMailbox(this.client.deviceId, [envelope.id])
+        await this.transport.ackMlsMailbox(this.deviceId, [envelope.id])
         continue
       }
       const recordIndex = records.findIndex(
@@ -421,10 +574,76 @@ export class MlsConversationService {
         throw new Error('durable inbound MLS result differs from its mailbox Commit')
       }
       records[recordIndex] = result.conversation
-      await this.transport.ackMlsMailbox(this.client.deviceId, [envelope.id])
+      await this.publishCurrentDeliveryCapability(result.conversation)
+      await this.transport.ackMlsMailbox(this.deviceId, [envelope.id])
       applied.push(result)
     }
     return applied
+  }
+
+  async reconcileInboundApplicationMessages(): Promise<AppliedInboundMlsApplication[]> {
+    const recipient = requireCanonicalAddress(this.selfAddress)
+    const applied: AppliedInboundMlsApplication[] = []
+    for (const mailbox of await this.allMlsEnvelopes()) {
+      if (mailbox.deliveryKind !== 'anonymous') continue
+      const existing = await this.withCryptoLock(() =>
+        this.client.processedMlsApplicationEnvelope(mailbox.id),
+      )
+      if (existing) {
+        if (
+          existing.recordId !== `in:${mailbox.id}`
+          || existing.messageId !== mailbox.sendId
+          || String(existing.cursor) !== mailbox.cursor
+        ) {
+          throw new Error('MLS application replay differs from its durable receipt')
+        }
+        await this.transport.ackMlsMailbox(this.deviceId, [mailbox.id])
+        continue
+      }
+      const envelope = decodeAnonymousEnvelope(mailbox.opaqueEnvelope)
+      const inspection = await this.withCryptoLock(() =>
+        this.client.inspectAnonymousMlsApplicationEnvelope(
+          recipient,
+          mailbox.sendId,
+          envelope,
+        ),
+      )
+      const senders = await this.withCryptoLock(() =>
+        this.client.resolveMlsWelcomeClaims([inspection.claimedSender]),
+      )
+      if (senders.length !== 1) {
+        throw new Error('MLS application sender did not resolve to one manifest device')
+      }
+      const result = await this.withCryptoLock(() =>
+        this.client.applyAnonymousMlsApplicationEnvelope(
+          mailbox.id,
+          mailbox.cursor,
+          mailbox.sendId,
+          String(mailbox.serverTimestamp),
+          recipient,
+          envelope,
+          senders[0],
+        ),
+      )
+      if (
+        result.message.recordId !== `in:${mailbox.id}`
+        || result.message.messageId !== mailbox.sendId
+        || result.message.conversationId.length !== 16
+      ) {
+        throw new Error('durable MLS application result differs from its mailbox envelope')
+      }
+      await this.transport.ackMlsMailbox(this.deviceId, [mailbox.id])
+      applied.push(result)
+    }
+    return applied
+  }
+
+  async reconcile(): Promise<void> {
+    await this.reconcilePendingGroupGeneses()
+    await this.reconcilePendingMembershipChanges()
+    await this.reconcileInboundMembershipCommits()
+    await this.reconcilePendingApplicationMessages()
+    await this.reconcileInboundApplicationMessages()
   }
 
   /**
@@ -482,8 +701,9 @@ export class MlsConversationService {
     if (decision.status !== 'active') {
       throw new Error('server did not activate the verified MLS invitation')
     }
+    await this.publishCurrentDeliveryCapability(joined.conversation)
     await this.transport.ackMlsMailbox(
-      this.client.deviceId,
+      this.deviceId,
       envelopes.map((envelope) => envelope.id),
     )
     return { group, serverAccepted: true, resumed }
@@ -531,24 +751,137 @@ export class MlsConversationService {
   }
 
   private async allMembershipEnvelopes(): Promise<MlsMailboxEnvelope[]> {
+    return (await this.allMlsEnvelopes()).filter(
+      envelope => envelope.deliveryKind === 'membership_control',
+    )
+  }
+
+  private async allMlsEnvelopes(): Promise<MlsMailboxEnvelope[]> {
     let after: string | undefined
-    const matching: MlsMailboxEnvelope[] = []
+    const envelopes: MlsMailboxEnvelope[] = []
     for (let pageIndex = 0; pageIndex < MAX_MAILBOX_PAGES; pageIndex += 1) {
-      const page = await this.transport.drainMlsMailbox(this.client.deviceId, after, 256)
+      const page = await this.transport.drainMlsMailbox(this.deviceId, after, 256)
       for (const envelope of page.envelopes) {
         validateMailboxEnvelope(envelope)
-        if (
-          envelope.deliveryKind === 'membership_control'
-        ) {
-          matching.push(envelope)
-        }
+        envelopes.push(envelope)
       }
       if (!page.nextCursor || page.nextCursor === after || page.envelopes.length < 256) {
-        return matching
+        return envelopes
       }
       after = page.nextCursor
     }
-    throw new Error('MLS mailbox exceeded the bounded membership-control scan')
+    throw new Error('MLS mailbox exceeded the bounded client scan')
+  }
+
+  private async requireActiveConversation(
+    conversationId: string,
+  ): Promise<LocalMlsConversationRecord> {
+    if (!isUuid(conversationId)) throw new Error('invalid MLS conversation id')
+    const records = await this.conversations()
+    const conversation = records.find(record =>
+      record.status === 'active'
+      && record.request.genesis.conversationId === conversationId)
+    if (!conversation) throw new Error('active local MLS conversation is unavailable')
+    validateLocalGenesisRecord(conversation)
+    return conversation
+  }
+
+  private async publishCurrentDeliveryCapability(
+    conversation: LocalMlsConversationRecord,
+  ): Promise<void> {
+    if (!this.selfAddress) return
+    const recipient = requireCanonicalAddress(this.selfAddress)
+    if (!conversation.currentRoster.some(
+      member => canonicalAccountAddress(member.address) === canonicalAccountAddress(recipient),
+    )) return
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const derived = await this.withCryptoLock(() =>
+      this.client.deriveMlsDeliveryCapability(
+        groupId,
+        conversation.request.genesis.conversationId,
+        String(conversation.request.genesis.incarnation),
+        recipient,
+      ) as Promise<DerivedMlsDeliveryCapability>,
+    )
+    if (derived.verifierHash.length !== 32 || derived.capability.length !== 16) {
+      throw new Error('shared MLS capability derivation returned invalid key material')
+    }
+    await this.transport.publishMlsDeliveryCapability({
+      protocolVersion: MLS_PROTOCOL_VERSION,
+      conversationId: conversation.request.genesis.conversationId,
+      incarnation: conversation.request.genesis.incarnation,
+      epoch: derived.epoch,
+      capabilityKind: 'group',
+      capabilityHash: encodeHex(derived.verifierHash),
+      policySequence: 1,
+    })
+  }
+
+  private async deliverApplicationEntry(initial: MlsOutboxEntry): Promise<void> {
+    let entry = initial
+    for (const recipientText of entry.expectedRecipients) {
+      const existing = entry.deliveries.find(delivery => delivery.recipient === recipientText)
+      if (existing?.delivered) continue
+      const recipient = parseAccountAddress(recipientText)
+      if (!recipient?.server || canonicalAccountAddress(recipient) !== recipientText) {
+        throw new MlsSendError(
+          'recipient',
+          new Error('durable MLS recipient is not a canonical federated address'),
+        )
+      }
+      if (!existing) {
+        const derived = await this.withCryptoLock(() =>
+            this.client.deriveMlsDeliveryCapability(
+              Uint8Array.from(entry.mlsGroupId),
+              bytesToUuid(entry.conversationId),
+              String(entry.incarnation),
+              recipient,
+            ) as Promise<DerivedMlsDeliveryCapability>,
+          )
+          .catch(cause => { throw new MlsSendError('capability', cause) })
+        if (derived.epoch !== entry.epoch || derived.capability.length !== 16) {
+          throw new MlsSendError(
+            'capability_binding',
+            new Error('MLS send capability differs from the durable ciphertext epoch'),
+          )
+        }
+        const packages = await this.fetchVerifiedKeyPackages(
+            recipient,
+            Uint8Array.from(derived.capability),
+          )
+          .catch(cause => { throw new MlsSendError('key_packages', cause) })
+        const staged = await this.withCryptoLock(() =>
+            this.client.stageMlsApplicationDelivery(
+              entry.sendId,
+              recipient,
+              Uint8Array.from(derived.capability),
+              packages,
+              String(Math.floor(Date.now() / 1000)),
+            ),
+          )
+          .catch(cause => { throw new MlsSendError('envelope_staging', cause) })
+        entry = staged.entry
+      }
+      const submission = await this.withCryptoLock(() =>
+          this.client.noteMlsApplicationDeliveryAttempt(entry.sendId, recipientText),
+        )
+        .catch(cause => { throw new MlsSendError('outbox_attempt', cause) })
+      const response = await this.transport.submitAnonymousMlsMessage(submission)
+        .then(value => requireAnonymousDeliveryResponse(value, submission.envelopes.length))
+        .catch(cause => { throw new MlsSendError('submission', cause) })
+      await this.withCryptoLock(() =>
+          this.client.markMlsApplicationRecipientDelivered(
+            entry.sendId,
+            recipientText,
+            response.deduplicated,
+          ),
+        )
+        .catch(cause => { throw new MlsSendError('receipt', cause) })
+    }
   }
 
   private async publishPreparedGenesis(
@@ -929,4 +1262,77 @@ function requireSafePositiveInteger(value: number, field: string): void {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new Error(`MLS ${field} must be a positive safe integer`)
   }
+}
+
+function requireCanonicalAddress(address: AccountAddress | undefined): AccountAddress {
+  if (!address?.server) throw new Error('MLS operation requires a federated account address')
+  const canonical = canonicalAccountAddress(address)
+  if (parseAccountAddress(canonical)?.server !== address.server) {
+    throw new Error('MLS account address is not canonical')
+  }
+  return address
+}
+
+function compareMembers(left: MlsConversationMember, right: MlsConversationMember): number {
+  return canonicalAccountAddress(left.address).localeCompare(
+    canonicalAccountAddress(right.address),
+  )
+}
+
+function encodeHex(bytes: number[]): string {
+  return bytes.map((byte) => {
+    if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+      throw new Error('invalid MLS byte array')
+    }
+    return byte.toString(16).padStart(2, '0')
+  }).join('')
+}
+
+function bytesToUuid(bytes: number[]): string {
+  if (bytes.length !== 16) throw new Error('invalid MLS conversation UUID bytes')
+  const hex = encodeHex(bytes)
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+function decodeAnonymousEnvelope(value: string): AnonymousMlsDeviceEnvelope {
+  const bytes = decodeCanonicalBase64(value, 2, 1024 * 1024)
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+  } catch {
+    throw new Error('anonymous MLS mailbox envelope is not canonical JSON')
+  }
+  if (
+    typeof parsed !== 'object'
+    || parsed === null
+    || !('deviceId' in parsed)
+    || !Number.isSafeInteger(parsed.deviceId)
+    || parsed.deviceId !== Number(parsed.deviceId)
+    || !('encapsulatedKey' in parsed)
+    || typeof parsed.encapsulatedKey !== 'string'
+    || !('ciphertext' in parsed)
+    || typeof parsed.ciphertext !== 'string'
+  ) {
+    throw new Error('anonymous MLS mailbox envelope has an invalid shape')
+  }
+  return parsed as AnonymousMlsDeviceEnvelope
+}
+
+function requireAnonymousDeliveryResponse(
+  value: unknown,
+  expectedDevices: number,
+): { accepted: true; storedDevices: number; deduplicated: boolean } {
+  if (
+    typeof value !== 'object'
+    || value === null
+    || !('accepted' in value)
+    || value.accepted !== true
+    || !('storedDevices' in value)
+    || value.storedDevices !== expectedDevices
+    || !('deduplicated' in value)
+    || typeof value.deduplicated !== 'boolean'
+  ) {
+    throw new Error('server returned an invalid anonymous MLS delivery acknowledgement')
+  }
+  return value as { accepted: true; storedDevices: number; deduplicated: boolean }
 }

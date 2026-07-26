@@ -666,6 +666,11 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
         )
         .route(
+            "/api/chat/mls/key-packages/identified",
+            post(chat_mls::get_identified_key_packages)
+                .route_layer(DefaultBodyLimit::max(8 * 1024)),
+        )
+        .route(
             "/api/chat/mls/key-packages/:deviceId/count",
             get(chat_mls::key_package_count),
         )
@@ -787,6 +792,12 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/chat/sealed/messages",
             post(chat_federation::deliver_sealed_messages)
                 .route_layer(DefaultBodyLimit::max(1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/mls/key-packages/identified",
+            post(chat_mls::federated_get_identified_key_packages)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(

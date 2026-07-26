@@ -217,6 +217,7 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         transparency_witnesses: state.transparency_authority.witnesses(),
         transparency_witness_quorum: state.transparency_authority.witness_quorum(),
         sealed_sender: sealed_sender_policy.is_some(),
+        mls_groups: federation_enabled && state.mls_ordering.is_some(),
         sealed_sender_policy,
         ..Default::default()
     };

@@ -287,6 +287,12 @@ export class ApiChatTransport implements ChatTransportPort {
     await api.put('/chat/mls/delivery-capability', request)
   }
 
+  async fetchIdentifiedMlsKeyPackages(request: unknown): Promise<unknown> {
+    return api
+      .post('/chat/mls/key-packages/identified', request)
+      .then((response) => response.data)
+  }
+
   async fetchAnonymousMlsKeyPackages(request: unknown): Promise<unknown> {
     return axios
       .post(`${apiBase()}/chat/mls/anonymous/key-packages`, request, {

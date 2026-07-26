@@ -36,25 +36,26 @@ pub use mls::{
     mls_transition_digest, roster_commitment, verify_mls_authority_bootstrap_history,
     verify_mls_client_control_history, verify_mls_participant_bootstrap_history, AckMlsMailboxV1,
     AnonymousMlsDeliveryResponseV1, AnonymousMlsDeviceEnvelopeV1, AnonymousMlsKeyPackageRequestV1,
-    AnonymousMlsKeyPackageResponseV1, AnonymousMlsSubmissionV1, CommitMlsControlBlockResponseV1,
-    CommitMlsControlBlockV1, CreateMlsConversationRequestV1, CreateMlsConversationResponseV1,
-    Ed25519MlsControlSigner, Ed25519MlsOwnerSigner, FederatedAnonymousMlsTransactionV1,
-    FederatedMlsAuthorityBootstrapPageV1, FederatedMlsControlReplicaV1,
-    FederatedMlsGenesisReplicaV1, FederatedMlsOrderingVoteRequestV1,
-    FederatedMlsParticipantBootstrapPageV1, MlsAbuseLimitsV1, MlsAnonymousDeliverySuiteV1,
-    MlsAuthorityBootstrapDescriptorV1, MlsAuthoritySetV1, MlsAuthorityTransitionCertificateV1,
-    MlsAuthorityV1, MlsCipherSuiteId, MlsClientControlHistoryPageV1, MlsControlActionTypeV1,
-    MlsControlBlockV1, MlsControlProposalV1, MlsControlSigner, MlsConversationGenesisV1,
-    MlsConversationKindV1, MlsConversationMemberV1, MlsDeliveryCapabilityKindV1,
-    MlsFinalizedControlBlockV1, MlsKeyPackageCountResponseV1, MlsKeyPackageV1,
-    MlsMailboxDeliveryKindV1, MlsMailboxEnvelopeV1, MlsMailboxPageV1, MlsManifestDeviceV1,
-    MlsMembershipDeliveryCommitmentV1, MlsMembershipDeliveryV1, MlsMembershipEnvelopeKindV1,
-    MlsMembershipEnvelopeV1, MlsMembershipTransitionV1, MlsOrderingQuorumCertificateV1,
-    MlsOrderingServicePolicyV1, MlsOrderingVoteTypeV1, MlsOrderingVoteV1,
-    MlsOwnerApprovalCertificateV1, MlsOwnerApprovalV1, MlsOwnerSetV1, MlsOwnerSigner, MlsOwnerV1,
-    MlsParticipantBootstrapDescriptorV1, MlsPrivateControlStateV1, PendingMessageRequestPolicyV1,
-    PendingMlsInvitationV1, PublishMlsDeliveryCapabilityV1, PublishMlsKeyPackagesRequestV1,
-    RespondMlsInvitationResponseV1, RespondMlsInvitationV1, ANONYMOUS_MLS_DELIVERY_CONTEXT,
+    AnonymousMlsSubmissionV1, CommitMlsControlBlockResponseV1, CommitMlsControlBlockV1,
+    CreateMlsConversationRequestV1, CreateMlsConversationResponseV1, Ed25519MlsControlSigner,
+    Ed25519MlsOwnerSigner, FederatedAnonymousMlsTransactionV1,
+    FederatedIdentifiedMlsKeyPackageRequestV1, FederatedMlsAuthorityBootstrapPageV1,
+    FederatedMlsControlReplicaV1, FederatedMlsGenesisReplicaV1, FederatedMlsOrderingVoteRequestV1,
+    FederatedMlsParticipantBootstrapPageV1, IdentifiedMlsKeyPackageRequestV1, MlsAbuseLimitsV1,
+    MlsAnonymousDeliverySuiteV1, MlsAuthorityBootstrapDescriptorV1, MlsAuthoritySetV1,
+    MlsAuthorityTransitionCertificateV1, MlsAuthorityV1, MlsCipherSuiteId,
+    MlsClientControlHistoryPageV1, MlsControlActionTypeV1, MlsControlBlockV1, MlsControlProposalV1,
+    MlsControlSigner, MlsConversationGenesisV1, MlsConversationKindV1, MlsConversationMemberV1,
+    MlsDeliveryCapabilityKindV1, MlsFinalizedControlBlockV1, MlsKeyPackageBundleV1,
+    MlsKeyPackageCountResponseV1, MlsKeyPackageV1, MlsMailboxDeliveryKindV1, MlsMailboxEnvelopeV1,
+    MlsMailboxPageV1, MlsManifestDeviceV1, MlsMembershipDeliveryCommitmentV1,
+    MlsMembershipDeliveryV1, MlsMembershipEnvelopeKindV1, MlsMembershipEnvelopeV1,
+    MlsMembershipTransitionV1, MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1,
+    MlsOrderingVoteTypeV1, MlsOrderingVoteV1, MlsOwnerApprovalCertificateV1, MlsOwnerApprovalV1,
+    MlsOwnerSetV1, MlsOwnerSigner, MlsOwnerV1, MlsParticipantBootstrapDescriptorV1,
+    MlsPrivateControlStateV1, PendingMessageRequestPolicyV1, PendingMlsInvitationV1,
+    PublishMlsDeliveryCapabilityV1, PublishMlsKeyPackagesRequestV1, RespondMlsInvitationResponseV1,
+    RespondMlsInvitationV1, ANONYMOUS_MLS_DELIVERY_CONTEXT,
     MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256, MLS_ORDERING_SERVICE_POLICY_VERSION,
     MLS_PRIVATE_CONTROL_EXTENSION_TYPE, MLS_PROTOCOL_VERSION,
 };
@@ -621,6 +622,10 @@ pub struct ChatCapabilities {
     /// [RSV] flips true when sealed sender ships.
     #[serde(default)]
     pub sealed_sender: bool,
+    /// RFC 9420 group creation, invitation, ordered membership, and anonymous
+    /// application delivery are complete on the local and federated paths.
+    #[serde(default)]
+    pub mls_groups: bool,
     /// Complete authenticated local service-policy history. Present only when
     /// the certificate, anonymous bundle, local delivery, and federation paths
     /// are all enabled.
@@ -648,6 +653,7 @@ impl Default for ChatCapabilities {
             transparency_witnesses: Vec::new(),
             transparency_witness_quorum: 0,
             sealed_sender: false,
+            mls_groups: false,
             sealed_sender_policy: None,
         }
     }
