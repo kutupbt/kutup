@@ -207,6 +207,53 @@ export class ApiChatTransport implements ChatTransportPort {
       .then((response) => response.data)
   }
 
+  async fetchMlsControlHistory(
+    conversationId: string,
+    incarnation: number,
+    afterHeight: string,
+    limit = 64,
+  ): Promise<{ bytes: Uint8Array; entryCount: number; nextHeight?: string }> {
+    const response = await api.get(
+      `/chat/mls/conversations/${encodeURIComponent(conversationId)}/${incarnation}/control-history`,
+      {
+        params: { afterHeight, limit },
+        responseType: 'arraybuffer',
+      },
+    )
+    const bytes = new Uint8Array(response.data as ArrayBuffer)
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(new TextDecoder().decode(bytes))
+    } catch {
+      throw new Error('server returned malformed MLS control-history JSON')
+    }
+    const record = typeof parsed === 'object' && parsed !== null
+      ? parsed as Record<string, unknown>
+      : null
+    const nextHeight = record?.nextHeight
+    const entryCount = record && Array.isArray(record.commits)
+      ? record.commits.length
+      : -1
+    if (
+      entryCount < 0
+      || entryCount > 64
+      || (
+      nextHeight !== undefined
+      && (
+        typeof nextHeight !== 'string'
+        || !/^[1-9][0-9]*$/.test(nextHeight)
+      )
+      )
+    ) {
+      throw new Error('server returned invalid MLS control-history pagination')
+    }
+    return {
+      bytes,
+      entryCount,
+      ...(nextHeight === undefined ? {} : { nextHeight }),
+    }
+  }
+
   async listMlsInvitations(): Promise<PendingMlsInvitation[]> {
     return api.get('/chat/mls/invitations').then((response) => response.data)
   }

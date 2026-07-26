@@ -193,6 +193,22 @@ export interface MlsWelcomeInspection {
   mlsGroupId: number[]
   epoch: number
   claimedMembers: ClaimedMlsCredential[]
+  privateControlState: {
+    protocolVersion: number
+    conversationId: string
+    incarnation: number
+    height: number
+    epoch: number
+  }
+}
+
+export interface MlsInboundCommitInspection {
+  mlsGroupId: number[]
+  epochBefore: number
+  epochAfter: number
+  commitHash: string
+  claimedMembers: ClaimedMlsCredential[]
+  privateControlState: MlsWelcomeInspection['privateControlState']
 }
 
 export interface LocalMlsConversationRecord {
@@ -305,6 +321,35 @@ export interface FinalizedMlsMembershipChange {
   conversation: LocalMlsConversationRecord
 }
 
+export interface JoinedMlsConversation {
+  group: LocalMlsGroupState
+  conversation: LocalMlsConversationRecord
+}
+
+export interface ProcessedMlsControlEnvelope {
+  envelopeId: string
+  cursor: string
+  sendId: string
+  conversationId: string
+  incarnation: number
+  height: number
+  epoch: number
+  blockHash: string
+}
+
+export interface AppliedInboundMlsCommit {
+  group: LocalMlsGroupState
+  conversation: LocalMlsConversationRecord
+  receipt: ProcessedMlsControlEnvelope
+  idempotent: boolean
+}
+
+export interface MlsControlHistoryPage {
+  bytes: Uint8Array
+  entryCount: number
+  nextHeight?: string
+}
+
 export interface ChatTransportPort {
   registerDevice(request: unknown): Promise<unknown>
   fetchBundles(username: string, transparencyTreeSize: string): Promise<unknown>
@@ -348,6 +393,12 @@ export interface ChatTransportPort {
   stageMlsMembershipDelivery(request: unknown): Promise<unknown>
   collectMlsOrderingVotes(request: unknown): Promise<unknown>
   commitMlsControlBlock(request: unknown): Promise<unknown>
+  fetchMlsControlHistory(
+    conversationId: string,
+    incarnation: number,
+    afterHeight: string,
+    limit?: number,
+  ): Promise<MlsControlHistoryPage>
   listMlsInvitations(): Promise<PendingMlsInvitation[]>
   respondMlsInvitation(
     request: MlsInvitationDecision,
@@ -425,11 +476,15 @@ export interface WasmChatClientHandle {
   pendingMlsCommit(mlsGroupId: Uint8Array): Promise<unknown | null>
   mergePendingMlsCommit(mlsGroupId: Uint8Array, commitHash: string): Promise<unknown>
   rejectPendingMlsCommit(mlsGroupId: Uint8Array, commitHash: string): Promise<void>
-  joinMlsFromWelcome(
+  joinMlsFromWelcomeWithControlHistory(
+    envelopeId: string,
+    cursor: string,
+    sendId: string,
     mlsGroupId: Uint8Array,
     welcome: Uint8Array,
     expectedMembers: unknown,
-  ): Promise<unknown>
+    historyPages: Uint8Array[],
+  ): Promise<JoinedMlsConversation>
   inspectMlsWelcome(
     mlsGroupId: Uint8Array,
     welcome: Uint8Array,
@@ -443,11 +498,22 @@ export interface WasmChatClientHandle {
     capability: Uint8Array,
     nowSeconds: string,
   ): Promise<unknown[]>
-  applyInboundMlsCommit(
+  processedMlsControlEnvelope(
+    envelopeId: string,
+  ): Promise<ProcessedMlsControlEnvelope | null>
+  applyOrderedInboundMlsMembershipCommit(
+    envelopeId: string,
+    cursor: string,
+    sendId: string,
     mlsGroupId: Uint8Array,
     commit: Uint8Array,
     expectedMembers: unknown,
-  ): Promise<unknown>
+    controlHistoryPage: Uint8Array,
+  ): Promise<AppliedInboundMlsCommit>
+  inspectInboundMlsCommit(
+    mlsGroupId: Uint8Array,
+    commit: Uint8Array,
+  ): Promise<MlsInboundCommitInspection>
   mlsGroupControlCredential(mlsGroupId: Uint8Array): Promise<unknown>
   signMlsControlProposal(
     mlsGroupId: Uint8Array,

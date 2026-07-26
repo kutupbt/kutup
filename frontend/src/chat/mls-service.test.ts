@@ -200,6 +200,13 @@ function harness(
     inspectMlsWelcome: vi.fn().mockResolvedValue({
       mlsGroupId: [...new Uint8Array(16).fill(7)],
       epoch: 1,
+      privateControlState: {
+        protocolVersion: 1,
+        conversationId,
+        incarnation: 1,
+        height: 1,
+        epoch: 1,
+      },
       claimedMembers: [
         {
           credentialIdentity: 'alice@example.test#7',
@@ -213,12 +220,49 @@ function harness(
         credentialPublicKey: [...new Uint8Array(65).fill(4)],
       },
     ]),
+    processedMlsControlEnvelope: vi.fn().mockResolvedValue(null),
+    inspectInboundMlsCommit: vi.fn().mockResolvedValue({
+      mlsGroupId: [...genesisGroupBytes],
+      epochBefore: 0,
+      epochAfter: 1,
+      commitHash: 'cd'.repeat(32),
+      claimedMembers: [
+        {
+          credentialIdentity: 'alice@example.test#7',
+          credentialPublicKey: [...new Uint8Array(65).fill(4)],
+        },
+      ],
+      privateControlState: {
+        protocolVersion: 1,
+        conversationId,
+        incarnation: 1,
+        height: 1,
+        epoch: 1,
+      },
+    }),
+    applyOrderedInboundMlsMembershipCommit: vi.fn().mockResolvedValue({
+      ...finalizedMembership(),
+      receipt: {
+        envelopeId,
+        cursor: '1',
+        sendId,
+        conversationId,
+        incarnation: 1,
+        height: 1,
+        epoch: 1,
+        blockHash: controlBlockHash,
+      },
+      idempotent: false,
+    }),
     fetchVerifiedMlsKeyPackages: vi.fn().mockResolvedValue([
       { wire: { deviceId: 7 }, credential: { credentialIdentity: 'bob@example.test#7' } },
     ]),
-    joinMlsFromWelcome: vi.fn().mockResolvedValue({
-      mlsGroupId: [...new Uint8Array(16).fill(7)],
-      epoch: 1,
+    joinMlsFromWelcomeWithControlHistory: vi.fn().mockResolvedValue({
+      group: {
+        mlsGroupId: [...new Uint8Array(16).fill(7)],
+        epoch: 1,
+      },
+      conversation: finalizedMembership().conversation,
     }),
   } as unknown as WasmChatClientHandle
   const transport = {
@@ -239,6 +283,11 @@ function harness(
       epoch: 1,
       blockHash: controlBlockHash,
       idempotent: false,
+    }),
+    fetchMlsControlHistory: vi.fn().mockResolvedValue({
+      bytes: new Uint8Array([123, 125]),
+      entryCount: 1,
+      nextHeight: '1',
     }),
     listMlsInvitations: vi.fn().mockResolvedValue([invitation()]),
     respondMlsInvitation: vi.fn().mockResolvedValue({
@@ -503,7 +552,21 @@ describe('MlsConversationService', () => {
         credentialPublicKey: [...new Uint8Array(65).fill(4)],
       },
     ])
-    expect(client.joinMlsFromWelcome).toHaveBeenCalledOnce()
+    expect(client.joinMlsFromWelcomeWithControlHistory).toHaveBeenCalledWith(
+      envelopeId,
+      '1',
+      sendId,
+      new Uint8Array(16).fill(7),
+      new Uint8Array(32).fill(9),
+      expect.any(Array),
+      [new Uint8Array([123, 125])],
+    )
+    expect(transport.fetchMlsControlHistory).toHaveBeenCalledWith(
+      conversationId,
+      1,
+      '0',
+      64,
+    )
     expect(transport.respondMlsInvitation).toHaveBeenCalledWith({
       conversationId,
       incarnation: 1,
@@ -520,8 +583,59 @@ describe('MlsConversationService', () => {
     })
     expect(client.inspectMlsWelcome).toHaveBeenCalledOnce()
     expect(client.resolveMlsWelcomeClaims).not.toHaveBeenCalled()
-    expect(client.joinMlsFromWelcome).not.toHaveBeenCalled()
+    expect(client.joinMlsFromWelcomeWithControlHistory).not.toHaveBeenCalled()
     expect(transport.ackMlsMailbox).not.toHaveBeenCalled()
+  })
+
+  it('applies, durably receipts, and only then acknowledges an ordered inbound Commit', async () => {
+    const { client, transport, service } = harness(null, [activeGenesis()])
+    await expect(service.reconcileInboundMembershipCommits()).resolves.toEqual([
+      expect.objectContaining({
+        group: expect.objectContaining({ epoch: 1 }),
+        receipt: expect.objectContaining({ envelopeId, cursor: '1' }),
+      }),
+    ])
+    expect(client.inspectInboundMlsCommit).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      new Uint8Array(32).fill(9),
+    )
+    expect(transport.fetchMlsControlHistory).toHaveBeenCalledWith(
+      conversationId,
+      1,
+      '0',
+      1,
+    )
+    expect(client.applyOrderedInboundMlsMembershipCommit).toHaveBeenCalledWith(
+      envelopeId,
+      '1',
+      sendId,
+      genesisGroupBytes,
+      new Uint8Array(32).fill(9),
+      expect.any(Array),
+      new Uint8Array([123, 125]),
+    )
+    expect(transport.ackMlsMailbox).toHaveBeenCalledWith(7, [envelopeId])
+    expect(
+      vi.mocked(client.applyOrderedInboundMlsMembershipCommit).mock.invocationCallOrder[0],
+    ).toBeLessThan(vi.mocked(transport.ackMlsMailbox).mock.invocationCallOrder[0])
+  })
+
+  it('acknowledges a crash-replayed Commit from its durable receipt without parsing it', async () => {
+    const { client, transport, service } = harness(null, [activeGenesis()])
+    vi.mocked(client.processedMlsControlEnvelope).mockResolvedValueOnce({
+      envelopeId,
+      cursor: '1',
+      sendId,
+      conversationId,
+      incarnation: 1,
+      height: 1,
+      epoch: 1,
+      blockHash: controlBlockHash,
+    })
+    await expect(service.reconcileInboundMembershipCommits()).resolves.toEqual([])
+    expect(client.inspectInboundMlsCommit).not.toHaveBeenCalled()
+    expect(client.applyOrderedInboundMlsMembershipCommit).not.toHaveBeenCalled()
+    expect(transport.ackMlsMailbox).toHaveBeenCalledWith(7, [envelopeId])
   })
 
   it('resumes server activation without rejoining a durable group', async () => {
@@ -534,7 +648,7 @@ describe('MlsConversationService', () => {
       serverAccepted: true,
       resumed: true,
     })
-    expect(client.joinMlsFromWelcome).not.toHaveBeenCalled()
+    expect(client.joinMlsFromWelcomeWithControlHistory).toHaveBeenCalledOnce()
   })
 
   it('rejects a verifier result that differs from the inspected Welcome', async () => {
@@ -548,6 +662,6 @@ describe('MlsConversationService', () => {
     await expect(service.acceptInvitation(invitation())).rejects.toThrow(
       /roster different/,
     )
-    expect(client.joinMlsFromWelcome).not.toHaveBeenCalled()
+    expect(client.joinMlsFromWelcomeWithControlHistory).not.toHaveBeenCalled()
   })
 })

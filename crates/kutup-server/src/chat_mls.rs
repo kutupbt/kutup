@@ -9,6 +9,7 @@ mod anonymous_federation;
 mod anonymous_routes;
 mod authority_bootstrap;
 mod control_federation;
+mod control_history;
 mod control_routes;
 mod control_store;
 mod conversation_store;
@@ -35,6 +36,7 @@ use authority_bootstrap::{bootstrap_finalized_authority, bootstrap_new_authoriti
 pub(crate) use control_federation::{
     federated_cast_ordering_vote, federated_commit_control_block, federated_replicate_genesis,
 };
+pub(crate) use control_history::get_control_history;
 pub(crate) use control_routes::{
     collect_ordering_votes, commit_control_block, create_conversation,
 };

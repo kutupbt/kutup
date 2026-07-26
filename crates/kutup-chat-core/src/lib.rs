@@ -56,13 +56,14 @@ pub use manifest::{
     TransparencyScopePolicy,
 };
 pub use mls_engine::{
-    AnonymousMlsRecipientDevice, ClaimedMlsCredential, DecryptedMlsApplication,
-    DerivedMlsDeliveryCapability, FinalizedMlsMembershipChange, LocalMlsConversationRecord,
-    LocalMlsConversationStatus, LocalMlsGroupState, MlsClient, MlsDevicePublicMaterial,
-    MlsGroupControlCredential, MlsGroupOwnerCredential, MlsWelcomeInspection, PendingMlsCommit,
-    PendingMlsMembershipChange, PreparedMlsGroupGenesis, PreparedMlsMembershipChange,
-    VerifiedMlsCredential, VerifiedMlsKeyPackage, KUTUP_MLS_V1_CIPHERSUITE,
-    KUTUP_MLS_V1_MAX_PAST_EPOCHS,
+    AnonymousMlsRecipientDevice, AppliedInboundMlsCommit, ClaimedMlsCredential,
+    DecryptedMlsApplication, DerivedMlsDeliveryCapability, FinalizedMlsMembershipChange,
+    JoinedMlsConversation, LocalMlsConversationRecord, LocalMlsConversationStatus,
+    LocalMlsGroupState, MlsClient, MlsControlEnvelopeContext, MlsDevicePublicMaterial,
+    MlsGroupControlCredential, MlsGroupOwnerCredential, MlsInboundCommitInspection,
+    MlsWelcomeInspection, PendingMlsCommit, PendingMlsMembershipChange, PreparedMlsGroupGenesis,
+    PreparedMlsMembershipChange, ProcessedMlsControlEnvelope, VerifiedMlsCredential,
+    VerifiedMlsKeyPackage, KUTUP_MLS_V1_CIPHERSUITE, KUTUP_MLS_V1_MAX_PAST_EPOCHS,
 };
 pub use mls_policy::verify_mls_ordering_policy_history;
 pub use profile::{derive_wrapping_key, MAX_AVATAR_BYTES};

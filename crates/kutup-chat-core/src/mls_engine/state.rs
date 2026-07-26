@@ -22,9 +22,9 @@ use serde::{Deserialize, Serialize};
 use super::{
     decode_canonical_base64, validate_group_id, validate_metadata, validate_pending_commit,
     validate_pending_membership_change, LocalMlsConversationRecord, MlsDevicePublicMaterial,
-    PendingMlsCommit, PendingMlsMembershipChange, MAX_PENDING_COMMITS, MAX_STATE_BYTES,
-    MAX_STATE_RECORDS, MAX_STATE_RECORD_BYTES, MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256,
-    STATE_FORMAT_VERSION,
+    PendingMlsCommit, PendingMlsMembershipChange, ProcessedMlsControlEnvelope, MAX_PENDING_COMMITS,
+    MAX_STATE_BYTES, MAX_STATE_RECORDS, MAX_STATE_RECORD_BYTES,
+    MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256, STATE_FORMAT_VERSION,
 };
 use crate::error::{ChatError, Result};
 
@@ -61,6 +61,7 @@ pub(super) struct SnapshotMetadata {
     pub(super) group_control_private_keys: BTreeMap<String, Vec<u8>>,
     pub(super) group_owner_private_keys: BTreeMap<String, Vec<u8>>,
     pub(super) conversations: BTreeMap<String, LocalMlsConversationRecord>,
+    pub(super) processed_control_envelopes: BTreeMap<String, ProcessedMlsControlEnvelope>,
 }
 
 impl SnapshotMetadata {
@@ -98,7 +99,7 @@ impl SnapshotMetadata {
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PersistedMlsStateV4 {
+struct PersistedMlsStateV5 {
     format_version: u16,
     ciphersuite: u16,
     credential_identity: String,
@@ -109,6 +110,7 @@ struct PersistedMlsStateV4 {
     group_control_keys: Vec<PersistedMlsGroupControlKeyV1>,
     group_owner_keys: Vec<PersistedMlsGroupOwnerKeyV1>,
     conversations: Vec<LocalMlsConversationRecord>,
+    processed_control_envelopes: Vec<ProcessedMlsControlEnvelope>,
     records: Vec<PersistedMlsRecordV1>,
 }
 
@@ -160,7 +162,7 @@ pub(super) fn snapshot_provider(
             value: BASE64.encode(value),
         });
     }
-    let state = PersistedMlsStateV4 {
+    let state = PersistedMlsStateV5 {
         format_version: STATE_FORMAT_VERSION,
         ciphersuite: MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256,
         credential_identity: metadata.credential_identity.clone(),
@@ -189,6 +191,11 @@ pub(super) fn snapshot_provider(
             })
             .collect(),
         conversations: metadata.conversations.values().cloned().collect(),
+        processed_control_envelopes: metadata
+            .processed_control_envelopes
+            .values()
+            .cloned()
+            .collect(),
         records,
     };
     let encoded = serde_json::to_vec(&state).map_err(|error| ChatError::Db(error.to_string()))?;
@@ -202,7 +209,7 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
     if bytes.is_empty() || bytes.len() > MAX_STATE_BYTES {
         return Err(ChatError::Db("OpenMLS state size is invalid".into()));
     }
-    let state: PersistedMlsStateV4 =
+    let state: PersistedMlsStateV5 =
         serde_json::from_slice(bytes).map_err(|error| ChatError::Db(error.to_string()))?;
     if state.format_version != STATE_FORMAT_VERSION
         || state.ciphersuite != MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256
@@ -212,6 +219,7 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
         || state.group_control_keys.len() > MAX_PENDING_COMMITS
         || state.group_owner_keys.len() > MAX_PENDING_COMMITS
         || state.conversations.len() > MAX_PENDING_COMMITS
+        || state.processed_control_envelopes.len() > MAX_PENDING_COMMITS
     {
         return Err(ChatError::Db(
             "unsupported or oversized OpenMLS state snapshot".into(),
@@ -344,6 +352,26 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
             ));
         }
     }
+    let mut processed_control_envelopes = BTreeMap::new();
+    let mut previous_envelope_id: Option<String> = None;
+    for receipt in state.processed_control_envelopes {
+        super::validate_processed_control_envelope(&receipt)?;
+        let key = receipt.envelope_id.to_string();
+        if previous_envelope_id
+            .as_ref()
+            .is_some_and(|previous| key <= *previous)
+        {
+            return Err(ChatError::Db(
+                "processed MLS control envelopes are not canonically ordered".into(),
+            ));
+        }
+        previous_envelope_id = Some(key.clone());
+        if processed_control_envelopes.insert(key, receipt).is_some() {
+            return Err(ChatError::Db(
+                "OpenMLS state contains a duplicate processed control envelope".into(),
+            ));
+        }
+    }
     let metadata = SnapshotMetadata {
         credential_identity: state.credential_identity,
         credential_public_key: decode_canonical_base64(
@@ -361,6 +389,7 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
         group_control_private_keys,
         group_owner_private_keys,
         conversations,
+        processed_control_envelopes,
     };
     validate_metadata(&metadata)?;
 

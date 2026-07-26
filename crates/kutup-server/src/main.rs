@@ -643,6 +643,10 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
         )
         .route(
+            "/api/chat/mls/conversations/:conversationId/:incarnation/control-history",
+            get(chat_mls::get_control_history),
+        )
+        .route(
             "/api/chat/mls/control/membership-deliveries",
             put(chat_mls::stage_membership_delivery)
                 .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),

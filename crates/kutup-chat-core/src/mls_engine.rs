@@ -18,9 +18,10 @@ use std::rc::Rc;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use openmls::prelude::{
-    Ciphersuite, Extensions, GroupId, KeyPackage, KeyPackageIn, Lifetime, Member, MlsGroup,
-    MlsGroupCreateConfig, MlsGroupJoinConfig, MlsMessageBodyIn, MlsMessageIn,
-    ProcessedMessageContent, ProtocolVersion, Sender, StagedWelcome,
+    Capabilities, Ciphersuite, CredentialType, Extension, ExtensionType, Extensions, GroupContext,
+    GroupId, KeyPackage, KeyPackageIn, Lifetime, Member, MlsGroup, MlsGroupCreateConfig,
+    MlsGroupJoinConfig, MlsMessageBodyIn, MlsMessageIn, ProcessedMessageContent, ProtocolVersion,
+    RequiredCapabilitiesExtension, Sender, StagedWelcome, UnknownExtension,
 };
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_traits::types::SignatureScheme;
@@ -38,18 +39,20 @@ use uuid::Uuid;
 use crate::db::{ChatDb, MlsOutboxEntry, Pending};
 use crate::error::{ChatError, Result};
 use kutup_chat_proto::{
-    roster_commitment, AccountAddress, CommitMlsControlBlockResponseV1, CommitMlsControlBlockV1,
-    CreateMlsConversationRequestV1, FederatedMlsOrderingVoteRequestV1, MlsAuthoritySetV1,
-    MlsAuthorityV1, MlsCipherSuiteId, MlsControlActionTypeV1, MlsControlBlockV1,
-    MlsControlProposalV1, MlsConversationGenesisV1, MlsConversationKindV1, MlsConversationMemberV1,
+    roster_commitment, verify_mls_client_control_history, AccountAddress,
+    CommitMlsControlBlockResponseV1, CommitMlsControlBlockV1, CreateMlsConversationRequestV1,
+    FederatedMlsOrderingVoteRequestV1, MlsAuthoritySetV1, MlsAuthorityV1, MlsCipherSuiteId,
+    MlsClientControlHistoryPageV1, MlsControlActionTypeV1, MlsControlBlockV1, MlsControlProposalV1,
+    MlsConversationGenesisV1, MlsConversationKindV1, MlsConversationMemberV1,
     MlsFinalizedControlBlockV1, MlsKeyPackageV1, MlsManifestDeviceV1,
     MlsMembershipDeliveryCommitmentV1, MlsMembershipDeliveryV1, MlsMembershipEnvelopeKindV1,
     MlsMembershipEnvelopeV1, MlsMembershipTransitionV1, MlsOrderingQuorumCertificateV1,
-    MlsOrderingServicePolicyV1, MlsOwnerSetV1, MlsOwnerV1,
-    MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256, MLS_PROTOCOL_VERSION,
+    MlsOrderingServicePolicyV1, MlsOwnerSetV1, MlsOwnerV1, MlsPrivateControlStateV1,
+    MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256, MLS_PRIVATE_CONTROL_EXTENSION_TYPE,
+    MLS_PROTOCOL_VERSION,
 };
 
-const STATE_FORMAT_VERSION: u16 = 4;
+const STATE_FORMAT_VERSION: u16 = 5;
 const MAX_STATE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_STATE_RECORDS: usize = 100_000;
 const MAX_STATE_RECORD_BYTES: usize = 16 * 1024 * 1024;
@@ -142,6 +145,15 @@ pub struct PreparedMlsGroupGenesis {
     pub conversation: LocalMlsConversationRecord,
 }
 
+/// Atomic result of joining a Welcome and importing its independently
+/// replayed public control history.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JoinedMlsConversation {
+    pub group: LocalMlsGroupState,
+    pub conversation: LocalMlsConversationRecord,
+}
+
 /// One transparency-verified MLS credential. Account addresses are carried in
 /// the BasicCredential only between group members; ordering authorities see
 /// only the separately encrypted Kutup control proposal.
@@ -155,7 +167,7 @@ pub struct VerifiedMlsCredential {
 /// Untrusted roster claim decrypted from an MLS Welcome before any local group
 /// state is created. Callers must bind every claim to transparency-verified
 /// account manifests before passing the corresponding verified roster to
-/// [`MlsClient::join_from_welcome`].
+/// [`MlsClient::join_from_welcome_with_control_history`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClaimedMlsCredential {
@@ -169,6 +181,21 @@ pub struct MlsWelcomeInspection {
     pub mls_group_id: Vec<u8>,
     pub epoch: u64,
     pub claimed_members: Vec<ClaimedMlsCredential>,
+    pub private_control_state: MlsPrivateControlStateV1,
+}
+
+/// Untrusted-but-MLS-authenticated view of a staged inbound Commit. The caller
+/// must resolve every claimed device through transparency and verify the
+/// corresponding public control block before the Commit can be merged.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsInboundCommitInspection {
+    pub mls_group_id: Vec<u8>,
+    pub epoch_before: u64,
+    pub epoch_after: u64,
+    pub commit_hash: String,
+    pub claimed_members: Vec<ClaimedMlsCredential>,
+    pub private_control_state: MlsPrivateControlStateV1,
 }
 
 impl VerifiedMlsCredential {
@@ -240,6 +267,63 @@ pub struct PreparedMlsMembershipChange {
 pub struct FinalizedMlsMembershipChange {
     pub group: LocalMlsGroupState,
     pub conversation: LocalMlsConversationRecord,
+}
+
+/// Authenticated mailbox coordinates supplied alongside one opaque MLS
+/// membership-control message.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsControlEnvelopeContext {
+    pub envelope_id: Uuid,
+    pub cursor: String,
+    pub send_id: Uuid,
+}
+
+impl MlsControlEnvelopeContext {
+    fn validate(&self) -> Result<()> {
+        if self.envelope_id.is_nil()
+            || self.send_id.is_nil()
+            || self
+                .cursor
+                .parse::<u64>()
+                .ok()
+                .filter(|cursor| *cursor > 0 && cursor.to_string() == self.cursor)
+                .is_none()
+        {
+            return Err(ChatError::Invalid(
+                "MLS mailbox envelope coordinates are invalid".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Exact durable receipt for a membership-control mailbox envelope. It is
+/// written in the same encrypted snapshot as the merged OpenMLS Commit and
+/// control-log head, then used to make post-crash server acknowledgement
+/// retries idempotent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessedMlsControlEnvelope {
+    pub envelope_id: Uuid,
+    pub cursor: String,
+    pub send_id: Uuid,
+    pub conversation_id: Uuid,
+    pub incarnation: u64,
+    pub height: u64,
+    pub epoch: u64,
+    pub block_hash: String,
+}
+
+/// Atomic result of applying or replaying one authenticated inbound
+/// membership Commit.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppliedInboundMlsCommit {
+    pub group: LocalMlsGroupState,
+    pub conversation: LocalMlsConversationRecord,
+    pub receipt: ProcessedMlsControlEnvelope,
+    pub idempotent: bool,
 }
 
 /// Authenticated application plaintext and the exact MLS device credential
@@ -321,6 +405,7 @@ impl MlsClient {
             group_control_private_keys: BTreeMap::new(),
             group_owner_private_keys: BTreeMap::new(),
             conversations: BTreeMap::new(),
+            processed_control_envelopes: BTreeMap::new(),
         };
         let state = snapshot_provider(&provider, &metadata)?;
         let mut pending = Pending {
@@ -367,6 +452,7 @@ impl MlsClient {
         let bundle = KeyPackage::builder()
             .key_package_lifetime(Lifetime::init(not_before, not_after))
             .key_package_extensions(Extensions::default())
+            .leaf_node_capabilities(kutup_mls_capabilities())
             .build(KUTUP_MLS_V1_CIPHERSUITE, &provider, &signer, credential)
             .map_err(|error| mls_error("create MLS KeyPackage", error))?;
         let package = bundle.key_package();
@@ -433,6 +519,7 @@ impl MlsClient {
             ensure_v1_group(&group)?;
             ensure_group_control_key(&metadata, mls_group_id)?;
             ensure_group_owner_key(&metadata, mls_group_id)?;
+            ensure_private_control_matches_record(group.extensions(), existing)?;
             if existing.request.genesis.mls_group_id != group_key
                 || existing.request.genesis.created_at != created_at_seconds
                 || existing.request.genesis.authority_set != authority_set
@@ -468,21 +555,6 @@ impl MlsClient {
             ));
         }
 
-        let signer = metadata.read_signer(&provider)?;
-        let config = MlsGroupCreateConfig::builder()
-            .ciphersuite(KUTUP_MLS_V1_CIPHERSUITE)
-            .max_past_epochs(KUTUP_MLS_V1_MAX_PAST_EPOCHS)
-            .use_ratchet_tree_extension(true)
-            .build();
-        let group = MlsGroup::new_with_group_id(
-            &provider,
-            &signer,
-            &config,
-            group_id,
-            metadata.credential(),
-        )
-        .map_err(|error| mls_error("create MLS group", error))?;
-        ensure_v1_group(&group)?;
         insert_new_group_control_key(&mut metadata, mls_group_id)?;
         let owner = insert_new_group_owner_key(&mut metadata, mls_group_id)?;
         let member = MlsConversationMemberV1 {
@@ -530,6 +602,25 @@ impl MlsClient {
             status: LocalMlsConversationStatus::PendingGenesis,
             server_genesis_hash: None,
         };
+        let private_control_state = genesis_private_control_state(&conversation)?;
+        let signer = metadata.read_signer(&provider)?;
+        let config = MlsGroupCreateConfig::builder()
+            .ciphersuite(KUTUP_MLS_V1_CIPHERSUITE)
+            .max_past_epochs(KUTUP_MLS_V1_MAX_PAST_EPOCHS)
+            .use_ratchet_tree_extension(true)
+            .capabilities(kutup_mls_capabilities())
+            .with_group_context_extensions(private_control_extensions(&private_control_state)?)
+            .build();
+        let group = MlsGroup::new_with_group_id(
+            &provider,
+            &signer,
+            &config,
+            group_id,
+            metadata.credential(),
+        )
+        .map_err(|error| mls_error("create MLS group", error))?;
+        ensure_v1_group(&group)?;
+        ensure_exact_private_control_state(group.extensions(), &private_control_state)?;
         metadata
             .conversations
             .insert(conversation_key, conversation.clone());
@@ -629,11 +720,82 @@ impl MlsClient {
             return Ok(local_group_state(&group));
         }
 
+        let owner_signer = ed25519_dalek::SigningKey::generate(&mut OsRng);
+        let owner_public = owner_signer.verifying_key().as_bytes().to_vec();
+        let owner = MlsGroupOwnerCredential {
+            owner_id: hex::encode(Sha256::digest(&owner_public)),
+            public_key: owner_public,
+        };
+        let (account, _) = parse_device_credential_identity(&metadata.credential_identity)?;
+        let address: AccountAddress =
+            account
+                .parse()
+                .map_err(|error: kutup_chat_proto::AddressError| {
+                    ChatError::Invalid(error.to_string())
+                })?;
+        let authority_signer = ed25519_dalek::SigningKey::generate(&mut OsRng);
+        let authority_public = authority_signer.verifying_key().as_bytes().to_vec();
+        let private_control = MlsPrivateControlStateV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            conversation_id: random_uuid(),
+            incarnation: 1,
+            proposal_id: None,
+            height: 0,
+            epoch: 0,
+            previous_block_hash: None,
+            genesis_roster: vec![MlsConversationMemberV1 {
+                address: address.clone(),
+                is_admin: true,
+                owner_id: Some(owner.owner_id.clone()),
+            }],
+            genesis_authority_set: MlsAuthoritySetV1 {
+                sequence: 1,
+                authorities: vec![MlsAuthorityV1 {
+                    domain: "example.test".into(),
+                    key_id: hex::encode(Sha256::digest(&authority_public)),
+                    public_key: BASE64.encode(&authority_public),
+                }],
+                required_quorum: 1,
+            },
+            genesis_owner_set: MlsOwnerSetV1 {
+                sequence: 1,
+                owners: vec![MlsOwnerV1 {
+                    owner_id: owner.owner_id.clone(),
+                    public_key: BASE64.encode(&owner.public_key),
+                }],
+                required_quorum: 1,
+            },
+            roster: vec![MlsConversationMemberV1 {
+                address,
+                is_admin: true,
+                owner_id: Some(owner.owner_id.clone()),
+            }],
+            authority_set: MlsAuthoritySetV1 {
+                sequence: 1,
+                authorities: vec![MlsAuthorityV1 {
+                    domain: "example.test".into(),
+                    key_id: hex::encode(Sha256::digest(&authority_public)),
+                    public_key: BASE64.encode(authority_public),
+                }],
+                required_quorum: 1,
+            },
+            owner_set: MlsOwnerSetV1 {
+                sequence: 1,
+                owners: vec![MlsOwnerV1 {
+                    owner_id: owner.owner_id,
+                    public_key: BASE64.encode(owner.public_key),
+                }],
+                required_quorum: 1,
+            },
+        };
+        private_control.validate().map_err(ChatError::Protocol)?;
         let signer = metadata.read_signer(&provider)?;
         let config = MlsGroupCreateConfig::builder()
             .ciphersuite(KUTUP_MLS_V1_CIPHERSUITE)
             .max_past_epochs(KUTUP_MLS_V1_MAX_PAST_EPOCHS)
             .use_ratchet_tree_extension(true)
+            .capabilities(kutup_mls_capabilities())
+            .with_group_context_extensions(private_control_extensions(&private_control)?)
             .build();
         let group = MlsGroup::new_with_group_id(
             &provider,
@@ -738,6 +900,7 @@ impl MlsClient {
                 "OpenMLS epoch differs from the pinned control-log epoch".into(),
             ));
         }
+        ensure_private_control_matches_record(group.extensions(), &conversation)?;
         let current_devices = group
             .members()
             .map(|member| {
@@ -800,6 +963,29 @@ impl MlsClient {
                 "ordinary membership control cannot transfer, add, or remove owners".into(),
             ));
         }
+        let next_private_control = MlsPrivateControlStateV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            conversation_id: conversation.request.genesis.conversation_id,
+            incarnation: conversation.request.genesis.incarnation,
+            proposal_id: Some(proposal_id),
+            height: conversation.last_finalized_height.saturating_add(1),
+            epoch: conversation.last_finalized_epoch.saturating_add(1),
+            previous_block_hash: conversation.last_block_hash.clone(),
+            genesis_roster: conversation.request.members.clone(),
+            genesis_authority_set: conversation.request.genesis.authority_set.clone(),
+            genesis_owner_set: conversation
+                .request
+                .genesis
+                .owner_set
+                .clone()
+                .ok_or_else(|| ChatError::Db("group genesis has no owner set".into()))?,
+            roster: next_roster.to_vec(),
+            authority_set: conversation.current_authority_set.clone(),
+            owner_set: conversation.current_owner_set.clone(),
+        };
+        next_private_control
+            .validate()
+            .map_err(ChatError::Invalid)?;
 
         let pending = if !added_accounts.is_empty() {
             let mut packaged_accounts = BTreeMap::<String, usize>::new();
@@ -830,6 +1016,7 @@ impl MlsClient {
                 mls_group_id,
                 additions,
                 created_at_seconds,
+                Some(&next_private_control),
             )?
         } else {
             if !additions.is_empty() {
@@ -847,7 +1034,13 @@ impl MlsClient {
                     "removed MLS account has no credential in the current group".into(),
                 ));
             }
-            stage_remove_members(&provider, &mut metadata, mls_group_id, &removed_identities)?
+            stage_remove_members(
+                &provider,
+                &mut metadata,
+                mls_group_id,
+                &removed_identities,
+                Some(&next_private_control),
+            )?
         };
         let control = build_pending_membership_change(
             &metadata,
@@ -1016,6 +1209,27 @@ impl MlsClient {
                 "merged MLS epoch differs from the finalized membership block".into(),
             ));
         }
+        let private_control = extract_private_control_state(group.extensions())?;
+        let expected_owner_set = metadata
+            .conversations
+            .get(&block.conversation_id.to_string())
+            .ok_or_else(|| ChatError::Db("local MLS conversation record is unavailable".into()))?
+            .current_owner_set
+            .clone();
+        if private_control.conversation_id != block.conversation_id
+            || private_control.incarnation != block.incarnation
+            || private_control.proposal_id != Some(block.proposal.proposal_id)
+            || private_control.height != block.height
+            || private_control.epoch != block.epoch_after
+            || private_control.previous_block_hash != block.previous_block_hash
+            || private_control.roster != control.next_roster
+            || private_control.authority_set != control.vote_request.authority_set
+            || private_control.owner_set != expected_owner_set
+        {
+            return Err(ChatError::Trust(
+                "merged MLS private control extension differs from the finalized block".into(),
+            ));
+        }
         metadata.pending_commits.remove(&group_key);
         metadata.pending_membership_changes.remove(&group_key);
         let conversation = metadata
@@ -1060,12 +1274,25 @@ impl MlsClient {
         now_seconds: i64,
     ) -> Result<PendingMlsCommit> {
         let (provider, mut metadata) = self.load_provider().await?;
+        let group = MlsGroup::load(provider.storage(), &GroupId::from_slice(mls_group_id))
+            .map_err(|error| mls_error("load MLS group", error))?
+            .ok_or_else(|| {
+                ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
+            })?;
+        let private_control = advance_test_private_control(
+            extract_private_control_state(group.extensions())?,
+            additions
+                .iter()
+                .map(|addition| addition.credential.credential_identity.as_str()),
+            std::iter::empty(),
+        )?;
         let pending = stage_add_members(
             &provider,
             &mut metadata,
             mls_group_id,
             additions,
             now_seconds,
+            Some(&private_control),
         )?;
         let state = snapshot_provider(&provider, &metadata)?;
         let writes = Pending {
@@ -1085,11 +1312,22 @@ impl MlsClient {
         removed_credential_identities: &[String],
     ) -> Result<PendingMlsCommit> {
         let (provider, mut metadata) = self.load_provider().await?;
+        let group = MlsGroup::load(provider.storage(), &GroupId::from_slice(mls_group_id))
+            .map_err(|error| mls_error("load MLS group", error))?
+            .ok_or_else(|| {
+                ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
+            })?;
+        let private_control = advance_test_private_control(
+            extract_private_control_state(group.extensions())?,
+            std::iter::empty(),
+            removed_credential_identities.iter().map(String::as_str),
+        )?;
         let pending = stage_remove_members(
             &provider,
             &mut metadata,
             mls_group_id,
             removed_credential_identities,
+            Some(&private_control),
         )?;
         let state = snapshot_provider(&provider, &metadata)?;
         let writes = Pending {
@@ -1200,8 +1438,11 @@ impl MlsClient {
         self.db.apply(&writes).await
     }
 
-    /// Join from a Welcome only when its full resulting roster exactly matches
-    /// transparency-verified MLS device credentials supplied by the caller.
+    /// Test-only primitive for OpenMLS lifecycle coverage. Production callers
+    /// must use [`Self::join_from_welcome_with_control_history`] so installing
+    /// a Welcome and its independently verified public control head is one
+    /// atomic operation.
+    #[cfg(test)]
     pub async fn join_from_welcome(
         &self,
         expected_group_id: &[u8],
@@ -1247,6 +1488,18 @@ impl MlsClient {
                 "MLS Welcome group or ciphersuite differs from authenticated genesis".into(),
             ));
         }
+        let private_control = extract_private_control_state(staged.group_context().extensions())?;
+        if private_control.epoch != staged.group_context().epoch().as_u64() {
+            return Err(ChatError::Trust(
+                "MLS Welcome private control epoch differs from its GroupContext".into(),
+            ));
+        }
+        verify_private_control_accounts(
+            &private_control,
+            expected_members
+                .iter()
+                .map(|member| member.credential_identity.as_str()),
+        )?;
         verify_exact_roster(staged.members(), expected_members)?;
         let group = staged
             .into_group(&provider)
@@ -1261,6 +1514,239 @@ impl MlsClient {
         };
         self.db.apply(&writes).await?;
         Ok(public)
+    }
+
+    /// Join from a Welcome and atomically pin the complete authenticated
+    /// public control history represented by its private GroupContext state.
+    ///
+    /// A server-supplied roster or status label is never trusted here. The
+    /// Welcome authenticates the group-private account/role state, callers
+    /// independently bind every device credential through transparency, and
+    /// the protocol verifier replays every signed ordering block from genesis.
+    pub async fn join_from_welcome_with_control_history(
+        &self,
+        envelope: &MlsControlEnvelopeContext,
+        expected_group_id: &[u8],
+        welcome_bytes: &[u8],
+        expected_members: &[VerifiedMlsCredential],
+        history_page_bytes: &[Vec<u8>],
+    ) -> Result<JoinedMlsConversation> {
+        validate_group_id(expected_group_id)?;
+        envelope.validate()?;
+        if welcome_bytes.is_empty()
+            || welcome_bytes.len() > MAX_APPLICATION_BYTES
+            || expected_members.is_empty()
+            || expected_members.len() > 1000
+            || history_page_bytes.is_empty()
+            || history_page_bytes.len() > 1024
+        {
+            return Err(ChatError::Invalid(
+                "MLS Welcome, roster, or control history is outside v1 bounds".into(),
+            ));
+        }
+        let mut total_history_bytes = 0usize;
+        let mut history_pages = Vec::with_capacity(history_page_bytes.len());
+        for bytes in history_page_bytes {
+            total_history_bytes = total_history_bytes
+                .checked_add(bytes.len())
+                .ok_or_else(|| ChatError::Invalid("MLS control history size overflow".into()))?;
+            if bytes.is_empty() || total_history_bytes > MAX_STATE_BYTES {
+                return Err(ChatError::Invalid(
+                    "MLS control history is outside the 64 MiB client bound".into(),
+                ));
+            }
+            history_pages.push(
+                MlsClientControlHistoryPageV1::from_canonical_bytes(bytes)
+                    .map_err(ChatError::Protocol)?,
+            );
+        }
+        let genesis = history_pages
+            .first()
+            .expect("non-empty history checked above")
+            .genesis
+            .clone();
+        if genesis.mls_group_id != BASE64.encode(expected_group_id)
+            || genesis.kind != MlsConversationKindV1::Group
+            || genesis.suite != MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256
+        {
+            return Err(ChatError::Trust(
+                "MLS control history genesis differs from the expected group".into(),
+            ));
+        }
+
+        let (provider, mut metadata) = self.load_provider().await?;
+        let group_id = GroupId::from_slice(expected_group_id);
+        let group_key = BASE64.encode(expected_group_id);
+        let conversation_key = genesis.conversation_id.to_string();
+        if let Some(group) = MlsGroup::load(provider.storage(), &group_id)
+            .map_err(|error| mls_error("load MLS group", error))?
+        {
+            let record = metadata
+                .conversations
+                .get(&conversation_key)
+                .ok_or_else(|| {
+                    ChatError::Db(
+                        "existing OpenMLS group has no durable conversation control pin".into(),
+                    )
+                })?;
+            if record.request.genesis != genesis
+                || record.request.genesis.mls_group_id != group_key
+                || record.status != LocalMlsConversationStatus::Active
+            {
+                return Err(ChatError::Trust(
+                    "existing MLS group differs from the imported control history".into(),
+                ));
+            }
+            ensure_v1_group(&group)?;
+            let private_control =
+                ensure_private_control_matches_record(group.extensions(), record)?;
+            let last_hash = verify_mls_client_control_history(&history_pages, &private_control)
+                .map_err(ChatError::Trust)?;
+            if last_hash != record.last_block_hash {
+                return Err(ChatError::Trust(
+                    "replayed MLS history differs from the durable control head".into(),
+                ));
+            }
+            let receipt = ProcessedMlsControlEnvelope {
+                envelope_id: envelope.envelope_id,
+                cursor: envelope.cursor.clone(),
+                send_id: envelope.send_id,
+                conversation_id: private_control.conversation_id,
+                incarnation: private_control.incarnation,
+                height: private_control.height,
+                epoch: private_control.epoch,
+                block_hash: last_hash
+                    .clone()
+                    .expect("group Welcome has a finalized adding block"),
+            };
+            if metadata
+                .processed_control_envelopes
+                .get(&envelope.envelope_id.to_string())
+                != Some(&receipt)
+            {
+                return Err(ChatError::Db(
+                    "durable joined MLS group has no matching mailbox receipt".into(),
+                ));
+            }
+            verify_private_control_accounts(
+                &private_control,
+                expected_members
+                    .iter()
+                    .map(|member| member.credential_identity.as_str()),
+            )?;
+            verify_exact_roster(group.members(), expected_members)?;
+            return Ok(JoinedMlsConversation {
+                group: local_group_state(&group),
+                conversation: record.clone(),
+            });
+        }
+        if metadata.conversations.contains_key(&conversation_key)
+            || metadata
+                .conversations
+                .values()
+                .any(|record| record.request.genesis.mls_group_id == group_key)
+            || metadata.group_control_private_keys.contains_key(&group_key)
+            || metadata.group_owner_private_keys.contains_key(&group_key)
+        {
+            return Err(ChatError::Db(
+                "durable MLS control metadata has no matching OpenMLS group".into(),
+            ));
+        }
+
+        let message = MlsMessageIn::tls_deserialize_exact(welcome_bytes)
+            .map_err(|error| mls_error("parse MLS Welcome", error))?;
+        let welcome = match message.extract() {
+            MlsMessageBodyIn::Welcome(welcome) => welcome,
+            _ => return Err(ChatError::Invalid("expected an MLS Welcome message".into())),
+        };
+        let join_config = MlsGroupJoinConfig::builder()
+            .max_past_epochs(KUTUP_MLS_V1_MAX_PAST_EPOCHS)
+            .use_ratchet_tree_extension(true)
+            .build();
+        let staged = StagedWelcome::new_from_welcome(&provider, &join_config, welcome, None)
+            .map_err(|error| mls_error("stage MLS Welcome", error))?;
+        if staged.group_context().group_id().as_slice() != expected_group_id
+            || staged.group_context().ciphersuite() != KUTUP_MLS_V1_CIPHERSUITE
+        {
+            return Err(ChatError::Trust(
+                "MLS Welcome group or ciphersuite differs from authenticated genesis".into(),
+            ));
+        }
+        let private_control = extract_private_control_state(staged.group_context().extensions())?;
+        if private_control.epoch != staged.group_context().epoch().as_u64() {
+            return Err(ChatError::Trust(
+                "MLS Welcome private control epoch differs from its GroupContext".into(),
+            ));
+        }
+        verify_private_control_accounts(
+            &private_control,
+            expected_members
+                .iter()
+                .map(|member| member.credential_identity.as_str()),
+        )?;
+        verify_exact_roster(staged.members(), expected_members)?;
+        let last_block_hash = verify_mls_client_control_history(&history_pages, &private_control)
+            .map_err(ChatError::Trust)?;
+        if last_block_hash.is_none() {
+            return Err(ChatError::Trust(
+                "a group Welcome cannot be installed without its adding control block".into(),
+            ));
+        }
+        let request = CreateMlsConversationRequestV1 {
+            genesis,
+            members: private_control.genesis_roster.clone(),
+        };
+        request.validate().map_err(ChatError::Trust)?;
+        let server_genesis_hash = request
+            .genesis
+            .genesis_hash()
+            .map_err(ChatError::Protocol)?;
+        let conversation = LocalMlsConversationRecord {
+            request,
+            status: LocalMlsConversationStatus::Active,
+            server_genesis_hash: Some(server_genesis_hash),
+            last_finalized_height: private_control.height,
+            last_finalized_epoch: private_control.epoch,
+            last_block_hash,
+            current_roster: private_control.roster.clone(),
+            current_authority_set: private_control.authority_set.clone(),
+            current_owner_set: private_control.owner_set.clone(),
+        };
+        let receipt = ProcessedMlsControlEnvelope {
+            envelope_id: envelope.envelope_id,
+            cursor: envelope.cursor.clone(),
+            send_id: envelope.send_id,
+            conversation_id: private_control.conversation_id,
+            incarnation: private_control.incarnation,
+            height: private_control.height,
+            epoch: private_control.epoch,
+            block_hash: conversation
+                .last_block_hash
+                .clone()
+                .expect("group Welcome has a finalized adding block"),
+        };
+        let group = staged
+            .into_group(&provider)
+            .map_err(|error| mls_error("join MLS group", error))?;
+        ensure_v1_group(&group)?;
+        ensure_exact_private_control_state(group.extensions(), &private_control)?;
+        insert_new_group_control_key(&mut metadata, expected_group_id)?;
+        metadata
+            .conversations
+            .insert(conversation_key, conversation.clone());
+        insert_processed_control_envelope(&mut metadata, receipt)?;
+        let group = local_group_state(&group);
+        let state = snapshot_provider(&provider, &metadata)?;
+        self.db
+            .apply(&Pending {
+                mls_state: Some(state),
+                ..Pending::default()
+            })
+            .await?;
+        Ok(JoinedMlsConversation {
+            group,
+            conversation,
+        })
     }
 
     /// Decrypt and inspect a Welcome without installing its group. The
@@ -1296,6 +1782,13 @@ impl MlsClient {
                 "MLS Welcome group or ciphersuite differs from authenticated genesis".into(),
             ));
         }
+        let private_control_state =
+            extract_private_control_state(staged.group_context().extensions())?;
+        if private_control_state.epoch != staged.group_context().epoch().as_u64() {
+            return Err(ChatError::Trust(
+                "MLS Welcome private control epoch differs from its GroupContext".into(),
+            ));
+        }
         let mut claimed_members = Vec::new();
         let mut identities = HashSet::new();
         for member in staged.members() {
@@ -1322,15 +1815,377 @@ impl MlsClient {
         }
         claimed_members
             .sort_by(|left, right| left.credential_identity.cmp(&right.credential_identity));
+        verify_private_control_accounts(
+            &private_control_state,
+            claimed_members
+                .iter()
+                .map(|member| member.credential_identity.as_str()),
+        )?;
         Ok(MlsWelcomeInspection {
             mls_group_id: expected_group_id.to_vec(),
             epoch: staged.group_context().epoch().as_u64(),
             claimed_members,
+            private_control_state,
         })
     }
 
-    /// Apply a remotely authored Commit only after the ordered encrypted
-    /// control action has produced the exact expected next roster.
+    /// Stage an inbound Commit in an isolated provider snapshot and expose
+    /// only MLS-authenticated claims. No secret-tree generation, epoch, cursor,
+    /// or durable control pin is changed by inspection.
+    pub async fn inspect_inbound_commit(
+        &self,
+        mls_group_id: &[u8],
+        commit_bytes: &[u8],
+    ) -> Result<MlsInboundCommitInspection> {
+        validate_group_id(mls_group_id)?;
+        if commit_bytes.is_empty() || commit_bytes.len() > MAX_APPLICATION_BYTES {
+            return Err(ChatError::Invalid("MLS Commit is outside v1 bounds".into()));
+        }
+        let (provider, metadata) = self.load_provider().await?;
+        let group_key = BASE64.encode(mls_group_id);
+        if metadata.pending_commits.contains_key(&group_key)
+            || metadata.pending_membership_changes.contains_key(&group_key)
+        {
+            return Err(ChatError::Trust(
+                "cannot inspect a remote MLS Commit while a local Commit is pending".into(),
+            ));
+        }
+        let group_id = GroupId::from_slice(mls_group_id);
+        let mut group = MlsGroup::load(provider.storage(), &group_id)
+            .map_err(|error| mls_error("load MLS group", error))?
+            .ok_or_else(|| {
+                ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
+            })?;
+        ensure_v1_group(&group)?;
+        let epoch_before = group.epoch().as_u64();
+        let message = MlsMessageIn::tls_deserialize_exact(commit_bytes)
+            .map_err(|error| mls_error("parse MLS Commit", error))?
+            .try_into_protocol_message()
+            .map_err(|_| ChatError::Invalid("expected an MLS protocol message".into()))?;
+        let processed = group
+            .process_message(&provider, message)
+            .map_err(|error| mls_error("process MLS Commit", error))?;
+        let staged = match processed.into_content() {
+            ProcessedMessageContent::StagedCommitMessage(staged) => staged,
+            _ => return Err(ChatError::Invalid("expected an MLS Commit message".into())),
+        };
+        let epoch_after = staged.epoch().as_u64();
+        if epoch_after != epoch_before.saturating_add(1) {
+            return Err(ChatError::Trust(
+                "inbound MLS Commit does not advance exactly one epoch".into(),
+            ));
+        }
+        let private_control_state =
+            extract_private_control_state(staged.group_context().extensions())?;
+        if private_control_state.epoch != epoch_after {
+            return Err(ChatError::Trust(
+                "inbound MLS private control epoch differs from its Commit".into(),
+            ));
+        }
+        group
+            .merge_staged_commit(&provider, *staged)
+            .map_err(|error| mls_error("inspect inbound MLS Commit", error))?;
+        let mut claimed_members = Vec::new();
+        let mut identities = HashSet::new();
+        for member in group.members() {
+            let identity = std::str::from_utf8(member.credential.serialized_content())
+                .map_err(|_| ChatError::Trust("MLS credential identity is not UTF-8".into()))?
+                .to_owned();
+            validate_credential_identity(&identity)?;
+            if !identities.insert(identity.clone()) {
+                return Err(ChatError::Trust(
+                    "inbound MLS Commit repeats a credential identity".into(),
+                ));
+            }
+            let credential_public_key = member.signature_key.as_slice().to_vec();
+            validate_credential_public_key(&credential_public_key)?;
+            claimed_members.push(ClaimedMlsCredential {
+                credential_identity: identity,
+                credential_public_key,
+            });
+        }
+        claimed_members
+            .sort_by(|left, right| left.credential_identity.cmp(&right.credential_identity));
+        verify_private_control_accounts(
+            &private_control_state,
+            claimed_members
+                .iter()
+                .map(|member| member.credential_identity.as_str()),
+        )?;
+        Ok(MlsInboundCommitInspection {
+            mls_group_id: mls_group_id.to_vec(),
+            epoch_before,
+            epoch_after,
+            commit_hash: hex::encode(Sha256::digest(commit_bytes)),
+            claimed_members,
+            private_control_state,
+        })
+    }
+
+    /// Return a durable processed-envelope receipt before attempting to parse
+    /// a replayed Commit. This lets a restarted client acknowledge the exact
+    /// mailbox row whose epoch was already atomically applied.
+    pub async fn processed_control_envelope(
+        &self,
+        envelope_id: Uuid,
+    ) -> Result<Option<ProcessedMlsControlEnvelope>> {
+        if envelope_id.is_nil() {
+            return Err(ChatError::Invalid(
+                "MLS mailbox envelope id must not be nil".into(),
+            ));
+        }
+        let (_, metadata) = self.load_provider().await?;
+        Ok(metadata
+            .processed_control_envelopes
+            .get(&envelope_id.to_string())
+            .cloned())
+    }
+
+    /// Verify a quorum-certified public membership block, bind its payload to
+    /// the exact MLS Commit, merge one epoch, advance the durable control pin,
+    /// and record the mailbox cursor in one encrypted database transaction.
+    pub async fn apply_ordered_inbound_membership_commit(
+        &self,
+        envelope: &MlsControlEnvelopeContext,
+        mls_group_id: &[u8],
+        commit_bytes: &[u8],
+        expected_next_members: &[VerifiedMlsCredential],
+        request: &CommitMlsControlBlockV1,
+    ) -> Result<AppliedInboundMlsCommit> {
+        validate_group_id(mls_group_id)?;
+        envelope.validate()?;
+        if commit_bytes.is_empty()
+            || commit_bytes.len() > MAX_APPLICATION_BYTES
+            || expected_next_members.is_empty()
+            || expected_next_members.len() > 1000
+        {
+            return Err(ChatError::Invalid(
+                "MLS mailbox Commit, cursor, or expected roster is outside v1 bounds".into(),
+            ));
+        }
+        request.validate_shape().map_err(ChatError::Protocol)?;
+        let block = &request.finalized.block;
+        if block.proposal.action_type != MlsControlActionTypeV1::MembershipChange {
+            return Err(ChatError::Trust(
+                "membership-control mailbox carried a non-membership block".into(),
+            ));
+        }
+        block.proposal.verify().map_err(ChatError::Trust)?;
+        let commit_hash = hex::encode(Sha256::digest(commit_bytes));
+        if block.proposal.payload_digest != commit_hash {
+            return Err(ChatError::Trust(
+                "ordered MLS control block commits different ciphertext".into(),
+            ));
+        }
+        let block_hash = block.block_hash().map_err(ChatError::Protocol)?;
+        let receipt = ProcessedMlsControlEnvelope {
+            envelope_id: envelope.envelope_id,
+            cursor: envelope.cursor.clone(),
+            send_id: envelope.send_id,
+            conversation_id: block.conversation_id,
+            incarnation: block.incarnation,
+            height: block.height,
+            epoch: block.epoch_after,
+            block_hash: block_hash.clone(),
+        };
+        validate_processed_control_envelope(&receipt)?;
+
+        let group_key = BASE64.encode(mls_group_id);
+        let (provider, mut metadata) = self.load_provider().await?;
+        if let Some(existing) = metadata
+            .processed_control_envelopes
+            .get(&envelope.envelope_id.to_string())
+        {
+            if existing != &receipt {
+                return Err(ChatError::Trust(
+                    "MLS mailbox envelope id was replayed with different control material".into(),
+                ));
+            }
+            let conversation = metadata
+                .conversations
+                .get(&block.conversation_id.to_string())
+                .cloned()
+                .ok_or_else(|| {
+                    ChatError::Db("processed MLS Commit has no conversation record".into())
+                })?;
+            if conversation.request.genesis.mls_group_id != group_key
+                || conversation.request.genesis.incarnation != existing.incarnation
+                || conversation.last_finalized_height < existing.height
+                || conversation.last_finalized_epoch < existing.epoch
+            {
+                return Err(ChatError::Db(
+                    "processed MLS receipt differs from its current conversation".into(),
+                ));
+            }
+            let group = MlsGroup::load(provider.storage(), &GroupId::from_slice(mls_group_id))
+                .map_err(|error| mls_error("load MLS group", error))?
+                .ok_or_else(|| {
+                    ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
+                })?;
+            ensure_v1_group(&group)?;
+            ensure_private_control_matches_record(group.extensions(), &conversation)?;
+            return Ok(AppliedInboundMlsCommit {
+                group: local_group_state(&group),
+                conversation,
+                receipt: existing.clone(),
+                idempotent: true,
+            });
+        }
+        if metadata
+            .processed_control_envelopes
+            .values()
+            .any(|existing| {
+                existing.send_id == envelope.send_id || existing.cursor == envelope.cursor
+            })
+        {
+            return Err(ChatError::Trust(
+                "MLS mailbox reused a processed send id or cursor".into(),
+            ));
+        }
+        if metadata.pending_commits.contains_key(&group_key)
+            || metadata.pending_membership_changes.contains_key(&group_key)
+        {
+            return Err(ChatError::Trust(
+                "cannot merge a remote MLS Commit while a local Commit is pending".into(),
+            ));
+        }
+        let conversation = metadata
+            .conversations
+            .get(&block.conversation_id.to_string())
+            .cloned()
+            .ok_or_else(|| {
+                ChatError::Trust("local MLS conversation control state is unavailable".into())
+            })?;
+        if conversation.status != LocalMlsConversationStatus::Active
+            || conversation.request.genesis.mls_group_id != group_key
+            || conversation.request.genesis.incarnation != block.incarnation
+        {
+            return Err(ChatError::Trust(
+                "inbound MLS block differs from the active conversation genesis".into(),
+            ));
+        }
+        validate_local_control_state(&conversation)?;
+        request
+            .finalized
+            .verify(&conversation.current_authority_set)
+            .map_err(ChatError::Trust)?;
+        if block.height != conversation.last_finalized_height.saturating_add(1)
+            || block.epoch_before != conversation.last_finalized_epoch
+            || block.epoch_after != block.epoch_before.saturating_add(1)
+            || block.previous_block_hash != conversation.last_block_hash
+        {
+            return Err(ChatError::Trust(
+                "inbound MLS block does not exactly extend the durable control pin".into(),
+            ));
+        }
+        let transition = request
+            .membership_transition
+            .as_ref()
+            .expect("validated membership request");
+        if transition.previous_roster_commitment
+            != roster_commitment(&conversation.current_roster).map_err(ChatError::Protocol)?
+            || transition.previous_member_count != conversation.current_roster.len() as u32
+            || transition.previous_participant_domains
+                != participant_domains(&conversation.current_roster)?
+        {
+            return Err(ChatError::Trust(
+                "inbound MLS membership transition differs from the pinned roster".into(),
+            ));
+        }
+
+        let group_id = GroupId::from_slice(mls_group_id);
+        let mut group = MlsGroup::load(provider.storage(), &group_id)
+            .map_err(|error| mls_error("load MLS group", error))?
+            .ok_or_else(|| {
+                ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
+            })?;
+        ensure_v1_group(&group)?;
+        if group.epoch().as_u64() != conversation.last_finalized_epoch {
+            return Err(ChatError::Trust(
+                "OpenMLS epoch differs from the pinned control-log epoch".into(),
+            ));
+        }
+        ensure_private_control_matches_record(group.extensions(), &conversation)?;
+        let message = MlsMessageIn::tls_deserialize_exact(commit_bytes)
+            .map_err(|error| mls_error("parse MLS Commit", error))?
+            .try_into_protocol_message()
+            .map_err(|_| ChatError::Invalid("expected an MLS protocol message".into()))?;
+        let processed = group
+            .process_message(&provider, message)
+            .map_err(|error| mls_error("process MLS Commit", error))?;
+        let staged = match processed.into_content() {
+            ProcessedMessageContent::StagedCommitMessage(staged) => staged,
+            _ => return Err(ChatError::Invalid("expected an MLS Commit message".into())),
+        };
+        if staged.epoch().as_u64() != block.epoch_after {
+            return Err(ChatError::Trust(
+                "inbound MLS Commit epoch differs from the ordered block".into(),
+            ));
+        }
+        let private_control = extract_private_control_state(staged.group_context().extensions())?;
+        if private_control.conversation_id != block.conversation_id
+            || private_control.incarnation != block.incarnation
+            || private_control.proposal_id != Some(block.proposal.proposal_id)
+            || private_control.height != block.height
+            || private_control.epoch != block.epoch_after
+            || private_control.previous_block_hash != block.previous_block_hash
+            || private_control.genesis_roster != conversation.request.members
+            || private_control.genesis_authority_set != conversation.request.genesis.authority_set
+            || conversation.request.genesis.owner_set.as_ref()
+                != Some(&private_control.genesis_owner_set)
+            || private_control.authority_set != conversation.current_authority_set
+            || private_control.owner_set != conversation.current_owner_set
+            || transition.next_roster_commitment
+                != roster_commitment(&private_control.roster).map_err(ChatError::Protocol)?
+            || transition.next_member_count != private_control.roster.len() as u32
+            || transition.next_participant_domains != participant_domains(&private_control.roster)?
+        {
+            return Err(ChatError::Trust(
+                "inbound MLS private control state differs from the finalized transition".into(),
+            ));
+        }
+        verify_private_control_accounts(
+            &private_control,
+            expected_next_members
+                .iter()
+                .map(|member| member.credential_identity.as_str()),
+        )?;
+        group
+            .merge_staged_commit(&provider, *staged)
+            .map_err(|error| mls_error("merge inbound MLS Commit", error))?;
+        verify_exact_roster(group.members(), expected_next_members)?;
+        ensure_exact_private_control_state(group.extensions(), &private_control)?;
+
+        let conversation = metadata
+            .conversations
+            .get_mut(&block.conversation_id.to_string())
+            .expect("conversation cloned above");
+        conversation.last_finalized_height = block.height;
+        conversation.last_finalized_epoch = block.epoch_after;
+        conversation.last_block_hash = Some(block_hash);
+        conversation.current_roster = private_control.roster;
+        let conversation = conversation.clone();
+        insert_processed_control_envelope(&mut metadata, receipt.clone())?;
+        let group = local_group_state(&group);
+        let state = snapshot_provider(&provider, &metadata)?;
+        self.db
+            .apply(&Pending {
+                mls_state: Some(state),
+                ..Pending::default()
+            })
+            .await?;
+        Ok(AppliedInboundMlsCommit {
+            group,
+            conversation,
+            receipt,
+            idempotent: false,
+        })
+    }
+
+    /// Test-only raw OpenMLS primitive. Production callers must authenticate
+    /// and pin the ordered control block with
+    /// [`Self::apply_ordered_inbound_membership_commit`].
+    #[cfg(test)]
     pub async fn apply_inbound_commit(
         &self,
         mls_group_id: &[u8],
@@ -1661,12 +2516,219 @@ fn decode_canonical_base64(label: &str, value: &str, exact_len: usize) -> Result
     Ok(decoded)
 }
 
+fn kutup_mls_capabilities() -> Capabilities {
+    Capabilities::new(
+        None,
+        Some(&[KUTUP_MLS_V1_CIPHERSUITE]),
+        Some(&[ExtensionType::Unknown(MLS_PRIVATE_CONTROL_EXTENSION_TYPE)]),
+        None,
+        Some(&[CredentialType::Basic]),
+    )
+}
+
+fn private_control_extensions(
+    state: &MlsPrivateControlStateV1,
+) -> Result<Extensions<GroupContext>> {
+    let encoded = state.canonical_bytes().map_err(ChatError::Invalid)?;
+    Extensions::try_from(vec![
+        Extension::RequiredCapabilities(RequiredCapabilitiesExtension::new(
+            &[ExtensionType::Unknown(MLS_PRIVATE_CONTROL_EXTENSION_TYPE)],
+            &[],
+            &[CredentialType::Basic],
+        )),
+        Extension::Unknown(
+            MLS_PRIVATE_CONTROL_EXTENSION_TYPE,
+            UnknownExtension(encoded),
+        ),
+    ])
+    .map_err(|error| ChatError::Protocol(format!("build MLS private control extensions: {error}")))
+}
+
+fn extract_private_control_state(
+    extensions: &Extensions<GroupContext>,
+) -> Result<MlsPrivateControlStateV1> {
+    let required = extensions.required_capabilities().ok_or_else(|| {
+        ChatError::Trust("MLS group omits its required-capabilities extension".into())
+    })?;
+    if required.extension_types()
+        != [ExtensionType::Unknown(MLS_PRIVATE_CONTROL_EXTENSION_TYPE)]
+        || !required.proposal_types().is_empty()
+        || required.credential_types() != [CredentialType::Basic]
+    {
+        return Err(ChatError::Trust(
+            "MLS group has a different mandatory capability set".into(),
+        ));
+    }
+    let extension = extensions
+        .unknown(MLS_PRIVATE_CONTROL_EXTENSION_TYPE)
+        .ok_or_else(|| {
+            ChatError::Trust("MLS group omits its mandatory private control extension".into())
+        })?;
+    MlsPrivateControlStateV1::from_canonical_bytes(&extension.0).map_err(|error| {
+        ChatError::Trust(format!("invalid MLS private control extension: {error}"))
+    })
+}
+
+fn ensure_exact_private_control_state(
+    extensions: &Extensions<GroupContext>,
+    expected: &MlsPrivateControlStateV1,
+) -> Result<()> {
+    if extract_private_control_state(extensions)? != *expected {
+        return Err(ChatError::Trust(
+            "MLS private control extension differs from the prepared state".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn genesis_private_control_state(
+    record: &LocalMlsConversationRecord,
+) -> Result<MlsPrivateControlStateV1> {
+    if record.last_finalized_height != 0
+        || record.last_finalized_epoch != 0
+        || record.last_block_hash.is_some()
+    {
+        return Err(ChatError::Db(
+            "cannot derive a genesis private control extension from an advanced record".into(),
+        ));
+    }
+    let state = MlsPrivateControlStateV1 {
+        protocol_version: MLS_PROTOCOL_VERSION,
+        conversation_id: record.request.genesis.conversation_id,
+        incarnation: record.request.genesis.incarnation,
+        proposal_id: None,
+        height: 0,
+        epoch: 0,
+        previous_block_hash: None,
+        genesis_roster: record.request.members.clone(),
+        genesis_authority_set: record.request.genesis.authority_set.clone(),
+        genesis_owner_set: record
+            .request
+            .genesis
+            .owner_set
+            .clone()
+            .ok_or_else(|| ChatError::Db("group genesis has no owner set".into()))?,
+        roster: record.current_roster.clone(),
+        authority_set: record.current_authority_set.clone(),
+        owner_set: record.current_owner_set.clone(),
+    };
+    state.validate().map_err(ChatError::Db)?;
+    Ok(state)
+}
+
+fn ensure_private_control_matches_record(
+    extensions: &Extensions<GroupContext>,
+    record: &LocalMlsConversationRecord,
+) -> Result<MlsPrivateControlStateV1> {
+    let state = extract_private_control_state(extensions)?;
+    if state.conversation_id != record.request.genesis.conversation_id
+        || state.incarnation != record.request.genesis.incarnation
+        || state.height != record.last_finalized_height
+        || state.epoch != record.last_finalized_epoch
+        || state.genesis_roster != record.request.members
+        || state.genesis_authority_set != record.request.genesis.authority_set
+        || record.request.genesis.owner_set.as_ref() != Some(&state.genesis_owner_set)
+        || state.roster != record.current_roster
+        || state.authority_set != record.current_authority_set
+        || state.owner_set != record.current_owner_set
+        || (state.height == 0
+            && (state.proposal_id.is_some() || state.previous_block_hash.is_some()))
+        || (state.height == 1 && state.previous_block_hash.is_some())
+    {
+        return Err(ChatError::Trust(
+            "MLS private control extension differs from the durable control pin".into(),
+        ));
+    }
+    if state.height > 1 {
+        validate_sha256_hex(
+            "MLS private control predecessor",
+            state.previous_block_hash.as_deref().ok_or_else(|| {
+                ChatError::Trust("MLS private control predecessor is missing".into())
+            })?,
+        )?;
+    }
+    Ok(state)
+}
+
+fn verify_private_control_accounts<'a>(
+    state: &MlsPrivateControlStateV1,
+    credential_identities: impl Iterator<Item = &'a str>,
+) -> Result<()> {
+    let mut device_accounts = BTreeSet::new();
+    for identity in credential_identities {
+        let (account, _) = parse_device_credential_identity(identity)?;
+        device_accounts.insert(account);
+    }
+    let control_accounts = state
+        .roster
+        .iter()
+        .map(|member| member.address.canonical())
+        .collect::<BTreeSet<_>>();
+    if device_accounts != control_accounts {
+        return Err(ChatError::Trust(
+            "MLS private control roster differs from the cryptographic device roster".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn advance_test_private_control<'a>(
+    mut state: MlsPrivateControlStateV1,
+    additions: impl Iterator<Item = &'a str>,
+    removals: impl Iterator<Item = &'a str>,
+) -> Result<MlsPrivateControlStateV1> {
+    let removed_accounts = removals
+        .map(parse_device_credential_identity)
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .map(|(account, _)| account)
+        .collect::<BTreeSet<_>>();
+    state
+        .roster
+        .retain(|member| !removed_accounts.contains(&member.address.canonical()));
+    for identity in additions {
+        let (account, _) = parse_device_credential_identity(identity)?;
+        if state
+            .roster
+            .iter()
+            .all(|member| member.address.canonical() != account)
+        {
+            state.roster.push(MlsConversationMemberV1 {
+                address: account
+                    .parse()
+                    .map_err(|error: kutup_chat_proto::AddressError| {
+                        ChatError::Invalid(error.to_string())
+                    })?,
+                is_admin: false,
+                owner_id: None,
+            });
+        }
+    }
+    state
+        .roster
+        .sort_by_key(|member| member.address.canonical());
+    state.previous_block_hash = if state.height == 0 {
+        None
+    } else {
+        Some(hex::encode(Sha256::digest(
+            state.canonical_bytes().map_err(ChatError::Protocol)?,
+        )))
+    };
+    state.height = state.height.saturating_add(1);
+    state.epoch = state.epoch.saturating_add(1);
+    state.proposal_id = Some(random_uuid());
+    state.validate().map_err(ChatError::Protocol)?;
+    Ok(state)
+}
+
 fn stage_add_members(
     provider: &KutupMlsProvider,
     metadata: &mut SnapshotMetadata,
     mls_group_id: &[u8],
     additions: &[VerifiedMlsKeyPackage],
     now_seconds: i64,
+    private_control: Option<&MlsPrivateControlStateV1>,
 ) -> Result<PendingMlsCommit> {
     validate_group_id(mls_group_id)?;
     if additions.is_empty() || additions.len() > 1000 || now_seconds < 0 {
@@ -1711,9 +2773,28 @@ fn stage_add_members(
     }
     let epoch_before = group.epoch().as_u64();
     let signer = signer_for_group(provider, &group)?;
-    let (commit, welcome, _group_info) = group
-        .add_members(provider, &signer, &key_packages)
+    let builder = group
+        .commit_builder()
+        .propose_adds(key_packages)
+        .force_self_update(true);
+    let builder = if let Some(private_control) = private_control {
+        builder
+            .propose_group_context_extensions(private_control_extensions(private_control)?)
+            .map_err(|error| mls_error("add MLS private control proposal", error))?
+    } else {
+        builder
+    };
+    let bundle = builder
+        .load_psks(provider.storage())
+        .map_err(|error| mls_error("load MLS add-member PSKs", error))?
+        .build(provider.rand(), provider.crypto(), &signer, |_| true)
+        .map_err(|error| mls_error("build MLS add-members commit", error))?
+        .stage_commit(provider)
         .map_err(|error| mls_error("stage MLS add-members commit", error))?;
+    let welcome = bundle
+        .to_welcome_msg()
+        .ok_or_else(|| ChatError::Protocol("MLS add-members Commit omitted Welcome".into()))?;
+    let (commit, _, _) = bundle.into_contents();
     let epoch_after = group
         .pending_commit()
         .ok_or_else(|| ChatError::Protocol("OpenMLS did not stage the membership commit".into()))?
@@ -1752,6 +2833,7 @@ fn stage_remove_members(
     metadata: &mut SnapshotMetadata,
     mls_group_id: &[u8],
     removed_credential_identities: &[String],
+    private_control: Option<&MlsPrivateControlStateV1>,
 ) -> Result<PendingMlsCommit> {
     validate_group_id(mls_group_id)?;
     if removed_credential_identities.is_empty() || removed_credential_identities.len() > 1000 {
@@ -1799,9 +2881,23 @@ fn stage_remove_members(
     }
     let epoch_before = group.epoch().as_u64();
     let signer = signer_for_group(provider, &group)?;
-    let (commit, welcome, _group_info) = group
-        .remove_members(provider, &signer, &targets)
+    let builder = group.commit_builder().propose_removals(targets);
+    let builder = if let Some(private_control) = private_control {
+        builder
+            .propose_group_context_extensions(private_control_extensions(private_control)?)
+            .map_err(|error| mls_error("add MLS private control proposal", error))?
+    } else {
+        builder
+    };
+    let bundle = builder
+        .load_psks(provider.storage())
+        .map_err(|error| mls_error("load MLS remove-member PSKs", error))?
+        .build(provider.rand(), provider.crypto(), &signer, |_| true)
+        .map_err(|error| mls_error("build MLS remove-members commit", error))?
+        .stage_commit(provider)
         .map_err(|error| mls_error("stage MLS remove-members commit", error))?;
+    let welcome = bundle.to_welcome_msg();
+    let (commit, _, _) = bundle.into_contents();
     let epoch_after = group
         .pending_commit()
         .ok_or_else(|| ChatError::Protocol("OpenMLS did not stage the membership commit".into()))?
@@ -2132,6 +3228,76 @@ fn validate_pending_membership_change(control: &PendingMlsMembershipChange) -> R
             ));
         }
     }
+    Ok(())
+}
+
+fn validate_processed_control_envelope(receipt: &ProcessedMlsControlEnvelope) -> Result<()> {
+    if receipt.envelope_id.is_nil()
+        || receipt.send_id.is_nil()
+        || receipt.conversation_id.is_nil()
+        || receipt.incarnation == 0
+        || receipt.height == 0
+        || receipt.epoch != receipt.height
+        || receipt
+            .cursor
+            .parse::<u64>()
+            .ok()
+            .filter(|cursor| *cursor > 0 && cursor.to_string() == receipt.cursor)
+            .is_none()
+    {
+        return Err(ChatError::Db(
+            "processed MLS control envelope has invalid identifiers or cursor".into(),
+        ));
+    }
+    validate_sha256_hex("processed MLS control block hash", &receipt.block_hash)
+        .map_err(|error| ChatError::Db(error.to_string()))
+}
+
+fn insert_processed_control_envelope(
+    metadata: &mut SnapshotMetadata,
+    receipt: ProcessedMlsControlEnvelope,
+) -> Result<()> {
+    validate_processed_control_envelope(&receipt)?;
+    let key = receipt.envelope_id.to_string();
+    if let Some(existing) = metadata.processed_control_envelopes.get(&key) {
+        if existing == &receipt {
+            return Ok(());
+        }
+        return Err(ChatError::Trust(
+            "MLS mailbox envelope id was replayed with different control metadata".into(),
+        ));
+    }
+    if metadata
+        .processed_control_envelopes
+        .values()
+        .any(|existing| {
+            existing.send_id == receipt.send_id
+                || existing.cursor == receipt.cursor
+                || (existing.conversation_id == receipt.conversation_id
+                    && existing.incarnation == receipt.incarnation
+                    && existing.height == receipt.height
+                    && existing.block_hash != receipt.block_hash)
+        })
+    {
+        return Err(ChatError::Trust(
+            "MLS control envelope reuses a durable send id, cursor, or height".into(),
+        ));
+    }
+    if metadata.processed_control_envelopes.len() >= MAX_PENDING_COMMITS {
+        let oldest = metadata
+            .processed_control_envelopes
+            .iter()
+            .min_by_key(|(_, existing)| {
+                existing
+                    .cursor
+                    .parse::<u64>()
+                    .expect("validated durable cursor")
+            })
+            .map(|(key, _)| key.clone())
+            .ok_or_else(|| ChatError::Db("processed MLS receipt index is inconsistent".into()))?;
+        metadata.processed_control_envelopes.remove(&oldest);
+    }
+    metadata.processed_control_envelopes.insert(key, receipt);
     Ok(())
 }
 
@@ -2642,6 +3808,7 @@ fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
     }
     if metadata.group_owner_private_keys.len() > MAX_PENDING_COMMITS
         || metadata.conversations.len() > MAX_PENDING_COMMITS
+        || metadata.processed_control_envelopes.len() > MAX_PENDING_COMMITS
     {
         return Err(ChatError::Db(
             "too many durable MLS owner or conversation records".into(),
@@ -2714,20 +3881,20 @@ fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
                 "durable MLS genesis has no group control key".into(),
             ));
         }
-        let owner = group_owner_credential(metadata, &group_id)?;
-        let owner_set = record
-            .request
-            .genesis
-            .owner_set
-            .as_ref()
-            .ok_or_else(|| ChatError::Db("durable group genesis has no owner set".into()))?;
-        if owner_set.owners.len() != 1
-            || owner_set.owners[0].owner_id != owner.owner_id
-            || owner_set.owners[0].public_key != BASE64.encode(owner.public_key)
-        {
-            return Err(ChatError::Db(
-                "durable MLS owner key differs from its group genesis".into(),
-            ));
+        if metadata.group_owner_private_keys.contains_key(&group_key) {
+            let owner = group_owner_credential(metadata, &group_id)?;
+            let owner_set =
+                record.request.genesis.owner_set.as_ref().ok_or_else(|| {
+                    ChatError::Db("durable group genesis has no owner set".into())
+                })?;
+            if owner_set.owners.len() != 1
+                || owner_set.owners[0].owner_id != owner.owner_id
+                || owner_set.owners[0].public_key != BASE64.encode(owner.public_key)
+            {
+                return Err(ChatError::Db(
+                    "durable MLS owner key differs from its group genesis".into(),
+                ));
+            }
         }
         match (record.status, &record.server_genesis_hash) {
             (LocalMlsConversationStatus::PendingGenesis, None) => {}
@@ -2765,6 +3932,35 @@ fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
                     "durable MLS membership control does not extend its conversation pin".into(),
                 ));
             }
+        }
+    }
+    let mut receipt_send_ids = HashSet::with_capacity(metadata.processed_control_envelopes.len());
+    let mut receipt_cursors = HashSet::with_capacity(metadata.processed_control_envelopes.len());
+    for (envelope_id, receipt) in &metadata.processed_control_envelopes {
+        validate_processed_control_envelope(receipt)?;
+        if envelope_id != &receipt.envelope_id.to_string()
+            || !receipt_send_ids.insert(receipt.send_id)
+            || !receipt_cursors.insert(receipt.cursor.as_str())
+        {
+            return Err(ChatError::Db(
+                "durable MLS control receipts contain duplicate identifiers".into(),
+            ));
+        }
+        let conversation = metadata
+            .conversations
+            .get(&receipt.conversation_id.to_string())
+            .ok_or_else(|| {
+                ChatError::Db("durable MLS control receipt has no conversation record".into())
+            })?;
+        if conversation.request.genesis.incarnation != receipt.incarnation
+            || receipt.height > conversation.last_finalized_height
+            || receipt.epoch > conversation.last_finalized_epoch
+            || (receipt.height == conversation.last_finalized_height
+                && conversation.last_block_hash.as_deref() != Some(receipt.block_hash.as_str()))
+        {
+            return Err(ChatError::Db(
+                "durable MLS control receipt differs from its conversation pin".into(),
+            ));
         }
     }
     for group_id in metadata.group_owner_private_keys.keys() {
@@ -3015,9 +4211,9 @@ mod tests {
             let bob_db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open_in_memory().unwrap());
             let charlie_db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open_in_memory().unwrap());
             let alice = MlsClient::new(alice_db.clone());
-            let bob = MlsClient::new(bob_db);
+            let bob = MlsClient::new(bob_db.clone());
             let charlie = MlsClient::new(charlie_db);
-            alice.initialize("alice@alpha.example#1").await.unwrap();
+            let alice_public = alice.initialize("alice@alpha.example#1").await.unwrap();
             let bob_public = bob.initialize("bobby@beta.example#1").await.unwrap();
             let charlie_public = charlie.initialize("carol@gamma.example#1").await.unwrap();
             let now = crate::clock::unix_millis() / 1000;
@@ -3033,7 +4229,7 @@ mod tests {
                 wire: bob_package,
                 credential: VerifiedMlsCredential::new(
                     "bobby@beta.example#1".into(),
-                    bob_public.credential_public_key,
+                    bob_public.credential_public_key.clone(),
                 )
                 .unwrap(),
             };
@@ -3041,7 +4237,7 @@ mod tests {
                 wire: charlie_package,
                 credential: VerifiedMlsCredential::new(
                     "carol@gamma.example#1".into(),
-                    charlie_public.credential_public_key,
+                    charlie_public.credential_public_key.clone(),
                 )
                 .unwrap(),
             };
@@ -3171,6 +4367,83 @@ mod tests {
                 .await
                 .unwrap();
             request.validate_shape().unwrap();
+            let welcome = prepared
+                .control
+                .deliveries
+                .iter()
+                .find(|delivery| delivery.destination == "beta.example")
+                .unwrap()
+                .envelopes[0]
+                .opaque_message
+                .as_str();
+            let welcome = BASE64.decode(welcome).unwrap();
+            let history = MlsClientControlHistoryPageV1 {
+                protocol_version: MLS_PROTOCOL_VERSION,
+                genesis: genesis.conversation.request.genesis.clone(),
+                genesis_participant_domains: vec!["alpha.example".into()],
+                after_height: "0".into(),
+                commits: vec![request.clone()],
+                next_height: Some("1".into()),
+            };
+            let history_page = history.canonical_bytes().unwrap();
+            let three_device_roster = vec![
+                VerifiedMlsCredential::new(
+                    "alice@alpha.example#1".into(),
+                    alice_public.credential_public_key.clone(),
+                )
+                .unwrap(),
+                additions[0].credential.clone(),
+                additions[1].credential.clone(),
+            ];
+            let welcome_envelope = MlsControlEnvelopeContext {
+                envelope_id: Uuid::from_u128(0xa4),
+                cursor: "16".into(),
+                send_id: Uuid::from_u128(0xa5),
+            };
+            let mut truncated = history;
+            truncated.commits.clear();
+            truncated.next_height = None;
+            assert!(bob
+                .join_from_welcome_with_control_history(
+                    &welcome_envelope,
+                    group_id,
+                    &welcome,
+                    &three_device_roster,
+                    &[truncated.canonical_bytes().unwrap()],
+                )
+                .await
+                .is_err());
+            assert!(bob.group_state(group_id).await.unwrap().is_none());
+            assert!(bob
+                .processed_control_envelope(welcome_envelope.envelope_id)
+                .await
+                .unwrap()
+                .is_none());
+            let joined = bob
+                .join_from_welcome_with_control_history(
+                    &welcome_envelope,
+                    group_id,
+                    &welcome,
+                    &three_device_roster,
+                    &[history_page.clone()],
+                )
+                .await
+                .unwrap();
+            assert_eq!(joined.group.epoch, 1);
+            assert_eq!(joined.conversation.last_finalized_height, 1);
+            assert_eq!(joined.conversation.current_roster, next_roster);
+            assert_eq!(
+                bob.join_from_welcome_with_control_history(
+                    &welcome_envelope,
+                    group_id,
+                    &welcome,
+                    &three_device_roster,
+                    &[history_page.clone()],
+                )
+                .await
+                .unwrap(),
+                joined
+            );
             let durable_final = alice.pending_membership_changes().await.unwrap();
             assert_eq!(durable_final[0].final_request.as_ref(), Some(&request));
             drop(alice);
@@ -3221,7 +4494,7 @@ mod tests {
             );
             let removal_roster = vec![
                 finalized.conversation.current_roster[0].clone(),
-                finalized.conversation.current_roster[2].clone(),
+                finalized.conversation.current_roster[1].clone(),
             ];
             let removal = alice
                 .prepare_membership_change(
@@ -3240,10 +4513,126 @@ mod tests {
                 .control
                 .deliveries
                 .iter()
-                .find(|delivery| delivery.destination == "beta.example")
+                .find(|delivery| delivery.destination == "gamma.example")
                 .unwrap();
             assert!(removed_domain.local_members_after.is_empty());
             assert!(removed_domain.envelopes.is_empty());
+            let removal_block = &removal.control.vote_request.block;
+            let removal_block_hash = removal_block.block_hash().unwrap();
+            let authority = &removal.control.vote_request.authority_set.authorities[0];
+            let mut removal_vote = kutup_chat_proto::MlsOrderingVoteV1 {
+                conversation_id,
+                incarnation: 1,
+                authority_set_sequence: 1,
+                height: 2,
+                round: 0,
+                vote_type: kutup_chat_proto::MlsOrderingVoteTypeV1::Precommit,
+                block_hash: removal_block_hash.clone(),
+                authority_domain: authority.domain.clone(),
+                authority_key_id: authority.key_id.clone(),
+                signature: String::new(),
+            };
+            let signature: ed25519_dalek::Signature =
+                authority_key.sign(&removal_vote.signing_bytes().unwrap());
+            removal_vote.signature = BASE64.encode(signature.to_bytes());
+            let removal_request = alice
+                .build_membership_commit_request(
+                    group_id,
+                    MlsOrderingQuorumCertificateV1 {
+                        authority_set_sequence: 1,
+                        height: 2,
+                        round: 0,
+                        block_hash: removal_block_hash.clone(),
+                        votes: vec![removal_vote],
+                    },
+                )
+                .await
+                .unwrap();
+            let bob_envelope = removal
+                .control
+                .deliveries
+                .iter()
+                .find(|delivery| delivery.destination == "beta.example")
+                .unwrap()
+                .envelopes
+                .first()
+                .unwrap();
+            assert_eq!(bob_envelope.kind, MlsMembershipEnvelopeKindV1::Commit);
+            let bob_commit = BASE64.decode(&bob_envelope.opaque_message).unwrap();
+            let acknowledgement = CommitMlsControlBlockResponseV1 {
+                conversation_id,
+                incarnation: 1,
+                height: 2,
+                epoch: 2,
+                block_hash: removal_block_hash,
+                idempotent: false,
+            };
+            let removed = alice
+                .finalize_membership_change(group_id, &acknowledgement)
+                .await
+                .unwrap();
+            let two_device_roster = vec![
+                three_device_roster[0].clone(),
+                three_device_roster[1].clone(),
+            ];
+            let commit_envelope = MlsControlEnvelopeContext {
+                envelope_id: bob_envelope.envelope_id,
+                cursor: "17".into(),
+                send_id: bob_envelope.envelope_id,
+            };
+            let mut forged_request = removal_request.clone();
+            forged_request.finalized.quorum_certificate.votes[0].signature =
+                BASE64.encode([0; 64]);
+            assert!(bob
+                .apply_ordered_inbound_membership_commit(
+                    &commit_envelope,
+                    group_id,
+                    &bob_commit,
+                    &two_device_roster,
+                    &forged_request,
+                )
+                .await
+                .is_err());
+            assert_eq!(bob.group_state(group_id).await.unwrap().unwrap().epoch, 1);
+            assert!(bob
+                .processed_control_envelope(bob_envelope.envelope_id)
+                .await
+                .unwrap()
+                .is_none());
+            let applied = bob
+                .apply_ordered_inbound_membership_commit(
+                    &commit_envelope,
+                    group_id,
+                    &bob_commit,
+                    &two_device_roster,
+                    &removal_request,
+                )
+                .await
+                .unwrap();
+            assert!(!applied.idempotent);
+            assert_eq!(applied.group.epoch, 2);
+            assert_eq!(applied.conversation, removed.conversation);
+            assert_eq!(
+                bob.processed_control_envelope(bob_envelope.envelope_id)
+                    .await
+                    .unwrap(),
+                Some(applied.receipt.clone())
+            );
+            drop(bob);
+            let bob = MlsClient::new(bob_db);
+            bob.initialize("bobby@beta.example#1").await.unwrap();
+            let replay = bob
+                .apply_ordered_inbound_membership_commit(
+                    &commit_envelope,
+                    group_id,
+                    &bob_commit,
+                    &two_device_roster,
+                    &removal_request,
+                )
+                .await
+                .unwrap();
+            assert!(replay.idempotent);
+            assert_eq!(replay.conversation, applied.conversation);
 
             drop(alice);
             drop(reopened);
@@ -3252,7 +4641,7 @@ mod tests {
             alice.initialize("alice@alpha.example#1").await.unwrap();
             assert_eq!(
                 alice.local_conversations().await.unwrap(),
-                vec![finalized.conversation]
+                vec![removed.conversation]
             );
             drop(alice);
             drop(reopened);

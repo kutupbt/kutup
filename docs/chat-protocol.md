@@ -799,6 +799,18 @@ rows cannot contain conversation/incarnation metadata. The browser invitation
 coordinator persists OpenMLS state before activating the server invitation and
 can resume that second step after failure without rejoining.
 
+MLS V1 mandates Kutup's private `0xff4b` GroupContext extension containing the
+complete group-private role, owner, authority, roster, and control-head state.
+The authenticated local control-history route serves canonical pages of at
+most 64 original quorum-certified blocks. Welcome installation independently
+replays the complete history and atomically stores OpenMLS state, reconstructed
+genesis/control pins, and the Welcome mailbox receipt. Active members apply
+ordinary membership Commits only when the next history block, ciphertext
+digest, public transition, private extension, transparency-verified device
+roster, and pinned quorum all agree. The epoch/control pin/mailbox receipt
+advance in one encrypted transaction before HTTP acknowledgement; crash replay
+is receipt-driven and never reprocesses an old Commit.
+
 Before a Welcome can be joined, the browser exposes its roster only as
 untrusted `account@server#device` claims. The shared Rust engine fetches the
 current-manifest proof route for each account, authenticates its policy and

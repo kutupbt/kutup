@@ -188,6 +188,23 @@ conversation incarnation; anonymous rows are structurally forbidden from
 carrying conversation or incarnation metadata. Browser cursors are canonical
 decimal strings so JavaScript cannot round a 64-bit value.
 
+Every V1 KeyPackage advertises, and every V1 group requires, the private-use
+`0xff4b` GroupContext extension. Its canonical
+`MlsPrivateControlStateV1` value carries the full group-private account roster,
+administrator/owner assignments, current authority and owner sets, immutable
+genesis state, proposal id, height, epoch, and predecessor. Ordering servers
+still see only public commitments and pseudonyms. A Commit or Welcome that
+omits, duplicates, or changes this mandatory state inconsistently is rejected.
+
+An authenticated same-origin control-history route returns the stored genesis
+and original quorum-certified `CommitMlsControlBlockV1` values in canonical
+pages of at most 64 entries and 8 MiB. Pending members may read only through
+their adding epoch; removed members may read through their removal epoch.
+Clients accept no URL from message content and never trust a server verdict:
+the shared verifier replays proposal signatures, old-set quorums,
+predecessors, epochs, roster transitions, authority/owner transitions, and
+then binds the resulting public commitments to the private GroupContext.
+
 The unadvertised browser coordinator replenishes durable KeyPackages and
 implements restart-safe genesis and invitation boundaries. For genesis, it
 fetches each authority's complete policy history through the same-origin
@@ -202,9 +219,11 @@ For invitations, the coordinator decrypts the Welcome only into untrusted
 authenticated policy history and current-manifest proofs, recover every
 skipped manifest, pin rollback/fork state, and compare the exact P-256
 credential key. Only that result can reach OpenMLS join. It commits OpenMLS
-state first, activates the server invitation second, and acknowledges the
-Welcome last. If the network fails after the local commit, retry reads the
-existing group and resumes activation without attempting a second join.
+state, reconstructed genesis/control pin, and exact mailbox receipt in one
+encrypted transaction, activates the server invitation second, and
+acknowledges the Welcome last. If the network fails after the local commit,
+retry authenticates the same history and receipt, then resumes activation
+without attempting a second join.
 
 For locally authored ordinary membership changes, the shared Rust engine now
 atomically commits the OpenMLS pending Commit together with the exact signed
@@ -220,6 +239,16 @@ removals are separate V1 transitions; neither can change administrator or
 owner assignments. Server finalization independently requires an active local
 administrator, while exact already-committed retries are checked by immutable
 block hash before consulting the post-transition roster.
+
+For inbound ordinary membership changes, the browser processes mailbox rows in
+cursor order, stages each Commit without writing state, resolves every claimed
+MLS device key through the transparency verifier, and fetches exactly the next
+canonical public history entry. Rust requires that the quorum-certified block,
+Commit digest, current pin, public transition, private GroupContext, and exact
+manifest-bound device roster all agree. It then merges one epoch, advances the
+control pin, and stores the mailbox id/cursor/send id receipt atomically.
+Only afterward may the browser acknowledge the row. A crash replay reads that
+receipt and acknowledges without attempting to process the old Commit again.
 
 ## Federation privacy
 

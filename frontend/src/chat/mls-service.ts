@@ -1,5 +1,6 @@
 import type {
   AccountAddress,
+  AppliedInboundMlsCommit,
   ChatTransportPort,
   FinalizedMlsMembershipChange,
   LocalMlsConversationRecord,
@@ -18,6 +19,7 @@ const MLS_PROTOCOL_VERSION = 1
 const DEFAULT_KEY_PACKAGE_TARGET = 20
 const KEY_PACKAGE_LIFETIME_SECONDS = 30 * 24 * 60 * 60
 const MAX_MAILBOX_PAGES = 64
+const MAX_CONTROL_HISTORY_PAGES = 1024
 
 type CryptoLock = <T>(operation: () => Promise<T>) => Promise<T>
 
@@ -268,6 +270,10 @@ export class MlsConversationService {
       || !equalBytes(inspection.mlsGroupId, groupId)
       || inspection.claimedMembers.length < 1
       || inspection.claimedMembers.length > 1000
+      || inspection.privateControlState.protocolVersion !== MLS_PROTOCOL_VERSION
+      || inspection.privateControlState.conversationId !== pending.conversationId
+      || inspection.privateControlState.incarnation !== pending.incarnation
+      || inspection.privateControlState.epoch !== inspection.epoch
     ) {
       throw new Error('MLS Welcome differs from pending invitation metadata')
     }
@@ -311,6 +317,117 @@ export class MlsConversationService {
   }
 
   /**
+   * Apply active-group membership Commits strictly in mailbox order. The
+   * shared engine verifies the exact quorum-certified public block and writes
+   * its mailbox receipt atomically with the OpenMLS epoch; HTTP acknowledgement
+   * happens only after that transaction succeeds.
+   */
+  async reconcileInboundMembershipCommits(): Promise<AppliedInboundMlsCommit[]> {
+    const records = await this.withCryptoLock(() =>
+      this.client.localMlsConversations(),
+    )
+    const applied: AppliedInboundMlsCommit[] = []
+    for (const envelope of await this.allMembershipEnvelopes()) {
+      const receipt = await this.withCryptoLock(() =>
+        this.client.processedMlsControlEnvelope(envelope.id),
+      )
+      if (receipt) {
+        if (
+          receipt.envelopeId !== envelope.id
+          || receipt.cursor !== envelope.cursor
+          || receipt.sendId !== envelope.sendId
+          || receipt.conversationId !== envelope.conversationId
+          || receipt.incarnation !== envelope.incarnation
+        ) {
+          throw new Error('MLS mailbox replay differs from its durable receipt')
+        }
+        await this.transport.ackMlsMailbox(this.client.deviceId, [envelope.id])
+        continue
+      }
+      const recordIndex = records.findIndex(
+        (record) =>
+          record.status === 'active'
+          && record.request.genesis.conversationId === envelope.conversationId
+          && record.request.genesis.incarnation === envelope.incarnation,
+      )
+      if (recordIndex < 0) continue
+      const record = records[recordIndex]
+      const groupId = decodeCanonicalBase64(
+        record.request.genesis.mlsGroupId,
+        16,
+        255,
+      )
+      const commit = decodeCanonicalBase64(
+        envelope.opaqueEnvelope,
+        1,
+        1024 * 1024,
+      )
+      const inspection = await this.withCryptoLock(() =>
+        this.client.inspectInboundMlsCommit(groupId, commit),
+      )
+      if (
+        !equalBytes(inspection.mlsGroupId, groupId)
+        || inspection.epochBefore !== record.lastFinalizedEpoch
+        || inspection.epochAfter !== record.lastFinalizedEpoch + 1
+        || inspection.privateControlState.conversationId !== envelope.conversationId
+        || inspection.privateControlState.incarnation !== envelope.incarnation
+        || inspection.privateControlState.epoch !== inspection.epochAfter
+      ) {
+        throw new Error('inbound MLS Commit differs from the durable conversation pin')
+      }
+      const expectedMembers = await this.withCryptoLock(() =>
+        this.client.resolveMlsWelcomeClaims(inspection.claimedMembers),
+      )
+      if (
+        expectedMembers.length !== inspection.claimedMembers.length
+        || expectedMembers.some((member, index) => {
+          const claim = inspection.claimedMembers[index]
+          return member.credentialIdentity !== claim.credentialIdentity
+            || !equalBytes(
+              member.credentialPublicKey,
+              Uint8Array.from(claim.credentialPublicKey),
+            )
+        })
+      ) {
+        throw new Error('shared verifier returned a roster different from the MLS Commit')
+      }
+      const history = await this.transport.fetchMlsControlHistory(
+        envelope.conversationId!,
+        envelope.incarnation!,
+        String(record.lastFinalizedHeight),
+        1,
+      )
+      if (history.entryCount !== 1) {
+        throw new Error('next authenticated MLS control block is unavailable')
+      }
+      const result = await this.withCryptoLock(() =>
+        this.client.applyOrderedInboundMlsMembershipCommit(
+          envelope.id,
+          envelope.cursor,
+          envelope.sendId,
+          groupId,
+          commit,
+          expectedMembers,
+          history.bytes,
+        ),
+      )
+      if (
+        result.receipt.envelopeId !== envelope.id
+        || result.receipt.cursor !== envelope.cursor
+        || result.receipt.sendId !== envelope.sendId
+        || result.conversation.lastFinalizedEpoch !== inspection.epochAfter
+        || result.group.epoch !== inspection.epochAfter
+      ) {
+        throw new Error('durable inbound MLS result differs from its mailbox Commit')
+      }
+      records[recordIndex] = result.conversation
+      await this.transport.ackMlsMailbox(this.client.deviceId, [envelope.id])
+      applied.push(result)
+    }
+    return applied
+  }
+
+  /**
    * Join locally first, then activate server delivery. If transport fails after
    * the durable join, a retry observes the exact existing group/epoch and
    * resumes only the server response and mailbox acknowledgement.
@@ -330,20 +447,32 @@ export class MlsConversationService {
       throw new Error('MLS invitation must have exactly one control envelope for this device')
     }
     const welcome = decodeCanonicalBase64(envelopes[0].opaqueEnvelope, 1, 1024 * 1024)
-    let resumed = false
-    let group = await this.withCryptoLock(() => this.client.mlsGroupState(groupId))
-    if (group) {
-      resumed = true
-      if (group.epoch !== verified.invitedEpoch) {
-        throw new Error('durable MLS group epoch differs from the pending invitation')
-      }
-    } else {
-      group = await this.withCryptoLock(() =>
-        this.client.joinMlsFromWelcome(groupId, welcome, verified.expectedMembers),
-      ) as LocalMlsGroupState
-      if (group.epoch !== verified.invitedEpoch) {
-        throw new Error('MLS Welcome epoch differs from authenticated invitation history')
-      }
+    const resumed = await this.withCryptoLock(() =>
+      this.client.mlsGroupState(groupId),
+    ) !== null
+    const historyPages = await this.controlHistory(
+      verified.conversationId,
+      verified.incarnation,
+    )
+    const joined = await this.withCryptoLock(() =>
+      this.client.joinMlsFromWelcomeWithControlHistory(
+        envelopes[0].id,
+        envelopes[0].cursor,
+        envelopes[0].sendId,
+        groupId,
+        welcome,
+        verified.expectedMembers,
+        historyPages,
+      ),
+    )
+    const group = joined.group
+    if (
+      group.epoch !== verified.invitedEpoch
+      || joined.conversation.request.genesis.conversationId !== verified.conversationId
+      || joined.conversation.request.genesis.incarnation !== verified.incarnation
+      || joined.conversation.lastFinalizedEpoch !== verified.invitedEpoch
+    ) {
+      throw new Error('MLS Welcome differs from authenticated invitation history')
     }
     const decision = await this.transport.respondMlsInvitation({
       conversationId: verified.conversationId,
@@ -360,10 +489,48 @@ export class MlsConversationService {
     return { group, serverAccepted: true, resumed }
   }
 
+  private async controlHistory(
+    conversationId: string,
+    incarnation: number,
+  ): Promise<Uint8Array[]> {
+    let afterHeight = '0'
+    const pages: Uint8Array[] = []
+    for (let pageIndex = 0; pageIndex < MAX_CONTROL_HISTORY_PAGES; pageIndex += 1) {
+      const page = await this.transport.fetchMlsControlHistory(
+        conversationId,
+        incarnation,
+        afterHeight,
+        64,
+      )
+      if (!(page.bytes instanceof Uint8Array) || page.bytes.length < 2 || page.bytes.length > 8 * 1024 * 1024) {
+        throw new Error('MLS control-history page is outside the client size bound')
+      }
+      if (page.entryCount === 0) return pages
+      pages.push(page.bytes)
+      if (page.entryCount < 64) return pages
+      if (!page.nextHeight) {
+        throw new Error('full MLS control-history page omitted its next cursor')
+      }
+      if (BigInt(page.nextHeight) <= BigInt(afterHeight)) {
+        throw new Error('MLS control-history pagination did not advance')
+      }
+      afterHeight = page.nextHeight
+    }
+    throw new Error('MLS control history exceeded the bounded client scan')
+  }
+
   private async membershipEnvelopes(
     conversationId: string,
     incarnation: number,
   ): Promise<MlsMailboxEnvelope[]> {
+    return (await this.allMembershipEnvelopes()).filter(
+      (envelope) =>
+        envelope.conversationId === conversationId
+        && envelope.incarnation === incarnation,
+    )
+  }
+
+  private async allMembershipEnvelopes(): Promise<MlsMailboxEnvelope[]> {
     let after: string | undefined
     const matching: MlsMailboxEnvelope[] = []
     for (let pageIndex = 0; pageIndex < MAX_MAILBOX_PAGES; pageIndex += 1) {
@@ -372,8 +539,6 @@ export class MlsConversationService {
         validateMailboxEnvelope(envelope)
         if (
           envelope.deliveryKind === 'membership_control'
-          && envelope.conversationId === conversationId
-          && envelope.incarnation === incarnation
         ) {
           matching.push(envelope)
         }
@@ -383,7 +548,7 @@ export class MlsConversationService {
       }
       after = page.nextCursor
     }
-    throw new Error('MLS mailbox exceeded the bounded invitation scan')
+    throw new Error('MLS mailbox exceeded the bounded membership-control scan')
   }
 
   private async publishPreparedGenesis(

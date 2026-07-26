@@ -8,7 +8,7 @@
 //! crypto + store. The `Rc<dyn ChatTransport>` is cloned per call so a network
 //! `await` never holds a borrow of `self` across the subsequent store write.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::rc::Rc;
 
 use base64::engine::general_purpose::STANDARD;
@@ -872,6 +872,28 @@ impl Engine {
                 .accept_current_manifest_evidence(account, &response)
                 .await?;
             manifests.insert(account.clone(), manifest);
+        }
+
+        let mut claimed_devices = BTreeMap::<String, BTreeSet<u32>>::new();
+        for (account, device_id) in &parsed {
+            claimed_devices
+                .entry(account.clone())
+                .or_default()
+                .insert(*device_id);
+        }
+        for (account, manifest) in &manifests {
+            let manifest_devices = manifest
+                .devices
+                .iter()
+                .map(|device| device.device_id)
+                .collect::<BTreeSet<_>>();
+            if manifest.devices.iter().any(|device| device.mls.is_none())
+                || claimed_devices.get(account) != Some(&manifest_devices)
+            {
+                return Err(ChatError::Trust(format!(
+                    "MLS roster does not cover the complete signed device set for {account}"
+                )));
+            }
         }
 
         claims

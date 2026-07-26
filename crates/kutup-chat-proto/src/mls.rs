@@ -19,6 +19,10 @@ use crate::{AccountAddress, DeviceManifest, ManifestTransparencyProof};
 pub const MLS_PROTOCOL_VERSION: u16 = 1;
 pub const MLS_ORDERING_SERVICE_POLICY_VERSION: u16 = 1;
 pub const MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256: u16 = 0x0002;
+/// Private-use RFC 9420 GroupContext extension carrying Kutup's
+/// group-encrypted authorization/control state. Every V1 KeyPackage advertises
+/// this extension and every V1 group requires it.
+pub const MLS_PRIVATE_CONTROL_EXTENSION_TYPE: u16 = 0xff4b;
 pub const ANONYMOUS_MLS_DELIVERY_CONTEXT: &[u8] = b"kutup/anonymous-mls-delivery/v1";
 const GROUP_DELIVERY_CAPABILITY_CONTEXT: &[u8] = b"kutup/group-delivery-capability/v1";
 const MAX_CANONICAL_POLICY_BYTES: usize = 256 * 1024;
@@ -368,6 +372,129 @@ impl MlsConversationMemberV1 {
             }
         }
         Ok(())
+    }
+}
+
+/// Complete group-private authorization state authenticated by the MLS
+/// GroupContext. Ordering servers see only the public roster commitment and
+/// pseudonymous authority/owner keys; members receive this exact structure in
+/// Welcome and every subsequent Commit.
+///
+/// `previous_block_hash` deliberately names the predecessor of `height`.
+/// Including the hash of the block at `height` would create a circular
+/// dependency because that block commits the MLS ciphertext containing this
+/// extension.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsPrivateControlStateV1 {
+    pub protocol_version: u16,
+    pub conversation_id: Uuid,
+    pub incarnation: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposal_id: Option<Uuid>,
+    pub height: u64,
+    pub epoch: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_block_hash: Option<String>,
+    /// Immutable epoch-zero account roster, retained so a joining client can
+    /// reconstruct and verify the private genesis request without asking any
+    /// server to reveal member identities.
+    pub genesis_roster: Vec<MlsConversationMemberV1>,
+    pub genesis_authority_set: MlsAuthoritySetV1,
+    pub genesis_owner_set: MlsOwnerSetV1,
+    pub roster: Vec<MlsConversationMemberV1>,
+    pub authority_set: MlsAuthoritySetV1,
+    pub owner_set: MlsOwnerSetV1,
+}
+
+impl MlsPrivateControlStateV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.protocol_version != MLS_PROTOCOL_VERSION
+            || self.conversation_id.is_nil()
+            || self.incarnation == 0
+            || self.epoch != self.height
+            || self.genesis_roster.len() != 1
+            || self.roster.is_empty()
+            || self.roster.len() > 1000
+        {
+            return Err("MLS private control state has invalid identifiers or bounds".into());
+        }
+        match (
+            self.height,
+            self.proposal_id,
+            self.previous_block_hash.as_deref(),
+        ) {
+            (0, None, None) => {}
+            (1, Some(proposal_id), None) if !proposal_id.is_nil() => {}
+            (height, Some(proposal_id), Some(hash)) if height > 1 && !proposal_id.is_nil() => {
+                validate_hash("previousBlockHash", hash)?;
+            }
+            _ => {
+                return Err(
+                    "MLS private control state has an invalid predecessor or proposal shape".into(),
+                )
+            }
+        }
+        self.genesis_authority_set.validate()?;
+        self.genesis_owner_set.validate()?;
+        self.authority_set.validate()?;
+        self.owner_set.validate()?;
+        self.genesis_roster[0].validate()?;
+        let genesis_owner_id = self.genesis_roster[0]
+            .owner_id
+            .as_deref()
+            .ok_or("MLS private control genesis roster has no owner")?;
+        if self.genesis_owner_set.owners.len() != 1
+            || self.genesis_owner_set.owners[0].owner_id != genesis_owner_id
+        {
+            return Err(
+                "MLS private control genesis roster differs from its declared owner set".into(),
+            );
+        }
+        roster_commitment(&self.genesis_roster)?;
+        let mut previous = None;
+        let mut admin_count = 0usize;
+        let mut roster_owner_ids = BTreeSet::new();
+        for member in &self.roster {
+            member.validate()?;
+            let address = member.address.canonical();
+            if previous
+                .as_ref()
+                .is_some_and(|prior: &String| address <= *prior)
+            {
+                return Err("MLS private control roster is not strictly ordered".into());
+            }
+            previous = Some(address);
+            admin_count += usize::from(member.is_admin);
+            if let Some(owner_id) = &member.owner_id {
+                if !roster_owner_ids.insert(owner_id.as_str()) {
+                    return Err("MLS private control roster repeats an owner id".into());
+                }
+            }
+        }
+        let declared_owner_ids = self
+            .owner_set
+            .owners
+            .iter()
+            .map(|owner| owner.owner_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if admin_count == 0 || roster_owner_ids != declared_owner_ids {
+            return Err(
+                "MLS private control roster roles differ from the declared owner set".into(),
+            );
+        }
+        roster_commitment(&self.roster)?;
+        Ok(())
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        serde_json::to_vec(self).map_err(|error| error.to_string())
+    }
+
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, String> {
+        decode_canonical(bytes, Self::validate)
     }
 }
 
@@ -1709,10 +1836,183 @@ impl CommitMlsControlBlockV1 {
     }
 }
 
+/// Authenticated same-origin page of the public MLS control log. The local
+/// server is only a cache: clients replay every signature, quorum,
+/// predecessor, epoch, and transition themselves. Heights are canonical
+/// decimal strings so browser JSON parsing cannot round a `u64`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsClientControlHistoryPageV1 {
+    pub protocol_version: u16,
+    pub genesis: MlsConversationGenesisV1,
+    pub genesis_participant_domains: Vec<String>,
+    pub after_height: String,
+    pub commits: Vec<CommitMlsControlBlockV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_height: Option<String>,
+}
+
+impl MlsClientControlHistoryPageV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.protocol_version != MLS_PROTOCOL_VERSION || self.commits.len() > 64 {
+            return Err("MLS client control-history page has invalid version or size".into());
+        }
+        self.genesis.validate()?;
+        validate_participant_domain_set(&self.genesis_participant_domains)?;
+        let after = parse_canonical_u64("afterHeight", &self.after_height, true)?;
+        let mut expected_height = after
+            .checked_add(1)
+            .ok_or("MLS client control-history height overflow")?;
+        for request in &self.commits {
+            request.validate_shape()?;
+            let block = &request.finalized.block;
+            if block.conversation_id != self.genesis.conversation_id
+                || block.incarnation != self.genesis.incarnation
+                || block.height != expected_height
+            {
+                return Err("MLS client control-history page is not contiguous".into());
+            }
+            expected_height = expected_height
+                .checked_add(1)
+                .ok_or("MLS client control-history height overflow")?;
+        }
+        match (self.commits.last(), self.next_height.as_deref()) {
+            (None, None) => {}
+            (Some(last), Some(next))
+                if parse_canonical_u64("nextHeight", next, false)?
+                    == last.finalized.block.height => {}
+            _ => return Err("MLS client control-history cursor does not match its page".into()),
+        }
+        if serde_json::to_vec(self)
+            .map_err(|error| error.to_string())?
+            .len()
+            > MAX_AUTHORITY_BOOTSTRAP_PAGE_BYTES
+        {
+            return Err("MLS client control-history page exceeds 8 MiB".into());
+        }
+        Ok(())
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        serde_json::to_vec(self).map_err(|error| error.to_string())
+    }
+
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, String> {
+        decode_canonical(bytes, Self::validate)
+    }
+}
+
+/// Replay a complete client-visible control history and bind its public
+/// commitments to the MLS-authenticated private GroupContext state.
+pub fn verify_mls_client_control_history(
+    pages: &[MlsClientControlHistoryPageV1],
+    private_state: &MlsPrivateControlStateV1,
+) -> Result<Option<String>, String> {
+    private_state.validate()?;
+    let first = pages.first().ok_or("MLS client control history is empty")?;
+    let genesis = &first.genesis;
+    let genesis_domains = &first.genesis_participant_domains;
+    if genesis.conversation_id != private_state.conversation_id
+        || genesis.incarnation != private_state.incarnation
+        || genesis.roster_commitment != roster_commitment(&private_state.genesis_roster)?
+        || genesis.member_count as usize != private_state.genesis_roster.len()
+        || genesis.authority_set != private_state.genesis_authority_set
+        || genesis.owner_set.as_ref() != Some(&private_state.genesis_owner_set)
+    {
+        return Err("MLS private control state differs from its genesis".into());
+    }
+    let private_genesis_domains = private_state
+        .genesis_roster
+        .iter()
+        .map(|member| {
+            member
+                .address
+                .server
+                .clone()
+                .ok_or("MLS private genesis member has no domain")
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?
+        .into_iter()
+        .collect::<Vec<_>>();
+    if &private_genesis_domains != genesis_domains {
+        return Err("MLS private genesis routing differs from public genesis".into());
+    }
+
+    let mut commits = Vec::new();
+    let mut expected_after = 0u64;
+    for page in pages {
+        page.validate()?;
+        if page.genesis != *genesis
+            || page.genesis_participant_domains != *genesis_domains
+            || page.after_height != expected_after.to_string()
+            || page.commits.is_empty()
+        {
+            return Err("MLS client control-history pages are incomplete or reordered".into());
+        }
+        expected_after = page
+            .commits
+            .last()
+            .ok_or("MLS client control-history page is empty")?
+            .finalized
+            .block
+            .height;
+        commits.extend(page.commits.iter().cloned());
+    }
+    if expected_after != private_state.height || commits.len() as u64 != private_state.height {
+        return Err("MLS client control history does not reach the private control head".into());
+    }
+    let replayed = replay_mls_control_history(genesis, genesis_domains, &commits)?;
+    let current_roster_commitment = roster_commitment(&private_state.roster)?;
+    let current_domains = private_state
+        .roster
+        .iter()
+        .map(|member| {
+            member
+                .address
+                .server
+                .clone()
+                .ok_or("MLS private member has no domain")
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?
+        .into_iter()
+        .collect::<Vec<_>>();
+    if replayed.height != private_state.height
+        || replayed.epoch != private_state.epoch
+        || replayed.roster_commitment != current_roster_commitment
+        || replayed.member_count as usize != private_state.roster.len()
+        || replayed.participant_domains != current_domains
+        || replayed.authorities != private_state.authority_set
+        || replayed.owners.as_ref() != Some(&private_state.owner_set)
+    {
+        return Err("MLS private control state differs from replayed public history".into());
+    }
+    match commits.last() {
+        None if private_state.height == 0
+            && private_state.proposal_id.is_none()
+            && private_state.previous_block_hash.is_none() => {}
+        Some(request)
+            if private_state.proposal_id == Some(request.finalized.block.proposal.proposal_id)
+                && private_state.previous_block_hash
+                    == request.finalized.block.previous_block_hash => {}
+        _ => return Err("MLS private control head differs from its final public block".into()),
+    }
+    Ok(replayed.previous_hash)
+}
+
 pub fn mls_transition_digest(value: &impl Serialize) -> Result<String, String> {
     serde_json::to_vec(value)
         .map(|bytes| hex::encode(Sha256::digest(bytes)))
         .map_err(|error| error.to_string())
+}
+
+fn parse_canonical_u64(label: &str, value: &str, allow_zero: bool) -> Result<u64, String> {
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|parsed| (allow_zero || *parsed > 0) && parsed.to_string() == value)
+        .ok_or_else(|| format!("MLS {label} is not canonical decimal"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3671,5 +3971,252 @@ mod tests {
         );
         let pretty = serde_json::to_vec_pretty(&policy).unwrap();
         assert!(MlsOrderingServicePolicyV1::from_canonical_bytes(&pretty).is_err());
+    }
+
+    #[test]
+    fn private_control_and_client_history_have_stable_canonical_vectors() {
+        let (authorities, _) = authority_set(1);
+        let owner_key = ed25519_dalek::SigningKey::from_bytes(&[44; 32]);
+        let owner_public = owner_key.verifying_key().to_bytes();
+        let owner_id = hex::encode(Sha256::digest(owner_public));
+        let owners = MlsOwnerSetV1 {
+            sequence: 1,
+            owners: vec![MlsOwnerV1 {
+                owner_id: owner_id.clone(),
+                public_key: base64::engine::general_purpose::STANDARD.encode(owner_public),
+            }],
+            required_quorum: 1,
+        };
+        let roster = vec![MlsConversationMemberV1 {
+            address: "alice@a0.example".parse().unwrap(),
+            is_admin: true,
+            owner_id: Some(owner_id),
+        }];
+        let private = MlsPrivateControlStateV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            conversation_id: Uuid::from_u128(0x101),
+            incarnation: 1,
+            proposal_id: None,
+            height: 0,
+            epoch: 0,
+            previous_block_hash: None,
+            genesis_roster: roster.clone(),
+            genesis_authority_set: authorities.clone(),
+            genesis_owner_set: owners.clone(),
+            roster: roster.clone(),
+            authority_set: authorities.clone(),
+            owner_set: owners.clone(),
+        };
+        let private_bytes = private.canonical_bytes().unwrap();
+        assert_eq!(
+            MlsPrivateControlStateV1::from_canonical_bytes(&private_bytes).unwrap(),
+            private
+        );
+        let genesis = MlsConversationGenesisV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            conversation_id: private.conversation_id,
+            incarnation: 1,
+            mls_group_id: base64::engine::general_purpose::STANDARD.encode([6; 16]),
+            kind: MlsConversationKindV1::Group,
+            suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+            roster_commitment: roster_commitment(&roster).unwrap(),
+            member_count: 1,
+            authority_set: authorities,
+            owner_set: Some(owners),
+            initial_epoch: 0,
+            created_at: 1_700_000_000,
+        };
+        let page = MlsClientControlHistoryPageV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            genesis,
+            genesis_participant_domains: vec!["a0.example".into()],
+            after_height: "0".into(),
+            commits: Vec::new(),
+            next_height: None,
+        };
+        let page_bytes = page.canonical_bytes().unwrap();
+        assert_eq!(
+            MlsClientControlHistoryPageV1::from_canonical_bytes(&page_bytes).unwrap(),
+            page
+        );
+        assert_eq!(
+            hex::encode(Sha256::digest(&private_bytes)),
+            "933090c87f6700eb0194709505b1dce6e56b0ac30d7c0c3ec3c83f4421b51073"
+        );
+        assert_eq!(
+            hex::encode(Sha256::digest(&page_bytes)),
+            "8c9cc89d2276c5a1b4e73e399ec7755b5c36a1d473d6c3493238ed3211f505c4"
+        );
+        let pretty = serde_json::to_vec_pretty(&page).unwrap();
+        assert!(MlsClientControlHistoryPageV1::from_canonical_bytes(&pretty).is_err());
+        let mut unknown = serde_json::to_value(&private).unwrap();
+        unknown
+            .as_object_mut()
+            .unwrap()
+            .insert("downgrade".into(), serde_json::Value::Bool(true));
+        assert!(serde_json::from_value::<MlsPrivateControlStateV1>(unknown).is_err());
+        assert!(verify_mls_client_control_history(&[], &private).is_err());
+    }
+
+    #[test]
+    fn client_control_history_replays_exactly_across_page_boundaries() {
+        use p256::ecdsa::signature::Signer as _;
+
+        let (authorities, authority_keys) = authority_set(1);
+        let authority = &authorities.authorities[0];
+        let authority_key = &authority_keys[&authority.domain];
+        let owner_key = ed25519_dalek::SigningKey::from_bytes(&[45; 32]);
+        let owner_public = owner_key.verifying_key().to_bytes();
+        let owner_id = hex::encode(Sha256::digest(owner_public));
+        let owners = MlsOwnerSetV1 {
+            sequence: 1,
+            owners: vec![MlsOwnerV1 {
+                owner_id: owner_id.clone(),
+                public_key: base64::engine::general_purpose::STANDARD.encode(owner_public),
+            }],
+            required_quorum: 1,
+        };
+        let roster = vec![MlsConversationMemberV1 {
+            address: "alice@a0.example".parse().unwrap(),
+            is_admin: true,
+            owner_id: Some(owner_id),
+        }];
+        let conversation_id = Uuid::from_u128(0x202);
+        let genesis = MlsConversationGenesisV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            conversation_id,
+            incarnation: 1,
+            mls_group_id: base64::engine::general_purpose::STANDARD.encode([7; 16]),
+            kind: MlsConversationKindV1::Group,
+            suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+            roster_commitment: roster_commitment(&roster).unwrap(),
+            member_count: 1,
+            authority_set: authorities.clone(),
+            owner_set: Some(owners.clone()),
+            initial_epoch: 0,
+            created_at: 1_700_000_000,
+        };
+        let proposer_key = p256::ecdsa::SigningKey::from_bytes((&[46; 32]).into()).unwrap();
+        let proposer_public = proposer_key.verifying_key().to_encoded_point(false);
+        let proposer_id = hex::encode(Sha256::digest(proposer_public.as_bytes()));
+        let proposer_public =
+            base64::engine::general_purpose::STANDARD.encode(proposer_public.as_bytes());
+        let mut commits = Vec::new();
+        let mut previous_block_hash = None;
+        for height in 1..=65 {
+            let payload = format!("opaque routine-admin commit {height}");
+            let mut proposal = MlsControlProposalV1 {
+                protocol_version: MLS_PROTOCOL_VERSION,
+                conversation_id,
+                incarnation: 1,
+                proposal_id: Uuid::from_u128(0x1_000 + u128::from(height)),
+                base_epoch: height - 1,
+                action_type: MlsControlActionTypeV1::RoutineAdmin,
+                proposer_id: proposer_id.clone(),
+                proposer_credential_public_key: proposer_public.clone(),
+                encrypted_payload: base64::engine::general_purpose::STANDARD
+                    .encode(payload.as_bytes()),
+                payload_digest: hex::encode(Sha256::digest(payload.as_bytes())),
+                created_at: 1_700_000_000 + height as i64,
+                proposer_signature: String::new(),
+            };
+            let signature: p256::ecdsa::Signature =
+                proposer_key.sign(&proposal.signing_bytes().unwrap());
+            proposal.proposer_signature =
+                base64::engine::general_purpose::STANDARD.encode(signature.to_der().as_bytes());
+            let block = MlsControlBlockV1 {
+                conversation_id,
+                incarnation: 1,
+                height,
+                previous_block_hash: previous_block_hash.clone(),
+                epoch_before: height - 1,
+                epoch_after: height,
+                proposal,
+                transition_digest: None,
+                owner_approval: None,
+                finalized_at: 1_700_000_100 + height as i64,
+            };
+            let block_hash = block.block_hash().unwrap();
+            let mut vote = MlsOrderingVoteV1 {
+                conversation_id,
+                incarnation: 1,
+                authority_set_sequence: authorities.sequence,
+                height,
+                round: 0,
+                vote_type: MlsOrderingVoteTypeV1::Precommit,
+                block_hash: block_hash.clone(),
+                authority_domain: authority.domain.clone(),
+                authority_key_id: authority.key_id.clone(),
+                signature: String::new(),
+            };
+            vote.signature = base64::engine::general_purpose::STANDARD.encode(
+                authority_key
+                    .sign(&vote.signing_bytes().unwrap())
+                    .to_bytes(),
+            );
+            commits.push(CommitMlsControlBlockV1 {
+                finalized: MlsFinalizedControlBlockV1 {
+                    block,
+                    quorum_certificate: MlsOrderingQuorumCertificateV1 {
+                        authority_set_sequence: authorities.sequence,
+                        height,
+                        round: 0,
+                        block_hash: block_hash.clone(),
+                        votes: vec![vote],
+                    },
+                },
+                membership_transition: None,
+                next_authority_set: None,
+                authority_transition: None,
+                next_owner_set: None,
+            });
+            previous_block_hash = Some(block_hash);
+        }
+        let final_block = &commits.last().unwrap().finalized.block;
+        let private = MlsPrivateControlStateV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            conversation_id,
+            incarnation: 1,
+            proposal_id: Some(final_block.proposal.proposal_id),
+            height: 65,
+            epoch: 65,
+            previous_block_hash: final_block.previous_block_hash.clone(),
+            genesis_roster: roster.clone(),
+            genesis_authority_set: authorities.clone(),
+            genesis_owner_set: owners.clone(),
+            roster,
+            authority_set: authorities,
+            owner_set: owners,
+        };
+        let first = MlsClientControlHistoryPageV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            genesis: genesis.clone(),
+            genesis_participant_domains: vec!["a0.example".into()],
+            after_height: "0".into(),
+            commits: commits[..64].to_vec(),
+            next_height: Some("64".into()),
+        };
+        let second = MlsClientControlHistoryPageV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            genesis,
+            genesis_participant_domains: vec!["a0.example".into()],
+            after_height: "64".into(),
+            commits: commits[64..].to_vec(),
+            next_height: Some("65".into()),
+        };
+
+        assert_eq!(
+            verify_mls_client_control_history(&[first.clone(), second.clone()], &private).unwrap(),
+            previous_block_hash
+        );
+        assert!(verify_mls_client_control_history(std::slice::from_ref(&first), &private).is_err());
+        assert!(
+            verify_mls_client_control_history(&[second.clone(), first.clone()], &private).is_err()
+        );
+        assert!(verify_mls_client_control_history(&[first.clone(), first], &private).is_err());
+        assert!(MlsClientControlHistoryPageV1::from_canonical_bytes(
+            &second.canonical_bytes().unwrap()
+        )
+        .is_ok());
     }
 }

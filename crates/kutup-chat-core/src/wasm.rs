@@ -12,11 +12,11 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
     AnonymousMlsDeviceEnvelopeV1, ChatProfileResponse, CommitMlsControlBlockResponseV1,
-    DeviceListMismatch, DeviceManifest, MailboxPage, MlsControlActionTypeV1,
-    MlsConversationMemberV1, MlsOrderingQuorumCertificateV1, OwnChatProfileResponse,
-    PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
-    RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest,
-    TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
+    DeviceListMismatch, DeviceManifest, MailboxPage, MlsClientControlHistoryPageV1,
+    MlsControlActionTypeV1, MlsConversationMemberV1, MlsOrderingQuorumCertificateV1,
+    OwnChatProfileResponse, PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest,
+    RegisterChatDeviceRequest, RegisterChatDeviceResponse, ReplenishKeysRequest,
+    SendMessagesRequest, TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::TryRngCore as _;
@@ -28,8 +28,9 @@ use zeroize::Zeroize as _;
 use crate::{
     AccountAddress, AccountAuthority, AnonymousMlsRecipientDevice, ChatContent, ChatError,
     ChatTransport, ConversationId, Engine, InboundEnvelope, IndexedDbChatDb, ManifestTrust,
-    MlsClient, ReceiveReport, Result, SendOutcome, TransparencyMonitorState,
-    TransparencyMonitorStatus, VerifiedMlsCredential, VerifiedMlsKeyPackage,
+    MlsClient, MlsControlEnvelopeContext, ReceiveReport, Result, SendOutcome,
+    TransparencyMonitorState, TransparencyMonitorStatus, VerifiedMlsCredential,
+    VerifiedMlsKeyPackage,
 };
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -930,21 +931,41 @@ impl WasmChatClient {
             .map_err(chat_error)
     }
 
-    #[wasm_bindgen(js_name = joinMlsFromWelcome)]
-    pub async fn join_mls_from_welcome(
+    #[wasm_bindgen(js_name = joinMlsFromWelcomeWithControlHistory)]
+    pub async fn join_mls_from_welcome_with_control_history(
         &self,
+        envelope_id: String,
+        cursor: String,
+        send_id: String,
         mls_group_id: Vec<u8>,
         welcome: Vec<u8>,
         expected_members: JsValue,
+        history_pages: JsValue,
     ) -> std::result::Result<JsValue, JsValue> {
+        let envelope_id = uuid::Uuid::parse_str(&envelope_id)
+            .map_err(|_| js_error("MLS mailbox envelope id must be a UUID"))?;
+        let send_id = uuid::Uuid::parse_str(&send_id)
+            .map_err(|_| js_error("MLS mailbox send id must be a UUID"))?;
+        let envelope = MlsControlEnvelopeContext {
+            envelope_id,
+            cursor,
+            send_id,
+        };
         let expected: Vec<VerifiedMlsCredential> =
             from_transport(expected_members).map_err(chat_error)?;
-        let state = self
+        let history_pages: Vec<Vec<u8>> = from_transport(history_pages).map_err(chat_error)?;
+        let joined = self
             .mls_client()
-            .join_from_welcome(&mls_group_id, &welcome, &expected)
+            .join_from_welcome_with_control_history(
+                &envelope,
+                &mls_group_id,
+                &welcome,
+                &expected,
+                &history_pages,
+            )
             .await
             .map_err(chat_error)?;
-        to_output(&state)
+        to_output(&joined)
     }
 
     #[wasm_bindgen(js_name = inspectMlsWelcome)]
@@ -1014,21 +1035,76 @@ impl WasmChatClient {
         to_output(&verified)
     }
 
-    #[wasm_bindgen(js_name = applyInboundMlsCommit)]
-    pub async fn apply_inbound_mls_commit(
+    #[wasm_bindgen(js_name = processedMlsControlEnvelope)]
+    pub async fn processed_mls_control_envelope(
         &self,
+        envelope_id: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let envelope_id = uuid::Uuid::parse_str(&envelope_id)
+            .map_err(|_| js_error("MLS mailbox envelope id must be a UUID"))?;
+        let receipt = self
+            .mls_client()
+            .processed_control_envelope(envelope_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&receipt)
+    }
+
+    #[wasm_bindgen(js_name = applyOrderedInboundMlsMembershipCommit)]
+    pub async fn apply_ordered_inbound_mls_membership_commit(
+        &self,
+        envelope_id: String,
+        cursor: String,
+        send_id: String,
         mls_group_id: Vec<u8>,
         commit: Vec<u8>,
         expected_members: JsValue,
+        control_history_page: Vec<u8>,
     ) -> std::result::Result<JsValue, JsValue> {
+        let envelope_id = uuid::Uuid::parse_str(&envelope_id)
+            .map_err(|_| js_error("MLS mailbox envelope id must be a UUID"))?;
+        let send_id = uuid::Uuid::parse_str(&send_id)
+            .map_err(|_| js_error("MLS mailbox send id must be a UUID"))?;
+        let envelope = MlsControlEnvelopeContext {
+            envelope_id,
+            cursor,
+            send_id,
+        };
         let expected: Vec<VerifiedMlsCredential> =
             from_transport(expected_members).map_err(chat_error)?;
-        let state = self
+        let page = MlsClientControlHistoryPageV1::from_canonical_bytes(&control_history_page)
+            .map_err(|error| chat_error(ChatError::Protocol(error)))?;
+        if page.commits.len() != 1 {
+            return Err(js_error(
+                "ordered inbound MLS Commit requires exactly one control-history entry",
+            ));
+        }
+        let applied = self
             .mls_client()
-            .apply_inbound_commit(&mls_group_id, &commit, &expected)
+            .apply_ordered_inbound_membership_commit(
+                &envelope,
+                &mls_group_id,
+                &commit,
+                &expected,
+                &page.commits[0],
+            )
             .await
             .map_err(chat_error)?;
-        to_output(&state)
+        to_output(&applied)
+    }
+
+    #[wasm_bindgen(js_name = inspectInboundMlsCommit)]
+    pub async fn inspect_inbound_mls_commit(
+        &self,
+        mls_group_id: Vec<u8>,
+        commit: Vec<u8>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let inspection = self
+            .mls_client()
+            .inspect_inbound_commit(&mls_group_id, &commit)
+            .await
+            .map_err(chat_error)?;
+        to_output(&inspection)
     }
 
     #[wasm_bindgen(js_name = mlsGroupControlCredential)]
