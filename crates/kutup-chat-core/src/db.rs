@@ -109,6 +109,33 @@ pub struct OutboxEntry {
     pub sync: Option<OutboxSyncLeg>,
 }
 
+/// An MLS application message whose secret-tree advance has already been
+/// committed locally. Retries must resend `ciphertext` byte-for-byte; creating
+/// another MLS message for the same logical send would consume a different
+/// generation and could make the original message permanently undecryptable.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MlsOutboxEntry {
+    /// Application-assigned UUID string, unique within this device store.
+    pub send_id: String,
+    /// Kutup conversation UUID bytes. OpenMLS uses these exact bytes as its
+    /// stable application identifier.
+    pub conversation_id: [u8; 16],
+    /// Append-only Kutup conversation incarnation.
+    pub incarnation: u64,
+    /// Exact MLS `GroupId` from the authenticated conversation genesis.
+    pub mls_group_id: Vec<u8>,
+    /// MLS epoch at which `ciphertext` was generated.
+    pub epoch: u64,
+    /// SHA-256 of the application plaintext, used only to reject accidental
+    /// `sendId` reuse with different content. The plaintext is not retained in
+    /// this cryptographic retry record.
+    pub content_digest: [u8; 32],
+    /// Complete TLS-encoded OpenMLS `MlsMessageOut`.
+    pub ciphertext: Vec<u8>,
+    pub created_at: i64,
+    pub attempts: u32,
+}
+
 /// Which independently durable leg of one logical send is being amended or
 /// completed. Kept crate-private; it is not a wire or binding type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -487,6 +514,11 @@ pub struct Pending {
     pub(crate) sender_keys: HashMap<(String, String), Vec<u8>>,
     /// `sendId` → `Some(entry)` (upsert the pending send) or `None` (delivered — delete).
     pub(crate) outbox: HashMap<String, Option<OutboxEntry>>,
+    /// `sendId` → exact MLS ciphertext retry record.
+    pub(crate) mls_outbox: HashMap<String, Option<MlsOutboxEntry>>,
+    /// Complete versioned OpenMLS provider snapshot. It contains private key
+    /// material and belongs only in the account-private encrypted client DB.
+    pub(crate) mls_state: Option<Vec<u8>>,
     /// Decrypted inbound messages to persist (insert-or-ignore by id).
     pub(crate) messages: Vec<InboxMessage>,
     /// Outbound history upserts, keyed by `sendId`.
@@ -538,6 +570,8 @@ impl Pending {
             && self.kyber_seen.is_empty()
             && self.sender_keys.is_empty()
             && self.outbox.is_empty()
+            && self.mls_outbox.is_empty()
+            && self.mls_state.is_none()
             && self.messages.is_empty()
             && self.sent_messages.is_empty()
             && self.inbound.is_empty()
@@ -596,6 +630,23 @@ pub trait ChatDb {
     async fn load_outbox(&self, send_id: &str) -> Result<Option<OutboxEntry>>;
     /// Every pending outbound send (oldest first) — for resend-on-startup.
     async fn list_outbox(&self) -> Result<Vec<OutboxEntry>>;
+
+    /// One exact pending MLS ciphertext retry record.
+    async fn load_mls_outbox(&self, send_id: &str) -> Result<Option<MlsOutboxEntry>> {
+        let _ = send_id;
+        Ok(None)
+    }
+
+    /// Every pending MLS ciphertext (oldest first) for restart recovery.
+    async fn list_mls_outbox(&self) -> Result<Vec<MlsOutboxEntry>> {
+        Ok(Vec::new())
+    }
+
+    /// Complete private OpenMLS provider snapshot, or `None` before MLS device
+    /// initialization. Production backends persist this in encrypted storage.
+    async fn load_mls_state(&self) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
 
     /// The highest mailbox cursor processed so far (the drain resume point).
     async fn load_last_cursor(&self) -> Result<Option<u64>>;

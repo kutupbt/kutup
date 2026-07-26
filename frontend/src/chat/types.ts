@@ -131,6 +131,70 @@ export interface TransparencyMonitorStatus {
   detail?: string
 }
 
+export interface PendingMlsInvitation {
+  conversationId: string
+  incarnation: number
+  mlsGroupId: string
+  invitedEpoch: number
+  expiresAt: number
+}
+
+export interface MlsInvitationDecision {
+  conversationId: string
+  incarnation: number
+  accept: boolean
+}
+
+export interface MlsInvitationDecisionResponse {
+  conversationId: string
+  incarnation: number
+  status: 'active' | 'rejected'
+  idempotent: boolean
+}
+
+export type MlsMailboxDeliveryKind =
+  | 'identified_request'
+  | 'anonymous'
+  | 'self_sync'
+  | 'membership_control'
+
+export interface MlsMailboxEnvelope {
+  id: string
+  cursor: string
+  deliveryKind: MlsMailboxDeliveryKind
+  conversationId?: string
+  incarnation?: number
+  sendId: string
+  opaqueEnvelope: string
+  serverTimestamp: number
+}
+
+export interface MlsMailboxPage {
+  envelopes: MlsMailboxEnvelope[]
+  nextCursor?: string
+}
+
+export interface LocalMlsGroupState {
+  mlsGroupId: number[]
+  epoch: number
+}
+
+export interface VerifiedMlsCredential {
+  credentialIdentity: string
+  credentialPublicKey: number[]
+}
+
+export interface ClaimedMlsCredential {
+  credentialIdentity: string
+  credentialPublicKey: number[]
+}
+
+export interface MlsWelcomeInspection {
+  mlsGroupId: number[]
+  epoch: number
+  claimedMembers: ClaimedMlsCredential[]
+}
+
 export interface ChatTransportPort {
   registerDevice(request: unknown): Promise<unknown>
   fetchBundles(username: string, transparencyTreeSize: string): Promise<unknown>
@@ -142,6 +206,10 @@ export interface ChatTransportPort {
   fetchTransparencyCheckpoint(scope: string, fromTreeSize: string): Promise<unknown>
   fetchTransparencyPolicy(domain: string): Promise<unknown>
   fetchManifest(username: string): Promise<unknown | null>
+  fetchManifestPublication(
+    username: string,
+    transparencyTreeSize: string,
+  ): Promise<unknown>
   fetchManifestRange(
     username: string,
     fromVersion: string,
@@ -163,6 +231,25 @@ export interface ChatTransportPort {
   fetchProfile(username: string, version: string, accessKey: string): Promise<unknown | null>
   prekeyCount(deviceId: number): Promise<unknown>
   replenishPrekeys(deviceId: number, request: unknown): Promise<void>
+  publishMlsKeyPackages(request: unknown): Promise<unknown>
+  mlsKeyPackageCount(deviceId: number): Promise<unknown>
+  createMlsConversation(request: unknown): Promise<unknown>
+  stageMlsMembershipDelivery(request: unknown): Promise<unknown>
+  collectMlsOrderingVotes(request: unknown): Promise<unknown>
+  commitMlsControlBlock(request: unknown): Promise<unknown>
+  listMlsInvitations(): Promise<PendingMlsInvitation[]>
+  respondMlsInvitation(
+    request: MlsInvitationDecision,
+  ): Promise<MlsInvitationDecisionResponse>
+  drainMlsMailbox(
+    deviceId: number,
+    after?: string,
+    limit?: number,
+  ): Promise<MlsMailboxPage>
+  ackMlsMailbox(deviceId: number, envelopeIds: string[]): Promise<void>
+  publishMlsDeliveryCapability(request: unknown): Promise<void>
+  fetchAnonymousMlsKeyPackages(request: unknown): Promise<unknown>
+  submitAnonymousMlsMessage(request: unknown): Promise<unknown>
   sendMessage(
     username: string,
     request: unknown,
@@ -189,6 +276,91 @@ export interface ChatTransportPort {
 
 export interface WasmChatClientHandle {
   readonly deviceId: number
+  generateMlsKeyPackage(
+    manifestVersion: string,
+    nowSeconds: string,
+    expiresAtSeconds: string,
+  ): Promise<unknown>
+  createMlsGroup(mlsGroupId: Uint8Array): Promise<unknown>
+  mlsGroupState(mlsGroupId: Uint8Array): Promise<LocalMlsGroupState | null>
+  prepareMlsAddMembers(
+    mlsGroupId: Uint8Array,
+    additions: unknown,
+    nowSeconds: string,
+  ): Promise<unknown>
+  prepareMlsRemoveMembers(
+    mlsGroupId: Uint8Array,
+    credentialIdentities: string[],
+  ): Promise<unknown>
+  pendingMlsCommit(mlsGroupId: Uint8Array): Promise<unknown | null>
+  mergePendingMlsCommit(mlsGroupId: Uint8Array, commitHash: string): Promise<unknown>
+  rejectPendingMlsCommit(mlsGroupId: Uint8Array, commitHash: string): Promise<void>
+  joinMlsFromWelcome(
+    mlsGroupId: Uint8Array,
+    welcome: Uint8Array,
+    expectedMembers: unknown,
+  ): Promise<unknown>
+  inspectMlsWelcome(
+    mlsGroupId: Uint8Array,
+    welcome: Uint8Array,
+  ): Promise<MlsWelcomeInspection>
+  resolveMlsWelcomeClaims(
+    claimedMembers: ClaimedMlsCredential[],
+  ): Promise<VerifiedMlsCredential[]>
+  fetchVerifiedMlsKeyPackages(
+    recipient: AccountAddress,
+    capability: Uint8Array,
+    nowSeconds: string,
+  ): Promise<unknown[]>
+  applyInboundMlsCommit(
+    mlsGroupId: Uint8Array,
+    commit: Uint8Array,
+    expectedMembers: unknown,
+  ): Promise<unknown>
+  mlsGroupControlCredential(mlsGroupId: Uint8Array): Promise<unknown>
+  signMlsControlProposal(
+    mlsGroupId: Uint8Array,
+    conversationId: string,
+    incarnation: string,
+    proposalId: string,
+    baseEpoch: string,
+    actionType: number,
+    encryptedPayload: Uint8Array,
+    createdAtSeconds: string,
+  ): Promise<unknown>
+  createMlsApplicationMessage(
+    sendId: string,
+    conversationId: string,
+    incarnation: string,
+    mlsGroupId: Uint8Array,
+    plaintext: Uint8Array,
+    createdAtMs: string,
+  ): Promise<unknown>
+  markMlsApplicationDelivered(sendId: string): Promise<void>
+  noteMlsApplicationAttempt(sendId: string): Promise<unknown>
+  decryptMlsApplicationMessage(
+    mlsGroupId: Uint8Array,
+    ciphertext: Uint8Array,
+    expectedSender: unknown,
+  ): Promise<unknown>
+  deriveMlsDeliveryCapability(
+    mlsGroupId: Uint8Array,
+    conversationId: string,
+    incarnation: string,
+    recipient: AccountAddress,
+  ): Promise<unknown>
+  createAnonymousMlsSubmission(
+    recipient: AccountAddress,
+    sendId: string,
+    capability: Uint8Array,
+    devices: unknown,
+    mlsCiphertext: Uint8Array,
+  ): Promise<unknown>
+  openAnonymousMlsEnvelope(
+    recipient: AccountAddress,
+    sendId: string,
+    envelope: unknown,
+  ): Promise<Uint8Array>
   history(): Promise<ChatHistoryEntry[]>
   contacts(): Promise<ContactRecord[]>
   profile(): Promise<ChatProfile>

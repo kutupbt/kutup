@@ -1,0 +1,44 @@
+DROP TRIGGER chat_mls_participant_bootstrap_pages_append_only ON chat_mls_participant_bootstrap_pages;
+DROP TRIGGER chat_mls_authority_bootstrap_pages_append_only ON chat_mls_authority_bootstrap_pages;
+DROP TRIGGER chat_mls_consensus_evidence_append_only ON chat_mls_consensus_evidence;
+DROP TRIGGER chat_mls_owner_approvals_append_only ON chat_mls_owner_approvals;
+DROP TRIGGER chat_mls_ordering_votes_append_only ON chat_mls_ordering_votes;
+DROP TRIGGER chat_mls_control_blocks_append_only ON chat_mls_control_blocks;
+DROP FUNCTION reject_chat_mls_append_only_mutation();
+
+DROP TABLE chat_mls_admin_audit_events;
+DROP TABLE chat_mls_participant_bootstrap_pages;
+DROP TABLE chat_mls_participant_bootstraps;
+DROP TABLE chat_mls_authority_bootstrap_pages;
+DROP TABLE chat_mls_authority_bootstraps;
+DROP TABLE chat_mls_federation_inbound_transactions;
+DROP TABLE chat_mls_federation_inbound_state;
+DROP TABLE chat_mls_control_outbox;
+DROP TABLE chat_mls_federation_outbox;
+DROP TABLE chat_mls_federation_sequences;
+DROP TABLE chat_mls_rate_counters;
+DROP TABLE chat_mls_anonymous_send_ids;
+DROP TABLE chat_mls_delivery_capabilities;
+DROP TABLE chat_mls_mailbox;
+DROP TABLE chat_mls_pending_requests;
+DROP TABLE chat_mls_consensus_evidence;
+DROP TABLE chat_mls_owner_approvals;
+DROP TABLE chat_mls_ordering_votes;
+DROP TABLE chat_mls_control_blocks;
+DROP TABLE chat_mls_membership_deliveries;
+DROP TABLE chat_mls_local_members;
+
+ALTER TABLE chat_mls_conversations
+    DROP CONSTRAINT chat_mls_conversations_current_incarnation_fk;
+DROP TABLE chat_mls_incarnations;
+DROP TABLE chat_mls_conversations;
+DROP TABLE chat_mls_key_packages;
+DROP TABLE chat_mls_devices;
+
+DELETE FROM federation_feature_policy_failures WHERE feature_type = 3;
+DELETE FROM federation_feature_policy_documents WHERE feature_type = 3;
+ALTER TABLE federation_feature_policy_documents
+    DROP CONSTRAINT federation_feature_policy_documents_feature_type_check;
+ALTER TABLE federation_feature_policy_documents
+    ADD CONSTRAINT federation_feature_policy_documents_feature_type_check
+    CHECK (feature_type IN (1, 2));

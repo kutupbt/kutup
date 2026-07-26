@@ -20,8 +20,8 @@ use crate::db::{
     contact_state_code, contact_state_from_code, transparency_monitor_state_code,
     transparency_monitor_state_from_code, AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope,
     InboundFailureKind, InboundState, InboxMessage, LocalIdentity, LocalProfile,
-    ManifestHistoryRecord, ManifestTrust, OutboxEntry, PeerProfile, Pending, SentMessage,
-    TransparencyMonitorStatus, TransparencyTrust,
+    ManifestHistoryRecord, ManifestTrust, MlsOutboxEntry, OutboxEntry, PeerProfile, Pending,
+    SentMessage, TransparencyMonitorStatus, TransparencyTrust,
 };
 use crate::error::{ChatError, Result};
 
@@ -87,6 +87,23 @@ CREATE TABLE IF NOT EXISTS outbox (
     sealed_sender    INTEGER NOT NULL DEFAULT 0,
     sealed_capability BLOB
 );
+CREATE TABLE IF NOT EXISTS mls_state (
+    id    INTEGER PRIMARY KEY CHECK (id = 1),
+    state BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mls_outbox (
+    send_id          TEXT PRIMARY KEY,
+    conversation_id BLOB    NOT NULL CHECK (length(conversation_id) = 16),
+    incarnation      INTEGER NOT NULL CHECK (incarnation > 0),
+    mls_group_id     BLOB    NOT NULL CHECK (length(mls_group_id) BETWEEN 16 AND 255),
+    epoch            INTEGER NOT NULL CHECK (epoch >= 0),
+    content_digest   BLOB    NOT NULL CHECK (length(content_digest) = 32),
+    ciphertext       BLOB    NOT NULL,
+    created_at       INTEGER NOT NULL,
+    attempts         INTEGER NOT NULL CHECK (attempts >= 0)
+);
+CREATE INDEX IF NOT EXISTS mls_outbox_by_created_at
+    ON mls_outbox (created_at, send_id);
 CREATE TABLE IF NOT EXISTS messages (
     id               TEXT PRIMARY KEY,
     peer             TEXT    NOT NULL,
@@ -187,6 +204,7 @@ INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (11, 0);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (12, 0);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (13, 0);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (14, 0);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (15, 0);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value INTEGER NOT NULL
@@ -365,6 +383,39 @@ impl ChatDb for SqliteChatDb {
             out.push(db(row)?);
         }
         Ok(out)
+    }
+
+    async fn load_mls_outbox(&self, send_id: &str) -> Result<Option<MlsOutboxEntry>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT send_id, conversation_id, incarnation, mls_group_id, epoch,
+                        content_digest, ciphertext, created_at, attempts
+                 FROM mls_outbox WHERE send_id = ?1",
+                [send_id],
+                mls_outbox_row,
+            )
+            .optional())
+    }
+
+    async fn list_mls_outbox(&self) -> Result<Vec<MlsOutboxEntry>> {
+        let conn = self.conn.borrow();
+        let mut statement = db(conn.prepare(
+            "SELECT send_id, conversation_id, incarnation, mls_group_id, epoch,
+                    content_digest, ciphertext, created_at, attempts
+             FROM mls_outbox ORDER BY created_at, send_id",
+        ))?;
+        let rows = db(statement.query_map([], mls_outbox_row))?;
+        rows.map(db).collect()
+    }
+
+    async fn load_mls_state(&self) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row("SELECT state FROM mls_state WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .optional())
     }
 
     async fn load_last_cursor(&self) -> Result<Option<u64>> {
@@ -766,6 +817,52 @@ impl ChatDb for SqliteChatDb {
                 None => db(tx.execute("DELETE FROM outbox WHERE send_id = ?1", [send_id]))?,
             };
         }
+        if let Some(state) = &pending.mls_state {
+            db(tx.execute(
+                "INSERT INTO mls_state (id, state) VALUES (1, ?1)
+                 ON CONFLICT(id) DO UPDATE SET state = excluded.state",
+                [state],
+            ))?;
+        }
+        for (send_id, entry) in &pending.mls_outbox {
+            match entry {
+                Some(entry) => {
+                    let changed = db(tx.execute(
+                        "INSERT INTO mls_outbox
+                             (send_id, conversation_id, incarnation, mls_group_id, epoch,
+                              content_digest, ciphertext, created_at, attempts)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                         ON CONFLICT(send_id) DO UPDATE SET
+                           attempts = excluded.attempts
+                         WHERE mls_outbox.conversation_id = excluded.conversation_id
+                           AND mls_outbox.incarnation = excluded.incarnation
+                           AND mls_outbox.mls_group_id = excluded.mls_group_id
+                           AND mls_outbox.epoch = excluded.epoch
+                           AND mls_outbox.content_digest = excluded.content_digest
+                           AND mls_outbox.ciphertext = excluded.ciphertext",
+                        rusqlite::params![
+                            send_id,
+                            entry.conversation_id.as_slice(),
+                            entry.incarnation as i64,
+                            entry.mls_group_id,
+                            entry.epoch as i64,
+                            entry.content_digest.as_slice(),
+                            entry.ciphertext,
+                            entry.created_at,
+                            entry.attempts,
+                        ],
+                    ))?;
+                    if changed != 1 {
+                        return Err(ChatError::Trust(format!(
+                            "MLS send id {send_id} is already bound to different ciphertext"
+                        )));
+                    }
+                }
+                None => {
+                    db(tx.execute("DELETE FROM mls_outbox WHERE send_id = ?1", [send_id]))?;
+                }
+            };
+        }
         for msg in &pending.messages {
             // INSERT OR IGNORE: redelivery of the same mailbox id is a no-op.
             db(tx.execute(
@@ -1108,7 +1205,7 @@ fn ensure_schema_upgrades(conn: &Connection) -> Result<()> {
     ))?;
     db(conn.execute(
         "INSERT OR IGNORE INTO schema_migrations (version, applied_at)
-         VALUES (4, 0), (5, 0), (6, 0), (7, 0), (8, 0), (9, 0), (10, 0), (11, 0), (12, 0), (13, 0), (14, 0)",
+         VALUES (4, 0), (5, 0), (6, 0), (7, 0), (8, 0), (9, 0), (10, 0), (11, 0), (12, 0), (13, 0), (14, 0), (15, 0)",
         [],
     ))?;
     Ok(())
@@ -1208,6 +1305,53 @@ fn outbox_row(row: &rusqlite::Row) -> rusqlite::Result<OutboxEntry> {
                 })
             })
             .transpose()?,
+    })
+}
+
+fn mls_outbox_row(row: &rusqlite::Row) -> rusqlite::Result<MlsOutboxEntry> {
+    let conversation_id: Vec<u8> = row.get(1)?;
+    let conversation_id: [u8; 16] = conversation_id.try_into().map_err(|value: Vec<u8>| {
+        rusqlite::Error::FromSqlConversionFailure(
+            value.len(),
+            rusqlite::types::Type::Blob,
+            "MLS conversation id must be 16 bytes".into(),
+        )
+    })?;
+    let incarnation = u64::try_from(row.get::<_, i64>(2)?).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            2,
+            rusqlite::types::Type::Integer,
+            Box::new(error),
+        )
+    })?;
+    let epoch = u64::try_from(row.get::<_, i64>(4)?).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            4,
+            rusqlite::types::Type::Integer,
+            Box::new(error),
+        )
+    })?;
+    let content_digest: Vec<u8> = row.get(5)?;
+    let content_digest: [u8; 32] =
+        content_digest
+            .try_into()
+            .map_err(|value: Vec<u8>| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    value.len(),
+                    rusqlite::types::Type::Blob,
+                    "MLS content digest must be 32 bytes".into(),
+                )
+            })?;
+    Ok(MlsOutboxEntry {
+        send_id: row.get(0)?,
+        conversation_id,
+        incarnation,
+        mls_group_id: row.get(3)?,
+        epoch,
+        content_digest,
+        ciphertext: row.get(6)?,
+        created_at: row.get(7)?,
+        attempts: row.get(8)?,
     })
 }
 

@@ -62,6 +62,11 @@ pub struct Config {
     /// Canonical base64 raw libsignal private key for the active online server
     /// certificate. This purpose-specific key issues only sender certificates.
     pub chat_sealed_sender_online_private_key: String,
+    /// Complete canonical MLS ordering-service policy JSON. It is authenticated
+    /// through the common federation policy chain before any MLS route opens.
+    pub chat_mls_ordering_policy: String,
+    /// Base64 raw 32-byte Ed25519 seed used only for MLS control-log votes.
+    pub chat_mls_control_signing_key: String,
 }
 
 impl Config {
@@ -109,6 +114,8 @@ impl Config {
                 "CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY",
                 "",
             ),
+            chat_mls_ordering_policy: get_env("CHAT_MLS_ORDERING_POLICY", ""),
+            chat_mls_control_signing_key: get_env("CHAT_MLS_CONTROL_SIGNING_KEY", ""),
         };
         if cfg.jwt_secret.len() < 32 {
             panic!("JWT_SECRET must be at least 32 characters long");

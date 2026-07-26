@@ -81,6 +81,7 @@ impl FederatedFeaturePolicyHistoryV1 {
 pub enum FederatedFeaturePolicyTypeV1 {
     ChatTransparency = 1,
     SealedSenderService = 2,
+    MlsOrderingService = 3,
 }
 
 impl FederatedFeaturePolicyTypeV1 {
@@ -102,6 +103,7 @@ impl TryFrom<u16> for FederatedFeaturePolicyTypeV1 {
         match value {
             1 => Ok(Self::ChatTransparency),
             2 => Ok(Self::SealedSenderService),
+            3 => Ok(Self::MlsOrderingService),
             _ => Err(crate::error::invalid_field(
                 "featureType",
                 "is not a supported feature policy type",

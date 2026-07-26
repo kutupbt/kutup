@@ -171,7 +171,16 @@ The full architecture is captured in `docs/research/11-federated-chat.md` (libsi
 
 The normative wire contract the three clients freeze against is **`docs/chat-protocol.md`** (v1) — it consolidates the wire-affecting decisions from `11-`/`12-`/`13-` into one spec, tagging every field **[IMPL]** (phase-2 server, frozen), **[ADD]** (additive, phase-2b), or **[RSV]** (reserved now, implemented later so it's not a breaking migration). Implement against that.
 
-**Changes from the comparative study (read `13-…` before implementing phase 2b+):** groups move to the **GV2 pattern** (server-held *encrypted, versioned* authoritative state + signed membership manifest, sender keys for fan-out) — **not** client-managed blobs (Signal's abandoned 2014 design); **device-list authenticity** (a signed per-account device manifest / cross-signing) becomes a **v1 wire-contract requirement**, not deferred research, because server-assigned device lists otherwise reproduce the malicious-homeserver break that defeated Matrix/Megolm; **sealed sender** ships as a whole system (sender certs + delivery-token abuse gate + contacts-only default) or not at all, with `Option`-typed sender fields reserved now; s2s delivery adds **durable in-order retry + per-destination sequence numbers + gap detection** (Matrix's retry rule minus its DAG backfill) and **X-Matrix-style Ed25519 request signing with destination binding + 401-on-mismatch**; the SPQR ratchet is **ML-KEM-768** (ML-KEM-1024 is PQXDH-handshake-only).
+**Current group decision:** the earlier GV2/sender-key proposal is superseded by
+the unified RFC 9420 MLS architecture in
+[`chat-mls.md`](chat-mls.md). SelfSync, Direct, and Group use one OpenMLS state
+machine; groups use owner-approved, dynamically replaceable multi-server
+ordering authorities rather than a permanent homeserver. Existing 1:1
+libsignal remains the advertised production path until the complete MLS
+browser/federation cutover gate passes. **Device-list authenticity** remains a
+v1 requirement. Sealed sender remains all-or-nothing with no identified
+fallback, and all federation continues to use the common authenticated
+transport rather than a room DAG.
 
 Phases (each lands as its own PR-series; do not start N+1 with N unmerged):
 
@@ -182,13 +191,68 @@ Phases (each lands as its own PR-series; do not start N+1 with N unmerged):
 | 2b | Shared core + minimal 1:1 reference web UI | **Implemented and live-stack verified on `codex/chat-architecture-hardening`.** Includes durable typed inbound journal/quarantine, SQLCipher/IndexedDB stores, crash-safe registration/prekeys, signed manifests, WASM transport, Web Locks, REST+WS reconciliation, history, Note to Self, and ordinary linked-device sent transcripts. Web remains the product client until the messaging milestone is complete; native packaging/integration is not a gate. |
 | 3 | Web federation foundation | **Implemented and two-server live verified:** canonical `username@server`, typed conversations, one persistent v2 server identity, signed `.well-known` endpoint/capability discovery, immutable identity history and authenticated rotation, strict RFC 9421/9530 request/response authentication, replay reservation, DNS-rebinding/SSRF-safe resolution, durable per-destination in-order Chat delivery, device-mismatch recovery, terminal rejection, and sequence-gap replay. Drive now uses that same stack for signed account lookup, domain-bound fragment capabilities, invite acceptance, file lists, idempotent upload/delete, persisted ciphertext digests, and verify-before-release streaming downloads. The isolated harness proves the Drive round trip, that Chat reuses a Drive-established pin, and that Chat retry survives an origin restart while the destination is offline. The generic responsive admin control plane provides a global stop, feature-scoped `disabled`/`allowlist`/`blocklist`/`open` admission and trust floors, directional domain rules, shared Chat/Drive diagnostics, peer search/trust filters, retry-one/retry-visible workflows, TOFU verification, exact immutable quarantine/history evidence, break-glass re-pin, and filtered audit presentation/CSV export. A disabled feature is omitted from discovery while the other remains available. Both old feature-specific federation stacks and raw remote URL routes were removed; there is no v1 downgrade. No alias namespace. See `docs/federation-protocol.md`. |
 | 4 | Web contact privacy and trust | **Implemented, final live gate pending:** durable message requests/blocking and Signal-style encrypted profiles; authenticated local/remote transparency policy histories and 15-minute restart-safe monitoring; checkpoint-bound multi-page skipped-manifest recovery; bounded witness views, shared server/standalone cross-view auditing, immutable fork evidence, and explicit audited recovery; contacts-only libsignal sealed sender with offline-root/online-certificate policy, transparency-bound identity validation, database-backed capability/origin rate limits, anonymous local/federated delivery, capability rotation on block, and no identified fallback. Rust/native/WASM and production web build gates pass; the expanded two-server browser/Compose adversarial gate remains to be run. |
-| 5 | Web private groups | Sender keys plus GV2-pattern encrypted/versioned group state, zkgroup authorization, linked-device state, roles, and a 256-member target. |
+| 5 | Unified MLS conversations and web private groups | **In progress, unadvertised:** RFC 9420 suite `0x0002`, durable OpenMLS lifecycle, manifest-bound KeyPackages/Welcome/Commit/application processing, group-scoped owner/control pseudonyms, multi-authority BFT control log, restart-safe authority and new-participant bootstrap, creator-only group genesis, destination-private membership transitions, identified 30-day invitation decisions, an incarnation-bound cursor/ack MLS mailbox, restart-safe browser KeyPackage/invitation coordination, authenticated local/federated current-manifest proofs, shared-engine Welcome-roster and anonymous-KeyPackage verification with complete gap recovery, epoch capabilities, RFC 9180 HPKE delivery, WASM bindings, privacy-bounded telemetry, and admin cryptographic inspection routes are implemented. Remaining gate: browser add/remove/vote/application orchestration and UI integration, federated invitation-rejection feedback, and two-server adversarial E2E. V1 supports at least 256 and policy may allow 1000. See `docs/chat-mls.md`. |
 | 6 | Web messaging and media | Replies, reactions, edits/deletes, receipts, typing, disappearing messages, local search, encrypted drive/tus attachments, and voice notes. |
 | 7 | Web PWA completion | Generic content-free Web Push, offline/restart recovery, responsive/accessibility/browser matrix, security/load tests, and protocol freeze. |
 | 8 | Calls | 1:1 WebRTC → SFU group calls; TURN + SNI demux on 443. Separate from the messaging-complete web milestone. |
 | 9 | Native clients | Freeze UniFFI APIs, package XCFramework/AAR, add Keychain/Keystore, then integrate iOS and Android against the proven web protocol. |
 
 Device-list authenticity (the signed per-account device manifest) is **not** in phase 7 — it is a phase-2b/2 wire-contract requirement per the comparative study.
+
+### Platform · Advanced traffic-inspection protection [TODO, post-MLS v1]
+
+Add an optional traffic-obfuscation layer for every connection to a Kutup
+server and every Kutup server-to-server connection. A shared protected
+transport should multiplex Chat, Drive, collaboration, authentication, policy,
+transparency, and federation streams instead of creating feature-specific
+cover channels. Chat cells carry opaque MLS/anonymous-delivery envelopes;
+Drive and collaboration cells carry their existing encrypted requests,
+responses, and blob chunks.
+
+This is distinct from sender-metadata minimization and zero-knowledge storage:
+fixed-size traffic alone does not hide operation counts, timing, origin
+domains, the local authenticated user from their own server, or the recipient
+known to its own server. Large Drive transfers also reveal approximate total
+size and duration unless bucket padding or correspondingly expensive cover
+traffic is enabled.
+
+- Define authenticated, versioned traffic profiles. A required profile never
+  silently falls back: unavailable protection queues the message and warns the
+  user or pauses the protected operation; weaker transport requires an explicit
+  user action.
+- Keep **Save mobile data** enabled by default. In this mode use size-bucket
+  padding, immediate delivery, opportunistic batching, normal foreground
+  connections, and no dummy or constant-rate traffic.
+- With **Save mobile data** disabled, use 1,024-byte application cells,
+  encrypted bounded fragmentation/reassembly, persistent connections where the
+  platform permits, multiplexed batches, dummy cells, and padded
+  acknowledgements, errors, authentication exchanges, API responses,
+  KeyPackages, MLS control traffic, Drive operations, collaboration updates,
+  receipts, and typing events.
+- Keep **Hide message timing** disabled by default. When enabled, replace
+  scheduled dummy cells with real cells, use a controlled-rate scheduler and
+  bounded delay presets, and batch, delay, or disable typing indicators and
+  receipts. Urgent security control such as block/device removal may bypass
+  artificial delay but must remain padded.
+- Allow separate user choices for mobile data and Wi-Fi/Ethernet, synchronize
+  them through the MLS Note-to-Self group, and show estimated data use.
+- A user may unilaterally send with a stronger profile. Requiring a minimum
+  profile needs both users for a direct chat and owner approval plus the group
+  ordering quorum for a group.
+- Servers advertise supported profiles. Administrators configure global and
+  per-feature cell rates, cover-traffic bandwidth budgets, maximum artificial
+  delay, padding buckets, large-transfer padding limits, and whether protection
+  is offered before login. Server-to-server cover traffic must share one
+  authenticated peer channel across features so its cost is amortized.
+  Browser/OS background throttling must be surfaced as protection unavailable,
+  never treated as permission to downgrade.
+- Add strict fragment count, total-size, timeout, replay, deduplication, and
+  reassembly-memory bounds. Dummy and real cells must be indistinguishable to
+  the passive observer covered by the selected profile.
+- Verify packet-size distributions, timing leakage, downgrade behavior, data
+  budgets, login/bootstrap behavior, small and large Drive transfers,
+  reconnects, background throttling, cross-feature federation batching, and
+  adversarial fragment streams before advertising any profile.
 
 ---
 
@@ -292,7 +356,10 @@ These live in `docs/research/` because the design hasn't been chosen yet:
 - **Version history** — `docs/research/03-version-history-design.md`. Two-tier checkpoint+delta model recommended; not yet specced.
 - **WebDAV mount** — `docs/research/06-webdav-support.md`. Client-side proxy is the only viable path because server-side WebDAV breaks E2EE. Long-term work.
 - **WebAuthn / passkey support** — not yet captured in `docs/research/`. Would supplement TOTP for second-factor. Useful research before adding.
-- **Chat open questions** — `docs/research/11-federated-chat.md` §7: sealed sender across federation (certificate-root trust with N mutually-distrusting servers), mailbox retention under E2EE, group-blob placement, an MLS suite slot for very large rooms. The chat *track* itself is committed (see the post-v1 section above); these sub-designs aren't.
+- **Chat open questions** — mailbox retention under E2EE, the post-RFC
+  post-quantum MLS suite transition, and the separate 100,000+ recipient
+  announcement-channel fan-out design. MLS V1 and multi-authority ordering are
+  committed in `docs/chat-mls.md`.
 
 ---
 

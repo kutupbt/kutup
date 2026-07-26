@@ -856,7 +856,9 @@ fn validate_request_spec(spec: &FederationRequestSpec) -> anyhow::Result<()> {
             spec.path.starts_with("/api/fed/chat/")
                 || matches!(
                     spec.path.as_str(),
-                    "/api/fed/policies/chat-transparency" | "/api/fed/policies/sealed-sender"
+                    "/api/fed/policies/chat-transparency"
+                        | "/api/fed/policies/sealed-sender"
+                        | "/api/fed/policies/mls-ordering"
                 )
         }
         FederationFeature::DriveV1 => spec.path.starts_with("/api/fed/drive/"),
@@ -1046,6 +1048,8 @@ mod tests {
         spec.path = "/api/fed/policies/chat-transparency".into();
         validate_request_spec(&spec).unwrap();
         spec.path = "/api/fed/policies/sealed-sender".into();
+        validate_request_spec(&spec).unwrap();
+        spec.path = "/api/fed/policies/mls-ordering".into();
         validate_request_spec(&spec).unwrap();
         spec.path = "/api/fed/policies/unknown".into();
         assert!(validate_request_spec(&spec).is_err());

@@ -29,5 +29,7 @@ hkdf = { workspace = true }
 hex = { workspace = true }
 base64 = { workspace = true }
 ed25519-dalek = { workspace = true }
+p256 = { workspace = true }
 url = { workspace = true }
+uuid = { workspace = true }
 utoipa = { workspace = true, optional = true }

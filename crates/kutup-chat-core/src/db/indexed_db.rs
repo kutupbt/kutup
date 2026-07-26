@@ -20,8 +20,8 @@ use wasm_bindgen::JsValue;
 
 use crate::db::{
     ChatDb, ContactRecord, InboundEnvelope, InboxMessage, LocalIdentity, LocalProfile,
-    ManifestHistoryRecord, ManifestTrust, OutboxEntry, PeerProfile, Pending, SentMessage,
-    TransparencyMonitorStatus, TransparencyTrust,
+    ManifestHistoryRecord, ManifestTrust, MlsOutboxEntry, OutboxEntry, PeerProfile, Pending,
+    SentMessage, TransparencyMonitorStatus, TransparencyTrust,
 };
 use crate::error::{ChatError, Result};
 
@@ -35,6 +35,8 @@ const KYBER_PRE_KEYS: &str = "kyber_pre_keys";
 const KYBER_SEEN: &str = "kyber_seen";
 const SENDER_KEYS: &str = "sender_keys";
 const OUTBOX: &str = "outbox";
+const MLS_STATE: &str = "mls_state";
+const MLS_OUTBOX: &str = "mls_outbox";
 const MESSAGES: &str = "messages";
 const SENT_MESSAGES: &str = "sent_messages";
 const INBOUND: &str = "inbound";
@@ -47,7 +49,7 @@ const LOCAL_PROFILE: &str = "local_profile";
 const PEER_PROFILES: &str = "peer_profiles";
 const META: &str = "meta";
 
-const ALL_STORES: [&str; 21] = [
+const ALL_STORES: [&str; 23] = [
     LOCAL_IDENTITY,
     SESSIONS,
     IDENTITIES,
@@ -58,6 +60,8 @@ const ALL_STORES: [&str; 21] = [
     KYBER_SEEN,
     SENDER_KEYS,
     OUTBOX,
+    MLS_STATE,
+    MLS_OUTBOX,
     MESSAGES,
     SENT_MESSAGES,
     INBOUND,
@@ -95,7 +99,7 @@ impl IndexedDbChatDb {
             ));
         }
 
-        let mut builder = Rexie::builder(name).version(7);
+        let mut builder = Rexie::builder(name).version(8);
         for store in ALL_STORES {
             builder = builder.add_object_store(ObjectStore::new(store));
         }
@@ -219,6 +223,24 @@ impl ChatDb for IndexedDbChatDb {
                 .then_with(|| left.send_id.cmp(&right.send_id))
         });
         Ok(entries)
+    }
+
+    async fn load_mls_outbox(&self, send_id: &str) -> Result<Option<MlsOutboxEntry>> {
+        self.get(MLS_OUTBOX, string_key(send_id)).await
+    }
+
+    async fn list_mls_outbox(&self) -> Result<Vec<MlsOutboxEntry>> {
+        let mut entries = self.all::<MlsOutboxEntry>(MLS_OUTBOX).await?;
+        entries.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.send_id.cmp(&right.send_id))
+        });
+        Ok(entries)
+    }
+
+    async fn load_mls_state(&self) -> Result<Option<Vec<u8>>> {
+        self.get(MLS_STATE, string_key(SINGLETON)).await
     }
 
     async fn load_last_cursor(&self) -> Result<Option<u64>> {
@@ -365,6 +387,8 @@ impl ChatDb for IndexedDbChatDb {
         let kyber_seen = idb(transaction.store(KYBER_SEEN))?;
         let sender_keys = idb(transaction.store(SENDER_KEYS))?;
         let outbox = idb(transaction.store(OUTBOX))?;
+        let mls_state = idb(transaction.store(MLS_STATE))?;
+        let mls_outbox = idb(transaction.store(MLS_OUTBOX))?;
         let messages = idb(transaction.store(MESSAGES))?;
         let sent_messages = idb(transaction.store(SENT_MESSAGES))?;
         let inbound = idb(transaction.store(INBOUND))?;
@@ -409,6 +433,10 @@ impl ChatDb for IndexedDbChatDb {
             ));
         }
         stage_map(&mut operations, &outbox, writes.outbox);
+        if let Some(value) = writes.mls_state.take() {
+            operations.push(put_op(&mls_state, value, string_key(SINGLETON)));
+        }
+        stage_map(&mut operations, &mls_outbox, writes.mls_outbox);
         for (id, value) in writes.messages {
             operations.push(put_op(&messages, value, string_key(&id)));
         }
@@ -544,6 +572,8 @@ struct PreparedWrites {
     kyber_seen: Vec<(String, JsValue)>,
     sender_keys: Vec<((String, String), JsValue)>,
     outbox: Vec<(String, Option<JsValue>)>,
+    mls_state: Option<JsValue>,
+    mls_outbox: Vec<(String, Option<JsValue>)>,
     messages: Vec<(String, JsValue)>,
     sent_messages: Vec<(String, JsValue)>,
     inbound: Vec<(String, Option<JsValue>)>,
@@ -582,6 +612,8 @@ impl PreparedWrites {
                 .map(|(key, value)| Ok((key.clone(), to_js(value)?)))
                 .collect::<Result<_>>()?,
             outbox: serialize_optional_map(&pending.outbox)?,
+            mls_state: pending.mls_state.as_ref().map(to_js).transpose()?,
+            mls_outbox: serialize_optional_map(&pending.mls_outbox)?,
             messages: pending
                 .messages
                 .iter()

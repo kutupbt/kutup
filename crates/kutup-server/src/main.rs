@@ -8,6 +8,7 @@
 
 mod chat_federation;
 mod chat_hub;
+mod chat_mls;
 mod chat_transparency;
 mod chat_transparency_auditor;
 mod chat_transparency_monitor;
@@ -78,6 +79,9 @@ pub struct AppState {
     /// Active root-signed online sealed-sender issuer. `None` keeps the
     /// capability unadvertised and all issuance routes closed.
     pub(crate) sealed_sender: Option<Arc<sealed_sender_service::SealedSenderService>>,
+    /// Purpose-scoped MLS ordering authority. `None` keeps every MLS route
+    /// closed even if stale policy rows remain in the database.
+    pub(crate) mls_ordering: Option<Arc<chat_mls::MlsOrderingService>>,
     /// Live SeaweedFS capacity probe for the admin dashboard; `None` disables it (the admin
     /// stats then fall back to `config.storage_total_bytes`).
     pub storage_probe: Option<Arc<storage_probe::StorageProbe>>,
@@ -108,12 +112,16 @@ async fn main() -> anyhow::Result<()> {
     let rotate_sealed_sender_policy = args
         .get(1..)
         .is_some_and(|args| args == ["feature-policy", "rotate", "sealed-sender"]);
+    let rotate_mls_ordering_policy = args
+        .get(1..)
+        .is_some_and(|args| args == ["feature-policy", "rotate", "mls-ordering"]);
     if args.get(1).is_some_and(|value| value == "feature-policy")
         && !rotate_transparency_policy
         && !rotate_sealed_sender_policy
+        && !rotate_mls_ordering_policy
     {
         anyhow::bail!(
-            "usage: kutup-server feature-policy rotate <chat-transparency|sealed-sender>"
+            "usage: kutup-server feature-policy rotate <chat-transparency|sealed-sender|mls-ordering>"
         );
     }
 
@@ -139,6 +147,7 @@ async fn main() -> anyhow::Result<()> {
         &config,
         time::OffsetDateTime::now_utc(),
     )?;
+    let mls_ordering = chat_mls::MlsOrderingService::from_config(&config)?.map(Arc::new);
     let local_transparency_policy =
         chat_transparency::local_transparency_policy(&pool, &config, &transparency_authority)
             .await?;
@@ -229,6 +238,48 @@ async fn main() -> anyhow::Result<()> {
             "sealed sender policy rotation requires federation, policy JSON, and an online signer"
         );
     }
+    if let (Some(federation), Some(service)) = (federation.as_deref(), mls_ordering.as_ref()) {
+        let envelope = federation
+            .feature_policies()
+            .ensure_local(
+                federation,
+                kutup_federation_proto::FederatedFeaturePolicyTypeV1::MlsOrderingService,
+                &service
+                    .policy()
+                    .canonical_bytes()
+                    .map_err(anyhow::Error::msg)?,
+                rotate_mls_ordering_policy,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await?;
+        tracing::info!(
+            sequence = envelope.sequence,
+            policy_hash = envelope.policy_hash()?,
+            control_key_id = service.signer().key_id(),
+            "loaded authenticated MLS ordering policy"
+        );
+        telemetry::policy_event(
+            "mls_ordering",
+            if rotate_mls_ordering_policy {
+                "rotated"
+            } else {
+                "loaded"
+            },
+        );
+        if rotate_mls_ordering_policy {
+            println!(
+                "MLS ordering policy rotated: domain={} sequence={} hash={}",
+                envelope.domain,
+                envelope.sequence,
+                envelope.policy_hash()?
+            );
+            return Ok(());
+        }
+    } else if rotate_mls_ordering_policy {
+        anyhow::bail!(
+            "MLS ordering policy rotation requires federation, policy JSON, and a control signer"
+        );
+    }
     let transparency_backfill = chat_transparency::backfill_existing_manifests(&pool).await?;
     if transparency_backfill > 0 {
         tracing::info!(
@@ -295,12 +346,14 @@ async fn main() -> anyhow::Result<()> {
         federation,
         transparency_authority,
         sealed_sender,
+        mls_ordering,
         storage_probe,
     };
     if let Some(federation) = state.federation.as_ref() {
         federation.spawn_maintenance();
     }
     chat_federation::spawn_retry_worker(state.clone());
+    chat_mls::spawn_retry_worker(state.clone());
     chat_transparency_monitor::spawn_monitor(state.clone());
     chat_transparency_auditor::spawn_auditor(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
@@ -562,11 +615,68 @@ fn build_router(state: AppState) -> Router {
             get(chat::get_user_manifest),
         )
         .route(
+            "/api/chat/users/:username/manifest-proof",
+            get(chat::get_user_manifest_proof)
+                .route_layer(from_fn(middleware::rate_limit_chat_keys)),
+        )
+        .route(
             "/api/chat/users/:username/manifest-history",
             get(chat::get_manifest_history).route_layer(from_fn(middleware::rate_limit_chat_keys)),
         )
         .route("/api/chat/keys", put(chat::replenish_keys))
         .route("/api/chat/keys/count", get(chat::prekey_count))
+        .route(
+            "/api/chat/mls/key-packages",
+            put(chat_mls::publish_key_packages).route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
+        .route(
+            "/api/chat/mls/conversations",
+            post(chat_mls::create_conversation).route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/api/chat/mls/control/blocks",
+            post(chat_mls::commit_control_block)
+                .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/api/chat/mls/control/membership-deliveries",
+            put(chat_mls::stage_membership_delivery)
+                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
+        .route(
+            "/api/chat/mls/invitations",
+            get(chat_mls::list_invitations).post(chat_mls::respond_invitation),
+        )
+        .route(
+            "/api/chat/mls/messages/:deviceId",
+            get(chat_mls::drain_mailbox),
+        )
+        .route("/api/chat/mls/messages/ack", post(chat_mls::ack_mailbox))
+        .route(
+            "/api/chat/mls/control/votes",
+            post(chat_mls::collect_ordering_votes)
+                .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/api/chat/mls/key-packages/:deviceId/count",
+            get(chat_mls::key_package_count),
+        )
+        .route(
+            "/api/chat/mls/delivery-capability",
+            put(chat_mls::publish_delivery_capability).route_layer(DefaultBodyLimit::max(8 * 1024)),
+        )
+        .route(
+            "/api/chat/mls/anonymous/key-packages",
+            post(chat_mls::get_anonymous_key_packages)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
+        )
+        .route(
+            "/api/chat/mls/anonymous/messages",
+            post(chat_mls::submit_anonymous_message)
+                .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
+        )
         .route(
             "/api/chat/users/:username/keys",
             get(chat::get_user_bundles).route_layer(from_fn(middleware::rate_limit_chat_keys)),
@@ -672,6 +782,48 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
+            "/api/fed/chat/mls/anonymous/key-packages",
+            post(chat_mls::federated_get_anonymous_key_packages)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/mls/anonymous/messages",
+            post(chat_mls::federated_submit_anonymous_message)
+                .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/mls/control/genesis",
+            post(chat_mls::federated_replicate_genesis)
+                .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/mls/control/votes",
+            post(chat_mls::federated_cast_ordering_vote)
+                .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/mls/control/blocks",
+            post(chat_mls::federated_commit_control_block)
+                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/mls/control/authority-bootstrap",
+            post(chat_mls::federated_stage_authority_bootstrap)
+                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/mls/control/participant-bootstrap",
+            post(chat_mls::federated_stage_participant_bootstrap)
+                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
             "/api/fed/policies/:feature",
             get(crate::federation::get_federated_feature_policy)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
@@ -689,6 +841,11 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/fed/chat/users/:username/manifest-history",
             get(chat_federation::get_manifest_history)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/users/:username/manifest-proof",
+            get(chat_federation::get_manifest_proof)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
@@ -810,6 +967,11 @@ fn build_router(state: AppState) -> Router {
                 .route(
                     "/api/admin/chat/transparency/domains/:domain/recover",
                     post(chat_transparency_auditor::recover_domain),
+                )
+                .route("/api/admin/chat/mls/status", get(chat_mls::admin_status))
+                .route(
+                    "/api/admin/chat/mls/conversations/:conversationId",
+                    get(chat_mls::admin_conversation),
                 )
                 .route_layer(from_fn(middleware::rate_limit_admin)),
         )

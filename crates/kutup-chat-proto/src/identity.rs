@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 /// The stable routing identity of one Kutup account.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct AccountAddress {
     pub username: String,
@@ -79,6 +80,7 @@ impl fmt::Display for AccountAddress {
 /// A stable conversation identity. Groups are included now so persisted UI
 /// state and public client APIs do not bake in a direct-message-only string.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ConversationId {
     Direct { address: AccountAddress },

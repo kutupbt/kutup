@@ -11,8 +11,9 @@ use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    ChatProfileResponse, DeviceListMismatch, DeviceManifest, MailboxPage, OwnChatProfileResponse,
-    PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
+    AnonymousMlsDeviceEnvelopeV1, ChatProfileResponse, DeviceListMismatch, DeviceManifest,
+    MailboxPage, MlsControlActionTypeV1, OwnChatProfileResponse, PreKeyCountResponse,
+    PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
     RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest,
     TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
 };
@@ -24,9 +25,10 @@ use wasm_bindgen::prelude::*;
 use zeroize::Zeroize as _;
 
 use crate::{
-    AccountAddress, AccountAuthority, ChatContent, ChatError, ChatTransport, ConversationId,
-    Engine, InboundEnvelope, IndexedDbChatDb, ManifestTrust, ReceiveReport, Result, SendOutcome,
-    TransparencyMonitorState, TransparencyMonitorStatus,
+    AccountAddress, AccountAuthority, AnonymousMlsRecipientDevice, ChatContent, ChatError,
+    ChatTransport, ConversationId, Engine, InboundEnvelope, IndexedDbChatDb, ManifestTrust,
+    MlsClient, ReceiveReport, Result, SendOutcome, TransparencyMonitorState,
+    TransparencyMonitorStatus, VerifiedMlsCredential, VerifiedMlsKeyPackage,
 };
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -38,7 +40,9 @@ export interface KutupChatTransport {
   fetchTransparencyCheckpoint(scope: string, fromTreeSize: string): Promise<unknown>;
   fetchTransparencyPolicy(domain: string): Promise<unknown>;
   fetchManifest(username: string): Promise<unknown | null>;
+  fetchManifestPublication(username: string, transparencyTreeSize: string): Promise<unknown>;
   fetchManifestRange(username: string, fromVersion: string, toVersion: string, pageFromVersion: string, cursor: string | null, transparencyTreeSize: string): Promise<unknown>;
+  fetchAnonymousMlsKeyPackages(request: unknown): Promise<unknown>;
   fetchSealedSenderPolicy(domain: string): Promise<unknown>;
   fetchSenderCertificate(deviceId: number): Promise<unknown>;
   fetchSealedBundles(username: string, capability: string, transparencyTreeSize: string): Promise<unknown>;
@@ -171,6 +175,13 @@ extern "C" {
         username: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
+    #[wasm_bindgen(method, catch, js_name = fetchManifestPublication)]
+    async fn js_fetch_manifest_publication(
+        this: &JsChatTransport,
+        username: &str,
+        transparency_tree_size: &str,
+    ) -> std::result::Result<JsValue, JsValue>;
+
     #[wasm_bindgen(method, catch, js_name = fetchManifestRange)]
     async fn js_fetch_manifest_range(
         this: &JsChatTransport,
@@ -180,6 +191,12 @@ extern "C" {
         page_from_version: &str,
         cursor: JsValue,
         transparency_tree_size: &str,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = fetchAnonymousMlsKeyPackages)]
+    async fn js_fetch_anonymous_mls_key_packages(
+        this: &JsChatTransport,
+        request: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = fetchSealedSenderPolicy)]
@@ -367,6 +384,19 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
+    async fn fetch_manifest_publication(
+        &self,
+        username: &str,
+        transparency_tree_size: u64,
+    ) -> Result<PublishManifestResponse> {
+        from_transport(
+            self.js
+                .js_fetch_manifest_publication(username, &transparency_tree_size.to_string())
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
     async fn fetch_manifest_range(
         &self,
         username: &str,
@@ -386,6 +416,18 @@ impl ChatTransport for BrowserTransport {
                     cursor.map(JsValue::from_str).unwrap_or(JsValue::NULL),
                     &transparency_tree_size.to_string(),
                 )
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_anonymous_mls_key_packages(
+        &self,
+        request: &kutup_chat_proto::AnonymousMlsKeyPackageRequestV1,
+    ) -> Result<kutup_chat_proto::AnonymousMlsKeyPackageResponseV1> {
+        from_transport(
+            self.js
+                .js_fetch_anonymous_mls_key_packages(to_transport(request)?)
                 .await
                 .map_err(transport_error)?,
         )
@@ -587,6 +629,12 @@ impl Drop for WasmChatClient {
     }
 }
 
+impl WasmChatClient {
+    fn mls_client(&self) -> MlsClient {
+        MlsClient::new(Rc::clone(self.engine.session().db()))
+    }
+}
+
 #[wasm_bindgen]
 impl WasmChatClient {
     /// Open or restart-safely register the local device, then publish its
@@ -650,6 +698,406 @@ impl WasmChatClient {
             .await
             .map_err(chat_error)?;
         to_output(&manifest)
+    }
+
+    #[wasm_bindgen(js_name = generateMlsKeyPackage)]
+    pub async fn generate_mls_key_package(
+        &self,
+        manifest_version: String,
+        now_seconds: String,
+        expires_at_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let package = self
+            .mls_client()
+            .generate_key_package(
+                parse_u64_string("manifest version", &manifest_version)?,
+                self.device_id(),
+                parse_i64_string("KeyPackage clock", &now_seconds)?,
+                parse_i64_string("KeyPackage expiry", &expires_at_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&package)
+    }
+
+    #[wasm_bindgen(js_name = createMlsGroup)]
+    pub async fn create_mls_group(
+        &self,
+        mls_group_id: Vec<u8>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let state = self
+            .mls_client()
+            .create_group(&mls_group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&state)
+    }
+
+    #[wasm_bindgen(js_name = mlsGroupState)]
+    pub async fn mls_group_state(
+        &self,
+        mls_group_id: Vec<u8>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let state = self
+            .mls_client()
+            .group_state(&mls_group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&state)
+    }
+
+    #[wasm_bindgen(js_name = prepareMlsAddMembers)]
+    pub async fn prepare_mls_add_members(
+        &self,
+        mls_group_id: Vec<u8>,
+        additions: JsValue,
+        now_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let additions: Vec<VerifiedMlsKeyPackage> =
+            from_transport(additions).map_err(chat_error)?;
+        let pending = self
+            .mls_client()
+            .prepare_add_members(
+                &mls_group_id,
+                &additions,
+                parse_i64_string("MLS clock", &now_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&pending)
+    }
+
+    #[wasm_bindgen(js_name = prepareMlsRemoveMembers)]
+    pub async fn prepare_mls_remove_members(
+        &self,
+        mls_group_id: Vec<u8>,
+        credential_identities: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let identities: Vec<String> =
+            from_transport(credential_identities).map_err(chat_error)?;
+        let pending = self
+            .mls_client()
+            .prepare_remove_members(&mls_group_id, &identities)
+            .await
+            .map_err(chat_error)?;
+        to_output(&pending)
+    }
+
+    #[wasm_bindgen(js_name = pendingMlsCommit)]
+    pub async fn pending_mls_commit(
+        &self,
+        mls_group_id: Vec<u8>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let pending = self
+            .mls_client()
+            .pending_commit(&mls_group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&pending)
+    }
+
+    #[wasm_bindgen(js_name = mergePendingMlsCommit)]
+    pub async fn merge_pending_mls_commit(
+        &self,
+        mls_group_id: Vec<u8>,
+        commit_hash: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let state = self
+            .mls_client()
+            .merge_pending_commit(&mls_group_id, &commit_hash)
+            .await
+            .map_err(chat_error)?;
+        to_output(&state)
+    }
+
+    #[wasm_bindgen(js_name = rejectPendingMlsCommit)]
+    pub async fn reject_pending_mls_commit(
+        &self,
+        mls_group_id: Vec<u8>,
+        commit_hash: String,
+    ) -> std::result::Result<(), JsValue> {
+        self.mls_client()
+            .reject_pending_commit(&mls_group_id, &commit_hash)
+            .await
+            .map_err(chat_error)
+    }
+
+    #[wasm_bindgen(js_name = joinMlsFromWelcome)]
+    pub async fn join_mls_from_welcome(
+        &self,
+        mls_group_id: Vec<u8>,
+        welcome: Vec<u8>,
+        expected_members: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let expected: Vec<VerifiedMlsCredential> =
+            from_transport(expected_members).map_err(chat_error)?;
+        let state = self
+            .mls_client()
+            .join_from_welcome(&mls_group_id, &welcome, &expected)
+            .await
+            .map_err(chat_error)?;
+        to_output(&state)
+    }
+
+    #[wasm_bindgen(js_name = inspectMlsWelcome)]
+    pub async fn inspect_mls_welcome(
+        &self,
+        mls_group_id: Vec<u8>,
+        welcome: Vec<u8>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let inspection = self
+            .mls_client()
+            .inspect_welcome(&mls_group_id, &welcome)
+            .await
+            .map_err(chat_error)?;
+        to_output(&inspection)
+    }
+
+    #[wasm_bindgen(js_name = resolveMlsWelcomeClaims)]
+    pub async fn resolve_mls_welcome_claims(
+        &mut self,
+        claimed_members: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let claims: Vec<crate::ClaimedMlsCredential> =
+            from_transport(claimed_members).map_err(chat_error)?;
+        let verified = self
+            .engine
+            .resolve_mls_credential_claims(&claims)
+            .await
+            .map_err(chat_error)?;
+        to_output(&verified)
+    }
+
+    #[wasm_bindgen(js_name = fetchVerifiedMlsKeyPackages)]
+    pub async fn fetch_verified_mls_key_packages(
+        &mut self,
+        recipient: JsValue,
+        capability: Vec<u8>,
+        now_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let capability: [u8; 16] = capability.try_into().map_err(|_| {
+            chat_error(ChatError::Invalid(
+                "MLS delivery capability must contain exactly 16 bytes".into(),
+            ))
+        })?;
+        let verified = self
+            .engine
+            .fetch_verified_anonymous_mls_key_packages(
+                &recipient,
+                &capability,
+                parse_i64_string("MLS clock", &now_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&verified)
+    }
+
+    #[wasm_bindgen(js_name = applyInboundMlsCommit)]
+    pub async fn apply_inbound_mls_commit(
+        &self,
+        mls_group_id: Vec<u8>,
+        commit: Vec<u8>,
+        expected_members: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let expected: Vec<VerifiedMlsCredential> =
+            from_transport(expected_members).map_err(chat_error)?;
+        let state = self
+            .mls_client()
+            .apply_inbound_commit(&mls_group_id, &commit, &expected)
+            .await
+            .map_err(chat_error)?;
+        to_output(&state)
+    }
+
+    #[wasm_bindgen(js_name = mlsGroupControlCredential)]
+    pub async fn mls_group_control_credential(
+        &self,
+        mls_group_id: Vec<u8>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let credential = self
+            .mls_client()
+            .group_control_credential(&mls_group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&credential)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = signMlsControlProposal)]
+    pub async fn sign_mls_control_proposal(
+        &self,
+        mls_group_id: Vec<u8>,
+        conversation_id: String,
+        incarnation: String,
+        proposal_id: String,
+        base_epoch: String,
+        action_type: u16,
+        encrypted_payload: Vec<u8>,
+        created_at_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let conversation_id = uuid::Uuid::parse_str(&conversation_id)
+            .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
+        let proposal_id = uuid::Uuid::parse_str(&proposal_id)
+            .map_err(|_| js_error("MLS proposal id must be a UUID"))?;
+        let action_type =
+            MlsControlActionTypeV1::try_from(action_type).map_err(|error| js_error(&error))?;
+        let proposal = self
+            .mls_client()
+            .sign_control_proposal(
+                &mls_group_id,
+                conversation_id,
+                parse_u64_string("MLS incarnation", &incarnation)?,
+                proposal_id,
+                parse_u64_string("MLS base epoch", &base_epoch)?,
+                action_type,
+                &encrypted_payload,
+                parse_i64_string("MLS proposal clock", &created_at_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&proposal)
+    }
+
+    #[wasm_bindgen(js_name = createMlsApplicationMessage)]
+    pub async fn create_mls_application_message(
+        &self,
+        send_id: String,
+        conversation_id: String,
+        incarnation: String,
+        mls_group_id: Vec<u8>,
+        plaintext: Vec<u8>,
+        created_at_ms: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let conversation_id = uuid::Uuid::parse_str(&conversation_id)
+            .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
+        let entry = self
+            .mls_client()
+            .create_application_message(
+                &send_id,
+                *conversation_id.as_bytes(),
+                parse_u64_string("MLS incarnation", &incarnation)?,
+                &mls_group_id,
+                &plaintext,
+                parse_i64_string("MLS message clock", &created_at_ms)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&entry)
+    }
+
+    #[wasm_bindgen(js_name = markMlsApplicationDelivered)]
+    pub async fn mark_mls_application_delivered(
+        &self,
+        send_id: String,
+    ) -> std::result::Result<(), JsValue> {
+        self.mls_client()
+            .mark_application_delivered(&send_id)
+            .await
+            .map_err(chat_error)
+    }
+
+    #[wasm_bindgen(js_name = noteMlsApplicationAttempt)]
+    pub async fn note_mls_application_attempt(
+        &self,
+        send_id: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let entry = self
+            .mls_client()
+            .note_application_attempt(&send_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&entry)
+    }
+
+    #[wasm_bindgen(js_name = decryptMlsApplicationMessage)]
+    pub async fn decrypt_mls_application_message(
+        &self,
+        mls_group_id: Vec<u8>,
+        ciphertext: Vec<u8>,
+        expected_sender: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let expected: VerifiedMlsCredential =
+            from_transport(expected_sender).map_err(chat_error)?;
+        let message = self
+            .mls_client()
+            .decrypt_application_message(&mls_group_id, &ciphertext, &expected)
+            .await
+            .map_err(chat_error)?;
+        to_output(&message)
+    }
+
+    #[wasm_bindgen(js_name = deriveMlsDeliveryCapability)]
+    pub async fn derive_mls_delivery_capability(
+        &self,
+        mls_group_id: Vec<u8>,
+        conversation_id: String,
+        incarnation: String,
+        recipient: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let conversation_id = uuid::Uuid::parse_str(&conversation_id)
+            .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
+        let capability = self
+            .mls_client()
+            .derive_delivery_capability(
+                &mls_group_id,
+                conversation_id,
+                parse_u64_string("MLS incarnation", &incarnation)?,
+                &recipient,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&capability)
+    }
+
+    #[wasm_bindgen(js_name = createAnonymousMlsSubmission)]
+    pub async fn create_anonymous_mls_submission(
+        &self,
+        recipient: JsValue,
+        send_id: String,
+        capability: Vec<u8>,
+        devices: JsValue,
+        mls_ciphertext: Vec<u8>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let send_id = uuid::Uuid::parse_str(&send_id)
+            .map_err(|_| js_error("anonymous MLS send id must be a UUID"))?;
+        let capability: [u8; 16] = capability
+            .try_into()
+            .map_err(|_| js_error("anonymous MLS capability must be 16 bytes"))?;
+        let devices: Vec<AnonymousMlsRecipientDevice> =
+            from_transport(devices).map_err(chat_error)?;
+        let submission = self
+            .mls_client()
+            .create_anonymous_submission(
+                recipient,
+                send_id,
+                capability,
+                &devices,
+                &mls_ciphertext,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&submission)
+    }
+
+    #[wasm_bindgen(js_name = openAnonymousMlsEnvelope)]
+    pub async fn open_anonymous_mls_envelope(
+        &self,
+        recipient: JsValue,
+        send_id: String,
+        envelope: JsValue,
+    ) -> std::result::Result<Vec<u8>, JsValue> {
+        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let send_id = uuid::Uuid::parse_str(&send_id)
+            .map_err(|_| js_error("anonymous MLS send id must be a UUID"))?;
+        let envelope: AnonymousMlsDeviceEnvelopeV1 =
+            from_transport(envelope).map_err(chat_error)?;
+        self.mls_client()
+            .open_anonymous_envelope(&recipient, send_id, &envelope)
+            .await
+            .map_err(chat_error)
     }
 
     #[wasm_bindgen(js_name = sendText)]
@@ -1294,6 +1742,30 @@ impl From<ManifestTrust> for ManifestTrustView {
 fn to_transport<T: Serialize + ?Sized>(value: &T) -> Result<JsValue> {
     serde_wasm_bindgen::to_value(value)
         .map_err(|error| ChatError::Transport(format!("encode transport request: {error}")))
+}
+
+fn parse_u64_string(label: &str, value: &str) -> std::result::Result<u64, JsValue> {
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| js_error(&format!("{label} must be canonical unsigned decimal")))?;
+    if parsed.to_string() != value {
+        return Err(js_error(&format!(
+            "{label} must be canonical unsigned decimal"
+        )));
+    }
+    Ok(parsed)
+}
+
+fn parse_i64_string(label: &str, value: &str) -> std::result::Result<i64, JsValue> {
+    let parsed = value
+        .parse::<i64>()
+        .map_err(|_| js_error(&format!("{label} must be canonical signed decimal")))?;
+    if parsed.to_string() != value {
+        return Err(js_error(&format!(
+            "{label} must be canonical signed decimal"
+        )));
+    }
+    Ok(parsed)
 }
 
 fn from_transport<T: DeserializeOwned>(value: JsValue) -> Result<T> {

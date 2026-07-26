@@ -14,11 +14,11 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use kutup_chat_proto::{
-    ChatProfileResponse, DeviceListMismatch, DeviceManifest, MailboxPage,
-    ManifestUpdateRangeProofV1, OwnChatProfileResponse, PreKeyCountResponse,
-    PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
-    ReplenishKeysRequest, SendMessagesRequest, TransparencyCheckpointResponse,
-    UserPreKeyBundlesResponse,
+    AnonymousMlsKeyPackageRequestV1, AnonymousMlsKeyPackageResponseV1, ChatProfileResponse,
+    DeviceListMismatch, DeviceManifest, MailboxPage, ManifestUpdateRangeProofV1,
+    OwnChatProfileResponse, PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest,
+    RegisterChatDeviceRequest, ReplenishKeysRequest, SendMessagesRequest,
+    TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
 };
 use kutup_federation_proto::FederatedFeaturePolicyHistoryV1;
 
@@ -95,6 +95,19 @@ pub trait ChatTransport {
         ))
     }
 
+    /// Fetch the exact current account manifest with inclusion, current-map,
+    /// consistency, operator-signature, and witness-quorum evidence. Unlike a
+    /// bundle fetch, this consumes no one-time Signal or MLS key material.
+    async fn fetch_manifest_publication(
+        &self,
+        _username: &str,
+        _transparency_tree_size: u64,
+    ) -> Result<PublishManifestResponse> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement current manifest proofs".into(),
+        ))
+    }
+
     /// Fetch one page of the exact missing manifest interval. `cursor` is
     /// opaque and checkpoint-bound; transports must pass it unchanged.
     async fn fetch_manifest_range(
@@ -108,6 +121,17 @@ pub trait ChatTransport {
     ) -> Result<ManifestUpdateRangeProofV1> {
         Err(crate::ChatError::Transport(
             "transport does not implement manifest range proofs".into(),
+        ))
+    }
+
+    /// Anonymous, capability-authenticated MLS KeyPackage retrieval. Browser
+    /// implementations must omit bearer tokens, cookies, and session context.
+    async fn fetch_anonymous_mls_key_packages(
+        &self,
+        _request: &AnonymousMlsKeyPackageRequestV1,
+    ) -> Result<AnonymousMlsKeyPackageResponseV1> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement anonymous MLS KeyPackage retrieval".into(),
         ))
     }
 

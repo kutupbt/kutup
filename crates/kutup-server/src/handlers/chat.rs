@@ -92,7 +92,7 @@ type OwnProfileRow = (
 #[derive(Debug, Default, Deserialize)]
 pub struct TransparencyQuery {
     #[serde(rename = "transparencyTreeSize")]
-    transparency_tree_size: Option<u64>,
+    pub transparency_tree_size: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -581,7 +581,7 @@ pub async fn publish_manifest(
 /// The manifest/log/map/checkpoint mutation has already committed atomically,
 /// so an independent witness can now observe it. Bound the availability wait;
 /// a timeout returns 503 while leaving the exact idempotent manifest retryable.
-async fn prove_manifest_with_quorum(
+pub(crate) async fn prove_manifest_with_quorum(
     state: &AppState,
     user_id: Uuid,
     known_tree_size: u64,
@@ -645,6 +645,91 @@ pub async fn get_user_manifest(
     let manifest: DeviceManifest = serde_json::from_value(value)
         .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
     Ok(Json(manifest).into_response())
+}
+
+/// `GET /api/chat/users/{username}/manifest-proof` — retrieve an exact current
+/// manifest and independently verifiable transparency evidence without
+/// consuming any Signal or MLS one-time key material. Federated accounts are
+/// resolved only through the authenticated same-origin federation proxy.
+#[utoipa::path(
+    get,
+    path = "/api/chat/users/{username}/manifest-proof",
+    tag = "chat",
+    operation_id = "getChatDeviceManifestProof",
+    params(
+        ("username" = String, Path, description = "Canonical local or federated account address"),
+        ("transparencyTreeSize" = Option<u64>, Query, description = "Highest verified checkpoint for the account's transparency log")
+    ),
+    responses(
+        (status = 200, description = "Latest signed manifest and authenticated transparency proof", body = PublishManifestResponse),
+        (status = 404, description = "Unknown account or no manifest"),
+        (status = 503, description = "Required witness quorum is unavailable"),
+    ),
+    security(("bearerAuth" = []))
+)]
+#[tracing::instrument(name = "chat.transparency.current_manifest", skip_all)]
+pub async fn get_user_manifest_proof(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+    Path(username): Path<String>,
+    Query(query): Query<TransparencyQuery>,
+) -> AppResult<Response> {
+    let address: AccountAddress =
+        username
+            .parse()
+            .map_err(|error: kutup_chat_proto::AddressError| {
+                AppError::bad_request(error.to_string())
+            })?;
+    if let Some(server) = address.server.as_deref() {
+        let federation = state
+            .federation
+            .as_ref()
+            .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
+        if server != federation.server_name() {
+            let response = crate::chat_federation::fetch_remote_manifest_proof(
+                &state,
+                &address,
+                query.transparency_tree_size.unwrap_or(0),
+            )
+            .await?;
+            crate::telemetry::proof_event("current_manifest_remote", "served", 1);
+            return Ok(Json(response).into_response());
+        }
+    }
+
+    let target_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
+            .bind(&address.username)
+            .fetch_optional(&state.pool)
+            .await?;
+    let target_id = target_id.ok_or_else(|| AppError::not_found("chat manifest not found"))?;
+    let response =
+        load_manifest_proof(&state, target_id, query.transparency_tree_size.unwrap_or(0)).await?;
+    crate::telemetry::proof_event("current_manifest_local", "served", 1);
+    Ok(Json(response).into_response())
+}
+
+pub(crate) async fn load_manifest_proof(
+    state: &AppState,
+    user_id: Uuid,
+    known_tree_size: u64,
+) -> AppResult<PublishManifestResponse> {
+    let value: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let value = value.ok_or_else(|| AppError::not_found("chat manifest not found"))?;
+    let manifest: DeviceManifest = serde_json::from_value(value)
+        .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
+    manifest
+        .verify()
+        .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
+    let transparency = prove_manifest_with_quorum(state, user_id, known_tree_size).await?;
+    Ok(PublishManifestResponse {
+        manifest,
+        transparency,
+    })
 }
 
 /// Retrieve every skipped manifest version as checkpoint-bound pages of at

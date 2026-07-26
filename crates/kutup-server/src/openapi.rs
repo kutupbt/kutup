@@ -131,6 +131,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::chat::get_transparency_checkpoint,
         crate::handlers::chat::submit_transparency_witness,
         crate::handlers::chat::get_user_manifest,
+        crate::handlers::chat::get_user_manifest_proof,
         crate::handlers::chat::put_profile,
         crate::handlers::chat::get_own_profile,
         crate::handlers::chat::get_user_profile,

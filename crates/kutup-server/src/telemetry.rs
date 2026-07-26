@@ -255,6 +255,105 @@ pub fn rate_limit_rejection(scope: &'static str) {
     );
 }
 
+pub fn mls_control_event(operation: &'static str, outcome: &'static str) {
+    static COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
+    COUNTER
+        .get_or_init(|| {
+            global::meter(INSTRUMENTATION_SCOPE)
+                .u64_counter("kutup.chat.mls.control.events")
+                .with_description("MLS genesis, voting, membership, and control-log outcomes")
+                .build()
+        })
+        .add(
+            1,
+            &[
+                KeyValue::new("operation", operation),
+                KeyValue::new("outcome", outcome),
+            ],
+        );
+}
+
+pub fn mls_quorum_event(outcome: &'static str, available: u64, required: u64) {
+    static COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
+    static AVAILABLE: OnceLock<Histogram<u64>> = OnceLock::new();
+    static REQUIRED: OnceLock<Histogram<u64>> = OnceLock::new();
+    let attributes = [KeyValue::new("outcome", outcome)];
+    COUNTER
+        .get_or_init(|| {
+            global::meter(INSTRUMENTATION_SCOPE)
+                .u64_counter("kutup.chat.mls.quorum.events")
+                .with_description("MLS ordering quorum collection outcomes")
+                .build()
+        })
+        .add(1, &attributes);
+    AVAILABLE
+        .get_or_init(|| {
+            global::meter(INSTRUMENTATION_SCOPE)
+                .u64_histogram("kutup.chat.mls.quorum.available")
+                .with_description("Distinct valid MLS ordering votes collected")
+                .build()
+        })
+        .record(available, &attributes);
+    REQUIRED
+        .get_or_init(|| {
+            global::meter(INSTRUMENTATION_SCOPE)
+                .u64_histogram("kutup.chat.mls.quorum.required")
+                .with_description("MLS ordering votes required by the authority set")
+                .build()
+        })
+        .record(required, &attributes);
+}
+
+pub fn mls_bootstrap_event(kind: &'static str, outcome: &'static str, pages: u64) {
+    static COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
+    static PAGES: OnceLock<Histogram<u64>> = OnceLock::new();
+    let attributes = [
+        KeyValue::new("kind", kind),
+        KeyValue::new("outcome", outcome),
+    ];
+    COUNTER
+        .get_or_init(|| {
+            global::meter(INSTRUMENTATION_SCOPE)
+                .u64_counter("kutup.chat.mls.bootstrap.events")
+                .with_description("Restart-safe authority and participant bootstrap outcomes")
+                .build()
+        })
+        .add(1, &attributes);
+    PAGES
+        .get_or_init(|| {
+            global::meter(INSTRUMENTATION_SCOPE)
+                .u64_histogram("kutup.chat.mls.bootstrap.pages")
+                .with_description("Bounded history pages in an MLS bootstrap")
+                .build()
+        })
+        .record(pages, &attributes);
+}
+
+pub fn mls_anonymous_delivery_event(stage: &'static str, outcome: &'static str, envelopes: u64) {
+    static COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
+    static ENVELOPES: OnceLock<Histogram<u64>> = OnceLock::new();
+    let attributes = [
+        KeyValue::new("stage", stage),
+        KeyValue::new("outcome", outcome),
+    ];
+    COUNTER
+        .get_or_init(|| {
+            global::meter(INSTRUMENTATION_SCOPE)
+                .u64_counter("kutup.chat.mls.anonymous_delivery.events")
+                .with_description("Capability-authenticated anonymous MLS delivery outcomes")
+                .build()
+        })
+        .add(1, &attributes);
+    ENVELOPES
+        .get_or_init(|| {
+            global::meter(INSTRUMENTATION_SCOPE)
+                .u64_histogram("kutup.chat.mls.anonymous_delivery.envelopes")
+                .with_description("Opaque per-device envelopes in an anonymous MLS delivery")
+                .build()
+        })
+        .record(envelopes, &attributes);
+}
+
 static FORK_COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
 static CERTIFICATE_COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
 static RATE_LIMIT_COUNTER: OnceLock<Counter<u64>> = OnceLock::new();

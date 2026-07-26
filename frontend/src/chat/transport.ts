@@ -1,7 +1,13 @@
 import axios from 'axios'
 import api from '@/api/client'
 import { apiBase } from '@/lib/apiBase'
-import type { ChatTransportPort } from './types'
+import type {
+  ChatTransportPort,
+  MlsInvitationDecision,
+  MlsInvitationDecisionResponse,
+  MlsMailboxPage,
+  PendingMlsInvitation,
+} from './types'
 
 /** Authenticated REST adapter consumed by the Rust engine. */
 export class ApiChatTransport implements ChatTransportPort {
@@ -56,6 +62,17 @@ export class ApiChatTransport implements ChatTransportPort {
       if (axios.isAxiosError(error) && error.response?.status === 404) return null
       throw error
     }
+  }
+
+  async fetchManifestPublication(
+    username: string,
+    transparencyTreeSize: string,
+  ): Promise<unknown> {
+    return api
+      .get(`/chat/users/${encodeURIComponent(username)}/manifest-proof`, {
+        params: { transparencyTreeSize },
+      })
+      .then((response) => response.data)
   }
 
   async fetchManifestRange(
@@ -150,6 +167,89 @@ export class ApiChatTransport implements ChatTransportPort {
 
   async replenishPrekeys(deviceId: number, request: unknown): Promise<void> {
     await api.put('/chat/keys', request, { params: { deviceId } })
+  }
+
+  async publishMlsKeyPackages(request: unknown): Promise<unknown> {
+    return api.put('/chat/mls/key-packages', request).then((response) => response.data)
+  }
+
+  async mlsKeyPackageCount(deviceId: number): Promise<unknown> {
+    return api
+      .get(`/chat/mls/key-packages/${deviceId}/count`)
+      .then((response) => response.data)
+  }
+
+  async createMlsConversation(request: unknown): Promise<unknown> {
+    return api.post('/chat/mls/conversations', request).then((response) => response.data)
+  }
+
+  async stageMlsMembershipDelivery(request: unknown): Promise<unknown> {
+    return api
+      .put('/chat/mls/control/membership-deliveries', request)
+      .then((response) => response.data)
+  }
+
+  async collectMlsOrderingVotes(request: unknown): Promise<unknown> {
+    return api
+      .post('/chat/mls/control/votes', request)
+      .then((response) => response.data)
+  }
+
+  async commitMlsControlBlock(request: unknown): Promise<unknown> {
+    return api
+      .post('/chat/mls/control/blocks', request)
+      .then((response) => response.data)
+  }
+
+  async listMlsInvitations(): Promise<PendingMlsInvitation[]> {
+    return api.get('/chat/mls/invitations').then((response) => response.data)
+  }
+
+  async respondMlsInvitation(
+    request: MlsInvitationDecision,
+  ): Promise<MlsInvitationDecisionResponse> {
+    return api.post('/chat/mls/invitations', request).then((response) => response.data)
+  }
+
+  async drainMlsMailbox(
+    deviceId: number,
+    after?: string,
+    limit = 100,
+  ): Promise<MlsMailboxPage> {
+    return api
+      .get(`/chat/mls/messages/${deviceId}`, {
+        params: { after, limit },
+      })
+      .then((response) => response.data)
+  }
+
+  async ackMlsMailbox(deviceId: number, envelopeIds: string[]): Promise<void> {
+    await api.post('/chat/mls/messages/ack', {
+      deviceId,
+      envelopeIds: [...envelopeIds].sort(),
+    })
+  }
+
+  async publishMlsDeliveryCapability(request: unknown): Promise<void> {
+    await api.put('/chat/mls/delivery-capability', request)
+  }
+
+  async fetchAnonymousMlsKeyPackages(request: unknown): Promise<unknown> {
+    return axios
+      .post(`${apiBase()}/chat/mls/anonymous/key-packages`, request, {
+        withCredentials: false,
+        headers: { Authorization: undefined },
+      })
+      .then((response) => response.data)
+  }
+
+  async submitAnonymousMlsMessage(request: unknown): Promise<unknown> {
+    return axios
+      .post(`${apiBase()}/chat/mls/anonymous/messages`, request, {
+        withCredentials: false,
+        headers: { Authorization: undefined },
+      })
+      .then((response) => response.data)
   }
 
   async sendMessage(

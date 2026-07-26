@@ -8,7 +8,7 @@
 //! crypto + store. The `Rc<dyn ChatTransport>` is cloned per call so a network
 //! `await` never holds a borrow of `self` across the subsequent store write.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 use base64::engine::general_purpose::STANDARD;
@@ -22,7 +22,7 @@ use crate::db::{
 };
 use crate::error::{ChatError, Result};
 use crate::manifest::{
-    transparency_scope, verify_transparency_checkpoint_response,
+    transparency_scope, verify_manifest_evidence, verify_transparency_checkpoint_response,
     verify_transparent_bundle_response, AccountAuthority, ManifestPolicy, TransparencyPolicy,
 };
 use crate::sealed_sender::SealedSenderPolicyPin;
@@ -32,10 +32,11 @@ use crate::session::{
 };
 use crate::transport::{ChatTransport, SendOutcome};
 use kutup_chat_proto::{
-    ChatContent, ChatTransparencyPolicyV1, ContactControlBody, ContactState, DeviceManifest,
-    OutgoingEnvelope, PreKeyCountResponse, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1,
-    SendMessagesRequest, TransparencyCheckpoint, TransparencyCheckpointResponse,
-    TransparencyVerifierKey,
+    AccountAddress, AnonymousMlsKeyPackageRequestV1, ChatContent, ChatTransparencyPolicyV1,
+    ContactControlBody, ContactState, DeviceManifest, MlsCipherSuiteId, OutgoingEnvelope,
+    PreKeyCountResponse, PublishManifestResponse, SealedMessageSubmissionV1,
+    SealedOutgoingEnvelopeV1, SendMessagesRequest, TransparencyCheckpoint,
+    TransparencyCheckpointResponse, TransparencyVerifierKey, MLS_PROTOCOL_VERSION,
 };
 use kutup_federation_proto::FederatedFeaturePolicyTypeV1;
 
@@ -746,7 +747,13 @@ impl Engine {
     ) -> Result<DeviceManifest> {
         let transport = Rc::clone(&self.transport);
         let current = transport.fetch_manifest(self.session.user()).await?;
-        let local = self.session.manifest_device();
+        let canonical_self = self.canonical_self()?;
+        let mls_identity = format!("{canonical_self}#{}", self.session.device_id());
+        let mls = crate::MlsClient::new(Rc::clone(self.session.db()))
+            .initialize(&mls_identity)
+            .await?
+            .manifest_binding();
+        let local = self.session.manifest_device_with_mls(mls);
         let issued_at = issued_at.into();
         let candidate = match current {
             None => authority.sign_manifest(1, None, vec![local], issued_at)?,
@@ -763,7 +770,8 @@ impl Engine {
                 match devices.binary_search_by_key(&local.device_id, |device| device.device_id) {
                     Ok(index)
                         if devices[index].identity_key == local.identity_key
-                            && devices[index].registration_id == local.registration_id =>
+                            && devices[index].registration_id == local.registration_id
+                            && devices[index].mls == local.mls =>
                     {
                         current
                     }
@@ -815,6 +823,201 @@ impl Engine {
             )
             .await?;
         Ok(published.manifest)
+    }
+
+    /// Resolve untrusted MLS Welcome credential claims exclusively through
+    /// authenticated, transparency-logged device manifests. This consumes no
+    /// Signal prekeys and durably applies the same rollback/gap/operator/witness
+    /// pins as direct-message session establishment.
+    pub async fn resolve_mls_credential_claims(
+        &mut self,
+        claims: &[crate::ClaimedMlsCredential],
+    ) -> Result<Vec<crate::VerifiedMlsCredential>> {
+        if claims.is_empty() || claims.len() > 1000 {
+            return Err(ChatError::Invalid(
+                "MLS roster must contain 1-1000 credential claims".into(),
+            ));
+        }
+
+        let mut parsed = Vec::with_capacity(claims.len());
+        let mut identities = HashSet::with_capacity(claims.len());
+        for claim in claims {
+            if !identities.insert(claim.credential_identity.as_str()) {
+                return Err(ChatError::Trust(
+                    "MLS Welcome repeats a credential identity".into(),
+                ));
+            }
+            let (account, device_id) =
+                parse_mls_device_credential_identity(&claim.credential_identity)?;
+            parsed.push((account, device_id));
+        }
+
+        let mut manifests = BTreeMap::new();
+        for (account, _) in &parsed {
+            if manifests.contains_key(account) {
+                continue;
+            }
+            let scope = transparency_scope(account)?;
+            self.ensure_authenticated_transparency_policy(&scope)
+                .await?;
+            let known_tree_size = self
+                .session
+                .transparency_trust_for_scope(&scope)
+                .await?
+                .map_or(0, |trust| trust.tree_size);
+            let response = Rc::clone(&self.transport)
+                .fetch_manifest_publication(account, known_tree_size)
+                .await?;
+            let manifest = self
+                .accept_current_manifest_evidence(account, &response)
+                .await?;
+            manifests.insert(account.clone(), manifest);
+        }
+
+        claims
+            .iter()
+            .zip(parsed)
+            .map(|(claim, (account, device_id))| {
+                let manifest = manifests.get(&account).ok_or_else(|| {
+                    ChatError::Trust("verified MLS account manifest is unavailable".into())
+                })?;
+                let device = manifest
+                    .devices
+                    .iter()
+                    .find(|device| device.device_id == device_id)
+                    .ok_or_else(|| {
+                        ChatError::Trust(format!(
+                            "MLS credential {} is absent from the signed device manifest",
+                            claim.credential_identity
+                        ))
+                    })?;
+                let binding = device.mls.as_ref().ok_or_else(|| {
+                    ChatError::Trust(format!(
+                        "MLS credential {} has no signed MLS device binding",
+                        claim.credential_identity
+                    ))
+                })?;
+                if binding.suite
+                    != MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256
+                {
+                    return Err(ChatError::Trust(
+                        "MLS credential uses a suite outside the V1 policy".into(),
+                    ));
+                }
+                binding.validate().map_err(ChatError::Trust)?;
+                let manifest_key = STANDARD
+                    .decode(&binding.credential_public_key)
+                    .map_err(|_| ChatError::Trust("manifest MLS key is not base64".into()))?;
+                if manifest_key != claim.credential_public_key {
+                    return Err(ChatError::Trust(format!(
+                        "MLS credential {} differs from the transparency-verified manifest",
+                        claim.credential_identity
+                    )));
+                }
+                crate::VerifiedMlsCredential::new(
+                    claim.credential_identity.clone(),
+                    claim.credential_public_key.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// Fetch capability-gated KeyPackages without authenticated browser
+    /// context, then bind every package credential to a complete,
+    /// transparency-verified current device manifest.
+    pub async fn fetch_verified_anonymous_mls_key_packages(
+        &mut self,
+        recipient: &AccountAddress,
+        capability: &[u8; 16],
+        now_seconds: i64,
+    ) -> Result<Vec<crate::VerifiedMlsKeyPackage>> {
+        if recipient.server.is_none() || now_seconds < 0 {
+            return Err(ChatError::Invalid(
+                "anonymous MLS KeyPackage retrieval requires a canonical recipient and clock"
+                    .into(),
+            ));
+        }
+        let account = recipient.canonical();
+        let scope = transparency_scope(&account)?;
+        self.ensure_authenticated_transparency_policy(&scope)
+            .await?;
+        let known_tree_size = self
+            .session
+            .transparency_trust_for_scope(&scope)
+            .await?
+            .map_or(0, |trust| trust.tree_size);
+        let request = AnonymousMlsKeyPackageRequestV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            recipient: recipient.clone(),
+            capability: STANDARD.encode(capability),
+            transparency_tree_size: known_tree_size.to_string(),
+        };
+        request.validate().map_err(ChatError::Invalid)?;
+        let response = Rc::clone(&self.transport)
+            .fetch_anonymous_mls_key_packages(&request)
+            .await?;
+        response.validate(now_seconds).map_err(ChatError::Trust)?;
+        if response.recipient != *recipient
+            || response.transparency.consistency_from != known_tree_size
+        {
+            return Err(ChatError::Trust(
+                "anonymous MLS KeyPackage response has the wrong recipient or checkpoint"
+                    .into(),
+            ));
+        }
+        let publication = PublishManifestResponse {
+            manifest: response.manifest.clone(),
+            transparency: response.transparency.clone(),
+        };
+        let manifest = self
+            .accept_current_manifest_evidence(&account, &publication)
+            .await?;
+
+        let manifest_devices: BTreeMap<u32, _> = manifest
+            .devices
+            .iter()
+            .map(|device| (device.device_id, device))
+            .collect();
+        if manifest_devices.len() != response.key_packages.len()
+            || manifest_devices.values().any(|device| device.mls.is_none())
+        {
+            return Err(ChatError::Trust(
+                "anonymous MLS KeyPackages do not cover the complete signed device set".into(),
+            ));
+        }
+        response
+            .key_packages
+            .into_iter()
+            .map(|wire| {
+                let device = manifest_devices.get(&wire.device_id).ok_or_else(|| {
+                    ChatError::Trust(
+                        "anonymous MLS KeyPackage names an undeclared device".into(),
+                    )
+                })?;
+                let binding = device.mls.as_ref().ok_or_else(|| {
+                    ChatError::Trust("signed device has no MLS credential binding".into())
+                })?;
+                if binding.suite
+                    != MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256
+                {
+                    return Err(ChatError::Trust(
+                        "MLS KeyPackage uses a suite outside the V1 policy".into(),
+                    ));
+                }
+                binding.validate().map_err(ChatError::Trust)?;
+                let credential = crate::VerifiedMlsCredential::new(
+                    format!("{account}#{}", wire.device_id),
+                    STANDARD
+                        .decode(&binding.credential_public_key)
+                        .map_err(|_| {
+                            ChatError::Trust("manifest MLS key is not base64".into())
+                        })?,
+                )?;
+                let verified = crate::VerifiedMlsKeyPackage { wire, credential };
+                crate::MlsClient::validate_verified_key_package(&verified, now_seconds)?;
+                Ok(verified)
+            })
+            .collect()
     }
 
     /// How many sends are still pending in the durable outbox (undelivered) — for a
@@ -1746,6 +1949,49 @@ impl Engine {
         )
     }
 
+    async fn accept_current_manifest_evidence(
+        &mut self,
+        account: &str,
+        response: &PublishManifestResponse,
+    ) -> Result<DeviceManifest> {
+        let scope = transparency_scope(account)?;
+        let prior_manifest = self.session.manifest_trust(account).await?;
+        let prior_transparency = self
+            .session
+            .transparency_trust_for_scope(&scope)
+            .await?;
+        let (manifest_trust, proof_trust) = verify_manifest_evidence(
+            account,
+            response,
+            prior_manifest.as_ref(),
+            prior_transparency.as_ref(),
+            &self.transparency_policy,
+        )?;
+        if manifest_trust.continuity_gap {
+            let (history, range_transparency) = self
+                .recover_manifest_history(
+                    account,
+                    &response.manifest,
+                    prior_manifest.as_ref(),
+                    &proof_trust,
+                )
+                .await?;
+            self.session
+                .accept_manifest_evidence_with_history(
+                    account,
+                    response,
+                    history,
+                    range_transparency,
+                    &self.transparency_policy,
+                )
+                .await
+        } else {
+            self.session
+                .accept_manifest_evidence(account, response, &self.transparency_policy)
+                .await
+        }
+    }
+
     async fn recover_manifest_history(
         &self,
         peer: &str,
@@ -1921,6 +2167,32 @@ impl Engine {
     }
 }
 
+fn parse_mls_device_credential_identity(identity: &str) -> Result<(String, u32)> {
+    let (account, device_id) = identity.rsplit_once('#').ok_or_else(|| {
+        ChatError::Trust("MLS credential identity must be account@server#device".into())
+    })?;
+    let address: AccountAddress = account
+        .parse()
+        .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
+    if address.server.is_none() {
+        return Err(ChatError::Trust(
+            "MLS credential identity requires a canonical federation domain".into(),
+        ));
+    }
+    let device_id: u32 = device_id
+        .parse()
+        .map_err(|_| ChatError::Trust("MLS credential device id is invalid".into()))?;
+    if device_id == 0
+        || device_id > 127
+        || format!("{}#{device_id}", address.canonical()) != identity
+    {
+        return Err(ChatError::Trust(
+            "MLS credential identity is not canonical".into(),
+        ));
+    }
+    Ok((address.canonical(), device_id))
+}
+
 fn profile_key_send_id(peer: &str, profile: &LocalProfile) -> Result<String> {
     use sha2::{Digest, Sha256};
     let version = crate::profile::profile_version(&profile.key)?;
@@ -1947,7 +2219,7 @@ fn unix_millis() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::profile_key_send_id;
+    use super::{parse_mls_device_credential_identity, profile_key_send_id};
     use crate::db::LocalProfile;
 
     #[test]
@@ -1973,5 +2245,28 @@ mod tests {
             first,
             profile_key_send_id("carol@example.test", &profile).unwrap()
         );
+    }
+
+    #[test]
+    fn mls_device_credential_identity_is_exact_and_canonical() {
+        assert_eq!(
+            parse_mls_device_credential_identity("alice@example.test#127").unwrap(),
+            ("alice@example.test".into(), 127)
+        );
+        for invalid in [
+            "alice#1",
+            "alice@example.test",
+            "alice@example.test#0",
+            "alice@example.test#128",
+            "alice@example.test#01",
+            "Alice@example.test#1",
+            "alice@EXAMPLE.test#1",
+            "alice@example.test#1#2",
+        ] {
+            assert!(
+                parse_mls_device_credential_identity(invalid).is_err(),
+                "{invalid}"
+            );
+        }
     }
 }

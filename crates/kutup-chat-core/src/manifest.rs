@@ -6,8 +6,9 @@ use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
 use kutup_chat_proto::{
     AccountAddress, DeviceManifest, ManifestDevice, ManifestTransparencyProof,
-    TransparencyCheckpoint, TransparencyCheckpointAuthentication, TransparencyCheckpointResponse,
-    TransparencyVerifierKey, TransparencyWitnessAttestation, UserPreKeyBundlesResponse,
+    PublishManifestResponse, TransparencyCheckpoint, TransparencyCheckpointAuthentication,
+    TransparencyCheckpointResponse, TransparencyVerifierKey, TransparencyWitnessAttestation,
+    UserPreKeyBundlesResponse,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -391,31 +392,66 @@ pub(crate) fn verify_transparent_bundle_response(
         transparency_policy,
     )?;
     if let Some(trust) = manifest.as_mut() {
-        if let Some(prior) = prior_manifest {
-            if let Some(prior_position) = prior.transparency_position {
-                if served_manifest.version == prior.highest_version
-                    && proof.leaf_index != prior_position
-                {
-                    return Err(ChatError::Trust(
-                        "unchanged manifest moved to another transparency log position".into(),
-                    ));
-                }
-                if served_manifest.version > prior.highest_version
-                    && proof.leaf_index <= prior_position
-                {
-                    return Err(ChatError::Trust(
-                        "updated manifest did not advance its transparency monitor position".into(),
-                    ));
-                }
-            }
-        }
-        trust.transparency_position = Some(proof.leaf_index);
+        bind_transparency_position(trust, served_manifest, proof, prior_manifest)?;
     }
 
     Ok(VerifiedBundleTrust {
         manifest,
         transparency: Some(next),
     })
+}
+
+/// Verify an exact current-manifest proof without requesting or consuming any
+/// prekey material. The returned pins are not durable until the caller commits
+/// them together with the complete manifest history when `continuity_gap` is
+/// true.
+pub(crate) fn verify_manifest_evidence(
+    expected_peer: &str,
+    response: &PublishManifestResponse,
+    prior_manifest: Option<&ManifestTrust>,
+    prior_transparency: Option<&TransparencyTrust>,
+    transparency_policy: &TransparencyPolicy,
+) -> Result<(ManifestTrust, TransparencyTrust)> {
+    let mut manifest =
+        verify_manifest_trust(expected_peer, &response.manifest, prior_manifest)?;
+    let transparency = verify_manifest_publication(
+        expected_peer,
+        &response.manifest,
+        &response.transparency,
+        prior_transparency,
+        transparency_policy,
+    )?;
+    bind_transparency_position(
+        &mut manifest,
+        &response.manifest,
+        &response.transparency,
+        prior_manifest,
+    )?;
+    Ok((manifest, transparency))
+}
+
+fn bind_transparency_position(
+    trust: &mut ManifestTrust,
+    manifest: &DeviceManifest,
+    proof: &ManifestTransparencyProof,
+    prior: Option<&ManifestTrust>,
+) -> Result<()> {
+    if let Some(prior) = prior {
+        if let Some(prior_position) = prior.transparency_position {
+            if manifest.version == prior.highest_version && proof.leaf_index != prior_position {
+                return Err(ChatError::Trust(
+                    "unchanged manifest moved to another transparency log position".into(),
+                ));
+            }
+            if manifest.version > prior.highest_version && proof.leaf_index <= prior_position {
+                return Err(ChatError::Trust(
+                    "updated manifest did not advance its transparency monitor position".into(),
+                ));
+            }
+        }
+    }
+    trust.transparency_position = Some(proof.leaf_index);
+    Ok(())
 }
 
 /// Deterministic account authority derived from the recoverable account master
@@ -534,6 +570,15 @@ pub fn verify_bundle_response(
         }
     }
 
+    verify_manifest_trust(expected_peer, manifest, prior).map(Some)
+}
+
+fn verify_manifest_trust(
+    expected_peer: &str,
+    manifest: &DeviceManifest,
+    prior: Option<&ManifestTrust>,
+) -> Result<ManifestTrust> {
+    manifest.verify().map_err(ChatError::Trust)?;
     let manifest_hash = manifest.manifest_hash().map_err(ChatError::Trust)?;
     let (trust, continuity_gap) = match prior {
         None => (AuthorityTrust::Tofu, manifest.version != 1),
@@ -563,7 +608,7 @@ pub fn verify_bundle_response(
                         manifest.version
                     )));
                 }
-                return Ok(Some(prior.clone()));
+                return Ok(prior.clone());
             }
 
             let consecutive = manifest.version == prior.highest_version.saturating_add(1);
@@ -578,7 +623,7 @@ pub fn verify_bundle_response(
         }
     };
 
-    Ok(Some(ManifestTrust {
+    Ok(ManifestTrust {
         peer: expected_peer.to_string(),
         authority_key_id: manifest.authority_key_id.clone(),
         self_authority_key: manifest.self_authority_key.clone(),
@@ -587,7 +632,7 @@ pub fn verify_bundle_response(
         trust,
         transparency_position: prior.and_then(|prior| prior.transparency_position),
         continuity_gap,
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -645,6 +690,7 @@ mod tests {
                     device_id: 1,
                     identity_key: "identity".into(),
                     registration_id: 42,
+                    mls: None,
                 }],
                 "2026-07-15T12:00:00Z",
             )
@@ -667,6 +713,7 @@ mod tests {
                     device_id: 1,
                     identity_key: "identity".into(),
                     registration_id: 42,
+                    mls: None,
                 }],
                 "2026-07-15T12:00:00Z",
             )
@@ -759,6 +806,7 @@ mod tests {
                     device_id: 1,
                     identity_key: "identity".into(),
                     registration_id: 42,
+                    mls: None,
                 }],
                 "2026-07-16T12:00:00Z",
             )
@@ -863,6 +911,15 @@ mod tests {
         assert_eq!(checkpoint.scope, "local");
         assert_eq!(checkpoint.tree_size, 2);
         assert_eq!(checkpoint.witnesses.len(), 1);
+        let current = PublishManifestResponse {
+            manifest: manifest.clone(),
+            transparency: response.transparency.clone().unwrap(),
+        };
+        let (manifest_pin, current_checkpoint) =
+            verify_manifest_evidence("bob", &current, None, None, &policy).unwrap();
+        assert_eq!(manifest_pin.highest_version, 1);
+        assert_eq!(manifest_pin.transparency_position, Some(0));
+        assert_eq!(current_checkpoint, checkpoint);
 
         let mut unwitnessed = response.clone();
         unwitnessed

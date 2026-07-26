@@ -19,7 +19,7 @@ use std::rc::Rc;
 
 use async_trait::async_trait;
 use base64::Engine as _;
-use kutup_chat_proto::ManifestDevice;
+use kutup_chat_proto::{ManifestDevice, MlsManifestDeviceV1};
 use libsignal_protocol::*;
 use uuid::Uuid;
 
@@ -247,11 +247,20 @@ impl ChatStore {
     }
 
     pub(crate) fn local_manifest_device(&self, device_id: u32) -> ManifestDevice {
+        self.local_manifest_device_with_mls(device_id, None)
+    }
+
+    pub(crate) fn local_manifest_device_with_mls(
+        &self,
+        device_id: u32,
+        mls: Option<MlsManifestDeviceV1>,
+    ) -> ManifestDevice {
         ManifestDevice {
             device_id,
             identity_key: base64::engine::general_purpose::STANDARD
                 .encode(self.identity_store.key_pair.identity_key().serialize()),
             registration_id: self.identity_store.registration_id,
+            mls,
         }
     }
 

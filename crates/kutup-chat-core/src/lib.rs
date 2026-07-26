@@ -20,6 +20,7 @@ mod engine;
 mod error;
 mod keys;
 mod manifest;
+mod mls_engine;
 mod profile;
 mod sealed_sender;
 mod session;
@@ -36,8 +37,9 @@ pub use db::indexed_db::IndexedDbChatDb;
 pub use db::sqlite::SqliteChatDb;
 pub use db::{
     AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState,
-    InboxMessage, LocalIdentity, LocalProfile, ManifestHistoryRecord, ManifestTrust, OutboxEntry,
-    OutboxSyncLeg, PeerProfile, Pending, SentMessage, TransparencyMonitorState,
+    InboxMessage, LocalIdentity, LocalProfile, ManifestHistoryRecord, ManifestTrust,
+    MlsOutboxEntry, OutboxEntry, OutboxSyncLeg, PeerProfile, Pending, SentMessage,
+    TransparencyMonitorState,
     TransparencyMonitorStatus, TransparencyTrust, TransparencyWitnessTrust,
 };
 pub use engine::{
@@ -51,6 +53,12 @@ pub use kutup_chat_proto::{
 pub use manifest::{
     verify_bundle_response, verify_manifest, AccountAuthority, ManifestPolicy, TransparencyPolicy,
     TransparencyScopePolicy,
+};
+pub use mls_engine::{
+    AnonymousMlsRecipientDevice, ClaimedMlsCredential, DecryptedMlsApplication,
+    DerivedMlsDeliveryCapability, LocalMlsGroupState, MlsClient, MlsDevicePublicMaterial,
+    MlsGroupControlCredential, MlsWelcomeInspection, PendingMlsCommit, VerifiedMlsCredential,
+    VerifiedMlsKeyPackage, KUTUP_MLS_V1_CIPHERSUITE, KUTUP_MLS_V1_MAX_PAST_EPOCHS,
 };
 pub use profile::{derive_wrapping_key, MAX_AVATAR_BYTES};
 pub use session::{ReceivedMessage, SendSummary, Session};

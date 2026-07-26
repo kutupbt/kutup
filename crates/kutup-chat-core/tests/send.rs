@@ -585,6 +585,7 @@ fn signed_manifest(bundle: &DevicePreKeyBundle) -> DeviceManifest {
                 device_id: bundle.device_id,
                 identity_key: bundle.identity_key.clone(),
                 registration_id: bundle.registration_id,
+                mls: None,
             }],
             "2026-07-15T12:00:00Z",
         )
@@ -600,11 +601,15 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
     let authority = AccountAuthority::derive(&[12; 32]).unwrap();
 
     let mut first = Engine::new(device("alice", 1, &mut rng), server.clone());
+    first.set_local_server("example.test").unwrap();
     let v1 = block_on(first.sync_own_manifest(&authority, "2026-07-15T12:00:00Z")).unwrap();
     assert_eq!(v1.version, 1);
-    assert_eq!(v1.devices, vec![first.session().manifest_device()]);
+    assert_eq!(v1.devices.len(), 1);
+    assert_eq!(v1.devices[0].device_id, 1);
+    assert!(v1.devices[0].mls.is_some());
 
     let mut second = Engine::new(device("alice", 2, &mut rng), server);
+    second.set_local_server("example.test").unwrap();
     let v2 = block_on(second.sync_own_manifest(&authority, "2026-07-15T12:01:00Z")).unwrap();
     assert_eq!(v2.version, 2);
     assert_eq!(
@@ -613,7 +618,8 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
     );
     assert_eq!(v2.devices.len(), 2);
     assert_eq!(v2.devices[0], v1.devices[0]);
-    assert_eq!(v2.devices[1], second.session().manifest_device());
+    assert_eq!(v2.devices[1].device_id, 2);
+    assert!(v2.devices[1].mls.is_some());
 }
 
 #[test]

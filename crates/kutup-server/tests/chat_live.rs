@@ -292,6 +292,7 @@ fn chat_v1_contract() {
             device_id: dev_a,
             identity_key: identity_a.clone(),
             registration_id: reg_a,
+            mls: None,
         }],
     );
     publish_manifest(
@@ -305,6 +306,7 @@ fn chat_v1_contract() {
             device_id: dev_b,
             identity_key: identity_b,
             registration_id: reg_b,
+            mls: None,
         }],
     );
 
@@ -411,11 +413,13 @@ fn chat_v1_contract() {
                 device_id: dev_a,
                 identity_key: identity_a.clone(),
                 registration_id: reg_a,
+                mls: None,
             },
             ManifestDevice {
                 device_id: dev_a2,
                 identity_key: identity_a2,
                 registration_id: reg_a2,
+                mls: None,
             },
         ],
     );

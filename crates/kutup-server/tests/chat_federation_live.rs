@@ -301,6 +301,7 @@ fn manifest_device(device_id: u32, registration_id: u32, seed: u8) -> ManifestDe
         device_id,
         registration_id,
         identity_key: b64(&[seed.wrapping_add(1); 33]),
+        mls: None,
     }
 }
 

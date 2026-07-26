@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 pub mod content;
 pub mod federation;
 mod identity;
+mod mls;
 mod profile;
 mod sealed_sender;
 mod security_policy;
@@ -30,6 +31,32 @@ pub use federation::{
     FederationDeliveryResponse, FEDERATED_CHAT_FEATURE,
 };
 pub use identity::{AccountAddress, AddressError, ConversationId};
+pub use mls::{
+    anonymous_mls_delivery_aad, derive_group_delivery_capability, mls_authority_history_digest,
+    mls_transition_digest, roster_commitment, verify_mls_authority_bootstrap_history,
+    verify_mls_participant_bootstrap_history, AckMlsMailboxV1, AnonymousMlsDeliveryResponseV1,
+    AnonymousMlsDeviceEnvelopeV1, AnonymousMlsKeyPackageRequestV1,
+    AnonymousMlsKeyPackageResponseV1, AnonymousMlsSubmissionV1, CommitMlsControlBlockResponseV1,
+    CommitMlsControlBlockV1, CreateMlsConversationRequestV1, CreateMlsConversationResponseV1,
+    Ed25519MlsControlSigner, Ed25519MlsOwnerSigner, FederatedAnonymousMlsTransactionV1,
+    FederatedMlsAuthorityBootstrapPageV1, FederatedMlsControlReplicaV1,
+    FederatedMlsGenesisReplicaV1, FederatedMlsOrderingVoteRequestV1,
+    FederatedMlsParticipantBootstrapPageV1, MlsAbuseLimitsV1, MlsAnonymousDeliverySuiteV1,
+    MlsAuthorityBootstrapDescriptorV1, MlsAuthoritySetV1, MlsAuthorityTransitionCertificateV1,
+    MlsAuthorityV1, MlsCipherSuiteId, MlsControlActionTypeV1, MlsControlBlockV1,
+    MlsControlProposalV1, MlsControlSigner, MlsConversationGenesisV1, MlsConversationKindV1,
+    MlsConversationMemberV1, MlsDeliveryCapabilityKindV1, MlsFinalizedControlBlockV1,
+    MlsKeyPackageCountResponseV1, MlsKeyPackageV1, MlsMailboxDeliveryKindV1, MlsMailboxEnvelopeV1,
+    MlsMailboxPageV1, MlsManifestDeviceV1, MlsMembershipDeliveryCommitmentV1,
+    MlsMembershipDeliveryV1, MlsMembershipEnvelopeKindV1, MlsMembershipEnvelopeV1,
+    MlsMembershipTransitionV1, MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1,
+    MlsOrderingVoteTypeV1, MlsOrderingVoteV1, MlsOwnerApprovalCertificateV1, MlsOwnerApprovalV1,
+    MlsOwnerSetV1, MlsOwnerSigner, MlsOwnerV1, MlsParticipantBootstrapDescriptorV1,
+    PendingMessageRequestPolicyV1, PendingMlsInvitationV1, PublishMlsDeliveryCapabilityV1,
+    PublishMlsKeyPackagesRequestV1, RespondMlsInvitationResponseV1, RespondMlsInvitationV1,
+    ANONYMOUS_MLS_DELIVERY_CONTEXT, MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256,
+    MLS_ORDERING_SERVICE_POLICY_VERSION, MLS_PROTOCOL_VERSION,
+};
 pub use profile::{ChatProfileResponse, OwnChatProfileResponse, PutChatProfileRequest};
 pub use sealed_sender::{
     capability_hash, constant_time_capability_hash_eq, derive_delivery_capability,
@@ -185,6 +212,10 @@ pub struct ManifestDevice {
     pub device_id: u32,
     pub identity_key: String,
     pub registration_id: u32,
+    /// MLS-only device keys covered by the account manifest. An MLS
+    /// registration is rejected unless this binding is present and exact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mls: Option<MlsManifestDeviceV1>,
 }
 
 /// The device-list-authenticity primitive (§5.3): a user's current chat
@@ -238,6 +269,16 @@ impl DeviceManifest {
             out.extend_from_slice(&device.device_id.to_be_bytes());
             out.extend_from_slice(&device.registration_id.to_be_bytes());
             push_string(&mut out, &device.identity_key)?;
+            match &device.mls {
+                Some(mls) => {
+                    out.push(1);
+                    mls.validate()?;
+                    out.extend_from_slice(&u16::from(mls.suite).to_be_bytes());
+                    push_string(&mut out, &mls.credential_public_key)?;
+                    push_string(&mut out, &mls.anonymous_delivery_public_key)?;
+                }
+                None => out.push(0),
+            }
         }
         Ok(out)
     }
@@ -715,11 +756,13 @@ mod tests {
                     device_id: 1,
                     identity_key: "identity-a".into(),
                     registration_id: 10,
+                    mls: None,
                 },
                 ManifestDevice {
                     device_id: 2,
                     identity_key: "identity-b".into(),
                     registration_id: 20,
+                    mls: None,
                 },
             ],
             issued_at: "2026-07-15T12:00:00Z".into(),

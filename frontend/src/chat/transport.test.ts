@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import axios from 'axios'
 import api from '@/api/client'
+import { resolveApiBase } from '@/lib/apiBase'
 import { ApiChatTransport } from './transport'
 
 afterEach(() => vi.restoreAllMocks())
@@ -96,6 +98,24 @@ describe('ApiChatTransport', () => {
     })
   })
 
+  it('fetches current manifest proofs without losing the checkpoint cursor', async () => {
+    const get = vi.spyOn(api, 'get').mockResolvedValue({
+      data: { manifest: { version: 4 }, transparency: { leafIndex: 9 } },
+    } as never)
+    const transport = new ApiChatTransport()
+
+    await expect(
+      transport.fetchManifestPublication(
+        'alice@remote.example',
+        '18446744073709551615',
+      ),
+    ).resolves.toMatchObject({ manifest: { version: 4 } })
+    expect(get).toHaveBeenCalledWith(
+      '/chat/users/alice%40remote.example/manifest-proof',
+      { params: { transparencyTreeSize: '18446744073709551615' } },
+    )
+  })
+
   it('keeps profile capabilities out of URLs and treats a missing profile as absent', async () => {
     const get = vi.spyOn(api, 'get')
       .mockResolvedValueOnce({ data: { version: 'v1' } } as never)
@@ -125,6 +145,69 @@ describe('ApiChatTransport', () => {
     await transport.drainMailbox(7, '18446744073709551615', 500)
     expect(get).toHaveBeenCalledWith('/chat/messages', {
       params: { deviceId: 7, after: '18446744073709551615', limit: 500 },
+    })
+  })
+
+  it('keeps anonymous MLS requests free of cookies and authorization', async () => {
+    await resolveApiBase()
+    const post = vi.spyOn(axios, 'post').mockResolvedValue({ data: { devices: [] } } as never)
+    const transport = new ApiChatTransport()
+
+    await expect(
+      transport.fetchAnonymousMlsKeyPackages({ recipient: { username: 'bob' } }),
+    ).resolves.toEqual({ devices: [] })
+    expect(post).toHaveBeenCalledWith(
+      expect.stringMatching(/\/chat\/mls\/anonymous\/key-packages$/),
+      { recipient: { username: 'bob' } },
+      { withCredentials: false, headers: { Authorization: undefined } },
+    )
+
+    await transport.submitAnonymousMlsMessage({ sendId: 'send-1' })
+    expect(post).toHaveBeenLastCalledWith(
+      expect.stringMatching(/\/chat\/mls\/anonymous\/messages$/),
+      { sendId: 'send-1' },
+      { withCredentials: false, headers: { Authorization: undefined } },
+    )
+  })
+
+  it('uses authenticated routes for MLS invitation decisions', async () => {
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: [] } as never)
+    const post = vi.spyOn(api, 'post').mockResolvedValue({
+      data: {
+        conversationId: '00000000-0000-0000-0000-000000000001',
+        incarnation: 1,
+        status: 'active',
+        idempotent: false,
+      },
+    } as never)
+    const transport = new ApiChatTransport()
+    await expect(transport.listMlsInvitations()).resolves.toEqual([])
+    expect(get).toHaveBeenCalledWith('/chat/mls/invitations')
+    await transport.respondMlsInvitation({
+      conversationId: '00000000-0000-0000-0000-000000000001',
+      incarnation: 1,
+      accept: true,
+    })
+    expect(post).toHaveBeenCalledWith('/chat/mls/invitations', {
+      conversationId: '00000000-0000-0000-0000-000000000001',
+      incarnation: 1,
+      accept: true,
+    })
+
+    await expect(transport.drainMlsMailbox(7, '42', 64)).resolves.toEqual([])
+    expect(get).toHaveBeenCalledWith('/chat/mls/messages/7', {
+      params: { after: '42', limit: 64 },
+    })
+    await transport.ackMlsMailbox(7, [
+      '00000000-0000-0000-0000-000000000002',
+      '00000000-0000-0000-0000-000000000001',
+    ])
+    expect(post).toHaveBeenCalledWith('/chat/mls/messages/ack', {
+      deviceId: 7,
+      envelopeIds: [
+        '00000000-0000-0000-0000-000000000001',
+        '00000000-0000-0000-0000-000000000002',
+      ],
     })
   })
 })

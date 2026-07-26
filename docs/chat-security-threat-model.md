@@ -1,8 +1,9 @@
 # Chat transparency and sealed-sender threat model
 
-This document is normative for one-to-one web Chat. Group delivery, calls,
-anonymous relays, traffic-shape obfuscation, native clients, HA, and threshold
-roots are outside this milestone.
+This document is normative for one-to-one web Chat and the unadvertised MLS
+conversation foundation. Calls, anonymous relays, traffic-shape obfuscation,
+native product integration, HA, threshold roots, and large announcement
+channels are outside this milestone.
 
 ## Assets and trust boundaries
 
@@ -18,6 +19,12 @@ roots are outside this milestone.
   operation has the online key and certificate, never the root private key.
 - A random profile key grants profile reads and derives the recipient-bound
   16-byte delivery capability. Servers persist only its SHA-256 verifier.
+- MLS device credentials and anonymous HPKE keys are bound into the complete
+  account manifest. Group-scoped owner and control keys are distinct from
+  account-wide credentials.
+- MLS control ordering is replicated by a replaceable 1-64 server authority
+  set. External authorities see participant domains and pseudonymous encrypted
+  control data, not member usernames.
 
 The sender's origin server necessarily knows the authenticated sender while it
 creates or retries a federated transaction. The destination server learns the
@@ -43,6 +50,17 @@ message size, origin domain, or recipient identity.
 | Downgrade | Capability advertisement gate and a durable sealed outbox bit | First contact remains identified. Once a send is sealed, any failure remains on the anonymous route; there is no identified fallback. |
 | Denial of service | IP outer limiter, database-backed capability/recipient/origin counters, 32-envelope and 1 MiB limits, bounded parsers and retries | Requests are rejected uniformly without consuming unbounded memory or process-local-only quota. DoS cannot be eliminated. |
 | Compromised signing key | Purpose-specific signer interfaces, explicit rotation commands, offline sealed root, immutable audit events | Existing evidence remains verifiable. Recovery is an explicit audited operation bound to the active evidence digest. |
+| Single group server outage or takeover | No permanent homeserver; `floor(2N/3)+1` authority quorum and owner-approved joint authority transitions | Control operations continue while quorum exists. A minority cannot rewrite the log; loss of quorum stops control writes rather than selecting a new owner implicitly. |
+| New authority receives a forged or truncated past | Hash-chained bounded pages, complete history digest, exact height/epoch/predecessor replay, all old quorum and owner certificates, current-set certificate over the transition | Invalid history is durably rejected and audited. The server cannot vote under the next set until verified materialization finishes. |
+| New ordering authority crashes during history materialization | Preverified hash-chained history, idempotent genesis/block replay, durable bootstrap cursor/state, and a write/vote gate until `materialized` | Restart resumes exact replay; partially built state cannot vote on or finalize a new control block. |
+| New participant receives a forged or truncated past | Complete hash-chained public history, exact old quorum/owner/authority-transition replay, final membership certificate, and destination-private delivery digest | Invalid or partial bootstrap is durably rejected. Conversation state and Welcome/Commit material are not exposed until the complete history verifies. |
+| Membership delivery is omitted, swapped, or leaks another server's roster | Public per-destination delivery commitments, exact global roster reconstruction at the origin, destination-local snapshots, and exact active-device Commit/Welcome coverage | The control block, membership state, mailbox, epoch, and retry outbox remain unchanged unless every affected delivery verifies and commits atomically. |
+| Unwanted or expired group invitation | Creator-only group genesis, identified pending membership, 30-day expiry, explicit accept/reject, no pending-member authorization or capability publication | Reject/expiry deletes membership-control mailbox material and is audited. Until federated rejection feedback lands, an administrator must commit removal before the rejected account leaves the MLS roster. |
+| Rejected invitee is silently restored by a later membership transition | Rejected status is durable, its Welcome is deleted, it is excluded from later envelope coverage, and any envelope addressed to it rejects the transition | No new Commit/Welcome is stored; access resumes only through an explicit future protocol flow. |
+| Ordering-authority cross-group correlation | Random group-scoped P-256 control credential bound inside MLS-encrypted control data | Authorities can attribute actions inside one group but cannot use the outer credential to link the device across groups. |
+| Malicious MLS Welcome, Commit, or sender leaf | Exact RFC 9420 suite, complete transparency-verified roster, exact GroupId/epoch, manifest credential and signature-key match | The client does not join, merge, decrypt, or advance durable state. |
+| Malicious or replayed anonymous MLS KeyPackage directory response | Capability-authenticated request, lossless prior-checkpoint cursor, exact current manifest plus policy-authenticated inclusion/map/consistency/quorum proof, complete device coverage, and OpenMLS KeyPackage validation | No membership proposal is created; valid proof/key material is pinned only through the shared rollback-safe verifier. |
+| Destination server enumerates a federated group roster | Destination-specific genesis replicas contain only locally hosted members; authority-only replicas contain none | The server learns participant domains and its own accounts, but not remote usernames. |
 
 ## Pinning and recovery rules
 
@@ -97,6 +115,13 @@ OTLP/gRPC exporter is configured:
 - `kutup.chat.sealed_sender.certificate.events`
 - `kutup.chat.sealed_sender.send.events` and
   `kutup.chat.sealed_sender.send.envelopes`
+- `kutup.chat.mls.control.events`
+- `kutup.chat.mls.quorum.events`, `kutup.chat.mls.quorum.available`, and
+  `kutup.chat.mls.quorum.required`
+- `kutup.chat.mls.bootstrap.events` and
+  `kutup.chat.mls.bootstrap.pages`
+- `kutup.chat.mls.anonymous_delivery.events` and
+  `kutup.chat.mls.anonymous_delivery.envelopes`
 - `kutup.chat.rate_limit.rejections`
 
 Export is disabled only when no endpoint is configured. A shared

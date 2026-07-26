@@ -253,6 +253,13 @@ DeviceManifest {
   version/hash continuity, stable authority, and an exact match with the
   registered device set. `GET /api/chat/users/{username}/manifest` and the
   `manifest` field in the bundles response serve the latest record.
+- Authenticated
+  `GET /api/chat/users/{username}/manifest-proof?transparencyTreeSize=N`
+  serves the exact current manifest and proof without consuming Signal or MLS
+  one-time keys. Canonical remote addresses are resolved only through the
+  signed federation counterpart
+  `/api/fed/chat/users/{username}/manifest-proof`; the browser never supplies a
+  remote URL.
 - On first install the client signs only its locally generated device. A newly
   linked/reinstalled client verifies the prior account manifest, then adds or
   replaces only its own locally held identity; it MUST NOT sign a device list
@@ -755,36 +762,56 @@ ID; federation retains signed origin sequences. Sealed sender is metadata
 
 ---
 
-## 12. Groups — [RSV], the GV2 pattern (NOT client blobs)
+## 12. Unified MLS conversations — [ADD], not yet advertised
 
-Per the decisive `13-…` §4.1 finding: **do not ship client-managed membership
-blobs** (Signal shipped that exact design in 2014 and abandoned it — update
-races, unenforceable roles). v1 reserves the shape for the **GV2 pattern**:
-server-held *authoritative, versioned, encrypted* group state.
+The earlier GV2/sender-key reservation is superseded. SelfSync, Direct, and
+Group conversations share the RFC 9420/OpenMLS protocol specified in
+[`chat-mls.md`](chat-mls.md). V1 fixes ciphersuite `0x0002`, binds device
+credentials and anonymous HPKE keys into the transparency-verified manifest,
+and persists exact pending Commit/Welcome/application retry bytes atomically
+with OpenMLS state.
 
-Reserved shape (phase 4):
+Groups have ordinary administrators and separate pseudonymous owners. Owner
+quorum governs authority/policy/close/recovery/upgrade operations; ordinary
+membership and admin promotion remain administrator actions. A dynamically
+replaceable set of 1-64 independent ordering servers replicates only the
+pseudonymous encrypted control log using `floor(2N/3)+1` quorum. There is no
+permanent homeserver and no Matrix room DAG.
 
-```
-GroupState {
-  groupId: b64,                 // random, opaque to server
-  version: u64,                 // optimistic-concurrency counter (anti-race)
-  encryptedState: b64,          // membership + metadata, sealed under a client-only GroupMasterKey
-  membershipManifest: b64       // signed by an admin device (chains to §5.3 authority) — enforceable roles
-}
-```
+Established delivery uses epoch-exporter-derived recipient capabilities and a
+fresh RFC 9180 P-256 HPKE envelope per recipient device. Destination anonymous
+transactions and mailbox rows omit sender, conversation, group, and epoch.
+Genesis federation discloses only destination-local usernames; authority-only
+servers receive none.
 
-- Message crypto: **sender keys** (`SenderKeyDistributionMessage` +
-  `group_encrypt`/`group_decrypt`) — adoptable independently of anonymous
-  credentials.
-- State writes use **optimistic concurrency** (compare-and-set on `version`),
-  not last-writer-wins — the fix for the race that killed the blob model.
-- The server sees group size and access patterns (accepted GV2 leakage), never
-  membership plaintext.
-- Full zkgroup anonymous-credential issuance (`13-…` §7) is a later upgrade the
-  data model does not preclude; v1 uses the signed membership manifest for
-  roles. `groupControl` content messages (§6) carry state-change operations.
+Group genesis enrolls only its creator. Later membership changes commit exact
+old/new roster hashes, member counts, participant domains, and one
+destination-private delivery digest per affected server. New participant
+servers verify the complete paginated control history before accepting their
+private Commit/Welcome delivery. New local members remain pending until they
+accept an identified 30-day invitation; rejection/expiry deletes their
+membership-control mailbox material and cannot grant authorization or delivery
+capabilities.
 
-No group endpoints in v1. The fields exist so phase 4 is additive.
+The authenticated MLS mailbox uses bounded cursor pages and idempotent UUID
+acknowledgements. Membership-control rows bind an exact incarnation; anonymous
+rows cannot contain conversation/incarnation metadata. The browser invitation
+coordinator persists OpenMLS state before activating the server invitation and
+can resume that second step after failure without rejoining.
+
+Before a Welcome can be joined, the browser exposes its roster only as
+untrusted `account@server#device` claims. The shared Rust engine fetches the
+current-manifest proof route for each account, authenticates its policy and
+witness quorum, performs full range recovery when required, advances durable
+pins, and matches the exact signed MLS credential key. Anonymous MLS
+KeyPackage retrieval uses the same verifier and returns manifest/proof evidence
+bound to a canonical-decimal prior checkpoint cursor; it never consumes Signal
+prekeys or sends browser authentication context.
+
+The protocol/server/client/WASM foundation is present but remains
+unadvertised. Browser orchestration/UI, federated invitation-rejection
+feedback, and the two-server adversarial browser gate must complete before
+this section changes from `[ADD]` to `[IMPL]`.
 
 ---
 
@@ -876,7 +903,7 @@ destinations.
 | `deviceSignature` + `DeviceManifest` + manifest endpoints | device reg + directory | device-list authenticity | 2/3 |
 | capability body field | anonymous bundle/send DTOs | sealed-sender abuse gate | **implemented** |
 | `ws-ticket` endpoint | WS auth | keep JWT out of logs | 2b/later |
-| `GroupState { groupId, version, encryptedState, membershipManifest }` | group endpoints | GV2 groups | 4 |
+| typed MLS genesis/control/membership/bootstrap structures | MLS endpoints | unified SelfSync/Direct/Group | **5 [ADD]** |
 | `.well-known` + `user@domain` addr + per-destination sequence | federation | transport federation | 3 |
 
 ---
@@ -886,8 +913,9 @@ destinations.
 - Key transparency uses authenticated remote policy chains, independent
   witnesses, range recovery, scheduled monitoring, and shared cross-view
   auditing without depending on one global service.
-- Does GV2-pattern server-held encrypted group state compose with a future
-  MLS migration, or does choosing sender keys now foreclose it?
+- The earlier GV2/sender-key question is resolved in favor of RFC 9420 MLS;
+  post-quantum suite transition remains open pending stable IETF and OpenMLS
+  support.
 - Future metadata work includes anonymous relays and traffic obfuscation;
   sealed delivery itself is capability-gated across federation.
 - Mailbox retention + device-expiry defaults, and interaction with quota.
@@ -904,7 +932,10 @@ destinations.
 2. **Trust and groups:** the device-manifest/self-authority scheme (§5.3),
    authenticated remote transparency policies, range recovery, witnesses,
    scheduled web/server monitoring, and cross-view auditing are implemented.
-   The GV2 group-state model (§12) remains the next major product subsystem.
+   The unadvertised unified MLS foundation (§12) now provides durable
+   client/server state, multi-authority ordering, private participant
+   transitions, invitation decisions, and anonymous delivery. Browser product
+   orchestration and two-server E2E remain the next major boundary.
 3. **`kutup-chat-core`**: engine skeleton (transport/db ports, event stream,
    durable outbox with `sendId`, decrypt→persist→ack ordering, 409 recovery) —
    the artifact the Android/iOS clients link. **✅ Done** (branch

@@ -16,9 +16,9 @@ use kutup_chat_proto::{
     capability_hash, AccountAddress, AnonymousPreKeyRequestV1, ChatProfileResponse,
     ChatWsServerMessage, DeliveredEnvelope, DeviceListMismatch, FederatedChatTransaction,
     FederatedSealedTransactionV1, FederationDeliveryError, FederationDeliveryRejection,
-    FederationDeliveryResponse, ManifestUpdateRangeProofV1, SealedDeliveryResponseV1,
-    SealedMessageSubmissionV1, SendMessagesRequest, TransparencyCheckpointResponse,
-    UserPreKeyBundlesResponse,
+    FederationDeliveryResponse, ManifestUpdateRangeProofV1, PublishManifestResponse,
+    SealedDeliveryResponseV1, SealedMessageSubmissionV1, SendMessagesRequest,
+    TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
 };
 use rand::Rng as _;
 use reqwest::Method;
@@ -192,6 +192,65 @@ pub async fn fetch_remote_manifest_range(
         ));
     }
     Ok(proof)
+}
+
+pub async fn fetch_remote_manifest_proof(
+    state: &AppState,
+    address: &AccountAddress,
+    transparency_tree_size: u64,
+) -> AppResult<PublishManifestResponse> {
+    let federation = configured_stack(state)?;
+    let destination = address
+        .server
+        .as_deref()
+        .ok_or_else(|| AppError::bad_request("remote account requires a server"))?;
+    crate::chat_transparency_monitor::verify_before_remote_use(state, destination).await?;
+    let path = format!("/api/fed/chat/users/{}/manifest-proof", address.username);
+    let query = format!("transparencyTreeSize={transparency_tree_size}");
+    let response = federation
+        .send(
+            destination,
+            FederationRequestSpec {
+                feature: FederationFeature::ChatV1,
+                method: Method::GET,
+                path,
+                query: Some(query),
+                content_type: JSON_CONTENT_TYPE.into(),
+                body: Vec::new(),
+                request_id: Uuid::new_v4().to_string(),
+                extra_headers: Vec::new(),
+                response_limit: MAX_DIRECTORY_RESPONSE_BYTES,
+            },
+        )
+        .await
+        .map_err(federation_gateway_error)?;
+    if response.status == StatusCode::NOT_FOUND {
+        return Err(AppError::not_found("remote chat manifest not found"));
+    }
+    if response.status != StatusCode::OK {
+        return Err(AppError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("remote manifest proof returned {}", response.status),
+        ));
+    }
+    let publication: PublishManifestResponse =
+        serde_json::from_slice(&response.body).map_err(|_| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "invalid remote manifest proof response",
+            )
+        })?;
+    publication
+        .transparency
+        .leaf
+        .matches_manifest(&address.username, &publication.manifest)
+        .map_err(|_| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "remote manifest proof returned the wrong account",
+            )
+        })?;
+    Ok(publication)
 }
 
 pub async fn fetch_remote_checkpoint(
@@ -1445,6 +1504,56 @@ pub async fn get_manifest_history(
     };
     tx.commit().await?;
     signed_json(federation, &authenticated, StatusCode::OK, &proof)
+}
+
+/// Signed server-to-server current-manifest proof. The exact query is covered
+/// by the common HTTP signature and the response is destination-bound by that
+/// same federation stack.
+pub async fn get_manifest_proof(
+    State(state): State<AppState>,
+    Path(username): Path<String>,
+    Query(query): Query<crate::handlers::chat::TransparencyQuery>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    let federation = state
+        .federation
+        .as_ref()
+        .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
+    let account = AccountAddress::local(&username)
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    let path = format!("/api/fed/chat/users/{}/manifest-proof", account.username);
+    let transparency_tree_size = query.transparency_tree_size.unwrap_or(0);
+    let query_string = format!("transparencyTreeSize={transparency_tree_size}");
+    let authenticated = federation
+        .authenticate_inbound(
+            &headers,
+            "GET",
+            &path,
+            Some(&query_string),
+            &[],
+            FederationFeature::ChatV1,
+        )
+        .await?;
+    let target_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
+            .bind(&account.username)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some(target_id) = target_id else {
+        return signed_app_error(
+            federation,
+            &authenticated,
+            AppError::not_found("chat manifest not found"),
+        );
+    };
+    let response =
+        match crate::handlers::chat::load_manifest_proof(&state, target_id, transparency_tree_size)
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => return signed_app_error(federation, &authenticated, error),
+        };
+    signed_json(federation, &authenticated, StatusCode::OK, &response)
 }
 
 /// Signed server-to-server encrypted profile lookup. The profile access key is

@@ -35,16 +35,16 @@ use crate::db::{
 use crate::error::{ChatError, Result};
 use crate::keys;
 use crate::manifest::{
-    transparency_scope, verify_manifest_publication, verify_transparent_bundle_response,
-    ManifestPolicy, TransparencyPolicy,
+    transparency_scope, verify_manifest_evidence, verify_manifest_publication,
+    verify_transparent_bundle_response, ManifestPolicy, TransparencyPolicy,
 };
 use crate::store::ChatStore;
 use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_prekey_bundle};
 use kutup_chat_proto::{
     AccountAddress, ChatContent, ContactControlBody, ContactState, DeliveredEnvelope,
-    DeviceListMismatch, DevicePreKeyBundle, DirectChatSuiteId, ManifestDevice,
+    DeviceListMismatch, DeviceManifest, DevicePreKeyBundle, DirectChatSuiteId, ManifestDevice,
     ManifestTransparencyProof, OutgoingEnvelope, RegisterChatDeviceRequest, ReplenishKeysRequest,
-    SealedOutgoingEnvelopeV1, UserPreKeyBundlesResponse,
+    PublishManifestResponse, SealedOutgoingEnvelopeV1, UserPreKeyBundlesResponse,
 };
 
 /// What a [`Engine::send`](crate::Engine::send) did: whether it landed, and any
@@ -286,6 +286,20 @@ impl Session {
     /// inclusion in the account-signed device manifest.
     pub fn manifest_device(&self) -> ManifestDevice {
         self.store.local_manifest_device(self.device_id())
+    }
+
+    /// Local device manifest entry with the MLS credential and independent
+    /// anonymous-delivery key authenticated alongside the Signal identity.
+    pub fn manifest_device_with_mls(
+        &self,
+        mls: kutup_chat_proto::MlsManifestDeviceV1,
+    ) -> ManifestDevice {
+        self.store
+            .local_manifest_device_with_mls(self.device_id(), Some(mls))
+    }
+
+    pub(crate) fn db(&self) -> &Rc<dyn ChatDb> {
+        self.store.db()
     }
 
     /// Persist and apply the server-assigned device id after registration. The
@@ -1329,6 +1343,91 @@ impl Session {
             self.store.commit().await?;
         }
         Ok(())
+    }
+
+    pub(crate) async fn accept_manifest_evidence(
+        &mut self,
+        account: &str,
+        response: &PublishManifestResponse,
+        policy: &TransparencyPolicy,
+    ) -> Result<DeviceManifest> {
+        let prior_manifest = self.store.db().load_manifest_trust(account).await?;
+        let scope = transparency_scope(account)?;
+        let prior_transparency = self.store.db().load_transparency_trust(&scope).await?;
+        let (manifest, transparency) = verify_manifest_evidence(
+            account,
+            response,
+            prior_manifest.as_ref(),
+            prior_transparency.as_ref(),
+            policy,
+        )?;
+        if manifest.continuity_gap {
+            return Err(ChatError::Trust(
+                "current manifest proof requires complete history recovery".into(),
+            ));
+        }
+        self.store.stage_manifest_trust(manifest);
+        self.store
+            .stage_manifest_history(ManifestHistoryRecord {
+                peer: account.to_string(),
+                version: response.manifest.version,
+                manifest: response.manifest.clone(),
+                leaf_index: response.transparency.leaf_index,
+            });
+        self.store.stage_transparency_trust(transparency);
+        self.store.commit().await?;
+        Ok(response.manifest.clone())
+    }
+
+    pub(crate) async fn accept_manifest_evidence_with_history(
+        &mut self,
+        account: &str,
+        response: &PublishManifestResponse,
+        history: Vec<ManifestHistoryRecord>,
+        range_transparency: TransparencyTrust,
+        policy: &TransparencyPolicy,
+    ) -> Result<DeviceManifest> {
+        let prior_manifest = self.store.db().load_manifest_trust(account).await?;
+        let scope = transparency_scope(account)?;
+        let prior_transparency = self.store.db().load_transparency_trust(&scope).await?;
+        let (mut manifest, _) = verify_manifest_evidence(
+            account,
+            response,
+            prior_manifest.as_ref(),
+            prior_transparency.as_ref(),
+            policy,
+        )?;
+        let last = history.last().ok_or_else(|| {
+            ChatError::Trust("manifest range recovery returned no complete history".into())
+        })?;
+        if last.peer != account
+            || last.version != response.manifest.version
+            || last.manifest != response.manifest
+            || last.leaf_index != response.transparency.leaf_index
+        {
+            return Err(ChatError::Trust(
+                "manifest range does not terminate at the current proof".into(),
+            ));
+        }
+        if range_transparency.scope != scope {
+            return Err(ChatError::Trust(
+                "manifest range checkpoint belongs to another homeserver".into(),
+            ));
+        }
+        manifest.continuity_gap = false;
+        manifest.transparency_position = Some(last.leaf_index);
+        for record in history {
+            if record.peer != account || record.version != record.manifest.version {
+                return Err(ChatError::Trust(
+                    "manifest history record has inconsistent ownership or version".into(),
+                ));
+            }
+            self.store.stage_manifest_history(record);
+        }
+        self.store.stage_manifest_trust(manifest);
+        self.store.stage_transparency_trust(range_transparency);
+        self.store.commit().await?;
+        Ok(response.manifest.clone())
     }
 
     /// Mark the current TOFU authority as verified after the application has
