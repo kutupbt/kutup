@@ -7,6 +7,10 @@ use uuid::Uuid;
 
 const FOUNDATION: &str = include_str!("../migrations/037_unified_mls_foundation.up.sql");
 const FOUNDATION_DOWN: &str = include_str!("../migrations/037_unified_mls_foundation.down.sql");
+const MAILBOX_CONSTRAINT: &str =
+    include_str!("../migrations/038_mls_mailbox_incarnation_constraint.up.sql");
+const MAILBOX_CONSTRAINT_DOWN: &str =
+    include_str!("../migrations/038_mls_mailbox_incarnation_constraint.down.sql");
 
 #[tokio::test]
 async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
@@ -42,6 +46,10 @@ async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
     .unwrap();
 
     sqlx::raw_sql(FOUNDATION)
+        .execute(&mut connection)
+        .await
+        .unwrap();
+    sqlx::raw_sql(MAILBOX_CONSTRAINT)
         .execute(&mut connection)
         .await
         .unwrap();
@@ -260,6 +268,10 @@ async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
         "finalized MLS control history must be append-only"
     );
 
+    sqlx::raw_sql(MAILBOX_CONSTRAINT_DOWN)
+        .execute(&mut connection)
+        .await
+        .unwrap();
     sqlx::raw_sql(FOUNDATION_DOWN)
         .execute(&mut connection)
         .await
