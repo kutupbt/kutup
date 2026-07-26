@@ -195,6 +195,49 @@ export interface MlsWelcomeInspection {
   claimedMembers: ClaimedMlsCredential[]
 }
 
+export interface LocalMlsConversationRecord {
+  request: {
+    genesis: {
+      protocolVersion: number
+      conversationId: string
+      incarnation: number
+      mlsGroupId: string
+      kind: 'group'
+      suite: number
+      rosterCommitment: string
+      memberCount: number
+      authoritySet: {
+        sequence: number
+        authorities: Array<{
+          domain: string
+          keyId: string
+          publicKey: string
+        }>
+        requiredQuorum: number
+      }
+      ownerSet: {
+        sequence: number
+        owners: Array<{ ownerId: string; publicKey: string }>
+        requiredQuorum: number
+      }
+      initialEpoch: number
+      createdAt: number
+    }
+    members: Array<{
+      address: AccountAddress
+      isAdmin: boolean
+      ownerId: string
+    }>
+  }
+  status: 'pending_genesis' | 'active'
+  serverGenesisHash?: string
+}
+
+export interface PreparedMlsGroupGenesis {
+  group: LocalMlsGroupState
+  conversation: LocalMlsConversationRecord
+}
+
 export interface ChatTransportPort {
   registerDevice(request: unknown): Promise<unknown>
   fetchBundles(username: string, transparencyTreeSize: string): Promise<unknown>
@@ -205,6 +248,7 @@ export interface ChatTransportPort {
   ): Promise<unknown>
   fetchTransparencyCheckpoint(scope: string, fromTreeSize: string): Promise<unknown>
   fetchTransparencyPolicy(domain: string): Promise<unknown>
+  fetchMlsOrderingPolicy(domain: string): Promise<unknown>
   fetchManifest(username: string): Promise<unknown | null>
   fetchManifestPublication(
     username: string,
@@ -281,7 +325,19 @@ export interface WasmChatClientHandle {
     nowSeconds: string,
     expiresAtSeconds: string,
   ): Promise<unknown>
-  createMlsGroup(mlsGroupId: Uint8Array): Promise<unknown>
+  prepareMlsGroupGenesis(
+    conversationId: string,
+    mlsGroupId: Uint8Array,
+    creator: AccountAddress,
+    authorityPolicies: unknown[],
+    createdAtSeconds: string,
+  ): Promise<PreparedMlsGroupGenesis>
+  localMlsConversations(): Promise<LocalMlsConversationRecord[]>
+  markMlsGroupGenesisPublished(
+    conversationId: string,
+    genesisHash: string,
+  ): Promise<LocalMlsConversationRecord>
+  mlsGroupOwnerCredential(mlsGroupId: Uint8Array): Promise<unknown>
   mlsGroupState(mlsGroupId: Uint8Array): Promise<LocalMlsGroupState | null>
   prepareMlsAddMembers(
     mlsGroupId: Uint8Array,
@@ -307,6 +363,7 @@ export interface WasmChatClientHandle {
   resolveMlsWelcomeClaims(
     claimedMembers: ClaimedMlsCredential[],
   ): Promise<VerifiedMlsCredential[]>
+  fetchVerifiedMlsOrderingPolicy(domain: string): Promise<unknown>
   fetchVerifiedMlsKeyPackages(
     recipient: AccountAddress,
     capability: Uint8Array,

@@ -1,10 +1,12 @@
 import type {
   AccountAddress,
   ChatTransportPort,
+  LocalMlsConversationRecord,
   LocalMlsGroupState,
   MlsMailboxEnvelope,
   MlsWelcomeInspection,
   PendingMlsInvitation,
+  PreparedMlsGroupGenesis,
   VerifiedMlsCredential,
   WasmChatClientHandle,
 } from './types'
@@ -53,6 +55,58 @@ export class MlsConversationService {
     private readonly transport: ChatTransportPort,
     private readonly withCryptoLock: CryptoLock,
   ) {}
+
+  /**
+   * Prepare group crypto and exact retry material before the first network
+   * write. Each authority policy is authenticated by the shared Rust engine;
+   * JavaScript only coordinates the resulting typed policies.
+   */
+  async createGroup(
+    creator: AccountAddress,
+    authorityDomains: string[],
+  ): Promise<PreparedMlsGroupGenesis> {
+    const domains = requireAuthorityDomains(authorityDomains)
+    const policies: unknown[] = []
+    for (const domain of domains) {
+      policies.push(
+        await this.withCryptoLock(() =>
+          this.client.fetchVerifiedMlsOrderingPolicy(domain),
+        ),
+      )
+    }
+    const browserCrypto = requireBrowserCrypto()
+    const conversationId = browserCrypto.randomUUID()
+    const groupId = browserCrypto.getRandomValues(new Uint8Array(32))
+    const prepared = await this.withCryptoLock(() =>
+      this.client.prepareMlsGroupGenesis(
+        conversationId,
+        groupId,
+        creator,
+        policies,
+        String(Math.floor(Date.now() / 1000)),
+      ),
+    )
+    validatePreparedGenesis(prepared, conversationId, groupId)
+    const published = await this.publishPreparedGenesis(prepared.conversation)
+    return { group: prepared.group, conversation: published }
+  }
+
+  /**
+   * Replay every exact pending genesis after restart. No crypto material or
+   * request field is regenerated.
+   */
+  async reconcilePendingGroupGeneses(): Promise<LocalMlsConversationRecord[]> {
+    const records = await this.withCryptoLock(() =>
+      this.client.localMlsConversations(),
+    )
+    const published: LocalMlsConversationRecord[] = []
+    for (const record of records) {
+      if (record.status === 'pending_genesis') {
+        published.push(await this.publishPreparedGenesis(record))
+      }
+    }
+    return published
+  }
 
   async maintainKeyPackages(
     manifestVersion: number,
@@ -275,6 +329,147 @@ export class MlsConversationService {
     }
     throw new Error('MLS mailbox exceeded the bounded invitation scan')
   }
+
+  private async publishPreparedGenesis(
+    record: LocalMlsConversationRecord,
+  ): Promise<LocalMlsConversationRecord> {
+    validateLocalGenesisRecord(record)
+    if (record.status !== 'pending_genesis') {
+      throw new Error('only a pending MLS genesis can be published')
+    }
+    const response = requireCreateConversationResponse(
+      await this.transport.createMlsConversation(record.request),
+      record.request.genesis.conversationId,
+    )
+    const active = await this.withCryptoLock(() =>
+      this.client.markMlsGroupGenesisPublished(
+        response.conversationId,
+        response.genesisHash,
+      ),
+    )
+    validateLocalGenesisRecord(active)
+    if (
+      active.status !== 'active'
+      || active.serverGenesisHash !== response.genesisHash
+      || active.request.genesis.conversationId !== response.conversationId
+    ) {
+      throw new Error('durable MLS genesis acknowledgement differs from the server response')
+    }
+    return active
+  }
+}
+
+interface BrowserCrypto {
+  randomUUID(): string
+  getRandomValues<T extends ArrayBufferView | null>(array: T): T
+}
+
+function requireBrowserCrypto(): BrowserCrypto {
+  const value = globalThis.crypto
+  if (
+    !value
+    || typeof value.randomUUID !== 'function'
+    || typeof value.getRandomValues !== 'function'
+  ) {
+    throw new Error('secure browser randomness is unavailable')
+  }
+  return value
+}
+
+function requireAuthorityDomains(authorityDomains: string[]): string[] {
+  if (!Array.isArray(authorityDomains) || authorityDomains.length < 1 || authorityDomains.length > 64) {
+    throw new Error('MLS group genesis requires 1-64 ordering authorities')
+  }
+  const domains = [...authorityDomains].sort()
+  for (let index = 0; index < domains.length; index += 1) {
+    const domain = domains[index]
+    if (
+      typeof domain !== 'string'
+      || domain.length < 1
+      || domain.length > 253
+      || domain.trim() !== domain
+      || domain.toLowerCase() !== domain
+      || (index > 0 && domains[index - 1] === domain)
+    ) {
+      throw new Error('MLS ordering authority domains must be canonical and unique')
+    }
+  }
+  return domains
+}
+
+function validatePreparedGenesis(
+  prepared: PreparedMlsGroupGenesis,
+  conversationId: string,
+  groupId: Uint8Array,
+): void {
+  if (
+    !prepared
+    || prepared.group.epoch !== 0
+    || !equalBytes(prepared.group.mlsGroupId, groupId)
+    || prepared.conversation.request.genesis.conversationId !== conversationId
+    || prepared.conversation.request.genesis.mlsGroupId !== encodeBase64(groupId)
+  ) {
+    throw new Error('prepared MLS group differs from the requested genesis')
+  }
+  validateLocalGenesisRecord(prepared.conversation)
+}
+
+function validateLocalGenesisRecord(record: LocalMlsConversationRecord): void {
+  const genesis = record?.request?.genesis
+  if (
+    !genesis
+    || !isUuid(genesis.conversationId)
+    || genesis.protocolVersion !== MLS_PROTOCOL_VERSION
+    || genesis.incarnation !== 1
+    || genesis.kind !== 'group'
+    || genesis.initialEpoch !== 0
+    || genesis.memberCount !== 1
+    || record.request.members.length !== 1
+    || (record.status !== 'pending_genesis' && record.status !== 'active')
+    || (record.status === 'pending_genesis' && record.serverGenesisHash !== undefined)
+    || (
+      record.status === 'active'
+      && !isSha256(record.serverGenesisHash)
+    )
+  ) {
+    throw new Error('invalid durable MLS group genesis record')
+  }
+  decodeCanonicalBase64(genesis.mlsGroupId, 16, 255)
+}
+
+function requireCreateConversationResponse(
+  value: unknown,
+  expectedConversationId: string,
+): {
+  conversationId: string
+  incarnation: number
+  genesisHash: string
+  idempotent: boolean
+} {
+  if (
+    typeof value !== 'object'
+    || value === null
+    || !('conversationId' in value)
+    || value.conversationId !== expectedConversationId
+    || !('incarnation' in value)
+    || value.incarnation !== 1
+    || !('genesisHash' in value)
+    || !isSha256(value.genesisHash)
+    || !('idempotent' in value)
+    || typeof value.idempotent !== 'boolean'
+  ) {
+    throw new Error('server returned an invalid MLS conversation genesis acknowledgement')
+  }
+  return value as {
+    conversationId: string
+    incarnation: number
+    genesisHash: string
+    idempotent: boolean
+  }
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value)
 }
 
 function requireKeyPackageCount(value: unknown, deviceId: number): MlsKeyPackageCount {

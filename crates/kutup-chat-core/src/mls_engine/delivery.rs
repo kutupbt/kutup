@@ -84,7 +84,9 @@ impl MlsClient {
         let (provider, _) = self.load_provider().await?;
         let group = MlsGroup::load(provider.storage(), &GroupId::from_slice(mls_group_id))
             .map_err(|error| ChatError::Protocol(format!("load MLS group: {error}")))?
-            .ok_or_else(|| ChatError::MissingKeyMaterial("MLS group state is unavailable".into()))?;
+            .ok_or_else(|| {
+                ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
+            })?;
         ensure_v1_group(&group)?;
         if group.pending_commit().is_some() {
             return Err(ChatError::Trust(
@@ -167,7 +169,9 @@ impl MlsClient {
                     None,
                     None,
                 )
-                .map_err(|error| ChatError::Protocol(format!("anonymous MLS HPKE seal: {error}")))?;
+                .map_err(|error| {
+                    ChatError::Protocol(format!("anonymous MLS HPKE seal: {error}"))
+                })?;
             if encapsulated_key.len() != P256_ENCAPSULATED_KEY_BYTES {
                 return Err(ChatError::Protocol(
                     "HPKE produced a non-canonical P-256 encapsulation".into(),
@@ -208,8 +212,7 @@ impl MlsClient {
         let (_, metadata) = self.load_provider().await?;
         let encapsulated_key =
             decode_canonical_base64("HPKE encapsulated key", &envelope.encapsulated_key)?;
-        let ciphertext =
-            decode_canonical_base64("anonymous MLS ciphertext", &envelope.ciphertext)?;
+        let ciphertext = decode_canonical_base64("anonymous MLS ciphertext", &envelope.ciphertext)?;
         if encapsulated_key.len() != P256_ENCAPSULATED_KEY_BYTES
             || ciphertext.len() < HPKE_TAG_BYTES + PAYLOAD_HEADER_BYTES
             || ciphertext.len() > MAX_ANONYMOUS_REQUEST_BYTES
@@ -225,9 +228,7 @@ impl MlsClient {
         let plaintext = hpke
             .open(
                 &encapsulated_key,
-                &HpkePrivateKey::new(
-                    metadata.anonymous_delivery_private_key.clone(),
-                ),
+                &HpkePrivateKey::new(metadata.anonymous_delivery_private_key.clone()),
                 ANONYMOUS_MLS_DELIVERY_CONTEXT,
                 &aad,
                 &ciphertext,
@@ -252,9 +253,7 @@ fn hpke_suite() -> Hpke<HpkeRustCrypto> {
 fn pad_payload(ciphertext: &[u8], device_count: usize) -> Result<Vec<u8>> {
     let per_device_budget = MAX_ANONYMOUS_REQUEST_BYTES
         .checked_div(device_count)
-        .and_then(|budget| {
-            budget.checked_sub(P256_ENCAPSULATED_KEY_BYTES + HPKE_TAG_BYTES)
-        })
+        .and_then(|budget| budget.checked_sub(P256_ENCAPSULATED_KEY_BYTES + HPKE_TAG_BYTES))
         .ok_or_else(|| ChatError::Invalid("anonymous MLS device fanout is too large".into()))?;
     let required = PAYLOAD_HEADER_BYTES
         .checked_add(ciphertext.len())
@@ -296,10 +295,7 @@ fn unpad_payload(payload: &[u8]) -> Result<Vec<u8>> {
     let end = PAYLOAD_HEADER_BYTES
         .checked_add(length)
         .ok_or_else(|| ChatError::Trust("anonymous MLS payload length overflow".into()))?;
-    if length == 0
-        || end > payload.len()
-        || payload[end..].iter().any(|byte| *byte != 0)
-    {
+    if length == 0 || end > payload.len() || payload[end..].iter().any(|byte| *byte != 0) {
         return Err(ChatError::Trust(
             "anonymous MLS padded payload length or padding is invalid".into(),
         ));

@@ -19,14 +19,16 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use openmls::prelude::{
     Ciphersuite, Extensions, GroupId, KeyPackage, KeyPackageIn, Lifetime, Member, MlsGroup,
-    MlsGroupCreateConfig, MlsGroupJoinConfig, MlsMessageIn, MlsMessageBodyIn,
+    MlsGroupCreateConfig, MlsGroupJoinConfig, MlsMessageBodyIn, MlsMessageIn,
     ProcessedMessageContent, ProtocolVersion, Sender, StagedWelcome,
 };
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_traits::types::SignatureScheme;
 use openmls_traits::OpenMlsProvider;
-use p256::ecdsa::{signature::Signer as _, Signature as P256Signature, SigningKey as P256SigningKey};
-use p256::elliptic_curve::rand_core::OsRng;
+use p256::ecdsa::{
+    signature::Signer as _, Signature as P256Signature, SigningKey as P256SigningKey,
+};
+use p256::elliptic_curve::rand_core::{OsRng, RngCore as _};
 use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -36,11 +38,14 @@ use uuid::Uuid;
 use crate::db::{ChatDb, MlsOutboxEntry, Pending};
 use crate::error::{ChatError, Result};
 use kutup_chat_proto::{
-    MlsCipherSuiteId, MlsControlActionTypeV1, MlsControlProposalV1, MlsKeyPackageV1,
-    MlsManifestDeviceV1, MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256, MLS_PROTOCOL_VERSION,
+    roster_commitment, AccountAddress, CreateMlsConversationRequestV1, MlsAuthoritySetV1,
+    MlsAuthorityV1, MlsCipherSuiteId, MlsControlActionTypeV1, MlsControlProposalV1,
+    MlsConversationGenesisV1, MlsConversationKindV1, MlsConversationMemberV1, MlsKeyPackageV1,
+    MlsManifestDeviceV1, MlsOrderingServicePolicyV1, MlsOwnerSetV1, MlsOwnerV1,
+    MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256, MLS_PROTOCOL_VERSION,
 };
 
-const STATE_FORMAT_VERSION: u16 = 2;
+const STATE_FORMAT_VERSION: u16 = 3;
 const MAX_STATE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_STATE_RECORDS: usize = 100_000;
 const MAX_STATE_RECORD_BYTES: usize = 16 * 1024 * 1024;
@@ -89,6 +94,43 @@ pub struct LocalMlsGroupState {
     pub epoch: u64,
 }
 
+/// Public half of the group-scoped owner credential. The Ed25519 seed remains
+/// exclusively inside the authenticated MLS state snapshot.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsGroupOwnerCredential {
+    pub owner_id: String,
+    pub public_key: Vec<u8>,
+}
+
+/// Publication state for one exact locally prepared group genesis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalMlsConversationStatus {
+    PendingGenesis,
+    Active,
+}
+
+/// Exact durable group genesis retry record. A network failure can only leave
+/// this record pending; it never regenerates an owner key, GroupId, or roster.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalMlsConversationRecord {
+    pub request: CreateMlsConversationRequestV1,
+    pub status: LocalMlsConversationStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_genesis_hash: Option<String>,
+}
+
+/// Atomic result of preparing an epoch-zero group and its exact server
+/// publication request.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PreparedMlsGroupGenesis {
+    pub group: LocalMlsGroupState,
+    pub conversation: LocalMlsConversationRecord,
+}
+
 /// One transparency-verified MLS credential. Account addresses are carried in
 /// the BasicCredential only between group members; ordering authorities see
 /// only the separately encrypted Kutup control proposal.
@@ -119,10 +161,7 @@ pub struct MlsWelcomeInspection {
 }
 
 impl VerifiedMlsCredential {
-    pub fn new(
-        credential_identity: String,
-        credential_public_key: Vec<u8>,
-    ) -> Result<Self> {
+    pub fn new(credential_identity: String, credential_public_key: Vec<u8>) -> Result<Self> {
         validate_credential_identity(&credential_identity)?;
         validate_credential_public_key(&credential_public_key)?;
         Ok(Self {
@@ -177,7 +216,7 @@ pub struct MlsGroupControlCredential {
     pub public_key: Vec<u8>,
 }
 
-/// Single-owner client MLS engine. The surrounding Chat engine already
+/// Single-device client MLS engine. The surrounding Chat engine already
 /// serializes operations for one device database; callers must preserve that
 /// invariant on native and browser platforms.
 pub struct MlsClient {
@@ -232,6 +271,8 @@ impl MlsClient {
             anonymous_delivery_private_key: anonymous_private_key.to_bytes().to_vec(),
             pending_commits: BTreeMap::new(),
             group_control_private_keys: BTreeMap::new(),
+            group_owner_private_keys: BTreeMap::new(),
+            conversations: BTreeMap::new(),
         };
         let state = snapshot_provider(&provider, &metadata)?;
         let mut pending = Pending {
@@ -278,12 +319,7 @@ impl MlsClient {
         let bundle = KeyPackage::builder()
             .key_package_lifetime(Lifetime::init(not_before, not_after))
             .key_package_extensions(Extensions::default())
-            .build(
-                KUTUP_MLS_V1_CIPHERSUITE,
-                &provider,
-                &signer,
-                credential,
-            )
+            .build(KUTUP_MLS_V1_CIPHERSUITE, &provider, &signer, credential)
             .map_err(|error| mls_error("create MLS KeyPackage", error))?;
         let package = bundle.key_package();
         if package.ciphersuite() != KUTUP_MLS_V1_CIPHERSUITE {
@@ -305,8 +341,7 @@ impl MlsClient {
             key_package: BASE64.encode(package_bytes),
             expires_at: expires_at_seconds,
         };
-        wire.validate(now_seconds)
-            .map_err(ChatError::Invalid)?;
+        wire.validate(now_seconds).map_err(ChatError::Invalid)?;
 
         let state = snapshot_provider(&provider, &metadata)?;
         let pending = Pending {
@@ -317,9 +352,215 @@ impl MlsClient {
         Ok(wire)
     }
 
+    /// Atomically create an epoch-zero group, its unlinkable owner credential,
+    /// and the exact authenticated request that must be retried at the server.
+    /// An OpenMLS group without the matching durable genesis record is treated
+    /// as corruption and is never repaired by silently minting new metadata.
+    pub async fn prepare_group_genesis(
+        &self,
+        conversation_id: Uuid,
+        mls_group_id: &[u8],
+        creator: AccountAddress,
+        authority_policies: &[MlsOrderingServicePolicyV1],
+        created_at_seconds: i64,
+    ) -> Result<PreparedMlsGroupGenesis> {
+        if conversation_id.is_nil() || created_at_seconds < 0 {
+            return Err(ChatError::Invalid(
+                "MLS group genesis requires a conversation id and valid clock".into(),
+            ));
+        }
+        validate_group_id(mls_group_id)?;
+        let authority_set = authority_set_from_policies(authority_policies)?;
+        let group_key = BASE64.encode(mls_group_id);
+        let conversation_key = conversation_id.to_string();
+        let (provider, mut metadata) = self.load_provider().await?;
+        let group_id = GroupId::from_slice(mls_group_id);
+
+        if let Some(existing) = metadata.conversations.get(&conversation_key) {
+            let group = MlsGroup::load(provider.storage(), &group_id)
+                .map_err(|error| mls_error("load MLS group", error))?
+                .ok_or_else(|| {
+                    ChatError::Db("durable MLS genesis record has no matching OpenMLS group".into())
+                })?;
+            ensure_v1_group(&group)?;
+            ensure_group_control_key(&metadata, mls_group_id)?;
+            ensure_group_owner_key(&metadata, mls_group_id)?;
+            if existing.request.genesis.mls_group_id != group_key
+                || existing.request.genesis.created_at != created_at_seconds
+                || existing.request.genesis.authority_set != authority_set
+                || existing.request.members.len() != 1
+                || existing.request.members[0].address != creator
+            {
+                return Err(ChatError::Trust(
+                    "MLS conversation id is already bound to a different genesis".into(),
+                ));
+            }
+            return Ok(PreparedMlsGroupGenesis {
+                group: local_group_state(&group),
+                conversation: existing.clone(),
+            });
+        }
+        if metadata
+            .conversations
+            .values()
+            .any(|record| record.request.genesis.mls_group_id == group_key)
+        {
+            return Err(ChatError::Trust(
+                "MLS GroupId is already bound to another conversation".into(),
+            ));
+        }
+        if MlsGroup::load(provider.storage(), &group_id)
+            .map_err(|error| mls_error("load MLS group", error))?
+            .is_some()
+            || metadata.group_control_private_keys.contains_key(&group_key)
+            || metadata.group_owner_private_keys.contains_key(&group_key)
+        {
+            return Err(ChatError::Trust(
+                "OpenMLS group exists without an exact durable genesis record".into(),
+            ));
+        }
+
+        let signer = metadata.read_signer(&provider)?;
+        let config = MlsGroupCreateConfig::builder()
+            .ciphersuite(KUTUP_MLS_V1_CIPHERSUITE)
+            .max_past_epochs(KUTUP_MLS_V1_MAX_PAST_EPOCHS)
+            .use_ratchet_tree_extension(true)
+            .build();
+        let group = MlsGroup::new_with_group_id(
+            &provider,
+            &signer,
+            &config,
+            group_id,
+            metadata.credential(),
+        )
+        .map_err(|error| mls_error("create MLS group", error))?;
+        ensure_v1_group(&group)?;
+        insert_new_group_control_key(&mut metadata, mls_group_id)?;
+        let owner = insert_new_group_owner_key(&mut metadata, mls_group_id)?;
+        let member = MlsConversationMemberV1 {
+            address: creator,
+            is_admin: true,
+            owner_id: Some(owner.owner_id.clone()),
+        };
+        let members = vec![member];
+        let request = CreateMlsConversationRequestV1 {
+            genesis: MlsConversationGenesisV1 {
+                protocol_version: MLS_PROTOCOL_VERSION,
+                conversation_id,
+                incarnation: 1,
+                mls_group_id: group_key,
+                kind: MlsConversationKindV1::Group,
+                suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+                roster_commitment: roster_commitment(&members).map_err(ChatError::Invalid)?,
+                member_count: 1,
+                authority_set,
+                owner_set: Some(MlsOwnerSetV1 {
+                    sequence: 1,
+                    owners: vec![MlsOwnerV1 {
+                        owner_id: owner.owner_id,
+                        public_key: BASE64.encode(owner.public_key),
+                    }],
+                    required_quorum: 1,
+                }),
+                initial_epoch: 0,
+                created_at: created_at_seconds,
+            },
+            members,
+        };
+        request.validate().map_err(ChatError::Invalid)?;
+        let conversation = LocalMlsConversationRecord {
+            request,
+            status: LocalMlsConversationStatus::PendingGenesis,
+            server_genesis_hash: None,
+        };
+        metadata
+            .conversations
+            .insert(conversation_key, conversation.clone());
+        let public = local_group_state(&group);
+        let state = snapshot_provider(&provider, &metadata)?;
+        let pending = Pending {
+            mls_state: Some(state),
+            ..Pending::default()
+        };
+        self.db.apply(&pending).await?;
+        Ok(PreparedMlsGroupGenesis {
+            group: public,
+            conversation,
+        })
+    }
+
+    /// Return every exact local conversation record in canonical UUID order.
+    pub async fn local_conversations(&self) -> Result<Vec<LocalMlsConversationRecord>> {
+        let (_, metadata) = self.load_provider().await?;
+        Ok(metadata.conversations.values().cloned().collect())
+    }
+
+    /// Mark one pending genesis active only after the server acknowledges the
+    /// exact canonical genesis digest. Replays with the same digest are
+    /// idempotent; a different digest is a durable trust failure.
+    pub async fn mark_group_genesis_published(
+        &self,
+        conversation_id: Uuid,
+        server_genesis_hash: &str,
+    ) -> Result<LocalMlsConversationRecord> {
+        if conversation_id.is_nil() {
+            return Err(ChatError::Invalid(
+                "MLS conversation id must not be nil".into(),
+            ));
+        }
+        validate_sha256_hex("MLS genesis hash", server_genesis_hash)?;
+        let (provider, mut metadata) = self.load_provider().await?;
+        let record = metadata
+            .conversations
+            .get_mut(&conversation_id.to_string())
+            .ok_or_else(|| ChatError::Trust("local MLS genesis record is unavailable".into()))?;
+        let expected_hash = record
+            .request
+            .genesis
+            .genesis_hash()
+            .map_err(ChatError::Protocol)?;
+        if expected_hash != server_genesis_hash {
+            return Err(ChatError::Trust(
+                "server acknowledged a different MLS genesis".into(),
+            ));
+        }
+        if let Some(existing) = &record.server_genesis_hash {
+            if existing != server_genesis_hash
+                || record.status != LocalMlsConversationStatus::Active
+            {
+                return Err(ChatError::Db(
+                    "durable MLS genesis acknowledgement is inconsistent".into(),
+                ));
+            }
+            return Ok(record.clone());
+        }
+        record.status = LocalMlsConversationStatus::Active;
+        record.server_genesis_hash = Some(server_genesis_hash.to_owned());
+        let result = record.clone();
+        let state = snapshot_provider(&provider, &metadata)?;
+        let pending = Pending {
+            mls_state: Some(state),
+            ..Pending::default()
+        };
+        self.db.apply(&pending).await?;
+        Ok(result)
+    }
+
+    /// Return the public group-scoped owner credential without exposing its
+    /// signing seed.
+    pub async fn group_owner_credential(
+        &self,
+        mls_group_id: &[u8],
+    ) -> Result<MlsGroupOwnerCredential> {
+        validate_group_id(mls_group_id)?;
+        let (_, metadata) = self.load_provider().await?;
+        group_owner_credential(&metadata, mls_group_id)
+    }
+
     /// Create an epoch-zero group using the authenticated genesis `GroupId`.
     /// Existing group state is returned idempotently and is never overwritten.
-    pub async fn create_group(&self, mls_group_id: &[u8]) -> Result<LocalMlsGroupState> {
+    #[cfg(test)]
+    pub(crate) async fn create_group(&self, mls_group_id: &[u8]) -> Result<LocalMlsGroupState> {
         validate_group_id(mls_group_id)?;
         let (provider, mut metadata) = self.load_provider().await?;
         let group_id = GroupId::from_slice(mls_group_id);
@@ -360,10 +601,7 @@ impl MlsClient {
     /// Return an existing group's public state without creating or replacing
     /// it. Browser orchestration uses this to resume the server half of an
     /// invitation acceptance after a crash or network failure.
-    pub async fn group_state(
-        &self,
-        mls_group_id: &[u8],
-    ) -> Result<Option<LocalMlsGroupState>> {
+    pub async fn group_state(&self, mls_group_id: &[u8]) -> Result<Option<LocalMlsGroupState>> {
         validate_group_id(mls_group_id)?;
         let (provider, metadata) = self.load_provider().await?;
         let group_id = GroupId::from_slice(mls_group_id);
@@ -403,7 +641,9 @@ impl MlsClient {
         let group_id = GroupId::from_slice(mls_group_id);
         let mut group = MlsGroup::load(provider.storage(), &group_id)
             .map_err(|error| mls_error("load MLS group", error))?
-            .ok_or_else(|| ChatError::MissingKeyMaterial("MLS group state is unavailable".into()))?;
+            .ok_or_else(|| {
+                ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
+            })?;
         ensure_v1_group(&group)?;
         if group.pending_commit().is_some() {
             return Err(ChatError::Trust(
@@ -422,11 +662,7 @@ impl MlsClient {
                 .wire
                 .validate(now_seconds)
                 .map_err(ChatError::Invalid)?;
-            let identity = addition
-                .credential
-                .credential_identity
-                .as_bytes()
-                .to_vec();
+            let identity = addition.credential.credential_identity.as_bytes().to_vec();
             if existing_identities.contains(&identity) || !new_identities.insert(identity) {
                 return Err(ChatError::Trust(
                     "MLS member addition repeats an existing credential identity".into(),
@@ -441,12 +677,15 @@ impl MlsClient {
 
         let epoch_before = group.epoch().as_u64();
         let signer = signer_for_group(&provider, &group)?;
-        let (commit, welcome, _group_info) = group
-            .add_members(&provider, &signer, &key_packages)
-            .map_err(|error| mls_error("stage MLS add-members commit", error))?;
+        let (commit, welcome, _group_info) =
+            group
+                .add_members(&provider, &signer, &key_packages)
+                .map_err(|error| mls_error("stage MLS add-members commit", error))?;
         let epoch_after = group
             .pending_commit()
-            .ok_or_else(|| ChatError::Protocol("OpenMLS did not stage the membership commit".into()))?
+            .ok_or_else(|| {
+                ChatError::Protocol("OpenMLS did not stage the membership commit".into())
+            })?
             .epoch()
             .as_u64();
         if epoch_after != epoch_before.saturating_add(1) {
@@ -491,9 +730,7 @@ impl MlsClient {
         removed_credential_identities: &[String],
     ) -> Result<PendingMlsCommit> {
         validate_group_id(mls_group_id)?;
-        if removed_credential_identities.is_empty()
-            || removed_credential_identities.len() > 1000
-        {
+        if removed_credential_identities.is_empty() || removed_credential_identities.len() > 1000 {
             return Err(ChatError::Invalid(
                 "MLS member removal requires 1-1000 credential identities".into(),
             ));
@@ -508,7 +745,9 @@ impl MlsClient {
         let group_id = GroupId::from_slice(mls_group_id);
         let mut group = MlsGroup::load(provider.storage(), &group_id)
             .map_err(|error| mls_error("load MLS group", error))?
-            .ok_or_else(|| ChatError::MissingKeyMaterial("MLS group state is unavailable".into()))?;
+            .ok_or_else(|| {
+                ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
+            })?;
         ensure_v1_group(&group)?;
         if group.pending_commit().is_some() {
             return Err(ChatError::Trust(
@@ -545,7 +784,9 @@ impl MlsClient {
             .map_err(|error| mls_error("stage MLS remove-members commit", error))?;
         let epoch_after = group
             .pending_commit()
-            .ok_or_else(|| ChatError::Protocol("OpenMLS did not stage the membership commit".into()))?
+            .ok_or_else(|| {
+                ChatError::Protocol("OpenMLS did not stage the membership commit".into())
+            })?
             .epoch()
             .as_u64();
         if epoch_after != epoch_before.saturating_add(1) {
@@ -586,10 +827,7 @@ impl MlsClient {
 
     /// Return exact retry material for a staged membership commit after a
     /// restart. A missing record never causes the engine to regenerate one.
-    pub async fn pending_commit(
-        &self,
-        mls_group_id: &[u8],
-    ) -> Result<Option<PendingMlsCommit>> {
+    pub async fn pending_commit(&self, mls_group_id: &[u8]) -> Result<Option<PendingMlsCommit>> {
         validate_group_id(mls_group_id)?;
         let (_, metadata) = self.load_provider().await?;
         Ok(metadata
@@ -621,7 +859,9 @@ impl MlsClient {
         let group_id = GroupId::from_slice(mls_group_id);
         let mut group = MlsGroup::load(provider.storage(), &group_id)
             .map_err(|error| mls_error("load MLS group", error))?
-            .ok_or_else(|| ChatError::MissingKeyMaterial("MLS group state is unavailable".into()))?;
+            .ok_or_else(|| {
+                ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
+            })?;
         if group.epoch().as_u64() != pending.epoch_before || group.pending_commit().is_none() {
             return Err(ChatError::Trust(
                 "durable MLS pending state does not match its retry record".into(),
@@ -670,7 +910,9 @@ impl MlsClient {
         let group_id = GroupId::from_slice(mls_group_id);
         let mut group = MlsGroup::load(provider.storage(), &group_id)
             .map_err(|error| mls_error("load MLS group", error))?
-            .ok_or_else(|| ChatError::MissingKeyMaterial("MLS group state is unavailable".into()))?;
+            .ok_or_else(|| {
+                ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
+            })?;
         group
             .clear_pending_commit(provider.storage())
             .map_err(|error| mls_error("clear rejected MLS commit", error))?;
@@ -803,9 +1045,8 @@ impl MlsClient {
                 "MLS Welcome roster is outside v1 bounds".into(),
             ));
         }
-        claimed_members.sort_by(|left, right| {
-            left.credential_identity.cmp(&right.credential_identity)
-        });
+        claimed_members
+            .sort_by(|left, right| left.credential_identity.cmp(&right.credential_identity));
         Ok(MlsWelcomeInspection {
             mls_group_id: expected_group_id.to_vec(),
             epoch: staged.group_context().epoch().as_u64(),
@@ -843,7 +1084,9 @@ impl MlsClient {
         let group_id = GroupId::from_slice(mls_group_id);
         let mut group = MlsGroup::load(provider.storage(), &group_id)
             .map_err(|error| mls_error("load MLS group", error))?
-            .ok_or_else(|| ChatError::MissingKeyMaterial("MLS group state is unavailable".into()))?;
+            .ok_or_else(|| {
+                ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
+            })?;
         ensure_v1_group(&group)?;
         let epoch_before = group.epoch().as_u64();
         let message = MlsMessageIn::tls_deserialize_exact(commit_bytes)
@@ -895,7 +1138,9 @@ impl MlsClient {
         let group_id = GroupId::from_slice(mls_group_id);
         let mut group = MlsGroup::load(provider.storage(), &group_id)
             .map_err(|error| mls_error("load MLS group", error))?
-            .ok_or_else(|| ChatError::MissingKeyMaterial("MLS group state is unavailable".into()))?;
+            .ok_or_else(|| {
+                ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
+            })?;
         ensure_v1_group(&group)?;
         let message = MlsMessageIn::tls_deserialize_exact(ciphertext)
             .map_err(|error| mls_error("parse MLS application message", error))?
@@ -1017,7 +1262,14 @@ impl MlsClient {
         plaintext: &[u8],
         created_at_ms: i64,
     ) -> Result<MlsOutboxEntry> {
-        validate_send(send_id, conversation_id, incarnation, mls_group_id, plaintext, created_at_ms)?;
+        validate_send(
+            send_id,
+            conversation_id,
+            incarnation,
+            mls_group_id,
+            plaintext,
+            created_at_ms,
+        )?;
         let content_digest: [u8; 32] = Sha256::digest(plaintext).into();
 
         if let Some(existing) = self.db.load_mls_outbox(send_id).await? {
@@ -1037,7 +1289,9 @@ impl MlsClient {
         let group_id = GroupId::from_slice(mls_group_id);
         let mut group = MlsGroup::load(provider.storage(), &group_id)
             .map_err(|error| mls_error("load MLS group", error))?
-            .ok_or_else(|| ChatError::MissingKeyMaterial("MLS group state is unavailable".into()))?;
+            .ok_or_else(|| {
+                ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
+            })?;
         ensure_v1_group(&group)?;
         let signer_public_key = group
             .own_leaf_node()
@@ -1049,7 +1303,9 @@ impl MlsClient {
             signer_public_key,
             SignatureScheme::ECDSA_SECP256R1_SHA256,
         )
-        .ok_or_else(|| ChatError::MissingKeyMaterial("MLS leaf signing key is unavailable".into()))?;
+        .ok_or_else(|| {
+            ChatError::MissingKeyMaterial("MLS leaf signing key is unavailable".into())
+        })?;
         let epoch = group.epoch().as_u64();
         let ciphertext = group
             .create_message(&provider, &signer, plaintext)
@@ -1110,11 +1366,10 @@ impl MlsClient {
     }
 
     async fn load_provider(&self) -> Result<(KutupMlsProvider, SnapshotMetadata)> {
-        let bytes = self
-            .db
-            .load_mls_state()
-            .await?
-            .ok_or_else(|| ChatError::MissingKeyMaterial("MLS device is not initialized".into()))?;
+        let bytes =
+            self.db.load_mls_state().await?.ok_or_else(|| {
+                ChatError::MissingKeyMaterial("MLS device is not initialized".into())
+            })?;
         provider_from_snapshot(&bytes)
     }
 }
@@ -1124,7 +1379,9 @@ fn decode_canonical_base64(label: &str, value: &str, exact_len: usize) -> Result
         .decode(value)
         .map_err(|_| ChatError::Db(format!("{label} is not canonical base64")))?;
     if BASE64.encode(&decoded) != value || (exact_len != 0 && decoded.len() != exact_len) {
-        return Err(ChatError::Db(format!("{label} has invalid encoding or length")));
+        return Err(ChatError::Db(format!(
+            "{label} has invalid encoding or length"
+        )));
     }
     Ok(decoded)
 }
@@ -1173,10 +1430,7 @@ fn parse_verified_key_package(
     Ok(package)
 }
 
-fn signer_for_group(
-    provider: &KutupMlsProvider,
-    group: &MlsGroup,
-) -> Result<SignatureKeyPair> {
+fn signer_for_group(provider: &KutupMlsProvider, group: &MlsGroup) -> Result<SignatureKeyPair> {
     let signature_key = group
         .own_leaf()
         .ok_or_else(|| ChatError::Trust("MLS group has no local leaf".into()))?
@@ -1204,6 +1458,112 @@ fn insert_new_group_control_key(
         .group_control_private_keys
         .insert(key, signing_key.to_bytes().to_vec());
     Ok(())
+}
+
+fn authority_set_from_policies(
+    authority_policies: &[MlsOrderingServicePolicyV1],
+) -> Result<MlsAuthoritySetV1> {
+    if !(1..=64).contains(&authority_policies.len()) {
+        return Err(ChatError::Invalid(
+            "MLS group genesis requires 1-64 ordering authorities".into(),
+        ));
+    }
+    let mut policies = authority_policies.to_vec();
+    for policy in &policies {
+        policy.validate().map_err(ChatError::Invalid)?;
+        if !policy.accepts_group_ordering {
+            return Err(ChatError::Trust(format!(
+                "MLS authority {} does not accept group ordering",
+                policy.canonical_domain
+            )));
+        }
+        if authority_policies.len() > usize::from(policy.maximum_authorities) {
+            return Err(ChatError::Trust(format!(
+                "MLS authority {} does not permit this authority-set size",
+                policy.canonical_domain
+            )));
+        }
+    }
+    policies.sort_by(|left, right| left.canonical_domain.cmp(&right.canonical_domain));
+    if policies
+        .windows(2)
+        .any(|window| window[0].canonical_domain == window[1].canonical_domain)
+    {
+        return Err(ChatError::Invalid(
+            "MLS ordering authority domains must be unique".into(),
+        ));
+    }
+    let authorities = policies
+        .into_iter()
+        .map(|policy| MlsAuthorityV1 {
+            domain: policy.canonical_domain,
+            key_id: policy.control_signing_key_id,
+            public_key: policy.control_signing_public_key,
+        })
+        .collect::<Vec<_>>();
+    let authority_set = MlsAuthoritySetV1 {
+        sequence: 1,
+        required_quorum: MlsAuthoritySetV1::quorum_for(authorities.len())
+            .map_err(ChatError::Invalid)?,
+        authorities,
+    };
+    authority_set.validate().map_err(ChatError::Invalid)?;
+    Ok(authority_set)
+}
+
+fn insert_new_group_owner_key(
+    metadata: &mut SnapshotMetadata,
+    mls_group_id: &[u8],
+) -> Result<MlsGroupOwnerCredential> {
+    let group_key = BASE64.encode(mls_group_id);
+    if metadata.group_owner_private_keys.contains_key(&group_key) {
+        return Err(ChatError::Trust(
+            "refusing to replace an existing MLS group owner key".into(),
+        ));
+    }
+    let mut seed = [0_u8; 32];
+    OsRng.fill_bytes(&mut seed);
+    let signer = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let public_key = signer.verifying_key().as_bytes().to_vec();
+    let credential = MlsGroupOwnerCredential {
+        owner_id: hex::encode(Sha256::digest(&public_key)),
+        public_key,
+    };
+    metadata
+        .group_owner_private_keys
+        .insert(group_key, seed.to_vec());
+    Ok(credential)
+}
+
+fn ensure_group_owner_key<'a>(
+    metadata: &'a SnapshotMetadata,
+    mls_group_id: &[u8],
+) -> Result<&'a [u8]> {
+    metadata
+        .group_owner_private_keys
+        .get(&BASE64.encode(mls_group_id))
+        .map(Vec::as_slice)
+        .ok_or_else(|| {
+            ChatError::MissingKeyMaterial("MLS group-scoped owner key is unavailable".into())
+        })
+}
+
+fn group_owner_credential(
+    metadata: &SnapshotMetadata,
+    mls_group_id: &[u8],
+) -> Result<MlsGroupOwnerCredential> {
+    let private_key = ensure_group_owner_key(metadata, mls_group_id)?;
+    let seed: [u8; 32] = private_key
+        .try_into()
+        .map_err(|_| ChatError::Db("invalid durable MLS group owner key".into()))?;
+    let public_key = ed25519_dalek::SigningKey::from_bytes(&seed)
+        .verifying_key()
+        .as_bytes()
+        .to_vec();
+    Ok(MlsGroupOwnerCredential {
+        owner_id: hex::encode(Sha256::digest(&public_key)),
+        public_key,
+    })
 }
 
 fn ensure_group_control_key<'a>(
@@ -1346,13 +1706,7 @@ fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
         .map_err(|error| ChatError::Db(error.to_string()))?;
     let secret = p256::SecretKey::from_slice(&metadata.anonymous_delivery_private_key)
         .map_err(|_| ChatError::Db("invalid durable anonymous-delivery private key".into()))?;
-    if secret
-        .public_key()
-        .to_encoded_point(false)
-        .as_bytes()
-        .len()
-        != 65
-    {
+    if secret.public_key().to_encoded_point(false).as_bytes().len() != 65 {
         return Err(ChatError::Db(
             "anonymous-delivery key is not uncompressed P-256".into(),
         ));
@@ -1365,6 +1719,13 @@ fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
     if metadata.group_control_private_keys.len() > MAX_PENDING_COMMITS {
         return Err(ChatError::Db(
             "too many durable MLS group control keys".into(),
+        ));
+    }
+    if metadata.group_owner_private_keys.len() > MAX_PENDING_COMMITS
+        || metadata.conversations.len() > MAX_PENDING_COMMITS
+    {
+        return Err(ChatError::Db(
+            "too many durable MLS owner or conversation records".into(),
         ));
     }
     for (group_id, private_key) in &metadata.group_control_private_keys {
@@ -1383,6 +1744,92 @@ fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
         if key != &BASE64.encode(&pending.mls_group_id) {
             return Err(ChatError::Db(
                 "durable MLS pending Commit key does not match its group".into(),
+            ));
+        }
+    }
+    for (group_id, private_key) in &metadata.group_owner_private_keys {
+        let decoded = decode_canonical_base64("MLS owner group id", group_id, 0)?;
+        validate_group_id(&decoded)?;
+        let seed: [u8; 32] = private_key.as_slice().try_into().map_err(|_| {
+            ChatError::Db("durable MLS group owner key has the wrong length".into())
+        })?;
+        ed25519_dalek::SigningKey::from_bytes(&seed);
+    }
+    let mut conversation_group_ids = HashSet::with_capacity(metadata.conversations.len());
+    for (conversation_id, record) in &metadata.conversations {
+        record
+            .request
+            .validate()
+            .map_err(|error| ChatError::Db(format!("invalid durable MLS genesis: {error}")))?;
+        if record.request.genesis.kind != MlsConversationKindV1::Group
+            || conversation_id != &record.request.genesis.conversation_id.to_string()
+        {
+            return Err(ChatError::Db(
+                "durable MLS conversation key or kind is invalid".into(),
+            ));
+        }
+        let group_id = decode_canonical_base64(
+            "durable MLS genesis group id",
+            &record.request.genesis.mls_group_id,
+            0,
+        )?;
+        let group_key = BASE64.encode(&group_id);
+        if !conversation_group_ids.insert(group_key.clone()) {
+            return Err(ChatError::Db(
+                "durable MLS conversations contain a duplicate GroupId".into(),
+            ));
+        }
+        if !metadata.group_control_private_keys.contains_key(&group_key) {
+            return Err(ChatError::Db(
+                "durable MLS genesis has no group control key".into(),
+            ));
+        }
+        let owner = group_owner_credential(metadata, &group_id)?;
+        let owner_set = record
+            .request
+            .genesis
+            .owner_set
+            .as_ref()
+            .ok_or_else(|| ChatError::Db("durable group genesis has no owner set".into()))?;
+        if owner_set.owners.len() != 1
+            || owner_set.owners[0].owner_id != owner.owner_id
+            || owner_set.owners[0].public_key != BASE64.encode(owner.public_key)
+        {
+            return Err(ChatError::Db(
+                "durable MLS owner key differs from its group genesis".into(),
+            ));
+        }
+        match (record.status, &record.server_genesis_hash) {
+            (LocalMlsConversationStatus::PendingGenesis, None) => {}
+            (LocalMlsConversationStatus::Active, Some(hash)) => {
+                validate_sha256_hex("durable MLS genesis hash", hash)
+                    .map_err(|error| ChatError::Db(error.to_string()))?;
+                let expected = record
+                    .request
+                    .genesis
+                    .genesis_hash()
+                    .map_err(ChatError::Db)?;
+                if hash != &expected {
+                    return Err(ChatError::Db(
+                        "durable MLS genesis hash differs from its request".into(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(ChatError::Db(
+                    "durable MLS genesis publication state is inconsistent".into(),
+                ))
+            }
+        }
+    }
+    for group_id in metadata.group_owner_private_keys.keys() {
+        if !metadata
+            .conversations
+            .values()
+            .any(|record| &record.request.genesis.mls_group_id == group_id)
+        {
+            return Err(ChatError::Db(
+                "durable MLS owner key has no conversation record".into(),
             ));
         }
     }
@@ -1457,6 +1904,26 @@ mod tests {
     use super::*;
     use crate::SqliteChatDb;
 
+    fn ordering_policy(domain: &str, seed: u8) -> MlsOrderingServicePolicyV1 {
+        let signer = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+        let public_key = signer.verifying_key().to_bytes();
+        MlsOrderingServicePolicyV1 {
+            policy_version: kutup_chat_proto::MLS_ORDERING_SERVICE_POLICY_VERSION,
+            canonical_domain: domain.into(),
+            suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+            anonymous_delivery_suite:
+                kutup_chat_proto::MlsAnonymousDeliverySuiteV1::DhKemP256HkdfSha256Aes128Gcm,
+            control_signing_key_id: hex::encode(Sha256::digest(public_key)),
+            control_signing_public_key: BASE64.encode(public_key),
+            accepts_group_ordering: true,
+            maximum_group_members: 1000,
+            maximum_authorities: 64,
+            maximum_control_payload_bytes: 1024 * 1024,
+            pending_message_requests: kutup_chat_proto::PendingMessageRequestPolicyV1::default(),
+            abuse_limits: kutup_chat_proto::MlsAbuseLimitsV1::default(),
+        }
+    }
+
     #[test]
     fn exact_suite_is_rfc9420_suite_two() {
         assert_eq!(
@@ -1467,6 +1934,195 @@ mod tests {
             KUTUP_MLS_V1_CIPHERSUITE.signature_algorithm(),
             SignatureScheme::ECDSA_SECP256R1_SHA256
         );
+    }
+
+    #[test]
+    fn group_genesis_owner_and_exact_retry_survive_restart() {
+        futures_executor::block_on(async {
+            let path = std::env::temp_dir().join(format!(
+                "kutup-openmls-genesis-{}.db",
+                crate::clock::unix_millis()
+            ));
+            let db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
+            let client = MlsClient::new(db.clone());
+            client.initialize("alice@example.test#1").await.unwrap();
+            let conversation_id = Uuid::from_u128(0x81);
+            let group_id = b"group-genesis-id";
+            let creator: AccountAddress = "alice@example.test".parse().unwrap();
+            let policies = vec![
+                ordering_policy("beta.example", 12),
+                ordering_policy("alpha.example", 11),
+                ordering_policy("gamma.example", 13),
+            ];
+
+            let prepared = client
+                .prepare_group_genesis(
+                    conversation_id,
+                    group_id,
+                    creator.clone(),
+                    &policies,
+                    1_700_000_000,
+                )
+                .await
+                .unwrap();
+            assert_eq!(prepared.group.epoch, 0);
+            assert_eq!(
+                prepared.conversation.status,
+                LocalMlsConversationStatus::PendingGenesis
+            );
+            prepared.conversation.request.validate().unwrap();
+            assert_eq!(
+                prepared
+                    .conversation
+                    .request
+                    .genesis
+                    .authority_set
+                    .required_quorum,
+                3
+            );
+            assert_eq!(
+                prepared
+                    .conversation
+                    .request
+                    .genesis
+                    .authority_set
+                    .authorities
+                    .iter()
+                    .map(|authority| authority.domain.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["alpha.example", "beta.example", "gamma.example"]
+            );
+            let owner = client.group_owner_credential(group_id).await.unwrap();
+            let declared = &prepared
+                .conversation
+                .request
+                .genesis
+                .owner_set
+                .as_ref()
+                .unwrap()
+                .owners[0];
+            assert_eq!(declared.owner_id, owner.owner_id);
+            assert_eq!(declared.public_key, BASE64.encode(&owner.public_key));
+
+            drop(client);
+            drop(db);
+            let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
+            let client = MlsClient::new(reopened.clone());
+            client.initialize("alice@example.test#1").await.unwrap();
+            let retry = client
+                .prepare_group_genesis(conversation_id, group_id, creator, &policies, 1_700_000_000)
+                .await
+                .unwrap();
+            assert_eq!(retry, prepared);
+            assert_eq!(
+                client.group_owner_credential(group_id).await.unwrap(),
+                owner
+            );
+
+            assert!(client
+                .mark_group_genesis_published(conversation_id, &"00".repeat(32))
+                .await
+                .is_err());
+            assert_eq!(
+                client.local_conversations().await.unwrap()[0].status,
+                LocalMlsConversationStatus::PendingGenesis
+            );
+            let hash = prepared
+                .conversation
+                .request
+                .genesis
+                .genesis_hash()
+                .unwrap();
+            let active = client
+                .mark_group_genesis_published(conversation_id, &hash)
+                .await
+                .unwrap();
+            assert_eq!(active.status, LocalMlsConversationStatus::Active);
+            assert_eq!(active.server_genesis_hash.as_deref(), Some(hash.as_str()));
+            assert_eq!(
+                client
+                    .mark_group_genesis_published(conversation_id, &hash)
+                    .await
+                    .unwrap(),
+                active
+            );
+
+            drop(client);
+            drop(reopened);
+            let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
+            let client = MlsClient::new(reopened.clone());
+            client.initialize("alice@example.test#1").await.unwrap();
+            assert_eq!(client.local_conversations().await.unwrap(), vec![active]);
+            drop(client);
+            drop(reopened);
+            std::fs::remove_file(path).unwrap();
+        });
+    }
+
+    #[test]
+    fn group_genesis_rejects_authority_downgrade_and_identity_collisions() {
+        futures_executor::block_on(async {
+            let path = std::env::temp_dir().join(format!(
+                "kutup-openmls-genesis-reject-{}.db",
+                crate::clock::unix_millis()
+            ));
+            let db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
+            let client = MlsClient::new(db.clone());
+            client.initialize("alice@example.test#1").await.unwrap();
+            let creator: AccountAddress = "alice@example.test".parse().unwrap();
+            let mut rejected = ordering_policy("alpha.example", 21);
+            rejected.accepts_group_ordering = false;
+            assert!(client
+                .prepare_group_genesis(
+                    Uuid::from_u128(0x91),
+                    b"group-rejected-id",
+                    creator.clone(),
+                    &[rejected],
+                    1_700_000_000,
+                )
+                .await
+                .is_err());
+            assert!(client.local_conversations().await.unwrap().is_empty());
+
+            let policy = ordering_policy("alpha.example", 21);
+            let prepared = client
+                .prepare_group_genesis(
+                    Uuid::from_u128(0x92),
+                    b"group-accepted-id",
+                    creator.clone(),
+                    &[policy.clone()],
+                    1_700_000_000,
+                )
+                .await
+                .unwrap();
+            assert!(client
+                .prepare_group_genesis(
+                    Uuid::from_u128(0x92),
+                    b"different-group!",
+                    creator.clone(),
+                    &[policy.clone()],
+                    1_700_000_000,
+                )
+                .await
+                .is_err());
+            assert!(client
+                .prepare_group_genesis(
+                    Uuid::from_u128(0x93),
+                    b"group-accepted-id",
+                    creator,
+                    &[policy],
+                    1_700_000_000,
+                )
+                .await
+                .is_err());
+            assert_eq!(
+                client.local_conversations().await.unwrap(),
+                vec![prepared.conversation]
+            );
+            drop(client);
+            drop(db);
+            std::fs::remove_file(path).unwrap();
+        });
     }
 
     #[test]
@@ -1526,10 +2182,7 @@ mod tests {
 
             let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
             let client = MlsClient::new(reopened.clone());
-            let reopened_public = client
-                .initialize("alice@example.test#1")
-                .await
-                .unwrap();
+            let reopened_public = client.initialize("alice@example.test#1").await.unwrap();
             assert_eq!(reopened_public, public);
             assert_eq!(client.create_group(group_id).await.unwrap().epoch, 0);
 
@@ -1581,11 +2234,7 @@ mod tests {
                 1
             );
             client.mark_application_delivered(send_id).await.unwrap();
-            assert!(restarted
-                .load_mls_outbox(send_id)
-                .await
-                .unwrap()
-                .is_none());
+            assert!(restarted.load_mls_outbox(send_id).await.unwrap().is_none());
             drop(client);
             drop(restarted);
 
@@ -1609,14 +2258,7 @@ mod tests {
             client.create_group(group_id).await.unwrap();
             let send_id = "f3035928-4128-46d1-a5a4-12e80ce823aa";
             client
-                .create_application_message(
-                    send_id,
-                    *b"conversation-id!",
-                    1,
-                    group_id,
-                    b"first",
-                    1,
-                )
+                .create_application_message(send_id, *b"conversation-id!", 1, group_id, b"first", 1)
                 .await
                 .unwrap();
             assert!(matches!(
@@ -1646,10 +2288,7 @@ mod tests {
             let charlie = MlsClient::new(charlie_db);
             let alice_public = alice.initialize("alice@example.test#1").await.unwrap();
             let bob_public = bob.initialize("bob@example.test#1").await.unwrap();
-            let charlie_public = charlie
-                .initialize("charlie@example.test#1")
-                .await
-                .unwrap();
+            let charlie_public = charlie.initialize("charlie@example.test#1").await.unwrap();
             let now = crate::clock::unix_millis() / 1000;
             let bob_package = bob
                 .generate_key_package(1, 1, now, now + 86_400)
@@ -1715,9 +2354,9 @@ mod tests {
                     pending.welcome.as_deref().unwrap(),
                     &expected_roster,
                 )
-                    .await
-                    .unwrap()
-                    .epoch,
+                .await
+                .unwrap()
+                .epoch,
                 1
             );
             assert_eq!(
@@ -1729,24 +2368,13 @@ mod tests {
                 1
             );
             assert!(alice.pending_commit(group_id).await.unwrap().is_none());
-            let bob_address: kutup_chat_proto::AccountAddress =
-                "bob@example.test".parse().unwrap();
+            let bob_address: kutup_chat_proto::AccountAddress = "bob@example.test".parse().unwrap();
             let alice_epoch_one_capability = alice
-                .derive_delivery_capability(
-                    group_id,
-                    Uuid::from_u128(77),
-                    1,
-                    &bob_address,
-                )
+                .derive_delivery_capability(group_id, Uuid::from_u128(77), 1, &bob_address)
                 .await
                 .unwrap();
             let bob_epoch_one_capability = bob
-                .derive_delivery_capability(
-                    group_id,
-                    Uuid::from_u128(77),
-                    1,
-                    &bob_address,
-                )
+                .derive_delivery_capability(group_id, Uuid::from_u128(77), 1, &bob_address)
                 .await
                 .unwrap();
             assert_eq!(alice_epoch_one_capability, bob_epoch_one_capability);
@@ -1768,14 +2396,10 @@ mod tests {
                 charlie_credential.clone(),
             ];
             assert_eq!(
-                bob.apply_inbound_commit(
-                    group_id,
-                    &second_commit.commit,
-                    &three_member_roster,
-                )
-                .await
-                .unwrap()
-                .epoch,
+                bob.apply_inbound_commit(group_id, &second_commit.commit, &three_member_roster,)
+                    .await
+                    .unwrap()
+                    .epoch,
                 2
             );
             assert_eq!(
@@ -1799,12 +2423,7 @@ mod tests {
                 2
             );
             let bob_epoch_two_capability = bob
-                .derive_delivery_capability(
-                    group_id,
-                    Uuid::from_u128(77),
-                    1,
-                    &bob_address,
-                )
+                .derive_delivery_capability(group_id, Uuid::from_u128(77), 1, &bob_address)
                 .await
                 .unwrap();
             assert_ne!(
@@ -1813,10 +2432,7 @@ mod tests {
             );
 
             let removal = alice
-                .prepare_remove_members(
-                    group_id,
-                    &["charlie@example.test#1".to_owned()],
-                )
+                .prepare_remove_members(group_id, &["charlie@example.test#1".to_owned()])
                 .await
                 .unwrap();
             assert!(removal.welcome.is_none());
@@ -1852,11 +2468,7 @@ mod tests {
                 .await
                 .unwrap();
             let decrypted = bob
-                .decrypt_application_message(
-                    group_id,
-                    &outbound.ciphertext,
-                    &alice_credential,
-                )
+                .decrypt_application_message(group_id, &outbound.ciphertext, &alice_credential)
                 .await
                 .unwrap();
             assert_eq!(decrypted.plaintext, b"hello from alice");

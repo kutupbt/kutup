@@ -897,9 +897,7 @@ impl Engine {
                         claim.credential_identity
                     ))
                 })?;
-                if binding.suite
-                    != MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256
-                {
+                if binding.suite != MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256 {
                     return Err(ChatError::Trust(
                         "MLS credential uses a suite outside the V1 policy".into(),
                     ));
@@ -920,6 +918,19 @@ impl Engine {
                 )
             })
             .collect()
+    }
+
+    /// Fetch and independently authenticate one MLS ordering authority policy
+    /// through the same-origin server proxy. No client-provided remote URL or
+    /// server-computed trust label is accepted.
+    pub async fn fetch_verified_mls_ordering_policy(
+        &self,
+        domain: &str,
+    ) -> Result<kutup_chat_proto::MlsOrderingServicePolicyV1> {
+        let history = Rc::clone(&self.transport)
+            .fetch_mls_ordering_policy(domain)
+            .await?;
+        crate::verify_mls_ordering_policy_history(&history, domain)
     }
 
     /// Fetch capability-gated KeyPackages without authenticated browser
@@ -961,8 +972,7 @@ impl Engine {
             || response.transparency.consistency_from != known_tree_size
         {
             return Err(ChatError::Trust(
-                "anonymous MLS KeyPackage response has the wrong recipient or checkpoint"
-                    .into(),
+                "anonymous MLS KeyPackage response has the wrong recipient or checkpoint".into(),
             ));
         }
         let publication = PublishManifestResponse {
@@ -990,16 +1000,12 @@ impl Engine {
             .into_iter()
             .map(|wire| {
                 let device = manifest_devices.get(&wire.device_id).ok_or_else(|| {
-                    ChatError::Trust(
-                        "anonymous MLS KeyPackage names an undeclared device".into(),
-                    )
+                    ChatError::Trust("anonymous MLS KeyPackage names an undeclared device".into())
                 })?;
                 let binding = device.mls.as_ref().ok_or_else(|| {
                     ChatError::Trust("signed device has no MLS credential binding".into())
                 })?;
-                if binding.suite
-                    != MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256
-                {
+                if binding.suite != MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256 {
                     return Err(ChatError::Trust(
                         "MLS KeyPackage uses a suite outside the V1 policy".into(),
                     ));
@@ -1009,9 +1015,7 @@ impl Engine {
                     format!("{account}#{}", wire.device_id),
                     STANDARD
                         .decode(&binding.credential_public_key)
-                        .map_err(|_| {
-                            ChatError::Trust("manifest MLS key is not base64".into())
-                        })?,
+                        .map_err(|_| ChatError::Trust("manifest MLS key is not base64".into()))?,
                 )?;
                 let verified = crate::VerifiedMlsKeyPackage { wire, credential };
                 crate::MlsClient::validate_verified_key_package(&verified, now_seconds)?;
@@ -1956,10 +1960,7 @@ impl Engine {
     ) -> Result<DeviceManifest> {
         let scope = transparency_scope(account)?;
         let prior_manifest = self.session.manifest_trust(account).await?;
-        let prior_transparency = self
-            .session
-            .transparency_trust_for_scope(&scope)
-            .await?;
+        let prior_transparency = self.session.transparency_trust_for_scope(&scope).await?;
         let (manifest_trust, proof_trust) = verify_manifest_evidence(
             account,
             response,

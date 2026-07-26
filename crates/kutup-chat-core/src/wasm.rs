@@ -39,6 +39,7 @@ export interface KutupChatTransport {
   fetchSyncBundles(username: string, currentDeviceId: number, transparencyTreeSize: string): Promise<unknown>;
   fetchTransparencyCheckpoint(scope: string, fromTreeSize: string): Promise<unknown>;
   fetchTransparencyPolicy(domain: string): Promise<unknown>;
+  fetchMlsOrderingPolicy(domain: string): Promise<unknown>;
   fetchManifest(username: string): Promise<unknown | null>;
   fetchManifestPublication(username: string, transparencyTreeSize: string): Promise<unknown>;
   fetchManifestRange(username: string, fromVersion: string, toVersion: string, pageFromVersion: string, cursor: string | null, transparencyTreeSize: string): Promise<unknown>;
@@ -165,6 +166,12 @@ extern "C" {
 
     #[wasm_bindgen(method, catch, js_name = fetchTransparencyPolicy)]
     async fn js_fetch_transparency_policy(
+        this: &JsChatTransport,
+        domain: &str,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = fetchMlsOrderingPolicy)]
+    async fn js_fetch_mls_ordering_policy(
         this: &JsChatTransport,
         domain: &str,
     ) -> std::result::Result<JsValue, JsValue>;
@@ -370,6 +377,18 @@ impl ChatTransport for BrowserTransport {
         from_transport(
             self.js
                 .js_fetch_transparency_policy(domain)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_mls_ordering_policy(
+        &self,
+        domain: &str,
+    ) -> Result<kutup_federation_proto::FederatedFeaturePolicyHistoryV1> {
+        from_transport(
+            self.js
+                .js_fetch_mls_ordering_policy(domain)
                 .await
                 .map_err(transport_error)?,
         )
@@ -720,17 +739,71 @@ impl WasmChatClient {
         to_output(&package)
     }
 
-    #[wasm_bindgen(js_name = createMlsGroup)]
-    pub async fn create_mls_group(
+    #[wasm_bindgen(js_name = prepareMlsGroupGenesis)]
+    pub async fn prepare_mls_group_genesis(
+        &self,
+        conversation_id: String,
+        mls_group_id: Vec<u8>,
+        creator: JsValue,
+        authority_policies: JsValue,
+        created_at_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let conversation_id = uuid::Uuid::parse_str(&conversation_id)
+            .map_err(|_| js_error("invalid MLS conversation id"))?;
+        let creator: AccountAddress = from_transport(creator).map_err(chat_error)?;
+        let authority_policies: Vec<kutup_chat_proto::MlsOrderingServicePolicyV1> =
+            from_transport(authority_policies).map_err(chat_error)?;
+        let prepared = self
+            .mls_client()
+            .prepare_group_genesis(
+                conversation_id,
+                &mls_group_id,
+                creator,
+                &authority_policies,
+                parse_i64_string("MLS genesis clock", &created_at_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&prepared)
+    }
+
+    #[wasm_bindgen(js_name = localMlsConversations)]
+    pub async fn local_mls_conversations(&self) -> std::result::Result<JsValue, JsValue> {
+        let records = self
+            .mls_client()
+            .local_conversations()
+            .await
+            .map_err(chat_error)?;
+        to_output(&records)
+    }
+
+    #[wasm_bindgen(js_name = markMlsGroupGenesisPublished)]
+    pub async fn mark_mls_group_genesis_published(
+        &self,
+        conversation_id: String,
+        genesis_hash: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let conversation_id = uuid::Uuid::parse_str(&conversation_id)
+            .map_err(|_| js_error("invalid MLS conversation id"))?;
+        let record = self
+            .mls_client()
+            .mark_group_genesis_published(conversation_id, &genesis_hash)
+            .await
+            .map_err(chat_error)?;
+        to_output(&record)
+    }
+
+    #[wasm_bindgen(js_name = mlsGroupOwnerCredential)]
+    pub async fn mls_group_owner_credential(
         &self,
         mls_group_id: Vec<u8>,
     ) -> std::result::Result<JsValue, JsValue> {
-        let state = self
+        let credential = self
             .mls_client()
-            .create_group(&mls_group_id)
+            .group_owner_credential(&mls_group_id)
             .await
             .map_err(chat_error)?;
-        to_output(&state)
+        to_output(&credential)
     }
 
     #[wasm_bindgen(js_name = mlsGroupState)]
@@ -773,8 +846,7 @@ impl WasmChatClient {
         mls_group_id: Vec<u8>,
         credential_identities: JsValue,
     ) -> std::result::Result<JsValue, JsValue> {
-        let identities: Vec<String> =
-            from_transport(credential_identities).map_err(chat_error)?;
+        let identities: Vec<String> = from_transport(credential_identities).map_err(chat_error)?;
         let pending = self
             .mls_client()
             .prepare_remove_members(&mls_group_id, &identities)
@@ -866,6 +938,19 @@ impl WasmChatClient {
             .await
             .map_err(chat_error)?;
         to_output(&verified)
+    }
+
+    #[wasm_bindgen(js_name = fetchVerifiedMlsOrderingPolicy)]
+    pub async fn fetch_verified_mls_ordering_policy(
+        &self,
+        domain: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let policy = self
+            .engine
+            .fetch_verified_mls_ordering_policy(&domain)
+            .await
+            .map_err(chat_error)?;
+        to_output(&policy)
     }
 
     #[wasm_bindgen(js_name = fetchVerifiedMlsKeyPackages)]
@@ -1070,13 +1155,7 @@ impl WasmChatClient {
             from_transport(devices).map_err(chat_error)?;
         let submission = self
             .mls_client()
-            .create_anonymous_submission(
-                recipient,
-                send_id,
-                capability,
-                &devices,
-                &mls_ciphertext,
-            )
+            .create_anonymous_submission(recipient, send_id, capability, &devices, &mls_ciphertext)
             .await
             .map_err(chat_error)?;
         to_output(&submission)

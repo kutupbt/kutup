@@ -1332,16 +1332,13 @@ fn mls_outbox_row(row: &rusqlite::Row) -> rusqlite::Result<MlsOutboxEntry> {
         )
     })?;
     let content_digest: Vec<u8> = row.get(5)?;
-    let content_digest: [u8; 32] =
-        content_digest
-            .try_into()
-            .map_err(|value: Vec<u8>| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    value.len(),
-                    rusqlite::types::Type::Blob,
-                    "MLS content digest must be 32 bytes".into(),
-                )
-            })?;
+    let content_digest: [u8; 32] = content_digest.try_into().map_err(|value: Vec<u8>| {
+        rusqlite::Error::FromSqlConversionFailure(
+            value.len(),
+            rusqlite::types::Type::Blob,
+            "MLS content digest must be 32 bytes".into(),
+        )
+    })?;
     Ok(MlsOutboxEntry {
         send_id: row.get(0)?,
         conversation_id,

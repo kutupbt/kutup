@@ -1,13 +1,17 @@
 //! Authenticated MLS ordering policy and purpose-scoped control signer.
 
+use axum::extract::{Path, State};
+use axum::response::{IntoResponse, Response};
+use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{Ed25519MlsControlSigner, MlsControlSigner, MlsOrderingServicePolicyV1};
-use kutup_federation_proto::FederatedFeaturePolicyTypeV1;
+use kutup_federation_proto::{FederatedFeaturePolicyHistoryV1, FederatedFeaturePolicyTypeV1};
 use reqwest::StatusCode;
 
 use crate::config::Config;
 use crate::error::{AppError, AppResult};
+use crate::middleware::AuthUser;
 use crate::AppState;
 
 /// Purpose-scoped online authority for one server's MLS control votes. The
@@ -131,6 +135,55 @@ pub(super) async fn authenticated_remote_policy(
         .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
     MlsOrderingServicePolicyV1::from_canonical_bytes(&payload)
         .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error))
+}
+
+/// Same-origin access to a complete authenticated MLS ordering-policy history.
+/// Remote domains are resolved only through the unified federation transport;
+/// the browser independently verifies the returned identity and policy chains.
+#[utoipa::path(
+    get,
+    path = "/api/chat/mls/domains/{domain}/policy",
+    tag = "chat",
+    operation_id = "getChatMlsOrderingPolicyHistory",
+    params(
+        ("domain" = String, Path, description = "Canonical MLS ordering authority domain")
+    ),
+    responses(
+        (status = 200, description = "Complete authenticated federation identity and MLS ordering-policy history", body = FederatedFeaturePolicyHistoryV1),
+        (status = 400, description = "Invalid canonical domain"),
+        (status = 404, description = "MLS federation or policy unavailable"),
+        (status = 502, description = "Remote policy authentication failed")
+    ),
+    security(("BearerAuth" = []))
+)]
+pub(crate) async fn get_policy_history(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+    Path(domain): Path<String>,
+) -> AppResult<Response> {
+    kutup_federation_proto::validate_server_name(&domain)
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    let federation = state
+        .federation
+        .as_deref()
+        .ok_or_else(|| AppError::not_found("MLS federation is not configured"))?;
+    let is_local = domain == federation.server_name();
+    if is_local {
+        active_policy(&state).await?;
+    } else {
+        authenticated_remote_policy(&state, &domain).await?;
+    }
+    let history = federation
+        .feature_policies()
+        .history(
+            &domain,
+            FederatedFeaturePolicyTypeV1::MlsOrderingService,
+            is_local,
+        )
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::not_found("MLS ordering policy not found"))?;
+    Ok(Json(history).into_response())
 }
 
 fn decode_canonical_base64_config(name: &str, value: &str) -> anyhow::Result<Vec<u8>> {

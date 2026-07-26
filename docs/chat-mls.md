@@ -64,9 +64,11 @@ every MLS-enabled manifest device, and validates each OpenMLS KeyPackage before
 returning it to browser orchestration. This path consumes no Signal prekeys.
 
 The OpenMLS provider snapshot, pending Commit bytes, Welcome retry bytes,
-group-scoped control key, secret-tree progress, and application outbox are
-committed atomically. A restart returns exact retry bytes; it never regenerates
-a Commit or silently replaces a key.
+group-scoped control and Ed25519 owner keys, exact pending genesis request,
+secret-tree progress, and application outbox are committed atomically. A
+restart returns exact retry bytes; it never regenerates a genesis, owner key,
+Commit, or silently replaces a key. The browser has no raw group-creation
+binding: group genesis is available only through this atomic boundary.
 
 ## Roles
 
@@ -187,10 +189,18 @@ carrying conversation or incarnation metadata. Browser cursors are canonical
 decimal strings so JavaScript cannot round a 64-bit value.
 
 The unadvertised browser coordinator replenishes durable KeyPackages and
-implements a restart-safe invitation boundary. It decrypts the Welcome only
-into untrusted `account@server#device` claims, then calls the shared Rust engine
-to fetch authenticated policy history and current-manifest proofs, recover
-every skipped manifest, pin rollback/fork state, and compare the exact P-256
+implements restart-safe genesis and invitation boundaries. For genesis, it
+fetches each authority's complete policy history through the same-origin
+federation route, asks the shared Rust engine to authenticate the federation
+identity/policy chain and typed payload, and then atomically creates the
+OpenMLS group, owner key, and exact server request. A failed publication leaves
+that request pending; reconciliation replays it byte-for-byte and activates it
+only when the server returns the exact canonical genesis hash.
+
+For invitations, the coordinator decrypts the Welcome only into untrusted
+`account@server#device` claims, then calls the shared Rust engine to fetch
+authenticated policy history and current-manifest proofs, recover every
+skipped manifest, pin rollback/fork state, and compare the exact P-256
 credential key. Only that result can reach OpenMLS join. It commits OpenMLS
 state first, activates the server invitation second, and acknowledges the
 Welcome last. If the network fails after the local commit, retry reads the

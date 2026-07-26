@@ -43,8 +43,9 @@ use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_
 use kutup_chat_proto::{
     AccountAddress, ChatContent, ContactControlBody, ContactState, DeliveredEnvelope,
     DeviceListMismatch, DeviceManifest, DevicePreKeyBundle, DirectChatSuiteId, ManifestDevice,
-    ManifestTransparencyProof, OutgoingEnvelope, RegisterChatDeviceRequest, ReplenishKeysRequest,
-    PublishManifestResponse, SealedOutgoingEnvelopeV1, UserPreKeyBundlesResponse,
+    ManifestTransparencyProof, OutgoingEnvelope, PublishManifestResponse,
+    RegisterChatDeviceRequest, ReplenishKeysRequest, SealedOutgoingEnvelopeV1,
+    UserPreKeyBundlesResponse,
 };
 
 /// What a [`Engine::send`](crate::Engine::send) did: whether it landed, and any
@@ -1367,13 +1368,12 @@ impl Session {
             ));
         }
         self.store.stage_manifest_trust(manifest);
-        self.store
-            .stage_manifest_history(ManifestHistoryRecord {
-                peer: account.to_string(),
-                version: response.manifest.version,
-                manifest: response.manifest.clone(),
-                leaf_index: response.transparency.leaf_index,
-            });
+        self.store.stage_manifest_history(ManifestHistoryRecord {
+            peer: account.to_string(),
+            version: response.manifest.version,
+            manifest: response.manifest.clone(),
+            leaf_index: response.transparency.leaf_index,
+        });
         self.store.stage_transparency_trust(transparency);
         self.store.commit().await?;
         Ok(response.manifest.clone())

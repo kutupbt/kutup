@@ -20,7 +20,7 @@ mod membership;
 mod package_routes;
 mod package_store;
 mod participant_bootstrap;
-mod policy;
+pub(crate) mod policy;
 mod rate_limits;
 mod retry;
 mod util;
@@ -47,8 +47,8 @@ pub(crate) use package_routes::{
     key_package_count, publish_delivery_capability, publish_key_packages,
 };
 pub(crate) use participant_bootstrap::federated_stage_participant_bootstrap;
-pub(crate) use policy::MlsOrderingService;
 use policy::{active_policy, authenticated_remote_policy};
+pub(crate) use policy::{get_policy_history, MlsOrderingService};
 use rate_limits::increment_counter;
 pub(crate) use retry::spawn_retry_worker;
 use util::{

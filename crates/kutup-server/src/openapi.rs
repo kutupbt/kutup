@@ -144,6 +144,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::chat::ack_messages,
         crate::handlers::chat::create_ws_ticket,
         crate::handlers::chat::ws,
+        crate::chat_mls::policy::get_policy_history,
         // --- chat federation (signed server-to-server directory foundation) ---
         crate::chat_federation::get_user_bundles,
         crate::chat_federation::get_user_profile,

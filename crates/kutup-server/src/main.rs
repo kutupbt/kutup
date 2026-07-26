@@ -630,6 +630,10 @@ fn build_router(state: AppState) -> Router {
             put(chat_mls::publish_key_packages).route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
         )
         .route(
+            "/api/chat/mls/domains/:domain/policy",
+            get(chat_mls::get_policy_history),
+        )
+        .route(
             "/api/chat/mls/conversations",
             post(chat_mls::create_conversation).route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
         )

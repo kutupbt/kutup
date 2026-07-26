@@ -412,8 +412,7 @@ pub(crate) fn verify_manifest_evidence(
     prior_transparency: Option<&TransparencyTrust>,
     transparency_policy: &TransparencyPolicy,
 ) -> Result<(ManifestTrust, TransparencyTrust)> {
-    let mut manifest =
-        verify_manifest_trust(expected_peer, &response.manifest, prior_manifest)?;
+    let mut manifest = verify_manifest_trust(expected_peer, &response.manifest, prior_manifest)?;
     let transparency = verify_manifest_publication(
         expected_peer,
         &response.manifest,

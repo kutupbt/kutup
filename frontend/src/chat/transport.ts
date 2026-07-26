@@ -53,6 +53,12 @@ export class ApiChatTransport implements ChatTransportPort {
       .then((response) => response.data)
   }
 
+  async fetchMlsOrderingPolicy(domain: string): Promise<unknown> {
+    return api
+      .get(`/chat/mls/domains/${encodeURIComponent(domain)}/policy`)
+      .then((response) => response.data)
+  }
+
   async fetchManifest(username: string): Promise<unknown | null> {
     try {
       return await api

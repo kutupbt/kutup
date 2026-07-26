@@ -210,4 +210,16 @@ describe('ApiChatTransport', () => {
       ],
     })
   })
+
+  it('retrieves MLS ordering history only through the same-origin policy route', async () => {
+    const get = vi.spyOn(api, 'get')
+    get.mockResolvedValueOnce({ data: { domain: 'authority.example' } })
+    const transport = new ApiChatTransport()
+    await expect(
+      transport.fetchMlsOrderingPolicy('authority.example'),
+    ).resolves.toEqual({ domain: 'authority.example' })
+    expect(get).toHaveBeenCalledWith(
+      '/chat/mls/domains/authority.example/policy',
+    )
+  })
 })

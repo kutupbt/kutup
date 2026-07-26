@@ -21,6 +21,7 @@ mod error;
 mod keys;
 mod manifest;
 mod mls_engine;
+mod mls_policy;
 mod profile;
 mod sealed_sender;
 mod session;
@@ -39,8 +40,8 @@ pub use db::{
     AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState,
     InboxMessage, LocalIdentity, LocalProfile, ManifestHistoryRecord, ManifestTrust,
     MlsOutboxEntry, OutboxEntry, OutboxSyncLeg, PeerProfile, Pending, SentMessage,
-    TransparencyMonitorState,
-    TransparencyMonitorStatus, TransparencyTrust, TransparencyWitnessTrust,
+    TransparencyMonitorState, TransparencyMonitorStatus, TransparencyTrust,
+    TransparencyWitnessTrust,
 };
 pub use engine::{
     ChatEvent, Engine, EngineState, InboundFailure, PreKeyMaintenanceReport, ReceiveReport,
@@ -56,10 +57,13 @@ pub use manifest::{
 };
 pub use mls_engine::{
     AnonymousMlsRecipientDevice, ClaimedMlsCredential, DecryptedMlsApplication,
-    DerivedMlsDeliveryCapability, LocalMlsGroupState, MlsClient, MlsDevicePublicMaterial,
-    MlsGroupControlCredential, MlsWelcomeInspection, PendingMlsCommit, VerifiedMlsCredential,
-    VerifiedMlsKeyPackage, KUTUP_MLS_V1_CIPHERSUITE, KUTUP_MLS_V1_MAX_PAST_EPOCHS,
+    DerivedMlsDeliveryCapability, LocalMlsConversationRecord, LocalMlsConversationStatus,
+    LocalMlsGroupState, MlsClient, MlsDevicePublicMaterial, MlsGroupControlCredential,
+    MlsGroupOwnerCredential, MlsWelcomeInspection, PendingMlsCommit, PreparedMlsGroupGenesis,
+    VerifiedMlsCredential, VerifiedMlsKeyPackage, KUTUP_MLS_V1_CIPHERSUITE,
+    KUTUP_MLS_V1_MAX_PAST_EPOCHS,
 };
+pub use mls_policy::verify_mls_ordering_policy_history;
 pub use profile::{derive_wrapping_key, MAX_AVATAR_BYTES};
 pub use session::{ReceivedMessage, SendSummary, Session};
 pub use transport::{ChatTransport, SendOutcome};

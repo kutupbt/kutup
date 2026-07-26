@@ -21,9 +21,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     decode_canonical_base64, validate_group_id, validate_metadata, validate_pending_commit,
-    MlsDevicePublicMaterial, PendingMlsCommit, MAX_PENDING_COMMITS, MAX_STATE_BYTES,
-    MAX_STATE_RECORD_BYTES, MAX_STATE_RECORDS, MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256,
-    STATE_FORMAT_VERSION,
+    LocalMlsConversationRecord, MlsDevicePublicMaterial, PendingMlsCommit, MAX_PENDING_COMMITS,
+    MAX_STATE_BYTES, MAX_STATE_RECORDS, MAX_STATE_RECORD_BYTES,
+    MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256, STATE_FORMAT_VERSION,
 };
 use crate::error::{ChatError, Result};
 
@@ -57,6 +57,8 @@ pub(super) struct SnapshotMetadata {
     pub(super) anonymous_delivery_private_key: Vec<u8>,
     pub(super) pending_commits: BTreeMap<String, PendingMlsCommit>,
     pub(super) group_control_private_keys: BTreeMap<String, Vec<u8>>,
+    pub(super) group_owner_private_keys: BTreeMap<String, Vec<u8>>,
+    pub(super) conversations: BTreeMap<String, LocalMlsConversationRecord>,
 }
 
 impl SnapshotMetadata {
@@ -67,16 +69,15 @@ impl SnapshotMetadata {
         }
     }
 
-    pub(super) fn read_signer(
-        &self,
-        provider: &KutupMlsProvider,
-    ) -> Result<SignatureKeyPair> {
+    pub(super) fn read_signer(&self, provider: &KutupMlsProvider) -> Result<SignatureKeyPair> {
         SignatureKeyPair::read(
             provider.storage(),
             &self.credential_public_key,
             SignatureScheme::ECDSA_SECP256R1_SHA256,
         )
-        .ok_or_else(|| ChatError::MissingKeyMaterial("MLS device signing key is unavailable".into()))
+        .ok_or_else(|| {
+            ChatError::MissingKeyMaterial("MLS device signing key is unavailable".into())
+        })
     }
 
     pub(super) fn public_material(&self) -> Result<MlsDevicePublicMaterial> {
@@ -95,7 +96,7 @@ impl SnapshotMetadata {
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PersistedMlsStateV2 {
+struct PersistedMlsStateV3 {
     format_version: u16,
     ciphersuite: u16,
     credential_identity: String,
@@ -103,12 +104,21 @@ struct PersistedMlsStateV2 {
     anonymous_delivery_private_key: String,
     pending_commits: Vec<PendingMlsCommit>,
     group_control_keys: Vec<PersistedMlsGroupControlKeyV1>,
+    group_owner_keys: Vec<PersistedMlsGroupOwnerKeyV1>,
+    conversations: Vec<LocalMlsConversationRecord>,
     records: Vec<PersistedMlsRecordV1>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PersistedMlsGroupControlKeyV1 {
+    group_id: String,
+    private_key: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PersistedMlsGroupOwnerKeyV1 {
     group_id: String,
     private_key: String,
 }
@@ -138,20 +148,21 @@ pub(super) fn snapshot_provider(
     let mut records = Vec::with_capacity(entries.len());
     for (key, value) in entries {
         if key.len() > MAX_STATE_RECORD_BYTES || value.len() > MAX_STATE_RECORD_BYTES {
-            return Err(ChatError::Db("OpenMLS state record exceeds its bound".into()));
+            return Err(ChatError::Db(
+                "OpenMLS state record exceeds its bound".into(),
+            ));
         }
         records.push(PersistedMlsRecordV1 {
             key: BASE64.encode(key),
             value: BASE64.encode(value),
         });
     }
-    let state = PersistedMlsStateV2 {
+    let state = PersistedMlsStateV3 {
         format_version: STATE_FORMAT_VERSION,
         ciphersuite: MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256,
         credential_identity: metadata.credential_identity.clone(),
         credential_public_key: BASE64.encode(&metadata.credential_public_key),
-        anonymous_delivery_private_key: BASE64
-            .encode(&metadata.anonymous_delivery_private_key),
+        anonymous_delivery_private_key: BASE64.encode(&metadata.anonymous_delivery_private_key),
         pending_commits: metadata.pending_commits.values().cloned().collect(),
         group_control_keys: metadata
             .group_control_private_keys
@@ -161,36 +172,43 @@ pub(super) fn snapshot_provider(
                 private_key: BASE64.encode(private_key),
             })
             .collect(),
+        group_owner_keys: metadata
+            .group_owner_private_keys
+            .iter()
+            .map(|(group_id, private_key)| PersistedMlsGroupOwnerKeyV1 {
+                group_id: group_id.clone(),
+                private_key: BASE64.encode(private_key),
+            })
+            .collect(),
+        conversations: metadata.conversations.values().cloned().collect(),
         records,
     };
-    let encoded =
-        serde_json::to_vec(&state).map_err(|error| ChatError::Db(error.to_string()))?;
+    let encoded = serde_json::to_vec(&state).map_err(|error| ChatError::Db(error.to_string()))?;
     if encoded.len() > MAX_STATE_BYTES {
         return Err(ChatError::Db("OpenMLS state exceeds 64 MiB".into()));
     }
     Ok(encoded)
 }
 
-pub(super) fn provider_from_snapshot(
-    bytes: &[u8],
-) -> Result<(KutupMlsProvider, SnapshotMetadata)> {
+pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, SnapshotMetadata)> {
     if bytes.is_empty() || bytes.len() > MAX_STATE_BYTES {
         return Err(ChatError::Db("OpenMLS state size is invalid".into()));
     }
-    let state: PersistedMlsStateV2 =
+    let state: PersistedMlsStateV3 =
         serde_json::from_slice(bytes).map_err(|error| ChatError::Db(error.to_string()))?;
     if state.format_version != STATE_FORMAT_VERSION
         || state.ciphersuite != MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256
         || state.records.len() > MAX_STATE_RECORDS
         || state.pending_commits.len() > MAX_PENDING_COMMITS
         || state.group_control_keys.len() > MAX_PENDING_COMMITS
+        || state.group_owner_keys.len() > MAX_PENDING_COMMITS
+        || state.conversations.len() > MAX_PENDING_COMMITS
     {
         return Err(ChatError::Db(
             "unsupported or oversized OpenMLS state snapshot".into(),
         ));
     }
-    let canonical =
-        serde_json::to_vec(&state).map_err(|error| ChatError::Db(error.to_string()))?;
+    let canonical = serde_json::to_vec(&state).map_err(|error| ChatError::Db(error.to_string()))?;
     if canonical != bytes {
         return Err(ChatError::Db(
             "OpenMLS state snapshot is not canonically encoded".into(),
@@ -246,6 +264,57 @@ pub(super) fn provider_from_snapshot(
             ));
         }
     }
+    let mut group_owner_private_keys = BTreeMap::new();
+    let mut previous_owner_group: Option<String> = None;
+    for entry in state.group_owner_keys {
+        let group_id = decode_canonical_base64("MLS owner group id", &entry.group_id, 0)?;
+        validate_group_id(&group_id)?;
+        let expected_group_key = BASE64.encode(&group_id);
+        if expected_group_key != entry.group_id
+            || previous_owner_group
+                .as_ref()
+                .is_some_and(|previous| entry.group_id <= *previous)
+        {
+            return Err(ChatError::Db(
+                "MLS group owner keys are not canonically ordered".into(),
+            ));
+        }
+        previous_owner_group = Some(entry.group_id.clone());
+        let private_key =
+            decode_canonical_base64("MLS group owner private key", &entry.private_key, 32)?;
+        let private_key_array: [u8; 32] = private_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| ChatError::Db("invalid durable MLS group owner key".into()))?;
+        ed25519_dalek::SigningKey::from_bytes(&private_key_array);
+        if group_owner_private_keys
+            .insert(entry.group_id, private_key)
+            .is_some()
+        {
+            return Err(ChatError::Db(
+                "OpenMLS state contains a duplicate group owner key".into(),
+            ));
+        }
+    }
+    let mut conversations = BTreeMap::new();
+    let mut previous_conversation: Option<String> = None;
+    for conversation in state.conversations {
+        let key = conversation.request.genesis.conversation_id.to_string();
+        if previous_conversation
+            .as_ref()
+            .is_some_and(|previous| key <= *previous)
+        {
+            return Err(ChatError::Db(
+                "MLS conversation records are not canonically ordered".into(),
+            ));
+        }
+        previous_conversation = Some(key.clone());
+        if conversations.insert(key, conversation).is_some() {
+            return Err(ChatError::Db(
+                "OpenMLS state contains a duplicate conversation record".into(),
+            ));
+        }
+    }
     let metadata = SnapshotMetadata {
         credential_identity: state.credential_identity,
         credential_public_key: decode_canonical_base64(
@@ -260,6 +329,8 @@ pub(super) fn provider_from_snapshot(
         )?,
         pending_commits,
         group_control_private_keys,
+        group_owner_private_keys,
+        conversations,
     };
     validate_metadata(&metadata)?;
 
@@ -277,7 +348,9 @@ pub(super) fn provider_from_snapshot(
         if key.is_empty()
             || key.len() > MAX_STATE_RECORD_BYTES
             || value.len() > MAX_STATE_RECORD_BYTES
-            || previous_key.as_ref().is_some_and(|previous| key <= *previous)
+            || previous_key
+                .as_ref()
+                .is_some_and(|previous| key <= *previous)
         {
             return Err(ChatError::Db(
                 "OpenMLS state records are invalid or not strictly ordered".into(),

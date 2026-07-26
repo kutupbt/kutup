@@ -88,6 +88,18 @@ pub trait ChatTransport {
         ))
     }
 
+    /// Complete authenticated feature-policy history for an MLS ordering
+    /// authority. Clients verify the federation identity and contiguous typed
+    /// policy chain before accepting the authority's purpose-scoped key.
+    async fn fetch_mls_ordering_policy(
+        &self,
+        _domain: &str,
+    ) -> Result<FederatedFeaturePolicyHistoryV1> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement MLS ordering policy retrieval".into(),
+        ))
+    }
+
     /// Latest account-signed device manifest. `None` maps the endpoint's 404.
     async fn fetch_manifest(&self, _username: &str) -> Result<Option<DeviceManifest>> {
         Err(crate::ChatError::Transport(
