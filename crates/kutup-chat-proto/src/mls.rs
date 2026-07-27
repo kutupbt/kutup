@@ -907,9 +907,6 @@ impl MlsMembershipTransitionV1 {
         }
         validate_hash("previousRosterCommitment", &self.previous_roster_commitment)?;
         validate_hash("nextRosterCommitment", &self.next_roster_commitment)?;
-        if self.previous_roster_commitment == self.next_roster_commitment {
-            return Err("MLS membership transition does not change the roster".into());
-        }
         if !(1..=1000).contains(&self.previous_member_count)
             || !(1..=1000).contains(&self.next_member_count)
         {
@@ -958,6 +955,40 @@ impl MlsMembershipTransitionV1 {
             .binary_search_by(|delivery| delivery.destination.as_str().cmp(destination))
             .ok()
             .map(|index| &self.deliveries[index])
+    }
+}
+
+/// Public verifier data for an owner-authorized ordering-authority change.
+/// The unchanged-roster delivery transition commits the exact MLS Commit
+/// envelope delivered to every participant server; ordering-only authorities
+/// still learn no usernames or device identifiers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsAuthorityChangeV1 {
+    pub next_authority_set: MlsAuthoritySetV1,
+    pub delivery_transition: MlsMembershipTransitionV1,
+}
+
+impl MlsAuthorityChangeV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        self.next_authority_set.validate()?;
+        self.delivery_transition.validate()?;
+        if self.delivery_transition.previous_roster_commitment
+            != self.delivery_transition.next_roster_commitment
+            || self.delivery_transition.previous_member_count
+                != self.delivery_transition.next_member_count
+            || self.delivery_transition.previous_participant_domains
+                != self.delivery_transition.next_participant_domains
+        {
+            return Err("MLS authority change must preserve the exact roster and routing".into());
+        }
+        Ok(())
+    }
+
+    pub fn transition_digest(&self) -> Result<String, String> {
+        self.validate()?;
+        mls_transition_digest(self)
     }
 }
 
@@ -1608,6 +1639,10 @@ pub struct MlsControlBlockV1 {
 pub struct FederatedMlsOrderingVoteRequestV1 {
     pub protocol_version: u16,
     pub block: MlsControlBlockV1,
+    /// Present only for authority-set changes. Both the old and new authority
+    /// sets verify the same next set and destination-delivery commitments.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authority_change: Option<MlsAuthorityChangeV1>,
     /// Exact set under which the requested vote is made. During an authority
     /// transition both the current and next set vote over the same block hash.
     pub authority_set: MlsAuthoritySetV1,
@@ -1627,6 +1662,24 @@ impl FederatedMlsOrderingVoteRequestV1 {
         self.block.validate()?;
         self.block.proposal.verify()?;
         self.authority_set.validate()?;
+        match self.block.proposal.action_type {
+            MlsControlActionTypeV1::AuthoritySetChange => {
+                let change = self
+                    .authority_change
+                    .as_ref()
+                    .ok_or("MLS authority vote omits its public transition")?;
+                change.validate()?;
+                if self.block.transition_digest.as_deref()
+                    != Some(change.transition_digest()?.as_str())
+                {
+                    return Err("MLS authority vote transition digest does not match".into());
+                }
+            }
+            _ if self.authority_change.is_some() => {
+                return Err("unrelated MLS vote carries an authority transition".into())
+            }
+            _ => {}
+        }
         if let Some(certificate) = &self.previous_set_certificate {
             if self.block.proposal.action_type != MlsControlActionTypeV1::AuthoritySetChange
                 || certificate.height != self.block.height
@@ -1635,6 +1688,15 @@ impl FederatedMlsOrderingVoteRequestV1 {
                 return Err(
                     "MLS previous-set certificate does not authorize the transition block".into(),
                 );
+            }
+            if self.authority_set
+                != self
+                    .authority_change
+                    .as_ref()
+                    .expect("authority change checked above")
+                    .next_authority_set
+            {
+                return Err("next-set MLS vote uses a different authority set".into());
             }
         }
         Ok(())
@@ -1723,7 +1785,7 @@ pub struct CommitMlsControlBlockV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub membership_transition: Option<MlsMembershipTransitionV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_authority_set: Option<MlsAuthoritySetV1>,
+    pub authority_change: Option<MlsAuthorityChangeV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authority_transition: Option<MlsAuthorityTransitionCertificateV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1745,10 +1807,13 @@ pub struct FederatedMlsControlReplicaV1 {
 impl FederatedMlsControlReplicaV1 {
     pub fn validate(&self) -> Result<(), String> {
         self.commit.validate_shape()?;
-        match (
-            self.commit.membership_transition.as_ref(),
-            self.membership_delivery.as_ref(),
-        ) {
+        let delivery_transition = self.commit.membership_transition.as_ref().or_else(|| {
+            self.commit
+                .authority_change
+                .as_ref()
+                .map(|change| &change.delivery_transition)
+        });
+        match (delivery_transition, self.membership_delivery.as_ref()) {
             (Some(transition), Some(delivery)) => {
                 delivery.verify_transition(transition)?;
                 if delivery.epoch_after != self.commit.finalized.block.epoch_after {
@@ -1777,7 +1842,7 @@ impl CommitMlsControlBlockV1 {
                     .membership_transition
                     .as_ref()
                     .expect("guarded roster transition");
-                if self.next_authority_set.is_some()
+                if self.authority_change.is_some()
                     || self.authority_transition.is_some()
                     || self.next_owner_set.is_some()
                     || transition.conversation_id != self.finalized.block.conversation_id
@@ -1792,14 +1857,18 @@ impl CommitMlsControlBlockV1 {
                 }
                 match self.finalized.block.proposal.action_type {
                     MlsControlActionTypeV1::MembershipChange
-                        if transition.previous_member_count == transition.next_member_count =>
+                        if transition.previous_member_count == transition.next_member_count
+                            || transition.previous_roster_commitment
+                                == transition.next_roster_commitment =>
                     {
                         return Err("membership change must add or remove an account".into())
                     }
                     MlsControlActionTypeV1::RoutineAdmin
                         if transition.previous_member_count != transition.next_member_count
                             || transition.previous_participant_domains
-                                != transition.next_participant_domains =>
+                                != transition.next_participant_domains
+                            || transition.previous_roster_commitment
+                                == transition.next_roster_commitment =>
                     {
                         return Err(
                             "routine administrator change cannot alter membership routing".into(),
@@ -1812,7 +1881,7 @@ impl CommitMlsControlBlockV1 {
                 return Err("membership change requires its public transition".into())
             }
             MlsControlActionTypeV1::AuthoritySetChange => {
-                if self.next_authority_set.is_none()
+                if self.authority_change.is_none()
                     || self.authority_transition.is_none()
                     || self.membership_transition.is_some()
                     || self.next_owner_set.is_some()
@@ -1821,11 +1890,19 @@ impl CommitMlsControlBlockV1 {
                         "authority-set change requires exactly its joint transition data".into(),
                     );
                 }
-                let expected = mls_transition_digest(
-                    self.next_authority_set
-                        .as_ref()
-                        .expect("checked authority transition"),
-                )?;
+                let change = self
+                    .authority_change
+                    .as_ref()
+                    .expect("checked authority transition");
+                let expected = change.transition_digest()?;
+                if change.delivery_transition.conversation_id
+                    != self.finalized.block.conversation_id
+                    || change.delivery_transition.incarnation != self.finalized.block.incarnation
+                    || change.delivery_transition.proposal_id
+                        != self.finalized.block.proposal.proposal_id
+                {
+                    return Err("authority change carries inconsistent delivery data".into());
+                }
                 if self.finalized.block.transition_digest.as_deref() != Some(expected.as_str()) {
                     return Err(
                         "authority transition data does not match the finalized block".into(),
@@ -1834,7 +1911,7 @@ impl CommitMlsControlBlockV1 {
             }
             MlsControlActionTypeV1::OwnerSetChange => {
                 if self.next_owner_set.is_none()
-                    || self.next_authority_set.is_some()
+                    || self.authority_change.is_some()
                     || self.authority_transition.is_some()
                     || self.membership_transition.is_some()
                 {
@@ -1850,7 +1927,7 @@ impl CommitMlsControlBlockV1 {
                 }
             }
             _ => {
-                if self.next_authority_set.is_some()
+                if self.authority_change.is_some()
                     || self.authority_transition.is_some()
                     || self.next_owner_set.is_some()
                     || self.membership_transition.is_some()
@@ -2069,7 +2146,7 @@ impl MlsAuthorityTransitionCertificateV1 {
         previous: &MlsAuthoritySetV1,
         next: &MlsAuthoritySetV1,
     ) -> Result<(), String> {
-        if next.sequence != previous.sequence + 1
+        if previous.sequence.checked_add(1) != Some(next.sequence)
             || self.previous_set_certificate.block_hash != block_hash
             || self.new_set_certificate.block_hash != block_hash
         {
@@ -2094,7 +2171,7 @@ pub struct MlsAuthorityBootstrapDescriptorV1 {
     pub participant_domains: Vec<String>,
     pub transition_block: MlsControlBlockV1,
     pub previous_set_certificate: MlsOrderingQuorumCertificateV1,
-    pub next_authority_set: MlsAuthoritySetV1,
+    pub authority_change: MlsAuthorityChangeV1,
     pub history_block_count: u64,
     pub history_digest: String,
 }
@@ -2109,13 +2186,19 @@ impl MlsAuthorityBootstrapDescriptorV1 {
         validate_participant_domain_set(&self.participant_domains)?;
         self.transition_block.validate()?;
         self.transition_block.proposal.verify()?;
-        self.next_authority_set.validate()?;
+        self.authority_change.validate()?;
         validate_hash("historyDigest", &self.history_digest)?;
-        let next_set_digest = mls_transition_digest(&self.next_authority_set)?;
+        let next_set_digest = self.authority_change.transition_digest()?;
         if self.transition_block.conversation_id != self.genesis.conversation_id
             || self.transition_block.incarnation != self.genesis.incarnation
             || self.transition_block.proposal.action_type
                 != MlsControlActionTypeV1::AuthoritySetChange
+            || self.authority_change.delivery_transition.conversation_id
+                != self.transition_block.conversation_id
+            || self.authority_change.delivery_transition.incarnation
+                != self.transition_block.incarnation
+            || self.authority_change.delivery_transition.proposal_id
+                != self.transition_block.proposal.proposal_id
             || self.transition_block.height != self.history_block_count.saturating_add(1)
             || self.previous_set_certificate.height != self.transition_block.height
             || self.previous_set_certificate.block_hash != self.transition_block.block_hash()?
@@ -2529,10 +2612,18 @@ pub fn verify_mls_authority_bootstrap_history(
     }
 
     let transition = &descriptor.transition_block;
+    let delivery = &descriptor.authority_change.delivery_transition;
     if transition.height != replayed.height + 1
         || transition.epoch_before != replayed.epoch
         || transition.previous_block_hash != replayed.previous_hash
-        || descriptor.next_authority_set.sequence != replayed.authorities.sequence + 1
+        || replayed.authorities.sequence.checked_add(1)
+            != Some(descriptor.authority_change.next_authority_set.sequence)
+        || delivery.previous_roster_commitment != replayed.roster_commitment
+        || delivery.next_roster_commitment != replayed.roster_commitment
+        || delivery.previous_member_count != replayed.member_count
+        || delivery.next_member_count != replayed.member_count
+        || delivery.previous_participant_domains != replayed.participant_domains
+        || delivery.next_participant_domains != replayed.participant_domains
     {
         return Err(
             "MLS authority bootstrap transition does not extend the verified history".into(),
@@ -2593,10 +2684,21 @@ fn replay_mls_control_history(
         verify_bootstrap_owner_authorization(&genesis.kind, block, replayed.owners.as_ref())?;
         let block_hash = block.block_hash()?;
         if block.proposal.action_type == MlsControlActionTypeV1::AuthoritySetChange {
-            let next = request
-                .next_authority_set
+            let change = request
+                .authority_change
                 .as_ref()
-                .ok_or("MLS authority history transition omits its next set")?;
+                .ok_or("MLS authority history transition omits its public change")?;
+            let next = &change.next_authority_set;
+            let delivery = &change.delivery_transition;
+            if delivery.previous_roster_commitment != replayed.roster_commitment
+                || delivery.next_roster_commitment != replayed.roster_commitment
+                || delivery.previous_member_count != replayed.member_count
+                || delivery.next_member_count != replayed.member_count
+                || delivery.previous_participant_domains != replayed.participant_domains
+                || delivery.next_participant_domains != replayed.participant_domains
+            {
+                return Err("MLS authority history changes its roster or routing".into());
+            }
             request
                 .authority_transition
                 .as_ref()
@@ -2631,7 +2733,7 @@ fn replay_mls_control_history(
                 .as_ref()
                 .ok_or("MLS owner history transition omits its next set")?;
             next.validate()?;
-            if next.sequence != current.sequence + 1 {
+            if current.sequence.checked_add(1) != Some(next.sequence) {
                 return Err("MLS owner history sequence is not contiguous".into());
             }
             replayed.owners = Some(next.clone());
@@ -3555,6 +3657,48 @@ mod tests {
     }
 
     #[test]
+    fn authority_change_has_a_stable_composite_digest_and_rejects_roster_changes() {
+        let conversation_id = Uuid::from_u128(73);
+        let (mut next_authority_set, _) = authority_set(1);
+        next_authority_set.sequence = 2;
+        let transition = MlsMembershipTransitionV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            conversation_id,
+            incarnation: 1,
+            proposal_id: Uuid::from_u128(74),
+            previous_roster_commitment: "aa".repeat(32),
+            next_roster_commitment: "aa".repeat(32),
+            previous_member_count: 2,
+            next_member_count: 2,
+            previous_participant_domains: vec!["a0.example".into()],
+            next_participant_domains: vec!["a0.example".into()],
+            deliveries: vec![MlsMembershipDeliveryCommitmentV1 {
+                destination: "a0.example".into(),
+                delivery_digest: "bb".repeat(32),
+            }],
+        };
+        let change = MlsAuthorityChangeV1 {
+            next_authority_set,
+            delivery_transition: transition,
+        };
+        change.validate().unwrap();
+        assert_eq!(
+            change.transition_digest().unwrap(),
+            "5f3cbf3bdb82c84c825c74fdee376ca018f060a07d1b44fa402fba35cddc9d9d"
+        );
+        let encoded = serde_json::to_vec(&change).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&serde_json::from_slice::<MlsAuthorityChangeV1>(&encoded).unwrap())
+                .unwrap(),
+            encoded
+        );
+
+        let mut changed_roster = change;
+        changed_roster.delivery_transition.next_roster_commitment = "cc".repeat(32);
+        assert!(changed_roster.validate().is_err());
+    }
+
+    #[test]
     fn new_participant_bootstrap_requires_complete_qc_history_and_private_digest() {
         use p256::ecdsa::signature::Signer as _;
 
@@ -3702,7 +3846,7 @@ mod tests {
                 },
             },
             membership_transition: Some(transition),
-            next_authority_set: None,
+            authority_change: None,
             authority_transition: None,
             next_owner_set: None,
         };
@@ -3802,6 +3946,32 @@ mod tests {
         next.sequence = 2;
         next.authorities.push(new_authority);
         next.required_quorum = MlsAuthoritySetV1::quorum_for(next.authorities.len()).unwrap();
+        let delivery_transition = MlsMembershipTransitionV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            conversation_id,
+            incarnation: 1,
+            proposal_id: Uuid::from_u128(32),
+            previous_roster_commitment: "ab".repeat(32),
+            next_roster_commitment: "ab".repeat(32),
+            previous_member_count: 2,
+            next_member_count: 2,
+            previous_participant_domains: vec!["a0.example".into(), "a1.example".into()],
+            next_participant_domains: vec!["a0.example".into(), "a1.example".into()],
+            deliveries: vec![
+                MlsMembershipDeliveryCommitmentV1 {
+                    destination: "a0.example".into(),
+                    delivery_digest: "cd".repeat(32),
+                },
+                MlsMembershipDeliveryCommitmentV1 {
+                    destination: "a1.example".into(),
+                    delivery_digest: "ef".repeat(32),
+                },
+            ],
+        };
+        let authority_change = MlsAuthorityChangeV1 {
+            next_authority_set: next,
+            delivery_transition,
+        };
 
         let proposer_key = p256::ecdsa::SigningKey::from_bytes((&[17u8; 32]).into()).unwrap();
         let proposer_public = proposer_key.verifying_key().to_encoded_point(false);
@@ -3833,7 +4003,7 @@ mod tests {
             epoch_before: 0,
             epoch_after: 1,
             proposal,
-            transition_digest: Some(mls_transition_digest(&next).unwrap()),
+            transition_digest: Some(authority_change.transition_digest().unwrap()),
             owner_approval: None,
             finalized_at: 2,
         };
@@ -3887,7 +4057,7 @@ mod tests {
             participant_domains: vec!["a0.example".into(), "a1.example".into()],
             transition_block: block,
             previous_set_certificate,
-            next_authority_set: next,
+            authority_change,
             history_block_count: 0,
             history_digest: mls_authority_history_digest(&history).unwrap(),
         };
@@ -4265,7 +4435,7 @@ mod tests {
                     },
                 },
                 membership_transition: None,
-                next_authority_set: None,
+                authority_change: None,
                 authority_transition: None,
                 next_owner_set: None,
             });

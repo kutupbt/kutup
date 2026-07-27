@@ -14,9 +14,10 @@ use kutup_chat_proto::{
     AnonymousMlsDeviceEnvelopeV1, ChatProfileResponse, CommitMlsControlBlockResponseV1,
     DeviceListMismatch, DeviceManifest, MailboxPage, MlsClientControlHistoryPageV1,
     MlsControlActionTypeV1, MlsConversationMemberV1, MlsOrderingQuorumCertificateV1,
-    OwnChatProfileResponse, PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest,
-    RegisterChatDeviceRequest, RegisterChatDeviceResponse, ReplenishKeysRequest,
-    SendMessagesRequest, TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
+    MlsOrderingServicePolicyV1, OwnChatProfileResponse, PreKeyCountResponse,
+    PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
+    RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest,
+    TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::TryRngCore as _;
@@ -911,6 +912,89 @@ impl WasmChatClient {
         to_output(&finalized)
     }
 
+    #[wasm_bindgen(js_name = prepareMlsAuthorityChange)]
+    pub async fn prepare_mls_authority_change(
+        &self,
+        mls_group_id: Vec<u8>,
+        proposal_id: String,
+        authority_policies: JsValue,
+        now_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let proposal_id = uuid::Uuid::parse_str(&proposal_id)
+            .map_err(|_| js_error("MLS proposal id must be a UUID"))?;
+        let policies: Vec<MlsOrderingServicePolicyV1> =
+            from_transport(authority_policies).map_err(chat_error)?;
+        let prepared = self
+            .mls_client()
+            .prepare_authority_change_from_policies(
+                &mls_group_id,
+                proposal_id,
+                &policies,
+                parse_i64_string("MLS clock", &now_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&prepared)
+    }
+
+    #[wasm_bindgen(js_name = pendingMlsAuthorityChanges)]
+    pub async fn pending_mls_authority_changes(&self) -> std::result::Result<JsValue, JsValue> {
+        let pending = self
+            .mls_client()
+            .pending_authority_changes()
+            .await
+            .map_err(chat_error)?;
+        to_output(&pending)
+    }
+
+    #[wasm_bindgen(js_name = recordMlsAuthorityPreviousQuorum)]
+    pub async fn record_mls_authority_previous_quorum(
+        &self,
+        mls_group_id: Vec<u8>,
+        certificate: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let certificate: MlsOrderingQuorumCertificateV1 =
+            from_transport(certificate).map_err(chat_error)?;
+        let request = self
+            .mls_client()
+            .record_authority_previous_quorum(&mls_group_id, certificate)
+            .await
+            .map_err(chat_error)?;
+        to_output(&request)
+    }
+
+    #[wasm_bindgen(js_name = buildMlsAuthorityCommitRequest)]
+    pub async fn build_mls_authority_commit_request(
+        &self,
+        mls_group_id: Vec<u8>,
+        new_set_certificate: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let certificate: MlsOrderingQuorumCertificateV1 =
+            from_transport(new_set_certificate).map_err(chat_error)?;
+        let request = self
+            .mls_client()
+            .build_authority_commit_request(&mls_group_id, certificate)
+            .await
+            .map_err(chat_error)?;
+        to_output(&request)
+    }
+
+    #[wasm_bindgen(js_name = finalizeMlsAuthorityChange)]
+    pub async fn finalize_mls_authority_change(
+        &self,
+        mls_group_id: Vec<u8>,
+        acknowledgement: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let acknowledgement: CommitMlsControlBlockResponseV1 =
+            from_transport(acknowledgement).map_err(chat_error)?;
+        let finalized = self
+            .mls_client()
+            .finalize_authority_change(&mls_group_id, &acknowledgement)
+            .await
+            .map_err(chat_error)?;
+        to_output(&finalized)
+    }
+
     #[wasm_bindgen(js_name = pendingMlsCommit)]
     pub async fn pending_mls_commit(
         &self,
@@ -1257,9 +1341,7 @@ impl WasmChatClient {
     }
 
     #[wasm_bindgen(js_name = pendingMlsApplicationMessages)]
-    pub async fn pending_mls_application_messages(
-        &self,
-    ) -> std::result::Result<JsValue, JsValue> {
+    pub async fn pending_mls_application_messages(&self) -> std::result::Result<JsValue, JsValue> {
         let pending = self
             .mls_client()
             .pending_application_messages()
@@ -1281,8 +1363,7 @@ impl WasmChatClient {
         let capability: [u8; 16] = capability
             .try_into()
             .map_err(|_| js_error("MLS delivery capability must be 16 bytes"))?;
-        let packages: Vec<VerifiedMlsKeyPackage> =
-            from_transport(packages).map_err(chat_error)?;
+        let packages: Vec<VerifiedMlsKeyPackage> = from_transport(packages).map_err(chat_error)?;
         let staged = self
             .mls_client()
             .stage_application_delivery(
@@ -1388,12 +1469,7 @@ impl WasmChatClient {
             from_transport(expected_sender).map_err(chat_error)?;
         let applied = self
             .mls_client()
-            .apply_anonymous_application_envelope(
-                &context,
-                &recipient,
-                &envelope,
-                &expected_sender,
-            )
+            .apply_anonymous_application_envelope(&context, &recipient, &envelope, &expected_sender)
             .await
             .map_err(chat_error)?;
         to_output(&applied)

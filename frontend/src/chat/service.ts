@@ -337,6 +337,14 @@ export class ChatService {
     this.notifyPeers()
   }
 
+  async setGroupAuthorities(
+    conversationId: string,
+    authorityDomains: string[],
+  ): Promise<void> {
+    await this.requireMls().setAuthorities(conversationId, authorityDomains)
+    this.notifyPeers()
+  }
+
   async maintainPrekeys(): Promise<void> {
     try {
       await this.withLock(() => this.client.maintainPrekeys())

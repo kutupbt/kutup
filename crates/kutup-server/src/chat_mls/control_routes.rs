@@ -67,8 +67,9 @@ pub(crate) async fn commit_control_block(
 ) -> AppResult<Response> {
     let policy = active_policy(&state).await?;
     if request
-        .next_authority_set
+        .authority_change
         .as_ref()
+        .map(|change| &change.next_authority_set)
         .is_some_and(|set| set.authorities.len() > usize::from(policy.maximum_authorities))
     {
         return Err(AppError::bad_request(
@@ -126,7 +127,9 @@ pub(crate) async fn collect_ordering_votes(
         local_member.ok_or_else(|| AppError::forbidden("not an active local MLS member"))?;
     if matches!(
         request.block.proposal.action_type,
-        MlsControlActionTypeV1::RoutineAdmin | MlsControlActionTypeV1::MembershipChange
+        MlsControlActionTypeV1::RoutineAdmin
+            | MlsControlActionTypeV1::MembershipChange
+            | MlsControlActionTypeV1::AuthoritySetChange
     ) && !is_admin
     {
         return Err(AppError::forbidden(

@@ -5,6 +5,7 @@ import type {
   AppliedInboundMlsApplication,
   ChatTransportPort,
   DerivedMlsDeliveryCapability,
+  FinalizedMlsAuthorityChange,
   FinalizedMlsMembershipChange,
   LocalMlsConversationRecord,
   LocalMlsGroupState,
@@ -12,6 +13,7 @@ import type {
   MlsMailboxEnvelope,
   MlsOutboxEntry,
   MlsWelcomeInspection,
+  PendingMlsAuthorityChange,
   PendingMlsMembershipChange,
   PendingMlsInvitation,
   PreparedMlsGroupGenesis,
@@ -263,6 +265,59 @@ export class MlsConversationService {
     for (const control of pending) {
       validatePendingMembershipChange(control, Uint8Array.from(control.mlsGroupId))
       const result = await this.publishPendingMembershipChange(control)
+      await this.publishCurrentDeliveryCapability(result.conversation)
+      finalized.push(result)
+    }
+    return finalized
+  }
+
+  /**
+   * Replace the ordering-authority set through owner authorization and joint
+   * old/new quorums. Each supplied server policy is authenticated first.
+   */
+  async setAuthorities(
+    conversationId: string,
+    authorityDomains: string[],
+  ): Promise<FinalizedMlsAuthorityChange> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const domains = requireAuthorityDomains(authorityDomains)
+    const currentDomains = conversation.currentAuthoritySet.authorities
+      .map(authority => authority.domain)
+      .sort()
+    if (domains.length === currentDomains.length
+      && domains.every((domain, index) => domain === currentDomains[index])) {
+      throw new Error('MLS authority set is already in the requested state')
+    }
+    const policies: unknown[] = []
+    for (const domain of domains) {
+      policies.push(await this.withCryptoLock(() =>
+        this.client.fetchVerifiedMlsOrderingPolicy(domain)))
+    }
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const prepared = await this.withCryptoLock(() =>
+      this.client.prepareMlsAuthorityChange(
+        groupId,
+        requireBrowserCrypto().randomUUID(),
+        policies,
+        String(Math.floor(Date.now() / 1000)),
+      ))
+    validatePendingAuthorityChange(prepared.control, groupId)
+    const finalized = await this.publishPendingAuthorityChange(prepared.control)
+    await this.publishCurrentDeliveryCapability(finalized.conversation)
+    return finalized
+  }
+
+  async reconcilePendingAuthorityChanges(): Promise<FinalizedMlsAuthorityChange[]> {
+    const pending = await this.withCryptoLock(() =>
+      this.client.pendingMlsAuthorityChanges())
+    const finalized: FinalizedMlsAuthorityChange[] = []
+    for (const control of pending) {
+      validatePendingAuthorityChange(control, Uint8Array.from(control.mlsGroupId))
+      const result = await this.publishPendingAuthorityChange(control)
       await this.publishCurrentDeliveryCapability(result.conversation)
       finalized.push(result)
     }
@@ -641,6 +696,7 @@ export class MlsConversationService {
   async reconcile(): Promise<void> {
     await this.reconcilePendingGroupGeneses()
     await this.reconcilePendingMembershipChanges()
+    await this.reconcilePendingAuthorityChanges()
     await this.reconcileInboundMembershipCommits()
     await this.reconcilePendingApplicationMessages()
     await this.reconcileInboundApplicationMessages()
@@ -945,6 +1001,45 @@ export class MlsConversationService {
     }
     return finalized
   }
+
+  private async publishPendingAuthorityChange(
+    control: PendingMlsAuthorityChange,
+  ): Promise<FinalizedMlsAuthorityChange> {
+    const groupId = Uint8Array.from(control.mlsGroupId)
+    validatePendingAuthorityChange(control, groupId)
+    for (const delivery of control.deliveries) {
+      await this.transport.stageMlsMembershipDelivery(delivery)
+    }
+    let request = control.finalRequest
+    if (!request) {
+      let nextVoteRequest = control.newVoteRequest
+      if (!nextVoteRequest) {
+        const previousCertificate = await this.transport.collectMlsOrderingVotes(
+          control.voteRequest,
+        )
+        nextVoteRequest = await this.withCryptoLock(() =>
+          this.client.recordMlsAuthorityPreviousQuorum(groupId, previousCertificate))
+      }
+      const newCertificate = await this.transport.collectMlsOrderingVotes(nextVoteRequest)
+      request = await this.withCryptoLock(() =>
+        this.client.buildMlsAuthorityCommitRequest(groupId, newCertificate))
+    }
+    const acknowledgement = requireControlBlockResponse(
+      await this.transport.commitMlsControlBlock(request),
+      control,
+    )
+    const finalized = await this.withCryptoLock(() =>
+      this.client.finalizeMlsAuthorityChange(groupId, acknowledgement))
+    if (
+      finalized.group.epoch !== control.voteRequest.block.epochAfter
+      || finalized.conversation.currentAuthoritySet.sequence
+        !== control.authorityChange.nextAuthoritySet.sequence
+      || finalized.conversation.lastBlockHash !== acknowledgement.blockHash
+    ) {
+      throw new Error('durable MLS authority state differs from its finalized block')
+    }
+    return finalized
+  }
 }
 
 interface BrowserCrypto {
@@ -1071,9 +1166,38 @@ function validatePendingMembershipChange(
   }
 }
 
+function validatePendingAuthorityChange(
+  control: PendingMlsAuthorityChange,
+  expectedGroupId: Uint8Array,
+): void {
+  const block = control?.voteRequest?.block
+  const change = control?.authorityChange
+  if (
+    !control
+    || !equalBytes(control.mlsGroupId, expectedGroupId)
+    || !isSha256(control.commitHash)
+    || !Array.isArray(control.deliveries)
+    || control.deliveries.length < 1
+    || !block
+    || !change
+    || !isUuid(block.conversationId)
+    || block.conversationId !== change.deliveryTransition?.conversationId
+    || block.incarnation !== change.deliveryTransition?.incarnation
+    || !isUuid(change.deliveryTransition?.proposalId)
+    || !Number.isSafeInteger(change.nextAuthoritySet?.sequence)
+    || change.nextAuthoritySet.sequence < 2
+    || !Array.isArray(change.nextAuthoritySet.authorities)
+    || change.nextAuthoritySet.authorities.length < 1
+    || change.nextAuthoritySet.authorities.length > 64
+    || block.epochAfter !== block.epochBefore + 1
+  ) {
+    throw new Error('invalid durable MLS authority control record')
+  }
+}
+
 function requireControlBlockResponse(
   value: unknown,
-  control: PendingMlsMembershipChange,
+  control: PendingMlsMembershipChange | PendingMlsAuthorityChange,
 ): {
   conversationId: string
   incarnation: number

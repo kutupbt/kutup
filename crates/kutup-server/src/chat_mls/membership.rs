@@ -144,7 +144,13 @@ pub(super) async fn prepare_membership_finalization(
     verified_history_replay: bool,
 ) -> AppResult<Option<MembershipFinalization>> {
     let block = &request.finalized.block;
-    let Some(transition) = request.membership_transition.as_ref() else {
+    let transition = request.membership_transition.as_ref().or_else(|| {
+        request
+            .authority_change
+            .as_ref()
+            .map(|change| &change.delivery_transition)
+    });
+    let Some(transition) = transition else {
         if incoming_delivery.is_some() {
             return Err(AppError::bad_request(
                 "unrelated MLS control block carries a membership delivery",
@@ -154,7 +160,9 @@ pub(super) async fn prepare_membership_finalization(
     };
     if !matches!(
         block.proposal.action_type,
-        MlsControlActionTypeV1::MembershipChange | MlsControlActionTypeV1::RoutineAdmin
+        MlsControlActionTypeV1::MembershipChange
+            | MlsControlActionTypeV1::RoutineAdmin
+            | MlsControlActionTypeV1::AuthoritySetChange
     ) {
         return Err(AppError::bad_request(
             "unrelated MLS control action carries a roster transition",
@@ -259,6 +267,16 @@ fn validate_transition_against_state(
         {
             return Err(AppError::bad_request(
                 "MLS routine administrator change cannot alter membership routing",
+            ))
+        }
+        MlsControlActionTypeV1::AuthoritySetChange
+            if transition.previous_member_count != transition.next_member_count
+                || transition.previous_roster_commitment != transition.next_roster_commitment
+                || transition.previous_participant_domains
+                    != transition.next_participant_domains =>
+        {
+            return Err(AppError::bad_request(
+                "MLS authority change cannot alter membership or routing",
             ))
         }
         _ => {}

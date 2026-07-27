@@ -338,6 +338,46 @@ test.describe('two-server secure chat', () => {
     ).toHaveCount(0, { timeout: 90_000 })
     await pageA.keyboard.press('Escape')
 
+    // The owner changes ordering authorities through one owner-approved MLS
+    // Commit and joint old/new quorums. Removing b.test still delivers the
+    // exact Commit to Bob because participant routing is independent from the
+    // ordering set.
+    const removeAuthorityCommit = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/control/blocks'
+    })
+    await pageA.getByTestId('chat-group-members').click()
+    await pageA.getByTestId('chat-group-authority-domains').fill('a.test')
+    await pageA.getByTestId('chat-group-save-authorities').click()
+    expect((await requireResponseOrUiError(pageA, removeAuthorityCommit)).ok()).toBe(true)
+    await expect(pageA.getByTestId('chat-group-authority-a.test')).toBeVisible({ timeout: 90_000 })
+    await expect(pageA.getByTestId('chat-group-authority-b.test')).toHaveCount(0)
+    await pageA.keyboard.press('Escape')
+
+    await pageB.getByTestId('chat-group-members').click()
+    await expect(pageB.getByTestId('chat-group-authority-a.test')).toBeVisible({ timeout: 90_000 })
+    await expect(pageB.getByTestId('chat-group-authority-b.test')).toHaveCount(0)
+    await pageB.keyboard.press('Escape')
+
+    // Adding b.test back exercises exact history bootstrap before b.test may
+    // contribute its new-set vote. Both participant clients then pin sequence 3.
+    const addAuthorityCommit = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/control/blocks'
+    })
+    await pageA.getByTestId('chat-group-members').click()
+    await pageA.getByTestId('chat-group-authority-domains').fill('a.test, b.test')
+    await pageA.getByTestId('chat-group-save-authorities').click()
+    expect((await requireResponseOrUiError(pageA, addAuthorityCommit)).ok()).toBe(true)
+    await expect(pageA.getByTestId('chat-group-authority-b.test')).toBeVisible({ timeout: 90_000 })
+    await pageA.keyboard.press('Escape')
+
+    await pageB.getByTestId('chat-group-members').click()
+    await expect(pageB.getByTestId('chat-group-authority-b.test')).toBeVisible({ timeout: 90_000 })
+    await pageB.keyboard.press('Escape')
+
     const destinationMailbox: Array<Record<string, unknown>> = []
     pageB.on('response', (response) => {
       const url = new URL(response.url())

@@ -12,7 +12,10 @@ The targets are:
   witness views, and fork evidence;
 - `sealed_sender_parsers`: anonymous and federated sealed-send JSON, sender
   certificates, libsignal unidentified-sender content, and raw libsignal
-  sealed-sender outer envelopes through the real decrypt/parser entry point.
+  sealed-sender outer envelopes through the real decrypt/parser entry point;
+- `mls_control_parsers`: authority changes, old/new vote requests, finalized
+  blocks, replicas, destination-private deliveries, bootstrap/history pages,
+  and the mandatory private control state.
 
 Install `cargo-fuzz`, then run both targets with a nightly toolchain:
 
@@ -21,6 +24,7 @@ cargo install cargo-fuzz
 cd fuzz
 cargo +nightly fuzz run policy_transparency_parsers -- -max_len=2097152
 cargo +nightly fuzz run sealed_sender_parsers -- -max_len=1048576
+cargo +nightly fuzz run mls_control_parsers -- -max_len=8388608
 ```
 
 CI and phase-gate smoke runs should add a bounded `-runs=10000`; scheduled

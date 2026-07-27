@@ -133,6 +133,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [addGroupMemberOpen, setAddGroupMemberOpen] = useState(false)
   const [groupMembersOpen, setGroupMembersOpen] = useState(false)
   const [groupMember, setGroupMember] = useState('')
+  const [groupAuthorityDomains, setGroupAuthorityDomains] = useState('')
   const [error, setError] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const selfAccount = useMemo(
@@ -282,9 +283,18 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const selectedGroupSelfMember = selectedGroup?.currentRoster.find(member =>
     canonicalAccountAddress(member.address) === selfAddress)
   const canManageSelectedGroup = selectedGroupSelfMember?.isAdmin === true
+  const canManageSelectedGroupAuthorities = Boolean(selectedGroupSelfMember?.ownerId)
   const selectedGroupAdministratorCount = selectedGroup?.currentRoster.filter(
     member => member.isAdmin,
   ).length ?? 0
+
+  useEffect(() => {
+    setGroupAuthorityDomains(
+      selectedGroup?.currentAuthoritySet.authorities
+        .map(authority => authority.domain)
+        .join(', ') ?? '',
+    )
+  }, [selectedGroup?.request.genesis.conversationId, selectedGroup?.currentAuthoritySet.sequence])
   const selectedLabel = selectedAddress ??
     (selectedConversation?.kind === 'group'
       ? `Group ${selectedConversation.groupId.slice(0, 8)}`
@@ -513,6 +523,28 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
         toast.success(member.isAdmin ? 'Administrator removed' : 'Administrator added')
       }
       setGroups(await service.groups())
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setGroupUpdating(false)
+    }
+  }
+
+  async function updateSelectedGroupAuthorities(event: FormEvent) {
+    event.preventDefault()
+    if (!service || !selectedGroup || !canManageSelectedGroupAuthorities || groupUpdating) return
+    const domains = groupAuthorityDomains
+      .split(/[\s,]+/u)
+      .map(domain => domain.trim())
+      .filter(Boolean)
+    setGroupUpdating(true)
+    try {
+      await service.setGroupAuthorities(
+        selectedGroup.request.genesis.conversationId,
+        domains,
+      )
+      setGroups(await service.groups())
+      toast.success('MLS ordering authorities updated')
     } catch (cause) {
       toast.error(errorMessage(cause, t))
     } finally {
@@ -956,6 +988,41 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                         </div>
                       )
                     })}
+                  </div>
+                  <div className="rounded-lg border p-3" data-testid="chat-group-authorities">
+                    <p className="text-sm font-medium">Ordering authorities</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Sequence {selectedGroup.currentAuthoritySet.sequence} · quorum {selectedGroup.currentAuthoritySet.requiredQuorum}/{selectedGroup.currentAuthoritySet.authorities.length}
+                    </p>
+                    <ul className="mt-2 grid gap-1 text-xs text-muted-foreground">
+                      {selectedGroup.currentAuthoritySet.authorities.map(authority => (
+                        <li key={authority.domain} data-testid={`chat-group-authority-${authority.domain}`}>
+                          {authority.domain}
+                        </li>
+                      ))}
+                    </ul>
+                    {canManageSelectedGroupAuthorities && (
+                      <form className="mt-3 flex gap-2" onSubmit={updateSelectedGroupAuthorities}>
+                        <Input
+                          value={groupAuthorityDomains}
+                          onChange={event => setGroupAuthorityDomains(event.target.value)}
+                          placeholder="one.example, two.example"
+                          aria-label="MLS ordering authority domains"
+                          data-testid="chat-group-authority-domains"
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                        />
+                        <Button
+                          type="submit"
+                          size="sm"
+                          disabled={groupUpdating || groupAuthorityDomains.trim().length === 0}
+                          data-testid="chat-group-save-authorities"
+                        >
+                          {groupUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                          Update
+                        </Button>
+                      </form>
+                    )}
                   </div>
                 </DialogContent>
               </Dialog>

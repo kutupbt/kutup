@@ -29,3 +29,10 @@ path = "fuzz_targets/sealed_sender_parsers.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "mls_control_parsers"
+path = "fuzz_targets/mls_control_parsers.rs"
+test = false
+doc = false
+bench = false

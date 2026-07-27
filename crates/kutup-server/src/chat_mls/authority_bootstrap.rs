@@ -95,7 +95,10 @@ impl MlsRepository {
             participant_domains,
             transition_block: block.clone(),
             previous_set_certificate: previous_certificate.clone(),
-            next_authority_set: request.authority_set.clone(),
+            authority_change: request
+                .authority_change
+                .clone()
+                .expect("validated next-set vote carries authority change"),
             history_block_count: history.len() as u64,
             history_digest: mls_authority_history_digest(&history).map_err(AppError::internal)?,
         };
@@ -199,9 +202,10 @@ pub(super) async fn bootstrap_finalized_authority(
     destination: &str,
     request: &CommitMlsControlBlockV1,
 ) -> AppResult<()> {
-    let Some(next) = request.next_authority_set.as_ref() else {
+    let Some(change) = request.authority_change.as_ref() else {
         return Ok(());
     };
+    let next = &change.next_authority_set;
     if next.authority(destination).is_none() {
         return Ok(());
     }
@@ -212,6 +216,7 @@ pub(super) async fn bootstrap_finalized_authority(
     let vote_request = FederatedMlsOrderingVoteRequestV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
         block: request.finalized.block.clone(),
+        authority_change: Some(change.clone()),
         authority_set: next.clone(),
         previous_set_certificate: Some(transition.previous_set_certificate.clone()),
     };
@@ -235,7 +240,12 @@ async fn send_bootstrap_pages(
         .ok_or_else(|| AppError::not_found("MLS federation unavailable"))?;
     let expected = pages
         .first()
-        .and_then(|page| page.descriptor.next_authority_set.authority(destination))
+        .and_then(|page| {
+            page.descriptor
+                .authority_change
+                .next_authority_set
+                .authority(destination)
+        })
         .ok_or_else(|| AppError::bad_request("bootstrap destination is not a new authority"))?;
     let remote_policy = authenticated_remote_policy(state, destination).await?;
     if remote_policy.control_signing_key_id != expected.key_id
@@ -338,7 +348,12 @@ pub(crate) async fn federated_stage_authority_bootstrap(
         return signed_federation_error(federation, &authenticated, AppError::bad_request(error));
     }
     let local_domain = federation.server_name();
-    let Some(local_authority) = page.descriptor.next_authority_set.authority(local_domain) else {
+    let Some(local_authority) = page
+        .descriptor
+        .authority_change
+        .next_authority_set
+        .authority(local_domain)
+    else {
         return signed_federation_error(
             federation,
             &authenticated,

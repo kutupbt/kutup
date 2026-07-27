@@ -155,11 +155,13 @@ impl MlsRepository {
                 is_admin.ok_or_else(|| AppError::forbidden("not an active local MLS member"))?;
             if matches!(
                 block.proposal.action_type,
-                MlsControlActionTypeV1::RoutineAdmin | MlsControlActionTypeV1::MembershipChange
+                MlsControlActionTypeV1::RoutineAdmin
+                    | MlsControlActionTypeV1::MembershipChange
+                    | MlsControlActionTypeV1::AuthoritySetChange
             ) && !is_admin
             {
                 return Err(AppError::forbidden(
-                    "MLS routine and membership finalization requires a local administrator",
+                    "MLS routine, membership, and authority finalization requires a local administrator",
                 ));
             }
         }
@@ -211,17 +213,19 @@ impl MlsRepository {
         let mut next_authorities = None;
         if block.proposal.action_type == MlsControlActionTypeV1::AuthoritySetChange {
             let next = request
-                .next_authority_set
+                .authority_change
                 .as_ref()
-                .expect("validated authority transition shape");
+                .expect("validated authority transition shape")
+                .next_authority_set
+                .clone();
             request
                 .authority_transition
                 .as_ref()
                 .expect("validated authority transition shape")
-                .verify(&block_hash, &authorities, next)
+                .verify(&block_hash, &authorities, &next)
                 .map_err(AppError::bad_request)?;
             next_authorities =
-                Some(serde_json::to_value(next).map_err(|error| {
+                Some(serde_json::to_value(&next).map_err(|error| {
                     AppError::internal(format!("serialize authorities: {error}"))
                 })?);
         }
@@ -236,7 +240,7 @@ impl MlsRepository {
                 .as_ref()
                 .expect("validated owner transition shape");
             next.validate().map_err(AppError::bad_request)?;
-            if next.sequence != current.sequence + 1 {
+            if current.sequence.checked_add(1) != Some(next.sequence) {
                 return Err(AppError::bad_request(
                     "MLS owner-set sequence must advance by exactly one",
                 ));
@@ -349,9 +353,9 @@ impl MlsRepository {
         .bind(&block_hash)
         .bind(
             request
-                .next_authority_set
+                .authority_change
                 .as_ref()
-                .map(|set| set.sequence as i64),
+                .map(|change| change.next_authority_set.sequence as i64),
         )
         .bind(next_authorities)
         .bind(
@@ -429,7 +433,11 @@ impl MlsRepository {
                     .iter()
                     .map(|authority| authority.domain.clone()),
             );
-            if let Some(next) = &request.next_authority_set {
+            if let Some(next) = request
+                .authority_change
+                .as_ref()
+                .map(|change| &change.next_authority_set)
+            {
                 destinations.extend(
                     next.authorities
                         .iter()
@@ -589,11 +597,16 @@ impl MlsRepository {
                 AppError::internal(format!("stored MLS authorities invalid: {error}"))
             })?;
         if request.authority_set != current_authorities {
+            let change = request
+                .authority_change
+                .as_ref()
+                .ok_or_else(|| AppError::bad_request("MLS authority transition is absent"))?;
             let expected_transition_digest =
-                kutup_chat_proto::mls_transition_digest(&request.authority_set)
-                    .map_err(AppError::bad_request)?;
+                change.transition_digest().map_err(AppError::bad_request)?;
             if block.proposal.action_type != MlsControlActionTypeV1::AuthoritySetChange
-                || request.authority_set.sequence != current_authorities.sequence + 1
+                || current_authorities.sequence.checked_add(1)
+                    != Some(request.authority_set.sequence)
+                || request.authority_set != change.next_authority_set
                 || block.transition_digest.as_deref() != Some(expected_transition_digest.as_str())
             {
                 return Err(AppError::bad_request(

@@ -243,6 +243,22 @@ owner assignments. Server finalization independently requires an active local
 administrator, while exact already-committed retries are checked by immutable
 block hash before consulting the post-transition roster.
 
+Authority changes use a distinct durable governance operation. A current
+administrator proposes the next authenticated policy set and a current owner
+signs the proposal; these are separate authorization checks even when the same
+account holds both roles. The public `MlsAuthorityChangeV1` jointly commits the
+next contiguous authority set and an unchanged-roster delivery transition for
+the exact MLS Commit. The client first pins a quorum certificate from the old
+set, then requests the same block from the new set. Newly added authorities
+must import and verify the complete hash-chained history before voting. Only a
+joint old/new certificate can finalize the block. Every participant server
+still receives its destination-private Commit delivery, including a server
+removed from ordering. The encrypted client snapshot persists the Commit,
+deliveries, owner approval, both quorum stages, and final request atomically;
+restart reconciliation never recollects or substitutes an already pinned
+stage. The owner-only web control displays exact authority domains, sequence,
+and quorum before accepting a replacement set.
+
 A routine administrator change uses the same committed private-roster delivery
 shape but must preserve member count and participant-domain routing exactly. It
 carries no KeyPackage or Welcome, advances MLS with a self-update Commit, must
@@ -292,8 +308,8 @@ traffic-inspection feature.
 ## Failure semantics
 
 - A network failure queues exact retry material.
-- A pending local Commit blocks another membership Commit and capability epoch
-  advancement.
+- A pending local Commit blocks another membership or authority Commit and
+  capability epoch advancement.
 - Wrong suite, key, roster, epoch, predecessor, quorum, owner approval,
   history digest, or sender manifest is a hard cryptographic failure.
 - No established MLS/anonymous send falls back to identified delivery.

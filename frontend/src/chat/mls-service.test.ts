@@ -165,6 +165,55 @@ function finalizedMembership() {
   }
 }
 
+function pendingAuthority() {
+  return {
+    mlsGroupId: [...genesisGroupBytes],
+    deliveries: [{ destination: 'alpha.example', deliveryDigest: '41'.repeat(32) }],
+    authorityChange: {
+      nextAuthoritySet: {
+        sequence: 2,
+        authorities: [
+          activeGenesis().currentAuthoritySet.authorities[0],
+          {
+            domain: 'beta.example',
+            keyId: '33'.repeat(32),
+            publicKey: btoa(String.fromCharCode(...new Uint8Array(32).fill(3))),
+          },
+        ],
+        requiredQuorum: 2,
+      },
+      deliveryTransition: {
+        conversationId,
+        incarnation: 1,
+        proposalId,
+      },
+    },
+    voteRequest: {
+      block: {
+        conversationId,
+        incarnation: 1,
+        height: 1,
+        epochBefore: 0,
+        epochAfter: 1,
+      },
+    },
+    commitHash: 'dc'.repeat(32),
+  }
+}
+
+function finalizedAuthority() {
+  return {
+    group: { mlsGroupId: [...genesisGroupBytes], epoch: 1 },
+    conversation: {
+      ...activeGenesis(),
+      lastFinalizedHeight: 1,
+      lastFinalizedEpoch: 1,
+      lastBlockHash: controlBlockHash,
+      currentAuthoritySet: pendingAuthority().authorityChange.nextAuthoritySet,
+    },
+  }
+}
+
 function harness(
   existing: LocalMlsGroupState | null = null,
   localRecords: LocalMlsConversationRecord[] = [pendingGenesis()],
@@ -196,6 +245,20 @@ function harness(
     pendingMlsMembershipChanges: vi.fn().mockResolvedValue([pendingMembership()]),
     buildMlsMembershipCommitRequest: vi.fn().mockResolvedValue({ finalized: 'request' }),
     finalizeMlsMembershipChange: vi.fn().mockResolvedValue(finalizedMembership()),
+    prepareMlsAuthorityChange: vi.fn().mockResolvedValue({
+      pending: {
+        mlsGroupId: [...genesisGroupBytes],
+        epochBefore: 0,
+        epochAfter: 1,
+        commitHash: 'dc'.repeat(32),
+        commit: [9, 8, 7],
+      },
+      control: pendingAuthority(),
+    }),
+    pendingMlsAuthorityChanges: vi.fn().mockResolvedValue([pendingAuthority()]),
+    recordMlsAuthorityPreviousQuorum: vi.fn().mockResolvedValue({ next: 'vote-request' }),
+    buildMlsAuthorityCommitRequest: vi.fn().mockResolvedValue({ finalized: 'authority-request' }),
+    finalizeMlsAuthorityChange: vi.fn().mockResolvedValue(finalizedAuthority()),
     mlsGroupState: vi.fn().mockResolvedValue(existing),
     inspectMlsWelcome: vi.fn().mockResolvedValue({
       mlsGroupId: [...new Uint8Array(16).fill(7)],
@@ -588,6 +651,66 @@ describe('MlsConversationService', () => {
     expect(client.buildMlsMembershipCommitRequest).toHaveBeenCalledTimes(1)
     expect(transport.stageMlsMembershipDelivery).toHaveBeenCalledTimes(4)
     expect(transport.commitMlsControlBlock).toHaveBeenCalledTimes(2)
+  })
+
+  it('pins old and new authority quorums before committing the owner-approved change', async () => {
+    vi.stubGlobal('crypto', {
+      randomUUID: () => proposalId,
+      getRandomValues: (value: Uint8Array) => value,
+    })
+    const { client, transport, service } = harness(null, [activeGenesis()])
+    await expect(service.setAuthorities(
+      conversationId,
+      ['beta.example', 'alpha.example'],
+    )).resolves.toEqual(finalizedAuthority())
+    expect(client.fetchVerifiedMlsOrderingPolicy).toHaveBeenNthCalledWith(1, 'alpha.example')
+    expect(client.fetchVerifiedMlsOrderingPolicy).toHaveBeenNthCalledWith(2, 'beta.example')
+    expect(client.prepareMlsAuthorityChange).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      proposalId,
+      [{ canonicalDomain: 'alpha.example' }, { canonicalDomain: 'beta.example' }],
+      expect.stringMatching(/^[0-9]+$/),
+    )
+    expect(transport.stageMlsMembershipDelivery).toHaveBeenCalledTimes(1)
+    expect(transport.collectMlsOrderingVotes).toHaveBeenNthCalledWith(
+      1,
+      pendingAuthority().voteRequest,
+    )
+    expect(client.recordMlsAuthorityPreviousQuorum).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      { votes: ['authority'] },
+    )
+    expect(transport.collectMlsOrderingVotes).toHaveBeenNthCalledWith(
+      2,
+      { next: 'vote-request' },
+    )
+    expect(client.buildMlsAuthorityCommitRequest).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      { votes: ['authority'] },
+    )
+    expect(client.finalizeMlsAuthorityChange).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      expect.objectContaining({ blockHash: controlBlockHash }),
+    )
+  })
+
+  it('resumes an authority change from the exact durable next-set vote request', async () => {
+    const { client, transport, service } = harness(null, [activeGenesis()])
+    const pending = {
+      ...pendingAuthority(),
+      previousSetCertificate: { votes: ['old'] },
+      newVoteRequest: { durable: 'next-vote-request' },
+    }
+    vi.mocked(client.pendingMlsAuthorityChanges).mockResolvedValueOnce([pending])
+    await expect(service.reconcilePendingAuthorityChanges()).resolves.toEqual([
+      finalizedAuthority(),
+    ])
+    expect(client.prepareMlsAuthorityChange).not.toHaveBeenCalled()
+    expect(client.recordMlsAuthorityPreviousQuorum).not.toHaveBeenCalled()
+    expect(transport.collectMlsOrderingVotes).toHaveBeenCalledOnce()
+    expect(transport.collectMlsOrderingVotes).toHaveBeenCalledWith(
+      pending.newVoteRequest,
+    )
   })
 
   it('never merges local MLS state for a malformed control acknowledgement', async () => {

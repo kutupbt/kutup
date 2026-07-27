@@ -323,6 +323,42 @@ export interface FinalizedMlsMembershipChange {
   conversation: LocalMlsConversationRecord
 }
 
+export interface PendingMlsAuthorityChange {
+  mlsGroupId: number[]
+  deliveries: unknown[]
+  authorityChange: {
+    nextAuthoritySet: MlsAuthoritySet
+    deliveryTransition: {
+      conversationId: string
+      incarnation: number
+      proposalId: string
+    }
+  }
+  voteRequest: {
+    block: {
+      conversationId: string
+      incarnation: number
+      height: number
+      epochBefore: number
+      epochAfter: number
+    }
+  }
+  commitHash: string
+  previousSetCertificate?: unknown
+  newVoteRequest?: unknown
+  finalRequest?: unknown
+}
+
+export interface PreparedMlsAuthorityChange {
+  pending: PreparedMlsMembershipChange['pending']
+  control: PendingMlsAuthorityChange
+}
+
+export interface FinalizedMlsAuthorityChange {
+  group: LocalMlsGroupState
+  conversation: LocalMlsConversationRecord
+}
+
 export interface JoinedMlsConversation {
   group: LocalMlsGroupState
   conversation: LocalMlsConversationRecord
@@ -550,6 +586,25 @@ export interface WasmChatClientHandle {
     mlsGroupId: Uint8Array,
     acknowledgement: unknown,
   ): Promise<FinalizedMlsMembershipChange>
+  prepareMlsAuthorityChange(
+    mlsGroupId: Uint8Array,
+    proposalId: string,
+    authorityPolicies: unknown[],
+    nowSeconds: string,
+  ): Promise<PreparedMlsAuthorityChange>
+  pendingMlsAuthorityChanges(): Promise<PendingMlsAuthorityChange[]>
+  recordMlsAuthorityPreviousQuorum(
+    mlsGroupId: Uint8Array,
+    certificate: unknown,
+  ): Promise<unknown>
+  buildMlsAuthorityCommitRequest(
+    mlsGroupId: Uint8Array,
+    newSetCertificate: unknown,
+  ): Promise<unknown>
+  finalizeMlsAuthorityChange(
+    mlsGroupId: Uint8Array,
+    acknowledgement: unknown,
+  ): Promise<FinalizedMlsAuthorityChange>
   pendingMlsCommit(mlsGroupId: Uint8Array): Promise<unknown | null>
   mergePendingMlsCommit(mlsGroupId: Uint8Array, commitHash: string): Promise<unknown>
   rejectPendingMlsCommit(mlsGroupId: Uint8Array, commitHash: string): Promise<void>
