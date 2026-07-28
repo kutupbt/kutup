@@ -264,6 +264,7 @@ impl MlsRepository {
             &mut tx,
             local_domain,
             local_submitter,
+            federated_origin,
             incoming_membership_delivery,
             request,
             conversation_kind,

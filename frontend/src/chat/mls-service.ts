@@ -18,6 +18,7 @@ import type {
   MlsGroupAuthorizationPolicy,
   MlsGroupCryptographicPolicy,
   MlsIncarnationRecovery,
+  MlsInvitationFeedback,
   MlsMailboxEnvelope,
   MlsOwnerCandidate,
   MlsOutboxEntry,
@@ -844,6 +845,12 @@ export class MlsConversationService {
     const invitations = await this.transport.listMlsInvitations()
     for (const invitation of invitations) validateInvitation(invitation, now)
     return invitations
+  }
+
+  async invitationFeedback(): Promise<MlsInvitationFeedback[]> {
+    const feedback = await this.transport.listMlsInvitationFeedback()
+    for (const entry of feedback) validateInvitationFeedback(entry)
+    return feedback
   }
 
   rejectInvitation(invitation: PendingMlsInvitation): Promise<void> {
@@ -2251,6 +2258,23 @@ function validateInvitation(invitation: PendingMlsInvitation, now: number): void
     throw new Error('invalid or expired MLS invitation')
   }
   decodeCanonicalBase64(invitation.mlsGroupId, 16, 255)
+}
+
+function validateInvitationFeedback(feedback: MlsInvitationFeedback): void {
+  if (
+    feedback.protocolVersion !== MLS_PROTOCOL_VERSION
+    || !isUuid(feedback.conversationId)
+    || !Number.isSafeInteger(feedback.incarnation)
+    || feedback.incarnation < 1
+    || !Number.isSafeInteger(feedback.invitedEpoch)
+    || feedback.invitedEpoch < 1
+    || !Number.isSafeInteger(feedback.decidedAt)
+    || feedback.decidedAt < 0
+    || (feedback.decision !== 'rejected' && feedback.decision !== 'expired')
+  ) {
+    throw new Error('invalid MLS invitation feedback')
+  }
+  requireCanonicalAddress(feedback.member)
 }
 
 function validateVerifiedInvitation(

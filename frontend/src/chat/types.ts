@@ -154,6 +154,16 @@ export interface MlsInvitationDecisionResponse {
   idempotent: boolean
 }
 
+export interface MlsInvitationFeedback {
+  protocolVersion: number
+  conversationId: string
+  incarnation: number
+  member: AccountAddress
+  invitedEpoch: number
+  decision: 'rejected' | 'expired'
+  decidedAt: number
+}
+
 export type MlsMailboxDeliveryKind =
   | 'identified_request'
   | 'anonymous'
@@ -741,6 +751,7 @@ export interface ChatTransportPort {
     limit?: number,
   ): Promise<MlsControlHistoryPage>
   listMlsInvitations(): Promise<PendingMlsInvitation[]>
+  listMlsInvitationFeedback(): Promise<MlsInvitationFeedback[]>
   respondMlsInvitation(
     request: MlsInvitationDecision,
   ): Promise<MlsInvitationDecisionResponse>

@@ -68,7 +68,7 @@ async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
     .fetch_one(&mut connection)
     .await
     .unwrap();
-    assert_eq!(table_count, 27);
+    assert_eq!(table_count, 29);
 
     sqlx::query(
         "INSERT INTO federation_feature_policy_documents
@@ -155,8 +155,9 @@ async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
     sqlx::query(
         "INSERT INTO chat_mls_local_members
              (conversation_id, incarnation, user_id, membership_status,
-              invitation_expires_at, joined_epoch)
-         VALUES ($1, 1, $2, 'pending', now() + interval '30 days', 0)",
+              invitation_expires_at, invited_by_domain, joined_epoch)
+         VALUES ($1, 1, $2, 'pending', now() + interval '30 days',
+                 'a.example', 1)",
     )
     .bind(conversation_id)
     .bind(user_id)
@@ -175,6 +176,43 @@ async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
         .await
         .is_err(),
         "terminal invitation state must clear its expiry atomically"
+    );
+
+    sqlx::query(
+        "INSERT INTO chat_mls_invitation_feedback
+             (conversation_id, incarnation, member_address, invited_epoch,
+              source_domain, decision, decided_at, feedback_digest, feedback)
+         VALUES ($1, 1, 'alice@a.example', 1, 'a.example', 'rejected',
+                 now(), $2, '{}'::jsonb)",
+    )
+    .bind(conversation_id)
+    .bind("66".repeat(32))
+    .execute(&mut connection)
+    .await
+    .unwrap();
+    assert!(
+        sqlx::query(
+            "UPDATE chat_mls_invitation_feedback SET decision = 'expired'
+             WHERE conversation_id = $1",
+        )
+        .bind(conversation_id)
+        .execute(&mut connection)
+        .await
+        .is_err(),
+        "authenticated invitation feedback must remain append-only"
+    );
+    let still_pending: String = sqlx::query_scalar(
+        "SELECT membership_status FROM chat_mls_local_members
+         WHERE conversation_id = $1 AND user_id = $2",
+    )
+    .bind(conversation_id)
+    .bind(user_id)
+    .fetch_one(&mut connection)
+    .await
+    .unwrap();
+    assert_eq!(
+        still_pending, "pending",
+        "advisory feedback must never mutate the MLS roster"
     );
 
     sqlx::query(

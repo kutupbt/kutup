@@ -791,7 +791,13 @@ servers verify the complete paginated control history before accepting their
 private Commit/Welcome delivery. New local members remain pending until they
 accept an identified 30-day invitation; rejection/expiry deletes their
 membership-control mailbox material and cannot grant authorization or delivery
-capabilities.
+capabilities. A rejection/expiry atomically records a canonical identified
+feedback statement and, when necessary, retries it over the shared
+authenticated federation transport. The invitation-origin server verifies the
+exact finalized Welcome and source domain before storing the statement
+append-only. Only active local administrators can read it. Feedback is
+advisory and never changes the MLS roster; an administrator must order an
+explicit removal Commit.
 
 The authenticated MLS mailbox uses bounded cursor pages and idempotent UUID
 acknowledgements. Membership-control rows bind an exact incarnation; anonymous
@@ -827,10 +833,10 @@ gate proves requester and approver restart recovery, ordering only after the
 current-owner quorum, finalization, and continued group delivery. Owner-approved
 closure uses the same private approval channel and one unchanged-roster MLS
 Commit; its gate proves no pre-quorum ordering, terminal state on both domains,
-send blocking, and closed-history persistence across reload. Recovery,
-suite-policy governance, federated invitation-rejection feedback, linked-device
-state flow, and adversarial/scale browser gates must finish before this section
-changes from `[ADD]` to `[IMPL]`.
+send blocking, and closed-history persistence across reload. The two-server
+gate also proves remote invitation rejection feedback, browser visibility, and
+manual MLS removal. Linked-device state flow and adversarial/scale browser
+gates must finish before this section changes from `[ADD]` to `[IMPL]`.
 
 ---
 

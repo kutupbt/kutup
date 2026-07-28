@@ -28,6 +28,8 @@ struct AdminMlsStatusV1 {
     pending_control_deliveries: u64,
     pending_recovery_deliveries: u64,
     pending_anonymous_deliveries: u64,
+    pending_invitation_feedback_deliveries: u64,
+    stored_invitation_feedback: u64,
     receiving_authority_bootstraps: u64,
     rejected_authority_bootstraps: u64,
     receiving_participant_bootstraps: u64,
@@ -69,6 +71,7 @@ struct AdminMlsConversationV1 {
     last_block_hash: Option<String>,
     local_members: MlsLocalMemberCountsV1,
     pending_control_deliveries: u64,
+    invitation_feedback: u64,
     incarnation_history: Vec<AdminMlsIncarnationV1>,
     recoveries: Vec<AdminMlsRecoveryV1>,
     consensus_evidence: Vec<AdminMlsEvidenceV1>,
@@ -168,11 +171,14 @@ pub(crate) async fn status(
     )
     .fetch_one(&state.pool)
     .await?;
-    let operational_counts: (i64, i64, i64, i64, i64, i64, i64, i64, i64) = sqlx::query_as(
-        "SELECT
+    let operational_counts: (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) =
+        sqlx::query_as(
+            "SELECT
             (SELECT COUNT(*) FROM chat_mls_control_outbox WHERE state = 'pending'),
             (SELECT COUNT(*) FROM chat_mls_recovery_outbox WHERE state = 'pending'),
             (SELECT COUNT(*) FROM chat_mls_federation_outbox WHERE state = 'pending'),
+            (SELECT COUNT(*) FROM chat_mls_invitation_feedback_outbox WHERE state = 'pending'),
+            (SELECT COUNT(*) FROM chat_mls_invitation_feedback),
             (SELECT COUNT(*) FROM chat_mls_authority_bootstraps WHERE state = 'receiving'),
             (SELECT COUNT(*) FROM chat_mls_authority_bootstraps WHERE state = 'rejected'),
             (SELECT COUNT(*) FROM chat_mls_participant_bootstraps WHERE state = 'receiving'),
@@ -181,9 +187,9 @@ pub(crate) async fn status(
              WHERE membership_status = 'pending' AND removed_epoch IS NULL),
             (SELECT COUNT(*) FROM chat_mls_consensus_evidence
              WHERE acknowledged_at IS NULL)",
-    )
-    .fetch_one(&state.pool)
-    .await?;
+        )
+        .fetch_one(&state.pool)
+        .await?;
     Ok(Json(AdminMlsStatusV1 {
         enabled: policy.is_some(),
         // This milestone keeps the browser capability absent until browser and
@@ -200,12 +206,14 @@ pub(crate) async fn status(
         pending_control_deliveries: checked_count(operational_counts.0)?,
         pending_recovery_deliveries: checked_count(operational_counts.1)?,
         pending_anonymous_deliveries: checked_count(operational_counts.2)?,
-        receiving_authority_bootstraps: checked_count(operational_counts.3)?,
-        rejected_authority_bootstraps: checked_count(operational_counts.4)?,
-        receiving_participant_bootstraps: checked_count(operational_counts.5)?,
-        rejected_participant_bootstraps: checked_count(operational_counts.6)?,
-        pending_invitations: checked_count(operational_counts.7)?,
-        unacknowledged_consensus_evidence: checked_count(operational_counts.8)?,
+        pending_invitation_feedback_deliveries: checked_count(operational_counts.3)?,
+        stored_invitation_feedback: checked_count(operational_counts.4)?,
+        receiving_authority_bootstraps: checked_count(operational_counts.5)?,
+        rejected_authority_bootstraps: checked_count(operational_counts.6)?,
+        receiving_participant_bootstraps: checked_count(operational_counts.7)?,
+        rejected_participant_bootstraps: checked_count(operational_counts.8)?,
+        pending_invitations: checked_count(operational_counts.9)?,
+        unacknowledged_consensus_evidence: checked_count(operational_counts.10)?,
     })
     .into_response())
 }
@@ -258,6 +266,14 @@ pub(crate) async fn conversation(
     let pending_control: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM chat_mls_control_outbox
          WHERE conversation_id = $1 AND incarnation = $2 AND state = 'pending'",
+    )
+    .bind(conversation_id)
+    .bind(row.incarnation)
+    .fetch_one(&state.pool)
+    .await?;
+    let invitation_feedback: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM chat_mls_invitation_feedback
+         WHERE conversation_id = $1 AND incarnation = $2",
     )
     .bind(conversation_id)
     .bind(row.incarnation)
@@ -338,6 +354,7 @@ pub(crate) async fn conversation(
             removed: checked_count(member_counts.3)?,
         },
         pending_control_deliveries: checked_count(pending_control)?,
+        invitation_feedback: checked_count(invitation_feedback)?,
         incarnation_history: incarnation_rows
             .into_iter()
             .map(

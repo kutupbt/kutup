@@ -4,6 +4,7 @@ import type {
   ChatTransportPort,
   LocalMlsConversationRecord,
   LocalMlsGroupState,
+  MlsInvitationFeedback,
   PendingMlsOwnerApprovalRequest,
   PendingMlsInvitation,
   WasmChatClientHandle,
@@ -146,6 +147,18 @@ function invitation(): PendingMlsInvitation {
     mlsGroupId: groupId,
     invitedEpoch: 1,
     expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  }
+}
+
+function invitationFeedback(): MlsInvitationFeedback {
+  return {
+    protocolVersion: 1,
+    conversationId,
+    incarnation: 1,
+    member: { username: 'bobby', server: 'beta.example' },
+    invitedEpoch: 1,
+    decision: 'rejected',
+    decidedAt: 1_700_000_100,
   }
 }
 
@@ -773,6 +786,7 @@ function harness(
       nextHeight: '1',
     }),
     listMlsInvitations: vi.fn().mockResolvedValue([invitation()]),
+    listMlsInvitationFeedback: vi.fn().mockResolvedValue([invitationFeedback()]),
     respondMlsInvitation: vi.fn().mockResolvedValue({
       conversationId,
       incarnation: 1,
@@ -1404,6 +1418,19 @@ describe('MlsConversationService', () => {
       accept: true,
     })
     expect(transport.ackMlsMailbox).toHaveBeenCalledWith(7, [envelopeId])
+  })
+
+  it('accepts only canonical, versioned invitation feedback', async () => {
+    const { transport, service } = harness()
+    await expect(service.invitationFeedback()).resolves.toEqual([invitationFeedback()])
+    expect(transport.listMlsInvitationFeedback).toHaveBeenCalledOnce()
+
+    vi.mocked(transport.listMlsInvitationFeedback).mockResolvedValue([
+      { ...invitationFeedback(), member: { username: 'bobby', server: 'BETA.example' } },
+    ])
+    await expect(service.invitationFeedback()).rejects.toThrow(
+      'MLS account address is not canonical',
+    )
   })
 
   it('inspects Welcome claims without joining or acknowledging', async () => {

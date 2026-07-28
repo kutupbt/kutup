@@ -3,7 +3,7 @@
 use kutup_chat_proto::{
     CommitMlsControlBlockV1, FederatedMlsAuthorityBootstrapPageV1, FederatedMlsControlReplicaV1,
     FederatedMlsOrderingVoteRequestV1, MlsAuthorityChangeV1, MlsClientControlHistoryPageV1,
-    MlsMembershipDeliveryV1, MlsPrivateControlStateV1,
+    MlsInvitationFeedbackV1, MlsMembershipDeliveryV1, MlsPrivateControlStateV1,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -31,6 +31,11 @@ fuzz_target!(|data: &[u8]| {
         let _ = delivery.validate();
         let _ = delivery.canonical_bytes();
         let _ = delivery.delivery_digest();
+    }
+    if let Ok(feedback) = serde_json::from_slice::<MlsInvitationFeedbackV1>(data) {
+        let _ = feedback.validate();
+        let _ = feedback.canonical_bytes();
+        let _ = feedback.feedback_digest();
     }
     if let Ok(page) = serde_json::from_slice::<FederatedMlsAuthorityBootstrapPageV1>(data) {
         let _ = page.validate();

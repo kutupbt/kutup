@@ -49,6 +49,29 @@ fn suite_is_exactly_wire_suite_zero_x_two() {
 }
 
 #[test]
+fn invitation_feedback_has_one_canonical_vector() {
+    let feedback = MlsInvitationFeedbackV1 {
+        protocol_version: MLS_INVITATION_FEEDBACK_VERSION,
+        conversation_id: Uuid::parse_str("4cc2114c-8015-4e78-9af8-2f5f71c18cf1").unwrap(),
+        incarnation: 3,
+        member: "bob@b.example".parse().unwrap(),
+        invited_epoch: 9,
+        decision: MlsInvitationFeedbackDecisionV1::Rejected,
+        decided_at: 1_785_249_600,
+    };
+    let expected = br#"{"protocolVersion":1,"conversationId":"4cc2114c-8015-4e78-9af8-2f5f71c18cf1","incarnation":3,"member":{"username":"bob","server":"b.example"},"invitedEpoch":9,"decision":"rejected","decidedAt":1785249600}"#;
+    assert_eq!(feedback.canonical_bytes().unwrap(), expected);
+    assert_eq!(
+        feedback.feedback_digest().unwrap(),
+        "93a7802652346c4dacc3964ef7a123c82e2db750c1f2b1e6438e8595e592bbb0"
+    );
+
+    let mut malformed = feedback;
+    malformed.member = "bob".parse().unwrap();
+    assert!(malformed.validate().is_err());
+}
+
+#[test]
 fn quorum_formula_covers_small_and_large_sets() {
     let expected = [(1, 1), (2, 2), (3, 3), (4, 3), (7, 5), (10, 7), (64, 43)];
     for (count, quorum) in expected {

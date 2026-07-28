@@ -1,6 +1,7 @@
 DROP TRIGGER chat_mls_participant_bootstrap_pages_append_only ON chat_mls_participant_bootstrap_pages;
 DROP TRIGGER chat_mls_authority_bootstrap_pages_append_only ON chat_mls_authority_bootstrap_pages;
 DROP TRIGGER chat_mls_consensus_evidence_append_only ON chat_mls_consensus_evidence;
+DROP TRIGGER chat_mls_invitation_feedback_append_only ON chat_mls_invitation_feedback;
 DROP TRIGGER chat_mls_owner_approvals_append_only ON chat_mls_owner_approvals;
 DROP TRIGGER chat_mls_ordering_votes_append_only ON chat_mls_ordering_votes;
 DROP TRIGGER chat_mls_control_blocks_append_only ON chat_mls_control_blocks;
@@ -25,6 +26,8 @@ DROP TABLE chat_mls_consensus_evidence;
 DROP TABLE chat_mls_owner_approvals;
 DROP TABLE chat_mls_ordering_votes;
 DROP TABLE chat_mls_control_blocks;
+DROP TABLE chat_mls_invitation_feedback_outbox;
+DROP TABLE chat_mls_invitation_feedback;
 DROP TABLE chat_mls_membership_deliveries;
 DROP TABLE chat_mls_local_members;
 

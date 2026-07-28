@@ -9,11 +9,13 @@ library support stabilize.
 The feature is intentionally **not advertised yet**. Protocol types, durable
 storage, authenticated federation routes, OpenMLS client state, WASM bindings,
 anonymous delivery, authority catch-up, participant membership transitions,
-identified invitation decisions, routine administrator changes, browser group
-management and messaging, privacy-bounded telemetry, and admin inspection
-routes exist. The live browser gate covers creation, cross-server invitation,
-promotion, administrator-authored add/remove, anonymous bidirectional messages,
-and reload persistence. Owner-set changes use durable MLS-encrypted manual
+identified invitation decisions, federation-authenticated rejection/expiry
+feedback, routine administrator changes, browser group management and
+messaging, privacy-bounded telemetry, and admin inspection routes exist. The
+live browser gate covers creation, cross-server invitation, rejection feedback
+and manual cryptographic removal, promotion, administrator-authored add/remove,
+anonymous bidirectional messages, and reload persistence. Owner-set changes use
+durable MLS-encrypted manual
 approval requests and responses with explicit browser approve/reject controls;
 the two-server gate proves requester and approver restart recovery, that no
 control block is ordered before quorum, and successful finalization after the
@@ -25,8 +27,8 @@ complete: the two-server gate proves manual quorum across requester/approver
 reloads, authenticated immutable evidence retrieval, recipient-side Welcome
 and manifest verification before durable join, post-recovery messaging, and
 recovered-state persistence after reload. Advertisement remains gated on
-federated invitation-rejection feedback, linked-device group state, and the
-remaining adversarial suites. The two-server private-policy gate now passes:
+linked-device group state and the remaining adversarial suites. The two-server
+private-policy gate now passes:
 it proves owner-approved administrator-only sending, a tightened 1 KiB
 user-message ceiling, control availability under both restrictions, exact
 remote policy pinning, and recovery after the tightened policy.
@@ -303,13 +305,20 @@ New local members are `pending` for at most 30 days. Acceptance activates the
 membership; rejection or expiry marks it rejected and deletes its staged
 membership-control mailbox material. Pending/rejected members cannot authorize
 control changes or publish/use group delivery capabilities. The server records
-structured accept/reject/expiry audit events. V1 advertisement additionally
-requires a federated rejection notification so administrators can promptly
-remove a rejecting account from the cryptographic roster; until that lands,
-rejection remains local and the account stays in MLS until an administrator
-commits its removal. A rejected account never receives a later Commit merely
-because another membership change occurs; an attempted delivery to it rejects
-the whole transition rather than silently restoring access.
+structured accept/reject/expiry audit events.
+
+Rejection and expiry also atomically create canonical
+`MlsInvitationFeedbackV1`. Same-server feedback is stored directly; remote
+feedback is delivered through a restart-safe outbox and the shared signed
+federation transport. The receiving server accepts it only from the member's
+authenticated home domain and only when its unchanged finalized membership
+delivery proves the exact member, invited epoch, and Welcome. Feedback history
+is append-only, exposed only to active local group administrators, and visible
+in the browser against the exact current roster/incarnation. It is advisory:
+no server may mutate MLS state from feedback, so an administrator must commit
+the member's cryptographic removal. A rejected account never receives a later
+Commit merely because another membership change occurs; an attempted delivery
+to it rejects the whole transition rather than silently restoring access.
 
 The dedicated authenticated MLS mailbox exposes bounded cursor pages and
 idempotent UUID acknowledgements. Membership-control rows bind the exact
@@ -465,7 +474,6 @@ Do not advertise MLS until all of the remaining items pass together. Private
 authorization/cryptographic owner actions now have protocol, browser
 orchestration, explicit approval UI, and two-server coverage.
 
-- federated invitation-rejection feedback and administrator removal flow;
 - group owner and exact authority-policy/fingerprint UI;
 - WebSocket/restart reconciliation and multi-device linked-state flow;
 - native Rust, WASM, web, Playwright, PostgreSQL migration, Docker Compose,

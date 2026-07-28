@@ -134,6 +134,7 @@ pub(super) async fn prepare_membership_finalization(
     tx: &mut Transaction<'_, Postgres>,
     local_domain: &str,
     local_submitter: Option<Uuid>,
+    federated_origin: Option<&str>,
     incoming_delivery: Option<&MlsMembershipDeliveryV1>,
     request: &CommitMlsControlBlockV1,
     conversation_kind: i16,
@@ -246,11 +247,17 @@ pub(super) async fn prepare_membership_finalization(
     }
 
     if let Some(delivery) = deliveries.get(local_domain) {
+        let invitation_origin = if local_submitter.is_some() {
+            Some(local_domain)
+        } else {
+            federated_origin
+        };
         apply_local_snapshot(
             tx,
             delivery,
             block.epoch_after,
             local_submitter,
+            invitation_origin,
             block.proposal.action_type,
         )
         .await?;
@@ -434,6 +441,7 @@ async fn apply_local_snapshot(
     delivery: &MlsMembershipDeliveryV1,
     epoch_after: u64,
     local_submitter: Option<Uuid>,
+    invitation_origin: Option<&str>,
     action_type: MlsControlActionTypeV1,
 ) -> AppResult<()> {
     let active: Vec<(Uuid, String, bool, Option<String>, String)> = sqlx::query_as(
@@ -600,13 +608,16 @@ async fn apply_local_snapshot(
             .execute(&mut **tx)
             .await?;
         } else {
+            let invitation_origin = invitation_origin.ok_or_else(|| {
+                AppError::forbidden("MLS invitation is missing its authenticated origin")
+            })?;
             sqlx::query(
                 "INSERT INTO chat_mls_local_members
                      (conversation_id, incarnation, user_id, is_admin, is_owner,
                       owner_id, membership_status, invitation_expires_at,
-                      joined_epoch)
+                      invited_by_domain, joined_epoch)
                  VALUES ($1,$2,$3,$4,$5,$6,'pending',
-                         now() + interval '30 days',$7)",
+                         now() + interval '30 days',$7,$8)",
             )
             .bind(delivery.conversation_id)
             .bind(delivery.incarnation as i64)
@@ -614,6 +625,7 @@ async fn apply_local_snapshot(
             .bind(member.is_admin)
             .bind(member.owner_id.is_some())
             .bind(&member.owner_id)
+            .bind(invitation_origin)
             .bind(epoch_after as i64)
             .execute(&mut **tx)
             .await?;

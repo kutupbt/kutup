@@ -105,6 +105,7 @@ CREATE TABLE chat_mls_local_members (
     membership_status TEXT      NOT NULL DEFAULT 'active'
         CHECK (membership_status IN ('pending', 'active', 'rejected')),
     invitation_expires_at TIMESTAMPTZ,
+    invited_by_domain TEXT,
     joined_epoch    BIGINT      NOT NULL CHECK (joined_epoch >= 0),
     removed_epoch   BIGINT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -114,9 +115,11 @@ CREATE TABLE chat_mls_local_members (
     CHECK (owner_id IS NULL OR owner_id ~ '^[0-9a-f]{64}$'),
     CHECK (is_owner = (owner_id IS NOT NULL)),
     CHECK (
-        (membership_status = 'pending' AND invitation_expires_at IS NOT NULL)
+        (membership_status = 'pending' AND invitation_expires_at IS NOT NULL
+            AND invited_by_domain IS NOT NULL)
         OR (membership_status != 'pending' AND invitation_expires_at IS NULL)
     ),
+    CHECK (invited_by_domain IS NULL OR invited_by_domain = lower(invited_by_domain)),
     CHECK (removed_epoch IS NULL OR removed_epoch > joined_epoch)
 );
 
@@ -158,6 +161,55 @@ CREATE TABLE chat_mls_membership_deliveries (
 
 CREATE INDEX chat_mls_membership_deliveries_expiry_idx
     ON chat_mls_membership_deliveries (state, expires_at);
+
+-- Invitation refusal is advisory server feedback, never an automatic MLS
+-- roster mutation. The rejecting member's server durably retries the
+-- federation-authenticated notice to the server that submitted the Welcome;
+-- that server exposes it only to active local group administrators.
+CREATE TABLE chat_mls_invitation_feedback (
+    conversation_id UUID        NOT NULL,
+    incarnation     BIGINT      NOT NULL CHECK (incarnation > 0),
+    member_address  TEXT        NOT NULL,
+    invited_epoch   BIGINT      NOT NULL CHECK (invited_epoch > 0),
+    source_domain   TEXT        NOT NULL,
+    decision        TEXT        NOT NULL CHECK (decision IN ('rejected', 'expired')),
+    decided_at      TIMESTAMPTZ NOT NULL,
+    feedback_digest CHAR(64)    NOT NULL,
+    feedback        JSONB       NOT NULL CHECK (jsonb_typeof(feedback) = 'object'),
+    received_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (conversation_id, incarnation, member_address, invited_epoch),
+    FOREIGN KEY (conversation_id, incarnation)
+        REFERENCES chat_mls_incarnations ON DELETE CASCADE,
+    CHECK (source_domain = lower(source_domain)),
+    CHECK (feedback_digest ~ '^[0-9a-f]{64}$')
+);
+
+CREATE TABLE chat_mls_invitation_feedback_outbox (
+    destination     TEXT        NOT NULL,
+    conversation_id UUID        NOT NULL,
+    incarnation     BIGINT      NOT NULL CHECK (incarnation > 0),
+    member_address  TEXT        NOT NULL,
+    invited_epoch   BIGINT      NOT NULL CHECK (invited_epoch > 0),
+    feedback_digest CHAR(64)    NOT NULL,
+    feedback        JSONB       NOT NULL CHECK (jsonb_typeof(feedback) = 'object'),
+    state           TEXT        NOT NULL DEFAULT 'pending'
+        CHECK (state IN ('pending', 'delivered')),
+    attempts        INTEGER     NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_error_class TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (destination, conversation_id, incarnation, member_address, invited_epoch),
+    FOREIGN KEY (conversation_id, incarnation)
+        REFERENCES chat_mls_incarnations ON DELETE CASCADE,
+    CHECK (destination = lower(destination)),
+    CHECK (feedback_digest ~ '^[0-9a-f]{64}$')
+);
+
+CREATE INDEX chat_mls_invitation_feedback_outbox_due_idx
+    ON chat_mls_invitation_feedback_outbox (
+        state, next_attempt_at, destination, conversation_id, incarnation
+    );
 
 -- Append-only finalized control log and the original signed statements used
 -- to construct its quorum certificates.
@@ -557,6 +609,9 @@ CREATE TRIGGER chat_mls_ordering_votes_append_only
     FOR EACH ROW EXECUTE FUNCTION reject_chat_mls_append_only_mutation();
 CREATE TRIGGER chat_mls_owner_approvals_append_only
     BEFORE UPDATE OR DELETE ON chat_mls_owner_approvals
+    FOR EACH ROW EXECUTE FUNCTION reject_chat_mls_append_only_mutation();
+CREATE TRIGGER chat_mls_invitation_feedback_append_only
+    BEFORE UPDATE OR DELETE ON chat_mls_invitation_feedback
     FOR EACH ROW EXECUTE FUNCTION reject_chat_mls_append_only_mutation();
 CREATE TRIGGER chat_mls_consensus_evidence_append_only
     BEFORE UPDATE OR DELETE ON chat_mls_consensus_evidence

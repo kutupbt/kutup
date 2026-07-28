@@ -20,6 +20,7 @@ pub const MLS_PROTOCOL_VERSION: u16 = 1;
 pub const MLS_ORDERING_SERVICE_POLICY_VERSION: u16 = 1;
 pub const MLS_GROUP_AUTHORIZATION_POLICY_VERSION: u16 = 1;
 pub const MLS_GROUP_CRYPTOGRAPHIC_POLICY_VERSION: u16 = 1;
+pub const MLS_INVITATION_FEEDBACK_VERSION: u16 = 1;
 pub const MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256: u16 = 0x0002;
 /// Private-use RFC 9420 GroupContext extension carrying Kutup's
 /// group-encrypted authorization/control state. Every V1 KeyPackage advertises

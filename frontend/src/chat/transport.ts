@@ -5,6 +5,7 @@ import type {
   ChatTransportPort,
   MlsInvitationDecision,
   MlsInvitationDecisionResponse,
+  MlsInvitationFeedback,
   MlsIncarnationRecovery,
   MlsMailboxPage,
   PendingMlsInvitation,
@@ -275,6 +276,10 @@ export class ApiChatTransport implements ChatTransportPort {
 
   async listMlsInvitations(): Promise<PendingMlsInvitation[]> {
     return api.get('/chat/mls/invitations').then((response) => response.data)
+  }
+
+  async listMlsInvitationFeedback(): Promise<MlsInvitationFeedback[]> {
+    return api.get('/chat/mls/invitation-feedback').then((response) => response.data)
   }
 
   async respondMlsInvitation(

@@ -60,6 +60,7 @@ import type {
   InboundAttention,
   LocalMlsConversationRecord,
   MlsConversationMember,
+  MlsInvitationFeedback,
   PendingMlsOwnerApprovalRequest,
   PendingMlsInvitation,
   PeerChatProfile,
@@ -120,6 +121,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [peerProfiles, setPeerProfiles] = useState<PeerChatProfile[]>([])
   const [groups, setGroups] = useState<LocalMlsConversationRecord[]>([])
   const [groupInvitations, setGroupInvitations] = useState<PendingMlsInvitation[]>([])
+  const [groupInvitationFeedback, setGroupInvitationFeedback] =
+    useState<MlsInvitationFeedback[]>([])
   const [ownerApprovalRequests, setOwnerApprovalRequests] =
     useState<PendingMlsOwnerApprovalRequest[]>([])
   const [transparencyStatuses, setTransparencyStatuses] =
@@ -163,7 +166,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     const refresh = async () => {
       if (!opened || cancelled) return
       try {
-        const [nextHistory, nextAttention, nextContacts, nextProfile, nextProfiles, nextTransparency, nextGroups, nextInvitations, nextOwnerApprovals] = await Promise.all([
+        const [nextHistory, nextAttention, nextContacts, nextProfile, nextProfiles, nextTransparency, nextGroups, nextInvitations, nextInvitationFeedback, nextOwnerApprovals] = await Promise.all([
           opened.history(),
           opened.inboundAttention(),
           opened.contacts(),
@@ -172,6 +175,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
           opened.transparencyStatus(),
           capabilities.mlsGroups ? opened.groups() : Promise.resolve([]),
           capabilities.mlsGroups ? opened.groupInvitations() : Promise.resolve([]),
+          capabilities.mlsGroups ? opened.groupInvitationFeedback() : Promise.resolve([]),
           capabilities.mlsGroups ? opened.pendingGroupOwnerApprovals() : Promise.resolve([]),
         ])
         if (!cancelled) {
@@ -182,6 +186,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
           setPeerProfiles(nextProfiles)
           setGroups(nextGroups)
           setGroupInvitations(nextInvitations)
+          setGroupInvitationFeedback(nextInvitationFeedback)
           setOwnerApprovalRequests(nextOwnerApprovals)
           if (nextTransparency) {
             setTransparencyStatuses((current) => ({ ...current, local: nextTransparency }))
@@ -290,6 +295,14 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     canonicalAccountAddress(member.address) === selfAddress)
   const selectedGroupClosed = selectedGroup?.status === 'closed'
   const canManageSelectedGroup = selectedGroupSelfMember?.isAdmin === true && !selectedGroupClosed
+  const selectedGroupInvitationFeedback = selectedGroup
+    ? groupInvitationFeedback.filter(feedback =>
+        feedback.conversationId === selectedGroup.request.genesis.conversationId
+        && feedback.incarnation === selectedGroup.request.genesis.incarnation
+        && feedback.member.server
+        && selectedGroup.currentRoster.some(member =>
+          canonicalAccountAddress(member.address) === canonicalAccountAddress(feedback.member)))
+    : []
   const canManageSelectedGroupAuthorities = Boolean(selectedGroupSelfMember?.ownerId) && !selectedGroupClosed
   const selectedOwnerApproval = selectedGroup
     ? ownerApprovalRequests.find(request =>
@@ -1172,6 +1185,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     {selectedGroup.currentRoster.map(member => {
                       const address = canonicalAccountAddress(member.address)
                       const isSelf = address === selfAddress
+                      const invitationFeedback = selectedGroupInvitationFeedback.find(feedback =>
+                        canonicalAccountAddress(feedback.member) === address)
                       const canDemote = member.isAdmin
                         && !member.ownerId
                         && selectedGroupAdministratorCount > 1
@@ -1190,6 +1205,16 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                               {member.isAdmin && <span>Administrator</span>}
                               {isSelf && <span>You</span>}
                             </span>
+                            {invitationFeedback && (
+                              <span
+                                className="mt-1 block text-xs text-warning"
+                                data-testid={`chat-group-invitation-feedback-${address}`}
+                              >
+                                {invitationFeedback.decision === 'rejected'
+                                  ? 'Rejected the invitation'
+                                  : 'Invitation expired'} · remove this member with MLS
+                              </span>
+                            )}
                           </span>
                           {canManageSelectedGroup && !isSelf && (
                             <>

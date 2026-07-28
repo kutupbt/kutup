@@ -11,6 +11,7 @@ use reqwest::{Method, StatusCode};
 use serde_json::Value;
 use uuid::Uuid;
 
+use super::invitation_feedback::retry_invitation_feedback_once;
 use super::participant_bootstrap::bootstrap_new_participant;
 use super::{authenticated_remote_policy, bootstrap_finalized_authority};
 use crate::error::{AppError, AppResult};
@@ -34,6 +35,9 @@ pub(crate) fn spawn_retry_worker(state: AppState) {
             }
             if let Err(error) = retry_recovery_outbox_once(&state).await {
                 tracing::warn!(error = %error, "MLS recovery federation retry iteration failed");
+            }
+            if let Err(error) = retry_invitation_feedback_once(&state).await {
+                tracing::warn!(error = %error, "MLS invitation feedback retry iteration failed");
             }
         }
     });

@@ -183,6 +183,8 @@ describe('ApiChatTransport', () => {
     const transport = new ApiChatTransport()
     await expect(transport.listMlsInvitations()).resolves.toEqual([])
     expect(get).toHaveBeenCalledWith('/chat/mls/invitations')
+    await expect(transport.listMlsInvitationFeedback()).resolves.toEqual([])
+    expect(get).toHaveBeenCalledWith('/chat/mls/invitation-feedback')
     await transport.respondMlsInvitation({
       conversationId: '00000000-0000-0000-0000-000000000001',
       incarnation: 1,

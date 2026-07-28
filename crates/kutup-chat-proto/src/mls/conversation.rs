@@ -898,6 +898,63 @@ pub struct RespondMlsInvitationResponseV1 {
     pub idempotent: bool,
 }
 
+/// A destination server's durable, identified report that one of its local
+/// accounts rejected or allowed an MLS invitation to expire. The report is
+/// federation-authenticated and advisory: only an MLS administrator can
+/// commit the member's cryptographic removal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum MlsInvitationFeedbackDecisionV1 {
+    Rejected,
+    Expired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsInvitationFeedbackV1 {
+    pub protocol_version: u16,
+    pub conversation_id: Uuid,
+    pub incarnation: u64,
+    pub member: AccountAddress,
+    pub invited_epoch: u64,
+    pub decision: MlsInvitationFeedbackDecisionV1,
+    pub decided_at: i64,
+}
+
+impl MlsInvitationFeedbackV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        let canonical: AccountAddress = self
+            .member
+            .canonical()
+            .parse()
+            .map_err(|error: crate::AddressError| error.to_string())?;
+        if self.protocol_version != MLS_INVITATION_FEEDBACK_VERSION
+            || self.conversation_id.is_nil()
+            || self.incarnation == 0
+            || self.incarnation > i64::MAX as u64
+            || self.invited_epoch == 0
+            || self.invited_epoch > i64::MAX as u64
+            || self.decided_at < 0
+            || canonical != self.member
+            || self.member.server.is_none()
+        {
+            return Err("MLS invitation feedback has invalid identifiers or member".into());
+        }
+        Ok(())
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        serde_json::to_vec(self).map_err(|error| error.to_string())
+    }
+
+    pub fn feedback_digest(&self) -> Result<String, String> {
+        Ok(hex::encode(Sha256::digest(self.canonical_bytes()?)))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]

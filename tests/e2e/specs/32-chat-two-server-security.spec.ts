@@ -209,23 +209,29 @@ test.describe('two-server secure chat', () => {
     const contextA = await browser.newContext({ baseURL })
     const contextB = await browser.newContext({ baseURL: SECONDARY })
     const contextC = await browser.newContext({ baseURL })
+    const contextD = await browser.newContext({ baseURL: SECONDARY })
     const tag = Date.now() % 1_000_000
     const alice = `mlsalice${tag}`
     const bob = `mlsbob${tag}`
     const charlie = `mlscarol${tag}`
+    const dave = `mlsdave${tag}`
     const aliceEmail = `${alice}@example.test`
     const bobEmail = `${bob}@example.test`
     const charlieEmail = `${charlie}@example.test`
+    const daveEmail = `${dave}@example.test`
 
     await register(contextA, aliceEmail, alice)
     await register(contextB, bobEmail, bob)
     await register(contextC, charlieEmail, charlie)
+    await register(contextD, daveEmail, dave)
     const pageA = await login(contextA, aliceEmail)
     const pageB = await login(contextB, bobEmail)
     const pageC = await login(contextC, charlieEmail)
+    const pageD = await login(contextD, daveEmail)
     await openChat(pageA)
     await openChat(pageB)
     await openChat(pageC)
+    await openChat(pageD)
 
     const genesisResponse = pageA.waitForResponse((response) => {
       const path = new URL(response.url()).pathname
@@ -328,6 +334,80 @@ test.describe('two-server secure chat', () => {
     await expect(
       pageA.getByTestId(`chat-group-member-${charlie}@a.test`),
     ).toBeVisible({ timeout: 90_000 })
+    await pageA.keyboard.press('Escape')
+    await expect(
+      pageA.getByRole('heading', { name: 'MLS group members' }),
+    ).toBeHidden()
+
+    // A rejected cross-server Welcome produces durable, federation-authenticated
+    // advisory feedback. It cannot mutate the MLS roster: Alice must see the
+    // exact member warning and manually commit the cryptographic removal.
+    const rejectedMemberAddCommit = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/control/blocks'
+    })
+    await pageA.getByTestId('chat-group-add-member').click()
+    await pageA.getByLabel('Group member address').fill(`${dave}@b.test`)
+    await pageA.getByRole('button', { name: 'Invite member' }).click()
+    const rejectedMemberAddResponse =
+      await requireResponseOrUiError(pageA, rejectedMemberAddCommit)
+    expect(rejectedMemberAddResponse.ok()).toBe(true)
+    const aliceAuthorization =
+      await rejectedMemberAddResponse.request().headerValue('authorization')
+    expect(aliceAuthorization).toMatch(/^Bearer /)
+    await expect(pageD.getByTestId('chat-group-invitations')).toBeVisible({ timeout: 90_000 })
+    const invitationRejection = pageD.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/invitations'
+    })
+    await pageD.getByRole('button', { name: 'Reject' }).click()
+    expect((await invitationRejection).ok()).toBe(true)
+    await expect(pageD.getByTestId('chat-group-invitations')).toHaveCount(0)
+
+    await expect.poll(
+      () => pageA.evaluate(async ({ authorization, groupId, member }) => {
+        const response = await fetch('/api/chat/mls/invitation-feedback', {
+          headers: { Authorization: authorization! },
+        })
+        if (!response.ok) return false
+        const feedback = await response.json() as Array<{
+          conversationId: string
+          member: { username: string; server?: string }
+          decision: string
+        }>
+        return feedback.some(entry =>
+          entry.conversationId === groupId
+          && `${entry.member.username}@${entry.member.server}` === member
+          && entry.decision === 'rejected')
+      }, {
+        authorization: aliceAuthorization,
+        groupId: conversationId,
+        member: `${dave}@b.test`,
+      }),
+      { timeout: 90_000 },
+    ).toBe(true)
+
+    await pageA.reload()
+    await expect(pageA.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+    await pageA.getByTestId(`chat-group-${conversationId}`).click()
+    await pageA.getByTestId('chat-group-members').click()
+    await expect(
+      pageA.getByTestId(`chat-group-invitation-feedback-${dave}@b.test`),
+    ).toContainText('Rejected the invitation', { timeout: 90_000 })
+    const rejectedMemberRemoveCommit = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/control/blocks'
+    })
+    await pageA.getByRole('button', {
+      name: `Remove ${dave}@b.test from group`,
+    }).click()
+    expect((await requireResponseOrUiError(pageA, rejectedMemberRemoveCommit)).ok()).toBe(true)
+    await expect(
+      pageA.getByTestId(`chat-group-member-${dave}@b.test`),
+    ).toHaveCount(0, { timeout: 90_000 })
     await pageA.keyboard.press('Escape')
 
     // Promote Bob while the current owner set is Alice-only (q=1), then prove
@@ -820,5 +900,6 @@ test.describe('two-server secure chat', () => {
     await contextA.close()
     await contextB.close()
     await contextC.close()
+    await contextD.close()
   })
 })

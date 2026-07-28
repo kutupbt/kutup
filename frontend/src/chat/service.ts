@@ -14,6 +14,7 @@ import type {
   SendSummary,
   TransparencyMonitorStatus,
   LocalMlsConversationRecord,
+  MlsInvitationFeedback,
   PendingMlsOwnerApprovalRequest,
   PendingMlsInvitation,
   WasmChatClientHandle,
@@ -281,6 +282,10 @@ export class ChatService {
 
   async groupInvitations(): Promise<PendingMlsInvitation[]> {
     return this.requireMls().invitations()
+  }
+
+  async groupInvitationFeedback(): Promise<MlsInvitationFeedback[]> {
+    return this.requireMls().invitationFeedback()
   }
 
   async createGroup(initialMember?: AccountAddress): Promise<LocalMlsConversationRecord> {

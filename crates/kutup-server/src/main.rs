@@ -665,6 +665,10 @@ fn build_router(state: AppState) -> Router {
             get(chat_mls::list_invitations).post(chat_mls::respond_invitation),
         )
         .route(
+            "/api/chat/mls/invitation-feedback",
+            get(chat_mls::list_invitation_feedback),
+        )
+        .route(
             "/api/chat/mls/messages/:deviceId",
             get(chat_mls::drain_mailbox),
         )
@@ -819,6 +823,12 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/chat/mls/anonymous/messages",
             post(chat_mls::federated_submit_anonymous_message)
                 .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/mls/invitation-feedback",
+            post(chat_mls::federated_record_invitation_feedback)
+                .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(

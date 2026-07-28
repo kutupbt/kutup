@@ -16,6 +16,7 @@ mod conversation_store;
 mod delivery_store;
 mod federation_control;
 mod identified_packages;
+mod invitation_feedback;
 mod invitation_routes;
 mod mailbox_routes;
 mod membership;
@@ -46,6 +47,9 @@ pub(crate) use control_routes::{
 use federation_control::{replicate_genesis, request_remote_ordering_vote};
 pub(crate) use identified_packages::{
     federated_get_identified_key_packages, get_identified_key_packages,
+};
+pub(crate) use invitation_feedback::{
+    federated_record_invitation_feedback, list_invitation_feedback,
 };
 pub(crate) use invitation_routes::{list_invitations, respond_invitation};
 pub(crate) use mailbox_routes::{ack as ack_mailbox, drain as drain_mailbox};
