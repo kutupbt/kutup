@@ -111,8 +111,8 @@ pub(crate) async fn collect_ordering_votes(
         ));
     }
     let user_id = trusted_uuid(&auth.user_id)?;
-    let local_member: Option<bool> = sqlx::query_scalar(
-        "SELECT is_admin
+    let local_member: Option<(bool, bool)> = sqlx::query_as(
+        "SELECT is_admin, is_owner
          FROM chat_mls_local_members
          WHERE conversation_id = $1 AND incarnation = $2
            AND user_id = $3 AND removed_epoch IS NULL
@@ -123,7 +123,7 @@ pub(crate) async fn collect_ordering_votes(
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await?;
-    let is_admin =
+    let (is_admin, is_owner) =
         local_member.ok_or_else(|| AppError::forbidden("not an active local MLS member"))?;
     if matches!(
         request.block.proposal.action_type,
@@ -134,6 +134,11 @@ pub(crate) async fn collect_ordering_votes(
     {
         return Err(AppError::forbidden(
             "MLS routine and membership control requires a local administrator",
+        ));
+    }
+    if request.block.proposal.action_type == MlsControlActionTypeV1::OwnerSetChange && !is_owner {
+        return Err(AppError::forbidden(
+            "MLS owner-set control requires a current local owner",
         ));
     }
 

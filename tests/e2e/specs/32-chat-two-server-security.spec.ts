@@ -59,12 +59,25 @@ async function requireResponseOrUiError(
   response: Promise<import('@playwright/test').Response>,
 ): Promise<import('@playwright/test').Response> {
   const uiError = page.locator('[data-sonner-toast][data-type="error"]')
-  return Promise.race([
-    response,
-    uiError.waitFor({ state: 'visible', timeout: 15_000 }).then(async () => {
-      throw new Error(`browser operation failed: ${(await uiError.textContent())?.trim() || 'unknown error'}`)
-    }),
+  const errorText = uiError.waitFor({ state: 'visible', timeout: 15_000 })
+    .then(async () => (await uiError.textContent())?.trim() || 'unknown error')
+    .catch(() => undefined)
+  const first = await Promise.race([
+    response.then(value => ({ kind: 'response' as const, value })),
+    errorText.then(value => ({ kind: 'error' as const, value })),
   ])
+  if (first.kind === 'error') {
+    throw new Error(`browser operation failed: ${first.value ?? 'unknown error'}`)
+  }
+  // The orderer acknowledgement precedes the initiating client's durable
+  // OpenMLS merge. Keep observing the UI briefly so a post-ack cryptographic
+  // or state failure cannot be mistaken for a successful operation.
+  const lateError = await Promise.race([
+    errorText,
+    page.waitForTimeout(1_000).then(() => undefined),
+  ])
+  if (lateError) throw new Error(`browser operation failed: ${lateError}`)
+  return first.value
 }
 
 function bubble(page: Page, text: string) {
@@ -335,6 +348,83 @@ test.describe('two-server secure chat', () => {
     await pageA.getByTestId('chat-group-members').click()
     await expect(
       pageA.getByTestId(`chat-group-member-${charlie}@a.test`),
+    ).toHaveCount(0, { timeout: 90_000 })
+    await pageA.keyboard.press('Escape')
+
+    // Promote Bob while the current owner set is Alice-only (q=1), then prove
+    // the resulting two-owner set (q=2) cannot remove Bob until his exact
+    // encrypted manual approval returns. Both clients restart with the
+    // partially approved transition/request still durable.
+    const promoteOwnerCommit = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/control/blocks'
+    })
+    await pageA.getByTestId('chat-group-members').click()
+    await pageA.getByTestId(`chat-group-owner-${bob}@b.test`).click()
+    expect((await requireResponseOrUiError(pageA, promoteOwnerCommit)).ok()).toBe(true)
+    await expect(
+      pageA.getByTestId(`chat-group-member-owner-${bob}@b.test`),
+    ).toBeVisible({ timeout: 90_000 })
+    await pageA.keyboard.press('Escape')
+
+    await pageB.getByTestId('chat-group-members').click()
+    await expect(
+      pageB.getByTestId(`chat-group-member-owner-${bob}@b.test`),
+    ).toBeVisible({ timeout: 90_000 })
+    await pageB.keyboard.press('Escape')
+
+    let ownerRemovalControlSubmitted = false
+    let awaitingOwnerRemovalApproval = true
+    pageA.on('request', (request) => {
+      if (
+        awaitingOwnerRemovalApproval
+        && request.method() === 'POST'
+        && new URL(request.url()).pathname === '/api/chat/mls/control/blocks'
+      ) ownerRemovalControlSubmitted = true
+    })
+    const ownerApprovalRequest = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/anonymous/messages'
+    })
+    await pageA.getByTestId('chat-group-members').click()
+    await pageA.getByTestId(`chat-group-owner-${bob}@b.test`).click()
+    expect((await requireResponseOrUiError(pageA, ownerApprovalRequest)).ok()).toBe(true)
+    await pageA.waitForTimeout(1_000)
+    expect(ownerRemovalControlSubmitted).toBe(false)
+
+    await pageA.reload()
+    await expect(pageA.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+    await pageA.getByTestId(`chat-group-${conversationId}`).click()
+
+    await pageB.getByTestId('chat-group-members').click()
+    await expect(pageB.getByTestId('chat-group-owner-approval')).toBeVisible({ timeout: 90_000 })
+    await pageB.reload()
+    await expect(pageB.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+    await pageB.getByTestId(`chat-group-${conversationId}`).click()
+    await pageB.getByTestId('chat-group-members').click()
+    await expect(pageB.getByTestId('chat-group-owner-approval')).toBeVisible({ timeout: 90_000 })
+
+    const ownerApprovalResponse = pageB.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/anonymous/messages'
+    })
+    const removeOwnerCommit = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/control/blocks'
+    })
+    await pageB.getByTestId('chat-group-owner-approve').click()
+    expect((await requireResponseOrUiError(pageB, ownerApprovalResponse)).ok()).toBe(true)
+    awaitingOwnerRemovalApproval = false
+    expect((await requireResponseOrUiError(pageA, removeOwnerCommit)).ok()).toBe(true)
+    await pageB.keyboard.press('Escape')
+
+    await pageA.getByTestId('chat-group-members').click()
+    await expect(
+      pageA.getByTestId(`chat-group-member-owner-${bob}@b.test`),
     ).toHaveCount(0, { timeout: 90_000 })
     await pageA.keyboard.press('Escape')
 

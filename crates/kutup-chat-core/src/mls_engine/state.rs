@@ -9,6 +9,7 @@ use std::sync::RwLock;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use kutup_chat_proto::MlsOwnerCandidateV1;
 use openmls::prelude::{BasicCredential, CredentialWithKey};
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_memory_storage::MemoryStorage;
@@ -23,8 +24,9 @@ use super::{
     decode_canonical_base64, validate_group_id, validate_metadata, validate_pending_commit,
     validate_pending_membership_change, LocalMlsConversationRecord, MlsDevicePublicMaterial,
     PendingMlsAuthorityChange, PendingMlsCommit, PendingMlsMembershipChange,
-    ProcessedMlsControlEnvelope, MAX_PENDING_COMMITS, MAX_STATE_BYTES, MAX_STATE_RECORDS,
-    MAX_STATE_RECORD_BYTES, MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256, STATE_FORMAT_VERSION,
+    PendingMlsOwnerApprovalRequest, PendingMlsOwnerChange, ProcessedMlsControlEnvelope,
+    MAX_PENDING_COMMITS, MAX_STATE_BYTES, MAX_STATE_RECORDS, MAX_STATE_RECORD_BYTES,
+    MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256, STATE_FORMAT_VERSION,
 };
 use crate::error::{ChatError, Result};
 
@@ -59,8 +61,12 @@ pub(super) struct SnapshotMetadata {
     pub(super) pending_commits: BTreeMap<String, PendingMlsCommit>,
     pub(super) pending_membership_changes: BTreeMap<String, PendingMlsMembershipChange>,
     pub(super) pending_authority_changes: BTreeMap<String, PendingMlsAuthorityChange>,
+    pub(super) pending_owner_changes: BTreeMap<String, PendingMlsOwnerChange>,
+    pub(super) owner_approval_requests: BTreeMap<String, PendingMlsOwnerApprovalRequest>,
     pub(super) group_control_private_keys: BTreeMap<String, Vec<u8>>,
     pub(super) group_owner_private_keys: BTreeMap<String, Vec<u8>>,
+    pub(super) group_owner_candidate_private_keys: BTreeMap<String, Vec<u8>>,
+    pub(super) owner_candidates: BTreeMap<String, BTreeMap<String, MlsOwnerCandidateV1>>,
     pub(super) conversations: BTreeMap<String, LocalMlsConversationRecord>,
     pub(super) processed_control_envelopes: BTreeMap<String, ProcessedMlsControlEnvelope>,
 }
@@ -100,7 +106,7 @@ impl SnapshotMetadata {
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PersistedMlsStateV6 {
+struct PersistedMlsStateV7 {
     format_version: u16,
     ciphersuite: u16,
     credential_identity: String,
@@ -109,8 +115,12 @@ struct PersistedMlsStateV6 {
     pending_commits: Vec<PendingMlsCommit>,
     pending_membership_changes: Vec<PendingMlsMembershipChange>,
     pending_authority_changes: Vec<PendingMlsAuthorityChange>,
+    pending_owner_changes: Vec<PendingMlsOwnerChange>,
+    owner_approval_requests: Vec<PendingMlsOwnerApprovalRequest>,
     group_control_keys: Vec<PersistedMlsGroupControlKeyV1>,
     group_owner_keys: Vec<PersistedMlsGroupOwnerKeyV1>,
+    group_owner_candidate_keys: Vec<PersistedMlsGroupOwnerKeyV1>,
+    owner_candidates: Vec<PersistedMlsOwnerCandidateV1>,
     conversations: Vec<LocalMlsConversationRecord>,
     processed_control_envelopes: Vec<ProcessedMlsControlEnvelope>,
     records: Vec<PersistedMlsRecordV1>,
@@ -128,6 +138,14 @@ struct PersistedMlsGroupControlKeyV1 {
 struct PersistedMlsGroupOwnerKeyV1 {
     group_id: String,
     private_key: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PersistedMlsOwnerCandidateV1 {
+    group_id: String,
+    account: String,
+    candidate: MlsOwnerCandidateV1,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -164,7 +182,7 @@ pub(super) fn snapshot_provider(
             value: BASE64.encode(value),
         });
     }
-    let state = PersistedMlsStateV6 {
+    let state = PersistedMlsStateV7 {
         format_version: STATE_FORMAT_VERSION,
         ciphersuite: MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256,
         credential_identity: metadata.credential_identity.clone(),
@@ -181,6 +199,8 @@ pub(super) fn snapshot_provider(
             .values()
             .cloned()
             .collect(),
+        pending_owner_changes: metadata.pending_owner_changes.values().cloned().collect(),
+        owner_approval_requests: metadata.owner_approval_requests.values().cloned().collect(),
         group_control_keys: metadata
             .group_control_private_keys
             .iter()
@@ -195,6 +215,27 @@ pub(super) fn snapshot_provider(
             .map(|(group_id, private_key)| PersistedMlsGroupOwnerKeyV1 {
                 group_id: group_id.clone(),
                 private_key: BASE64.encode(private_key),
+            })
+            .collect(),
+        group_owner_candidate_keys: metadata
+            .group_owner_candidate_private_keys
+            .iter()
+            .map(|(group_id, private_key)| PersistedMlsGroupOwnerKeyV1 {
+                group_id: group_id.clone(),
+                private_key: BASE64.encode(private_key),
+            })
+            .collect(),
+        owner_candidates: metadata
+            .owner_candidates
+            .iter()
+            .flat_map(|(group_id, candidates)| {
+                candidates
+                    .iter()
+                    .map(move |(account, candidate)| PersistedMlsOwnerCandidateV1 {
+                        group_id: group_id.clone(),
+                        account: account.clone(),
+                        candidate: candidate.clone(),
+                    })
             })
             .collect(),
         conversations: metadata.conversations.values().cloned().collect(),
@@ -216,7 +257,7 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
     if bytes.is_empty() || bytes.len() > MAX_STATE_BYTES {
         return Err(ChatError::Db("OpenMLS state size is invalid".into()));
     }
-    let state: PersistedMlsStateV6 =
+    let state: PersistedMlsStateV7 =
         serde_json::from_slice(bytes).map_err(|error| ChatError::Db(error.to_string()))?;
     if state.format_version != STATE_FORMAT_VERSION
         || state.ciphersuite != MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256
@@ -224,8 +265,12 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
         || state.pending_commits.len() > MAX_PENDING_COMMITS
         || state.pending_membership_changes.len() > MAX_PENDING_COMMITS
         || state.pending_authority_changes.len() > MAX_PENDING_COMMITS
+        || state.pending_owner_changes.len() > MAX_PENDING_COMMITS
+        || state.owner_approval_requests.len() > MAX_PENDING_COMMITS
         || state.group_control_keys.len() > MAX_PENDING_COMMITS
         || state.group_owner_keys.len() > MAX_PENDING_COMMITS
+        || state.group_owner_candidate_keys.len() > MAX_PENDING_COMMITS
+        || state.owner_candidates.len() > MAX_PENDING_COMMITS * 1024
         || state.conversations.len() > MAX_PENDING_COMMITS
         || state.processed_control_envelopes.len() > MAX_PENDING_COMMITS
     {
@@ -300,6 +345,46 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
             ));
         }
     }
+    let mut pending_owner_changes = BTreeMap::new();
+    let mut previous_owner_change_key: Option<String> = None;
+    for pending in state.pending_owner_changes {
+        pending.validate_durable()?;
+        let key = BASE64.encode(&pending.mls_group_id);
+        if previous_owner_change_key
+            .as_ref()
+            .is_some_and(|previous| key <= *previous)
+        {
+            return Err(ChatError::Db(
+                "MLS pending owner records are not strictly ordered".into(),
+            ));
+        }
+        previous_owner_change_key = Some(key.clone());
+        if pending_owner_changes.insert(key, pending).is_some() {
+            return Err(ChatError::Db(
+                "OpenMLS state contains duplicate pending owner material".into(),
+            ));
+        }
+    }
+    let mut owner_approval_requests = BTreeMap::new();
+    let mut previous_owner_request_key: Option<String> = None;
+    for pending in state.owner_approval_requests {
+        pending.validate_durable()?;
+        let key = BASE64.encode(&pending.mls_group_id);
+        if previous_owner_request_key
+            .as_ref()
+            .is_some_and(|previous| key <= *previous)
+        {
+            return Err(ChatError::Db(
+                "MLS owner approval requests are not strictly ordered".into(),
+            ));
+        }
+        previous_owner_request_key = Some(key.clone());
+        if owner_approval_requests.insert(key, pending).is_some() {
+            return Err(ChatError::Db(
+                "OpenMLS state contains duplicate owner approval requests".into(),
+            ));
+        }
+    }
     let mut group_control_private_keys = BTreeMap::new();
     let mut previous_control_group: Option<String> = None;
     for entry in state.group_control_keys {
@@ -361,6 +446,82 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
             ));
         }
     }
+    let mut group_owner_candidate_private_keys = BTreeMap::new();
+    let mut previous_owner_candidate_group: Option<String> = None;
+    for entry in state.group_owner_candidate_keys {
+        let group_id = decode_canonical_base64("MLS owner candidate group id", &entry.group_id, 0)?;
+        validate_group_id(&group_id)?;
+        let expected_group_key = BASE64.encode(&group_id);
+        if expected_group_key != entry.group_id
+            || previous_owner_candidate_group
+                .as_ref()
+                .is_some_and(|previous| entry.group_id <= *previous)
+        {
+            return Err(ChatError::Db(
+                "MLS owner candidate keys are not canonically ordered".into(),
+            ));
+        }
+        previous_owner_candidate_group = Some(entry.group_id.clone());
+        let private_key = decode_canonical_base64(
+            "MLS group owner candidate private key",
+            &entry.private_key,
+            32,
+        )?;
+        let seed: [u8; 32] = private_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| ChatError::Db("invalid owner candidate key length".into()))?;
+        ed25519_dalek::SigningKey::from_bytes(&seed);
+        if group_owner_candidate_private_keys
+            .insert(entry.group_id, private_key)
+            .is_some()
+        {
+            return Err(ChatError::Db(
+                "OpenMLS state contains a duplicate owner candidate key".into(),
+            ));
+        }
+    }
+    let mut owner_candidates = BTreeMap::<String, BTreeMap<String, MlsOwnerCandidateV1>>::new();
+    let mut previous_candidate_key: Option<(String, String)> = None;
+    for entry in state.owner_candidates {
+        let group_id = decode_canonical_base64("MLS owner candidate group id", &entry.group_id, 0)?;
+        validate_group_id(&group_id)?;
+        let account = entry
+            .account
+            .parse::<kutup_chat_proto::AccountAddress>()
+            .map_err(|error| ChatError::Db(error.to_string()))?;
+        if account.server.is_none() || account.canonical() != entry.account {
+            return Err(ChatError::Db(
+                "MLS owner candidate account is not canonical and federated".into(),
+            ));
+        }
+        entry.candidate.verify().map_err(ChatError::Db)?;
+        if entry.candidate.account != account {
+            return Err(ChatError::Db(
+                "MLS owner candidate key differs from its account index".into(),
+            ));
+        }
+        let key = (entry.group_id.clone(), entry.account.clone());
+        if previous_candidate_key
+            .as_ref()
+            .is_some_and(|previous| key <= *previous)
+        {
+            return Err(ChatError::Db(
+                "MLS owner candidates are not canonically ordered".into(),
+            ));
+        }
+        previous_candidate_key = Some(key);
+        if owner_candidates
+            .entry(entry.group_id)
+            .or_default()
+            .insert(entry.account, entry.candidate)
+            .is_some()
+        {
+            return Err(ChatError::Db(
+                "OpenMLS state contains a duplicate owner candidate".into(),
+            ));
+        }
+    }
     let mut conversations = BTreeMap::new();
     let mut previous_conversation: Option<String> = None;
     for conversation in state.conversations {
@@ -415,8 +576,12 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
         pending_commits,
         pending_membership_changes,
         pending_authority_changes,
+        pending_owner_changes,
+        owner_approval_requests,
         group_control_private_keys,
         group_owner_private_keys,
+        group_owner_candidate_private_keys,
+        owner_candidates,
         conversations,
         processed_control_envelopes,
     };

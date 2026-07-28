@@ -284,6 +284,17 @@ export interface MlsOwnerSet {
   requiredQuorum: number
 }
 
+export interface MlsOwnerCandidate {
+  protocolVersion: number
+  conversationId: string
+  incarnation: number
+  account: AccountAddress
+  ownerId: string
+  publicKey: string
+  createdAt: number
+  signature: string
+}
+
 export interface PendingMlsMembershipChange {
   mlsGroupId: number[]
   nextRoster: MlsConversationMember[]
@@ -355,6 +366,63 @@ export interface PreparedMlsAuthorityChange {
 }
 
 export interface FinalizedMlsAuthorityChange {
+  group: LocalMlsGroupState
+  conversation: LocalMlsConversationRecord
+}
+
+export interface PendingMlsOwnerChange {
+  mlsGroupId: number[]
+  nextRoster: MlsConversationMember[]
+  deliveries: unknown[]
+  ownerChange: {
+    nextOwnerSet: MlsOwnerSet
+    deliveryTransition: {
+      conversationId: string
+      incarnation: number
+      proposalId: string
+    }
+  }
+  voteRequest: {
+    block: {
+      conversationId: string
+      incarnation: number
+      height: number
+      epochBefore: number
+      epochAfter: number
+    }
+  }
+  commitHash: string
+  finalRequest?: unknown
+}
+
+export interface PendingMlsOwnerApprovalRequest {
+  mlsGroupId: number[]
+  requester: AccountAddress
+  request: {
+    protocolVersion: number
+    ownerSetSequence: number
+    proposal: {
+      conversationId: string
+      incarnation: number
+      proposalId: string
+      baseEpoch: number
+    }
+    transitionDigest: string
+    ownerChange: {
+      nextOwnerSet: MlsOwnerSet
+    }
+    nextRoster: MlsConversationMember[]
+    requestedAt: number
+    expiresAt: number
+  }
+}
+
+export interface PreparedMlsOwnerChange {
+  pending: PreparedMlsMembershipChange['pending']
+  control: PendingMlsOwnerChange
+}
+
+export interface FinalizedMlsOwnerChange {
   group: LocalMlsGroupState
   conversation: LocalMlsConversationRecord
 }
@@ -605,6 +673,41 @@ export interface WasmChatClientHandle {
     mlsGroupId: Uint8Array,
     acknowledgement: unknown,
   ): Promise<FinalizedMlsAuthorityChange>
+  prepareMlsOwnerChange(
+    mlsGroupId: Uint8Array,
+    proposalId: string,
+    nextRoster: MlsConversationMember[],
+    nextOwnerSet: MlsOwnerSet,
+    nowSeconds: string,
+  ): Promise<PreparedMlsOwnerChange>
+  ensureMlsOwnerCandidate(
+    mlsGroupId: Uint8Array,
+    nowSeconds: string,
+  ): Promise<MlsOwnerCandidate>
+  mlsOwnerCandidates(mlsGroupId: Uint8Array): Promise<MlsOwnerCandidate[]>
+  createMlsOwnerCandidateMessage(
+    mlsGroupId: Uint8Array,
+    nowSeconds: string,
+  ): Promise<MlsOutboxEntry | null>
+  pendingMlsOwnerChanges(): Promise<PendingMlsOwnerChange[]>
+  mlsOwnerChangeHasQuorum(mlsGroupId: Uint8Array): Promise<boolean>
+  createMlsOwnerApprovalRequestMessage(
+    mlsGroupId: Uint8Array,
+  ): Promise<MlsOutboxEntry | null>
+  pendingMlsOwnerApprovalRequests(): Promise<PendingMlsOwnerApprovalRequest[]>
+  approveMlsOwnerApprovalRequest(
+    mlsGroupId: Uint8Array,
+    approvedAtSeconds: string,
+  ): Promise<MlsOutboxEntry | null>
+  rejectMlsOwnerApprovalRequest(mlsGroupId: Uint8Array): Promise<void>
+  buildMlsOwnerCommitRequest(
+    mlsGroupId: Uint8Array,
+    quorumCertificate: unknown,
+  ): Promise<unknown>
+  finalizeMlsOwnerChange(
+    mlsGroupId: Uint8Array,
+    acknowledgement: unknown,
+  ): Promise<FinalizedMlsOwnerChange>
   pendingMlsCommit(mlsGroupId: Uint8Array): Promise<unknown | null>
   mergePendingMlsCommit(mlsGroupId: Uint8Array, commitHash: string): Promise<unknown>
   rejectPendingMlsCommit(mlsGroupId: Uint8Array, commitHash: string): Promise<void>

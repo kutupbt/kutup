@@ -4,6 +4,7 @@ import type {
   ChatTransportPort,
   LocalMlsConversationRecord,
   LocalMlsGroupState,
+  PendingMlsOwnerApprovalRequest,
   PendingMlsInvitation,
   WasmChatClientHandle,
 } from './types'
@@ -214,6 +215,88 @@ function finalizedAuthority() {
   }
 }
 
+function pendingOwner() {
+  return {
+    mlsGroupId: [...genesisGroupBytes],
+    nextRoster: activeGenesis().currentRoster,
+    deliveries: [{ destination: 'alpha.example', deliveryDigest: '51'.repeat(32) }],
+    ownerChange: {
+      nextOwnerSet: {
+        sequence: 2,
+        owners: activeGenesis().currentOwnerSet.owners,
+        requiredQuorum: 1,
+      },
+      deliveryTransition: {
+        conversationId,
+        incarnation: 1,
+        proposalId,
+      },
+    },
+    voteRequest: {
+      block: {
+        conversationId,
+        incarnation: 1,
+        height: 1,
+        epochBefore: 0,
+        epochAfter: 1,
+      },
+    },
+    commitHash: 'ed'.repeat(32),
+  }
+}
+
+function finalizedOwner() {
+  return {
+    group: { mlsGroupId: [...genesisGroupBytes], epoch: 1 },
+    conversation: {
+      ...activeGenesis(),
+      lastFinalizedHeight: 1,
+      lastFinalizedEpoch: 1,
+      lastBlockHash: controlBlockHash,
+      currentOwnerSet: pendingOwner().ownerChange.nextOwnerSet,
+    },
+  }
+}
+
+function ownerApprovalRequest(): PendingMlsOwnerApprovalRequest {
+  return {
+    mlsGroupId: [...genesisGroupBytes],
+    requester: { username: 'alice', server: 'alpha.example' },
+    request: {
+      protocolVersion: 1,
+      ownerSetSequence: 1,
+      proposal: {
+        conversationId,
+        incarnation: 1,
+        proposalId,
+        baseEpoch: 0,
+      },
+      transitionDigest: 'ac'.repeat(32),
+      ownerChange: { nextOwnerSet: pendingOwner().ownerChange.nextOwnerSet },
+      nextRoster: activeGenesis().currentRoster,
+      requestedAt: 1_700_000_000,
+      expiresAt: 1_700_086_400,
+    },
+  }
+}
+
+function applicationOutboxEntry() {
+  return {
+    sendId,
+    conversationId: [...genesisGroupBytes.subarray(0, 16)],
+    incarnation: 1,
+    mlsGroupId: [...genesisGroupBytes],
+    epoch: 1,
+    contentDigest: [...new Uint8Array(32).fill(6)],
+    content: [1, 2, 3],
+    ciphertext: [4, 5, 6],
+    expectedRecipients: ['bobby@beta.example'],
+    deliveries: [],
+    createdAt: 1_700_000_000_000,
+    attempts: 0,
+  }
+}
+
 function harness(
   existing: LocalMlsGroupState | null = null,
   localRecords: LocalMlsConversationRecord[] = [pendingGenesis()],
@@ -259,6 +342,36 @@ function harness(
     recordMlsAuthorityPreviousQuorum: vi.fn().mockResolvedValue({ next: 'vote-request' }),
     buildMlsAuthorityCommitRequest: vi.fn().mockResolvedValue({ finalized: 'authority-request' }),
     finalizeMlsAuthorityChange: vi.fn().mockResolvedValue(finalizedAuthority()),
+    ensureMlsOwnerCandidate: vi.fn().mockResolvedValue({
+      protocolVersion: 1,
+      conversationId,
+      incarnation: 1,
+      account: { username: 'bobby', server: 'beta.example' },
+      ownerId: '44'.repeat(32),
+      publicKey: btoa(String.fromCharCode(...new Uint8Array(32).fill(4))),
+      createdAt: 1_700_000_000,
+      signature: btoa(String.fromCharCode(...new Uint8Array(64).fill(5))),
+    }),
+    mlsOwnerCandidates: vi.fn().mockResolvedValue([]),
+    createMlsOwnerCandidateMessage: vi.fn().mockResolvedValue(null),
+    prepareMlsOwnerChange: vi.fn().mockResolvedValue({
+      pending: {
+        mlsGroupId: [...genesisGroupBytes],
+        epochBefore: 0,
+        epochAfter: 1,
+        commitHash: 'ed'.repeat(32),
+        commit: [6, 7, 8],
+      },
+      control: pendingOwner(),
+    }),
+    pendingMlsOwnerChanges: vi.fn().mockResolvedValue([pendingOwner()]),
+    mlsOwnerChangeHasQuorum: vi.fn().mockResolvedValue(true),
+    createMlsOwnerApprovalRequestMessage: vi.fn().mockResolvedValue(null),
+    pendingMlsOwnerApprovalRequests: vi.fn().mockResolvedValue([]),
+    approveMlsOwnerApprovalRequest: vi.fn().mockResolvedValue(null),
+    rejectMlsOwnerApprovalRequest: vi.fn().mockResolvedValue(undefined),
+    buildMlsOwnerCommitRequest: vi.fn().mockResolvedValue({ finalized: 'owner-request' }),
+    finalizeMlsOwnerChange: vi.fn().mockResolvedValue(finalizedOwner()),
     mlsGroupState: vi.fn().mockResolvedValue(existing),
     inspectMlsWelcome: vi.fn().mockResolvedValue({
       mlsGroupId: [...new Uint8Array(16).fill(7)],
@@ -423,6 +536,7 @@ function harness(
       nextCursor: '1',
     }),
     ackMlsMailbox: vi.fn().mockResolvedValue(undefined),
+    publishMlsDeliveryCapability: vi.fn().mockResolvedValue(undefined),
     fetchAnonymousMlsKeyPackages: vi.fn(),
     submitAnonymousMlsMessage: vi.fn().mockResolvedValue({
       accepted: true,
@@ -438,7 +552,13 @@ function harness(
   return {
     client,
     transport,
-    service: new MlsConversationService(client, transport, lock, client.deviceId),
+    service: new MlsConversationService(
+      client,
+      transport,
+      lock,
+      client.deviceId,
+      { username: 'bobby', server: 'beta.example' },
+    ),
     lock: lockCalls,
   }
 }
@@ -711,6 +831,53 @@ describe('MlsConversationService', () => {
     expect(transport.collectMlsOrderingVotes).toHaveBeenCalledWith(
       pending.newVoteRequest,
     )
+  })
+
+  it('keeps an owner transition pending until encrypted manual approvals reach quorum', async () => {
+    const { client, transport, service } = harness(null, [activeGenesis()])
+    vi.mocked(client.mlsOwnerChangeHasQuorum).mockResolvedValueOnce(false)
+    vi.mocked(client.createMlsOwnerApprovalRequestMessage)
+      .mockResolvedValueOnce(applicationOutboxEntry())
+
+    await expect(service.reconcilePendingOwnerChanges()).resolves.toEqual([])
+    expect(client.createMlsOwnerApprovalRequestMessage).toHaveBeenCalledWith(genesisGroupBytes)
+    expect(transport.submitAnonymousMlsMessage).toHaveBeenCalledOnce()
+    expect(transport.stageMlsMembershipDelivery).not.toHaveBeenCalled()
+    expect(transport.collectMlsOrderingVotes).not.toHaveBeenCalled()
+
+    vi.mocked(client.mlsOwnerChangeHasQuorum).mockResolvedValueOnce(true)
+    await expect(service.reconcilePendingOwnerChanges()).resolves.toEqual([finalizedOwner()])
+    expect(transport.stageMlsMembershipDelivery).toHaveBeenCalledOnce()
+    expect(transport.collectMlsOrderingVotes).toHaveBeenCalledWith(pendingOwner().voteRequest)
+    expect(client.buildMlsOwnerCommitRequest).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      { votes: ['authority'] },
+    )
+    expect(client.finalizeMlsOwnerChange).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      expect.objectContaining({ blockHash: controlBlockHash }),
+    )
+  })
+
+  it('exposes explicit approve and reject actions for encrypted owner requests', async () => {
+    const { client, transport, service } = harness(null, [activeGenesis()])
+    vi.mocked(client.pendingMlsOwnerApprovalRequests)
+      .mockResolvedValueOnce([ownerApprovalRequest()])
+    await expect(service.pendingOwnerApprovalRequests()).resolves.toEqual([
+      ownerApprovalRequest(),
+    ])
+
+    vi.mocked(client.approveMlsOwnerApprovalRequest)
+      .mockResolvedValueOnce(applicationOutboxEntry())
+    await service.approveOwnerChange(conversationId)
+    expect(client.approveMlsOwnerApprovalRequest).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      expect.stringMatching(/^[0-9]+$/),
+    )
+    expect(transport.submitAnonymousMlsMessage).toHaveBeenCalledOnce()
+
+    await service.rejectOwnerChange(conversationId)
+    expect(client.rejectMlsOwnerApprovalRequest).toHaveBeenCalledWith(genesisGroupBytes)
   })
 
   it('never merges local MLS state for a malformed control acknowledgement', async () => {

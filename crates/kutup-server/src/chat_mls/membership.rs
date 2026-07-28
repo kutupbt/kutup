@@ -144,12 +144,21 @@ pub(super) async fn prepare_membership_finalization(
     verified_history_replay: bool,
 ) -> AppResult<Option<MembershipFinalization>> {
     let block = &request.finalized.block;
-    let transition = request.membership_transition.as_ref().or_else(|| {
-        request
-            .authority_change
-            .as_ref()
-            .map(|change| &change.delivery_transition)
-    });
+    let transition = request
+        .membership_transition
+        .as_ref()
+        .or_else(|| {
+            request
+                .authority_change
+                .as_ref()
+                .map(|change| &change.delivery_transition)
+        })
+        .or_else(|| {
+            request
+                .owner_change
+                .as_ref()
+                .map(|change| &change.delivery_transition)
+        });
     let Some(transition) = transition else {
         if incoming_delivery.is_some() {
             return Err(AppError::bad_request(
@@ -163,6 +172,7 @@ pub(super) async fn prepare_membership_finalization(
         MlsControlActionTypeV1::MembershipChange
             | MlsControlActionTypeV1::RoutineAdmin
             | MlsControlActionTypeV1::AuthoritySetChange
+            | MlsControlActionTypeV1::OwnerSetChange
     ) {
         return Err(AppError::bad_request(
             "unrelated MLS control action carries a roster transition",
@@ -213,8 +223,34 @@ pub(super) async fn prepare_membership_finalization(
         }
     };
 
+    if let (Some(change), true) = (&request.owner_change, local_submitter.is_some()) {
+        let roster_owner_ids = deliveries
+            .values()
+            .flat_map(|delivery| delivery.local_members_after.iter())
+            .filter_map(|member| member.owner_id.as_deref())
+            .collect::<BTreeSet<_>>();
+        let declared_owner_ids = change
+            .next_owner_set
+            .owners
+            .iter()
+            .map(|owner| owner.owner_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if roster_owner_ids != declared_owner_ids {
+            return Err(AppError::bad_request(
+                "MLS owner set differs from the committed private roster snapshots",
+            ));
+        }
+    }
+
     if let Some(delivery) = deliveries.get(local_domain) {
-        apply_local_snapshot(tx, delivery, block.epoch_after, local_submitter).await?;
+        apply_local_snapshot(
+            tx,
+            delivery,
+            block.epoch_after,
+            local_submitter,
+            block.proposal.action_type,
+        )
+        .await?;
     }
     finalize_delivery_records(
         tx,
@@ -277,6 +313,16 @@ fn validate_transition_against_state(
         {
             return Err(AppError::bad_request(
                 "MLS authority change cannot alter membership or routing",
+            ))
+        }
+        MlsControlActionTypeV1::OwnerSetChange
+            if transition.previous_member_count != transition.next_member_count
+                || transition.previous_roster_commitment == transition.next_roster_commitment
+                || transition.previous_participant_domains
+                    != transition.next_participant_domains =>
+        {
+            return Err(AppError::bad_request(
+                "MLS owner change must alter roles without changing membership routing",
             ))
         }
         _ => {}
@@ -373,6 +419,7 @@ async fn apply_local_snapshot(
     delivery: &MlsMembershipDeliveryV1,
     epoch_after: u64,
     local_submitter: Option<Uuid>,
+    action_type: MlsControlActionTypeV1,
 ) -> AppResult<()> {
     let active: Vec<(Uuid, String, bool, Option<String>, String)> = sqlx::query_as(
         "SELECT m.user_id, u.username, m.is_owner, m.owner_id, m.membership_status
@@ -396,7 +443,8 @@ async fn apply_local_snapshot(
         .iter()
         .filter_map(|member| member.owner_id.clone())
         .collect();
-    if existing_owner_ids != next_owner_ids {
+    if action_type != MlsControlActionTypeV1::OwnerSetChange && existing_owner_ids != next_owner_ids
+    {
         return Err(AppError::bad_request(
             "ordinary MLS membership change cannot add or remove owners",
         ));

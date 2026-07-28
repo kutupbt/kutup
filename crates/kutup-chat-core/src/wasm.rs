@@ -14,7 +14,7 @@ use kutup_chat_proto::{
     AnonymousMlsDeviceEnvelopeV1, ChatProfileResponse, CommitMlsControlBlockResponseV1,
     DeviceListMismatch, DeviceManifest, MailboxPage, MlsClientControlHistoryPageV1,
     MlsControlActionTypeV1, MlsConversationMemberV1, MlsOrderingQuorumCertificateV1,
-    MlsOrderingServicePolicyV1, OwnChatProfileResponse, PreKeyCountResponse,
+    MlsOrderingServicePolicyV1, MlsOwnerSetV1, OwnChatProfileResponse, PreKeyCountResponse,
     PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
     RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest,
     TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
@@ -995,6 +995,187 @@ impl WasmChatClient {
         to_output(&finalized)
     }
 
+    #[wasm_bindgen(js_name = prepareMlsOwnerChange)]
+    pub async fn prepare_mls_owner_change(
+        &self,
+        mls_group_id: Vec<u8>,
+        proposal_id: String,
+        next_roster: JsValue,
+        next_owner_set: JsValue,
+        now_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let proposal_id = uuid::Uuid::parse_str(&proposal_id)
+            .map_err(|_| js_error("MLS proposal id must be a UUID"))?;
+        let next_roster: Vec<MlsConversationMemberV1> =
+            from_transport(next_roster).map_err(chat_error)?;
+        let next_owner_set: MlsOwnerSetV1 = from_transport(next_owner_set).map_err(chat_error)?;
+        let prepared = self
+            .mls_client()
+            .prepare_owner_change(
+                &mls_group_id,
+                proposal_id,
+                &next_roster,
+                next_owner_set,
+                parse_i64_string("MLS clock", &now_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&prepared)
+    }
+
+    #[wasm_bindgen(js_name = ensureMlsOwnerCandidate)]
+    pub async fn ensure_mls_owner_candidate(
+        &self,
+        mls_group_id: Vec<u8>,
+        now_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let candidate = self
+            .mls_client()
+            .ensure_owner_candidate(
+                &mls_group_id,
+                parse_i64_string("MLS owner-candidate clock", &now_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&candidate)
+    }
+
+    #[wasm_bindgen(js_name = mlsOwnerCandidates)]
+    pub async fn mls_owner_candidates(
+        &self,
+        mls_group_id: Vec<u8>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let candidates = self
+            .mls_client()
+            .owner_candidates(&mls_group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&candidates)
+    }
+
+    #[wasm_bindgen(js_name = createMlsOwnerCandidateMessage)]
+    pub async fn create_mls_owner_candidate_message(
+        &self,
+        mls_group_id: Vec<u8>,
+        now_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let entry = self
+            .mls_client()
+            .create_owner_candidate_message(
+                &mls_group_id,
+                parse_i64_string("MLS owner-candidate clock", &now_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&entry)
+    }
+
+    #[wasm_bindgen(js_name = pendingMlsOwnerChanges)]
+    pub async fn pending_mls_owner_changes(&self) -> std::result::Result<JsValue, JsValue> {
+        let pending = self
+            .mls_client()
+            .pending_owner_changes()
+            .await
+            .map_err(chat_error)?;
+        to_output(&pending)
+    }
+
+    #[wasm_bindgen(js_name = mlsOwnerChangeHasQuorum)]
+    pub async fn mls_owner_change_has_quorum(
+        &self,
+        mls_group_id: Vec<u8>,
+    ) -> std::result::Result<bool, JsValue> {
+        self.mls_client()
+            .owner_change_has_quorum(&mls_group_id)
+            .await
+            .map_err(chat_error)
+    }
+
+    #[wasm_bindgen(js_name = createMlsOwnerApprovalRequestMessage)]
+    pub async fn create_mls_owner_approval_request_message(
+        &self,
+        mls_group_id: Vec<u8>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let entry = self
+            .mls_client()
+            .create_owner_approval_request_message(&mls_group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&entry)
+    }
+
+    #[wasm_bindgen(js_name = pendingMlsOwnerApprovalRequests)]
+    pub async fn pending_mls_owner_approval_requests(
+        &self,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let pending = self
+            .mls_client()
+            .pending_owner_approval_requests()
+            .await
+            .map_err(chat_error)?;
+        to_output(&pending)
+    }
+
+    #[wasm_bindgen(js_name = approveMlsOwnerApprovalRequest)]
+    pub async fn approve_mls_owner_approval_request(
+        &self,
+        mls_group_id: Vec<u8>,
+        approved_at_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let entry = self
+            .mls_client()
+            .approve_owner_approval_request(
+                &mls_group_id,
+                parse_i64_string("MLS owner-approval clock", &approved_at_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&entry)
+    }
+
+    #[wasm_bindgen(js_name = rejectMlsOwnerApprovalRequest)]
+    pub async fn reject_mls_owner_approval_request(
+        &self,
+        mls_group_id: Vec<u8>,
+    ) -> std::result::Result<(), JsValue> {
+        self.mls_client()
+            .reject_owner_approval_request(&mls_group_id)
+            .await
+            .map_err(chat_error)
+    }
+
+    #[wasm_bindgen(js_name = buildMlsOwnerCommitRequest)]
+    pub async fn build_mls_owner_commit_request(
+        &self,
+        mls_group_id: Vec<u8>,
+        quorum_certificate: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let certificate: MlsOrderingQuorumCertificateV1 =
+            from_transport(quorum_certificate).map_err(chat_error)?;
+        let request = self
+            .mls_client()
+            .build_owner_commit_request(&mls_group_id, certificate)
+            .await
+            .map_err(chat_error)?;
+        to_output(&request)
+    }
+
+    #[wasm_bindgen(js_name = finalizeMlsOwnerChange)]
+    pub async fn finalize_mls_owner_change(
+        &self,
+        mls_group_id: Vec<u8>,
+        acknowledgement: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let acknowledgement: CommitMlsControlBlockResponseV1 =
+            from_transport(acknowledgement).map_err(chat_error)?;
+        let finalized = self
+            .mls_client()
+            .finalize_owner_change(&mls_group_id, &acknowledgement)
+            .await
+            .map_err(chat_error)?;
+        to_output(&finalized)
+    }
+
     #[wasm_bindgen(js_name = pendingMlsCommit)]
     pub async fn pending_mls_commit(
         &self,
@@ -1709,6 +1890,9 @@ impl WasmChatClient {
             history.push(HistoryEntry::outgoing(message).map_err(chat_error)?);
         }
         for message in mls {
+            if is_invisible_control(&message.content).map_err(chat_error)? {
+                continue;
+            }
             history.push(HistoryEntry::mls(message).map_err(chat_error)?);
         }
         history.sort_by(|left, right| {
@@ -2200,6 +2384,17 @@ fn is_contact_control(bytes: &[u8]) -> Result<bool> {
     Ok(matches!(
         content.kind.as_str(),
         kutup_chat_proto::content::kind::CONTACT_CONTROL
+            | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
+    ))
+}
+
+fn is_invisible_control(bytes: &[u8]) -> Result<bool> {
+    let content = serde_json::from_slice::<ChatContent>(bytes)
+        .map_err(|error| ChatError::Content(error.to_string()))?;
+    Ok(matches!(
+        content.kind.as_str(),
+        kutup_chat_proto::content::kind::GROUP_CONTROL
+            | kutup_chat_proto::content::kind::CONTACT_CONTROL
             | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
     ))
 }

@@ -139,8 +139,8 @@ impl MlsRepository {
             }
         }
         if let Some(local_submitter) = local_submitter {
-            let is_admin: Option<bool> = sqlx::query_scalar(
-                "SELECT is_admin
+            let local_member: Option<(bool, bool)> = sqlx::query_as(
+                "SELECT is_admin, is_owner
                  FROM chat_mls_local_members
                  WHERE conversation_id = $1 AND incarnation = $2
                    AND user_id = $3 AND removed_epoch IS NULL
@@ -151,8 +151,8 @@ impl MlsRepository {
             .bind(local_submitter)
             .fetch_optional(&mut *tx)
             .await?;
-            let is_admin =
-                is_admin.ok_or_else(|| AppError::forbidden("not an active local MLS member"))?;
+            let (is_admin, is_owner) = local_member
+                .ok_or_else(|| AppError::forbidden("not an active local MLS member"))?;
             if matches!(
                 block.proposal.action_type,
                 MlsControlActionTypeV1::RoutineAdmin
@@ -162,6 +162,11 @@ impl MlsRepository {
             {
                 return Err(AppError::forbidden(
                     "MLS routine, membership, and authority finalization requires a local administrator",
+                ));
+            }
+            if block.proposal.action_type == MlsControlActionTypeV1::OwnerSetChange && !is_owner {
+                return Err(AppError::forbidden(
+                    "MLS owner-set finalization requires a current local owner",
                 ));
             }
         }
@@ -202,11 +207,11 @@ impl MlsRepository {
                         "security-sensitive group control requires owner approval",
                     )
                 })?
-                .verify(&block.proposal, owners)
+                .verify(&block.proposal, block.transition_digest.as_deref(), owners)
                 .map_err(AppError::bad_request)?;
         } else if let (Some(certificate), Some(owners)) = (&block.owner_approval, &owners) {
             certificate
-                .verify(&block.proposal, owners)
+                .verify(&block.proposal, block.transition_digest.as_deref(), owners)
                 .map_err(AppError::bad_request)?;
         }
 
@@ -236,9 +241,11 @@ impl MlsRepository {
                 .as_ref()
                 .ok_or_else(|| AppError::internal("group MLS owner set is absent"))?;
             let next = request
-                .next_owner_set
+                .owner_change
                 .as_ref()
-                .expect("validated owner transition shape");
+                .expect("validated owner transition shape")
+                .next_owner_set
+                .clone();
             next.validate().map_err(AppError::bad_request)?;
             if current.sequence.checked_add(1) != Some(next.sequence) {
                 return Err(AppError::bad_request(
@@ -246,7 +253,7 @@ impl MlsRepository {
                 ));
             }
             next_owners = Some(
-                serde_json::to_value(next)
+                serde_json::to_value(&next)
                     .map_err(|error| AppError::internal(format!("serialize owners: {error}")))?,
             );
         }
@@ -360,9 +367,9 @@ impl MlsRepository {
         .bind(next_authorities)
         .bind(
             request
-                .next_owner_set
+                .owner_change
                 .as_ref()
-                .map(|set| set.sequence as i64),
+                .map(|change| change.next_owner_set.sequence as i64),
         )
         .bind(next_owners)
         .bind(
@@ -656,7 +663,7 @@ impl MlsRepository {
                         "security-sensitive group control requires owner approval",
                     )
                 })?
-                .verify(&block.proposal, owners)
+                .verify(&block.proposal, block.transition_digest.as_deref(), owners)
                 .map_err(AppError::bad_request)?;
         }
 

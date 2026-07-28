@@ -60,6 +60,7 @@ import type {
   InboundAttention,
   LocalMlsConversationRecord,
   MlsConversationMember,
+  PendingMlsOwnerApprovalRequest,
   PendingMlsInvitation,
   PeerChatProfile,
   TransparencyMonitorStatus,
@@ -119,6 +120,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [peerProfiles, setPeerProfiles] = useState<PeerChatProfile[]>([])
   const [groups, setGroups] = useState<LocalMlsConversationRecord[]>([])
   const [groupInvitations, setGroupInvitations] = useState<PendingMlsInvitation[]>([])
+  const [ownerApprovalRequests, setOwnerApprovalRequests] =
+    useState<PendingMlsOwnerApprovalRequest[]>([])
   const [transparencyStatuses, setTransparencyStatuses] =
     useState<Record<string, TransparencyMonitorStatus>>({})
   const [selectedConversation, setSelectedConversation] = useState<ConversationId | null>(null)
@@ -159,7 +162,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     const refresh = async () => {
       if (!opened || cancelled) return
       try {
-        const [nextHistory, nextAttention, nextContacts, nextProfile, nextProfiles, nextTransparency, nextGroups, nextInvitations] = await Promise.all([
+        const [nextHistory, nextAttention, nextContacts, nextProfile, nextProfiles, nextTransparency, nextGroups, nextInvitations, nextOwnerApprovals] = await Promise.all([
           opened.history(),
           opened.inboundAttention(),
           opened.contacts(),
@@ -168,6 +171,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
           opened.transparencyStatus(),
           capabilities.mlsGroups ? opened.groups() : Promise.resolve([]),
           capabilities.mlsGroups ? opened.groupInvitations() : Promise.resolve([]),
+          capabilities.mlsGroups ? opened.pendingGroupOwnerApprovals() : Promise.resolve([]),
         ])
         if (!cancelled) {
           setHistory(nextHistory)
@@ -177,6 +181,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
           setPeerProfiles(nextProfiles)
           setGroups(nextGroups)
           setGroupInvitations(nextInvitations)
+          setOwnerApprovalRequests(nextOwnerApprovals)
           if (nextTransparency) {
             setTransparencyStatuses((current) => ({ ...current, local: nextTransparency }))
           }
@@ -284,6 +289,11 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     canonicalAccountAddress(member.address) === selfAddress)
   const canManageSelectedGroup = selectedGroupSelfMember?.isAdmin === true
   const canManageSelectedGroupAuthorities = Boolean(selectedGroupSelfMember?.ownerId)
+  const selectedOwnerApproval = selectedGroup
+    ? ownerApprovalRequests.find(request =>
+        request.request.proposal.conversationId
+          === selectedGroup.request.genesis.conversationId)
+    : undefined
   const selectedGroupAdministratorCount = selectedGroup?.currentRoster.filter(
     member => member.isAdmin,
   ).length ?? 0
@@ -523,6 +533,46 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
         toast.success(member.isAdmin ? 'Administrator removed' : 'Administrator added')
       }
       setGroups(await service.groups())
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setGroupUpdating(false)
+    }
+  }
+
+  async function updateSelectedGroupOwner(member: MlsConversationMember) {
+    if (!service || !selectedGroup || !canManageSelectedGroupAuthorities || groupUpdating) return
+    setGroupUpdating(true)
+    try {
+      const finalized = await service.setGroupOwner(
+        selectedGroup.request.genesis.conversationId,
+        member.address,
+        !member.ownerId,
+      )
+      setGroups(await service.groups())
+      setOwnerApprovalRequests(await service.pendingGroupOwnerApprovals())
+      toast.success(finalized
+        ? 'Owner role updated with MLS'
+        : 'Encrypted approval requested from the other group owners')
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setGroupUpdating(false)
+    }
+  }
+
+  async function respondOwnerApproval(approve: boolean) {
+    if (!service || !selectedGroup || !selectedOwnerApproval || groupUpdating) return
+    setGroupUpdating(true)
+    try {
+      if (approve) {
+        await service.approveGroupOwnerChange(selectedGroup.request.genesis.conversationId)
+      } else {
+        await service.rejectGroupOwnerChange(selectedGroup.request.genesis.conversationId)
+      }
+      setOwnerApprovalRequests(await service.pendingGroupOwnerApprovals())
+      setGroups(await service.groups())
+      toast.success(approve ? 'Owner change approved' : 'Owner change rejected on this device')
     } catch (cause) {
       toast.error(errorMessage(cause, t))
     } finally {
@@ -939,6 +989,42 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                       Administrator roles are encrypted into the MLS control state. Owners cannot be changed by a routine administrator action.
                     </DialogDescription>
                   </DialogHeader>
+                  {selectedOwnerApproval && (
+                    <div
+                      className="rounded-lg border border-primary/40 bg-primary/5 p-3"
+                      data-testid="chat-group-owner-approval"
+                    >
+                      <p className="text-sm font-medium">Approve MLS owner change?</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {canonicalAccountAddress(selectedOwnerApproval.requester)} proposes making{' '}
+                        {selectedOwnerApproval.request.nextRoster
+                          .filter(member => Boolean(member.ownerId))
+                          .map(member => canonicalAccountAddress(member.address))
+                          .join(', ')} the group owners. Approval signs this exact encrypted transition.
+                      </p>
+                      <div className="mt-3 flex justify-end gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={groupUpdating}
+                          onClick={() => void respondOwnerApproval(false)}
+                          data-testid="chat-group-owner-reject"
+                        >
+                          Reject
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={groupUpdating}
+                          onClick={() => void respondOwnerApproval(true)}
+                          data-testid="chat-group-owner-approve"
+                        >
+                          Approve
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                   <div className="grid max-h-[60vh] gap-2 overflow-y-auto">
                     {selectedGroup.currentRoster.map(member => {
                       const address = canonicalAccountAddress(member.address)
@@ -955,13 +1041,29 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-sm font-medium">{address}</span>
                             <span className="mt-1 flex gap-2 text-xs text-muted-foreground">
-                              {member.ownerId && <span>Owner</span>}
+                              {member.ownerId && (
+                                <span data-testid={`chat-group-member-owner-${address}`}>Owner</span>
+                              )}
                               {member.isAdmin && <span>Administrator</span>}
                               {isSelf && <span>You</span>}
                             </span>
                           </span>
                           {canManageSelectedGroup && !isSelf && (
                             <>
+                              {canManageSelectedGroupAuthorities && (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={groupUpdating}
+                                  onClick={() => void updateSelectedGroupOwner(member)}
+                                  aria-label={`${member.ownerId ? 'Remove owner from' : 'Make owner'} ${address}`}
+                                  data-testid={`chat-group-owner-${address}`}
+                                >
+                                  <ShieldCheck className="mr-2 h-4 w-4" />
+                                  {member.ownerId ? 'Unown' : 'Owner'}
+                                </Button>
+                              )}
                               <Button
                                 type="button"
                                 size="sm"

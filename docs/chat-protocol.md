@@ -821,9 +821,13 @@ bound to a canonical-decimal prior checkpoint cursor; it never consumes Signal
 prekeys or sends browser authentication context.
 
 The protocol/server/client/WASM foundation is present but remains
-unadvertised. Browser orchestration/UI, federated invitation-rejection
-feedback, and the two-server adversarial browser gate must complete before
-this section changes from `[ADD]` to `[IMPL]`.
+unadvertised. Owner-set changes have durable MLS-encrypted manual approval
+requests/responses and explicit web approve/reject controls. Their two-server
+gate proves requester and approver restart recovery, ordering only after the
+current-owner quorum, finalization, and continued group delivery. The remaining
+governance UI, federated invitation-rejection feedback, linked-device state
+flow, and adversarial/scale browser gates must finish before this section
+changes from `[ADD]` to `[IMPL]`.
 
 ---
 
@@ -949,8 +953,9 @@ destinations.
    transitions, invitation decisions, anonymous delivery, and routine
    administrator changes. The browser and two-server E2E cover group creation,
    invitation, administrator-authored add/remove, promotion, anonymous
-   bidirectional messages, and reload persistence. Owner/authority rotation,
-   linked-device group state, and the remaining adversarial gates are still
+   bidirectional messages, reload persistence, owner/authority rotation, and
+   restart-safe manual owner approval. Linked-device group state, the remaining
+   owner-governed actions, and the remaining adversarial gates are still
    unadvertised work.
 3. **`kutup-chat-core`**: engine skeleton (transport/db ports, event stream,
    durable outbox with `sendId`, decrypt→persist→ack ordering, 409 recovery) —

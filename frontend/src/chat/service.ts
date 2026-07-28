@@ -14,6 +14,7 @@ import type {
   SendSummary,
   TransparencyMonitorStatus,
   LocalMlsConversationRecord,
+  PendingMlsOwnerApprovalRequest,
   PendingMlsInvitation,
   WasmChatClientHandle,
 } from './types'
@@ -342,6 +343,39 @@ export class ChatService {
     authorityDomains: string[],
   ): Promise<void> {
     await this.requireMls().setAuthorities(conversationId, authorityDomains)
+    this.notifyPeers()
+  }
+
+  async publishGroupOwnerCandidate(conversationId: string): Promise<void> {
+    await this.requireMls().publishOwnerCandidate(conversationId)
+    this.notifyPeers()
+  }
+
+  async setGroupOwner(
+    conversationId: string,
+    member: AccountAddress,
+    isOwner: boolean,
+  ): Promise<boolean> {
+    const finalized = await this.requireMls().setOwnerRole(
+      conversationId,
+      withHomeServer(member, this.capabilities.serverName),
+      isOwner,
+    )
+    this.notifyPeers()
+    return finalized !== null
+  }
+
+  async pendingGroupOwnerApprovals(): Promise<PendingMlsOwnerApprovalRequest[]> {
+    return this.requireMls().pendingOwnerApprovalRequests()
+  }
+
+  async approveGroupOwnerChange(conversationId: string): Promise<void> {
+    await this.requireMls().approveOwnerChange(conversationId)
+    this.notifyPeers()
+  }
+
+  async rejectGroupOwnerChange(conversationId: string): Promise<void> {
+    await this.requireMls().rejectOwnerChange(conversationId)
     this.notifyPeers()
   }
 

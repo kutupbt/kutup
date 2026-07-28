@@ -88,12 +88,6 @@ impl MlsClient {
                 ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
             })?;
         ensure_v1_group(&group)?;
-        if group.pending_commit().is_some() {
-            return Err(ChatError::Trust(
-                "delivery capability cannot advance before the pending MLS Commit is finalized"
-                    .into(),
-            ));
-        }
         let epoch = group.epoch().as_u64();
         let mut exporter = group
             .export_secret(

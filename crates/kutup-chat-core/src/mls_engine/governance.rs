@@ -313,10 +313,11 @@ impl MlsClient {
             mls_group_id,
             &next_private_control,
         )?;
-        let (deliveries, delivery_transition) = build_authority_deliveries(
+        let (deliveries, delivery_transition) = build_governance_deliveries(
             &metadata,
             &conversation,
             proposal_id,
+            &conversation.current_roster,
             &current_devices,
             &pending,
         )?;
@@ -336,6 +337,9 @@ impl MlsClient {
             created_at_seconds,
         )?;
         let proposal_hash = proposal.proposal_hash().map_err(ChatError::Protocol)?;
+        let transition_digest = authority_change
+            .transition_digest()
+            .map_err(ChatError::Protocol)?;
         let owner_seed: [u8; 32] = ensure_group_owner_key(&metadata, mls_group_id)?
             .try_into()
             .map_err(|_| ChatError::Db("invalid durable MLS owner seed".into()))?;
@@ -345,6 +349,7 @@ impl MlsClient {
             incarnation: proposal.incarnation,
             owner_set_sequence: conversation.current_owner_set.sequence,
             proposal_hash: proposal_hash.clone(),
+            transition_digest: Some(transition_digest.clone()),
             owner_id: owner.owner_id,
             approved_at: created_at_seconds,
             signature: String::new(),
@@ -357,10 +362,15 @@ impl MlsClient {
         let owner_approval = MlsOwnerApprovalCertificateV1 {
             owner_set_sequence: conversation.current_owner_set.sequence,
             proposal_hash,
+            transition_digest: Some(transition_digest.clone()),
             approvals: vec![approval],
         };
         owner_approval
-            .verify(&proposal, &conversation.current_owner_set)
+            .verify(
+                &proposal,
+                Some(transition_digest.as_str()),
+                &conversation.current_owner_set,
+            )
             .map_err(ChatError::Trust)?;
         let block = MlsControlBlockV1 {
             conversation_id: proposal.conversation_id,
@@ -370,11 +380,7 @@ impl MlsClient {
             epoch_before: pending.epoch_before,
             epoch_after: pending.epoch_after,
             proposal,
-            transition_digest: Some(
-                authority_change
-                    .transition_digest()
-                    .map_err(ChatError::Protocol)?,
-            ),
+            transition_digest: Some(transition_digest),
             owner_approval: Some(owner_approval),
             finalized_at: created_at_seconds,
         };
@@ -535,7 +541,7 @@ impl MlsClient {
             membership_transition: None,
             authority_change: Some(control.authority_change.clone()),
             authority_transition: Some(authority_transition),
-            next_owner_set: None,
+            owner_change: None,
         };
         request.validate_shape().map_err(ChatError::Protocol)?;
         control.final_request = Some(request.clone());
@@ -663,15 +669,24 @@ impl MlsClient {
     }
 }
 
-fn build_authority_deliveries(
+pub(super) fn build_governance_deliveries(
     metadata: &SnapshotMetadata,
     conversation: &LocalMlsConversationRecord,
     proposal_id: Uuid,
+    next_roster: &[MlsConversationMemberV1],
     current_devices: &[(String, u32)],
     pending: &PendingMlsCommit,
 ) -> Result<(Vec<MlsMembershipDeliveryV1>, MlsMembershipTransitionV1)> {
-    let domains = participant_domains(&conversation.current_roster)?;
-    let commitment = roster_commitment(&conversation.current_roster).map_err(ChatError::Db)?;
+    let previous_domains = participant_domains(&conversation.current_roster)?;
+    let next_domains = participant_domains(next_roster)?;
+    if previous_domains != next_domains || conversation.current_roster.len() != next_roster.len() {
+        return Err(ChatError::Invalid(
+            "MLS governance delivery cannot change membership routing".into(),
+        ));
+    }
+    let previous_commitment =
+        roster_commitment(&conversation.current_roster).map_err(ChatError::Db)?;
+    let next_commitment = roster_commitment(next_roster).map_err(ChatError::Db)?;
     let local_device = parse_device_credential_identity(&metadata.credential_identity)?;
     let commit_message = BASE64.encode(&pending.commit);
     let mut envelopes_by_domain = BTreeMap::<String, Vec<MlsMembershipEnvelopeV1>>::new();
@@ -697,10 +712,9 @@ fn build_authority_deliveries(
                 opaque_message: commit_message.clone(),
             });
     }
-    let mut deliveries = Vec::with_capacity(domains.len());
-    for destination in &domains {
-        let mut local_members_after = conversation
-            .current_roster
+    let mut deliveries = Vec::with_capacity(next_domains.len());
+    for destination in &next_domains {
+        let mut local_members_after = next_roster
             .iter()
             .filter(|member| member.address.server.as_deref() == Some(destination.as_str()))
             .cloned()
@@ -722,8 +736,8 @@ fn build_authority_deliveries(
             proposal_id,
             destination: destination.clone(),
             epoch_after: pending.epoch_after,
-            next_roster_commitment: commitment.clone(),
-            next_participant_domains: domains.clone(),
+            next_roster_commitment: next_commitment.clone(),
+            next_participant_domains: next_domains.clone(),
             local_members_after,
             envelopes,
         };
@@ -732,7 +746,7 @@ fn build_authority_deliveries(
     }
     if !envelopes_by_domain.is_empty() {
         return Err(ChatError::Protocol(
-            "MLS authority Commit targets a domain outside the roster".into(),
+            "MLS governance Commit targets a domain outside the roster".into(),
         ));
     }
     let transition = MlsMembershipTransitionV1 {
@@ -740,12 +754,12 @@ fn build_authority_deliveries(
         conversation_id: conversation.request.genesis.conversation_id,
         incarnation: conversation.request.genesis.incarnation,
         proposal_id,
-        previous_roster_commitment: commitment.clone(),
-        next_roster_commitment: commitment,
+        previous_roster_commitment: previous_commitment,
+        next_roster_commitment: next_commitment,
         previous_member_count: conversation.current_roster.len() as u32,
         next_member_count: conversation.current_roster.len() as u32,
-        previous_participant_domains: domains.clone(),
-        next_participant_domains: domains,
+        previous_participant_domains: previous_domains,
+        next_participant_domains: next_domains,
         deliveries: deliveries
             .iter()
             .map(|delivery| {

@@ -7,14 +7,18 @@ import type {
   DerivedMlsDeliveryCapability,
   FinalizedMlsAuthorityChange,
   FinalizedMlsMembershipChange,
+  FinalizedMlsOwnerChange,
   LocalMlsConversationRecord,
   LocalMlsGroupState,
   MlsConversationMember,
   MlsMailboxEnvelope,
+  MlsOwnerCandidate,
   MlsOutboxEntry,
   MlsWelcomeInspection,
   PendingMlsAuthorityChange,
   PendingMlsMembershipChange,
+  PendingMlsOwnerApprovalRequest,
+  PendingMlsOwnerChange,
   PendingMlsInvitation,
   PreparedMlsGroupGenesis,
   VerifiedMlsCredential,
@@ -322,6 +326,179 @@ export class MlsConversationService {
       finalized.push(result)
     }
     return finalized
+  }
+
+  /**
+   * Replace the pseudonymous owner set and its encrypted account bindings.
+   * The caller supplies only credentials independently obtained from the
+   * intended group members; Rust validates the exact mapping and quorum.
+   */
+  async setOwners(
+    conversationId: string,
+    owners: Array<{ address: AccountAddress; ownerId: string; publicKey: string }>,
+  ): Promise<FinalizedMlsOwnerChange | null> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    if (owners.length < 1 || owners.length > 1024) {
+      throw new Error('MLS owner set must contain 1-1024 members')
+    }
+    const byAddress = new Map<string, { ownerId: string; publicKey: string }>()
+    for (const owner of owners) {
+      const address = canonicalAccountAddress(owner.address)
+      if (
+        byAddress.has(address)
+        || !/^[0-9a-f]{64}$/.test(owner.ownerId)
+        || decodeCanonicalBase64(owner.publicKey, 32, 32).length !== 32
+      ) {
+        throw new Error('invalid or duplicate MLS owner credential')
+      }
+      byAddress.set(address, { ownerId: owner.ownerId, publicKey: owner.publicKey })
+    }
+    const rosterAddresses = new Set(
+      conversation.currentRoster.map(member => canonicalAccountAddress(member.address)),
+    )
+    if ([...byAddress.keys()].some(address => !rosterAddresses.has(address))) {
+      throw new Error('MLS owner candidate is not a current group member')
+    }
+    const nextRoster = conversation.currentRoster.map(member => ({
+      ...member,
+      ownerId: byAddress.get(canonicalAccountAddress(member.address))?.ownerId,
+    }))
+    const nextOwners = [...byAddress.values()]
+      .sort((left, right) => left.ownerId.localeCompare(right.ownerId))
+    const nextOwnerSet = {
+      sequence: conversation.currentOwnerSet.sequence + 1,
+      owners: nextOwners,
+      requiredQuorum: Math.floor((2 * nextOwners.length) / 3) + 1,
+    }
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const prepared = await this.withCryptoLock(() =>
+      this.client.prepareMlsOwnerChange(
+        groupId,
+        requireBrowserCrypto().randomUUID(),
+        nextRoster,
+        nextOwnerSet,
+        String(Math.floor(Date.now() / 1000)),
+      ))
+    validatePendingOwnerChange(prepared.control, groupId)
+    if (!await this.withCryptoLock(() => this.client.mlsOwnerChangeHasQuorum(groupId))) {
+      await this.publishOwnerApprovalRequest(groupId)
+      return null
+    }
+    const finalized = await this.publishPendingOwnerChange(prepared.control)
+    await this.publishCurrentDeliveryCapability(finalized.conversation)
+    return finalized
+  }
+
+  async reconcilePendingOwnerChanges(): Promise<FinalizedMlsOwnerChange[]> {
+    const pending = await this.withCryptoLock(() => this.client.pendingMlsOwnerChanges())
+    const finalized: FinalizedMlsOwnerChange[] = []
+    for (const control of pending) {
+      const groupId = Uint8Array.from(control.mlsGroupId)
+      validatePendingOwnerChange(control, groupId)
+      if (!await this.withCryptoLock(() => this.client.mlsOwnerChangeHasQuorum(groupId))) {
+        await this.publishOwnerApprovalRequest(groupId)
+        continue
+      }
+      const result = await this.publishPendingOwnerChange(control)
+      await this.publishCurrentDeliveryCapability(result.conversation)
+      finalized.push(result)
+    }
+    return finalized
+  }
+
+  async ownerCandidates(conversationId: string): Promise<MlsOwnerCandidate[]> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    return this.withCryptoLock(() => this.client.mlsOwnerCandidates(groupId))
+  }
+
+  /**
+   * Publish this member's proof-of-possession credential inside MLS. The
+   * deterministic per-epoch outbox makes crashes retry-safe and keeps ordering
+   * servers from learning which account is being considered for ownership.
+   */
+  async publishOwnerCandidate(conversationId: string): Promise<MlsOwnerCandidate> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    return this.publishOwnerCandidateForRecord(conversation)
+  }
+
+  async setOwnerRole(
+    conversationId: string,
+    member: AccountAddress,
+    isOwner: boolean,
+  ): Promise<FinalizedMlsOwnerChange | null> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const canonical = canonicalAccountAddress(requireCanonicalAddress(member))
+    const rosterMember = conversation.currentRoster.find(
+      current => canonicalAccountAddress(current.address) === canonical,
+    )
+    if (!rosterMember) throw new Error('account is not an MLS group member')
+    if (Boolean(rosterMember.ownerId) === isOwner) {
+      throw new Error('MLS owner role is already in the requested state')
+    }
+    const publicOwners = new Map(
+      conversation.currentOwnerSet.owners.map(owner => [owner.ownerId, owner]),
+    )
+    const owners = conversation.currentRoster.flatMap((current) => {
+      if (!current.ownerId) return []
+      const owner = publicOwners.get(current.ownerId)
+      if (!owner) throw new Error('MLS private owner mapping differs from the public owner set')
+      return [{ address: current.address, ...owner }]
+    })
+    if (isOwner) {
+      const candidate = (await this.ownerCandidates(conversationId)).find(
+        current => canonicalAccountAddress(current.account) === canonical,
+      )
+      if (!candidate) {
+        throw new Error('member must publish an authenticated MLS owner candidate first')
+      }
+      owners.push({
+        address: candidate.account,
+        ownerId: candidate.ownerId,
+        publicKey: candidate.publicKey,
+      })
+    } else {
+      const index = owners.findIndex(owner => canonicalAccountAddress(owner.address) === canonical)
+      if (index >= 0) owners.splice(index, 1)
+    }
+    return this.setOwners(conversationId, owners)
+  }
+
+  async pendingOwnerApprovalRequests(): Promise<PendingMlsOwnerApprovalRequest[]> {
+    return this.withCryptoLock(() => this.client.pendingMlsOwnerApprovalRequests())
+  }
+
+  async approveOwnerChange(conversationId: string): Promise<void> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const entry = await this.withCryptoLock(() =>
+      this.client.approveMlsOwnerApprovalRequest(
+        groupId,
+        String(Math.floor(Date.now() / 1000)),
+      ))
+    if (entry) await this.deliverApplicationEntry(entry)
+  }
+
+  async rejectOwnerChange(conversationId: string): Promise<void> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    await this.withCryptoLock(() => this.client.rejectMlsOwnerApprovalRequest(groupId))
   }
 
   async maintainKeyPackages(
@@ -697,9 +874,11 @@ export class MlsConversationService {
     await this.reconcilePendingGroupGeneses()
     await this.reconcilePendingMembershipChanges()
     await this.reconcilePendingAuthorityChanges()
+    await this.reconcilePendingOwnerChanges()
     await this.reconcileInboundMembershipCommits()
     await this.reconcilePendingApplicationMessages()
     await this.reconcileInboundApplicationMessages()
+    await this.reconcilePendingOwnerChanges()
   }
 
   /**
@@ -758,11 +937,39 @@ export class MlsConversationService {
       throw new Error('server did not activate the verified MLS invitation')
     }
     await this.publishCurrentDeliveryCapability(joined.conversation)
+    await this.publishOwnerCandidateForRecord(joined.conversation)
     await this.transport.ackMlsMailbox(
       this.deviceId,
       envelopes.map((envelope) => envelope.id),
     )
     return { group, serverAccepted: true, resumed }
+  }
+
+  private async publishOwnerCandidateForRecord(
+    conversation: LocalMlsConversationRecord,
+  ): Promise<MlsOwnerCandidate> {
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const now = String(Math.floor(Date.now() / 1000))
+    const candidate = await this.withCryptoLock(() =>
+      this.client.ensureMlsOwnerCandidate(groupId, now))
+    const local = requireCanonicalAddress(this.selfAddress)
+    if (canonicalAccountAddress(candidate.account) !== canonicalAccountAddress(local)) {
+      throw new Error('local MLS owner candidate is bound to a different account')
+    }
+    const entry = await this.withCryptoLock(() =>
+      this.client.createMlsOwnerCandidateMessage(groupId, now))
+    if (entry) await this.deliverApplicationEntry(entry)
+    return candidate
+  }
+
+  private async publishOwnerApprovalRequest(groupId: Uint8Array): Promise<void> {
+    const entry = await this.withCryptoLock(() =>
+      this.client.createMlsOwnerApprovalRequestMessage(groupId))
+    if (entry) await this.deliverApplicationEntry(entry)
   }
 
   private async controlHistory(
@@ -1040,6 +1247,37 @@ export class MlsConversationService {
     }
     return finalized
   }
+
+  private async publishPendingOwnerChange(
+    control: PendingMlsOwnerChange,
+  ): Promise<FinalizedMlsOwnerChange> {
+    const groupId = Uint8Array.from(control.mlsGroupId)
+    validatePendingOwnerChange(control, groupId)
+    for (const delivery of control.deliveries) {
+      await this.transport.stageMlsMembershipDelivery(delivery)
+    }
+    let request = control.finalRequest
+    if (!request) {
+      const certificate = await this.transport.collectMlsOrderingVotes(control.voteRequest)
+      request = await this.withCryptoLock(() =>
+        this.client.buildMlsOwnerCommitRequest(groupId, certificate))
+    }
+    const acknowledgement = requireControlBlockResponse(
+      await this.transport.commitMlsControlBlock(request),
+      control,
+    )
+    const finalized = await this.withCryptoLock(() =>
+      this.client.finalizeMlsOwnerChange(groupId, acknowledgement))
+    if (
+      finalized.group.epoch !== control.voteRequest.block.epochAfter
+      || finalized.conversation.currentOwnerSet.sequence
+        !== control.ownerChange.nextOwnerSet.sequence
+      || finalized.conversation.lastBlockHash !== acknowledgement.blockHash
+    ) {
+      throw new Error('durable MLS owner state differs from its finalized block')
+    }
+    return finalized
+  }
 }
 
 interface BrowserCrypto {
@@ -1195,9 +1433,41 @@ function validatePendingAuthorityChange(
   }
 }
 
+function validatePendingOwnerChange(
+  control: PendingMlsOwnerChange,
+  expectedGroupId: Uint8Array,
+): void {
+  const block = control?.voteRequest?.block
+  const change = control?.ownerChange
+  if (
+    !control
+    || !equalBytes(control.mlsGroupId, expectedGroupId)
+    || !isSha256(control.commitHash)
+    || !Array.isArray(control.nextRoster)
+    || control.nextRoster.length < 1
+    || control.nextRoster.length > 1000
+    || !Array.isArray(control.deliveries)
+    || control.deliveries.length < 1
+    || !block
+    || !change
+    || !isUuid(block.conversationId)
+    || block.conversationId !== change.deliveryTransition?.conversationId
+    || block.incarnation !== change.deliveryTransition?.incarnation
+    || !isUuid(change.deliveryTransition?.proposalId)
+    || !Number.isSafeInteger(change.nextOwnerSet?.sequence)
+    || change.nextOwnerSet.sequence < 2
+    || !Array.isArray(change.nextOwnerSet.owners)
+    || change.nextOwnerSet.owners.length < 1
+    || change.nextOwnerSet.owners.length > 1024
+    || block.epochAfter !== block.epochBefore + 1
+  ) {
+    throw new Error('invalid durable MLS owner control record')
+  }
+}
+
 function requireControlBlockResponse(
   value: unknown,
-  control: PendingMlsMembershipChange | PendingMlsAuthorityChange,
+  control: PendingMlsMembershipChange | PendingMlsAuthorityChange | PendingMlsOwnerChange,
 ): {
   conversationId: string
   incarnation: number

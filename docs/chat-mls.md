@@ -13,9 +13,13 @@ identified invitation decisions, routine administrator changes, browser group
 management and messaging, privacy-bounded telemetry, and admin inspection
 routes exist. The live browser gate covers creation, cross-server invitation,
 promotion, administrator-authored add/remove, anonymous bidirectional messages,
-and reload persistence. Advertisement remains gated on owner/authority product
-orchestration, federated invitation-rejection feedback, linked-device group
-state, and the remaining adversarial suites.
+and reload persistence. Owner-set changes use durable MLS-encrypted manual
+approval requests and responses with explicit browser approve/reject controls;
+the two-server gate proves requester and approver restart recovery, that no
+control block is ordered before quorum, and successful finalization after the
+approval arrives. Advertisement remains gated on the remaining owner/authority
+product orchestration, federated invitation-rejection feedback, linked-device
+group state, and the remaining adversarial suites.
 
 ## Conversation model
 
@@ -91,6 +95,18 @@ Owners are group-scoped pseudonyms with group-scoped Ed25519 keys. Ordering
 authorities receive the original signed approvals but not account identities.
 The member-visible MLS-encrypted control payload binds each owner/control
 pseudonym to the manifest-verified MLS sender.
+
+An owner-set proposal automatically carries the initiating owner's signature.
+If the current owner quorum is not yet met, the client persists the staged MLS
+Commit and sends an invisible `groupControl` approval request only to the other
+current owners. The request contains the exact signed proposal, transition
+digest, next owner set, and group-private next roster, expires after at most
+seven days, and survives restart. An approving client independently verifies
+its current control pin and every prospective owner's prior MLS-authenticated
+proof-of-possession candidate before signing. Its response is another ordinary
+anonymous MLS application message sent only to the requester. No server or
+client votes automatically, rejection cannot count as approval, and ordering
+does not begin until the exact current-owner certificate reaches quorum.
 
 ## Ordering authorities
 
@@ -329,8 +345,8 @@ sender/recipient correlations.
 
 Do not advertise MLS until all of the following pass together:
 
-- browser orchestration and explicit approval UI for owner, authority,
-  recovery, close, and suite-policy actions;
+- browser orchestration, explicit approval UI, and two-server adversarial
+  coverage for recovery, close, and suite-policy owner actions;
 - federated invitation-rejection feedback and administrator removal flow;
 - group owner and exact authority-policy/fingerprint UI;
 - WebSocket/restart reconciliation and multi-device linked-state flow;
