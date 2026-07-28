@@ -82,6 +82,7 @@ pub(crate) async fn federated_replicate_genesis(
     let request = CreateMlsConversationRequestV1 {
         genesis: replica.genesis.clone(),
         members: replica.members.clone(),
+        initial_devices: Vec::new(),
     };
     match MlsRepository::new(state.pool.clone())
         .create_conversation(

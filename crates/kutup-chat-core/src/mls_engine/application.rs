@@ -138,9 +138,9 @@ impl MlsClient {
             parse_device_credential_identity(&expected_sender.credential_identity)?;
         if group_control.is_none()
             && plaintext.len()
-            > conversation
-                .current_cryptographic_policy
-                .maximum_application_plaintext_bytes as usize
+                > conversation
+                    .current_cryptographic_policy
+                    .maximum_application_plaintext_bytes as usize
         {
             return Err(ChatError::Trust(
                 "MLS application plaintext exceeds the authenticated group policy".into(),
@@ -150,7 +150,9 @@ impl MlsClient {
             .current_roster
             .iter()
             .find(|member| member.address.canonical() == sender)
-            .ok_or_else(|| ChatError::Trust("MLS application sender is absent from the roster".into()))?;
+            .ok_or_else(|| {
+                ChatError::Trust("MLS application sender is absent from the roster".into())
+            })?;
         if group_control.is_none()
             && conversation
                 .current_authorization_policy
@@ -390,9 +392,9 @@ impl MlsClient {
             let is_group_control = is_typed_group_control(&plaintext);
             if !is_group_control
                 && plaintext.len()
-                > conversation
-                    .current_cryptographic_policy
-                    .maximum_application_plaintext_bytes as usize
+                    > conversation
+                        .current_cryptographic_policy
+                        .maximum_application_plaintext_bytes as usize
             {
                 return Err(ChatError::Trust(
                     "MLS application plaintext exceeds the authenticated group policy".into(),
@@ -400,9 +402,10 @@ impl MlsClient {
             }
             let (sender, _) =
                 parse_device_credential_identity(&expected_sender.credential_identity)?;
-            let sender_is_admin = conversation.current_roster.iter().any(|member| {
-                member.address.canonical() == sender && member.is_admin
-            });
+            let sender_is_admin = conversation
+                .current_roster
+                .iter()
+                .any(|member| member.address.canonical() == sender && member.is_admin);
             if !is_group_control
                 && conversation
                     .current_authorization_policy
@@ -653,7 +656,7 @@ impl MlsClient {
             .map_err(|error| mls_error("load MLS group", error))?
             .ok_or_else(|| {
                 ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
-        })?;
+            })?;
         ensure_v1_group(&group)?;
         let is_group_control = is_typed_group_control(plaintext);
         if group.pending_commit().is_some() {
@@ -679,9 +682,9 @@ impl MlsClient {
             }
             if !is_group_control
                 && plaintext.len()
-                > conversation
-                    .current_cryptographic_policy
-                    .maximum_application_plaintext_bytes as usize
+                    > conversation
+                        .current_cryptographic_policy
+                        .maximum_application_plaintext_bytes as usize
             {
                 return Err(ChatError::Invalid(
                     "MLS application plaintext exceeds the authenticated group policy".into(),
@@ -695,9 +698,10 @@ impl MlsClient {
             {
                 let (local_address, _) =
                     parse_device_credential_identity(&metadata.credential_identity)?;
-                let local_is_admin = conversation.current_roster.iter().any(|member| {
-                    member.address.canonical() == local_address && member.is_admin
-                });
+                let local_is_admin = conversation
+                    .current_roster
+                    .iter()
+                    .any(|member| member.address.canonical() == local_address && member.is_admin);
                 if !local_is_admin {
                     return Err(ChatError::Trust(
                         "local MLS sender is not permitted by group policy".into(),

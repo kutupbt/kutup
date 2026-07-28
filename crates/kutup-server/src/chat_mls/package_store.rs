@@ -151,13 +151,29 @@ impl MlsRepository {
         .fetch_optional(&mut *tx)
         .await?;
         if let Some((version, existing_credential, existing_anonymous)) = existing {
-            if version != manifest_version
-                || existing_credential != credential_key
-                || existing_anonymous != anonymous_key
-            {
+            if existing_credential != credential_key || existing_anonymous != anonymous_key {
                 return Err(AppError::conflict(
                     "MLS device key replacement requires explicit device revocation",
                 ));
+            }
+            if version > manifest_version {
+                return Err(AppError::conflict(
+                    "MLS device manifest version cannot roll back",
+                ));
+            }
+            if version < manifest_version {
+                sqlx::query(
+                    "UPDATE chat_mls_devices
+                     SET manifest_version = $3
+                     WHERE user_id = $1 AND device_id = $2
+                       AND manifest_version = $4",
+                )
+                .bind(user_id)
+                .bind(request.device_id as i32)
+                .bind(manifest_version)
+                .bind(version)
+                .execute(&mut *tx)
+                .await?;
             }
         } else {
             sqlx::query(
@@ -233,9 +249,14 @@ impl MlsRepository {
     ) -> AppResult<u32> {
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*)
-             FROM chat_mls_key_packages
-             WHERE user_id = $1 AND device_id = $2
-               AND claimed_at IS NULL AND expires_at > $3",
+             FROM chat_mls_key_packages p
+             JOIN chat_mls_devices d
+               ON d.user_id = p.user_id AND d.device_id = p.device_id
+             JOIN chat_device_manifests m ON m.user_id = p.user_id
+             WHERE p.user_id = $1 AND p.device_id = $2
+               AND d.manifest_version = m.version
+               AND p.manifest_version = m.version
+               AND p.claimed_at IS NULL AND p.expires_at > $3",
         )
         .bind(user_id)
         .bind(device_id as i32)

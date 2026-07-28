@@ -16,6 +16,10 @@ pub enum MlsControlActionTypeV1 {
     CloseConversation = 7,
     ProtocolUpgrade = 8,
     RecoverIncarnation = 9,
+    /// Add or remove manifest-bound leaves for an account that is already in
+    /// the group. The account roster, roles, routing, and policies remain
+    /// byte-for-byte unchanged.
+    DeviceSync = 10,
 }
 
 impl MlsControlActionTypeV1 {
@@ -53,6 +57,7 @@ impl TryFrom<u16> for MlsControlActionTypeV1 {
             7 => Ok(Self::CloseConversation),
             8 => Ok(Self::ProtocolUpgrade),
             9 => Ok(Self::RecoverIncarnation),
+            10 => Ok(Self::DeviceSync),
             _ => Err(format!("unknown MLS control action {value}")),
         }
     }
@@ -835,6 +840,7 @@ impl MlsControlBlockV1 {
         }
         match self.proposal.action_type {
             MlsControlActionTypeV1::MembershipChange
+            | MlsControlActionTypeV1::DeviceSync
             | MlsControlActionTypeV1::AuthoritySetChange
             | MlsControlActionTypeV1::OwnerSetChange
             | MlsControlActionTypeV1::AuthorizationPolicyChange
@@ -958,7 +964,9 @@ impl CommitMlsControlBlockV1 {
     pub fn validate_shape(&self) -> Result<(), String> {
         self.finalized.block.validate()?;
         match self.finalized.block.proposal.action_type {
-            MlsControlActionTypeV1::MembershipChange | MlsControlActionTypeV1::RoutineAdmin
+            MlsControlActionTypeV1::MembershipChange
+            | MlsControlActionTypeV1::RoutineAdmin
+            | MlsControlActionTypeV1::DeviceSync
                 if self.membership_transition.is_some() =>
             {
                 let transition = self
@@ -997,11 +1005,23 @@ impl CommitMlsControlBlockV1 {
                             "routine administrator change cannot alter membership routing".into(),
                         )
                     }
+                    MlsControlActionTypeV1::DeviceSync
+                        if transition.previous_member_count != transition.next_member_count
+                            || transition.previous_participant_domains
+                                != transition.next_participant_domains
+                            || transition.previous_roster_commitment
+                                != transition.next_roster_commitment =>
+                    {
+                        return Err(
+                            "device synchronization must preserve the exact account roster and routing"
+                                .into(),
+                        )
+                    }
                     _ => {}
                 }
             }
-            MlsControlActionTypeV1::MembershipChange => {
-                return Err("membership change requires its public transition".into())
+            MlsControlActionTypeV1::MembershipChange | MlsControlActionTypeV1::DeviceSync => {
+                return Err("membership or device change requires its public transition".into())
             }
             MlsControlActionTypeV1::AuthoritySetChange => {
                 if self.authority_change.is_none()

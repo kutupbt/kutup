@@ -23,7 +23,9 @@ pub(super) fn validate_pending_membership_change(
         .map_err(ChatError::Db)?;
     if !matches!(
         block.proposal.action_type,
-        MlsControlActionTypeV1::MembershipChange | MlsControlActionTypeV1::RoutineAdmin
+        MlsControlActionTypeV1::MembershipChange
+            | MlsControlActionTypeV1::RoutineAdmin
+            | MlsControlActionTypeV1::DeviceSync
     ) || block.conversation_id != control.transition.conversation_id
         || block.incarnation != control.transition.incarnation
         || block.proposal.proposal_id != control.transition.proposal_id
@@ -53,6 +55,17 @@ pub(super) fn validate_pending_membership_change(
         {
             return Err(ChatError::Db(
                 "durable MLS administrator control changes membership routing".into(),
+            ));
+        }
+        MlsControlActionTypeV1::DeviceSync
+            if control.transition.previous_member_count != control.transition.next_member_count
+                || control.transition.previous_roster_commitment
+                    != control.transition.next_roster_commitment
+                || control.transition.previous_participant_domains
+                    != control.transition.next_participant_domains =>
+        {
+            return Err(ChatError::Db(
+                "durable MLS device synchronization changes account membership".into(),
             ));
         }
         _ => {}
@@ -340,9 +353,12 @@ fn validate_local_genesis_request(request: &CreateMlsConversationRequestV1) -> R
 }
 
 pub(super) fn validate_group_roster(roster: &[MlsConversationMemberV1]) -> Result<()> {
-    if !(2..=1000).contains(&roster.len()) {
+    // A group is created with its creator as the only member and may return to
+    // that state after removals. Control actions must remain available in both
+    // cases so the creator can add a linked device, invite a peer, or close it.
+    if !(1..=1000).contains(&roster.len()) {
         return Err(ChatError::Invalid(
-            "MLS group roster must contain 2-1000 accounts".into(),
+            "MLS group roster must contain 1-1000 accounts".into(),
         ));
     }
     let mut previous = None;
@@ -466,6 +482,13 @@ pub(super) fn validate_private_roster_action(
                 return Err(
                     "MLS routine administrator control must change at least one administrator role"
                         .into(),
+                );
+            }
+        }
+        MlsControlActionTypeV1::DeviceSync => {
+            if added != 0 || removed != 0 || previous != next {
+                return Err(
+                    "MLS device synchronization must preserve the exact account roster".into(),
                 );
             }
         }
@@ -1061,30 +1084,22 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
                                 .next_authorization_policy
                                 .as_ref()
                                 .is_some_and(|next| {
-                                    record
-                                        .current_authorization_policy
-                                        .sequence
-                                        .checked_add(1)
+                                    record.current_authorization_policy.sequence.checked_add(1)
                                         == Some(next.sequence)
-                                        && record
-                                            .current_authorization_policy
-                                            .application_senders
+                                        && record.current_authorization_policy.application_senders
                                             != next.application_senders
                                 }),
                             MlsControlActionTypeV1::CryptographicPolicyChange => request
                                 .next_cryptographic_policy
                                 .as_ref()
                                 .is_some_and(|next| {
-                                    record
-                                        .current_cryptographic_policy
-                                        .sequence
-                                        .checked_add(1)
+                                    record.current_cryptographic_policy.sequence.checked_add(1)
                                         == Some(next.sequence)
                                         && next.maximum_application_plaintext_bytes
                                             < record
                                                 .current_cryptographic_policy
                                                 .maximum_application_plaintext_bytes
-                            }),
+                                }),
                             _ => false,
                         } => {}
                 MlsControlActionTypeV1::RecoverIncarnation

@@ -542,6 +542,7 @@ export class ChatService {
       const manifest = await this.withLock(() => this.client.syncManifest())
       const version = requireManifestVersion(manifest)
       await this.mls?.maintainKeyPackages(version)
+      await this.mls?.reconcileLinkedDevices(requireMlsManifestDeviceIds(manifest))
     })
   }
 
@@ -649,4 +650,38 @@ function requireManifestVersion(value: unknown): number {
     throw new Error('signed device manifest returned an invalid version')
   }
   return value.version
+}
+
+function requireMlsManifestDeviceIds(value: unknown): number[] {
+  if (
+    typeof value !== 'object'
+    || value === null
+    || !('devices' in value)
+    || !Array.isArray(value.devices)
+    || value.devices.length < 1
+    || value.devices.length > 127
+  ) {
+    throw new Error('signed device manifest returned an invalid MLS device set')
+  }
+  const ids = value.devices.map((entry) => {
+    if (
+      typeof entry !== 'object'
+      || entry === null
+      || !('deviceId' in entry)
+      || typeof entry.deviceId !== 'number'
+      || !Number.isSafeInteger(entry.deviceId)
+      || entry.deviceId < 1
+      || entry.deviceId > 127
+      || !('mls' in entry)
+      || typeof entry.mls !== 'object'
+      || entry.mls === null
+    ) {
+      throw new Error('signed device manifest contains a device without MLS keys')
+    }
+    return entry.deviceId
+  }).sort((left, right) => left - right)
+  if (new Set(ids).size !== ids.length) {
+    throw new Error('signed device manifest repeats an MLS device id')
+  }
+  return ids
 }

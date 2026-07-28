@@ -50,6 +50,7 @@ impl MlsClient {
             block.proposal.action_type,
             MlsControlActionTypeV1::MembershipChange
                 | MlsControlActionTypeV1::RoutineAdmin
+                | MlsControlActionTypeV1::DeviceSync
                 | MlsControlActionTypeV1::AuthoritySetChange
                 | MlsControlActionTypeV1::OwnerSetChange
                 | MlsControlActionTypeV1::AuthorizationPolicyChange
@@ -267,6 +268,7 @@ impl MlsClient {
                 .owner_id
                 .as_deref()
                 .is_some_and(|owner_id| conversation.current_owner_set.owner(owner_id).is_some()),
+            MlsControlActionTypeV1::DeviceSync => true,
             _ => sender_member.is_admin,
         };
         if !sender_authorized {

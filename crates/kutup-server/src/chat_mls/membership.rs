@@ -1,8 +1,10 @@
 //! Destination-private MLS membership snapshots and control envelopes.
 //!
 //! Ordering authorities retain only `MlsMembershipTransitionV1`. An
-//! authenticated group administrator stages one digest-bound delivery per
-//! affected participant server before requesting finalization.
+//! authenticated active member stages one digest-bound delivery per affected
+//! participant server before requesting finalization. Ordinary account-roster
+//! changes still require an administrator; device synchronization may change
+//! only the submitter's own leaves.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -42,8 +44,8 @@ pub(crate) async fn stage_membership_delivery(
     active_policy(&state).await?;
     delivery.validate().map_err(AppError::bad_request)?;
     let submitter = trusted_uuid(&auth.user_id)?;
-    let is_admin: Option<bool> = sqlx::query_scalar(
-        "SELECT is_admin
+    let membership: Option<(bool, String)> = sqlx::query_as(
+        "SELECT is_admin, membership_status
          FROM chat_mls_local_members
          WHERE conversation_id = $1 AND incarnation = $2
            AND user_id = $3 AND removed_epoch IS NULL
@@ -54,9 +56,9 @@ pub(crate) async fn stage_membership_delivery(
     .bind(submitter)
     .fetch_optional(&state.pool)
     .await?;
-    if is_admin != Some(true) {
+    if !membership.is_some_and(|(_, status)| status == "active") {
         return Err(AppError::forbidden(
-            "MLS membership delivery staging requires a local administrator",
+            "MLS delivery staging requires an active local member",
         ));
     }
     let current_epoch: Option<i64> = sqlx::query_scalar(
@@ -172,6 +174,7 @@ pub(super) async fn prepare_membership_finalization(
         block.proposal.action_type,
         MlsControlActionTypeV1::MembershipChange
             | MlsControlActionTypeV1::RoutineAdmin
+            | MlsControlActionTypeV1::DeviceSync
             | MlsControlActionTypeV1::AuthoritySetChange
             | MlsControlActionTypeV1::OwnerSetChange
             | MlsControlActionTypeV1::AuthorizationPolicyChange
@@ -198,7 +201,12 @@ pub(super) async fn prepare_membership_finalization(
                 "local MLS finalization cannot supply a federation delivery",
             ));
         }
-        load_staged_deliveries(tx, transition).await?
+        load_staged_deliveries(
+            tx,
+            transition,
+            local_submitter.expect("checked local submitter"),
+        )
+        .await?
     } else {
         let local_affected = transition.delivery_commitment(local_domain).is_some();
         match (local_affected, incoming_delivery, verified_history_replay) {
@@ -315,6 +323,16 @@ fn validate_transition_against_state(
                 "MLS routine administrator change cannot alter membership routing",
             ))
         }
+        MlsControlActionTypeV1::DeviceSync
+            if transition.previous_member_count != transition.next_member_count
+                || transition.previous_roster_commitment != transition.next_roster_commitment
+                || transition.previous_participant_domains
+                    != transition.next_participant_domains =>
+        {
+            return Err(AppError::bad_request(
+                "MLS device synchronization must preserve the account roster and routing",
+            ))
+        }
         MlsControlActionTypeV1::AuthoritySetChange
             if transition.previous_member_count != transition.next_member_count
                 || transition.previous_roster_commitment != transition.next_roster_commitment
@@ -353,7 +371,7 @@ fn validate_transition_against_state(
         1 => transition.next_member_count == 1,
         2 => transition.next_member_count == 2,
         3 => {
-            (2..=u32::from(maximum_group_members)).contains(&transition.next_member_count)
+            (1..=u32::from(maximum_group_members)).contains(&transition.next_member_count)
                 && transition.next_member_count <= 1000
         }
         _ => false,
@@ -369,18 +387,21 @@ fn validate_transition_against_state(
 async fn load_staged_deliveries(
     tx: &mut Transaction<'_, Postgres>,
     transition: &MlsMembershipTransitionV1,
+    submitter: Uuid,
 ) -> AppResult<BTreeMap<String, MlsMembershipDeliveryV1>> {
     let rows: Vec<(String, String, Value)> = sqlx::query_as(
         "SELECT destination, delivery_digest, delivery
          FROM chat_mls_membership_deliveries
          WHERE conversation_id = $1 AND incarnation = $2
-           AND proposal_id = $3 AND state = 'staged' AND expires_at > now()
+           AND proposal_id = $3 AND submitted_by = $4
+           AND state = 'staged' AND expires_at > now()
          ORDER BY destination
          FOR UPDATE",
     )
     .bind(transition.conversation_id)
     .bind(transition.incarnation as i64)
     .bind(transition.proposal_id)
+    .bind(submitter)
     .fetch_all(&mut **tx)
     .await?;
     if rows.len() != transition.deliveries.len() {
@@ -504,6 +525,83 @@ async fn apply_local_snapshot(
             (status == "rejected").then_some(username.as_str())
         })
         .collect();
+    let active_devices: Vec<(Uuid, i32)> = sqlx::query_as(
+        "SELECT user_id, device_id
+         FROM chat_mls_local_member_devices
+         WHERE conversation_id = $1 AND incarnation = $2
+           AND removed_epoch IS NULL
+         ORDER BY user_id, device_id
+         FOR UPDATE",
+    )
+    .bind(delivery.conversation_id)
+    .bind(delivery.incarnation as i64)
+    .fetch_all(&mut **tx)
+    .await?;
+    let active_device_set = active_devices
+        .iter()
+        .map(|(user_id, device_id)| (*user_id, *device_id as u32))
+        .collect::<BTreeSet<_>>();
+    let mut next_device_set = BTreeSet::new();
+    for device in &delivery.local_devices_after {
+        let (user_id, _) = next_users
+            .iter()
+            .find(|(_, member)| member.address == device.address)
+            .ok_or_else(|| {
+                AppError::bad_request("MLS device snapshot names an account outside its roster")
+            })?;
+        let manifest_bound: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM chat_mls_devices d
+                JOIN chat_device_manifests m ON m.user_id = d.user_id
+                WHERE d.user_id = $1 AND d.device_id = $2
+                  AND d.manifest_version = m.version
+             )",
+        )
+        .bind(user_id)
+        .bind(device.device_id as i32)
+        .fetch_one(&mut **tx)
+        .await?;
+        if !manifest_bound {
+            return Err(AppError::conflict(
+                "MLS device snapshot contains a leaf absent from the current signed manifest",
+            ));
+        }
+        next_device_set.insert((*user_id, device.device_id));
+    }
+    let added_devices = next_device_set
+        .difference(&active_device_set)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let removed_devices = active_device_set
+        .difference(&next_device_set)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if action_type == MlsControlActionTypeV1::DeviceSync {
+        if !added_devices.is_empty() || !removed_devices.is_empty() {
+            let submitter = local_submitter.ok_or_else(|| {
+                AppError::forbidden(
+                    "MLS device changes must originate on the affected member server",
+                )
+            })?;
+            if added_devices
+                .iter()
+                .chain(&removed_devices)
+                .any(|(user_id, _)| *user_id != submitter)
+            {
+                return Err(AppError::bad_request(
+                    "MLS device synchronization may change only the submitter's device leaves",
+                ));
+            }
+        }
+    } else if !matches!(action_type, MlsControlActionTypeV1::MembershipChange)
+        && (!added_devices.is_empty() || !removed_devices.is_empty())
+    {
+        return Err(AppError::bad_request(
+            "unrelated MLS control action changed the destination device snapshot",
+        ));
+    }
+
     let mut required_envelopes = BTreeSet::new();
     for (user_id, member) in &next_users {
         // A rejected invitation stays in the cryptographic roster until an
@@ -512,31 +610,20 @@ async fn apply_local_snapshot(
         if rejected_ids.contains(user_id) {
             continue;
         }
-        let device_ids: Vec<i32> = sqlx::query_scalar(
-            "SELECT device_id
-             FROM chat_mls_devices
-             WHERE user_id = $1
-             ORDER BY device_id",
-        )
-        .bind(user_id)
-        .fetch_all(&mut **tx)
-        .await?;
+        let device_ids = next_device_set
+            .iter()
+            .filter_map(|(candidate, device_id)| (candidate == user_id).then_some(*device_id))
+            .collect::<Vec<_>>();
         if device_ids.is_empty() {
-            return Err(AppError::conflict(
-                "active MLS member has no manifest-bound MLS device",
-            ));
+            return Err(AppError::conflict("active MLS member has no MLS leaf"));
         }
-        let kind = if active_ids.contains(user_id) {
-            MlsMembershipEnvelopeKindV1::Commit
-        } else {
-            MlsMembershipEnvelopeKindV1::Welcome
-        };
         for device_id in device_ids {
-            required_envelopes.insert((
-                member.address.canonical(),
-                device_id as u32,
-                u16::from(kind),
-            ));
+            let kind = if active_device_set.contains(&(*user_id, device_id)) {
+                MlsMembershipEnvelopeKindV1::Commit
+            } else {
+                MlsMembershipEnvelopeKindV1::Welcome
+            };
+            required_envelopes.insert((member.address.canonical(), device_id, u16::from(kind)));
         }
     }
     let supplied_after = delivery
@@ -573,6 +660,36 @@ async fn apply_local_snapshot(
         return Err(AppError::conflict(
             "MLS membership delivery does not cover every required local device exactly once",
         ));
+    }
+    for (user_id, device_id) in &removed_devices {
+        sqlx::query(
+            "UPDATE chat_mls_local_member_devices
+             SET removed_epoch = $5
+             WHERE conversation_id = $1 AND incarnation = $2
+               AND user_id = $3 AND device_id = $4
+               AND removed_epoch IS NULL",
+        )
+        .bind(delivery.conversation_id)
+        .bind(delivery.incarnation as i64)
+        .bind(user_id)
+        .bind(*device_id as i32)
+        .bind(epoch_after as i64)
+        .execute(&mut **tx)
+        .await?;
+    }
+    for (user_id, device_id) in &added_devices {
+        sqlx::query(
+            "INSERT INTO chat_mls_local_member_devices
+                 (conversation_id, incarnation, user_id, device_id, joined_epoch)
+             VALUES ($1,$2,$3,$4,$5)",
+        )
+        .bind(delivery.conversation_id)
+        .bind(delivery.incarnation as i64)
+        .bind(user_id)
+        .bind(*device_id as i32)
+        .bind(epoch_after as i64)
+        .execute(&mut **tx)
+        .await?;
     }
 
     for (user_id, _, _, _, _) in &active {
@@ -660,8 +777,11 @@ async fn apply_local_snapshot(
         })?;
         let device_exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(
-                SELECT 1 FROM chat_mls_devices
-                WHERE user_id = $1 AND device_id = $2
+                SELECT 1
+                FROM chat_mls_devices d
+                JOIN chat_device_manifests m ON m.user_id = d.user_id
+                WHERE d.user_id = $1 AND d.device_id = $2
+                  AND d.manifest_version = m.version
              )",
         )
         .bind(recipient_user_id)

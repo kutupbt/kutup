@@ -594,7 +594,9 @@ pub(super) fn replay_mls_control_history(
             replayed.authorities = next.clone();
         } else if matches!(
             block.proposal.action_type,
-            MlsControlActionTypeV1::MembershipChange | MlsControlActionTypeV1::RoutineAdmin
+            MlsControlActionTypeV1::MembershipChange
+                | MlsControlActionTypeV1::RoutineAdmin
+                | MlsControlActionTypeV1::DeviceSync
         ) && request.membership_transition.is_some()
         {
             let transition = request

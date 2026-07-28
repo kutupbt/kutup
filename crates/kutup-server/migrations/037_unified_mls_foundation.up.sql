@@ -127,6 +127,28 @@ CREATE UNIQUE INDEX chat_mls_one_active_local_membership_idx
     ON chat_mls_local_members (conversation_id, incarnation, user_id)
     WHERE removed_epoch IS NULL;
 
+-- Destination-private MLS leaf membership. Device ids are deliberately not
+-- replicated to ordering-only authorities. Rows survive a global manifest
+-- removal until an authenticated DeviceSync Commit removes that leaf.
+CREATE TABLE chat_mls_local_member_devices (
+    conversation_id UUID        NOT NULL,
+    incarnation     BIGINT      NOT NULL,
+    user_id         UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_id       INTEGER     NOT NULL CHECK (device_id BETWEEN 1 AND 127),
+    joined_epoch    BIGINT      NOT NULL CHECK (joined_epoch >= 0),
+    removed_epoch   BIGINT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (conversation_id, incarnation, user_id, device_id, joined_epoch),
+    FOREIGN KEY (conversation_id, incarnation)
+        REFERENCES chat_mls_incarnations ON DELETE CASCADE,
+    CHECK (removed_epoch IS NULL OR removed_epoch > joined_epoch)
+);
+
+CREATE UNIQUE INDEX chat_mls_one_active_local_member_device_idx
+    ON chat_mls_local_member_devices
+       (conversation_id, incarnation, user_id, device_id)
+    WHERE removed_epoch IS NULL;
+
 -- An administrator stages one destination-private snapshot for every server
 -- affected by a membership transition. Finalization verifies the public
 -- delivery commitments, applies the local snapshot, and promotes every staged

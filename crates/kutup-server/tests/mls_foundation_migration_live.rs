@@ -68,7 +68,7 @@ async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
     .fetch_one(&mut connection)
     .await
     .unwrap();
-    assert_eq!(table_count, 29);
+    assert_eq!(table_count, 30);
 
     sqlx::query(
         "INSERT INTO federation_feature_policy_documents
@@ -158,6 +158,62 @@ async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
               invitation_expires_at, invited_by_domain, joined_epoch)
          VALUES ($1, 1, $2, 'pending', now() + interval '30 days',
                  'a.example', 1)",
+    )
+    .bind(conversation_id)
+    .bind(user_id)
+    .execute(&mut connection)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO chat_mls_local_member_devices
+             (conversation_id, incarnation, user_id, device_id, joined_epoch)
+         VALUES ($1, 1, $2, 1, 1)",
+    )
+    .bind(conversation_id)
+    .bind(user_id)
+    .execute(&mut connection)
+    .await
+    .unwrap();
+    assert!(
+        sqlx::query(
+            "INSERT INTO chat_mls_local_member_devices
+                 (conversation_id, incarnation, user_id, device_id, joined_epoch)
+             VALUES ($1, 1, $2, 1, 2)",
+        )
+        .bind(conversation_id)
+        .bind(user_id)
+        .execute(&mut connection)
+        .await
+        .is_err(),
+        "one MLS account device may have only one active leaf per incarnation"
+    );
+    assert!(
+        sqlx::query(
+            "UPDATE chat_mls_local_member_devices
+             SET removed_epoch = joined_epoch
+             WHERE conversation_id = $1 AND user_id = $2",
+        )
+        .bind(conversation_id)
+        .bind(user_id)
+        .execute(&mut connection)
+        .await
+        .is_err(),
+        "an MLS leaf removal must follow its join epoch"
+    );
+    sqlx::query(
+        "UPDATE chat_mls_local_member_devices
+         SET removed_epoch = 2
+         WHERE conversation_id = $1 AND user_id = $2",
+    )
+    .bind(conversation_id)
+    .bind(user_id)
+    .execute(&mut connection)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO chat_mls_local_member_devices
+             (conversation_id, incarnation, user_id, device_id, joined_epoch)
+         VALUES ($1, 1, $2, 1, 2)",
     )
     .bind(conversation_id)
     .bind(user_id)

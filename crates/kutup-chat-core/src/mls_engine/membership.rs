@@ -213,6 +213,137 @@ pub(super) fn stage_remove_members(
     Ok(pending)
 }
 
+pub(super) fn stage_device_sync(
+    provider: &KutupMlsProvider,
+    metadata: &mut SnapshotMetadata,
+    mls_group_id: &[u8],
+    additions: &[VerifiedMlsKeyPackage],
+    removed_credential_identities: &[String],
+    now_seconds: i64,
+    private_control: &MlsPrivateControlStateV1,
+) -> Result<PendingMlsCommit> {
+    validate_group_id(mls_group_id)?;
+    if (additions.is_empty() && removed_credential_identities.is_empty())
+        || additions.len() + removed_credential_identities.len() > 127
+        || now_seconds < 0
+    {
+        return Err(ChatError::Invalid(
+            "MLS device synchronization requires 1-127 leaf changes and a valid clock".into(),
+        ));
+    }
+    let pending_key = BASE64.encode(mls_group_id);
+    if metadata.pending_commits.contains_key(&pending_key) {
+        return Err(ChatError::Trust(
+            "another MLS membership Commit is already pending".into(),
+        ));
+    }
+    let group_id = GroupId::from_slice(mls_group_id);
+    let mut group = MlsGroup::load(provider.storage(), &group_id)
+        .map_err(|error| mls_error("load MLS group", error))?
+        .ok_or_else(|| ChatError::MissingKeyMaterial("MLS group state is unavailable".into()))?;
+    ensure_v1_group(&group)?;
+    if group.pending_commit().is_some() {
+        return Err(ChatError::Trust(
+            "OpenMLS has a pending commit without matching durable retry material".into(),
+        ));
+    }
+
+    let existing = group
+        .members()
+        .map(|member| {
+            let identity = std::str::from_utf8(member.credential.serialized_content())
+                .map_err(|_| ChatError::Trust("MLS credential identity is not UTF-8".into()))?
+                .to_owned();
+            Ok((identity, member.index))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let mut new_identities = HashSet::with_capacity(additions.len());
+    let mut key_packages = Vec::with_capacity(additions.len());
+    for addition in additions {
+        addition
+            .wire
+            .validate(now_seconds)
+            .map_err(ChatError::Invalid)?;
+        let identity = addition.credential.credential_identity.clone();
+        if existing.contains_key(&identity) || !new_identities.insert(identity) {
+            return Err(ChatError::Trust(
+                "MLS device synchronization repeats an existing credential".into(),
+            ));
+        }
+        key_packages.push(parse_verified_key_package(provider, addition, now_seconds)?);
+    }
+    let mut removed = HashSet::with_capacity(removed_credential_identities.len());
+    let mut targets = Vec::with_capacity(removed_credential_identities.len());
+    for identity in removed_credential_identities {
+        validate_credential_identity(identity)?;
+        if !removed.insert(identity.clone()) || new_identities.contains(identity) {
+            return Err(ChatError::Invalid(
+                "MLS device synchronization repeats a leaf change".into(),
+            ));
+        }
+        targets.push(*existing.get(identity).ok_or_else(|| {
+            ChatError::Trust("MLS device synchronization removes an absent credential".into())
+        })?);
+    }
+
+    let epoch_before = group.epoch().as_u64();
+    let signer = signer_for_group(provider, &group)?;
+    let builder = group
+        .commit_builder()
+        .propose_removals(targets)
+        .propose_adds(key_packages)
+        .force_self_update(true)
+        .propose_group_context_extensions(private_control_extensions(private_control)?)
+        .map_err(|error| mls_error("add MLS private control proposal", error))?;
+    let bundle = builder
+        .load_psks(provider.storage())
+        .map_err(|error| mls_error("load MLS device-sync PSKs", error))?
+        .build(provider.rand(), provider.crypto(), &signer, |_| true)
+        .map_err(|error| mls_error("build MLS device-sync commit", error))?
+        .stage_commit(provider)
+        .map_err(|error| mls_error("stage MLS device-sync commit", error))?;
+    let welcome = bundle
+        .to_welcome_msg()
+        .map(|message| {
+            message
+                .to_bytes()
+                .map_err(|error| mls_error("serialize MLS device-sync Welcome", error))
+        })
+        .transpose()?;
+    if additions.is_empty() != welcome.is_none() {
+        return Err(ChatError::Protocol(
+            "MLS device synchronization produced an inconsistent Welcome".into(),
+        ));
+    }
+    let (commit, _, _) = bundle.into_contents();
+    let epoch_after = group
+        .pending_commit()
+        .ok_or_else(|| ChatError::Protocol("OpenMLS did not stage the device-sync commit".into()))?
+        .epoch()
+        .as_u64();
+    if epoch_after != epoch_before.saturating_add(1) {
+        return Err(ChatError::Protocol(
+            "MLS device synchronization did not advance exactly one epoch".into(),
+        ));
+    }
+    let commit = commit
+        .to_bytes()
+        .map_err(|error| mls_error("serialize MLS device-sync commit", error))?;
+    let pending = PendingMlsCommit {
+        mls_group_id: mls_group_id.to_vec(),
+        epoch_before,
+        epoch_after,
+        commit_hash: hex::encode(Sha256::digest(&commit)),
+        commit,
+        welcome,
+    };
+    validate_pending_commit(&pending)?;
+    metadata
+        .pending_commits
+        .insert(pending_key, pending.clone());
+    Ok(pending)
+}
+
 pub(super) fn stage_private_control_update(
     provider: &KutupMlsProvider,
     metadata: &mut SnapshotMetadata,
@@ -290,6 +421,7 @@ pub(super) fn build_pending_membership_change(
     proposal_id: Uuid,
     next_roster: &[MlsConversationMemberV1],
     additions: &[VerifiedMlsKeyPackage],
+    removed_credential_identities: &[String],
     current_devices: &[(String, u32, String)],
     pending: &PendingMlsCommit,
     action_type: MlsControlActionTypeV1,
@@ -313,9 +445,12 @@ pub(super) fn build_pending_membership_change(
         .map(|welcome| BASE64.encode(welcome));
     let local_device = parse_device_credential_identity(&metadata.credential_identity)?;
     let mut envelopes_by_domain = BTreeMap::<String, Vec<MlsMembershipEnvelopeV1>>::new();
-    for (address, device_id, _) in current_devices {
+    let mut devices_by_domain = BTreeMap::<String, Vec<MlsConversationDeviceV1>>::new();
+    for (address, device_id, identity) in current_devices {
         if !next_addresses.contains(address)
-            || (address == &local_device.0 && device_id == &local_device.1)
+            || removed_credential_identities
+                .iter()
+                .any(|removed| removed == identity)
         {
             continue;
         }
@@ -326,6 +461,16 @@ pub(super) fn build_pending_membership_change(
             .server
             .clone()
             .ok_or_else(|| ChatError::Trust("MLS member has no federation domain".into()))?;
+        devices_by_domain
+            .entry(destination.clone())
+            .or_default()
+            .push(MlsConversationDeviceV1 {
+                address: recipient.clone(),
+                device_id: *device_id,
+            });
+        if address == &local_device.0 && device_id == &local_device.1 {
+            continue;
+        }
         envelopes_by_domain
             .entry(destination)
             .or_default()
@@ -354,6 +499,13 @@ pub(super) fn build_pending_membership_change(
                 .server
                 .clone()
                 .ok_or_else(|| ChatError::Trust("MLS member has no federation domain".into()))?;
+            devices_by_domain
+                .entry(destination.clone())
+                .or_default()
+                .push(MlsConversationDeviceV1 {
+                    address: recipient.clone(),
+                    device_id,
+                });
             envelopes_by_domain
                 .entry(destination)
                 .or_default()
@@ -384,6 +536,8 @@ pub(super) fn build_pending_membership_change(
                 envelope.envelope_id,
             )
         });
+        let mut local_devices_after = devices_by_domain.remove(&destination).unwrap_or_default();
+        local_devices_after.sort_by_key(|device| (device.address.canonical(), device.device_id));
         let delivery = MlsMembershipDeliveryV1 {
             protocol_version: MLS_PROTOCOL_VERSION,
             conversation_id: conversation.request.genesis.conversation_id,
@@ -394,6 +548,7 @@ pub(super) fn build_pending_membership_change(
             next_roster_commitment: next_roster_commitment.clone(),
             next_participant_domains: next_participant_domains.clone(),
             local_members_after,
+            local_devices_after,
             envelopes,
         };
         delivery.validate().map_err(ChatError::Protocol)?;
@@ -402,6 +557,11 @@ pub(super) fn build_pending_membership_change(
     if !envelopes_by_domain.is_empty() {
         return Err(ChatError::Protocol(
             "MLS membership envelopes target a domain outside the roster transition".into(),
+        ));
+    }
+    if !devices_by_domain.is_empty() {
+        return Err(ChatError::Protocol(
+            "MLS device snapshot targets a domain outside the roster transition".into(),
         ));
     }
     let transition = MlsMembershipTransitionV1 {

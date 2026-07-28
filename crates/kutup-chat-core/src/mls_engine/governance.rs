@@ -305,12 +305,8 @@ impl MlsClient {
                 .owner_set
                 .clone()
                 .ok_or_else(|| ChatError::Db("group genesis has no owner set".into()))?,
-            genesis_authorization_policy: conversation
-                .genesis_authorization_policy
-                .clone(),
-            genesis_cryptographic_policy: conversation
-                .genesis_cryptographic_policy
-                .clone(),
+            genesis_authorization_policy: conversation.genesis_authorization_policy.clone(),
+            genesis_cryptographic_policy: conversation.genesis_cryptographic_policy.clone(),
             roster: conversation.current_roster.clone(),
             authority_set: next_authority_set.clone(),
             owner_set: conversation.current_owner_set.clone(),
@@ -703,10 +699,8 @@ pub(super) fn build_governance_deliveries(
     let local_device = parse_device_credential_identity(&metadata.credential_identity)?;
     let commit_message = BASE64.encode(&pending.commit);
     let mut envelopes_by_domain = BTreeMap::<String, Vec<MlsMembershipEnvelopeV1>>::new();
+    let mut devices_by_domain = BTreeMap::<String, Vec<MlsConversationDeviceV1>>::new();
     for (address, device_id) in current_devices {
-        if address == &local_device.0 && device_id == &local_device.1 {
-            continue;
-        }
         let recipient: AccountAddress = address
             .parse()
             .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
@@ -714,6 +708,16 @@ pub(super) fn build_governance_deliveries(
             .server
             .clone()
             .ok_or_else(|| ChatError::Trust("MLS member has no federation domain".into()))?;
+        devices_by_domain
+            .entry(destination.clone())
+            .or_default()
+            .push(MlsConversationDeviceV1 {
+                address: recipient.clone(),
+                device_id: *device_id,
+            });
+        if address == &local_device.0 && device_id == &local_device.1 {
+            continue;
+        }
         envelopes_by_domain
             .entry(destination)
             .or_default()
@@ -742,6 +746,8 @@ pub(super) fn build_governance_deliveries(
                 envelope.envelope_id,
             )
         });
+        let mut local_devices_after = devices_by_domain.remove(destination).unwrap_or_default();
+        local_devices_after.sort_by_key(|device| (device.address.canonical(), device.device_id));
         let delivery = MlsMembershipDeliveryV1 {
             protocol_version: MLS_PROTOCOL_VERSION,
             conversation_id: conversation.request.genesis.conversation_id,
@@ -752,6 +758,7 @@ pub(super) fn build_governance_deliveries(
             next_roster_commitment: next_commitment.clone(),
             next_participant_domains: next_domains.clone(),
             local_members_after,
+            local_devices_after,
             envelopes,
         };
         delivery.validate().map_err(ChatError::Protocol)?;
@@ -760,6 +767,11 @@ pub(super) fn build_governance_deliveries(
     if !envelopes_by_domain.is_empty() {
         return Err(ChatError::Protocol(
             "MLS governance Commit targets a domain outside the roster".into(),
+        ));
+    }
+    if !devices_by_domain.is_empty() {
+        return Err(ChatError::Protocol(
+            "MLS governance device snapshot targets a domain outside the roster".into(),
         ));
     }
     let transition = MlsMembershipTransitionV1 {

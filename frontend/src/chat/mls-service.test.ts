@@ -531,6 +531,23 @@ function harness(
       },
       control: pendingMembership(),
     }),
+    mlsGroupDevices: vi.fn().mockResolvedValue([
+      {
+        address: { username: 'alice', server: 'alpha.example' },
+        deviceId: 7,
+      },
+    ]),
+    prepareMlsDeviceSync: vi.fn().mockResolvedValue({
+      pending: {
+        mlsGroupId: [...genesisGroupBytes],
+        epochBefore: 0,
+        epochAfter: 1,
+        commitHash: 'cd'.repeat(32),
+        commit: [1, 2, 3],
+        welcome: [4, 5, 6],
+      },
+      control: pendingMembership(),
+    }),
     pendingMlsMembershipChanges: vi.fn().mockResolvedValue([pendingMembership()]),
     buildMlsMembershipCommitRequest: vi.fn().mockResolvedValue({ finalized: 'request' }),
     finalizeMlsMembershipChange: vi.fn().mockResolvedValue(finalizedMembership()),
@@ -656,6 +673,10 @@ function harness(
         credentialPublicKey: [...new Uint8Array(65).fill(4)],
       },
     ]),
+    resolveMlsSenderClaim: vi.fn().mockResolvedValue({
+      credentialIdentity: 'alice@example.test#7',
+      credentialPublicKey: [...new Uint8Array(65).fill(4)],
+    }),
     processedMlsControlEnvelope: vi.fn().mockResolvedValue(null),
     inspectInboundMlsCommit: vi.fn().mockResolvedValue({
       mlsGroupId: [...genesisGroupBytes],
@@ -741,6 +762,37 @@ function harness(
     }),
     markMlsApplicationRecipientDelivered: vi.fn().mockResolvedValue(undefined),
     pendingMlsApplicationMessages: vi.fn().mockResolvedValue([]),
+    inspectAnonymousMlsApplicationEnvelope: vi.fn().mockResolvedValue({
+      mlsGroupId: [...genesisGroupBytes],
+      conversationId,
+      incarnation: 1,
+      epoch: 1,
+      claimedSender: {
+        credentialIdentity: 'alice@example.test#7',
+        credentialPublicKey: [...new Uint8Array(65).fill(4)],
+      },
+    }),
+    processedMlsApplicationEnvelope: vi.fn().mockResolvedValue(null),
+    applyAnonymousMlsApplicationEnvelope: vi.fn().mockResolvedValue({
+      message: {
+        recordId: `in:${envelopeId}`,
+        messageId: sendId,
+        conversationId: [...genesisGroupBytes.subarray(0, 16)],
+        incarnation: 1,
+        mlsGroupId: [...genesisGroupBytes],
+        epoch: 1,
+        sender: 'alice@example.test',
+        senderDeviceId: 7,
+        outgoing: false,
+        cursor: 1,
+        transportDigest: [...new Uint8Array(32).fill(6)],
+        content: [1, 2, 3],
+        timestampMs: 1_700_000_000_000,
+        delivered: true,
+        deduplicated: false,
+      },
+      idempotent: false,
+    }),
     joinMlsFromWelcomeWithControlHistory: vi.fn().mockResolvedValue({
       group: {
         mlsGroupId: [...new Uint8Array(16).fill(7)],
@@ -784,6 +836,7 @@ function harness(
       bytes: new Uint8Array([123, 125]),
       entryCount: 1,
       nextHeight: '1',
+      genesisGroupId,
     }),
     listMlsInvitations: vi.fn().mockResolvedValue([invitation()]),
     listMlsInvitationFeedback: vi.fn().mockResolvedValue([invitationFeedback()]),
@@ -1334,6 +1387,116 @@ describe('MlsConversationService', () => {
     })
   })
 
+  it('adds and removes only the local account linked-device leaves', async () => {
+    vi.stubGlobal('crypto', {
+      randomUUID: () => proposalId,
+      getRandomValues: (value: Uint8Array) => value,
+    })
+    const { client, service } = harness(
+      null,
+      [activeGenesis()],
+      { username: 'alice', server: 'alpha.example' },
+    )
+    vi.mocked(client.fetchVerifiedIdentifiedMlsKeyPackages).mockResolvedValue([{
+      wire: {
+        deviceId: 8,
+        manifestVersion: 2,
+        suite: 2,
+        keyPackageRef: '55'.repeat(32),
+        keyPackage: btoa('package'),
+        expiresAt: 1_800_000_000,
+      },
+      credential: {
+        credentialIdentity: 'alice@alpha.example#8',
+        credentialPublicKey: [...new Uint8Array(65).fill(4)],
+      },
+      anonymousDeliveryPublicKey: [...new Uint8Array(65).fill(5)],
+    }])
+
+    await expect(service.reconcileLinkedDevices([7, 8])).resolves.toHaveLength(1)
+    expect(client.fetchVerifiedIdentifiedMlsKeyPackages).toHaveBeenCalledWith(
+      { username: 'alice', server: 'alpha.example' },
+      conversationId,
+      '1',
+      expect.stringMatching(/^[0-9]+$/),
+    )
+    const addCall = vi.mocked(client.prepareMlsDeviceSync).mock.calls[0]
+    expect([...addCall[0]]).toEqual([...genesisGroupBytes])
+    expect(addCall[1]).toBe(proposalId)
+    const addedPackages = addCall[2] as Array<{
+      wire: { deviceId: number }
+      credential: { credentialIdentity: string }
+    }>
+    expect(addedPackages).toHaveLength(1)
+    expect(addedPackages[0]).toMatchObject({
+      wire: { deviceId: 8 },
+      credential: { credentialIdentity: 'alice@alpha.example#8' },
+    })
+    expect(addCall[3]).toEqual([])
+    expect(addCall[4]).toMatch(/^[0-9]+$/)
+
+    vi.mocked(client.mlsGroupDevices).mockResolvedValue([
+      {
+        address: { username: 'alice', server: 'alpha.example' },
+        deviceId: 7,
+      },
+      {
+        address: { username: 'alice', server: 'alpha.example' },
+        deviceId: 8,
+      },
+    ])
+    vi.mocked(client.prepareMlsDeviceSync).mockClear()
+    vi.mocked(client.fetchVerifiedIdentifiedMlsKeyPackages).mockClear()
+    await expect(service.reconcileLinkedDevices([7])).resolves.toHaveLength(1)
+    expect(client.fetchVerifiedIdentifiedMlsKeyPackages).not.toHaveBeenCalled()
+    const removalCall = vi.mocked(client.prepareMlsDeviceSync).mock.calls[0]
+    expect([...removalCall[0]]).toEqual([...genesisGroupBytes])
+    expect(removalCall[1]).toBe(proposalId)
+    expect(removalCall[2]).toEqual([])
+    expect(removalCall[3]).toEqual([8])
+    expect(removalCall[4]).toMatch(/^[0-9]+$/)
+  })
+
+  it('auto-installs a linked-device Welcome only for an already-active account', async () => {
+    const { client, transport, service } = harness(
+      null,
+      [],
+      { username: 'alice', server: 'alpha.example' },
+    )
+    vi.mocked(transport.listMlsInvitations).mockResolvedValue([])
+    vi.mocked(transport.fetchMlsControlHistory).mockResolvedValue({
+      bytes: new Uint8Array([123, 125]),
+      entryCount: 1,
+      nextHeight: '1',
+      genesisGroupId: groupId,
+    })
+
+    await expect(service.reconcileInboundLinkedDeviceWelcomes()).resolves.toHaveLength(1)
+    expect(client.inspectMlsWelcome).toHaveBeenCalledWith(
+      new Uint8Array(16).fill(7),
+      new Uint8Array(32).fill(9),
+    )
+    expect(client.joinMlsFromWelcomeWithControlHistory).toHaveBeenCalledWith(
+      envelopeId,
+      '1',
+      sendId,
+      new Uint8Array(16).fill(7),
+      new Uint8Array(32).fill(9),
+      expect.any(Array),
+      [new Uint8Array([123, 125])],
+    )
+    expect(transport.respondMlsInvitation).not.toHaveBeenCalled()
+    expect(transport.ackMlsMailbox).toHaveBeenCalledWith(7, [envelopeId])
+  })
+
+  it('never auto-installs a Welcome while an account invitation is pending', async () => {
+    const { client, transport, service } = harness(null, [])
+    await expect(service.reconcileInboundLinkedDeviceWelcomes()).resolves.toEqual([])
+    expect(client.inspectMlsWelcome).not.toHaveBeenCalled()
+    expect(client.joinMlsFromWelcomeWithControlHistory).not.toHaveBeenCalled()
+    expect(transport.ackMlsMailbox).not.toHaveBeenCalled()
+  })
+
   it('fetches anonymous KeyPackages only through the shared proof verifier', async () => {
     const { client, transport, service } = harness()
     const capability = new Uint8Array(16).fill(8)
@@ -1382,6 +1545,53 @@ describe('MlsConversationService', () => {
       'bobby@beta.example',
       false,
     )
+  })
+
+  it('verifies one application sender leaf without weakening full-roster verification', async () => {
+    const { client, transport, service } = harness(null, [activeGenesis()])
+    const anonymousEnvelope = {
+      deviceId: 7,
+      encapsulatedKey: btoa(String.fromCharCode(...new Uint8Array(65).fill(3))),
+      ciphertext: btoa(String.fromCharCode(...new Uint8Array([4, 5, 6]))),
+    }
+    vi.mocked(transport.drainMlsMailbox).mockResolvedValueOnce({
+      envelopes: [{
+        id: envelopeId,
+        cursor: '1',
+        deliveryKind: 'anonymous',
+        sendId,
+        opaqueEnvelope: btoa(JSON.stringify(anonymousEnvelope)),
+        serverTimestamp: 1_700_000_000,
+      }],
+      nextCursor: '1',
+    })
+
+    await expect(service.reconcileInboundApplicationMessages()).resolves.toEqual([
+      expect.objectContaining({
+        message: expect.objectContaining({
+          recordId: `in:${envelopeId}`,
+          messageId: sendId,
+        }),
+      }),
+    ])
+    expect(client.resolveMlsSenderClaim).toHaveBeenCalledWith({
+      credentialIdentity: 'alice@example.test#7',
+      credentialPublicKey: [...new Uint8Array(65).fill(4)],
+    })
+    expect(client.resolveMlsWelcomeClaims).not.toHaveBeenCalled()
+    expect(client.applyAnonymousMlsApplicationEnvelope).toHaveBeenCalledWith(
+      envelopeId,
+      '1',
+      sendId,
+      '1700000000',
+      { username: 'bobby', server: 'beta.example' },
+      anonymousEnvelope,
+      {
+        credentialIdentity: 'alice@example.test#7',
+        credentialPublicKey: [...new Uint8Array(65).fill(4)],
+      },
+    )
+    expect(transport.ackMlsMailbox).toHaveBeenCalledWith(7, [envelopeId])
   })
 
   it('joins only with matching verified evidence, then activates and acknowledges', async () => {

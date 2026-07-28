@@ -10,6 +10,7 @@ mod application;
 mod close;
 mod delivery;
 mod device;
+mod device_sync;
 mod genesis;
 mod governance;
 mod inbound;
@@ -31,9 +32,7 @@ pub use governance::{
 use membership::*;
 pub use owner_approval::PendingMlsOwnerApprovalRequest;
 pub use ownership::{FinalizedMlsOwnerChange, PendingMlsOwnerChange, PreparedMlsOwnerChange};
-pub use policy::{
-    FinalizedMlsPolicyChange, PendingMlsPolicyChange, PreparedMlsPolicyChange,
-};
+pub use policy::{FinalizedMlsPolicyChange, PendingMlsPolicyChange, PreparedMlsPolicyChange};
 pub use recovery::{FinalizedMlsRecovery, PendingMlsRecovery, PreparedMlsRecovery};
 use state::{provider_from_snapshot, snapshot_provider, KutupMlsProvider, SnapshotMetadata};
 use validation::*;
@@ -69,15 +68,15 @@ use kutup_chat_proto::{
     AnonymousMlsDeviceEnvelopeV1, AnonymousMlsSubmissionV1, ChatContent,
     CommitMlsControlBlockResponseV1, CommitMlsControlBlockV1, CreateMlsConversationRequestV1,
     FederatedMlsOrderingVoteRequestV1, MlsApplicationSenderPolicyV1, MlsAuthoritySetV1,
-    MlsAuthorityV1, MlsCipherSuiteId,
-    MlsClientControlHistoryPageV1, MlsControlActionTypeV1, MlsControlBlockV1, MlsControlProposalV1,
-    MlsConversationGenesisV1, MlsConversationKindV1, MlsConversationMemberV1,
-    MlsFinalizedControlBlockV1, MlsGroupControlBodyV1, MlsKeyPackageV1, MlsManifestDeviceV1,
-    MlsGroupAuthorizationPolicyV1, MlsGroupCryptographicPolicyV1,
-    MlsMembershipDeliveryCommitmentV1, MlsMembershipDeliveryV1, MlsMembershipEnvelopeKindV1,
-    MlsMembershipEnvelopeV1, MlsMembershipTransitionV1, MlsOrderingQuorumCertificateV1,
-    MlsOrderingServicePolicyV1, MlsOwnerCandidateV1, MlsOwnerSetV1, MlsOwnerV1,
-    MlsPrivateControlStateV1, RecoverMlsConversationRequestV1, RecoverMlsConversationResponseV1,
+    MlsAuthorityV1, MlsCipherSuiteId, MlsClientControlHistoryPageV1, MlsControlActionTypeV1,
+    MlsControlBlockV1, MlsControlProposalV1, MlsConversationDeviceV1, MlsConversationGenesisV1,
+    MlsConversationKindV1, MlsConversationMemberV1, MlsFinalizedControlBlockV1,
+    MlsGroupAuthorizationPolicyV1, MlsGroupControlBodyV1, MlsGroupCryptographicPolicyV1,
+    MlsKeyPackageV1, MlsManifestDeviceV1, MlsMembershipDeliveryCommitmentV1,
+    MlsMembershipDeliveryV1, MlsMembershipEnvelopeKindV1, MlsMembershipEnvelopeV1,
+    MlsMembershipTransitionV1, MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1,
+    MlsOwnerCandidateV1, MlsOwnerSetV1, MlsOwnerV1, MlsPrivateControlStateV1,
+    RecoverMlsConversationRequestV1, RecoverMlsConversationResponseV1,
     MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256, MLS_PRIVATE_CONTROL_EXTENSION_TYPE,
     MLS_PROTOCOL_VERSION,
 };

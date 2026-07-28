@@ -90,10 +90,9 @@ impl PendingMlsPolicyChange {
                 "durable MLS policy control fields are inconsistent".into(),
             ));
         }
-        let certificate = block
-            .owner_approval
-            .as_ref()
-            .ok_or_else(|| ChatError::Db("durable MLS policy change has no owner approvals".into()))?;
+        let certificate = block.owner_approval.as_ref().ok_or_else(|| {
+            ChatError::Db("durable MLS policy change has no owner approvals".into())
+        })?;
         if certificate.owner_set_sequence == 0
             || certificate.approvals.is_empty()
             || certificate.proposal_hash != block.proposal.proposal_hash().map_err(ChatError::Db)?
@@ -275,7 +274,9 @@ impl MlsClient {
             .current_roster
             .iter()
             .find(|member| member.address.canonical() == local_address)
-            .ok_or_else(|| ChatError::Trust("local account is absent from the MLS roster".into()))?;
+            .ok_or_else(|| {
+                ChatError::Trust("local account is absent from the MLS roster".into())
+            })?;
         let owner = group_owner_credential(&metadata, mls_group_id)?;
         if !local_member.is_admin
             || local_member.owner_id.as_deref() != Some(owner.owner_id.as_str())
@@ -291,7 +292,9 @@ impl MlsClient {
 
         let group = MlsGroup::load(provider.storage(), &GroupId::from_slice(mls_group_id))
             .map_err(|error| mls_error("load MLS group", error))?
-            .ok_or_else(|| ChatError::MissingKeyMaterial("MLS group state is unavailable".into()))?;
+            .ok_or_else(|| {
+                ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
+            })?;
         ensure_v1_group(&group)?;
         if group.epoch().as_u64() != conversation.last_finalized_epoch {
             return Err(ChatError::Trust(
@@ -691,7 +694,9 @@ pub(super) fn validate_pending_policy_change(
                 .sequence
                 .checked_add(1)
                 == Some(next.sequence)
-                && conversation.current_authorization_policy.application_senders
+                && conversation
+                    .current_authorization_policy
+                    .application_senders
                     != next.application_senders => {}
         (None, Some(next))
             if conversation

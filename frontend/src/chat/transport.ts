@@ -232,7 +232,12 @@ export class ApiChatTransport implements ChatTransportPort {
     incarnation: number,
     afterHeight: string,
     limit = 64,
-  ): Promise<{ bytes: Uint8Array; entryCount: number; nextHeight?: string }> {
+  ): Promise<{
+    bytes: Uint8Array
+    entryCount: number
+    nextHeight?: string
+    genesisGroupId: string
+  }> {
     const response = await api.get(
       `/chat/mls/conversations/${encodeURIComponent(conversationId)}/${incarnation}/control-history`,
       {
@@ -251,12 +256,20 @@ export class ApiChatTransport implements ChatTransportPort {
       ? parsed as Record<string, unknown>
       : null
     const nextHeight = record?.nextHeight
+    const genesis = record?.genesis
+    const genesisGroupId = typeof genesis === 'object'
+      && genesis !== null
+      && 'mlsGroupId' in genesis
+      && typeof genesis.mlsGroupId === 'string'
+      ? genesis.mlsGroupId
+      : null
     const entryCount = record && Array.isArray(record.commits)
       ? record.commits.length
       : -1
     if (
       entryCount < 0
       || entryCount > 64
+      || genesisGroupId === null
       || (
       nextHeight !== undefined
       && (
@@ -270,6 +283,7 @@ export class ApiChatTransport implements ChatTransportPort {
     return {
       bytes,
       entryCount,
+      genesisGroupId,
       ...(nextHeight === undefined ? {} : { nextHeight }),
     }
   }

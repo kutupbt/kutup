@@ -260,6 +260,7 @@ impl MlsClient {
         let request = CreateMlsConversationRequestV1 {
             genesis,
             members: private_control.genesis_roster.clone(),
+            initial_devices: Vec::new(),
         };
         request.validate().map_err(ChatError::Trust)?;
         let server_genesis_hash = request

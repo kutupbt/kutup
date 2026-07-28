@@ -556,6 +556,36 @@ impl MlsConversationMemberV1 {
     }
 }
 
+/// One MLS leaf identity in a destination-private device snapshot. Ordering
+/// authorities receive only the digest of the containing delivery and cannot
+/// correlate account or device identities across groups.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsConversationDeviceV1 {
+    pub address: AccountAddress,
+    pub device_id: u32,
+}
+
+impl MlsConversationDeviceV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        let canonical: AccountAddress = self
+            .address
+            .canonical()
+            .parse()
+            .map_err(|error: crate::AddressError| error.to_string())?;
+        if canonical != self.address
+            || self.address.server.is_none()
+            || !(1..=127).contains(&self.device_id)
+        {
+            return Err(
+                "MLS conversation device must have a canonical account and id 1-127".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Complete group-private authorization state authenticated by the MLS
 /// GroupContext. Ordering servers see only the public roster commitment and
 /// pseudonymous authority/owner keys; members receive this exact structure in
@@ -741,6 +771,11 @@ fn validate_private_roster_owner_bindings(
 pub struct CreateMlsConversationRequestV1 {
     pub genesis: MlsConversationGenesisV1,
     pub members: Vec<MlsConversationMemberV1>,
+    /// Device leaves present at an ordinary local genesis. Federation replicas
+    /// omit this destination-private list; recovery reconstructs device state
+    /// from its authenticated Welcome deliveries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub initial_devices: Vec<MlsConversationDeviceV1>,
 }
 
 impl CreateMlsConversationRequestV1 {
@@ -825,6 +860,7 @@ impl CreateMlsConversationRequestV1 {
                 }
             }
         }
+        validate_conversation_devices(&self.initial_devices, &self.members, true)?;
         Ok(())
     }
 }
@@ -1413,6 +1449,10 @@ pub struct MlsMembershipDeliveryV1 {
     pub next_roster_commitment: String,
     pub next_participant_domains: Vec<String>,
     pub local_members_after: Vec<MlsConversationMemberV1>,
+    /// Exact MLS leaves hosted by this destination after the Commit. This is
+    /// destination-private and lets the homeserver distinguish an existing
+    /// leaf that needs a Commit from a newly linked device that needs Welcome.
+    pub local_devices_after: Vec<MlsConversationDeviceV1>,
     pub envelopes: Vec<MlsMembershipEnvelopeV1>,
 }
 
@@ -1458,6 +1498,18 @@ impl MlsMembershipDeliveryV1 {
                 return Err("MLS membership delivery members must be strictly ordered".into());
             }
             previous_member = Some(address);
+        }
+        validate_conversation_devices(
+            &self.local_devices_after,
+            &self.local_members_after,
+            self.local_members_after.is_empty(),
+        )?;
+        if self
+            .local_devices_after
+            .iter()
+            .any(|device| device.address.server.as_deref() != Some(self.destination.as_str()))
+        {
+            return Err("MLS membership delivery contains a non-local device".into());
         }
         let mut total_bytes = 0usize;
         let mut previous_envelope = None;
@@ -1513,6 +1565,39 @@ impl MlsMembershipDeliveryV1 {
         }
         Ok(())
     }
+}
+
+fn validate_conversation_devices(
+    devices: &[MlsConversationDeviceV1],
+    members: &[MlsConversationMemberV1],
+    allow_empty: bool,
+) -> Result<(), String> {
+    if devices.len() > MAX_MEMBERSHIP_ENVELOPES || (!allow_empty && devices.is_empty()) {
+        return Err("MLS conversation device snapshot is empty or exceeds its entry limit".into());
+    }
+    let member_addresses = members
+        .iter()
+        .map(|member| member.address.canonical())
+        .collect::<BTreeSet<_>>();
+    let mut covered = BTreeSet::new();
+    let mut previous = None;
+    for device in devices {
+        device.validate()?;
+        let address = device.address.canonical();
+        if !member_addresses.contains(&address) {
+            return Err("MLS conversation device is absent from the account roster".into());
+        }
+        let key = (address.clone(), device.device_id);
+        if previous.as_ref().is_some_and(|prior| key <= *prior) {
+            return Err("MLS conversation devices must be strictly ordered".into());
+        }
+        previous = Some(key);
+        covered.insert(address);
+    }
+    if !devices.is_empty() && covered != member_addresses {
+        return Err("MLS conversation devices must cover every account in the roster".into());
+    }
+    Ok(())
 }
 
 pub fn roster_commitment(members: &[MlsConversationMemberV1]) -> Result<String, String> {

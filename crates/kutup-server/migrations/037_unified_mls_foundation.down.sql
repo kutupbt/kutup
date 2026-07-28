@@ -29,6 +29,7 @@ DROP TABLE chat_mls_control_blocks;
 DROP TABLE chat_mls_invitation_feedback_outbox;
 DROP TABLE chat_mls_invitation_feedback;
 DROP TABLE chat_mls_membership_deliveries;
+DROP TABLE chat_mls_local_member_devices;
 DROP TABLE chat_mls_local_members;
 
 ALTER TABLE chat_mls_conversations

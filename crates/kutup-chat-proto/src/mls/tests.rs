@@ -453,6 +453,10 @@ fn incarnation_recovery_is_owner_bound_append_only_and_destination_private() {
                 .filter(|member| member.address.server.as_deref() == Some(destination))
                 .cloned()
                 .collect(),
+            local_devices_after: vec![MlsConversationDeviceV1 {
+                address: recipient.parse().unwrap(),
+                device_id,
+            }],
             envelopes: vec![MlsMembershipEnvelopeV1 {
                 envelope_id: Uuid::from_u128(envelope_id),
                 recipient: recipient.parse().unwrap(),
@@ -547,7 +551,7 @@ fn incarnation_recovery_is_owner_bound_append_only_and_destination_private() {
     request.validate_shape().unwrap();
     assert_eq!(
         recovery_digest,
-        "ba02112a3c75c9ea2a9e904dd8d4be028e2e5517df32fa06d18827f1945adce8"
+        "27ea6ac37236364770fb7641513a090e95a9d7d1b492ef94f58f73ab1b2a3790"
     );
 
     let mut substituted = request.clone();
@@ -562,6 +566,7 @@ fn incarnation_recovery_is_owner_bound_append_only_and_destination_private() {
     let mut ordinary = CreateMlsConversationRequestV1 {
         genesis: request.recovery.plan.new_genesis,
         members: request.members,
+        initial_devices: Vec::new(),
     };
     assert!(ordinary.validate().is_err());
     ordinary.genesis.incarnation = 1;
@@ -603,6 +608,7 @@ fn direct_roster_requires_exact_participant_authorities() {
             created_at: 1,
         },
         members,
+        initial_devices: Vec::new(),
     };
     request.validate().unwrap();
 
@@ -649,12 +655,20 @@ fn membership_transition_commits_destination_private_snapshots() {
         epoch_after: 1,
         next_roster_commitment: next.clone(),
         next_participant_domains: vec!["a0.example".into(), "a1.example".into()],
-        local_members_after: vec![alice],
+        local_members_after: vec![alice.clone()],
+        local_devices_after: vec![MlsConversationDeviceV1 {
+            address: alice.address,
+            device_id: 1,
+        }],
         envelopes: Vec::new(),
     };
     let delivery_b = MlsMembershipDeliveryV1 {
         destination: "a1.example".into(),
-        local_members_after: vec![bob],
+        local_members_after: vec![bob.clone()],
+        local_devices_after: vec![MlsConversationDeviceV1 {
+            address: bob.address,
+            device_id: 1,
+        }],
         ..delivery_a.clone()
     };
     let transition = MlsMembershipTransitionV1 {
@@ -682,6 +696,22 @@ fn membership_transition_commits_destination_private_snapshots() {
     transition.validate().unwrap();
     delivery_a.verify_transition(&transition).unwrap();
     delivery_b.verify_transition(&transition).unwrap();
+    assert_eq!(
+        delivery_a.delivery_digest().unwrap(),
+        "8d0c124cb625fc7b8cb84717a516205a7c53701808da20083e44150af8b98a7d"
+    );
+    assert_eq!(
+        transition.transition_digest().unwrap(),
+        "46b88215946f13c40857975162ead1ff6073a37df995b20745d2a2d96530802e"
+    );
+    assert_eq!(
+        serde_json::to_string(&MlsControlActionTypeV1::DeviceSync).unwrap(),
+        "10"
+    );
+    assert_eq!(
+        serde_json::from_str::<MlsControlActionTypeV1>("10").unwrap(),
+        MlsControlActionTypeV1::DeviceSync
+    );
 
     let public_json = serde_json::to_string(&transition).unwrap();
     assert!(!public_json.contains("alice"));
@@ -774,17 +804,29 @@ fn new_participant_bootstrap_requires_complete_qc_history_and_private_digest() {
             "a1.example".into(),
             "a2.example".into(),
         ],
-        local_members_after: vec![alice],
+        local_members_after: vec![alice.clone()],
+        local_devices_after: vec![MlsConversationDeviceV1 {
+            address: alice.address,
+            device_id: 1,
+        }],
         envelopes: Vec::new(),
     };
     let delivery_a1 = MlsMembershipDeliveryV1 {
         destination: "a1.example".into(),
-        local_members_after: vec![bob],
+        local_members_after: vec![bob.clone()],
+        local_devices_after: vec![MlsConversationDeviceV1 {
+            address: bob.address,
+            device_id: 1,
+        }],
         ..delivery_a0.clone()
     };
     let delivery_a2 = MlsMembershipDeliveryV1 {
         destination: "a2.example".into(),
-        local_members_after: vec![carol],
+        local_members_after: vec![carol.clone()],
+        local_devices_after: vec![MlsConversationDeviceV1 {
+            address: carol.address,
+            device_id: 1,
+        }],
         ..delivery_a0.clone()
     };
     let transition = MlsMembershipTransitionV1 {

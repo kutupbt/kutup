@@ -133,8 +133,11 @@ pub(crate) async fn ack(
 async fn require_device(state: &AppState, user_id: Uuid, device_id: u32) -> AppResult<()> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(
-            SELECT 1 FROM chat_mls_devices
-            WHERE user_id = $1 AND device_id = $2
+            SELECT 1
+            FROM chat_mls_devices d
+            JOIN chat_device_manifests m ON m.user_id = d.user_id
+            WHERE d.user_id = $1 AND d.device_id = $2
+              AND d.manifest_version = m.version
          )",
     )
     .bind(user_id)

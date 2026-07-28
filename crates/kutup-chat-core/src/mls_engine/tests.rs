@@ -23,6 +23,35 @@ fn ordering_policy(domain: &str, seed: u8) -> MlsOrderingServicePolicyV1 {
     }
 }
 
+fn single_authority_certificate(
+    request: &FederatedMlsOrderingVoteRequestV1,
+    seed: u8,
+) -> MlsOrderingQuorumCertificateV1 {
+    let block_hash = request.block.block_hash().unwrap();
+    let authority = &request.authority_set.authorities[0];
+    let signer = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+    let mut vote = kutup_chat_proto::MlsOrderingVoteV1 {
+        conversation_id: request.block.conversation_id,
+        incarnation: request.block.incarnation,
+        authority_set_sequence: request.authority_set.sequence,
+        height: request.block.height,
+        round: 0,
+        vote_type: kutup_chat_proto::MlsOrderingVoteTypeV1::Precommit,
+        block_hash: block_hash.clone(),
+        authority_domain: authority.domain.clone(),
+        authority_key_id: authority.key_id.clone(),
+        signature: String::new(),
+    };
+    vote.signature = BASE64.encode(signer.sign(&vote.signing_bytes().unwrap()).to_bytes());
+    MlsOrderingQuorumCertificateV1 {
+        authority_set_sequence: request.authority_set.sequence,
+        height: request.block.height,
+        round: 0,
+        block_hash,
+        votes: vec![vote],
+    }
+}
+
 async fn persist_owner_candidate(
     client: &MlsClient,
     mls_group_id: &[u8],
@@ -232,6 +261,241 @@ fn group_genesis_owner_and_exact_retry_survive_restart() {
         client.initialize("alice@example.test#1").await.unwrap();
         assert_eq!(client.local_conversations().await.unwrap(), vec![active]);
         drop(client);
+        drop(reopened);
+        std::fs::remove_file(path).unwrap();
+    });
+}
+
+#[test]
+fn linked_device_leaves_join_from_welcome_and_removal_survives_restart() {
+    futures_executor::block_on(async {
+        let path = std::env::temp_dir().join(format!(
+            "kutup-openmls-linked-devices-{}.db",
+            crate::clock::unix_millis()
+        ));
+        let first_db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
+        let second_db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open_in_memory().unwrap());
+        let first = MlsClient::new(first_db.clone());
+        let second = MlsClient::new(second_db);
+        let first_public = first.initialize("alice@alpha.example#1").await.unwrap();
+        let second_public = second.initialize("alice@alpha.example#2").await.unwrap();
+        let now = crate::clock::unix_millis() / 1000;
+        let second_package = second
+            .generate_key_package(1, 2, now, now + 86_400)
+            .await
+            .unwrap();
+        let verified_second = VerifiedMlsKeyPackage {
+            wire: second_package,
+            credential: VerifiedMlsCredential::new(
+                "alice@alpha.example#2".into(),
+                second_public.credential_public_key.clone(),
+            )
+            .unwrap(),
+            anonymous_delivery_public_key: second_public.anonymous_delivery_public_key.clone(),
+        };
+        let conversation_id = Uuid::from_u128(0x91);
+        let group_id = b"linked-devices-v1";
+        let policy = ordering_policy("alpha.example", 41);
+        let genesis = first
+            .prepare_group_genesis(
+                conversation_id,
+                group_id,
+                "alice@alpha.example".parse().unwrap(),
+                std::slice::from_ref(&policy),
+                now,
+            )
+            .await
+            .unwrap();
+        let genesis_hash = genesis.conversation.request.genesis.genesis_hash().unwrap();
+        let active = first
+            .mark_group_genesis_published(conversation_id, &genesis_hash)
+            .await
+            .unwrap();
+        assert_eq!(
+            first.group_devices(group_id).await.unwrap(),
+            vec![MlsConversationDeviceV1 {
+                address: "alice@alpha.example".parse().unwrap(),
+                device_id: 1,
+            }]
+        );
+
+        let add_proposal_id = Uuid::from_u128(0x92);
+        let prepared = first
+            .prepare_device_sync(
+                group_id,
+                add_proposal_id,
+                std::slice::from_ref(&verified_second),
+                &[],
+                now + 1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            prepared.control.vote_request.block.proposal.action_type,
+            MlsControlActionTypeV1::DeviceSync
+        );
+        assert_eq!(prepared.control.next_roster, active.current_roster);
+        assert_eq!(
+            prepared.control.transition.previous_roster_commitment,
+            prepared.control.transition.next_roster_commitment
+        );
+        let delivery = prepared.control.deliveries[0].clone();
+        assert_eq!(delivery.destination, "alpha.example");
+        assert_eq!(
+            delivery
+                .local_devices_after
+                .iter()
+                .map(|device| device.device_id)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(delivery.envelopes.len(), 1);
+        assert_eq!(delivery.envelopes[0].device_id, 2);
+        assert_eq!(
+            delivery.envelopes[0].kind,
+            MlsMembershipEnvelopeKindV1::Welcome
+        );
+
+        drop(first);
+        drop(first_db);
+        let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
+        let first = MlsClient::new(reopened.clone());
+        first.initialize("alice@alpha.example#1").await.unwrap();
+        assert_eq!(
+            first.pending_membership_changes().await.unwrap(),
+            vec![prepared.control.clone()]
+        );
+        assert_eq!(
+            first
+                .prepare_device_sync(
+                    group_id,
+                    add_proposal_id,
+                    std::slice::from_ref(&verified_second),
+                    &[],
+                    now + 1,
+                )
+                .await
+                .unwrap(),
+            prepared
+        );
+
+        let certificate = single_authority_certificate(&prepared.control.vote_request, 41);
+        let request = first
+            .build_membership_commit_request(group_id, certificate)
+            .await
+            .unwrap();
+        let acknowledgement = CommitMlsControlBlockResponseV1 {
+            conversation_id,
+            incarnation: 1,
+            height: 1,
+            epoch: 1,
+            block_hash: request.finalized.block.block_hash().unwrap(),
+            idempotent: false,
+        };
+        let finalized = first
+            .finalize_membership_change(group_id, &acknowledgement)
+            .await
+            .unwrap();
+        assert_eq!(finalized.group.epoch, 1);
+        assert_eq!(
+            first
+                .group_devices(group_id)
+                .await
+                .unwrap()
+                .iter()
+                .map(|device| device.device_id)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+
+        let welcome = BASE64
+            .decode(&delivery.envelopes[0].opaque_message)
+            .unwrap();
+        let history = MlsClientControlHistoryPageV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            genesis: genesis.conversation.request.genesis.clone(),
+            genesis_participant_domains: vec!["alpha.example".into()],
+            after_height: "0".into(),
+            commits: vec![request],
+            next_height: Some("1".into()),
+        };
+        let expected_members = vec![
+            VerifiedMlsCredential::new(
+                "alice@alpha.example#1".into(),
+                first_public.credential_public_key,
+            )
+            .unwrap(),
+            verified_second.credential.clone(),
+        ];
+        let joined = second
+            .join_from_welcome_with_control_history(
+                &MlsControlEnvelopeContext {
+                    envelope_id: delivery.envelopes[0].envelope_id,
+                    cursor: "1".into(),
+                    send_id: delivery.envelopes[0].envelope_id,
+                },
+                group_id,
+                &welcome,
+                &expected_members,
+                &[history.canonical_bytes().unwrap()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(joined.group.epoch, 1);
+        assert_eq!(
+            second
+                .group_devices(group_id)
+                .await
+                .unwrap()
+                .iter()
+                .map(|device| device.device_id)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+
+        let removal = first
+            .prepare_device_sync(group_id, Uuid::from_u128(0x93), &[], &[2], now + 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            removal.control.vote_request.block.proposal.action_type,
+            MlsControlActionTypeV1::DeviceSync
+        );
+        assert_eq!(
+            removal.control.deliveries[0]
+                .local_devices_after
+                .iter()
+                .map(|device| device.device_id)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert!(removal.control.deliveries[0].envelopes.is_empty());
+        let certificate = single_authority_certificate(&removal.control.vote_request, 41);
+        let request = first
+            .build_membership_commit_request(group_id, certificate)
+            .await
+            .unwrap();
+        let acknowledgement = CommitMlsControlBlockResponseV1 {
+            conversation_id,
+            incarnation: 1,
+            height: 2,
+            epoch: 2,
+            block_hash: request.finalized.block.block_hash().unwrap(),
+            idempotent: false,
+        };
+        first
+            .finalize_membership_change(group_id, &acknowledgement)
+            .await
+            .unwrap();
+        assert_eq!(
+            first.group_devices(group_id).await.unwrap(),
+            vec![MlsConversationDeviceV1 {
+                address: "alice@alpha.example".parse().unwrap(),
+                device_id: 1,
+            }]
+        );
+
+        drop(first);
         drop(reopened);
         std::fs::remove_file(path).unwrap();
     });

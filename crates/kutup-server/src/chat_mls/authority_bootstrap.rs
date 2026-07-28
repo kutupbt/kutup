@@ -591,6 +591,7 @@ async fn materialize_complete_bootstrap(
     let create = CreateMlsConversationRequestV1 {
         genesis: first.descriptor.genesis.clone(),
         members: Vec::new(),
+        initial_devices: Vec::new(),
     };
     MlsRepository::new(state.pool.clone())
         .create_conversation(

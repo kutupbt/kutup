@@ -15,11 +15,10 @@ use kutup_chat_proto::{
     DeviceListMismatch, DeviceManifest, MailboxPage, MlsClientControlHistoryPageV1,
     MlsControlActionTypeV1, MlsConversationMemberV1, MlsGroupAuthorizationPolicyV1,
     MlsGroupCryptographicPolicyV1, MlsIncarnationRecoveryV1, MlsOrderingQuorumCertificateV1,
-    MlsOrderingServicePolicyV1, MlsOwnerSetV1,
-    OwnChatProfileResponse, PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest,
-    RecoverMlsConversationResponseV1, RegisterChatDeviceRequest, RegisterChatDeviceResponse,
-    ReplenishKeysRequest, SendMessagesRequest, TransparencyCheckpointResponse,
-    UserPreKeyBundlesResponse,
+    MlsOrderingServicePolicyV1, MlsOwnerSetV1, OwnChatProfileResponse, PreKeyCountResponse,
+    PublishManifestResponse, PutChatProfileRequest, RecoverMlsConversationResponseV1,
+    RegisterChatDeviceRequest, RegisterChatDeviceResponse, ReplenishKeysRequest,
+    SendMessagesRequest, TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::TryRngCore as _;
@@ -843,6 +842,19 @@ impl WasmChatClient {
         to_output(&state)
     }
 
+    #[wasm_bindgen(js_name = mlsGroupDevices)]
+    pub async fn mls_group_devices(
+        &self,
+        mls_group_id: Vec<u8>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let devices = self
+            .mls_client()
+            .group_devices(&mls_group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&devices)
+    }
+
     #[wasm_bindgen(js_name = prepareMlsMembershipChange)]
     pub async fn prepare_mls_membership_change(
         &self,
@@ -865,6 +877,35 @@ impl WasmChatClient {
                 proposal_id,
                 &next_roster,
                 &additions,
+                parse_i64_string("MLS clock", &now_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&prepared)
+    }
+
+    #[wasm_bindgen(js_name = prepareMlsDeviceSync)]
+    pub async fn prepare_mls_device_sync(
+        &self,
+        mls_group_id: Vec<u8>,
+        proposal_id: String,
+        additions: JsValue,
+        removed_device_ids: JsValue,
+        now_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let proposal_id = uuid::Uuid::parse_str(&proposal_id)
+            .map_err(|_| js_error("MLS proposal id must be a UUID"))?;
+        let additions: Vec<VerifiedMlsKeyPackage> =
+            from_transport(additions).map_err(chat_error)?;
+        let removed_device_ids: Vec<u32> =
+            from_transport(removed_device_ids).map_err(chat_error)?;
+        let prepared = self
+            .mls_client()
+            .prepare_device_sync(
+                &mls_group_id,
+                proposal_id,
+                &additions,
+                &removed_device_ids,
                 parse_i64_string("MLS clock", &now_seconds)?,
             )
             .await
@@ -1564,6 +1605,21 @@ impl WasmChatClient {
         let verified = self
             .engine
             .resolve_mls_credential_claims(&claims)
+            .await
+            .map_err(chat_error)?;
+        to_output(&verified)
+    }
+
+    #[wasm_bindgen(js_name = resolveMlsSenderClaim)]
+    pub async fn resolve_mls_sender_claim(
+        &mut self,
+        claimed_sender: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let claim: crate::ClaimedMlsCredential =
+            from_transport(claimed_sender).map_err(chat_error)?;
+        let verified = self
+            .engine
+            .resolve_mls_sender_credential(&claim)
             .await
             .map_err(chat_error)?;
         to_output(&verified)

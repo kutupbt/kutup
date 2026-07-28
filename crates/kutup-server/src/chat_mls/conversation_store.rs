@@ -90,6 +90,43 @@ impl MlsRepository {
                     "MLS conversation creator must be in the initial roster",
                 ));
             }
+            if request.genesis.kind == MlsConversationKindV1::Group
+                && (request.initial_devices.len() != 1
+                    || request.initial_devices[0].address.canonical() != creator_address)
+            {
+                return Err(AppError::bad_request(
+                    "group genesis must bind exactly the creating account's current MLS device",
+                ));
+            }
+            for device in &request.initial_devices {
+                let device_user_id: Option<Uuid> = sqlx::query_scalar(
+                    "SELECT id FROM users WHERE username = $1 AND is_active = true",
+                )
+                .bind(&device.address.username)
+                .fetch_optional(&mut *tx)
+                .await?;
+                let device_user_id = device_user_id.ok_or_else(|| {
+                    AppError::conflict("an initial MLS device account does not exist")
+                })?;
+                let exists: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(
+                        SELECT 1
+                        FROM chat_mls_devices d
+                        JOIN chat_device_manifests m ON m.user_id = d.user_id
+                        WHERE d.user_id = $1 AND d.device_id = $2
+                          AND d.manifest_version = m.version
+                     )",
+                )
+                .bind(device_user_id)
+                .bind(device.device_id as i32)
+                .fetch_one(&mut *tx)
+                .await?;
+                if !exists {
+                    return Err(AppError::conflict(
+                        "an initial MLS leaf is absent from the current signed manifest",
+                    ));
+                }
+            }
         }
 
         let existing: Option<(i64, String, Value)> = sqlx::query_as(
@@ -115,6 +152,30 @@ impl MlsRepository {
                 return Err(AppError::conflict(
                     "MLS conversation id is already bound to another genesis",
                 ));
+            }
+            if creator_user_id.is_some() {
+                let existing_devices: Vec<(String, i32)> = sqlx::query_as(
+                    "SELECT u.username, d.device_id
+                     FROM chat_mls_local_member_devices d
+                     JOIN users u ON u.id = d.user_id
+                     WHERE d.conversation_id = $1 AND d.incarnation = $2
+                       AND d.removed_epoch IS NULL
+                     ORDER BY u.username, d.device_id",
+                )
+                .bind(request.genesis.conversation_id)
+                .bind(request.genesis.incarnation as i64)
+                .fetch_all(&mut *tx)
+                .await?;
+                let requested_devices = request
+                    .initial_devices
+                    .iter()
+                    .map(|device| (device.address.username.clone(), device.device_id as i32))
+                    .collect::<Vec<_>>();
+                if existing_devices != requested_devices {
+                    return Err(AppError::conflict(
+                        "MLS conversation genesis is bound to another initial device set",
+                    ));
+                }
             }
             tx.commit().await?;
             return Ok(CreateMlsConversationResponseV1 {
@@ -194,6 +255,28 @@ impl MlsRepository {
             .bind(member.is_admin)
             .bind(member.owner_id.is_some())
             .bind(&member.owner_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        for device in &request.initial_devices {
+            if device.address.server.as_deref() != Some(server_name) {
+                continue;
+            }
+            let local_user_id: Uuid =
+                sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
+                    .bind(&device.address.username)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            sqlx::query(
+                "INSERT INTO chat_mls_local_member_devices
+                     (conversation_id, incarnation, user_id, device_id, joined_epoch)
+                 VALUES ($1,$2,$3,$4,$5)",
+            )
+            .bind(request.genesis.conversation_id)
+            .bind(request.genesis.incarnation as i64)
+            .bind(local_user_id)
+            .bind(device.device_id as i32)
+            .bind(request.genesis.initial_epoch as i64)
             .execute(&mut *tx)
             .await?;
         }

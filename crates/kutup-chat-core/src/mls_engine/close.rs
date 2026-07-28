@@ -220,12 +220,8 @@ impl MlsClient {
                 .owner_set
                 .clone()
                 .ok_or_else(|| ChatError::Db("group genesis has no owner set".into()))?,
-            genesis_authorization_policy: conversation
-                .genesis_authorization_policy
-                .clone(),
-            genesis_cryptographic_policy: conversation
-                .genesis_cryptographic_policy
-                .clone(),
+            genesis_authorization_policy: conversation.genesis_authorization_policy.clone(),
+            genesis_cryptographic_policy: conversation.genesis_cryptographic_policy.clone(),
             roster: conversation.current_roster.clone(),
             authority_set: conversation.current_authority_set.clone(),
             owner_set: conversation.current_owner_set.clone(),

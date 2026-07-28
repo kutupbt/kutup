@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
 
 const SECONDARY = process.env.E2E_SECONDARY_BASE_URL
 const PASSWORD = 'Deneme123*FederatedSecurityPassword'
@@ -47,6 +47,23 @@ async function openChat(page: Page): Promise<void> {
   await page.goto('/chat')
   await expect(page.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
   await expect(page.getByText(/End-to-end encrypted · device \d+/)).toBeVisible({ timeout: 90_000 })
+}
+
+async function cloneAuthenticatedInstall(
+  browser: Browser,
+  sourceContext: BrowserContext,
+  sourcePage: Page,
+): Promise<{ context: BrowserContext; page: Page }> {
+  const session = await sourcePage.evaluate(() => sessionStorage.getItem('kutup_session'))
+  if (!session) throw new Error('source install has no authenticated session')
+  const context = await browser.newContext({
+    baseURL: new URL(sourcePage.url()).origin,
+    storageState: await sourceContext.storageState(),
+  })
+  await context.addInitScript((savedSession) => {
+    sessionStorage.setItem('kutup_session', savedSession)
+  }, session)
+  return { context, page: await context.newPage() }
 }
 
 async function send(page: Page, text: string): Promise<void> {
@@ -274,25 +291,41 @@ test.describe('two-server secure chat', () => {
     expect(invitationAcceptanceResponse.ok()).toBe(true)
     await expect(pageB.getByTestId(`chat-group-${conversationId}`)).toBeVisible({ timeout: 90_000 })
 
-    // Membership alone must not authorize first-contact package claims. This
-    // protects local and remote users from package exhaustion by non-admins.
+    // An active member may claim only its own packages for linked-device leaf
+    // synchronization. Membership alone must not authorize cross-account
+    // first-contact claims, which protects other users from package exhaustion.
     const bobAuthorization = await invitationAcceptanceResponse.request().headerValue('authorization')
     expect(bobAuthorization).toMatch(/^Bearer /)
-    const unauthorizedClaimStatus = await pageB.evaluate(
-      async ({ authorization, request }) => {
-        const response = await fetch('/api/chat/mls/key-packages/identified', {
-          method: 'POST',
-          headers: {
-            Authorization: authorization!,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(request),
-        })
-        return response.status
+    const packageClaimStatuses = await pageB.evaluate(
+      async ({ authorization, selfRequest, crossAccountRecipient }) => {
+        const claim = async (request: Record<string, unknown>) => {
+          const response = await fetch('/api/chat/mls/key-packages/identified', {
+            method: 'POST',
+            headers: {
+              Authorization: authorization!,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(request),
+          })
+          return response.status
+        }
+        const crossAccountRequest = {
+          ...selfRequest,
+          recipient: crossAccountRecipient,
+        }
+        return {
+          self: await claim(selfRequest),
+          crossAccount: await claim(crossAccountRequest),
+        }
       },
-      { authorization: bobAuthorization, request: identifiedPackageRequest },
+      {
+        authorization: bobAuthorization,
+        selfRequest: identifiedPackageRequest,
+        crossAccountRecipient: { username: alice, server: 'a.test' },
+      },
     )
-    expect(unauthorizedClaimStatus).toBe(403)
+    expect(packageClaimStatuses.self).toBe(200)
+    expect(packageClaimStatuses.crossAccount).toBe(403)
 
     // Routine administrator changes use the same encrypted roster transition,
     // but preserve member count and routing domains and require no owner vote.
@@ -576,6 +609,87 @@ test.describe('two-server secure chat', () => {
     await expect(pageB.getByTestId(`chat-group-${conversationId}`)).toBeVisible({ timeout: 90_000 })
     await expect(bubble(pageB, fromAlice)).toBeVisible({ timeout: 90_000 })
     await expect(bubble(pageB, fromBob)).toBeVisible({ timeout: 90_000 })
+
+    // A fresh Alice install owns independent MLS credentials and leaf secrets.
+    // The existing Alice device commits a manifest-bound DeviceSync Welcome;
+    // the new device verifies the complete signed control history, joins
+    // without an invitation decision, and survives a browser restart.
+    const { context: contextA2, page: pageA2 } = await cloneAuthenticatedInstall(
+      browser,
+      contextA,
+      pageA,
+    )
+    await openChat(pageA2)
+    const bobCapabilityEpochs: number[] = []
+    pageB.on('response', (response) => {
+      const path = new URL(response.url()).pathname
+      if (
+        !response.ok()
+        || response.request().method() !== 'PUT'
+        || path !== '/api/chat/mls/delivery-capability'
+      ) return
+      try {
+        const publication = response.request().postDataJSON() as {
+          conversationId?: unknown
+          epoch?: unknown
+        }
+        if (
+          publication.conversationId === conversationId
+          && typeof publication.epoch === 'number'
+          && Number.isSafeInteger(publication.epoch)
+        ) {
+          bobCapabilityEpochs.push(publication.epoch)
+        }
+      } catch {
+        // A malformed publication is independently rejected by the server.
+      }
+    })
+    const linkedDeviceCommit = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/control/blocks'
+    })
+    await pageA.reload()
+    await expect(pageA.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+    const linkedDeviceCommitResponse =
+      await requireResponseOrUiError(pageA, linkedDeviceCommit)
+    expect(linkedDeviceCommitResponse.ok()).toBe(true)
+    const linkedDeviceCommitBody =
+      await linkedDeviceCommitResponse.json() as { epoch?: unknown }
+    expect(linkedDeviceCommitBody.epoch).toEqual(expect.any(Number))
+    const linkedDeviceEpoch = linkedDeviceCommitBody.epoch as number
+    await expect(pageA2.getByTestId(`chat-group-${conversationId}`)).toBeVisible({
+      timeout: 90_000,
+    })
+    await expect.poll(
+      () => bobCapabilityEpochs.includes(linkedDeviceEpoch),
+      { timeout: 90_000 },
+    ).toBe(true)
+    await pageA2.getByTestId(`chat-group-${conversationId}`).click()
+    const linkedSendResponse = pageA2.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/anonymous/messages'
+    })
+    const fromAliceLinked = `mls-from-alice-linked-${tag}`
+    await send(pageA2, fromAliceLinked)
+    expect((await requireResponseOrUiError(pageA2, linkedSendResponse)).ok()).toBe(true)
+    await expect(bubble(pageB, fromAliceLinked)).toBeVisible({ timeout: 90_000 })
+
+    const toAliceLinkedResponse = pageB.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/anonymous/messages'
+    })
+    const toAliceLinked = `mls-to-alice-linked-${tag}`
+    await send(pageB, toAliceLinked)
+    expect((await requireResponseOrUiError(pageB, toAliceLinkedResponse)).ok()).toBe(true)
+    await expect(bubble(pageA2, toAliceLinked)).toBeVisible({ timeout: 90_000 })
+    await pageA2.reload()
+    await expect(pageA2.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+    await pageA2.getByTestId(`chat-group-${conversationId}`).click()
+    await expect(bubble(pageA2, fromAliceLinked)).toBeVisible({ timeout: 90_000 })
+    await expect(bubble(pageA2, toAliceLinked)).toBeVisible({ timeout: 90_000 })
 
     // Re-promoting the previously demoted owner reuses the exact durable
     // group-scoped candidate key. The resulting q=2 owner set first proves
@@ -898,6 +1012,7 @@ test.describe('two-server secure chat', () => {
     await expect(pageB.getByPlaceholder('This MLS group is closed')).toBeDisabled()
 
     await contextA.close()
+    await contextA2.close()
     await contextB.close()
     await contextC.close()
     await contextD.close()

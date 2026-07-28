@@ -14,6 +14,7 @@ import type {
   JoinedMlsConversation,
   LocalMlsConversationRecord,
   LocalMlsGroupState,
+  MlsConversationDevice,
   MlsConversationMember,
   MlsGroupAuthorizationPolicy,
   MlsGroupCryptographicPolicy,
@@ -283,6 +284,91 @@ export class MlsConversationService {
     for (const control of pending) {
       validatePendingMembershipChange(control, Uint8Array.from(control.mlsGroupId))
       const result = await this.publishPendingMembershipChange(control)
+      await this.publishCurrentDeliveryCapability(result.conversation)
+      finalized.push(result)
+    }
+    return finalized
+  }
+
+  /**
+   * Reconcile this account's current transparency-logged devices into every
+   * active group as independent MLS leaves. No OpenMLS snapshot or private
+   * credential is copied between devices.
+   */
+  async reconcileLinkedDevices(
+    manifestDeviceIds: number[],
+  ): Promise<FinalizedMlsMembershipChange[]> {
+    const local = requireCanonicalAddress(this.selfAddress)
+    const localCanonical = canonicalAccountAddress(local)
+    const desired = new Set(manifestDeviceIds)
+    if (
+      desired.size !== manifestDeviceIds.length
+      || desired.size < 1
+      || desired.size > 127
+      || manifestDeviceIds.some(deviceId =>
+        !Number.isSafeInteger(deviceId) || deviceId < 1 || deviceId > 127)
+    ) {
+      throw new Error('signed manifest has an invalid MLS device set')
+    }
+    const finalized: FinalizedMlsMembershipChange[] = []
+    for (const conversation of await this.conversations()) {
+      if (conversation.status !== 'active') continue
+      const groupId = decodeCanonicalBase64(
+        conversation.request.genesis.mlsGroupId,
+        16,
+        255,
+      )
+      const groupDevices = await this.withCryptoLock(() =>
+        this.client.mlsGroupDevices(groupId))
+      validateGroupDevices(groupDevices)
+      const localGroupIds = new Set(groupDevices
+        .filter(device =>
+          canonicalAccountAddress(device.address) === localCanonical)
+        .map(device => device.deviceId))
+      if (!localGroupIds.has(this.deviceId)) {
+        throw new Error('local MLS state is not represented by its own group leaf')
+      }
+      const missing = manifestDeviceIds
+        .filter(deviceId => !localGroupIds.has(deviceId))
+      const removed = [...localGroupIds]
+        .filter(deviceId => !desired.has(deviceId))
+        .sort((left, right) => left - right)
+      if (missing.length === 0 && removed.length === 0) continue
+
+      let additions: VerifiedMlsKeyPackage[] = []
+      if (missing.length > 0) {
+        const packages = await this.withCryptoLock(() =>
+          this.client.fetchVerifiedIdentifiedMlsKeyPackages(
+            local,
+            conversation.request.genesis.conversationId,
+            String(conversation.request.genesis.incarnation),
+            String(Math.floor(Date.now() / 1000)),
+          ))
+        additions = packages.filter(keyPackage =>
+          missing.includes(keyPackage.wire.deviceId))
+        if (
+          additions.length !== missing.length
+          || new Set(additions.map(keyPackage => keyPackage.wire.deviceId)).size
+            !== missing.length
+        ) {
+          throw new Error(
+            'linked-device KeyPackage claim did not cover every missing manifest device',
+          )
+        }
+        for (const addition of additions) {
+          validateVerifiedKeyPackage(addition, localCanonical)
+        }
+      }
+      const prepared = await this.withCryptoLock(() =>
+        this.client.prepareMlsDeviceSync(
+          groupId,
+          requireBrowserCrypto().randomUUID(),
+          additions,
+          removed,
+          String(Math.floor(Date.now() / 1000)),
+        ))
+      validatePendingMembershipChange(prepared.control, groupId)
+      const result = await this.publishPendingMembershipChange(prepared.control)
       await this.publishCurrentDeliveryCapability(result.conversation)
       finalized.push(result)
     }
@@ -1139,12 +1225,9 @@ export class MlsConversationService {
           envelope,
         ),
       )
-      const senders = await this.withCryptoLock(() =>
-        this.client.resolveMlsWelcomeClaims([inspection.claimedSender]),
+      const sender = await this.withCryptoLock(() =>
+        this.client.resolveMlsSenderClaim(inspection.claimedSender),
       )
-      if (senders.length !== 1) {
-        throw new Error('MLS application sender did not resolve to one manifest device')
-      }
       const result = await this.withCryptoLock(() =>
         this.client.applyAnonymousMlsApplicationEnvelope(
           mailbox.id,
@@ -1153,7 +1236,7 @@ export class MlsConversationService {
           String(mailbox.serverTimestamp),
           recipient,
           envelope,
-          senders[0],
+          sender,
         ),
       )
       if (
@@ -1183,6 +1266,7 @@ export class MlsConversationService {
       }
     }
     await this.reconcileInboundRecoveries()
+    await this.reconcileInboundLinkedDeviceWelcomes()
     await this.reconcileInboundMembershipCommits()
     await this.reconcilePendingApplicationMessages()
     await this.reconcileInboundApplicationMessages()
@@ -1190,6 +1274,74 @@ export class MlsConversationService {
     await this.reconcilePendingPolicyChanges()
     await this.reconcilePendingCloses()
     await this.reconcilePendingRecoveries()
+  }
+
+  /**
+   * Install a DeviceSync Welcome only when this account is already active on
+   * the homeserver and the conversation is not a pending invitation.
+   */
+  async reconcileInboundLinkedDeviceWelcomes(): Promise<JoinedMlsConversation[]> {
+    const records = await this.withCryptoLock(() =>
+      this.client.localMlsConversations())
+    const pendingInvitations = new Set(
+      (await this.invitations())
+        .map(invitation => `${invitation.conversationId}:${invitation.incarnation}`),
+    )
+    const joined: JoinedMlsConversation[] = []
+    for (const envelope of await this.allMembershipEnvelopes()) {
+      if (
+        records.some(record =>
+          record.request.genesis.conversationId === envelope.conversationId
+          && record.request.genesis.incarnation === envelope.incarnation)
+        || pendingInvitations.has(`${envelope.conversationId}:${envelope.incarnation}`)
+      ) {
+        continue
+      }
+      const history = await this.controlHistory(
+        envelope.conversationId!,
+        envelope.incarnation!,
+      )
+      const groupId = decodeCanonicalBase64(history.mlsGroupId, 16, 255)
+      const welcome = decodeCanonicalBase64(
+        envelope.opaqueEnvelope,
+        1,
+        1024 * 1024,
+      )
+      const inspection = await this.withCryptoLock(() =>
+        this.client.inspectMlsWelcome(groupId, welcome))
+      if (
+        inspection.privateControlState.conversationId !== envelope.conversationId
+        || inspection.privateControlState.incarnation !== envelope.incarnation
+        || inspection.privateControlState.epoch !== inspection.epoch
+      ) {
+        throw new Error('linked-device MLS Welcome differs from its control history')
+      }
+      const expectedMembers = await this.withCryptoLock(() =>
+        this.client.resolveMlsWelcomeClaims(inspection.claimedMembers))
+      validateResolvedRoster(inspection.claimedMembers, expectedMembers)
+      const result = await this.withCryptoLock(() =>
+        this.client.joinMlsFromWelcomeWithControlHistory(
+          envelope.id,
+          envelope.cursor,
+          envelope.sendId,
+          groupId,
+          welcome,
+          expectedMembers,
+          history.pages,
+        ))
+      if (
+        result.group.epoch !== inspection.epoch
+        || result.conversation.lastFinalizedEpoch !== inspection.epoch
+        || result.conversation.request.genesis.conversationId !== envelope.conversationId
+      ) {
+        throw new Error('durable linked-device MLS join differs from its Welcome')
+      }
+      await this.publishCurrentDeliveryCapability(result.conversation)
+      await this.transport.ackMlsMailbox(this.deviceId, [envelope.id])
+      records.push(result.conversation)
+      joined.push(result)
+    }
+    return joined
   }
 
   /**
@@ -1215,7 +1367,7 @@ export class MlsConversationService {
     const resumed = await this.withCryptoLock(() =>
       this.client.mlsGroupState(groupId),
     ) !== null
-    const historyPages = await this.controlHistory(
+    const history = await this.controlHistory(
       verified.conversationId,
       verified.incarnation,
     )
@@ -1227,7 +1379,7 @@ export class MlsConversationService {
         groupId,
         welcome,
         verified.expectedMembers,
-        historyPages,
+        history.pages,
       ),
     )
     const group = joined.group
@@ -1286,9 +1438,10 @@ export class MlsConversationService {
   private async controlHistory(
     conversationId: string,
     incarnation: number,
-  ): Promise<Uint8Array[]> {
+  ): Promise<{ pages: Uint8Array[]; mlsGroupId: string }> {
     let afterHeight = '0'
     const pages: Uint8Array[] = []
+    let mlsGroupId: string | undefined
     for (let pageIndex = 0; pageIndex < MAX_CONTROL_HISTORY_PAGES; pageIndex += 1) {
       const page = await this.transport.fetchMlsControlHistory(
         conversationId,
@@ -1296,12 +1449,19 @@ export class MlsConversationService {
         afterHeight,
         64,
       )
+      if (mlsGroupId !== undefined && page.genesisGroupId !== mlsGroupId) {
+        throw new Error('MLS control-history pages disagree on the genesis group id')
+      }
+      mlsGroupId = page.genesisGroupId
       if (!(page.bytes instanceof Uint8Array) || page.bytes.length < 2 || page.bytes.length > 8 * 1024 * 1024) {
         throw new Error('MLS control-history page is outside the client size bound')
       }
-      if (page.entryCount === 0) return pages
+      if (page.entryCount === 0) {
+        if (!mlsGroupId) throw new Error('MLS control history omitted its genesis group id')
+        return { pages, mlsGroupId }
+      }
       pages.push(page.bytes)
-      if (page.entryCount < 64) return pages
+      if (page.entryCount < 64) return { pages, mlsGroupId }
       if (!page.nextHeight) {
         throw new Error('full MLS control-history page omitted its next cursor')
       }
@@ -1940,6 +2100,26 @@ function validateResolvedRoster(
   }
 }
 
+function validateGroupDevices(devices: MlsConversationDevice[]): void {
+  if (!Array.isArray(devices) || devices.length < 1 || devices.length > 32_000) {
+    throw new Error('shared MLS group device roster is outside its bound')
+  }
+  let previous = ''
+  for (const device of devices) {
+    const canonical = canonicalAccountAddress(requireCanonicalAddress(device.address))
+    const key = `${canonical}#${String(device.deviceId).padStart(3, '0')}`
+    if (
+      !Number.isSafeInteger(device.deviceId)
+      || device.deviceId < 1
+      || device.deviceId > 127
+      || key <= previous
+    ) {
+      throw new Error('shared MLS group device roster is not canonical')
+    }
+    previous = key
+  }
+}
+
 function validatePendingMembershipChange(
   control: PendingMlsMembershipChange,
   expectedGroupId: Uint8Array,
@@ -1950,7 +2130,7 @@ function validatePendingMembershipChange(
     || !equalBytes(control.mlsGroupId, expectedGroupId)
     || !isSha256(control.commitHash)
     || !Array.isArray(control.nextRoster)
-    || control.nextRoster.length < 2
+    || control.nextRoster.length < 1
     || control.nextRoster.length > 1000
     || !Array.isArray(control.deliveries)
     || control.deliveries.length < 1

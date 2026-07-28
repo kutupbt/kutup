@@ -834,6 +834,30 @@ impl Engine {
         &mut self,
         claims: &[crate::ClaimedMlsCredential],
     ) -> Result<Vec<crate::VerifiedMlsCredential>> {
+        self.resolve_mls_credential_claims_inner(claims, true).await
+    }
+
+    /// Resolve the single leaf that authored an MLS application message.
+    ///
+    /// Unlike a Welcome or Commit roster, one application message carries
+    /// exactly one sender leaf. The leaf must still match that exact device in
+    /// the current transparency-verified manifest, but it must not pretend to
+    /// enumerate the sender account's other linked devices.
+    pub async fn resolve_mls_sender_credential(
+        &mut self,
+        claim: &crate::ClaimedMlsCredential,
+    ) -> Result<crate::VerifiedMlsCredential> {
+        self.resolve_mls_credential_claims_inner(std::slice::from_ref(claim), false)
+            .await?
+            .pop()
+            .ok_or_else(|| ChatError::Trust("verified MLS sender is unavailable".into()))
+    }
+
+    async fn resolve_mls_credential_claims_inner(
+        &mut self,
+        claims: &[crate::ClaimedMlsCredential],
+        require_complete_device_coverage: bool,
+    ) -> Result<Vec<crate::VerifiedMlsCredential>> {
         if claims.is_empty() || claims.len() > 1000 {
             return Err(ChatError::Invalid(
                 "MLS roster must contain 1-1000 credential claims".into(),
@@ -875,25 +899,27 @@ impl Engine {
             manifests.insert(account.clone(), manifest);
         }
 
-        let mut claimed_devices = BTreeMap::<String, BTreeSet<u32>>::new();
-        for (account, device_id) in &parsed {
-            claimed_devices
-                .entry(account.clone())
-                .or_default()
-                .insert(*device_id);
-        }
-        for (account, manifest) in &manifests {
-            let manifest_devices = manifest
-                .devices
-                .iter()
-                .map(|device| device.device_id)
-                .collect::<BTreeSet<_>>();
-            if manifest.devices.iter().any(|device| device.mls.is_none())
-                || claimed_devices.get(account) != Some(&manifest_devices)
-            {
-                return Err(ChatError::Trust(format!(
-                    "MLS roster does not cover the complete signed device set for {account}"
-                )));
+        if require_complete_device_coverage {
+            let mut claimed_devices = BTreeMap::<String, BTreeSet<u32>>::new();
+            for (account, device_id) in &parsed {
+                claimed_devices
+                    .entry(account.clone())
+                    .or_default()
+                    .insert(*device_id);
+            }
+            for (account, manifest) in &manifests {
+                let manifest_devices = manifest
+                    .devices
+                    .iter()
+                    .map(|device| device.device_id)
+                    .collect::<BTreeSet<_>>();
+                if manifest.devices.iter().any(|device| device.mls.is_none())
+                    || claimed_devices.get(account) != Some(&manifest_devices)
+                {
+                    return Err(ChatError::Trust(format!(
+                        "MLS roster does not cover the complete signed device set for {account}"
+                    )));
+                }
             }
         }
 

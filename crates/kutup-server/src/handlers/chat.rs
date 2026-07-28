@@ -1206,6 +1206,16 @@ pub async fn revoke_device(
     if deleted == 0 {
         return Err(AppError::not_found("no such chat device"));
     }
+    // The destination-private group-leaf history deliberately survives until
+    // an ordered DeviceSync Commit removes it, but the revoked device must
+    // immediately stop receiving MLS mailbox entries or contributing
+    // KeyPackages. Deleting the current MLS directory row cascades those
+    // ephemeral records without erasing the group control history.
+    sqlx::query("DELETE FROM chat_mls_devices WHERE user_id = $1 AND device_id = $2")
+        .bind(user_id)
+        .bind(device_id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     state.chat_hub.close_device(user_id, device_id);
     Ok(StatusCode::NO_CONTENT.into_response())

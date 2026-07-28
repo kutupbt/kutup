@@ -27,8 +27,12 @@ complete: the two-server gate proves manual quorum across requester/approver
 reloads, authenticated immutable evidence retrieval, recipient-side Welcome
 and manifest verification before durable join, post-recovery messaging, and
 recovered-state persistence after reload. Advertisement remains gated on
-linked-device group state and the remaining adversarial suites. The two-server
-private-policy gate now passes:
+the remaining adversarial/scale suites and explicit capability advertisement.
+Linked-device group state is complete: the two-server browser gate adds an
+independent second installation as a distinct manifest-bound MLS leaf, proves
+automatic history-verified Welcome installation without invitation fallback,
+exchanges anonymous messages in both directions, and proves state persistence
+after reload. The two-server private-policy gate also passes:
 it proves owner-approved administrator-only sending, a tightened 1 KiB
 user-message ceiling, control availability under both restrictions, exact
 remote policy pinning, and recovery after the tightened policy.
@@ -423,6 +427,45 @@ control pin, and stores the mailbox id/cursor/send id receipt atomically.
 Only afterward may the browser acknowledge the row. A crash replay reads that
 receipt and acknowledges without attempting to process the old Commit again.
 
+### Linked devices
+
+One account may occupy multiple distinct MLS leaves. Kutup never copies an
+OpenMLS provider snapshot, group secret, or leaf private key into a newly
+linked installation. The new installation independently creates its MLS
+credential and KeyPackage, publishes their binding in the next signed device
+manifest, and waits for an already-enrolled device to author one ordered
+`DeviceSync` transition.
+
+`DeviceSync` is a typed membership action that may be initiated by any active
+member only for that member's own canonical account. Its private transition
+must preserve the account roster and every role, add exactly the current
+manifest devices missing from the group, remove exactly the group devices no
+longer present in that manifest, and never remove the initiating leaf. The
+single OpenMLS Commit and any new-device Welcomes advance one epoch. The
+destination-private delivery carries the complete exact local-device snapshot;
+the server atomically stores append-only leaf history, active-leaf state,
+mailbox rows, control state, and retries. Active leaf identity is unique, while
+removed leaves remain in immutable history and may be re-added only as a later
+leaf.
+
+On Chat startup and manifest change, the browser compares each active local
+group with the transparency-verified signed device set. It claims identified
+KeyPackages only for its own missing devices and submits the exact add/remove
+transition. A new installation may auto-install a `DeviceSync` Welcome only
+when its account is already active on the destination server, no account
+invitation is pending, and the complete authenticated control history,
+GroupId, epoch, manifest device roster, and Welcome claims agree. It never
+accepts an invitation, grants an owner role, or clones another device's state
+as part of this flow.
+
+Application messages authenticate only the actual sender leaf against that
+exact device in the current manifest. Welcome, Commit, recovery, and roster
+validation continue to require complete manifest-device coverage. Removing or
+revoking a device deletes its ephemeral KeyPackages, delivery capability, and
+mailbox access without deleting the group leaf history. A missing, forged,
+stale, or partially applied device transition leaves the prior epoch pinned
+and cannot fall back to identified delivery.
+
 ## Federation privacy
 
 Genesis replication sends each participant server only accounts hosted on
@@ -475,7 +518,6 @@ authorization/cryptographic owner actions now have protocol, browser
 orchestration, explicit approval UI, and two-server coverage.
 
 - group owner and exact authority-policy/fingerprint UI;
-- WebSocket/restart reconciliation and multi-device linked-state flow;
 - native Rust, WASM, web, Playwright, PostgreSQL migration, Docker Compose,
   witness/auditor, and two-server federation suites;
 - adversarial tests for authority rollback/fork, invalid bootstrap pages,

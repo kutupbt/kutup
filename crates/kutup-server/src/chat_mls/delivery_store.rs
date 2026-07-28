@@ -283,10 +283,11 @@ impl MlsRepository {
         .await?;
 
         let expected_devices: Vec<i32> = sqlx::query_scalar(
-            "SELECT device_id
-             FROM chat_mls_devices
-             WHERE user_id = $1
-             ORDER BY device_id",
+            "SELECT d.device_id
+             FROM chat_mls_devices d
+             JOIN chat_device_manifests m ON m.user_id = d.user_id
+             WHERE d.user_id = $1 AND d.manifest_version = m.version
+             ORDER BY d.device_id",
         )
         .bind(recipient_user_id)
         .fetch_all(&mut *tx)

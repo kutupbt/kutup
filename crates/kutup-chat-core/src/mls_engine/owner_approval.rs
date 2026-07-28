@@ -592,8 +592,7 @@ pub(super) fn record_owner_approval_request(
             if request.next_roster != conversation.current_roster
                 || transition.previous_roster_commitment
                     != roster_commitment(&conversation.current_roster).map_err(ChatError::Trust)?
-                || transition.next_roster_commitment
-                    != transition.previous_roster_commitment
+                || transition.next_roster_commitment != transition.previous_roster_commitment
             {
                 return Err(ChatError::Trust(
                     "MLS policy approval differs from the exact current roster".into(),

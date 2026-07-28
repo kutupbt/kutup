@@ -191,6 +191,11 @@ export interface LocalMlsGroupState {
   epoch: number
 }
 
+export interface MlsConversationDevice {
+  address: AccountAddress
+  deviceId: number
+}
+
 export interface VerifiedMlsCredential {
   credentialIdentity: string
   credentialPublicKey: number[]
@@ -257,6 +262,7 @@ export interface LocalMlsConversationRecord {
       isAdmin: boolean
       ownerId?: string
     }>
+    initialDevices?: MlsConversationDevice[]
   }
   status: 'pending_genesis' | 'active' | 'read_only' | 'closed'
   serverGenesisHash?: string
@@ -620,6 +626,7 @@ export interface MlsControlHistoryPage {
   bytes: Uint8Array
   entryCount: number
   nextHeight?: string
+  genesisGroupId: string
 }
 
 export interface DerivedMlsDeliveryCapability {
@@ -810,11 +817,19 @@ export interface WasmChatClientHandle {
   ): Promise<LocalMlsConversationRecord>
   mlsGroupOwnerCredential(mlsGroupId: Uint8Array): Promise<unknown>
   mlsGroupState(mlsGroupId: Uint8Array): Promise<LocalMlsGroupState | null>
+  mlsGroupDevices(mlsGroupId: Uint8Array): Promise<MlsConversationDevice[]>
   prepareMlsMembershipChange(
     mlsGroupId: Uint8Array,
     proposalId: string,
     nextRoster: MlsConversationMember[],
     additions: unknown,
+    nowSeconds: string,
+  ): Promise<PreparedMlsMembershipChange>
+  prepareMlsDeviceSync(
+    mlsGroupId: Uint8Array,
+    proposalId: string,
+    additions: unknown,
+    removedDeviceIds: number[],
     nowSeconds: string,
   ): Promise<PreparedMlsMembershipChange>
   pendingMlsMembershipChanges(): Promise<PendingMlsMembershipChange[]>
@@ -960,6 +975,9 @@ export interface WasmChatClientHandle {
   resolveMlsWelcomeClaims(
     claimedMembers: ClaimedMlsCredential[],
   ): Promise<VerifiedMlsCredential[]>
+  resolveMlsSenderClaim(
+    claimedSender: ClaimedMlsCredential,
+  ): Promise<VerifiedMlsCredential>
   fetchVerifiedMlsOrderingPolicy(domain: string): Promise<unknown>
   fetchVerifiedMlsKeyPackages(
     recipient: AccountAddress,

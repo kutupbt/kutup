@@ -72,9 +72,12 @@ pub(crate) async fn get_identified_key_packages(
     .bind(requester_user_id)
     .fetch_optional(&state.pool)
     .await?;
-    if may_claim_membership_packages != Some(true) {
+    let self_device_sync = request.recipient == requester;
+    if may_claim_membership_packages.is_none()
+        || (may_claim_membership_packages != Some(true) && !self_device_sync)
+    {
         return Err(AppError::forbidden(
-            "identified MLS KeyPackage claims require an active local administrator or owner",
+            "identified MLS KeyPackage claims require an administrator or the active member's own account",
         ));
     }
 

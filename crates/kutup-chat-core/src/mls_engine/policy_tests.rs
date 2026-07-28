@@ -198,7 +198,10 @@ fn private_policy_changes_are_restart_safe_contiguous_and_enforced() {
             )
             .await
             .unwrap();
-        assert!(client.policy_change_has_owner_quorum(group_id).await.unwrap());
+        assert!(client
+            .policy_change_has_owner_quorum(group_id)
+            .await
+            .unwrap());
         assert_eq!(
             client.pending_policy_changes().await.unwrap(),
             vec![pending.control.clone()]
@@ -230,9 +233,7 @@ fn private_policy_changes_are_restart_safe_contiguous_and_enforced() {
             .envelopes
             .first()
             .unwrap();
-        let bob_policy_commit = BASE64
-            .decode(&bob_policy_envelope.opaque_message)
-            .unwrap();
+        let bob_policy_commit = BASE64.decode(&bob_policy_envelope.opaque_message).unwrap();
         let acknowledgement = CommitMlsControlBlockResponseV1 {
             conversation_id,
             incarnation: 1,

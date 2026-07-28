@@ -458,6 +458,7 @@ async fn materialize_participant_bootstrap(
             &CreateMlsConversationRequestV1 {
                 genesis: first.descriptor.genesis.clone(),
                 members: Vec::new(),
+                initial_devices: Vec::new(),
             },
             &first.descriptor.genesis_participant_domains,
             policy.maximum_group_members,

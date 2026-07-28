@@ -268,6 +268,7 @@ impl MlsClient {
             request: CreateMlsConversationRequestV1 {
                 genesis: recovery.plan.new_genesis.clone(),
                 members: private.genesis_roster.clone(),
+                initial_devices: Vec::new(),
             },
             status: LocalMlsConversationStatus::Active,
             server_genesis_hash: Some(
@@ -619,6 +620,25 @@ impl MlsClient {
                     envelope.envelope_id,
                 )
             });
+            let mut local_devices_after = Vec::new();
+            if creator.server.as_deref() == Some(destination.as_str()) {
+                local_devices_after.push(MlsConversationDeviceV1 {
+                    address: creator.clone(),
+                    device_id: creator_device_id,
+                });
+            }
+            for addition in additions {
+                let (address, device_id) =
+                    parse_device_credential_identity(&addition.credential.credential_identity)?;
+                let address = address.parse::<AccountAddress>().map_err(
+                    |error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()),
+                )?;
+                if address.server.as_deref() == Some(destination.as_str()) {
+                    local_devices_after.push(MlsConversationDeviceV1 { address, device_id });
+                }
+            }
+            local_devices_after
+                .sort_by_key(|device| (device.address.canonical(), device.device_id));
             let delivery = MlsMembershipDeliveryV1 {
                 protocol_version: MLS_PROTOCOL_VERSION,
                 conversation_id: new_genesis.conversation_id,
@@ -633,6 +653,7 @@ impl MlsClient {
                     .filter(|member| member.address.server.as_deref() == Some(destination))
                     .cloned()
                     .collect(),
+                local_devices_after,
                 envelopes,
             };
             delivery.validate().map_err(ChatError::Protocol)?;
@@ -875,6 +896,7 @@ impl MlsClient {
             request: CreateMlsConversationRequestV1 {
                 genesis: plan.new_genesis.clone(),
                 members: control.request.members.clone(),
+                initial_devices: Vec::new(),
             },
             status: LocalMlsConversationStatus::Active,
             server_genesis_hash: Some(
@@ -889,12 +911,8 @@ impl MlsClient {
             current_roster: control.request.members.clone(),
             current_authority_set: plan.new_genesis.authority_set.clone(),
             current_owner_set: current.current_owner_set,
-            genesis_authorization_policy: private_control
-                .genesis_authorization_policy
-                .clone(),
-            genesis_cryptographic_policy: private_control
-                .genesis_cryptographic_policy
-                .clone(),
+            genesis_authorization_policy: private_control.genesis_authorization_policy.clone(),
+            genesis_cryptographic_policy: private_control.genesis_cryptographic_policy.clone(),
             current_authorization_policy: private_control.authorization_policy,
             current_cryptographic_policy: private_control.cryptographic_policy,
         };

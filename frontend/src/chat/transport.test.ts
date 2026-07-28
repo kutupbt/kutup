@@ -224,4 +224,38 @@ describe('ApiChatTransport', () => {
       '/chat/mls/domains/authority.example/policy',
     )
   })
+
+  it('extracts the authenticated MLS group id from canonical control history', async () => {
+    const page = {
+      protocolVersion: 1,
+      genesis: { mlsGroupId: 'BwcHBwcHBwcHBwcHBwcHBw==' },
+      commits: [{ height: 1 }],
+      nextHeight: '1',
+    }
+    const bytes = new TextEncoder().encode(JSON.stringify(page))
+    const get = vi.spyOn(api, 'get').mockResolvedValue({
+      data: bytes.buffer,
+    } as never)
+    const transport = new ApiChatTransport()
+
+    const result = await transport.fetchMlsControlHistory(
+      '00000000-0000-4000-8000-000000000001',
+      1,
+      '0',
+      64,
+    )
+    expect(result).toMatchObject({
+      entryCount: 1,
+      nextHeight: '1',
+      genesisGroupId: page.genesis.mlsGroupId,
+    })
+    expect([...result.bytes]).toEqual([...bytes])
+    expect(get).toHaveBeenCalledWith(
+      '/chat/mls/conversations/00000000-0000-4000-8000-000000000001/1/control-history',
+      {
+        params: { afterHeight: '0', limit: 64 },
+        responseType: 'arraybuffer',
+      },
+    )
+  })
 })

@@ -185,8 +185,11 @@ impl MlsRepository {
             }
             let creator_device_exists: bool = sqlx::query_scalar(
                 "SELECT EXISTS(
-                    SELECT 1 FROM chat_mls_devices
-                    WHERE user_id = $1 AND device_id = $2
+                    SELECT 1
+                    FROM chat_mls_devices d
+                    JOIN chat_device_manifests m ON m.user_id = d.user_id
+                    WHERE d.user_id = $1 AND d.device_id = $2
+                      AND d.manifest_version = m.version
                  )",
             )
             .bind(submitter)
@@ -491,19 +494,37 @@ async fn apply_recovery_delivery(
         let user_id = user_id.ok_or_else(|| {
             AppError::conflict("recovered local member was not active in the prior incarnation")
         })?;
-        let device_ids: Vec<i32> = sqlx::query_scalar(
-            "SELECT device_id FROM chat_mls_devices
-             WHERE user_id = $1 ORDER BY device_id",
-        )
-        .bind(user_id)
-        .fetch_all(&mut **tx)
-        .await?;
+        let device_ids = delivery
+            .local_devices_after
+            .iter()
+            .filter_map(|device| {
+                (device.address == member.address).then_some(device.device_id as i32)
+            })
+            .collect::<Vec<_>>();
         if device_ids.is_empty() {
             return Err(AppError::conflict(
                 "recovered local member has no manifest-bound MLS device",
             ));
         }
         for device_id in device_ids {
+            let manifest_bound: bool = sqlx::query_scalar(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM chat_mls_devices d
+                    JOIN chat_device_manifests m ON m.user_id = d.user_id
+                    WHERE d.user_id = $1 AND d.device_id = $2
+                      AND d.manifest_version = m.version
+                 )",
+            )
+            .bind(user_id)
+            .bind(device_id)
+            .fetch_one(&mut **tx)
+            .await?;
+            if !manifest_bound {
+                return Err(AppError::conflict(
+                    "recovered MLS leaf is absent from the current signed manifest",
+                ));
+            }
             let omitted_creator = local_submitter == Some(user_id)
                 && creator.is_some_and(|(address, creator_device)| {
                     address == &member.address && creator_device == device_id as u32
@@ -546,6 +567,20 @@ async fn apply_recovery_delivery(
         .bind(member.is_admin)
         .bind(member.owner_id.is_some())
         .bind(&member.owner_id)
+        .execute(&mut **tx)
+        .await?;
+    }
+    for device in &delivery.local_devices_after {
+        let user_id = users[&device.address.canonical()];
+        sqlx::query(
+            "INSERT INTO chat_mls_local_member_devices
+                 (conversation_id, incarnation, user_id, device_id, joined_epoch)
+             VALUES ($1,$2,$3,$4,1)",
+        )
+        .bind(delivery.conversation_id)
+        .bind(delivery.incarnation as i64)
+        .bind(user_id)
+        .bind(device.device_id as i32)
         .execute(&mut **tx)
         .await?;
     }

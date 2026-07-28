@@ -75,7 +75,7 @@ impl MlsClient {
         insert_new_group_control_key(&mut metadata, mls_group_id)?;
         let owner = insert_new_group_owner_key(&mut metadata, mls_group_id)?;
         let member = MlsConversationMemberV1 {
-            address: creator,
+            address: creator.clone(),
             is_admin: true,
             owner_id: Some(owner.owner_id.clone()),
         };
@@ -103,6 +103,10 @@ impl MlsClient {
                 created_at: created_at_seconds,
             },
             members,
+            initial_devices: vec![MlsConversationDeviceV1 {
+                address: creator,
+                device_id: parse_device_credential_identity(&metadata.credential_identity)?.1,
+            }],
         };
         request.validate().map_err(ChatError::Invalid)?;
         let current_owner_set = request.genesis.owner_set.clone().ok_or_else(|| {
@@ -206,6 +210,11 @@ impl MlsClient {
         }
         record.status = LocalMlsConversationStatus::Active;
         record.server_genesis_hash = Some(server_genesis_hash.to_owned());
+        // The exact initial device set is needed only while retrying the local
+        // server creation transaction. It is destination-private and must not
+        // make the durable logical conversation differ from a member that
+        // reconstructs the same authenticated genesis from Welcome history.
+        record.request.initial_devices.clear();
         let result = record.clone();
         let state = snapshot_provider(&provider, &metadata)?;
         let pending = Pending {
