@@ -302,6 +302,13 @@ OpenMLS group, owner key, and exact server request. A failed publication leaves
 that request pending; reconciliation replays it byte-for-byte and activates it
 only when the server returns the exact canonical genesis hash.
 
+The browser holds a separate account-scoped Web Lock across every complete MLS
+workflow, including its network phases. Group sends, membership and governance
+changes, recovery, KeyPackage maintenance, and background reconciliation cannot
+interleave across tabs between prepare, order, and finalize. The existing
+engine lock still protects each individual durable cryptographic transaction;
+using distinct lock names preserves a fixed, non-recursive lock order.
+
 For invitations, the coordinator decrypts the Welcome only into untrusted
 `account@server#device` claims, then calls the shared Rust engine to fetch
 authenticated policy history and current-manifest proofs, recover every

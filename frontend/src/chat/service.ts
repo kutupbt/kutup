@@ -59,6 +59,7 @@ export class ChatService {
 
   private readonly client: WasmChatClientHandle
   private readonly lockName: string
+  private readonly mlsWorkflowLockName: string
   private readonly channel: BroadcastChannel
   private readonly listeners = new Set<UpdateListener>()
   private socket: WebSocket | null = null
@@ -81,6 +82,7 @@ export class ChatService {
     this.client = client
     this.deviceId = client.deviceId
     this.lockName = lockName
+    this.mlsWorkflowLockName = `${lockName}:mls-workflow`
     this.capabilities = capabilities
     this.mls = capabilities.mlsGroups === true
       ? new MlsConversationService(
@@ -242,8 +244,9 @@ export class ChatService {
 
   async send(conversation: ConversationId, text: string): Promise<SendSummary> {
     if (conversation.kind === 'group') {
-      const mls = this.requireMls()
-      const summary = await mls.sendText(conversation.groupId, text)
+      const summary = await this.withMlsWorkflow(() =>
+        this.requireMls().sendText(conversation.groupId, text),
+      )
       this.notifyPeers()
       return { ...summary, safetyNumberChanges: [] }
     }
@@ -260,7 +263,9 @@ export class ChatService {
     if (this.reconcilePromise) return this.reconcilePromise
     this.reconcilePromise = this.withLock(() => this.client.reconcile())
       .then(async (report) => {
-        await this.mls?.reconcile()
+        await this.withMlsWorkflow(async () => {
+          await this.mls?.reconcile()
+        })
         this.notifyPeers()
         return report
       })
@@ -279,48 +284,54 @@ export class ChatService {
   }
 
   async createGroup(initialMember?: AccountAddress): Promise<LocalMlsConversationRecord> {
-    const mls = this.requireMls()
-    const self: AccountAddress = {
-      username: this.currentUsername(),
-      server: this.capabilities.serverName!,
-    }
-    const authorities = new Set([self.server!])
-    if (initialMember) {
-      const member = withHomeServer(initialMember, this.capabilities.serverName)
-      if (!member.server) throw new Error('group member requires a server')
-      authorities.add(member.server)
-      initialMember = member
-    }
-    const created = await mls.createGroup(self, [...authorities].sort())
-    const result = initialMember
-      ? await mls.addMember(created.conversation.request.genesis.conversationId, initialMember)
-      : created
+    const result = await this.withMlsWorkflow(async () => {
+      const mls = this.requireMls()
+      const self: AccountAddress = {
+        username: this.currentUsername(),
+        server: this.capabilities.serverName!,
+      }
+      const authorities = new Set([self.server!])
+      if (initialMember) {
+        const member = withHomeServer(initialMember, this.capabilities.serverName)
+        if (!member.server) throw new Error('group member requires a server')
+        authorities.add(member.server)
+        initialMember = member
+      }
+      const created = await mls.createGroup(self, [...authorities].sort())
+      return initialMember
+        ? await mls.addMember(created.conversation.request.genesis.conversationId, initialMember)
+        : created
+    })
     this.notifyPeers()
     return result.conversation
   }
 
   async acceptGroupInvitation(invitation: PendingMlsInvitation): Promise<void> {
-    await this.requireMls().acceptInvitation(invitation)
+    await this.withMlsWorkflow(() => this.requireMls().acceptInvitation(invitation))
     this.notifyPeers()
   }
 
   async rejectGroupInvitation(invitation: PendingMlsInvitation): Promise<void> {
-    await this.requireMls().rejectInvitation(invitation)
+    await this.withMlsWorkflow(() => this.requireMls().rejectInvitation(invitation))
     this.notifyPeers()
   }
 
   async addGroupMember(conversationId: string, member: AccountAddress): Promise<void> {
-    await this.requireMls().addMember(
-      conversationId,
-      withHomeServer(member, this.capabilities.serverName),
+    await this.withMlsWorkflow(() =>
+      this.requireMls().addMember(
+        conversationId,
+        withHomeServer(member, this.capabilities.serverName),
+      ),
     )
     this.notifyPeers()
   }
 
   async removeGroupMember(conversationId: string, member: AccountAddress): Promise<void> {
-    await this.requireMls().removeMember(
-      conversationId,
-      withHomeServer(member, this.capabilities.serverName),
+    await this.withMlsWorkflow(() =>
+      this.requireMls().removeMember(
+        conversationId,
+        withHomeServer(member, this.capabilities.serverName),
+      ),
     )
     this.notifyPeers()
   }
@@ -330,10 +341,12 @@ export class ChatService {
     member: AccountAddress,
     isAdmin: boolean,
   ): Promise<void> {
-    await this.requireMls().setAdministrator(
-      conversationId,
-      withHomeServer(member, this.capabilities.serverName),
-      isAdmin,
+    await this.withMlsWorkflow(() =>
+      this.requireMls().setAdministrator(
+        conversationId,
+        withHomeServer(member, this.capabilities.serverName),
+        isAdmin,
+      ),
     )
     this.notifyPeers()
   }
@@ -342,12 +355,16 @@ export class ChatService {
     conversationId: string,
     authorityDomains: string[],
   ): Promise<void> {
-    await this.requireMls().setAuthorities(conversationId, authorityDomains)
+    await this.withMlsWorkflow(() =>
+      this.requireMls().setAuthorities(conversationId, authorityDomains),
+    )
     this.notifyPeers()
   }
 
   async publishGroupOwnerCandidate(conversationId: string): Promise<void> {
-    await this.requireMls().publishOwnerCandidate(conversationId)
+    await this.withMlsWorkflow(() =>
+      this.requireMls().publishOwnerCandidate(conversationId),
+    )
     this.notifyPeers()
   }
 
@@ -356,10 +373,12 @@ export class ChatService {
     member: AccountAddress,
     isOwner: boolean,
   ): Promise<boolean> {
-    const finalized = await this.requireMls().setOwnerRole(
-      conversationId,
-      withHomeServer(member, this.capabilities.serverName),
-      isOwner,
+    const finalized = await this.withMlsWorkflow(() =>
+      this.requireMls().setOwnerRole(
+        conversationId,
+        withHomeServer(member, this.capabilities.serverName),
+        isOwner,
+      ),
     )
     this.notifyPeers()
     return finalized !== null
@@ -370,17 +389,23 @@ export class ChatService {
   }
 
   async approveGroupOwnerGovernance(conversationId: string): Promise<void> {
-    await this.requireMls().approveOwnerGovernance(conversationId)
+    await this.withMlsWorkflow(() =>
+      this.requireMls().approveOwnerGovernance(conversationId),
+    )
     this.notifyPeers()
   }
 
   async rejectGroupOwnerGovernance(conversationId: string): Promise<void> {
-    await this.requireMls().rejectOwnerGovernance(conversationId)
+    await this.withMlsWorkflow(() =>
+      this.requireMls().rejectOwnerGovernance(conversationId),
+    )
     this.notifyPeers()
   }
 
   async closeGroup(conversationId: string): Promise<boolean> {
-    const finalized = await this.requireMls().closeConversation(conversationId)
+    const finalized = await this.withMlsWorkflow(() =>
+      this.requireMls().closeConversation(conversationId),
+    )
     this.notifyPeers()
     return finalized !== null
   }
@@ -389,9 +414,11 @@ export class ChatService {
     conversationId: string,
     authorityDomains?: string[],
   ): Promise<boolean> {
-    const finalized = await this.requireMls().recoverConversation(
-      conversationId,
-      authorityDomains,
+    const finalized = await this.withMlsWorkflow(() =>
+      this.requireMls().recoverConversation(
+        conversationId,
+        authorityDomains,
+      ),
     )
     this.notifyPeers()
     return finalized !== null
@@ -459,6 +486,20 @@ export class ChatService {
     )
   }
 
+  /**
+   * Serialize complete MLS workflows, including their network phases, across
+   * tabs. The engine lock above still protects each durable cryptographic
+   * transaction; this separate lock prevents reconciliation from observing a
+   * prepared workflow and racing its order/finalize steps.
+   */
+  private async withMlsWorkflow<T>(operation: () => Promise<T>): Promise<T> {
+    return await navigator.locks.request(
+      this.mlsWorkflowLockName,
+      { mode: 'exclusive' },
+      async () => await operation(),
+    )
+  }
+
   private requireMls(): MlsConversationService {
     if (!this.mls) throw new Error('MLS groups are not enabled by this server')
     return this.mls
@@ -470,9 +511,11 @@ export class ChatService {
 
   private async initializeMls(): Promise<void> {
     if (!this.mls) return
-    const manifest = await this.withLock(() => this.client.syncManifest())
-    const version = requireManifestVersion(manifest)
-    await this.mls.maintainKeyPackages(version)
+    await this.withMlsWorkflow(async () => {
+      const manifest = await this.withLock(() => this.client.syncManifest())
+      const version = requireManifestVersion(manifest)
+      await this.mls?.maintainKeyPackages(version)
+    })
   }
 
   private notifyPeers(): void {
