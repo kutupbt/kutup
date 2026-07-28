@@ -575,7 +575,9 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       setGroups(await service.groups())
       const action = selectedOwnerApproval.request.proposal.actionType === 7
         ? 'Group close'
-        : 'Owner change'
+        : selectedOwnerApproval.request.proposal.actionType === 9
+          ? 'Group recovery'
+          : 'Owner change'
       toast.success(approve ? `${action} approved` : `${action} rejected on this device`)
     } catch (cause) {
       toast.error(errorMessage(cause, t))
@@ -622,6 +624,34 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       toast.success(finalized
         ? 'MLS group closed'
         : 'Encrypted close approval requested from the other group owners')
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setGroupUpdating(false)
+    }
+  }
+
+  async function recoverSelectedGroup() {
+    if (!service || !selectedGroup || !canManageSelectedGroupAuthorities || groupUpdating) return
+    const confirmed = window.confirm(
+      'Recover this MLS group into a fresh incarnation? Use this only when the current ordering quorum cannot make progress. The member and owner sets will be preserved, and all current owners may need to approve.',
+    )
+    if (!confirmed) return
+    const domains = groupAuthorityDomains
+      .split(/[\s,]+/u)
+      .map(domain => domain.trim())
+      .filter(Boolean)
+    setGroupUpdating(true)
+    try {
+      const finalized = await service.recoverGroup(
+        selectedGroup.request.genesis.conversationId,
+        domains,
+      )
+      setGroups(await service.groups())
+      setOwnerApprovalRequests(await service.pendingGroupOwnerApprovals())
+      toast.success(finalized
+        ? 'MLS group recovered into a fresh incarnation'
+        : 'Encrypted recovery approval requested from the other group owners')
     } catch (cause) {
       toast.error(errorMessage(cause, t))
     } finally {
@@ -1025,12 +1055,16 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                       <p className="text-sm font-medium">
                         {selectedOwnerApproval.request.proposal.actionType === 7
                           ? 'Approve closing this MLS group?'
-                          : 'Approve MLS owner change?'}
+                          : selectedOwnerApproval.request.proposal.actionType === 9
+                            ? 'Approve MLS group recovery?'
+                            : 'Approve MLS owner change?'}
                       </p>
                       <p className="mt-1 text-xs text-muted-foreground">
                         {selectedOwnerApproval.request.proposal.actionType === 7
                           ? `${canonicalAccountAddress(selectedOwnerApproval.requester)} proposes permanently closing this group incarnation. Approval signs the exact unchanged-roster MLS transition.`
-                          : `${canonicalAccountAddress(selectedOwnerApproval.requester)} proposes making ${selectedOwnerApproval.request.nextRoster
+                          : selectedOwnerApproval.request.proposal.actionType === 9
+                            ? `${canonicalAccountAddress(selectedOwnerApproval.requester)} proposes replacing the unavailable MLS incarnation while preserving the exact member and owner sets. Approval signs the complete new genesis and delivery commitments.`
+                            : `${canonicalAccountAddress(selectedOwnerApproval.requester)} proposes making ${selectedOwnerApproval.request.nextRoster
                               .filter(member => Boolean(member.ownerId))
                               .map(member => canonicalAccountAddress(member.address))
                               .join(', ')} the group owners. Approval signs this exact encrypted transition.`}
@@ -1167,7 +1201,17 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                       This MLS group incarnation is closed. Its authenticated history remains available, but no new messages or control changes are allowed.
                     </div>
                   ) : canManageSelectedGroupAuthorities ? (
-                    <div className="flex justify-end border-t pt-4">
+                    <div className="flex flex-wrap justify-end gap-2 border-t pt-4">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={groupUpdating || groupAuthorityDomains.trim().length === 0}
+                        onClick={() => void recoverSelectedGroup()}
+                        data-testid="chat-group-recover"
+                      >
+                        <RefreshCw className="mr-2 h-4 w-4" />
+                        Recover quorum
+                      </Button>
                       <Button
                         type="button"
                         variant="destructive"

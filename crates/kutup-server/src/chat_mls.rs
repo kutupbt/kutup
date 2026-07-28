@@ -24,6 +24,8 @@ mod package_store;
 mod participant_bootstrap;
 pub(crate) mod policy;
 mod rate_limits;
+mod recovery_routes;
+mod recovery_store;
 mod retry;
 mod util;
 
@@ -56,6 +58,9 @@ pub(crate) use participant_bootstrap::federated_stage_participant_bootstrap;
 use policy::{active_policy, authenticated_remote_policy};
 pub(crate) use policy::{get_policy_history, MlsOrderingService};
 use rate_limits::increment_counter;
+pub(crate) use recovery_routes::{
+    federated_recover_conversation, get_recovery, recover_conversation,
+};
 pub(crate) use retry::spawn_retry_worker;
 use util::{
     decode_canonical_base64, decode_capability, ensure_anonymous_context, scoped_digest,

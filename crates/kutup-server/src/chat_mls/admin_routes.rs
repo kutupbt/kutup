@@ -26,6 +26,7 @@ struct AdminMlsStatusV1 {
     policy: Option<MlsOrderingServicePolicyV1>,
     conversations: MlsConversationCountsV1,
     pending_control_deliveries: u64,
+    pending_recovery_deliveries: u64,
     pending_anonymous_deliveries: u64,
     receiving_authority_bootstraps: u64,
     rejected_authority_bootstraps: u64,
@@ -68,6 +69,8 @@ struct AdminMlsConversationV1 {
     last_block_hash: Option<String>,
     local_members: MlsLocalMemberCountsV1,
     pending_control_deliveries: u64,
+    incarnation_history: Vec<AdminMlsIncarnationV1>,
+    recoveries: Vec<AdminMlsRecoveryV1>,
     consensus_evidence: Vec<AdminMlsEvidenceV1>,
     audit_events: Vec<AdminMlsAuditEventV1>,
 }
@@ -79,6 +82,31 @@ struct MlsLocalMemberCountsV1 {
     pending: u64,
     rejected: u64,
     removed: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminMlsIncarnationV1 {
+    incarnation: u64,
+    status: String,
+    genesis_hash: String,
+    roster_commitment: String,
+    member_count: u32,
+    last_finalized_height: u64,
+    last_finalized_epoch: u64,
+    last_block_hash: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminMlsRecoveryV1 {
+    recovery_digest: String,
+    previous_incarnation: u64,
+    new_incarnation: u64,
+    origin_domain: String,
+    /// Original owner-signed public statement, unchanged from durable storage.
+    recovery: Value,
+    created_at: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -140,9 +168,10 @@ pub(crate) async fn status(
     )
     .fetch_one(&state.pool)
     .await?;
-    let operational_counts: (i64, i64, i64, i64, i64, i64, i64, i64) = sqlx::query_as(
+    let operational_counts: (i64, i64, i64, i64, i64, i64, i64, i64, i64) = sqlx::query_as(
         "SELECT
             (SELECT COUNT(*) FROM chat_mls_control_outbox WHERE state = 'pending'),
+            (SELECT COUNT(*) FROM chat_mls_recovery_outbox WHERE state = 'pending'),
             (SELECT COUNT(*) FROM chat_mls_federation_outbox WHERE state = 'pending'),
             (SELECT COUNT(*) FROM chat_mls_authority_bootstraps WHERE state = 'receiving'),
             (SELECT COUNT(*) FROM chat_mls_authority_bootstraps WHERE state = 'rejected'),
@@ -169,13 +198,14 @@ pub(crate) async fn status(
             closed: checked_count(conversation_counts.4)?,
         },
         pending_control_deliveries: checked_count(operational_counts.0)?,
-        pending_anonymous_deliveries: checked_count(operational_counts.1)?,
-        receiving_authority_bootstraps: checked_count(operational_counts.2)?,
-        rejected_authority_bootstraps: checked_count(operational_counts.3)?,
-        receiving_participant_bootstraps: checked_count(operational_counts.4)?,
-        rejected_participant_bootstraps: checked_count(operational_counts.5)?,
-        pending_invitations: checked_count(operational_counts.6)?,
-        unacknowledged_consensus_evidence: checked_count(operational_counts.7)?,
+        pending_recovery_deliveries: checked_count(operational_counts.1)?,
+        pending_anonymous_deliveries: checked_count(operational_counts.2)?,
+        receiving_authority_bootstraps: checked_count(operational_counts.3)?,
+        rejected_authority_bootstraps: checked_count(operational_counts.4)?,
+        receiving_participant_bootstraps: checked_count(operational_counts.5)?,
+        rejected_participant_bootstraps: checked_count(operational_counts.6)?,
+        pending_invitations: checked_count(operational_counts.7)?,
+        unacknowledged_consensus_evidence: checked_count(operational_counts.8)?,
     })
     .into_response())
 }
@@ -233,6 +263,28 @@ pub(crate) async fn conversation(
     .bind(row.incarnation)
     .fetch_one(&state.pool)
     .await?;
+    let incarnation_rows: Vec<(i64, String, String, String, i32, i64, i64, Option<String>)> =
+        sqlx::query_as(
+            "SELECT incarnation, status, genesis_hash, roster_commitment,
+                    member_count, last_finalized_height, last_finalized_epoch,
+                    last_block_hash
+             FROM chat_mls_incarnations
+             WHERE conversation_id = $1
+             ORDER BY incarnation",
+        )
+        .bind(conversation_id)
+        .fetch_all(&state.pool)
+        .await?;
+    let recovery_rows: Vec<(String, i64, i64, String, Value, OffsetDateTime)> = sqlx::query_as(
+        "SELECT recovery_digest, previous_incarnation, new_incarnation,
+                    origin_domain, recovery, created_at
+             FROM chat_mls_incarnation_recoveries
+             WHERE conversation_id = $1
+             ORDER BY previous_incarnation",
+    )
+    .bind(conversation_id)
+    .fetch_all(&state.pool)
+    .await?;
     let evidence_rows: Vec<(String, String, OffsetDateTime, Option<OffsetDateTime>)> =
         sqlx::query_as(
             "SELECT evidence_digest, failure_class, detected_at, acknowledged_at
@@ -286,6 +338,65 @@ pub(crate) async fn conversation(
             removed: checked_count(member_counts.3)?,
         },
         pending_control_deliveries: checked_count(pending_control)?,
+        incarnation_history: incarnation_rows
+            .into_iter()
+            .map(
+                |(
+                    incarnation,
+                    status,
+                    genesis_hash,
+                    roster_commitment,
+                    member_count,
+                    last_finalized_height,
+                    last_finalized_epoch,
+                    last_block_hash,
+                )| {
+                    Ok(AdminMlsIncarnationV1 {
+                        incarnation: checked_u64(incarnation, "incarnation history")?,
+                        status,
+                        genesis_hash,
+                        roster_commitment,
+                        member_count: u32::try_from(member_count).map_err(|_| {
+                            AppError::internal("stored MLS history member count is invalid")
+                        })?,
+                        last_finalized_height: checked_u64(
+                            last_finalized_height,
+                            "history finalized height",
+                        )?,
+                        last_finalized_epoch: checked_u64(
+                            last_finalized_epoch,
+                            "history finalized epoch",
+                        )?,
+                        last_block_hash,
+                    })
+                },
+            )
+            .collect::<AppResult<Vec<_>>>()?,
+        recoveries: recovery_rows
+            .into_iter()
+            .map(
+                |(
+                    recovery_digest,
+                    previous_incarnation,
+                    new_incarnation,
+                    origin_domain,
+                    recovery,
+                    created_at,
+                )| {
+                    Ok(AdminMlsRecoveryV1 {
+                        recovery_digest,
+                        previous_incarnation: checked_u64(
+                            previous_incarnation,
+                            "recovery previous incarnation",
+                        )?,
+                        new_incarnation: checked_u64(new_incarnation, "recovery new incarnation")?,
+                        origin_domain,
+                        recovery,
+                        created_at: created_at.unix_timestamp(),
+                    })
+                },
+            )
+            .collect::<AppResult<Vec<_>>>()?,
         consensus_evidence: evidence_rows
             .into_iter()
             .map(

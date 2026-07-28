@@ -13,11 +13,12 @@ use base64::Engine as _;
 use kutup_chat_proto::{
     AnonymousMlsDeviceEnvelopeV1, ChatProfileResponse, CommitMlsControlBlockResponseV1,
     DeviceListMismatch, DeviceManifest, MailboxPage, MlsClientControlHistoryPageV1,
-    MlsControlActionTypeV1, MlsConversationMemberV1, MlsOrderingQuorumCertificateV1,
-    MlsOrderingServicePolicyV1, MlsOwnerSetV1, OwnChatProfileResponse, PreKeyCountResponse,
-    PublishManifestResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
-    RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest,
-    TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
+    MlsControlActionTypeV1, MlsConversationMemberV1, MlsIncarnationRecoveryV1,
+    MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1, MlsOwnerSetV1,
+    OwnChatProfileResponse, PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest,
+    RecoverMlsConversationResponseV1, RegisterChatDeviceRequest, RegisterChatDeviceResponse,
+    ReplenishKeysRequest, SendMessagesRequest, TransparencyCheckpointResponse,
+    UserPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::TryRngCore as _;
@@ -1250,6 +1251,84 @@ impl WasmChatClient {
         to_output(&finalized)
     }
 
+    #[wasm_bindgen(js_name = prepareMlsGroupRecovery)]
+    pub async fn prepare_mls_group_recovery(
+        &self,
+        mls_group_id: Vec<u8>,
+        new_mls_group_id: Vec<u8>,
+        proposal_id: String,
+        authority_policies: JsValue,
+        additions: JsValue,
+        created_at_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let proposal_id = uuid::Uuid::parse_str(&proposal_id)
+            .map_err(|_| js_error("MLS recovery proposal id must be a UUID"))?;
+        let policies: Vec<MlsOrderingServicePolicyV1> =
+            from_transport(authority_policies).map_err(chat_error)?;
+        let additions: Vec<VerifiedMlsKeyPackage> =
+            from_transport(additions).map_err(chat_error)?;
+        let prepared = self
+            .mls_client()
+            .prepare_group_recovery(
+                &mls_group_id,
+                &new_mls_group_id,
+                proposal_id,
+                &policies,
+                &additions,
+                parse_i64_string("MLS recovery clock", &created_at_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&prepared)
+    }
+
+    #[wasm_bindgen(js_name = pendingMlsRecoveries)]
+    pub async fn pending_mls_recoveries(&self) -> std::result::Result<JsValue, JsValue> {
+        let pending = self
+            .mls_client()
+            .pending_recoveries()
+            .await
+            .map_err(chat_error)?;
+        to_output(&pending)
+    }
+
+    #[wasm_bindgen(js_name = localMlsIncarnationHistory)]
+    pub async fn local_mls_incarnation_history(&self) -> std::result::Result<JsValue, JsValue> {
+        let history = self
+            .mls_client()
+            .local_incarnation_history()
+            .await
+            .map_err(chat_error)?;
+        to_output(&history)
+    }
+
+    #[wasm_bindgen(js_name = mlsRecoveryHasOwnerQuorum)]
+    pub async fn mls_recovery_has_owner_quorum(
+        &self,
+        mls_group_id: Vec<u8>,
+    ) -> std::result::Result<bool, JsValue> {
+        self.mls_client()
+            .recovery_has_owner_quorum(&mls_group_id)
+            .await
+            .map_err(chat_error)
+    }
+
+    #[wasm_bindgen(js_name = finalizeMlsGroupRecovery)]
+    pub async fn finalize_mls_group_recovery(
+        &self,
+        mls_group_id: Vec<u8>,
+        acknowledgement: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let acknowledgement: RecoverMlsConversationResponseV1 =
+            from_transport(acknowledgement).map_err(chat_error)?;
+        let finalized = self
+            .mls_client()
+            .finalize_group_recovery(&mls_group_id, &acknowledgement)
+            .await
+            .map_err(chat_error)?;
+        to_output(&finalized)
+    }
+
     #[wasm_bindgen(js_name = pendingMlsCommit)]
     pub async fn pending_mls_commit(
         &self,
@@ -1320,6 +1399,44 @@ impl WasmChatClient {
                 &welcome,
                 &expected,
                 &history_pages,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&joined)
+    }
+
+    #[wasm_bindgen(js_name = joinMlsFromRecoveryWelcome)]
+    pub async fn join_mls_from_recovery_welcome(
+        &self,
+        envelope_id: String,
+        cursor: String,
+        send_id: String,
+        mls_group_id: Vec<u8>,
+        welcome: Vec<u8>,
+        expected_members: JsValue,
+        recovery: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let envelope_id = uuid::Uuid::parse_str(&envelope_id)
+            .map_err(|_| js_error("MLS mailbox envelope id must be a UUID"))?;
+        let send_id = uuid::Uuid::parse_str(&send_id)
+            .map_err(|_| js_error("MLS mailbox send id must be a UUID"))?;
+        let envelope = MlsControlEnvelopeContext {
+            envelope_id,
+            cursor,
+            send_id,
+        };
+        let expected: Vec<VerifiedMlsCredential> =
+            from_transport(expected_members).map_err(chat_error)?;
+        let recovery: MlsIncarnationRecoveryV1 =
+            from_transport(recovery).map_err(chat_error)?;
+        let joined = self
+            .mls_client()
+            .join_from_recovery_welcome(
+                &envelope,
+                &mls_group_id,
+                &welcome,
+                &expected,
+                &recovery,
             )
             .await
             .map_err(chat_error)?;

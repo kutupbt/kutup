@@ -53,12 +53,14 @@ impl MlsClient {
             pending_authority_changes: BTreeMap::new(),
             pending_owner_changes: BTreeMap::new(),
             pending_closes: BTreeMap::new(),
+            pending_recoveries: BTreeMap::new(),
             owner_approval_requests: BTreeMap::new(),
             group_control_private_keys: BTreeMap::new(),
             group_owner_private_keys: BTreeMap::new(),
             group_owner_candidate_private_keys: BTreeMap::new(),
             owner_candidates: BTreeMap::new(),
             conversations: BTreeMap::new(),
+            incarnation_history: BTreeMap::new(),
             processed_control_envelopes: BTreeMap::new(),
         };
         let state = snapshot_provider(&provider, &metadata)?;

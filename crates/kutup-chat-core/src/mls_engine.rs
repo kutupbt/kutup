@@ -17,6 +17,7 @@ mod lifecycle;
 mod membership;
 mod owner_approval;
 mod ownership;
+mod recovery;
 mod state;
 mod validation;
 mod welcome;
@@ -29,6 +30,7 @@ pub use governance::{
 use membership::*;
 pub use owner_approval::PendingMlsOwnerApprovalRequest;
 pub use ownership::{FinalizedMlsOwnerChange, PendingMlsOwnerChange, PreparedMlsOwnerChange};
+pub use recovery::{FinalizedMlsRecovery, PendingMlsRecovery, PreparedMlsRecovery};
 use state::{provider_from_snapshot, snapshot_provider, KutupMlsProvider, SnapshotMetadata};
 use validation::*;
 
@@ -69,11 +71,12 @@ use kutup_chat_proto::{
     MlsMembershipDeliveryCommitmentV1, MlsMembershipDeliveryV1, MlsMembershipEnvelopeKindV1,
     MlsMembershipEnvelopeV1, MlsMembershipTransitionV1, MlsOrderingQuorumCertificateV1,
     MlsOrderingServicePolicyV1, MlsOwnerCandidateV1, MlsOwnerSetV1, MlsOwnerV1,
-    MlsPrivateControlStateV1, MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256,
-    MLS_PRIVATE_CONTROL_EXTENSION_TYPE, MLS_PROTOCOL_VERSION,
+    MlsPrivateControlStateV1, RecoverMlsConversationRequestV1, RecoverMlsConversationResponseV1,
+    MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256, MLS_PRIVATE_CONTROL_EXTENSION_TYPE,
+    MLS_PROTOCOL_VERSION,
 };
 
-const STATE_FORMAT_VERSION: u16 = 8;
+const STATE_FORMAT_VERSION: u16 = 9;
 const MAX_STATE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_STATE_RECORDS: usize = 100_000;
 const MAX_STATE_RECORD_BYTES: usize = 16 * 1024 * 1024;
@@ -137,6 +140,7 @@ pub struct MlsGroupOwnerCredential {
 pub enum LocalMlsConversationStatus {
     PendingGenesis,
     Active,
+    ReadOnly,
     Closed,
 }
 
@@ -149,6 +153,10 @@ pub struct LocalMlsConversationRecord {
     pub status: LocalMlsConversationStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server_genesis_hash: Option<String>,
+    /// Present only for append-only recovered incarnations and bound to the
+    /// owner-approved recovery statement that created this genesis.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery_digest: Option<String>,
     pub last_finalized_height: u64,
     pub last_finalized_epoch: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -539,7 +547,8 @@ fn genesis_private_control_state(
         incarnation: record.request.genesis.incarnation,
         proposal_id: None,
         height: 0,
-        epoch: 0,
+        initial_epoch: record.request.genesis.initial_epoch,
+        epoch: record.request.genesis.initial_epoch,
         previous_block_hash: None,
         genesis_roster: record.request.members.clone(),
         genesis_authority_set: record.request.genesis.authority_set.clone(),

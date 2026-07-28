@@ -9,9 +9,12 @@ import type {
   FinalizedMlsClose,
   FinalizedMlsMembershipChange,
   FinalizedMlsOwnerChange,
+  FinalizedMlsRecovery,
+  JoinedMlsConversation,
   LocalMlsConversationRecord,
   LocalMlsGroupState,
   MlsConversationMember,
+  MlsIncarnationRecovery,
   MlsMailboxEnvelope,
   MlsOwnerCandidate,
   MlsOutboxEntry,
@@ -21,9 +24,11 @@ import type {
   PendingMlsMembershipChange,
   PendingMlsOwnerApprovalRequest,
   PendingMlsOwnerChange,
+  PendingMlsRecovery,
   PendingMlsInvitation,
   PreparedMlsGroupGenesis,
   VerifiedMlsCredential,
+  VerifiedMlsKeyPackage,
   WasmChatClientHandle,
 } from './types'
 import {
@@ -448,6 +453,101 @@ export class MlsConversationService {
     return finalized
   }
 
+  /**
+   * Replace an unavailable group incarnation using the current owners rather
+   * than the old ordering quorum. The account roster and owner set are fixed;
+   * only the authenticated ordering-authority subset may be selected.
+   */
+  async recoverConversation(
+    conversationId: string,
+    authorityDomains?: string[],
+  ): Promise<FinalizedMlsRecovery | null> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const domains = requireAuthorityDomains(
+      authorityDomains
+      ?? conversation.currentAuthoritySet.authorities.map(authority => authority.domain),
+    )
+    const policies: unknown[] = []
+    for (const domain of domains) {
+      policies.push(await this.withCryptoLock(() =>
+        this.client.fetchVerifiedMlsOrderingPolicy(domain)))
+    }
+    const self = requireCanonicalAddress(this.selfAddress)
+    const selfCanonical = canonicalAccountAddress(self)
+    const additions: VerifiedMlsKeyPackage[] = []
+    const now = String(Math.floor(Date.now() / 1000))
+    for (const member of conversation.currentRoster) {
+      const canonical = canonicalAccountAddress(requireCanonicalAddress(member.address))
+      const packages = await this.withCryptoLock(() =>
+        this.client.fetchVerifiedIdentifiedMlsKeyPackages(
+          member.address,
+          conversationId,
+          String(conversation.request.genesis.incarnation),
+          now,
+        ))
+      if (!Array.isArray(packages) || packages.length < 1 || packages.length > 32) {
+        throw new Error('recovery KeyPackage claim returned an invalid device set')
+      }
+      let retained = 0
+      for (const keyPackage of packages) {
+        validateVerifiedKeyPackage(keyPackage, canonical)
+        if (canonical === selfCanonical && keyPackage.wire.deviceId === this.deviceId) continue
+        additions.push(keyPackage)
+        retained += 1
+      }
+      if (canonical !== selfCanonical && retained === 0) {
+        throw new Error('recovery omitted every device for a preserved member')
+      }
+    }
+    const browserCrypto = requireBrowserCrypto()
+    const oldGroupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const newGroupId = browserCrypto.getRandomValues(new Uint8Array(32))
+    const prepared = await this.withCryptoLock(() =>
+      this.client.prepareMlsGroupRecovery(
+        oldGroupId,
+        newGroupId,
+        browserCrypto.randomUUID(),
+        policies,
+        additions,
+        now,
+      ))
+    validatePendingRecovery(prepared.control, oldGroupId, newGroupId)
+    if (!await this.withCryptoLock(() =>
+      this.client.mlsRecoveryHasOwnerQuorum(oldGroupId))) {
+      await this.publishOwnerApprovalRequest(oldGroupId)
+      return null
+    }
+    const finalized = await this.publishPendingRecovery(prepared.control)
+    await this.publishCurrentDeliveryCapability(finalized.conversation)
+    return finalized
+  }
+
+  async reconcilePendingRecoveries(): Promise<FinalizedMlsRecovery[]> {
+    const pending = await this.withCryptoLock(() => this.client.pendingMlsRecoveries())
+    const finalized: FinalizedMlsRecovery[] = []
+    for (const control of pending) {
+      const oldGroupId = Uint8Array.from(control.mlsGroupId)
+      validatePendingRecovery(
+        control,
+        oldGroupId,
+        Uint8Array.from(control.newMlsGroupId),
+      )
+      if (!await this.withCryptoLock(() =>
+        this.client.mlsRecoveryHasOwnerQuorum(oldGroupId))) {
+        await this.publishOwnerApprovalRequest(oldGroupId)
+        continue
+      }
+      const result = await this.publishPendingRecovery(control)
+      await this.publishCurrentDeliveryCapability(result.conversation)
+      finalized.push(result)
+    }
+    return finalized
+  }
+
   async ownerCandidates(conversationId: string): Promise<MlsOwnerCandidate[]> {
     const conversation = await this.requireActiveConversation(conversationId)
     const groupId = decodeCanonicalBase64(
@@ -851,6 +951,72 @@ export class MlsConversationService {
     return applied
   }
 
+  /** Apply owner-signed next-incarnation Welcomes before ordinary commits. */
+  async reconcileInboundRecoveries(): Promise<JoinedMlsConversation[]> {
+    const records = await this.withCryptoLock(() => this.client.localMlsConversations())
+    const joined: JoinedMlsConversation[] = []
+    for (const envelope of await this.allMembershipEnvelopes()) {
+      const receipt = await this.withCryptoLock(() =>
+        this.client.processedMlsControlEnvelope(envelope.id))
+      if (receipt) continue
+      const previous = records.find(record =>
+        record.status === 'active'
+        && record.request.genesis.conversationId === envelope.conversationId
+        && record.request.genesis.incarnation + 1 === envelope.incarnation)
+      if (!previous) continue
+      const recovery = await this.transport.fetchMlsRecovery(
+        envelope.conversationId!,
+        envelope.incarnation!,
+      )
+      validateRecoveryStatement(recovery, previous, envelope)
+      const groupId = decodeCanonicalBase64(
+        recovery.plan.newGenesis.mlsGroupId,
+        16,
+        255,
+      )
+      const welcome = decodeCanonicalBase64(envelope.opaqueEnvelope, 1, 1024 * 1024)
+      const inspection = await this.withCryptoLock(() =>
+        this.client.inspectMlsWelcome(groupId, welcome))
+      if (
+        inspection.epoch !== 1
+        || !equalBytes(inspection.mlsGroupId, groupId)
+        || inspection.privateControlState.conversationId !== envelope.conversationId
+        || inspection.privateControlState.incarnation !== envelope.incarnation
+        || inspection.privateControlState.initialEpoch !== 1
+        || inspection.privateControlState.height !== 0
+        || inspection.privateControlState.epoch !== 1
+      ) {
+        throw new Error('MLS recovery Welcome differs from its signed next incarnation')
+      }
+      const expectedMembers = await this.withCryptoLock(() =>
+        this.client.resolveMlsWelcomeClaims(inspection.claimedMembers))
+      validateResolvedRoster(inspection.claimedMembers, expectedMembers)
+      const result = await this.withCryptoLock(() =>
+        this.client.joinMlsFromRecoveryWelcome(
+          envelope.id,
+          envelope.cursor,
+          envelope.sendId,
+          groupId,
+          welcome,
+          expectedMembers,
+          recovery,
+        ))
+      if (
+        result.group.epoch !== 1
+        || result.conversation.status !== 'active'
+        || result.conversation.request.genesis.conversationId !== envelope.conversationId
+        || result.conversation.request.genesis.incarnation !== envelope.incarnation
+        || result.conversation.recoveryDigest === undefined
+      ) {
+        throw new Error('durable MLS recovery differs from its signed statement')
+      }
+      await this.publishCurrentDeliveryCapability(result.conversation)
+      await this.transport.ackMlsMailbox(this.deviceId, [envelope.id])
+      joined.push(result)
+    }
+    return joined
+  }
+
   async reconcileInboundApplicationMessages(): Promise<AppliedInboundMlsApplication[]> {
     const recipient = requireCanonicalAddress(this.selfAddress)
     const applied: AppliedInboundMlsApplication[] = []
@@ -914,11 +1080,14 @@ export class MlsConversationService {
     await this.reconcilePendingAuthorityChanges()
     await this.reconcilePendingOwnerChanges()
     await this.reconcilePendingCloses()
+    await this.reconcilePendingRecoveries()
+    await this.reconcileInboundRecoveries()
     await this.reconcileInboundMembershipCommits()
     await this.reconcilePendingApplicationMessages()
     await this.reconcileInboundApplicationMessages()
     await this.reconcilePendingOwnerChanges()
     await this.reconcilePendingCloses()
+    await this.reconcilePendingRecoveries()
   }
 
   /**
@@ -1348,6 +1517,35 @@ export class MlsConversationService {
     }
     return finalized
   }
+
+  private async publishPendingRecovery(
+    control: PendingMlsRecovery,
+  ): Promise<FinalizedMlsRecovery> {
+    const oldGroupId = Uint8Array.from(control.mlsGroupId)
+    validatePendingRecovery(
+      control,
+      oldGroupId,
+      Uint8Array.from(control.newMlsGroupId),
+    )
+    const acknowledgement = requireRecoveryResponse(
+      await this.transport.recoverMlsConversation(control.request),
+      control,
+    )
+    const finalized = await this.withCryptoLock(() =>
+      this.client.finalizeMlsGroupRecovery(oldGroupId, acknowledgement))
+    if (
+      finalized.group.epoch !== 1
+      || finalized.conversation.status !== 'active'
+      || finalized.conversation.request.genesis.incarnation !== acknowledgement.incarnation
+      || finalized.conversation.recoveryDigest !== acknowledgement.recoveryDigest
+      || finalized.archivedIncarnation.status !== 'read_only'
+      || finalized.archivedIncarnation.request.genesis.incarnation
+        !== acknowledgement.previousIncarnation
+    ) {
+      throw new Error('durable MLS recovery differs from its server acknowledgement')
+    }
+    return finalized
+  }
 }
 
 interface BrowserCrypto {
@@ -1407,15 +1605,18 @@ function validatePreparedGenesis(
 
 function validateLocalGenesisRecord(record: LocalMlsConversationRecord): void {
   const genesis = record?.request?.genesis
+  const recovered = (genesis?.incarnation ?? 0) > 1
   if (
     !genesis
     || !isUuid(genesis.conversationId)
     || genesis.protocolVersion !== MLS_PROTOCOL_VERSION
-    || genesis.incarnation !== 1
+    || !Number.isSafeInteger(genesis.incarnation)
+    || genesis.incarnation < 1
     || genesis.kind !== 'group'
-    || genesis.initialEpoch !== 0
-    || genesis.memberCount !== 1
-    || record.request.members.length !== 1
+    || genesis.initialEpoch !== (recovered ? 1 : 0)
+    || genesis.memberCount !== record.request.members.length
+    || genesis.memberCount < 1
+    || genesis.memberCount > 1000
     || !Number.isSafeInteger(record.lastFinalizedHeight)
     || record.lastFinalizedHeight < 0
     || !Number.isSafeInteger(record.lastFinalizedEpoch)
@@ -1426,22 +1627,123 @@ function validateLocalGenesisRecord(record: LocalMlsConversationRecord): void {
     || record.currentOwnerSet.owners.length < 1
     || (
       record.lastFinalizedHeight === 0
-      && (record.lastFinalizedEpoch !== 0 || record.lastBlockHash !== undefined)
+      && (
+        record.lastFinalizedEpoch !== genesis.initialEpoch
+        || record.lastBlockHash !== undefined
+      )
     )
     || (
       record.lastFinalizedHeight > 0
       && !isSha256(record.lastBlockHash)
     )
-    || !['pending_genesis', 'active', 'closed'].includes(record.status)
-    || (record.status === 'pending_genesis' && record.serverGenesisHash !== undefined)
+    || record.lastFinalizedEpoch !== genesis.initialEpoch + record.lastFinalizedHeight
+    || !['pending_genesis', 'active', 'read_only', 'closed'].includes(record.status)
     || (
-      (record.status === 'active' || record.status === 'closed')
+      record.status === 'pending_genesis'
+      && (recovered || record.serverGenesisHash !== undefined)
+    )
+    || (
+      (record.status === 'active' || record.status === 'read_only' || record.status === 'closed')
       && !isSha256(record.serverGenesisHash)
     )
+    || (recovered !== isSha256(record.recoveryDigest))
   ) {
     throw new Error('invalid durable MLS group genesis record')
   }
   decodeCanonicalBase64(genesis.mlsGroupId, 16, 255)
+}
+
+function validateVerifiedKeyPackage(
+  keyPackage: VerifiedMlsKeyPackage,
+  expectedAccount: string,
+): void {
+  if (
+    !keyPackage
+    || !Number.isSafeInteger(keyPackage.wire?.deviceId)
+    || keyPackage.wire.deviceId < 1
+    || keyPackage.wire.deviceId > 127
+    || keyPackage.credential?.credentialIdentity
+      !== `${expectedAccount}#${keyPackage.wire.deviceId}`
+    || keyPackage.credential.credentialPublicKey.length !== 65
+  ) {
+    throw new Error('transparency-verified recovery KeyPackage has an invalid device binding')
+  }
+}
+
+function validatePendingRecovery(
+  control: PendingMlsRecovery,
+  expectedOldGroupId: Uint8Array,
+  expectedNewGroupId: Uint8Array,
+): void {
+  const plan = control?.request?.recovery?.plan
+  const genesis = plan?.newGenesis
+  if (
+    !control
+    || !equalBytes(control.mlsGroupId, expectedOldGroupId)
+    || !equalBytes(control.newMlsGroupId, expectedNewGroupId)
+    || equalBytes(control.mlsGroupId, Uint8Array.from(control.newMlsGroupId))
+    || !isSha256(control.commitHash)
+    || !plan
+    || plan.protocolVersion !== MLS_PROTOCOL_VERSION
+    || !isUuid(plan.conversationId)
+    || !isUuid(plan.proposalId)
+    || !Number.isSafeInteger(plan.previousIncarnation)
+    || plan.previousIncarnation < 1
+    || genesis?.conversationId !== plan.conversationId
+    || genesis.incarnation !== plan.previousIncarnation + 1
+    || genesis.initialEpoch !== 1
+    || genesis.mlsGroupId !== encodeBase64(expectedNewGroupId)
+    || genesis.memberCount !== control.request.members.length
+    || control.request.members.length < 1
+    || control.request.members.length > 1000
+    || !Array.isArray(control.request.deliveries)
+    || control.request.deliveries.length !== plan.participantDomains.length
+    || !Array.isArray(plan.deliveries)
+    || plan.deliveries.length !== plan.participantDomains.length
+  ) {
+    throw new Error('invalid durable MLS incarnation recovery')
+  }
+}
+
+function validateRecoveryStatement(
+  recovery: MlsIncarnationRecovery,
+  previous: LocalMlsConversationRecord,
+  envelope: MlsMailboxEnvelope,
+): void {
+  const plan = recovery?.plan
+  if (
+    !plan
+    || plan.protocolVersion !== MLS_PROTOCOL_VERSION
+    || plan.conversationId !== previous.request.genesis.conversationId
+    || plan.conversationId !== envelope.conversationId
+    || plan.previousIncarnation !== previous.request.genesis.incarnation
+    || plan.newGenesis.incarnation !== envelope.incarnation
+    || plan.newGenesis.incarnation !== plan.previousIncarnation + 1
+    || plan.newGenesis.initialEpoch !== 1
+    || plan.newGenesis.memberCount !== previous.currentRoster.length
+    || plan.previousHeight !== previous.lastFinalizedHeight
+    || plan.previousEpoch !== previous.lastFinalizedEpoch
+    || plan.previousBlockHash !== previous.lastBlockHash
+  ) {
+    throw new Error('server returned an MLS recovery for a different durable head')
+  }
+  decodeCanonicalBase64(plan.newGenesis.mlsGroupId, 16, 255)
+}
+
+function validateResolvedRoster(
+  claimed: Array<{ credentialIdentity: string; credentialPublicKey: number[] }>,
+  verified: VerifiedMlsCredential[],
+): void {
+  if (
+    verified.length !== claimed.length
+    || verified.some((member, index) => {
+      const claim = claimed[index]
+      return member.credentialIdentity !== claim.credentialIdentity
+        || !equalBytes(member.credentialPublicKey, Uint8Array.from(claim.credentialPublicKey))
+    })
+  ) {
+    throw new Error('shared verifier returned a roster different from the inspected MLS state')
+  }
 }
 
 function validatePendingMembershipChange(
@@ -1599,6 +1901,42 @@ function requireControlBlockResponse(
     epoch: number
     blockHash: string
     idempotent: boolean
+  }
+}
+
+function requireRecoveryResponse(
+  value: unknown,
+  control: PendingMlsRecovery,
+): {
+  conversationId: string
+  previousIncarnation: number
+  incarnation: number
+  recoveryDigest: string
+  status: 'active'
+} {
+  const plan = control.request.recovery.plan
+  if (
+    typeof value !== 'object'
+    || value === null
+    || !('conversationId' in value)
+    || value.conversationId !== plan.conversationId
+    || !('previousIncarnation' in value)
+    || value.previousIncarnation !== plan.previousIncarnation
+    || !('incarnation' in value)
+    || value.incarnation !== plan.newGenesis.incarnation
+    || !('recoveryDigest' in value)
+    || !isSha256(value.recoveryDigest)
+    || !('status' in value)
+    || value.status !== 'active'
+  ) {
+    throw new Error('server returned an invalid MLS recovery acknowledgement')
+  }
+  return value as {
+    conversationId: string
+    previousIncarnation: number
+    incarnation: number
+    recoveryDigest: string
+    status: 'active'
   }
 }
 

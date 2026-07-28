@@ -118,6 +118,7 @@ impl MlsClient {
             request,
             status: LocalMlsConversationStatus::PendingGenesis,
             server_genesis_hash: None,
+            recovery_digest: None,
         };
         let private_control_state = genesis_private_control_state(&conversation)?;
         let signer = metadata.read_signer(&provider)?;
@@ -258,6 +259,7 @@ impl MlsClient {
             incarnation: 1,
             proposal_id: None,
             height: 0,
+            initial_epoch: 0,
             epoch: 0,
             previous_block_hash: None,
             genesis_roster: vec![MlsConversationMemberV1 {

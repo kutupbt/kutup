@@ -270,6 +270,7 @@ impl MlsClient {
             request,
             status: LocalMlsConversationStatus::Active,
             server_genesis_hash: Some(server_genesis_hash),
+            recovery_digest: None,
             last_finalized_height: private_control.height,
             last_finalized_epoch: private_control.epoch,
             last_block_hash,

@@ -44,6 +44,8 @@ pub use control::*;
 mod bootstrap;
 pub use bootstrap::*;
 use bootstrap::{replay_mls_control_history, validate_participant_domain_set};
+mod recovery;
+pub use recovery::*;
 mod delivery;
 pub use delivery::*;
 

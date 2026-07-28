@@ -1111,9 +1111,7 @@ impl Engine {
                 let anonymous_delivery_public_key = STANDARD
                     .decode(&binding.anonymous_delivery_public_key)
                     .map_err(|_| {
-                        ChatError::Trust(
-                            "manifest MLS anonymous-delivery key is not base64".into(),
-                        )
+                        ChatError::Trust("manifest MLS anonymous-delivery key is not base64".into())
                     })?;
                 let verified = crate::VerifiedMlsKeyPackage {
                     wire,

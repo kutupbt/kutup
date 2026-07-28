@@ -959,9 +959,13 @@ destinations.
    bidirectional messages, reload persistence, owner/authority rotation, and
    restart-safe manual owner approval. Owner-approved terminal closure now also
    survives requester/approver and post-close reloads, closes both domains, and
-   retains readable history while blocking sends. Linked-device group state,
-   recovery and suite-policy governance, and the remaining adversarial gates
-   are still unadvertised work.
+   retains readable history while blocking sends. Owner-approved incarnation
+   recovery now has immutable signed evidence, restart-safe federation retry,
+   a dedicated WASM/browser flow, transparency-bound Welcome verification, an
+   explicit owner UI, and a passing two-server requester/approver restart gate
+   with post-recovery delivery and reload persistence. Linked-device group
+   state, suite-policy governance, and the remaining adversarial gates are
+   still unadvertised work.
 3. **`kutup-chat-core`**: engine skeleton (transport/db ports, event stream,
    durable outbox with `sendId`, decrypt→persist→ack ordering, 409 recovery) —
    the artifact the Android/iOS clients link. **✅ Done** (branch

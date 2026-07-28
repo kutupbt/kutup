@@ -238,6 +238,434 @@ fn group_genesis_owner_and_exact_retry_survive_restart() {
 }
 
 #[test]
+fn owner_recovery_survives_restart_and_archives_the_previous_incarnation() {
+    futures_executor::block_on(async {
+        let path = std::env::temp_dir().join(format!(
+            "kutup-openmls-recovery-{}.db",
+            crate::clock::unix_millis()
+        ));
+        let db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
+        let client = MlsClient::new(db.clone());
+        client.initialize("alice@example.test#1").await.unwrap();
+        let conversation_id = Uuid::from_u128(0x831);
+        let group_id = b"recovery-group-01";
+        let new_group_id = b"recovery-group-02";
+        let policy = ordering_policy("alpha.example", 41);
+        let prepared = client
+            .prepare_group_genesis(
+                conversation_id,
+                group_id,
+                "alice@example.test".parse().unwrap(),
+                std::slice::from_ref(&policy),
+                1_700_002_000,
+            )
+            .await
+            .unwrap();
+        let genesis_hash = prepared
+            .conversation
+            .request
+            .genesis
+            .genesis_hash()
+            .unwrap();
+        client
+            .mark_group_genesis_published(conversation_id, &genesis_hash)
+            .await
+            .unwrap();
+        let recovery = client
+            .prepare_group_recovery(
+                group_id,
+                new_group_id,
+                Uuid::from_u128(0x832),
+                &[policy],
+                &[],
+                1_700_002_001,
+            )
+            .await
+            .unwrap();
+        assert_eq!(recovery.pending.epoch_before, 0);
+        assert_eq!(recovery.pending.epoch_after, 1);
+        assert!(recovery.pending.welcome.is_none());
+        assert_eq!(
+            recovery.control.request.recovery.plan.previous_genesis_hash,
+            genesis_hash
+        );
+        assert_eq!(
+            recovery
+                .control
+                .request
+                .recovery
+                .plan
+                .new_genesis
+                .incarnation,
+            2
+        );
+        assert!(client.recovery_has_owner_quorum(group_id).await.unwrap());
+
+        drop(client);
+        drop(db);
+        let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
+        let client = MlsClient::new(reopened.clone());
+        client.initialize("alice@example.test#1").await.unwrap();
+        assert_eq!(
+            client.pending_recoveries().await.unwrap(),
+            vec![recovery.control.clone()]
+        );
+        let recovery_digest = recovery
+            .control
+            .request
+            .recovery
+            .plan
+            .transition_digest()
+            .unwrap();
+        assert!(client
+            .finalize_group_recovery(
+                group_id,
+                &RecoverMlsConversationResponseV1 {
+                    conversation_id,
+                    previous_incarnation: 1,
+                    incarnation: 2,
+                    recovery_digest: "00".repeat(32),
+                    status: "active".into(),
+                },
+            )
+            .await
+            .is_err());
+        let finalized = client
+            .finalize_group_recovery(
+                group_id,
+                &RecoverMlsConversationResponseV1 {
+                    conversation_id,
+                    previous_incarnation: 1,
+                    incarnation: 2,
+                    recovery_digest,
+                    status: "active".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(finalized.group.mls_group_id, new_group_id);
+        assert_eq!(finalized.group.epoch, 1);
+        assert_eq!(finalized.conversation.request.genesis.incarnation, 2);
+        assert_eq!(
+            finalized.archived_incarnation.status,
+            LocalMlsConversationStatus::ReadOnly
+        );
+        assert!(client.pending_recoveries().await.unwrap().is_empty());
+        assert_eq!(
+            client.local_incarnation_history().await.unwrap(),
+            vec![finalized.archived_incarnation.clone()]
+        );
+        assert!(client
+            .create_text_application_message(
+                &Uuid::from_u128(0x833).to_string(),
+                conversation_id,
+                1,
+                group_id,
+                "1700002002",
+                "must not use old incarnation",
+                1_700_002_002_000,
+            )
+            .await
+            .is_err());
+
+        drop(client);
+        drop(reopened);
+        let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
+        let client = MlsClient::new(reopened.clone());
+        client.initialize("alice@example.test#1").await.unwrap();
+        assert_eq!(client.local_conversations().await.unwrap().len(), 1);
+        assert_eq!(
+            client.local_conversations().await.unwrap()[0]
+                .request
+                .genesis
+                .incarnation,
+            2
+        );
+        assert_eq!(client.local_incarnation_history().await.unwrap().len(), 1);
+        drop(client);
+        drop(reopened);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    });
+}
+
+#[test]
+fn recipient_verifies_and_joins_owner_signed_recovery_welcome() {
+    futures_executor::block_on(async {
+        let alice_db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open_in_memory().unwrap());
+        let bob_db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open_in_memory().unwrap());
+        let alice = MlsClient::new(alice_db);
+        let bob = MlsClient::new(bob_db);
+        let alice_public = alice.initialize("alice@alpha.example#1").await.unwrap();
+        let bob_public = bob.initialize("bobby@beta.example#1").await.unwrap();
+        let now = crate::clock::unix_millis() / 1000;
+        let conversation_id = Uuid::from_u128(0x841);
+        let group_id = b"recovery-live-01";
+        let new_group_id = b"recovery-live-02";
+        let policy = ordering_policy("authority.example", 51);
+        let bob_package = bob
+            .generate_key_package(1, 1, now, now + 86_400)
+            .await
+            .unwrap();
+        let verified_bob = VerifiedMlsKeyPackage {
+            wire: bob_package,
+            credential: VerifiedMlsCredential::new(
+                "bobby@beta.example#1".into(),
+                bob_public.credential_public_key.clone(),
+            )
+            .unwrap(),
+            anonymous_delivery_public_key: bob_public.anonymous_delivery_public_key.clone(),
+        };
+        let genesis = alice
+            .prepare_group_genesis(
+                conversation_id,
+                group_id,
+                "alice@alpha.example".parse().unwrap(),
+                std::slice::from_ref(&policy),
+                now,
+            )
+            .await
+            .unwrap();
+        let genesis_hash = genesis.conversation.request.genesis.genesis_hash().unwrap();
+        let active = alice
+            .mark_group_genesis_published(conversation_id, &genesis_hash)
+            .await
+            .unwrap();
+        let next_roster = vec![
+            active.current_roster[0].clone(),
+            MlsConversationMemberV1 {
+                address: "bobby@beta.example".parse().unwrap(),
+                is_admin: false,
+                owner_id: None,
+            },
+        ];
+        let prepared = alice
+            .prepare_membership_change(
+                group_id,
+                Uuid::from_u128(0x842),
+                &next_roster,
+                std::slice::from_ref(&verified_bob),
+                now + 1,
+            )
+            .await
+            .unwrap();
+        let block = &prepared.control.vote_request.block;
+        let block_hash = block.block_hash().unwrap();
+        let authority_key = ed25519_dalek::SigningKey::from_bytes(&[51; 32]);
+        let authority = &prepared.control.vote_request.authority_set.authorities[0];
+        let mut vote = kutup_chat_proto::MlsOrderingVoteV1 {
+            conversation_id,
+            incarnation: 1,
+            authority_set_sequence: 1,
+            height: 1,
+            round: 0,
+            vote_type: kutup_chat_proto::MlsOrderingVoteTypeV1::Precommit,
+            block_hash: block_hash.clone(),
+            authority_domain: authority.domain.clone(),
+            authority_key_id: authority.key_id.clone(),
+            signature: String::new(),
+        };
+        vote.signature = BASE64.encode(
+            authority_key
+                .sign(&vote.signing_bytes().unwrap())
+                .to_bytes(),
+        );
+        let ordered = alice
+            .build_membership_commit_request(
+                group_id,
+                MlsOrderingQuorumCertificateV1 {
+                    authority_set_sequence: 1,
+                    height: 1,
+                    round: 0,
+                    block_hash: block_hash.clone(),
+                    votes: vec![vote],
+                },
+            )
+            .await
+            .unwrap();
+        let welcome = prepared
+            .control
+            .deliveries
+            .iter()
+            .find(|delivery| delivery.destination == "beta.example")
+            .unwrap()
+            .envelopes[0]
+            .opaque_message
+            .as_str();
+        let welcome = BASE64.decode(welcome).unwrap();
+        let expected = vec![
+            VerifiedMlsCredential::new(
+                "alice@alpha.example#1".into(),
+                alice_public.credential_public_key.clone(),
+            )
+            .unwrap(),
+            verified_bob.credential.clone(),
+        ];
+        let history = MlsClientControlHistoryPageV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            genesis: genesis.conversation.request.genesis,
+            genesis_participant_domains: vec!["alpha.example".into()],
+            after_height: "0".into(),
+            commits: vec![ordered.clone()],
+            next_height: Some("1".into()),
+        }
+        .canonical_bytes()
+        .unwrap();
+        bob.join_from_welcome_with_control_history(
+            &MlsControlEnvelopeContext {
+                envelope_id: Uuid::from_u128(0x843),
+                cursor: "1".into(),
+                send_id: Uuid::from_u128(0x844),
+            },
+            group_id,
+            &welcome,
+            &expected,
+            &[history],
+        )
+        .await
+        .unwrap();
+        alice
+            .finalize_membership_change(
+                group_id,
+                &CommitMlsControlBlockResponseV1 {
+                    conversation_id,
+                    incarnation: 1,
+                    height: 1,
+                    epoch: 1,
+                    block_hash,
+                    idempotent: false,
+                },
+            )
+            .await
+            .unwrap();
+
+        let fresh_bob_package = bob
+            .generate_key_package(1, 1, now + 2, now + 86_400)
+            .await
+            .unwrap();
+        let fresh_verified_bob = VerifiedMlsKeyPackage {
+            wire: fresh_bob_package,
+            credential: expected[1].clone(),
+            anonymous_delivery_public_key: bob_public.anonymous_delivery_public_key,
+        };
+        let recovery = alice
+            .prepare_group_recovery(
+                group_id,
+                new_group_id,
+                Uuid::from_u128(0x845),
+                std::slice::from_ref(&policy),
+                std::slice::from_ref(&fresh_verified_bob),
+                now + 3,
+            )
+            .await
+            .unwrap();
+        let recovery_welcome = recovery
+            .control
+            .request
+            .deliveries
+            .iter()
+            .find(|delivery| delivery.destination == "beta.example")
+            .unwrap()
+            .envelopes[0]
+            .opaque_message
+            .as_str();
+        let recovery_welcome = BASE64.decode(recovery_welcome).unwrap();
+        let recovery_envelope = MlsControlEnvelopeContext {
+            envelope_id: Uuid::from_u128(0x846),
+            cursor: "2".into(),
+            send_id: Uuid::from_u128(0x847),
+        };
+        let mut forged = recovery.control.request.recovery.clone();
+        forged.plan.previous_genesis_hash = "00".repeat(32);
+        assert!(bob
+            .join_from_recovery_welcome(
+                &recovery_envelope,
+                new_group_id,
+                &recovery_welcome,
+                &expected,
+                &forged,
+            )
+            .await
+            .is_err());
+        assert!(bob.group_state(new_group_id).await.unwrap().is_none());
+
+        let joined = bob
+            .join_from_recovery_welcome(
+                &recovery_envelope,
+                new_group_id,
+                &recovery_welcome,
+                &expected,
+                &recovery.control.request.recovery,
+            )
+            .await
+            .unwrap();
+        assert_eq!(joined.group.epoch, 1);
+        assert_eq!(joined.conversation.request.genesis.incarnation, 2);
+        assert_eq!(joined.conversation.current_roster, next_roster);
+        assert_eq!(bob.local_incarnation_history().await.unwrap().len(), 1);
+        assert_eq!(
+            bob.processed_control_envelope(recovery_envelope.envelope_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .send_id,
+            recovery_envelope.send_id
+        );
+        assert_eq!(
+            bob.join_from_recovery_welcome(
+                &recovery_envelope,
+                new_group_id,
+                &recovery_welcome,
+                &expected,
+                &recovery.control.request.recovery,
+            )
+            .await
+            .unwrap(),
+            joined
+        );
+
+        let recovery_digest = recovery
+            .control
+            .request
+            .recovery
+            .plan
+            .transition_digest()
+            .unwrap();
+        alice
+            .finalize_group_recovery(
+                group_id,
+                &RecoverMlsConversationResponseV1 {
+                    conversation_id,
+                    previous_incarnation: 1,
+                    incarnation: 2,
+                    recovery_digest,
+                    status: "active".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let outbound = alice
+            .create_application_message(
+                "16811fc6-27b8-4f32-81c4-c3888ca60f5f",
+                *conversation_id.as_bytes(),
+                2,
+                new_group_id,
+                b"after recovery",
+                (now + 4) * 1000,
+            )
+            .await
+            .unwrap();
+        let decrypted = bob
+            .decrypt_application_message(new_group_id, &outbound.ciphertext, &expected[0])
+            .await
+            .unwrap();
+        assert_eq!(decrypted.plaintext, b"after recovery");
+        assert_eq!(decrypted.epoch, 1);
+    });
+}
+
+#[test]
 fn authority_change_survives_restart_and_requires_both_exact_quorums() {
     futures_executor::block_on(async {
         fn certificate(

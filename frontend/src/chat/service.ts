@@ -385,6 +385,18 @@ export class ChatService {
     return finalized !== null
   }
 
+  async recoverGroup(
+    conversationId: string,
+    authorityDomains?: string[],
+  ): Promise<boolean> {
+    const finalized = await this.requireMls().recoverConversation(
+      conversationId,
+      authorityDomains,
+    )
+    this.notifyPeers()
+    return finalized !== null
+  }
+
   async maintainPrekeys(): Promise<void> {
     try {
       await this.withLock(() => this.client.maintainPrekeys())

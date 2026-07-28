@@ -53,8 +53,8 @@ pub(crate) async fn get_identified_key_packages(
     let incarnation = i64::try_from(request.incarnation)
         .map_err(|_| AppError::bad_request("MLS incarnation is outside the supported range"))?;
 
-    let is_active_administrator: Option<bool> = sqlx::query_scalar(
-        "SELECT m.is_admin
+    let may_claim_membership_packages: Option<bool> = sqlx::query_scalar(
+        "SELECT (m.is_admin OR m.is_owner)
          FROM chat_mls_local_members m
          JOIN chat_mls_incarnations i
            ON i.conversation_id = m.conversation_id
@@ -72,9 +72,9 @@ pub(crate) async fn get_identified_key_packages(
     .bind(requester_user_id)
     .fetch_optional(&state.pool)
     .await?;
-    if is_active_administrator != Some(true) {
+    if may_claim_membership_packages != Some(true) {
         return Err(AppError::forbidden(
-            "identified MLS KeyPackage claims require an active local administrator",
+            "identified MLS KeyPackage claims require an active local administrator or owner",
         ));
     }
 

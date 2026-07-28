@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use kutup_chat_proto::{
     CommitMlsControlBlockResponseV1, FederatedAnonymousMlsTransactionV1,
-    FederatedMlsControlReplicaV1,
+    FederatedMlsControlReplicaV1, FederatedMlsRecoveryReplicaV1, RecoverMlsConversationResponseV1,
 };
 use kutup_federation_proto::FederationFeature;
 use reqwest::{Method, StatusCode};
@@ -32,8 +32,140 @@ pub(crate) fn spawn_retry_worker(state: AppState) {
             if let Err(error) = retry_control_outbox_once(&state).await {
                 tracing::warn!(error = %error, "MLS control federation retry iteration failed");
             }
+            if let Err(error) = retry_recovery_outbox_once(&state).await {
+                tracing::warn!(error = %error, "MLS recovery federation retry iteration failed");
+            }
         }
     });
+}
+
+async fn retry_recovery_outbox_once(state: &AppState) -> AppResult<()> {
+    let row: Option<(String, String, Uuid, i64, Value, i32)> = sqlx::query_as(
+        "SELECT destination, recovery_digest, conversation_id,
+                previous_incarnation, replica, attempts
+         FROM chat_mls_recovery_outbox
+         WHERE state = 'pending' AND next_attempt_at <= now()
+         ORDER BY next_attempt_at, destination, recovery_digest
+         LIMIT 1",
+    )
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((
+        destination,
+        recovery_digest,
+        conversation_id,
+        previous_incarnation,
+        value,
+        attempts,
+    )) = row
+    else {
+        return Ok(());
+    };
+    let replica: FederatedMlsRecoveryReplicaV1 =
+        serde_json::from_value(value).map_err(|error| {
+            AppError::internal(format!("stored MLS recovery replica invalid: {error}"))
+        })?;
+    replica.validate_shape().map_err(|error| {
+        AppError::internal(format!("stored MLS recovery replica invalid: {error}"))
+    })?;
+    let outcome = async {
+        authenticated_remote_policy(state, &destination).await?;
+        let body = serde_json::to_vec(&replica).map_err(|error| {
+            AppError::internal(format!("serialize MLS recovery retry: {error}"))
+        })?;
+        let response = state
+            .federation
+            .as_ref()
+            .ok_or_else(|| AppError::not_found("MLS federation unavailable"))?
+            .send(
+                &destination,
+                FederationRequestSpec {
+                    feature: FederationFeature::ChatV1,
+                    method: Method::POST,
+                    path: "/api/fed/chat/mls/control/recoveries".into(),
+                    query: None,
+                    content_type: "application/json".into(),
+                    body,
+                    request_id: Uuid::new_v4().to_string(),
+                    extra_headers: Vec::new(),
+                    response_limit: 64 * 1024,
+                },
+            )
+            .await
+            .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
+        if response.status != StatusCode::OK {
+            return Err(AppError::new(
+                response.status,
+                format!("remote MLS recovery replica returned {}", response.status),
+            ));
+        }
+        let acknowledged: RecoverMlsConversationResponseV1 = serde_json::from_slice(&response.body)
+            .map_err(|_| {
+                AppError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "remote MLS recovery acknowledgement is invalid",
+                )
+            })?;
+        acknowledged.validate().map_err(|error| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("remote MLS recovery acknowledgement is invalid: {error}"),
+            )
+        })?;
+        if acknowledged.conversation_id != conversation_id
+            || acknowledged.previous_incarnation != previous_incarnation as u64
+            || acknowledged.incarnation != replica.recovery.plan.new_genesis.incarnation
+            || acknowledged.recovery_digest != recovery_digest
+        {
+            return Err(AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "remote MLS recovery acknowledgement does not match",
+            ));
+        }
+        Ok(())
+    }
+    .await;
+    match outcome {
+        Ok(()) => {
+            sqlx::query(
+                "UPDATE chat_mls_recovery_outbox
+                 SET state = 'delivered', attempts = attempts + 1,
+                     last_error_class = NULL, updated_at = now()
+                 WHERE destination = $1 AND recovery_digest = $2
+                   AND state = 'pending'",
+            )
+            .bind(&destination)
+            .bind(&recovery_digest)
+            .execute(&state.pool)
+            .await?;
+        }
+        Err(error) => {
+            let failure_class = match error.status {
+                StatusCode::CONFLICT => "remote_conflict",
+                StatusCode::TOO_MANY_REQUESTS => "rate_limited",
+                StatusCode::BAD_GATEWAY => "transport_or_invalid_ack",
+                _ if error.status.is_server_error() => "remote_unavailable",
+                _ => "remote_rejection",
+            };
+            let exponent = u32::try_from(attempts).unwrap_or(u32::MAX).min(8);
+            let delay_seconds = 5i64.saturating_mul(1i64 << exponent).min(900);
+            sqlx::query(
+                "UPDATE chat_mls_recovery_outbox
+                 SET attempts = attempts + 1,
+                     next_attempt_at = now() + make_interval(secs => $3),
+                     last_error_class = $4, updated_at = now()
+                 WHERE destination = $1 AND recovery_digest = $2
+                   AND state = 'pending'",
+            )
+            .bind(&destination)
+            .bind(&recovery_digest)
+            .bind(delay_seconds as f64)
+            .bind(failure_class)
+            .execute(&state.pool)
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 async fn retry_federation_outbox_once(state: &AppState) -> AppResult<()> {

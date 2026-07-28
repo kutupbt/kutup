@@ -519,8 +519,9 @@ test.describe('two-server secure chat', () => {
     await expect(bubble(pageB, fromBob)).toBeVisible({ timeout: 90_000 })
 
     // Re-promoting the previously demoted owner reuses the exact durable
-    // group-scoped candidate key. The resulting q=2 owner set then proves that
-    // close is an explicit, restart-safe owner-governed terminal transition.
+    // group-scoped candidate key. The resulting q=2 owner set first proves
+    // restart-safe incarnation recovery without an ordering vote, then closes
+    // the recovered incarnation through the ordinary control quorum.
     const repromoteOwnerCommit = pageA.waitForResponse((response) => {
       const path = new URL(response.url()).pathname
       return response.request().method() === 'POST'
@@ -539,6 +540,87 @@ test.describe('two-server secure chat', () => {
       pageB.getByTestId(`chat-group-member-owner-${bob}@b.test`),
     ).toBeVisible({ timeout: 90_000 })
     await pageB.keyboard.press('Escape')
+
+    let recoverySubmitted = false
+    let awaitingRecoveryApproval = true
+    pageA.on('request', (request) => {
+      if (
+        awaitingRecoveryApproval
+        && request.method() === 'POST'
+        && new URL(request.url()).pathname === '/api/chat/mls/conversations/recover'
+      ) recoverySubmitted = true
+    })
+    const recoveryApprovalRequest = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/anonymous/messages'
+    })
+    await pageA.getByTestId('chat-group-members').click()
+    pageA.once('dialog', dialog => void dialog.accept())
+    await pageA.getByTestId('chat-group-recover').click()
+    expect((await requireResponseOrUiError(pageA, recoveryApprovalRequest)).ok()).toBe(true)
+    await pageA.waitForTimeout(1_000)
+    expect(recoverySubmitted).toBe(false)
+
+    await pageA.reload()
+    await expect(pageA.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+    await pageA.getByTestId(`chat-group-${conversationId}`).click()
+
+    await pageB.getByTestId('chat-group-members').click()
+    await expect(pageB.getByText('Approve MLS group recovery?')).toBeVisible({ timeout: 90_000 })
+    await pageB.reload()
+    await expect(pageB.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+    await pageB.getByTestId(`chat-group-${conversationId}`).click()
+    await pageB.getByTestId('chat-group-members').click()
+    await expect(pageB.getByText('Approve MLS group recovery?')).toBeVisible({ timeout: 90_000 })
+
+    const recoveryApprovalResponse = pageB.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/anonymous/messages'
+    })
+    const recoveryCommit = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/conversations/recover'
+    })
+    const destinationRecoveryEvidence = pageB.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'GET'
+        && path === `/api/chat/mls/conversations/${conversationId}/2/recovery`
+    })
+    await pageB.getByTestId('chat-group-owner-approve').click()
+    expect((await requireResponseOrUiError(pageB, recoveryApprovalResponse)).ok()).toBe(true)
+    awaitingRecoveryApproval = false
+    const recoveryResponse = await requireResponseOrUiError(pageA, recoveryCommit)
+    expect(recoveryResponse.ok()).toBe(true)
+    expect(await recoveryResponse.json()).toMatchObject({
+      conversationId,
+      previousIncarnation: 1,
+      incarnation: 2,
+      status: 'active',
+    })
+    expect((await destinationRecoveryEvidence).ok()).toBe(true)
+    await pageB.keyboard.press('Escape')
+
+    const afterRecoverySend = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/anonymous/messages'
+    })
+    const afterRecovery = `mls-after-recovery-${tag}`
+    await send(pageA, afterRecovery)
+    expect((await requireResponseOrUiError(pageA, afterRecoverySend)).ok()).toBe(true)
+    await expect(bubble(pageB, afterRecovery)).toBeVisible({ timeout: 90_000 })
+
+    await pageA.reload()
+    await pageB.reload()
+    await expect(pageA.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+    await expect(pageB.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+    await pageA.getByTestId(`chat-group-${conversationId}`).click()
+    await pageB.getByTestId(`chat-group-${conversationId}`).click()
+    await expect(bubble(pageA, afterRecovery)).toBeVisible({ timeout: 90_000 })
+    await expect(bubble(pageB, afterRecovery)).toBeVisible({ timeout: 90_000 })
 
     let closeControlSubmitted = false
     let awaitingCloseApproval = true

@@ -5,8 +5,10 @@ import type {
   ChatTransportPort,
   MlsInvitationDecision,
   MlsInvitationDecisionResponse,
+  MlsIncarnationRecovery,
   MlsMailboxPage,
   PendingMlsInvitation,
+  RecoverMlsConversationRequest,
 } from './types'
 
 /** Authenticated REST adapter consumed by the Rust engine. */
@@ -187,6 +189,23 @@ export class ApiChatTransport implements ChatTransportPort {
 
   async createMlsConversation(request: unknown): Promise<unknown> {
     return api.post('/chat/mls/conversations', request).then((response) => response.data)
+  }
+
+  async recoverMlsConversation(request: RecoverMlsConversationRequest): Promise<unknown> {
+    return api
+      .post('/chat/mls/conversations/recover', request)
+      .then((response) => response.data)
+  }
+
+  async fetchMlsRecovery(
+    conversationId: string,
+    incarnation: number,
+  ): Promise<MlsIncarnationRecovery> {
+    return api
+      .get(
+        `/chat/mls/conversations/${encodeURIComponent(conversationId)}/${incarnation}/recovery`,
+      )
+      .then((response) => response.data)
   }
 
   async stageMlsMembershipDelivery(request: unknown): Promise<unknown> {

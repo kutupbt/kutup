@@ -11,6 +11,8 @@ const MAILBOX_CONSTRAINT: &str =
     include_str!("../migrations/038_mls_mailbox_incarnation_constraint.up.sql");
 const MAILBOX_CONSTRAINT_DOWN: &str =
     include_str!("../migrations/038_mls_mailbox_incarnation_constraint.down.sql");
+const RECOVERY: &str = include_str!("../migrations/039_mls_incarnation_recovery.up.sql");
+const RECOVERY_DOWN: &str = include_str!("../migrations/039_mls_incarnation_recovery.down.sql");
 
 #[tokio::test]
 async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
@@ -53,6 +55,10 @@ async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
         .execute(&mut connection)
         .await
         .unwrap();
+    sqlx::raw_sql(RECOVERY)
+        .execute(&mut connection)
+        .await
+        .unwrap();
 
     let table_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM information_schema.tables
@@ -62,7 +68,7 @@ async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
     .fetch_one(&mut connection)
     .await
     .unwrap();
-    assert_eq!(table_count, 25);
+    assert_eq!(table_count, 27);
 
     sqlx::query(
         "INSERT INTO federation_feature_policy_documents
@@ -268,6 +274,53 @@ async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
         "finalized MLS control history must be append-only"
     );
 
+    sqlx::query(
+        "INSERT INTO chat_mls_incarnations
+              (conversation_id, incarnation, mls_group_id, suite,
+               roster_commitment, member_count,
+               genesis_participant_domains, participant_domains,
+               authority_set_sequence, authority_set,
+               genesis, genesis_hash, last_finalized_epoch, status)
+         VALUES ($1, 2, $2, 2, $3, 1,
+                 '[\"a.example\"]'::jsonb, '[\"a.example\"]'::jsonb,
+                 1, '{}'::jsonb, '{}'::jsonb, $4, 1, 'active')",
+    )
+    .bind(conversation_id)
+    .bind(vec![8u8; 16])
+    .bind("11".repeat(32))
+    .bind("44".repeat(32))
+    .execute(&mut connection)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO chat_mls_incarnation_recoveries
+             (recovery_digest, conversation_id, previous_incarnation,
+              new_incarnation, proposal_id, origin_domain, recovery)
+         VALUES ($1,$2,1,2,$3,'a.example','{}'::jsonb)",
+    )
+    .bind("55".repeat(32))
+    .bind(conversation_id)
+    .bind(Uuid::from_u128(8))
+    .execute(&mut connection)
+    .await
+    .unwrap();
+    assert!(
+        sqlx::query(
+            "UPDATE chat_mls_incarnation_recoveries
+             SET origin_domain = 'b.example'
+             WHERE conversation_id = $1",
+        )
+        .bind(conversation_id)
+        .execute(&mut connection)
+        .await
+        .is_err(),
+        "signed MLS recovery evidence must be append-only"
+    );
+
+    sqlx::raw_sql(RECOVERY_DOWN)
+        .execute(&mut connection)
+        .await
+        .unwrap();
     sqlx::raw_sql(MAILBOX_CONSTRAINT_DOWN)
         .execute(&mut connection)
         .await

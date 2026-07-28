@@ -1507,16 +1507,14 @@ fn mls_outbox_row(row: &rusqlite::Row) -> rusqlite::Result<MlsOutboxEntry> {
                 )
             },
         )?,
-        deliveries: serde_json::from_slice::<Vec<MlsOutboxDelivery>>(
-            &row.get::<_, Vec<u8>>(9)?,
-        )
-        .map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                9,
-                rusqlite::types::Type::Blob,
-                Box::new(error),
-            )
-        })?,
+        deliveries: serde_json::from_slice::<Vec<MlsOutboxDelivery>>(&row.get::<_, Vec<u8>>(9)?)
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    9,
+                    rusqlite::types::Type::Blob,
+                    Box::new(error),
+                )
+            })?,
         created_at: row.get(10)?,
         attempts: row.get(11)?,
     })

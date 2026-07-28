@@ -200,6 +200,7 @@ export interface MlsWelcomeInspection {
     conversationId: string
     incarnation: number
     height: number
+    initialEpoch: number
     epoch: number
   }
 }
@@ -247,8 +248,9 @@ export interface LocalMlsConversationRecord {
       ownerId?: string
     }>
   }
-  status: 'pending_genesis' | 'active' | 'closed'
+  status: 'pending_genesis' | 'active' | 'read_only' | 'closed'
   serverGenesisHash?: string
+  recoveryDigest?: string
   lastFinalizedHeight: number
   lastFinalizedEpoch: number
   lastBlockHash?: string
@@ -417,6 +419,7 @@ export interface PendingMlsOwnerApprovalRequest {
       incarnation: number
       proposalId: string
     }
+    incarnationRecovery?: MlsIncarnationRecovery['plan']
     nextRoster: MlsConversationMember[]
     requestedAt: number
     expiresAt: number
@@ -463,6 +466,72 @@ export interface PreparedMlsClose {
 export interface FinalizedMlsClose {
   group: LocalMlsGroupState
   conversation: LocalMlsConversationRecord
+}
+
+export interface VerifiedMlsKeyPackage {
+  wire: {
+    deviceId: number
+    manifestVersion: number
+    suite: number
+    keyPackageRef: string
+    keyPackage: string
+    expiresAt: number
+  }
+  credential: VerifiedMlsCredential
+  anonymousDeliveryPublicKey: number[]
+}
+
+export interface MlsIncarnationRecovery {
+  plan: {
+    protocolVersion: number
+    conversationId: string
+    previousIncarnation: number
+    proposalId: string
+    previousGenesisHash: string
+    previousHeight: number
+    previousEpoch: number
+    previousBlockHash?: string
+    previousRosterCommitment: string
+    participantDomains: string[]
+    newGenesis: LocalMlsConversationRecord['request']['genesis']
+    deliveries: Array<{ destination: string; deliveryDigest: string }>
+  }
+  proposal: unknown
+  ownerApproval: unknown
+}
+
+export interface RecoverMlsConversationRequest {
+  recovery: MlsIncarnationRecovery
+  creator: AccountAddress
+  creatorDeviceId: number
+  members: MlsConversationMember[]
+  deliveries: unknown[]
+}
+
+export interface RecoverMlsConversationResponse {
+  conversationId: string
+  previousIncarnation: number
+  incarnation: number
+  recoveryDigest: string
+  status: 'active'
+}
+
+export interface PendingMlsRecovery {
+  mlsGroupId: number[]
+  newMlsGroupId: number[]
+  request: RecoverMlsConversationRequest
+  commitHash: string
+}
+
+export interface PreparedMlsRecovery {
+  pending: PreparedMlsMembershipChange['pending']
+  control: PendingMlsRecovery
+}
+
+export interface FinalizedMlsRecovery {
+  group: LocalMlsGroupState
+  conversation: LocalMlsConversationRecord
+  archivedIncarnation: LocalMlsConversationRecord
 }
 
 export interface JoinedMlsConversation {
@@ -608,6 +677,11 @@ export interface ChatTransportPort {
   publishMlsKeyPackages(request: unknown): Promise<unknown>
   mlsKeyPackageCount(deviceId: number): Promise<unknown>
   createMlsConversation(request: unknown): Promise<unknown>
+  recoverMlsConversation(request: RecoverMlsConversationRequest): Promise<unknown>
+  fetchMlsRecovery(
+    conversationId: string,
+    incarnation: number,
+  ): Promise<MlsIncarnationRecovery>
   stageMlsMembershipDelivery(request: unknown): Promise<unknown>
   collectMlsOrderingVotes(request: unknown): Promise<unknown>
   commitMlsControlBlock(request: unknown): Promise<unknown>
@@ -761,6 +835,21 @@ export interface WasmChatClientHandle {
     mlsGroupId: Uint8Array,
     acknowledgement: unknown,
   ): Promise<FinalizedMlsClose>
+  prepareMlsGroupRecovery(
+    mlsGroupId: Uint8Array,
+    newMlsGroupId: Uint8Array,
+    proposalId: string,
+    authorityPolicies: unknown[],
+    additions: VerifiedMlsKeyPackage[],
+    createdAtSeconds: string,
+  ): Promise<PreparedMlsRecovery>
+  pendingMlsRecoveries(): Promise<PendingMlsRecovery[]>
+  localMlsIncarnationHistory(): Promise<LocalMlsConversationRecord[]>
+  mlsRecoveryHasOwnerQuorum(mlsGroupId: Uint8Array): Promise<boolean>
+  finalizeMlsGroupRecovery(
+    mlsGroupId: Uint8Array,
+    acknowledgement: RecoverMlsConversationResponse,
+  ): Promise<FinalizedMlsRecovery>
   pendingMlsCommit(mlsGroupId: Uint8Array): Promise<unknown | null>
   mergePendingMlsCommit(mlsGroupId: Uint8Array, commitHash: string): Promise<unknown>
   rejectPendingMlsCommit(mlsGroupId: Uint8Array, commitHash: string): Promise<void>
@@ -772,6 +861,15 @@ export interface WasmChatClientHandle {
     welcome: Uint8Array,
     expectedMembers: unknown,
     historyPages: Uint8Array[],
+  ): Promise<JoinedMlsConversation>
+  joinMlsFromRecoveryWelcome(
+    envelopeId: string,
+    cursor: string,
+    sendId: string,
+    mlsGroupId: Uint8Array,
+    welcome: Uint8Array,
+    expectedMembers: VerifiedMlsCredential[],
+    recovery: MlsIncarnationRecovery,
   ): Promise<JoinedMlsConversation>
   inspectMlsWelcome(
     mlsGroupId: Uint8Array,
@@ -791,7 +889,7 @@ export interface WasmChatClientHandle {
     conversationId: string,
     incarnation: string,
     nowSeconds: string,
-  ): Promise<unknown[]>
+  ): Promise<VerifiedMlsKeyPackage[]>
   processedMlsControlEnvelope(
     envelopeId: string,
   ): Promise<ProcessedMlsControlEnvelope | null>

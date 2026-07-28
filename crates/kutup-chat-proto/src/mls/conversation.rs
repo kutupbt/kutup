@@ -310,7 +310,6 @@ impl MlsConversationGenesisV1 {
         if self.protocol_version != MLS_PROTOCOL_VERSION
             || self.conversation_id.is_nil()
             || self.incarnation == 0
-            || self.initial_epoch != 0
             || self.created_at < 0
         {
             return Err("MLS conversation genesis has invalid version, id, epoch, or time".into());
@@ -325,7 +324,9 @@ impl MlsConversationGenesisV1 {
         self.authority_set.validate()?;
         match self.kind {
             MlsConversationKindV1::SelfSync => {
-                if self.member_count != 1
+                if self.incarnation != 1
+                    || self.initial_epoch != 0
+                    || self.member_count != 1
                     || self.authority_set.authorities.len() != 1
                     || self.authority_set.required_quorum != 1
                     || self.owner_set.is_some()
@@ -334,7 +335,9 @@ impl MlsConversationGenesisV1 {
                 }
             }
             MlsConversationKindV1::Direct => {
-                if self.member_count != 2
+                if self.incarnation != 1
+                    || self.initial_epoch != 0
+                    || self.member_count != 2
                     || !(1..=2).contains(&self.authority_set.authorities.len())
                     || usize::from(self.authority_set.required_quorum)
                         != self.authority_set.authorities.len()
@@ -347,11 +350,18 @@ impl MlsConversationGenesisV1 {
                 }
             }
             MlsConversationKindV1::Group => {
-                if self.member_count != 1 {
-                    return Err(
-                        "group MLS genesis contains only its creator; additions use membership transitions"
-                            .into(),
-                    );
+                match self.incarnation {
+                    1 if self.initial_epoch == 0 && self.member_count == 1 => {}
+                    incarnation
+                        if incarnation > 1
+                            && self.initial_epoch == 1
+                            && (1..=1000).contains(&self.member_count) => {}
+                    _ => {
+                        return Err(
+                            "group MLS genesis is not a creator genesis or recovered incarnation"
+                                .into(),
+                        )
+                    }
                 }
                 self.owner_set
                     .as_ref()
@@ -428,10 +438,14 @@ pub struct MlsPrivateControlStateV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proposal_id: Option<Uuid>,
     pub height: u64,
+    /// Epoch at which this append-only incarnation began. Incarnation one
+    /// begins at epoch zero; a recovered incarnation begins after the single
+    /// full-roster recovery Commit at epoch one.
+    pub initial_epoch: u64,
     pub epoch: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_block_hash: Option<String>,
-    /// Immutable epoch-zero account roster, retained so a joining client can
+    /// Immutable incarnation-genesis account roster, retained so a joining client can
     /// reconstruct and verify the private genesis request without asking any
     /// server to reveal member identities.
     pub genesis_roster: Vec<MlsConversationMemberV1>,
@@ -447,8 +461,10 @@ impl MlsPrivateControlStateV1 {
         if self.protocol_version != MLS_PROTOCOL_VERSION
             || self.conversation_id.is_nil()
             || self.incarnation == 0
-            || self.epoch != self.height
-            || self.genesis_roster.len() != 1
+            || self.epoch != self.initial_epoch.saturating_add(self.height)
+            || !matches!((self.incarnation, self.initial_epoch), (1, 0) | (2.., 1))
+            || self.genesis_roster.is_empty()
+            || self.genesis_roster.len() > 1000
             || self.roster.is_empty()
             || self.roster.len() > 1000
         {
@@ -474,19 +490,11 @@ impl MlsPrivateControlStateV1 {
         self.genesis_owner_set.validate()?;
         self.authority_set.validate()?;
         self.owner_set.validate()?;
-        self.genesis_roster[0].validate()?;
-        let genesis_owner_id = self.genesis_roster[0]
-            .owner_id
-            .as_deref()
-            .ok_or("MLS private control genesis roster has no owner")?;
-        if self.genesis_owner_set.owners.len() != 1
-            || self.genesis_owner_set.owners[0].owner_id != genesis_owner_id
-        {
-            return Err(
-                "MLS private control genesis roster differs from its declared owner set".into(),
-            );
-        }
-        roster_commitment(&self.genesis_roster)?;
+        validate_private_roster_owner_bindings(
+            "genesis",
+            &self.genesis_roster,
+            &self.genesis_owner_set,
+        )?;
         let mut previous = None;
         let mut admin_count = 0usize;
         let mut roster_owner_ids = BTreeSet::new();
@@ -532,6 +540,49 @@ impl MlsPrivateControlStateV1 {
     }
 }
 
+fn validate_private_roster_owner_bindings(
+    label: &str,
+    roster: &[MlsConversationMemberV1],
+    owner_set: &MlsOwnerSetV1,
+) -> Result<(), String> {
+    let mut previous = None;
+    let mut owner_ids = BTreeSet::new();
+    let mut admin_count = 0usize;
+    for member in roster {
+        member.validate()?;
+        let address = member.address.canonical();
+        if previous
+            .as_ref()
+            .is_some_and(|prior: &String| address <= *prior)
+        {
+            return Err(format!(
+                "MLS private control {label} roster is not strictly ordered"
+            ));
+        }
+        previous = Some(address);
+        admin_count += usize::from(member.is_admin);
+        if let Some(owner_id) = member.owner_id.as_deref() {
+            if !owner_ids.insert(owner_id) {
+                return Err(format!(
+                    "MLS private control {label} roster repeats an owner id"
+                ));
+            }
+        }
+    }
+    let declared = owner_set
+        .owners
+        .iter()
+        .map(|owner| owner.owner_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if admin_count == 0 || owner_ids != declared {
+        return Err(format!(
+            "MLS private control {label} roster differs from its declared owner set"
+        ));
+    }
+    roster_commitment(roster)?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -543,6 +594,11 @@ pub struct CreateMlsConversationRequestV1 {
 impl CreateMlsConversationRequestV1 {
     pub fn validate(&self) -> Result<(), String> {
         self.genesis.validate()?;
+        if self.genesis.incarnation != 1 || self.genesis.initial_epoch != 0 {
+            return Err(
+                "ordinary MLS creation only accepts an epoch-zero first incarnation".into(),
+            );
+        }
         let valid_count = match self.genesis.kind {
             MlsConversationKindV1::SelfSync => self.members.len() == 1,
             MlsConversationKindV1::Direct => self.members.len() == 2,

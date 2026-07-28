@@ -20,8 +20,12 @@ control block is ordered before quorum, and successful finalization after the
 approval arrives. Owner-approved closure is also complete: the gate proves an
 unchanged-roster terminal Commit, requester and approver reload recovery,
 closure on both participant servers, send blocking, and immutable-history
-visibility after restart. Advertisement remains gated on the remaining
-owner/authority product orchestration, federated invitation-rejection feedback,
+visibility after restart. Owner-approved incarnation recovery is likewise
+complete: the two-server gate proves manual quorum across requester/approver
+reloads, authenticated immutable evidence retrieval, recipient-side Welcome
+and manifest verification before durable join, post-recovery messaging, and
+recovered-state persistence after reload. Advertisement remains gated on
+suite-policy governance, federated invitation-rejection feedback,
 linked-device group state, and the remaining adversarial suites.
 
 ## Conversation model
@@ -133,9 +137,45 @@ manifest-bound sender before atomically advancing its MLS state to `closed`.
 
 `closed` is durable and idempotent. The conversation and authenticated history
 remain visible after restart, but application sends and all further control
-changes fail closed; there is no identified-delivery fallback. Recovery, when
-implemented, creates an explicitly owner-approved new incarnation and never
-reopens or rewrites the closed one.
+changes fail closed; there is no identified-delivery fallback. Incarnation
+recovery does not reopen or rewrite a closed incarnation.
+
+### Incarnation recovery
+
+When the current ordering quorum cannot make progress, a current owner may
+explicitly recover an active group into the exact next incarnation. Recovery
+does not ask the unavailable old authorities to vote. The owner-signed recovery
+plan binds the previous genesis and finalized head, preserved roster and owner
+set, fresh GroupId, epoch-one replacement genesis, authenticated replacement
+authority set, participant domains, and the digest of every destination-private
+Welcome delivery. V1 replacement authorities must be prior participant or
+authority servers because only those servers possess the immutable old public
+history needed to verify the owner keys.
+
+The initiating browser claims fresh, transparency-verified KeyPackages for
+every preserved manifest device except its own initiating device, stages a
+fresh OpenMLS group and one full-roster Commit from epoch zero to epoch one,
+and persists the exact request before any network write. The initiating owner
+approves automatically. When more owner signatures are required, the existing
+bounded MLS-encrypted owner approval path shows the exact recovery plan to the
+other current owners. No server signs on behalf of an owner.
+
+After owner quorum, each server atomically stores the immutable signed recovery,
+marks the previous incarnation read-only, creates the next active incarnation,
+copies only its local active membership, queues exact-device Welcomes, records
+an administrative event, and queues destination-specific federation replicas.
+The dedicated recovery outbox survives restart and does not duplicate the
+ordered-control stack.
+
+A recipient treats an incarnation+1 membership-control envelope as a recovery
+candidate. It fetches the signed recovery only through its authenticated
+same-origin server, verifies the statement against its exact durable old head,
+inspects the Welcome without joining, resolves every device credential through
+the shared transparency verifier, and then atomically archives the old local
+state and installs epoch one. Mailbox acknowledgement occurs only after this
+transaction. Invalid, missing, reordered, replayed, or mismatched recovery
+material leaves the old pin unchanged and blocks the transition; there is no
+ordinary-invitation or identified-message fallback.
 
 ## Ordering authorities
 
@@ -366,16 +406,17 @@ traffic-inspection feature.
 Admin-only inspection is available at `/api/admin/chat/mls/status` and
 `/api/admin/chat/mls/conversations/{conversationId}`. It exposes exact policy
 and key fingerprints, roster and routing commitments, quorum sets, progress
-counts, failure evidence digests, and bounded audit history. It never returns
-usernames, ciphertext, raw capabilities, mailbox contents, or
+counts, every incarnation head, immutable original owner-signed recovery
+statements, failure evidence digests, and bounded audit history. It never
+returns usernames, ciphertext, raw capabilities, mailbox contents, or
 sender/recipient correlations.
 
 ## Completion gate
 
 Do not advertise MLS until all of the following pass together:
 
-- browser orchestration, explicit approval UI, and two-server adversarial
-  coverage for recovery and suite-policy owner actions;
+- protocol, browser orchestration, explicit approval UI, and two-server
+  coverage for suite-policy owner actions;
 - federated invitation-rejection feedback and administrator removal flow;
 - group owner and exact authority-policy/fingerprint UI;
 - WebSocket/restart reconciliation and multi-device linked-state flow;

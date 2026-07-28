@@ -19,6 +19,9 @@ const genesisGroupId = btoa(String.fromCharCode(...genesisGroupBytes))
 const genesisHash = 'ab'.repeat(32)
 const proposalId = '44444444-4444-4444-8444-444444444444'
 const controlBlockHash = 'ef'.repeat(32)
+const recoveryGroupBytes = new Uint8Array(32).fill(6)
+const recoveryGroupId = btoa(String.fromCharCode(...recoveryGroupBytes))
+const recoveryDigest = 'bd'.repeat(32)
 
 function pendingGenesis(): LocalMlsConversationRecord {
   return {
@@ -294,6 +297,83 @@ function finalizedClose() {
   }
 }
 
+function recoveryPrevious(): LocalMlsConversationRecord {
+  return finalizedMembership().conversation
+}
+
+function recoveryStatement() {
+  const previous = recoveryPrevious()
+  return {
+    plan: {
+      protocolVersion: 1,
+      conversationId,
+      previousIncarnation: 1,
+      proposalId,
+      previousGenesisHash: genesisHash,
+      previousHeight: 1,
+      previousEpoch: 1,
+      previousBlockHash: controlBlockHash,
+      previousRosterCommitment: 'ce'.repeat(32),
+      participantDomains: ['alpha.example', 'beta.example'],
+      newGenesis: {
+        ...previous.request.genesis,
+        incarnation: 2,
+        mlsGroupId: recoveryGroupId,
+        rosterCommitment: 'ce'.repeat(32),
+        memberCount: 2,
+        initialEpoch: 1,
+      },
+      deliveries: [
+        { destination: 'alpha.example', deliveryDigest: '71'.repeat(32) },
+        { destination: 'beta.example', deliveryDigest: '72'.repeat(32) },
+      ],
+    },
+    proposal: { signed: 'owner-proposal' },
+    ownerApproval: { approvals: ['owner'] },
+  }
+}
+
+function pendingRecovery() {
+  return {
+    mlsGroupId: [...genesisGroupBytes],
+    newMlsGroupId: [...recoveryGroupBytes],
+    request: {
+      recovery: recoveryStatement(),
+      creator: { username: 'alice', server: 'alpha.example' },
+      creatorDeviceId: 7,
+      members: recoveryPrevious().currentRoster,
+      deliveries: [
+        { destination: 'alpha.example', envelopes: [] },
+        { destination: 'beta.example', envelopes: [{ deviceId: 7 }] },
+      ],
+    },
+    commitHash: 'ca'.repeat(32),
+  }
+}
+
+function finalizedRecovery() {
+  const previous = recoveryPrevious()
+  const conversation: LocalMlsConversationRecord = {
+    request: {
+      genesis: recoveryStatement().plan.newGenesis,
+      members: previous.currentRoster,
+    },
+    status: 'active',
+    serverGenesisHash: 'bc'.repeat(32),
+    recoveryDigest,
+    lastFinalizedHeight: 0,
+    lastFinalizedEpoch: 1,
+    currentRoster: previous.currentRoster,
+    currentAuthoritySet: previous.currentAuthoritySet,
+    currentOwnerSet: previous.currentOwnerSet,
+  }
+  return {
+    group: { mlsGroupId: [...recoveryGroupBytes], epoch: 1 },
+    conversation,
+    archivedIncarnation: { ...previous, status: 'read_only' as const },
+  }
+}
+
 function ownerApprovalRequest(): PendingMlsOwnerApprovalRequest {
   return {
     mlsGroupId: [...genesisGroupBytes],
@@ -337,6 +417,7 @@ function applicationOutboxEntry() {
 function harness(
   existing: LocalMlsGroupState | null = null,
   localRecords: LocalMlsConversationRecord[] = [pendingGenesis()],
+  selfAddress = { username: 'bobby', server: 'beta.example' },
 ) {
   const client = {
     deviceId: 7,
@@ -423,6 +504,31 @@ function harness(
     mlsCloseHasOwnerQuorum: vi.fn().mockResolvedValue(true),
     buildMlsCloseCommitRequest: vi.fn().mockResolvedValue({ finalized: 'close-request' }),
     finalizeMlsClose: vi.fn().mockResolvedValue(finalizedClose()),
+    fetchVerifiedIdentifiedMlsKeyPackages: vi.fn().mockImplementation(
+      async (recipient: { username: string; server: string }) => [{
+        wire: { deviceId: 7 },
+        credential: {
+          credentialIdentity: `${recipient.username}@${recipient.server}#7`,
+          credentialPublicKey: [...new Uint8Array(65).fill(4)],
+        },
+        anonymousDeliveryPublicKey: [...new Uint8Array(65).fill(5)],
+      }],
+    ),
+    prepareMlsGroupRecovery: vi.fn().mockResolvedValue({
+      pending: {
+        mlsGroupId: [...recoveryGroupBytes],
+        epochBefore: 0,
+        epochAfter: 1,
+        commitHash: 'ca'.repeat(32),
+        commit: [1, 3, 5],
+        welcome: [2, 4, 6],
+      },
+      control: pendingRecovery(),
+    }),
+    pendingMlsRecoveries: vi.fn().mockResolvedValue([]),
+    localMlsIncarnationHistory: vi.fn().mockResolvedValue([]),
+    mlsRecoveryHasOwnerQuorum: vi.fn().mockResolvedValue(true),
+    finalizeMlsGroupRecovery: vi.fn().mockResolvedValue(finalizedRecovery()),
     mlsGroupState: vi.fn().mockResolvedValue(existing),
     inspectMlsWelcome: vi.fn().mockResolvedValue({
       mlsGroupId: [...new Uint8Array(16).fill(7)],
@@ -539,6 +645,10 @@ function harness(
       },
       conversation: finalizedMembership().conversation,
     }),
+    joinMlsFromRecoveryWelcome: vi.fn().mockResolvedValue({
+      group: finalizedRecovery().group,
+      conversation: finalizedRecovery().conversation,
+    }),
   } as unknown as WasmChatClientHandle
   const transport = {
     mlsKeyPackageCount: vi.fn().mockResolvedValue({ deviceId: 7, available: 18 }),
@@ -549,6 +659,14 @@ function harness(
       genesisHash,
       idempotent: false,
     }),
+    recoverMlsConversation: vi.fn().mockResolvedValue({
+      conversationId,
+      previousIncarnation: 1,
+      incarnation: 2,
+      recoveryDigest,
+      status: 'active',
+    }),
+    fetchMlsRecovery: vi.fn().mockResolvedValue(recoveryStatement()),
     stageMlsMembershipDelivery: vi.fn().mockResolvedValue({}),
     collectMlsOrderingVotes: vi.fn().mockResolvedValue({ votes: ['authority'] }),
     commitMlsControlBlock: vi.fn().mockResolvedValue({
@@ -608,7 +726,7 @@ function harness(
       transport,
       lock,
       client.deviceId,
-      { username: 'bobby', server: 'beta.example' },
+      selfAddress,
     ),
     lock: lockCalls,
   }
@@ -965,6 +1083,68 @@ describe('MlsConversationService', () => {
     )
   })
 
+  it('recovers through owner quorum and atomically installs the exact next incarnation', async () => {
+    vi.stubGlobal('crypto', {
+      randomUUID: () => proposalId,
+      getRandomValues: (value: Uint8Array) => {
+        value.set(recoveryGroupBytes)
+        return value
+      },
+    })
+    const { client, transport, service } = harness(
+      null,
+      [recoveryPrevious()],
+      { username: 'alice', server: 'alpha.example' },
+    )
+
+    await expect(service.recoverConversation(conversationId)).resolves.toEqual(
+      finalizedRecovery(),
+    )
+    expect(client.fetchVerifiedMlsOrderingPolicy).toHaveBeenCalledWith('alpha.example')
+    expect(client.fetchVerifiedIdentifiedMlsKeyPackages).toHaveBeenCalledTimes(2)
+    expect(client.prepareMlsGroupRecovery).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      recoveryGroupBytes,
+      proposalId,
+      [{ canonicalDomain: 'alpha.example' }],
+      [expect.objectContaining({
+        credential: expect.objectContaining({
+          credentialIdentity: 'bobby@beta.example#7',
+        }),
+      })],
+      expect.stringMatching(/^[0-9]+$/),
+    )
+    expect(transport.recoverMlsConversation).toHaveBeenCalledWith(
+      pendingRecovery().request,
+    )
+    expect(client.finalizeMlsGroupRecovery).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      expect.objectContaining({ recoveryDigest }),
+    )
+  })
+
+  it('keeps recovery retry material durable until manual owner quorum arrives', async () => {
+    const { client, transport, service } = harness(null, [recoveryPrevious()])
+    vi.mocked(client.pendingMlsRecoveries).mockResolvedValue([pendingRecovery()])
+    vi.mocked(client.mlsRecoveryHasOwnerQuorum).mockResolvedValueOnce(false)
+    vi.mocked(client.createMlsOwnerApprovalRequestMessage)
+      .mockResolvedValueOnce(applicationOutboxEntry())
+
+    await expect(service.reconcilePendingRecoveries()).resolves.toEqual([])
+    expect(client.createMlsOwnerApprovalRequestMessage).toHaveBeenCalledWith(
+      genesisGroupBytes,
+    )
+    expect(transport.recoverMlsConversation).not.toHaveBeenCalled()
+
+    vi.mocked(client.mlsRecoveryHasOwnerQuorum).mockResolvedValueOnce(true)
+    await expect(service.reconcilePendingRecoveries()).resolves.toEqual([
+      finalizedRecovery(),
+    ])
+    expect(transport.recoverMlsConversation).toHaveBeenCalledWith(
+      pendingRecovery().request,
+    )
+  })
+
   it('never merges local MLS state for a malformed control acknowledgement', async () => {
     const { client, transport, service } = harness(null, [activeGenesis()])
     vi.mocked(transport.commitMlsControlBlock).mockResolvedValueOnce({
@@ -1122,6 +1302,68 @@ describe('MlsConversationService', () => {
     expect(transport.ackMlsMailbox).toHaveBeenCalledWith(7, [envelopeId])
     expect(
       vi.mocked(client.applyOrderedInboundMlsMembershipCommit).mock.invocationCallOrder[0],
+    ).toBeLessThan(vi.mocked(transport.ackMlsMailbox).mock.invocationCallOrder[0])
+  })
+
+  it('verifies and joins a federated recovery before acknowledging its Welcome', async () => {
+    const { client, transport, service } = harness(null, [recoveryPrevious()])
+    vi.mocked(transport.drainMlsMailbox).mockResolvedValueOnce({
+      envelopes: [{
+        id: envelopeId,
+        cursor: '1',
+        deliveryKind: 'membership_control',
+        conversationId,
+        incarnation: 2,
+        sendId,
+        opaqueEnvelope: welcome,
+        serverTimestamp: Math.floor(Date.now() / 1000),
+      }],
+      nextCursor: '1',
+    })
+    const claims = [
+      {
+        credentialIdentity: 'alice@alpha.example#7',
+        credentialPublicKey: [...new Uint8Array(65).fill(4)],
+      },
+      {
+        credentialIdentity: 'bobby@beta.example#7',
+        credentialPublicKey: [...new Uint8Array(65).fill(5)],
+      },
+    ]
+    vi.mocked(client.inspectMlsWelcome).mockResolvedValueOnce({
+      mlsGroupId: [...recoveryGroupBytes],
+      epoch: 1,
+      privateControlState: {
+        protocolVersion: 1,
+        conversationId,
+        incarnation: 2,
+        height: 0,
+        initialEpoch: 1,
+        epoch: 1,
+      },
+      claimedMembers: claims,
+    })
+    vi.mocked(client.resolveMlsWelcomeClaims).mockResolvedValueOnce(claims)
+
+    await expect(service.reconcileInboundRecoveries()).resolves.toEqual([
+      {
+        group: finalizedRecovery().group,
+        conversation: finalizedRecovery().conversation,
+      },
+    ])
+    expect(transport.fetchMlsRecovery).toHaveBeenCalledWith(conversationId, 2)
+    expect(client.joinMlsFromRecoveryWelcome).toHaveBeenCalledWith(
+      envelopeId,
+      '1',
+      sendId,
+      recoveryGroupBytes,
+      new Uint8Array(32).fill(9),
+      claims,
+      recoveryStatement(),
+    )
+    expect(transport.ackMlsMailbox).toHaveBeenCalledWith(7, [envelopeId])
+    expect(
+      vi.mocked(client.joinMlsFromRecoveryWelcome).mock.invocationCallOrder[0],
     ).toBeLessThan(vi.mocked(transport.ackMlsMailbox).mock.invocationCallOrder[0])
   })
 

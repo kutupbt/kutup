@@ -24,9 +24,9 @@ use super::{
     decode_canonical_base64, validate_group_id, validate_metadata, validate_pending_commit,
     validate_pending_membership_change, LocalMlsConversationRecord, MlsDevicePublicMaterial,
     PendingMlsAuthorityChange, PendingMlsClose, PendingMlsCommit, PendingMlsMembershipChange,
-    PendingMlsOwnerApprovalRequest, PendingMlsOwnerChange, ProcessedMlsControlEnvelope,
-    MAX_PENDING_COMMITS, MAX_STATE_BYTES, MAX_STATE_RECORDS, MAX_STATE_RECORD_BYTES,
-    MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256, STATE_FORMAT_VERSION,
+    PendingMlsOwnerApprovalRequest, PendingMlsOwnerChange, PendingMlsRecovery,
+    ProcessedMlsControlEnvelope, MAX_PENDING_COMMITS, MAX_STATE_BYTES, MAX_STATE_RECORDS,
+    MAX_STATE_RECORD_BYTES, MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256, STATE_FORMAT_VERSION,
 };
 use crate::error::{ChatError, Result};
 
@@ -63,12 +63,14 @@ pub(super) struct SnapshotMetadata {
     pub(super) pending_authority_changes: BTreeMap<String, PendingMlsAuthorityChange>,
     pub(super) pending_owner_changes: BTreeMap<String, PendingMlsOwnerChange>,
     pub(super) pending_closes: BTreeMap<String, PendingMlsClose>,
+    pub(super) pending_recoveries: BTreeMap<String, PendingMlsRecovery>,
     pub(super) owner_approval_requests: BTreeMap<String, PendingMlsOwnerApprovalRequest>,
     pub(super) group_control_private_keys: BTreeMap<String, Vec<u8>>,
     pub(super) group_owner_private_keys: BTreeMap<String, Vec<u8>>,
     pub(super) group_owner_candidate_private_keys: BTreeMap<String, Vec<u8>>,
     pub(super) owner_candidates: BTreeMap<String, BTreeMap<String, MlsOwnerCandidateV1>>,
     pub(super) conversations: BTreeMap<String, LocalMlsConversationRecord>,
+    pub(super) incarnation_history: BTreeMap<String, LocalMlsConversationRecord>,
     pub(super) processed_control_envelopes: BTreeMap<String, ProcessedMlsControlEnvelope>,
 }
 
@@ -107,7 +109,7 @@ impl SnapshotMetadata {
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PersistedMlsStateV8 {
+struct PersistedMlsStateV9 {
     format_version: u16,
     ciphersuite: u16,
     credential_identity: String,
@@ -118,12 +120,14 @@ struct PersistedMlsStateV8 {
     pending_authority_changes: Vec<PendingMlsAuthorityChange>,
     pending_owner_changes: Vec<PendingMlsOwnerChange>,
     pending_closes: Vec<PendingMlsClose>,
+    pending_recoveries: Vec<PendingMlsRecovery>,
     owner_approval_requests: Vec<PendingMlsOwnerApprovalRequest>,
     group_control_keys: Vec<PersistedMlsGroupControlKeyV1>,
     group_owner_keys: Vec<PersistedMlsGroupOwnerKeyV1>,
     group_owner_candidate_keys: Vec<PersistedMlsGroupOwnerKeyV1>,
     owner_candidates: Vec<PersistedMlsOwnerCandidateV1>,
     conversations: Vec<LocalMlsConversationRecord>,
+    incarnation_history: Vec<LocalMlsConversationRecord>,
     processed_control_envelopes: Vec<ProcessedMlsControlEnvelope>,
     records: Vec<PersistedMlsRecordV1>,
 }
@@ -184,7 +188,7 @@ pub(super) fn snapshot_provider(
             value: BASE64.encode(value),
         });
     }
-    let state = PersistedMlsStateV8 {
+    let state = PersistedMlsStateV9 {
         format_version: STATE_FORMAT_VERSION,
         ciphersuite: MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256,
         credential_identity: metadata.credential_identity.clone(),
@@ -203,6 +207,7 @@ pub(super) fn snapshot_provider(
             .collect(),
         pending_owner_changes: metadata.pending_owner_changes.values().cloned().collect(),
         pending_closes: metadata.pending_closes.values().cloned().collect(),
+        pending_recoveries: metadata.pending_recoveries.values().cloned().collect(),
         owner_approval_requests: metadata.owner_approval_requests.values().cloned().collect(),
         group_control_keys: metadata
             .group_control_private_keys
@@ -242,6 +247,7 @@ pub(super) fn snapshot_provider(
             })
             .collect(),
         conversations: metadata.conversations.values().cloned().collect(),
+        incarnation_history: metadata.incarnation_history.values().cloned().collect(),
         processed_control_envelopes: metadata
             .processed_control_envelopes
             .values()
@@ -260,7 +266,7 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
     if bytes.is_empty() || bytes.len() > MAX_STATE_BYTES {
         return Err(ChatError::Db("OpenMLS state size is invalid".into()));
     }
-    let state: PersistedMlsStateV8 =
+    let state: PersistedMlsStateV9 =
         serde_json::from_slice(bytes).map_err(|error| ChatError::Db(error.to_string()))?;
     if state.format_version != STATE_FORMAT_VERSION
         || state.ciphersuite != MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256
@@ -270,12 +276,14 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
         || state.pending_authority_changes.len() > MAX_PENDING_COMMITS
         || state.pending_owner_changes.len() > MAX_PENDING_COMMITS
         || state.pending_closes.len() > MAX_PENDING_COMMITS
+        || state.pending_recoveries.len() > MAX_PENDING_COMMITS
         || state.owner_approval_requests.len() > MAX_PENDING_COMMITS
         || state.group_control_keys.len() > MAX_PENDING_COMMITS
         || state.group_owner_keys.len() > MAX_PENDING_COMMITS
         || state.group_owner_candidate_keys.len() > MAX_PENDING_COMMITS
         || state.owner_candidates.len() > MAX_PENDING_COMMITS * 1024
         || state.conversations.len() > MAX_PENDING_COMMITS
+        || state.incarnation_history.len() > MAX_PENDING_COMMITS
         || state.processed_control_envelopes.len() > MAX_PENDING_COMMITS
     {
         return Err(ChatError::Db(
@@ -386,6 +394,26 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
         if pending_closes.insert(key, pending).is_some() {
             return Err(ChatError::Db(
                 "OpenMLS state contains duplicate pending close material".into(),
+            ));
+        }
+    }
+    let mut pending_recoveries = BTreeMap::new();
+    let mut previous_recovery_key: Option<String> = None;
+    for pending in state.pending_recoveries {
+        pending.validate_durable()?;
+        let key = BASE64.encode(&pending.mls_group_id);
+        if previous_recovery_key
+            .as_ref()
+            .is_some_and(|previous| key <= *previous)
+        {
+            return Err(ChatError::Db(
+                "MLS pending recovery records are not strictly ordered".into(),
+            ));
+        }
+        previous_recovery_key = Some(key.clone());
+        if pending_recoveries.insert(key, pending).is_some() {
+            return Err(ChatError::Db(
+                "OpenMLS state contains duplicate pending recovery material".into(),
             ));
         }
     }
@@ -565,6 +593,28 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
             ));
         }
     }
+    let mut incarnation_history = BTreeMap::new();
+    let mut previous_incarnation: Option<String> = None;
+    for conversation in state.incarnation_history {
+        let key = format!(
+            "{}:{:020}",
+            conversation.request.genesis.conversation_id, conversation.request.genesis.incarnation
+        );
+        if previous_incarnation
+            .as_ref()
+            .is_some_and(|previous| key <= *previous)
+        {
+            return Err(ChatError::Db(
+                "MLS incarnation history is not strictly ordered".into(),
+            ));
+        }
+        previous_incarnation = Some(key.clone());
+        if incarnation_history.insert(key, conversation).is_some() {
+            return Err(ChatError::Db(
+                "OpenMLS state contains duplicate incarnation history".into(),
+            ));
+        }
+    }
     let mut processed_control_envelopes = BTreeMap::new();
     let mut previous_envelope_id: Option<String> = None;
     for receipt in state.processed_control_envelopes {
@@ -602,12 +652,14 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
         pending_authority_changes,
         pending_owner_changes,
         pending_closes,
+        pending_recoveries,
         owner_approval_requests,
         group_control_private_keys,
         group_owner_private_keys,
         group_owner_candidate_private_keys,
         owner_candidates,
         conversations,
+        incarnation_history,
         processed_control_envelopes,
     };
     validate_metadata(&metadata)?;

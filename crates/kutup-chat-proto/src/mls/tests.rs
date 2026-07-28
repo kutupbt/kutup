@@ -285,6 +285,7 @@ fn owner_approval_request_has_one_exact_private_transition_vector() {
         transition_digest: owner_change.transition_digest().unwrap(),
         owner_change: Some(owner_change),
         membership_transition: None,
+        incarnation_recovery: None,
         next_roster,
         requested_at: 1_700_000_100,
         expires_at: 1_700_086_500,
@@ -319,6 +320,7 @@ fn owner_approval_request_has_one_exact_private_transition_vector() {
         transition_digest: close_transition.transition_digest().unwrap(),
         owner_change: None,
         membership_transition: Some(close_transition.clone()),
+        incarnation_recovery: None,
         next_roster: request.next_roster.clone(),
         requested_at: 1_700_000_100,
         expires_at: 1_700_086_500,
@@ -358,6 +360,189 @@ fn owner_approval_request_has_one_exact_private_transition_vector() {
     let mut substituted = request;
     substituted.next_roster[1].is_admin = true;
     assert!(substituted.validate().is_err());
+}
+
+#[test]
+fn incarnation_recovery_is_owner_bound_append_only_and_destination_private() {
+    use p256::ecdsa::signature::Signer as _;
+
+    let conversation_id = Uuid::from_u128(0x7331);
+    let proposal_id = Uuid::from_u128(0x7332);
+    let owner_key = SigningKey::from_bytes(&[31; 32]);
+    let owner = MlsOwnerV1 {
+        owner_id: hex::encode(Sha256::digest(owner_key.verifying_key().as_bytes())),
+        public_key: base64::engine::general_purpose::STANDARD
+            .encode(owner_key.verifying_key().as_bytes()),
+    };
+    let owners = MlsOwnerSetV1 {
+        sequence: 7,
+        owners: vec![owner.clone()],
+        required_quorum: 1,
+    };
+    let members = vec![
+        MlsConversationMemberV1 {
+            address: "alice@a0.example".parse().unwrap(),
+            is_admin: true,
+            owner_id: Some(owner.owner_id.clone()),
+        },
+        MlsConversationMemberV1 {
+            address: "bob@a1.example".parse().unwrap(),
+            is_admin: false,
+            owner_id: None,
+        },
+    ];
+    let roster_hash = roster_commitment(&members).unwrap();
+    let (authorities, _) = authority_set(3);
+    let new_genesis = MlsConversationGenesisV1 {
+        protocol_version: MLS_PROTOCOL_VERSION,
+        conversation_id,
+        incarnation: 4,
+        mls_group_id: base64::engine::general_purpose::STANDARD.encode([44; 32]),
+        kind: MlsConversationKindV1::Group,
+        suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+        roster_commitment: roster_hash.clone(),
+        member_count: 2,
+        authority_set: authorities,
+        owner_set: Some(owners.clone()),
+        initial_epoch: 1,
+        created_at: 1_700_001_000,
+    };
+    let make_delivery = |destination: &str,
+                         recipient: &str,
+                         device_id: u32,
+                         envelope_id: u128|
+     -> MlsMembershipDeliveryV1 {
+        MlsMembershipDeliveryV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            conversation_id,
+            incarnation: 4,
+            proposal_id,
+            destination: destination.into(),
+            epoch_after: 1,
+            next_roster_commitment: roster_hash.clone(),
+            next_participant_domains: vec!["a0.example".into(), "a1.example".into()],
+            local_members_after: members
+                .iter()
+                .filter(|member| member.address.server.as_deref() == Some(destination))
+                .cloned()
+                .collect(),
+            envelopes: vec![MlsMembershipEnvelopeV1 {
+                envelope_id: Uuid::from_u128(envelope_id),
+                recipient: recipient.parse().unwrap(),
+                device_id,
+                kind: MlsMembershipEnvelopeKindV1::Welcome,
+                opaque_message: base64::engine::general_purpose::STANDARD.encode(b"welcome"),
+            }],
+        }
+    };
+    let mut creator_delivery = make_delivery("a0.example", "alice@a0.example", 1, 0x7333);
+    creator_delivery.envelopes.clear();
+    let deliveries = vec![
+        creator_delivery,
+        make_delivery("a1.example", "bob@a1.example", 2, 0x7334),
+    ];
+    let plan = MlsIncarnationRecoveryPlanV1 {
+        protocol_version: MLS_PROTOCOL_VERSION,
+        conversation_id,
+        previous_incarnation: 3,
+        proposal_id,
+        previous_genesis_hash: "11".repeat(32),
+        previous_height: 9,
+        previous_epoch: 9,
+        previous_block_hash: Some("12".repeat(32)),
+        previous_roster_commitment: roster_hash,
+        participant_domains: vec!["a0.example".into(), "a1.example".into()],
+        new_genesis,
+        deliveries: deliveries
+            .iter()
+            .map(|delivery| MlsMembershipDeliveryCommitmentV1 {
+                destination: delivery.destination.clone(),
+                delivery_digest: delivery.delivery_digest().unwrap(),
+            })
+            .collect(),
+    };
+    let recovery_digest = plan.transition_digest().unwrap();
+    let proposer_key = p256::ecdsa::SigningKey::from_bytes((&[32u8; 32]).into()).unwrap();
+    let proposer_public = proposer_key.verifying_key().to_encoded_point(false);
+    let payload = b"encrypted recovery approval context";
+    let mut proposal = MlsControlProposalV1 {
+        protocol_version: MLS_PROTOCOL_VERSION,
+        conversation_id,
+        incarnation: 3,
+        proposal_id,
+        base_epoch: 9,
+        action_type: MlsControlActionTypeV1::RecoverIncarnation,
+        proposer_id: hex::encode(Sha256::digest(proposer_public.as_bytes())),
+        proposer_credential_public_key: base64::engine::general_purpose::STANDARD
+            .encode(proposer_public.as_bytes()),
+        encrypted_payload: base64::engine::general_purpose::STANDARD.encode(payload),
+        payload_digest: hex::encode(Sha256::digest(payload)),
+        created_at: 1_700_000_999,
+        proposer_signature: String::new(),
+    };
+    let signature: p256::ecdsa::Signature = proposer_key.sign(&proposal.signing_bytes().unwrap());
+    proposal.proposer_signature =
+        base64::engine::general_purpose::STANDARD.encode(signature.to_der().as_bytes());
+    let proposal_hash = proposal.proposal_hash().unwrap();
+    let mut approval = MlsOwnerApprovalV1 {
+        conversation_id,
+        incarnation: 3,
+        owner_set_sequence: owners.sequence,
+        proposal_hash: proposal_hash.clone(),
+        transition_digest: Some(recovery_digest.clone()),
+        owner_id: owner.owner_id,
+        approved_at: 1_700_001_001,
+        signature: String::new(),
+    };
+    approval.signature = base64::engine::general_purpose::STANDARD.encode(
+        owner_key
+            .sign(&approval.signing_bytes().unwrap())
+            .to_bytes(),
+    );
+    let recovery = MlsIncarnationRecoveryV1 {
+        plan,
+        proposal,
+        owner_approval: MlsOwnerApprovalCertificateV1 {
+            owner_set_sequence: owners.sequence,
+            proposal_hash,
+            transition_digest: Some(recovery_digest.clone()),
+            approvals: vec![approval],
+        },
+    };
+    recovery.verify(&owners).unwrap();
+    let request = RecoverMlsConversationRequestV1 {
+        recovery: recovery.clone(),
+        creator: "alice@a0.example".parse().unwrap(),
+        creator_device_id: 1,
+        members,
+        deliveries,
+    };
+    request.validate_shape().unwrap();
+    assert_eq!(
+        recovery_digest,
+        "ba02112a3c75c9ea2a9e904dd8d4be028e2e5517df32fa06d18827f1945adce8"
+    );
+
+    let mut substituted = request.clone();
+    substituted.deliveries[1].envelopes[0].device_id = 3;
+    assert!(substituted.validate_shape().is_err());
+    let mut rollback = recovery.clone();
+    rollback.plan.new_genesis.incarnation = 3;
+    assert!(rollback.verify(&owners).is_err());
+    let mut replaced_owner = owners;
+    replaced_owner.sequence += 1;
+    assert!(recovery.verify(&replaced_owner).is_err());
+    let mut ordinary = CreateMlsConversationRequestV1 {
+        genesis: request.recovery.plan.new_genesis,
+        members: request.members,
+    };
+    assert!(ordinary.validate().is_err());
+    ordinary.genesis.incarnation = 1;
+    ordinary.genesis.initial_epoch = 0;
+    assert!(
+        ordinary.validate().is_err(),
+        "group creation stays creator-only"
+    );
 }
 
 #[test]
@@ -1089,6 +1274,7 @@ fn private_control_and_client_history_have_stable_canonical_vectors() {
         incarnation: 1,
         proposal_id: None,
         height: 0,
+        initial_epoch: 0,
         epoch: 0,
         previous_block_hash: None,
         genesis_roster: roster.clone(),
@@ -1132,7 +1318,7 @@ fn private_control_and_client_history_have_stable_canonical_vectors() {
     );
     assert_eq!(
         hex::encode(Sha256::digest(&private_bytes)),
-        "933090c87f6700eb0194709505b1dce6e56b0ac30d7c0c3ec3c83f4421b51073"
+        "2d7c65ab1154aa7c8d7054ea47ccee6701d5789f3c301f05e21b2cbf200c3752"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&page_bytes)),
@@ -1269,6 +1455,7 @@ fn client_control_history_replays_exactly_across_page_boundaries() {
         incarnation: 1,
         proposal_id: Some(final_block.proposal.proposal_id),
         height: 65,
+        initial_epoch: 0,
         epoch: 65,
         previous_block_hash: final_block.previous_block_hash.clone(),
         genesis_roster: roster.clone(),

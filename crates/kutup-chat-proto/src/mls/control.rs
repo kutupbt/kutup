@@ -311,6 +311,8 @@ pub struct MlsOwnerApprovalRequestV1 {
     pub owner_change: Option<MlsOwnerChangeV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub membership_transition: Option<MlsMembershipTransitionV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incarnation_recovery: Option<MlsIncarnationRecoveryPlanV1>,
     pub next_roster: Vec<MlsConversationMemberV1>,
     pub requested_at: i64,
     pub expires_at: i64,
@@ -325,20 +327,29 @@ impl MlsOwnerApprovalRequestV1 {
             || self.expires_at - self.requested_at > 7 * 24 * 60 * 60
             || !matches!(
                 self.proposal.action_type,
-                MlsControlActionTypeV1::OwnerSetChange | MlsControlActionTypeV1::CloseConversation
+                MlsControlActionTypeV1::OwnerSetChange
+                    | MlsControlActionTypeV1::CloseConversation
+                    | MlsControlActionTypeV1::RecoverIncarnation
             )
         {
             return Err("MLS owner approval request has invalid version, sequence, or time".into());
         }
         self.proposal.verify()?;
-        let transition = match self.proposal.action_type {
+        let (
+            conversation_id,
+            incarnation,
+            proposal_id,
+            next_member_count,
+            next_commitment,
+            domains,
+        ) = match self.proposal.action_type {
             MlsControlActionTypeV1::OwnerSetChange => {
                 let change = self
                     .owner_change
                     .as_ref()
                     .ok_or("MLS owner-set approval omits its owner transition")?;
-                if self.membership_transition.is_some() {
-                    return Err("MLS owner-set approval carries a close transition".into());
+                if self.membership_transition.is_some() || self.incarnation_recovery.is_some() {
+                    return Err("MLS owner-set approval carries an unrelated transition".into());
                 }
                 change.validate()?;
                 if self.owner_set_sequence.checked_add(1) != Some(change.next_owner_set.sequence)
@@ -348,11 +359,19 @@ impl MlsOwnerApprovalRequestV1 {
                         "MLS owner approval request differs from its owner transition".into(),
                     );
                 }
-                &change.delivery_transition
+                let transition = &change.delivery_transition;
+                (
+                    transition.conversation_id,
+                    transition.incarnation,
+                    transition.proposal_id,
+                    transition.next_member_count,
+                    transition.next_roster_commitment.as_str(),
+                    transition.next_participant_domains.as_slice(),
+                )
             }
             MlsControlActionTypeV1::CloseConversation => {
-                if self.owner_change.is_some() {
-                    return Err("MLS close approval carries an owner-set transition".into());
+                if self.owner_change.is_some() || self.incarnation_recovery.is_some() {
+                    return Err("MLS close approval carries an unrelated transition".into());
                 }
                 let transition = self
                     .membership_transition
@@ -367,16 +386,51 @@ impl MlsOwnerApprovalRequestV1 {
                 {
                     return Err("MLS close approval must preserve the exact roster".into());
                 }
-                transition
+                (
+                    transition.conversation_id,
+                    transition.incarnation,
+                    transition.proposal_id,
+                    transition.next_member_count,
+                    transition.next_roster_commitment.as_str(),
+                    transition.next_participant_domains.as_slice(),
+                )
+            }
+            MlsControlActionTypeV1::RecoverIncarnation => {
+                if self.owner_change.is_some() || self.membership_transition.is_some() {
+                    return Err("MLS recovery approval carries an unrelated transition".into());
+                }
+                let recovery = self
+                    .incarnation_recovery
+                    .as_ref()
+                    .ok_or("MLS recovery approval omits its recovery plan")?;
+                recovery.validate()?;
+                if self.owner_set_sequence
+                    != recovery
+                        .new_genesis
+                        .owner_set
+                        .as_ref()
+                        .ok_or("MLS recovery genesis has no owner set")?
+                        .sequence
+                    || self.transition_digest != recovery.transition_digest()?
+                {
+                    return Err("MLS recovery approval differs from its recovery plan".into());
+                }
+                (
+                    recovery.conversation_id,
+                    recovery.previous_incarnation,
+                    recovery.proposal_id,
+                    recovery.new_genesis.member_count,
+                    recovery.new_genesis.roster_commitment.as_str(),
+                    recovery.participant_domains.as_slice(),
+                )
             }
             _ => unreachable!("approval action checked above"),
         };
-        if self.proposal.conversation_id != transition.conversation_id
-            || self.proposal.incarnation != transition.incarnation
-            || self.proposal.proposal_id != transition.proposal_id
-            || transition.previous_member_count != transition.next_member_count
-            || transition.next_member_count != self.next_roster.len() as u32
-            || transition.next_roster_commitment != roster_commitment(&self.next_roster)?
+        if self.proposal.conversation_id != conversation_id
+            || self.proposal.incarnation != incarnation
+            || self.proposal.proposal_id != proposal_id
+            || next_member_count != self.next_roster.len() as u32
+            || next_commitment != roster_commitment(&self.next_roster)?
         {
             return Err("MLS owner approval request differs from its exact transition".into());
         }
@@ -400,7 +454,7 @@ impl MlsOwnerApprovalRequestV1 {
             .collect::<Result<BTreeSet<_>, _>>()?
             .into_iter()
             .collect::<Vec<_>>();
-        if participant_domains != transition.next_participant_domains {
+        if participant_domains != domains {
             return Err("MLS owner approval request has inconsistent private bindings".into());
         }
         if let Some(change) = &self.owner_change {
@@ -412,6 +466,20 @@ impl MlsOwnerApprovalRequestV1 {
                 .collect::<BTreeSet<_>>();
             if roster_owner_ids != declared_owner_ids {
                 return Err("MLS owner approval request has inconsistent owner bindings".into());
+            }
+        }
+        if let Some(recovery) = &self.incarnation_recovery {
+            let declared_owner_ids = recovery
+                .new_genesis
+                .owner_set
+                .as_ref()
+                .expect("validated recovery owner set")
+                .owners
+                .iter()
+                .map(|owner| owner.owner_id.as_str())
+                .collect::<BTreeSet<_>>();
+            if roster_owner_ids != declared_owner_ids {
+                return Err("MLS recovery approval has inconsistent owner bindings".into());
             }
         }
         Ok(())
@@ -428,6 +496,9 @@ impl MlsOwnerApprovalRequestV1 {
                 .membership_transition
                 .as_ref()
                 .ok_or_else(|| "MLS close approval omits its delivery transition".into()),
+            MlsControlActionTypeV1::RecoverIncarnation => {
+                Err("MLS recovery approval has no old-incarnation delivery transition".into())
+            }
             _ => Err("MLS owner approval has an unsupported action".into()),
         }
     }
@@ -1037,6 +1108,7 @@ pub fn verify_mls_client_control_history(
     let genesis_domains = &first.genesis_participant_domains;
     if genesis.conversation_id != private_state.conversation_id
         || genesis.incarnation != private_state.incarnation
+        || genesis.initial_epoch != private_state.initial_epoch
         || genesis.roster_commitment != roster_commitment(&private_state.genesis_roster)?
         || genesis.member_count as usize != private_state.genesis_roster.len()
         || genesis.authority_set != private_state.genesis_authority_set

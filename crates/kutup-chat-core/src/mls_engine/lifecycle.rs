@@ -114,6 +114,7 @@ impl MlsClient {
             incarnation: conversation.request.genesis.incarnation,
             proposal_id: Some(proposal_id),
             height: conversation.last_finalized_height.saturating_add(1),
+            initial_epoch: conversation.request.genesis.initial_epoch,
             epoch: conversation.last_finalized_epoch.saturating_add(1),
             previous_block_hash: conversation.last_block_hash.clone(),
             genesis_roster: conversation.request.members.clone(),

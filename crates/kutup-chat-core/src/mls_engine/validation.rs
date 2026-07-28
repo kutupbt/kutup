@@ -104,8 +104,7 @@ pub(super) fn validate_processed_control_envelope(
         || receipt.send_id.is_nil()
         || receipt.conversation_id.is_nil()
         || receipt.incarnation == 0
-        || receipt.height == 0
-        || receipt.epoch != receipt.height
+        || !matches!(receipt.epoch.checked_sub(receipt.height), Some(0 | 1))
         || receipt
             .cursor
             .parse::<u64>()
@@ -178,6 +177,21 @@ pub(super) fn validate_local_control_state(record: &LocalMlsConversationRecord) 
             "durable MLS group control roster is invalid".into(),
         ));
     }
+    match (
+        record.request.genesis.incarnation,
+        record.recovery_digest.as_deref(),
+    ) {
+        (1, None) => {}
+        (incarnation, Some(digest)) if incarnation > 1 => {
+            validate_sha256_hex("durable MLS recovery digest", digest)
+                .map_err(|error| ChatError::Db(error.to_string()))?;
+        }
+        _ => {
+            return Err(ChatError::Db(
+                "durable MLS recovery binding is inconsistent".into(),
+            ))
+        }
+    }
     let mut previous = None;
     let mut admins = 0usize;
     let mut owner_ids = BTreeSet::new();
@@ -241,6 +255,64 @@ pub(super) fn validate_local_control_state(record: &LocalMlsConversationRecord) 
                 "durable MLS control head has an invalid predecessor shape".into(),
             ))
         }
+    }
+    Ok(())
+}
+
+fn validate_local_genesis_request(request: &CreateMlsConversationRequestV1) -> Result<()> {
+    if request.genesis.incarnation == 1 {
+        return request
+            .validate()
+            .map_err(|error| ChatError::Db(format!("invalid durable MLS genesis: {error}")));
+    }
+    request.genesis.validate().map_err(ChatError::Db)?;
+    if request.genesis.kind != MlsConversationKindV1::Group
+        || request.genesis.initial_epoch != 1
+        || request.members.len() != request.genesis.member_count as usize
+        || roster_commitment(&request.members).map_err(ChatError::Db)?
+            != request.genesis.roster_commitment
+    {
+        return Err(ChatError::Db(
+            "durable recovered MLS genesis has an inexact roster".into(),
+        ));
+    }
+    let mut previous = None;
+    let mut admins = 0usize;
+    let mut owner_ids = BTreeSet::new();
+    for member in &request.members {
+        member.validate().map_err(ChatError::Db)?;
+        let address = member.address.canonical();
+        if previous
+            .as_ref()
+            .is_some_and(|prior: &String| address <= *prior)
+        {
+            return Err(ChatError::Db(
+                "durable recovered MLS genesis roster is not ordered".into(),
+            ));
+        }
+        previous = Some(address);
+        admins += usize::from(member.is_admin);
+        if let Some(owner_id) = member.owner_id.as_deref() {
+            if !owner_ids.insert(owner_id) {
+                return Err(ChatError::Db(
+                    "durable recovered MLS genesis repeats an owner".into(),
+                ));
+            }
+        }
+    }
+    let declared = request
+        .genesis
+        .owner_set
+        .as_ref()
+        .ok_or_else(|| ChatError::Db("recovered MLS genesis has no owners".into()))?
+        .owners
+        .iter()
+        .map(|owner| owner.owner_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if admins == 0 || owner_ids != declared {
+        return Err(ChatError::Db(
+            "durable recovered MLS genesis has inconsistent private roles".into(),
+        ));
     }
     Ok(())
 }
@@ -540,6 +612,7 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
         || metadata.pending_authority_changes.len() > MAX_PENDING_COMMITS
         || metadata.pending_owner_changes.len() > MAX_PENDING_COMMITS
         || metadata.pending_closes.len() > MAX_PENDING_COMMITS
+        || metadata.pending_recoveries.len() > MAX_PENDING_COMMITS
         || metadata.owner_approval_requests.len() > MAX_PENDING_COMMITS
     {
         return Err(ChatError::Db(
@@ -554,6 +627,7 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
     if metadata.group_owner_private_keys.len() > MAX_PENDING_COMMITS
         || metadata.group_owner_candidate_private_keys.len() > MAX_PENDING_COMMITS
         || metadata.conversations.len() > MAX_PENDING_COMMITS
+        || metadata.incarnation_history.len() > MAX_PENDING_COMMITS
         || metadata.processed_control_envelopes.len() > MAX_PENDING_COMMITS
     {
         return Err(ChatError::Db(
@@ -625,11 +699,29 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
             ));
         }
     }
+    for (key, control) in &metadata.pending_recoveries {
+        control.validate_durable()?;
+        let new_key = BASE64.encode(&control.new_mls_group_id);
+        if key != &BASE64.encode(&control.mls_group_id)
+            || !metadata.pending_commits.contains_key(&new_key)
+            || metadata.pending_membership_changes.contains_key(key)
+            || metadata.pending_authority_changes.contains_key(key)
+            || metadata.pending_owner_changes.contains_key(key)
+            || metadata.pending_closes.contains_key(key)
+            || !metadata.group_control_private_keys.contains_key(&new_key)
+            || !metadata.group_owner_private_keys.contains_key(&new_key)
+        {
+            return Err(ChatError::Db(
+                "durable MLS recovery key or replacement Commit is inconsistent".into(),
+            ));
+        }
+    }
     for (key, request) in &metadata.owner_approval_requests {
         request.validate_durable()?;
         if key != &BASE64.encode(&request.mls_group_id)
             || metadata.pending_owner_changes.contains_key(key)
             || metadata.pending_closes.contains_key(key)
+            || metadata.pending_recoveries.contains_key(key)
         {
             return Err(ChatError::Db(
                 "durable MLS owner approval request conflicts with local control state".into(),
@@ -659,10 +751,7 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
     }
     let mut conversation_group_ids = HashSet::with_capacity(metadata.conversations.len());
     for (conversation_id, record) in &metadata.conversations {
-        record
-            .request
-            .validate()
-            .map_err(|error| ChatError::Db(format!("invalid durable MLS genesis: {error}")))?;
+        validate_local_genesis_request(&record.request)?;
         if record.request.genesis.kind != MlsConversationKindV1::Group
             || conversation_id != &record.request.genesis.conversation_id.to_string()
         {
@@ -740,6 +829,11 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
                         "durable MLS genesis hash differs from its request".into(),
                     ));
                 }
+            }
+            (LocalMlsConversationStatus::ReadOnly, _) => {
+                return Err(ChatError::Db(
+                    "current MLS conversation cannot be read-only".into(),
+                ))
             }
             _ => {
                 return Err(ChatError::Db(
@@ -855,6 +949,9 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
                 )
                 .map_err(ChatError::Db)?;
         }
+        if let Some(control) = metadata.pending_recoveries.get(&group_key) {
+            super::recovery::validate_pending_recovery(control, record)?;
+        }
         if let Some(pending) = metadata.owner_approval_requests.get(&group_key) {
             let request = &pending.request;
             let requester = pending.requester.canonical();
@@ -869,17 +966,86 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
                 || request.proposal.incarnation != record.request.genesis.incarnation
                 || request.proposal.base_epoch != record.last_finalized_epoch
                 || request.owner_set_sequence != record.current_owner_set.sequence
-                || request
-                    .delivery_transition()
-                    .map_err(ChatError::Db)?
-                    .previous_roster_commitment
-                    != roster_commitment(&record.current_roster).map_err(ChatError::Db)?
                 || !requester_is_owner
             {
                 return Err(ChatError::Db(
                     "durable MLS owner approval request differs from its conversation pin".into(),
                 ));
             }
+            let pinned_roster = roster_commitment(&record.current_roster).map_err(ChatError::Db)?;
+            match request.proposal.action_type {
+                MlsControlActionTypeV1::OwnerSetChange
+                | MlsControlActionTypeV1::CloseConversation
+                    if request
+                        .delivery_transition()
+                        .map_err(ChatError::Db)?
+                        .previous_roster_commitment
+                        == pinned_roster => {}
+                MlsControlActionTypeV1::RecoverIncarnation
+                    if request
+                        .incarnation_recovery
+                        .as_ref()
+                        .is_some_and(|recovery| {
+                            recovery.previous_genesis_hash
+                                == record.request.genesis.genesis_hash().unwrap_or_default()
+                                && recovery.previous_height == record.last_finalized_height
+                                && recovery.previous_epoch == record.last_finalized_epoch
+                                && recovery.previous_block_hash == record.last_block_hash
+                                && recovery.previous_roster_commitment == pinned_roster
+                                && recovery.new_genesis.owner_set.as_ref()
+                                    == Some(&record.current_owner_set)
+                        }) => {}
+                _ => {
+                    return Err(ChatError::Db(
+                        "durable MLS owner approval transition differs from its pin".into(),
+                    ))
+                }
+            }
+        }
+    }
+    let mut last_incarnation = BTreeMap::<Uuid, u64>::new();
+    for (key, record) in &metadata.incarnation_history {
+        validate_local_genesis_request(&record.request)?;
+        validate_local_control_state(record)?;
+        let expected_key = format!(
+            "{}:{:020}",
+            record.request.genesis.conversation_id, record.request.genesis.incarnation
+        );
+        if key != &expected_key
+            || record.status != LocalMlsConversationStatus::ReadOnly
+            || record.server_genesis_hash.as_deref()
+                != Some(
+                    record
+                        .request
+                        .genesis
+                        .genesis_hash()
+                        .map_err(ChatError::Db)?
+                        .as_str(),
+                )
+        {
+            return Err(ChatError::Db(
+                "durable MLS incarnation history is inconsistent".into(),
+            ));
+        }
+        let previous = last_incarnation
+            .entry(record.request.genesis.conversation_id)
+            .or_insert(0);
+        if previous.checked_add(1) != Some(record.request.genesis.incarnation) {
+            return Err(ChatError::Db(
+                "durable MLS incarnation history has a gap".into(),
+            ));
+        }
+        *previous = record.request.genesis.incarnation;
+    }
+    for (conversation_id, last) in last_incarnation {
+        let current = metadata
+            .conversations
+            .get(&conversation_id.to_string())
+            .ok_or_else(|| ChatError::Db("MLS incarnation history has no current record".into()))?;
+        if last.checked_add(1) != Some(current.request.genesis.incarnation) {
+            return Err(ChatError::Db(
+                "current MLS incarnation does not extend its history".into(),
+            ));
         }
     }
     let mut receipt_send_ids = HashSet::with_capacity(metadata.processed_control_envelopes.len());
@@ -897,14 +1063,31 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
         let conversation = metadata
             .conversations
             .get(&receipt.conversation_id.to_string())
+            .filter(|record| record.request.genesis.incarnation == receipt.incarnation)
+            .or_else(|| {
+                metadata.incarnation_history.values().find(|record| {
+                    record.request.genesis.conversation_id == receipt.conversation_id
+                        && record.request.genesis.incarnation == receipt.incarnation
+                })
+            })
             .ok_or_else(|| {
-                ChatError::Db("durable MLS control receipt has no conversation record".into())
+                ChatError::Db("durable MLS control receipt has no incarnation".into())
             })?;
         if conversation.request.genesis.incarnation != receipt.incarnation
+            || conversation
+                .request
+                .genesis
+                .initial_epoch
+                .checked_add(receipt.height)
+                != Some(receipt.epoch)
             || receipt.height > conversation.last_finalized_height
             || receipt.epoch > conversation.last_finalized_epoch
             || (receipt.height == conversation.last_finalized_height
-                && conversation.last_block_hash.as_deref() != Some(receipt.block_hash.as_str()))
+                && conversation
+                    .last_block_hash
+                    .as_deref()
+                    .or(conversation.recovery_digest.as_deref())
+                    != Some(receipt.block_hash.as_str()))
         {
             return Err(ChatError::Db(
                 "durable MLS control receipt differs from its conversation pin".into(),
@@ -923,6 +1106,10 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
             .conversations
             .values()
             .any(|record| &record.request.genesis.mls_group_id == group_id)
+            && !metadata
+                .pending_recoveries
+                .values()
+                .any(|recovery| BASE64.encode(&recovery.new_mls_group_id) == *group_id)
         {
             return Err(ChatError::Db(
                 "durable MLS owner material has no conversation record".into(),
