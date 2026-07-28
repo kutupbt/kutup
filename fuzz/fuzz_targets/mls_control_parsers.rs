@@ -1,10 +1,9 @@
 #![no_main]
 
 use kutup_chat_proto::{
-    CommitMlsControlBlockV1, FederatedMlsAuthorityBootstrapPageV1,
-    FederatedMlsControlReplicaV1, FederatedMlsOrderingVoteRequestV1,
-    MlsAuthorityChangeV1, MlsClientControlHistoryPageV1, MlsMembershipDeliveryV1,
-    MlsPrivateControlStateV1,
+    CommitMlsControlBlockV1, FederatedMlsAuthorityBootstrapPageV1, FederatedMlsControlReplicaV1,
+    FederatedMlsOrderingVoteRequestV1, MlsAuthorityChangeV1, MlsClientControlHistoryPageV1,
+    MlsMembershipDeliveryV1, MlsPrivateControlStateV1,
 };
 use libfuzzer_sys::fuzz_target;
 

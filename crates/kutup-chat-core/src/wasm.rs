@@ -1427,17 +1427,10 @@ impl WasmChatClient {
         };
         let expected: Vec<VerifiedMlsCredential> =
             from_transport(expected_members).map_err(chat_error)?;
-        let recovery: MlsIncarnationRecoveryV1 =
-            from_transport(recovery).map_err(chat_error)?;
+        let recovery: MlsIncarnationRecoveryV1 = from_transport(recovery).map_err(chat_error)?;
         let joined = self
             .mls_client()
-            .join_from_recovery_welcome(
-                &envelope,
-                &mls_group_id,
-                &welcome,
-                &expected,
-                &recovery,
-            )
+            .join_from_recovery_welcome(&envelope, &mls_group_id, &welcome, &expected, &recovery)
             .await
             .map_err(chat_error)?;
         to_output(&joined)
