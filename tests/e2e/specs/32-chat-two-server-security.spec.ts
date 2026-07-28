@@ -330,27 +330,6 @@ test.describe('two-server secure chat', () => {
     ).toBeVisible({ timeout: 90_000 })
     await pageA.keyboard.press('Escape')
 
-    const administratorRemoveCommit = pageB.waitForResponse((response) => {
-      const path = new URL(response.url()).pathname
-      return response.request().method() === 'POST'
-        && path === '/api/chat/mls/control/blocks'
-    })
-    await pageB.getByTestId('chat-group-members').click()
-    await pageB.getByRole('button', {
-      name: `Remove ${charlie}@a.test from group`,
-    }).click()
-    expect((await requireResponseOrUiError(pageB, administratorRemoveCommit)).ok()).toBe(true)
-    await expect(
-      pageB.getByTestId(`chat-group-member-${charlie}@a.test`),
-    ).toHaveCount(0, { timeout: 90_000 })
-    await pageB.keyboard.press('Escape')
-
-    await pageA.getByTestId('chat-group-members').click()
-    await expect(
-      pageA.getByTestId(`chat-group-member-${charlie}@a.test`),
-    ).toHaveCount(0, { timeout: 90_000 })
-    await pageA.keyboard.press('Escape')
-
     // Promote Bob while the current owner set is Alice-only (q=1), then prove
     // the resulting two-owner set (q=2) cannot remove Bob until his exact
     // encrypted manual approval returns. Both clients restart with the
@@ -540,6 +519,154 @@ test.describe('two-server secure chat', () => {
       pageB.getByTestId(`chat-group-member-owner-${bob}@b.test`),
     ).toBeVisible({ timeout: 90_000 })
     await pageB.keyboard.press('Escape')
+
+    // Private group policy uses the same exact owner-only approval exchange.
+    // The policy value stays in MLS; ordering sees only an unchanged-roster
+    // transition. Restart both owners before approval to prove durable resume.
+    let senderPolicyControlSubmitted = false
+    let awaitingSenderPolicyApproval = true
+    pageA.on('request', (request) => {
+      if (
+        awaitingSenderPolicyApproval
+        && request.method() === 'POST'
+        && new URL(request.url()).pathname === '/api/chat/mls/control/blocks'
+      ) senderPolicyControlSubmitted = true
+    })
+    const senderPolicyApprovalRequest = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/anonymous/messages'
+    })
+    await pageA.getByTestId('chat-group-members').click()
+    await pageA.getByTestId('chat-group-senders-administrators').click()
+    expect((await requireResponseOrUiError(pageA, senderPolicyApprovalRequest)).ok()).toBe(true)
+    await pageA.waitForTimeout(1_000)
+    expect(senderPolicyControlSubmitted).toBe(false)
+    await pageA.reload()
+    await expect(pageA.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+    await pageA.getByTestId(`chat-group-${conversationId}`).click()
+
+    await pageB.getByTestId('chat-group-members').click()
+    await expect(pageB.getByText('Approve who may send messages?')).toBeVisible({ timeout: 90_000 })
+    await pageB.reload()
+    await expect(pageB.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+    await pageB.getByTestId(`chat-group-${conversationId}`).click()
+    await pageB.getByTestId('chat-group-members').click()
+    await expect(pageB.getByText('Approve who may send messages?')).toBeVisible({ timeout: 90_000 })
+
+    const senderPolicyApprovalResponse = pageB.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/anonymous/messages'
+    })
+    const senderPolicyCommit = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/control/blocks'
+    })
+    await pageB.getByTestId('chat-group-owner-approve').click()
+    expect((await requireResponseOrUiError(pageB, senderPolicyApprovalResponse)).ok()).toBe(true)
+    awaitingSenderPolicyApproval = false
+    expect((await requireResponseOrUiError(pageA, senderPolicyCommit)).ok()).toBe(true)
+    await pageB.keyboard.press('Escape')
+
+    await pageA.getByTestId('chat-group-members').click()
+    await expect(pageA.getByTestId('chat-group-senders-administrators')).toBeDisabled({
+      timeout: 90_000,
+    })
+    await pageA.keyboard.press('Escape')
+    // The orderer acknowledgement only proves that Alice finalized the block.
+    // Wait until the remote owner has independently applied that epoch and
+    // published its epoch-bound delivery capability before sending the next
+    // owner-approval request.
+    await pageB.getByTestId('chat-group-members').click()
+    await expect(pageB.getByTestId('chat-group-senders-administrators')).toBeDisabled({
+      timeout: 90_000,
+    })
+    await pageB.keyboard.press('Escape')
+    await pageC.getByTestId(`chat-group-${conversationId}`).click()
+    await expect(
+      pageC.getByPlaceholder('Only group administrators may send messages'),
+    ).toBeDisabled({ timeout: 90_000 })
+
+    // V1 cryptographic policy is monotonic: owners may tighten the canonical
+    // application plaintext ceiling but cannot alter suite/padding/delivery.
+    const cryptographicPolicyApprovalRequest = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/anonymous/messages'
+    })
+    await pageA.getByTestId('chat-group-members').click()
+    await pageA.getByTestId('chat-group-maximum-plaintext').fill('1024')
+    await pageA.getByTestId('chat-group-tighten-plaintext').click()
+    expect((await requireResponseOrUiError(pageA, cryptographicPolicyApprovalRequest)).ok()).toBe(true)
+    await pageA.keyboard.press('Escape')
+
+    await pageB.getByTestId('chat-group-members').click()
+    await expect(pageB.getByText('Approve stricter MLS message limits?')).toBeVisible({
+      timeout: 90_000,
+    })
+    const cryptographicPolicyApprovalResponse = pageB.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/anonymous/messages'
+    })
+    const cryptographicPolicyCommit = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/control/blocks'
+    })
+    await pageB.getByTestId('chat-group-owner-approve').click()
+    expect((await requireResponseOrUiError(pageB, cryptographicPolicyApprovalResponse)).ok()).toBe(true)
+    expect((await requireResponseOrUiError(pageA, cryptographicPolicyCommit)).ok()).toBe(true)
+    await pageB.keyboard.press('Escape')
+
+    await pageA.getByTestId('chat-group-members').click()
+    await expect(pageA.getByTestId('chat-group-maximum-plaintext')).toHaveValue('1024', {
+      timeout: 90_000,
+    })
+    await pageA.keyboard.press('Escape')
+    let oversizedSubmitted = false
+    const observeOversized = (request: import('@playwright/test').Request) => {
+      if (
+        request.method() === 'POST'
+        && new URL(request.url()).pathname === '/api/chat/mls/anonymous/messages'
+      ) oversizedSubmitted = true
+    }
+    pageA.on('request', observeOversized)
+    await send(pageA, 'x'.repeat(2048))
+    await expect(pageA.locator('[data-sonner-toast][data-type="error"]')).toBeVisible({
+      timeout: 15_000,
+    })
+    await pageA.waitForTimeout(1_000)
+    expect(oversizedSubmitted).toBe(false)
+    pageA.off('request', observeOversized)
+    await expect(pageA.locator('[data-sonner-toast][data-type="error"]')).toHaveCount(0, {
+      timeout: 15_000,
+    })
+
+    // Group-control traffic remains available under administrator-only
+    // application policy. Bob removes the non-administrator before recovery.
+    const administratorRemoveCommit = pageB.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/control/blocks'
+    })
+    await pageB.getByTestId('chat-group-members').click()
+    await pageB.getByRole('button', {
+      name: `Remove ${charlie}@a.test from group`,
+    }).click()
+    expect((await requireResponseOrUiError(pageB, administratorRemoveCommit)).ok()).toBe(true)
+    await expect(
+      pageB.getByTestId(`chat-group-member-${charlie}@a.test`),
+    ).toHaveCount(0, { timeout: 90_000 })
+    await pageB.keyboard.press('Escape')
+
+    await pageA.getByTestId('chat-group-members').click()
+    await expect(
+      pageA.getByTestId(`chat-group-member-${charlie}@a.test`),
+    ).toHaveCount(0, { timeout: 90_000 })
+    await pageA.keyboard.press('Escape')
 
     let recoverySubmitted = false
     let awaitingRecoveryApproval = true

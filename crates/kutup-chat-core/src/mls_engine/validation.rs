@@ -219,6 +219,22 @@ pub(super) fn validate_local_control_state(record: &LocalMlsConversationRecord) 
         .validate()
         .map_err(ChatError::Db)?;
     record.current_owner_set.validate().map_err(ChatError::Db)?;
+    record
+        .genesis_authorization_policy
+        .validate()
+        .map_err(ChatError::Db)?;
+    record
+        .genesis_cryptographic_policy
+        .validate()
+        .map_err(ChatError::Db)?;
+    record
+        .current_authorization_policy
+        .validate()
+        .map_err(ChatError::Db)?;
+    record
+        .current_cryptographic_policy
+        .validate()
+        .map_err(ChatError::Db)?;
     let declared_owners = record
         .current_owner_set
         .owners
@@ -227,6 +243,12 @@ pub(super) fn validate_local_control_state(record: &LocalMlsConversationRecord) 
         .collect::<BTreeSet<_>>();
     if admins == 0
         || owner_ids != declared_owners
+        || record.genesis_authorization_policy.sequence != 1
+        || record.genesis_cryptographic_policy.sequence != 1
+        || record.current_authorization_policy.sequence
+            > record.last_finalized_height.saturating_add(1)
+        || record.current_cryptographic_policy.sequence
+            > record.last_finalized_height.saturating_add(1)
         || record.last_finalized_epoch
             != record
                 .request
@@ -612,6 +634,7 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
         || metadata.pending_authority_changes.len() > MAX_PENDING_COMMITS
         || metadata.pending_owner_changes.len() > MAX_PENDING_COMMITS
         || metadata.pending_closes.len() > MAX_PENDING_COMMITS
+        || metadata.pending_policy_changes.len() > MAX_PENDING_COMMITS
         || metadata.pending_recoveries.len() > MAX_PENDING_COMMITS
         || metadata.owner_approval_requests.len() > MAX_PENDING_COMMITS
     {
@@ -699,6 +722,27 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
             ));
         }
     }
+    for (key, control) in &metadata.pending_policy_changes {
+        let conversation = metadata
+            .conversations
+            .values()
+            .find(|record| record.request.genesis.mls_group_id == *key)
+            .ok_or_else(|| {
+                ChatError::Db("durable MLS policy change has no conversation pin".into())
+            })?;
+        super::policy::validate_pending_policy_change(control, conversation)?;
+        if key != &BASE64.encode(&control.mls_group_id)
+            || !metadata.pending_commits.contains_key(key)
+            || metadata.pending_membership_changes.contains_key(key)
+            || metadata.pending_authority_changes.contains_key(key)
+            || metadata.pending_owner_changes.contains_key(key)
+            || metadata.pending_closes.contains_key(key)
+        {
+            return Err(ChatError::Db(
+                "durable MLS policy key or pending Commit is inconsistent".into(),
+            ));
+        }
+    }
     for (key, control) in &metadata.pending_recoveries {
         control.validate_durable()?;
         let new_key = BASE64.encode(&control.new_mls_group_id);
@@ -708,6 +752,7 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
             || metadata.pending_authority_changes.contains_key(key)
             || metadata.pending_owner_changes.contains_key(key)
             || metadata.pending_closes.contains_key(key)
+            || metadata.pending_policy_changes.contains_key(key)
             || !metadata.group_control_private_keys.contains_key(&new_key)
             || !metadata.group_owner_private_keys.contains_key(&new_key)
         {
@@ -721,6 +766,7 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
         if key != &BASE64.encode(&request.mls_group_id)
             || metadata.pending_owner_changes.contains_key(key)
             || metadata.pending_closes.contains_key(key)
+            || metadata.pending_policy_changes.contains_key(key)
             || metadata.pending_recoveries.contains_key(key)
         {
             return Err(ChatError::Db(
@@ -949,6 +995,27 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
                 )
                 .map_err(ChatError::Db)?;
         }
+        if let Some(control) = metadata.pending_policy_changes.get(&group_key) {
+            super::policy::validate_pending_policy_change(control, record)?;
+            let block = &control.vote_request.block;
+            if record.status != LocalMlsConversationStatus::Active
+                || block.conversation_id != record.request.genesis.conversation_id
+                || block.incarnation != record.request.genesis.incarnation
+                || block.height != record.last_finalized_height.saturating_add(1)
+                || block.previous_block_hash != record.last_block_hash
+                || block.epoch_before != record.last_finalized_epoch
+                || control.vote_request.authority_set != record.current_authority_set
+                || control.transition.previous_roster_commitment
+                    != roster_commitment(&record.current_roster).map_err(ChatError::Db)?
+                || control.transition.next_roster_commitment
+                    != control.transition.previous_roster_commitment
+                || control.current_roster != record.current_roster
+            {
+                return Err(ChatError::Db(
+                    "durable MLS policy change does not extend its conversation pin".into(),
+                ));
+            }
+        }
         if let Some(control) = metadata.pending_recoveries.get(&group_key) {
             super::recovery::validate_pending_recovery(control, record)?;
         }
@@ -981,6 +1048,45 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
                         .map_err(ChatError::Db)?
                         .previous_roster_commitment
                         == pinned_roster => {}
+                MlsControlActionTypeV1::AuthorizationPolicyChange
+                | MlsControlActionTypeV1::CryptographicPolicyChange
+                    if request
+                        .delivery_transition()
+                        .map_err(ChatError::Db)?
+                        .previous_roster_commitment
+                        == pinned_roster
+                        && request.next_roster == record.current_roster
+                        && match request.proposal.action_type {
+                            MlsControlActionTypeV1::AuthorizationPolicyChange => request
+                                .next_authorization_policy
+                                .as_ref()
+                                .is_some_and(|next| {
+                                    record
+                                        .current_authorization_policy
+                                        .sequence
+                                        .checked_add(1)
+                                        == Some(next.sequence)
+                                        && record
+                                            .current_authorization_policy
+                                            .application_senders
+                                            != next.application_senders
+                                }),
+                            MlsControlActionTypeV1::CryptographicPolicyChange => request
+                                .next_cryptographic_policy
+                                .as_ref()
+                                .is_some_and(|next| {
+                                    record
+                                        .current_cryptographic_policy
+                                        .sequence
+                                        .checked_add(1)
+                                        == Some(next.sequence)
+                                        && next.maximum_application_plaintext_bytes
+                                            < record
+                                                .current_cryptographic_policy
+                                                .maximum_application_plaintext_bytes
+                            }),
+                            _ => false,
+                        } => {}
                 MlsControlActionTypeV1::RecoverIncarnation
                     if request
                         .incarnation_recovery
@@ -1101,6 +1207,7 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
         .chain(metadata.owner_candidates.keys())
         .chain(metadata.owner_approval_requests.keys())
         .chain(metadata.pending_closes.keys())
+        .chain(metadata.pending_policy_changes.keys())
     {
         if !metadata
             .conversations

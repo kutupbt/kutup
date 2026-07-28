@@ -9,11 +9,14 @@ import type {
   FinalizedMlsClose,
   FinalizedMlsMembershipChange,
   FinalizedMlsOwnerChange,
+  FinalizedMlsPolicyChange,
   FinalizedMlsRecovery,
   JoinedMlsConversation,
   LocalMlsConversationRecord,
   LocalMlsGroupState,
   MlsConversationMember,
+  MlsGroupAuthorizationPolicy,
+  MlsGroupCryptographicPolicy,
   MlsIncarnationRecovery,
   MlsMailboxEnvelope,
   MlsOwnerCandidate,
@@ -24,6 +27,7 @@ import type {
   PendingMlsMembershipChange,
   PendingMlsOwnerApprovalRequest,
   PendingMlsOwnerChange,
+  PendingMlsPolicyChange,
   PendingMlsRecovery,
   PendingMlsInvitation,
   PreparedMlsGroupGenesis,
@@ -96,6 +100,8 @@ interface MlsKeyPackageCount {
  * transitions run under the same cross-tab crypto lock as the 1:1 engine.
  */
 export class MlsConversationService {
+  private readonly publishedCapabilityEpochs = new Map<string, string>()
+
   constructor(
     private readonly client: WasmChatClientHandle,
     private readonly transport: ChatTransportPort,
@@ -449,6 +455,88 @@ export class MlsConversationService {
         continue
       }
       finalized.push(await this.publishPendingClose(control))
+    }
+    return finalized
+  }
+
+  async setApplicationSenderPolicy(
+    conversationId: string,
+    applicationSenders: 'members' | 'administrators',
+  ): Promise<FinalizedMlsPolicyChange | null> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const nextPolicy: MlsGroupAuthorizationPolicy = {
+      policyVersion: 1,
+      sequence: conversation.currentAuthorizationPolicy.sequence + 1,
+      applicationSenders: applicationSenders === 'members' ? 1 : 2,
+    }
+    const prepared = await this.withCryptoLock(() =>
+      this.client.prepareMlsAuthorizationPolicyChange(
+        groupId,
+        requireBrowserCrypto().randomUUID(),
+        nextPolicy,
+        String(Math.floor(Date.now() / 1000)),
+      ))
+    validatePendingPolicyChange(prepared.control, groupId)
+    if (!await this.withCryptoLock(() => this.client.mlsPolicyChangeHasOwnerQuorum(groupId))) {
+      await this.publishOwnerApprovalRequest(groupId)
+      return null
+    }
+    return this.publishPendingPolicyChange(prepared.control)
+  }
+
+  async tightenMaximumApplicationPlaintext(
+    conversationId: string,
+    maximumBytes: number,
+  ): Promise<FinalizedMlsPolicyChange | null> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    if (
+      !Number.isSafeInteger(maximumBytes)
+      || maximumBytes < 1024
+      || maximumBytes >= conversation.currentCryptographicPolicy.maximumApplicationPlaintextBytes
+    ) {
+      throw new Error('MLS plaintext maximum must tighten the current policy within V1 bounds')
+    }
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const nextPolicy: MlsGroupCryptographicPolicy = {
+      ...conversation.currentCryptographicPolicy,
+      sequence: conversation.currentCryptographicPolicy.sequence + 1,
+      maximumApplicationPlaintextBytes: maximumBytes,
+    }
+    const prepared = await this.withCryptoLock(() =>
+      this.client.prepareMlsCryptographicPolicyChange(
+        groupId,
+        requireBrowserCrypto().randomUUID(),
+        nextPolicy,
+        String(Math.floor(Date.now() / 1000)),
+      ))
+    validatePendingPolicyChange(prepared.control, groupId)
+    if (!await this.withCryptoLock(() => this.client.mlsPolicyChangeHasOwnerQuorum(groupId))) {
+      await this.publishOwnerApprovalRequest(groupId)
+      return null
+    }
+    return this.publishPendingPolicyChange(prepared.control)
+  }
+
+  async reconcilePendingPolicyChanges(): Promise<FinalizedMlsPolicyChange[]> {
+    const pending = await this.withCryptoLock(() => this.client.pendingMlsPolicyChanges())
+    const finalized: FinalizedMlsPolicyChange[] = []
+    for (const control of pending) {
+      const groupId = Uint8Array.from(control.mlsGroupId)
+      validatePendingPolicyChange(control, groupId)
+      if (!await this.withCryptoLock(() => this.client.mlsPolicyChangeHasOwnerQuorum(groupId))) {
+        await this.publishOwnerApprovalRequest(groupId)
+        continue
+      }
+      finalized.push(await this.publishPendingPolicyChange(control))
     }
     return finalized
   }
@@ -1079,13 +1167,20 @@ export class MlsConversationService {
     await this.reconcilePendingMembershipChanges()
     await this.reconcilePendingAuthorityChanges()
     await this.reconcilePendingOwnerChanges()
+    await this.reconcilePendingPolicyChanges()
     await this.reconcilePendingCloses()
     await this.reconcilePendingRecoveries()
+    for (const conversation of await this.conversations()) {
+      if (conversation.status === 'active') {
+        await this.publishCurrentDeliveryCapability(conversation)
+      }
+    }
     await this.reconcileInboundRecoveries()
     await this.reconcileInboundMembershipCommits()
     await this.reconcilePendingApplicationMessages()
     await this.reconcileInboundApplicationMessages()
     await this.reconcilePendingOwnerChanges()
+    await this.reconcilePendingPolicyChanges()
     await this.reconcilePendingCloses()
     await this.reconcilePendingRecoveries()
   }
@@ -1266,6 +1361,12 @@ export class MlsConversationService {
     if (!conversation.currentRoster.some(
       member => canonicalAccountAddress(member.address) === canonicalAccountAddress(recipient),
     )) return
+    const publicationKey =
+      `${conversation.request.genesis.incarnation}:${conversation.lastFinalizedEpoch}`
+    if (
+      this.publishedCapabilityEpochs.get(conversation.request.genesis.conversationId)
+      === publicationKey
+    ) return
     const groupId = decodeCanonicalBase64(
       conversation.request.genesis.mlsGroupId,
       16,
@@ -1282,6 +1383,9 @@ export class MlsConversationService {
     if (derived.verifierHash.length !== 32 || derived.capability.length !== 16) {
       throw new Error('shared MLS capability derivation returned invalid key material')
     }
+    if (derived.epoch !== conversation.lastFinalizedEpoch) {
+      throw new Error('shared MLS capability is bound to a stale group epoch')
+    }
     await this.transport.publishMlsDeliveryCapability({
       protocolVersion: MLS_PROTOCOL_VERSION,
       conversationId: conversation.request.genesis.conversationId,
@@ -1291,6 +1395,10 @@ export class MlsConversationService {
       capabilityHash: encodeHex(derived.verifierHash),
       policySequence: 1,
     })
+    this.publishedCapabilityEpochs.set(
+      conversation.request.genesis.conversationId,
+      publicationKey,
+    )
   }
 
   private async deliverApplicationEntry(initial: MlsOutboxEntry): Promise<void> {
@@ -1518,6 +1626,46 @@ export class MlsConversationService {
     return finalized
   }
 
+  private async publishPendingPolicyChange(
+    control: PendingMlsPolicyChange,
+  ): Promise<FinalizedMlsPolicyChange> {
+    const groupId = Uint8Array.from(control.mlsGroupId)
+    validatePendingPolicyChange(control, groupId)
+    for (const delivery of control.deliveries) {
+      await this.transport.stageMlsMembershipDelivery(delivery)
+    }
+    let request = control.finalRequest
+    if (!request) {
+      const certificate = await this.transport.collectMlsOrderingVotes(control.voteRequest)
+      request = await this.withCryptoLock(() =>
+        this.client.buildMlsPolicyCommitRequest(groupId, certificate))
+    }
+    const acknowledgement = requireControlBlockResponse(
+      await this.transport.commitMlsControlBlock(request),
+      control,
+    )
+    const finalized = await this.withCryptoLock(() =>
+      this.client.finalizeMlsPolicyChange(groupId, acknowledgement))
+    if (
+      finalized.group.epoch !== control.voteRequest.block.epochAfter
+      || finalized.conversation.lastBlockHash !== acknowledgement.blockHash
+      || (
+        control.nextAuthorizationPolicy
+        && finalized.conversation.currentAuthorizationPolicy.sequence
+          !== control.nextAuthorizationPolicy.sequence
+      )
+      || (
+        control.nextCryptographicPolicy
+        && finalized.conversation.currentCryptographicPolicy.sequence
+          !== control.nextCryptographicPolicy.sequence
+      )
+    ) {
+      throw new Error('durable MLS policy state differs from its finalized block')
+    }
+    await this.publishCurrentDeliveryCapability(finalized.conversation)
+    return finalized
+  }
+
   private async publishPendingRecovery(
     control: PendingMlsRecovery,
   ): Promise<FinalizedMlsRecovery> {
@@ -1625,6 +1773,14 @@ function validateLocalGenesisRecord(record: LocalMlsConversationRecord): void {
     || record.currentRoster.length > 1000
     || record.currentAuthoritySet.authorities.length < 1
     || record.currentOwnerSet.owners.length < 1
+    || !isAuthorizationPolicy(record.genesisAuthorizationPolicy)
+    || !isAuthorizationPolicy(record.currentAuthorizationPolicy)
+    || !isCryptographicPolicy(record.genesisCryptographicPolicy)
+    || !isCryptographicPolicy(record.currentCryptographicPolicy)
+    || record.genesisAuthorizationPolicy.sequence !== 1
+    || record.genesisCryptographicPolicy.sequence !== 1
+    || record.currentAuthorizationPolicy.sequence > record.lastFinalizedHeight + 1
+    || record.currentCryptographicPolicy.sequence > record.lastFinalizedHeight + 1
     || (
       record.lastFinalizedHeight === 0
       && (
@@ -1651,6 +1807,37 @@ function validateLocalGenesisRecord(record: LocalMlsConversationRecord): void {
     throw new Error('invalid durable MLS group genesis record')
   }
   decodeCanonicalBase64(genesis.mlsGroupId, 16, 255)
+}
+
+function isAuthorizationPolicy(
+  value: MlsGroupAuthorizationPolicy | undefined,
+): value is MlsGroupAuthorizationPolicy {
+  return Boolean(
+    value
+    && value.policyVersion === 1
+    && Number.isSafeInteger(value.sequence)
+    && value.sequence >= 1
+    && [1, 2].includes(value.applicationSenders),
+  )
+}
+
+function isCryptographicPolicy(
+  value: MlsGroupCryptographicPolicy | undefined,
+): value is MlsGroupCryptographicPolicy {
+  return Boolean(
+    value
+    && value.policyVersion === 1
+    && Number.isSafeInteger(value.sequence)
+    && value.sequence >= 1
+    && value.suite === 2
+    && value.requiredPrivateControlExtension === 0xff4b
+    && value.maximumPastEpochs === 2
+    && value.anonymousDeliveryRequired === true
+    && value.paddingBlockBytes === 1024
+    && Number.isSafeInteger(value.maximumApplicationPlaintextBytes)
+    && value.maximumApplicationPlaintextBytes >= 1024
+    && value.maximumApplicationPlaintextBytes <= 1024 * 1024,
+  )
 }
 
 function validateVerifiedKeyPackage(
@@ -1864,9 +2051,68 @@ function validatePendingClose(
   }
 }
 
+function validatePendingPolicyChange(
+  control: PendingMlsPolicyChange,
+  expectedGroupId: Uint8Array,
+): void {
+  const block = control?.voteRequest?.block
+  const transition = control?.transition
+  const authorization = control?.nextAuthorizationPolicy
+  const cryptographic = control?.nextCryptographicPolicy
+  if (
+    !control
+    || !equalBytes(control.mlsGroupId, expectedGroupId)
+    || !isSha256(control.commitHash)
+    || !Array.isArray(control.currentRoster)
+    || control.currentRoster.length < 1
+    || control.currentRoster.length > 1000
+    || !Array.isArray(control.deliveries)
+    || control.deliveries.length < 1
+    || !block
+    || !transition
+    || !isUuid(block.conversationId)
+    || block.conversationId !== transition.conversationId
+    || block.incarnation !== transition.incarnation
+    || !isUuid(transition.proposalId)
+    || block.epochAfter !== block.epochBefore + 1
+    || Boolean(authorization) === Boolean(cryptographic)
+    || (
+      authorization
+      && (
+        authorization.policyVersion !== 1
+        || !Number.isSafeInteger(authorization.sequence)
+        || authorization.sequence < 2
+        || ![1, 2].includes(authorization.applicationSenders)
+      )
+    )
+    || (
+      cryptographic
+      && (
+        cryptographic.policyVersion !== 1
+        || !Number.isSafeInteger(cryptographic.sequence)
+        || cryptographic.sequence < 2
+        || cryptographic.suite !== 2
+        || cryptographic.maximumPastEpochs !== 2
+        || cryptographic.anonymousDeliveryRequired !== true
+        || cryptographic.paddingBlockBytes !== 1024
+        || !Number.isSafeInteger(cryptographic.maximumApplicationPlaintextBytes)
+        || cryptographic.maximumApplicationPlaintextBytes < 1024
+        || cryptographic.maximumApplicationPlaintextBytes > 1024 * 1024
+      )
+    )
+  ) {
+    throw new Error('invalid durable MLS policy control record')
+  }
+}
+
 function requireControlBlockResponse(
   value: unknown,
-  control: PendingMlsMembershipChange | PendingMlsAuthorityChange | PendingMlsOwnerChange | PendingMlsClose,
+  control:
+    | PendingMlsMembershipChange
+    | PendingMlsAuthorityChange
+    | PendingMlsOwnerChange
+    | PendingMlsClose
+    | PendingMlsPolicyChange,
 ): {
   conversationId: string
   incarnation: number

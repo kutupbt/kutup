@@ -25,8 +25,11 @@ complete: the two-server gate proves manual quorum across requester/approver
 reloads, authenticated immutable evidence retrieval, recipient-side Welcome
 and manifest verification before durable join, post-recovery messaging, and
 recovered-state persistence after reload. Advertisement remains gated on
-suite-policy governance, federated invitation-rejection feedback,
-linked-device group state, and the remaining adversarial suites.
+federated invitation-rejection feedback, linked-device group state, and the
+remaining adversarial suites. The two-server private-policy gate now passes:
+it proves owner-approved administrator-only sending, a tightened 1 KiB
+user-message ceiling, control availability under both restrictions, exact
+remote policy pinning, and recovery after the tightened policy.
 
 ## Conversation model
 
@@ -114,6 +117,44 @@ proof-of-possession candidate before signing. Its response is another ordinary
 anonymous MLS application message sent only to the requester. No server or
 client votes automatically, rejection cannot count as approval, and ordering
 does not begin until the exact current-owner certificate reaches quorum.
+
+### Private authorization and cryptographic policy
+
+Every incarnation begins with two canonical, sequence-one policies carried
+only in the mandatory MLS GroupContext extension:
+
+- `MlsGroupAuthorizationPolicyV1` selects whether all members or only
+  administrators may send user-visible application messages.
+- `MlsGroupCryptographicPolicyV1` fixes suite `0x0002`, private-control
+  extension `0xff4b`, anonymous delivery, 1024-byte padding, two retained past
+  epochs, and a maximum canonical user-application plaintext size. Typed MLS
+  governance controls are exempt from that configurable user-message ceiling
+  so a tightened policy cannot deadlock recovery or reconfiguration; they
+  remain bounded by the fixed 1 MiB V1 control and transport limits.
+
+Changing either policy is one unchanged-roster MLS Commit and requires the
+current owner quorum. The approval request contains exactly one next policy,
+its contiguous sequence, the signed Commit proposal, and the unchanged-roster
+transition. The policy value stays MLS-encrypted; ordering authorities see
+only the action class, ciphertext digest, delivery commitment, and
+pseudonymous owner certificate.
+
+V1 authorization policy may switch between all-member and
+administrator-only sending. Group-control approval messages remain permitted
+so governance cannot deadlock. The shared Rust engine enforces the sender role
+on encryption and after authenticating an inbound MLS sender leaf. The
+cryptographic policy may only lower the user-application plaintext maximum
+within 1 KiB–1 MiB; it cannot change the suite, disable anonymous delivery or
+padding, or enlarge the past-epoch window. A suite/protocol change requires
+the separately typed future upgrade/new-incarnation flow.
+
+Both current and incarnation-genesis policies, pending Commit, exact
+destination deliveries, partial owner certificate, authority vote request,
+and final request share one encrypted snapshot transaction. Restart restores
+the exact pending operation. Public history replay counts each typed policy
+action and requires the private policy sequences to match, while recipients
+independently verify that only the selected policy changed and that a
+cryptographic change tightened the previous pin.
 
 ### Conversation closure
 
@@ -400,8 +441,8 @@ traffic-inspection feature.
 ## Failure semantics
 
 - A network failure queues exact retry material.
-- A pending local Commit blocks another membership or authority Commit and
-  capability epoch advancement.
+- A pending local Commit blocks every other membership, authority, owner,
+  close, recovery, or policy Commit and capability epoch advancement.
 - Wrong suite, key, roster, epoch, predecessor, quorum, owner approval,
   history digest, or sender manifest is a hard cryptographic failure.
 - No established MLS/anonymous send falls back to identified delivery.
@@ -420,10 +461,10 @@ sender/recipient correlations.
 
 ## Completion gate
 
-Do not advertise MLS until all of the following pass together:
+Do not advertise MLS until all of the remaining items pass together. Private
+authorization/cryptographic owner actions now have protocol, browser
+orchestration, explicit approval UI, and two-server coverage.
 
-- protocol, browser orchestration, explicit approval UI, and two-server
-  coverage for suite-policy owner actions;
 - federated invitation-rejection feedback and administrator removal flow;
 - group owner and exact authority-policy/fingerprint UI;
 - WebSocket/restart reconciliation and multi-device linked-state flow;

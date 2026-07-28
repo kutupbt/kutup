@@ -115,6 +115,10 @@ impl MlsClient {
             current_roster: request.members.clone(),
             current_authority_set: request.genesis.authority_set.clone(),
             current_owner_set,
+            genesis_authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),
+            genesis_cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
+            current_authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),
+            current_cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
             request,
             status: LocalMlsConversationStatus::PendingGenesis,
             server_genesis_hash: None,
@@ -284,6 +288,8 @@ impl MlsClient {
                 }],
                 required_quorum: 1,
             },
+            genesis_authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),
+            genesis_cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
             roster: vec![MlsConversationMemberV1 {
                 address,
                 is_admin: true,
@@ -306,6 +312,8 @@ impl MlsClient {
                 }],
                 required_quorum: 1,
             },
+            authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),
+            cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
         };
         private_control.validate().map_err(ChatError::Protocol)?;
         let signer = metadata.read_signer(&provider)?;

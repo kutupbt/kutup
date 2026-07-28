@@ -532,6 +532,8 @@ pub(super) struct ReplayedMlsControlHistory {
     pub(super) roster_commitment: String,
     pub(super) member_count: u32,
     pub(super) participant_domains: Vec<String>,
+    pub(super) authorization_policy_sequence: u64,
+    pub(super) cryptographic_policy_sequence: u64,
 }
 
 pub(super) fn replay_mls_control_history(
@@ -550,6 +552,8 @@ pub(super) fn replay_mls_control_history(
         roster_commitment: genesis.roster_commitment.clone(),
         member_count: genesis.member_count,
         participant_domains: genesis_participant_domains.to_vec(),
+        authorization_policy_sequence: 1,
+        cryptographic_policy_sequence: 1,
     };
     for request in commits {
         request.validate_shape()?;
@@ -648,6 +652,36 @@ pub(super) fn replay_mls_control_history(
             {
                 return Err("MLS close history changes its roster or routing".into());
             }
+        } else if matches!(
+            block.proposal.action_type,
+            MlsControlActionTypeV1::AuthorizationPolicyChange
+                | MlsControlActionTypeV1::CryptographicPolicyChange
+        ) {
+            let transition = request
+                .membership_transition
+                .as_ref()
+                .ok_or("MLS policy history omits its participant delivery transition")?;
+            if transition.previous_roster_commitment != replayed.roster_commitment
+                || transition.next_roster_commitment != replayed.roster_commitment
+                || transition.previous_member_count != replayed.member_count
+                || transition.next_member_count != replayed.member_count
+                || transition.previous_participant_domains != replayed.participant_domains
+                || transition.next_participant_domains != replayed.participant_domains
+            {
+                return Err("MLS policy history changes its roster or routing".into());
+            }
+            let sequence = match block.proposal.action_type {
+                MlsControlActionTypeV1::AuthorizationPolicyChange => {
+                    &mut replayed.authorization_policy_sequence
+                }
+                MlsControlActionTypeV1::CryptographicPolicyChange => {
+                    &mut replayed.cryptographic_policy_sequence
+                }
+                _ => unreachable!("policy action checked above"),
+            };
+            *sequence = sequence
+                .checked_add(1)
+                .ok_or("MLS private policy sequence overflow")?;
         }
         replayed.height = block.height;
         replayed.epoch = block.epoch_after;

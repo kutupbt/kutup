@@ -313,6 +313,10 @@ pub struct MlsOwnerApprovalRequestV1 {
     pub membership_transition: Option<MlsMembershipTransitionV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub incarnation_recovery: Option<MlsIncarnationRecoveryPlanV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_authorization_policy: Option<MlsGroupAuthorizationPolicyV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cryptographic_policy: Option<MlsGroupCryptographicPolicyV1>,
     pub next_roster: Vec<MlsConversationMemberV1>,
     pub requested_at: i64,
     pub expires_at: i64,
@@ -329,6 +333,8 @@ impl MlsOwnerApprovalRequestV1 {
                 self.proposal.action_type,
                 MlsControlActionTypeV1::OwnerSetChange
                     | MlsControlActionTypeV1::CloseConversation
+                    | MlsControlActionTypeV1::AuthorizationPolicyChange
+                    | MlsControlActionTypeV1::CryptographicPolicyChange
                     | MlsControlActionTypeV1::RecoverIncarnation
             )
         {
@@ -348,7 +354,11 @@ impl MlsOwnerApprovalRequestV1 {
                     .owner_change
                     .as_ref()
                     .ok_or("MLS owner-set approval omits its owner transition")?;
-                if self.membership_transition.is_some() || self.incarnation_recovery.is_some() {
+                if self.membership_transition.is_some()
+                    || self.incarnation_recovery.is_some()
+                    || self.next_authorization_policy.is_some()
+                    || self.next_cryptographic_policy.is_some()
+                {
                     return Err("MLS owner-set approval carries an unrelated transition".into());
                 }
                 change.validate()?;
@@ -370,7 +380,11 @@ impl MlsOwnerApprovalRequestV1 {
                 )
             }
             MlsControlActionTypeV1::CloseConversation => {
-                if self.owner_change.is_some() || self.incarnation_recovery.is_some() {
+                if self.owner_change.is_some()
+                    || self.incarnation_recovery.is_some()
+                    || self.next_authorization_policy.is_some()
+                    || self.next_cryptographic_policy.is_some()
+                {
                     return Err("MLS close approval carries an unrelated transition".into());
                 }
                 let transition = self
@@ -396,7 +410,11 @@ impl MlsOwnerApprovalRequestV1 {
                 )
             }
             MlsControlActionTypeV1::RecoverIncarnation => {
-                if self.owner_change.is_some() || self.membership_transition.is_some() {
+                if self.owner_change.is_some()
+                    || self.membership_transition.is_some()
+                    || self.next_authorization_policy.is_some()
+                    || self.next_cryptographic_policy.is_some()
+                {
                     return Err("MLS recovery approval carries an unrelated transition".into());
                 }
                 let recovery = self
@@ -422,6 +440,58 @@ impl MlsOwnerApprovalRequestV1 {
                     recovery.new_genesis.member_count,
                     recovery.new_genesis.roster_commitment.as_str(),
                     recovery.participant_domains.as_slice(),
+                )
+            }
+            MlsControlActionTypeV1::AuthorizationPolicyChange
+            | MlsControlActionTypeV1::CryptographicPolicyChange => {
+                if self.owner_change.is_some() || self.incarnation_recovery.is_some() {
+                    return Err("MLS policy approval carries an unrelated transition".into());
+                }
+                let transition = self
+                    .membership_transition
+                    .as_ref()
+                    .ok_or("MLS policy approval omits its delivery transition")?;
+                transition.validate()?;
+                if self.transition_digest != transition.transition_digest()?
+                    || transition.previous_roster_commitment != transition.next_roster_commitment
+                    || transition.previous_member_count != transition.next_member_count
+                    || transition.previous_participant_domains
+                        != transition.next_participant_domains
+                {
+                    return Err("MLS policy approval must preserve the exact roster".into());
+                }
+                match self.proposal.action_type {
+                    MlsControlActionTypeV1::AuthorizationPolicyChange => {
+                        self.next_authorization_policy
+                            .as_ref()
+                            .ok_or("MLS authorization approval omits its next policy")?
+                            .validate()?;
+                        if self.next_cryptographic_policy.is_some() {
+                            return Err(
+                                "MLS authorization approval carries a cryptographic policy".into(),
+                            );
+                        }
+                    }
+                    MlsControlActionTypeV1::CryptographicPolicyChange => {
+                        self.next_cryptographic_policy
+                            .as_ref()
+                            .ok_or("MLS cryptographic approval omits its next policy")?
+                            .validate()?;
+                        if self.next_authorization_policy.is_some() {
+                            return Err(
+                                "MLS cryptographic approval carries an authorization policy".into(),
+                            );
+                        }
+                    }
+                    _ => unreachable!("policy action checked above"),
+                }
+                (
+                    transition.conversation_id,
+                    transition.incarnation,
+                    transition.proposal_id,
+                    transition.next_member_count,
+                    transition.next_roster_commitment.as_str(),
+                    transition.next_participant_domains.as_slice(),
                 )
             }
             _ => unreachable!("approval action checked above"),
@@ -496,6 +566,11 @@ impl MlsOwnerApprovalRequestV1 {
                 .membership_transition
                 .as_ref()
                 .ok_or_else(|| "MLS close approval omits its delivery transition".into()),
+            MlsControlActionTypeV1::AuthorizationPolicyChange
+            | MlsControlActionTypeV1::CryptographicPolicyChange => self
+                .membership_transition
+                .as_ref()
+                .ok_or_else(|| "MLS policy approval omits its delivery transition".into()),
             MlsControlActionTypeV1::RecoverIncarnation => {
                 Err("MLS recovery approval has no old-incarnation delivery transition".into())
             }
@@ -762,6 +837,8 @@ impl MlsControlBlockV1 {
             MlsControlActionTypeV1::MembershipChange
             | MlsControlActionTypeV1::AuthoritySetChange
             | MlsControlActionTypeV1::OwnerSetChange
+            | MlsControlActionTypeV1::AuthorizationPolicyChange
+            | MlsControlActionTypeV1::CryptographicPolicyChange
             | MlsControlActionTypeV1::CloseConversation => {
                 validate_hash(
                     "transitionDigest",
@@ -1014,6 +1091,37 @@ impl CommitMlsControlBlockV1 {
                     );
                 }
             }
+            MlsControlActionTypeV1::AuthorizationPolicyChange
+            | MlsControlActionTypeV1::CryptographicPolicyChange => {
+                if self.membership_transition.is_none()
+                    || self.authority_change.is_some()
+                    || self.authority_transition.is_some()
+                    || self.owner_change.is_some()
+                {
+                    return Err(
+                        "MLS policy change requires exactly its participant delivery transition"
+                            .into(),
+                    );
+                }
+                let transition = self
+                    .membership_transition
+                    .as_ref()
+                    .expect("checked policy transition");
+                if transition.conversation_id != self.finalized.block.conversation_id
+                    || transition.incarnation != self.finalized.block.incarnation
+                    || transition.proposal_id != self.finalized.block.proposal.proposal_id
+                    || transition.previous_roster_commitment != transition.next_roster_commitment
+                    || transition.previous_member_count != transition.next_member_count
+                    || transition.previous_participant_domains
+                        != transition.next_participant_domains
+                {
+                    return Err("MLS policy change must preserve the exact roster".into());
+                }
+                let expected = transition.transition_digest()?;
+                if self.finalized.block.transition_digest.as_deref() != Some(expected.as_str()) {
+                    return Err("MLS policy transition differs from its finalized block".into());
+                }
+            }
             _ => {
                 if self.authority_change.is_some()
                     || self.authority_transition.is_some()
@@ -1178,6 +1286,8 @@ pub fn verify_mls_client_control_history(
         || replayed.participant_domains != current_domains
         || replayed.authorities != private_state.authority_set
         || replayed.owners.as_ref() != Some(&private_state.owner_set)
+        || replayed.authorization_policy_sequence != private_state.authorization_policy.sequence
+        || replayed.cryptographic_policy_sequence != private_state.cryptographic_policy.sequence
     {
         return Err("MLS private control state differs from replayed public history".into());
     }

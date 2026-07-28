@@ -52,6 +52,8 @@ impl MlsClient {
                 | MlsControlActionTypeV1::RoutineAdmin
                 | MlsControlActionTypeV1::AuthoritySetChange
                 | MlsControlActionTypeV1::OwnerSetChange
+                | MlsControlActionTypeV1::AuthorizationPolicyChange
+                | MlsControlActionTypeV1::CryptographicPolicyChange
                 | MlsControlActionTypeV1::CloseConversation
         ) {
             return Err(ChatError::Trust(
@@ -135,6 +137,7 @@ impl MlsClient {
             || metadata.pending_authority_changes.contains_key(&group_key)
             || metadata.pending_owner_changes.contains_key(&group_key)
             || metadata.pending_closes.contains_key(&group_key)
+            || metadata.pending_policy_changes.contains_key(&group_key)
         {
             return Err(ChatError::Trust(
                 "cannot merge a remote MLS Commit while a local Commit is pending".into(),
@@ -291,6 +294,10 @@ impl MlsClient {
             || private_control.genesis_authority_set != conversation.request.genesis.authority_set
             || conversation.request.genesis.owner_set.as_ref()
                 != Some(&private_control.genesis_owner_set)
+            || private_control.genesis_authorization_policy
+                != conversation.genesis_authorization_policy
+            || private_control.genesis_cryptographic_policy
+                != conversation.genesis_cryptographic_policy
             || &private_control.authority_set
                 != request
                     .authority_change
@@ -312,9 +319,56 @@ impl MlsClient {
                 "inbound MLS private control state differs from the finalized transition".into(),
             ));
         }
+        match block.proposal.action_type {
+            MlsControlActionTypeV1::AuthorizationPolicyChange
+                if private_control.cryptographic_policy
+                    == conversation.current_cryptographic_policy
+                    && conversation
+                        .current_authorization_policy
+                        .sequence
+                        .checked_add(1)
+                        == Some(private_control.authorization_policy.sequence)
+                    && private_control.authorization_policy.application_senders
+                        != conversation
+                            .current_authorization_policy
+                            .application_senders => {}
+            MlsControlActionTypeV1::CryptographicPolicyChange
+                if private_control.authorization_policy
+                    == conversation.current_authorization_policy
+                    && conversation
+                        .current_cryptographic_policy
+                        .sequence
+                        .checked_add(1)
+                        == Some(private_control.cryptographic_policy.sequence)
+                    && private_control
+                        .cryptographic_policy
+                        .maximum_application_plaintext_bytes
+                        < conversation
+                            .current_cryptographic_policy
+                            .maximum_application_plaintext_bytes => {}
+            MlsControlActionTypeV1::AuthorizationPolicyChange
+            | MlsControlActionTypeV1::CryptographicPolicyChange => {
+                return Err(ChatError::Trust(
+                    "inbound MLS private policy is not the authorized contiguous change".into(),
+                ))
+            }
+            _ if private_control.authorization_policy
+                != conversation.current_authorization_policy
+                || private_control.cryptographic_policy
+                    != conversation.current_cryptographic_policy =>
+            {
+                return Err(ChatError::Trust(
+                    "unrelated MLS control action changed private policy".into(),
+                ))
+            }
+            _ => {}
+        }
         if matches!(
             block.proposal.action_type,
-            MlsControlActionTypeV1::AuthoritySetChange | MlsControlActionTypeV1::CloseConversation
+            MlsControlActionTypeV1::AuthoritySetChange
+                | MlsControlActionTypeV1::AuthorizationPolicyChange
+                | MlsControlActionTypeV1::CryptographicPolicyChange
+                | MlsControlActionTypeV1::CloseConversation
         ) {
             if private_control.roster != conversation.current_roster {
                 return Err(ChatError::Trust(
@@ -365,6 +419,8 @@ impl MlsClient {
         conversation.current_roster = private_control.roster;
         conversation.current_authority_set = private_control.authority_set;
         conversation.current_owner_set = private_control.owner_set;
+        conversation.current_authorization_policy = private_control.authorization_policy;
+        conversation.current_cryptographic_policy = private_control.cryptographic_policy;
         if block.proposal.action_type == MlsControlActionTypeV1::CloseConversation {
             conversation.status = LocalMlsConversationStatus::Closed;
         }

@@ -81,13 +81,16 @@ impl MlsClient {
             owner_change,
             membership_transition,
             incarnation_recovery,
+            next_authorization_policy,
+            next_cryptographic_policy,
             next_roster,
         ) = match (
             metadata.pending_owner_changes.get(&group_key),
             metadata.pending_closes.get(&group_key),
+            metadata.pending_policy_changes.get(&group_key),
             metadata.pending_recoveries.get(&group_key),
         ) {
-            (Some(control), None, None) => (
+            (Some(control), None, None, None) => (
                 &control.vote_request.block.proposal,
                 control.vote_request.block.owner_approval.as_ref(),
                 control.vote_request.block.transition_digest.as_deref(),
@@ -95,9 +98,11 @@ impl MlsClient {
                 Some(control.owner_change.clone()),
                 None,
                 None,
+                None,
+                None,
                 control.next_roster.clone(),
             ),
-            (None, Some(control), None) => (
+            (None, Some(control), None, None) => (
                 &control.vote_request.block.proposal,
                 control.vote_request.block.owner_approval.as_ref(),
                 control.vote_request.block.transition_digest.as_deref(),
@@ -105,9 +110,23 @@ impl MlsClient {
                 None,
                 Some(control.transition.clone()),
                 None,
+                None,
+                None,
                 control.current_roster.clone(),
             ),
-            (None, None, Some(control)) => (
+            (None, None, Some(control), None) => (
+                &control.vote_request.block.proposal,
+                control.vote_request.block.owner_approval.as_ref(),
+                control.vote_request.block.transition_digest.as_deref(),
+                control.vote_request.block.finalized_at,
+                None,
+                Some(control.transition.clone()),
+                None,
+                control.next_authorization_policy.clone(),
+                control.next_cryptographic_policy.clone(),
+                control.current_roster.clone(),
+            ),
+            (None, None, None, Some(control)) => (
                 &control.request.recovery.proposal,
                 Some(&control.request.recovery.owner_approval),
                 control
@@ -120,9 +139,11 @@ impl MlsClient {
                 None,
                 None,
                 Some(control.request.recovery.plan.clone()),
+                None,
+                None,
                 control.request.members.clone(),
             ),
-            (None, None, None) => {
+            (None, None, None, None) => {
                 return Err(ChatError::Trust(
                     "pending MLS owner-governed control is unavailable".into(),
                 ))
@@ -158,6 +179,8 @@ impl MlsClient {
             owner_change,
             membership_transition,
             incarnation_recovery,
+            next_authorization_policy,
+            next_cryptographic_policy,
             next_roster,
             requested_at,
             expires_at,
@@ -463,6 +486,7 @@ pub(super) fn record_owner_approval_request(
     }
     if metadata.pending_owner_changes.contains_key(&group_key)
         || metadata.pending_closes.contains_key(&group_key)
+        || metadata.pending_policy_changes.contains_key(&group_key)
         || metadata.pending_recoveries.contains_key(&group_key)
     {
         return Err(ChatError::Trust(
@@ -562,6 +586,61 @@ pub(super) fn record_owner_approval_request(
                 ));
             }
         }
+        MlsControlActionTypeV1::AuthorizationPolicyChange
+        | MlsControlActionTypeV1::CryptographicPolicyChange => {
+            let transition = request.delivery_transition().map_err(ChatError::Trust)?;
+            if request.next_roster != conversation.current_roster
+                || transition.previous_roster_commitment
+                    != roster_commitment(&conversation.current_roster).map_err(ChatError::Trust)?
+                || transition.next_roster_commitment
+                    != transition.previous_roster_commitment
+            {
+                return Err(ChatError::Trust(
+                    "MLS policy approval differs from the exact current roster".into(),
+                ));
+            }
+            match request.proposal.action_type {
+                MlsControlActionTypeV1::AuthorizationPolicyChange => {
+                    let next = request.next_authorization_policy.as_ref().ok_or_else(|| {
+                        ChatError::Trust("authorization approval omits its policy".into())
+                    })?;
+                    if conversation
+                        .current_authorization_policy
+                        .sequence
+                        .checked_add(1)
+                        != Some(next.sequence)
+                        || conversation
+                            .current_authorization_policy
+                            .application_senders
+                            == next.application_senders
+                    {
+                        return Err(ChatError::Trust(
+                            "MLS authorization approval is not a contiguous change".into(),
+                        ));
+                    }
+                }
+                MlsControlActionTypeV1::CryptographicPolicyChange => {
+                    let next = request.next_cryptographic_policy.as_ref().ok_or_else(|| {
+                        ChatError::Trust("cryptographic approval omits its policy".into())
+                    })?;
+                    if conversation
+                        .current_cryptographic_policy
+                        .sequence
+                        .checked_add(1)
+                        != Some(next.sequence)
+                        || next.maximum_application_plaintext_bytes
+                            >= conversation
+                                .current_cryptographic_policy
+                                .maximum_application_plaintext_bytes
+                    {
+                        return Err(ChatError::Trust(
+                            "MLS cryptographic approval is not a contiguous tightening".into(),
+                        ));
+                    }
+                }
+                _ => unreachable!("policy action checked above"),
+            }
+        }
         _ => {
             return Err(ChatError::Trust(
                 "unsupported MLS owner-governed approval action".into(),
@@ -620,6 +699,13 @@ pub(super) fn record_owner_approval(
         );
     }
     if let Some(control) = metadata.pending_closes.get_mut(&group_key) {
+        return insert_owner_approval(
+            &mut control.vote_request.block,
+            &conversation.current_owner_set,
+            approval,
+        );
+    }
+    if let Some(control) = metadata.pending_policy_changes.get_mut(&group_key) {
         return insert_owner_approval(
             &mut control.vote_request.block,
             &conversation.current_owner_set,

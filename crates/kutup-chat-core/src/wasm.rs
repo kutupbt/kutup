@@ -13,8 +13,9 @@ use base64::Engine as _;
 use kutup_chat_proto::{
     AnonymousMlsDeviceEnvelopeV1, ChatProfileResponse, CommitMlsControlBlockResponseV1,
     DeviceListMismatch, DeviceManifest, MailboxPage, MlsClientControlHistoryPageV1,
-    MlsControlActionTypeV1, MlsConversationMemberV1, MlsIncarnationRecoveryV1,
-    MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1, MlsOwnerSetV1,
+    MlsControlActionTypeV1, MlsConversationMemberV1, MlsGroupAuthorizationPolicyV1,
+    MlsGroupCryptographicPolicyV1, MlsIncarnationRecoveryV1, MlsOrderingQuorumCertificateV1,
+    MlsOrderingServicePolicyV1, MlsOwnerSetV1,
     OwnChatProfileResponse, PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest,
     RecoverMlsConversationResponseV1, RegisterChatDeviceRequest, RegisterChatDeviceResponse,
     ReplenishKeysRequest, SendMessagesRequest, TransparencyCheckpointResponse,
@@ -1246,6 +1247,109 @@ impl WasmChatClient {
         let finalized = self
             .mls_client()
             .finalize_close(&mls_group_id, &acknowledgement)
+            .await
+            .map_err(chat_error)?;
+        to_output(&finalized)
+    }
+
+    #[wasm_bindgen(js_name = prepareMlsAuthorizationPolicyChange)]
+    pub async fn prepare_mls_authorization_policy_change(
+        &self,
+        mls_group_id: Vec<u8>,
+        proposal_id: String,
+        next_policy: JsValue,
+        now_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let proposal_id = uuid::Uuid::parse_str(&proposal_id)
+            .map_err(|_| js_error("MLS proposal id must be a UUID"))?;
+        let next_policy: MlsGroupAuthorizationPolicyV1 =
+            from_transport(next_policy).map_err(chat_error)?;
+        let prepared = self
+            .mls_client()
+            .prepare_authorization_policy_change(
+                &mls_group_id,
+                proposal_id,
+                next_policy,
+                parse_i64_string("MLS policy clock", &now_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&prepared)
+    }
+
+    #[wasm_bindgen(js_name = prepareMlsCryptographicPolicyChange)]
+    pub async fn prepare_mls_cryptographic_policy_change(
+        &self,
+        mls_group_id: Vec<u8>,
+        proposal_id: String,
+        next_policy: JsValue,
+        now_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let proposal_id = uuid::Uuid::parse_str(&proposal_id)
+            .map_err(|_| js_error("MLS proposal id must be a UUID"))?;
+        let next_policy: MlsGroupCryptographicPolicyV1 =
+            from_transport(next_policy).map_err(chat_error)?;
+        let prepared = self
+            .mls_client()
+            .prepare_cryptographic_policy_change(
+                &mls_group_id,
+                proposal_id,
+                next_policy,
+                parse_i64_string("MLS policy clock", &now_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&prepared)
+    }
+
+    #[wasm_bindgen(js_name = pendingMlsPolicyChanges)]
+    pub async fn pending_mls_policy_changes(&self) -> std::result::Result<JsValue, JsValue> {
+        let pending = self
+            .mls_client()
+            .pending_policy_changes()
+            .await
+            .map_err(chat_error)?;
+        to_output(&pending)
+    }
+
+    #[wasm_bindgen(js_name = mlsPolicyChangeHasOwnerQuorum)]
+    pub async fn mls_policy_change_has_owner_quorum(
+        &self,
+        mls_group_id: Vec<u8>,
+    ) -> std::result::Result<bool, JsValue> {
+        self.mls_client()
+            .policy_change_has_owner_quorum(&mls_group_id)
+            .await
+            .map_err(chat_error)
+    }
+
+    #[wasm_bindgen(js_name = buildMlsPolicyCommitRequest)]
+    pub async fn build_mls_policy_commit_request(
+        &self,
+        mls_group_id: Vec<u8>,
+        quorum_certificate: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let certificate: MlsOrderingQuorumCertificateV1 =
+            from_transport(quorum_certificate).map_err(chat_error)?;
+        let request = self
+            .mls_client()
+            .build_policy_commit_request(&mls_group_id, certificate)
+            .await
+            .map_err(chat_error)?;
+        to_output(&request)
+    }
+
+    #[wasm_bindgen(js_name = finalizeMlsPolicyChange)]
+    pub async fn finalize_mls_policy_change(
+        &self,
+        mls_group_id: Vec<u8>,
+        acknowledgement: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let acknowledgement: CommitMlsControlBlockResponseV1 =
+            from_transport(acknowledgement).map_err(chat_error)?;
+        let finalized = self
+            .mls_client()
+            .finalize_policy_change(&mls_group_id, &acknowledgement)
             .await
             .map_err(chat_error)?;
         to_output(&finalized)

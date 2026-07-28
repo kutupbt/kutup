@@ -173,6 +173,8 @@ pub(super) async fn prepare_membership_finalization(
             | MlsControlActionTypeV1::RoutineAdmin
             | MlsControlActionTypeV1::AuthoritySetChange
             | MlsControlActionTypeV1::OwnerSetChange
+            | MlsControlActionTypeV1::AuthorizationPolicyChange
+            | MlsControlActionTypeV1::CryptographicPolicyChange
             | MlsControlActionTypeV1::CloseConversation
     ) {
         return Err(AppError::bad_request(
@@ -327,13 +329,15 @@ fn validate_transition_against_state(
             ))
         }
         MlsControlActionTypeV1::CloseConversation
+        | MlsControlActionTypeV1::AuthorizationPolicyChange
+        | MlsControlActionTypeV1::CryptographicPolicyChange
             if transition.previous_member_count != transition.next_member_count
                 || transition.previous_roster_commitment != transition.next_roster_commitment
                 || transition.previous_participant_domains
                     != transition.next_participant_domains =>
         {
             return Err(AppError::bad_request(
-                "MLS close cannot alter membership, roles, or routing",
+                "MLS close or policy change cannot alter membership, roles, or routing",
             ))
         }
         _ => {}

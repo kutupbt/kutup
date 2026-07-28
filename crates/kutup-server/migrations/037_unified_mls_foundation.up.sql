@@ -437,15 +437,20 @@ CREATE TABLE chat_mls_federation_inbound_state (
 );
 
 CREATE TABLE chat_mls_federation_inbound_transactions (
-    origin          TEXT        NOT NULL REFERENCES chat_mls_federation_inbound_state ON DELETE CASCADE,
-    sequence        BIGINT      NOT NULL CHECK (sequence > 0),
-    send_id         UUID        NOT NULL,
-    response_status SMALLINT    NOT NULL CHECK (response_status BETWEEN 200 AND 599),
-    response        JSONB       NOT NULL CHECK (jsonb_typeof(response) = 'object'),
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (origin, sequence),
-    UNIQUE (origin, send_id)
+    origin             TEXT        NOT NULL REFERENCES chat_mls_federation_inbound_state ON DELETE CASCADE,
+    sequence           BIGINT      NOT NULL CHECK (sequence > 0),
+    send_id            UUID        NOT NULL,
+    transaction_digest CHAR(64)    NOT NULL CHECK (transaction_digest ~ '^[0-9a-f]{64}$'),
+    response_status    SMALLINT    NOT NULL CHECK (response_status BETWEEN 200 AND 599),
+    response           JSONB       NOT NULL CHECK (jsonb_typeof(response) = 'object'),
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (origin, sequence)
 );
+
+-- One MLS application message intentionally reuses its random send id for
+-- each recipient. Recipient/capability/send-id deduplication happens in
+-- chat_mls_anonymous_send_ids; federation replay protection is the strictly
+-- ordered origin sequence plus the exact signed-transaction digest.
 
 -- A newly added ordering authority stages a bounded, hash-chained copy of the
 -- complete finalized control history. It becomes eligible to vote only after

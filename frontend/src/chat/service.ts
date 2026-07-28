@@ -410,6 +410,28 @@ export class ChatService {
     return finalized !== null
   }
 
+  async setGroupApplicationSenders(
+    conversationId: string,
+    applicationSenders: 'members' | 'administrators',
+  ): Promise<boolean> {
+    const finalized = await this.withMlsWorkflow(() =>
+      this.requireMls().setApplicationSenderPolicy(conversationId, applicationSenders),
+    )
+    this.notifyPeers()
+    return finalized !== null
+  }
+
+  async tightenGroupMaximumPlaintext(
+    conversationId: string,
+    maximumBytes: number,
+  ): Promise<boolean> {
+    const finalized = await this.withMlsWorkflow(() =>
+      this.requireMls().tightenMaximumApplicationPlaintext(conversationId, maximumBytes),
+    )
+    this.notifyPeers()
+    return finalized !== null
+  }
+
   async recoverGroup(
     conversationId: string,
     authorityDomains?: string[],

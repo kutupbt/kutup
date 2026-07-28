@@ -63,6 +63,143 @@ pub enum MlsConversationKindV1 {
     Group,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(into = "u16", try_from = "u16")]
+#[repr(u16)]
+pub enum MlsApplicationSenderPolicyV1 {
+    Members = 1,
+    Administrators = 2,
+}
+
+impl From<MlsApplicationSenderPolicyV1> for u16 {
+    fn from(value: MlsApplicationSenderPolicyV1) -> Self {
+        value as u16
+    }
+}
+
+impl TryFrom<u16> for MlsApplicationSenderPolicyV1 {
+    type Error = String;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Members),
+            2 => Ok(Self::Administrators),
+            _ => Err(format!("unknown MLS application sender policy {value}")),
+        }
+    }
+}
+
+/// Group-private authorization policy. Administrators always retain ordinary
+/// roster-management authority; this policy controls only user-visible
+/// application messages and deliberately does not suppress owner-governance
+/// control messages.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsGroupAuthorizationPolicyV1 {
+    pub policy_version: u16,
+    pub sequence: u64,
+    pub application_senders: MlsApplicationSenderPolicyV1,
+}
+
+impl MlsGroupAuthorizationPolicyV1 {
+    pub fn members_default() -> Self {
+        Self {
+            policy_version: MLS_GROUP_AUTHORIZATION_POLICY_VERSION,
+            sequence: 1,
+            application_senders: MlsApplicationSenderPolicyV1::Members,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.policy_version != MLS_GROUP_AUTHORIZATION_POLICY_VERSION || self.sequence == 0 {
+            return Err("MLS authorization policy has an invalid version or sequence".into());
+        }
+        Ok(())
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        serde_json::to_vec(self).map_err(|error| error.to_string())
+    }
+
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, String> {
+        decode_canonical(bytes, Self::validate)
+    }
+
+    pub fn policy_digest(&self) -> Result<String, String> {
+        Ok(hex::encode(Sha256::digest(self.canonical_bytes()?)))
+    }
+}
+
+/// Group-private cryptographic requirements. V1 policy changes may tighten
+/// the maximum canonical application plaintext, but cannot replace the MLS
+/// suite, remove anonymous delivery, weaken padding, or enlarge the retained
+/// past-epoch window. Such changes require an explicit future protocol/suite
+/// upgrade and a new incarnation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsGroupCryptographicPolicyV1 {
+    pub policy_version: u16,
+    pub sequence: u64,
+    pub suite: MlsCipherSuiteId,
+    pub required_private_control_extension: u16,
+    pub maximum_past_epochs: u16,
+    pub anonymous_delivery_required: bool,
+    pub padding_block_bytes: u32,
+    pub maximum_application_plaintext_bytes: u32,
+}
+
+impl MlsGroupCryptographicPolicyV1 {
+    pub const MINIMUM_APPLICATION_PLAINTEXT_BYTES: u32 = 1024;
+    pub const MAXIMUM_APPLICATION_PLAINTEXT_BYTES: u32 = 1024 * 1024;
+
+    pub fn v1_default() -> Self {
+        Self {
+            policy_version: MLS_GROUP_CRYPTOGRAPHIC_POLICY_VERSION,
+            sequence: 1,
+            suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+            required_private_control_extension: MLS_PRIVATE_CONTROL_EXTENSION_TYPE,
+            maximum_past_epochs: 2,
+            anonymous_delivery_required: true,
+            padding_block_bytes: 1024,
+            maximum_application_plaintext_bytes: Self::MAXIMUM_APPLICATION_PLAINTEXT_BYTES,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.policy_version != MLS_GROUP_CRYPTOGRAPHIC_POLICY_VERSION
+            || self.sequence == 0
+            || self.suite != MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256
+            || self.required_private_control_extension != MLS_PRIVATE_CONTROL_EXTENSION_TYPE
+            || self.maximum_past_epochs != 2
+            || !self.anonymous_delivery_required
+            || self.padding_block_bytes != 1024
+            || !(Self::MINIMUM_APPLICATION_PLAINTEXT_BYTES
+                ..=Self::MAXIMUM_APPLICATION_PLAINTEXT_BYTES)
+                .contains(&self.maximum_application_plaintext_bytes)
+        {
+            return Err("MLS cryptographic policy is outside the supported V1 profile".into());
+        }
+        Ok(())
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        serde_json::to_vec(self).map_err(|error| error.to_string())
+    }
+
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, String> {
+        decode_canonical(bytes, Self::validate)
+    }
+
+    pub fn policy_digest(&self) -> Result<String, String> {
+        Ok(hex::encode(Sha256::digest(self.canonical_bytes()?)))
+    }
+}
+
 /// MLS keys for one device, authenticated by the account's signed manifest and
 /// therefore by the transparency log. Both keys are uncompressed P-256 points.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -451,9 +588,13 @@ pub struct MlsPrivateControlStateV1 {
     pub genesis_roster: Vec<MlsConversationMemberV1>,
     pub genesis_authority_set: MlsAuthoritySetV1,
     pub genesis_owner_set: MlsOwnerSetV1,
+    pub genesis_authorization_policy: MlsGroupAuthorizationPolicyV1,
+    pub genesis_cryptographic_policy: MlsGroupCryptographicPolicyV1,
     pub roster: Vec<MlsConversationMemberV1>,
     pub authority_set: MlsAuthoritySetV1,
     pub owner_set: MlsOwnerSetV1,
+    pub authorization_policy: MlsGroupAuthorizationPolicyV1,
+    pub cryptographic_policy: MlsGroupCryptographicPolicyV1,
 }
 
 impl MlsPrivateControlStateV1 {
@@ -488,8 +629,19 @@ impl MlsPrivateControlStateV1 {
         }
         self.genesis_authority_set.validate()?;
         self.genesis_owner_set.validate()?;
+        self.genesis_authorization_policy.validate()?;
+        self.genesis_cryptographic_policy.validate()?;
         self.authority_set.validate()?;
         self.owner_set.validate()?;
+        self.authorization_policy.validate()?;
+        self.cryptographic_policy.validate()?;
+        if self.genesis_authorization_policy.sequence != 1
+            || self.genesis_cryptographic_policy.sequence != 1
+            || self.authorization_policy.sequence > self.height.saturating_add(1)
+            || self.cryptographic_policy.sequence > self.height.saturating_add(1)
+        {
+            return Err("MLS private policy sequence is inconsistent with control history".into());
+        }
         validate_private_roster_owner_bindings(
             "genesis",
             &self.genesis_roster,

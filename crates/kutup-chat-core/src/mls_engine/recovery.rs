@@ -284,6 +284,10 @@ impl MlsClient {
             current_roster: private.roster,
             current_authority_set: private.authority_set,
             current_owner_set: private.owner_set,
+            genesis_authorization_policy: private.genesis_authorization_policy,
+            genesis_cryptographic_policy: private.genesis_cryptographic_policy,
+            current_authorization_policy: private.authorization_policy,
+            current_cryptographic_policy: private.cryptographic_policy,
         };
         metadata
             .conversations
@@ -372,6 +376,7 @@ impl MlsClient {
                 .contains_key(&old_group_key)
             || metadata.pending_owner_changes.contains_key(&old_group_key)
             || metadata.pending_closes.contains_key(&old_group_key)
+            || metadata.pending_policy_changes.contains_key(&old_group_key)
         {
             return Err(ChatError::Trust(
                 "another MLS control operation is already pending".into(),
@@ -507,6 +512,10 @@ impl MlsClient {
             created_at: created_at_seconds,
         };
         new_genesis.validate().map_err(ChatError::Invalid)?;
+        let mut authorization_policy = conversation.current_authorization_policy.clone();
+        authorization_policy.sequence = 1;
+        let mut cryptographic_policy = conversation.current_cryptographic_policy.clone();
+        cryptographic_policy.sequence = 1;
         let private_control = MlsPrivateControlStateV1 {
             protocol_version: MLS_PROTOCOL_VERSION,
             conversation_id: new_genesis.conversation_id,
@@ -519,9 +528,13 @@ impl MlsClient {
             genesis_roster: members.clone(),
             genesis_authority_set: authority_set.clone(),
             genesis_owner_set: conversation.current_owner_set.clone(),
+            genesis_authorization_policy: authorization_policy.clone(),
+            genesis_cryptographic_policy: cryptographic_policy.clone(),
             roster: members.clone(),
             authority_set,
             owner_set: conversation.current_owner_set.clone(),
+            authorization_policy,
+            cryptographic_policy,
         };
         private_control.validate().map_err(ChatError::Invalid)?;
         let signer = metadata.read_signer(&provider)?;
@@ -830,6 +843,16 @@ impl MlsClient {
             || private_control.roster != control.request.members
             || private_control.authority_set != plan.new_genesis.authority_set
             || private_control.owner_set != current.current_owner_set
+            || private_control.authorization_policy.sequence != 1
+            || private_control.authorization_policy.application_senders
+                != current.current_authorization_policy.application_senders
+            || private_control.cryptographic_policy.sequence != 1
+            || private_control
+                .cryptographic_policy
+                .maximum_application_plaintext_bytes
+                != current
+                    .current_cryptographic_policy
+                    .maximum_application_plaintext_bytes
         {
             return Err(ChatError::Trust(
                 "merged replacement MLS private state differs from recovery".into(),
@@ -866,6 +889,14 @@ impl MlsClient {
             current_roster: control.request.members.clone(),
             current_authority_set: plan.new_genesis.authority_set.clone(),
             current_owner_set: current.current_owner_set,
+            genesis_authorization_policy: private_control
+                .genesis_authorization_policy
+                .clone(),
+            genesis_cryptographic_policy: private_control
+                .genesis_cryptographic_policy
+                .clone(),
+            current_authorization_policy: private_control.authorization_policy,
+            current_cryptographic_policy: private_control.cryptographic_policy,
         };
         metadata
             .conversations

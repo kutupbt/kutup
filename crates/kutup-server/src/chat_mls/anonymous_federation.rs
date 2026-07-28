@@ -7,6 +7,7 @@ use axum::response::Response;
 use kutup_chat_proto::{AnonymousMlsKeyPackageRequestV1, FederatedAnonymousMlsTransactionV1};
 use kutup_federation_proto::FederationFeature;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 use super::{
@@ -127,6 +128,7 @@ pub(crate) async fn federated_submit_anonymous_message(
             )
         }
     };
+    let transaction_digest = hex::encode(Sha256::digest(&body));
     let now = OffsetDateTime::now_utc();
     let mut tx = state.pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 693071))")
@@ -140,8 +142,8 @@ pub(crate) async fn federated_submit_anonymous_message(
     .bind(&transaction.origin_domain)
     .execute(&mut *tx)
     .await?;
-    if let Some((status, response)) = sqlx::query_as::<_, (i16, Value)>(
-        "SELECT response_status, response
+    if let Some((status, response, stored_digest)) = sqlx::query_as::<_, (i16, Value, String)>(
+        "SELECT response_status, response, transaction_digest
          FROM chat_mls_federation_inbound_transactions
          WHERE origin = $1 AND sequence = $2",
     )
@@ -151,6 +153,15 @@ pub(crate) async fn federated_submit_anonymous_message(
     .await?
     {
         tx.rollback().await?;
+        if stored_digest != transaction_digest {
+            return signed_federation_error(
+                federation,
+                &authenticated,
+                AppError::conflict(
+                    "anonymous MLS federation sequence was reused for another transaction",
+                ),
+            );
+        }
         let status = StatusCode::from_u16(status as u16)
             .map_err(|_| AppError::internal("stored MLS federation status is invalid"))?;
         return signed_federation_json(federation, &authenticated, status, &response);
@@ -224,12 +235,13 @@ pub(crate) async fn federated_submit_anonymous_message(
     };
     sqlx::query(
         "INSERT INTO chat_mls_federation_inbound_transactions
-             (origin, sequence, send_id, response_status, response)
-         VALUES ($1,$2,$3,$4,$5)",
+             (origin, sequence, send_id, transaction_digest, response_status, response)
+         VALUES ($1,$2,$3,$4,$5,$6)",
     )
     .bind(&transaction.origin_domain)
     .bind(sequence)
     .bind(transaction.submission.send_id)
+    .bind(&transaction_digest)
     .bind(status.as_u16() as i16)
     .bind(&response)
     .execute(&mut *tx)

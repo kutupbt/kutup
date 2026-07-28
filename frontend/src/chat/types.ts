@@ -257,6 +257,10 @@ export interface LocalMlsConversationRecord {
   currentRoster: MlsConversationMember[]
   currentAuthoritySet: MlsAuthoritySet
   currentOwnerSet: MlsOwnerSet
+  genesisAuthorizationPolicy: MlsGroupAuthorizationPolicy
+  genesisCryptographicPolicy: MlsGroupCryptographicPolicy
+  currentAuthorizationPolicy: MlsGroupAuthorizationPolicy
+  currentCryptographicPolicy: MlsGroupCryptographicPolicy
 }
 
 export interface PreparedMlsGroupGenesis {
@@ -284,6 +288,23 @@ export interface MlsOwnerSet {
   sequence: number
   owners: Array<{ ownerId: string; publicKey: string }>
   requiredQuorum: number
+}
+
+export interface MlsGroupAuthorizationPolicy {
+  policyVersion: 1
+  sequence: number
+  applicationSenders: 1 | 2
+}
+
+export interface MlsGroupCryptographicPolicy {
+  policyVersion: 1
+  sequence: number
+  suite: 2
+  requiredPrivateControlExtension: number
+  maximumPastEpochs: 2
+  anonymousDeliveryRequired: true
+  paddingBlockBytes: 1024
+  maximumApplicationPlaintextBytes: number
 }
 
 export interface MlsOwnerCandidate {
@@ -420,6 +441,8 @@ export interface PendingMlsOwnerApprovalRequest {
       proposalId: string
     }
     incarnationRecovery?: MlsIncarnationRecovery['plan']
+    nextAuthorizationPolicy?: MlsGroupAuthorizationPolicy
+    nextCryptographicPolicy?: MlsGroupCryptographicPolicy
     nextRoster: MlsConversationMember[]
     requestedAt: number
     expiresAt: number
@@ -464,6 +487,32 @@ export interface PreparedMlsClose {
 }
 
 export interface FinalizedMlsClose {
+  group: LocalMlsGroupState
+  conversation: LocalMlsConversationRecord
+}
+
+export interface PendingMlsPolicyChange {
+  mlsGroupId: number[]
+  nextAuthorizationPolicy?: MlsGroupAuthorizationPolicy
+  nextCryptographicPolicy?: MlsGroupCryptographicPolicy
+  currentRoster: MlsConversationMember[]
+  deliveries: unknown[]
+  transition: {
+    conversationId: string
+    incarnation: number
+    proposalId: string
+  }
+  voteRequest: PendingMlsClose['voteRequest']
+  commitHash: string
+  finalRequest?: unknown
+}
+
+export interface PreparedMlsPolicyChange {
+  pending: PreparedMlsMembershipChange['pending']
+  control: PendingMlsPolicyChange
+}
+
+export interface FinalizedMlsPolicyChange {
   group: LocalMlsGroupState
   conversation: LocalMlsConversationRecord
 }
@@ -835,6 +884,28 @@ export interface WasmChatClientHandle {
     mlsGroupId: Uint8Array,
     acknowledgement: unknown,
   ): Promise<FinalizedMlsClose>
+  prepareMlsAuthorizationPolicyChange(
+    mlsGroupId: Uint8Array,
+    proposalId: string,
+    nextPolicy: MlsGroupAuthorizationPolicy,
+    nowSeconds: string,
+  ): Promise<PreparedMlsPolicyChange>
+  prepareMlsCryptographicPolicyChange(
+    mlsGroupId: Uint8Array,
+    proposalId: string,
+    nextPolicy: MlsGroupCryptographicPolicy,
+    nowSeconds: string,
+  ): Promise<PreparedMlsPolicyChange>
+  pendingMlsPolicyChanges(): Promise<PendingMlsPolicyChange[]>
+  mlsPolicyChangeHasOwnerQuorum(mlsGroupId: Uint8Array): Promise<boolean>
+  buildMlsPolicyCommitRequest(
+    mlsGroupId: Uint8Array,
+    quorumCertificate: unknown,
+  ): Promise<unknown>
+  finalizeMlsPolicyChange(
+    mlsGroupId: Uint8Array,
+    acknowledgement: unknown,
+  ): Promise<FinalizedMlsPolicyChange>
   prepareMlsGroupRecovery(
     mlsGroupId: Uint8Array,
     newMlsGroupId: Uint8Array,

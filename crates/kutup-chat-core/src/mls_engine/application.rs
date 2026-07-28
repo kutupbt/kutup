@@ -126,11 +126,43 @@ impl MlsClient {
                 "MLS application content is not canonically encoded".into(),
             ));
         }
+        let group_control = if content.kind == kutup_chat_proto::content::kind::GROUP_CONTROL {
+            Some(
+                serde_json::from_value::<MlsGroupControlBodyV1>(content.body.clone())
+                    .map_err(|error| ChatError::Content(error.to_string()))?,
+            )
+        } else {
+            None
+        };
         let (sender, sender_device_id) =
             parse_device_credential_identity(&expected_sender.credential_identity)?;
-        if content.kind == kutup_chat_proto::content::kind::GROUP_CONTROL {
-            let control: MlsGroupControlBodyV1 = serde_json::from_value(content.body.clone())
-                .map_err(|error| ChatError::Content(error.to_string()))?;
+        if group_control.is_none()
+            && plaintext.len()
+            > conversation
+                .current_cryptographic_policy
+                .maximum_application_plaintext_bytes as usize
+        {
+            return Err(ChatError::Trust(
+                "MLS application plaintext exceeds the authenticated group policy".into(),
+            ));
+        }
+        let sender_member = conversation
+            .current_roster
+            .iter()
+            .find(|member| member.address.canonical() == sender)
+            .ok_or_else(|| ChatError::Trust("MLS application sender is absent from the roster".into()))?;
+        if group_control.is_none()
+            && conversation
+                .current_authorization_policy
+                .application_senders
+                == MlsApplicationSenderPolicyV1::Administrators
+            && !sender_member.is_admin
+        {
+            return Err(ChatError::Trust(
+                "MLS application sender is not permitted by group policy".into(),
+            ));
+        }
+        if let Some(control) = group_control {
             match control {
                 MlsGroupControlBodyV1::OwnerCandidate { candidate } => {
                     candidate.verify().map_err(ChatError::Trust)?;
@@ -353,6 +385,36 @@ impl MlsClient {
                 ))
             }
         };
+        if !metadata.conversations.is_empty() {
+            let conversation = active_conversation_for_group(&metadata, mls_group_id)?;
+            let is_group_control = is_typed_group_control(&plaintext);
+            if !is_group_control
+                && plaintext.len()
+                > conversation
+                    .current_cryptographic_policy
+                    .maximum_application_plaintext_bytes as usize
+            {
+                return Err(ChatError::Trust(
+                    "MLS application plaintext exceeds the authenticated group policy".into(),
+                ));
+            }
+            let (sender, _) =
+                parse_device_credential_identity(&expected_sender.credential_identity)?;
+            let sender_is_admin = conversation.current_roster.iter().any(|member| {
+                member.address.canonical() == sender && member.is_admin
+            });
+            if !is_group_control
+                && conversation
+                    .current_authorization_policy
+                    .application_senders
+                    == MlsApplicationSenderPolicyV1::Administrators
+                && !sender_is_admin
+            {
+                return Err(ChatError::Trust(
+                    "MLS application sender is not permitted by group policy".into(),
+                ));
+            }
+        }
         let state = snapshot_provider(&provider, &metadata)?;
         let writes = Pending {
             mls_state: Some(state),
@@ -591,17 +653,11 @@ impl MlsClient {
             .map_err(|error| mls_error("load MLS group", error))?
             .ok_or_else(|| {
                 ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
-            })?;
+        })?;
         ensure_v1_group(&group)?;
+        let is_group_control = is_typed_group_control(plaintext);
         if group.pending_commit().is_some() {
-            let parsed: ChatContent = serde_json::from_slice(plaintext).map_err(|_| {
-                ChatError::Trust(
-                    "only typed MLS group control may be sent while a Commit is pending".into(),
-                )
-            })?;
-            if parsed.kind != kutup_chat_proto::content::kind::GROUP_CONTROL
-                || serde_json::from_value::<MlsGroupControlBodyV1>(parsed.body).is_err()
-            {
+            if !is_group_control {
                 return Err(ChatError::Trust(
                     "only typed MLS group control may be sent while a Commit is pending".into(),
                 ));
@@ -620,6 +676,33 @@ impl MlsClient {
                 return Err(ChatError::Trust(
                     "OpenMLS epoch differs from the durable conversation pin".into(),
                 ));
+            }
+            if !is_group_control
+                && plaintext.len()
+                > conversation
+                    .current_cryptographic_policy
+                    .maximum_application_plaintext_bytes as usize
+            {
+                return Err(ChatError::Invalid(
+                    "MLS application plaintext exceeds the authenticated group policy".into(),
+                ));
+            }
+            if !is_group_control
+                && conversation
+                    .current_authorization_policy
+                    .application_senders
+                    == MlsApplicationSenderPolicyV1::Administrators
+            {
+                let (local_address, _) =
+                    parse_device_credential_identity(&metadata.credential_identity)?;
+                let local_is_admin = conversation.current_roster.iter().any(|member| {
+                    member.address.canonical() == local_address && member.is_admin
+                });
+                if !local_is_admin {
+                    return Err(ChatError::Trust(
+                        "local MLS sender is not permitted by group policy".into(),
+                    ));
+                }
             }
         }
         let signer_public_key = group
@@ -914,4 +997,13 @@ impl MlsClient {
         self.db.apply(&pending).await?;
         Ok(entry)
     }
+}
+
+fn is_typed_group_control(plaintext: &[u8]) -> bool {
+    serde_json::from_slice::<ChatContent>(plaintext)
+        .ok()
+        .filter(|content| content.kind == kutup_chat_proto::content::kind::GROUP_CONTROL)
+        .is_some_and(|content| {
+            serde_json::from_value::<MlsGroupControlBodyV1>(content.body).is_ok()
+        })
 }

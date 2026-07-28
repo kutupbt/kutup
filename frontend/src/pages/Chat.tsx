@@ -137,6 +137,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [groupMembersOpen, setGroupMembersOpen] = useState(false)
   const [groupMember, setGroupMember] = useState('')
   const [groupAuthorityDomains, setGroupAuthorityDomains] = useState('')
+  const [groupMaximumPlaintext, setGroupMaximumPlaintext] = useState('')
   const [error, setError] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const selfAccount = useMemo(
@@ -298,6 +299,9 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const selectedGroupAdministratorCount = selectedGroup?.currentRoster.filter(
     member => member.isAdmin,
   ).length ?? 0
+  const selectedGroupCanSend = !selectedGroup
+    || selectedGroup.currentAuthorizationPolicy.applicationSenders === 1
+    || selectedGroupSelfMember?.isAdmin === true
 
   useEffect(() => {
     setGroupAuthorityDomains(
@@ -306,6 +310,14 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
         .join(', ') ?? '',
     )
   }, [selectedGroup?.request.genesis.conversationId, selectedGroup?.currentAuthoritySet.sequence])
+  useEffect(() => {
+    setGroupMaximumPlaintext(
+      selectedGroup?.currentCryptographicPolicy.maximumApplicationPlaintextBytes.toString() ?? '',
+    )
+  }, [
+    selectedGroup?.request.genesis.conversationId,
+    selectedGroup?.currentCryptographicPolicy.sequence,
+  ])
   const selectedLabel = selectedAddress ??
     (selectedConversation?.kind === 'group'
       ? `Group ${selectedConversation.groupId.slice(0, 8)}`
@@ -327,7 +339,11 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const requestSelected = selectedContact?.state === 'pendingIncoming'
   const blockedSelected = selectedContact?.state === 'blocked'
   const canSend = Boolean(
-    selectedConversation && !requestSelected && !blockedSelected && !selectedGroupClosed,
+    selectedConversation
+      && !requestSelected
+      && !blockedSelected
+      && !selectedGroupClosed
+      && selectedGroupCanSend,
   )
 
   useEffect(() => {
@@ -577,7 +593,11 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
         ? 'Group close'
         : selectedOwnerApproval.request.proposal.actionType === 9
           ? 'Group recovery'
-          : 'Owner change'
+          : selectedOwnerApproval.request.proposal.actionType === 5
+            ? 'Sender policy change'
+            : selectedOwnerApproval.request.proposal.actionType === 6
+              ? 'Cryptographic policy change'
+              : 'Owner change'
       toast.success(approve ? `${action} approved` : `${action} rejected on this device`)
     } catch (cause) {
       toast.error(errorMessage(cause, t))
@@ -624,6 +644,50 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       toast.success(finalized
         ? 'MLS group closed'
         : 'Encrypted close approval requested from the other group owners')
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setGroupUpdating(false)
+    }
+  }
+
+  async function updateSelectedGroupSenderPolicy(
+    applicationSenders: 'members' | 'administrators',
+  ) {
+    if (!service || !selectedGroup || !canManageSelectedGroupAuthorities || groupUpdating) return
+    setGroupUpdating(true)
+    try {
+      const finalized = await service.setGroupApplicationSenders(
+        selectedGroup.request.genesis.conversationId,
+        applicationSenders,
+      )
+      setGroups(await service.groups())
+      setOwnerApprovalRequests(await service.pendingGroupOwnerApprovals())
+      toast.success(finalized
+        ? 'MLS sender policy updated'
+        : 'Encrypted sender-policy approval requested from the other group owners')
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setGroupUpdating(false)
+    }
+  }
+
+  async function tightenSelectedGroupPlaintext(event: FormEvent) {
+    event.preventDefault()
+    if (!service || !selectedGroup || !canManageSelectedGroupAuthorities || groupUpdating) return
+    const maximumBytes = Number(groupMaximumPlaintext)
+    setGroupUpdating(true)
+    try {
+      const finalized = await service.tightenGroupMaximumPlaintext(
+        selectedGroup.request.genesis.conversationId,
+        maximumBytes,
+      )
+      setGroups(await service.groups())
+      setOwnerApprovalRequests(await service.pendingGroupOwnerApprovals())
+      toast.success(finalized
+        ? 'MLS cryptographic policy tightened'
+        : 'Encrypted cryptographic-policy approval requested from the other group owners')
     } catch (cause) {
       toast.error(errorMessage(cause, t))
     } finally {
@@ -1057,17 +1121,29 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                           ? 'Approve closing this MLS group?'
                           : selectedOwnerApproval.request.proposal.actionType === 9
                             ? 'Approve MLS group recovery?'
-                            : 'Approve MLS owner change?'}
+                            : selectedOwnerApproval.request.proposal.actionType === 5
+                              ? 'Approve who may send messages?'
+                              : selectedOwnerApproval.request.proposal.actionType === 6
+                                ? 'Approve stricter MLS message limits?'
+                                : 'Approve MLS owner change?'}
                       </p>
                       <p className="mt-1 text-xs text-muted-foreground">
                         {selectedOwnerApproval.request.proposal.actionType === 7
                           ? `${canonicalAccountAddress(selectedOwnerApproval.requester)} proposes permanently closing this group incarnation. Approval signs the exact unchanged-roster MLS transition.`
                           : selectedOwnerApproval.request.proposal.actionType === 9
                             ? `${canonicalAccountAddress(selectedOwnerApproval.requester)} proposes replacing the unavailable MLS incarnation while preserving the exact member and owner sets. Approval signs the complete new genesis and delivery commitments.`
-                            : `${canonicalAccountAddress(selectedOwnerApproval.requester)} proposes making ${selectedOwnerApproval.request.nextRoster
-                              .filter(member => Boolean(member.ownerId))
-                              .map(member => canonicalAccountAddress(member.address))
-                              .join(', ')} the group owners. Approval signs this exact encrypted transition.`}
+                            : selectedOwnerApproval.request.proposal.actionType === 5
+                              ? `${canonicalAccountAddress(selectedOwnerApproval.requester)} proposes allowing ${
+                                selectedOwnerApproval.request.nextAuthorizationPolicy?.applicationSenders === 2
+                                  ? 'only administrators'
+                                  : 'all members'
+                              } to send user-visible messages. Approval signs this exact encrypted policy transition.`
+                              : selectedOwnerApproval.request.proposal.actionType === 6
+                                ? `${canonicalAccountAddress(selectedOwnerApproval.requester)} proposes limiting canonical application plaintext to ${selectedOwnerApproval.request.nextCryptographicPolicy?.maximumApplicationPlaintextBytes ?? 0} bytes. Approval signs this exact encrypted policy transition.`
+                                : `${canonicalAccountAddress(selectedOwnerApproval.requester)} proposes making ${selectedOwnerApproval.request.nextRoster
+                                  .filter(member => Boolean(member.ownerId))
+                                  .map(member => canonicalAccountAddress(member.address))
+                                  .join(', ')} the group owners. Approval signs this exact encrypted transition.`}
                       </p>
                       <div className="mt-3 flex justify-end gap-2">
                         <Button
@@ -1192,6 +1268,83 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                         </Button>
                       </form>
                     )}
+                  </div>
+                  <div className="rounded-lg border p-3" data-testid="chat-group-policies">
+                    <p className="text-sm font-medium">Private group policy</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Sender policy sequence {selectedGroup.currentAuthorizationPolicy.sequence} ·
+                      cryptographic policy sequence {selectedGroup.currentCryptographicPolicy.sequence}
+                    </p>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <span className="text-xs text-muted-foreground">User-visible messages:</span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={selectedGroup.currentAuthorizationPolicy.applicationSenders === 1
+                          ? 'default'
+                          : 'outline'}
+                        disabled={
+                          groupUpdating
+                          || !canManageSelectedGroupAuthorities
+                          || selectedGroup.currentAuthorizationPolicy.applicationSenders === 1
+                        }
+                        onClick={() => void updateSelectedGroupSenderPolicy('members')}
+                        data-testid="chat-group-senders-members"
+                      >
+                        All members
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={selectedGroup.currentAuthorizationPolicy.applicationSenders === 2
+                          ? 'default'
+                          : 'outline'}
+                        disabled={
+                          groupUpdating
+                          || !canManageSelectedGroupAuthorities
+                          || selectedGroup.currentAuthorizationPolicy.applicationSenders === 2
+                        }
+                        onClick={() => void updateSelectedGroupSenderPolicy('administrators')}
+                        data-testid="chat-group-senders-administrators"
+                      >
+                        Administrators only
+                      </Button>
+                    </div>
+                    <form
+                      className="mt-3 flex items-center gap-2"
+                      onSubmit={tightenSelectedGroupPlaintext}
+                    >
+                      <Input
+                        type="number"
+                        min={1024}
+                        max={selectedGroup.currentCryptographicPolicy.maximumApplicationPlaintextBytes - 1}
+                        value={groupMaximumPlaintext}
+                        onChange={event => setGroupMaximumPlaintext(event.target.value)}
+                        aria-label="Maximum MLS application plaintext bytes"
+                        data-testid="chat-group-maximum-plaintext"
+                        disabled={!canManageSelectedGroupAuthorities || groupUpdating}
+                      />
+                      <Button
+                        type="submit"
+                        size="sm"
+                        disabled={
+                          !canManageSelectedGroupAuthorities
+                          || groupUpdating
+                          || !Number.isSafeInteger(Number(groupMaximumPlaintext))
+                          || Number(groupMaximumPlaintext) < 1024
+                          || Number(groupMaximumPlaintext)
+                            >= selectedGroup.currentCryptographicPolicy.maximumApplicationPlaintextBytes
+                        }
+                        data-testid="chat-group-tighten-plaintext"
+                      >
+                        Tighten
+                      </Button>
+                    </form>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Suite 0x0002, anonymous delivery, 1024-byte padding, and two retained past
+                      epochs are mandatory in V1. The user-message plaintext maximum can only
+                      decrease; typed governance controls retain the fixed V1 control limit.
+                    </p>
                   </div>
                   {selectedGroupClosed ? (
                     <div
@@ -1396,6 +1549,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     ? t('chat.requests.acceptBeforeReply')
                     : blockedSelected
                       ? t('chat.requests.unblockBeforeReply')
+                      : selectedGroup && !selectedGroupCanSend
+                        ? 'Only group administrators may send messages'
                       : selectedGroupClosed
                         ? 'This MLS group is closed'
                       : selectedConversation

@@ -200,6 +200,10 @@ impl MlsClient {
         }
         if metadata.pending_membership_changes.contains_key(&group_key)
             || metadata.pending_commits.contains_key(&group_key)
+            || metadata.pending_owner_changes.contains_key(&group_key)
+            || metadata.pending_closes.contains_key(&group_key)
+            || metadata.pending_policy_changes.contains_key(&group_key)
+            || metadata.pending_recoveries.contains_key(&group_key)
         {
             return Err(ChatError::Trust(
                 "another MLS control operation is already pending".into(),
@@ -301,9 +305,17 @@ impl MlsClient {
                 .owner_set
                 .clone()
                 .ok_or_else(|| ChatError::Db("group genesis has no owner set".into()))?,
+            genesis_authorization_policy: conversation
+                .genesis_authorization_policy
+                .clone(),
+            genesis_cryptographic_policy: conversation
+                .genesis_cryptographic_policy
+                .clone(),
             roster: conversation.current_roster.clone(),
             authority_set: next_authority_set.clone(),
             owner_set: conversation.current_owner_set.clone(),
+            authorization_policy: conversation.current_authorization_policy.clone(),
+            cryptographic_policy: conversation.current_cryptographic_policy.clone(),
         };
         next_private_control
             .validate()

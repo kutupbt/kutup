@@ -277,6 +277,10 @@ impl MlsClient {
             current_roster: private_control.roster.clone(),
             current_authority_set: private_control.authority_set.clone(),
             current_owner_set: private_control.owner_set.clone(),
+            genesis_authorization_policy: private_control.genesis_authorization_policy.clone(),
+            genesis_cryptographic_policy: private_control.genesis_cryptographic_policy.clone(),
+            current_authorization_policy: private_control.authorization_policy.clone(),
+            current_cryptographic_policy: private_control.cryptographic_policy.clone(),
         };
         let receipt = ProcessedMlsControlEnvelope {
             envelope_id: envelope.envelope_id,
@@ -411,6 +415,11 @@ impl MlsClient {
         let group_key = BASE64.encode(mls_group_id);
         if metadata.pending_commits.contains_key(&group_key)
             || metadata.pending_membership_changes.contains_key(&group_key)
+            || metadata.pending_authority_changes.contains_key(&group_key)
+            || metadata.pending_owner_changes.contains_key(&group_key)
+            || metadata.pending_closes.contains_key(&group_key)
+            || metadata.pending_policy_changes.contains_key(&group_key)
+            || metadata.pending_recoveries.contains_key(&group_key)
         {
             return Err(ChatError::Trust(
                 "cannot inspect a remote MLS Commit while a local Commit is pending".into(),

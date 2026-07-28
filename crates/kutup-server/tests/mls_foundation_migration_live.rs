@@ -249,6 +249,28 @@ async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
         "destination transactions must reject sender metadata"
     );
 
+    let shared_group_send_id = Uuid::from_u128(8);
+    sqlx::query(
+        "INSERT INTO chat_mls_federation_inbound_state (origin, last_sequence)
+         VALUES ('b.example', 2)",
+    )
+    .execute(&mut connection)
+    .await
+    .unwrap();
+    for (sequence, digest) in [(1_i64, "a".repeat(64)), (2, "b".repeat(64))] {
+        sqlx::query(
+            "INSERT INTO chat_mls_federation_inbound_transactions
+                 (origin, sequence, send_id, transaction_digest, response_status, response)
+             VALUES ('b.example', $1, $2, $3, 200, '{\"accepted\":true}'::jsonb)",
+        )
+        .bind(sequence)
+        .bind(shared_group_send_id)
+        .bind(digest)
+        .execute(&mut connection)
+        .await
+        .unwrap();
+    }
+
     sqlx::query(
         "INSERT INTO chat_mls_control_blocks
              (conversation_id, incarnation, height, block_hash,

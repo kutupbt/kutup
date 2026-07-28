@@ -158,6 +158,8 @@ impl MlsRepository {
                 MlsControlActionTypeV1::RoutineAdmin
                     | MlsControlActionTypeV1::MembershipChange
                     | MlsControlActionTypeV1::AuthoritySetChange
+                    | MlsControlActionTypeV1::AuthorizationPolicyChange
+                    | MlsControlActionTypeV1::CryptographicPolicyChange
             ) && !is_admin
             {
                 return Err(AppError::forbidden(

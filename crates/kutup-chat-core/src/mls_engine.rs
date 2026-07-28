@@ -17,6 +17,7 @@ mod lifecycle;
 mod membership;
 mod owner_approval;
 mod ownership;
+mod policy;
 mod recovery;
 mod state;
 mod validation;
@@ -30,6 +31,9 @@ pub use governance::{
 use membership::*;
 pub use owner_approval::PendingMlsOwnerApprovalRequest;
 pub use ownership::{FinalizedMlsOwnerChange, PendingMlsOwnerChange, PreparedMlsOwnerChange};
+pub use policy::{
+    FinalizedMlsPolicyChange, PendingMlsPolicyChange, PreparedMlsPolicyChange,
+};
 pub use recovery::{FinalizedMlsRecovery, PendingMlsRecovery, PreparedMlsRecovery};
 use state::{provider_from_snapshot, snapshot_provider, KutupMlsProvider, SnapshotMetadata};
 use validation::*;
@@ -64,10 +68,12 @@ use kutup_chat_proto::{
     roster_commitment, verify_mls_client_control_history, AccountAddress,
     AnonymousMlsDeviceEnvelopeV1, AnonymousMlsSubmissionV1, ChatContent,
     CommitMlsControlBlockResponseV1, CommitMlsControlBlockV1, CreateMlsConversationRequestV1,
-    FederatedMlsOrderingVoteRequestV1, MlsAuthoritySetV1, MlsAuthorityV1, MlsCipherSuiteId,
+    FederatedMlsOrderingVoteRequestV1, MlsApplicationSenderPolicyV1, MlsAuthoritySetV1,
+    MlsAuthorityV1, MlsCipherSuiteId,
     MlsClientControlHistoryPageV1, MlsControlActionTypeV1, MlsControlBlockV1, MlsControlProposalV1,
     MlsConversationGenesisV1, MlsConversationKindV1, MlsConversationMemberV1,
     MlsFinalizedControlBlockV1, MlsGroupControlBodyV1, MlsKeyPackageV1, MlsManifestDeviceV1,
+    MlsGroupAuthorizationPolicyV1, MlsGroupCryptographicPolicyV1,
     MlsMembershipDeliveryCommitmentV1, MlsMembershipDeliveryV1, MlsMembershipEnvelopeKindV1,
     MlsMembershipEnvelopeV1, MlsMembershipTransitionV1, MlsOrderingQuorumCertificateV1,
     MlsOrderingServicePolicyV1, MlsOwnerCandidateV1, MlsOwnerSetV1, MlsOwnerV1,
@@ -76,7 +82,7 @@ use kutup_chat_proto::{
     MLS_PROTOCOL_VERSION,
 };
 
-const STATE_FORMAT_VERSION: u16 = 9;
+const STATE_FORMAT_VERSION: u16 = 10;
 const MAX_STATE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_STATE_RECORDS: usize = 100_000;
 const MAX_STATE_RECORD_BYTES: usize = 16 * 1024 * 1024;
@@ -164,6 +170,10 @@ pub struct LocalMlsConversationRecord {
     pub current_roster: Vec<MlsConversationMemberV1>,
     pub current_authority_set: MlsAuthoritySetV1,
     pub current_owner_set: MlsOwnerSetV1,
+    pub genesis_authorization_policy: MlsGroupAuthorizationPolicyV1,
+    pub genesis_cryptographic_policy: MlsGroupCryptographicPolicyV1,
+    pub current_authorization_policy: MlsGroupAuthorizationPolicyV1,
+    pub current_cryptographic_policy: MlsGroupCryptographicPolicyV1,
 }
 
 /// Atomic result of preparing an epoch-zero group and its exact server
@@ -558,9 +568,13 @@ fn genesis_private_control_state(
             .owner_set
             .clone()
             .ok_or_else(|| ChatError::Db("group genesis has no owner set".into()))?,
+        genesis_authorization_policy: record.genesis_authorization_policy.clone(),
+        genesis_cryptographic_policy: record.genesis_cryptographic_policy.clone(),
         roster: record.current_roster.clone(),
         authority_set: record.current_authority_set.clone(),
         owner_set: record.current_owner_set.clone(),
+        authorization_policy: record.current_authorization_policy.clone(),
+        cryptographic_policy: record.current_cryptographic_policy.clone(),
     };
     state.validate().map_err(ChatError::Db)?;
     Ok(state)
@@ -578,9 +592,13 @@ fn ensure_private_control_matches_record(
         || state.genesis_roster != record.request.members
         || state.genesis_authority_set != record.request.genesis.authority_set
         || record.request.genesis.owner_set.as_ref() != Some(&state.genesis_owner_set)
+        || state.genesis_authorization_policy != record.genesis_authorization_policy
+        || state.genesis_cryptographic_policy != record.genesis_cryptographic_policy
         || state.roster != record.current_roster
         || state.authority_set != record.current_authority_set
         || state.owner_set != record.current_owner_set
+        || state.authorization_policy != record.current_authorization_policy
+        || state.cryptographic_policy != record.current_cryptographic_policy
         || (state.height == 0
             && (state.proposal_id.is_some() || state.previous_block_hash.is_some()))
         || (state.height == 1 && state.previous_block_hash.is_some())
@@ -953,5 +971,7 @@ fn group_control_credential(
     })
 }
 
+#[cfg(test)]
+mod policy_tests;
 #[cfg(test)]
 mod tests;

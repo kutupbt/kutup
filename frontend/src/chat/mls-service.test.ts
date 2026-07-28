@@ -98,6 +98,36 @@ function pendingGenesis(): LocalMlsConversationRecord {
       ],
       requiredQuorum: 1,
     },
+    genesisAuthorizationPolicy: {
+      policyVersion: 1,
+      sequence: 1,
+      applicationSenders: 1,
+    },
+    genesisCryptographicPolicy: {
+      policyVersion: 1,
+      sequence: 1,
+      suite: 2,
+      requiredPrivateControlExtension: 0xff4b,
+      maximumPastEpochs: 2,
+      anonymousDeliveryRequired: true,
+      paddingBlockBytes: 1024,
+      maximumApplicationPlaintextBytes: 1024 * 1024,
+    },
+    currentAuthorizationPolicy: {
+      policyVersion: 1,
+      sequence: 1,
+      applicationSenders: 1,
+    },
+    currentCryptographicPolicy: {
+      policyVersion: 1,
+      sequence: 1,
+      suite: 2,
+      requiredPrivateControlExtension: 0xff4b,
+      maximumPastEpochs: 2,
+      anonymousDeliveryRequired: true,
+      paddingBlockBytes: 1024,
+      maximumApplicationPlaintextBytes: 1024 * 1024,
+    },
   }
 }
 
@@ -297,6 +327,47 @@ function finalizedClose() {
   }
 }
 
+function pendingPolicy() {
+  return {
+    mlsGroupId: [...genesisGroupBytes],
+    nextAuthorizationPolicy: {
+      policyVersion: 1 as const,
+      sequence: 2,
+      applicationSenders: 2 as const,
+    },
+    currentRoster: activeGenesis().currentRoster,
+    deliveries: [{ destination: 'alpha.example', deliveryDigest: '71'.repeat(32) }],
+    transition: {
+      conversationId,
+      incarnation: 1,
+      proposalId,
+    },
+    voteRequest: {
+      block: {
+        conversationId,
+        incarnation: 1,
+        height: 1,
+        epochBefore: 0,
+        epochAfter: 1,
+      },
+    },
+    commitHash: 'fb'.repeat(32),
+  }
+}
+
+function finalizedPolicy() {
+  return {
+    group: { mlsGroupId: [...genesisGroupBytes], epoch: 1 },
+    conversation: {
+      ...activeGenesis(),
+      lastFinalizedHeight: 1,
+      lastFinalizedEpoch: 1,
+      lastBlockHash: controlBlockHash,
+      currentAuthorizationPolicy: pendingPolicy().nextAuthorizationPolicy,
+    },
+  }
+}
+
 function recoveryPrevious(): LocalMlsConversationRecord {
   return finalizedMembership().conversation
 }
@@ -366,6 +437,10 @@ function finalizedRecovery() {
     currentRoster: previous.currentRoster,
     currentAuthoritySet: previous.currentAuthoritySet,
     currentOwnerSet: previous.currentOwnerSet,
+    genesisAuthorizationPolicy: previous.currentAuthorizationPolicy,
+    genesisCryptographicPolicy: previous.currentCryptographicPolicy,
+    currentAuthorizationPolicy: previous.currentAuthorizationPolicy,
+    currentCryptographicPolicy: previous.currentCryptographicPolicy,
   }
   return {
     group: { mlsGroupId: [...recoveryGroupBytes], epoch: 1 },
@@ -504,6 +579,21 @@ function harness(
     mlsCloseHasOwnerQuorum: vi.fn().mockResolvedValue(true),
     buildMlsCloseCommitRequest: vi.fn().mockResolvedValue({ finalized: 'close-request' }),
     finalizeMlsClose: vi.fn().mockResolvedValue(finalizedClose()),
+    prepareMlsAuthorizationPolicyChange: vi.fn().mockResolvedValue({
+      pending: {
+        mlsGroupId: [...genesisGroupBytes],
+        epochBefore: 0,
+        epochAfter: 1,
+        commitHash: 'fb'.repeat(32),
+        commit: [13, 14, 15],
+      },
+      control: pendingPolicy(),
+    }),
+    prepareMlsCryptographicPolicyChange: vi.fn(),
+    pendingMlsPolicyChanges: vi.fn().mockResolvedValue([pendingPolicy()]),
+    mlsPolicyChangeHasOwnerQuorum: vi.fn().mockResolvedValue(true),
+    buildMlsPolicyCommitRequest: vi.fn().mockResolvedValue({ finalized: 'policy-request' }),
+    finalizeMlsPolicyChange: vi.fn().mockResolvedValue(finalizedPolicy()),
     fetchVerifiedIdentifiedMlsKeyPackages: vi.fn().mockImplementation(
       async (recipient: { username: string; server: string }) => [{
         wire: { deviceId: 7 },
@@ -1080,6 +1170,62 @@ describe('MlsConversationService', () => {
     expect(client.finalizeMlsClose).toHaveBeenCalledWith(
       genesisGroupBytes,
       expect.objectContaining({ blockHash: controlBlockHash }),
+    )
+  })
+
+  it('keeps private sender policy pending for owner approval and resumes exact finalization', async () => {
+    vi.stubGlobal('crypto', {
+      randomUUID: () => proposalId,
+      getRandomValues: (value: Uint8Array) => value,
+    })
+    const { client, transport, service } = harness(
+      null,
+      [activeGenesis()],
+      { username: 'alice', server: 'alpha.example' },
+    )
+    vi.mocked(client.mlsPolicyChangeHasOwnerQuorum).mockResolvedValueOnce(false)
+    vi.mocked(client.createMlsOwnerApprovalRequestMessage)
+      .mockResolvedValueOnce(applicationOutboxEntry())
+
+    await expect(
+      service.setApplicationSenderPolicy(conversationId, 'administrators'),
+    ).resolves.toBeNull()
+    expect(client.prepareMlsAuthorizationPolicyChange).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      proposalId,
+      {
+        policyVersion: 1,
+        sequence: 2,
+        applicationSenders: 2,
+      },
+      expect.stringMatching(/^[0-9]+$/),
+    )
+    expect(client.createMlsOwnerApprovalRequestMessage).toHaveBeenCalledWith(genesisGroupBytes)
+    expect(transport.collectMlsOrderingVotes).not.toHaveBeenCalled()
+
+    vi.mocked(client.mlsPolicyChangeHasOwnerQuorum).mockResolvedValueOnce(true)
+    await expect(service.reconcilePendingPolicyChanges()).resolves.toEqual([
+      finalizedPolicy(),
+    ])
+    expect(transport.stageMlsMembershipDelivery).toHaveBeenCalledOnce()
+    expect(transport.collectMlsOrderingVotes).toHaveBeenCalledWith(
+      pendingPolicy().voteRequest,
+    )
+    expect(client.buildMlsPolicyCommitRequest).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      { votes: ['authority'] },
+    )
+    expect(client.finalizeMlsPolicyChange).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      expect.objectContaining({ blockHash: controlBlockHash }),
+    )
+    expect(transport.publishMlsDeliveryCapability).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId,
+        incarnation: 1,
+        epoch: 1,
+        capabilityKind: 'group',
+      }),
     )
   })
 

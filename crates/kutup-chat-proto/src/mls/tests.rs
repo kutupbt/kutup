@@ -286,6 +286,8 @@ fn owner_approval_request_has_one_exact_private_transition_vector() {
         owner_change: Some(owner_change),
         membership_transition: None,
         incarnation_recovery: None,
+        next_authorization_policy: None,
+        next_cryptographic_policy: None,
         next_roster,
         requested_at: 1_700_000_100,
         expires_at: 1_700_086_500,
@@ -321,6 +323,8 @@ fn owner_approval_request_has_one_exact_private_transition_vector() {
         owner_change: None,
         membership_transition: Some(close_transition.clone()),
         incarnation_recovery: None,
+        next_authorization_policy: None,
+        next_cryptographic_policy: None,
         next_roster: request.next_roster.clone(),
         requested_at: 1_700_000_100,
         expires_at: 1_700_086_500,
@@ -1280,9 +1284,13 @@ fn private_control_and_client_history_have_stable_canonical_vectors() {
         genesis_roster: roster.clone(),
         genesis_authority_set: authorities.clone(),
         genesis_owner_set: owners.clone(),
+        genesis_authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),
+        genesis_cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
         roster: roster.clone(),
         authority_set: authorities.clone(),
         owner_set: owners.clone(),
+        authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),
+        cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
     };
     let private_bytes = private.canonical_bytes().unwrap();
     assert_eq!(
@@ -1318,7 +1326,7 @@ fn private_control_and_client_history_have_stable_canonical_vectors() {
     );
     assert_eq!(
         hex::encode(Sha256::digest(&private_bytes)),
-        "2d7c65ab1154aa7c8d7054ea47ccee6701d5789f3c301f05e21b2cbf200c3752"
+        "247a283bfb4cf3b2bb3d65f2a48ee3f0f5b4a43ab5ac791598161edb80dfdd66"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&page_bytes)),
@@ -1333,6 +1341,31 @@ fn private_control_and_client_history_have_stable_canonical_vectors() {
         .insert("downgrade".into(), serde_json::Value::Bool(true));
     assert!(serde_json::from_value::<MlsPrivateControlStateV1>(unknown).is_err());
     assert!(verify_mls_client_control_history(&[], &private).is_err());
+}
+
+#[test]
+fn private_group_policies_have_stable_canonical_vectors() {
+    let authorization = MlsGroupAuthorizationPolicyV1::members_default();
+    let authorization_bytes = authorization.canonical_bytes().unwrap();
+    assert_eq!(
+        MlsGroupAuthorizationPolicyV1::from_canonical_bytes(&authorization_bytes).unwrap(),
+        authorization
+    );
+    assert_eq!(
+        authorization.policy_digest().unwrap(),
+        "9428a5e307c99b64c9cc1fd5b0efb76567cd5845ca422a33ba25875664545bf7"
+    );
+
+    let cryptographic = MlsGroupCryptographicPolicyV1::v1_default();
+    let cryptographic_bytes = cryptographic.canonical_bytes().unwrap();
+    assert_eq!(
+        MlsGroupCryptographicPolicyV1::from_canonical_bytes(&cryptographic_bytes).unwrap(),
+        cryptographic
+    );
+    assert_eq!(
+        cryptographic.policy_digest().unwrap(),
+        "af88bc6a47502751ad485059e6373d99352d225b68a9cef177f0969c641a73a4"
+    );
 }
 
 #[test]
@@ -1461,9 +1494,13 @@ fn client_control_history_replays_exactly_across_page_boundaries() {
         genesis_roster: roster.clone(),
         genesis_authority_set: authorities.clone(),
         genesis_owner_set: owners.clone(),
+        genesis_authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),
+        genesis_cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
         roster,
         authority_set: authorities,
         owner_set: owners,
+        authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),
+        cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
     };
     let first = MlsClientControlHistoryPageV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
