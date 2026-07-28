@@ -72,14 +72,52 @@ impl MlsClient {
         validate_group_id(mls_group_id)?;
         let (_, metadata) = self.load_provider().await?;
         let conversation = active_conversation_for_group(&metadata, mls_group_id)?.clone();
-        let control = metadata
-            .pending_owner_changes
-            .get(&BASE64.encode(mls_group_id))
-            .ok_or_else(|| ChatError::Trust("pending MLS owner control is unavailable".into()))?;
-        if self.owner_change_has_quorum(mls_group_id).await? {
+        let group_key = BASE64.encode(mls_group_id);
+        let (block, owner_change, membership_transition, next_roster) = match (
+            metadata.pending_owner_changes.get(&group_key),
+            metadata.pending_closes.get(&group_key),
+        ) {
+            (Some(control), None) => (
+                &control.vote_request.block,
+                Some(control.owner_change.clone()),
+                None,
+                control.next_roster.clone(),
+            ),
+            (None, Some(control)) => (
+                &control.vote_request.block,
+                None,
+                Some(control.transition.clone()),
+                control.current_roster.clone(),
+            ),
+            (None, None) => {
+                return Err(ChatError::Trust(
+                    "pending MLS owner-governed control is unavailable".into(),
+                ))
+            }
+            (Some(_), Some(_)) => {
+                return Err(ChatError::Db(
+                    "concurrent MLS owner-governed controls are durable".into(),
+                ))
+            }
+        };
+        let certificate = block
+            .owner_approval
+            .as_ref()
+            .ok_or_else(|| ChatError::Db("pending MLS control has no owner approvals".into()))?;
+        match certificate.verify(
+            &block.proposal,
+            block.transition_digest.as_deref(),
+            &conversation.current_owner_set,
+        ) {
+            Ok(()) => return Ok(None),
+            Err(error) if error == "MLS owner certificate does not meet quorum" => {}
+            Err(error) => return Err(ChatError::Trust(error)),
+        }
+        if block.proposal.action_type == MlsControlActionTypeV1::CloseConversation
+            && conversation.status != LocalMlsConversationStatus::Active
+        {
             return Ok(None);
         }
-        let block = &control.vote_request.block;
         let expires_at = block
             .finalized_at
             .checked_add(OWNER_APPROVAL_REQUEST_LIFETIME_SECONDS)
@@ -92,8 +130,9 @@ impl MlsClient {
                 .transition_digest
                 .clone()
                 .ok_or_else(|| ChatError::Db("owner change has no transition digest".into()))?,
-            owner_change: control.owner_change.clone(),
-            next_roster: control.next_roster.clone(),
+            owner_change,
+            membership_transition,
+            next_roster,
             requested_at: block.finalized_at,
             expires_at,
         };
@@ -396,38 +435,61 @@ pub(super) fn record_owner_approval_request(
             "MLS owner approval request was delivered to a non-owner".into(),
         ));
     }
-    if metadata.pending_owner_changes.contains_key(&group_key) {
+    if metadata.pending_owner_changes.contains_key(&group_key)
+        || metadata.pending_closes.contains_key(&group_key)
+    {
         return Err(ChatError::Trust(
-            "concurrent MLS owner changes fail closed".into(),
+            "concurrent MLS owner-governed changes fail closed".into(),
         ));
     }
+    let transition = request.delivery_transition().map_err(ChatError::Trust)?;
     if request.proposal.conversation_id != conversation.request.genesis.conversation_id
         || request.proposal.incarnation != conversation.request.genesis.incarnation
         || request.proposal.base_epoch != conversation.last_finalized_epoch
         || request.owner_set_sequence != conversation.current_owner_set.sequence
-        || request
-            .owner_change
-            .delivery_transition
-            .previous_roster_commitment
+        || transition.previous_roster_commitment
             != roster_commitment(&conversation.current_roster).map_err(ChatError::Trust)?
     {
         return Err(ChatError::Trust(
             "MLS owner approval request differs from the current group pin".into(),
         ));
     }
-    ownership::validate_owner_role_transition(
-        &conversation.current_roster,
-        &request.next_roster,
-        &conversation.current_owner_set,
-        &request.owner_change.next_owner_set,
-    )?;
-    ownership::validate_new_owner_candidates(
-        metadata,
-        &conversation,
-        &request.next_roster,
-        &request.owner_change.next_owner_set,
-        &group_key,
-    )?;
+    match request.proposal.action_type {
+        MlsControlActionTypeV1::OwnerSetChange => {
+            let change = request
+                .owner_change
+                .as_ref()
+                .ok_or_else(|| ChatError::Trust("owner approval omits its owner change".into()))?;
+            ownership::validate_owner_role_transition(
+                &conversation.current_roster,
+                &request.next_roster,
+                &conversation.current_owner_set,
+                &change.next_owner_set,
+            )?;
+            ownership::validate_new_owner_candidates(
+                metadata,
+                &conversation,
+                &request.next_roster,
+                &change.next_owner_set,
+                &group_key,
+            )?;
+        }
+        MlsControlActionTypeV1::CloseConversation => {
+            if request.next_roster != conversation.current_roster
+                || transition.next_roster_commitment
+                    != roster_commitment(&conversation.current_roster).map_err(ChatError::Trust)?
+            {
+                return Err(ChatError::Trust(
+                    "MLS close approval differs from the exact current roster".into(),
+                ));
+            }
+        }
+        _ => {
+            return Err(ChatError::Trust(
+                "unsupported MLS owner-governed approval action".into(),
+            ))
+        }
+    }
     let requester: AccountAddress = sender
         .parse()
         .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
@@ -472,18 +534,34 @@ pub(super) fn record_owner_approval(
         .owner(&approval.owner_id)
         .ok_or_else(|| ChatError::Trust("MLS approval references a non-owner".into()))?;
     approval.verify(owner).map_err(ChatError::Trust)?;
-    let control = match metadata.pending_owner_changes.get_mut(&group_key) {
-        Some(control) => control,
-        None => return Ok(()),
-    };
-    let block = &mut control.vote_request.block;
-    let certificate = block
-        .owner_approval
-        .as_mut()
-        .ok_or_else(|| ChatError::Db("pending MLS owner change has no certificate".into()))?;
+    if let Some(control) = metadata.pending_owner_changes.get_mut(&group_key) {
+        return insert_owner_approval(
+            &mut control.vote_request.block,
+            &conversation.current_owner_set,
+            approval,
+        );
+    }
+    if let Some(control) = metadata.pending_closes.get_mut(&group_key) {
+        return insert_owner_approval(
+            &mut control.vote_request.block,
+            &conversation.current_owner_set,
+            approval,
+        );
+    }
+    Ok(())
+}
+
+fn insert_owner_approval(
+    block: &mut MlsControlBlockV1,
+    current_owners: &MlsOwnerSetV1,
+    approval: MlsOwnerApprovalV1,
+) -> Result<()> {
+    let certificate = block.owner_approval.as_mut().ok_or_else(|| {
+        ChatError::Db("pending MLS owner-governed action has no certificate".into())
+    })?;
     if approval.conversation_id != block.proposal.conversation_id
         || approval.incarnation != block.proposal.incarnation
-        || approval.owner_set_sequence != conversation.current_owner_set.sequence
+        || approval.owner_set_sequence != current_owners.sequence
         || approval.proposal_hash
             != block
                 .proposal
@@ -511,7 +589,7 @@ pub(super) fn record_owner_approval(
         .verify_partial(
             &block.proposal,
             block.transition_digest.as_deref(),
-            &conversation.current_owner_set,
+            current_owners,
         )
         .map_err(ChatError::Trust)
 }

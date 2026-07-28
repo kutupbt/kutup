@@ -258,6 +258,42 @@ function finalizedOwner() {
   }
 }
 
+function pendingClose() {
+  return {
+    mlsGroupId: [...genesisGroupBytes],
+    currentRoster: activeGenesis().currentRoster,
+    deliveries: [{ destination: 'alpha.example', deliveryDigest: '61'.repeat(32) }],
+    transition: {
+      conversationId,
+      incarnation: 1,
+      proposalId,
+    },
+    voteRequest: {
+      block: {
+        conversationId,
+        incarnation: 1,
+        height: 1,
+        epochBefore: 0,
+        epochAfter: 1,
+      },
+    },
+    commitHash: 'fa'.repeat(32),
+  }
+}
+
+function finalizedClose() {
+  return {
+    group: { mlsGroupId: [...genesisGroupBytes], epoch: 1 },
+    conversation: {
+      ...activeGenesis(),
+      status: 'closed' as const,
+      lastFinalizedHeight: 1,
+      lastFinalizedEpoch: 1,
+      lastBlockHash: controlBlockHash,
+    },
+  }
+}
+
 function ownerApprovalRequest(): PendingMlsOwnerApprovalRequest {
   return {
     mlsGroupId: [...genesisGroupBytes],
@@ -270,6 +306,7 @@ function ownerApprovalRequest(): PendingMlsOwnerApprovalRequest {
         incarnation: 1,
         proposalId,
         baseEpoch: 0,
+        actionType: 3,
       },
       transitionDigest: 'ac'.repeat(32),
       ownerChange: { nextOwnerSet: pendingOwner().ownerChange.nextOwnerSet },
@@ -372,6 +409,20 @@ function harness(
     rejectMlsOwnerApprovalRequest: vi.fn().mockResolvedValue(undefined),
     buildMlsOwnerCommitRequest: vi.fn().mockResolvedValue({ finalized: 'owner-request' }),
     finalizeMlsOwnerChange: vi.fn().mockResolvedValue(finalizedOwner()),
+    prepareMlsClose: vi.fn().mockResolvedValue({
+      pending: {
+        mlsGroupId: [...genesisGroupBytes],
+        epochBefore: 0,
+        epochAfter: 1,
+        commitHash: 'fa'.repeat(32),
+        commit: [10, 11, 12],
+      },
+      control: pendingClose(),
+    }),
+    pendingMlsCloses: vi.fn().mockResolvedValue([pendingClose()]),
+    mlsCloseHasOwnerQuorum: vi.fn().mockResolvedValue(true),
+    buildMlsCloseCommitRequest: vi.fn().mockResolvedValue({ finalized: 'close-request' }),
+    finalizeMlsClose: vi.fn().mockResolvedValue(finalizedClose()),
     mlsGroupState: vi.fn().mockResolvedValue(existing),
     inspectMlsWelcome: vi.fn().mockResolvedValue({
       mlsGroupId: [...new Uint8Array(16).fill(7)],
@@ -869,15 +920,49 @@ describe('MlsConversationService', () => {
 
     vi.mocked(client.approveMlsOwnerApprovalRequest)
       .mockResolvedValueOnce(applicationOutboxEntry())
-    await service.approveOwnerChange(conversationId)
+    await service.approveOwnerGovernance(conversationId)
     expect(client.approveMlsOwnerApprovalRequest).toHaveBeenCalledWith(
       genesisGroupBytes,
       expect.stringMatching(/^[0-9]+$/),
     )
     expect(transport.submitAnonymousMlsMessage).toHaveBeenCalledOnce()
 
-    await service.rejectOwnerChange(conversationId)
+    await service.rejectOwnerGovernance(conversationId)
     expect(client.rejectMlsOwnerApprovalRequest).toHaveBeenCalledWith(genesisGroupBytes)
+  })
+
+  it('keeps close pending for owner approval and finalizes the exact terminal epoch', async () => {
+    vi.stubGlobal('crypto', {
+      randomUUID: () => proposalId,
+      getRandomValues: (value: Uint8Array) => value,
+    })
+    const { client, transport, service } = harness(null, [activeGenesis()])
+    vi.mocked(client.mlsCloseHasOwnerQuorum).mockResolvedValueOnce(false)
+    vi.mocked(client.createMlsOwnerApprovalRequestMessage)
+      .mockResolvedValueOnce(applicationOutboxEntry())
+
+    await expect(service.closeConversation(conversationId)).resolves.toBeNull()
+    expect(client.prepareMlsClose).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      proposalId,
+      expect.stringMatching(/^[0-9]+$/),
+    )
+    expect(client.createMlsOwnerApprovalRequestMessage).toHaveBeenCalledWith(genesisGroupBytes)
+    expect(transport.submitAnonymousMlsMessage).toHaveBeenCalledOnce()
+    expect(transport.collectMlsOrderingVotes).not.toHaveBeenCalled()
+
+    vi.mocked(client.mlsCloseHasOwnerQuorum).mockResolvedValueOnce(true)
+    await expect(service.reconcilePendingCloses()).resolves.toEqual([finalizedClose()])
+    expect(transport.stageMlsMembershipDelivery).toHaveBeenCalledOnce()
+    expect(transport.collectMlsOrderingVotes).toHaveBeenCalledWith(pendingClose().voteRequest)
+    expect(client.buildMlsCloseCommitRequest).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      { votes: ['authority'] },
+    )
+    expect(client.finalizeMlsClose).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      expect.objectContaining({ blockHash: controlBlockHash }),
+    )
   })
 
   it('never merges local MLS state for a malformed control acknowledgement', async () => {

@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     decode_canonical_base64, validate_group_id, validate_metadata, validate_pending_commit,
     validate_pending_membership_change, LocalMlsConversationRecord, MlsDevicePublicMaterial,
-    PendingMlsAuthorityChange, PendingMlsCommit, PendingMlsMembershipChange,
+    PendingMlsAuthorityChange, PendingMlsClose, PendingMlsCommit, PendingMlsMembershipChange,
     PendingMlsOwnerApprovalRequest, PendingMlsOwnerChange, ProcessedMlsControlEnvelope,
     MAX_PENDING_COMMITS, MAX_STATE_BYTES, MAX_STATE_RECORDS, MAX_STATE_RECORD_BYTES,
     MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256, STATE_FORMAT_VERSION,
@@ -62,6 +62,7 @@ pub(super) struct SnapshotMetadata {
     pub(super) pending_membership_changes: BTreeMap<String, PendingMlsMembershipChange>,
     pub(super) pending_authority_changes: BTreeMap<String, PendingMlsAuthorityChange>,
     pub(super) pending_owner_changes: BTreeMap<String, PendingMlsOwnerChange>,
+    pub(super) pending_closes: BTreeMap<String, PendingMlsClose>,
     pub(super) owner_approval_requests: BTreeMap<String, PendingMlsOwnerApprovalRequest>,
     pub(super) group_control_private_keys: BTreeMap<String, Vec<u8>>,
     pub(super) group_owner_private_keys: BTreeMap<String, Vec<u8>>,
@@ -106,7 +107,7 @@ impl SnapshotMetadata {
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PersistedMlsStateV7 {
+struct PersistedMlsStateV8 {
     format_version: u16,
     ciphersuite: u16,
     credential_identity: String,
@@ -116,6 +117,7 @@ struct PersistedMlsStateV7 {
     pending_membership_changes: Vec<PendingMlsMembershipChange>,
     pending_authority_changes: Vec<PendingMlsAuthorityChange>,
     pending_owner_changes: Vec<PendingMlsOwnerChange>,
+    pending_closes: Vec<PendingMlsClose>,
     owner_approval_requests: Vec<PendingMlsOwnerApprovalRequest>,
     group_control_keys: Vec<PersistedMlsGroupControlKeyV1>,
     group_owner_keys: Vec<PersistedMlsGroupOwnerKeyV1>,
@@ -182,7 +184,7 @@ pub(super) fn snapshot_provider(
             value: BASE64.encode(value),
         });
     }
-    let state = PersistedMlsStateV7 {
+    let state = PersistedMlsStateV8 {
         format_version: STATE_FORMAT_VERSION,
         ciphersuite: MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256,
         credential_identity: metadata.credential_identity.clone(),
@@ -200,6 +202,7 @@ pub(super) fn snapshot_provider(
             .cloned()
             .collect(),
         pending_owner_changes: metadata.pending_owner_changes.values().cloned().collect(),
+        pending_closes: metadata.pending_closes.values().cloned().collect(),
         owner_approval_requests: metadata.owner_approval_requests.values().cloned().collect(),
         group_control_keys: metadata
             .group_control_private_keys
@@ -257,7 +260,7 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
     if bytes.is_empty() || bytes.len() > MAX_STATE_BYTES {
         return Err(ChatError::Db("OpenMLS state size is invalid".into()));
     }
-    let state: PersistedMlsStateV7 =
+    let state: PersistedMlsStateV8 =
         serde_json::from_slice(bytes).map_err(|error| ChatError::Db(error.to_string()))?;
     if state.format_version != STATE_FORMAT_VERSION
         || state.ciphersuite != MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256
@@ -266,6 +269,7 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
         || state.pending_membership_changes.len() > MAX_PENDING_COMMITS
         || state.pending_authority_changes.len() > MAX_PENDING_COMMITS
         || state.pending_owner_changes.len() > MAX_PENDING_COMMITS
+        || state.pending_closes.len() > MAX_PENDING_COMMITS
         || state.owner_approval_requests.len() > MAX_PENDING_COMMITS
         || state.group_control_keys.len() > MAX_PENDING_COMMITS
         || state.group_owner_keys.len() > MAX_PENDING_COMMITS
@@ -362,6 +366,26 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
         if pending_owner_changes.insert(key, pending).is_some() {
             return Err(ChatError::Db(
                 "OpenMLS state contains duplicate pending owner material".into(),
+            ));
+        }
+    }
+    let mut pending_closes = BTreeMap::new();
+    let mut previous_close_key: Option<String> = None;
+    for pending in state.pending_closes {
+        pending.validate_durable()?;
+        let key = BASE64.encode(&pending.mls_group_id);
+        if previous_close_key
+            .as_ref()
+            .is_some_and(|previous| key <= *previous)
+        {
+            return Err(ChatError::Db(
+                "MLS pending close records are not strictly ordered".into(),
+            ));
+        }
+        previous_close_key = Some(key.clone());
+        if pending_closes.insert(key, pending).is_some() {
+            return Err(ChatError::Db(
+                "OpenMLS state contains duplicate pending close material".into(),
             ));
         }
     }
@@ -577,6 +601,7 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
         pending_membership_changes,
         pending_authority_changes,
         pending_owner_changes,
+        pending_closes,
         owner_approval_requests,
         group_control_private_keys,
         group_owner_private_keys,

@@ -287,8 +287,9 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     : undefined
   const selectedGroupSelfMember = selectedGroup?.currentRoster.find(member =>
     canonicalAccountAddress(member.address) === selfAddress)
-  const canManageSelectedGroup = selectedGroupSelfMember?.isAdmin === true
-  const canManageSelectedGroupAuthorities = Boolean(selectedGroupSelfMember?.ownerId)
+  const selectedGroupClosed = selectedGroup?.status === 'closed'
+  const canManageSelectedGroup = selectedGroupSelfMember?.isAdmin === true && !selectedGroupClosed
+  const canManageSelectedGroupAuthorities = Boolean(selectedGroupSelfMember?.ownerId) && !selectedGroupClosed
   const selectedOwnerApproval = selectedGroup
     ? ownerApprovalRequests.find(request =>
         request.request.proposal.conversationId
@@ -326,7 +327,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const requestSelected = selectedContact?.state === 'pendingIncoming'
   const blockedSelected = selectedContact?.state === 'blocked'
   const canSend = Boolean(
-    selectedConversation && !requestSelected && !blockedSelected,
+    selectedConversation && !requestSelected && !blockedSelected && !selectedGroupClosed,
   )
 
   useEffect(() => {
@@ -566,13 +567,16 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     setGroupUpdating(true)
     try {
       if (approve) {
-        await service.approveGroupOwnerChange(selectedGroup.request.genesis.conversationId)
+        await service.approveGroupOwnerGovernance(selectedGroup.request.genesis.conversationId)
       } else {
-        await service.rejectGroupOwnerChange(selectedGroup.request.genesis.conversationId)
+        await service.rejectGroupOwnerGovernance(selectedGroup.request.genesis.conversationId)
       }
       setOwnerApprovalRequests(await service.pendingGroupOwnerApprovals())
       setGroups(await service.groups())
-      toast.success(approve ? 'Owner change approved' : 'Owner change rejected on this device')
+      const action = selectedOwnerApproval.request.proposal.actionType === 7
+        ? 'Group close'
+        : 'Owner change'
+      toast.success(approve ? `${action} approved` : `${action} rejected on this device`)
     } catch (cause) {
       toast.error(errorMessage(cause, t))
     } finally {
@@ -595,6 +599,29 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       )
       setGroups(await service.groups())
       toast.success('MLS ordering authorities updated')
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setGroupUpdating(false)
+    }
+  }
+
+  async function closeSelectedGroup() {
+    if (!service || !selectedGroup || !canManageSelectedGroupAuthorities || groupUpdating) return
+    const confirmed = window.confirm(
+      'Close this MLS group? Closing is permanent for this incarnation and all current owners may need to approve.',
+    )
+    if (!confirmed) return
+    setGroupUpdating(true)
+    try {
+      const finalized = await service.closeGroup(
+        selectedGroup.request.genesis.conversationId,
+      )
+      setGroups(await service.groups())
+      setOwnerApprovalRequests(await service.pendingGroupOwnerApprovals())
+      toast.success(finalized
+        ? 'MLS group closed'
+        : 'Encrypted close approval requested from the other group owners')
     } catch (cause) {
       toast.error(errorMessage(cause, t))
     } finally {
@@ -824,7 +851,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
               <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 MLS groups
               </div>
-              {groups.filter(group => group.status === 'active').map(group => {
+              {groups.filter(group =>
+                group.status === 'active' || group.status === 'closed').map(group => {
                 const groupId = group.request.genesis.conversationId
                 const conversation: ConversationId = { kind: 'group', groupId }
                 const latest = history.filter(message =>
@@ -847,7 +875,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium">
-                        Group {groupId.slice(0, 8)}
+                        Group {groupId.slice(0, 8)}{group.status === 'closed' ? ' · Closed' : ''}
                       </span>
                       <span className="block truncate text-xs text-muted-foreground">
                         {latest?.content.text ?? `${group.currentRoster.length} members · epoch ${group.lastFinalizedEpoch}`}
@@ -994,13 +1022,18 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                       className="rounded-lg border border-primary/40 bg-primary/5 p-3"
                       data-testid="chat-group-owner-approval"
                     >
-                      <p className="text-sm font-medium">Approve MLS owner change?</p>
+                      <p className="text-sm font-medium">
+                        {selectedOwnerApproval.request.proposal.actionType === 7
+                          ? 'Approve closing this MLS group?'
+                          : 'Approve MLS owner change?'}
+                      </p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {canonicalAccountAddress(selectedOwnerApproval.requester)} proposes making{' '}
-                        {selectedOwnerApproval.request.nextRoster
-                          .filter(member => Boolean(member.ownerId))
-                          .map(member => canonicalAccountAddress(member.address))
-                          .join(', ')} the group owners. Approval signs this exact encrypted transition.
+                        {selectedOwnerApproval.request.proposal.actionType === 7
+                          ? `${canonicalAccountAddress(selectedOwnerApproval.requester)} proposes permanently closing this group incarnation. Approval signs the exact unchanged-roster MLS transition.`
+                          : `${canonicalAccountAddress(selectedOwnerApproval.requester)} proposes making ${selectedOwnerApproval.request.nextRoster
+                              .filter(member => Boolean(member.ownerId))
+                              .map(member => canonicalAccountAddress(member.address))
+                              .join(', ')} the group owners. Approval signs this exact encrypted transition.`}
                       </p>
                       <div className="mt-3 flex justify-end gap-2">
                         <Button
@@ -1126,10 +1159,31 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                       </form>
                     )}
                   </div>
+                  {selectedGroupClosed ? (
+                    <div
+                      className="rounded-lg border border-destructive/40 bg-destructive-faint p-3 text-sm"
+                      data-testid="chat-group-closed"
+                    >
+                      This MLS group incarnation is closed. Its authenticated history remains available, but no new messages or control changes are allowed.
+                    </div>
+                  ) : canManageSelectedGroupAuthorities ? (
+                    <div className="flex justify-end border-t pt-4">
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        disabled={groupUpdating}
+                        onClick={() => void closeSelectedGroup()}
+                        data-testid="chat-group-close"
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Close group
+                      </Button>
+                    </div>
+                  ) : null}
                 </DialogContent>
               </Dialog>
             )}
-            {selectedGroup && canManageSelectedGroup && (
+            {selectedGroup && canManageSelectedGroup && !selectedGroupClosed && (
               <Dialog open={addGroupMemberOpen} onOpenChange={setAddGroupMemberOpen}>
                 <DialogTrigger asChild>
                   <Button
@@ -1298,6 +1352,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     ? t('chat.requests.acceptBeforeReply')
                     : blockedSelected
                       ? t('chat.requests.unblockBeforeReply')
+                      : selectedGroupClosed
+                        ? 'This MLS group is closed'
                       : selectedConversation
                     ? t('chat.messagePeer', {
                         peer: selectedTitle,

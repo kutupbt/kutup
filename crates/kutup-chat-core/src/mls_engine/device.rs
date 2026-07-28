@@ -52,6 +52,7 @@ impl MlsClient {
             pending_membership_changes: BTreeMap::new(),
             pending_authority_changes: BTreeMap::new(),
             pending_owner_changes: BTreeMap::new(),
+            pending_closes: BTreeMap::new(),
             owner_approval_requests: BTreeMap::new(),
             group_control_private_keys: BTreeMap::new(),
             group_owner_private_keys: BTreeMap::new(),

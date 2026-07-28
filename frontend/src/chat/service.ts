@@ -369,14 +369,20 @@ export class ChatService {
     return this.requireMls().pendingOwnerApprovalRequests()
   }
 
-  async approveGroupOwnerChange(conversationId: string): Promise<void> {
-    await this.requireMls().approveOwnerChange(conversationId)
+  async approveGroupOwnerGovernance(conversationId: string): Promise<void> {
+    await this.requireMls().approveOwnerGovernance(conversationId)
     this.notifyPeers()
   }
 
-  async rejectGroupOwnerChange(conversationId: string): Promise<void> {
-    await this.requireMls().rejectOwnerChange(conversationId)
+  async rejectGroupOwnerGovernance(conversationId: string): Promise<void> {
+    await this.requireMls().rejectOwnerGovernance(conversationId)
     this.notifyPeers()
+  }
+
+  async closeGroup(conversationId: string): Promise<boolean> {
+    const finalized = await this.requireMls().closeConversation(conversationId)
+    this.notifyPeers()
+    return finalized !== null
   }
 
   async maintainPrekeys(): Promise<void> {

@@ -136,9 +136,9 @@ pub(crate) async fn collect_ordering_votes(
             "MLS routine and membership control requires a local administrator",
         ));
     }
-    if request.block.proposal.action_type == MlsControlActionTypeV1::OwnerSetChange && !is_owner {
+    if request.block.proposal.action_type.requires_owner_quorum() && !is_owner {
         return Err(AppError::forbidden(
-            "MLS owner-set control requires a current local owner",
+            "MLS security governance requires a current local owner",
         ));
     }
 

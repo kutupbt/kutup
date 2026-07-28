@@ -17,9 +17,12 @@ and reload persistence. Owner-set changes use durable MLS-encrypted manual
 approval requests and responses with explicit browser approve/reject controls;
 the two-server gate proves requester and approver restart recovery, that no
 control block is ordered before quorum, and successful finalization after the
-approval arrives. Advertisement remains gated on the remaining owner/authority
-product orchestration, federated invitation-rejection feedback, linked-device
-group state, and the remaining adversarial suites.
+approval arrives. Owner-approved closure is also complete: the gate proves an
+unchanged-roster terminal Commit, requester and approver reload recovery,
+closure on both participant servers, send blocking, and immutable-history
+visibility after restart. Advertisement remains gated on the remaining
+owner/authority product orchestration, federated invitation-rejection feedback,
+linked-device group state, and the remaining adversarial suites.
 
 ## Conversation model
 
@@ -107,6 +110,32 @@ proof-of-possession candidate before signing. Its response is another ordinary
 anonymous MLS application message sent only to the requester. No server or
 client votes automatically, rejection cannot count as approval, and ordering
 does not begin until the exact current-owner certificate reaches quorum.
+
+### Conversation closure
+
+Closing a conversation is an owner-governed terminal transition for one exact
+incarnation. A current owner stages a self-update MLS Commit whose public
+transition preserves the complete roster, member count, participant domains,
+roles, authority set, and owner set. The initiating owner signs automatically;
+when more approvals are required, the same bounded, group-private approval
+request/response path used by owner-set changes carries the exact close proposal
+and transition digest only to current owners. No authority vote is requested
+before the current-owner certificate reaches quorum.
+
+After owner quorum, the current authority quorum orders one
+`CloseConversation` control block. Every participant server receives its
+destination-private Commit delivery, while ordering-only replicas learn no
+membership. Server finalization atomically stores the block, delivery rows,
+closed incarnation/conversation status, and administrative audit event. Each
+client independently verifies the previous owner, owner certificate, authority
+quorum, unchanged roster/routing commitments, private GroupContext, Commit, and
+manifest-bound sender before atomically advancing its MLS state to `closed`.
+
+`closed` is durable and idempotent. The conversation and authenticated history
+remain visible after restart, but application sends and all further control
+changes fail closed; there is no identified-delivery fallback. Recovery, when
+implemented, creates an explicitly owner-approved new incarnation and never
+reopens or rewrites the closed one.
 
 ## Ordering authorities
 
@@ -346,7 +375,7 @@ sender/recipient correlations.
 Do not advertise MLS until all of the following pass together:
 
 - browser orchestration, explicit approval UI, and two-server adversarial
-  coverage for recovery, close, and suite-policy owner actions;
+  coverage for recovery and suite-policy owner actions;
 - federated invitation-rejection feedback and administrator removal flow;
 - group owner and exact authority-policy/fingerprint UI;
 - WebSocket/restart reconciliation and multi-device linked-state flow;

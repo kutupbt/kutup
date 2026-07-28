@@ -283,7 +283,8 @@ fn owner_approval_request_has_one_exact_private_transition_vector() {
         owner_set_sequence: 4,
         proposal,
         transition_digest: owner_change.transition_digest().unwrap(),
-        owner_change,
+        owner_change: Some(owner_change),
+        membership_transition: None,
         next_roster,
         requested_at: 1_700_000_100,
         expires_at: 1_700_086_500,
@@ -296,6 +297,63 @@ fn owner_approval_request_has_one_exact_private_transition_vector() {
     let encoded = serde_json::to_vec(&request).unwrap();
     let decoded: MlsOwnerApprovalRequestV1 = serde_json::from_slice(&encoded).unwrap();
     assert_eq!(decoded, request);
+
+    let mut close_transition = request
+        .owner_change
+        .as_ref()
+        .unwrap()
+        .delivery_transition
+        .clone();
+    close_transition.previous_roster_commitment = close_transition.next_roster_commitment.clone();
+    let mut close_proposal = request.proposal.clone();
+    close_proposal.action_type = MlsControlActionTypeV1::CloseConversation;
+    close_proposal.proposer_signature.clear();
+    let signature: p256::ecdsa::Signature =
+        proposer_key.sign(&close_proposal.signing_bytes().unwrap());
+    close_proposal.proposer_signature =
+        base64::engine::general_purpose::STANDARD.encode(signature.to_der().as_bytes());
+    let close_request = MlsOwnerApprovalRequestV1 {
+        protocol_version: MLS_PROTOCOL_VERSION,
+        owner_set_sequence: 4,
+        proposal: close_proposal.clone(),
+        transition_digest: close_transition.transition_digest().unwrap(),
+        owner_change: None,
+        membership_transition: Some(close_transition.clone()),
+        next_roster: request.next_roster.clone(),
+        requested_at: 1_700_000_100,
+        expires_at: 1_700_086_500,
+    };
+    close_request.validate().unwrap();
+    let close_block = MlsControlBlockV1 {
+        conversation_id,
+        incarnation: 2,
+        height: 10,
+        previous_block_hash: Some("04".repeat(32)),
+        epoch_before: 9,
+        epoch_after: 10,
+        proposal: close_proposal,
+        transition_digest: Some(close_transition.transition_digest().unwrap()),
+        owner_approval: None,
+        finalized_at: 1_700_000_101,
+    };
+    CommitMlsControlBlockV1 {
+        finalized: MlsFinalizedControlBlockV1 {
+            block: close_block,
+            quorum_certificate: MlsOrderingQuorumCertificateV1 {
+                authority_set_sequence: 1,
+                height: 10,
+                round: 0,
+                block_hash: "05".repeat(32),
+                votes: vec![],
+            },
+        },
+        membership_transition: Some(close_transition),
+        authority_change: None,
+        authority_transition: None,
+        owner_change: None,
+    }
+    .validate_shape()
+    .unwrap();
 
     let mut substituted = request;
     substituted.next_roster[1].is_admin = true;

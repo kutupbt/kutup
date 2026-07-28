@@ -539,6 +539,7 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
         || metadata.pending_membership_changes.len() > MAX_PENDING_COMMITS
         || metadata.pending_authority_changes.len() > MAX_PENDING_COMMITS
         || metadata.pending_owner_changes.len() > MAX_PENDING_COMMITS
+        || metadata.pending_closes.len() > MAX_PENDING_COMMITS
         || metadata.owner_approval_requests.len() > MAX_PENDING_COMMITS
     {
         return Err(ChatError::Db(
@@ -611,10 +612,24 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
             ));
         }
     }
+    for (key, control) in &metadata.pending_closes {
+        control.validate_durable()?;
+        if key != &BASE64.encode(&control.mls_group_id)
+            || !metadata.pending_commits.contains_key(key)
+            || metadata.pending_membership_changes.contains_key(key)
+            || metadata.pending_authority_changes.contains_key(key)
+            || metadata.pending_owner_changes.contains_key(key)
+        {
+            return Err(ChatError::Db(
+                "durable MLS close key or pending Commit is inconsistent".into(),
+            ));
+        }
+    }
     for (key, request) in &metadata.owner_approval_requests {
         request.validate_durable()?;
         if key != &BASE64.encode(&request.mls_group_id)
             || metadata.pending_owner_changes.contains_key(key)
+            || metadata.pending_closes.contains_key(key)
         {
             return Err(ChatError::Db(
                 "durable MLS owner approval request conflicts with local control state".into(),
@@ -709,7 +724,10 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
         }
         match (record.status, &record.server_genesis_hash) {
             (LocalMlsConversationStatus::PendingGenesis, None) => {}
-            (LocalMlsConversationStatus::Active, Some(hash)) => {
+            (
+                LocalMlsConversationStatus::Active | LocalMlsConversationStatus::Closed,
+                Some(hash),
+            ) => {
                 validate_sha256_hex("durable MLS genesis hash", hash)
                     .map_err(|error| ChatError::Db(error.to_string()))?;
                 let expected = record
@@ -805,6 +823,38 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
                 )
                 .map_err(ChatError::Db)?;
         }
+        if let Some(control) = metadata.pending_closes.get(&group_key) {
+            let block = &control.vote_request.block;
+            let transition = &control.transition;
+            if record.status != LocalMlsConversationStatus::Active
+                || block.conversation_id != record.request.genesis.conversation_id
+                || block.incarnation != record.request.genesis.incarnation
+                || block.height != record.last_finalized_height.saturating_add(1)
+                || block.previous_block_hash != record.last_block_hash
+                || block.epoch_before != record.last_finalized_epoch
+                || control.vote_request.authority_set != record.current_authority_set
+                || transition.previous_roster_commitment
+                    != roster_commitment(&record.current_roster).map_err(ChatError::Db)?
+                || transition.next_roster_commitment != transition.previous_roster_commitment
+                || control.current_roster != record.current_roster
+            {
+                return Err(ChatError::Db(
+                    "durable MLS close does not extend its conversation pin".into(),
+                ));
+            }
+            control
+                .vote_request
+                .block
+                .owner_approval
+                .as_ref()
+                .ok_or_else(|| ChatError::Db("durable close has no owner approvals".into()))?
+                .verify_partial(
+                    &block.proposal,
+                    block.transition_digest.as_deref(),
+                    &record.current_owner_set,
+                )
+                .map_err(ChatError::Db)?;
+        }
         if let Some(pending) = metadata.owner_approval_requests.get(&group_key) {
             let request = &pending.request;
             let requester = pending.requester.canonical();
@@ -820,8 +870,8 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
                 || request.proposal.base_epoch != record.last_finalized_epoch
                 || request.owner_set_sequence != record.current_owner_set.sequence
                 || request
-                    .owner_change
-                    .delivery_transition
+                    .delivery_transition()
+                    .map_err(ChatError::Db)?
                     .previous_roster_commitment
                     != roster_commitment(&record.current_roster).map_err(ChatError::Db)?
                 || !requester_is_owner
@@ -867,6 +917,7 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
         .chain(metadata.group_owner_candidate_private_keys.keys())
         .chain(metadata.owner_candidates.keys())
         .chain(metadata.owner_approval_requests.keys())
+        .chain(metadata.pending_closes.keys())
     {
         if !metadata
             .conversations

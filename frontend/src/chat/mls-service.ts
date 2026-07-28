@@ -6,6 +6,7 @@ import type {
   ChatTransportPort,
   DerivedMlsDeliveryCapability,
   FinalizedMlsAuthorityChange,
+  FinalizedMlsClose,
   FinalizedMlsMembershipChange,
   FinalizedMlsOwnerChange,
   LocalMlsConversationRecord,
@@ -16,6 +17,7 @@ import type {
   MlsOutboxEntry,
   MlsWelcomeInspection,
   PendingMlsAuthorityChange,
+  PendingMlsClose,
   PendingMlsMembershipChange,
   PendingMlsOwnerApprovalRequest,
   PendingMlsOwnerChange,
@@ -410,6 +412,42 @@ export class MlsConversationService {
     return finalized
   }
 
+  async closeConversation(conversationId: string): Promise<FinalizedMlsClose | null> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const prepared = await this.withCryptoLock(() =>
+      this.client.prepareMlsClose(
+        groupId,
+        requireBrowserCrypto().randomUUID(),
+        String(Math.floor(Date.now() / 1000)),
+      ))
+    validatePendingClose(prepared.control, groupId)
+    if (!await this.withCryptoLock(() => this.client.mlsCloseHasOwnerQuorum(groupId))) {
+      await this.publishOwnerApprovalRequest(groupId)
+      return null
+    }
+    return this.publishPendingClose(prepared.control)
+  }
+
+  async reconcilePendingCloses(): Promise<FinalizedMlsClose[]> {
+    const pending = await this.withCryptoLock(() => this.client.pendingMlsCloses())
+    const finalized: FinalizedMlsClose[] = []
+    for (const control of pending) {
+      const groupId = Uint8Array.from(control.mlsGroupId)
+      validatePendingClose(control, groupId)
+      if (!await this.withCryptoLock(() => this.client.mlsCloseHasOwnerQuorum(groupId))) {
+        await this.publishOwnerApprovalRequest(groupId)
+        continue
+      }
+      finalized.push(await this.publishPendingClose(control))
+    }
+    return finalized
+  }
+
   async ownerCandidates(conversationId: string): Promise<MlsOwnerCandidate[]> {
     const conversation = await this.requireActiveConversation(conversationId)
     const groupId = decodeCanonicalBase64(
@@ -476,7 +514,7 @@ export class MlsConversationService {
     return this.withCryptoLock(() => this.client.pendingMlsOwnerApprovalRequests())
   }
 
-  async approveOwnerChange(conversationId: string): Promise<void> {
+  async approveOwnerGovernance(conversationId: string): Promise<void> {
     const conversation = await this.requireActiveConversation(conversationId)
     const groupId = decodeCanonicalBase64(
       conversation.request.genesis.mlsGroupId,
@@ -491,7 +529,7 @@ export class MlsConversationService {
     if (entry) await this.deliverApplicationEntry(entry)
   }
 
-  async rejectOwnerChange(conversationId: string): Promise<void> {
+  async rejectOwnerGovernance(conversationId: string): Promise<void> {
     const conversation = await this.requireActiveConversation(conversationId)
     const groupId = decodeCanonicalBase64(
       conversation.request.genesis.mlsGroupId,
@@ -875,10 +913,12 @@ export class MlsConversationService {
     await this.reconcilePendingMembershipChanges()
     await this.reconcilePendingAuthorityChanges()
     await this.reconcilePendingOwnerChanges()
+    await this.reconcilePendingCloses()
     await this.reconcileInboundMembershipCommits()
     await this.reconcilePendingApplicationMessages()
     await this.reconcileInboundApplicationMessages()
     await this.reconcilePendingOwnerChanges()
+    await this.reconcilePendingCloses()
   }
 
   /**
@@ -1278,6 +1318,36 @@ export class MlsConversationService {
     }
     return finalized
   }
+
+  private async publishPendingClose(
+    control: PendingMlsClose,
+  ): Promise<FinalizedMlsClose> {
+    const groupId = Uint8Array.from(control.mlsGroupId)
+    validatePendingClose(control, groupId)
+    for (const delivery of control.deliveries) {
+      await this.transport.stageMlsMembershipDelivery(delivery)
+    }
+    let request = control.finalRequest
+    if (!request) {
+      const certificate = await this.transport.collectMlsOrderingVotes(control.voteRequest)
+      request = await this.withCryptoLock(() =>
+        this.client.buildMlsCloseCommitRequest(groupId, certificate))
+    }
+    const acknowledgement = requireControlBlockResponse(
+      await this.transport.commitMlsControlBlock(request),
+      control,
+    )
+    const finalized = await this.withCryptoLock(() =>
+      this.client.finalizeMlsClose(groupId, acknowledgement))
+    if (
+      finalized.group.epoch !== control.voteRequest.block.epochAfter
+      || finalized.conversation.status !== 'closed'
+      || finalized.conversation.lastBlockHash !== acknowledgement.blockHash
+    ) {
+      throw new Error('durable MLS close state differs from its finalized block')
+    }
+    return finalized
+  }
 }
 
 interface BrowserCrypto {
@@ -1362,10 +1432,10 @@ function validateLocalGenesisRecord(record: LocalMlsConversationRecord): void {
       record.lastFinalizedHeight > 0
       && !isSha256(record.lastBlockHash)
     )
-    || (record.status !== 'pending_genesis' && record.status !== 'active')
+    || !['pending_genesis', 'active', 'closed'].includes(record.status)
     || (record.status === 'pending_genesis' && record.serverGenesisHash !== undefined)
     || (
-      record.status === 'active'
+      (record.status === 'active' || record.status === 'closed')
       && !isSha256(record.serverGenesisHash)
     )
   ) {
@@ -1465,9 +1535,36 @@ function validatePendingOwnerChange(
   }
 }
 
+function validatePendingClose(
+  control: PendingMlsClose,
+  expectedGroupId: Uint8Array,
+): void {
+  const block = control?.voteRequest?.block
+  const transition = control?.transition
+  if (
+    !control
+    || !equalBytes(control.mlsGroupId, expectedGroupId)
+    || !isSha256(control.commitHash)
+    || !Array.isArray(control.currentRoster)
+    || control.currentRoster.length < 1
+    || control.currentRoster.length > 1000
+    || !Array.isArray(control.deliveries)
+    || control.deliveries.length < 1
+    || !block
+    || !transition
+    || !isUuid(block.conversationId)
+    || block.conversationId !== transition.conversationId
+    || block.incarnation !== transition.incarnation
+    || !isUuid(transition.proposalId)
+    || block.epochAfter !== block.epochBefore + 1
+  ) {
+    throw new Error('invalid durable MLS close control record')
+  }
+}
+
 function requireControlBlockResponse(
   value: unknown,
-  control: PendingMlsMembershipChange | PendingMlsAuthorityChange | PendingMlsOwnerChange,
+  control: PendingMlsMembershipChange | PendingMlsAuthorityChange | PendingMlsOwnerChange | PendingMlsClose,
 ): {
   conversationId: string
   incarnation: number

@@ -58,16 +58,17 @@ pub use manifest::{
 pub use mls_engine::{
     AnonymousMlsRecipientDevice, AppliedInboundMlsApplication, AppliedInboundMlsCommit,
     ClaimedMlsCredential, DecryptedMlsApplication, DerivedMlsDeliveryCapability,
-    FinalizedMlsAuthorityChange, FinalizedMlsMembershipChange, FinalizedMlsOwnerChange,
-    JoinedMlsConversation, LocalMlsConversationRecord, LocalMlsConversationStatus,
-    LocalMlsGroupState, MlsApplicationEnvelopeContext, MlsApplicationInspection, MlsClient,
-    MlsControlEnvelopeContext, MlsDevicePublicMaterial, MlsGroupControlCredential,
-    MlsGroupOwnerCredential, MlsInboundCommitInspection, MlsWelcomeInspection,
-    PendingMlsAuthorityChange, PendingMlsCommit, PendingMlsMembershipChange,
-    PendingMlsOwnerApprovalRequest, PendingMlsOwnerChange, PreparedMlsAuthorityChange,
-    PreparedMlsGroupGenesis, PreparedMlsMembershipChange, PreparedMlsOwnerChange,
-    ProcessedMlsControlEnvelope, StagedMlsApplicationDelivery, VerifiedMlsCredential,
-    VerifiedMlsKeyPackage, KUTUP_MLS_V1_CIPHERSUITE, KUTUP_MLS_V1_MAX_PAST_EPOCHS,
+    FinalizedMlsAuthorityChange, FinalizedMlsClose, FinalizedMlsMembershipChange,
+    FinalizedMlsOwnerChange, JoinedMlsConversation, LocalMlsConversationRecord,
+    LocalMlsConversationStatus, LocalMlsGroupState, MlsApplicationEnvelopeContext,
+    MlsApplicationInspection, MlsClient, MlsControlEnvelopeContext, MlsDevicePublicMaterial,
+    MlsGroupControlCredential, MlsGroupOwnerCredential, MlsInboundCommitInspection,
+    MlsWelcomeInspection, PendingMlsAuthorityChange, PendingMlsClose, PendingMlsCommit,
+    PendingMlsMembershipChange, PendingMlsOwnerApprovalRequest, PendingMlsOwnerChange,
+    PreparedMlsAuthorityChange, PreparedMlsClose, PreparedMlsGroupGenesis,
+    PreparedMlsMembershipChange, PreparedMlsOwnerChange, ProcessedMlsControlEnvelope,
+    StagedMlsApplicationDelivery, VerifiedMlsCredential, VerifiedMlsKeyPackage,
+    KUTUP_MLS_V1_CIPHERSUITE, KUTUP_MLS_V1_MAX_PAST_EPOCHS,
 };
 pub use mls_policy::verify_mls_ordering_policy_history;
 pub use profile::{derive_wrapping_key, MAX_AVATAR_BYTES};

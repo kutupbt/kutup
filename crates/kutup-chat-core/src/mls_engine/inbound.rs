@@ -52,6 +52,7 @@ impl MlsClient {
                 | MlsControlActionTypeV1::RoutineAdmin
                 | MlsControlActionTypeV1::AuthoritySetChange
                 | MlsControlActionTypeV1::OwnerSetChange
+                | MlsControlActionTypeV1::CloseConversation
         ) {
             return Err(ChatError::Trust(
                 "roster-control mailbox carried an unrelated block".into(),
@@ -133,6 +134,7 @@ impl MlsClient {
             || metadata.pending_membership_changes.contains_key(&group_key)
             || metadata.pending_authority_changes.contains_key(&group_key)
             || metadata.pending_owner_changes.contains_key(&group_key)
+            || metadata.pending_closes.contains_key(&group_key)
         {
             return Err(ChatError::Trust(
                 "cannot merge a remote MLS Commit while a local Commit is pending".into(),
@@ -258,7 +260,7 @@ impl MlsClient {
                 ChatError::Trust("MLS Commit sender is absent from the roster".into())
             })?;
         let sender_authorized = match block.proposal.action_type {
-            MlsControlActionTypeV1::OwnerSetChange => sender_member
+            action if action.requires_owner_quorum() => sender_member
                 .owner_id
                 .as_deref()
                 .is_some_and(|owner_id| conversation.current_owner_set.owner(owner_id).is_some()),
@@ -310,10 +312,13 @@ impl MlsClient {
                 "inbound MLS private control state differs from the finalized transition".into(),
             ));
         }
-        if block.proposal.action_type == MlsControlActionTypeV1::AuthoritySetChange {
+        if matches!(
+            block.proposal.action_type,
+            MlsControlActionTypeV1::AuthoritySetChange | MlsControlActionTypeV1::CloseConversation
+        ) {
             if private_control.roster != conversation.current_roster {
                 return Err(ChatError::Trust(
-                    "MLS authority change altered the private roster".into(),
+                    "MLS governance action altered the private roster".into(),
                 ));
             }
         } else if block.proposal.action_type == MlsControlActionTypeV1::OwnerSetChange {
@@ -360,6 +365,9 @@ impl MlsClient {
         conversation.current_roster = private_control.roster;
         conversation.current_authority_set = private_control.authority_set;
         conversation.current_owner_set = private_control.owner_set;
+        if block.proposal.action_type == MlsControlActionTypeV1::CloseConversation {
+            conversation.status = LocalMlsConversationStatus::Closed;
+        }
         let conversation = conversation.clone();
         ownership::prune_owner_candidates_for_roster(
             &mut metadata,
@@ -376,7 +384,12 @@ impl MlsClient {
                 })
             });
         if !retained_local_owner {
-            metadata.group_owner_private_keys.remove(&group_key);
+            if let Some(seed) = metadata.group_owner_private_keys.remove(&group_key) {
+                metadata
+                    .group_owner_candidate_private_keys
+                    .entry(group_key.clone())
+                    .or_insert(seed);
+            }
         }
         insert_processed_control_envelope(&mut metadata, receipt.clone())?;
         let group = local_group_state(&group);

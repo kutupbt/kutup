@@ -1176,6 +1176,80 @@ impl WasmChatClient {
         to_output(&finalized)
     }
 
+    #[wasm_bindgen(js_name = prepareMlsClose)]
+    pub async fn prepare_mls_close(
+        &self,
+        mls_group_id: Vec<u8>,
+        proposal_id: String,
+        now_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let proposal_id = uuid::Uuid::parse_str(&proposal_id)
+            .map_err(|_| js_error("MLS proposal id must be a UUID"))?;
+        let prepared = self
+            .mls_client()
+            .prepare_close_conversation(
+                &mls_group_id,
+                proposal_id,
+                parse_i64_string("MLS close clock", &now_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&prepared)
+    }
+
+    #[wasm_bindgen(js_name = pendingMlsCloses)]
+    pub async fn pending_mls_closes(&self) -> std::result::Result<JsValue, JsValue> {
+        let pending = self
+            .mls_client()
+            .pending_closes()
+            .await
+            .map_err(chat_error)?;
+        to_output(&pending)
+    }
+
+    #[wasm_bindgen(js_name = mlsCloseHasOwnerQuorum)]
+    pub async fn mls_close_has_owner_quorum(
+        &self,
+        mls_group_id: Vec<u8>,
+    ) -> std::result::Result<bool, JsValue> {
+        self.mls_client()
+            .close_has_owner_quorum(&mls_group_id)
+            .await
+            .map_err(chat_error)
+    }
+
+    #[wasm_bindgen(js_name = buildMlsCloseCommitRequest)]
+    pub async fn build_mls_close_commit_request(
+        &self,
+        mls_group_id: Vec<u8>,
+        quorum_certificate: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let certificate: MlsOrderingQuorumCertificateV1 =
+            from_transport(quorum_certificate).map_err(chat_error)?;
+        let request = self
+            .mls_client()
+            .build_close_commit_request(&mls_group_id, certificate)
+            .await
+            .map_err(chat_error)?;
+        to_output(&request)
+    }
+
+    #[wasm_bindgen(js_name = finalizeMlsClose)]
+    pub async fn finalize_mls_close(
+        &self,
+        mls_group_id: Vec<u8>,
+        acknowledgement: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let acknowledgement: CommitMlsControlBlockResponseV1 =
+            from_transport(acknowledgement).map_err(chat_error)?;
+        let finalized = self
+            .mls_client()
+            .finalize_close(&mls_group_id, &acknowledgement)
+            .await
+            .map_err(chat_error)?;
+        to_output(&finalized)
+    }
+
     #[wasm_bindgen(js_name = pendingMlsCommit)]
     pub async fn pending_mls_commit(
         &self,

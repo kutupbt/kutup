@@ -247,7 +247,7 @@ export interface LocalMlsConversationRecord {
       ownerId?: string
     }>
   }
-  status: 'pending_genesis' | 'active'
+  status: 'pending_genesis' | 'active' | 'closed'
   serverGenesisHash?: string
   lastFinalizedHeight: number
   lastFinalizedEpoch: number
@@ -406,10 +406,16 @@ export interface PendingMlsOwnerApprovalRequest {
       incarnation: number
       proposalId: string
       baseEpoch: number
+      actionType: number
     }
     transitionDigest: string
-    ownerChange: {
+    ownerChange?: {
       nextOwnerSet: MlsOwnerSet
+    }
+    membershipTransition?: {
+      conversationId: string
+      incarnation: number
+      proposalId: string
     }
     nextRoster: MlsConversationMember[]
     requestedAt: number
@@ -423,6 +429,38 @@ export interface PreparedMlsOwnerChange {
 }
 
 export interface FinalizedMlsOwnerChange {
+  group: LocalMlsGroupState
+  conversation: LocalMlsConversationRecord
+}
+
+export interface PendingMlsClose {
+  mlsGroupId: number[]
+  currentRoster: MlsConversationMember[]
+  deliveries: unknown[]
+  transition: {
+    conversationId: string
+    incarnation: number
+    proposalId: string
+  }
+  voteRequest: {
+    block: {
+      conversationId: string
+      incarnation: number
+      height: number
+      epochBefore: number
+      epochAfter: number
+    }
+  }
+  commitHash: string
+  finalRequest?: unknown
+}
+
+export interface PreparedMlsClose {
+  pending: PreparedMlsMembershipChange['pending']
+  control: PendingMlsClose
+}
+
+export interface FinalizedMlsClose {
   group: LocalMlsGroupState
   conversation: LocalMlsConversationRecord
 }
@@ -708,6 +746,21 @@ export interface WasmChatClientHandle {
     mlsGroupId: Uint8Array,
     acknowledgement: unknown,
   ): Promise<FinalizedMlsOwnerChange>
+  prepareMlsClose(
+    mlsGroupId: Uint8Array,
+    proposalId: string,
+    nowSeconds: string,
+  ): Promise<PreparedMlsClose>
+  pendingMlsCloses(): Promise<PendingMlsClose[]>
+  mlsCloseHasOwnerQuorum(mlsGroupId: Uint8Array): Promise<boolean>
+  buildMlsCloseCommitRequest(
+    mlsGroupId: Uint8Array,
+    quorumCertificate: unknown,
+  ): Promise<unknown>
+  finalizeMlsClose(
+    mlsGroupId: Uint8Array,
+    acknowledgement: unknown,
+  ): Promise<FinalizedMlsClose>
   pendingMlsCommit(mlsGroupId: Uint8Array): Promise<unknown | null>
   mergePendingMlsCommit(mlsGroupId: Uint8Array, commitHash: string): Promise<unknown>
   rejectPendingMlsCommit(mlsGroupId: Uint8Array, commitHash: string): Promise<void>

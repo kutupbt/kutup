@@ -518,6 +518,96 @@ test.describe('two-server secure chat', () => {
     await expect(bubble(pageB, fromAlice)).toBeVisible({ timeout: 90_000 })
     await expect(bubble(pageB, fromBob)).toBeVisible({ timeout: 90_000 })
 
+    // Re-promoting the previously demoted owner reuses the exact durable
+    // group-scoped candidate key. The resulting q=2 owner set then proves that
+    // close is an explicit, restart-safe owner-governed terminal transition.
+    const repromoteOwnerCommit = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/control/blocks'
+    })
+    await pageA.getByTestId('chat-group-members').click()
+    await pageA.getByTestId(`chat-group-owner-${bob}@b.test`).click()
+    expect((await requireResponseOrUiError(pageA, repromoteOwnerCommit)).ok()).toBe(true)
+    await expect(
+      pageA.getByTestId(`chat-group-member-owner-${bob}@b.test`),
+    ).toBeVisible({ timeout: 90_000 })
+    await pageA.keyboard.press('Escape')
+
+    await pageB.getByTestId('chat-group-members').click()
+    await expect(
+      pageB.getByTestId(`chat-group-member-owner-${bob}@b.test`),
+    ).toBeVisible({ timeout: 90_000 })
+    await pageB.keyboard.press('Escape')
+
+    let closeControlSubmitted = false
+    let awaitingCloseApproval = true
+    pageA.on('request', (request) => {
+      if (
+        awaitingCloseApproval
+        && request.method() === 'POST'
+        && new URL(request.url()).pathname === '/api/chat/mls/control/blocks'
+      ) closeControlSubmitted = true
+    })
+    const closeApprovalRequest = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/anonymous/messages'
+    })
+    await pageA.getByTestId('chat-group-members').click()
+    pageA.once('dialog', dialog => void dialog.accept())
+    await pageA.getByTestId('chat-group-close').click()
+    expect((await requireResponseOrUiError(pageA, closeApprovalRequest)).ok()).toBe(true)
+    await pageA.waitForTimeout(1_000)
+    expect(closeControlSubmitted).toBe(false)
+
+    await pageA.reload()
+    await expect(pageA.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+    await pageA.getByTestId(`chat-group-${conversationId}`).click()
+
+    await pageB.getByTestId('chat-group-members').click()
+    await expect(pageB.getByText('Approve closing this MLS group?')).toBeVisible({ timeout: 90_000 })
+    await pageB.reload()
+    await expect(pageB.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+    await pageB.getByTestId(`chat-group-${conversationId}`).click()
+    await pageB.getByTestId('chat-group-members').click()
+    await expect(pageB.getByText('Approve closing this MLS group?')).toBeVisible({ timeout: 90_000 })
+
+    const closeApprovalResponse = pageB.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/anonymous/messages'
+    })
+    const closeCommit = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/mls/control/blocks'
+    })
+    await pageB.getByTestId('chat-group-owner-approve').click()
+    expect((await requireResponseOrUiError(pageB, closeApprovalResponse)).ok()).toBe(true)
+    awaitingCloseApproval = false
+    expect((await requireResponseOrUiError(pageA, closeCommit)).ok()).toBe(true)
+
+    await expect(pageA.getByPlaceholder('This MLS group is closed')).toBeDisabled({
+      timeout: 90_000,
+    })
+    await pageA.getByTestId('chat-group-members').click()
+    await expect(pageA.getByTestId('chat-group-closed')).toBeVisible({ timeout: 90_000 })
+    await expect(pageB.getByTestId('chat-group-closed')).toBeVisible({ timeout: 90_000 })
+    await pageA.keyboard.press('Escape')
+    await pageB.keyboard.press('Escape')
+    await expect(pageA.getByPlaceholder('This MLS group is closed')).toBeDisabled()
+    await expect(pageB.getByPlaceholder('This MLS group is closed')).toBeDisabled()
+
+    await pageA.reload()
+    await pageB.reload()
+    await expect(pageA.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+    await expect(pageB.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+    await pageA.getByTestId(`chat-group-${conversationId}`).click()
+    await pageB.getByTestId(`chat-group-${conversationId}`).click()
+    await expect(pageA.getByPlaceholder('This MLS group is closed')).toBeDisabled()
+    await expect(pageB.getByPlaceholder('This MLS group is closed')).toBeDisabled()
+
     await contextA.close()
     await contextB.close()
     await contextC.close()

@@ -824,9 +824,12 @@ The protocol/server/client/WASM foundation is present but remains
 unadvertised. Owner-set changes have durable MLS-encrypted manual approval
 requests/responses and explicit web approve/reject controls. Their two-server
 gate proves requester and approver restart recovery, ordering only after the
-current-owner quorum, finalization, and continued group delivery. The remaining
-governance UI, federated invitation-rejection feedback, linked-device state
-flow, and adversarial/scale browser gates must finish before this section
+current-owner quorum, finalization, and continued group delivery. Owner-approved
+closure uses the same private approval channel and one unchanged-roster MLS
+Commit; its gate proves no pre-quorum ordering, terminal state on both domains,
+send blocking, and closed-history persistence across reload. Recovery,
+suite-policy governance, federated invitation-rejection feedback, linked-device
+state flow, and adversarial/scale browser gates must finish before this section
 changes from `[ADD]` to `[IMPL]`.
 
 ---
@@ -954,9 +957,11 @@ destinations.
    administrator changes. The browser and two-server E2E cover group creation,
    invitation, administrator-authored add/remove, promotion, anonymous
    bidirectional messages, reload persistence, owner/authority rotation, and
-   restart-safe manual owner approval. Linked-device group state, the remaining
-   owner-governed actions, and the remaining adversarial gates are still
-   unadvertised work.
+   restart-safe manual owner approval. Owner-approved terminal closure now also
+   survives requester/approver and post-close reloads, closes both domains, and
+   retains readable history while blocking sends. Linked-device group state,
+   recovery and suite-policy governance, and the remaining adversarial gates
+   are still unadvertised work.
 3. **`kutup-chat-core`**: engine skeleton (transport/db ports, event stream,
    durable outbox with `sendId`, decrypt→persist→ack ordering, 409 recovery) —
    the artifact the Android/iOS clients link. **✅ Done** (branch

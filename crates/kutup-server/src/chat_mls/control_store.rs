@@ -164,9 +164,9 @@ impl MlsRepository {
                     "MLS routine, membership, and authority finalization requires a local administrator",
                 ));
             }
-            if block.proposal.action_type == MlsControlActionTypeV1::OwnerSetChange && !is_owner {
+            if block.proposal.action_type.requires_owner_quorum() && !is_owner {
                 return Err(AppError::forbidden(
-                    "MLS owner-set finalization requires a current local owner",
+                    "MLS security-governance finalization requires a current local owner",
                 ));
             }
         }

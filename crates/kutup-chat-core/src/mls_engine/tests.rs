@@ -1452,7 +1452,143 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         alice.initialize("alice@alpha.example#1").await.unwrap();
         assert_eq!(
             alice.local_conversations().await.unwrap(),
-            vec![removal_finalized.conversation]
+            vec![removal_finalized.conversation.clone()]
+        );
+
+        let close = alice
+            .prepare_close_conversation(group_id, Uuid::from_u128(0xae), now + 9)
+            .await
+            .unwrap();
+        assert!(alice.close_has_owner_quorum(group_id).await.unwrap());
+        assert_eq!(
+            close.control.current_roster,
+            removal_finalized.conversation.current_roster
+        );
+        assert_eq!(
+            close.control.transition.previous_roster_commitment,
+            close.control.transition.next_roster_commitment
+        );
+        assert_eq!(
+            alice.pending_closes().await.unwrap(),
+            vec![close.control.clone()]
+        );
+
+        drop(alice);
+        drop(reopened);
+        let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
+        let alice = MlsClient::new(reopened.clone());
+        alice.initialize("alice@alpha.example#1").await.unwrap();
+        assert_eq!(
+            alice.pending_closes().await.unwrap(),
+            vec![close.control.clone()]
+        );
+        assert!(alice
+            .create_owner_approval_request_message(group_id)
+            .await
+            .unwrap()
+            .is_none());
+
+        let close_block = &close.control.vote_request.block;
+        let close_block_hash = close_block.block_hash().unwrap();
+        let authority = &close.control.vote_request.authority_set.authorities[0];
+        let mut close_vote = kutup_chat_proto::MlsOrderingVoteV1 {
+            conversation_id,
+            incarnation: 1,
+            authority_set_sequence: 1,
+            height: 6,
+            round: 0,
+            vote_type: kutup_chat_proto::MlsOrderingVoteTypeV1::Precommit,
+            block_hash: close_block_hash.clone(),
+            authority_domain: authority.domain.clone(),
+            authority_key_id: authority.key_id.clone(),
+            signature: String::new(),
+        };
+        close_vote.signature = BASE64.encode(
+            authority_key
+                .sign(&close_vote.signing_bytes().unwrap())
+                .to_bytes(),
+        );
+        let close_request = alice
+            .build_close_commit_request(
+                group_id,
+                MlsOrderingQuorumCertificateV1 {
+                    authority_set_sequence: 1,
+                    height: 6,
+                    round: 0,
+                    block_hash: close_block_hash.clone(),
+                    votes: vec![close_vote],
+                },
+            )
+            .await
+            .unwrap();
+        close_request.validate_shape().unwrap();
+        let bob_close_envelope = close
+            .control
+            .deliveries
+            .iter()
+            .find(|delivery| delivery.destination == "beta.example")
+            .unwrap()
+            .envelopes
+            .first()
+            .unwrap();
+        let bob_close_commit = BASE64.decode(&bob_close_envelope.opaque_message).unwrap();
+        let closed = alice
+            .finalize_close(
+                group_id,
+                &CommitMlsControlBlockResponseV1 {
+                    conversation_id,
+                    incarnation: 1,
+                    height: 6,
+                    epoch: 6,
+                    block_hash: close_block_hash,
+                    idempotent: false,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            closed.conversation.status,
+            LocalMlsConversationStatus::Closed
+        );
+        let bob_closed = bob
+            .apply_ordered_inbound_membership_commit(
+                &MlsControlEnvelopeContext {
+                    envelope_id: bob_close_envelope.envelope_id,
+                    cursor: "24".into(),
+                    send_id: bob_close_envelope.envelope_id,
+                },
+                group_id,
+                &bob_close_commit,
+                &two_device_roster,
+                &close_request,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            bob_closed.conversation.status,
+            LocalMlsConversationStatus::Closed
+        );
+        assert!(alice
+            .create_text_application_message(
+                &Uuid::from_u128(0xaf).to_string(),
+                conversation_id,
+                1,
+                group_id,
+                "1700000010",
+                "must not send after close",
+                (now + 10) * 1000,
+            )
+            .await
+            .is_err());
+
+        drop(alice);
+        drop(reopened);
+        let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
+        let alice = MlsClient::new(reopened.clone());
+        alice.initialize("alice@alpha.example#1").await.unwrap();
+        assert_eq!(
+            alice.local_conversations().await.unwrap()[0].status,
+            LocalMlsConversationStatus::Closed
         );
         drop(alice);
         drop(reopened);

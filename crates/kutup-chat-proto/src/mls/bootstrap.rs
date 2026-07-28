@@ -634,6 +634,20 @@ pub(super) fn replay_mls_control_history(
             }
             replayed.roster_commitment = change.delivery_transition.next_roster_commitment.clone();
             replayed.owners = Some(next.clone());
+        } else if block.proposal.action_type == MlsControlActionTypeV1::CloseConversation {
+            let transition = request
+                .membership_transition
+                .as_ref()
+                .ok_or("MLS close history omits its participant delivery transition")?;
+            if transition.previous_roster_commitment != replayed.roster_commitment
+                || transition.next_roster_commitment != replayed.roster_commitment
+                || transition.previous_member_count != replayed.member_count
+                || transition.next_member_count != replayed.member_count
+                || transition.previous_participant_domains != replayed.participant_domains
+                || transition.next_participant_domains != replayed.participant_domains
+            {
+                return Err("MLS close history changes its roster or routing".into());
+            }
         }
         replayed.height = block.height;
         replayed.epoch = block.epoch_after;

@@ -7,6 +7,7 @@
 //! nor regenerate different ciphertext for the same logical send.
 
 mod application;
+mod close;
 mod delivery;
 mod device;
 mod genesis;
@@ -20,6 +21,7 @@ mod state;
 mod validation;
 mod welcome;
 
+pub use close::{FinalizedMlsClose, PendingMlsClose, PreparedMlsClose};
 pub use delivery::{AnonymousMlsRecipientDevice, DerivedMlsDeliveryCapability};
 pub use governance::{
     FinalizedMlsAuthorityChange, PendingMlsAuthorityChange, PreparedMlsAuthorityChange,
@@ -71,7 +73,7 @@ use kutup_chat_proto::{
     MLS_PRIVATE_CONTROL_EXTENSION_TYPE, MLS_PROTOCOL_VERSION,
 };
 
-const STATE_FORMAT_VERSION: u16 = 7;
+const STATE_FORMAT_VERSION: u16 = 8;
 const MAX_STATE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_STATE_RECORDS: usize = 100_000;
 const MAX_STATE_RECORD_BYTES: usize = 16 * 1024 * 1024;
@@ -135,6 +137,7 @@ pub struct MlsGroupOwnerCredential {
 pub enum LocalMlsConversationStatus {
     PendingGenesis,
     Active,
+    Closed,
 }
 
 /// Exact durable group genesis retry record. A network failure can only leave

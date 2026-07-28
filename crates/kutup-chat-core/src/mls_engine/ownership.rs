@@ -696,7 +696,12 @@ impl MlsClient {
                 })
             });
         if !retained_local_owner {
-            metadata.group_owner_private_keys.remove(&group_key);
+            if let Some(seed) = metadata.group_owner_private_keys.remove(&group_key) {
+                metadata
+                    .group_owner_candidate_private_keys
+                    .entry(group_key.clone())
+                    .or_insert(seed);
+            }
         }
         metadata.pending_commits.remove(&group_key);
         metadata.pending_owner_changes.remove(&group_key);

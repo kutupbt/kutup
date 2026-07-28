@@ -295,9 +295,10 @@ impl MlsOwnerApprovalCertificateV1 {
     }
 }
 
-/// Exact owner-set proposal shown to current owners inside an MLS-encrypted
-/// group-control message. Ordering authorities never receive `next_roster`;
-/// the public transition exposes only its commitment and server routing.
+/// Exact security-governance proposal shown to current owners inside an
+/// MLS-encrypted group-control message. Ordering authorities never receive
+/// `next_roster`; the public transition exposes only its commitment and server
+/// routing. Exactly one action-specific transition is present.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -306,7 +307,10 @@ pub struct MlsOwnerApprovalRequestV1 {
     pub owner_set_sequence: u64,
     pub proposal: MlsControlProposalV1,
     pub transition_digest: String,
-    pub owner_change: MlsOwnerChangeV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_change: Option<MlsOwnerChangeV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub membership_transition: Option<MlsMembershipTransitionV1>,
     pub next_roster: Vec<MlsConversationMemberV1>,
     pub requested_at: i64,
     pub expires_at: i64,
@@ -319,24 +323,60 @@ impl MlsOwnerApprovalRequestV1 {
             || self.requested_at < 0
             || self.expires_at <= self.requested_at
             || self.expires_at - self.requested_at > 7 * 24 * 60 * 60
-            || self.proposal.action_type != MlsControlActionTypeV1::OwnerSetChange
+            || !matches!(
+                self.proposal.action_type,
+                MlsControlActionTypeV1::OwnerSetChange | MlsControlActionTypeV1::CloseConversation
+            )
         {
             return Err("MLS owner approval request has invalid version, sequence, or time".into());
         }
         self.proposal.verify()?;
-        self.owner_change.validate()?;
-        if self.owner_set_sequence.checked_add(1) != Some(self.owner_change.next_owner_set.sequence)
-            || self.transition_digest != self.owner_change.transition_digest()?
-            || self.proposal.conversation_id
-                != self.owner_change.delivery_transition.conversation_id
-            || self.proposal.incarnation != self.owner_change.delivery_transition.incarnation
-            || self.proposal.proposal_id != self.owner_change.delivery_transition.proposal_id
-            || self.owner_change.delivery_transition.previous_member_count
-                != self.owner_change.delivery_transition.next_member_count
-            || self.owner_change.delivery_transition.next_member_count
-                != self.next_roster.len() as u32
-            || self.owner_change.delivery_transition.next_roster_commitment
-                != roster_commitment(&self.next_roster)?
+        let transition = match self.proposal.action_type {
+            MlsControlActionTypeV1::OwnerSetChange => {
+                let change = self
+                    .owner_change
+                    .as_ref()
+                    .ok_or("MLS owner-set approval omits its owner transition")?;
+                if self.membership_transition.is_some() {
+                    return Err("MLS owner-set approval carries a close transition".into());
+                }
+                change.validate()?;
+                if self.owner_set_sequence.checked_add(1) != Some(change.next_owner_set.sequence)
+                    || self.transition_digest != change.transition_digest()?
+                {
+                    return Err(
+                        "MLS owner approval request differs from its owner transition".into(),
+                    );
+                }
+                &change.delivery_transition
+            }
+            MlsControlActionTypeV1::CloseConversation => {
+                if self.owner_change.is_some() {
+                    return Err("MLS close approval carries an owner-set transition".into());
+                }
+                let transition = self
+                    .membership_transition
+                    .as_ref()
+                    .ok_or("MLS close approval omits its delivery transition")?;
+                transition.validate()?;
+                if self.transition_digest != transition.transition_digest()?
+                    || transition.previous_roster_commitment != transition.next_roster_commitment
+                    || transition.previous_member_count != transition.next_member_count
+                    || transition.previous_participant_domains
+                        != transition.next_participant_domains
+                {
+                    return Err("MLS close approval must preserve the exact roster".into());
+                }
+                transition
+            }
+            _ => unreachable!("approval action checked above"),
+        };
+        if self.proposal.conversation_id != transition.conversation_id
+            || self.proposal.incarnation != transition.incarnation
+            || self.proposal.proposal_id != transition.proposal_id
+            || transition.previous_member_count != transition.next_member_count
+            || transition.next_member_count != self.next_roster.len() as u32
+            || transition.next_roster_commitment != roster_commitment(&self.next_roster)?
         {
             return Err("MLS owner approval request differs from its exact transition".into());
         }
@@ -360,23 +400,36 @@ impl MlsOwnerApprovalRequestV1 {
             .collect::<Result<BTreeSet<_>, _>>()?
             .into_iter()
             .collect::<Vec<_>>();
-        let declared_owner_ids = self
-            .owner_change
-            .next_owner_set
-            .owners
-            .iter()
-            .map(|owner| owner.owner_id.as_str())
-            .collect::<BTreeSet<_>>();
-        if roster_owner_ids != declared_owner_ids
-            || participant_domains
-                != self
-                    .owner_change
-                    .delivery_transition
-                    .next_participant_domains
-        {
+        if participant_domains != transition.next_participant_domains {
             return Err("MLS owner approval request has inconsistent private bindings".into());
         }
+        if let Some(change) = &self.owner_change {
+            let declared_owner_ids = change
+                .next_owner_set
+                .owners
+                .iter()
+                .map(|owner| owner.owner_id.as_str())
+                .collect::<BTreeSet<_>>();
+            if roster_owner_ids != declared_owner_ids {
+                return Err("MLS owner approval request has inconsistent owner bindings".into());
+            }
+        }
         Ok(())
+    }
+
+    pub fn delivery_transition(&self) -> Result<&MlsMembershipTransitionV1, String> {
+        match self.proposal.action_type {
+            MlsControlActionTypeV1::OwnerSetChange => self
+                .owner_change
+                .as_ref()
+                .map(|change| &change.delivery_transition)
+                .ok_or_else(|| "MLS owner approval omits its owner transition".into()),
+            MlsControlActionTypeV1::CloseConversation => self
+                .membership_transition
+                .as_ref()
+                .ok_or_else(|| "MLS close approval omits its delivery transition".into()),
+            _ => Err("MLS owner approval has an unsupported action".into()),
+        }
     }
 
     pub fn request_hash(&self) -> Result<String, String> {
@@ -637,7 +690,8 @@ impl MlsControlBlockV1 {
         match self.proposal.action_type {
             MlsControlActionTypeV1::MembershipChange
             | MlsControlActionTypeV1::AuthoritySetChange
-            | MlsControlActionTypeV1::OwnerSetChange => {
+            | MlsControlActionTypeV1::OwnerSetChange
+            | MlsControlActionTypeV1::CloseConversation => {
                 validate_hash(
                     "transitionDigest",
                     self.transition_digest
@@ -855,6 +909,38 @@ impl CommitMlsControlBlockV1 {
                 }
                 if self.finalized.block.transition_digest.as_deref() != Some(expected.as_str()) {
                     return Err("owner transition data does not match the finalized block".into());
+                }
+            }
+            MlsControlActionTypeV1::CloseConversation => {
+                if self.membership_transition.is_none()
+                    || self.authority_change.is_some()
+                    || self.authority_transition.is_some()
+                    || self.owner_change.is_some()
+                {
+                    return Err(
+                        "conversation close requires exactly its participant delivery transition"
+                            .into(),
+                    );
+                }
+                let transition = self
+                    .membership_transition
+                    .as_ref()
+                    .expect("checked close transition");
+                if transition.conversation_id != self.finalized.block.conversation_id
+                    || transition.incarnation != self.finalized.block.incarnation
+                    || transition.proposal_id != self.finalized.block.proposal.proposal_id
+                    || transition.previous_roster_commitment != transition.next_roster_commitment
+                    || transition.previous_member_count != transition.next_member_count
+                    || transition.previous_participant_domains
+                        != transition.next_participant_domains
+                {
+                    return Err("conversation close must preserve the exact roster".into());
+                }
+                let expected = transition.transition_digest()?;
+                if self.finalized.block.transition_digest.as_deref() != Some(expected.as_str()) {
+                    return Err(
+                        "conversation close transition differs from its finalized block".into(),
+                    );
                 }
             }
             _ => {

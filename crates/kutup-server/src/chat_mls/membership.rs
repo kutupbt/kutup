@@ -173,6 +173,7 @@ pub(super) async fn prepare_membership_finalization(
             | MlsControlActionTypeV1::RoutineAdmin
             | MlsControlActionTypeV1::AuthoritySetChange
             | MlsControlActionTypeV1::OwnerSetChange
+            | MlsControlActionTypeV1::CloseConversation
     ) {
         return Err(AppError::bad_request(
             "unrelated MLS control action carries a roster transition",
@@ -323,6 +324,16 @@ fn validate_transition_against_state(
         {
             return Err(AppError::bad_request(
                 "MLS owner change must alter roles without changing membership routing",
+            ))
+        }
+        MlsControlActionTypeV1::CloseConversation
+            if transition.previous_member_count != transition.next_member_count
+                || transition.previous_roster_commitment != transition.next_roster_commitment
+                || transition.previous_participant_domains
+                    != transition.next_participant_domains =>
+        {
+            return Err(AppError::bad_request(
+                "MLS close cannot alter membership, roles, or routing",
             ))
         }
         _ => {}
