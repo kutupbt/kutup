@@ -15,7 +15,7 @@ the MLS branch is prepared for `main`.
 ## Governing premise: V1 is preproduction
 
 Kutup has no production deployment or stable wire/persistent-format release.
-Development databases, browser state, manifests, transparency histories, and
+Development databases, browser state, manifests, identity histories, and
 federation pins may be recreated while V1 is finalized.
 
 Therefore V1 work must prefer the cleanest reviewed structure:
@@ -55,9 +55,12 @@ set before that tag:
 - write the Drive threat model and exhaustive persistent/wire-format inventory;
 - replace the Chat-scoped self-authority derivation with the final
   account-scoped authority and regenerate development trust state;
-- define independently versioned account-identity and device-identity
-  manifests under that authority, with one typed transparency current-state
-  commitment;
+- define one complete, account-signed `AccountManifestV1` under that authority,
+  carrying account keys and up to ten complete active device records with a
+  monotonic sequence and previous-manifest hash;
+- remove the global transparency log, sparse map, checkpoints, proofs, policy,
+  monitors and dormant routes; retain only account-signed manifest history,
+  durable peer pins, TOFU, QR verification and fail-closed identity change;
 - define explicit account-incarnation termination and discontinuity semantics
   for destructive administrative wipe;
 - define purpose-separated Drive, collaboration, and asset subkeys;
@@ -66,16 +69,18 @@ set before that tag:
   and AAD, and make removal rotate and redistribute keys atomically;
 - authenticate named share creation and redemption to the exact verified
   account identity;
-- decide the canonical implementation source through the quantitative
-  Rust-to-WASM spike before implementing the new browser cryptography; and
+- make `kutup-crypto` the canonical Rust implementation used by the browser
+  through WASM; retain a narrow primitive-only libsodium adapter only when a
+  reproducible operation is at least ten times slower or cannot complete; and
 - pass canonical-vector, parser/fuzz, transaction-failure, restart, federation,
   browser, migration/reset, and adversarial gates, followed by an independent
   implementation-versus-spec security review.
 
 Do not tag with a partial set and promise to migrate the remainder later.
-OPAQUE, a post-quantum Drive wrapping suite, random-access chunk trees,
-broadcast channels, and other independently addable code points remain outside
-this checklist.
+OPAQUE, a post-quantum Drive wrapping suite, random-access chunk trees and
+other independently addable code points remain outside this checklist.
+Confidential broadcast is a separate V1 blocker because V1 promises that
+feature at a one-million-account, ten-million-device-grant boundary.
 
 ## Accepted decision: administrator-controlled device limit
 
@@ -145,12 +150,11 @@ V1 will use two unambiguous limits:
 - `maximum_group_accounts`;
 - `maximum_group_leaves`.
 
-The account limit must remain at least 256. The leaf limit must be selected from
-measured browser/native performance and then enforced on genesis, membership
-change, device sync, recovery, history replay, and server materialization. With
-the ten-device account ceiling, 256 accounts can require as many as 2,560
-leaves; that is a capacity bound to test, not a claim that 2,560 will
-automatically become the V1 leaf limit.
+The V1 account limit is 256 and the V1 leaf limit is 2,560. Both limits are
+enforced on genesis, membership change, device sync, recovery, history replay,
+and server materialization. The exact 2,560-leaf boundary must pass native,
+WASM, browser, restart, multi-authority and adversarial gates before groups are
+advertised as V1-ready.
 
 The UI and documentation must state whether every displayed capacity refers to
 accounts or devices/leaves. Kutup must not advertise 1000-account operation
@@ -161,22 +165,21 @@ protocol and browser gates.
 
 ### Account-protection documentation
 
-`docs/architecture.md` must match the implemented hierarchy:
+`docs/architecture.md` and the implementation must use the final hierarchy:
 
-- `Argon2id(password, kdfSalt)` derives the key-encryption key that wraps the
-  master key;
-- `Argon2id(password, loginKeySalt)` independently derives the server-facing
-  login key;
+- one per-account parameterized `Argon2id(password, accountSalt)` derives an
+  account-protection root;
+- domain-separated HKDF derives the master-key KEK and server-facing login key;
 - random 32-byte recovery entropy wraps the master key and is encoded as the
-  BIP39 mnemonic.
+  BIP39 mnemonic; and
+- a distinct HKDF-derived recovery-auth proof is sent to the server. The raw
+  recovery entropy never leaves the client.
 
 The login key does not decrypt the master key. The current "four threads"
 frontend KDF comment must also be corrected because libsodium uses one lane.
-
-Deriving both purpose-specific keys from one Argon2id root via
-domain-separated HKDF remains an optional, benchmark-driven account-format
-change. It is not required for the MLS merge and must not be introduced without
-new canonical vectors and negative tests.
+The account-protection suite, Argon2 version, memory, passes, parallelism,
+output length and salt are persisted per account. Canonical vectors and
+negative label-swap tests gate the cutover.
 
 ### Authority availability guidance
 
@@ -199,18 +202,17 @@ not a requirement of the quorum formula.
 
 ### MLS ciphersuite decision
 
-The protocol specifies MLS ciphersuite `0x0002` but does not record the reason
-for preferring it over MLS 1.0's mandatory-to-implement `0x0001`. Before the V1
-wire format is frozen, Kutup must either:
+Kutup V1 uses RFC 9420 ciphersuite `0x0003`
+(`MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519`). Kutup-to-Kutup
+federation does not require the `0x0001` mandatory-to-implement suite used for
+generic MLS interoperability. The clean preproduction cutover also replaces
+the P-256 MLS BasicCredential signer, anonymous-delivery HPKE binding and
+group-scoped control pseudonym with Ed25519/X25519 equivalents; the manifest
+shape, canonical vectors and all gates change together.
 
-1. document a verified interoperability, provider, platform, or hardware reason
-   for retaining `0x0002`; or
-2. change cleanly to `0x0001` and rerun every native, WASM, browser,
-   federation, recovery, and adversarial gate.
-
-The concern is crypto-agility and audit surface. It is not evidence that Kutup
-hand-implements unsafe P-256 arithmetic: OpenMLS and the selected crypto
-provider own the curve operations, while Kutup validates encoded public keys.
+The choice keeps Kutup-owned group cryptography on the shared X25519,
+Ed25519 and ChaCha portfolio. It does not rewrite OpenMLS or libsignal, and it
+does not claim hardware-keystore protection for these software-held keys.
 
 ### Linear private-control state
 
@@ -251,8 +253,8 @@ Before the MLS feature is described as production-ready:
 - freeze new cryptographic and governance scope on the branch;
 - write an operator runbook mapping every fail-closed state to inspection,
   safe retry/recovery, immutable evidence export, and forbidden manual actions;
-- alert on monitor staleness, unavailable quorum, aged pending Commits,
-  bootstrap/recovery stalls, and durable outbox backlog;
+- alert on unavailable quorum, aged pending Commits, bootstrap/recovery stalls,
+  identity-change quarantine and durable outbox backlog;
 - prepare a reproducible review bundle containing the normative protocol,
   threat model, canonical vectors, fuzz entry points, adversarial tests, and
   local two-server harness;
@@ -266,26 +268,28 @@ The canonical production-readiness roadmap must include this review before the
 first stable tag. AI-generated review comments are useful inputs but do not
 satisfy the independent-review gate.
 
-### V1 transparency decision: no witness service
+### V1 identity decision: Signal-like manifests and QR verification
 
-Kutup V1 does not ship a transparency witness or auditor service. Requiring a
-second independently governed deployment is a poor default for household and
-small-organization self-hosting, while a same-operator witness does not add the
-claimed independence. Removing the protocol, storage, binaries, routes,
-configuration, deployment topology, and UI also reduces a security-critical
-maintenance surface before the first stable release.
+Kutup V1 does not ship a global transparency log, sparse map, checkpoint,
+inclusion/consistency proof, transparency policy, monitor, witness or auditor.
+Without independently governed observation, the operator log added substantial
+security-critical code but did not authenticate first contact for ordinary
+self-hosted deployments.
 
-The retained baseline is account-signed manifests, persistent operator-signed
-checkpoints, RFC 6962 inclusion/consistency proofs, current-map proofs,
-authenticated policy histories, restart-safe monitoring, durable pins,
-safety-number comparison, range recovery, and quarantine on contradictions
-observed against an existing pin.
+V1 instead uses one stable `AccountSelfAuthorityV1` and one complete
+`AccountManifestV1`. The manifest binds account-scoped Drive keys and up to ten
+complete device records, and is signed over a monotonic sequence and
+`previousHash`. Clients persist the complete accepted history and peer pin.
+Missing, reordered, duplicated, rolled-back or same-sequence-conflicting
+history blocks new sensitive operations.
 
-The limitation must remain explicit: these controls detect rollback, log/key
-replacement, and conflicting views that reach the same client or monitor. They
-do not detect two internally consistent split views that never meet. A future
-independent observation system is a new versioned design, not an advertised V1
-capability or dormant compatibility surface.
+First contact is explicitly TOFU and displays a gray shield. Face-to-face QR
+comparison pins the account authority and incarnation and displays a green
+verified shield across Drive, Direct Chat, groups and channels. An unexpected
+authority/incarnation change displays red, quarantines new sends/shares and
+requires explicit safety-number-style acceptance. A server response can relay
+history but cannot promote trust. A future independently observed transparency
+system is a new versioned feature, not dormant V1 compatibility code.
 
 ## Accepted separate Drive security work
 
@@ -325,20 +329,25 @@ continuity without the lost old authority.
   analysis justifies a broader "BFT consensus" claim.
 - P-256 parser risk is not evidence of a known vulnerability in Kutup's use of
   OpenMLS/RustCrypto.
-- Neither the experimental post-quantum MLS draft nor announcement channels,
-  calls, threshold roots, or new governance mechanisms enter the V1 MLS branch.
+- Neither the experimental post-quantum MLS draft nor calls, threshold roots,
+  or new governance mechanisms enter the V1 MLS branch. Confidential broadcast
+  uses a separate V1 design rather than an oversized MLS group.
 
 ## V1 completion order
 
-1. Correct the account-protection documentation.
-2. Implement and test the 1–10 active-device administrator setting.
-3. Split and enforce account and MLS-leaf capacity limits.
-4. Benchmark the full private-control and multi-device boundaries.
-5. Add authority quorum/availability guidance.
-6. Resolve and document the `0x0001` versus `0x0002` decision.
-7. Add the explicit classical-group post-quantum limitation.
-8. Write and exercise the operations runbook.
-9. Rerun the complete Rust, WASM, web, Playwright, Compose, restart,
-   federation, recovery, and adversarial gates.
+1. Freeze the dependency inventory, threat models and persistent-format list.
+2. Replace global transparency with account-signed manifest history, durable
+   pins, account-incarnation handling and QR verification.
+3. Implement the one-Argon account-protection suite and derived recovery proof.
+4. Move Drive format ownership to canonical Rust/WASM and cut over typed,
+   context-bound XChaCha envelopes, authenticated shares and collection epochs.
+5. Implement and test the 1–10 active-device administrator setting.
+6. Cut MLS and anonymous delivery to X25519/ChaCha/Ed25519, then pass the exact
+   256-account/2,560-leaf boundary and authority availability gates.
+7. Implement confidential broadcast at one million accounts and ten million
+   device grants using the separate LKH/control-group design.
+8. Write and exercise the operations runbook and independent review bundle.
+9. Rerun complete Rust, WASM, web, Playwright, Compose, restart, federation,
+   recovery, scale, parser/fuzz and adversarial gates.
 10. Merge to development `main`; reserve production-security claims for after
     independent review and resolution of its findings.

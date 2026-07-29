@@ -26,6 +26,42 @@ Items below are organized by **whether they block v1** vs. whether they can ship
 
 ## Blockers for v1 (must-have)
 
+### V1 cryptographic and identity cutover
+
+Kutup is still preproduction, so the first stable tag must freeze the clean
+format rather than preserve development-only ciphertexts or trust machinery.
+This destructive-change permission expires at the first stable `v*` tag;
+afterward `docs/crypto-agility.md` requires versioned readers, authenticated
+migrations, peer capability windows and no silent downgrade.
+
+The normative checklist is
+[`docs/draft/v1/security-review-follow-ups.md`](draft/v1/security-review-follow-ups.md).
+The following are release blockers:
+
+- one parameterized Argon2id root with HKDF-separated KEK/login keys, a derived
+  recovery-auth proof that never exposes recovery entropy, and suite-bearing
+  account envelopes;
+- canonical Rust `kutup-crypto` used by the browser through WASM, subject only
+  to the documented per-operation 10× primitive-adapter exception;
+- one account-signed `AccountManifestV1`, complete history, durable TOFU/QR
+  pins, explicit account-incarnation reset, and removal of the global
+  transparency log/checkpoint/proof/monitor stack;
+- typed context-bound XChaCha Drive/profile/collaboration envelopes,
+  authenticated X25519-HPKE named shares and owner-authenticated collection
+  epochs;
+- an administrator-controlled 1–10 active-device limit (default and hard cap
+  10), enforced identically by every Chat and identity path;
+- MLS suite `0x0003` and real 256-account/2,560-leaf group gates; and
+- confidential broadcast for 1,000,000 accounts and up to 10,000,000 device
+  grants using the separate LKH plus small-MLS-control-group design.
+
+The format inventory and threat models are
+[`docs/v1-format-inventory.md`](v1-format-inventory.md),
+[`docs/drive-security-threat-model.md`](drive-security-threat-model.md), and
+[`docs/broadcast-security-threat-model.md`](broadcast-security-threat-model.md).
+The exact third-party ownership boundary is
+[`docs/cryptographic-dependencies.md`](cryptographic-dependencies.md).
+
 ### Signed builds
 
 CLAUDE.md explicitly notes: **"Builds are currently unsigned."** macOS Gatekeeper and Windows SmartScreen treat unsigned `.dmg` / `.msi` as untrusted; non-technical users see scary warnings.
@@ -163,7 +199,7 @@ Self-hosters need an easy way to back up + restore the full encrypted dataset (D
 
 ---
 
-## Post-v1 major track · Federated E2EE chat ("ileti")
+## V1 major track · Federated E2EE chat ("ileti")
 
 A Signal-class chat feature — 1:1 + group text, media, voice/video — federated between kutup instances, E2EE on the Signal protocol, media stored in the user's existing E2EE drive, everything (client *and* server, including calls) on port 443 only. Chat UI at its own domain (e.g. `ileti.` vs `depo.` for the drive) but the same backend binary and port.
 
@@ -172,15 +208,14 @@ The full architecture is captured in `docs/research/11-federated-chat.md` (libsi
 The normative wire contract the three clients freeze against is **`docs/chat-protocol.md`** (v1) — it consolidates the wire-affecting decisions from `11-`/`12-`/`13-` into one spec, tagging every field **[IMPL]** (phase-2 server, frozen), **[ADD]** (additive, phase-2b), or **[RSV]** (reserved now, implemented later so it's not a breaking migration). Implement against that.
 
 **Current group decision:** the earlier GV2/sender-key proposal is superseded by
-the unified RFC 9420 MLS architecture in
-[`chat-mls.md`](chat-mls.md). SelfSync, Direct, and Group use one OpenMLS state
-machine; groups use owner-approved, dynamically replaceable multi-server
-ordering authorities rather than a permanent homeserver. Existing 1:1
-libsignal remains the advertised production path; SelfSync and Direct MLS are
-not part of the private-group activation. **Device-list authenticity** remains
-a v1 requirement. Sealed sender remains all-or-nothing with no identified
-fallback, and all federation continues to use the common authenticated
-transport rather than a room DAG.
+the RFC 9420 MLS architecture in [`chat-mls.md`](chat-mls.md). Direct Chat and
+Note to Self remain on pinned libsignal; private groups and the small broadcast
+administrator control group use OpenMLS. Groups use owner-approved,
+dynamically replaceable multi-server ordering authorities rather than a
+permanent homeserver. **Account/device authenticity** is a V1 requirement.
+Sealed sender remains all-or-nothing with no identified fallback, and all
+federation continues to use the common authenticated transport rather than a
+room DAG.
 
 Phases (each lands as its own PR-series; do not start N+1 with N unmerged):
 
@@ -190,8 +225,9 @@ Phases (each lands as its own PR-series; do not start N+1 with N unmerged):
 | 2 | Server slice: `kutup-chat-proto` + prekey directory, per-device mailboxes, WSS drain | ✅ landed — `crates/kutup-chat-proto`, migration 021, `handlers/chat.rs`, `chat_hub.rs`, nginx `/api/chat/ws`; full REST + WS contract smoke-verified against the live stack (incl. one-time-prekey consumption, last-resort fallback, the 409 missing/stale/extra device contract, live envelope push). Playwright chat spec lands with phase 2b |
 | 2b | Shared core + minimal 1:1 reference web UI | **Implemented and live-stack verified on `codex/chat-architecture-hardening`.** Includes durable typed inbound journal/quarantine, SQLCipher/IndexedDB stores, crash-safe registration/prekeys, signed manifests, WASM transport, Web Locks, REST+WS reconciliation, history, Note to Self, and ordinary linked-device sent transcripts. Web remains the product client until the messaging milestone is complete; native packaging/integration is not a gate. |
 | 3 | Web federation foundation | **Implemented and two-server live verified:** canonical `username@server`, typed conversations, one persistent v2 server identity, signed `.well-known` endpoint/capability discovery, immutable identity history and authenticated rotation, strict RFC 9421/9530 request/response authentication, replay reservation, DNS-rebinding/SSRF-safe resolution, durable per-destination in-order Chat delivery, device-mismatch recovery, terminal rejection, and sequence-gap replay. Drive now uses that same stack for signed account lookup, domain-bound fragment capabilities, invite acceptance, file lists, idempotent upload/delete, persisted ciphertext digests, and verify-before-release streaming downloads. The isolated harness proves the Drive round trip, that Chat reuses a Drive-established pin, and that Chat retry survives an origin restart while the destination is offline. The generic responsive admin control plane provides a global stop, feature-scoped `disabled`/`allowlist`/`blocklist`/`open` admission and trust floors, directional domain rules, shared Chat/Drive diagnostics, peer search/trust filters, retry-one/retry-visible workflows, TOFU verification, exact immutable quarantine/history evidence, break-glass re-pin, and filtered audit presentation/CSV export. A disabled feature is omitted from discovery while the other remains available. Both old feature-specific federation stacks and raw remote URL routes were removed; there is no v1 downgrade. No alias namespace. See `docs/federation-protocol.md`. |
-| 4 | Web contact privacy and trust | **Implemented and two-server live verified:** durable message requests/blocking and Signal-style encrypted profiles; authenticated local/remote transparency policy histories and 15-minute restart-safe monitoring; checkpoint-bound multi-page skipped-manifest recovery; operator-signed checkpoints with durable rollback/contradiction pins; contacts-only libsignal sealed sender with offline-root/online-certificate policy, transparency-bound identity validation, database-backed capability/origin rate limits, anonymous local/federated delivery, capability rotation on block, and no identified fallback. Rust/native/WASM and production web build gates pass; the expanded two-server browser/Compose gate proves remote policy pinning, established sealed delivery, capability invalidation, and no identified fallback. Independent split-view witnessing is intentionally outside V1. |
-| 5 | Unified MLS conversations and web private groups | ✅ **Implemented and activated:** RFC 9420 suite `0x0002`, durable OpenMLS state, manifest-bound devices, private role/control state, BFT multi-authority ordering, owner-approved governance/recovery, destination-private delivery, invitation consent, linked-device sync, restart reconciliation, and exact group security inspection are implemented. The member-visible panel displays complete group owner credentials, group-pinned authority keys, independently verified federation-identity fingerprints, current typed service policies, and authenticated policy histories. Rust/WASM/web, real 256-member scale, adversarial, two-server restart/federation, full browser lifecycle, and destination-metadata privacy gates pass. The browser capability is fail-closed behind an authenticated local MLS policy and the administrator-controlled shared Chat federation policy. V1 supports at least 256 members and policy may allow 1000. SelfSync and Direct MLS remain unadvertised. See `docs/chat-mls.md`. |
+| 4 | Web contact privacy and trust | **Core delivery is implemented; V1 identity cutover pending.** Durable message requests/blocking, contacts-only libsignal sealed sender, offline-root/online-certificate policy, database-backed abuse limits, anonymous local/federated delivery, capability rotation on block and no identified fallback are live-stack verified. Before V1, replace the development transparency stack with one account-signed complete manifest history, durable TOFU/QR pin states and fail-closed account-incarnation change; change encrypted profiles to the shared typed XChaCha format. |
+| 5 | MLS private groups | **Implemented and activated on the development suite; V1 cutover pending.** Durable OpenMLS state, manifest-bound devices, private role/control state, quorum-certified multi-authority ordering, owner-approved governance/recovery, destination-private delivery, invitation consent, linked-device sync, restart reconciliation and exact group security inspection are implemented. V1 changes the complete Kutup-owned binding to RFC 9420 suite `0x0003` with X25519/ChaCha/Ed25519, enforces 256 accounts and 2,560 leaves, and reruns native/WASM/web, scale, adversarial, two-server restart/federation, browser lifecycle and destination-metadata gates. Direct and Note to Self remain libsignal. See `docs/chat-mls.md`. |
+| 5b | Confidential broadcast | **V1 blocker, not an oversized MLS group.** A small MLS owner/admin control group authorizes publishers and the replaceable ordering authorities. A fixed-depth account-leaf LKH serves up to 1,000,000 subscribed accounts; each account access secret is independently wrapped to up to ten manifest devices (10,000,000 grants). Posts are encrypted once and pulled/cached by subscriber homeservers. Removal rekeys before the next post, owner removal performs a restart-safe full rebuild, and history policy is `0..=365` days (default 30) over daily one-way content epochs. See `docs/broadcast-security-threat-model.md`. |
 | 6 | Web messaging and media | Replies, reactions, edits/deletes, receipts, typing, disappearing messages, local search, encrypted drive/tus attachments, and voice notes. |
 | 7 | Web PWA completion | Generic content-free Web Push, offline/restart recovery, responsive/accessibility/browser matrix, security/load tests, and protocol freeze. |
 | 8 | Calls | 1:1 WebRTC → SFU group calls; TURN + SNI demux on 443. Separate from the messaging-complete web milestone. |
@@ -204,7 +240,7 @@ Device-list authenticity (the signed per-account device manifest) is **not** in 
 Add an optional traffic-obfuscation layer for every connection to a Kutup
 server and every Kutup server-to-server connection. A shared protected
 transport should multiplex Chat, Drive, collaboration, authentication, policy,
-transparency, and federation streams instead of creating feature-specific
+identity-manifest, and federation streams instead of creating feature-specific
 cover channels. Chat cells carry opaque MLS/anonymous-delivery envelopes;
 Drive and collaboration cells carry their existing encrypted requests,
 responses, and blob chunks.

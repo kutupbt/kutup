@@ -5,8 +5,9 @@ Kutup is a zero-knowledge file storage system. The server stores only ciphertext
 Kutup-owned cryptographic protocols follow the purpose-specific suite,
 authenticated-capability, policy-floor, suite-locking, and explicit-migration
 rules in [`crypto-agility.md`](crypto-agility.md). That decision is authoritative
-for protocol evolution; the constructions below describe the currently
-implemented formats.
+for protocol evolution. This document describes the V1 target; unfinished
+pre-tag cutovers are listed explicitly in [`roadmap.md`](roadmap.md) and must
+not be advertised as complete.
 
 Chat and Drive federation share the versioned identity, discovery, and HTTP
 authentication boundary specified in
@@ -20,39 +21,68 @@ are cut over. No mixed v1/v2 trust path or raw remote URL remains.
 
 ```mermaid
 flowchart TD
-    M["mnemonic<br/>(BIP39, 24 words)"]
-    R["recovery key<br/>Argon2id over mnemonic"]
+    P["password"]
+    APS["account-protection salt + parameters"]
+    APR["account-protection root<br/>Argon2id(password, salt, parameters)"]
+    KEK["key-encryption key<br/>HKDF purpose subkey"]
+    LK["server login key<br/>HKDF purpose subkey"]
+    RE["random recovery entropy<br/>(32 bytes)"]
+    M["mnemonic<br/>(BIP39 encoding of recovery entropy)"]
     EMK["encryptedMasterKey<br/>(stored server-side)"]
+    ERK["encryptedRecoveryKey<br/>(stored server-side)"]
     MK["master key<br/>(browser memory only)"]
     CK["per-collection key<br/>XSalsa20-Poly1305<br/>via crypto_secretbox"]
     NACL["NaCl keypair<br/>publicKey + encryptedPrivateKey<br/>(for cross-user sharing)"]
     FK["per-file key<br/>(random, per file)"]
     BLOB["encrypted file content<br/>XChaCha20-Poly1305<br/>crypto_secretstream, 5 MB chunks<br/>→ SeaweedFS"]
 
-    M -->|derives| R
-    R -->|encrypts| EMK
-    EMK -->|client-side decrypt| MK
+    P --> APR
+    APS --> APR
+    APR --> KEK
+    APR --> LK
+    LK -->|sent to server; bcrypt verifier| AUTH["login authentication"]
+    RE -->|encoded as| M
+    KEK -->|encrypts| EMK
+    RE -->|encrypts| ERK
+    EMK -->|client-side decrypt with KEK| MK
+    ERK -->|recovery decrypt with entropy| MK
     MK -->|encrypts| CK
     MK -->|encrypts| NACL
     CK -->|encrypts| FK
     FK -->|encrypts| BLOB
 ```
 
-Every cryptographic primitive is from **libsodium** (`libsodium-wrappers-sumo`), running entirely in the browser. The backend is a pure ciphertext relay.
+The canonical implementation is `kutup-crypto` (`dryoc` plus RustCrypto). The
+browser consumes it through WASM; CLI and native clients call the same Rust
+implementation. A primitive-only browser adapter is allowed solely under the
+10×/platform-failure exception in
+[`cryptographic-dependencies.md`](cryptographic-dependencies.md). The backend
+remains a ciphertext relay.
 
 ---
 
 ## Registration Flow
 
 1. Client generates a random 32-byte **master key**.
-2. Client derives a **login key** from the user's password using Argon2id (`loginKeySalt`). Only the base64-encoded `loginKey` is sent to the server, which then bcrypts it and stores `login_key_hash`. The raw password never leaves the browser.
+2. Client derives one account-protection root with the persisted suite,
+   Argon2id salt and parameters. Domain-separated HKDF expands that root into a
+   **key-encryption key** and a **login key**. Only the base64-encoded login key
+   is sent to the server, which bcrypts it into `login_key_hash`. The password,
+   root and key-encryption key never leave the client.
 3. Client generates a NaCl box **keypair** (`publicKey`, `privateKey`).
-4. Client derives a **recovery key** from a freshly generated BIP39 mnemonic using Argon2id (`kdfSalt`).
+4. Client generates 32 random bytes of **recovery entropy** and encodes those
+   exact bytes as a 24-word BIP39 mnemonic. BIP39 is an encoding here; the
+   recovery path does not run Argon2id.
 5. Client encrypts:
-   - `masterKey` with the recovery key → `encryptedRecoveryKey` + `recoveryKeyNonce`
-   - `masterKey` with the login key → `encryptedMasterKey` + `masterKeyNonce`
+   - `masterKey` with the recovery entropy → `encryptedRecoveryKey` + `recoveryKeyNonce`
+   - `masterKey` with the key-encryption key → `encryptedMasterKey` + `masterKeyNonce`
    - `privateKey` with the master key → `encryptedPrivateKey` + `privateKeyNonce`
-6. Client also sends a **recovery proof** — base64 of the recovery-key entropy. The server bcrypts it into `recovery_key_verifier` so it can later confirm the client really holds the mnemonic during account recovery (no plaintext recovery key is ever transmitted).
+6. Client also derives a **recovery authorization proof** with HKDF-SHA256 from
+   the recovery entropy, the fixed purpose
+   `kutup/account-recovery/auth-proof/v1`, and the canonical account address.
+   The server bcrypts only that proof into `recovery_key_verifier`. The proof is
+   password-equivalent for recovery authorization, but cannot decrypt
+   `encryptedRecoveryKey`; the raw recovery entropy never leaves the client.
 7. Client POSTs the encrypted bundle to `POST /api/auth/register`. The server stores all ciphertext, the public key, and the recovery verifier. The mnemonic is shown to the user once and never stored anywhere.
 
 ---
@@ -66,18 +96,23 @@ sequenceDiagram
     participant S as Backend
 
     B->>S: GET /auth/login/preflight?email=...
-    S-->>B: { loginKeySalt, kdfSalt }
-    Note over B: Argon2id(password, loginKeySalt)<br/>in Web Worker → loginKey
+    S-->>B: { accountProtectionSuite, salt, parameters }
+    Note over B: Argon2id(password, suite params) → root<br/>HKDF(root, purpose) → loginKey + KEK
     B->>S: POST /auth/login { loginKey }
     S-->>B: { accessToken, encryptedMasterKey, ... }<br/>+ refresh_token cookie (httpOnly)
-    Note over B: Decrypt encryptedMasterKey<br/>with loginKey → master key<br/>(browser memory only)
+    Note over B: Decrypt encryptedMasterKey<br/>with KEK → master key<br/>(browser memory only)
 ```
 
-1. Client fetches `GET /api/auth/login/preflight?email=...` to retrieve `loginKeySalt` and `kdfSalt`.
-2. Client recomputes the login key from the password + `loginKeySalt` via Argon2id (in a Web Worker to avoid blocking the UI).
+1. Client fetches `GET /api/auth/login/preflight?email=...` to retrieve the
+   account-protection suite, salt and complete Argon2id parameters.
+2. Client recomputes one root via Argon2id in a Web Worker, then derives the
+   login key and key-encryption key with distinct fixed HKDF purposes.
 3. Client POSTs the base64 `loginKey` to `POST /api/auth/login`. Server bcrypt-compares it against the stored `login_key_hash`.
 4. On success the server returns an **access token** (short-lived JWT) in the JSON body and sets the **refresh token** as an HTTP-only `refresh_token` cookie scoped to `/api/auth/refresh`.
-5. The login response also carries `encryptedMasterKey` + `masterKeyNonce` (and the encrypted private key); the client decrypts the master key locally with the login key. The master key lives only in browser memory.
+5. The login response also carries `encryptedMasterKey` + `masterKeyNonce` (and
+   the encrypted private key); the client decrypts the master key locally with
+   the key-encryption key. The server-facing login key cannot decrypt it. The
+   master key lives only in browser memory.
 6. If 2FA is enabled, the server returns `{requiresTotp: true, preAuthToken: ...}` instead of full tokens. The client completes login at `POST /api/auth/login/2fa` with a TOTP code before receiving the full JWT.
 7. For accounts created via `ADMIN_ACCOUNT` that have not yet generated a recovery phrase, the server returns `{requiresSetup: true, setupToken: ...}`. The client derives a fresh key bundle and submits it to `POST /api/auth/complete-setup`.
 
@@ -195,8 +230,8 @@ flowchart LR
   to refresh the signed directory and re-encrypt instead of silently skipping
   a device.
 - The client persists ratchets, plaintext history, pending ciphertext,
-  message-request state, encrypted-profile capabilities, and transparency
-  trust in an account-scoped IndexedDB database. Web Locks serialize ratchet
+  message-request state, encrypted-profile capabilities, and account-identity
+  pins in an account-scoped IndexedDB database. Web Locks serialize ratchet
   transactions across tabs. Ciphertext is durably journaled before decrypt and
   acknowledged only after the ratchet advance and plaintext commit together.
 - The server stores public directory material and opaque per-device mailbox
@@ -225,23 +260,24 @@ do not contain the sender. First contact, Note to Self, and linked-device sync
 remain identified. Blocking rotates the profile key and delivery capability
 before redistributing the new key to remaining contacts.
 
-### Device-directory trust and transparency
+### Account identity, device directory, and verification
 
-An account self-authority key signs the exact chat-device manifest. Every
-accepted manifest version is appended to a chronological Merkle log and the
-current account value is authenticated by a sparse Merkle map. Exact
-checkpoints carry a persistent operator signature; clients enforce their
-pinned operator policy.
+One stable `AccountSelfAuthorityV1` signs the complete
+`AccountManifestV1`. The manifest binds account-scoped Drive keys and every
+active device record (maximum ten), and carries a monotonic sequence plus the
+previous-manifest hash. Clients fetch every missing complete manifest, verify
+exact continuity and commit the chain and peer pin atomically. Missing,
+duplicated, reordered, rolled-back, same-sequence-conflicting, malformed or
+invalidly signed history blocks new sensitive operations while retaining
+existing ciphertext.
 
-The web client independently verifies local and authenticated remote policy and
-checkpoint histories when chat opens, connectivity returns, the page becomes
-visible, the WebSocket reconnects, and before stale evidence is used. The
-server also runs restart-safe 15-minute remote monitoring. Network
-unavailability warns without discarding established trust; a cryptographic
-contradiction against a client's prior pin durably blocks new sends for that
-domain. Skipped manifest versions are recovered from
-checkpoint-bound pages and committed only after the entire chain verifies.
-Existing durable ciphertext is retained.
+First contact is TOFU and displays a gray shield. A face-to-face QR comparison
+pins the account authority and incarnation across Drive, Direct Chat, groups
+and channels and displays a green verified shield. An unexpected authority or
+incarnation change displays red and quarantines new sends/shares until the user
+explicitly accepts a safety-number-style reset. The server can relay manifest
+history but cannot promote trust. V1 has no global transparency log, sparse
+map, checkpoint/proof policy, monitor, witness or auditor.
 
 ### Transport-only federation
 
@@ -287,12 +323,12 @@ not create a feature-owned identity, cache, client, or admission path.
 
 ### Current product boundary
 
-The web client currently supports direct text messaging, linked-device sync,
-Note to Self, transport federation, message requests/blocking, encrypted
-profiles, signed device manifests, and monitored key transparency. Private
-groups, attachments/media, receipts, typing, disappearing messages, sealed
-sender, calls, push delivery, and native-client integration remain future
-slices tracked in [`roadmap.md`](roadmap.md).
+The web client supports Direct Chat, linked-device synchronization, Note to
+Self, transport federation, message requests/blocking, encrypted profiles,
+sealed sender and MLS private groups. The V1 identity/format cutover,
+confidential broadcast, attachments/media, receipts, typing, disappearing
+messages, calls, push delivery and native-client integration are tracked in
+[`roadmap.md`](roadmap.md).
 
 ---
 
@@ -318,7 +354,7 @@ PostgreSQL 16 is used for all persistent metadata:
 - Federation share tokens and incoming shares
 - Chat devices and public prekey pools
 - Opaque per-device chat mailboxes and idempotent send records
-- Signed device manifests, transparency log/map nodes, and checkpoints
+- Account manifests, complete signed manifest history, and durable peer pins
 - Unified federation local/peer identity history, trust/quarantine evidence,
   replay reservations, and feature-scoped policy
 - Durable per-destination federation outboxes and inbound replay/high-water records

@@ -39,18 +39,17 @@ select its suite.
 | Registry | Protected purpose and lock unit | Authoritative owner |
 |---|---|---|
 | `AccountProtectionSuiteId` | Password/recovery derivation and wrapping of account secrets; one account protection revision | `kutup-crypto` account-protection module and Auth wire contract |
-| `AccountIdentitySuiteId` | Account root authority, feature-key authorization, and authenticated identity rotation; one identity epoch | account-identity protocol crate (to be extracted from Chat before Drive uses it) |
-| `DriveObjectSuiteId` | The complete Drive E2EE object family: collection/file metadata, key envelopes, content streams, assets, and share key wrapping; one independently decryptable object | `kutup-crypto` Drive-object module, mirrored by web/native clients |
-| `CollabFrameSuiteId` | Collaborative frame KDF, AEAD, signature, framing, and validation; one document-key epoch | `kutup-crypto` collaboration-envelope module, mirrored by web/native clients |
+| `AccountIdentitySuiteId` | Account root authority, feature-key authorization, and authenticated identity rotation; one identity epoch | `kutup-crypto` account-identity module and the shared account-manifest wire contract |
+| `DriveObjectSuiteId` | The complete Drive E2EE object family: collection/file metadata, key envelopes, content streams, assets, and share key wrapping; one independently decryptable object | canonical `kutup-crypto` Rust module consumed through WASM, native Rust and UniFFI |
+| `CollabFrameSuiteId` | Collaborative frame KDF, AEAD, signature, framing, and validation; one document-key epoch | canonical `kutup-crypto` Rust module consumed through WASM, native Rust and UniFFI |
 | `DirectChatSuiteId` | Direct-session establishment, ratchet, message format, and validation; one device-to-device session | `kutup-chat-proto` and `kutup-chat-core` |
 | `GroupChatSuiteId` | Group key agreement, encrypted authoritative group state, message protection, and epoch rules; one group/epoch | Group Chat protocol/core; created with the group feature, not as a placeholder |
 | `ProfileSuiteId` | Encrypted-profile key derivation, field envelopes, padding, wrapping, and access capability; one profile-key version | `kutup-chat-proto` and the profile module in `kutup-chat-core` |
-| `KeyTransparencySuiteId` | Log/map hashing, proof formats, checkpoint, and operator authentication; one log generation | transparency protocol module; extraction from Chat is required if Drive adopts it |
 | `FederationAuthProfileId` | Federation discovery authentication, server identity/rotation, HTTP request/response authentication, and replay profile; one federation protocol version/exchange | `kutup-federation-proto` |
 
-The extra Account Protection, Collaboration, and Key Transparency boundaries
-are intentional. They have different keys, authorities, migration events, and
-failure consequences from Account Identity, Drive objects, and Chat sessions.
+The extra Account Protection and Collaboration boundaries are intentional.
+They have different keys, authorities, migration events, and failure
+consequences from Account Identity, Drive objects, and Chat sessions.
 Combining them would allow an unrelated protocol to select or block their
 cryptography.
 
@@ -207,7 +206,7 @@ plaintext keys or content.
   policy status, interoperability tests for every supported client, and an
   explicit removal criterion for the predecessor.
 - Shared helpers may reduce serialization duplication, but may not erase the
-  registry's Rust/TypeScript/UniFFI type or introduce cross-purpose conversion.
+  registry's Rust/UniFFI/WASM type or introduce cross-purpose conversion.
 
 ## Consequences for current Kutup code
 
@@ -217,12 +216,21 @@ wire encoding remain unchanged. Authenticated per-device suite capabilities
 and suite-tagged local libsignal sessions remain the next Direct Chat slice;
 they must land before a second Direct Chat suite is introduced.
 
-Drive, Account Protection, encrypted profiles, account identity, and key
-transparency currently encode most of their constructions implicitly. Their
-current formats become explicit legacy-v1 entries for exact reads; changing
-their binding or format requires a new suite and explicit migration. The
-collaboration frame's signed-and-AEAD-bound version byte can remain its sole
-suite selector after strict version validation is added.
+Drive, Account Protection, encrypted profiles, and account identity currently
+encode most constructions implicitly. Before the first stable tag Kutup will
+replace those development formats with explicit V1 suite-bearing formats and
+recreate development state; it will not ship dormant legacy readers. After the
+first stable tag, changing a binding or format requires a new suite and the
+explicit migration protocol above. The collaboration frame's
+signed-and-AEAD-bound version byte can remain its sole suite selector after
+strict version validation is added.
+
+The canonical implementation for Kutup-owned cryptographic formats is Rust in
+`kutup-crypto`. The browser consumes it through WASM. A narrow browser
+libsodium primitive adapter is permitted only when a reproducible benchmark
+shows the Rust/WASM operation is at least ten times slower, or it cannot
+complete because of a platform memory/runtime failure. Such an adapter never
+owns headers, suite dispatch, derivation labels, validation or policy.
 
 The unified federation implementation owns only
 `FederationAuthProfileId`. It must treat Chat and Drive payloads as opaque and
