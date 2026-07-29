@@ -1147,6 +1147,25 @@ impl WasmChatClient {
         to_output(&entry)
     }
 
+    #[wasm_bindgen(js_name = createMlsInvitationAcceptanceMessage)]
+    pub async fn create_mls_invitation_acceptance_message(
+        &self,
+        mls_group_id: Vec<u8>,
+        invited_epoch: String,
+        accepted_at_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let entry = self
+            .mls_client()
+            .create_invitation_acceptance_message(
+                &mls_group_id,
+                parse_u64_string("MLS invited epoch", &invited_epoch)?,
+                parse_i64_string("MLS acceptance clock", &accepted_at_seconds)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&entry)
+    }
+
     #[wasm_bindgen(js_name = pendingMlsOwnerApprovalRequests)]
     pub async fn pending_mls_owner_approval_requests(
         &self,

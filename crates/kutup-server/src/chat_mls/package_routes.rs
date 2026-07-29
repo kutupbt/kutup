@@ -8,6 +8,7 @@ use kutup_chat_proto::{
 };
 use time::OffsetDateTime;
 
+use super::invitation_feedback::record_ready_invitation_feedback;
 use super::{active_policy, MlsRepository, MAX_DEVICE_ID};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
@@ -60,8 +61,10 @@ pub(crate) async fn publish_delivery_capability(
     Json(request): Json<PublishMlsDeliveryCapabilityV1>,
 ) -> AppResult<Response> {
     active_policy(&state).await?;
-    MlsRepository::new(state.pool)
-        .publish_delivery_capability(trusted_uuid(&auth.user_id)?, &request)
+    let user_id = trusted_uuid(&auth.user_id)?;
+    MlsRepository::new(state.pool.clone())
+        .publish_delivery_capability(user_id, &request)
         .await?;
+    record_ready_invitation_feedback(&state, user_id, &request).await?;
     Ok(Json(serde_json::json!({ "published": true })).into_response())
 }

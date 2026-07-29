@@ -203,7 +203,7 @@ impl MlsClient {
                 "MLS owner quorum is missing but no other current owner is reachable".into(),
             ));
         }
-        self.create_owner_control_message(
+        self.create_deterministic_group_control_message(
             mls_group_id,
             &conversation,
             b"kutup/mls/owner-approval-request-message/v1\0",
@@ -296,7 +296,7 @@ impl MlsClient {
             .request_hash()
             .map_err(ChatError::Protocol)?;
         let entry = self
-            .create_owner_control_message(
+            .create_deterministic_group_control_message(
                 mls_group_id,
                 &conversation,
                 b"kutup/mls/owner-approval-response-message/v1\0",
@@ -343,7 +343,7 @@ impl MlsClient {
             .await
     }
 
-    async fn create_owner_control_message(
+    pub(super) async fn create_deterministic_group_control_message(
         &self,
         mls_group_id: &[u8],
         conversation: &LocalMlsConversationRecord,
@@ -379,7 +379,7 @@ impl MlsClient {
                 || existing_body != body
             {
                 return Err(ChatError::Db(
-                    "durable MLS owner-approval outbox differs from its deterministic id".into(),
+                    "durable MLS group-control outbox differs from its deterministic id".into(),
                 ));
             }
             return Ok(Some(existing));
@@ -402,7 +402,7 @@ impl MlsClient {
                 || existing_body != body
             {
                 return Err(ChatError::Db(
-                    "durable MLS owner-approval receipt differs from its deterministic id".into(),
+                    "durable MLS group-control receipt differs from its deterministic id".into(),
                 ));
             }
             return Ok(None);
@@ -429,7 +429,7 @@ impl MlsClient {
             serde_json::to_vec(&content).map_err(|error| ChatError::Content(error.to_string()))?;
         let created_at_ms = sent_at_seconds
             .checked_mul(1000)
-            .ok_or_else(|| ChatError::Invalid("MLS owner approval clock overflow".into()))?;
+            .ok_or_else(|| ChatError::Invalid("MLS group-control clock overflow".into()))?;
         self.create_application_message_inner(
             &send_id,
             *conversation.request.genesis.conversation_id.as_bytes(),

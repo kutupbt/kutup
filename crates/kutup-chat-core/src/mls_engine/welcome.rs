@@ -267,6 +267,19 @@ impl MlsClient {
             .genesis
             .genesis_hash()
             .map_err(ChatError::Protocol)?;
+        let (local_address, _) =
+            parse_device_credential_identity(&metadata.credential_identity)?;
+        let mut member_joined_epochs = private_control
+            .roster
+            .iter()
+            .map(|member| (member.address.canonical(), 0))
+            .collect::<BTreeMap<_, _>>();
+        member_joined_epochs.insert(local_address.clone(), private_control.epoch);
+        let mut accepted_invitation_epochs = member_joined_epochs
+            .keys()
+            .map(|address| (address.clone(), 0))
+            .collect::<BTreeMap<_, _>>();
+        accepted_invitation_epochs.insert(local_address, private_control.epoch);
         let conversation = LocalMlsConversationRecord {
             request,
             status: LocalMlsConversationStatus::Active,
@@ -276,6 +289,8 @@ impl MlsClient {
             last_finalized_epoch: private_control.epoch,
             last_block_hash,
             current_roster: private_control.roster.clone(),
+            member_joined_epochs,
+            accepted_invitation_epochs,
             current_authority_set: private_control.authority_set.clone(),
             current_owner_set: private_control.owner_set.clone(),
             genesis_authorization_policy: private_control.genesis_authorization_policy.clone(),

@@ -147,6 +147,32 @@ pub(super) async fn notify_mls_recipient_mailbox(state: &AppState, username: &st
     }
 }
 
+/// Wake active local administrators when durable invitation readiness or
+/// refusal feedback changes. The frame remains the same identifier-free
+/// mailbox hint used by ciphertext delivery; clients re-read authenticated
+/// state rather than trusting a WebSocket payload.
+pub(super) async fn notify_mls_administrators(state: &AppState, conversation_id: Uuid) {
+    let targets: Result<Vec<(Uuid, i32)>, _> = sqlx::query_as(
+        "SELECT DISTINCT d.user_id, d.device_id
+         FROM chat_mls_local_members m
+         JOIN chat_devices d ON d.user_id = m.user_id
+         WHERE m.conversation_id = $1
+           AND m.is_admin = true
+           AND m.membership_status = 'active'
+           AND m.removed_epoch IS NULL
+         ORDER BY d.user_id, d.device_id",
+    )
+    .bind(conversation_id)
+    .fetch_all(&state.pool)
+    .await;
+    match targets {
+        Ok(targets) => notify_mls_mailbox_targets(state, targets).await,
+        Err(error) => {
+            tracing::warn!(error = %error, "MLS administrator WebSocket wake-up query failed")
+        }
+    }
+}
+
 fn signed_federation_json<T: serde::Serialize>(
     federation: &FederationStack,
     authenticated: &AuthenticatedFederationRequest,

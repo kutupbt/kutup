@@ -1448,12 +1448,34 @@ export class MlsConversationService {
       throw new Error('server did not activate the verified MLS invitation')
     }
     await this.publishCurrentDeliveryCapability(joined.conversation)
+    await this.publishInvitationAcceptance(
+      joined.conversation,
+      verified.invitedEpoch,
+    )
     await this.publishOwnerCandidateForRecord(joined.conversation)
     await this.transport.ackMlsMailbox(
       this.deviceId,
       envelopes.map((envelope) => envelope.id),
     )
     return { group, serverAccepted: true, resumed }
+  }
+
+  private async publishInvitationAcceptance(
+    conversation: LocalMlsConversationRecord,
+    invitedEpoch: number,
+  ): Promise<void> {
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const entry = await this.withCryptoLock(() =>
+      this.client.createMlsInvitationAcceptanceMessage(
+        groupId,
+        String(invitedEpoch),
+        String(Math.floor(Date.now() / 1000)),
+      ))
+    if (entry) await this.deliverApplicationEntry(entry)
   }
 
   private async publishOwnerCandidateForRecord(
@@ -1986,6 +2008,7 @@ function validateLocalGenesisRecord(record: LocalMlsConversationRecord): void {
     || record.lastFinalizedEpoch < 0
     || record.currentRoster.length < 1
     || record.currentRoster.length > 1000
+    || !hasValidInvitationReadiness(record)
     || record.currentAuthoritySet.authorities.length < 1
     || record.currentOwnerSet.owners.length < 1
     || !isAuthorizationPolicy(record.genesisAuthorizationPolicy)
@@ -2022,6 +2045,27 @@ function validateLocalGenesisRecord(record: LocalMlsConversationRecord): void {
     throw new Error('invalid durable MLS group genesis record')
   }
   decodeCanonicalBase64(genesis.mlsGroupId, 16, 255)
+}
+
+function hasValidInvitationReadiness(record: LocalMlsConversationRecord): boolean {
+  if (
+    !(record.memberJoinedEpochs instanceof Map)
+    || !(record.acceptedInvitationEpochs instanceof Map)
+  ) return false
+  const roster = new Set(
+    record.currentRoster.map(member => canonicalAccountAddress(member.address)),
+  )
+  const joined = [...record.memberJoinedEpochs.entries()]
+  const accepted = [...record.acceptedInvitationEpochs.entries()]
+  return joined.length === roster.size
+    && joined.every(([address, epoch]) =>
+      roster.has(address)
+      && Number.isSafeInteger(epoch)
+      && epoch >= 0
+      && epoch <= record.lastFinalizedEpoch)
+    && accepted.every(([address, epoch]) =>
+      roster.has(address)
+      && record.memberJoinedEpochs.get(address) === epoch)
 }
 
 function isAuthorizationPolicy(
@@ -2498,7 +2542,11 @@ function validateInvitationFeedback(feedback: MlsInvitationFeedback): void {
     || feedback.invitedEpoch < 1
     || !Number.isSafeInteger(feedback.decidedAt)
     || feedback.decidedAt < 0
-    || (feedback.decision !== 'rejected' && feedback.decision !== 'expired')
+    || (
+      feedback.decision !== 'accepted'
+      && feedback.decision !== 'rejected'
+      && feedback.decision !== 'expired'
+    )
   ) {
     throw new Error('invalid MLS invitation feedback')
   }

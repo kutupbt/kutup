@@ -50,7 +50,7 @@ fn suite_is_exactly_wire_suite_zero_x_two() {
 
 #[test]
 fn invitation_feedback_has_one_canonical_vector() {
-    let feedback = MlsInvitationFeedbackV1 {
+    let mut feedback = MlsInvitationFeedbackV1 {
         protocol_version: MLS_INVITATION_FEEDBACK_VERSION,
         conversation_id: Uuid::parse_str("4cc2114c-8015-4e78-9af8-2f5f71c18cf1").unwrap(),
         incarnation: 3,
@@ -66,9 +66,42 @@ fn invitation_feedback_has_one_canonical_vector() {
         "93a7802652346c4dacc3964ef7a123c82e2db750c1f2b1e6438e8595e592bbb0"
     );
 
+    feedback.decision = MlsInvitationFeedbackDecisionV1::Accepted;
+    let accepted = br#"{"protocolVersion":1,"conversationId":"4cc2114c-8015-4e78-9af8-2f5f71c18cf1","incarnation":3,"member":{"username":"bob","server":"b.example"},"invitedEpoch":9,"decision":"accepted","decidedAt":1785249600}"#;
+    assert_eq!(feedback.canonical_bytes().unwrap(), accepted);
+    assert_eq!(
+        feedback.feedback_digest().unwrap(),
+        "9f1413d1f191592bd7a4e7a883aa9a867f2646d70c6fbe1b3c93675fe046d6f5"
+    );
+
     let mut malformed = feedback;
     malformed.member = "bob".parse().unwrap();
     assert!(malformed.validate().is_err());
+}
+
+#[test]
+fn invitation_acceptance_group_control_has_one_canonical_vector() {
+    let body = MlsGroupControlBodyV1::InvitationAccepted {
+        acceptance: MlsInvitationAcceptanceV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            conversation_id: Uuid::from_u128(1),
+            incarnation: 2,
+            invited_epoch: 7,
+            accepted_at: 1_700_000_000,
+        },
+    };
+    let encoded = serde_json::to_vec(&body).unwrap();
+    assert_eq!(
+        String::from_utf8(encoded.clone()).unwrap(),
+        concat!(
+            "{\"action\":\"invitationAccepted\",\"acceptance\":{",
+            "\"protocolVersion\":1,",
+            "\"conversationId\":\"00000000-0000-0000-0000-000000000001\",",
+            "\"incarnation\":2,\"invitedEpoch\":7,\"acceptedAt\":1700000000}}"
+        )
+    );
+    let decoded: MlsGroupControlBodyV1 = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(decoded, body);
 }
 
 #[test]

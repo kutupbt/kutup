@@ -74,6 +74,19 @@ async fn persist_owner_candidate(
         .unwrap();
 }
 
+fn assert_same_protocol_state(
+    left: &LocalMlsConversationRecord,
+    right: &LocalMlsConversationRecord,
+) {
+    let mut left = left.clone();
+    let mut right = right.clone();
+    left.member_joined_epochs.clear();
+    left.accepted_invitation_epochs.clear();
+    right.member_joined_epochs.clear();
+    right.accepted_invitation_epochs.clear();
+    assert_eq!(left, right);
+}
+
 #[test]
 fn exact_suite_is_rfc9420_suite_two() {
     assert_eq!(
@@ -1551,7 +1564,56 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         assert!(bob.owner_candidates(group_id).await.unwrap().is_empty());
         assert!(!applied.idempotent);
         assert_eq!(applied.group.epoch, 2);
-        assert_eq!(applied.conversation, removed.conversation);
+        assert_eq!(
+            applied
+                .conversation
+                .accepted_invitation_epochs
+                .get("bobby@beta.example"),
+            Some(&1)
+        );
+        assert_eq!(
+            removed
+                .conversation
+                .accepted_invitation_epochs
+                .get("bobby@beta.example"),
+            None
+        );
+        assert_same_protocol_state(&applied.conversation, &removed.conversation);
+        let (_, mut acceptance_metadata) = alice.load_provider().await.unwrap();
+        let acceptance = kutup_chat_proto::MlsInvitationAcceptanceV1 {
+            protocol_version: MLS_PROTOCOL_VERSION,
+            conversation_id,
+            incarnation: 1,
+            invited_epoch: 1,
+            accepted_at: now + 3,
+        };
+        invitation_acceptance::record_invitation_acceptance(
+            &mut acceptance_metadata,
+            group_id,
+            "bobby@beta.example",
+            acceptance.clone(),
+            now + 3,
+        )
+        .unwrap();
+        assert_eq!(
+            acceptance_metadata
+                .conversations
+                .get(&conversation_id.to_string())
+                .unwrap()
+                .accepted_invitation_epochs
+                .get("bobby@beta.example"),
+            Some(&1)
+        );
+        let mut replayed_for_readd = acceptance;
+        replayed_for_readd.invited_epoch = 2;
+        assert!(invitation_acceptance::record_invitation_acceptance(
+            &mut acceptance_metadata,
+            group_id,
+            "bobby@beta.example",
+            replayed_for_readd,
+            now + 3,
+        )
+        .is_err());
         assert_eq!(
             bob.processed_control_envelope(bob_envelope.envelope_id)
                 .await
@@ -1696,7 +1758,7 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
             .await
             .unwrap();
         assert_eq!(promoted.group.epoch, 3);
-        assert_eq!(promoted_applied.conversation, promoted.conversation);
+        assert_same_protocol_state(&promoted_applied.conversation, &promoted.conversation);
         assert!(promoted
             .conversation
             .current_roster
@@ -1864,9 +1926,9 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
             )
             .await
             .unwrap();
-        assert_eq!(
-            bob_owner_applied.conversation,
-            owners_finalized.conversation
+        assert_same_protocol_state(
+            &bob_owner_applied.conversation,
+            &owners_finalized.conversation,
         );
         assert_eq!(
             bob.group_owner_credential(group_id).await.unwrap().owner_id,
@@ -2120,9 +2182,9 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
             )
             .await
             .unwrap();
-        assert_eq!(
-            bob_removal_applied.conversation,
-            removal_finalized.conversation
+        assert_same_protocol_state(
+            &bob_removal_applied.conversation,
+            &removal_finalized.conversation,
         );
         assert!(bob.group_owner_credential(group_id).await.is_err());
         assert_eq!(

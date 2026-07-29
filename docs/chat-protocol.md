@@ -791,13 +791,21 @@ servers verify the complete paginated control history before accepting their
 private Commit/Welcome delivery. New local members remain pending until they
 accept an identified 30-day invitation; rejection/expiry deletes their
 membership-control mailbox material and cannot grant authorization or delivery
-capabilities. A rejection/expiry atomically records a canonical identified
-feedback statement and, when necessary, retries it over the shared
-authenticated federation transport. The invitation-origin server verifies the
-exact finalized Welcome and source domain before storing the statement
-append-only. Only active local administrators can read it. Feedback is
-advisory and never changes the MLS roster; an administrator must order an
-explicit removal Commit.
+capabilities. After verified Welcome installation, capability publication
+records a canonical `accepted` readiness statement; rejection/expiry records
+the corresponding terminal statement. When necessary, the destination retries
+that feedback over the shared authenticated federation transport. The
+invitation-origin server verifies the exact finalized Welcome and source domain
+before storing the statement append-only. It does not relay the plaintext
+member identity to other participant servers. After capability publication the
+recipient also sends a typed MLS-encrypted acceptance control to the ready
+roster. Clients bind that control to the sender leaf and exact client-private
+join epoch, so removal/re-addition cannot replay an old acceptance. Only active
+local administrators can read server feedback. Their composer remains disabled
+while a later roster member lacks a matching server or encrypted accepted
+receipt, preventing partial all-roster delivery around a pending invitee.
+Feedback is advisory and never changes the MLS roster; an administrator must
+order an explicit removal Commit.
 
 The authenticated MLS mailbox uses bounded cursor pages and idempotent UUID
 acknowledgements. Membership-control rows bind an exact incarnation; anonymous
@@ -836,9 +844,10 @@ current-owner quorum, finalization, and continued group delivery.
 Owner-approved closure uses the same private approval channel and one
 unchanged-roster MLS Commit; its gate proves no pre-quorum ordering, terminal
 state on both domains, send blocking, and closed-history persistence across
-reload. The two-server gate also proves remote invitation rejection feedback,
-browser visibility, manual MLS removal, linked-device state, and the
-adversarial/scale requirements.
+reload. The two-server gate also proves capability-backed remote invitation
+acceptance, MLS-encrypted cross-admin readiness, pre-accept send blocking,
+rejection feedback, browser visibility, manual MLS removal, linked-device
+state, and the adversarial/scale requirements.
 
 ---
 

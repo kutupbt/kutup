@@ -42,6 +42,7 @@ import api from '@/api/client'
 import { ChatService, ChatServiceError } from '@/chat/service'
 import { MlsSendError } from '@/chat/mls-service'
 import { MlsGroupSecurityDetails } from '@/chat/MlsGroupSecurityDetails'
+import { mlsGroupInvitationReadiness } from '@/chat/group-readiness'
 import { isSupportedChat, useChatCapabilities } from '@/chat/capabilities'
 import {
   conversationKey,
@@ -320,6 +321,16 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const selectedGroupCanSend = !selectedGroup
     || selectedGroup.currentAuthorizationPolicy.applicationSenders === 1
     || selectedGroupSelfMember?.isAdmin === true
+  const selectedGroupReadiness = useMemo(
+    () => selectedGroup
+      ? mlsGroupInvitationReadiness(
+          selectedGroup,
+          groupInvitationFeedback,
+          selfAddress,
+        )
+      : { pending: [], refused: [], blocksSending: false },
+    [groupInvitationFeedback, selectedGroup, selfAddress],
+  )
 
   useEffect(() => {
     setGroupAuthorityDomains(
@@ -390,7 +401,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       && !requestSelected
       && !blockedSelected
       && !selectedGroupClosed
-      && selectedGroupCanSend,
+      && selectedGroupCanSend
+      && !selectedGroupReadiness.blocksSending,
   )
 
   useEffect(() => {
@@ -1239,7 +1251,15 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                               {member.isAdmin && <span>Administrator</span>}
                               {isSelf && <span>You</span>}
                             </span>
-                            {invitationFeedback && (
+                            {invitationFeedback?.decision === 'accepted' && (
+                              <span
+                                className="mt-1 block text-xs text-emerald-600 dark:text-emerald-400"
+                                data-testid={`chat-group-invitation-feedback-${address}`}
+                              >
+                                Accepted the encrypted invitation
+                              </span>
+                            )}
+                            {invitationFeedback && invitationFeedback.decision !== 'accepted' && (
                               <span
                                 className="mt-1 block text-xs text-warning"
                                 data-testid={`chat-group-invitation-feedback-${address}`}
@@ -1594,6 +1614,16 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
           </div>
 
           <form className="border-t bg-card p-3 md:px-8" onSubmit={sendMessage}>
+            {selectedGroupReadiness.blocksSending && (
+              <div
+                className="mx-auto mb-2 max-w-3xl rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-xs text-muted-foreground"
+                data-testid="chat-group-delivery-readiness"
+              >
+                {selectedGroupReadiness.refused.length > 0
+                  ? `Remove ${selectedGroupReadiness.refused.join(', ')} before sending; the invitation was rejected or expired.`
+                  : `Waiting for ${selectedGroupReadiness.pending.join(', ')} to accept the encrypted group invitation.`}
+              </div>
+            )}
             <div className="mx-auto flex max-w-3xl items-end gap-2">
               <Input
                 value={draft}
@@ -1605,6 +1635,10 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                       ? t('chat.requests.unblockBeforeReply')
                       : selectedGroup && !selectedGroupCanSend
                         ? 'Only group administrators may send messages'
+                      : selectedGroupReadiness.refused.length > 0
+                        ? 'Remove members who rejected or missed the invitation'
+                      : selectedGroupReadiness.pending.length > 0
+                        ? 'Waiting for invited members to accept'
                       : selectedGroupClosed
                         ? 'This MLS group is closed'
                       : selectedConversation

@@ -117,6 +117,16 @@ impl MlsClient {
             last_finalized_epoch: request.genesis.initial_epoch,
             last_block_hash: None,
             current_roster: request.members.clone(),
+            member_joined_epochs: request
+                .members
+                .iter()
+                .map(|member| (member.address.canonical(), request.genesis.initial_epoch))
+                .collect(),
+            accepted_invitation_epochs: request
+                .members
+                .iter()
+                .map(|member| (member.address.canonical(), request.genesis.initial_epoch))
+                .collect(),
             current_authority_set: request.genesis.authority_set.clone(),
             current_owner_set,
             genesis_authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),

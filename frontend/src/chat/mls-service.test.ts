@@ -126,6 +126,8 @@ function pendingGenesis(): LocalMlsConversationRecord {
         ownerId: '22'.repeat(32),
       },
     ],
+    memberJoinedEpochs: new Map([['alice@alpha.example', 0]]),
+    acceptedInvitationEpochs: new Map([['alice@alpha.example', 0]]),
     currentAuthoritySet: {
       sequence: 1,
       authorities: [
@@ -253,6 +255,11 @@ function finalizedMembership() {
     lastFinalizedEpoch: 1,
     lastBlockHash: controlBlockHash,
     currentRoster: pendingMembership().nextRoster,
+    memberJoinedEpochs: new Map([
+      ['alice@alpha.example', 0],
+      ['bobby@beta.example', 1],
+    ]),
+    acceptedInvitationEpochs: new Map([['alice@alpha.example', 0]]),
   }
   return {
     group: { mlsGroupId: [...genesisGroupBytes], epoch: 1 },
@@ -496,6 +503,18 @@ function finalizedRecovery() {
     lastFinalizedHeight: 0,
     lastFinalizedEpoch: 1,
     currentRoster: previous.currentRoster,
+    memberJoinedEpochs: new Map(
+      previous.currentRoster.map(member => [
+        `${member.address.username}@${member.address.server}`,
+        1,
+      ] as const),
+    ),
+    acceptedInvitationEpochs: new Map(
+      previous.currentRoster.map(member => [
+        `${member.address.username}@${member.address.server}`,
+        1,
+      ] as const),
+    ),
     currentAuthoritySet: previous.currentAuthoritySet,
     currentOwnerSet: previous.currentOwnerSet,
     genesisAuthorizationPolicy: previous.currentAuthorizationPolicy,
@@ -779,6 +798,7 @@ function harness(
       createdAt: 1_700_000_000_000,
       attempts: 0,
     }),
+    createMlsInvitationAcceptanceMessage: vi.fn().mockResolvedValue(null),
     deriveMlsDeliveryCapability: vi.fn().mockResolvedValue({
       epoch: 1,
       capability: [...new Uint8Array(16).fill(8)],
@@ -1128,8 +1148,7 @@ describe('MlsConversationService', () => {
       getRandomValues: (value: Uint8Array) => value,
     })
     const active = {
-      ...activeGenesis(),
-      currentRoster: pendingMembership().nextRoster,
+      ...finalizedMembership().conversation,
     }
     const { client, service } = harness(null, [active])
     await expect(service.setAdministrator(
@@ -1154,8 +1173,7 @@ describe('MlsConversationService', () => {
 
   it('rejects a no-op administrator change before staging MLS state', async () => {
     const active = {
-      ...activeGenesis(),
-      currentRoster: pendingMembership().nextRoster,
+      ...finalizedMembership().conversation,
     }
     const { client, service } = harness(null, [active])
     await expect(service.setAdministrator(

@@ -14,6 +14,7 @@ mod device_sync;
 mod genesis;
 mod governance;
 mod inbound;
+mod invitation_acceptance;
 mod lifecycle;
 mod membership;
 mod owner_approval;
@@ -167,6 +168,14 @@ pub struct LocalMlsConversationRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_block_hash: Option<String>,
     pub current_roster: Vec<MlsConversationMemberV1>,
+    /// Client-private join epochs keyed by canonical account. These are never
+    /// sent to ordering servers; they bind encrypted invitation acceptances
+    /// across removal and re-addition.
+    #[serde(default)]
+    pub member_joined_epochs: BTreeMap<String, u64>,
+    /// Latest MLS-authenticated accepted join epoch for each account.
+    #[serde(default)]
+    pub accepted_invitation_epochs: BTreeMap<String, u64>,
     pub current_authority_set: MlsAuthoritySetV1,
     pub current_owner_set: MlsOwnerSetV1,
     pub genesis_authorization_policy: MlsGroupAuthorizationPolicyV1,

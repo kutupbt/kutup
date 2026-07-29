@@ -699,6 +699,7 @@ impl MlsClient {
         conversation.last_finalized_height = block.height;
         conversation.last_finalized_epoch = block.epoch_after;
         conversation.last_block_hash = Some(block_hash);
+        advance_member_readiness(conversation, &control.next_roster, block.epoch_after);
         conversation.current_roster = control.next_roster;
         conversation.current_owner_set = control.owner_change.next_owner_set;
         let conversation = conversation.clone();
@@ -780,6 +781,9 @@ fn candidate_conversation_id(content: &ChatContent) -> Result<Uuid> {
             Ok(request.proposal.conversation_id)
         }
         MlsGroupControlBodyV1::OwnerApproval { approval } => Ok(approval.conversation_id),
+        MlsGroupControlBodyV1::InvitationAccepted { acceptance } => {
+            Ok(acceptance.conversation_id)
+        }
     }
 }
 

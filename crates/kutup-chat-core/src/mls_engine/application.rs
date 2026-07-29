@@ -235,6 +235,15 @@ impl MlsClient {
                         approval,
                     )?;
                 }
+                MlsGroupControlBodyV1::InvitationAccepted { acceptance } => {
+                    invitation_acceptance::record_invitation_acceptance(
+                        &mut metadata,
+                        &mls_group_id,
+                        &sender,
+                        acceptance,
+                        context.server_timestamp,
+                    )?;
+                }
             }
         }
         let timestamp_ms = context

@@ -184,17 +184,19 @@ CREATE TABLE chat_mls_membership_deliveries (
 CREATE INDEX chat_mls_membership_deliveries_expiry_idx
     ON chat_mls_membership_deliveries (state, expires_at);
 
--- Invitation refusal is advisory server feedback, never an automatic MLS
--- roster mutation. The rejecting member's server durably retries the
+-- Invitation decisions are advisory server feedback, never an automatic MLS
+-- roster mutation. The member's server durably retries the
 -- federation-authenticated notice to the server that submitted the Welcome;
--- that server exposes it only to active local group administrators.
+-- that server exposes it only to active local group administrators. Accepted
+-- is emitted only after the browser has installed the Welcome and published
+-- its anonymous-delivery capability.
 CREATE TABLE chat_mls_invitation_feedback (
     conversation_id UUID        NOT NULL,
     incarnation     BIGINT      NOT NULL CHECK (incarnation > 0),
     member_address  TEXT        NOT NULL,
     invited_epoch   BIGINT      NOT NULL CHECK (invited_epoch > 0),
     source_domain   TEXT        NOT NULL,
-    decision        TEXT        NOT NULL CHECK (decision IN ('rejected', 'expired')),
+    decision        TEXT        NOT NULL CHECK (decision IN ('accepted', 'rejected', 'expired')),
     decided_at      TIMESTAMPTZ NOT NULL,
     feedback_digest CHAR(64)    NOT NULL,
     feedback        JSONB       NOT NULL CHECK (jsonb_typeof(feedback) = 'object'),

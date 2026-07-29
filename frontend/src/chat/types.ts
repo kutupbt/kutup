@@ -160,7 +160,7 @@ export interface MlsInvitationFeedback {
   incarnation: number
   member: AccountAddress
   invitedEpoch: number
-  decision: 'rejected' | 'expired'
+  decision: 'accepted' | 'rejected' | 'expired'
   decidedAt: number
 }
 
@@ -271,6 +271,8 @@ export interface LocalMlsConversationRecord {
   lastFinalizedEpoch: number
   lastBlockHash?: string
   currentRoster: MlsConversationMember[]
+  memberJoinedEpochs: Map<string, number>
+  acceptedInvitationEpochs: Map<string, number>
   currentAuthoritySet: MlsAuthoritySet
   currentOwnerSet: MlsOwnerSet
   genesisAuthorizationPolicy: MlsGroupAuthorizationPolicy
@@ -931,6 +933,11 @@ export interface WasmChatClientHandle {
   mlsOwnerChangeHasQuorum(mlsGroupId: Uint8Array): Promise<boolean>
   createMlsOwnerApprovalRequestMessage(
     mlsGroupId: Uint8Array,
+  ): Promise<MlsOutboxEntry | null>
+  createMlsInvitationAcceptanceMessage(
+    mlsGroupId: Uint8Array,
+    invitedEpoch: string,
+    acceptedAtSeconds: string,
   ): Promise<MlsOutboxEntry | null>
   pendingMlsOwnerApprovalRequests(): Promise<PendingMlsOwnerApprovalRequest[]>
   approveMlsOwnerApprovalRequest(

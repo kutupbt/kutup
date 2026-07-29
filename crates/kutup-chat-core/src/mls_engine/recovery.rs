@@ -282,6 +282,16 @@ impl MlsClient {
             last_finalized_height: 0,
             last_finalized_epoch: 1,
             last_block_hash: None,
+            member_joined_epochs: private
+                .roster
+                .iter()
+                .map(|member| (member.address.canonical(), 1))
+                .collect(),
+            accepted_invitation_epochs: private
+                .roster
+                .iter()
+                .map(|member| (member.address.canonical(), 1))
+                .collect(),
             current_roster: private.roster,
             current_authority_set: private.authority_set,
             current_owner_set: private.owner_set,
@@ -909,6 +919,18 @@ impl MlsClient {
             last_finalized_epoch: 1,
             last_block_hash: None,
             current_roster: control.request.members.clone(),
+            member_joined_epochs: control
+                .request
+                .members
+                .iter()
+                .map(|member| (member.address.canonical(), 1))
+                .collect(),
+            accepted_invitation_epochs: control
+                .request
+                .members
+                .iter()
+                .map(|member| (member.address.canonical(), 1))
+                .collect(),
             current_authority_set: plan.new_genesis.authority_set.clone(),
             current_owner_set: current.current_owner_set,
             genesis_authorization_policy: private_control.genesis_authorization_policy.clone(),

@@ -120,6 +120,18 @@ fn register_account(c: &Client, base: &str, email: &str, username: &str) -> Stri
 }
 
 fn setup_admin(c: &Client, base: &str, email: &str, username: &str) -> String {
+    let preflight = json_response(
+        c.get(format!("{base}/api/auth/login/preflight?email={email}"))
+            .send()
+            .unwrap(),
+        "bootstrap admin preflight",
+    );
+    if preflight["kdfSalt"]
+        .as_str()
+        .is_some_and(|salt| !salt.is_empty())
+    {
+        return login(c, base, email);
+    }
     let login = json_response(
         c.post(format!("{base}/api/auth/login"))
             .json(&json!({

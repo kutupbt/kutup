@@ -69,6 +69,8 @@ function group(): LocalMlsConversationRecord {
       isAdmin: true,
       ownerId,
     }],
+    memberJoinedEpochs: new Map([['alice@alpha.example', 0]]),
+    acceptedInvitationEpochs: new Map([['alice@alpha.example', 0]]),
     currentAuthoritySet: {
       sequence: 1,
       authorities: [{

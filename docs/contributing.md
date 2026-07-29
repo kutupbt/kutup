@@ -101,6 +101,7 @@ cargo clippy --all-targets -- -D warnings       # lints (gate)
 cargo fmt --check                               # formatting (gate)
 ./scripts/audit-unified-federation.sh           # no feature-owned federation stack
 ./scripts/test-chat-federation.sh               # isolated two-server federation + outage/restart
+./scripts/dev-chat-federation-up.sh              # leave an MLS-enabled two-server stack running
 ```
 
 The federation harness uses its own Compose project, two tmpfs Postgres
@@ -111,9 +112,17 @@ evidence/retry/audit control plane. It also covers the Drive share lifecycle,
 Chat delivery and durable retry, the global emergency stop, all four admission
 modes and directional domain rules independently for both features, and
 disabled feature capabilities. It tears the topology down on exit and does not
-touch the ordinary development stack. Set
-`KUTUP_FEDERATION_SKIP_BUILD=1` only when reusing an image already built from
-the current server sources.
+touch the ordinary development stack. Set `KUTUP_FEDERATION_SKIP_BUILD=1`
+only when reusing an image already built from the current checkout.
+
+For manual browser testing, use `./scripts/dev-chat-federation-up.sh` instead
+of invoking `docker-compose.chat-federation.yml` directly. The helper starts
+the same real two-server topology, completes the authenticated admin bootstrap,
+and changes both Chat federation policies from their fail-closed allowlist
+default to `open`. It is repeatable while its tmpfs databases remain running.
+The script prints both URLs and the development-only admin credentials. Override
+`KUTUP_FEDERATION_PROJECT`, `KUTUP_FED_A_PORT`, and `KUTUP_FED_B_PORT` to run an
+additional isolated topology.
 
 The intentionally breaking Chat and Drive cutovers have separate up/down
 isolation fixtures. Point `KUTUP_TEST_DB` at a disposable PostgreSQL database;

@@ -422,6 +422,7 @@ impl MlsClient {
         conversation.last_finalized_height = block.height;
         conversation.last_finalized_epoch = block.epoch_after;
         conversation.last_block_hash = Some(expected_hash);
+        advance_member_readiness(conversation, &control.next_roster, block.epoch_after);
         conversation.current_roster = control.next_roster;
         let conversation = conversation.clone();
         ownership::prune_owner_candidates_for_roster(

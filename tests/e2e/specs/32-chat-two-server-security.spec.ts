@@ -311,6 +311,10 @@ test.describe('two-server secure chat', () => {
     const identifiedPackageRequest = identifiedPackageResponse.request().postDataJSON()
     expect((await membershipCommit).ok()).toBe(true)
     await expect(pageA.getByTestId(`chat-group-${conversationId}`)).toBeVisible({ timeout: 90_000 })
+    await expect(pageA.getByTestId('chat-group-delivery-readiness')).toContainText(
+      `Waiting for ${bob}@b.test to accept`,
+    )
+    await expect(pageA.getByRole('button', { name: 'Send' })).toBeDisabled()
 
     // No manual Sync action: the destination server sends only a generic
     // DrainMailbox WebSocket hint after committing the federated Welcome.
@@ -324,6 +328,9 @@ test.describe('two-server secure chat', () => {
     const invitationAcceptanceResponse = await invitationAcceptance
     expect(invitationAcceptanceResponse.ok()).toBe(true)
     await expect(pageB.getByTestId(`chat-group-${conversationId}`)).toBeVisible({ timeout: 90_000 })
+    await expect(pageA.getByTestId('chat-group-delivery-readiness')).toHaveCount(0, {
+      timeout: 90_000,
+    })
 
     // The member-visible security panel must show exact group owner
     // credentials and group-pinned authority keys, then independently verify
@@ -481,6 +488,12 @@ test.describe('two-server secure chat', () => {
     await expect(pageC.getByTestId('chat-group-invitations')).toBeVisible({ timeout: 90_000 })
     await pageC.getByTestId('chat-group-accept').click()
     await expect(pageC.getByTestId(`chat-group-${conversationId}`)).toBeVisible({ timeout: 90_000 })
+    // Charlie was invited by Bob on b.test, so Alice's a.test server does not
+    // receive the plaintext origin-scoped receipt. Alice unlocks only after
+    // processing Charlie's MLS-encrypted, exact-join-epoch acceptance.
+    await expect(pageA.getByTestId('chat-group-delivery-readiness')).toHaveCount(0, {
+      timeout: 90_000,
+    })
 
     await pageA.getByTestId('chat-group-members').click()
     await expect(

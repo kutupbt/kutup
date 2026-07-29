@@ -208,6 +208,11 @@ pub(super) fn validate_local_control_state(record: &LocalMlsConversationRecord) 
     let mut previous = None;
     let mut admins = 0usize;
     let mut owner_ids = BTreeSet::new();
+    let roster_accounts = record
+        .current_roster
+        .iter()
+        .map(|member| member.address.canonical())
+        .collect::<BTreeSet<_>>();
     for member in &record.current_roster {
         member
             .validate()
@@ -226,6 +231,25 @@ pub(super) fn validate_local_control_state(record: &LocalMlsConversationRecord) 
         if let Some(owner_id) = &member.owner_id {
             owner_ids.insert(owner_id.as_str());
         }
+    }
+    if record.member_joined_epochs.len() != roster_accounts.len()
+        || record
+            .member_joined_epochs
+            .iter()
+            .any(|(address, epoch)| {
+                !roster_accounts.contains(address) || *epoch > record.last_finalized_epoch
+            })
+        || record
+            .accepted_invitation_epochs
+            .iter()
+            .any(|(address, epoch)| {
+                !roster_accounts.contains(address)
+                    || record.member_joined_epochs.get(address) != Some(epoch)
+            })
+    {
+        return Err(ChatError::Db(
+            "durable MLS invitation readiness differs from the current roster".into(),
+        ));
     }
     record
         .current_authority_set
@@ -292,6 +316,34 @@ pub(super) fn validate_local_control_state(record: &LocalMlsConversationRecord) 
         }
     }
     Ok(())
+}
+
+pub(super) fn advance_member_readiness(
+    record: &mut LocalMlsConversationRecord,
+    next_roster: &[MlsConversationMemberV1],
+    epoch_after: u64,
+) {
+    let previous = record
+        .current_roster
+        .iter()
+        .map(|member| member.address.canonical())
+        .collect::<BTreeSet<_>>();
+    let next = next_roster
+        .iter()
+        .map(|member| member.address.canonical())
+        .collect::<BTreeSet<_>>();
+    record
+        .member_joined_epochs
+        .retain(|address, _| next.contains(address));
+    record
+        .accepted_invitation_epochs
+        .retain(|address, _| next.contains(address));
+    for address in next.difference(&previous) {
+        record
+            .member_joined_epochs
+            .insert((*address).clone(), epoch_after);
+        record.accepted_invitation_epochs.remove(address);
+    }
 }
 
 fn validate_local_genesis_request(request: &CreateMlsConversationRequestV1) -> Result<()> {

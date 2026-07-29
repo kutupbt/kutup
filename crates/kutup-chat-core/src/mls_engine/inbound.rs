@@ -418,6 +418,7 @@ impl MlsClient {
         conversation.last_finalized_height = block.height;
         conversation.last_finalized_epoch = block.epoch_after;
         conversation.last_block_hash = Some(block_hash);
+        advance_member_readiness(conversation, &private_control.roster, block.epoch_after);
         conversation.current_roster = private_control.roster;
         conversation.current_authority_set = private_control.authority_set;
         conversation.current_owner_set = private_control.owner_set;

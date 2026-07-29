@@ -323,21 +323,35 @@ rejection survive restart.
 New local members are `pending` for at most 30 days. Acceptance activates the
 membership; rejection or expiry marks it rejected and deletes its staged
 membership-control mailbox material. Pending/rejected members cannot authorize
-control changes or publish/use group delivery capabilities. The server records
+control changes or publish/use group delivery capabilities. After installing
+the verified Welcome, the accepting browser publishes its epoch-bound delivery
+capability; only then does the server create an `accepted` readiness receipt.
+The browser then emits a typed MLS-encrypted `invitationAccepted` control bound
+to the exact conversation, incarnation, and join epoch. The server records
 structured accept/reject/expiry audit events.
 
-Rejection and expiry also atomically create canonical
+Capability-backed acceptance, rejection, and expiry create canonical
 `MlsInvitationFeedbackV1`. Same-server feedback is stored directly; remote
-feedback is delivered through a restart-safe outbox and the shared signed
-federation transport. The receiving server accepts it only from the member's
-authenticated home domain and only when its unchanged finalized membership
-delivery proves the exact member, invited epoch, and Welcome. Feedback history
-is append-only, exposed only to active local group administrators, and visible
-in the browser against the exact current roster/incarnation. It is advisory:
-no server may mutate MLS state from feedback, so an administrator must commit
-the member's cryptographic removal. A rejected account never receives a later
-Commit merely because another membership change occurs; an attempted delivery
-to it rejects the whole transition rather than silently restoring access.
+feedback is delivered only to the invitation-origin server through a
+restart-safe outbox and the shared signed federation transport. The receiving
+server accepts it only from the member's authenticated home domain and only
+when its unchanged finalized membership delivery proves the exact member,
+invited epoch, and Welcome. It is never broadcast in plaintext to unrelated
+participant servers.
+
+The MLS-encrypted acceptance control supplies the same readiness fact to group
+clients without expanding server-visible roster metadata. Each client persists
+the member's join epoch and accepted epoch together; removal deletes both, and
+re-addition requires a new matching control. Feedback history is append-only,
+exposed only to active local group administrators, and visible in the browser
+against the exact current roster/incarnation. Until every later roster addition
+has a matching server or encrypted accepted receipt, the administrator composer
+remains disabled so an all-roster send cannot partially deliver around a
+pending invitee. Feedback is advisory: no server may mutate MLS state from it,
+so an administrator must commit the member's cryptographic removal. A rejected
+account never receives a later Commit merely because another membership change
+occurs; an attempted delivery to it rejects the whole transition rather than
+silently restoring access.
 
 The dedicated authenticated MLS mailbox exposes bounded cursor pages and
 idempotent UUID acknowledgements. Membership-control rows bind the exact

@@ -1,8 +1,10 @@
-//! Durable, federation-authenticated feedback for rejected MLS invitations.
+//! Durable, federation-authenticated MLS invitation readiness and refusal.
 //!
 //! Feedback is advisory and identified: it is visible only to active local
-//! administrators who already know the group roster. It never mutates the MLS
-//! roster; an administrator must commit the cryptographic removal.
+//! administrators who already know the group roster. An accepted receipt is
+//! recorded only after the recipient publishes its epoch delivery capability.
+//! Feedback never mutates the MLS roster; an administrator must commit the
+//! cryptographic removal of a rejected member.
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -10,8 +12,9 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use kutup_chat_proto::{
-    MlsInvitationFeedbackDecisionV1, MlsInvitationFeedbackV1, MlsMembershipDeliveryV1,
-    MlsMembershipEnvelopeKindV1,
+    AccountAddress, MlsDeliveryCapabilityKindV1, MlsInvitationFeedbackDecisionV1,
+    MlsInvitationFeedbackV1, MlsMembershipDeliveryV1, MlsMembershipEnvelopeKindV1,
+    PublishMlsDeliveryCapabilityV1, MLS_INVITATION_FEEDBACK_VERSION,
 };
 use kutup_federation_proto::FederationFeature;
 use reqwest::Method;
@@ -20,6 +23,7 @@ use sqlx::{Postgres, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use super::notify_mls_administrators;
 use super::{
     active_policy, authenticated_remote_policy, signed_federation_error, signed_federation_json,
 };
@@ -31,6 +35,115 @@ use crate::telemetry;
 use crate::AppState;
 
 const FEEDBACK_CLOCK_SKEW_SECONDS: i64 = 300;
+
+pub(super) async fn record_ready_invitation_feedback(
+    state: &AppState,
+    user_id: Uuid,
+    request: &PublishMlsDeliveryCapabilityV1,
+) -> AppResult<()> {
+    if request.capability_kind != MlsDeliveryCapabilityKindV1::Group {
+        return Ok(());
+    }
+    let local_domain = state
+        .federation
+        .as_ref()
+        .ok_or_else(|| AppError::not_found("MLS federation unavailable"))?
+        .server_name()
+        .to_owned();
+    let mut tx = state.pool.begin().await?;
+    let row: Option<(String, Option<String>, i64)> = sqlx::query_as(
+        "SELECT u.username, m.invited_by_domain, m.joined_epoch
+         FROM chat_mls_local_members m
+         JOIN users u ON u.id = m.user_id
+         WHERE m.conversation_id = $1 AND m.incarnation = $2
+           AND m.user_id = $3 AND m.membership_status = 'active'
+           AND m.removed_epoch IS NULL",
+    )
+    .bind(request.conversation_id)
+    .bind(request.incarnation as i64)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((username, Some(invited_by_domain), invited_epoch)) = row else {
+        tx.commit().await?;
+        return Ok(());
+    };
+    let member: AccountAddress = format!("{username}@{local_domain}")
+        .parse()
+        .map_err(|_| AppError::internal("stored MLS invitation account is invalid"))?;
+    let exists = invitation_feedback_exists(
+        &mut tx,
+        &local_domain,
+        &invited_by_domain,
+        request.conversation_id,
+        request.incarnation,
+        &member,
+        invited_epoch,
+    )
+    .await?;
+    if exists {
+        tx.commit().await?;
+        return Ok(());
+    }
+    let feedback = MlsInvitationFeedbackV1 {
+        protocol_version: MLS_INVITATION_FEEDBACK_VERSION,
+        conversation_id: request.conversation_id,
+        incarnation: request.incarnation,
+        member,
+        invited_epoch: u64::try_from(invited_epoch)
+            .map_err(|_| AppError::internal("stored MLS invitation epoch is invalid"))?,
+        decision: MlsInvitationFeedbackDecisionV1::Accepted,
+        decided_at: OffsetDateTime::now_utc().unix_timestamp(),
+    };
+    persist_invitation_feedback(&mut tx, &local_domain, &invited_by_domain, &feedback).await?;
+    tx.commit().await?;
+    notify_mls_administrators(state, request.conversation_id).await;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn invitation_feedback_exists(
+    tx: &mut Transaction<'_, Postgres>,
+    local_domain: &str,
+    destination: &str,
+    conversation_id: Uuid,
+    incarnation: u64,
+    member: &AccountAddress,
+    invited_epoch: i64,
+) -> AppResult<bool> {
+    let exists: bool = if destination == local_domain {
+        sqlx::query_scalar(
+            "SELECT EXISTS(
+                 SELECT 1 FROM chat_mls_invitation_feedback
+                 WHERE conversation_id = $1 AND incarnation = $2
+                   AND member_address = $3 AND invited_epoch = $4
+             )",
+        )
+        .bind(conversation_id)
+        .bind(incarnation as i64)
+        .bind(member.canonical())
+        .bind(invited_epoch)
+        .fetch_one(&mut **tx)
+        .await?
+    } else {
+        sqlx::query_scalar(
+            "SELECT EXISTS(
+                 SELECT 1 FROM chat_mls_invitation_feedback_outbox
+                 WHERE destination = $1 AND conversation_id = $2
+                   AND incarnation = $3 AND member_address = $4
+                   AND invited_epoch = $5
+             )",
+        )
+        .bind(destination)
+        .bind(conversation_id)
+        .bind(incarnation as i64)
+        .bind(member.canonical())
+        .bind(invited_epoch)
+        .fetch_one(&mut **tx)
+        .await?
+    };
+    Ok(exists)
+}
 
 pub(super) async fn persist_invitation_feedback(
     tx: &mut Transaction<'_, Postgres>,
@@ -185,6 +298,7 @@ pub(crate) async fn federated_record_invitation_feedback(
     match verify_and_store_federated_feedback(&state, authenticated.origin(), &feedback).await {
         Ok(digest) => {
             telemetry::mls_control_event("invitation_feedback_receive", "accepted");
+            notify_mls_administrators(&state, feedback.conversation_id).await;
             signed_federation_json(
                 federation,
                 &authenticated,
@@ -270,6 +384,7 @@ async fn insert_feedback(
     value: &Value,
 ) -> AppResult<()> {
     let decision = match feedback.decision {
+        MlsInvitationFeedbackDecisionV1::Accepted => "accepted",
         MlsInvitationFeedbackDecisionV1::Rejected => "rejected",
         MlsInvitationFeedbackDecisionV1::Expired => "expired",
     };

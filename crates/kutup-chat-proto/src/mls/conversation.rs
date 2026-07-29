@@ -370,13 +370,52 @@ impl MlsOwnerCandidateV1 {
     }
 }
 
+/// MLS-authenticated proof that an invited member installed its Welcome and
+/// published the anonymous-delivery capability for that exact join epoch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsInvitationAcceptanceV1 {
+    pub protocol_version: u16,
+    pub conversation_id: Uuid,
+    pub incarnation: u64,
+    /// Exact MLS epoch at which this account was added. Binding the receipt to
+    /// the join epoch prevents an old acceptance from authorizing a later
+    /// remove-and-readd cycle.
+    pub invited_epoch: u64,
+    pub accepted_at: i64,
+}
+
+impl MlsInvitationAcceptanceV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.protocol_version != MLS_PROTOCOL_VERSION
+            || self.conversation_id.is_nil()
+            || self.incarnation == 0
+            || self.invited_epoch == 0
+            || self.accepted_at < 0
+        {
+            return Err("MLS invitation acceptance has invalid metadata".into());
+        }
+        Ok(())
+    }
+}
+
 /// Typed body carried by `ChatContent.kind == groupControl`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
 pub enum MlsGroupControlBodyV1 {
-    OwnerCandidate { candidate: MlsOwnerCandidateV1 },
-    OwnerApprovalRequest { request: MlsOwnerApprovalRequestV1 },
-    OwnerApproval { approval: MlsOwnerApprovalV1 },
+    OwnerCandidate {
+        candidate: MlsOwnerCandidateV1,
+    },
+    OwnerApprovalRequest {
+        request: MlsOwnerApprovalRequestV1,
+    },
+    OwnerApproval {
+        approval: MlsOwnerApprovalV1,
+    },
+    InvitationAccepted {
+        acceptance: MlsInvitationAcceptanceV1,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -935,13 +974,16 @@ pub struct RespondMlsInvitationResponseV1 {
 }
 
 /// A destination server's durable, identified report that one of its local
-/// accounts rejected or allowed an MLS invitation to expire. The report is
-/// federation-authenticated and advisory: only an MLS administrator can
-/// commit the member's cryptographic removal.
+/// accounts accepted, rejected, or allowed an MLS invitation to expire. The
+/// report is federation-authenticated and advisory: acceptance is emitted only
+/// after the recipient has installed the Welcome and published its delivery
+/// capability, while only an MLS administrator can commit a rejected member's
+/// cryptographic removal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum MlsInvitationFeedbackDecisionV1 {
+    Accepted,
     Rejected,
     Expired,
 }
