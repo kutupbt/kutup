@@ -24,6 +24,54 @@ const recoveryGroupBytes = new Uint8Array(32).fill(6)
 const recoveryGroupId = btoa(String.fromCharCode(...recoveryGroupBytes))
 const recoveryDigest = 'bd'.repeat(32)
 
+function verifiedPolicyDetails(domain: string) {
+  const authority = pendingGenesis().currentAuthoritySet.authorities.find(
+    candidate => candidate.domain === domain,
+  )
+  const keyId = authority?.keyId ?? '33'.repeat(32)
+  const publicKey = authority?.publicKey
+    ?? btoa(String.fromCharCode(...new Uint8Array(32).fill(3)))
+  return {
+    domain,
+    policies: [{
+      sequence: 1,
+      policyHash: '44'.repeat(32),
+      payloadDigest: '55'.repeat(32),
+      issuedAt: 1_700_000_000,
+      federationIdentityGeneration: 0,
+      federationIdentityKeyId: '66'.repeat(32),
+      federationIdentityPublicKey:
+        btoa(String.fromCharCode(...new Uint8Array(32).fill(6))),
+      policy: {
+        policyVersion: 1,
+        canonicalDomain: domain,
+        suite: 2,
+        anonymousDeliverySuite: 1,
+        controlSigningKeyId: keyId,
+        controlSigningPublicKey: publicKey,
+        acceptsGroupOrdering: true,
+        maximumGroupMembers: 1000,
+        maximumAuthorities: 64,
+        maximumControlPayloadBytes: 1024 * 1024,
+        pendingMessageRequests: {
+          maximumMessages: 32,
+          maximumCiphertextBytes: 1024 * 1024,
+          expirySeconds: 30 * 24 * 60 * 60,
+        },
+        abuseLimits: {
+          anonymousAttemptsPerIpMinute: 60,
+          capabilityBundleRequestsPerMinute: 30,
+          sealedSendsPerCapabilityMinute: 120,
+          sealedSendsPerCapabilityDay: 10_000,
+          federatedSealedSendsPerOriginMinute: 600,
+          maximumEnvelopesPerRequest: 32,
+          maximumRequestBytes: 1024 * 1024,
+        },
+      },
+    }],
+  }
+}
+
 function pendingGenesis(): LocalMlsConversationRecord {
   return {
     request: {
@@ -514,6 +562,9 @@ function harness(
     fetchVerifiedMlsOrderingPolicy: vi.fn().mockImplementation(async (domain: string) => ({
       canonicalDomain: domain,
     })),
+    fetchVerifiedMlsOrderingPolicyDetails: vi.fn().mockImplementation(
+      async (domain: string) => verifiedPolicyDetails(domain),
+    ),
     prepareMlsGroupGenesis: vi.fn().mockResolvedValue({
       group: { mlsGroupId: [...genesisGroupBytes], epoch: 0 },
       conversation: pendingGenesis(),
@@ -895,6 +946,62 @@ afterEach(() => {
 })
 
 describe('MlsConversationService', () => {
+  it('returns only independently verified authority details and compares exact group pins', async () => {
+    const active = activeGenesis()
+    active.currentAuthoritySet.authorities.push({
+      domain: 'beta.example',
+      keyId: '77'.repeat(32),
+      publicKey: btoa(String.fromCharCode(...new Uint8Array(32).fill(7))),
+    })
+    active.currentAuthoritySet.requiredQuorum = 2
+    const { client, service } = harness(null, [active])
+    client.fetchVerifiedMlsOrderingPolicyDetails = vi.fn()
+      .mockResolvedValueOnce(verifiedPolicyDetails('alpha.example'))
+      .mockResolvedValueOnce({
+        ...verifiedPolicyDetails('beta.example'),
+        policies: [{
+          ...verifiedPolicyDetails('beta.example').policies[0],
+          policy: {
+            ...verifiedPolicyDetails('beta.example').policies[0].policy,
+            controlSigningKeyId: '88'.repeat(32),
+          },
+        }],
+      })
+
+    await expect(service.authorityPolicyDetails(conversationId)).resolves.toMatchObject([
+      {
+        domain: 'alpha.example',
+        currentMatchesGroupPin: true,
+        unavailable: false,
+      },
+      {
+        domain: 'beta.example',
+        currentMatchesGroupPin: false,
+        unavailable: false,
+      },
+    ])
+    expect(client.fetchVerifiedMlsOrderingPolicyDetails).toHaveBeenNthCalledWith(
+      1,
+      'alpha.example',
+    )
+    expect(client.fetchVerifiedMlsOrderingPolicyDetails).toHaveBeenNthCalledWith(
+      2,
+      'beta.example',
+    )
+  })
+
+  it('keeps exact group pins visible when live authority evidence is unavailable', async () => {
+    const { client, service } = harness(null, [activeGenesis()])
+    client.fetchVerifiedMlsOrderingPolicyDetails = vi.fn()
+      .mockRejectedValue(new Error('offline'))
+
+    await expect(service.authorityPolicyDetails(conversationId)).resolves.toEqual([{
+      domain: 'alpha.example',
+      currentMatchesGroupPin: false,
+      unavailable: true,
+    }])
+  })
+
   it('creates from independently verified authority policies and activates exact genesis', async () => {
     vi.stubGlobal('crypto', {
       randomUUID: () => conversationId,

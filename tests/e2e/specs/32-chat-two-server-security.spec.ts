@@ -271,6 +271,16 @@ test.describe('two-server secure chat', () => {
     const genesis = await genesisResponse
     expect(genesis.ok()).toBe(true)
     const { conversationId } = await genesis.json() as { conversationId: string }
+    const genesisRequest = genesis.request().postDataJSON() as {
+      genesis: {
+        authoritySet: {
+          authorities: Array<{ domain: string; keyId: string; publicKey: string }>
+        }
+        ownerSet: {
+          owners: Array<{ ownerId: string; publicKey: string }>
+        }
+      }
+    }
     expect(conversationId).toMatch(/^[0-9a-f-]{36}$/)
     const identifiedPackageResponse = await identifiedPackages
     expect(identifiedPackageResponse.ok()).toBe(true)
@@ -290,6 +300,91 @@ test.describe('two-server secure chat', () => {
     const invitationAcceptanceResponse = await invitationAcceptance
     expect(invitationAcceptanceResponse.ok()).toBe(true)
     await expect(pageB.getByTestId(`chat-group-${conversationId}`)).toBeVisible({ timeout: 90_000 })
+
+    // The member-visible security panel must show exact group owner
+    // credentials and group-pinned authority keys, then independently verify
+    // the complete federation identity/policy history before showing live
+    // policy and identity fingerprints. Assertions compare the UI against the
+    // signed genesis and actual two-server policy responses, not fixtures.
+    const policyResponseFor = (domain: string) => pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'GET'
+        && path === `/api/chat/mls/domains/${domain}/policy`
+        && response.ok()
+    })
+    const aPolicyResponse = policyResponseFor('a.test')
+    const bPolicyResponse = policyResponseFor('b.test')
+    await pageA.getByTestId('chat-group-members').click()
+    const [aPolicyHistory, bPolicyHistory] = await Promise.all([
+      aPolicyResponse.then(response => response.json()),
+      bPolicyResponse.then(response => response.json()),
+    ]) as Array<{
+      identities: Array<{
+        sequence: number
+        key: { keyId: string; publicKey: string }
+      }>
+      policies: Array<{
+        sequence: number
+        federationIdentityGeneration: number
+        payload: string
+      }>
+    }>
+    const assertExactAuthoritySecurity = async (
+      domain: string,
+      history: typeof aPolicyHistory,
+    ) => {
+      const envelope = history.policies.at(-1)
+      expect(envelope).toBeDefined()
+      const policy = JSON.parse(
+        Buffer.from(envelope!.payload, 'base64').toString('utf8'),
+      ) as {
+        controlSigningKeyId: string
+        controlSigningPublicKey: string
+        maximumGroupMembers: number
+      }
+      const identity = history.identities.find(
+        candidate => candidate.sequence === envelope!.federationIdentityGeneration,
+      )
+      expect(identity).toBeDefined()
+      const genesisAuthority = genesisRequest.genesis.authoritySet.authorities.find(
+        candidate => candidate.domain === domain,
+      )
+      expect(genesisAuthority).toBeDefined()
+      expect(policy.controlSigningKeyId).toBe(genesisAuthority!.keyId)
+      expect(policy.controlSigningPublicKey).toBe(genesisAuthority!.publicKey)
+      await expect(
+        pageA.getByTestId(`chat-group-authority-policy-match-${domain}`),
+      ).toBeVisible({ timeout: 90_000 })
+      await expect(
+        pageA.getByTestId(`chat-group-authority-pin-${domain}`),
+      ).toContainText(genesisAuthority!.keyId)
+      const exactPolicy = pageA.getByTestId(`chat-group-authority-policy-${domain}`)
+      await exactPolicy.getByText('Exact authenticated service policy').click()
+      await expect(
+        pageA.getByTestId(`chat-group-authority-policy-fingerprint-${domain}`),
+      ).toContainText(policy.controlSigningKeyId)
+      await expect(
+        pageA.getByTestId(`chat-group-authority-identity-fingerprint-${domain}`),
+      ).toContainText(identity!.key.keyId)
+      await expect(
+        pageA.getByTestId(`chat-group-authority-policy-sequence-${domain}`),
+      ).toContainText(String(envelope!.sequence))
+      await expect(
+        pageA.getByTestId(`chat-group-authority-${domain}`),
+      ).toContainText(String(policy.maximumGroupMembers))
+      await exactPolicy.getByText('Exact authenticated service policy').click()
+    }
+    const genesisOwner = genesisRequest.genesis.ownerSet.owners[0]
+    expect(genesisOwner).toBeDefined()
+    await expect(
+      pageA.getByTestId(`chat-group-owner-fingerprint-${alice}@a.test`),
+    ).toContainText(genesisOwner.ownerId)
+    await expect(
+      pageA.getByTestId(`chat-group-owner-credential-${alice}@a.test`),
+    ).toContainText(genesisOwner.publicKey)
+    await assertExactAuthoritySecurity('a.test', aPolicyHistory)
+    await assertExactAuthoritySecurity('b.test', bPolicyHistory)
+    await pageA.keyboard.press('Escape')
 
     // An active member may claim only its own packages for linked-device leaf
     // synchronization. Membership alone must not authorize cross-account

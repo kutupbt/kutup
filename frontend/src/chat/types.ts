@@ -306,6 +306,57 @@ export interface MlsOwnerSet {
   requiredQuorum: number
 }
 
+export interface MlsOrderingServicePolicy {
+  policyVersion: number
+  canonicalDomain: string
+  suite: number
+  anonymousDeliverySuite: number
+  controlSigningKeyId: string
+  controlSigningPublicKey: string
+  acceptsGroupOrdering: boolean
+  maximumGroupMembers: number
+  maximumAuthorities: number
+  maximumControlPayloadBytes: number
+  pendingMessageRequests: {
+    maximumMessages: number
+    maximumCiphertextBytes: number
+    expirySeconds: number
+  }
+  abuseLimits: {
+    anonymousAttemptsPerIpMinute: number
+    capabilityBundleRequestsPerMinute: number
+    sealedSendsPerCapabilityMinute: number
+    sealedSendsPerCapabilityDay: number
+    federatedSealedSendsPerOriginMinute: number
+    maximumEnvelopesPerRequest: number
+    maximumRequestBytes: number
+  }
+}
+
+export interface VerifiedMlsOrderingPolicyEntry {
+  sequence: number
+  previousPolicyHash?: string
+  policyHash: string
+  payloadDigest: string
+  issuedAt: number
+  federationIdentityGeneration: number
+  federationIdentityKeyId: string
+  federationIdentityPublicKey: string
+  policy: MlsOrderingServicePolicy
+}
+
+export interface VerifiedMlsOrderingPolicyHistory {
+  domain: string
+  policies: VerifiedMlsOrderingPolicyEntry[]
+}
+
+export interface MlsAuthorityPolicyInspection {
+  domain: string
+  history?: VerifiedMlsOrderingPolicyHistory
+  currentMatchesGroupPin: boolean
+  unavailable: boolean
+}
+
 export interface MlsGroupAuthorizationPolicy {
   policyVersion: 1
   sequence: number
@@ -979,6 +1030,9 @@ export interface WasmChatClientHandle {
     claimedSender: ClaimedMlsCredential,
   ): Promise<VerifiedMlsCredential>
   fetchVerifiedMlsOrderingPolicy(domain: string): Promise<unknown>
+  fetchVerifiedMlsOrderingPolicyDetails(
+    domain: string,
+  ): Promise<VerifiedMlsOrderingPolicyHistory>
   fetchVerifiedMlsKeyPackages(
     recipient: AccountAddress,
     capability: Uint8Array,

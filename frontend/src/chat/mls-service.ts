@@ -14,6 +14,7 @@ import type {
   JoinedMlsConversation,
   LocalMlsConversationRecord,
   LocalMlsGroupState,
+  MlsAuthorityPolicyInspection,
   MlsConversationDevice,
   MlsConversationMember,
   MlsGroupAuthorizationPolicy,
@@ -150,6 +151,52 @@ export class MlsConversationService {
 
   async conversations(): Promise<LocalMlsConversationRecord[]> {
     return this.withCryptoLock(() => this.client.localMlsConversations())
+  }
+
+  /**
+   * Re-fetch every current authority's complete policy history through the
+   * shared verifier for human inspection. A failure remains visible per
+   * authority; it never substitutes server-provided trust labels or stale
+   * JavaScript-parsed policy data.
+   */
+  async authorityPolicyDetails(
+    conversationId: string,
+  ): Promise<MlsAuthorityPolicyInspection[]> {
+    const conversation = (await this.conversations()).find(
+      candidate => candidate.request.genesis.conversationId === conversationId,
+    )
+    if (!conversation) throw new Error('MLS conversation is not available')
+
+    const inspections: MlsAuthorityPolicyInspection[] = []
+    for (const authority of conversation.currentAuthoritySet.authorities) {
+      try {
+        const history = await this.withCryptoLock(() =>
+          this.client.fetchVerifiedMlsOrderingPolicyDetails(authority.domain))
+        const current = history.policies.at(-1)
+        if (
+          history.domain !== authority.domain
+          || !current
+          || current.policy.canonicalDomain !== authority.domain
+        ) {
+          throw new Error('verified MLS policy details have the wrong authority domain')
+        }
+        inspections.push({
+          domain: authority.domain,
+          history,
+          currentMatchesGroupPin:
+            current.policy.controlSigningKeyId === authority.keyId
+            && current.policy.controlSigningPublicKey === authority.publicKey,
+          unavailable: false,
+        })
+      } catch {
+        inspections.push({
+          domain: authority.domain,
+          currentMatchesGroupPin: false,
+          unavailable: true,
+        })
+      }
+    }
+    return inspections
   }
 
   async addMember(

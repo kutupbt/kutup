@@ -26,9 +26,14 @@ visibility after restart. Owner-approved incarnation recovery is likewise
 complete: the two-server gate proves manual quorum across requester/approver
 reloads, authenticated immutable evidence retrieval, recipient-side Welcome
 and manifest verification before durable join, post-recovery messaging, and
-recovered-state persistence after reload. Advertisement remains gated on
-the exact authority-policy/fingerprint browser UI and an explicit capability
-advertisement change. The adversarial/scale gate now passes with an actual
+recovered-state persistence after reload. The member-visible security panel
+now renders every group-scoped owner credential, exact group-pinned control
+key, independently verified federation-identity fingerprint, current typed
+ordering policy, and authenticated policy-hash history. Its two-server gate
+compares the displayed values with the signed genesis and actual policy
+responses from both authorities. All pre-advertisement implementation gates
+are complete; advertisement remains off until a separate explicit capability
+activation change. The adversarial/scale gate passes with an actual
 256-member OpenMLS group, signed fork and malformed-bootstrap cases, raw
 two-server replay/enumeration/capability-rotation probes, and a destination-log
 privacy assertion.
@@ -521,7 +526,7 @@ Do not advertise MLS until every item is checked. Private
 authorization/cryptographic owner actions have protocol, browser
 orchestration, explicit approval UI, and two-server coverage.
 
-- [ ] group owner and exact authority-policy/fingerprint UI;
+- [x] group owner and exact authority-policy/fingerprint UI;
 - [x] native Rust, WASM, web, Playwright, PostgreSQL migration, Docker Compose,
   witness/auditor, and two-server federation suites;
 - [x] adversarial tests for authority rollback/fork, invalid bootstrap pages,
@@ -551,3 +556,7 @@ claim:
   federation-transaction schemas, MLS telemetry accepts only fixed
   non-identifier dimensions, and `scripts/test-chat-federation.sh` fails if the
   destination backend logs the remote MLS sender or application plaintext.
+- the group browser scenario compares full owner credential fingerprints and
+  public keys with the signed genesis, and compares both displayed authority
+  pins, federation-identity fingerprints, policy sequences, control keys, and
+  limits with the real authenticated `a.test`/`b.test` policy histories.

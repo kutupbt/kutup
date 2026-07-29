@@ -41,6 +41,7 @@ import { useAppSelector } from '@/store'
 import api from '@/api/client'
 import { ChatService, ChatServiceError } from '@/chat/service'
 import { MlsSendError } from '@/chat/mls-service'
+import { MlsGroupSecurityDetails } from '@/chat/MlsGroupSecurityDetails'
 import { isSupportedChat, useChatCapabilities } from '@/chat/capabilities'
 import {
   conversationKey,
@@ -59,6 +60,7 @@ import type {
   ConversationId,
   InboundAttention,
   LocalMlsConversationRecord,
+  MlsAuthorityPolicyInspection,
   MlsConversationMember,
   MlsInvitationFeedback,
   PendingMlsOwnerApprovalRequest,
@@ -140,6 +142,9 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [groupMembersOpen, setGroupMembersOpen] = useState(false)
   const [groupMember, setGroupMember] = useState('')
   const [groupAuthorityDomains, setGroupAuthorityDomains] = useState('')
+  const [groupAuthorityPolicies, setGroupAuthorityPolicies] =
+    useState<MlsAuthorityPolicyInspection[]>([])
+  const [groupAuthorityPoliciesLoading, setGroupAuthorityPoliciesLoading] = useState(false)
   const [groupMaximumPlaintext, setGroupMaximumPlaintext] = useState('')
   const [error, setError] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
@@ -330,6 +335,35 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   }, [
     selectedGroup?.request.genesis.conversationId,
     selectedGroup?.currentCryptographicPolicy.sequence,
+  ])
+  useEffect(() => {
+    if (!groupMembersOpen || !service || !selectedGroup) {
+      setGroupAuthorityPolicies([])
+      setGroupAuthorityPoliciesLoading(false)
+      return
+    }
+    let cancelled = false
+    setGroupAuthorityPolicies([])
+    setGroupAuthorityPoliciesLoading(true)
+    void service
+      .groupAuthorityPolicyDetails(selectedGroup.request.genesis.conversationId)
+      .then(policies => {
+        if (!cancelled) setGroupAuthorityPolicies(policies)
+      })
+      .catch(() => {
+        if (!cancelled) setGroupAuthorityPolicies([])
+      })
+      .finally(() => {
+        if (!cancelled) setGroupAuthorityPoliciesLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    groupMembersOpen,
+    selectedGroup?.request.genesis.conversationId,
+    selectedGroup?.currentAuthoritySet.sequence,
+    service,
   ])
   const selectedLabel = selectedAddress ??
     (selectedConversation?.kind === 'group'
@@ -1117,7 +1151,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     <Users className="h-4 w-4" />
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="max-w-lg">
+                <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
                   <DialogHeader>
                     <DialogTitle>MLS group members</DialogTitle>
                     <DialogDescription>
@@ -1181,7 +1215,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                       </div>
                     </div>
                   )}
-                  <div className="grid max-h-[60vh] gap-2 overflow-y-auto">
+                  <div className="grid gap-2">
                     {selectedGroup.currentRoster.map(member => {
                       const address = canonicalAccountAddress(member.address)
                       const isSelf = address === selfAddress
@@ -1259,41 +1293,36 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                       )
                     })}
                   </div>
-                  <div className="rounded-lg border p-3" data-testid="chat-group-authorities">
-                    <p className="text-sm font-medium">Ordering authorities</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Sequence {selectedGroup.currentAuthoritySet.sequence} · quorum {selectedGroup.currentAuthoritySet.requiredQuorum}/{selectedGroup.currentAuthoritySet.authorities.length}
-                    </p>
-                    <ul className="mt-2 grid gap-1 text-xs text-muted-foreground">
-                      {selectedGroup.currentAuthoritySet.authorities.map(authority => (
-                        <li key={authority.domain} data-testid={`chat-group-authority-${authority.domain}`}>
-                          {authority.domain}
-                        </li>
-                      ))}
-                    </ul>
-                    {canManageSelectedGroupAuthorities && (
-                      <form className="mt-3 flex gap-2" onSubmit={updateSelectedGroupAuthorities}>
-                        <Input
-                          value={groupAuthorityDomains}
-                          onChange={event => setGroupAuthorityDomains(event.target.value)}
-                          placeholder="one.example, two.example"
-                          aria-label="MLS ordering authority domains"
-                          data-testid="chat-group-authority-domains"
-                          autoCapitalize="none"
-                          autoCorrect="off"
-                        />
-                        <Button
-                          type="submit"
-                          size="sm"
-                          disabled={groupUpdating || groupAuthorityDomains.trim().length === 0}
-                          data-testid="chat-group-save-authorities"
-                        >
-                          {groupUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                          Update
-                        </Button>
-                      </form>
-                    )}
-                  </div>
+                  <MlsGroupSecurityDetails
+                    group={selectedGroup}
+                    authorityPolicies={groupAuthorityPolicies}
+                    loading={groupAuthorityPoliciesLoading}
+                  />
+                  {canManageSelectedGroupAuthorities && (
+                    <form
+                      className="flex gap-2 rounded-lg border p-3"
+                      onSubmit={updateSelectedGroupAuthorities}
+                    >
+                      <Input
+                        value={groupAuthorityDomains}
+                        onChange={event => setGroupAuthorityDomains(event.target.value)}
+                        placeholder="one.example, two.example"
+                        aria-label="MLS ordering authority domains"
+                        data-testid="chat-group-authority-domains"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                      />
+                      <Button
+                        type="submit"
+                        size="sm"
+                        disabled={groupUpdating || groupAuthorityDomains.trim().length === 0}
+                        data-testid="chat-group-save-authorities"
+                      >
+                        {groupUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        Update
+                      </Button>
+                    </form>
+                  )}
                   <div className="rounded-lg border p-3" data-testid="chat-group-policies">
                     <p className="text-sm font-medium">Private group policy</p>
                     <p className="mt-1 text-xs text-muted-foreground">

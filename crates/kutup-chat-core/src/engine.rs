@@ -982,6 +982,18 @@ impl Engine {
         crate::verify_mls_ordering_policy_history(&history, domain)
     }
 
+    /// Fetch and independently authenticate the complete ordering-policy
+    /// history, retaining exact public fingerprints for human inspection.
+    pub async fn fetch_verified_mls_ordering_policy_details(
+        &self,
+        domain: &str,
+    ) -> Result<crate::VerifiedMlsOrderingPolicyHistory> {
+        let history = Rc::clone(&self.transport)
+            .fetch_mls_ordering_policy(domain)
+            .await?;
+        crate::verify_mls_ordering_policy_history_details(&history, domain)
+    }
+
     /// Fetch capability-gated KeyPackages without authenticated browser
     /// context, then bind every package credential to a complete,
     /// transparency-verified current device manifest.

@@ -15,6 +15,7 @@ import type {
   TransparencyMonitorStatus,
   LocalMlsConversationRecord,
   MlsInvitationFeedback,
+  MlsAuthorityPolicyInspection,
   PendingMlsOwnerApprovalRequest,
   PendingMlsInvitation,
   WasmChatClientHandle,
@@ -278,6 +279,12 @@ export class ChatService {
 
   async groups(): Promise<LocalMlsConversationRecord[]> {
     return this.requireMls().conversations()
+  }
+
+  async groupAuthorityPolicyDetails(
+    conversationId: string,
+  ): Promise<MlsAuthorityPolicyInspection[]> {
+    return this.requireMls().authorityPolicyDetails(conversationId)
   }
 
   async groupInvitations(): Promise<PendingMlsInvitation[]> {

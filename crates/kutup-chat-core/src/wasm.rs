@@ -1638,6 +1638,19 @@ impl WasmChatClient {
         to_output(&policy)
     }
 
+    #[wasm_bindgen(js_name = fetchVerifiedMlsOrderingPolicyDetails)]
+    pub async fn fetch_verified_mls_ordering_policy_details(
+        &self,
+        domain: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let history = self
+            .engine
+            .fetch_verified_mls_ordering_policy_details(&domain)
+            .await
+            .map_err(chat_error)?;
+        to_output(&history)
+    }
+
     #[wasm_bindgen(js_name = fetchVerifiedMlsKeyPackages)]
     pub async fn fetch_verified_mls_key_packages(
         &mut self,
