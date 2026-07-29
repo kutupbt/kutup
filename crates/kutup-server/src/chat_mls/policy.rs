@@ -98,6 +98,22 @@ pub(super) async fn active_policy(state: &AppState) -> AppResult<MlsOrderingServ
     Ok(policy)
 }
 
+/// Return the authenticated local MLS policy only while the shared federation
+/// control plane publicly enables Chat. This is the single activation gate
+/// used by both the public browser capability and administrative status.
+pub(crate) async fn advertised_policy(
+    state: &AppState,
+    chat_publicly_enabled: bool,
+) -> AppResult<Option<MlsOrderingServicePolicyV1>> {
+    if !chat_publicly_enabled || state.mls_ordering.is_none() {
+        return Ok(None);
+    }
+    if state.federation.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(active_policy(state).await?))
+}
+
 pub(super) async fn authenticated_remote_policy(
     state: &AppState,
     domain: &str,

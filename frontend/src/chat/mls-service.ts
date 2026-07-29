@@ -96,11 +96,12 @@ interface MlsKeyPackageCount {
 }
 
 /**
- * Unadvertised browser coordinator for the MLS-specific lifecycle.
+ * Browser coordinator for the MLS-specific lifecycle.
  *
- * It deliberately stays separate from ChatService until the authenticated
- * participant-history verifier and group UI are complete. All OpenMLS state
- * transitions run under the same cross-tab crypto lock as the 1:1 engine.
+ * It remains a focused component behind ChatService so MLS workflows and
+ * direct-message workflows keep separate orchestration boundaries. All
+ * OpenMLS state transitions run under the same cross-tab crypto lock as the
+ * 1:1 engine.
  */
 export class MlsConversationService {
   private readonly publishedCapabilityEpochs = new Map<string, string>()

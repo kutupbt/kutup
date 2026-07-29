@@ -6,17 +6,24 @@ proposal. RFC 9420 MLS 1.0 is the V1 cryptographic protocol; post-quantum MLS
 remains a later suite upgrade after the relevant IETF work and interoperable
 library support stabilize.
 
-The feature is intentionally **not advertised yet**. Protocol types, durable
-storage, authenticated federation routes, OpenMLS client state, WASM bindings,
-anonymous delivery, authority catch-up, participant membership transitions,
-identified invitation decisions, federation-authenticated rejection/expiry
-feedback, routine administrator changes, browser group management and
-messaging, privacy-bounded telemetry, and admin inspection routes exist. The
-live browser gate covers creation, cross-server invitation, rejection feedback
-and manual cryptographic removal, promotion, administrator-authored add/remove,
-anonymous bidirectional messages, and reload persistence. Owner-set changes use
-durable MLS-encrypted manual
-approval requests and responses with explicit browser approve/reject controls;
+Private MLS groups are **advertised and enabled** when the server has a
+federation-identity-authenticated MLS ordering policy and the administrator has
+publicly enabled Chat in the shared federation control plane. The same
+fail-closed gate drives `/api/auth/settings` and the administrative MLS status;
+disabling Chat withdraws the browser capability without deleting durable group
+state. SelfSync and Direct MLS remain unadvertised foundations: Note to Self
+and 1:1 Chat continue to use their existing production paths.
+
+Protocol types, durable storage, authenticated federation routes, OpenMLS
+client state, WASM bindings, anonymous delivery, authority catch-up,
+participant membership transitions, identified invitation decisions,
+federation-authenticated rejection/expiry feedback, routine administrator
+changes, browser group management and messaging, privacy-bounded telemetry,
+and admin inspection routes are complete. The live browser gate covers
+creation, cross-server invitation, rejection feedback and manual cryptographic
+removal, promotion, administrator-authored add/remove, anonymous bidirectional
+messages, and reload persistence. Owner-set changes use durable MLS-encrypted
+manual approval requests and responses with explicit browser approve/reject controls;
 the two-server gate proves requester and approver restart recovery, that no
 control block is ordered before quorum, and successful finalization after the
 approval arrives. Owner-approved closure is also complete: the gate proves an
@@ -31,12 +38,11 @@ now renders every group-scoped owner credential, exact group-pinned control
 key, independently verified federation-identity fingerprint, current typed
 ordering policy, and authenticated policy-hash history. Its two-server gate
 compares the displayed values with the signed genesis and actual policy
-responses from both authorities. All pre-advertisement implementation gates
-are complete; advertisement remains off until a separate explicit capability
-activation change. The adversarial/scale gate passes with an actual
-256-member OpenMLS group, signed fork and malformed-bootstrap cases, raw
-two-server replay/enumeration/capability-rotation probes, and a destination-log
-privacy assertion.
+responses from both authorities. All implementation and activation gates pass.
+The adversarial/scale gate uses an actual 256-member OpenMLS group, signed fork
+and malformed-bootstrap cases, raw two-server
+replay/enumeration/capability-rotation probes, and a destination-log privacy
+assertion.
 Linked-device group state is complete: the two-server browser gate adds an
 independent second installation as a distinct manifest-bound MLS leaf, proves
 automatic history-verified Welcome installation without invitation fallback,
@@ -356,8 +362,8 @@ the shared verifier replays proposal signatures, old-set quorums,
 predecessors, epochs, roster transitions, authority/owner transitions, and
 then binds the resulting public commitments to the private GroupContext.
 
-The unadvertised browser coordinator replenishes durable KeyPackages and
-implements restart-safe genesis and invitation boundaries. For genesis, it
+The browser coordinator replenishes durable KeyPackages and implements
+restart-safe genesis and invitation boundaries. For genesis, it
 fetches each authority's complete policy history through the same-origin
 federation route, asks the shared Rust engine to authenticate the federation
 identity/policy chain and typed payload, and then atomically creates the

@@ -67,8 +67,26 @@ async function cloneAuthenticatedInstall(
 }
 
 async function send(page: Page, text: string): Promise<void> {
-  await page.locator('main form input').fill(text)
-  await page.getByRole('button', { name: 'Send' }).click()
+  const input = page.locator('main form input')
+  await input.fill(text)
+  // Wait out the application's own transition, then use the keyboard submit
+  // path so a transient bottom-right success toast cannot intercept it.
+  const button = page.getByRole('button', { name: 'Send' })
+  await expect(button).toBeEnabled({ timeout: 45_000 })
+  await input.press('Enter')
+}
+
+async function syncUntilVisible(page: Page, text: string): Promise<void> {
+  await expect.poll(async () => {
+    if (await bubble(page, text).count() > 0) return true
+    await page.getByRole('button', { name: 'Sync messages' }).click()
+    await page.waitForTimeout(500)
+    return await bubble(page, text).count() > 0
+  }, {
+    timeout: 45_000,
+    intervals: [500, 1_000, 2_000],
+    message: `durable message ${text} was not recovered by mailbox reconciliation`,
+  }).toBe(true)
 }
 
 async function requireResponseOrUiError(
@@ -142,7 +160,9 @@ test.describe('two-server secure chat', () => {
     await expect(pageB.getByText('1 message request')).toBeVisible({ timeout: 45_000 })
     await pageB.getByRole('button', { name: new RegExp(alice) }).click()
     await expect(bubble(pageB, first)).toBeVisible()
-    await pageB.getByRole('button', { name: 'Accept', exact: true }).click()
+    const acceptRequest = pageB.getByRole('button', { name: 'Accept', exact: true })
+    await acceptRequest.click()
+    await expect(acceptRequest).toBeHidden({ timeout: 45_000 })
 
     const sealedReplyResponse = pageB.waitForResponse((response) => {
       const path = new URL(response.url()).pathname
@@ -153,7 +173,9 @@ test.describe('two-server secure chat', () => {
     const reply = `sealed-reply-${tag}`
     await send(pageB, reply)
     expect((await sealedReplyResponse).ok()).toBe(true)
-    await expect(bubble(pageA, reply)).toBeVisible({ timeout: 45_000 })
+    // The acceptance/profile update and immediate sealed reply use independent
+    // durable paths. Reconciliation must recover either arrival order.
+    await syncUntilVisible(pageA, reply)
 
     // Selecting the remote peer triggers the shared engine's independent
     // policy/checkpoint verification. The dialog exposes exact policy material.
@@ -265,7 +287,9 @@ test.describe('two-server secure chat', () => {
       return response.request().method() === 'POST'
         && path === '/api/chat/mls/control/blocks'
     })
-    await pageA.getByTestId('chat-create-group').click()
+    const createGroup = pageA.getByTestId('chat-create-group')
+    await expect(createGroup).toBeVisible()
+    await createGroup.click()
     await pageA.getByTestId('chat-group-initial-member').fill(`${bob}@b.test`)
     await pageA.getByTestId('chat-group-create-submit').click()
     const genesis = await genesisResponse

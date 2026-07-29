@@ -13,7 +13,9 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::active_policy;
+use super::policy::advertised_policy;
 use crate::error::{AppError, AppResult};
+use crate::federation::FederationPolicyFeature;
 use crate::middleware::AdminUser;
 use crate::AppState;
 
@@ -156,10 +158,21 @@ pub(crate) async fn status(
     State(state): State<AppState>,
     _admin: AdminUser,
 ) -> AppResult<Response> {
-    let policy = if state.mls_ordering.is_some() {
-        Some(active_policy(&state).await?)
-    } else {
-        None
+    let chat_publicly_enabled = match state.federation.as_ref() {
+        Some(federation) => {
+            federation
+                .policy()
+                .feature_is_publicly_enabled(FederationPolicyFeature::Chat)
+                .await?
+        }
+        None => false,
+    };
+    let advertised_policy = advertised_policy(&state, chat_publicly_enabled).await?;
+    let advertised = advertised_policy.is_some();
+    let policy = match advertised_policy {
+        Some(policy) => Some(policy),
+        None if state.mls_ordering.is_some() => Some(active_policy(&state).await?),
+        None => None,
     };
     let conversation_counts: (i64, i64, i64, i64, i64) = sqlx::query_as(
         "SELECT COUNT(*),
@@ -192,9 +205,7 @@ pub(crate) async fn status(
         .await?;
     Ok(Json(AdminMlsStatusV1 {
         enabled: policy.is_some(),
-        // This milestone keeps the browser capability absent until browser and
-        // two-server E2E gates pass.
-        advertised: false,
+        advertised,
         policy,
         conversations: MlsConversationCountsV1 {
             total: checked_count(conversation_counts.0)?,

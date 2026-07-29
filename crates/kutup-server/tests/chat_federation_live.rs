@@ -657,6 +657,23 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(initial_policy["features"][0]["mode"], "allowlist");
     update_federation_mode(c, a, &admin_a, "open");
     update_federation_mode(c, b, &admin_b, "open");
+    for (base, admin, domain) in [(a, &admin_a, "a.test"), (b, &admin_b, "b.test")] {
+        let settings = json_response(
+            c.get(format!("{base}/api/auth/settings")).send().unwrap(),
+            "advertised MLS browser capability",
+        );
+        assert_eq!(settings["chat"]["mlsGroups"], true);
+        let status = json_response(
+            c.get(format!("{base}/api/admin/chat/mls/status"))
+                .bearer_auth(admin)
+                .send()
+                .unwrap(),
+            "advertised MLS administrative status",
+        );
+        assert_eq!(status["enabled"], true);
+        assert_eq!(status["advertised"], true);
+        assert_eq!(status["policy"]["canonicalDomain"], domain);
+    }
     update_feature_mode(c, a, &admin_a, "drive", "open");
     update_feature_mode(c, b, &admin_b, "drive", "open");
 
@@ -928,6 +945,16 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         "disabled federation capabilities",
     );
     assert_eq!(disabled_capabilities["chat"]["federation"], false);
+    assert_eq!(disabled_capabilities["chat"]["mlsGroups"], false);
+    let disabled_mls_status = json_response(
+        c.get(format!("{a}/api/admin/chat/mls/status"))
+            .bearer_auth(&admin_a)
+            .send()
+            .unwrap(),
+        "disabled MLS administrative status",
+    );
+    assert_eq!(disabled_mls_status["enabled"], true);
+    assert_eq!(disabled_mls_status["advertised"], false);
     json_response(
         drive_remote_user(c, a, &alice_token),
         "Drive remains enabled while Chat is disabled",
@@ -946,6 +973,11 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         update_federation_mode(c, a, &admin_a, "allowlist")["mode"],
         "allowlist"
     );
+    let reenabled_capabilities = json_response(
+        c.get(format!("{a}/api/auth/settings")).send().unwrap(),
+        "re-enabled MLS browser capability",
+    );
+    assert_eq!(reenabled_capabilities["chat"]["mlsGroups"], true);
     assert_eq!(
         c.get(format!("{a}/api/chat/users/{remote_address}/keys"))
             .bearer_auth(&alice_token)

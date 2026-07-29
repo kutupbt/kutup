@@ -255,6 +255,10 @@ fn chat_v1_contract() {
     let max = chat["maxContentBytes"].as_u64().unwrap();
     assert_eq!(max, 65536);
     assert_eq!(chat["sealedSender"], false);
+    assert_eq!(
+        chat["mlsGroups"], false,
+        "MLS groups fail closed without an authenticated ordering policy"
+    );
     assert_eq!(chat["manifests"], true);
     assert_eq!(chat["profiles"], true);
     assert_eq!(chat["keyTransparency"], true);

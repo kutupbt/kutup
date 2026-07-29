@@ -762,7 +762,7 @@ ID; federation retains signed origin sequences. Sealed sender is metadata
 
 ---
 
-## 12. Unified MLS conversations — [ADD], not yet advertised
+## 12. Unified MLS conversations — [IMPL], private groups advertised
 
 The earlier GV2/sender-key reservation is superseded. SelfSync, Direct, and
 Group conversations share the RFC 9420/OpenMLS protocol specified in
@@ -826,17 +826,19 @@ KeyPackage retrieval uses the same verifier and returns manifest/proof evidence
 bound to a canonical-decimal prior checkpoint cursor; it never consumes Signal
 prekeys or sends browser authentication context.
 
-The protocol/server/client/WASM foundation is present but remains
-unadvertised. Owner-set changes have durable MLS-encrypted manual approval
+Private Group conversations are advertised when the local MLS ordering policy
+is authenticated by the federation identity and the shared administration
+policy publicly enables Chat. SelfSync and Direct MLS remain unadvertised.
+Owner-set changes have durable MLS-encrypted manual approval
 requests/responses and explicit web approve/reject controls. Their two-server
 gate proves requester and approver restart recovery, ordering only after the
-current-owner quorum, finalization, and continued group delivery. Owner-approved
-closure uses the same private approval channel and one unchanged-roster MLS
-Commit; its gate proves no pre-quorum ordering, terminal state on both domains,
-send blocking, and closed-history persistence across reload. The two-server
-gate also proves remote invitation rejection feedback, browser visibility, and
-manual MLS removal. Linked-device state flow and adversarial/scale browser
-gates must finish before this section changes from `[ADD]` to `[IMPL]`.
+current-owner quorum, finalization, and continued group delivery.
+Owner-approved closure uses the same private approval channel and one
+unchanged-roster MLS Commit; its gate proves no pre-quorum ordering, terminal
+state on both domains, send blocking, and closed-history persistence across
+reload. The two-server gate also proves remote invitation rejection feedback,
+browser visibility, manual MLS removal, linked-device state, and the
+adversarial/scale requirements.
 
 ---
 
@@ -957,10 +959,11 @@ destinations.
 2. **Trust and groups:** the device-manifest/self-authority scheme (§5.3),
    authenticated remote transparency policies, range recovery, witnesses,
    scheduled web/server monitoring, and cross-view auditing are implemented.
-   The unadvertised unified MLS foundation (§12) now provides durable
-   client/server state, multi-authority ordering, private participant
-   transitions, invitation decisions, anonymous delivery, and routine
-   administrator changes. The browser and two-server E2E cover group creation,
+   The unified MLS implementation (§12) provides durable client/server state,
+   multi-authority ordering, private participant transitions, invitation
+   decisions, anonymous delivery, and routine administrator changes. Its
+   private Group capability is advertised; SelfSync and Direct MLS remain
+   unadvertised. The browser and two-server E2E cover group creation,
    invitation, administrator-authored add/remove, promotion, anonymous
    bidirectional messages, reload persistence, owner/authority rotation, and
    restart-safe manual owner approval. Owner-approved terminal closure now also
@@ -970,8 +973,8 @@ destinations.
    a dedicated WASM/browser flow, transparency-bound Welcome verification, an
    explicit owner UI, and a passing two-server requester/approver restart gate
    with post-recovery delivery and reload persistence. Linked-device group
-   state, suite-policy governance, and the remaining adversarial gates are
-   still unadvertised work.
+   state and suite-policy governance are also covered, and the adversarial and
+   256-member gates pass.
 3. **`kutup-chat-core`**: engine skeleton (transport/db ports, event stream,
    durable outbox with `sendId`, decrypt→persist→ack ordering, 409 recovery) —
    the artifact the Android/iOS clients link. **✅ Done** (branch

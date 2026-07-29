@@ -1,9 +1,9 @@
 # Chat transparency and sealed-sender threat model
 
-This document is normative for one-to-one web Chat and the unadvertised MLS
-conversation foundation. Calls, anonymous relays, traffic-shape obfuscation,
-native product integration, HA, threshold roots, and large announcement
-channels are outside this milestone.
+This document is normative for one-to-one web Chat, advertised private MLS
+groups, and the unadvertised MLS SelfSync/Direct foundation. Calls, anonymous
+relays, traffic-shape obfuscation, native product integration, HA, threshold
+roots, and large announcement channels are outside this milestone.
 
 ## Assets and trust boundaries
 
