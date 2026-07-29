@@ -320,6 +320,21 @@ impl MlsRepository {
             ));
         }
 
+        // A capability authorizes only one exact active group epoch. Rotate
+        // the verifier in the same transaction as publication so a stolen
+        // capability cannot survive a membership/device/control Commit.
+        sqlx::query(
+            "DELETE FROM chat_mls_delivery_capabilities
+             WHERE recipient_user_id = $1 AND conversation_id = $2
+               AND (incarnation <> $3 OR epoch <> $4)",
+        )
+        .bind(user_id)
+        .bind(request.conversation_id)
+        .bind(request.incarnation as i64)
+        .bind(request.epoch as i64)
+        .execute(&mut *tx)
+        .await?;
+
         let inserted = sqlx::query(
             "INSERT INTO chat_mls_delivery_capabilities
                  (recipient_user_id, conversation_id, incarnation, epoch,

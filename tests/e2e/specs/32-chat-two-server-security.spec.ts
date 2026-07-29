@@ -584,7 +584,10 @@ test.describe('two-server secure chat', () => {
     })
     const fromAlice = `mls-from-alice-${tag}`
     await send(pageA, fromAlice)
-    expect((await requireResponseOrUiError(pageA, sentToBob)).ok()).toBe(true)
+    const firstAnonymousResponse = await requireResponseOrUiError(pageA, sentToBob)
+    expect(firstAnonymousResponse.ok()).toBe(true)
+    const firstAnonymousSubmission =
+      firstAnonymousResponse.request().postDataJSON() as Record<string, unknown>
     await expect(bubble(pageB, fromAlice)).toBeVisible({ timeout: 90_000 })
     await expect.poll(
       () => destinationMailbox.some(envelope => envelope.deliveryKind === 'anonymous'),
@@ -593,6 +596,70 @@ test.describe('two-server secure chat', () => {
     const anonymous = destinationMailbox.find(envelope => envelope.deliveryKind === 'anonymous')
     expect(anonymous).not.toHaveProperty('conversationId')
     expect(anonymous).not.toHaveProperty('incarnation')
+
+    // Exact anonymous retries reuse the same signed origin sequence and do not
+    // create another destination mailbox row. Reusing the UUID for different
+    // ciphertext is an origin-side conflict before federation.
+    const replay = await pageA.evaluate(async (submission) => {
+      const response = await fetch('/api/chat/mls/anonymous/messages', {
+        method: 'POST',
+        credentials: 'omit',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(submission),
+      })
+      return { status: response.status, body: await response.json() }
+    }, firstAnonymousSubmission)
+    expect(replay).toMatchObject({ status: 200, body: { accepted: true } })
+    await pageB.waitForTimeout(1_000)
+    await expect(bubble(pageB, fromAlice)).toHaveCount(1)
+
+    const conflictingReplay = await pageA.evaluate(async (submission) => {
+      const changed = structuredClone(submission) as {
+        envelopes: Array<{ ciphertext: string }>
+      }
+      const ciphertext = changed.envelopes[0].ciphertext
+      changed.envelopes[0].ciphertext =
+        `${ciphertext.startsWith('A') ? 'B' : 'A'}${ciphertext.slice(1)}`
+      const response = await fetch('/api/chat/mls/anonymous/messages', {
+        method: 'POST',
+        credentials: 'omit',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(changed),
+      })
+      return response.status
+    }, firstAnonymousSubmission)
+    expect(conflictingReplay).toBe(409)
+
+    // Unknown recipients and known recipients with an invalid capability are
+    // deliberately indistinguishable at the same-origin anonymous boundary.
+    const enumerationResponses = await pageA.evaluate(
+      async ({ knownRecipient, unknownUsername }) => {
+        const unknownRecipient = structuredClone(knownRecipient) as { username: string }
+        unknownRecipient.username = unknownUsername
+        const claim = async (recipient: unknown) => {
+          const response = await fetch('/api/chat/mls/anonymous/key-packages', {
+            method: 'POST',
+            credentials: 'omit',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              protocolVersion: 1,
+              recipient,
+              capability: 'AAAAAAAAAAAAAAAAAAAAAA==',
+              transparencyTreeSize: '0',
+            }),
+          })
+          return { status: response.status, body: await response.text() }
+        }
+        return Promise.all([claim(knownRecipient), claim(unknownRecipient)])
+      },
+      {
+        knownRecipient: firstAnonymousSubmission.recipient,
+        unknownUsername: `mlsunknown${tag}`,
+      },
+    )
+    expect(enumerationResponses[0].status).toBe(404)
+    expect(enumerationResponses[1].status).toBe(404)
+    expect(enumerationResponses[0].body).toBe(enumerationResponses[1].body)
 
     const sentToAlice = pageB.waitForResponse((response) => {
       const path = new URL(response.url()).pathname
@@ -665,6 +732,23 @@ test.describe('two-server secure chat', () => {
       () => bobCapabilityEpochs.includes(linkedDeviceEpoch),
       { timeout: 90_000 },
     ).toBe(true)
+
+    // The new epoch verifier atomically replaces the old one. A copied
+    // capability plus opaque envelope from epoch N must become the same
+    // uniform unavailable response used for an unknown recipient.
+    const staleCapability = await pageA.evaluate(async (submission) => {
+      const stolen = structuredClone(submission) as Record<string, unknown>
+      stolen.sendId = crypto.randomUUID()
+      const response = await fetch('/api/chat/mls/anonymous/messages', {
+        method: 'POST',
+        credentials: 'omit',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(stolen),
+      })
+      return { status: response.status, body: await response.text() }
+    }, firstAnonymousSubmission)
+    expect(staleCapability).toEqual(enumerationResponses[0])
+
     await pageA2.getByTestId(`chat-group-${conversationId}`).click()
     const linkedSendResponse = pageA2.waitForResponse((response) => {
       const path = new URL(response.url()).pathname

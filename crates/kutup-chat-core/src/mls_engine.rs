@@ -973,4 +973,6 @@ fn group_control_credential(
 #[cfg(test)]
 mod policy_tests;
 #[cfg(test)]
+mod scale_tests;
+#[cfg(test)]
 mod tests;

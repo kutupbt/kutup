@@ -27,7 +27,11 @@ complete: the two-server gate proves manual quorum across requester/approver
 reloads, authenticated immutable evidence retrieval, recipient-side Welcome
 and manifest verification before durable join, post-recovery messaging, and
 recovered-state persistence after reload. Advertisement remains gated on
-the remaining adversarial/scale suites and explicit capability advertisement.
+the exact authority-policy/fingerprint browser UI and an explicit capability
+advertisement change. The adversarial/scale gate now passes with an actual
+256-member OpenMLS group, signed fork and malformed-bootstrap cases, raw
+two-server replay/enumeration/capability-rotation probes, and a destination-log
+privacy assertion.
 Linked-device group state is complete: the two-server browser gate adds an
 independent second installation as a distinct manifest-bound MLS leaf, proves
 automatic history-verified Welcome installation without invitation fallback,
@@ -513,15 +517,37 @@ sender/recipient correlations.
 
 ## Completion gate
 
-Do not advertise MLS until all of the remaining items pass together. Private
-authorization/cryptographic owner actions now have protocol, browser
+Do not advertise MLS until every item is checked. Private
+authorization/cryptographic owner actions have protocol, browser
 orchestration, explicit approval UI, and two-server coverage.
 
-- group owner and exact authority-policy/fingerprint UI;
-- native Rust, WASM, web, Playwright, PostgreSQL migration, Docker Compose,
+- [ ] group owner and exact authority-policy/fingerprint UI;
+- [x] native Rust, WASM, web, Playwright, PostgreSQL migration, Docker Compose,
   witness/auditor, and two-server federation suites;
-- adversarial tests for authority rollback/fork, invalid bootstrap pages,
+- [x] adversarial tests for authority rollback/fork, invalid bootstrap pages,
   forged Welcome/Commit/certificate, roster mismatch, capability theft and
   rotation, replay, enumeration, oversized requests, and downgrade;
-- destination logs/audit/metrics verified to contain no sender identity or
+- [x] destination logs/audit/metrics verified to contain no sender identity or
   sender-recipient correlation.
+
+The checked adversarial/scale gate is executable rather than a documentation
+claim:
+
+- `mls_engine::scale_tests::openmls_group_operates_with_256_manifest_bound_members`
+  creates 255 independently manifest-bound KeyPackages, commits a real
+  256-leaf OpenMLS tree, joins the final member, and exchanges application
+  ciphertext at epoch one;
+- the protocol suite rejects a fully signed alternate control branch,
+  incomplete/reordered/duplicated history, invalid bootstrap pages, malformed
+  P-256 encapsulations, unknown suites, 33-envelope requests, and requests over
+  1 MiB;
+- the native client suite rejects forged Welcome/Commit/certificate material,
+  manifest/roster mismatch, identity replacement, rollback, and send-ID reuse;
+- the two-server Playwright gate submits exact and conflicting anonymous
+  replays, compares the uniform unknown-recipient/invalid-capability response,
+  proves an epoch-rotated stolen capability is rejected, and exercises the
+  existing no-downgrade and oversize paths;
+- the live PostgreSQL migration test enforces sender-free anonymous mailbox and
+  federation-transaction schemas, MLS telemetry accepts only fixed
+  non-identifier dimensions, and `scripts/test-chat-federation.sh` fails if the
+  destination backend logs the remote MLS sender or application plaintext.

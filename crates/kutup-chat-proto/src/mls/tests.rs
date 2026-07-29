@@ -966,6 +966,12 @@ fn new_participant_bootstrap_requires_complete_qc_history_and_private_digest() {
         membership_delivery: Some(delivery_a2.clone()),
     };
     page.validate().unwrap();
+    let mut missing_delivery = page.clone();
+    missing_delivery.membership_delivery = None;
+    assert!(missing_delivery.validate().is_err());
+    let mut invalid_first_page = page;
+    invalid_first_page.previous_page_hash = Some("11".repeat(32));
+    assert!(invalid_first_page.validate().is_err());
 
     let mut tampered = delivery_a2;
     tampered.local_members_after[0].is_admin = true;
@@ -1154,6 +1160,9 @@ fn new_authority_bootstrap_requires_old_quorum_and_exact_history() {
         commits: history,
     };
     page.validate().unwrap();
+    let mut invalid_first_page = page;
+    invalid_first_page.previous_page_hash = Some("11".repeat(32));
+    assert!(invalid_first_page.validate().is_err());
 
     let mut tampered = descriptor;
     tampered.history_digest = "00".repeat(32);
@@ -1218,6 +1227,10 @@ fn pending_policy_is_bounded_and_strictest_wins() {
 
 #[test]
 fn anonymous_submission_has_stable_aad_and_hides_conversation_id() {
+    let encapsulation_key = p256::ecdsa::SigningKey::from_bytes((&[4u8; 32]).into())
+        .unwrap()
+        .verifying_key()
+        .to_encoded_point(false);
     let submission = AnonymousMlsSubmissionV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
         recipient: "alice@example.org".parse().unwrap(),
@@ -1226,7 +1239,8 @@ fn anonymous_submission_has_stable_aad_and_hides_conversation_id() {
         suite: MlsAnonymousDeliverySuiteV1::DhKemP256HkdfSha256Aes128Gcm,
         envelopes: vec![AnonymousMlsDeviceEnvelopeV1 {
             device_id: 1,
-            encapsulated_key: base64::engine::general_purpose::STANDARD.encode([4u8; 65]),
+            encapsulated_key: base64::engine::general_purpose::STANDARD
+                .encode(encapsulation_key.as_bytes()),
             ciphertext: base64::engine::general_purpose::STANDARD.encode([5u8; 17]),
         }],
     };
@@ -1546,6 +1560,46 @@ fn client_control_history_replays_exactly_across_page_boundaries() {
         });
         previous_block_hash = Some(block_hash);
     }
+
+    // Build a second, independently valid authority-signed block at height 64.
+    // It has the same predecessor but a different proposal/hash, modeling a
+    // Byzantine authority fork rather than a malformed signature. The pinned
+    // height-65 continuation must reject this alternate branch.
+    let mut forked_commit = commits[63].clone();
+    let forked_payload = b"conflicting but valid height 64";
+    forked_commit.finalized.block.proposal.encrypted_payload =
+        base64::engine::general_purpose::STANDARD.encode(forked_payload);
+    forked_commit.finalized.block.proposal.payload_digest =
+        hex::encode(Sha256::digest(forked_payload));
+    forked_commit
+        .finalized
+        .block
+        .proposal
+        .proposer_signature
+        .clear();
+    let forked_proposal_signature: p256::ecdsa::Signature = proposer_key.sign(
+        &forked_commit
+            .finalized
+            .block
+            .proposal
+            .signing_bytes()
+            .unwrap(),
+    );
+    forked_commit.finalized.block.proposal.proposer_signature =
+        base64::engine::general_purpose::STANDARD
+            .encode(forked_proposal_signature.to_der().as_bytes());
+    let forked_block_hash = forked_commit.finalized.block.block_hash().unwrap();
+    let forked_vote = &mut forked_commit.finalized.quorum_certificate.votes[0];
+    forked_vote.block_hash = forked_block_hash.clone();
+    forked_vote.signature.clear();
+    forked_vote.signature = base64::engine::general_purpose::STANDARD.encode(
+        authority_key
+            .sign(&forked_vote.signing_bytes().unwrap())
+            .to_bytes(),
+    );
+    forked_commit.finalized.quorum_certificate.block_hash = forked_block_hash;
+    forked_commit.validate_shape().unwrap();
+
     let final_block = &commits.last().unwrap().finalized.block;
     let private = MlsPrivateControlStateV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
@@ -1587,6 +1641,12 @@ fn client_control_history_replays_exactly_across_page_boundaries() {
     assert_eq!(
         verify_mls_client_control_history(&[first.clone(), second.clone()], &private).unwrap(),
         previous_block_hash
+    );
+    let mut forked_first = first.clone();
+    forked_first.commits[63] = forked_commit;
+    assert!(
+        verify_mls_client_control_history(&[forked_first, second.clone()], &private).is_err(),
+        "a valid authority-signed fork must not replace the pinned control head"
     );
     assert!(verify_mls_client_control_history(std::slice::from_ref(&first), &private).is_err());
     assert!(verify_mls_client_control_history(&[second.clone(), first.clone()], &private).is_err());

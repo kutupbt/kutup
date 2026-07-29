@@ -85,4 +85,13 @@ if [[ "${KUTUP_FEDERATION_SKIP_BROWSER:-0}" != "1" ]]; then
       npm exec -- playwright test \
         specs/32-chat-two-server-security.spec.ts --project=chromium
   )
+
+  # The destination necessarily sees its local recipient, but anonymous MLS
+  # handling must never log the remote sender or application plaintext.
+  if compose logs --no-color backend-b \
+      | grep -Eq 'mlsalice[0-9]+|mls-from-alice'; then
+    echo "destination MLS logs contain sender identity or plaintext" >&2
+    exit 1
+  fi
+  echo "MLS DESTINATION LOG METADATA PRIVACY VERIFIED"
 fi

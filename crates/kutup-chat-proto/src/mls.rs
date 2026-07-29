@@ -147,4 +147,6 @@ fn push_string(out: &mut Vec<u8>, value: &str) -> Result<(), String> {
 }
 
 #[cfg(test)]
+mod adversarial_tests;
+#[cfg(test)]
 mod tests;

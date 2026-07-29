@@ -411,7 +411,7 @@ impl AnonymousMlsDeviceEnvelopeV1 {
         if self.device_id == 0 {
             return Err("anonymous MLS envelope device id must be positive".into());
         }
-        decode_canonical_base64("HPKE encapsulated key", &self.encapsulated_key, 65, 65)?;
+        validate_uncompressed_p256("HPKE encapsulated key", &self.encapsulated_key)?;
         let ciphertext = decode_canonical_base64(
             "anonymous MLS ciphertext",
             &self.ciphertext,

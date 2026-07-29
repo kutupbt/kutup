@@ -1,9 +1,12 @@
 #![no_main]
 
 use kutup_chat_proto::{
-    CommitMlsControlBlockV1, FederatedMlsAuthorityBootstrapPageV1, FederatedMlsControlReplicaV1,
-    FederatedMlsOrderingVoteRequestV1, MlsAuthorityChangeV1, MlsClientControlHistoryPageV1,
-    MlsInvitationFeedbackV1, MlsMembershipDeliveryV1, MlsPrivateControlStateV1,
+    AnonymousMlsKeyPackageRequestV1, AnonymousMlsSubmissionV1, CommitMlsControlBlockV1,
+    FederatedAnonymousMlsTransactionV1, FederatedMlsAuthorityBootstrapPageV1,
+    FederatedMlsControlReplicaV1, FederatedMlsOrderingVoteRequestV1,
+    FederatedMlsParticipantBootstrapPageV1, MlsAuthorityChangeV1,
+    MlsClientControlHistoryPageV1, MlsInvitationFeedbackV1, MlsMailboxPageV1,
+    MlsMembershipDeliveryV1, MlsPrivateControlStateV1,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -48,5 +51,21 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(state) = serde_json::from_slice::<MlsPrivateControlStateV1>(data) {
         let _ = state.validate();
         let _ = state.canonical_bytes();
+    }
+    if let Ok(page) = serde_json::from_slice::<FederatedMlsParticipantBootstrapPageV1>(data) {
+        let _ = page.validate();
+        let _ = page.page_hash();
+    }
+    if let Ok(request) = serde_json::from_slice::<AnonymousMlsKeyPackageRequestV1>(data) {
+        let _ = request.validate();
+    }
+    if let Ok(submission) = serde_json::from_slice::<AnonymousMlsSubmissionV1>(data) {
+        let _ = submission.validate();
+    }
+    if let Ok(transaction) = serde_json::from_slice::<FederatedAnonymousMlsTransactionV1>(data) {
+        let _ = transaction.validate();
+    }
+    if let Ok(page) = serde_json::from_slice::<MlsMailboxPageV1>(data) {
+        let _ = page.validate();
     }
 });
