@@ -1,25 +1,16 @@
 use kutup_chat_core::{
     ChatContent, ChatError, InboundEnvelope, InboundFailure, InboundFailureKind, ManifestTrust,
     PreKeyMaintenanceReport, ReceiveReport, ReceivedMessage, SendSummary, TransparencyPolicy,
-    TransparencyScopePolicy, TransparencyVerifierKey,
+    TransparencyScopePolicy,
 };
 
 pub type Result<T> = std::result::Result<T, KutupChatError>;
-
-#[derive(Debug, Clone, uniffi::Record)]
-pub struct ChatTransparencyVerifierKey {
-    pub witness_id: String,
-    pub key_id: String,
-    pub public_key: String,
-}
 
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct ChatTransparencyScopePolicy {
     pub scope: String,
     pub operator_key_id: String,
     pub operator_public_key: String,
-    pub witnesses: Vec<ChatTransparencyVerifierKey>,
-    pub witness_quorum: u16,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -35,18 +26,11 @@ impl From<ChatTransparencyPolicy> for TransparencyPolicy {
                 .into_iter()
                 .map(|scope| TransparencyScopePolicy {
                     scope: scope.scope,
+                    log_id: None,
                     operator_key_id: scope.operator_key_id,
                     operator_public_key: scope.operator_public_key,
-                    witnesses: scope
-                        .witnesses
-                        .into_iter()
-                        .map(|witness| TransparencyVerifierKey {
-                            witness_id: witness.witness_id,
-                            key_id: witness.key_id,
-                            public_key: witness.public_key,
-                        })
-                        .collect(),
-                    witness_quorum: scope.witness_quorum,
+                    maximum_checkpoint_age_seconds: None,
+                    maximum_clock_skew_seconds: None,
                 })
                 .collect(),
         }

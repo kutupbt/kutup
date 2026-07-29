@@ -48,14 +48,6 @@ pub struct Config {
     /// Base64 raw 32-byte Ed25519 seed for stable transparency checkpoints.
     /// This key is deliberately distinct from federation request signing.
     pub chat_transparency_signing_key: String,
-    /// Comma-separated `witness-id=base64-ed25519-public-key` allowlist.
-    pub chat_transparency_witnesses: String,
-    /// Optional comma-separated `witness-id=https://endpoint` overrides.
-    pub chat_transparency_witness_endpoints: String,
-    /// Minimum configured witness attestations clients require on a head.
-    pub chat_transparency_witness_quorum: i64,
-    /// Reject authenticated remote policies below this independent quorum.
-    pub chat_remote_transparency_min_quorum: i64,
     /// Complete authenticated sealed-sender service policy JSON. It contains
     /// public roots and root-signed online certificates, never an offline root.
     pub chat_sealed_sender_policy: String,
@@ -74,7 +66,6 @@ impl Config {
     /// a too-short JWT secret (mirrors the Go `Load`).
     pub fn load() -> Config {
         let app_env = get_env("APP_ENV", "development");
-        let default_remote_quorum = if app_env == "production" { 1 } else { 0 };
         let cfg = Config {
             database_url: must_env("DATABASE_URL"),
             jwt_secret: must_env("JWT_SECRET"),
@@ -102,13 +93,6 @@ impl Config {
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
             federation_test_allow_private: get_env_bool("FEDERATION_TEST_ALLOW_PRIVATE", false),
             chat_transparency_signing_key: get_env("CHAT_TRANSPARENCY_SIGNING_KEY", ""),
-            chat_transparency_witnesses: get_env("CHAT_TRANSPARENCY_WITNESSES", ""),
-            chat_transparency_witness_endpoints: get_env("CHAT_TRANSPARENCY_WITNESS_ENDPOINTS", ""),
-            chat_transparency_witness_quorum: get_env_i64("CHAT_TRANSPARENCY_WITNESS_QUORUM", 0),
-            chat_remote_transparency_min_quorum: get_env_i64(
-                "CHAT_REMOTE_TRANSPARENCY_MIN_QUORUM",
-                default_remote_quorum,
-            ),
             chat_sealed_sender_policy: get_env("CHAT_SEALED_SENDER_POLICY", ""),
             chat_sealed_sender_online_private_key: get_env(
                 "CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY",

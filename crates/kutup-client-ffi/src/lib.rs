@@ -169,6 +169,7 @@ pub async fn open_native_chat_client(
     database_path: String,
     database_key: Vec<u8>,
     user: String,
+    server_name: String,
     master_key: Vec<u8>,
     transparency_policy: ChatTransparencyPolicy,
     http: Arc<dyn ChatHttpClient>,
@@ -183,6 +184,11 @@ pub async fn open_native_chat_client(
             message: "chat username is empty".into(),
         });
     }
+    kutup_chat_proto::AccountAddress::federated("server", &server_name).map_err(|error| {
+        KutupChatError::InvalidInput {
+            message: error.to_string(),
+        }
+    })?;
     let database_key = take_key(database_key, "database key")?;
     let master_key = take_key(master_key, "account master key")?;
     let (commands, receiver) = mpsc::channel();
@@ -197,6 +203,7 @@ pub async fn open_native_chat_client(
                     database_key,
                     master_key,
                     user: worker_user,
+                    server_name,
                     transparency_policy: transparency_policy.into(),
                     http,
                 },
@@ -233,6 +240,7 @@ struct WorkerConfig {
     database_key: [u8; 32],
     master_key: [u8; 32],
     user: String,
+    server_name: String,
     transparency_policy: kutup_chat_core::TransparencyPolicy,
     http: Arc<dyn ChatHttpClient>,
 }
@@ -283,6 +291,7 @@ fn worker_main(
         let mut rng = OsRng.unwrap_err();
         let mut engine =
             Engine::register(database, transport, config.user, INITIAL_PREKEYS, &mut rng).await?;
+        engine.set_local_server(&config.server_name)?;
         engine.set_transparency_policy(config.transparency_policy)?;
         engine.sync_own_manifest(&authority, now_rfc3339()?).await?;
         Result::<_>::Ok((engine, authority))

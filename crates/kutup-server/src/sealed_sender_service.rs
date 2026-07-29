@@ -306,7 +306,6 @@ pub(crate) async fn get_domain_policy(
                 federation,
                 &domain,
                 FederatedFeaturePolicyTypeV1::SealedSenderService,
-                0,
             )
             .await
             .map_err(|error| {

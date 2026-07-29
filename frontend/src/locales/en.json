@@ -49,6 +49,7 @@
     "backToFiles": "Back to files",
     "encrypted": "End-to-end encrypted",
     "encryptedDevice": "End-to-end encrypted · device {{device}}",
+    "device": "Device {{device}}",
     "username": "Username",
     "startAria": "Start a chat with username",
     "start": "Start chat",

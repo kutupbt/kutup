@@ -8,7 +8,7 @@ code-grounded against a local libsignal checkout at **v0.97.2** (2026).
 > current-state contract. The web/WASM shared engine, direct messaging,
 > linked-device sync, Note to Self, transport-only federation, message
 > requests/blocking, encrypted profiles, signed device manifests, key
-> transparency, independent witnesses, and local checkpoint monitoring are now
+> transparency and local checkpoint monitoring are now
 > implemented. See [`../chat-protocol.md`](../chat-protocol.md) for normative
 > behavior and [`../roadmap.md`](../roadmap.md) for the remaining work.
 

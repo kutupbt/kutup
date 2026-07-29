@@ -23,14 +23,7 @@ interface PolicyPayload {
   logId: string
   operatorKeyId: string
   operatorPublicKey: string
-  requiredQuorum: number
   maximumCheckpointAgeSeconds: number
-  witnesses: Array<{
-    witnessId: string
-    keyId: string
-    publicKey: string
-    publicEndpoint: string
-  }>
 }
 
 interface MonitorStatus {
@@ -51,23 +44,14 @@ interface MonitorStatus {
   evidenceDigest?: string
 }
 
-interface EvidenceRecord {
-  evidenceDigest: string
-  evidence: unknown
-  detectedAt: string
-  acknowledgedAt?: string
-  recoveryReason?: string
-}
-
 export function AdminTransparencyCard() {
   const [domain, setDomain] = useState('')
   const [loadedDomain, setLoadedDomain] = useState('')
   const [status, setStatus] = useState<MonitorStatus | null>(null)
   const [history, setHistory] = useState<PolicyHistory | null>(null)
   const [policy, setPolicy] = useState<PolicyPayload | null>(null)
-  const [evidence, setEvidence] = useState<EvidenceRecord[]>([])
-  const [reason, setReason] = useState('')
   const [loading, setLoading] = useState(false)
+  const [reason, setReason] = useState('')
   const [recovering, setRecovering] = useState(false)
 
   async function load(target = domain) {
@@ -75,15 +59,12 @@ export function AdminTransparencyCard() {
     if (!canonical) return
     setLoading(true)
     try {
-      const [statusResponse, historyResponse, evidenceResponse] = await Promise.all([
+      const [statusResponse, historyResponse] = await Promise.all([
         api.get<MonitorStatus>(
           `/chat/transparency/domains/${encodeURIComponent(canonical)}/status`,
         ),
         api.get<PolicyHistory>(
           `/chat/transparency/domains/${encodeURIComponent(canonical)}/policy`,
-        ),
-        api.get<EvidenceRecord[]>(
-          `/admin/chat/transparency/domains/${encodeURIComponent(canonical)}/evidence`,
         ),
       ])
       const current = historyResponse.data.policies.at(-1)
@@ -93,7 +74,6 @@ export function AdminTransparencyCard() {
       setStatus(statusResponse.data)
       setHistory(historyResponse.data)
       setPolicy(decodePayload(current.payload))
-      setEvidence(evidenceResponse.data)
     } catch {
       toast.error('Transparency state could not be loaded for that domain.')
     } finally {
@@ -125,9 +105,9 @@ export function AdminTransparencyCard() {
       )
       setReason('')
       await load(loadedDomain)
-      toast.success('Transparency block recovered; immutable evidence was retained.')
+      toast.success('Transparency block recovered and the decision was audit logged.')
     } catch {
-      toast.error('Recovery requires matching evidence and a fresh valid monitor observation.')
+      toast.error('Recovery requires the active digest and a fresh valid observation.')
     } finally {
       setRecovering(false)
     }
@@ -137,10 +117,10 @@ export function AdminTransparencyCard() {
     <section className="mb-5 overflow-hidden rounded-[var(--radius-lg)] border border-border-light bg-surface">
       <div className="border-b border-border-light px-[18px] py-3.5">
         <div className="text-[14px] font-semibold text-text-primary">
-          Chat transparency audit
+          Chat transparency monitor
         </div>
         <div className="mt-0.5 text-[12.5px] text-text-tertiary">
-          Inspect authenticated policy history, exact fingerprints, monitor freshness, and immutable fork evidence.
+          Inspect authenticated policy history, exact fingerprints, monitor freshness, and failure evidence.
         </div>
       </div>
       <form
@@ -189,7 +169,6 @@ export function AdminTransparencyCard() {
 
           <div className="grid grid-cols-2 gap-3 rounded-lg bg-surface-sunken p-3 md:grid-cols-4">
             <Datum label="Policy sequence" value={String(status.policySequence)} />
-            <Datum label="Required quorum" value={String(policy.requiredQuorum)} />
             <Datum label="Tree size" value={String(status.checkpoint?.checkpoint.treeSize ?? '—')} />
             <Datum label="Checkpoint age" value={formatAge(status.checkpoint?.authentication.issuedAt)} />
             <Datum label="Last verified" value={status.lastSuccessfulAt ?? 'Never'} />
@@ -211,20 +190,6 @@ export function AdminTransparencyCard() {
             <Fingerprint label="Active evidence digest" value={status.evidenceDigest} />
           )}
 
-          <div>
-            <div className="mb-2 font-semibold text-text-primary">Witness policy</div>
-            <div className="grid gap-2">
-              {policy.witnesses.map((witness) => (
-                <div key={witness.witnessId} className="rounded-lg border border-border-light p-3">
-                  <div className="font-medium">{witness.witnessId}</div>
-                  <code className="mt-1 block break-all text-[11px] text-text-tertiary">{witness.keyId}</code>
-                  <code className="mt-1 block break-all text-[11px] text-text-tertiary">{witness.publicKey}</code>
-                  <div className="mt-1 break-all text-[11px] text-text-tertiary">{witness.publicEndpoint}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
           <details className="rounded-lg border border-border-light p-3">
             <summary className="cursor-pointer font-semibold">Authenticated policy history ({history.policies.length})</summary>
             <div className="mt-3 grid gap-2">
@@ -240,30 +205,12 @@ export function AdminTransparencyCard() {
             </div>
           </details>
 
-          <details className="rounded-lg border border-border-light p-3" open={status.blocked}>
-            <summary className="cursor-pointer font-semibold">Immutable fork evidence ({evidence.length})</summary>
-            <div className="mt-3 grid gap-3">
-              {evidence.length === 0 && <div className="text-text-tertiary">No signed contradictions stored.</div>}
-              {evidence.map((record) => (
-                <div key={record.evidenceDigest} className="rounded border border-border-light p-2">
-                  <code className="block break-all text-[11px]">{record.evidenceDigest}</code>
-                  <div className="mt-1 text-[11px] text-text-tertiary">
-                    Detected {record.detectedAt}
-                    {record.acknowledgedAt ? ` · acknowledged ${record.acknowledgedAt}` : ''}
-                  </div>
-                  <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-surface-sunken p-2 text-[10px]">
-                    {JSON.stringify(record.evidence, null, 2)}
-                  </pre>
-                </div>
-              ))}
-            </div>
-          </details>
-
           {status.blocked && status.evidenceDigest && (
             <div className="rounded-lg border border-destructive/30 bg-destructive-faint p-3">
               <div className="font-semibold text-destructive">Break-glass recovery</div>
               <p className="my-2 text-[12px] text-text-tertiary">
-                Requires a fresh valid checkpoint. The signed evidence remains immutable and the acknowledgement is audit logged.
+                Recovery requires a fresh valid checkpoint and records the active evidence digest,
+                administrator, and reason in the audit log.
               </p>
               <div className="flex gap-2">
                 <Input
@@ -283,6 +230,7 @@ export function AdminTransparencyCard() {
               </div>
             </div>
           )}
+
         </div>
       )}
     </section>

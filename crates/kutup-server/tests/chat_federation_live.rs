@@ -1183,7 +1183,6 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     .unwrap();
     assert_eq!(first_page.entries.len(), 64);
     assert_eq!(first_page.page_to_version, 64);
-    assert!(!first_page.authentication.witnesses.is_empty());
     first_page
         .verify_page(&remote_address, 1, None, None)
         .unwrap();

@@ -14,7 +14,6 @@ roots, and large announcement channels are outside this milestone.
   interpret Chat policy payloads. Identity rotation and feature-policy rotation
   are separate contiguous old-to-new authenticated chains.
 - Transparency operators sign append-only log and current-map checkpoints.
-  Independently administered witnesses attest exact operator statements.
 - A sealed-sender offline root signs only an online server certificate. Normal
   operation has the online key and certificate, never the root private key.
 - A random profile key grants profile reads and derives the recipient-bound
@@ -40,8 +39,7 @@ message size, origin domain, or recipient identity.
 |---|---|---|
 | Malicious remote server serves an attacker device | Account signature, exact manifest leaf, RFC 6962 inclusion/consistency, current-map proof, authenticated policy | Invalid proof/signature or unresolved version gap durably blocks new sends. |
 | Policy rollback, gap, wrong domain/type, or silent key replacement | Complete federation identity and typed policy histories with sequence and predecessor hashes | Reject and retain the last valid pin; cryptographic policy-chain failures quarantine the domain. |
-| Split log view | Pinned log ID, operator signature, witness quorum, scheduled checkpoint consistency, cross-view audit | Signed same-size root/map conflict or log replacement creates immutable fork evidence and hard-blocks. |
-| Compromised or unavailable witness | Independent configured keys and quorum; original witness statements retained | Invalid/contradictory signed statements block. Missing witness, unavailable auditor, or withheld cross-view proof warns but does not override an otherwise valid quorum. |
+| Split log view | Pinned log ID, operator signature, and scheduled checkpoint consistency | Same-size root/map conflict or log replacement observed against a durable pin hard-blocks. Separate internally consistent views can remain undetected when clients never compare safety numbers or evidence; V1 has no independent witness/auditor. |
 | Skipped manifest updates | Append-only complete history and checkpoint-bound pages of at most 64 individual RFC 6962 proofs | The new manifest remains pending until every exact increment, previous hash, authority, proof, and final map binding verifies atomically. |
 | Stolen delivery capability | Recipient-bound HKDF capability, database limits, profile-key rotation on block | Capability permits bounded anonymous bundle/send attempts only; block publishes a new verifier before redistributing the new profile key. |
 | Recipient enumeration | Identical not-found response for unknown user and invalid capability | Callers cannot distinguish these cases through status/body. Timing leakage remains an operational concern. |
@@ -68,17 +66,16 @@ message size, origin domain, or recipient identity.
 
 ## Pinning and recovery rules
 
-Network failures, stale checkpoints, and unavailable witnesses are warnings and
-retain the last valid checkpoint. Rollback, invalid signatures/proofs, policy
+Network failures and stale checkpoints are warnings and retain the last valid
+checkpoint. Rollback, invalid signatures/proofs, policy
 chain failure, log replacement, same-size equivocation, and certificate/manifest
 identity mismatch are cryptographic failures. They block new sends for the
 affected domain and survive restart.
 
 Hard blocks never clear merely because a later scheduled poll succeeds. An
 administrator must name the active evidence digest, supply a reason, and obtain
-a fresh valid observation through the recovery endpoint. Fork evidence and the
-administrative audit event are not deleted. If contradictory witness views
-remain present, scheduled auditing re-applies the block.
+a fresh valid observation through the recovery endpoint. The quarantine and
+administrative recovery audit events are retained.
 
 ## Key compromise playbooks
 
@@ -88,8 +85,6 @@ remain present, scheduled auditing re-applies the block.
 - Transparency operator: publish an authenticated feature-policy successor and
   retain the log ID. Clients remain fail-closed where an old checkpoint pin
   cannot authenticate the transition.
-- Witness: publish a policy successor that changes the witness set while still
-  satisfying the local quorum floor. Preserve all prior signed statements.
 - Sealed root: publish old and new roots, activate a server certificate under
   the new root, wait at least the maximum sender-certificate lifetime plus clock
   skew, then remove the old root in a later policy version.
@@ -113,9 +108,6 @@ OTLP/gRPC exporter is configured:
   `kutup.chat.transparency.monitor.checkpoint_age_seconds`
 - `kutup.chat.transparency.proof.events` and
   `kutup.chat.transparency.proof.entries`
-- `kutup.chat.transparency.witness.events` and
-  `kutup.chat.transparency.witness.quorum`
-- `kutup.chat.transparency.fork.events`
 - `kutup.chat.sealed_sender.certificate.events`
 - `kutup.chat.sealed_sender.send.events` and
   `kutup.chat.sealed_sender.send.envelopes`
@@ -138,7 +130,7 @@ fails startup and never falls back to logs-only operation.
 The standalone [`fuzz`](../fuzz/README.md) package coverage-fuzzes every
 untrusted structure added by this milestone. One target covers authenticated
 policy envelopes and histories, typed Chat policies, checkpoints, manifest
-range pages, witness views, and fork evidence. The second covers anonymous and
+range pages. The second covers anonymous and
 federated sealed-send JSON, sender certificates, inner unidentified-sender
 content, and raw libsignal sealed-sender outer envelopes through libsignal's
 real decrypt/parser entry point. The package is outside the release workspace,

@@ -1,7 +1,8 @@
 # Scheduled web transparency monitoring
 
 **Status:** implemented; static/adversarial, production WASM/web, and live
-Chromium chat E2E verification pass
+Chromium chat E2E verification pass. Historical witness-quorum references below
+were removed before V1; monitoring now authenticates operator checkpoints.
 
 ## Decision
 

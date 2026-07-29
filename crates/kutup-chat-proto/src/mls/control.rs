@@ -125,8 +125,13 @@ impl MlsControlProposalV1 {
         if hex::encode(Sha256::digest(payload)) != self.payload_digest {
             return Err("MLS control payload digest does not match".into());
         }
+        // A canonical P-256 ECDSA DER signature is at most 72 bytes, but it is
+        // not fixed-width: DER removes redundant leading zero octets from the
+        // two INTEGER values.  Let the strict DER parser enforce the lower
+        // bound instead of rejecting the rare valid 69-byte (or shorter)
+        // encoding before it reaches the parser.
         let signature =
-            decode_canonical_base64("proposer signature", &self.proposer_signature, 70, 72)?;
+            decode_canonical_base64("proposer signature", &self.proposer_signature, 8, 72)?;
         P256Signature::from_der(&signature)
             .map_err(|_| "MLS proposer signature is not canonical P-256 DER")?;
         Ok(())
@@ -159,7 +164,7 @@ impl MlsControlProposalV1 {
         let public_key = P256Key::from_sec1_bytes(&public_key)
             .map_err(|_| "MLS proposer credential key is not P-256")?;
         let signature =
-            decode_canonical_base64("proposer signature", &self.proposer_signature, 70, 72)?;
+            decode_canonical_base64("proposer signature", &self.proposer_signature, 8, 72)?;
         let signature = P256Signature::from_der(&signature)
             .map_err(|_| "MLS proposer signature is not canonical P-256 DER")?;
         public_key

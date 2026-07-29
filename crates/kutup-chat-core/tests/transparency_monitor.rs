@@ -6,7 +6,7 @@ use ed25519_dalek::SigningKey;
 use futures_executor::block_on;
 use kutup_chat_core::{
     ChatContent, ChatDb, ChatError, ChatTransport, Engine, Result, SendOutcome, SqliteChatDb,
-    TransparencyMonitorState, TransparencyPolicy, TransparencyScopePolicy, TransparencyVerifierKey,
+    TransparencyMonitorState, TransparencyPolicy, TransparencyScopePolicy,
 };
 use kutup_chat_proto::{
     MailboxPage, RegisterChatDeviceRequest, SendMessagesRequest, TransparencyCheckpoint,
@@ -20,14 +20,12 @@ use rand::TryRngCore as _;
 enum MonitorMode {
     Valid,
     Unavailable,
-    MissingWitness,
     Tampered,
 }
 
 struct MonitorServer {
     mode: Cell<MonitorMode>,
     signing_key: SigningKey,
-    witness_key: SigningKey,
 }
 
 impl MonitorServer {
@@ -45,17 +43,6 @@ impl MonitorServer {
             &self.signing_key,
         )
         .unwrap();
-        if !matches!(self.mode.get(), MonitorMode::MissingWitness) {
-            authentication
-                .add_witness(
-                    &checkpoint,
-                    &map_root,
-                    "audit.example",
-                    1_752_688_001,
-                    &self.witness_key,
-                )
-                .unwrap();
-        }
         if matches!(self.mode.get(), MonitorMode::Tampered) {
             authentication.operator_signature = "AA==".into();
         }
@@ -82,9 +69,7 @@ impl ChatTransport for MonitorServer {
     ) -> Result<TransparencyCheckpointResponse> {
         match self.mode.get() {
             MonitorMode::Unavailable => Err(ChatError::Transport("offline".into())),
-            MonitorMode::Valid | MonitorMode::MissingWitness | MonitorMode::Tampered => {
-                Ok(self.response(from_tree_size))
-            }
+            MonitorMode::Valid | MonitorMode::Tampered => Ok(self.response(from_tree_size)),
         }
     }
 
@@ -123,10 +108,8 @@ fn scheduled_monitor_persists_status_and_blocks_after_verification_failure() {
     let server = Rc::new(MonitorServer {
         mode: Cell::new(MonitorMode::Valid),
         signing_key: SigningKey::from_bytes(&[42; 32]),
-        witness_key: SigningKey::from_bytes(&[43; 32]),
     });
     let public = server.signing_key.verifying_key();
-    let witness_public = server.witness_key.verifying_key();
     let policy = TransparencyPolicy {
         scopes: vec![TransparencyScopePolicy {
             scope: "local".into(),
@@ -136,15 +119,6 @@ fn scheduled_monitor_persists_status_and_blocks_after_verification_failure() {
                 &base64::engine::general_purpose::STANDARD,
                 public.as_bytes(),
             ),
-            witnesses: vec![TransparencyVerifierKey {
-                witness_id: "audit.example".into(),
-                key_id: kutup_chat_proto::transparency_signing_key_id(&witness_public),
-                public_key: base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    witness_public.as_bytes(),
-                ),
-            }],
-            witness_quorum: 1,
             maximum_checkpoint_age_seconds: None,
             maximum_clock_skew_seconds: None,
         }],
@@ -177,10 +151,6 @@ fn scheduled_monitor_persists_status_and_blocks_after_verification_failure() {
     assert_eq!(unavailable.state, TransparencyMonitorState::Unavailable);
     assert_eq!(unavailable.last_success_at_ms, healthy.last_success_at_ms);
 
-    server.mode.set(MonitorMode::MissingWitness);
-    let failed = block_on(engine.monitor_transparency("local")).unwrap();
-    assert_eq!(failed.state, TransparencyMonitorState::VerificationFailed);
-    assert!(failed.detail.unwrap().contains("trusted witnesses"));
     server.mode.set(MonitorMode::Tampered);
     let tampered = block_on(engine.monitor_transparency("local")).unwrap();
     assert_eq!(tampered.state, TransparencyMonitorState::VerificationFailed);

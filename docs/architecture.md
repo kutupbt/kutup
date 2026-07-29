@@ -230,17 +230,16 @@ before redistributing the new key to remaining contacts.
 An account self-authority key signs the exact chat-device manifest. Every
 accepted manifest version is appended to a chronological Merkle log and the
 current account value is authenticated by a sparse Merkle map. Exact
-checkpoints carry a persistent operator signature and may carry signatures
-from independently deployed witnesses; clients enforce their pinned operator
-and witness-quorum policy.
+checkpoints carry a persistent operator signature; clients enforce their
+pinned operator policy.
 
 The web client independently verifies local and authenticated remote policy and
 checkpoint histories when chat opens, connectivity returns, the page becomes
 visible, the WebSocket reconnects, and before stale evidence is used. The
-server also runs restart-safe 15-minute remote monitoring and scheduled
-operator/witness cross-view auditing. Network/witness unavailability warns
-without discarding established trust; a cryptographic contradiction durably
-blocks new sends for that domain. Skipped manifest versions are recovered from
+server also runs restart-safe 15-minute remote monitoring. Network
+unavailability warns without discarding established trust; a cryptographic
+contradiction against a client's prior pin durably blocks new sends for that
+domain. Skipped manifest versions are recovered from
 checkpoint-bound pages and committed only after the entire chain verifies.
 Existing durable ciphertext is retained.
 
@@ -319,7 +318,7 @@ PostgreSQL 16 is used for all persistent metadata:
 - Federation share tokens and incoming shares
 - Chat devices and public prekey pools
 - Opaque per-device chat mailboxes and idempotent send records
-- Signed device manifests, transparency log/map nodes, checkpoints, and witness attestations
+- Signed device manifests, transparency log/map nodes, and checkpoints
 - Unified federation local/peer identity history, trust/quarantine evidence,
   replay reservations, and feature-scoped policy
 - Durable per-destination federation outboxes and inbound replay/high-water records

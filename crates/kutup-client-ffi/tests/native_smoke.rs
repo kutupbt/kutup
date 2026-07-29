@@ -23,8 +23,6 @@ fn transparency_policy() -> ChatTransparencyPolicy {
             scope: "local".into(),
             operator_key_id: kutup_chat_proto::transparency_signing_key_id(&key),
             operator_public_key: STANDARD.encode(key.as_bytes()),
-            witnesses: Vec::new(),
-            witness_quorum: 0,
         }],
     }
 }
@@ -191,6 +189,7 @@ fn encrypted_install_registers_once_and_reopens() {
         database.clone(),
         vec![3; 32],
         "alice".into(),
+        "chat.test".into(),
         vec![9; 32],
         transparency_policy(),
         http.clone(),
@@ -228,6 +227,7 @@ fn encrypted_install_registers_once_and_reopens() {
         database.clone(),
         vec![4; 32],
         "alice".into(),
+        "chat.test".into(),
         vec![9; 32],
         transparency_policy(),
         http.clone(),
@@ -238,6 +238,7 @@ fn encrypted_install_registers_once_and_reopens() {
         database,
         vec![3; 32],
         "alice".into(),
+        "chat.test".into(),
         vec![9; 32],
         transparency_policy(),
         http.clone(),

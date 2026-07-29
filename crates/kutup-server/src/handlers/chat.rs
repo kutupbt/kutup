@@ -35,8 +35,7 @@ use kutup_chat_proto::{
     OwnChatProfileResponse, PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest,
     RegisterChatDeviceRequest, RegisterChatDeviceResponse, ReplenishKeysRequest,
     SealedDeliveryResponseV1, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1,
-    SendMessagesRequest, SubmitTransparencyWitnessRequest, TransparencyCheckpointResponse,
-    UserPreKeyBundlesResponse,
+    SendMessagesRequest, TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
 };
 
 use crate::chat_hub::ChatWsOut;
@@ -114,8 +113,8 @@ pub struct ManifestRangeQuery {
     pub transparency_tree_size: Option<u64>,
 }
 
-/// Public signed head for client monitors and independent witnesses. This does
-/// not touch a user directory or consume one-time keys.
+/// Public operator-signed head for client monitors. This does not touch a user
+/// directory or consume one-time keys.
 #[utoipa::path(
     get,
     path = "/api/chat/transparency/checkpoint",
@@ -138,42 +137,6 @@ pub async fn get_transparency_checkpoint(
             .await?;
     tx.commit().await?;
     Ok(Json(response).into_response())
-}
-
-/// Cache a statement made with an administrator-selected independent witness
-/// key. Replays are idempotent; contradictory submissions fail closed.
-#[utoipa::path(
-    post,
-    path = "/api/chat/transparency/witness",
-    tag = "chat",
-    operation_id = "submitChatTransparencyWitness",
-    request_body = SubmitTransparencyWitnessRequest,
-    responses(
-        (status = 200, description = "Witness statement accepted"),
-        (status = 401, description = "Witness is not in deployment policy"),
-        (status = 404, description = "Checkpoint is unknown"),
-        (status = 409, description = "Witness equivocated at this tree size")
-    )
-)]
-pub async fn submit_transparency_witness(
-    State(state): State<AppState>,
-    Json(request): Json<SubmitTransparencyWitnessRequest>,
-) -> AppResult<Response> {
-    let inserted = match crate::chat_transparency::submit_witness_attestation(
-        &state.pool,
-        &state.transparency_authority,
-        &request,
-    )
-    .await
-    {
-        Ok(inserted) => inserted,
-        Err(error) => {
-            crate::telemetry::witness_event("rejected", 0);
-            return Err(error);
-        }
-    };
-    crate::telemetry::witness_event(if inserted { "accepted" } else { "deduplicated" }, 1);
-    Ok(Json(json!({ "accepted": true, "deduplicated": !inserted })).into_response())
 }
 
 /// Validates a base64 field and returns the decoded bytes (callers that only
@@ -528,9 +491,12 @@ pub async fn publish_manifest(
     }
     if idempotent {
         tx.commit().await?;
-        let transparency =
-            prove_manifest_with_quorum(&state, user_id, query.transparency_tree_size.unwrap_or(0))
-                .await?;
+        let transparency = prove_manifest_authentication(
+            &state,
+            user_id,
+            query.transparency_tree_size.unwrap_or(0),
+        )
+        .await?;
         return Ok(Json(PublishManifestResponse {
             manifest,
             transparency,
@@ -568,7 +534,7 @@ pub async fn publish_manifest(
     .await?;
     tx.commit().await?;
     let transparency =
-        prove_manifest_with_quorum(&state, user_id, query.transparency_tree_size.unwrap_or(0))
+        prove_manifest_authentication(&state, user_id, query.transparency_tree_size.unwrap_or(0))
             .await?;
 
     Ok(Json(PublishManifestResponse {
@@ -578,36 +544,16 @@ pub async fn publish_manifest(
     .into_response())
 }
 
-/// The manifest/log/map/checkpoint mutation has already committed atomically,
-/// so an independent witness can now observe it. Bound the availability wait;
-/// a timeout returns 503 while leaving the exact idempotent manifest retryable.
-pub(crate) async fn prove_manifest_with_quorum(
+/// Return the operator-authenticated proof for an atomically committed manifest.
+pub(crate) async fn prove_manifest_authentication(
     state: &AppState,
     user_id: Uuid,
     known_tree_size: u64,
 ) -> AppResult<kutup_chat_proto::ManifestTransparencyProof> {
-    let required = usize::from(state.transparency_authority.witness_quorum());
-    for attempt in 0..=50 {
-        let mut tx = state.pool.begin().await?;
-        let proof =
-            crate::chat_transparency::prove_manifest(&mut tx, user_id, known_tree_size).await?;
-        tx.commit().await?;
-        if proof.authentication.witnesses.len() >= required {
-            crate::telemetry::witness_event(
-                "quorum_satisfied",
-                proof.authentication.witnesses.len() as u64,
-            );
-            return Ok(proof);
-        }
-        if attempt < 50 {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-    }
-    crate::telemetry::witness_event("quorum_unavailable", 0);
-    Err(AppError::new(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "transparency witness quorum has not observed the committed manifest",
-    ))
+    let mut tx = state.pool.begin().await?;
+    let proof = crate::chat_transparency::prove_manifest(&mut tx, user_id, known_tree_size).await?;
+    tx.commit().await?;
+    Ok(proof)
 }
 
 /// `GET /api/chat/users/{username}/manifest` — fetch a local account's latest
@@ -663,7 +609,6 @@ pub async fn get_user_manifest(
     responses(
         (status = 200, description = "Latest signed manifest and authenticated transparency proof", body = PublishManifestResponse),
         (status = 404, description = "Unknown account or no manifest"),
-        (status = 503, description = "Required witness quorum is unavailable"),
     ),
     security(("bearerAuth" = []))
 )]
@@ -725,7 +670,7 @@ pub(crate) async fn load_manifest_proof(
     manifest
         .verify()
         .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
-    let transparency = prove_manifest_with_quorum(state, user_id, known_tree_size).await?;
+    let transparency = prove_manifest_authentication(state, user_id, known_tree_size).await?;
     Ok(PublishManifestResponse {
         manifest,
         transparency,

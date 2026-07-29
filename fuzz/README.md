@@ -8,8 +8,7 @@ toolchain or libFuzzer dependency.
 The targets are:
 
 - `policy_transparency_parsers`: authenticated feature-policy envelopes and
-  histories, both typed Chat policies, checkpoints, manifest range proofs,
-  witness views, and fork evidence;
+  histories, both typed Chat policies, checkpoints, and manifest range proofs;
 - `sealed_sender_parsers`: anonymous and federated sealed-send JSON, sender
   certificates, libsignal unidentified-sender content, and raw libsignal
   sealed-sender outer envelopes through the real decrypt/parser entry point;

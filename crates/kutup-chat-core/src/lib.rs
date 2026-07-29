@@ -41,7 +41,6 @@ pub use db::{
     InboxMessage, LocalIdentity, LocalProfile, ManifestHistoryRecord, ManifestTrust,
     MlsHistoryMessage, MlsOutboxDelivery, MlsOutboxEntry, OutboxEntry, OutboxSyncLeg, PeerProfile,
     Pending, SentMessage, TransparencyMonitorState, TransparencyMonitorStatus, TransparencyTrust,
-    TransparencyWitnessTrust,
 };
 pub use engine::{
     ChatEvent, Engine, EngineState, InboundFailure, PreKeyMaintenanceReport, ReceiveReport,
@@ -49,7 +48,7 @@ pub use engine::{
 pub use error::{ChatError, Result};
 pub use kutup_chat_proto::{
     AccountAddress, ChatContent, ContactControlBody, ContactState, ConversationId,
-    DeliveredEnvelope, OutgoingEnvelope, TextBody, TransparencyVerifierKey,
+    DeliveredEnvelope, OutgoingEnvelope, TextBody,
 };
 pub use manifest::{
     verify_bundle_response, verify_manifest, AccountAuthority, ManifestPolicy, TransparencyPolicy,

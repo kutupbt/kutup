@@ -45,7 +45,7 @@ select its suite.
 | `DirectChatSuiteId` | Direct-session establishment, ratchet, message format, and validation; one device-to-device session | `kutup-chat-proto` and `kutup-chat-core` |
 | `GroupChatSuiteId` | Group key agreement, encrypted authoritative group state, message protection, and epoch rules; one group/epoch | Group Chat protocol/core; created with the group feature, not as a placeholder |
 | `ProfileSuiteId` | Encrypted-profile key derivation, field envelopes, padding, wrapping, and access capability; one profile-key version | `kutup-chat-proto` and the profile module in `kutup-chat-core` |
-| `KeyTransparencySuiteId` | Log/map hashing, proof formats, checkpoint, operator, and witness authentication; one log generation | transparency protocol module; extraction from Chat is required if Drive adopts it |
+| `KeyTransparencySuiteId` | Log/map hashing, proof formats, checkpoint, and operator authentication; one log generation | transparency protocol module; extraction from Chat is required if Drive adopts it |
 | `FederationAuthProfileId` | Federation discovery authentication, server identity/rotation, HTTP request/response authentication, and replay profile; one federation protocol version/exchange | `kutup-federation-proto` |
 
 The extra Account Protection, Collaboration, and Key Transparency boundaries

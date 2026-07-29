@@ -10,7 +10,7 @@ codebases checked out locally: `libsignal`, Prosody, ejabberd, Monal.
 > **Implementation status (2026-07-17):** The verdict remains the design
 > rationale. Its signed device manifest, durable in-order federation,
 > authenticated request, mailbox-durability, encrypted-profile, key-
-> transparency, and witness recommendations are implemented in the server,
+> transparency recommendations are implemented in the server,
 > shared core, and web client. GV2-pattern private groups, complete sealed
 > sender, richer messaging/media, remote federation-policy distribution, and
 > native integration remain. Current normative behavior lives in

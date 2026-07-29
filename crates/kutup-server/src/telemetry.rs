@@ -179,37 +179,6 @@ pub fn proof_event(profile: &'static str, outcome: &'static str, entries: u64) {
     .record(entries, &attributes);
 }
 
-pub fn witness_event(outcome: &'static str, quorum: u64) {
-    static COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
-    static QUORUM: OnceLock<Histogram<u64>> = OnceLock::new();
-    COUNTER
-        .get_or_init(|| {
-            global::meter(INSTRUMENTATION_SCOPE)
-                .u64_counter("kutup.chat.transparency.witness.events")
-                .with_description("Witness checkpoint and quorum outcomes")
-                .build()
-        })
-        .add(1, &[KeyValue::new("outcome", outcome)]);
-    QUORUM
-        .get_or_init(|| {
-            global::meter(INSTRUMENTATION_SCOPE)
-                .u64_histogram("kutup.chat.transparency.witness.quorum")
-                .with_description("Authenticated witness signatures participating in a checkpoint")
-                .build()
-        })
-        .record(quorum, &[KeyValue::new("outcome", outcome)]);
-}
-
-pub fn fork_event(outcome: &'static str) {
-    event_counter(
-        &FORK_COUNTER,
-        "kutup.chat.transparency.fork.events",
-        "Independent transparency fork-audit outcomes",
-        "outcome",
-        outcome,
-    );
-}
-
 pub fn certificate_event(outcome: &'static str) {
     event_counter(
         &CERTIFICATE_COUNTER,
@@ -354,7 +323,6 @@ pub fn mls_anonymous_delivery_event(stage: &'static str, outcome: &'static str, 
         .record(envelopes, &attributes);
 }
 
-static FORK_COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
 static CERTIFICATE_COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
 static RATE_LIMIT_COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
 

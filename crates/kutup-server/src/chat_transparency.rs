@@ -8,16 +8,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::SigningKey;
 use kutup_chat_proto::{
     hash_transparency_map_checkpoint, hash_transparency_map_leaf, hash_transparency_node,
     manifest_range_cursor, map_key_bit, transparency_map_empty_hashes, transparency_map_key,
     ChatTransparencyPolicyV1, DeviceManifest, ManifestTransparencyLeaf,
     ManifestTransparencyMapProof, ManifestTransparencyProof, ManifestUpdateRangeEntryV1,
-    ManifestUpdateRangeProofV1, SubmitTransparencyWitnessRequest, TransparencyCheckpoint,
-    TransparencyCheckpointAuthentication, TransparencyCheckpointResponse, TransparencyHash,
-    TransparencyMapSibling, TransparencyProofProfileV1, TransparencyVerifierKey,
-    TransparencyWitnessAttestation, TransparencyWitnessPolicyV1,
+    ManifestUpdateRangeProofV1, TransparencyCheckpoint, TransparencyCheckpointAuthentication,
+    TransparencyCheckpointResponse, TransparencyHash, TransparencyMapSibling,
+    TransparencyProofProfileV1,
 };
 use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
 use time::OffsetDateTime;
@@ -27,11 +26,8 @@ use crate::config::Config;
 use crate::error::{AppError, AppResult};
 
 /// Long-term operator identity for distinguished transparency checkpoints.
-/// Witness private keys never enter this process.
 pub struct TransparencyAuthority {
     signing_key: SigningKey,
-    trusted_witnesses: BTreeMap<String, TransparencyVerifierKey>,
-    witness_quorum: u16,
 }
 
 impl TransparencyAuthority {
@@ -47,47 +43,8 @@ impl TransparencyAuthority {
         let seed: [u8; 32] = seed.try_into().map_err(|_| {
             anyhow::anyhow!("CHAT_TRANSPARENCY_SIGNING_KEY must decode to exactly 32 bytes")
         })?;
-        let mut trusted_witnesses = BTreeMap::new();
-        for entry in config
-            .chat_transparency_witnesses
-            .split(',')
-            .map(str::trim)
-            .filter(|entry| !entry.is_empty())
-        {
-            let (witness_id, encoded) = entry.split_once('=').ok_or_else(|| {
-                anyhow::anyhow!("CHAT_TRANSPARENCY_WITNESSES entries must be witness-id=base64-key")
-            })?;
-            let public = STANDARD.decode(encoded).map_err(|_| {
-                anyhow::anyhow!("CHAT_TRANSPARENCY_WITNESSES contains invalid base64")
-            })?;
-            let public: [u8; 32] = public.try_into().map_err(|_| {
-                anyhow::anyhow!("CHAT_TRANSPARENCY_WITNESSES keys must be exactly 32 bytes")
-            })?;
-            let public = VerifyingKey::from_bytes(&public).map_err(|_| {
-                anyhow::anyhow!("CHAT_TRANSPARENCY_WITNESSES contains an invalid Ed25519 key")
-            })?;
-            let verifier = TransparencyVerifierKey {
-                witness_id: witness_id.to_string(),
-                key_id: kutup_chat_proto::transparency_signing_key_id(&public),
-                public_key: STANDARD.encode(public.as_bytes()),
-            };
-            verifier.validate().map_err(anyhow::Error::msg)?;
-            if trusted_witnesses
-                .insert(verifier.witness_id.clone(), verifier)
-                .is_some()
-            {
-                anyhow::bail!("CHAT_TRANSPARENCY_WITNESSES repeats a witness id");
-            }
-        }
-        let witness_quorum = u16::try_from(config.chat_transparency_witness_quorum)
-            .map_err(|_| anyhow::anyhow!("CHAT_TRANSPARENCY_WITNESS_QUORUM is too large"))?;
-        if usize::from(witness_quorum) > trusted_witnesses.len() {
-            anyhow::bail!("CHAT_TRANSPARENCY_WITNESS_QUORUM exceeds configured witnesses");
-        }
         Ok(Self {
             signing_key: SigningKey::from_bytes(&seed),
-            trusted_witnesses,
-            witness_quorum,
         })
     }
 
@@ -98,69 +55,21 @@ impl TransparencyAuthority {
     pub fn key_id(&self) -> String {
         kutup_chat_proto::transparency_signing_key_id(&self.signing_key.verifying_key())
     }
-
-    pub fn witnesses(&self) -> Vec<TransparencyVerifierKey> {
-        self.trusted_witnesses.values().cloned().collect()
-    }
-
-    pub fn witness_quorum(&self) -> u16 {
-        self.witness_quorum
-    }
 }
 
 pub async fn local_transparency_policy(
     pool: &PgPool,
-    config: &Config,
     authority: &TransparencyAuthority,
 ) -> anyhow::Result<Option<ChatTransparencyPolicyV1>> {
-    if authority.witness_quorum() == 0 {
-        return Ok(None);
-    }
     let log_id: String =
         sqlx::query_scalar("SELECT log_id FROM chat_transparency_log WHERE singleton = true")
             .fetch_one(pool)
             .await?;
-    let mut endpoints = BTreeMap::new();
-    for entry in config
-        .chat_transparency_witness_endpoints
-        .split(',')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-    {
-        let (id, endpoint) = entry.split_once('=').ok_or_else(|| {
-            anyhow::anyhow!(
-                "CHAT_TRANSPARENCY_WITNESS_ENDPOINTS entries must be witness-id=https-url"
-            )
-        })?;
-        if endpoints
-            .insert(id.to_owned(), endpoint.to_owned())
-            .is_some()
-        {
-            anyhow::bail!("CHAT_TRANSPARENCY_WITNESS_ENDPOINTS repeats a witness id");
-        }
-    }
-    let witnesses = authority
-        .witnesses()
-        .into_iter()
-        .map(|witness| TransparencyWitnessPolicyV1 {
-            public_endpoint: endpoints
-                .remove(&witness.witness_id)
-                .unwrap_or_else(|| default_witness_endpoint(&witness.witness_id)),
-            witness_id: witness.witness_id,
-            key_id: witness.key_id,
-            public_key: witness.public_key,
-        })
-        .collect();
-    if !endpoints.is_empty() {
-        anyhow::bail!("CHAT_TRANSPARENCY_WITNESS_ENDPOINTS names an unconfigured witness");
-    }
     let policy = ChatTransparencyPolicyV1 {
         policy_version: 1,
         log_id: log_id.trim_end().to_owned(),
         operator_key_id: authority.key_id(),
         operator_public_key: authority.public_key_base64(),
-        witnesses,
-        required_quorum: authority.witness_quorum(),
         proof_profile: TransparencyProofProfileV1::Rfc6962IndividualInclusionV1,
         maximum_checkpoint_age_seconds: 60 * 60,
         maximum_clock_skew_seconds: 60,
@@ -169,23 +78,6 @@ pub async fn local_transparency_policy(
     };
     policy.validate().map_err(anyhow::Error::msg)?;
     Ok(Some(policy))
-}
-
-fn default_witness_endpoint(witness_id: &str) -> String {
-    format!("https://{witness_id}/v1/view")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::default_witness_endpoint;
-
-    #[test]
-    fn generated_witness_endpoint_is_a_canonical_signed_view_path() {
-        assert_eq!(
-            default_witness_endpoint("audit.example"),
-            "https://audit.example/v1/view"
-        );
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -811,95 +703,6 @@ pub async fn prove_checkpoint(
     Ok(response)
 }
 
-/// Accept a self-authenticating observation only when its public identity is
-/// present in the administrator's out-of-band witness allowlist.
-pub async fn submit_witness_attestation(
-    pool: &PgPool,
-    authority: &TransparencyAuthority,
-    request: &SubmitTransparencyWitnessRequest,
-) -> AppResult<bool> {
-    let trusted = authority
-        .trusted_witnesses
-        .get(&request.attestation.witness_id)
-        .ok_or_else(|| AppError::unauthorized("untrusted transparency witness"))?;
-    if !trusted.matches(&request.attestation) {
-        return Err(AppError::unauthorized(
-            "transparency witness key does not match policy",
-        ));
-    }
-    let tree_size = i64::try_from(request.tree_size)
-        .map_err(|_| AppError::bad_request("transparency tree size is too large"))?;
-    let mut tx = pool.begin().await?;
-    let signed: Option<(String, Vec<u8>, Vec<u8>)> = sqlx::query_as(
-        "SELECT log_id, root_hash, map_root
-         FROM chat_transparency_signed_checkpoints WHERE tree_size = $1",
-    )
-    .bind(tree_size)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let (log_id, root, map_root) =
-        signed.ok_or_else(|| AppError::not_found("transparency checkpoint is unknown"))?;
-    let root = hash_from_bytes(&root)?;
-    let map_root = hash_from_bytes(&map_root)?;
-    let checkpoint = TransparencyCheckpoint {
-        log_id: log_id.trim_end().to_string(),
-        tree_size: request.tree_size,
-        root_hash: hex::encode(root),
-    };
-    let authentication =
-        load_checkpoint_authentication(&mut tx, request.tree_size, &log_id, root, map_root).await?;
-    request
-        .attestation
-        .verify(&authentication, &checkpoint, &hex::encode(map_root))
-        .map_err(AppError::bad_request)?;
-    if request.attestation.observed_at > OffsetDateTime::now_utc().unix_timestamp() + 300 {
-        return Err(AppError::bad_request(
-            "transparency witness observation is too far in the future",
-        ));
-    }
-    let inserted = sqlx::query(
-        "INSERT INTO chat_transparency_witness_attestations
-             (tree_size, witness_id, observed_at, key_id, public_key, signature)
-         VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (tree_size, witness_id) DO NOTHING",
-    )
-    .bind(tree_size)
-    .bind(&request.attestation.witness_id)
-    .bind(request.attestation.observed_at)
-    .bind(&request.attestation.key_id)
-    .bind(&request.attestation.public_key)
-    .bind(&request.attestation.signature)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected()
-        == 1;
-    if !inserted {
-        let existing: (i64, String, String, String) = sqlx::query_as(
-            "SELECT observed_at, key_id, public_key, signature
-             FROM chat_transparency_witness_attestations
-             WHERE tree_size = $1 AND witness_id = $2",
-        )
-        .bind(tree_size)
-        .bind(&request.attestation.witness_id)
-        .fetch_one(&mut *tx)
-        .await?;
-        if existing
-            != (
-                request.attestation.observed_at,
-                request.attestation.key_id.clone(),
-                request.attestation.public_key.clone(),
-                request.attestation.signature.clone(),
-            )
-        {
-            return Err(AppError::conflict(
-                "witness already submitted a different statement for this checkpoint",
-            ));
-        }
-    }
-    tx.commit().await?;
-    Ok(inserted)
-}
-
 async fn load_checkpoint_authentication(
     tx: &mut Transaction<'_, Postgres>,
     tree_size: u64,
@@ -927,31 +730,11 @@ async fn load_checkpoint_authentication(
             "signed transparency checkpoint contradicts the log head",
         ));
     }
-    let witnesses: Vec<(String, i64, String, String, String)> = sqlx::query_as(
-        "SELECT witness_id, observed_at, key_id, public_key, signature
-         FROM chat_transparency_witness_attestations
-         WHERE tree_size = $1 ORDER BY witness_id",
-    )
-    .bind(tree_size)
-    .fetch_all(&mut **tx)
-    .await?;
     Ok(TransparencyCheckpointAuthentication {
         issued_at: signed.issued_at,
         operator_key_id: signed.operator_key_id.trim_end().to_string(),
         operator_public_key: signed.operator_public_key,
         operator_signature: signed.operator_signature,
-        witnesses: witnesses
-            .into_iter()
-            .map(|(witness_id, observed_at, key_id, public_key, signature)| {
-                TransparencyWitnessAttestation {
-                    witness_id,
-                    observed_at,
-                    key_id: key_id.trim_end().to_string(),
-                    public_key,
-                    signature,
-                }
-            })
-            .collect(),
     })
 }
 

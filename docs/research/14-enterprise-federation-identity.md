@@ -10,6 +10,10 @@ Drive. The clean replacement and implementation sequence is specified in
 The system in this note is an optional future high-assurance profile for
 organizations willing to operate more trust infrastructure.
 
+The transparency-witness roles discussed below are also deferred research.
+Kutup V1 ships operator-signed checkpoints, durable client/server pins, and
+scheduled monitoring without a witness or auditor service.
+
 ## 1. Why this exists
 
 TLS and a domain's currently published federation key establish who controls an

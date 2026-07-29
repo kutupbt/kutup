@@ -1,8 +1,8 @@
 # Federated manifest key-transparency foundation
 
-**Status:** append-only log, authenticated current map, signed checkpoints,
-independent witness quorum, and scheduled local web monitoring implemented;
-range/remote monitoring and cross-witness gossip follow-up remains
+**Status:** append-only log, authenticated current map, operator-signed
+checkpoints, range recovery, and scheduled local/remote monitoring implemented.
+Historical witness/auditor references below were removed before V1.
 
 ## Decision
 

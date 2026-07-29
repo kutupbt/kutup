@@ -1,7 +1,8 @@
 # Signed transparency checkpoints and independent witnesses
 
-**Status:** implemented and live-verified locally, with an independent witness,
-and across two federated servers
+**Status:** superseded and removed before V1. This file is retained only as
+historical design context; no witness/auditor protocol, binary, route, storage,
+configuration, capability, or deployment surface remains.
 
 ## Decision
 

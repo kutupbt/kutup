@@ -108,7 +108,7 @@ pub trait ChatTransport {
     }
 
     /// Fetch the exact current account manifest with inclusion, current-map,
-    /// consistency, operator-signature, and witness-quorum evidence. Unlike a
+    /// consistency and operator-signature evidence. Unlike a
     /// bundle fetch, this consumes no one-time Signal or MLS key material.
     async fn fetch_manifest_publication(
         &self,

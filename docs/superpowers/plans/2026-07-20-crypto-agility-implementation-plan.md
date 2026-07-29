@@ -4,6 +4,9 @@
 
 **Status:** proposed
 
+**V1 note:** witness/auditor work mentioned in this historical plan was removed
+before V1. The active transparency profile is operator-signed and monitored.
+
 **Authority:** [`../../crypto-agility.md`](../../crypto-agility.md)
 
 **Scope:** planning only; this document does not authorize an algorithm change

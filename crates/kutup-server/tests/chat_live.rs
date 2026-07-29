@@ -201,10 +201,8 @@ fn publish_manifest(
     };
     manifest.signature = b64(&signing.sign(&manifest.signing_bytes().unwrap()).to_bytes());
     manifest.verify().unwrap();
-    // The manifest/log/map/checkpoint transaction commits before the server
-    // waits for the independently running witness. If that bounded wait
-    // expires, the server deliberately returns 503 and requires an exact,
-    // idempotent retry rather than rolling back or publishing new bytes.
+    // Publication is idempotent, so a transient transport failure can retry
+    // the exact manifest without publishing different bytes.
     let mut response = None;
     for attempt in 0..3 {
         let candidate = c
@@ -267,10 +265,8 @@ fn chat_v1_contract() {
         64
     );
     assert!(chat["transparencyOperatorPublicKey"].is_string());
-    assert!(
-        chat["transparencyWitnessQuorum"].as_u64().unwrap()
-            <= chat["transparencyWitnesses"].as_array().map_or(0, Vec::len) as u64
-    );
+    assert!(chat.get("transparencyWitnessQuorum").is_none());
+    assert!(chat.get("transparencyWitnesses").is_none());
     assert!(chat["mailboxRetentionDays"].is_number());
     assert!(chat["deviceExpiryDays"].is_number());
     println!("ok  - capability block");

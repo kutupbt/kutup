@@ -7,14 +7,12 @@ use hkdf::Hkdf;
 use kutup_chat_proto::{
     AccountAddress, DeviceManifest, ManifestDevice, ManifestTransparencyProof,
     PublishManifestResponse, TransparencyCheckpoint, TransparencyCheckpointAuthentication,
-    TransparencyCheckpointResponse, TransparencyVerifierKey, TransparencyWitnessAttestation,
-    UserPreKeyBundlesResponse,
+    TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroize as _;
 
-use crate::db::TransparencyWitnessTrust;
 use crate::db::{AuthorityTrust, ManifestTrust, TransparencyTrust};
 use crate::error::{ChatError, Result};
 
@@ -29,8 +27,7 @@ pub enum ManifestPolicy {
     AllowMissingForDevelopment,
 }
 
-/// Application-supplied trust roots for one transparency namespace. A log
-/// response cannot add a trusted witness to this policy.
+/// Application-supplied operator trust roots for transparency namespaces.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransparencyPolicy {
@@ -48,10 +45,6 @@ pub struct TransparencyScopePolicy {
     pub log_id: Option<String>,
     pub operator_key_id: String,
     pub operator_public_key: String,
-    #[serde(default)]
-    pub witnesses: Vec<TransparencyVerifierKey>,
-    #[serde(default)]
-    pub witness_quorum: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maximum_checkpoint_age_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -102,20 +95,6 @@ impl TransparencyPolicy {
             if !valid_key_id || !valid_public_key {
                 return Err(ChatError::Invalid(
                     "transparency policy has an invalid operator key".into(),
-                ));
-            }
-            let mut witness_ids = std::collections::BTreeSet::new();
-            for witness in &policy.witnesses {
-                witness.validate().map_err(ChatError::Invalid)?;
-                if !witness_ids.insert(witness.witness_id.as_str()) {
-                    return Err(ChatError::Invalid(
-                        "transparency policy repeats a witness id".into(),
-                    ));
-                }
-            }
-            if usize::from(policy.witness_quorum) > policy.witnesses.len() {
-                return Err(ChatError::Invalid(
-                    "transparency witness quorum exceeds the trusted witness set".into(),
                 ));
             }
         }
@@ -270,8 +249,6 @@ fn verify_authenticated_checkpoint(
             ));
         }
     }
-    let witnesses =
-        verify_witness_policy(&authentication.witnesses, scope_policy, prior, checkpoint)?;
     Ok(TransparencyTrust {
         scope,
         log_id: checkpoint.log_id.clone(),
@@ -280,73 +257,7 @@ fn verify_authenticated_checkpoint(
         operator_key_id: authentication.operator_key_id.clone(),
         operator_public_key: authentication.operator_public_key.clone(),
         checkpoint_issued_at: authentication.issued_at,
-        witnesses,
     })
-}
-
-fn verify_witness_policy(
-    attestations: &[TransparencyWitnessAttestation],
-    policy: Option<&TransparencyScopePolicy>,
-    prior: Option<&TransparencyTrust>,
-    checkpoint: &TransparencyCheckpoint,
-) -> Result<Vec<TransparencyWitnessTrust>> {
-    let Some(policy) = policy else {
-        return Ok(prior
-            .map(|prior| prior.witnesses.clone())
-            .unwrap_or_default());
-    };
-    let mut accepted = Vec::new();
-    let mut observed = 0usize;
-    for trusted in &policy.witnesses {
-        let previous = prior.and_then(|prior| {
-            prior
-                .witnesses
-                .iter()
-                .find(|witness| witness.witness_id == trusted.witness_id)
-        });
-        if let Some(previous) = previous {
-            if previous.key_id != trusted.key_id || previous.public_key != trusted.public_key {
-                return Err(ChatError::Trust(
-                    "trusted transparency witness key changed without a transition".into(),
-                ));
-            }
-        }
-        let current = attestations
-            .iter()
-            .find(|attestation| trusted.matches(attestation));
-        if let Some(current) = current {
-            if let Some(previous) = previous {
-                if current.observed_at < previous.observed_at
-                    || checkpoint.tree_size < previous.tree_size
-                    || (checkpoint.tree_size == previous.tree_size
-                        && checkpoint.root_hash != previous.root_hash)
-                {
-                    return Err(ChatError::Trust(
-                        "transparency witness observation rolled back or equivocated".into(),
-                    ));
-                }
-            }
-            observed += 1;
-            accepted.push(TransparencyWitnessTrust {
-                witness_id: current.witness_id.clone(),
-                key_id: current.key_id.clone(),
-                public_key: current.public_key.clone(),
-                tree_size: checkpoint.tree_size,
-                root_hash: checkpoint.root_hash.clone(),
-                observed_at: current.observed_at,
-            });
-        } else if let Some(previous) = previous {
-            accepted.push(previous.clone());
-        }
-    }
-    if observed < usize::from(policy.witness_quorum) {
-        return Err(ChatError::Trust(format!(
-            "transparency checkpoint has {observed} trusted witnesses; {} required",
-            policy.witness_quorum
-        )));
-    }
-    accepted.sort_by(|left, right| left.witness_id.cmp(&right.witness_id));
-    Ok(accepted)
 }
 
 /// Verify the signed manifest and its inclusion in the homeserver's append-only
@@ -862,32 +773,13 @@ mod tests {
             },
             authentication,
         });
-        let witness = SigningKey::from_bytes(&[94; 32]);
         let proof = response.transparency.as_mut().unwrap();
-        proof
-            .authentication
-            .add_witness(
-                &proof.checkpoint,
-                &proof.map.root_hash,
-                "audit.example",
-                1_752_688_001,
-                &witness,
-            )
-            .unwrap();
-        let witness_key = witness.verifying_key();
         let policy = TransparencyPolicy {
             scopes: vec![TransparencyScopePolicy {
                 scope: "local".into(),
                 log_id: None,
                 operator_key_id: proof.authentication.operator_key_id.clone(),
                 operator_public_key: proof.authentication.operator_public_key.clone(),
-                witnesses: vec![TransparencyVerifierKey {
-                    witness_id: "audit.example".into(),
-                    key_id: kutup_chat_proto::transparency_signing_key_id(&witness_key),
-                    public_key: base64::engine::general_purpose::STANDARD
-                        .encode(witness_key.as_bytes()),
-                }],
-                witness_quorum: 1,
                 maximum_checkpoint_age_seconds: None,
                 maximum_clock_skew_seconds: None,
             }],
@@ -909,7 +801,6 @@ mod tests {
         let checkpoint = verified.transparency.unwrap();
         assert_eq!(checkpoint.scope, "local");
         assert_eq!(checkpoint.tree_size, 2);
-        assert_eq!(checkpoint.witnesses.len(), 1);
         let current = PublishManifestResponse {
             manifest: manifest.clone(),
             transparency: response.transparency.clone().unwrap(),
@@ -919,24 +810,6 @@ mod tests {
         assert_eq!(manifest_pin.highest_version, 1);
         assert_eq!(manifest_pin.transparency_position, Some(0));
         assert_eq!(current_checkpoint, checkpoint);
-
-        let mut unwitnessed = response.clone();
-        unwitnessed
-            .transparency
-            .as_mut()
-            .unwrap()
-            .authentication
-            .witnesses
-            .clear();
-        assert!(verify_transparent_bundle_response(
-            "bob",
-            &unwitnessed,
-            ManifestPolicy::Required,
-            None,
-            None,
-            &policy,
-        )
-        .is_err());
 
         response.transparency.as_mut().unwrap().map.root_hash = "03".repeat(32);
         assert!(verify_transparent_bundle_response(

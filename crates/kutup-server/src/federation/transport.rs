@@ -122,46 +122,6 @@ impl AuthenticatedFederationRequest {
 }
 
 impl FederationStack {
-    /// Fetch a self-authenticating public object whose exact URL came from an
-    /// already verified feature policy. The object is not a federation HTTP
-    /// response, so its feature-specific signature is verified by the caller;
-    /// DNS binding, SSRF rejection, redirects, timeout, and response limits
-    /// remain identical to the unified federation transport.
-    pub(crate) async fn fetch_signed_public_object(
-        &self,
-        endpoint: &str,
-        response_limit: usize,
-    ) -> anyhow::Result<Vec<u8>> {
-        if response_limit == 0 {
-            anyhow::bail!("public-object response limit must be positive");
-        }
-        let url = Url::parse(endpoint)?;
-        if url.query().is_some() {
-            anyhow::bail!("public-object endpoint cannot contain a query");
-        }
-        let response = self
-            .bounded_request(
-                Method::GET,
-                url,
-                HeaderMap::new(),
-                Vec::new(),
-                response_limit,
-            )
-            .await?;
-        if response.status != StatusCode::OK {
-            anyhow::bail!("public-object endpoint returned status {}", response.status);
-        }
-        let content_type = response
-            .headers
-            .get(header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default();
-        if content_type.split(';').next() != Some("application/json") {
-            anyhow::bail!("public-object endpoint did not return application/json");
-        }
-        Ok(response.body)
-    }
-
     pub(crate) async fn resolve_peer(
         &self,
         domain: &str,

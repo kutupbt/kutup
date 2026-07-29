@@ -154,7 +154,7 @@ impl FeaturePolicyStore {
         allow_rotation: bool,
         now: OffsetDateTime,
     ) -> anyhow::Result<FederatedFeaturePolicyEnvelopeV1> {
-        validate_feature_payload(feature_type, payload, 0)?;
+        validate_feature_payload(feature_type, payload)?;
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock($1)")
             .bind(FEATURE_POLICY_LOCK)
@@ -217,7 +217,6 @@ impl FeaturePolicyStore {
         &self,
         expected_domain: &str,
         envelope: &FederatedFeaturePolicyEnvelopeV1,
-        local_witness_quorum_floor: u16,
     ) -> anyhow::Result<bool> {
         if envelope.domain != expected_domain {
             self.record_failure(envelope, "wrong_domain").await?;
@@ -249,11 +248,7 @@ impl FeaturePolicyStore {
             anyhow::bail!("remote feature policy equivocated at an accepted sequence");
         }
         envelope.verify_successor(previous.as_ref(), &identity)?;
-        validate_feature_payload(
-            envelope.feature_type,
-            &envelope.payload_bytes()?,
-            local_witness_quorum_floor,
-        )?;
+        validate_feature_payload(envelope.feature_type, &envelope.payload_bytes()?)?;
         insert_envelope(&mut tx, envelope, false).await?;
         tx.commit().await?;
         Ok(true)
@@ -265,7 +260,6 @@ impl FeaturePolicyStore {
         federation: &FederationStack,
         domain: &str,
         feature_type: FederatedFeaturePolicyTypeV1,
-        local_witness_quorum_floor: u16,
     ) -> Result<FederatedFeaturePolicyEnvelopeV1, RemotePolicySyncError> {
         let current = fetch_remote_envelope(federation, domain, feature_type, None).await?;
         if current.domain != domain || current.feature_type != feature_type {
@@ -319,7 +313,7 @@ impl FeaturePolicyStore {
                     "remote policy history has a gap or wrong typed identity".into(),
                 ));
             }
-            self.accept_remote(domain, &candidate, local_witness_quorum_floor)
+            self.accept_remote(domain, &candidate)
                 .await
                 .map_err(|error| RemotePolicySyncError::Invalid(error.to_string()))?;
         }
@@ -473,19 +467,10 @@ fn feature_name(value: FederatedFeaturePolicyTypeV1) -> &'static str {
 fn validate_feature_payload(
     feature_type: FederatedFeaturePolicyTypeV1,
     payload: &[u8],
-    local_witness_quorum_floor: u16,
 ) -> anyhow::Result<()> {
     match feature_type {
         FederatedFeaturePolicyTypeV1::ChatTransparency => {
-            let policy = ChatTransparencyPolicyV1::from_canonical_bytes(payload)
-                .map_err(anyhow::Error::msg)?;
-            if policy.required_quorum < local_witness_quorum_floor {
-                anyhow::bail!(
-                    "remote transparency witness quorum {} is below the local floor {}",
-                    policy.required_quorum,
-                    local_witness_quorum_floor
-                );
-            }
+            ChatTransparencyPolicyV1::from_canonical_bytes(payload).map_err(anyhow::Error::msg)?;
         }
         FederatedFeaturePolicyTypeV1::SealedSenderService => {
             SealedSenderServicePolicyV1::from_canonical_bytes(payload)

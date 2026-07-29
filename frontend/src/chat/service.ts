@@ -123,8 +123,6 @@ export class ChatService {
           scope: 'local',
           operatorKeyId: capabilities.transparencyOperatorKeyId!,
           operatorPublicKey: capabilities.transparencyOperatorPublicKey!,
-          witnesses: capabilities.transparencyWitnesses ?? [],
-          witnessQuorum: capabilities.transparencyWitnessQuorum ?? 0,
         },
       ],
     }

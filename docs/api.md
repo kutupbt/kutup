@@ -25,19 +25,15 @@ Returns public server settings (e.g. registration enabled/disabled).
     "protocolVersion": 1,
     "keyTransparency": true,
     "transparencyOperatorKeyId": "<64 lowercase hex>",
-    "transparencyOperatorPublicKey": "<base64 Ed25519 public key>",
-    "transparencyWitnesses": [
-      { "witnessId": "audit.example", "keyId": "<hex>", "publicKey": "<base64>" }
-    ],
-    "transparencyWitnessQuorum": 1
+    "transparencyOperatorPublicKey": "<base64 Ed25519 public key>"
   }
 }
 ```
 
 The chat block also advertises suites, size/retention limits, federation,
-manifests, profiles, and sealed-sender support. Browser clients use the
-operator/witness fields as their local transparency policy. Applications that
-need an independent trust root must pin the same policy out of band rather than
+manifests, profiles, and sealed-sender support. Browser clients pin the
+operator fields as their local transparency policy. Applications that need an
+independent trust root must pin the same policy out of band rather than
 treating this same-origin response as authoritative.
 
 ---
@@ -844,41 +840,35 @@ indistinguishable from a missing profile and returns `404`.
 
 Public monitor endpoint; it does not consume prekeys or require a user account.
 Returns the current chronological checkpoint, sparse-map root, the persistent
-operator signature, cached independent witness attestations, and an RFC 6962
-consistency path from `N` (`0` for first observation). Returns `404` while the
-log is empty and `409` when `N` is newer than the presented view. Clients and
-witnesses verify the response before advancing durable state. The web client
-polls this endpoint on open, online/foreground/reconnect transitions, and every
-15 visible minutes. It preserves the last valid pin on network failure and
-blocks new sends when authentication, consistency, policy, or witness quorum
-verification fails.
+operator signature, and an RFC 6962 consistency path from `N` (`0` for first
+observation). Returns `404` while the log is empty and `409` when `N` is newer
+than the presented view. Clients verify the response before advancing durable
+state. The web client polls this endpoint on open,
+online/foreground/reconnect transitions, and every 15 visible minutes. It
+preserves the last valid pin on network failure and blocks new sends when
+authentication, consistency, or policy verification fails.
 
-### POST /api/chat/transparency/witness
+### Remote transparency monitoring
 
-Public, rate-limited submission endpoint for an administrator-allowlisted
-independent witness. Body:
+Authenticated clients use same-origin routes rather than supplying remote
+URLs: `GET /api/chat/transparency/domains/{domain}/status`, `POST
+/api/chat/transparency/domains/{domain}/verify`, `GET
+/api/chat/transparency/domains/{domain}/policy`, and `GET
+/api/chat/transparency/domains/{domain}/checkpoint?fromTreeSize=N`. Remote
+traffic stays inside the unified federation transport and its admission,
+resolution, timeout, size, and signature checks. The policy endpoint returns
+the complete authenticated history so the client can verify it independently.
 
-```json
-{
-  "treeSize": 42,
-  "attestation": {
-    "witnessId": "audit.example",
-    "observedAt": 1784250000,
-    "keyId": "<64 lowercase hex>",
-    "publicKey": "<base64 Ed25519 public key>",
-    "signature": "<base64 signature over the exact operator checkpoint>"
-  }
-}
-```
-
-The server verifies the configured identity/key and exact checkpoint.
-Identical replay succeeds with `{ "accepted": true, "deduplicated": true }`;
-an unknown key returns `401`, an unknown checkpoint `404`, and equivocation at
-one tree size `409`.
+`POST /api/admin/chat/transparency/domains/{domain}/recover` is an
+administrator-only break-glass operation. Its body is `{ "evidenceDigest":
+"<active digest>", "reason": "<operator explanation>" }`. Recovery succeeds
+only when the digest names the current quarantine and a new monitor attempt
+obtains fresh valid evidence; the decision is persisted in the administrative
+audit log. It never installs a replacement key or bypasses proof verification.
 
 ### GET /api/chat/users/{username}/keys?transparencyTreeSize=N
 
-PQXDH prekey bundles for **every** chat device of `username` (a message must encrypt to all of them), plus the account-signed device manifest and its transparency proof. `transparencyTreeSize` is the client's highest verified homeserver checkpoint (`0` initially); the response proves chronological inclusion of the exact manifest, sparse-map membership as the account's current value, inclusion of that map root as the checkpoint's final leaf, RFC 6962 consistency from the requested size, and the operator signature plus configured witness quorum for the exact checkpoint. Each bundle carries `identityKey`, `signedPreKey`, `kyberPreKey` (a one-time Kyber prekey, **consumed** by this fetch, or the reusable last-resort key when the pool is empty) and optionally a consumed one-time EC prekey. Fetches are limited to 30/min per authenticated account (`RATE_LIMIT_CHAT_KEYS_PER_MIN`) with a coarse 120/min IP wall (`RATE_LIMIT_CHAT_KEYS_IP_PER_MIN`).
+PQXDH prekey bundles for **every** chat device of `username` (a message must encrypt to all of them), plus the account-signed device manifest and its transparency proof. `transparencyTreeSize` is the client's highest verified homeserver checkpoint (`0` initially); the response proves chronological inclusion of the exact manifest, sparse-map membership as the account's current value, inclusion of that map root as the checkpoint's final leaf, RFC 6962 consistency from the requested size, and the operator signature for the exact checkpoint. Each bundle carries `identityKey`, `signedPreKey`, `kyberPreKey` (a one-time Kyber prekey, **consumed** by this fetch, or the reusable last-resort key when the pool is empty) and optionally a consumed one-time EC prekey. Fetches are limited to 30/min per authenticated account (`RATE_LIMIT_CHAT_KEYS_PER_MIN`) with a coarse 120/min IP wall (`RATE_LIMIT_CHAT_KEYS_IP_PER_MIN`).
 
 ### POST /api/chat/users/{username}/messages
 

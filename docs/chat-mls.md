@@ -95,8 +95,8 @@ processing all fail closed on a manifest mismatch.
 
 Anonymous KeyPackage retrieval carries the requester's prior transparency tree
 size as a lossless canonical decimal string. Its response includes the complete
-signed current manifest plus inclusion, current-map, consistency, operator, and
-witness evidence. The shared Rust engine authenticates and durably pins that
+signed current manifest plus inclusion, current-map, consistency, and operator
+evidence. The shared Rust engine authenticates and durably pins that
 evidence, recovers every skipped manifest version, requires one package for
 every MLS-enabled manifest device, and validates each OpenMLS KeyPackage before
 returning it to browser orchestration. This path consumes no Signal prekeys.
@@ -548,7 +548,7 @@ orchestration, explicit approval UI, and two-server coverage.
 
 - [x] group owner and exact authority-policy/fingerprint UI;
 - [x] native Rust, WASM, web, Playwright, PostgreSQL migration, Docker Compose,
-  witness/auditor, and two-server federation suites;
+  and two-server federation suites;
 - [x] adversarial tests for authority rollback/fork, invalid bootstrap pages,
   forged Welcome/Commit/certificate, roster mismatch, capability theft and
   rotation, replay, enumeration, oversized requests, and downgrade;

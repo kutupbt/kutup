@@ -2467,7 +2467,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "url",
  "utoipa",
  "uuid",
 ]
@@ -2577,18 +2576,6 @@ dependencies = [
  "url",
  "utoipa",
  "uuid",
-]
-
-[[package]]
-name = "kutup-transparency-auditor"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "kutup-chat-proto",
- "serde",
- "serde_json",
- "time",
 ]
 
 [[package]]

@@ -47,12 +47,6 @@ SERVER_URL=https://kutup.example.com
 # Required dedicated key-transparency operator identity. Generate a different
 # seed once, back it up, and do not reuse the federation identity.
 CHAT_TRANSPARENCY_SIGNING_KEY=<base64-32-byte-ed25519-seed>
-# Optional independent witnesses (witness-id=base64-public-key) and threshold.
-# CHAT_TRANSPARENCY_WITNESSES=audit.example=<base64-ed25519-public-key>
-# CHAT_TRANSPARENCY_WITNESS_ENDPOINTS=audit.example=https://audit.example/v1/view
-# CHAT_TRANSPARENCY_WITNESS_QUORUM=1
-# Reject authenticated remote policies below this local floor (production default: 1).
-# CHAT_REMOTE_TRANSPARENCY_MIN_QUORUM=1
 
 # Optional contacts-only sealed sender. The policy contains public offline roots
 # and root-signed online certificates; the normal server receives only the
@@ -124,8 +118,8 @@ configured, an incomplete or invalid exporter setup is a startup error rather
 than a silent fallback.
 
 The Chat security instruments cover authenticated policy lifecycle, monitor
-freshness, proof sizes and outcomes, witness quorum, fork detection,
-certificate issuance, sealed-send outcomes, and limiter rejection. Their
+freshness, proof sizes and outcomes, certificate issuance, sealed-send
+outcomes, and limiter rejection. Their
 attributes are bounded outcome or feature classes; usernames, account/device
 identifiers, send IDs, capabilities and hashes, certificates, ciphertext, and
 sender-recipient correlations are never metric labels or trace fields.
@@ -311,7 +305,7 @@ docker compose up -d --build backend
 
 ---
 
-## Chat key transparency and independent witnesses
+## Chat key transparency
 
 Chat key transparency requires a persistent operator seed even when chat
 federation is disabled:
@@ -325,49 +319,9 @@ federation key, and back it up. The database pins the derived public identity
 and refuses a silent replacement; planned rotation will require an
 authenticated transition rather than an environment-variable swap.
 
-For split-view resistance, run `kutup-transparency-witness` under a different
-administrative boundary with its own secret seed and persistent state volume.
-The server Docker image includes this second binary. Derive the public values
-that are safe to copy to the server:
-
-```sh
-KUTUP_WITNESS_SIGNING_KEY='<base64-32-byte-seed>' \
-  kutup-transparency-witness --print-public-key
-```
-
-Configure the returned public key on the server as
-`CHAT_TRANSPARENCY_WITNESSES=audit.example=<publicKey>` and set
-`CHAT_TRANSPARENCY_WITNESS_QUORUM=1`. Obtain the operator key id/public key from
-the server's public `/api/auth/settings` chat block, verify them through your
-deployment channel, and configure the independent process with:
-
-```text
-KUTUP_WITNESS_TARGET=https://kutup.example.com/
-KUTUP_WITNESS_ID=audit.example
-KUTUP_WITNESS_SIGNING_KEY=<private witness seed; never copy to the server>
-KUTUP_WITNESS_OPERATOR_KEY_ID=<pinned operator key id>
-KUTUP_WITNESS_OPERATOR_PUBLIC_KEY=<pinned operator public key>
-KUTUP_WITNESS_STATE_FILE=/state/checkpoint.json
-KUTUP_WITNESS_INTERVAL_SECONDS=30
-KUTUP_WITNESS_LISTEN=127.0.0.1:3001
-```
-
-The witness requires HTTPS, refuses redirects, verifies append-only consistency
-from its own state, submits its signature, and advances that state only after
-the server accepts it. It fsyncs a bounded, witness-signed history and serves
-that history at `GET /v1/view`; publish this endpoint through a separate HTTPS
-reverse proxy and configure its exact URL in
-`CHAT_TRANSPARENCY_WITNESS_ENDPOINTS`. Keep `/state` durable and backed up. A nonzero client
-quorum deliberately makes a newly published manifest temporarily unavailable
-until enough witnesses have polled; clients fail closed and may retry after the
-witness interval. The isolated reference topology and contract test are
-`docker-compose.chat-transparency-witness.yml` and
-`scripts/test-chat-transparency-witness.sh`.
-
 With federation enabled, the server publishes the complete transparency policy
-inside the federation-identity-signed feature-policy chain. Production refuses
-to publish a policy without an independent witness. Change a key, endpoint,
-quorum, or security parameter only with an explicit authenticated rotation:
+inside the federation-identity-signed feature-policy chain. Change the operator
+key or a security parameter only with an explicit authenticated rotation:
 
 ```sh
 docker compose run --rm backend feature-policy rotate chat-transparency
@@ -377,31 +331,24 @@ Remote policy histories and monitor cursors survive restarts. The monitor runs
 every 15 minutes with jitter/retry and never follows a browser-provided URL.
 The browser independently verifies the proxied policy chain and checkpoint on
 Chat open, first remote use, reconnect, foreground, restored connectivity, and
-before stale evidence is used. Unavailability or a missing witness warns and
-retains the last valid pin. Rollback, signature/proof failure, policy-chain
-failure, log/key replacement, or signed fork evidence blocks new sends to only
-that domain.
+before stale evidence is used. Network unavailability warns and retains the
+last valid pin. Rollback, signature/proof failure, policy-chain failure, or
+log/key replacement blocks new sends to only that domain.
 
-The server also collects each policy-authenticated `/v1/view` through its
-DNS-bound, redirect-free, SSRF-checked, time/size-bounded transport. It compares
-operator/witness and witness/witness views with the same verifier shipped in
-the standalone `kutup-transparency-auditor` binary. The binary accepts immutable
-JSON captures:
+V1 deliberately has no independent witness or auditor service. Operator
+signatures plus durable pins detect rollback and contradictions observed by the
+same client or monitor, but cannot detect two internally consistent views that
+never meet. Users can still compare safety numbers out of band. This limitation
+is explicit so a small self-hosted deployment does not need to operate a second
+security service merely to enable Chat.
 
-```sh
-kutup-transparency-auditor \
-  --domain remote.example \
-  --operator operator-statement.json \
-  --witness witness-a.json \
-  --witness witness-b.json
-```
-
-Signed evidence is never rewritten. Administrators can inspect it at
-`GET /api/admin/chat/transparency/domains/{domain}/evidence`, submit an
-out-of-band view at the corresponding `witness-views` endpoint, and trigger a
-break-glass recovery at `POST .../recover` with the active `evidenceDigest`
-and a reason. Recovery requires a fresh valid monitor observation, retains and
-acknowledges the evidence, and is audit logged.
+A cryptographic quarantine never clears merely because a remote server becomes
+reachable again. Inspect its exact evidence digest in the admin transparency
+card, document the decision, and use the card's break-glass recovery action.
+The server requires a fresh valid checkpoint before clearing the block and
+writes the digest and reason to the administrative audit log. The equivalent
+API is `POST /api/admin/chat/transparency/domains/{domain}/recover`; it does not
+replace keys or skip verification.
 
 ## Contacts-only sealed sender
 

@@ -7,7 +7,6 @@ use base64::Engine as _;
 use ed25519_dalek::VerifyingKey;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use url::Url;
 
 use crate::{transparency_signing_key_id, DirectChatSuiteId};
 
@@ -41,23 +40,11 @@ impl TryFrom<u16> for TransparencyProofProfileV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TransparencyWitnessPolicyV1 {
-    pub witness_id: String,
-    pub key_id: String,
-    pub public_key: String,
-    pub public_endpoint: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChatTransparencyPolicyV1 {
     pub policy_version: u16,
     pub log_id: String,
     pub operator_key_id: String,
     pub operator_public_key: String,
-    pub witnesses: Vec<TransparencyWitnessPolicyV1>,
-    pub required_quorum: u16,
     pub proof_profile: TransparencyProofProfileV1,
     pub maximum_checkpoint_age_seconds: u64,
     pub maximum_clock_skew_seconds: u32,
@@ -72,15 +59,6 @@ impl ChatTransparencyPolicyV1 {
         }
         decode_hash("logId", &self.log_id)?;
         validate_ed25519_key("operator", &self.operator_key_id, &self.operator_public_key)?;
-        if self.witnesses.is_empty()
-            || self.required_quorum == 0
-            || usize::from(self.required_quorum) > self.witnesses.len()
-        {
-            return Err(
-                "production transparency policy requires a satisfiable independent witness quorum"
-                    .into(),
-            );
-        }
         if self.maximum_checkpoint_age_seconds < 60
             || self.maximum_checkpoint_age_seconds > 7 * 24 * 60 * 60
             || self.maximum_clock_skew_seconds > 15 * 60
@@ -90,21 +68,6 @@ impl ChatTransparencyPolicyV1 {
             || self.maximum_range_response_bytes > 8 * 1024 * 1024
         {
             return Err("transparency policy security parameters are outside the v1 bounds".into());
-        }
-        let mut ids = BTreeSet::new();
-        let mut keys = BTreeSet::new();
-        for witness in &self.witnesses {
-            if !ids.insert(witness.witness_id.as_str()) {
-                return Err("transparency policy repeats a witness id".into());
-            }
-            validate_ed25519_key("witness", &witness.key_id, &witness.public_key)?;
-            if !keys.insert(witness.key_id.as_str()) || witness.key_id == self.operator_key_id {
-                return Err(
-                    "transparency witness keys must be unique and independent of the operator"
-                        .into(),
-                );
-            }
-            validate_https_endpoint(&witness.public_endpoint)?;
         }
         Ok(())
     }
@@ -274,21 +237,6 @@ fn validate_ed25519_key(name: &str, key_id: &str, encoded: &str) -> Result<(), S
     Ok(())
 }
 
-fn validate_https_endpoint(value: &str) -> Result<(), String> {
-    let parsed = Url::parse(value).map_err(|_| "witness endpoint must be an absolute URL")?;
-    if parsed.scheme() != "https"
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-        || parsed.host_str().is_none()
-        || parsed.path().ends_with('/')
-    {
-        return Err("witness endpoint must be canonical HTTPS without credentials, query, fragment, or trailing slash".into());
-    }
-    Ok(())
-}
-
 fn decode_hash(name: &str, value: &str) -> Result<[u8; 32], String> {
     let bytes = hex::decode(value).map_err(|_| format!("{name} must be lowercase SHA-256 hex"))?;
     if bytes.len() != 32 || hex::encode(&bytes) != value {
@@ -325,22 +273,14 @@ mod tests {
     use ed25519_dalek::SigningKey;
 
     #[test]
-    fn transparency_policy_has_one_canonical_encoding_and_independent_quorum() {
+    fn transparency_policy_has_one_canonical_encoding() {
         let operator = SigningKey::from_bytes(&[1; 32]).verifying_key();
-        let witness = SigningKey::from_bytes(&[2; 32]).verifying_key();
         let policy = ChatTransparencyPolicyV1 {
             policy_version: 1,
             log_id: "11".repeat(32),
             operator_key_id: transparency_signing_key_id(&operator),
             operator_public_key: base64::engine::general_purpose::STANDARD
                 .encode(operator.as_bytes()),
-            witnesses: vec![TransparencyWitnessPolicyV1 {
-                witness_id: "witness.example".into(),
-                key_id: transparency_signing_key_id(&witness),
-                public_key: base64::engine::general_purpose::STANDARD.encode(witness.as_bytes()),
-                public_endpoint: "https://witness.example/v1".into(),
-            }],
-            required_quorum: 1,
             proof_profile: TransparencyProofProfileV1::Rfc6962IndividualInclusionV1,
             maximum_checkpoint_age_seconds: 3600,
             maximum_clock_skew_seconds: 60,

@@ -46,7 +46,31 @@ async function login(context: BrowserContext, email: string): Promise<Page> {
 async function openChat(page: Page): Promise<void> {
   await page.goto('/chat')
   await expect(page.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
-  await expect(page.getByText(/End-to-end encrypted · device \d+/)).toBeVisible({ timeout: 90_000 })
+  await expect(page.getByText(/Device \d+/)).toBeVisible({ timeout: 90_000 })
+  const headerLayout = await page.evaluate(() => {
+    const header = document.querySelector<HTMLElement>('[data-testid="chat-sidebar-header"]')
+    const title = document.querySelector<HTMLElement>('[data-testid="chat-sidebar-title"]')
+    const status = document.querySelector<HTMLElement>(
+      '[data-testid="chat-sidebar-transparency-status"]',
+    )
+    if (!header || !title || !status) throw new Error('Chat sidebar header is incomplete')
+    const headerBox = header.getBoundingClientRect()
+    const titleBox = title.getBoundingClientRect()
+    const statusBox = status.getBoundingClientRect()
+    return {
+      headerRight: headerBox.right,
+      titleRight: titleBox.right,
+      statusLeft: statusBox.left,
+      statusRight: statusBox.right,
+      titleClientWidth: title.clientWidth,
+      titleScrollWidth: title.scrollWidth,
+      titleOverflowX: getComputedStyle(title).overflowX,
+    }
+  })
+  expect(headerLayout.titleOverflowX).toBe('hidden')
+  expect(headerLayout.titleScrollWidth).toBeLessThanOrEqual(headerLayout.titleClientWidth)
+  expect(headerLayout.titleRight).toBeLessThanOrEqual(headerLayout.statusLeft)
+  expect(headerLayout.statusRight).toBeLessThanOrEqual(headerLayout.headerRight)
 }
 
 async function cloneAuthenticatedInstall(
@@ -182,8 +206,6 @@ test.describe('two-server secure chat', () => {
     await pageA.getByLabel('Transparency details').click()
     const details = pageA.getByRole('dialog')
     await expect(details.getByText('b.test', { exact: true })).toBeVisible({ timeout: 30_000 })
-    await expect(details.getByText('Required quorum')).toBeVisible()
-    await expect(details.getByText('1', { exact: true }).first()).toBeVisible()
     await pageA.keyboard.press('Escape')
 
     const destinationEnvelopes: Array<Record<string, unknown>> = []

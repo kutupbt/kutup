@@ -2,6 +2,9 @@
 
 **Status:** implemented and live-verified
 
+**V1 note:** later witness/auditor additions referenced below were removed
+before V1; the current-map construction itself remains implemented.
+
 ## Decision
 
 Kutup adds the missing current-value property without pretending the public

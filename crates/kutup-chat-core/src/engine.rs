@@ -37,7 +37,7 @@ use kutup_chat_proto::{
     MlsCipherSuiteId, MlsKeyPackageBundleV1, OutgoingEnvelope, PreKeyCountResponse,
     PublishManifestResponse, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1,
     SendMessagesRequest, TransparencyCheckpoint, TransparencyCheckpointResponse,
-    TransparencyVerifierKey, MLS_PROTOCOL_VERSION,
+    MLS_PROTOCOL_VERSION,
 };
 use kutup_federation_proto::FederatedFeaturePolicyTypeV1;
 
@@ -198,7 +198,7 @@ impl Engine {
             .map_err(|error| ChatError::Invalid(error.to_string()))
     }
 
-    /// Install application-owned operator/witness trust roots before the first
+    /// Install application-owned operator trust roots before the first
     /// manifest publication or peer bundle fetch.
     pub fn set_transparency_policy(&mut self, policy: TransparencyPolicy) -> Result<()> {
         policy.validate()?;
@@ -828,7 +828,7 @@ impl Engine {
 
     /// Resolve untrusted MLS Welcome credential claims exclusively through
     /// authenticated, transparency-logged device manifests. This consumes no
-    /// Signal prekeys and durably applies the same rollback/gap/operator/witness
+    /// Signal prekeys and durably applies the same rollback/gap/operator
     /// pins as direct-message session establishment.
     pub async fn resolve_mls_credential_claims(
         &mut self,
@@ -1987,18 +1987,6 @@ impl Engine {
                 .map_err(|error| ChatError::Trust(error.to_string()))?,
         )
         .map_err(ChatError::Trust)?;
-        let local_floor = self
-            .transparency_policy
-            .scopes
-            .iter()
-            .find(|configured| configured.scope == "local")
-            .map_or(1, |configured| configured.witness_quorum.max(1));
-        if policy.required_quorum < local_floor {
-            return Err(ChatError::Trust(format!(
-                "remote transparency witness quorum {} is below the local floor {local_floor}",
-                policy.required_quorum
-            )));
-        }
         if self
             .session
             .transparency_trust_for_scope(scope)
@@ -2015,16 +2003,6 @@ impl Engine {
             log_id: Some(policy.log_id),
             operator_key_id: policy.operator_key_id,
             operator_public_key: policy.operator_public_key,
-            witnesses: policy
-                .witnesses
-                .into_iter()
-                .map(|witness| TransparencyVerifierKey {
-                    witness_id: witness.witness_id,
-                    key_id: witness.key_id,
-                    public_key: witness.public_key,
-                })
-                .collect(),
-            witness_quorum: policy.required_quorum,
             maximum_checkpoint_age_seconds: Some(policy.maximum_checkpoint_age_seconds),
             maximum_clock_skew_seconds: Some(policy.maximum_clock_skew_seconds),
         };

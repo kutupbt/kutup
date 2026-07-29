@@ -2,7 +2,7 @@
 
 use kutup_chat_proto::{
     ChatTransparencyPolicyV1, ManifestUpdateRangeProofV1, SealedSenderServicePolicyV1,
-    TransparencyCheckpointResponse, TransparencyForkEvidenceV1, WitnessViewV1,
+    TransparencyCheckpointResponse,
 };
 use kutup_federation_proto::{FederatedFeaturePolicyEnvelopeV1, FederatedFeaturePolicyHistoryV1};
 use libfuzzer_sys::fuzz_target;
@@ -39,11 +39,5 @@ fuzz_target!(|data: &[u8]| {
     }
     if let Ok(proof) = serde_json::from_slice::<ManifestUpdateRangeProofV1>(data) {
         let _ = proof.verify_page(&proof.account, proof.from_version, None, None);
-    }
-    if let Ok(view) = serde_json::from_slice::<WitnessViewV1>(data) {
-        let _ = view.verify();
-    }
-    if let Ok(evidence) = serde_json::from_slice::<TransparencyForkEvidenceV1>(data) {
-        let _ = evidence.verify_contradiction();
     }
 });

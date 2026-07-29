@@ -182,8 +182,7 @@ CREATE TABLE IF NOT EXISTS transparency_trust (
     root_hash            TEXT    NOT NULL,
     operator_key_id      TEXT    NOT NULL DEFAULT '',
     operator_public_key  TEXT    NOT NULL DEFAULT '',
-    checkpoint_issued_at INTEGER NOT NULL DEFAULT 0,
-    witnesses_json       TEXT    NOT NULL DEFAULT '[]'
+    checkpoint_issued_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS transparency_monitor_status (
     scope                TEXT PRIMARY KEY,
@@ -608,11 +607,10 @@ impl ChatDb for SqliteChatDb {
         db(conn
             .query_row(
                 "SELECT scope, log_id, tree_size, root_hash, operator_key_id,
-                        operator_public_key, checkpoint_issued_at, witnesses_json
+                        operator_public_key, checkpoint_issued_at
                  FROM transparency_trust WHERE scope = ?1",
                 [scope],
                 |row| {
-                    let witnesses: String = row.get(7)?;
                     Ok(TransparencyTrust {
                         scope: row.get(0)?,
                         log_id: row.get(1)?,
@@ -621,13 +619,6 @@ impl ChatDb for SqliteChatDb {
                         operator_key_id: row.get(4)?,
                         operator_public_key: row.get(5)?,
                         checkpoint_issued_at: row.get(6)?,
-                        witnesses: serde_json::from_str(&witnesses).map_err(|error| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                7,
-                                rusqlite::types::Type::Text,
-                                Box::new(error),
-                            )
-                        })?,
                     })
                 },
             )
@@ -1087,16 +1078,15 @@ impl ChatDb for SqliteChatDb {
             db(tx.execute(
                 "INSERT INTO transparency_trust
                      (scope, log_id, tree_size, root_hash, operator_key_id,
-                      operator_public_key, checkpoint_issued_at, witnesses_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                      operator_public_key, checkpoint_issued_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT(scope) DO UPDATE SET
                      log_id = excluded.log_id,
                      tree_size = excluded.tree_size,
                      root_hash = excluded.root_hash,
                      operator_key_id = excluded.operator_key_id,
                      operator_public_key = excluded.operator_public_key,
-                     checkpoint_issued_at = excluded.checkpoint_issued_at,
-                     witnesses_json = excluded.witnesses_json",
+                     checkpoint_issued_at = excluded.checkpoint_issued_at",
                 rusqlite::params![
                     scope,
                     trust.log_id,
@@ -1105,9 +1095,6 @@ impl ChatDb for SqliteChatDb {
                     trust.operator_key_id,
                     trust.operator_public_key,
                     trust.checkpoint_issued_at,
-                    serde_json::to_string(&trust.witnesses).map_err(|error| {
-                        ChatError::Db(format!("serialize transparency witnesses: {error}"))
-                    })?,
                 ],
             ))?;
         }
@@ -1314,7 +1301,6 @@ fn ensure_schema_upgrades(conn: &Connection) -> Result<()> {
         ("operator_key_id", "TEXT NOT NULL DEFAULT ''"),
         ("operator_public_key", "TEXT NOT NULL DEFAULT ''"),
         ("checkpoint_issued_at", "INTEGER NOT NULL DEFAULT 0"),
-        ("witnesses_json", "TEXT NOT NULL DEFAULT '[]'"),
     ] {
         if !has_column(conn, "transparency_trust", column)? {
             db(conn.execute(

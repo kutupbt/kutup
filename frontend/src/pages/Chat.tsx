@@ -788,8 +788,16 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     <div className="fixed inset-0 flex bg-background text-foreground">
       {showPeerList && (
         <aside className="flex w-full shrink-0 flex-col border-r bg-sidebar md:w-80">
-          <header className="flex h-16 items-center gap-3 border-b px-4">
-            <Button variant="ghost" size="icon" onClick={() => navigate('/drive')}>
+          <header
+            className="flex h-16 items-center gap-1.5 border-b px-3"
+            data-testid="chat-sidebar-header"
+          >
+            <Button
+              variant="ghost"
+              size="icon"
+              className="shrink-0"
+              onClick={() => navigate('/drive')}
+            >
               <ArrowLeft className="h-5 w-5" />
               <span className="sr-only">{t('chat.backToFiles')}</span>
             </Button>
@@ -802,20 +810,27 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
               />
             )}
             <div className="min-w-0 flex-1">
-              <h1 className="font-semibold">{t('chat.title')}</h1>
+              <h1
+                className="truncate font-semibold"
+                data-testid="chat-sidebar-title"
+                title={t('chat.title')}
+              >
+                {t('chat.title')}
+              </h1>
               <p className="truncate text-xs text-muted-foreground">
-                {t('chat.encryptedDevice', { device: service?.deviceId ?? '…' })}
+                {t('chat.device', { device: service?.deviceId ?? '…' })}
               </p>
             </div>
             {transparencyStatus?.state === 'verificationFailed' ? (
               <AlertTriangle
-                className="h-5 w-5 text-destructive"
+                className="h-5 w-5 shrink-0 text-destructive"
                 aria-label={t('chat.transparency.verificationFailed')}
+                data-testid="chat-sidebar-transparency-status"
               />
             ) : (
               <ShieldCheck
                 className={cn(
-                  'h-5 w-5',
+                  'h-5 w-5 shrink-0',
                   transparencyStatus?.state === 'unavailable'
                     ? 'text-warning'
                     : 'text-success',
@@ -825,12 +840,18 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     ? t('chat.transparency.unavailable')
                     : t('chat.transparency.healthy')
                 }
+                data-testid="chat-sidebar-transparency-status"
               />
             )}
             {selfAccount?.server && selfAddress && (
               <Dialog>
                 <DialogTrigger asChild>
-                  <Button variant="ghost" size="icon" aria-label={t('chat.contact.open')}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="shrink-0"
+                    aria-label={t('chat.contact.open')}
+                  >
                     <QrCode className="h-5 w-5" />
                   </Button>
                 </DialogTrigger>
@@ -865,6 +886,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                   <Button
                     variant="ghost"
                     size="icon"
+                    className="shrink-0"
                     disabled={!service}
                     aria-label="Create encrypted group"
                     data-testid="chat-create-group"
@@ -1679,13 +1701,6 @@ interface TransparencyPolicyPayload {
   logId: string
   operatorKeyId: string
   operatorPublicKey: string
-  requiredQuorum: number
-  witnesses: Array<{
-    witnessId: string
-    keyId: string
-    publicKey: string
-    publicEndpoint: string
-  }>
   maximumCheckpointAgeSeconds: number
 }
 
@@ -1696,7 +1711,6 @@ interface TransparencyCheckpointDetails {
     issuedAt: number
     operatorKeyId: string
     operatorPublicKey: string
-    witnesses: Array<{ witnessId: string; keyId: string }>
   }
 }
 
@@ -1819,7 +1833,6 @@ function TransparencyDetails({
               <Detail label="Client state" value={status?.state ?? 'unknown'} />
               <Detail label="Policy sequence" value={String(history.policies.at(-1)?.sequence)} />
               <Detail label="History length" value={String(history.policies.length)} />
-              <Detail label="Required quorum" value={String(policy.requiredQuorum)} />
               <Detail label="Tree size" value={String(checkpoint.checkpoint.treeSize)} />
               <Detail
                 label="Checkpoint age"
@@ -1843,25 +1856,6 @@ function TransparencyDetails({
             {serverStatus?.evidenceDigest && (
               <Fingerprint label="Blocking evidence digest" value={serverStatus.evidenceDigest} />
             )}
-            <div>
-              <h3 className="mb-2 font-medium">Witnesses</h3>
-              <div className="grid gap-2">
-                {policy.witnesses.map((witness) => (
-                  <div key={witness.witnessId} className="rounded-lg border p-3">
-                    <div className="font-medium">{witness.witnessId}</div>
-                    <code className="mt-1 block break-all text-xs text-muted-foreground">
-                      {witness.keyId}
-                    </code>
-                    <code className="mt-1 block break-all text-xs text-muted-foreground">
-                      {witness.publicKey}
-                    </code>
-                    <div className="mt-1 break-all text-xs text-muted-foreground">
-                      {witness.publicEndpoint}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
             <details className="rounded-lg border p-3">
               <summary className="cursor-pointer font-medium">Authenticated policy history</summary>
               <div className="mt-3 grid gap-2">
@@ -2012,7 +2006,7 @@ function ProfileEditor({
         <Button
           variant="ghost"
           size="icon"
-          className="rounded-full"
+          className="shrink-0 rounded-full"
           disabled={disabled || !profile}
           aria-label={t('chat.profile.open')}
         >

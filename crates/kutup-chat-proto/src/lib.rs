@@ -76,19 +76,15 @@ pub use sealed_sender::{
 pub use security_policy::{
     ChatTransparencyPolicyV1, SealedSenderRootV1, SealedSenderServerCertificateV1,
     SealedSenderServicePolicyV1, SealedSenderSuiteId, TransparencyProofProfileV1,
-    TransparencyWitnessPolicyV1,
 };
 pub use transparency::{
-    audit_operator_witness_view, audit_witness_views, empty_transparency_root,
-    hash_transparency_map_checkpoint, hash_transparency_map_leaf, hash_transparency_node,
-    manifest_range_cursor, map_key_bit, transparency_map_empty_hashes, transparency_map_key,
-    transparency_signing_key_id, verify_checkpoint_against_policy, ManifestTransparencyLeaf,
-    ManifestTransparencyMapProof, ManifestTransparencyProof, ManifestUpdateRangeEntryV1,
-    ManifestUpdateRangeProofV1, SubmitTransparencyWitnessRequest, TransparencyCheckpoint,
-    TransparencyCheckpointAuthentication, TransparencyCheckpointResponse,
-    TransparencyForkEvidenceV1, TransparencyHash, TransparencyMapSibling,
-    TransparencyOperatorSigner, TransparencySignedStatementV1, TransparencyVerifierKey,
-    TransparencyWitnessAttestation, WitnessViewV1, MAX_WITNESS_VIEW_STATEMENTS,
+    empty_transparency_root, hash_transparency_map_checkpoint, hash_transparency_map_leaf,
+    hash_transparency_node, manifest_range_cursor, map_key_bit, transparency_map_empty_hashes,
+    transparency_map_key, transparency_signing_key_id, verify_checkpoint_against_policy,
+    ManifestTransparencyLeaf, ManifestTransparencyMapProof, ManifestTransparencyProof,
+    ManifestUpdateRangeEntryV1, ManifestUpdateRangeProofV1, TransparencyCheckpoint,
+    TransparencyCheckpointAuthentication, TransparencyCheckpointResponse, TransparencyHash,
+    TransparencyMapSibling, TransparencyOperatorSigner,
 };
 
 /// Registry of encryption suites — the algorithm-agility mechanism.
@@ -620,12 +616,6 @@ pub struct ChatCapabilities {
     pub transparency_operator_key_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transparency_operator_public_key: Option<String>,
-    /// Independently administered witness identities selected by deployment
-    /// policy, never inferred from attestations returned by the log.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub transparency_witnesses: Vec<TransparencyVerifierKey>,
-    #[serde(default)]
-    pub transparency_witness_quorum: u16,
     /// [RSV] flips true when sealed sender ships.
     #[serde(default)]
     pub sealed_sender: bool,
@@ -657,8 +647,6 @@ impl Default for ChatCapabilities {
             key_transparency: true,
             transparency_operator_key_id: None,
             transparency_operator_public_key: None,
-            transparency_witnesses: Vec::new(),
-            transparency_witness_quorum: 0,
             sealed_sender: false,
             mls_groups: false,
             sealed_sender_policy: None,

@@ -78,37 +78,6 @@ FROM chat_device_manifests m
 JOIN chat_transparency_leaves l
   ON l.user_id = m.user_id AND l.manifest_version = m.version;
 
-CREATE TABLE chat_transparency_witness_views (
-    domain         TEXT        NOT NULL,
-    witness_id     TEXT        NOT NULL,
-    key_id         CHAR(64)    NOT NULL,
-    first_tree_size BIGINT     NOT NULL CHECK (first_tree_size > 0),
-    last_tree_size BIGINT      NOT NULL CHECK (last_tree_size >= first_tree_size),
-    view_hash      CHAR(64)    NOT NULL,
-    signed_view    JSONB       NOT NULL CHECK (jsonb_typeof(signed_view) = 'object'),
-    received_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (domain, witness_id, view_hash),
-    CHECK (domain = lower(domain)),
-    CHECK (key_id ~ '^[0-9a-f]{64}$'),
-    CHECK (view_hash ~ '^[0-9a-f]{64}$')
-);
-
-CREATE INDEX chat_transparency_witness_views_latest_idx
-    ON chat_transparency_witness_views (domain, witness_id, received_at DESC);
-
-CREATE TABLE chat_transparency_fork_evidence (
-    evidence_digest CHAR(64)    PRIMARY KEY,
-    domain          TEXT        NOT NULL,
-    evidence        JSONB       NOT NULL CHECK (jsonb_typeof(evidence) = 'object'),
-    detected_at     TIMESTAMPTZ NOT NULL,
-    acknowledged_at TIMESTAMPTZ,
-    acknowledged_by UUID        REFERENCES users(id) ON DELETE SET NULL,
-    recovery_reason TEXT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CHECK (evidence_digest ~ '^[0-9a-f]{64}$'),
-    CHECK ((acknowledged_at IS NULL) = (recovery_reason IS NULL))
-);
-
 -- One current verifier per recipient. Raw 16-byte capabilities are never
 -- persisted at the destination.
 CREATE TABLE chat_delivery_capabilities (

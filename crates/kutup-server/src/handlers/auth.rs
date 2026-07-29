@@ -217,8 +217,6 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         federation: federation_enabled,
         transparency_operator_key_id: Some(state.transparency_authority.key_id()),
         transparency_operator_public_key: Some(state.transparency_authority.public_key_base64()),
-        transparency_witnesses: state.transparency_authority.witnesses(),
-        transparency_witness_quorum: state.transparency_authority.witness_quorum(),
         sealed_sender: sealed_sender_policy.is_some(),
         mls_groups,
         sealed_sender_policy,

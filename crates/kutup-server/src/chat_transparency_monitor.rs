@@ -10,14 +10,14 @@ use kutup_chat_proto::{
 };
 use kutup_federation_proto::FederatedFeaturePolicyTypeV1;
 use rand::Rng as _;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 
 use crate::error::{AppError, AppResult};
 use crate::federation::RemotePolicySyncError;
 use crate::handlers::chat::CheckpointQuery;
-use crate::middleware::AuthUser;
+use crate::middleware::{AdminUser, AuthUser};
 use crate::AppState;
 
 const HEALTHY_INTERVAL_SECONDS: i64 = 15 * 60;
@@ -37,6 +37,13 @@ pub(crate) struct MonitorStatus {
     pub warning: bool,
     pub blocked: bool,
     pub evidence_digest: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct RecoveryRequest {
+    evidence_digest: String,
+    reason: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -126,15 +133,12 @@ pub(crate) async fn monitor_domain(state: &AppState, domain: &str) -> AppResult<
             "remote transparency monitor requires a remote domain",
         ));
     }
-    let floor = u16::try_from(state.config.chat_remote_transparency_min_quorum)
-        .map_err(|_| AppError::internal("remote transparency quorum floor is too large"))?;
     let envelope = match federation
         .feature_policies()
         .sync_remote(
             federation,
             domain,
             FederatedFeaturePolicyTypeV1::ChatTransparency,
-            floor,
         )
         .await
     {
@@ -217,12 +221,9 @@ pub(crate) async fn monitor_domain(state: &AppState, domain: &str) -> AppResult<
         prior_checkpoint,
         OffsetDateTime::now_utc().unix_timestamp(),
     ) {
-        let warning = error.contains("stale or from the future")
-            || error.contains("authenticated policy witnesses");
+        let warning = error.contains("stale or from the future");
         let class = if error.contains("stale") {
             "stale"
-        } else if warning {
-            "witness_unavailable"
         } else {
             "cryptographic_failure"
         };
@@ -280,15 +281,12 @@ pub(crate) async fn get_policy_history(
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
     let is_local = domain == federation.server_name();
     if !is_local {
-        let floor = u16::try_from(state.config.chat_remote_transparency_min_quorum)
-            .map_err(|_| AppError::internal("remote transparency quorum floor is too large"))?;
         federation
             .feature_policies()
             .sync_remote(
                 federation,
                 &domain,
                 FederatedFeaturePolicyTypeV1::ChatTransparency,
-                floor,
             )
             .await
             .map_err(|error| {
@@ -337,6 +335,83 @@ pub(crate) async fn get_remote_checkpoint(
     )
     .await?;
     Ok(Json(response).into_response())
+}
+
+/// Deliberately clear a durable transparency quarantine after a fresh valid
+/// observation. The active digest prevents an administrator from
+/// acknowledging a different incident, and the decision remains audit logged.
+pub(crate) async fn recover_domain(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(domain): Path<String>,
+    Json(request): Json<RecoveryRequest>,
+) -> AppResult<Response> {
+    kutup_federation_proto::validate_server_name(&domain)
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    if request.reason.trim().is_empty() || request.reason.len() > 1024 {
+        return Err(AppError::bad_request(
+            "recovery reason is empty or too long",
+        ));
+    }
+    let before: Option<(bool, Option<String>, Option<OffsetDateTime>)> = sqlx::query_as(
+        "SELECT blocked, evidence_digest, last_successful_at
+         FROM chat_transparency_monitor_cursors WHERE domain = $1",
+    )
+    .bind(&domain)
+    .fetch_optional(&state.pool)
+    .await?;
+    let (blocked, digest, prior_success) =
+        before.ok_or_else(|| AppError::not_found("transparency monitor cursor not found"))?;
+    if !blocked || digest.as_deref() != Some(request.evidence_digest.as_str()) {
+        return Err(AppError::new(
+            axum::http::StatusCode::CONFLICT,
+            "recovery digest does not match the active transparency block",
+        ));
+    }
+
+    monitor_domain(&state, &domain).await?;
+    let fresh_success: Option<OffsetDateTime> = sqlx::query_scalar(
+        "SELECT last_successful_at FROM chat_transparency_monitor_cursors WHERE domain = $1",
+    )
+    .bind(&domain)
+    .fetch_one(&state.pool)
+    .await?;
+    if fresh_success.is_none() || fresh_success == prior_success {
+        return Err(AppError::new(
+            axum::http::StatusCode::CONFLICT,
+            "fresh valid transparency evidence is required before recovery",
+        ));
+    }
+
+    let admin_id = uuid::Uuid::parse_str(&admin.user_id)
+        .map_err(|_| AppError::unauthorized("unauthorized"))?;
+    let now = OffsetDateTime::now_utc();
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "UPDATE chat_transparency_monitor_cursors SET blocked = false, warning = false,
+         failure_class = NULL, evidence_digest = NULL, updated_at = $2
+         WHERE domain = $1",
+    )
+    .bind(&domain)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO admin_audit_log
+         (admin_user_id, action, target_user_id, payload, occurred_at)
+         VALUES ($1, 'chat.transparency.recovery', NULL, $2, $3)",
+    )
+    .bind(admin_id)
+    .bind(serde_json::json!({
+        "domain": domain,
+        "evidenceDigest": request.evidence_digest,
+        "reason": request.reason.trim(),
+    }))
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Json(serde_json::json!({ "domain": domain, "recovered": true })).into_response())
 }
 
 async fn record_success(
@@ -446,8 +521,6 @@ async fn record_failure(
             match class {
                 "unavailable" => "unavailable",
                 "stale" => "stale",
-                "witness_unavailable" => "witness_unavailable",
-                "audit_unavailable" => "audit_unavailable",
                 _ => "warning",
             }
         },

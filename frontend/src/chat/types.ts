@@ -109,17 +109,9 @@ export interface ChatCapabilities {
   keyTransparency: boolean
   transparencyOperatorKeyId?: string
   transparencyOperatorPublicKey?: string
-  transparencyWitnesses?: TransparencyVerifierKey[]
-  transparencyWitnessQuorum?: number
   sealedSender: boolean
   /** Complete browser + local + federated MLS group path is available. */
   mlsGroups?: boolean
-}
-
-export interface TransparencyVerifierKey {
-  witnessId: string
-  keyId: string
-  publicKey: string
 }
 
 export type TransparencyMonitorState = 'healthy' | 'unavailable' | 'verificationFailed'

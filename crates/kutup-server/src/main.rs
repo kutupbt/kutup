@@ -10,7 +10,6 @@ mod chat_federation;
 mod chat_hub;
 mod chat_mls;
 mod chat_transparency;
-mod chat_transparency_auditor;
 mod chat_transparency_monitor;
 mod config;
 mod db;
@@ -149,14 +148,7 @@ async fn main() -> anyhow::Result<()> {
     )?;
     let mls_ordering = chat_mls::MlsOrderingService::from_config(&config)?.map(Arc::new);
     let local_transparency_policy =
-        chat_transparency::local_transparency_policy(&pool, &config, &transparency_authority)
-            .await?;
-    if federation.is_some() && config.app_env == "production" && local_transparency_policy.is_none()
-    {
-        anyhow::bail!(
-            "production chat federation requires at least one independent transparency witness"
-        );
-    }
+        chat_transparency::local_transparency_policy(&pool, &transparency_authority).await?;
     if let (Some(federation), Some(policy)) =
         (federation.as_deref(), local_transparency_policy.as_ref())
     {
@@ -193,9 +185,7 @@ async fn main() -> anyhow::Result<()> {
             return Ok(());
         }
     } else if rotate_transparency_policy {
-        anyhow::bail!(
-            "chat transparency policy rotation requires federation and a non-zero witness quorum"
-        );
+        anyhow::bail!("chat transparency policy rotation requires federation");
     }
     if let (Some(federation), Some(service)) = (federation.as_deref(), sealed_sender.as_ref()) {
         let envelope = federation
@@ -355,7 +345,6 @@ async fn main() -> anyhow::Result<()> {
     chat_federation::spawn_retry_worker(state.clone());
     chat_mls::spawn_retry_worker(state.clone());
     chat_transparency_monitor::spawn_monitor(state.clone());
-    chat_transparency_auditor::spawn_auditor(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
@@ -567,12 +556,6 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/chat/transparency/checkpoint",
             get(chat::get_transparency_checkpoint)
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/chat/transparency/witness",
-            post(chat::submit_transparency_witness)
-                .route_layer(DefaultBodyLimit::max(16 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
@@ -1001,16 +984,8 @@ fn build_router(state: AppState) -> Router {
                     post(admin::repin_federation_peer),
                 )
                 .route(
-                    "/api/admin/chat/transparency/domains/:domain/witness-views",
-                    post(chat_transparency_auditor::submit_witness_view),
-                )
-                .route(
-                    "/api/admin/chat/transparency/domains/:domain/evidence",
-                    get(chat_transparency_auditor::list_evidence),
-                )
-                .route(
                     "/api/admin/chat/transparency/domains/:domain/recover",
-                    post(chat_transparency_auditor::recover_domain),
+                    post(chat_transparency_monitor::recover_domain),
                 )
                 .route("/api/admin/chat/mls/status", get(chat_mls::admin_status))
                 .route(

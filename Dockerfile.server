@@ -19,13 +19,12 @@ RUN apt-get update \
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
-# Build the server, independent witness, and offline sealed-sender provisioner.
+# Build the server and offline sealed-sender provisioner.
 RUN --mount=type=cache,id=kutup-server-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=kutup-server-release-target,target=/build/target,sharing=locked \
     cargo build --release -p kutup-server \
-        --bin kutup-server --bin kutup-transparency-witness --bin kutup-sealed-sender-provision \
+        --bin kutup-server --bin kutup-sealed-sender-provision \
     && cp target/release/kutup-server /kutup-server \
-    && cp target/release/kutup-transparency-witness /kutup-transparency-witness \
     && cp target/release/kutup-sealed-sender-provision /kutup-sealed-sender-provision
 
 # Minimal runtime: rustls is used throughout (no OpenSSL), so only CA certs are needed.
@@ -34,7 +33,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /kutup-server /usr/local/bin/kutup-server
-COPY --from=builder /kutup-transparency-witness /usr/local/bin/kutup-transparency-witness
 COPY --from=builder /kutup-sealed-sender-provision /usr/local/bin/kutup-sealed-sender-provision
 
 EXPOSE 3000

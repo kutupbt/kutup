@@ -129,7 +129,6 @@ pub(super) async fn authenticated_remote_policy(
             federation,
             domain,
             FederatedFeaturePolicyTypeV1::MlsOrderingService,
-            0,
         )
         .await
         .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;

@@ -49,6 +49,7 @@
     "backToFiles": "Dosyalara dön",
     "encrypted": "Uçtan uca şifreli",
     "encryptedDevice": "Uçtan uca şifreli · cihaz {{device}}",
+    "device": "Cihaz {{device}}",
     "username": "Kullanıcı adı",
     "startAria": "Kullanıcı adıyla sohbet başlat",
     "start": "Sohbet başlat",
