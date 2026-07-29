@@ -52,25 +52,30 @@ pub fn run(
     };
 
     eprintln!("Generating keys…");
-    // Mirror generateRegistrationKeys: random master key + recovery entropy, two independent
-    // 16-byte KDF salts, Argon2id KEK + login key, an X25519 keypair, and the three seals.
+    // Mirror generateRegistrationKeys: random master/recovery keys, one
+    // Argon2id root with HKDF-separated KEK/login keys, an X25519 keypair and
+    // three encrypted key envelopes.
     let mut rng = rand::thread_rng();
     let mut master_key = [0u8; 32];
     let mut recovery_entropy = [0u8; 32];
-    let mut kdf_salt = [0u8; 16];
-    let mut login_key_salt = [0u8; 16];
+    let mut account_protection_salt = [0u8; 16];
     rng.fill_bytes(&mut master_key);
     rng.fill_bytes(&mut recovery_entropy);
-    rng.fill_bytes(&mut kdf_salt);
-    rng.fill_bytes(&mut login_key_salt);
+    rng.fill_bytes(&mut account_protection_salt);
 
-    let kek = kdf::derive_kek(&password, &kdf_salt).context("derive KEK")?;
-    let login_key =
-        kdf::derive_login_key(&password, &login_key_salt).context("derive login key")?;
+    let account_keys = kdf::derive_account_protection_keys(
+        &password,
+        &account_protection_salt,
+        kdf::AccountProtectionParameters::V1,
+    )
+    .context("derive account-protection keys")?;
+    let recovery_proof = kdf::derive_recovery_auth_proof(&recovery_entropy, &email)
+        .context("derive recovery authorization proof")?;
     let (public_key, secret_key) = sealedbox::generate_keypair();
 
     let (enc_mk, mk_nonce) =
-        secretbox::seal(&master_key, kek.as_slice()).context("seal master key")?;
+        secretbox::seal(&master_key, account_keys.key_encryption_key.as_slice())
+            .context("seal master key")?;
     let (enc_rk, rk_nonce) =
         secretbox::seal(&master_key, &recovery_entropy).context("seal recovery key")?;
     let (enc_pk, pk_nonce) =
@@ -80,7 +85,7 @@ pub fn run(
     let req = RegisterRequest {
         email: email.clone(),
         username: username.clone(),
-        login_key: b64.encode(login_key.as_slice()),
+        login_key: b64.encode(account_keys.login_key.as_slice()),
         encrypted_master_key: b64.encode(&enc_mk),
         master_key_nonce: b64.encode(mk_nonce),
         encrypted_recovery_key: b64.encode(&enc_rk),
@@ -88,9 +93,12 @@ pub fn run(
         encrypted_private_key: b64.encode(&enc_pk),
         private_key_nonce: b64.encode(pk_nonce),
         public_key: b64.encode(public_key),
-        kdf_salt: b64.encode(kdf_salt),
-        login_key_salt: b64.encode(login_key_salt),
-        recovery_proof: b64.encode(recovery_entropy),
+        account_protection_suite: kdf::AccountProtectionSuiteId::Argon2idHkdfSha256V1.as_u16(),
+        account_protection_salt: b64.encode(account_protection_salt),
+        argon_memory_kib: kdf::AccountProtectionParameters::V1.memory_kib,
+        argon_iterations: kdf::AccountProtectionParameters::V1.iterations,
+        argon_parallelism: kdf::AccountProtectionParameters::V1.parallelism,
+        recovery_proof: b64.encode(recovery_proof.as_slice()),
     };
 
     let client = Client::new(&server, "");

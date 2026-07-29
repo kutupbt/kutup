@@ -50,9 +50,11 @@ pub struct RegisterRequest {
     encrypted_private_key: String,
     private_key_nonce: String,
     public_key: String,
-    #[serde(rename = "kdfSalt")]
-    kdf_salt: String,
-    login_key_salt: String,
+    account_protection_suite: u16,
+    account_protection_salt: String,
+    argon_memory_kib: u32,
+    argon_iterations: u32,
+    argon_parallelism: u32,
     #[serde(default)]
     recovery_proof: String,
 }
@@ -105,9 +107,11 @@ pub struct RecoverRequest {
     new_login_key: String,
     new_encrypted_master_key: String,
     new_master_key_nonce: String,
-    #[serde(rename = "newKdfSalt")]
-    new_kdf_salt: String,
-    new_login_key_salt: String,
+    new_account_protection_suite: u16,
+    new_account_protection_salt: String,
+    new_argon_memory_kib: u32,
+    new_argon_iterations: u32,
+    new_argon_parallelism: u32,
     #[serde(default)]
     recovery_proof: String,
 }
@@ -152,6 +156,52 @@ pub struct CompleteSetupResponse {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+fn decode_canonical_base64_exact(
+    value: &str,
+    expected_len: usize,
+    field: &str,
+) -> AppResult<Vec<u8>> {
+    let decoded = STANDARD
+        .decode(value)
+        .map_err(|_| AppError::bad_request(format!("invalid {field} encoding")))?;
+    if decoded.len() != expected_len || STANDARD.encode(&decoded) != value {
+        return Err(AppError::bad_request(format!(
+            "{field} must be canonical base64 for {expected_len} bytes"
+        )));
+    }
+    Ok(decoded)
+}
+
+fn validate_account_protection(
+    suite: u16,
+    salt: &str,
+    memory_kib: u32,
+    iterations: u32,
+    parallelism: u32,
+) -> AppResult<()> {
+    use kutup_crypto::kdf::{
+        AccountProtectionParameters, AccountProtectionSuiteId, ACCOUNT_PROTECTION_SALT_LEN,
+    };
+    AccountProtectionSuiteId::try_from(suite)
+        .map_err(|_| AppError::bad_request("unsupported accountProtectionSuite"))?;
+    decode_canonical_base64_exact(salt, ACCOUNT_PROTECTION_SALT_LEN, "accountProtectionSalt")?;
+    AccountProtectionParameters {
+        memory_kib,
+        iterations,
+        parallelism,
+    }
+    .validate_v1()
+    .map_err(|_| AppError::bad_request("unsupported Argon2id parameters"))
+}
+
+fn hash_recovery_proof(proof: &str) -> AppResult<String> {
+    if proof.is_empty() {
+        return Err(AppError::bad_request("recoveryProof is required"));
+    }
+    let proof = decode_canonical_base64_exact(proof, 32, "recoveryProof")?;
+    bcrypt::hash(proof, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))
 }
 
 // --- handlers ---
@@ -259,32 +309,31 @@ pub async fn register(
             "invalid username: must be 3-32 chars, lowercase letters, numbers, _ and -",
         ));
     }
+    validate_account_protection(
+        req.account_protection_suite,
+        &req.account_protection_salt,
+        req.argon_memory_kib,
+        req.argon_iterations,
+        req.argon_parallelism,
+    )?;
 
-    let login_key_bytes = STANDARD
-        .decode(&req.login_key)
-        .map_err(|_| AppError::bad_request("invalid loginKey encoding"))?;
+    let login_key_bytes = decode_canonical_base64_exact(&req.login_key, 32, "loginKey")?;
     let hash =
         bcrypt::hash(login_key_bytes, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))?;
 
-    // Recovery verifier (S1-2): bcrypt the recovery entropy so recovery can prove
-    // mnemonic possession. Empty proof ⇒ stored verifier is "".
-    let recovery_verifier = if req.recovery_proof.is_empty() {
-        String::new()
-    } else {
-        let proof = STANDARD
-            .decode(&req.recovery_proof)
-            .map_err(|_| AppError::bad_request("invalid recoveryProof encoding"))?;
-        bcrypt::hash(proof, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))?
-    };
+    // This is an HKDF-derived authorization proof, never the recovery entropy
+    // that opens encryptedRecoveryKey.
+    let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
 
     let res = sqlx::query(
         r#"INSERT INTO users (
             email, username, encrypted_master_key, master_key_nonce,
             encrypted_recovery_key, recovery_key_nonce,
             encrypted_private_key, private_key_nonce,
-            public_key, kdf_salt, login_key_salt, login_key_hash,
-            recovery_key_verifier
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)"#,
+            public_key, account_protection_suite, account_protection_salt,
+            argon_memory_kib, argon_iterations, argon_parallelism,
+            login_key_hash, recovery_key_verifier
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)"#,
     )
     .bind(&req.email)
     .bind(&req.username)
@@ -295,8 +344,11 @@ pub async fn register(
     .bind(&req.encrypted_private_key)
     .bind(&req.private_key_nonce)
     .bind(&req.public_key)
-    .bind(&req.kdf_salt)
-    .bind(&req.login_key_salt)
+    .bind(i16::try_from(req.account_protection_suite).unwrap_or(i16::MAX))
+    .bind(&req.account_protection_salt)
+    .bind(i32::try_from(req.argon_memory_kib).unwrap_or(i32::MAX))
+    .bind(i32::try_from(req.argon_iterations).unwrap_or(i32::MAX))
+    .bind(i32::try_from(req.argon_parallelism).unwrap_or(i32::MAX))
     .bind(&hash)
     .bind(&recovery_verifier)
     .execute(&state.pool)
@@ -321,7 +373,7 @@ pub async fn register(
     path = "/api/auth/login/preflight",
     tag = "auth",
     params(("email" = String, Query, description = "Account email")),
-    responses((status = 200, description = "KDF + login-key salts", body = PreflightLoginResponse))
+    responses((status = 200, description = "Account-protection suite and parameters", body = PreflightLoginResponse))
 )]
 pub async fn get_login_preflight(
     State(state): State<AppState>,
@@ -332,23 +384,30 @@ pub async fn get_login_preflight(
         .filter(|e| !e.is_empty())
         .ok_or_else(|| AppError::bad_request("email required"))?;
 
-    let row: Option<(String, String)> =
-        sqlx::query_as("SELECT kdf_salt, login_key_salt FROM users WHERE email = $1")
-            .bind(&email)
-            .fetch_optional(&state.pool)
-            .await?;
+    let row: Option<(i16, String, i32, i32, i32)> = sqlx::query_as(
+        "SELECT account_protection_suite, account_protection_salt, argon_memory_kib, argon_iterations, argon_parallelism FROM users WHERE email = $1",
+    )
+    .bind(&email)
+    .fetch_optional(&state.pool)
+    .await?;
 
-    let (kdf_salt, login_key_salt) = match row {
-        Some(r) => r,
+    let (suite, salt, memory_kib, iterations, parallelism) = match row {
+        Some(row) => row,
         None => (
-            deterministic_fake_salt(&email, "kdf"),
-            deterministic_fake_salt(&email, "login"),
+            kutup_crypto::kdf::AccountProtectionSuiteId::Argon2idHkdfSha256V1.as_u16() as i16,
+            deterministic_fake_bytes(&email, "account-protection", 16),
+            kutup_crypto::kdf::AccountProtectionParameters::V1.memory_kib as i32,
+            kutup_crypto::kdf::AccountProtectionParameters::V1.iterations as i32,
+            kutup_crypto::kdf::AccountProtectionParameters::V1.parallelism as i32,
         ),
     };
 
     Ok(Json(PreflightLoginResponse {
-        kdf_salt,
-        login_key_salt,
+        account_protection_suite: u16::try_from(suite).unwrap_or(0),
+        account_protection_salt: salt,
+        argon_memory_kib: u32::try_from(memory_kib).unwrap_or(0),
+        argon_iterations: u32::try_from(iterations).unwrap_or(0),
+        argon_parallelism: u32::try_from(parallelism).unwrap_or(0),
     })
     .into_response())
 }
@@ -396,7 +455,8 @@ pub async fn login(
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT id, login_key_hash, encrypted_master_key, master_key_nonce,
                   encrypted_private_key, private_key_nonce, public_key,
-                  totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes, is_active, kdf_salt,
+                  totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes, is_active,
+                  account_protection_salt,
                   COALESCE(username, ''), COALESCE(color, '')
            FROM users WHERE email = $1"#,
     )
@@ -417,7 +477,7 @@ pub async fn login(
         quota_bytes,
         used_bytes,
         is_active,
-        kdf_salt,
+        account_protection_salt,
         username,
         color,
     )) = row
@@ -445,7 +505,7 @@ pub async fn login(
     let user_id = id.to_string();
 
     // First-login account — no key material yet.
-    if kdf_salt.is_empty() {
+    if account_protection_salt.is_empty() {
         let setup_token = jwt::generate_setup_token(&user_id, &state.config.jwt_secret)
             .map_err(|_| AppError::internal("token"))?;
         return Ok(Json(LoginResponse {
@@ -618,10 +678,10 @@ pub async fn get_recovery_preflight(
             private_key_nonce: pkn,
         },
         None => PreflightRecoverResponse {
-            encrypted_recovery_key: deterministic_fake_salt(&email, "recovery"),
-            recovery_key_nonce: deterministic_fake_salt(&email, "recovery-nonce"),
-            encrypted_private_key: deterministic_fake_salt(&email, "private"),
-            private_key_nonce: deterministic_fake_salt(&email, "private-nonce"),
+            encrypted_recovery_key: deterministic_fake_bytes(&email, "recovery", 48),
+            recovery_key_nonce: deterministic_fake_bytes(&email, "recovery-nonce", 24),
+            encrypted_private_key: deterministic_fake_bytes(&email, "private", 48),
+            private_key_nonce: deterministic_fake_bytes(&email, "private-nonce", 24),
         },
     };
     Ok(Json(resp).into_response())
@@ -644,6 +704,13 @@ pub async fn recover(
     if req.recovery_proof.is_empty() {
         return Err(AppError::bad_request("recoveryProof is required"));
     }
+    validate_account_protection(
+        req.new_account_protection_suite,
+        &req.new_account_protection_salt,
+        req.new_argon_memory_kib,
+        req.new_argon_iterations,
+        req.new_argon_parallelism,
+    )?;
 
     let stored: Option<String> =
         sqlx::query_scalar("SELECT recovery_key_verifier FROM users WHERE email = $1")
@@ -655,18 +722,17 @@ pub async fn recover(
         return Err(AppError::not_found("user not found"));
     };
 
-    if !stored_verifier.is_empty() {
-        let proof = STANDARD
-            .decode(&req.recovery_proof)
-            .map_err(|_| AppError::bad_request("invalid recoveryProof encoding"))?;
-        if !bcrypt::verify(&proof, &stored_verifier).unwrap_or(false) {
-            return Err(AppError::unauthorized("invalid recovery proof"));
-        }
+    if stored_verifier.is_empty() {
+        return Err(AppError::unauthorized(
+            "account has no recovery authorization verifier",
+        ));
+    }
+    let proof = decode_canonical_base64_exact(&req.recovery_proof, 32, "recoveryProof")?;
+    if !bcrypt::verify(&proof, &stored_verifier).unwrap_or(false) {
+        return Err(AppError::unauthorized("invalid recovery proof"));
     }
 
-    let login_key_bytes = STANDARD
-        .decode(&req.new_login_key)
-        .map_err(|_| AppError::bad_request("invalid loginKey"))?;
+    let login_key_bytes = decode_canonical_base64_exact(&req.new_login_key, 32, "newLoginKey")?;
     let hash =
         bcrypt::hash(login_key_bytes, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))?;
 
@@ -675,17 +741,23 @@ pub async fn recover(
               login_key_hash = $1,
               encrypted_master_key = $2,
               master_key_nonce = $3,
-              kdf_salt = $4,
-              login_key_salt = $5,
+              account_protection_suite = $4,
+              account_protection_salt = $5,
+              argon_memory_kib = $6,
+              argon_iterations = $7,
+              argon_parallelism = $8,
               is_first_login = false,
               updated_at = NOW()
-           WHERE email = $6"#,
+           WHERE email = $9"#,
     )
     .bind(&hash)
     .bind(&req.new_encrypted_master_key)
     .bind(&req.new_master_key_nonce)
-    .bind(&req.new_kdf_salt)
-    .bind(&req.new_login_key_salt)
+    .bind(i16::try_from(req.new_account_protection_suite).unwrap_or(i16::MAX))
+    .bind(&req.new_account_protection_salt)
+    .bind(i32::try_from(req.new_argon_memory_kib).unwrap_or(i32::MAX))
+    .bind(i32::try_from(req.new_argon_iterations).unwrap_or(i32::MAX))
+    .bind(i32::try_from(req.new_argon_parallelism).unwrap_or(i32::MAX))
     .bind(&req.email)
     .execute(&state.pool)
     .await?;
@@ -997,23 +1069,33 @@ pub async fn complete_setup(
 
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
 
-    let login_key_bytes = STANDARD
-        .decode(&req.login_key)
-        .map_err(|_| AppError::bad_request("invalid loginKey"))?;
+    validate_account_protection(
+        req.account_protection_suite,
+        &req.account_protection_salt,
+        req.argon_memory_kib,
+        req.argon_iterations,
+        req.argon_parallelism,
+    )?;
+    let login_key_bytes = decode_canonical_base64_exact(&req.login_key, 32, "loginKey")?;
     let hash =
         bcrypt::hash(login_key_bytes, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))?;
+    let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
 
     let uid = parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
-    // Only update while kdf_salt is still empty — prevents replay after setup completes.
+    // Only update while the account-protection salt is still empty — prevents
+    // replay after setup completes.
     let res = sqlx::query(
         r#"UPDATE users SET
               login_key_hash = $1,
               encrypted_master_key = $2, master_key_nonce = $3,
               encrypted_recovery_key = $4, recovery_key_nonce = $5,
               encrypted_private_key = $6, private_key_nonce = $7,
-              public_key = $8, kdf_salt = $9, login_key_salt = $10,
+              public_key = $8,
+              account_protection_suite = $9, account_protection_salt = $10,
+              argon_memory_kib = $11, argon_iterations = $12,
+              argon_parallelism = $13, recovery_key_verifier = $14,
               is_first_login = false, updated_at = NOW()
-           WHERE id = $11 AND kdf_salt = ''"#,
+           WHERE id = $15 AND account_protection_salt = ''"#,
     )
     .bind(&hash)
     .bind(&req.encrypted_master_key)
@@ -1023,8 +1105,12 @@ pub async fn complete_setup(
     .bind(&req.encrypted_private_key)
     .bind(&req.private_key_nonce)
     .bind(&req.public_key)
-    .bind(&req.kdf_salt)
-    .bind(&req.login_key_salt)
+    .bind(i16::try_from(req.account_protection_suite).unwrap_or(i16::MAX))
+    .bind(&req.account_protection_salt)
+    .bind(i32::try_from(req.argon_memory_kib).unwrap_or(i32::MAX))
+    .bind(i32::try_from(req.argon_iterations).unwrap_or(i32::MAX))
+    .bind(i32::try_from(req.argon_parallelism).unwrap_or(i32::MAX))
+    .bind(&recovery_verifier)
     .bind(uid)
     .execute(&state.pool)
     .await;
@@ -1163,10 +1249,10 @@ fn is_valid_hex_color(s: &str) -> bool {
 }
 
 /// Derives a stable base64 salt from email+purpose — mirrors `deterministicFakeSalt`.
-fn deterministic_fake_salt(email: &str, purpose: &str) -> String {
+fn deterministic_fake_bytes(email: &str, purpose: &str, len: usize) -> String {
     let input = format!("{email}:{purpose}:kutup-fake-salt-2024");
     let input = input.as_bytes();
-    let mut b = [0u8; 32];
+    let mut b = vec![0u8; len];
     for (i, slot) in b.iter_mut().enumerate() {
         *slot = input[i % input.len()] ^ ((i * 7 + 13) as u8);
     }
@@ -1198,13 +1284,30 @@ mod tests {
 
     #[test]
     fn fake_salt_is_deterministic_and_purpose_scoped() {
-        let a = deterministic_fake_salt("x@y.z", "kdf");
-        let b = deterministic_fake_salt("x@y.z", "kdf");
-        let c = deterministic_fake_salt("x@y.z", "login");
+        let a = deterministic_fake_bytes("x@y.z", "kdf", 16);
+        let b = deterministic_fake_bytes("x@y.z", "kdf", 16);
+        let c = deterministic_fake_bytes("x@y.z", "login", 16);
         assert_eq!(a, b);
         assert_ne!(a, c);
-        // 32 raw bytes → 44-char standard base64.
-        assert_eq!(a.len(), 44);
+        // 16 raw bytes → 24-char standard base64.
+        assert_eq!(a.len(), 24);
+    }
+
+    #[test]
+    fn account_protection_rejects_unknown_or_modified_parameters() {
+        let salt = STANDARD.encode([0u8; 16]);
+        assert!(validate_account_protection(1, &salt, 65_536, 3, 1).is_ok());
+        assert!(validate_account_protection(0, &salt, 65_536, 3, 1).is_err());
+        assert!(validate_account_protection(1, &salt, 8_192, 3, 1).is_err());
+        assert!(validate_account_protection(1, &salt, 65_536, 3, 2).is_err());
+        assert!(validate_account_protection(1, &STANDARD.encode([0u8; 15]), 65_536, 3, 1).is_err());
+    }
+
+    #[test]
+    fn recovery_proof_requires_canonical_32_bytes() {
+        assert!(hash_recovery_proof("").is_err());
+        assert!(hash_recovery_proof(&STANDARD.encode([7u8; 31])).is_err());
+        assert!(hash_recovery_proof(&STANDARD.encode([7u8; 32])).is_ok());
     }
 
     #[test]

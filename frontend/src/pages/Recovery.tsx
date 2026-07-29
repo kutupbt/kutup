@@ -13,9 +13,10 @@ import { KutupLogo } from '@/components/KutupLogo'
 import {
   decodeMnemonic, validateMnemonic,
   decrypt, encrypt,
-  deriveKeyEncryptionKey, deriveLoginKey, generateKDFSalt,
+  ACCOUNT_PROTECTION_DEFAULTS, deriveRecoveryAuthProof, generateAccountProtectionSalt,
   toBase64, fromBase64,
 } from '@/crypto'
+import { deriveAccountProtectionInWorker } from '@/crypto/accountProtectionWorker'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { PasswordInput } from '@/components/ui/password-input'
@@ -85,20 +86,29 @@ export default function Recovery() {
       const recoveryKey = decodeMnemonic(data.mnemonic.trim().toLowerCase())
       const masterKey = await decrypt(fromBase64(encryptedRecoveryKey), fromBase64(recoveryKeyNonce), recoveryKey)
 
-      const newKdfSalt = await generateKDFSalt()
-      const newLoginKeySalt = await generateKDFSalt()
-      const newKeyEncKey = await deriveKeyEncryptionKey(data.newPassword, newKdfSalt)
-      const newLoginKey = await deriveLoginKey(data.newPassword, newLoginKeySalt)
-      const newEncMK = await encrypt(masterKey, newKeyEncKey)
+      const accountProtectionSalt = generateAccountProtectionSalt()
+      const accountProtection = {
+        ...ACCOUNT_PROTECTION_DEFAULTS,
+        salt: toBase64(accountProtectionSalt),
+      }
+      const { keyEncryptionKey, loginKey } = await deriveAccountProtectionInWorker(
+        data.newPassword,
+        accountProtection,
+      )
+      const newEncMK = await encrypt(masterKey, keyEncryptionKey)
+      const recoveryProof = await deriveRecoveryAuthProof(toBase64(recoveryKey), data.email)
 
       await api.post('/auth/recover', {
         email: data.email,
-        newLoginKey: toBase64(newLoginKey),
+        newLoginKey: toBase64(loginKey),
         newEncryptedMasterKey: toBase64(newEncMK.ciphertext),
         newMasterKeyNonce: toBase64(newEncMK.nonce),
-        newKdfSalt: toBase64(newKdfSalt),
-        newLoginKeySalt: toBase64(newLoginKeySalt),
-        recoveryProof: toBase64(recoveryKey),
+        newAccountProtectionSuite: accountProtection.suite,
+        newAccountProtectionSalt: accountProtection.salt,
+        newArgonMemoryKib: accountProtection.memoryKib,
+        newArgonIterations: accountProtection.iterations,
+        newArgonParallelism: accountProtection.parallelism,
+        recoveryProof,
       })
       setStep('done')
     } catch (err: any) {

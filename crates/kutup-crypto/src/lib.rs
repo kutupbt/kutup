@@ -1,10 +1,9 @@
 //! # kutup-crypto
 //!
-//! Shared end-to-end-encryption primitives for kutup. This crate is the **Rust
-//! mirror** of `frontend/src/crypto/` (libsodium-wrappers) and the successor to
-//! `cmd/kutup/internal/crypto/` + `backend/services/envelope/` (Go). All three
-//! must stay byte-for-byte compatible on the wire — when you change one, change
-//! the others and update the test vectors.
+//! Canonical shared end-to-end-encryption implementation for Kutup. Browser
+//! clients consume this crate through the thin `kutup-crypto-wasm` wrapper;
+//! CLI and native clients call it directly. Kutup-owned headers, derivation
+//! labels, validation and suite policy live here rather than in each client.
 //!
 //! Backing libraries:
 //! - [`dryoc`] — pure-Rust, libsodium-compatible `crypto_pwhash` (Argon2id),
@@ -15,7 +14,7 @@
 //! - [`ed25519_dalek`] — Ed25519 collab-frame signatures.
 //!
 //! ## Modules
-//! - [`kdf`] — Argon2id KEK / login-key derivation + HKDF content key.
+//! - [`kdf`] — one-root Argon2id account protection, recovery proof, and HKDF content keys.
 //! - [`mnemonic`] — BIP39 recovery-phrase encode/decode (registration).
 //! - [`secretbox`] — XSalsa20-Poly1305 (keys, metadata).
 //! - [`sealedbox`] — anonymous X25519 sealed box (key sharing).

@@ -192,9 +192,10 @@ pub async fn create_user(
                encrypted_master_key, master_key_nonce,
                encrypted_recovery_key, recovery_key_nonce,
                encrypted_private_key, private_key_nonce,
-               public_key, kdf_salt, login_key_salt,
+               public_key, account_protection_suite, account_protection_salt,
+               argon_memory_kib, argon_iterations, argon_parallelism,
                is_admin, is_first_login, storage_quota_bytes
-           ) VALUES ($1,$2,$3,'','','','','','','','','',false,true,$4)
+           ) VALUES ($1,$2,$3,'','','','','','','',0,'',0,0,0,false,true,$4)
            RETURNING id"#,
     )
     .bind(&req.email)
@@ -1609,7 +1610,10 @@ pub async fn wipe_user(
                encrypted_master_key = '', master_key_nonce = '',
                encrypted_recovery_key = '', recovery_key_nonce = '',
                encrypted_private_key = '', private_key_nonce = '',
-               public_key = '', kdf_salt = '', login_key_salt = '',
+               public_key = '', account_protection_suite = 0,
+               account_protection_salt = '', argon_memory_kib = 0,
+               argon_iterations = 0, argon_parallelism = 0,
+               recovery_key_verifier = '',
                login_key_hash = $1, totp_secret = NULL, totp_enabled = false,
                is_first_login = true, updated_at = NOW()
            WHERE id = $2"#,

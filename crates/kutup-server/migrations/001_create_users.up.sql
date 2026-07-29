@@ -11,11 +11,15 @@ CREATE TABLE users (
     encrypted_private_key   TEXT NOT NULL,
     private_key_nonce       TEXT NOT NULL,
     public_key              TEXT NOT NULL,
-    -- KDF salts (base64-encoded)
-    kdf_salt                TEXT NOT NULL,
-    login_key_salt          TEXT NOT NULL,
+    -- Complete per-account password-protection suite. Suite zero plus an
+    -- empty salt is reserved for an administrator-created first-login account.
+    account_protection_suite SMALLINT NOT NULL CHECK (account_protection_suite IN (0, 1)),
+    account_protection_salt  TEXT NOT NULL,
+    argon_memory_kib         INTEGER NOT NULL CHECK (argon_memory_kib >= 0),
+    argon_iterations         INTEGER NOT NULL CHECK (argon_iterations >= 0),
+    argon_parallelism        INTEGER NOT NULL CHECK (argon_parallelism >= 0),
     -- Auth
-    login_key_hash          TEXT NOT NULL,  -- bcrypt(Argon2id(password, loginKeySalt))
+    login_key_hash          TEXT NOT NULL,  -- bcrypt(HKDF(Argon2id(password), login-purpose))
     -- TOTP
     totp_secret             TEXT,
     totp_enabled            BOOLEAN NOT NULL DEFAULT false,

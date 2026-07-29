@@ -9,6 +9,10 @@ use thiserror::Error;
 /// returns a single opaque "decryption failed" for secretbox/sealed-box/asset.
 #[derive(Debug, Error)]
 pub enum CryptoError {
+    /// A structurally valid value is not permitted by the selected suite.
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+
     /// A key, nonce, or other fixed-size input had the wrong length.
     #[error("invalid length: expected {expected} bytes, got {got}")]
     InvalidLength { expected: usize, got: usize },

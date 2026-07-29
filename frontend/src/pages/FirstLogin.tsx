@@ -10,6 +10,7 @@ import { useAppDispatch } from '@/store'
 import { setAuth } from '@/store/authSlice'
 import api from '@/api/client'
 import type { RegistrationKeys } from '@/crypto'
+import { generateRegistrationInWorker } from '@/crypto/accountProtectionWorker'
 import { KutupLogo } from '@/components/KutupLogo'
 import MnemonicDisplay from '@/components/MnemonicDisplay'
 import { Button } from '@/components/ui/button'
@@ -82,15 +83,9 @@ export default function FirstLogin() {
       return
     }
     setStep('generating')
-    await new Promise<void>((resolve, reject) => {
-      const worker = new Worker(new URL('../workers/kdf.worker.ts', import.meta.url), { type: 'module' })
-      worker.onmessage = (e) => {
-        const d = e.data
-        if (d.type === 'error') { worker.terminate(); reject(new Error(d.message)); return }
-        if (d.type === 'register') { setKeys(d.keys); setStep('mnemonic'); worker.terminate(); resolve() }
-      }
-      worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message)) }
-      worker.postMessage({ type: 'register', password: data.password })
+    await generateRegistrationInWorker(data.password, email).then((generated) => {
+      setKeys(generated)
+      setStep('mnemonic')
     }).catch((err) => {
       setError(err.message ?? 'Key generation failed')
       setStep('form')
@@ -121,8 +116,12 @@ export default function FirstLogin() {
           encryptedPrivateKey: keys.encryptedPrivateKey,
           privateKeyNonce: keys.privateKeyNonce,
           publicKey: keys.publicKey,
-          kdfSalt: keys.kdfSalt,
-          loginKeySalt: keys.loginKeySalt,
+          accountProtectionSuite: keys.accountProtectionSuite,
+          accountProtectionSalt: keys.accountProtectionSalt,
+          argonMemoryKib: keys.argonMemoryKib,
+          argonIterations: keys.argonIterations,
+          argonParallelism: keys.argonParallelism,
+          recoveryProof: keys.recoveryProof,
         },
         { headers: { Authorization: `Bearer ${setupToken}` } },
       )

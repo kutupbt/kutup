@@ -3,19 +3,30 @@
     {
       "password": "correct horse battery staple",
       "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
-      "expected": "lMhvVBq9s9mqv+pZqgOWNUlIPpwLGnkzbna1TO5skX4="
+      "expectedRoot": "lMhvVBq9s9mqv+pZqgOWNUlIPpwLGnkzbna1TO5skX4=",
+      "expectedKek": "dgUIbPObROQzY5NoEVSeiNn1cmCX+T5aHgdIUVuNrG0=",
+      "expectedLoginKey": "TqqiEotO6otWBWRjUcGqYnDkmonT51Smn/AfBCJLf/4="
     },
     {
       "password": "",
       "salt": "AAECAwQFBgcICQoLDA0ODw==",
-      "expected": "yr2OtlrITpa5bhUEe12Ewh3PDTh976IiDH1Kbdv5Kmw="
+      "expectedRoot": "yr2OtlrITpa5bhUEe12Ewh3PDTh976IiDH1Kbdv5Kmw=",
+      "expectedKek": "7dZzHVM6JyCdv1+iYTd58DSAQ7C4vwus1ExcwXuHoBg=",
+      "expectedLoginKey": "qNkq6mdxINkd3KUhY93wx1pmJvyyljLOD15ruEfRxFA="
     },
     {
       "password": "ünïcödé🔐 pässwörd",
       "salt": "c2FsdHktc2FsdC0xNmJ5dA==",
-      "expected": "xx4Zo7GZS5aPs7Pn+XsdpA8/KX6dKkWcVIg9ii2MYxY="
+      "expectedRoot": "xx4Zo7GZS5aPs7Pn+XsdpA8/KX6dKkWcVIg9ii2MYxY=",
+      "expectedKek": "DUZLG8UDmfLmmCjlZXxJA1nKnY8sqkOIt3ojHA0QALA=",
+      "expectedLoginKey": "irHOlblP3txZHnZCCpYaIDp72cBEzzps2lW2CiYVScI="
     }
   ],
+  "recoveryAuth": {
+    "entropy": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    "loginEmail": " Alice@Example.COM ",
+    "expected": "WCApZxc1kEKYdt6Ygph4RpjnSq23mfVOuZRu/YdM6sQ="
+  },
   "hkdf": [
     {
       "master": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo=",

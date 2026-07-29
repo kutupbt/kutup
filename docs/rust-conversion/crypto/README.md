@@ -1,7 +1,7 @@
 # kutup-crypto (Phase 1 ✅)
 
-The shared E2EE primitives crate — the Rust mirror of `frontend/src/crypto/` and the
-successor to `cmd/kutup/internal/crypto/` + `backend/services/envelope/`. See also the
+The canonical shared E2EE implementation used through Rust, WASM and UniFFI.
+It succeeds `cmd/kutup/internal/crypto/` + `backend/services/envelope/`. See also the
 crate's own `crates/kutup-crypto/README.md`, and `../decisions.md` for the param /
 wire-format facts that must never regress.
 
@@ -18,7 +18,7 @@ wire-format facts that must never regress.
 
 ## Module API surface
 
-- `kdf::{derive_kek, derive_login_key, derive_content_key, derive_kek_b64, derive_login_key_b64}`
+- `kdf::{derive_account_protection_keys, derive_account_protection_keys_b64, derive_recovery_auth_proof, derive_content_key}`
 - `secretbox::{seal, seal_with_nonce, open, open_b64}`
 - `sealedbox::{seal_anonymous, open_anonymous}`
 - `stream::{StreamEncryptor, StreamDecryptor, encrypt_stream, decrypt_stream}` + consts

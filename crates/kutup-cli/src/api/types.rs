@@ -8,8 +8,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreflightResponse {
-    pub kdf_salt: String,
-    pub login_key_salt: String,
+    pub account_protection_suite: u16,
+    pub account_protection_salt: String,
+    pub argon_memory_kib: u32,
+    pub argon_iterations: u32,
+    pub argon_parallelism: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -36,8 +39,11 @@ pub struct RegisterRequest {
     pub encrypted_private_key: String,
     pub private_key_nonce: String,
     pub public_key: String,
-    pub kdf_salt: String,
-    pub login_key_salt: String,
+    pub account_protection_suite: u16,
+    pub account_protection_salt: String,
+    pub argon_memory_kib: u32,
+    pub argon_iterations: u32,
+    pub argon_parallelism: u32,
     pub recovery_proof: String,
 }
 
@@ -99,8 +105,8 @@ pub struct RecoverPreflightResponse {
     pub private_key_nonce: String,
 }
 
-/// `POST /auth/recover` — rotates the login key, KEK wrap, and both salts.
-/// `recovery_proof` is the base64 raw 32-byte mnemonic entropy.
+/// `POST /auth/recover` — rotates the one-root account-protection revision.
+/// `recovery_proof` is HKDF-derived; raw mnemonic entropy never leaves client.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoverRequest {
@@ -108,8 +114,11 @@ pub struct RecoverRequest {
     pub new_login_key: String,
     pub new_encrypted_master_key: String,
     pub new_master_key_nonce: String,
-    pub new_kdf_salt: String,
-    pub new_login_key_salt: String,
+    pub new_account_protection_suite: u16,
+    pub new_account_protection_salt: String,
+    pub new_argon_memory_kib: u32,
+    pub new_argon_iterations: u32,
+    pub new_argon_parallelism: u32,
     pub recovery_proof: String,
 }
 
@@ -325,7 +334,7 @@ mod tests {
     use super::RecoverRequest;
 
     // Exact wire keys the server's RecoverRequest deserializes — the guard
-    // for the camelCase mapping (incl. the two easy-to-typo salt fields).
+    // for the camelCase mapping of the complete replacement revision.
     #[test]
     fn recover_request_keys() {
         let req = RecoverRequest {
@@ -333,8 +342,11 @@ mod tests {
             new_login_key: "lk".into(),
             new_encrypted_master_key: "emk".into(),
             new_master_key_nonce: "mkn".into(),
-            new_kdf_salt: "ks".into(),
-            new_login_key_salt: "lks".into(),
+            new_account_protection_suite: 1,
+            new_account_protection_salt: "salt".into(),
+            new_argon_memory_kib: 65_536,
+            new_argon_iterations: 3,
+            new_argon_parallelism: 1,
             recovery_proof: "rp".into(),
         };
         let v: serde_json::Value = serde_json::to_value(&req).unwrap();
@@ -343,8 +355,11 @@ mod tests {
             "newLoginKey",
             "newEncryptedMasterKey",
             "newMasterKeyNonce",
-            "newKdfSalt",
-            "newLoginKeySalt",
+            "newAccountProtectionSuite",
+            "newAccountProtectionSalt",
+            "newArgonMemoryKib",
+            "newArgonIterations",
+            "newArgonParallelism",
             "recoveryProof",
         ] {
             assert!(v.get(key).is_some(), "missing key {key}");

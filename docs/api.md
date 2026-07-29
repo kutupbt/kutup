@@ -57,13 +57,20 @@ Create a new account with an encrypted key bundle. Rate-limited (10/hr/IP, `RATE
   "encryptedPrivateKey": "<base64>",
   "privateKeyNonce": "<base64>",
   "publicKey": "<base64>",
-  "kdfSalt": "<base64>",
-  "loginKeySalt": "<base64>",
+  "accountProtectionSuite": 1,
+  "accountProtectionSalt": "<base64 16 bytes>",
+  "argonMemoryKib": 65536,
+  "argonIterations": 3,
+  "argonParallelism": 1,
   "recoveryProof": "<base64>"
 }
 ```
 
-All key material is encrypted client-side before being sent. `loginKey` is the Argon2id-derived login key (base64); the server bcrypts it and stores only the bcrypt hash — the raw password is never transmitted. `recoveryProof` is the base64 of the recovery-key entropy; the server bcrypts it into a verifier so it can later prove mnemonic possession during account recovery.
+All key material is encrypted client-side before being sent. One parameterized
+Argon2id invocation derives an account-protection root; HKDF purpose subkeys
+produce the master-key KEK and `loginKey`. The server bcrypts only `loginKey`.
+`recoveryProof` is a distinct HKDF output bound to the canonical login email;
+the raw recovery entropy that decrypts `encryptedRecoveryKey` is never sent.
 
 **Response:** `201 Created`
 
@@ -73,7 +80,7 @@ All key material is encrypted client-side before being sent. `loginKey` is the A
 
 ### GET /api/auth/login/preflight
 
-Fetch the KDF salts needed to derive the login key before submitting credentials. Rate-limited.
+Fetch the complete account-protection suite and parameters before submitting credentials. Rate-limited.
 
 **Auth:** None
 **Query:** `?email=user@example.com`
@@ -81,8 +88,11 @@ Fetch the KDF salts needed to derive the login key before submitting credentials
 **Response:**
 ```json
 {
-  "kdfSalt": "<base64>",
-  "loginKeySalt": "<base64>"
+  "accountProtectionSuite": 1,
+  "accountProtectionSalt": "<base64 16 bytes>",
+  "argonMemoryKib": 65536,
+  "argonIterations": 3,
+  "argonParallelism": 1
 }
 ```
 
@@ -178,12 +188,17 @@ Recover an account using a mnemonic-derived recovery key. The client proves poss
   "newLoginKey": "<base64>",
   "newEncryptedMasterKey": "<base64>",
   "newMasterKeyNonce": "<base64>",
-  "newKdfSalt": "<base64>",
-  "newLoginKeySalt": "<base64>"
+  "newAccountProtectionSuite": 1,
+  "newAccountProtectionSalt": "<base64 16 bytes>",
+  "newArgonMemoryKib": 65536,
+  "newArgonIterations": 3,
+  "newArgonParallelism": 1
 }
 ```
 
-`recoveryProof` is the base64 of the recovery-key entropy. The server bcrypt-compares it to the verifier stored at registration.
+`recoveryProof` is the 32-byte HKDF-derived authorization proof. The server
+bcrypt-compares it to the verifier stored at registration; it never receives
+the recovery entropy used for decryption.
 
 ---
 

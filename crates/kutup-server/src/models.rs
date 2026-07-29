@@ -58,9 +58,11 @@ pub struct SettingsResponse {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PreflightLoginResponse {
-    #[serde(rename = "kdfSalt")]
-    pub kdf_salt: String,
-    pub login_key_salt: String,
+    pub account_protection_suite: u16,
+    pub account_protection_salt: String,
+    pub argon_memory_kib: u32,
+    pub argon_iterations: u32,
+    pub argon_parallelism: u32,
 }
 
 /// `GET /api/auth/recover/preflight` — mirrors `handlers.PreflightRecoverResponse`.

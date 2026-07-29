@@ -15,7 +15,7 @@ curl -s -X POST http://localhost/api/auth/register \
   -d '{
     "email": "test@example.com",
     "username": "testuser",
-    "loginKey": "dGVzdGhhc2g=",
+    "loginKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     "encryptedMasterKey": "ZW5jbWFzdGVya2V5",
     "masterKeyNonce": "bm9uY2U=",
     "encryptedRecoveryKey": "ZW5jcmVj",
@@ -23,9 +23,12 @@ curl -s -X POST http://localhost/api/auth/register \
     "encryptedPrivateKey": "ZW5jcHJpdg==",
     "privateKeyNonce": "cHJpdm5vbmNl",
     "publicKey": "cHVia2V5",
-    "kdfSalt": "a2Rmc2FsdA==",
-    "loginKeySalt": "bG9naW5zYWx0",
-    "recoveryProof": "cmVjb3Zlcnlwcm9vZg=="
+    "accountProtectionSuite": 1,
+    "accountProtectionSalt": "AAAAAAAAAAAAAAAAAAAAAA==",
+    "argonMemoryKib": 65536,
+    "argonIterations": 3,
+    "argonParallelism": 1,
+    "recoveryProof": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
   }' | jq
 ```
 
@@ -34,7 +37,7 @@ curl -s -X POST http://localhost/api/auth/register \
 ```sh
 TOKEN=$(curl -s -X POST http://localhost/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"test@example.com","loginKey":"dGVzdGhhc2g="}' \
+  -d '{"email":"test@example.com","loginKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}' \
   | jq -r '.accessToken')
 echo "TOKEN=$TOKEN"
 ```

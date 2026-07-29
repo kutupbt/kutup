@@ -434,9 +434,10 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
             encrypted_master_key, master_key_nonce,
             encrypted_recovery_key, recovery_key_nonce,
             encrypted_private_key, private_key_nonce,
-            public_key, kdf_salt, login_key_salt,
+            public_key, account_protection_suite, account_protection_salt,
+            argon_memory_kib, argon_iterations, argon_parallelism,
             is_admin, is_first_login
-        ) VALUES ($1,$2,$3,'','','','','','','','','',true,true)"#,
+        ) VALUES ($1,$2,$3,'','','','','','','',0,'',0,0,0,true,true)"#,
     )
     .bind(email)
     .bind(username)

@@ -58,19 +58,29 @@ pub(crate) fn login_with_password(
     let b64 = base64::engine::general_purpose::STANDARD;
     let client = Client::new(server, "");
 
-    // Step 1: preflight — fetch the KDF salts.
+    // Step 1: preflight — fetch the complete account-protection revision.
     eprintln!("Deriving keys…");
     let preflight = client.login_preflight(email).context("preflight")?;
 
-    // Step 2: derive the login key (independent Argon2id over loginKeySalt).
-    let login_key = kdf::derive_login_key_b64(password, &preflight.login_key_salt)
-        .context("derive login key")?;
+    // Step 2: run Argon2id once, then expand the KEK and login key.
+    kdf::AccountProtectionSuiteId::try_from(preflight.account_protection_suite)
+        .context("unsupported account-protection suite")?;
+    let account_keys = kdf::derive_account_protection_keys_b64(
+        password,
+        &preflight.account_protection_salt,
+        kdf::AccountProtectionParameters {
+            memory_kib: preflight.argon_memory_kib,
+            iterations: preflight.argon_iterations,
+            parallelism: preflight.argon_parallelism,
+        },
+    )
+    .context("derive account-protection keys")?;
 
     // Step 3: login.
     let mut resp = client
         .login(&LoginRequest {
             email: email.to_string(),
-            login_key: b64.encode(login_key.as_slice()),
+            login_key: b64.encode(account_keys.login_key.as_slice()),
         })
         .context("login")?;
 
@@ -91,11 +101,10 @@ pub(crate) fn login_with_password(
 
     // Step 5: derive the KEK and decrypt the master + private keys.
     eprintln!("Decrypting vault…");
-    let kek = kdf::derive_kek_b64(password, &preflight.kdf_salt).context("derive KEK")?;
     let master_key = secretbox::open_b64(
         &resp.encrypted_master_key,
         &resp.master_key_nonce,
-        kek.as_slice(),
+        account_keys.key_encryption_key.as_slice(),
     )
     .context("decrypt master key")?;
     let private_key = secretbox::open_b64(

@@ -172,8 +172,9 @@ protocol and browser gates.
 - domain-separated HKDF derives the master-key KEK and server-facing login key;
 - random 32-byte recovery entropy wraps the master key and is encoded as the
   BIP39 mnemonic; and
-- a distinct HKDF-derived recovery-auth proof is sent to the server. The raw
-  recovery entropy never leaves the client.
+- a distinct HKDF-derived recovery-auth proof, bound to the canonical lowercase
+  login email, is sent to the server. The raw recovery entropy never leaves the
+  client.
 
 The login key does not decrypt the master key. The current "four threads"
 frontend KDF comment must also be corrected because libsodium uses one lane.
@@ -351,3 +352,9 @@ continuity without the lost old authority.
    recovery, scale, parser/fuzz and adversarial gates.
 10. Merge to development `main`; reserve production-security claims for after
     independent review and resolution of its findings.
+
+The initial desktop comparison for item 3 is recorded in
+`docs/research/account-protection-wasm-baseline-2026-07-29.md`: canonical
+Rust/WASM was 1.19x the current libsodium-WASM primitive, well below the 10x
+adapter threshold. The required mid-range Android Web Worker measurement is
+still a pre-tag gate.

@@ -19,6 +19,8 @@ fn b64(s: &str) -> Vec<u8> {
 #[derive(Deserialize)]
 struct CryptoVectors {
     kdf: Vec<KdfVec>,
+    #[serde(rename = "recoveryAuth")]
+    recovery_auth: RecoveryAuthVec,
     hkdf: Vec<HkdfVec>,
     secretbox: Vec<SecretboxVec>,
     sealedbox: Vec<SealedboxVec>,
@@ -30,6 +32,18 @@ struct CryptoVectors {
 struct KdfVec {
     password: String,
     salt: String,
+    #[serde(rename = "expectedRoot")]
+    expected_root: String,
+    #[serde(rename = "expectedKek")]
+    expected_kek: String,
+    #[serde(rename = "expectedLoginKey")]
+    expected_login_key: String,
+}
+#[derive(Deserialize)]
+struct RecoveryAuthVec {
+    entropy: String,
+    #[serde(rename = "loginEmail")]
+    login_email: String,
     expected: String,
 }
 #[derive(Deserialize)]
@@ -81,13 +95,35 @@ fn load_crypto() -> CryptoVectors {
 fn kdf_matches_go() {
     for v in load_crypto().kdf {
         let salt = b64(&v.salt);
-        let expected = b64(&v.expected);
-        // Argon2id is deterministic — derive_kek and derive_login_key share params.
-        let kek = kdf::derive_kek(&v.password, &salt).unwrap();
-        assert_eq!(kek.as_slice(), &expected[..], "derive_kek mismatch");
-        let login = kdf::derive_login_key(&v.password, &salt).unwrap();
-        assert_eq!(login.as_slice(), &expected[..], "derive_login_key mismatch");
+        let keys = kdf::derive_account_protection_keys(
+            &v.password,
+            &salt,
+            kdf::AccountProtectionParameters::V1,
+        )
+        .unwrap();
+        assert_eq!(
+            keys.key_encryption_key.as_slice(),
+            &b64(&v.expected_kek),
+            "account KEK mismatch for root {}",
+            v.expected_root
+        );
+        assert_eq!(
+            keys.login_key.as_slice(),
+            &b64(&v.expected_login_key),
+            "account login key mismatch"
+        );
+        assert_ne!(
+            keys.key_encryption_key.as_slice(),
+            keys.login_key.as_slice()
+        );
     }
+}
+
+#[test]
+fn recovery_auth_proof_vector() {
+    let v = load_crypto().recovery_auth;
+    let proof = kdf::derive_recovery_auth_proof(&b64(&v.entropy), &v.login_email).unwrap();
+    assert_eq!(proof.as_slice(), &b64(&v.expected));
 }
 
 #[test]

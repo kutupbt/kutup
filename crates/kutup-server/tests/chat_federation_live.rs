@@ -75,18 +75,22 @@ fn registration_payload(email: &str, username: &str) -> Value {
     let mut rng = rand::thread_rng();
     let mut master_key = [0u8; 32];
     let mut recovery_entropy = [0u8; 32];
-    let mut kdf_salt = [0u8; 16];
-    let mut login_key_salt = [0u8; 16];
+    let mut account_protection_salt = [0u8; 16];
     rng.fill_bytes(&mut master_key);
     rng.fill_bytes(&mut recovery_entropy);
-    rng.fill_bytes(&mut kdf_salt);
-    rng.fill_bytes(&mut login_key_salt);
+    rng.fill_bytes(&mut account_protection_salt);
 
-    let kek = kutup_crypto::kdf::derive_kek(PASSWORD, &kdf_salt).unwrap();
-    let login_key = kutup_crypto::kdf::derive_login_key(PASSWORD, &login_key_salt).unwrap();
+    let keys = kutup_crypto::kdf::derive_account_protection_keys(
+        PASSWORD,
+        &account_protection_salt,
+        kutup_crypto::kdf::AccountProtectionParameters::V1,
+    )
+    .unwrap();
+    let recovery_proof =
+        kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, email).unwrap();
     let (public_key, secret_key) = kutup_crypto::sealedbox::generate_keypair();
     let (encrypted_master_key, master_key_nonce) =
-        kutup_crypto::secretbox::seal(&master_key, kek.as_slice()).unwrap();
+        kutup_crypto::secretbox::seal(&master_key, keys.key_encryption_key.as_slice()).unwrap();
     let (encrypted_recovery_key, recovery_key_nonce) =
         kutup_crypto::secretbox::seal(&master_key, &recovery_entropy).unwrap();
     let (encrypted_private_key, private_key_nonce) =
@@ -95,7 +99,7 @@ fn registration_payload(email: &str, username: &str) -> Value {
     json!({
         "email": email,
         "username": username,
-        "loginKey": b64(login_key.as_slice()),
+        "loginKey": b64(keys.login_key.as_slice()),
         "encryptedMasterKey": b64(&encrypted_master_key),
         "masterKeyNonce": b64(&master_key_nonce),
         "encryptedRecoveryKey": b64(&encrypted_recovery_key),
@@ -103,9 +107,12 @@ fn registration_payload(email: &str, username: &str) -> Value {
         "encryptedPrivateKey": b64(&encrypted_private_key),
         "privateKeyNonce": b64(&private_key_nonce),
         "publicKey": b64(&public_key),
-        "kdfSalt": b64(&kdf_salt),
-        "loginKeySalt": b64(&login_key_salt),
-        "recoveryProof": b64(&recovery_entropy),
+        "accountProtectionSuite": 1,
+        "accountProtectionSalt": b64(&account_protection_salt),
+        "argonMemoryKib": 65536,
+        "argonIterations": 3,
+        "argonParallelism": 1,
+        "recoveryProof": b64(recovery_proof.as_slice()),
     })
 }
 
@@ -126,7 +133,7 @@ fn setup_admin(c: &Client, base: &str, email: &str, username: &str) -> String {
             .unwrap(),
         "bootstrap admin preflight",
     );
-    if preflight["kdfSalt"]
+    if preflight["accountProtectionSalt"]
         .as_str()
         .is_some_and(|salt| !salt.is_empty())
     {
@@ -262,11 +269,15 @@ fn login(c: &Client, base: &str, email: &str) -> String {
             .unwrap(),
         "login preflight",
     );
-    let salt = preflight["loginKeySalt"].as_str().unwrap();
-    let login_key = kutup_crypto::kdf::derive_login_key_b64(PASSWORD, salt).unwrap();
+    let keys = kutup_crypto::kdf::derive_account_protection_keys_b64(
+        PASSWORD,
+        preflight["accountProtectionSalt"].as_str().unwrap(),
+        kutup_crypto::kdf::AccountProtectionParameters::V1,
+    )
+    .unwrap();
     let response = json_response(
         c.post(format!("{base}/api/auth/login"))
-            .json(&json!({"email": email, "loginKey": b64(login_key.as_slice())}))
+            .json(&json!({"email": email, "loginKey": b64(keys.login_key.as_slice())}))
             .send()
             .unwrap(),
         "login",

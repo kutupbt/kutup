@@ -1,6 +1,12 @@
 // High-level crypto operations for registration and login flows.
 import { getSodium } from './sodium'
-import { deriveKeyEncryptionKey, deriveLoginKey, generateKDFSalt } from './kdf'
+import {
+  ACCOUNT_PROTECTION_DEFAULTS,
+  deriveAccountProtectionKeys,
+  deriveRecoveryAuthProof,
+  generateAccountProtectionSalt,
+} from './kdf'
+import { fromBase64, toBase64 } from './base64'
 import { encrypt, decrypt, generateKey } from './symmetric'
 import { generateKeypair } from './asymmetric'
 import { encodeMnemonic } from './mnemonic'
@@ -8,19 +14,15 @@ import { encodeMnemonic } from './mnemonic'
 export { encryptStream, decryptStream } from './symmetric'
 export { wrapKeyForRecipient, unwrapKeyFromSender } from './asymmetric'
 export { decodeMnemonic, validateMnemonic } from './mnemonic'
-export { deriveKeyEncryptionKey, deriveLoginKey, generateKDFSalt } from './kdf'
+export {
+  ACCOUNT_PROTECTION_DEFAULTS,
+  ACCOUNT_PROTECTION_SUITE_V1,
+  deriveAccountProtectionKeys,
+  deriveRecoveryAuthProof,
+  generateAccountProtectionSalt,
+} from './kdf'
 export { encrypt, decrypt, generateKey } from './symmetric'
-
-export function toBase64(bytes: Uint8Array): string {
-  return btoa(String.fromCharCode(...bytes))
-}
-
-export function fromBase64(b64: string): Uint8Array {
-  const binary = atob(b64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return bytes
-}
+export { fromBase64, toBase64 } from './base64'
 
 export interface RegistrationKeys {
   // For API call
@@ -31,10 +33,13 @@ export interface RegistrationKeys {
   encryptedPrivateKey: string   // base64
   privateKeyNonce: string       // base64
   publicKey: string             // base64
-  kdfSalt: string               // base64
-  loginKeySalt: string          // base64
+  accountProtectionSuite: number
+  accountProtectionSalt: string // base64
+  argonMemoryKib: number
+  argonIterations: number
+  argonParallelism: number
   loginKey: string              // base64 — sent to server for bcrypt storage
-  recoveryKey: string           // base64 — sent to server as recovery proof at registration (S1-2 fix)
+  recoveryProof: string         // base64 derived proof; cannot decrypt the recovery wrap
   // For display to user (NEVER sent to server)
   mnemonic: string              // 24-word BIP39
   // In-memory only — held in Redux, never persisted
@@ -46,6 +51,7 @@ export interface RegistrationKeys {
 // This runs in the KDF web worker for the Argon2id calls.
 export async function generateRegistrationKeys(
   password: string,
+  loginEmail: string,
 ): Promise<RegistrationKeys> {
   const sodium = await getSodium()
 
@@ -56,13 +62,20 @@ export async function generateRegistrationKeys(
   const recoveryKeyEntropy = sodium.randombytes_buf(32)
   const mnemonic = encodeMnemonic(recoveryKeyEntropy)
 
-  // 3. Generate two INDEPENDENT KDF salts
-  const kdfSalt = await generateKDFSalt()
-  const loginKeySalt = await generateKDFSalt()
-
-  // 4. Derive keys from password (Argon2id, ~1-2s each)
-  const keyEncryptionKey = await deriveKeyEncryptionKey(password, kdfSalt)
-  const loginKey = await deriveLoginKey(password, loginKeySalt)
+  // 3. One Argon2id root; Rust expands purpose-separated KEK and login keys.
+  const accountProtectionSalt = generateAccountProtectionSalt()
+  const accountProtection = {
+    ...ACCOUNT_PROTECTION_DEFAULTS,
+    salt: toBase64(accountProtectionSalt),
+  }
+  const { keyEncryptionKey, loginKey } = await deriveAccountProtectionKeys(
+    password,
+    accountProtection,
+  )
+  const recoveryProof = await deriveRecoveryAuthProof(
+    toBase64(recoveryKeyEntropy),
+    loginEmail,
+  )
 
   // 5. Generate X25519 keypair
   const keypair = await generateKeypair()
@@ -84,10 +97,13 @@ export async function generateRegistrationKeys(
     encryptedPrivateKey: toBase64(encPK.ciphertext),
     privateKeyNonce: toBase64(encPK.nonce),
     publicKey: toBase64(keypair.publicKey),
-    kdfSalt: toBase64(kdfSalt),
-    loginKeySalt: toBase64(loginKeySalt),
+    accountProtectionSuite: accountProtection.suite,
+    accountProtectionSalt: accountProtection.salt,
+    argonMemoryKib: accountProtection.memoryKib,
+    argonIterations: accountProtection.iterations,
+    argonParallelism: accountProtection.parallelism,
     loginKey: toBase64(loginKey),
-    recoveryKey: toBase64(recoveryKeyEntropy),
+    recoveryProof,
     mnemonic,
     masterKey,
     privateKey: keypair.privateKey,

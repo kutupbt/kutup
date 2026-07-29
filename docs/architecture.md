@@ -79,7 +79,8 @@ remains a ciphertext relay.
    - `privateKey` with the master key → `encryptedPrivateKey` + `privateKeyNonce`
 6. Client also derives a **recovery authorization proof** with HKDF-SHA256 from
    the recovery entropy, the fixed purpose
-   `kutup/account-recovery/auth-proof/v1`, and the canonical account address.
+   `kutup/account-recovery/auth-proof/v1`, and the canonical lowercase login
+   email.
    The server bcrypts only that proof into `recovery_key_verifier`. The proof is
    password-equivalent for recovery authorization, but cannot decrypt
    `encryptedRecoveryKey`; the raw recovery entropy never leaves the client.
