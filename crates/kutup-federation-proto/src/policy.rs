@@ -79,9 +79,8 @@ impl FederatedFeaturePolicyHistoryV1 {
 #[serde(into = "u16", try_from = "u16")]
 #[repr(u16)]
 pub enum FederatedFeaturePolicyTypeV1 {
-    ChatTransparency = 1,
-    SealedSenderService = 2,
-    MlsOrderingService = 3,
+    SealedSenderService = 1,
+    MlsOrderingService = 2,
 }
 
 impl FederatedFeaturePolicyTypeV1 {
@@ -101,9 +100,8 @@ impl TryFrom<u16> for FederatedFeaturePolicyTypeV1 {
 
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
-            1 => Ok(Self::ChatTransparency),
-            2 => Ok(Self::SealedSenderService),
-            3 => Ok(Self::MlsOrderingService),
+            1 => Ok(Self::SealedSenderService),
+            2 => Ok(Self::MlsOrderingService),
             _ => Err(crate::error::invalid_field(
                 "featureType",
                 "is not a supported feature policy type",
@@ -391,7 +389,7 @@ mod tests {
         let identity = identity(&key);
         let first = FederatedFeaturePolicyEnvelopeV1::sign(
             "alpha.example",
-            FederatedFeaturePolicyTypeV1::ChatTransparency,
+            FederatedFeaturePolicyTypeV1::SealedSenderService,
             1,
             None,
             &identity,
@@ -425,7 +423,7 @@ mod tests {
         let identity = identity(&key);
         let first = FederatedFeaturePolicyEnvelopeV1::sign(
             "alpha.example",
-            FederatedFeaturePolicyTypeV1::ChatTransparency,
+            FederatedFeaturePolicyTypeV1::SealedSenderService,
             1,
             None,
             &identity,

@@ -215,19 +215,20 @@ impl MlsClient {
                 Some(&next_private_control),
             )?
         };
-        let control = build_pending_membership_change(
-            &metadata,
-            &conversation,
-            mls_group_id,
-            proposal_id,
-            next_roster,
-            additions,
-            &[],
-            &current_devices,
-            &pending,
-            action_type,
-            created_at_seconds,
-        )?;
+        let control =
+            build_pending_membership_change(super::membership::PendingMembershipChangeInput {
+                metadata: &metadata,
+                conversation: &conversation,
+                mls_group_id,
+                proposal_id,
+                next_roster,
+                additions,
+                removed_credential_identities: &[],
+                current_devices: &current_devices,
+                pending: &pending,
+                action_type,
+                created_at_seconds,
+            })?;
         metadata
             .pending_membership_changes
             .insert(group_key, control.clone());
@@ -445,7 +446,7 @@ impl MlsClient {
     }
 
     /// Stage an add-members Commit after validating every claimed KeyPackage
-    /// against a transparency-verified manifest credential. The pending
+    /// against a account-manifest-verified manifest credential. The pending
     /// OpenMLS state and exact Commit/Welcome bytes are persisted atomically.
     #[cfg(test)]
     pub(crate) async fn prepare_add_members(

@@ -1,41 +1,9 @@
 use kutup_chat_core::{
     ChatContent, ChatError, InboundEnvelope, InboundFailure, InboundFailureKind, ManifestTrust,
-    PreKeyMaintenanceReport, ReceiveReport, ReceivedMessage, SendSummary, TransparencyPolicy,
-    TransparencyScopePolicy,
+    PreKeyMaintenanceReport, ReceiveReport, ReceivedMessage, SendSummary,
 };
 
 pub type Result<T> = std::result::Result<T, KutupChatError>;
-
-#[derive(Debug, Clone, uniffi::Record)]
-pub struct ChatTransparencyScopePolicy {
-    pub scope: String,
-    pub operator_key_id: String,
-    pub operator_public_key: String,
-}
-
-#[derive(Debug, Clone, uniffi::Record)]
-pub struct ChatTransparencyPolicy {
-    pub scopes: Vec<ChatTransparencyScopePolicy>,
-}
-
-impl From<ChatTransparencyPolicy> for TransparencyPolicy {
-    fn from(policy: ChatTransparencyPolicy) -> Self {
-        Self {
-            scopes: policy
-                .scopes
-                .into_iter()
-                .map(|scope| TransparencyScopePolicy {
-                    scope: scope.scope,
-                    log_id: None,
-                    operator_key_id: scope.operator_key_id,
-                    operator_public_key: scope.operator_public_key,
-                    maximum_checkpoint_age_seconds: None,
-                    maximum_clock_skew_seconds: None,
-                })
-                .collect(),
-        }
-    }
-}
 
 /// Stable error taxonomy shared by Swift and Kotlin. Messages never contain
 /// key material, HTTP response bodies, or database keys.
@@ -337,6 +305,7 @@ impl From<InboundEnvelope> for ChatInboundAttention {
 pub enum ChatTrustLevel {
     Tofu,
     Verified,
+    Quarantined,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -344,11 +313,43 @@ pub struct ChatManifestTrust {
     pub peer: String,
     pub authority_key_id: String,
     pub self_authority_key: String,
-    pub highest_version: u64,
+    pub highest_sequence: u64,
     pub manifest_hash: String,
     pub trust: ChatTrustLevel,
-    pub transparency_position: Option<u64>,
     pub continuity_gap: bool,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ChatSafetyNumber {
+    pub local_account: String,
+    pub peer_account: String,
+    pub fingerprint: String,
+    pub qr_payload: String,
+    pub authority_key_id: String,
+    pub retained_authority_key_id: Option<String>,
+    pub trust: ChatTrustLevel,
+    pub continuity_gap: bool,
+    pub quarantine_reason: Option<String>,
+}
+
+impl From<kutup_chat_core::SafetyNumberV1> for ChatSafetyNumber {
+    fn from(value: kutup_chat_core::SafetyNumberV1) -> Self {
+        Self {
+            local_account: value.local_account,
+            peer_account: value.peer_account,
+            fingerprint: value.fingerprint,
+            qr_payload: value.qr_payload,
+            authority_key_id: value.authority_key_id,
+            retained_authority_key_id: value.retained_authority_key_id,
+            trust: match value.trust {
+                kutup_chat_core::AuthorityTrust::Tofu => ChatTrustLevel::Tofu,
+                kutup_chat_core::AuthorityTrust::Verified => ChatTrustLevel::Verified,
+                kutup_chat_core::AuthorityTrust::Quarantined => ChatTrustLevel::Quarantined,
+            },
+            continuity_gap: value.continuity_gap,
+            quarantine_reason: value.quarantine_reason,
+        }
+    }
 }
 
 impl From<ManifestTrust> for ChatManifestTrust {
@@ -357,13 +358,13 @@ impl From<ManifestTrust> for ChatManifestTrust {
             peer: trust.peer,
             authority_key_id: trust.authority_key_id,
             self_authority_key: trust.self_authority_key,
-            highest_version: trust.highest_version,
+            highest_sequence: trust.highest_sequence,
             manifest_hash: trust.manifest_hash,
             trust: match trust.trust {
                 kutup_chat_core::AuthorityTrust::Tofu => ChatTrustLevel::Tofu,
                 kutup_chat_core::AuthorityTrust::Verified => ChatTrustLevel::Verified,
+                kutup_chat_core::AuthorityTrust::Quarantined => ChatTrustLevel::Quarantined,
             },
-            transparency_position: trust.transparency_position,
             continuity_gap: trust.continuity_gap,
         }
     }

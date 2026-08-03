@@ -3,14 +3,14 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    DeviceManifest, MlsCipherSuiteId, MlsDeliveryCapabilityKindV1, MlsKeyPackageV1,
+    AccountManifestV1, MlsCipherSuiteId, MlsDeliveryCapabilityKindV1, MlsKeyPackageV1,
     PublishMlsDeliveryCapabilityV1, PublishMlsKeyPackagesRequestV1,
 };
 use serde_json::Value;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use super::{decode_canonical_base64, MlsRepository, MAX_DEVICE_ID};
+use super::{decode_canonical_base64, MlsRepository, MAX_DEVICE_ID, MLS_SUITE_SQL};
 use crate::error::{AppError, AppResult};
 
 impl MlsRepository {
@@ -77,7 +77,7 @@ impl MlsRepository {
             packages.push(MlsKeyPackageV1 {
                 device_id: device_id as u32,
                 manifest_version,
-                suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+                suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
                 key_package_ref,
                 key_package: STANDARD.encode(key_package),
                 expires_at: expires_at.unix_timestamp(),
@@ -119,7 +119,7 @@ impl MlsRepository {
                 "MLS KeyPackages must use the current manifest version",
             ));
         }
-        let manifest: DeviceManifest = serde_json::from_value(manifest_value)
+        let manifest: AccountManifestV1 = serde_json::from_value(manifest_value)
             .map_err(|error| AppError::internal(format!("stored manifest is invalid: {error}")))?;
         manifest.verify().map_err(|error| {
             AppError::internal(format!("stored manifest failed verification: {error}"))
@@ -178,13 +178,14 @@ impl MlsRepository {
         } else {
             sqlx::query(
                 "INSERT INTO chat_mls_devices
-                     (user_id, device_id, manifest_version, suite,
+                 (user_id, device_id, manifest_version, suite,
                       credential_public_key, anonymous_delivery_public_key, name)
-                 VALUES ($1,$2,$3,2,$4,$5,$6)",
+                 VALUES ($1,$2,$3,$4,$5,$6,$7)",
             )
             .bind(user_id)
             .bind(request.device_id as i32)
             .bind(manifest_version)
+            .bind(MLS_SUITE_SQL)
             .bind(&credential_key)
             .bind(&anonymous_key)
             .bind("")
@@ -198,15 +199,16 @@ impl MlsRepository {
                 .map_err(|_| AppError::bad_request("MLS KeyPackage expiry is outside range"))?;
             let inserted = sqlx::query(
                 "INSERT INTO chat_mls_key_packages
-                     (user_id, device_id, key_package_ref, manifest_version,
+                 (user_id, device_id, key_package_ref, manifest_version,
                       suite, key_package, expires_at)
-                 VALUES ($1,$2,$3,$4,2,$5,$6)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7)
                  ON CONFLICT DO NOTHING",
             )
             .bind(user_id)
             .bind(request.device_id as i32)
             .bind(&package.key_package_ref)
             .bind(request.manifest_version as i64)
+            .bind(MLS_SUITE_SQL)
             .bind(&package_bytes)
             .bind(expires_at)
             .execute(&mut *tx)

@@ -85,12 +85,6 @@ pub struct SealedMessageSubmissionV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnonymousPreKeyRequestV1 {
     pub capability: String,
-    #[serde(
-        default,
-        serialize_with = "serialize_decimal_u64",
-        deserialize_with = "deserialize_decimal_u64"
-    )]
-    pub transparency_tree_size: u64,
 }
 
 impl AnonymousPreKeyRequestV1 {
@@ -214,31 +208,6 @@ fn uuid_shape(value: &str) -> Option<()> {
     }
 }
 
-fn serialize_decimal_u64<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    serializer.serialize_str(&value.to_string())
-}
-
-fn deserialize_decimal_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-    if value.is_empty()
-        || (value.len() > 1 && value.starts_with('0'))
-        || !value.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return Err(serde::de::Error::custom(
-            "transparencyTreeSize must be a canonical decimal u64 string",
-        ));
-    }
-    value.parse().map_err(|_| {
-        serde::de::Error::custom("transparencyTreeSize must be a canonical decimal u64 string")
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,28 +229,24 @@ mod tests {
     }
 
     #[test]
-    fn anonymous_prekey_cursor_has_one_lossless_canonical_encoding() {
+    fn anonymous_prekey_request_has_a_minimal_exact_shape() {
         let request = AnonymousPreKeyRequestV1 {
             capability: "SZcLD3yoaFOTO+f4/XQffw==".into(),
-            transparency_tree_size: u64::MAX,
         };
         assert_eq!(
             serde_json::to_string(&request).unwrap(),
-            r#"{"capability":"SZcLD3yoaFOTO+f4/XQffw==","transparencyTreeSize":"18446744073709551615"}"#
+            r#"{"capability":"SZcLD3yoaFOTO+f4/XQffw=="}"#
         );
         assert_eq!(
             serde_json::from_str::<AnonymousPreKeyRequestV1>(
-                r#"{"capability":"SZcLD3yoaFOTO+f4/XQffw==","transparencyTreeSize":"18446744073709551615"}"#
+                r#"{"capability":"SZcLD3yoaFOTO+f4/XQffw=="}"#
             )
             .unwrap(),
             request
         );
-        for invalid in [
-            r#"{"capability":"SZcLD3yoaFOTO+f4/XQffw==","transparencyTreeSize":2}"#,
-            r#"{"capability":"SZcLD3yoaFOTO+f4/XQffw==","transparencyTreeSize":"02"}"#,
-            r#"{"capability":"SZcLD3yoaFOTO+f4/XQffw==","transparencyTreeSize":"18446744073709551616"}"#,
-        ] {
-            assert!(serde_json::from_str::<AnonymousPreKeyRequestV1>(invalid).is_err());
-        }
+        assert!(serde_json::from_str::<AnonymousPreKeyRequestV1>(
+            r#"{"capability":"SZcLD3yoaFOTO+f4/XQffw==","transparencyTreeSize":"0"}"#
+        )
+        .is_err());
     }
 }

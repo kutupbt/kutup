@@ -1,7 +1,7 @@
 //! RFC 9180 outer protection for anonymous MLS mailbox delivery.
 //!
 //! OpenMLS ciphertext remains the inner message. A fresh Base-mode HPKE
-//! context encrypts one padded copy to each transparency-verified destination
+//! context encrypts one padded copy to each account-manifest-verified destination
 //! device key, so the destination server stores no sender or conversation
 //! metadata and cannot inspect the MLS routing fields.
 
@@ -17,7 +17,6 @@ use kutup_chat_proto::{
 };
 use openmls::prelude::{GroupId, MlsGroup};
 use openmls_traits::OpenMlsProvider;
-use p256::PublicKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
@@ -28,7 +27,7 @@ use super::{ensure_v1_group, validate_group_id, ChatError, MlsClient, Result};
 const PAD_BLOCK_BYTES: usize = 1024;
 const MAX_ANONYMOUS_REQUEST_BYTES: usize = 1024 * 1024;
 const HPKE_TAG_BYTES: usize = 16;
-const P256_ENCAPSULATED_KEY_BYTES: usize = 65;
+const X25519_ENCAPSULATED_KEY_BYTES: usize = 32;
 const PAYLOAD_CONTEXT: &[u8] = b"kutup/anonymous-mls-payload/v1\0";
 const PAYLOAD_HEADER_BYTES: usize = PAYLOAD_CONTEXT.len() + 4;
 
@@ -49,13 +48,9 @@ pub struct DerivedMlsDeliveryCapability {
 
 impl AnonymousMlsRecipientDevice {
     pub fn new(device_id: u32, public_key: Vec<u8>) -> Result<Self> {
-        if device_id == 0
-            || public_key.len() != 65
-            || public_key.first() != Some(&4)
-            || PublicKey::from_sec1_bytes(&public_key).is_err()
-        {
+        if device_id == 0 || public_key.len() != 32 || public_key.iter().all(|byte| *byte == 0) {
             return Err(ChatError::Invalid(
-                "anonymous MLS recipient requires a device id and uncompressed P-256 key".into(),
+                "anonymous MLS recipient requires a device id and 32-byte X25519 key".into(),
             ));
         }
         Ok(Self {
@@ -117,7 +112,7 @@ impl MlsClient {
     }
 
     /// Wrap one exact OpenMLS PrivateMessage for anonymous contacts-only
-    /// delivery. Device keys must come from one transparency-verified manifest.
+    /// delivery. Device keys must come from one account-manifest-verified manifest.
     pub async fn create_anonymous_submission(
         &self,
         recipient: AccountAddress,
@@ -147,7 +142,7 @@ impl MlsClient {
             previous_device = Some(device.device_id);
         }
         let padded = pad_payload(mls_ciphertext, devices.len())?;
-        let suite = MlsAnonymousDeliverySuiteV1::DhKemP256HkdfSha256Aes128Gcm;
+        let suite = MlsAnonymousDeliverySuiteV1::DhKemX25519HkdfSha256ChaCha20Poly1305;
         let mut envelopes = Vec::with_capacity(devices.len());
         for device in devices {
             let aad = anonymous_mls_delivery_aad(&recipient, send_id, suite, device.device_id)
@@ -166,9 +161,9 @@ impl MlsClient {
                 .map_err(|error| {
                     ChatError::Protocol(format!("anonymous MLS HPKE seal: {error}"))
                 })?;
-            if encapsulated_key.len() != P256_ENCAPSULATED_KEY_BYTES {
+            if encapsulated_key.len() != X25519_ENCAPSULATED_KEY_BYTES {
                 return Err(ChatError::Protocol(
-                    "HPKE produced a non-canonical P-256 encapsulation".into(),
+                    "HPKE produced a non-canonical X25519 encapsulation".into(),
                 ));
             }
             envelopes.push(AnonymousMlsDeviceEnvelopeV1 {
@@ -207,7 +202,7 @@ impl MlsClient {
         let encapsulated_key =
             decode_canonical_base64("HPKE encapsulated key", &envelope.encapsulated_key)?;
         let ciphertext = decode_canonical_base64("anonymous MLS ciphertext", &envelope.ciphertext)?;
-        if encapsulated_key.len() != P256_ENCAPSULATED_KEY_BYTES
+        if encapsulated_key.len() != X25519_ENCAPSULATED_KEY_BYTES
             || ciphertext.len() < HPKE_TAG_BYTES + PAYLOAD_HEADER_BYTES
             || ciphertext.len() > MAX_ANONYMOUS_REQUEST_BYTES
         {
@@ -215,7 +210,7 @@ impl MlsClient {
                 "anonymous MLS envelope size is invalid".into(),
             ));
         }
-        let suite = MlsAnonymousDeliverySuiteV1::DhKemP256HkdfSha256Aes128Gcm;
+        let suite = MlsAnonymousDeliverySuiteV1::DhKemX25519HkdfSha256ChaCha20Poly1305;
         let aad = anonymous_mls_delivery_aad(recipient, send_id, suite, envelope.device_id)
             .map_err(ChatError::Invalid)?;
         let hpke = hpke_suite();
@@ -235,19 +230,19 @@ impl MlsClient {
     }
 }
 
-fn hpke_suite() -> Hpke<HpkeRustCrypto> {
+pub(super) fn hpke_suite() -> Hpke<HpkeRustCrypto> {
     Hpke::new(
         Mode::Base,
-        KemAlgorithm::DhKemP256,
+        KemAlgorithm::DhKem25519,
         KdfAlgorithm::HkdfSha256,
-        AeadAlgorithm::Aes128Gcm,
+        AeadAlgorithm::ChaCha20Poly1305,
     )
 }
 
 fn pad_payload(ciphertext: &[u8], device_count: usize) -> Result<Vec<u8>> {
     let per_device_budget = MAX_ANONYMOUS_REQUEST_BYTES
         .checked_div(device_count)
-        .and_then(|budget| budget.checked_sub(P256_ENCAPSULATED_KEY_BYTES + HPKE_TAG_BYTES))
+        .and_then(|budget| budget.checked_sub(X25519_ENCAPSULATED_KEY_BYTES + HPKE_TAG_BYTES))
         .ok_or_else(|| ChatError::Invalid("anonymous MLS device fanout is too large".into()))?;
     let required = PAYLOAD_HEADER_BYTES
         .checked_add(ciphertext.len())
@@ -273,7 +268,7 @@ fn pad_payload(ciphertext: &[u8], device_count: usize) -> Result<Vec<u8>> {
 
 fn unpad_payload(payload: &[u8]) -> Result<Vec<u8>> {
     if payload.len() < PAYLOAD_HEADER_BYTES
-        || payload.len() % PAD_BLOCK_BYTES != 0
+        || !payload.len().is_multiple_of(PAD_BLOCK_BYTES)
         || !payload.starts_with(PAYLOAD_CONTEXT)
     {
         return Err(ChatError::Trust(

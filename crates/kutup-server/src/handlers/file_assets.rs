@@ -14,6 +14,10 @@ use axum::response::{IntoResponse, Response};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
+use kutup_crypto::drive_envelope::{
+    self, DriveEnvelopeContextV1, MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES,
+};
+
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_file, octet_stream_response, trusted_uuid};
 use crate::middleware::AuthUser;
@@ -82,6 +86,14 @@ pub async fn upload(
                 .await
                 .map_err(|_| AppError::bad_request("missing file"))?
             {
+                if size.saturating_add(chunk.len() as i64)
+                    > MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES as i64
+                {
+                    return Err(AppError::new(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "asset envelope too large",
+                    ));
+                }
                 file.write_all(&chunk)
                     .map_err(|_| AppError::internal("temp write"))?;
                 size += chunk.len() as i64;
@@ -92,6 +104,29 @@ pub async fn upload(
     let Some((tmp_file, size)) = tmp else {
         return Err(AppError::bad_request("missing file"));
     };
+
+    // A stored asset must be the canonical purpose-specific envelope for this
+    // exact live file, collection, epoch and content-addressed asset id. The
+    // server authenticates only public framing; it never receives the key.
+    let (collection_id, key_epoch): (Uuid, i32) = sqlx::query_as(
+        "SELECT collection_id, key_epoch FROM files WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(fid)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("not found"))?;
+    let context = DriveEnvelopeContextV1::whiteboard_asset(
+        &fid.to_string(),
+        &collection_id.to_string(),
+        &asset_id,
+        u32::try_from(key_epoch).map_err(|_| AppError::bad_request("invalid asset epoch"))?,
+    )
+    .map_err(|_| AppError::bad_request("invalid asset envelope"))?;
+    let encoded = tokio::fs::read(tmp_file.path())
+        .await
+        .map_err(|_| AppError::internal("read asset upload"))?;
+    drive_envelope::validate(&encoded, context)
+        .map_err(|_| AppError::bad_request("invalid asset envelope"))?;
 
     // Pre-flight under FOR UPDATE: lock user, idempotent INSERT, quota gate, counter bump.
     let mut tx = state.pool.begin().await?;

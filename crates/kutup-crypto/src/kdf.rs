@@ -59,9 +59,6 @@ const ACCOUNT_KEK_INFO: &[u8] = b"kutup/account-protection/kek/v1\0";
 const ACCOUNT_LOGIN_INFO: &[u8] = b"kutup/account-protection/login/v1\0";
 const RECOVERY_AUTH_SALT: &[u8] = b"kutup/account-recovery/auth-proof/v1\0";
 
-/// HKDF salt for the per-file content key. Mirrors `kutup/file-content/v1`.
-const CONTENT_KEY_SALT: &[u8] = b"kutup/file-content/v1";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AccountProtectionParameters {
     pub memory_kib: u32,
@@ -169,23 +166,6 @@ pub fn derive_recovery_auth_proof(
     hkdf.expand(canonical_email.as_bytes(), proof.as_mut_slice())
         .map_err(|_| CryptoError::Backend("recovery proof HKDF expand".into()))?;
     Ok(proof)
-}
-
-/// Derives the per-file content key used for AEAD-encrypted child blobs
-/// (whiteboard asset blobs at `files/{fileId}/assets/*`).
-///
-/// `HKDF-SHA256(ikm = collection_master, salt = "kutup/file-content/v1",
-/// info = file_id)` → 32 bytes. Mirrors `DeriveContentKey` and
-/// `frontend/src/collab/cryptoFrame.ts`.
-pub fn derive_content_key(
-    collection_master: &[u8],
-    file_id: &str,
-) -> Result<Zeroizing<[u8; KEY_LEN]>> {
-    let hk = Hkdf::<Sha256>::new(Some(CONTENT_KEY_SALT), collection_master);
-    let mut out = Zeroizing::new([0u8; KEY_LEN]);
-    hk.expand(file_id.as_bytes(), out.as_mut_slice())
-        .map_err(|_| CryptoError::Backend("hkdf expand".into()))?;
-    Ok(out)
 }
 
 #[cfg(test)]

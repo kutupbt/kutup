@@ -12,7 +12,7 @@ use crate::context::require_session;
 use crate::cryptohelpers::{decrypt_collection_key, decrypt_collections, find_collection};
 use crate::session::Store;
 use crate::uploader::{
-    self, create_sub_collection, file_name, now_unix, upload_streaming, Progress,
+    self, create_sub_collection, file_name, now_unix, upload_streaming, Progress, UploadRequest,
     RESUME_MAX_IDLE_SECS,
 };
 
@@ -54,6 +54,7 @@ pub fn run(
             &ctx.store,
             Path::new(local_path),
             collection_id,
+            &ctx.session.user_id,
             &master_key,
             no_resume,
             &mut stats,
@@ -80,10 +81,13 @@ pub fn run(
         &ctx.client,
         &ctx.store,
         Path::new(local_path),
-        collection_id,
-        &collection_key,
-        !no_resume,
-        Progress::Bar,
+        UploadRequest {
+            collection_id,
+            key_epoch: col.key_epoch,
+            collection_key: &collection_key,
+            resume: !no_resume,
+            progress: Progress::Bar,
+        },
     )?;
     extract_whiteboard_assets(
         &ctx.client,
@@ -125,6 +129,8 @@ fn extract_whiteboard_assets(
         client,
         &up.file_id,
         &up.file_key,
+        &up.collection_id,
+        up.key_epoch,
         collection_key,
         path,
     ) {
@@ -141,13 +147,14 @@ fn upload_dir(
     store: &Store,
     dir: &Path,
     parent_col_id: &str,
+    owner_user_id: &str,
     master_key: &[u8],
     no_resume: bool,
     stats: &mut DirUpload,
 ) -> Result<()> {
     let dir_name = file_name(&dir.to_string_lossy());
     let (sub_col_id, sub_col_key) =
-        create_sub_collection(client, &dir_name, parent_col_id, master_key)
+        create_sub_collection(client, &dir_name, parent_col_id, owner_user_id, master_key)
             .with_context(|| format!("create sub-folder {dir_name}"))?;
 
     for entry in std::fs::read_dir(dir)? {
@@ -159,6 +166,7 @@ fn upload_dir(
                 store,
                 &path,
                 &sub_col_id,
+                owner_user_id,
                 master_key,
                 no_resume,
                 stats,
@@ -172,10 +180,13 @@ fn upload_dir(
                 client,
                 store,
                 &path,
-                &sub_col_id,
-                &sub_col_key,
-                !no_resume,
-                Progress::Bar,
+                UploadRequest {
+                    collection_id: &sub_col_id,
+                    key_epoch: 1,
+                    collection_key: &sub_col_key,
+                    resume: !no_resume,
+                    progress: Progress::Bar,
+                },
             ) {
                 Ok(up) => {
                     eprintln!("  ↑ {}", path.display());

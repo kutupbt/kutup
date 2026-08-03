@@ -4,16 +4,11 @@
 // plaintext to a write sink (showSaveFilePicker WritableStream or a
 // growing Blob — see upload/streamDownload.ts).
 //
-// Wire format matches the existing one-shot decryptStream() in
-// symmetric.ts and the pure-Go port in
-// cmd/kutup/internal/crypto/stream.go: 24-byte secretstream header
-// followed by `5 MB + 17 B` ciphertext chunks (16-byte Poly1305 MAC
-// + 1-byte secretstream tag). The final chunk carries TAG_FINAL.
+// Primitive-only counterpart to streamEncryptor.ts. fileBlob.ts supplies the
+// derived purpose key, typed Drive-header AAD and exact context validation.
 //
-// Symmetric to streamEncryptor.ts — kept in a separate file so the
-// download side can be reasoned about independently. The one-shot
-// `decryptStream()` in symmetric.ts continues to work for callers
-// that already have the whole ciphertext in memory.
+// Symmetric to streamEncryptor.ts. The one-shot typed Drive helper delegates
+// to this same bounded primitive adapter.
 
 import { getSodium } from './sodium'
 import { CIPHER_CHUNK, HEADER_BYTES } from './streamEncryptor'
@@ -48,6 +43,7 @@ export interface StreamDecryptor {
 export async function newStreamDecryptor(
   key: Uint8Array,
   header: Uint8Array,
+  associatedData?: Uint8Array,
 ): Promise<StreamDecryptor> {
   if (header.length !== HEADER_BYTES) {
     throw new Error(`stream header must be ${HEADER_BYTES} bytes, got ${header.length}`)
@@ -58,7 +54,7 @@ export async function newStreamDecryptor(
   return {
     pull(cipherChunk) {
       const res = sodium.crypto_secretstream_xchacha20poly1305_pull(
-        state, cipherChunk, null,
+        state, cipherChunk, associatedData ?? null,
       )
       if (!res) {
         throw new Error('Stream decryption failed — wrong key, tampered ciphertext, or reordered chunks')

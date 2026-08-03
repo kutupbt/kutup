@@ -119,7 +119,7 @@ jobs:
         run: pnpm -C frontend run build:web
 
   chat-security-e2e:
-    name: Witness and two-server browser security
+    name: Two-server browser security
     needs:
       - format-and-fuzz
       - rust-workspace
@@ -148,8 +148,6 @@ jobs:
         run: npx --prefix tests/e2e playwright install --with-deps chromium
       - name: Verify Docker Compose
         run: docker compose version
-      - name: Run independent witness gate
-        run: scripts/test-chat-transparency-witness.sh
       - name: Run two-server federation and browser gate
         run: scripts/test-chat-federation.sh
       - name: Upload browser failure artifacts

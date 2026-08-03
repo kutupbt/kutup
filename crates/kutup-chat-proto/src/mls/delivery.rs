@@ -120,7 +120,7 @@ impl MlsOrderingServicePolicyV1 {
             &self.control_signing_key_id,
             &self.control_signing_public_key,
         )?;
-        if !(256..=1000).contains(&self.maximum_group_members)
+        if usize::from(self.maximum_group_members) != MAX_MLS_GROUP_ACCOUNTS
             || !(1..=64).contains(&self.maximum_authorities)
             || !(4096..=MAX_MLS_CONTROL_PAYLOAD_BYTES as u32)
                 .contains(&self.maximum_control_payload_bytes)
@@ -171,7 +171,7 @@ impl MlsKeyPackageV1 {
 }
 
 /// Authenticated publication of KeyPackages for a device already bound in the
-/// current transparency-logged manifest.
+/// current account-signed manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -259,9 +259,6 @@ pub struct AnonymousMlsKeyPackageRequestV1 {
     pub recipient: AccountAddress,
     /// Canonical padded base64 16-byte delivery capability.
     pub capability: String,
-    /// Highest transparency checkpoint already pinned by the requesting
-    /// client, encoded as canonical decimal to preserve all 64 bits in JS.
-    pub transparency_tree_size: String,
 }
 
 /// Identified first-contact KeyPackage claim used only to construct an MLS
@@ -275,7 +272,6 @@ pub struct IdentifiedMlsKeyPackageRequestV1 {
     pub recipient: AccountAddress,
     pub conversation_id: Uuid,
     pub incarnation: u64,
-    pub transparency_tree_size: String,
 }
 
 impl IdentifiedMlsKeyPackageRequestV1 {
@@ -287,19 +283,7 @@ impl IdentifiedMlsKeyPackageRequestV1 {
         {
             return Err("identified MLS KeyPackage request has invalid identifiers".into());
         }
-        self.known_tree_size()?;
         Ok(())
-    }
-
-    pub fn known_tree_size(&self) -> Result<u64, String> {
-        let value = self
-            .transparency_tree_size
-            .parse::<u64>()
-            .map_err(|_| "transparencyTreeSize must be canonical decimal".to_string())?;
-        if value.to_string() != self.transparency_tree_size {
-            return Err("transparencyTreeSize must be canonical decimal".into());
-        }
-        Ok(value)
     }
 }
 
@@ -330,19 +314,7 @@ impl AnonymousMlsKeyPackageRequestV1 {
             return Err("anonymous MLS KeyPackage request has invalid version or recipient".into());
         }
         decode_canonical_base64("delivery capability", &self.capability, 16, 16)?;
-        self.known_tree_size()?;
         Ok(())
-    }
-
-    pub fn known_tree_size(&self) -> Result<u64, String> {
-        let value = self
-            .transparency_tree_size
-            .parse::<u64>()
-            .map_err(|_| "transparencyTreeSize must be canonical decimal".to_string())?;
-        if value.to_string() != self.transparency_tree_size {
-            return Err("transparencyTreeSize must be canonical decimal".into());
-        }
-        Ok(value)
     }
 }
 
@@ -351,8 +323,7 @@ impl AnonymousMlsKeyPackageRequestV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MlsKeyPackageBundleV1 {
     pub recipient: AccountAddress,
-    pub manifest: DeviceManifest,
-    pub transparency: ManifestTransparencyProof,
+    pub manifest: AccountManifestV1,
     pub key_packages: Vec<MlsKeyPackageV1>,
 }
 
@@ -365,16 +336,13 @@ impl MlsKeyPackageBundleV1 {
             return Err("anonymous MLS KeyPackage response shape is invalid".into());
         }
         self.manifest.verify()?;
-        self.transparency
-            .leaf
-            .matches_manifest(&self.recipient.username, &self.manifest)?;
-        self.transparency.verify_inclusion()?;
-        self.transparency.verify_current_map()?;
-        self.transparency.verify_authentication()?;
+        if self.manifest.account != self.recipient.canonical() {
+            return Err("MLS KeyPackage manifest belongs to another account".into());
+        }
         let mut devices = BTreeSet::new();
         for package in &self.key_packages {
             package.validate(now)?;
-            if package.manifest_version != self.manifest.version
+            if package.manifest_version != self.manifest.sequence
                 || !devices.insert(package.device_id)
             {
                 return Err(
@@ -400,7 +368,7 @@ pub struct AnonymousMlsDeliveryResponseV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnonymousMlsDeviceEnvelopeV1 {
     pub device_id: u32,
-    /// HPKE KEM encapsulation (uncompressed P-256 point, 65 bytes).
+    /// HPKE DHKEM(X25519) encapsulation (32 bytes).
     pub encapsulated_key: String,
     /// HPKE ciphertext containing the entire padded MLS PrivateMessage.
     pub ciphertext: String,
@@ -411,14 +379,14 @@ impl AnonymousMlsDeviceEnvelopeV1 {
         if self.device_id == 0 {
             return Err("anonymous MLS envelope device id must be positive".into());
         }
-        validate_uncompressed_p256("HPKE encapsulated key", &self.encapsulated_key)?;
+        validate_x25519_public_key("HPKE encapsulated key", &self.encapsulated_key)?;
         let ciphertext = decode_canonical_base64(
             "anonymous MLS ciphertext",
             &self.ciphertext,
             17,
             1024 * 1024,
         )?;
-        Ok(ciphertext.len() + 65)
+        Ok(ciphertext.len() + 32)
     }
 }
 

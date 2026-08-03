@@ -1,1 +1,1 @@
-DROP TABLE IF EXISTS chat_transparency_signed_checkpoints;
+-- Reserved preproduction migration number; see migration 028.

@@ -9,13 +9,13 @@ fn ordering_policy(domain: &str, seed: u8) -> MlsOrderingServicePolicyV1 {
     MlsOrderingServicePolicyV1 {
         policy_version: kutup_chat_proto::MLS_ORDERING_SERVICE_POLICY_VERSION,
         canonical_domain: domain.into(),
-        suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+        suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
         anonymous_delivery_suite:
-            kutup_chat_proto::MlsAnonymousDeliverySuiteV1::DhKemP256HkdfSha256Aes128Gcm,
+            kutup_chat_proto::MlsAnonymousDeliverySuiteV1::DhKemX25519HkdfSha256ChaCha20Poly1305,
         control_signing_key_id: hex::encode(Sha256::digest(public_key)),
         control_signing_public_key: BASE64.encode(public_key),
         accepts_group_ordering: true,
-        maximum_group_members: 1000,
+        maximum_group_members: 256,
         maximum_authorities: 64,
         maximum_control_payload_bytes: 1024 * 1024,
         pending_message_requests: kutup_chat_proto::PendingMessageRequestPolicyV1::default(),
@@ -88,14 +88,14 @@ fn assert_same_protocol_state(
 }
 
 #[test]
-fn exact_suite_is_rfc9420_suite_two() {
+fn exact_suite_is_rfc9420_suite_three() {
     assert_eq!(
         KUTUP_MLS_V1_CIPHERSUITE as u16,
-        MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256
+        MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519
     );
     assert_eq!(
         KUTUP_MLS_V1_CIPHERSUITE.signature_algorithm(),
-        SignatureScheme::ECDSA_SECP256R1_SHA256
+        SignatureScheme::ED25519
     );
 }
 
@@ -1338,7 +1338,7 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
                 group_id,
                 &welcome,
                 &three_device_roster,
-                &[history_page.clone()],
+                std::slice::from_ref(&history_page),
             )
             .await
             .unwrap();
@@ -1368,7 +1368,7 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
                 group_id,
                 &welcome,
                 &three_device_roster,
-                &[history_page.clone()],
+                std::slice::from_ref(&history_page),
             )
             .await
             .unwrap(),
@@ -2381,7 +2381,7 @@ fn group_genesis_rejects_authority_downgrade_and_identity_collisions() {
                 Uuid::from_u128(0x92),
                 b"group-accepted-id",
                 creator.clone(),
-                &[policy.clone()],
+                std::slice::from_ref(&policy),
                 1_700_000_000,
             )
             .await
@@ -2391,7 +2391,7 @@ fn group_genesis_rejects_authority_downgrade_and_identity_collisions() {
                 Uuid::from_u128(0x92),
                 b"different-group!",
                 creator.clone(),
-                &[policy.clone()],
+                std::slice::from_ref(&policy),
                 1_700_000_000,
             )
             .await
@@ -2426,8 +2426,8 @@ fn state_group_keypackage_and_ciphertext_survive_restart() {
         let db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let client = MlsClient::new(db.clone());
         let public = client.initialize("alice@example.test#1").await.unwrap();
-        assert_eq!(public.credential_public_key.len(), 65);
-        assert_eq!(public.anonymous_delivery_public_key.len(), 65);
+        assert_eq!(public.credential_public_key.len(), 32);
+        assert_eq!(public.anonymous_delivery_public_key.len(), 32);
         public.manifest_binding().validate().unwrap();
 
         let package = client
@@ -2436,7 +2436,7 @@ fn state_group_keypackage_and_ciphertext_survive_restart() {
             .unwrap();
         assert_eq!(
             u16::from(package.suite),
-            MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256
+            MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519
         );
         assert!(!package.key_package.is_empty());
         let group_id = b"0123456789abcdef";

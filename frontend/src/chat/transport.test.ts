@@ -39,9 +39,9 @@ describe('ApiChatTransport', () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { stored: 1 } } as never)
     const transport = new ApiChatTransport()
 
-    await transport.fetchSyncBundles('alice/name', 7, '18446744073709551615')
+    await transport.fetchSyncBundles('alice/name', 7)
     expect(get).toHaveBeenCalledWith('/chat/users/alice%2Fname/keys', {
-      params: { syncDeviceId: 7, transparencyTreeSize: '18446744073709551615' },
+      params: { syncDeviceId: 7 },
     })
 
     await expect(transport.sendSyncMessage({ sendId: 'note-1' })).resolves.toEqual({
@@ -51,36 +51,12 @@ describe('ApiChatTransport', () => {
     expect(post).toHaveBeenCalledWith('/chat/sync/messages', { sendId: 'note-1' })
   })
 
-  it('sends transparency checkpoints losslessly on manifest publication', async () => {
+  it('publishes complete signed account manifests', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { manifest: {} } } as never)
     const transport = new ApiChatTransport()
 
-    await transport.publishManifest({ version: 2 }, '18446744073709551615')
-    expect(post).toHaveBeenCalledWith(
-      '/chat/manifest',
-      { version: 2 },
-      { params: { transparencyTreeSize: '18446744073709551615' } },
-    )
-  })
-
-  it('polls local and same-origin-proxied remote transparency scopes with lossless cursors', async () => {
-    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: { checkpoint: {} } } as never)
-    const transport = new ApiChatTransport()
-
-    await expect(
-      transport.fetchTransparencyCheckpoint('local', '18446744073709551615'),
-    ).resolves.toEqual({ checkpoint: {} })
-    expect(get).toHaveBeenCalledWith('/chat/transparency/checkpoint', {
-      params: { fromTreeSize: '18446744073709551615' },
-    })
-    await expect(
-      transport.fetchTransparencyCheckpoint('remote.example', '0'),
-    ).resolves.toEqual({ checkpoint: {} })
-    expect(get).toHaveBeenNthCalledWith(
-      2,
-      '/chat/transparency/domains/remote.example/checkpoint',
-      { params: { fromTreeSize: '0' } },
-    )
+    await transport.publishManifest({ sequence: 2 })
+    expect(post).toHaveBeenCalledWith('/chat/manifest', { sequence: 2 })
   })
 
   it('treats only a manifest 404 as an absent manifest', async () => {
@@ -98,21 +74,29 @@ describe('ApiChatTransport', () => {
     })
   })
 
-  it('fetches current manifest proofs without losing the checkpoint cursor', async () => {
+  it('fetches complete manifest history with lossless sequence bounds', async () => {
     const get = vi.spyOn(api, 'get').mockResolvedValue({
-      data: { manifest: { version: 4 }, transparency: { leafIndex: 9 } },
+      data: { account: 'alice@remote.example', manifests: [{ sequence: 4 }] },
     } as never)
     const transport = new ApiChatTransport()
 
     await expect(
-      transport.fetchManifestPublication(
+      transport.fetchManifestHistory(
         'alice@remote.example',
+        '1',
+        '18446744073709551615',
         '18446744073709551615',
       ),
-    ).resolves.toMatchObject({ manifest: { version: 4 } })
+    ).resolves.toMatchObject({ manifests: [{ sequence: 4 }] })
     expect(get).toHaveBeenCalledWith(
-      '/chat/users/alice%40remote.example/manifest-proof',
-      { params: { transparencyTreeSize: '18446744073709551615' } },
+      '/chat/users/alice%40remote.example/manifest-history',
+      {
+        params: {
+          fromSequence: '1',
+          toSequence: '18446744073709551615',
+          pageFromSequence: '18446744073709551615',
+        },
+      },
     )
   })
 

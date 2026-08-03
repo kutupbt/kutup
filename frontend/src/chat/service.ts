@@ -12,12 +12,12 @@ import type {
   PeerChatProfile,
   ReceiveReport,
   SendSummary,
-  TransparencyMonitorStatus,
   LocalMlsConversationRecord,
   MlsInvitationFeedback,
   MlsAuthorityPolicyInspection,
   PendingMlsOwnerApprovalRequest,
   PendingMlsInvitation,
+  SafetyNumberV1,
   WasmChatClientHandle,
 } from './types'
 import { loadChatWasm } from './wasm'
@@ -31,8 +31,6 @@ import {
 import { MlsConversationService } from './mls-service'
 
 type UpdateListener = () => void
-
-const TRANSPARENCY_MONITOR_INTERVAL_MS = 15 * 60 * 1000
 
 export type ChatServiceErrorCode = 'browserUnsupported' | 'serverUnsupported'
 
@@ -66,11 +64,9 @@ export class ChatService {
   private readonly listeners = new Set<UpdateListener>()
   private socket: WebSocket | null = null
   private socketRetry: ReturnType<typeof setTimeout> | null = null
-  private transparencyTimer: ReturnType<typeof setInterval> | null = null
   private retryAttempt = 0
   private disposed = false
   private reconcilePromise: Promise<ReceiveReport> | null = null
-  private readonly transparencyPromises = new Map<string, Promise<TransparencyMonitorStatus>>()
   private readonly mls: MlsConversationService | null
 
   private constructor(
@@ -117,15 +113,6 @@ export class ChatService {
     const databaseName = `kutup-chat-v2:${scope}`
     const wasm = await loadChatWasm()
     const transport = new ApiChatTransport()
-    const transparencyPolicy = {
-      scopes: [
-        {
-          scope: 'local',
-          operatorKeyId: capabilities.transparencyOperatorKeyId!,
-          operatorPublicKey: capabilities.transparencyOperatorPublicKey!,
-        },
-      ],
-    }
     const client = await navigator.locks.request(lockName, { mode: 'exclusive' }, () =>
       wasm.WasmChatClient.open(
         databaseName,
@@ -134,7 +121,6 @@ export class ChatService {
         capabilities.sealedSender,
         options.masterKey,
         transport,
-        transparencyPolicy,
       ),
     )
 
@@ -149,8 +135,6 @@ export class ChatService {
     try {
       await service.initializeMls()
       await service.reconcile()
-      await service.monitorTransparency()
-      service.startTransparencyMonitor()
       void service.maintainPrekeys()
       void service.connectSocket()
       return service
@@ -464,32 +448,25 @@ export class ChatService {
     }
   }
 
-  monitorTransparency(scope = 'local'): Promise<TransparencyMonitorStatus> {
-    const existing = this.transparencyPromises.get(scope)
-    if (existing) return existing
-    const pending = this.withLock(() => this.client.monitorTransparency(scope))
-      .then((status) => {
-        this.notifyPeers()
-        return status
-      })
-      .finally(() => {
-        this.transparencyPromises.delete(scope)
-      })
-    this.transparencyPromises.set(scope, pending)
-    return pending
-  }
-
-  transparencyStatus(scope = 'local'): Promise<TransparencyMonitorStatus | undefined> {
-    return this.withLock(() => this.client.transparencyMonitorStatus(scope))
-  }
-
-  async verifyAuthority(peer: string): Promise<void> {
+  async safetyNumber(peer: string): Promise<SafetyNumberV1> {
     const address = parseAccountAddress(peer)
     if (!address) throw new Error('invalid chat account address')
-    await this.withLock(() =>
-      this.client.verifyAuthority(toCoreAccountAddress(address, this.capabilities.serverName)),
+    return this.withLock(() =>
+      this.client.safetyNumber(toCoreAccountAddress(address, this.capabilities.serverName)),
+    )
+  }
+
+  async verifySafetyNumber(peer: string, scannedPayload: string): Promise<SafetyNumberV1> {
+    const address = parseAccountAddress(peer)
+    if (!address) throw new Error('invalid chat account address')
+    const verified = await this.withLock(() =>
+      this.client.verifySafetyNumber(
+        toCoreAccountAddress(address, this.capabilities.serverName),
+        scannedPayload,
+      ),
     )
     this.notifyPeers()
+    return verified
   }
 
   async quarantineInbound(id: string): Promise<void> {
@@ -501,7 +478,6 @@ export class ChatService {
     if (this.disposed) return
     this.disposed = true
     if (this.socketRetry) clearTimeout(this.socketRetry)
-    if (this.transparencyTimer) clearInterval(this.transparencyTimer)
     this.socket?.close()
     window.removeEventListener('online', this.handleOnline)
     document.removeEventListener('visibilitychange', this.handleVisibilityChange)
@@ -545,8 +521,8 @@ export class ChatService {
     if (!this.mls) return
     await this.withMlsWorkflow(async () => {
       const manifest = await this.withLock(() => this.client.syncManifest())
-      const version = requireManifestVersion(manifest)
-      await this.mls?.maintainKeyPackages(version)
+      const sequence = requireManifestSequence(manifest)
+      await this.mls?.maintainKeyPackages(sequence)
       await this.mls?.reconcileLinkedDevices(requireMlsManifestDeviceIds(manifest))
     })
   }
@@ -573,19 +549,11 @@ export class ChatService {
   }
 
   private readonly handleOnline = (): void => {
-    void this.monitorTransparency()
     void this.initializeMls().then(() => this.reconcile())
   }
 
   private readonly handleVisibilityChange = (): void => {
-    if (document.visibilityState === 'visible') void this.monitorTransparency()
-  }
-
-  private startTransparencyMonitor(): void {
-    if (this.transparencyTimer) return
-    this.transparencyTimer = setInterval(() => {
-      if (document.visibilityState === 'visible') void this.monitorTransparency()
-    }, TRANSPARENCY_MONITOR_INTERVAL_MS)
+    if (document.visibilityState === 'visible') void this.initializeMls().then(() => this.reconcile())
   }
 
   private async connectSocket(): Promise<void> {
@@ -604,7 +572,6 @@ export class ChatService {
       socket.onopen = () => {
         this.retryAttempt = 0
         void this.maintainPrekeys()
-        void this.monitorTransparency()
         void this.initializeMls().then(() => this.reconcile())
       }
       socket.onmessage = () => {
@@ -643,18 +610,18 @@ async function accountScope(userId: string): Promise<string> {
   ).join('')
 }
 
-function requireManifestVersion(value: unknown): number {
+function requireManifestSequence(value: unknown): number {
   if (
     typeof value !== 'object'
     || value === null
-    || !('version' in value)
-    || typeof value.version !== 'number'
-    || !Number.isSafeInteger(value.version)
-    || value.version < 1
+    || !('sequence' in value)
+    || typeof value.sequence !== 'number'
+    || !Number.isSafeInteger(value.sequence)
+    || value.sequence < 1
   ) {
-    throw new Error('signed device manifest returned an invalid version')
+    throw new Error('signed account manifest returned an invalid sequence')
   }
-  return value.version
+  return value.sequence
 }
 
 function requireMlsManifestDeviceIds(value: unknown): number[] {
@@ -664,7 +631,7 @@ function requireMlsManifestDeviceIds(value: unknown): number[] {
     || !('devices' in value)
     || !Array.isArray(value.devices)
     || value.devices.length < 1
-    || value.devices.length > 127
+    || value.devices.length > 10
   ) {
     throw new Error('signed device manifest returned an invalid MLS device set')
   }

@@ -19,7 +19,7 @@ function group(): LocalMlsConversationRecord {
   const cryptographic = {
     policyVersion: 1 as const,
     sequence: 1,
-    suite: 2 as const,
+    suite: 3 as const,
     requiredPrivateControlExtension: 0xff4b,
     maximumPastEpochs: 2 as const,
     anonymousDeliveryRequired: true as const,
@@ -34,7 +34,7 @@ function group(): LocalMlsConversationRecord {
         incarnation: 1,
         mlsGroupId: 'BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU=',
         kind: 'group',
-        suite: 2,
+        suite: 3,
         rosterCommitment: '44'.repeat(32),
         memberCount: 1,
         authoritySet: {
@@ -111,12 +111,12 @@ function inspection(matches = true): MlsAuthorityPolicyInspection {
         policy: {
           policyVersion: 1,
           canonicalDomain: 'alpha.example',
-          suite: 2,
+          suite: 3,
           anonymousDeliverySuite: 1,
           controlSigningKeyId: controlKeyId,
           controlSigningPublicKey: controlPublicKey,
           acceptsGroupOrdering: true,
-          maximumGroupMembers: 1000,
+          maximumGroupMembers: 256,
           maximumAuthorities: 64,
           maximumControlPayloadBytes: 1024 * 1024,
           pendingMessageRequests: {
@@ -170,8 +170,8 @@ describe('MlsGroupSecurityDetails', () => {
     ).toHaveTextContent('2')
     const authority = screen.getByTestId('chat-group-authority-alpha.example')
     expect(within(authority).getByText('Authenticated; matches group pin')).toBeVisible()
-    expect(within(authority).getByText('0x0002')).toBeVisible()
-    expect(within(authority).getByText('1000')).toBeVisible()
+    expect(within(authority).getByText('0x0003')).toBeVisible()
+    expect(within(authority).getByText('256')).toBeVisible()
     expect(
       screen.getByTestId('chat-group-authority-history-alpha.example-2'),
     ).toHaveTextContent('77'.repeat(32))

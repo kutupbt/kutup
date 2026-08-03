@@ -11,10 +11,10 @@ pub(super) fn stage_add_members(
     private_control: Option<&MlsPrivateControlStateV1>,
 ) -> Result<PendingMlsCommit> {
     validate_group_id(mls_group_id)?;
-    if additions.is_empty() || additions.len() > 1000 || now_seconds < 0 {
-        return Err(ChatError::Invalid(
-            "MLS member addition requires 1-1000 KeyPackages and a valid clock".into(),
-        ));
+    if additions.is_empty() || additions.len() > MAX_MLS_GROUP_LEAVES || now_seconds < 0 {
+        return Err(ChatError::Invalid(format!(
+            "MLS member addition requires 1-{MAX_MLS_GROUP_LEAVES} KeyPackages and a valid clock"
+        )));
     }
     let pending_key = BASE64.encode(mls_group_id);
     if metadata.pending_commits.contains_key(&pending_key) {
@@ -116,10 +116,12 @@ pub(super) fn stage_remove_members(
     private_control: Option<&MlsPrivateControlStateV1>,
 ) -> Result<PendingMlsCommit> {
     validate_group_id(mls_group_id)?;
-    if removed_credential_identities.is_empty() || removed_credential_identities.len() > 1000 {
-        return Err(ChatError::Invalid(
-            "MLS member removal requires 1-1000 credential identities".into(),
-        ));
+    if removed_credential_identities.is_empty()
+        || removed_credential_identities.len() > MAX_MLS_GROUP_LEAVES
+    {
+        return Err(ChatError::Invalid(format!(
+            "MLS member removal requires 1-{MAX_MLS_GROUP_LEAVES} credential identities"
+        )));
     }
     let pending_key = BASE64.encode(mls_group_id);
     if metadata.pending_commits.contains_key(&pending_key) {
@@ -224,11 +226,12 @@ pub(super) fn stage_device_sync(
 ) -> Result<PendingMlsCommit> {
     validate_group_id(mls_group_id)?;
     if (additions.is_empty() && removed_credential_identities.is_empty())
-        || additions.len() + removed_credential_identities.len() > 127
+        || additions.len() + removed_credential_identities.len() > MAX_MLS_DEVICES_PER_ACCOUNT * 2
         || now_seconds < 0
     {
         return Err(ChatError::Invalid(
-            "MLS device synchronization requires 1-127 leaf changes and a valid clock".into(),
+            "MLS device synchronization exceeds the 10-device account limit or has an invalid clock"
+                .into(),
         ));
     }
     let pending_key = BASE64.encode(mls_group_id);
@@ -414,19 +417,36 @@ pub(super) fn stage_private_control_update(
     Ok(pending)
 }
 
+pub(super) struct PendingMembershipChangeInput<'a> {
+    pub metadata: &'a SnapshotMetadata,
+    pub conversation: &'a LocalMlsConversationRecord,
+    pub mls_group_id: &'a [u8],
+    pub proposal_id: Uuid,
+    pub next_roster: &'a [MlsConversationMemberV1],
+    pub additions: &'a [VerifiedMlsKeyPackage],
+    pub removed_credential_identities: &'a [String],
+    pub current_devices: &'a [(String, u32, String)],
+    pub pending: &'a PendingMlsCommit,
+    pub action_type: MlsControlActionTypeV1,
+    pub created_at_seconds: i64,
+}
+
 pub(super) fn build_pending_membership_change(
-    metadata: &SnapshotMetadata,
-    conversation: &LocalMlsConversationRecord,
-    mls_group_id: &[u8],
-    proposal_id: Uuid,
-    next_roster: &[MlsConversationMemberV1],
-    additions: &[VerifiedMlsKeyPackage],
-    removed_credential_identities: &[String],
-    current_devices: &[(String, u32, String)],
-    pending: &PendingMlsCommit,
-    action_type: MlsControlActionTypeV1,
-    created_at_seconds: i64,
+    input: PendingMembershipChangeInput<'_>,
 ) -> Result<PendingMlsMembershipChange> {
+    let PendingMembershipChangeInput {
+        metadata,
+        conversation,
+        mls_group_id,
+        proposal_id,
+        next_roster,
+        additions,
+        removed_credential_identities,
+        current_devices,
+        pending,
+        action_type,
+        created_at_seconds,
+    } = input;
     let next_addresses = next_roster
         .iter()
         .map(|member| member.address.canonical())

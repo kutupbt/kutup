@@ -184,7 +184,7 @@ pub(super) fn insert_processed_control_envelope(
 pub(super) fn validate_local_control_state(record: &LocalMlsConversationRecord) -> Result<()> {
     if record.request.genesis.kind != MlsConversationKindV1::Group
         || record.current_roster.is_empty()
-        || record.current_roster.len() > 1000
+        || record.current_roster.len() > MAX_MLS_GROUP_ACCOUNTS
     {
         return Err(ChatError::Db(
             "durable MLS group control roster is invalid".into(),
@@ -233,12 +233,9 @@ pub(super) fn validate_local_control_state(record: &LocalMlsConversationRecord) 
         }
     }
     if record.member_joined_epochs.len() != roster_accounts.len()
-        || record
-            .member_joined_epochs
-            .iter()
-            .any(|(address, epoch)| {
-                !roster_accounts.contains(address) || *epoch > record.last_finalized_epoch
-            })
+        || record.member_joined_epochs.iter().any(|(address, epoch)| {
+            !roster_accounts.contains(address) || *epoch > record.last_finalized_epoch
+        })
         || record
             .accepted_invitation_epochs
             .iter()
@@ -408,10 +405,10 @@ pub(super) fn validate_group_roster(roster: &[MlsConversationMemberV1]) -> Resul
     // A group is created with its creator as the only member and may return to
     // that state after removals. Control actions must remain available in both
     // cases so the creator can add a linked device, invite a peer, or close it.
-    if !(1..=1000).contains(&roster.len()) {
-        return Err(ChatError::Invalid(
-            "MLS group roster must contain 1-1000 accounts".into(),
-        ));
+    if !(1..=MAX_MLS_GROUP_ACCOUNTS).contains(&roster.len()) {
+        return Err(ChatError::Invalid(format!(
+            "MLS group roster must contain 1-{MAX_MLS_GROUP_ACCOUNTS} accounts"
+        )));
     }
     let mut previous = None;
     let mut admins = 0usize;
@@ -628,7 +625,7 @@ pub(super) fn verify_exact_roster(
     }
     if actual_count != expected_by_identity.len() {
         return Err(ChatError::Trust(
-            "MLS roster omits a transparency-verified expected member".into(),
+            "MLS roster omits a account-manifest-verified expected member".into(),
         ));
     }
     Ok(())
@@ -644,7 +641,7 @@ pub(super) fn verify_member_credential(
         || member.signature_key != expected.credential_public_key
     {
         return Err(ChatError::Trust(
-            "MLS sender credential differs from the transparency-verified manifest".into(),
+            "MLS sender credential differs from the account-manifest-verified manifest".into(),
         ));
     }
     Ok(())
@@ -683,13 +680,11 @@ pub(super) fn validate_sha256_hex(label: &str, value: &str) -> Result<()> {
 }
 
 pub(super) fn validate_credential_public_key(key: &[u8]) -> Result<()> {
-    if key.len() != 65 || key.first() != Some(&4) {
-        return Err(ChatError::Invalid(
-            "MLS credential key must be uncompressed P-256".into(),
-        ));
-    }
-    p256::ecdsa::VerifyingKey::from_sec1_bytes(key)
-        .map_err(|_| ChatError::Invalid("MLS credential key is invalid P-256".into()))?;
+    let key: [u8; 32] = key
+        .try_into()
+        .map_err(|_| ChatError::Invalid("MLS credential key must be 32-byte Ed25519".into()))?;
+    ed25519_dalek::VerifyingKey::from_bytes(&key)
+        .map_err(|_| ChatError::Invalid("MLS credential key is invalid Ed25519".into()))?;
     Ok(())
 }
 
@@ -697,11 +692,9 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
     validate_credential_identity(&metadata.credential_identity)?;
     validate_credential_public_key(&metadata.credential_public_key)
         .map_err(|error| ChatError::Db(error.to_string()))?;
-    let secret = p256::SecretKey::from_slice(&metadata.anonymous_delivery_private_key)
-        .map_err(|_| ChatError::Db("invalid durable anonymous-delivery private key".into()))?;
-    if secret.public_key().to_encoded_point(false).as_bytes().len() != 65 {
+    if metadata.anonymous_delivery_private_key.len() != 32 {
         return Err(ChatError::Db(
-            "anonymous-delivery key is not uncompressed P-256".into(),
+            "anonymous-delivery key is not a 32-byte X25519 private key".into(),
         ));
     }
     if metadata.pending_commits.len() > MAX_PENDING_COMMITS
@@ -740,7 +733,9 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
                 "durable MLS group control key has the wrong length".into(),
             ));
         }
-        P256SigningKey::from_slice(private_key)
+        let _: [u8; 32] = private_key
+            .as_slice()
+            .try_into()
             .map_err(|_| ChatError::Db("invalid durable MLS group control key".into()))?;
     }
     for (key, pending) in &metadata.pending_commits {

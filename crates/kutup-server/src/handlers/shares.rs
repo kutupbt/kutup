@@ -9,6 +9,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use kutup_crypto::drive_envelope::{DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
@@ -16,6 +17,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+use crate::handlers::files::{canonical_uuid, validate_envelope};
 use crate::handlers::{octet_stream_response, random_token};
 use crate::middleware::AuthUser;
 use crate::AppState;
@@ -23,11 +25,10 @@ use crate::AppState;
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CreateShareRequest {
-    /// "collection" or "file".
+    /// V1 accepts only "collection".
     share_type: String,
     target_id: String,
-    encrypted_collection_key: String,
-    encrypted_collection_key_nonce: String,
+    collection_key_envelope: String,
     expires_in_hours: Option<i64>,
 }
 
@@ -48,32 +49,51 @@ pub async fn create_public_share(
     let user_id =
         Uuid::parse_str(&user.user_id).map_err(|_| AppError::internal("invalid user id"))?;
 
-    if !user_owns_target(&state, user_id, &req.share_type, &req.target_id).await {
-        return Err(AppError::forbidden("forbidden"));
+    if req.share_type != "collection" {
+        return Err(AppError::bad_request("unsupported public share type"));
     }
+    let target_uuid = canonical_uuid(&req.target_id)?;
+    let key_epoch: Option<i32> = sqlx::query_scalar(
+        "SELECT key_epoch FROM collections \
+         WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL",
+    )
+    .bind(target_uuid)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some(key_epoch) = key_epoch else {
+        return Err(AppError::forbidden("forbidden"));
+    };
+    let epoch =
+        u32::try_from(key_epoch).map_err(|_| AppError::conflict("invalid collection epoch"))?;
+    let envelope_context = DriveEnvelopeContextV1::new(
+        DriveEnvelopePurpose::PublicLinkCollectionKey,
+        epoch,
+        1,
+        &req.target_id,
+        &user_id.to_string(),
+    )
+    .map_err(|_| AppError::bad_request("invalid Drive envelope"))?;
+    validate_envelope(&req.collection_key_envelope, envelope_context)?;
 
     let token = random_token(32);
     let expires_at: Option<OffsetDateTime> = req
         .expires_in_hours
         .map(|h| OffsetDateTime::now_utc() + time::Duration::hours(h));
 
-    // target_id is a uuid column; bind a parsed Uuid (a bad id ⇒ forbidden was already
-    // ruled out by user_owns_target, which returns false on a non-owned/invalid id).
-    let target_uuid =
-        Uuid::parse_str(&req.target_id).map_err(|_| AppError::forbidden("forbidden"))?;
-
     let id: Uuid = sqlx::query_scalar(
         r#"INSERT INTO public_shares (share_type, target_id, token,
-                                      encrypted_collection_key, encrypted_collection_key_nonce,
-                                      expires_at)
-           VALUES ($1,$2,$3,$4,$5,$6)
+                                      collection_key_envelope, collection_key_epoch,
+                                      owner_user_id, expires_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
            RETURNING id"#,
     )
     .bind(&req.share_type)
     .bind(target_uuid)
     .bind(&token)
-    .bind(&req.encrypted_collection_key)
-    .bind(&req.encrypted_collection_key_nonce)
+    .bind(&req.collection_key_envelope)
+    .bind(key_epoch)
+    .bind(user_id)
     .bind(expires_at)
     .fetch_one(&state.pool)
     .await
@@ -82,16 +102,17 @@ pub async fn create_public_share(
     Ok((StatusCode::CREATED, Json(json!({"id": id, "token": token}))).into_response())
 }
 
-/// Encrypted key material for a public share. Field order mirrors the Go response struct
-/// (not alphabetical); the nullable key fields serialise as `null` when unset.
+/// Authenticated public context plus the opaque key envelope. The fragment key
+/// is deliberately absent.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PublicShareResponse {
     id: Uuid,
     share_type: String,
     target_id: Uuid,
-    encrypted_collection_key: Option<String>,
-    encrypted_collection_key_nonce: Option<String>,
+    collection_key_envelope: String,
+    collection_key_epoch: i32,
+    owner_user_id: Uuid,
     #[serde(with = "time::serde::rfc3339::option")]
     expires_at: Option<OffsetDateTime>,
 }
@@ -112,13 +133,14 @@ pub async fn get_public_share(
         Uuid,
         String,
         Uuid,
-        Option<String>,
-        Option<String>,
+        String,
+        i32,
+        Uuid,
         Option<OffsetDateTime>,
     );
     let row: Option<ShareRow> = sqlx::query_as(
         r#"SELECT id, share_type, target_id,
-                  encrypted_collection_key, encrypted_collection_key_nonce, expires_at
+                  collection_key_envelope, collection_key_epoch, owner_user_id, expires_at
            FROM public_shares WHERE token = $1"#,
     )
     .bind(&token)
@@ -126,7 +148,7 @@ pub async fn get_public_share(
     .await
     .ok()
     .flatten();
-    let Some((id, share_type, target_id, eck, eckn, expires_at)) = row else {
+    let Some((id, share_type, target_id, envelope, epoch, owner_user_id, expires_at)) = row else {
         return Err(AppError::not_found("not found"));
     };
     if let Some(exp) = expires_at {
@@ -138,8 +160,9 @@ pub async fn get_public_share(
         id,
         share_type,
         target_id,
-        encrypted_collection_key: eck,
-        encrypted_collection_key_nonce: eckn,
+        collection_key_envelope: envelope,
+        collection_key_epoch: epoch,
+        owner_user_id,
         expires_at,
     })
     .into_response())
@@ -152,10 +175,10 @@ pub async fn get_public_share(
 struct PublicFileRow {
     id: Uuid,
     collection_id: Uuid,
-    encrypted_metadata: String,
-    metadata_nonce: String,
-    encrypted_file_key: String,
-    file_key_nonce: String,
+    metadata_envelope: String,
+    file_key_envelope: String,
+    key_epoch: i32,
+    metadata_revision: i64,
     encrypted_size_bytes: i64,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
@@ -204,19 +227,10 @@ pub async fn list_public_share_files(
         return Err(AppError::not_found("not found"));
     }
 
-    type PubFileTuple = (
-        Uuid,
-        Uuid,
-        String,
-        String,
-        String,
-        String,
-        i64,
-        OffsetDateTime,
-    );
+    type PubFileTuple = (Uuid, Uuid, String, String, i32, i64, i64, OffsetDateTime);
     let rows: Vec<PubFileTuple> = sqlx::query_as(
-        r#"SELECT id, collection_id, encrypted_metadata, metadata_nonce,
-                  encrypted_file_key, file_key_nonce, encrypted_size_bytes, created_at
+        r#"SELECT id, collection_id, metadata_envelope, file_key_envelope,
+                  key_epoch, metadata_revision, encrypted_size_bytes, created_at
            FROM files WHERE collection_id = $1 AND deleted_at IS NULL
            ORDER BY created_at DESC"#,
     )
@@ -228,15 +242,17 @@ pub async fn list_public_share_files(
     let files: Vec<PublicFileRow> = rows
         .into_iter()
         .map(
-            |(id, collection_id, em, mn, efk, fkn, size, created_at)| PublicFileRow {
-                id,
-                collection_id,
-                encrypted_metadata: em,
-                metadata_nonce: mn,
-                encrypted_file_key: efk,
-                file_key_nonce: fkn,
-                encrypted_size_bytes: size,
-                created_at,
+            |(id, collection_id, metadata, file_key, epoch, revision, size, created_at)| {
+                PublicFileRow {
+                    id,
+                    collection_id,
+                    metadata_envelope: metadata,
+                    file_key_envelope: file_key,
+                    key_epoch: epoch,
+                    metadata_revision: revision,
+                    encrypted_size_bytes: size,
+                    created_at,
+                }
             },
         )
         .collect();
@@ -308,32 +324,4 @@ pub async fn download_public_share_file(
         .await
         .map_err(|_| AppError::internal("storage"))?;
     Ok(octet_stream_response(body, size, &[]))
-}
-
-/// Verifies the caller owns the share target — mirrors `userOwnsTarget`.
-async fn user_owns_target(
-    state: &AppState,
-    user_id: Uuid,
-    share_type: &str,
-    target_id: &str,
-) -> bool {
-    let Ok(tid) = Uuid::parse_str(target_id) else {
-        return false;
-    };
-    let sql = match share_type {
-        "collection" => {
-            "SELECT COUNT(*) FROM collections WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL"
-        }
-        "file" => {
-            "SELECT COUNT(*) FROM files WHERE id = $1 AND uploader_user_id = $2 AND deleted_at IS NULL"
-        }
-        _ => return false,
-    };
-    let count: i64 = sqlx::query_scalar(sql)
-        .bind(tid)
-        .bind(user_id)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap_or(0);
-    count > 0
 }

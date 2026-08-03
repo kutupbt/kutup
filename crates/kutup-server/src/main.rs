@@ -9,8 +9,6 @@
 mod chat_federation;
 mod chat_hub;
 mod chat_mls;
-mod chat_transparency;
-mod chat_transparency_monitor;
 mod config;
 mod db;
 mod drive_federation;
@@ -73,8 +71,6 @@ pub struct AppState {
     /// One shared v2 federation identity, resolver, trust store, policy engine,
     /// replay store, and signed transport for every feature protocol.
     pub(crate) federation: Option<Arc<federation::FederationStack>>,
-    /// Persistent operator identity for distinguished key-transparency heads.
-    pub transparency_authority: Arc<chat_transparency::TransparencyAuthority>,
     /// Active root-signed online sealed-sender issuer. `None` keeps the
     /// capability unadvertised and all issuance routes closed.
     pub(crate) sealed_sender: Option<Arc<sealed_sender_service::SealedSenderService>>,
@@ -105,9 +101,6 @@ async fn main() -> anyhow::Result<()> {
         }
         anyhow::bail!("usage: kutup-server federation-identity rotate");
     }
-    let rotate_transparency_policy = args
-        .get(1..)
-        .is_some_and(|args| args == ["feature-policy", "rotate", "chat-transparency"]);
     let rotate_sealed_sender_policy = args
         .get(1..)
         .is_some_and(|args| args == ["feature-policy", "rotate", "sealed-sender"]);
@@ -115,18 +108,11 @@ async fn main() -> anyhow::Result<()> {
         .get(1..)
         .is_some_and(|args| args == ["feature-policy", "rotate", "mls-ordering"]);
     if args.get(1).is_some_and(|value| value == "feature-policy")
-        && !rotate_transparency_policy
         && !rotate_sealed_sender_policy
         && !rotate_mls_ordering_policy
     {
-        anyhow::bail!(
-            "usage: kutup-server feature-policy rotate <chat-transparency|sealed-sender|mls-ordering>"
-        );
+        anyhow::bail!("usage: kutup-server feature-policy rotate <sealed-sender|mls-ordering>");
     }
-
-    let transparency_authority = Arc::new(chat_transparency::TransparencyAuthority::from_config(
-        &config,
-    )?);
     let federation = federation::FederationStack::from_config(
         pool.clone(),
         &config,
@@ -147,46 +133,6 @@ async fn main() -> anyhow::Result<()> {
         time::OffsetDateTime::now_utc(),
     )?;
     let mls_ordering = chat_mls::MlsOrderingService::from_config(&config)?.map(Arc::new);
-    let local_transparency_policy =
-        chat_transparency::local_transparency_policy(&pool, &transparency_authority).await?;
-    if let (Some(federation), Some(policy)) =
-        (federation.as_deref(), local_transparency_policy.as_ref())
-    {
-        let envelope = federation
-            .feature_policies()
-            .ensure_local(
-                federation,
-                kutup_federation_proto::FederatedFeaturePolicyTypeV1::ChatTransparency,
-                &policy.canonical_bytes().map_err(anyhow::Error::msg)?,
-                rotate_transparency_policy,
-                time::OffsetDateTime::now_utc(),
-            )
-            .await?;
-        tracing::info!(
-            sequence = envelope.sequence,
-            policy_hash = envelope.policy_hash()?,
-            "loaded authenticated chat transparency policy"
-        );
-        telemetry::policy_event(
-            "chat_transparency",
-            if rotate_transparency_policy {
-                "rotated"
-            } else {
-                "loaded"
-            },
-        );
-        if rotate_transparency_policy {
-            println!(
-                "chat transparency policy rotated: domain={} sequence={} hash={}",
-                envelope.domain,
-                envelope.sequence,
-                envelope.policy_hash()?
-            );
-            return Ok(());
-        }
-    } else if rotate_transparency_policy {
-        anyhow::bail!("chat transparency policy rotation requires federation");
-    }
     if let (Some(federation), Some(service)) = (federation.as_deref(), sealed_sender.as_ref()) {
         let envelope = federation
             .feature_policies()
@@ -270,22 +216,6 @@ async fn main() -> anyhow::Result<()> {
             "MLS ordering policy rotation requires federation, policy JSON, and a control signer"
         );
     }
-    let transparency_backfill = chat_transparency::backfill_existing_manifests(&pool).await?;
-    if transparency_backfill > 0 {
-        tracing::info!(
-            manifests = transparency_backfill,
-            "seeded chat manifest transparency log"
-        );
-    }
-    let transparency_map_backfill =
-        chat_transparency::backfill_current_map(&pool, &transparency_authority).await?;
-    if transparency_map_backfill > 0 {
-        tracing::info!(
-            manifests = transparency_map_backfill,
-            "seeded current-manifest transparency map"
-        );
-    }
-
     // S3 (SeaweedFS) storage client — mirrors services.NewStorage in main.go.
     let storage = storage::StorageService::new(
         &config.s3_endpoint,
@@ -334,7 +264,6 @@ async fn main() -> anyhow::Result<()> {
         hub: Arc::new(hub::Hub::new()),
         chat_hub,
         federation,
-        transparency_authority,
         sealed_sender,
         mls_ordering,
         storage_probe,
@@ -344,7 +273,6 @@ async fn main() -> anyhow::Result<()> {
     }
     chat_federation::spawn_retry_worker(state.clone());
     chat_mls::spawn_retry_worker(state.clone());
-    chat_transparency_monitor::spawn_monitor(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
@@ -431,13 +359,14 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
     let res = sqlx::query(
         r#"INSERT INTO users (
             email, username, login_key_hash,
-            encrypted_master_key, master_key_nonce,
-            encrypted_recovery_key, recovery_key_nonce,
-            encrypted_private_key, private_key_nonce,
-            public_key, account_protection_suite, account_protection_salt,
+            master_key_envelope, recovery_key_envelope,
+            drive_private_key_envelope,
+            public_key, account_authority_public_key, account_authority_key_id,
+            account_incarnation_id, drive_signing_public_key,
+            account_protection_suite, account_protection_salt,
             argon_memory_kib, argon_iterations, argon_parallelism,
             is_admin, is_first_login
-        ) VALUES ($1,$2,$3,'','','','','','','',0,'',0,0,0,true,true)"#,
+        ) VALUES ($1,$2,$3,'','','','','','','','',0,'',0,0,0,true,true)"#,
     )
     .bind(email)
     .bind(username)
@@ -555,27 +484,6 @@ fn build_router(state: AppState) -> Router {
         .route("/api/chat/device/:deviceId", delete(chat::revoke_device))
         .route("/api/chat/manifest", post(chat::publish_manifest))
         .route(
-            "/api/chat/transparency/checkpoint",
-            get(chat::get_transparency_checkpoint)
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/chat/transparency/domains/:domain/status",
-            get(chat_transparency_monitor::get_status),
-        )
-        .route(
-            "/api/chat/transparency/domains/:domain/verify",
-            post(chat_transparency_monitor::verify_now),
-        )
-        .route(
-            "/api/chat/transparency/domains/:domain/policy",
-            get(chat_transparency_monitor::get_policy_history),
-        )
-        .route(
-            "/api/chat/transparency/domains/:domain/checkpoint",
-            get(chat_transparency_monitor::get_remote_checkpoint),
-        )
-        .route(
             "/api/chat/profile",
             get(chat::get_own_profile)
                 .put(chat::put_profile)
@@ -597,11 +505,6 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/chat/users/:username/manifest",
             get(chat::get_user_manifest),
-        )
-        .route(
-            "/api/chat/users/:username/manifest-proof",
-            get(chat::get_user_manifest_proof)
-                .route_layer(from_fn(middleware::rate_limit_chat_keys)),
         )
         .route(
             "/api/chat/users/:username/manifest-history",
@@ -857,11 +760,6 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/transparency/checkpoint",
-            get(chat_federation::get_transparency_checkpoint)
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
             "/api/fed/chat/users/:username/profile/:version",
             get(chat_federation::get_user_profile)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
@@ -872,8 +770,8 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/users/:username/manifest-proof",
-            get(chat_federation::get_manifest_proof)
+            "/api/fed/chat/users/:username/manifest",
+            get(chat_federation::get_manifest)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
@@ -983,10 +881,6 @@ fn build_router(state: AppState) -> Router {
                 .route(
                     "/api/admin/federation/peers/:domain/repin",
                     post(admin::repin_federation_peer),
-                )
-                .route(
-                    "/api/admin/chat/transparency/domains/:domain/recover",
-                    post(chat_transparency_monitor::recover_domain),
                 )
                 .route("/api/admin/chat/mls/status", get(chat_mls::admin_status))
                 .route(

@@ -13,7 +13,7 @@ use reqwest::StatusCode;
 
 use super::{
     active_policy, bootstrap_new_authorities, notify_mls_conversation_mailbox, replicate_genesis,
-    request_remote_ordering_vote, MlsRepository,
+    request_remote_ordering_vote, CommitControlContext, MlsRepository,
 };
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
@@ -83,13 +83,15 @@ pub(crate) async fn commit_control_block(
         .server_name();
     let response = MlsRepository::new(state.pool.clone())
         .commit_control_block(
-            local_domain,
-            Some(trusted_uuid(&auth.user_id)?),
-            None,
             &request,
-            None,
-            policy.maximum_group_members,
-            false,
+            CommitControlContext {
+                local_domain,
+                local_submitter: Some(trusted_uuid(&auth.user_id)?),
+                federated_origin: None,
+                incoming_membership_delivery: None,
+                maximum_group_members: policy.maximum_group_members,
+                verified_history_replay: false,
+            },
         )
         .await?;
     notify_mls_conversation_mailbox(&state, request.finalized.block.conversation_id).await;

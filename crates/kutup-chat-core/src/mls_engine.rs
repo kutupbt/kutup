@@ -43,6 +43,7 @@ use std::rc::Rc;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use ed25519_dalek::{Signer as _, SigningKey as Ed25519SigningKey};
 use openmls::prelude::{
     Capabilities, Ciphersuite, CredentialType, Extension, ExtensionType, Extensions, GroupContext,
     GroupId, KeyPackage, KeyPackageIn, Lifetime, Member, MlsGroup, MlsGroupCreateConfig,
@@ -52,11 +53,7 @@ use openmls::prelude::{
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_traits::types::SignatureScheme;
 use openmls_traits::OpenMlsProvider;
-use p256::ecdsa::{
-    signature::Signer as _, Signature as P256Signature, SigningKey as P256SigningKey,
-};
-use p256::elliptic_curve::rand_core::{OsRng, RngCore as _};
-use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+use rand_core::{OsRng, RngCore as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tls_codec::{Deserialize as _, Serialize as _};
@@ -77,12 +74,15 @@ use kutup_chat_proto::{
     MlsMembershipDeliveryV1, MlsMembershipEnvelopeKindV1, MlsMembershipEnvelopeV1,
     MlsMembershipTransitionV1, MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1,
     MlsOwnerCandidateV1, MlsOwnerSetV1, MlsOwnerV1, MlsPrivateControlStateV1,
-    RecoverMlsConversationRequestV1, RecoverMlsConversationResponseV1,
-    MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256, MLS_PRIVATE_CONTROL_EXTENSION_TYPE,
+    RecoverMlsConversationRequestV1, RecoverMlsConversationResponseV1, MAX_MLS_DEVICES_PER_ACCOUNT,
+    MAX_MLS_GROUP_ACCOUNTS, MAX_MLS_GROUP_LEAVES,
+    MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519, MLS_PRIVATE_CONTROL_EXTENSION_TYPE,
     MLS_PROTOCOL_VERSION,
 };
 
-const STATE_FORMAT_VERSION: u16 = 10;
+// Pre-v1 clean break: the X25519/Ed25519/ChaCha suite and 10-device roster
+// bounds changed the durable key and validation shapes. No V10 reader remains.
+const STATE_FORMAT_VERSION: u16 = 11;
 const MAX_STATE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_STATE_RECORDS: usize = 100_000;
 const MAX_STATE_RECORD_BYTES: usize = 16 * 1024 * 1024;
@@ -94,9 +94,9 @@ const MAX_MLS_GROUP_ID_BYTES: usize = 255;
 const MAX_KEY_PACKAGE_LIFETIME_SECONDS: i64 = 84 * 24 * 60 * 60;
 const KEY_PACKAGE_CLOCK_SKEW_SECONDS: u64 = 60 * 60;
 
-/// The one ciphersuite advertised by Kutup MLS V1 (RFC 9420 suite `0x0002`).
+/// The one ciphersuite advertised by Kutup MLS V1 (RFC 9420 suite `0x0003`).
 pub const KUTUP_MLS_V1_CIPHERSUITE: Ciphersuite =
-    Ciphersuite::MLS_128_DHKEMP256_AES128GCM_SHA256_P256;
+    Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519;
 
 /// Maximum number of older epochs retained to tolerate a commit overtaking
 /// application messages during federation. This is intentionally small to
@@ -116,7 +116,7 @@ impl MlsDevicePublicMaterial {
     /// Produce the exact signed-manifest binding expected by the server.
     pub fn manifest_binding(&self) -> MlsManifestDeviceV1 {
         MlsManifestDeviceV1 {
-            suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+            suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
             credential_public_key: BASE64.encode(&self.credential_public_key),
             anonymous_delivery_public_key: BASE64.encode(&self.anonymous_delivery_public_key),
         }
@@ -202,7 +202,7 @@ pub struct JoinedMlsConversation {
     pub conversation: LocalMlsConversationRecord,
 }
 
-/// One transparency-verified MLS credential. Account addresses are carried in
+/// One account-manifest-verified MLS credential. Account addresses are carried in
 /// the BasicCredential only between group members; ordering authorities see
 /// only the separately encrypted Kutup control proposal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,7 +213,7 @@ pub struct VerifiedMlsCredential {
 }
 
 /// Untrusted roster claim decrypted from an MLS Welcome before any local group
-/// state is created. Callers must bind every claim to transparency-verified
+/// state is created. Callers must bind every claim to account-manifest-verified
 /// account manifests before passing the corresponding verified roster to
 /// [`MlsClient::join_from_welcome_with_control_history`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -233,7 +233,7 @@ pub struct MlsWelcomeInspection {
 }
 
 /// Untrusted-but-MLS-authenticated view of a staged inbound Commit. The caller
-/// must resolve every claimed device through transparency and verify the
+/// must resolve every claimed device through signed manifest history and verify the
 /// corresponding public control block before the Commit can be merged.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -258,7 +258,7 @@ impl VerifiedMlsCredential {
 }
 
 /// A claimed KeyPackage paired with the credential binding independently
-/// verified from the account's transparency-logged device manifest.
+/// verified from the account's account-signed device manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VerifiedMlsKeyPackage {
@@ -266,7 +266,7 @@ pub struct VerifiedMlsKeyPackage {
     pub credential: VerifiedMlsCredential,
     /// Manifest-authenticated RFC 9180 destination key for this same device.
     /// It is not inferred from the KeyPackage and must match the complete
-    /// transparency-verified device manifest.
+    /// account-manifest-verified device manifest.
     pub anonymous_delivery_public_key: Vec<u8>,
 }
 
@@ -379,7 +379,7 @@ pub struct AppliedInboundMlsCommit {
 }
 
 /// Authenticated application plaintext and the exact MLS device credential
-/// that sent it. The caller has already supplied the transparency-verified
+/// that sent it. The caller has already supplied the account-manifest-verified
 /// expected credential before this value can be returned.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -390,7 +390,7 @@ pub struct DecryptedMlsApplication {
 }
 
 /// Non-mutating inspection of an HPKE-wrapped MLS application message. The
-/// claimed sender remains untrusted until the shared transparency verifier
+/// claimed sender remains untrusted until the shared account-manifest verifier
 /// resolves it to [`VerifiedMlsCredential`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -732,9 +732,11 @@ fn sign_control_proposal_with_metadata(
     created_at_seconds: i64,
 ) -> Result<MlsControlProposalV1> {
     let key_bytes = ensure_group_control_key(metadata, mls_group_id)?;
-    let signer = P256SigningKey::from_slice(key_bytes)
+    let seed: [u8; 32] = key_bytes
+        .try_into()
         .map_err(|_| ChatError::Db("invalid durable MLS group control key".into()))?;
-    let public_key = signer.verifying_key().to_encoded_point(false);
+    let signer = Ed25519SigningKey::from_bytes(&seed);
+    let public_key = signer.verifying_key();
     let mut proposal = MlsControlProposalV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
         conversation_id,
@@ -749,9 +751,11 @@ fn sign_control_proposal_with_metadata(
         created_at: created_at_seconds,
         proposer_signature: String::new(),
     };
-    let signature: P256Signature =
-        signer.sign(&proposal.signing_bytes().map_err(ChatError::Invalid)?);
-    proposal.proposer_signature = BASE64.encode(signature.to_der().as_bytes());
+    proposal.proposer_signature = BASE64.encode(
+        signer
+            .sign(&proposal.signing_bytes().map_err(ChatError::Invalid)?)
+            .to_bytes(),
+    );
     proposal.verify().map_err(ChatError::Protocol)?;
     Ok(proposal)
 }
@@ -806,7 +810,7 @@ fn parse_verified_key_package(
             != verified.credential.credential_public_key
     {
         return Err(ChatError::Trust(
-            "MLS KeyPackage credential differs from the transparency-verified manifest".into(),
+            "MLS KeyPackage credential differs from the account-manifest-verified manifest".into(),
         ));
     }
     Ok(package)
@@ -835,10 +839,11 @@ fn insert_new_group_control_key(
             "refusing to replace an existing MLS group control key".into(),
         ));
     }
-    let signing_key = P256SigningKey::random(&mut OsRng);
+    let mut seed = [0_u8; 32];
+    OsRng.fill_bytes(&mut seed);
     metadata
         .group_control_private_keys
-        .insert(key, signing_key.to_bytes().to_vec());
+        .insert(key, seed.to_vec());
     Ok(())
 }
 
@@ -966,11 +971,11 @@ fn group_control_credential(
     mls_group_id: &[u8],
 ) -> Result<MlsGroupControlCredential> {
     let private_key = ensure_group_control_key(metadata, mls_group_id)?;
-    let signer = P256SigningKey::from_slice(private_key)
+    let seed: [u8; 32] = private_key
+        .try_into()
         .map_err(|_| ChatError::Db("invalid durable MLS group control key".into()))?;
-    let public_key = signer
+    let public_key = Ed25519SigningKey::from_bytes(&seed)
         .verifying_key()
-        .to_encoded_point(false)
         .as_bytes()
         .to_vec();
     Ok(MlsGroupControlCredential {

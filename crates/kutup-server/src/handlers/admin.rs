@@ -189,13 +189,14 @@ pub async fn create_user(
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO users (
                email, username, login_key_hash,
-               encrypted_master_key, master_key_nonce,
-               encrypted_recovery_key, recovery_key_nonce,
-               encrypted_private_key, private_key_nonce,
-               public_key, account_protection_suite, account_protection_salt,
+               master_key_envelope, recovery_key_envelope,
+               drive_private_key_envelope,
+               public_key, account_authority_public_key, account_authority_key_id,
+               account_incarnation_id, drive_signing_public_key,
+               account_protection_suite, account_protection_salt,
                argon_memory_kib, argon_iterations, argon_parallelism,
                is_admin, is_first_login, storage_quota_bytes
-           ) VALUES ($1,$2,$3,'','','','','','','',0,'',0,0,0,false,true,$4)
+           ) VALUES ($1,$2,$3,'','','','','','','','',0,'',0,0,0,false,true,$4)
            RETURNING id"#,
     )
     .bind(&req.email)
@@ -1602,15 +1603,37 @@ pub async fn wipe_user(
         .execute(&state.pool)
         .await?;
 
+    // A destructive wipe terminates the old account incarnation. Retain its
+    // append-only signed manifest history for peers' reset evidence, but remove
+    // the mutable head and every server-held delivery/device capability so the
+    // next setup begins at manifest sequence 1 with a new authority.
+    sqlx::query("DELETE FROM chat_device_manifests WHERE user_id = $1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query("DELETE FROM chat_delivery_capabilities WHERE user_id = $1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query("DELETE FROM chat_profiles WHERE user_id = $1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query("DELETE FROM chat_devices WHERE user_id = $1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+
     // 3. Erase the key bundle + TOTP and reset to first-login with the new temp password.
     let hash =
         bcrypt::hash(&req.temp_password, 10).map_err(|_| AppError::internal("internal error"))?;
     sqlx::query(
         r#"UPDATE users SET
-               encrypted_master_key = '', master_key_nonce = '',
-               encrypted_recovery_key = '', recovery_key_nonce = '',
-               encrypted_private_key = '', private_key_nonce = '',
-               public_key = '', account_protection_suite = 0,
+               master_key_envelope = '', recovery_key_envelope = '',
+               drive_private_key_envelope = '',
+               public_key = '', account_authority_public_key = '',
+               account_authority_key_id = '', account_incarnation_id = '',
+               drive_signing_public_key = '', account_protection_suite = 0,
                account_protection_salt = '', argon_memory_kib = 0,
                argon_iterations = 0, argon_parallelism = 0,
                recovery_key_verifier = '',

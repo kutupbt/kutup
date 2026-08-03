@@ -16,9 +16,8 @@
 // the per-chunk loop being a trivial pull-and-emit.
 
 import { describe, it, expect } from 'vitest'
-import { encryptStream } from './symmetric'
 import { getSodium } from './sodium'
-import { PLAIN_CHUNK, HEADER_BYTES, CIPHER_CHUNK } from './streamEncryptor'
+import { PLAIN_CHUNK, HEADER_BYTES, CIPHER_CHUNK, newStreamEncryptor } from './streamEncryptor'
 import { newStreamDecryptor } from './streamDecryptor'
 
 const ROUND_TRIP_SIZES = [
@@ -53,13 +52,26 @@ function splitWire(blob: Uint8Array): { header: Uint8Array; chunks: Uint8Array[]
   return { header, chunks }
 }
 
+async function encryptRaw(plain: Uint8Array, key: Uint8Array): Promise<Uint8Array> {
+  const enc = await newStreamEncryptor(key)
+  const parts = [enc.header]
+  for (let offset = 0; offset < plain.length; offset += PLAIN_CHUNK) {
+    const end = Math.min(offset + PLAIN_CHUNK, plain.length)
+    parts.push(enc.push(plain.subarray(offset, end), end === plain.length))
+  }
+  const output = new Uint8Array(parts.reduce((size, part) => size + part.length, 0))
+  let offset = 0
+  for (const part of parts) { output.set(part, offset); offset += part.length }
+  return output
+}
+
 describe('newStreamDecryptor', () => {
   it.each(ROUND_TRIP_SIZES)('round-trips %d-byte plaintext from encryptStream', async (n) => {
     const key = await genKey()
     const plain = new Uint8Array(n)
     for (let i = 0; i < n; i++) plain[i] = (i * 31 + 7) & 0xff
 
-    const cipher = await encryptStream(plain, key)
+    const cipher = await encryptRaw(plain, key)
     const { header, chunks } = splitWire(cipher)
     const dec = await newStreamDecryptor(key, header)
 
@@ -96,7 +108,7 @@ describe('newStreamDecryptor', () => {
   it('rejects tampered ciphertext (MAC fail)', async () => {
     const key = await genKey()
     const plain = new Uint8Array(64).fill(7)
-    const cipher = await encryptStream(plain, key)
+    const cipher = await encryptRaw(plain, key)
     const { header, chunks } = splitWire(cipher)
     // Flip one byte in the first chunk's body.
     const tampered = new Uint8Array(chunks[0])
@@ -110,7 +122,7 @@ describe('newStreamDecryptor', () => {
     // 2-chunk file — swap them.
     const plain = new Uint8Array(PLAIN_CHUNK + 100)
     for (let i = 0; i < plain.length; i++) plain[i] = i & 0xff
-    const cipher = await encryptStream(plain, key)
+    const cipher = await encryptRaw(plain, key)
     const { header, chunks } = splitWire(cipher)
     expect(chunks.length).toBe(2)
     const dec = await newStreamDecryptor(key, header)

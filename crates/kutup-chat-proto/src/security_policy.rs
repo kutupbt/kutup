@@ -4,83 +4,12 @@
 use std::collections::BTreeSet;
 
 use base64::Engine as _;
-use ed25519_dalek::VerifyingKey;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::{transparency_signing_key_id, DirectChatSuiteId};
+use crate::DirectChatSuiteId;
 
-pub const CHAT_TRANSPARENCY_POLICY_VERSION: u16 = 1;
 pub const SEALED_SENDER_SERVICE_POLICY_VERSION: u16 = 1;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(into = "u16", try_from = "u16")]
-#[repr(u16)]
-pub enum TransparencyProofProfileV1 {
-    Rfc6962IndividualInclusionV1 = 1,
-}
-
-impl From<TransparencyProofProfileV1> for u16 {
-    fn from(value: TransparencyProofProfileV1) -> Self {
-        value as u16
-    }
-}
-
-impl TryFrom<u16> for TransparencyProofProfileV1 {
-    type Error = String;
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
-        match value {
-            1 => Ok(Self::Rfc6962IndividualInclusionV1),
-            _ => Err(format!("unknown transparency proof profile {value}")),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChatTransparencyPolicyV1 {
-    pub policy_version: u16,
-    pub log_id: String,
-    pub operator_key_id: String,
-    pub operator_public_key: String,
-    pub proof_profile: TransparencyProofProfileV1,
-    pub maximum_checkpoint_age_seconds: u64,
-    pub maximum_clock_skew_seconds: u32,
-    pub maximum_range_page_entries: u16,
-    pub maximum_range_response_bytes: u32,
-}
-
-impl ChatTransparencyPolicyV1 {
-    pub fn validate(&self) -> Result<(), String> {
-        if self.policy_version != CHAT_TRANSPARENCY_POLICY_VERSION {
-            return Err("unsupported chat transparency policy version".into());
-        }
-        decode_hash("logId", &self.log_id)?;
-        validate_ed25519_key("operator", &self.operator_key_id, &self.operator_public_key)?;
-        if self.maximum_checkpoint_age_seconds < 60
-            || self.maximum_checkpoint_age_seconds > 7 * 24 * 60 * 60
-            || self.maximum_clock_skew_seconds > 15 * 60
-            || self.maximum_range_page_entries == 0
-            || self.maximum_range_page_entries > 64
-            || self.maximum_range_response_bytes < 4096
-            || self.maximum_range_response_bytes > 8 * 1024 * 1024
-        {
-            return Err("transparency policy security parameters are outside the v1 bounds".into());
-        }
-        Ok(())
-    }
-
-    pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
-        self.validate()?;
-        serde_json::to_vec(self).map_err(|error| error.to_string())
-    }
-
-    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, String> {
-        decode_canonical(bytes, Self::validate)
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -222,21 +151,6 @@ where
     Ok(value)
 }
 
-fn validate_ed25519_key(name: &str, key_id: &str, encoded: &str) -> Result<(), String> {
-    decode_hash(name, key_id)?;
-    let bytes = decode_canonical_base64(name, encoded, 32, 32)?;
-    let key = VerifyingKey::from_bytes(
-        &bytes
-            .try_into()
-            .map_err(|_| format!("{name} key has the wrong length"))?,
-    )
-    .map_err(|_| format!("{name} key is not Ed25519"))?;
-    if transparency_signing_key_id(&key) != key_id {
-        return Err(format!("{name} key id does not match its public key"));
-    }
-    Ok(())
-}
-
 fn decode_hash(name: &str, value: &str) -> Result<[u8; 32], String> {
     let bytes = hex::decode(value).map_err(|_| format!("{name} must be lowercase SHA-256 hex"))?;
     if bytes.len() != 32 || hex::encode(&bytes) != value {
@@ -269,30 +183,5 @@ fn decode_canonical_base64(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use ed25519_dalek::SigningKey;
-
-    #[test]
-    fn transparency_policy_has_one_canonical_encoding() {
-        let operator = SigningKey::from_bytes(&[1; 32]).verifying_key();
-        let policy = ChatTransparencyPolicyV1 {
-            policy_version: 1,
-            log_id: "11".repeat(32),
-            operator_key_id: transparency_signing_key_id(&operator),
-            operator_public_key: base64::engine::general_purpose::STANDARD
-                .encode(operator.as_bytes()),
-            proof_profile: TransparencyProofProfileV1::Rfc6962IndividualInclusionV1,
-            maximum_checkpoint_age_seconds: 3600,
-            maximum_clock_skew_seconds: 60,
-            maximum_range_page_entries: 64,
-            maximum_range_response_bytes: 2 * 1024 * 1024,
-        };
-        let bytes = policy.canonical_bytes().unwrap();
-        assert_eq!(
-            ChatTransparencyPolicyV1::from_canonical_bytes(&bytes).unwrap(),
-            policy
-        );
-        let pretty = serde_json::to_vec_pretty(&policy).unwrap();
-        assert!(ChatTransparencyPolicyV1::from_canonical_bytes(&pretty).is_err());
-    }
+    // Purpose-specific policy vectors live beside each remaining policy type.
 }

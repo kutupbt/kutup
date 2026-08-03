@@ -7,7 +7,8 @@ use super::*;
 #[serde(into = "u16", try_from = "u16")]
 #[repr(u16)]
 pub enum MlsCipherSuiteId {
-    Mls128DhKemP256Aes128GcmSha256P256 = MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256,
+    Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519 =
+        MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519,
 }
 
 impl From<MlsCipherSuiteId> for u16 {
@@ -21,8 +22,8 @@ impl TryFrom<u16> for MlsCipherSuiteId {
 
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
-            MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256 => {
-                Ok(Self::Mls128DhKemP256Aes128GcmSha256P256)
+            MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519 => {
+                Ok(Self::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519)
             }
             _ => Err(format!("unknown MLS ciphersuite {value:#06x}")),
         }
@@ -34,7 +35,7 @@ impl TryFrom<u16> for MlsCipherSuiteId {
 #[serde(into = "u16", try_from = "u16")]
 #[repr(u16)]
 pub enum MlsAnonymousDeliverySuiteV1 {
-    DhKemP256HkdfSha256Aes128Gcm = 1,
+    DhKemX25519HkdfSha256ChaCha20Poly1305 = 1,
 }
 
 impl From<MlsAnonymousDeliverySuiteV1> for u16 {
@@ -48,7 +49,7 @@ impl TryFrom<u16> for MlsAnonymousDeliverySuiteV1 {
 
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
-            1 => Ok(Self::DhKemP256HkdfSha256Aes128Gcm),
+            1 => Ok(Self::DhKemX25519HkdfSha256ChaCha20Poly1305),
             _ => Err(format!("unknown anonymous MLS delivery suite {value}")),
         }
     }
@@ -160,7 +161,7 @@ impl MlsGroupCryptographicPolicyV1 {
         Self {
             policy_version: MLS_GROUP_CRYPTOGRAPHIC_POLICY_VERSION,
             sequence: 1,
-            suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+            suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
             required_private_control_extension: MLS_PRIVATE_CONTROL_EXTENSION_TYPE,
             maximum_past_epochs: 2,
             anonymous_delivery_required: true,
@@ -172,7 +173,7 @@ impl MlsGroupCryptographicPolicyV1 {
     pub fn validate(&self) -> Result<(), String> {
         if self.policy_version != MLS_GROUP_CRYPTOGRAPHIC_POLICY_VERSION
             || self.sequence == 0
-            || self.suite != MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256
+            || self.suite != MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519
             || self.required_private_control_extension != MLS_PRIVATE_CONTROL_EXTENSION_TYPE
             || self.maximum_past_epochs != 2
             || !self.anonymous_delivery_required
@@ -201,7 +202,8 @@ impl MlsGroupCryptographicPolicyV1 {
 }
 
 /// MLS keys for one device, authenticated by the account's signed manifest and
-/// therefore by the transparency log. Both keys are uncompressed P-256 points.
+/// durably pinned by peers. The credential key is Ed25519 and the anonymous
+/// delivery key is X25519; both are canonical 32-byte public keys.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -213,8 +215,8 @@ pub struct MlsManifestDeviceV1 {
 
 impl MlsManifestDeviceV1 {
     pub fn validate(&self) -> Result<(), String> {
-        validate_uncompressed_p256("MLS credentialPublicKey", &self.credential_public_key)?;
-        validate_uncompressed_p256(
+        validate_ed25519_public_key("MLS credentialPublicKey", &self.credential_public_key)?;
+        validate_x25519_public_key(
             "MLS anonymousDeliveryPublicKey",
             &self.anonymous_delivery_public_key,
         )
@@ -401,6 +403,10 @@ impl MlsInvitationAcceptanceV1 {
 }
 
 /// Typed body carried by `ChatContent.kind == groupControl`.
+// Keeping the concrete request types visible makes every variant's canonical
+// wire/API shape explicit. These transient values are not stored in large
+// arrays, so an extra allocation only to reduce the enum size is unnecessary.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
 pub enum MlsGroupControlBodyV1 {
@@ -429,8 +435,13 @@ pub struct MlsOwnerSetV1 {
 
 impl MlsOwnerSetV1 {
     pub fn validate(&self) -> Result<(), String> {
-        if self.sequence == 0 || self.owners.is_empty() || self.owners.len() > 1024 {
-            return Err("MLS owner set must have a positive sequence and 1-1024 owners".into());
+        if self.sequence == 0
+            || self.owners.is_empty()
+            || self.owners.len() > MAX_MLS_GROUP_ACCOUNTS
+        {
+            return Err(format!(
+                "MLS owner set must have a positive sequence and 1-{MAX_MLS_GROUP_ACCOUNTS} owners"
+            ));
         }
         let expected = (2 * self.owners.len()) / 3 + 1;
         if usize::from(self.required_quorum) != expected {
@@ -470,7 +481,7 @@ pub struct MlsConversationGenesisV1 {
     pub mls_group_id: String,
     pub kind: MlsConversationKindV1,
     pub suite: MlsCipherSuiteId,
-    /// Commitment to the complete transparency-verified account/device roster.
+    /// Commitment to the complete account-manifest-verified account/device roster.
     pub roster_commitment: String,
     /// Public account-member count. Device leaf count remains inside MLS.
     pub member_count: u32,
@@ -531,7 +542,8 @@ impl MlsConversationGenesisV1 {
                     incarnation
                         if incarnation > 1
                             && self.initial_epoch == 1
-                            && (1..=1000).contains(&self.member_count) => {}
+                            && (1..=MAX_MLS_GROUP_ACCOUNTS as u32).contains(&self.member_count) => {
+                    }
                     _ => {
                         return Err(
                             "group MLS genesis is not a creator genesis or recovered incarnation"
@@ -674,9 +686,9 @@ impl MlsPrivateControlStateV1 {
             || self.epoch != self.initial_epoch.saturating_add(self.height)
             || !matches!((self.incarnation, self.initial_epoch), (1, 0) | (2.., 1))
             || self.genesis_roster.is_empty()
-            || self.genesis_roster.len() > 1000
+            || self.genesis_roster.len() > MAX_MLS_GROUP_ACCOUNTS
             || self.roster.is_empty()
-            || self.roster.len() > 1000
+            || self.roster.len() > MAX_MLS_GROUP_ACCOUNTS
         {
             return Err("MLS private control state has invalid identifiers or bounds".into());
         }
@@ -1183,7 +1195,9 @@ impl FederatedMlsGenesisReplicaV1 {
             return Err("unsupported federated MLS genesis version".into());
         }
         self.genesis.validate()?;
-        if self.participant_domains.is_empty() || self.participant_domains.len() > 1000 {
+        if self.participant_domains.is_empty()
+            || self.participant_domains.len() > MAX_MLS_GROUP_ACCOUNTS
+        {
             return Err("federated MLS participant-domain set is empty or too large".into());
         }
         let mut previous = None;
@@ -1284,10 +1298,10 @@ impl MlsMembershipTransitionV1 {
         }
         validate_hash("previousRosterCommitment", &self.previous_roster_commitment)?;
         validate_hash("nextRosterCommitment", &self.next_roster_commitment)?;
-        if !(1..=1000).contains(&self.previous_member_count)
-            || !(1..=1000).contains(&self.next_member_count)
+        if !(1..=MAX_MLS_GROUP_ACCOUNTS as u32).contains(&self.previous_member_count)
+            || !(1..=MAX_MLS_GROUP_ACCOUNTS as u32).contains(&self.next_member_count)
         {
-            return Err("MLS membership transition member count must be 1-1000".into());
+            return Err("MLS membership transition member count must be 1-256".into());
         }
         validate_participant_domain_set(&self.previous_participant_domains)?;
         validate_participant_domain_set(&self.next_participant_domains)?;
@@ -1512,7 +1526,8 @@ impl MlsMembershipDeliveryV1 {
             .map_err(|error| error.to_string())?;
         validate_hash("nextRosterCommitment", &self.next_roster_commitment)?;
         validate_participant_domain_set(&self.next_participant_domains)?;
-        if self.local_members_after.len() > 1000 || self.envelopes.len() > MAX_MEMBERSHIP_ENVELOPES
+        if self.local_members_after.len() > MAX_MLS_GROUP_ACCOUNTS
+            || self.envelopes.len() > MAX_MEMBERSHIP_ENVELOPES
         {
             return Err("MLS membership delivery exceeds its entry limit".into());
         }
@@ -1623,6 +1638,8 @@ fn validate_conversation_devices(
         .collect::<BTreeSet<_>>();
     let mut covered = BTreeSet::new();
     let mut previous = None;
+    let mut current_account: Option<String> = None;
+    let mut current_account_devices = 0usize;
     for device in devices {
         device.validate()?;
         let address = device.address.canonical();
@@ -1632,6 +1649,15 @@ fn validate_conversation_devices(
         let key = (address.clone(), device.device_id);
         if previous.as_ref().is_some_and(|prior| key <= *prior) {
             return Err("MLS conversation devices must be strictly ordered".into());
+        }
+        if current_account.as_deref() == Some(address.as_str()) {
+            current_account_devices += 1;
+        } else {
+            current_account = Some(address.clone());
+            current_account_devices = 1;
+        }
+        if current_account_devices > MAX_MLS_DEVICES_PER_ACCOUNT {
+            return Err("MLS account exceeds the 10-device V1 leaf limit".into());
         }
         previous = Some(key);
         covered.insert(address);
@@ -1643,8 +1669,8 @@ fn validate_conversation_devices(
 }
 
 pub fn roster_commitment(members: &[MlsConversationMemberV1]) -> Result<String, String> {
-    if members.is_empty() || members.len() > 1000 {
-        return Err("MLS roster must contain 1-1000 members".into());
+    if members.is_empty() || members.len() > MAX_MLS_GROUP_ACCOUNTS {
+        return Err("MLS roster must contain 1-256 accounts".into());
     }
     let mut bytes = Vec::with_capacity(members.len() * 160);
     bytes.extend_from_slice(b"kutup-mls-roster-v1\0");

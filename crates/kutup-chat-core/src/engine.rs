@@ -17,13 +17,12 @@ use rand::{CryptoRng, Rng};
 
 use crate::db::{
     ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState, LocalProfile,
-    ManifestHistoryRecord, OutboxEntry, OutboxLeg, PeerProfile, SentMessage,
-    TransparencyMonitorState, TransparencyMonitorStatus,
+    OutboxEntry, OutboxLeg, PeerProfile, SentMessage,
 };
 use crate::error::{ChatError, Result};
 use crate::manifest::{
-    transparency_scope, verify_manifest_evidence, verify_transparency_checkpoint_response,
-    verify_transparent_bundle_response, AccountAuthority, ManifestPolicy, TransparencyPolicy,
+    derive_safety_number, verify_bundle_trust, verify_manifest_evidence, verify_manifest_history,
+    AccountAuthority, ManifestPolicy, SafetyNumberV1,
 };
 use crate::sealed_sender::SealedSenderPolicyPin;
 use crate::session::{
@@ -32,14 +31,11 @@ use crate::session::{
 };
 use crate::transport::{ChatTransport, SendOutcome};
 use kutup_chat_proto::{
-    AccountAddress, AnonymousMlsKeyPackageRequestV1, ChatContent, ChatTransparencyPolicyV1,
-    ContactControlBody, ContactState, DeviceManifest, IdentifiedMlsKeyPackageRequestV1,
-    MlsCipherSuiteId, MlsKeyPackageBundleV1, OutgoingEnvelope, PreKeyCountResponse,
-    PublishManifestResponse, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1,
-    SendMessagesRequest, TransparencyCheckpoint, TransparencyCheckpointResponse,
-    MLS_PROTOCOL_VERSION,
+    AccountAddress, AccountManifestV1, AnonymousMlsKeyPackageRequestV1, ChatContent,
+    ContactControlBody, ContactState, IdentifiedMlsKeyPackageRequestV1, MlsCipherSuiteId,
+    MlsKeyPackageBundleV1, OutgoingEnvelope, PreKeyCountResponse, SealedMessageSubmissionV1,
+    SealedOutgoingEnvelopeV1, SendMessagesRequest, MLS_PROTOCOL_VERSION,
 };
-use kutup_federation_proto::FederatedFeaturePolicyTypeV1;
 
 /// How many send/recovery rounds a single message gets before giving up. Each 409
 /// consumes one; a well-behaved server converges in 1–2.
@@ -123,7 +119,6 @@ pub struct Engine {
     state: EngineState,
     events: VecDeque<ChatEvent>,
     manifest_policy: ManifestPolicy,
-    transparency_policy: TransparencyPolicy,
     local_server: Option<String>,
     sealed_sender_enabled: bool,
 }
@@ -155,7 +150,6 @@ impl Engine {
             state: EngineState::Stopped,
             events: VecDeque::new(),
             manifest_policy,
-            transparency_policy: TransparencyPolicy::default(),
             local_server: None,
             sealed_sender_enabled: false,
         }
@@ -196,96 +190,6 @@ impl Engine {
         kutup_chat_proto::AccountAddress::federated(&address.username, server)
             .map(|address| address.canonical())
             .map_err(|error| ChatError::Invalid(error.to_string()))
-    }
-
-    /// Install application-owned operator trust roots before the first
-    /// manifest publication or peer bundle fetch.
-    pub fn set_transparency_policy(&mut self, policy: TransparencyPolicy) -> Result<()> {
-        policy.validate()?;
-        self.transparency_policy = policy;
-        Ok(())
-    }
-
-    /// Poll and verify one homeserver checkpoint independently of a peer bundle
-    /// fetch. Verification failures are durable security state; ordinary
-    /// endpoint unavailability is recorded separately and leaves the last valid
-    /// pin intact.
-    pub async fn monitor_transparency(&mut self, scope: &str) -> Result<TransparencyMonitorStatus> {
-        if scope.trim().is_empty() {
-            return Err(ChatError::Invalid(
-                "transparency monitor scope is empty".into(),
-            ));
-        }
-        self.ensure_authenticated_transparency_policy(scope).await?;
-        let checked_at = unix_millis();
-        let prior = self.session.transparency_trust_for_scope(scope).await?;
-        let previous_status = self.session.transparency_monitor_status(scope).await?;
-        let from_tree_size = prior.as_ref().map_or(0, |trust| trust.tree_size);
-        let response = Rc::clone(&self.transport)
-            .fetch_transparency_checkpoint(scope, from_tree_size)
-            .await;
-        let response = match response {
-            Ok(response) => response,
-            Err(_) => {
-                let status = TransparencyMonitorStatus {
-                    scope: scope.to_string(),
-                    state: TransparencyMonitorState::Unavailable,
-                    last_checked_at_ms: checked_at,
-                    last_success_at_ms: previous_status
-                        .as_ref()
-                        .and_then(|status| status.last_success_at_ms),
-                    tree_size: prior.as_ref().map(|trust| trust.tree_size),
-                    detail: Some("checkpoint endpoint unavailable".into()),
-                };
-                self.session
-                    .record_transparency_monitor(status.clone(), None)
-                    .await?;
-                return Ok(status);
-            }
-        };
-        let next = match verify_transparency_checkpoint_response(
-            scope,
-            &response,
-            prior.as_ref(),
-            &self.transparency_policy,
-        ) {
-            Ok(next) => next,
-            Err(error) => {
-                let status = TransparencyMonitorStatus {
-                    scope: scope.to_string(),
-                    state: TransparencyMonitorState::VerificationFailed,
-                    last_checked_at_ms: checked_at,
-                    last_success_at_ms: previous_status
-                        .as_ref()
-                        .and_then(|status| status.last_success_at_ms),
-                    tree_size: prior.as_ref().map(|trust| trust.tree_size),
-                    detail: Some(error.to_string()),
-                };
-                self.session
-                    .record_transparency_monitor(status.clone(), None)
-                    .await?;
-                return Ok(status);
-            }
-        };
-        let status = TransparencyMonitorStatus {
-            scope: scope.to_string(),
-            state: TransparencyMonitorState::Healthy,
-            last_checked_at_ms: checked_at,
-            last_success_at_ms: Some(checked_at),
-            tree_size: Some(next.tree_size),
-            detail: None,
-        };
-        self.session
-            .record_transparency_monitor(status.clone(), Some(next))
-            .await?;
-        Ok(status)
-    }
-
-    pub async fn transparency_monitor_status(
-        &self,
-        scope: &str,
-    ) -> Result<Option<TransparencyMonitorStatus>> {
-        self.session.transparency_monitor_status(scope).await
     }
 
     /// Register a brand-new device end-to-end: generate keys, `POST` the
@@ -387,8 +291,75 @@ impl Engine {
         self.manifest_policy
     }
 
-    pub async fn mark_authority_verified(&mut self, peer: &str) -> Result<crate::ManifestTrust> {
-        self.session.mark_authority_verified(peer).await
+    /// Build the exact pair-bound safety number from the current durable pin.
+    pub async fn safety_number(
+        &mut self,
+        authority: &AccountAuthority,
+        peer: &str,
+    ) -> Result<SafetyNumberV1> {
+        // Receiving the first identified message establishes a Signal session,
+        // but it must not treat a sender key carried by that message as an
+        // account-authority pin. Fetch and authenticate the signed account
+        // manifest through the normal federation transport when the user opens
+        // verification before they have replied to the contact.
+        if self.session.manifest_trust(peer).await?.is_none() {
+            let manifest = Rc::clone(&self.transport)
+                .fetch_manifest(peer)
+                .await?
+                .ok_or_else(|| {
+                    ChatError::Trust(format!("no signed account manifest for {peer}"))
+                })?;
+            self.accept_current_manifest_evidence(peer, &manifest)
+                .await?;
+        }
+        let trust = self
+            .session
+            .manifest_trust(peer)
+            .await?
+            .ok_or_else(|| ChatError::Trust(format!("no authority is pinned for {peer}")))?;
+        let retained_authority_key_id = trust.authority_key_id.clone();
+        let safety_source = trust
+            .pending_reset
+            .as_ref()
+            .map_or(&trust, |pending| &pending.candidate);
+        let mut safety = derive_safety_number(
+            &self.canonical_self()?,
+            &authority.public_key_base64(),
+            safety_source,
+        )?;
+        if trust.trust == crate::AuthorityTrust::Quarantined {
+            safety.trust = crate::AuthorityTrust::Quarantined;
+            safety.retained_authority_key_id = Some(retained_authority_key_id);
+            safety.quarantine_reason = trust.quarantine_reason.clone();
+        }
+        Ok(safety)
+    }
+
+    /// Promote a TOFU pin only after Rust has compared the scanned QR payload
+    /// against the locally derived pair/key binding.
+    pub async fn verify_safety_number(
+        &mut self,
+        authority: &AccountAuthority,
+        peer: &str,
+        scanned_payload: &str,
+    ) -> Result<SafetyNumberV1> {
+        let expected = self.safety_number(authority, peer).await?;
+        if expected.continuity_gap {
+            return Err(ChatError::Trust(
+                "an incomplete manifest chain cannot be manually verified".into(),
+            ));
+        }
+        if !expected.matches_qr_payload(scanned_payload) {
+            return Err(ChatError::Trust(
+                "scanned safety QR does not match this account pair and authority keys".into(),
+            ));
+        }
+        if expected.trust == crate::AuthorityTrust::Quarantined {
+            self.session.accept_authority_reset(peer).await?;
+        } else {
+            self.session.mark_authority_verified(peer).await?;
+        }
+        self.safety_number(authority, peer).await
     }
 
     pub async fn contacts(&self) -> Result<Vec<ContactRecord>> {
@@ -462,12 +433,14 @@ impl Engine {
         let canonical_self = self.canonical_self()?;
         let updated = crate::profile::update_local_profile(
             &current,
-            display_name,
-            avatar,
-            avatar_content_type,
-            self.session.device_id(),
-            wrapping_key,
-            &canonical_self,
+            crate::profile::LocalProfileUpdate {
+                display_name,
+                avatar,
+                avatar_content_type,
+                source_device_id: self.session.device_id(),
+                wrapping_key,
+                canonical_recipient: &canonical_self,
+            },
             rng,
         )?;
         self.session.save_local_profile(updated).await?;
@@ -745,7 +718,7 @@ impl Engine {
         &mut self,
         authority: &AccountAuthority,
         issued_at: impl Into<String>,
-    ) -> Result<DeviceManifest> {
+    ) -> Result<AccountManifestV1> {
         let transport = Rc::clone(&self.transport);
         let current = transport.fetch_manifest(self.session.user()).await?;
         let canonical_self = self.canonical_self()?;
@@ -757,9 +730,16 @@ impl Engine {
         let local = self.session.manifest_device_with_mls(mls);
         let issued_at = issued_at.into();
         let candidate = match current {
-            None => authority.sign_manifest(1, None, vec![local], issued_at)?,
+            None => {
+                authority.sign_manifest(canonical_self.clone(), 1, None, vec![local], issued_at)?
+            }
             Some(current) => {
                 current.verify().map_err(ChatError::Trust)?;
+                if current.account != canonical_self {
+                    return Err(ChatError::Trust(
+                        "stored account manifest belongs to another account".into(),
+                    ));
+                }
                 if current.authority_key_id != authority.key_id()
                     || current.self_authority_key != authority.public_key_base64()
                 {
@@ -781,11 +761,12 @@ impl Engine {
                             Ok(index) => devices[index] = local,
                             Err(index) => devices.insert(index, local),
                         }
-                        let next_version = current.version.checked_add(1).ok_or_else(|| {
-                            ChatError::Trust("manifest version is exhausted".into())
+                        let next_sequence = current.sequence.checked_add(1).ok_or_else(|| {
+                            ChatError::Trust("manifest sequence is exhausted".into())
                         })?;
                         authority.sign_manifest(
-                            next_version,
+                            canonical_self.clone(),
+                            next_sequence,
                             Some(current.manifest_hash().map_err(ChatError::Trust)?),
                             devices,
                             issued_at,
@@ -795,15 +776,8 @@ impl Engine {
             }
         };
         let expected_hash = candidate.manifest_hash().map_err(ChatError::Trust)?;
-        let account = self.session.user().to_string();
-        let transparency_tree_size = self
-            .session
-            .transparency_trust(&account)
-            .await?
-            .map_or(0, |trust| trust.tree_size);
-        let published = transport
-            .publish_manifest(&candidate, transparency_tree_size)
-            .await?;
+        let account = canonical_self;
+        let published = transport.publish_manifest(&candidate).await?;
         published.manifest.verify().map_err(ChatError::Trust)?;
         if published
             .manifest
@@ -815,19 +789,13 @@ impl Engine {
                 "server returned a different manifest after publication".into(),
             ));
         }
-        self.session
-            .accept_manifest_publication(
-                &account,
-                &published.manifest,
-                &published.transparency,
-                &self.transparency_policy,
-            )
+        self.accept_current_manifest_evidence(&account, &published.manifest)
             .await?;
         Ok(published.manifest)
     }
 
     /// Resolve untrusted MLS Welcome credential claims exclusively through
-    /// authenticated, transparency-logged device manifests. This consumes no
+    /// authenticated, account-signed device manifests. This consumes no
     /// Signal prekeys and durably applies the same rollback/gap/operator
     /// pins as direct-message session establishment.
     pub async fn resolve_mls_credential_claims(
@@ -841,7 +809,7 @@ impl Engine {
     ///
     /// Unlike a Welcome or Commit roster, one application message carries
     /// exactly one sender leaf. The leaf must still match that exact device in
-    /// the current transparency-verified manifest, but it must not pretend to
+    /// the current account-manifest-verified manifest, but it must not pretend to
     /// enumerate the sender account's other linked devices.
     pub async fn resolve_mls_sender_credential(
         &mut self,
@@ -858,10 +826,11 @@ impl Engine {
         claims: &[crate::ClaimedMlsCredential],
         require_complete_device_coverage: bool,
     ) -> Result<Vec<crate::VerifiedMlsCredential>> {
-        if claims.is_empty() || claims.len() > 1000 {
-            return Err(ChatError::Invalid(
-                "MLS roster must contain 1-1000 credential claims".into(),
-            ));
+        if claims.is_empty() || claims.len() > kutup_chat_proto::MAX_MLS_GROUP_LEAVES {
+            return Err(ChatError::Invalid(format!(
+                "MLS roster must contain 1-{} credential claims",
+                kutup_chat_proto::MAX_MLS_GROUP_LEAVES
+            )));
         }
 
         let mut parsed = Vec::with_capacity(claims.len());
@@ -882,17 +851,10 @@ impl Engine {
             if manifests.contains_key(account) {
                 continue;
             }
-            let scope = transparency_scope(account)?;
-            self.ensure_authenticated_transparency_policy(&scope)
-                .await?;
-            let known_tree_size = self
-                .session
-                .transparency_trust_for_scope(&scope)
-                .await?
-                .map_or(0, |trust| trust.tree_size);
             let response = Rc::clone(&self.transport)
-                .fetch_manifest_publication(account, known_tree_size)
-                .await?;
+                .fetch_manifest(account)
+                .await?
+                .ok_or_else(|| ChatError::Trust("account manifest is missing".into()))?;
             let manifest = self
                 .accept_current_manifest_evidence(account, &response)
                 .await?;
@@ -946,7 +908,8 @@ impl Engine {
                         claim.credential_identity
                     ))
                 })?;
-                if binding.suite != MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256 {
+                if binding.suite != MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519
+                {
                     return Err(ChatError::Trust(
                         "MLS credential uses a suite outside the V1 policy".into(),
                     ));
@@ -957,7 +920,7 @@ impl Engine {
                     .map_err(|_| ChatError::Trust("manifest MLS key is not base64".into()))?;
                 if manifest_key != claim.credential_public_key {
                     return Err(ChatError::Trust(format!(
-                        "MLS credential {} differs from the transparency-verified manifest",
+                        "MLS credential {} differs from the account-manifest-verified manifest",
                         claim.credential_identity
                     )));
                 }
@@ -996,7 +959,7 @@ impl Engine {
 
     /// Fetch capability-gated KeyPackages without authenticated browser
     /// context, then bind every package credential to a complete,
-    /// transparency-verified current device manifest.
+    /// account-manifest-verified current device manifest.
     pub async fn fetch_verified_anonymous_mls_key_packages(
         &mut self,
         recipient: &AccountAddress,
@@ -1010,32 +973,17 @@ impl Engine {
             ));
         }
         let account = recipient.canonical();
-        let scope = transparency_scope(&account)?;
-        self.ensure_authenticated_transparency_policy(&scope)
-            .await?;
-        let known_tree_size = self
-            .session
-            .transparency_trust_for_scope(&scope)
-            .await?
-            .map_or(0, |trust| trust.tree_size);
         let request = AnonymousMlsKeyPackageRequestV1 {
             protocol_version: MLS_PROTOCOL_VERSION,
             recipient: recipient.clone(),
             capability: STANDARD.encode(capability),
-            transparency_tree_size: known_tree_size.to_string(),
         };
         request.validate().map_err(ChatError::Invalid)?;
         let response = Rc::clone(&self.transport)
             .fetch_anonymous_mls_key_packages(&request)
             .await?;
-        self.verify_mls_key_package_bundle(
-            recipient,
-            &account,
-            known_tree_size,
-            response,
-            now_seconds,
-        )
-        .await
+        self.verify_mls_key_package_bundle(recipient, &account, response, now_seconds)
+            .await
     }
 
     /// Fetch first-contact KeyPackages through the authenticated, identified
@@ -1059,57 +1007,35 @@ impl Engine {
             ));
         }
         let account = recipient.canonical();
-        let scope = transparency_scope(&account)?;
-        self.ensure_authenticated_transparency_policy(&scope)
-            .await?;
-        let known_tree_size = self
-            .session
-            .transparency_trust_for_scope(&scope)
-            .await?
-            .map_or(0, |trust| trust.tree_size);
         let request = IdentifiedMlsKeyPackageRequestV1 {
             protocol_version: MLS_PROTOCOL_VERSION,
             recipient: recipient.clone(),
             conversation_id,
             incarnation,
-            transparency_tree_size: known_tree_size.to_string(),
         };
         request.validate().map_err(ChatError::Invalid)?;
         let response = Rc::clone(&self.transport)
             .fetch_identified_mls_key_packages(&request)
             .await?;
-        self.verify_mls_key_package_bundle(
-            recipient,
-            &account,
-            known_tree_size,
-            response,
-            now_seconds,
-        )
-        .await
+        self.verify_mls_key_package_bundle(recipient, &account, response, now_seconds)
+            .await
     }
 
     async fn verify_mls_key_package_bundle(
         &mut self,
         recipient: &AccountAddress,
         account: &str,
-        known_tree_size: u64,
         response: MlsKeyPackageBundleV1,
         now_seconds: i64,
     ) -> Result<Vec<crate::VerifiedMlsKeyPackage>> {
         response.validate(now_seconds).map_err(ChatError::Trust)?;
-        if response.recipient != *recipient
-            || response.transparency.consistency_from != known_tree_size
-        {
+        if response.recipient != *recipient {
             return Err(ChatError::Trust(
-                "anonymous MLS KeyPackage response has the wrong recipient or checkpoint".into(),
+                "MLS KeyPackage response has the wrong recipient".into(),
             ));
         }
-        let publication = PublishManifestResponse {
-            manifest: response.manifest.clone(),
-            transparency: response.transparency.clone(),
-        };
         let manifest = self
-            .accept_current_manifest_evidence(account, &publication)
+            .accept_current_manifest_evidence(account, &response.manifest)
             .await?;
 
         let manifest_devices: BTreeMap<u32, _> = manifest
@@ -1134,7 +1060,8 @@ impl Engine {
                 let binding = device.mls.as_ref().ok_or_else(|| {
                     ChatError::Trust("signed device has no MLS credential binding".into())
                 })?;
-                if binding.suite != MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256 {
+                if binding.suite != MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519
+                {
                     return Err(ChatError::Trust(
                         "MLS KeyPackage uses a suite outside the V1 policy".into(),
                     ));
@@ -1288,8 +1215,6 @@ impl Engine {
                 "send {send_id} is pending but has no durable ciphertext"
             )));
         }
-        self.ensure_transparency_monitor_allows_new_send(peer_user)
-            .await?;
         let mut content = content.clone();
         if peer_user != self.session.user() && content.profile_key.is_none() {
             if let Some(profile) = self.session.local_profile().await? {
@@ -1299,6 +1224,8 @@ impl Engine {
                 // before new conversations receive it.
                 if profile.pending_upload.is_none() {
                     content.profile_key = Some(crate::profile::profile_key_base64(&profile)?);
+                    content.profile_suite =
+                        Some(kutup_chat_proto::ProfileSuiteId::XChaCha20Poly1305V1.as_u16());
                 }
             }
         }
@@ -1753,73 +1680,15 @@ impl Engine {
         &mut self,
         peer_user: &str,
     ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
-        let scope = transparency_scope(peer_user)?;
-        self.ensure_authenticated_transparency_policy(&scope)
-            .await?;
         let transport = Rc::clone(&self.transport);
-        let transparency_tree_size = self
-            .session
-            .transparency_trust(peer_user)
-            .await?
-            .map_or(0, |trust| trust.tree_size);
         let response = if peer_user == self.session.user() {
             transport
-                .fetch_sync_bundles(peer_user, self.session.device_id(), transparency_tree_size)
+                .fetch_sync_bundles(peer_user, self.session.device_id())
                 .await?
         } else {
-            transport
-                .fetch_bundles(peer_user, transparency_tree_size)
-                .await?
+            transport.fetch_bundles(peer_user).await?
         };
-        let prior_manifest = self.session.manifest_trust(peer_user).await?;
-        let scope = transparency_scope(peer_user)?;
-        let prior_transparency = self.session.transparency_trust_for_scope(&scope).await?;
-        let inspected = verify_transparent_bundle_response(
-            peer_user,
-            &response,
-            self.manifest_policy,
-            prior_manifest.as_ref(),
-            prior_transparency.as_ref(),
-            &self.transparency_policy,
-        )?;
-        let needs_history = inspected
-            .manifest
-            .as_ref()
-            .is_some_and(|trust| trust.continuity_gap);
-        if needs_history {
-            let bundle_transparency = inspected.transparency.ok_or_else(|| {
-                ChatError::Trust("manifest gap recovery requires transparency evidence".into())
-            })?;
-            let (history, range_transparency) = self
-                .recover_manifest_history(
-                    peer_user,
-                    response
-                        .manifest
-                        .as_ref()
-                        .ok_or_else(|| ChatError::Trust("manifest is missing".into()))?,
-                    prior_manifest.as_ref(),
-                    &bundle_transparency,
-                )
-                .await?;
-            return self
-                .session
-                .accept_bundle_response_with_history(
-                    peer_user,
-                    response,
-                    history,
-                    range_transparency,
-                    self.manifest_policy,
-                    &self.transparency_policy,
-                )
-                .await;
-        }
-        self.session
-            .accept_bundle_response(
-                peer_user,
-                response,
-                self.manifest_policy,
-                &self.transparency_policy,
-            )
+        self.accept_verified_bundle_response(peer_user, response)
             .await
     }
 
@@ -1828,16 +1697,8 @@ impl Engine {
         peer_user: &str,
         capability: &[u8; 16],
     ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
-        let scope = transparency_scope(peer_user)?;
-        self.ensure_authenticated_transparency_policy(&scope)
-            .await?;
-        let transparency_tree_size = self
-            .session
-            .transparency_trust(peer_user)
-            .await?
-            .map_or(0, |trust| trust.tree_size);
         let response = Rc::clone(&self.transport)
-            .fetch_sealed_bundles(peer_user, capability, transparency_tree_size)
+            .fetch_sealed_bundles(peer_user, capability)
             .await?;
         self.accept_verified_bundle_response(peer_user, response)
             .await
@@ -1849,54 +1710,49 @@ impl Engine {
         response: kutup_chat_proto::UserPreKeyBundlesResponse,
     ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
         let prior_manifest = self.session.manifest_trust(peer_user).await?;
-        let scope = transparency_scope(peer_user)?;
-        let prior_transparency = self.session.transparency_trust_for_scope(&scope).await?;
-        let inspected = verify_transparent_bundle_response(
+        let inspected = match verify_bundle_trust(
             peer_user,
             &response,
             self.manifest_policy,
             prior_manifest.as_ref(),
-            prior_transparency.as_ref(),
-            &self.transparency_policy,
-        )?;
+        ) {
+            Ok(inspected) => inspected,
+            Err(error) => {
+                self.quarantine_manifest_failure(
+                    peer_user,
+                    response.manifest.as_ref(),
+                    prior_manifest.as_ref(),
+                    &error,
+                )
+                .await?;
+                return Err(error);
+            }
+        };
         if inspected
             .manifest
             .as_ref()
             .is_some_and(|trust| trust.continuity_gap)
         {
-            let bundle_transparency = inspected.transparency.ok_or_else(|| {
-                ChatError::Trust("manifest gap recovery requires transparency evidence".into())
-            })?;
-            let (history, range_transparency) = self
-                .recover_manifest_history(
-                    peer_user,
-                    response
-                        .manifest
-                        .as_ref()
-                        .ok_or_else(|| ChatError::Trust("manifest is missing".into()))?,
-                    prior_manifest.as_ref(),
-                    &bundle_transparency,
-                )
+            let pending = response
+                .manifest
+                .as_ref()
+                .ok_or_else(|| ChatError::Trust("manifest is missing".into()))?;
+            let (trust, history) = self
+                .recover_manifest_history(peer_user, pending, prior_manifest.as_ref())
                 .await?;
             return self
                 .session
                 .accept_bundle_response_with_history(
                     peer_user,
                     response,
+                    trust,
                     history,
-                    range_transparency,
                     self.manifest_policy,
-                    &self.transparency_policy,
                 )
                 .await;
         }
         self.session
-            .accept_bundle_response(
-                peer_user,
-                response,
-                self.manifest_policy,
-                &self.transparency_policy,
-            )
+            .accept_bundle_response(peer_user, response, self.manifest_policy)
             .await
     }
 
@@ -1962,57 +1818,6 @@ impl Engine {
         )
     }
 
-    async fn ensure_authenticated_transparency_policy(&mut self, scope: &str) -> Result<()> {
-        if scope == "local" {
-            return Ok(());
-        }
-        kutup_federation_proto::validate_server_name(scope)
-            .map_err(|error| ChatError::Trust(error.to_string()))?;
-        let history = Rc::clone(&self.transport)
-            .fetch_transparency_policy(scope)
-            .await?;
-        if history.domain != scope
-            || history.feature_type != FederatedFeaturePolicyTypeV1::ChatTransparency
-        {
-            return Err(ChatError::Trust(
-                "transparency policy history has the wrong domain or type".into(),
-            ));
-        }
-        let envelope = history
-            .verify()
-            .map_err(|error| ChatError::Trust(error.to_string()))?;
-        let policy = ChatTransparencyPolicyV1::from_canonical_bytes(
-            &envelope
-                .payload_bytes()
-                .map_err(|error| ChatError::Trust(error.to_string()))?,
-        )
-        .map_err(ChatError::Trust)?;
-        if self
-            .session
-            .transparency_trust_for_scope(scope)
-            .await?
-            .is_some_and(|prior| prior.log_id != policy.log_id)
-        {
-            return Err(ChatError::Trust(
-                "authenticated remote policy attempted to replace the pinned transparency log"
-                    .into(),
-            ));
-        }
-        let scope_policy = crate::TransparencyScopePolicy {
-            scope: scope.to_string(),
-            log_id: Some(policy.log_id),
-            operator_key_id: policy.operator_key_id,
-            operator_public_key: policy.operator_public_key,
-            maximum_checkpoint_age_seconds: Some(policy.maximum_checkpoint_age_seconds),
-            maximum_clock_skew_seconds: Some(policy.maximum_clock_skew_seconds),
-        };
-        self.transparency_policy
-            .scopes
-            .retain(|configured| configured.scope != scope);
-        self.transparency_policy.scopes.push(scope_policy);
-        self.transparency_policy.validate()
-    }
-
     async fn validate_inbound_sealed_envelope(
         &mut self,
         envelope: &kutup_chat_proto::DeliveredEnvelope,
@@ -2028,7 +1833,7 @@ impl Engine {
 
         let mut manifest_identity = self
             .session
-            .transparent_identity_key(&inspection.sender, inspection.sender_device_id)
+            .manifest_identity_key(&inspection.sender, inspection.sender_device_id)
             .await?;
         if manifest_identity.is_none() {
             // Retrieve and verify the complete current manifest before touching
@@ -2036,17 +1841,17 @@ impl Engine {
             self.fetch_verified_bundles(&inspection.sender).await?;
             manifest_identity = self
                 .session
-                .transparent_identity_key(&inspection.sender, inspection.sender_device_id)
+                .manifest_identity_key(&inspection.sender, inspection.sender_device_id)
                 .await?;
         }
         let manifest_identity = manifest_identity.ok_or_else(|| {
             ChatError::Trust(
-                "sealed sender device is absent from the transparency-verified manifest".into(),
+                "sealed sender device is absent from the account-manifest-verified manifest".into(),
             )
         })?;
         if manifest_identity.serialize() != inspection.identity_key.serialize() {
             return Err(ChatError::Trust(
-                "sealed envelope identity key differs from the transparent manifest".into(),
+                "sealed envelope identity key differs from the signed account manifest".into(),
             ));
         }
 
@@ -2072,39 +1877,33 @@ impl Engine {
     async fn accept_current_manifest_evidence(
         &mut self,
         account: &str,
-        response: &PublishManifestResponse,
-    ) -> Result<DeviceManifest> {
-        let scope = transparency_scope(account)?;
+        manifest: &AccountManifestV1,
+    ) -> Result<AccountManifestV1> {
         let prior_manifest = self.session.manifest_trust(account).await?;
-        let prior_transparency = self.session.transparency_trust_for_scope(&scope).await?;
-        let (manifest_trust, proof_trust) = verify_manifest_evidence(
-            account,
-            response,
-            prior_manifest.as_ref(),
-            prior_transparency.as_ref(),
-            &self.transparency_policy,
-        )?;
+        let manifest_trust =
+            match verify_manifest_evidence(account, manifest, prior_manifest.as_ref()) {
+                Ok(trust) => trust,
+                Err(error) => {
+                    self.quarantine_manifest_failure(
+                        account,
+                        Some(manifest),
+                        prior_manifest.as_ref(),
+                        &error,
+                    )
+                    .await?;
+                    return Err(error);
+                }
+            };
         if manifest_trust.continuity_gap {
-            let (history, range_transparency) = self
-                .recover_manifest_history(
-                    account,
-                    &response.manifest,
-                    prior_manifest.as_ref(),
-                    &proof_trust,
-                )
+            let (trust, history) = self
+                .recover_manifest_history(account, manifest, prior_manifest.as_ref())
                 .await?;
             self.session
-                .accept_manifest_evidence_with_history(
-                    account,
-                    response,
-                    history,
-                    range_transparency,
-                    &self.transparency_policy,
-                )
+                .accept_manifest_evidence_with_history(account, manifest, trust, history)
                 .await
         } else {
             self.session
-                .accept_manifest_evidence(account, response, &self.transparency_policy)
+                .accept_manifest_evidence(account, manifest)
                 .await
         }
     }
@@ -2112,174 +1911,95 @@ impl Engine {
     async fn recover_manifest_history(
         &self,
         peer: &str,
-        pending_manifest: &DeviceManifest,
+        pending_manifest: &AccountManifestV1,
         prior_trust: Option<&crate::ManifestTrust>,
-        bundle_transparency: &crate::TransparencyTrust,
-    ) -> Result<(Vec<ManifestHistoryRecord>, crate::TransparencyTrust)> {
-        let stored_prior = match prior_trust {
-            Some(trust) if !trust.continuity_gap => self
-                .session
-                .manifest_history(peer, trust.highest_version)
-                .await?
-                .filter(|record| {
-                    record
-                        .manifest
-                        .manifest_hash()
-                        .is_ok_and(|hash| hash == trust.manifest_hash)
-                        && record.manifest.authority_key_id == trust.authority_key_id
-                        && record.manifest.self_authority_key == trust.self_authority_key
-                }),
-            _ => None,
-        };
-        let from_version = stored_prior
-            .as_ref()
-            .map_or(1, |record| record.version.saturating_add(1));
-        if from_version > pending_manifest.version {
+    ) -> Result<(
+        crate::ManifestTrust,
+        Vec<crate::AccountManifestHistoryRecordV1>,
+    )> {
+        let from_sequence = prior_trust.map_or(1, |trust| trust.highest_sequence.saturating_add(1));
+        if from_sequence > pending_manifest.sequence {
             return Err(ChatError::Trust(
-                "manifest recovery bounds exceed the pending version".into(),
+                "manifest recovery bounds exceed the pending sequence".into(),
             ));
         }
-        let bundle_checkpoint = TransparencyCheckpoint {
-            log_id: bundle_transparency.log_id.clone(),
-            tree_size: bundle_transparency.tree_size,
-            root_hash: bundle_transparency.root_hash.clone(),
-        };
-        let mut page_from = from_version;
-        let mut cursor: Option<String> = None;
-        let mut previous_manifest = stored_prior.map(|record| record.manifest);
-        let mut fixed_checkpoint = None;
-        let mut fixed_authentication = None;
-        let mut history = Vec::new();
-        let mut verified_trust = None;
-
+        let mut page_from = from_sequence;
+        let mut pages = Vec::new();
         loop {
             let page = self
                 .transport
-                .fetch_manifest_range(
-                    peer,
-                    from_version,
-                    pending_manifest.version,
-                    page_from,
-                    cursor.as_deref(),
-                    bundle_checkpoint.tree_size,
-                )
+                .fetch_manifest_history(peer, from_sequence, pending_manifest.sequence, page_from)
                 .await?;
-            if page.to_version != pending_manifest.version
-                || page.page_from_version != page_from
-                || page.consistency_from != bundle_checkpoint.tree_size
+            if page.account != pending_manifest.account
+                || page.from_sequence != page_from
+                || page.to_sequence != pending_manifest.sequence
             {
                 return Err(ChatError::Trust(
-                    "manifest range response changed the requested snapshot bounds".into(),
+                    "manifest history response changed the requested bounds".into(),
                 ));
             }
-            page.verify_page(
-                peer,
-                from_version,
-                previous_manifest.as_ref(),
-                Some(&bundle_checkpoint),
-            )
-            .map_err(ChatError::Trust)?;
-            if let Some(checkpoint) = &fixed_checkpoint {
-                if checkpoint != &page.checkpoint
-                    || fixed_authentication.as_ref() != Some(&page.authentication)
-                {
-                    return Err(ChatError::Trust(
-                        "manifest range pages are not bound to one signed checkpoint".into(),
-                    ));
-                }
-            } else {
-                fixed_checkpoint = Some(page.checkpoint.clone());
-                fixed_authentication = Some(page.authentication.clone());
-            }
-            let response = TransparencyCheckpointResponse {
-                checkpoint: page.checkpoint.clone(),
-                map_root: page.latest_map.root_hash.clone(),
-                authentication: page.authentication.clone(),
-                consistency_from: page.consistency_from,
-                consistency: page.consistency.clone(),
-            };
-            let page_trust = verify_transparency_checkpoint_response(
-                &transparency_scope(peer)?,
-                &response,
-                Some(bundle_transparency),
-                &self.transparency_policy,
-            )?;
-            if verified_trust
-                .as_ref()
-                .is_some_and(|existing| existing != &page_trust)
-            {
-                return Err(ChatError::Trust(
-                    "manifest range pages produced different transparency pins".into(),
-                ));
-            }
-            verified_trust = Some(page_trust);
-            for entry in &page.entries {
-                history.push(ManifestHistoryRecord {
-                    peer: peer.to_string(),
-                    version: entry.manifest.version,
-                    manifest: entry.manifest.clone(),
-                    leaf_index: entry.leaf_index,
-                });
-            }
-            previous_manifest = page.entries.last().map(|entry| entry.manifest.clone());
-            match page.next_cursor {
+            let next = page.next_sequence;
+            pages.push(page);
+            match next {
                 Some(next) => {
-                    page_from = page.page_to_version.checked_add(1).ok_or_else(|| {
-                        ChatError::Trust("manifest range version overflow".into())
-                    })?;
-                    cursor = Some(next);
+                    if next <= page_from {
+                        return Err(ChatError::Trust(
+                            "manifest history pagination did not advance".into(),
+                        ));
+                    }
+                    page_from = next;
                 }
                 None => break,
             }
         }
+        verify_manifest_history(peer, &pages, prior_trust, pending_manifest)
+    }
 
-        if previous_manifest.as_ref() != Some(pending_manifest) {
-            return Err(ChatError::Trust(
-                "verified manifest history does not reach the pending bundle".into(),
-            ));
-        }
-        if let Some(prior) = prior_trust {
-            if from_version == 1 {
-                let pinned = history
-                    .iter()
-                    .find(|record| record.version == prior.highest_version)
-                    .ok_or_else(|| {
-                        ChatError::Trust(
-                            "recovered history omits the previously pinned version".into(),
-                        )
-                    })?;
-                if pinned.manifest.manifest_hash().map_err(ChatError::Trust)? != prior.manifest_hash
-                    || pinned.manifest.authority_key_id != prior.authority_key_id
-                    || pinned.manifest.self_authority_key != prior.self_authority_key
-                {
-                    return Err(ChatError::Trust(
-                        "recovered history contradicts the previously pinned manifest".into(),
-                    ));
+    async fn quarantine_manifest_failure(
+        &mut self,
+        peer: &str,
+        pending_manifest: Option<&AccountManifestV1>,
+        prior_trust: Option<&crate::ManifestTrust>,
+        error: &ChatError,
+    ) -> Result<()> {
+        let Some(prior) = prior_trust else {
+            return Ok(());
+        };
+        let ChatError::Trust(reason) = error else {
+            return Ok(());
+        };
+        let mut pending_reset = None;
+        if let Some(manifest) = pending_manifest {
+            let changes_identity = manifest.incarnation_id != prior.incarnation_id
+                || manifest.authority_key_id != prior.authority_key_id
+                || manifest.self_authority_key != prior.self_authority_key;
+            if changes_identity {
+                let candidate = verify_manifest_evidence(peer, manifest, None);
+                if let Ok(candidate) = candidate {
+                    let recovered = if candidate.continuity_gap {
+                        self.recover_manifest_history(peer, manifest, None)
+                            .await
+                            .ok()
+                    } else {
+                        Some((
+                            candidate,
+                            vec![crate::AccountManifestHistoryRecordV1 {
+                                peer: peer.to_string(),
+                                sequence: manifest.sequence,
+                                manifest: manifest.clone(),
+                            }],
+                        ))
+                    };
+                    if let Some((candidate, history)) = recovered {
+                        pending_reset =
+                            Some(crate::PendingAccountIdentityResetV1 { candidate, history });
+                    }
                 }
             }
         }
-        Ok((
-            history,
-            verified_trust.ok_or_else(|| {
-                ChatError::Trust("manifest range had no verified checkpoint".into())
-            })?,
-        ))
-    }
-
-    async fn ensure_transparency_monitor_allows_new_send(&self, peer_user: &str) -> Result<()> {
-        let peer_scope = transparency_scope(peer_user)?;
-        for scope in ["local", peer_scope.as_str()] {
-            if self
-                .session
-                .transparency_monitor_status(scope)
-                .await?
-                .is_some_and(|status| status.state == TransparencyMonitorState::VerificationFailed)
-            {
-                return Err(ChatError::Trust(format!(
-                    "transparency monitor verification failed for {scope}"
-                )));
-            }
-        }
+        self.session
+            .quarantine_authority(peer, reason, pending_reset)
+            .await?;
         Ok(())
     }
 }

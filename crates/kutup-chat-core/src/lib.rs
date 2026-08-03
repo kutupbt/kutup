@@ -37,10 +37,10 @@ pub use db::indexed_db::IndexedDbChatDb;
 #[cfg(feature = "sqlite")]
 pub use db::sqlite::SqliteChatDb;
 pub use db::{
-    AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState,
-    InboxMessage, LocalIdentity, LocalProfile, ManifestHistoryRecord, ManifestTrust,
+    AccountManifestHistoryRecordV1, AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope,
+    InboundFailureKind, InboundState, InboxMessage, LocalIdentity, LocalProfile, ManifestTrust,
     MlsHistoryMessage, MlsOutboxDelivery, MlsOutboxEntry, OutboxEntry, OutboxSyncLeg, PeerProfile,
-    Pending, SentMessage, TransparencyMonitorState, TransparencyMonitorStatus, TransparencyTrust,
+    Pending, PendingAccountIdentityResetV1, SentMessage,
 };
 pub use engine::{
     ChatEvent, Engine, EngineState, InboundFailure, PreKeyMaintenanceReport, ReceiveReport,
@@ -51,8 +51,8 @@ pub use kutup_chat_proto::{
     DeliveredEnvelope, OutgoingEnvelope, TextBody,
 };
 pub use manifest::{
-    verify_bundle_response, verify_manifest, AccountAuthority, ManifestPolicy, TransparencyPolicy,
-    TransparencyScopePolicy,
+    derive_safety_number, verify_bundle_response, verify_manifest, AccountAuthority,
+    ManifestPolicy, SafetyNumberV1,
 };
 pub use mls_engine::{
     AnonymousMlsRecipientDevice, AppliedInboundMlsApplication, AppliedInboundMlsCommit,

@@ -114,11 +114,7 @@ impl ChatTransport for Mailbox {
     async fn register_device(&self, _req: &RegisterChatDeviceRequest) -> Result<u32> {
         unreachable!("receive path does not register")
     }
-    async fn fetch_bundles(
-        &self,
-        _username: &str,
-        _transparency_tree_size: u64,
-    ) -> Result<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(&self, _username: &str) -> Result<UserPreKeyBundlesResponse> {
         unreachable!("receive path does not fetch bundles")
     }
     async fn send(&self, _username: &str, _req: &SendMessagesRequest) -> Result<SendOutcome> {

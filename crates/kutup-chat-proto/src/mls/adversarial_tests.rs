@@ -4,13 +4,7 @@ use super::*;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
 fn valid_encapsulated_key() -> String {
-    let signing_key = p256::ecdsa::SigningKey::from_bytes((&[37u8; 32]).into()).unwrap();
-    BASE64.encode(
-        signing_key
-            .verifying_key()
-            .to_encoded_point(false)
-            .as_bytes(),
-    )
+    BASE64.encode([37u8; 32])
 }
 
 fn envelope(device_id: u32, ciphertext_bytes: usize) -> AnonymousMlsDeviceEnvelopeV1 {
@@ -27,7 +21,7 @@ fn valid_submission() -> AnonymousMlsSubmissionV1 {
         recipient: "recipient@example.test".parse().unwrap(),
         send_id: Uuid::from_u128(1),
         capability: BASE64.encode([0x33; 16]),
-        suite: MlsAnonymousDeliverySuiteV1::DhKemP256HkdfSha256Aes128Gcm,
+        suite: MlsAnonymousDeliverySuiteV1::DhKemX25519HkdfSha256ChaCha20Poly1305,
         envelopes: vec![envelope(1, 17)],
     }
 }
@@ -48,7 +42,7 @@ fn anonymous_submission_enforces_exact_envelope_and_byte_ceilings() {
     assert!(too_large.validate().is_err());
 
     let mut at_ceiling = valid_submission();
-    at_ceiling.envelopes = vec![envelope(1, MAX_ANONYMOUS_REQUEST_BYTES - 65)];
+    at_ceiling.envelopes = vec![envelope(1, MAX_ANONYMOUS_REQUEST_BYTES - 32)];
     at_ceiling.validate().unwrap();
 }
 

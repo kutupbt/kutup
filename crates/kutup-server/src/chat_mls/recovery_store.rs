@@ -12,7 +12,7 @@ use serde_json::Value;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-use super::MlsRepository;
+use super::{MlsRepository, MLS_SUITE_SQL};
 use crate::error::{AppError, AppResult};
 
 struct PreviousRecoveryState {
@@ -27,6 +27,19 @@ struct PreviousRecoveryState {
     authority_set: MlsAuthoritySetV1,
     owner_set: MlsOwnerSetV1,
 }
+
+type PreviousRecoveryRow = (
+    i64,
+    String,
+    i64,
+    i64,
+    Option<String>,
+    String,
+    i32,
+    Value,
+    Value,
+    Value,
+);
 
 impl MlsRepository {
     #[allow(clippy::too_many_arguments)]
@@ -52,17 +65,14 @@ impl MlsRepository {
                 "MLS recovery exceeds the local service policy",
             ));
         }
-        match local_delivery {
-            Some(delivery) => {
-                plan.verify_delivery(delivery)
-                    .map_err(AppError::bad_request)?;
-                if delivery.destination != local_domain {
-                    return Err(AppError::forbidden(
-                        "MLS recovery delivery targets another server",
-                    ));
-                }
+        if let Some(delivery) = local_delivery {
+            plan.verify_delivery(delivery)
+                .map_err(AppError::bad_request)?;
+            if delivery.destination != local_domain {
+                return Err(AppError::forbidden(
+                    "MLS recovery delivery targets another server",
+                ));
             }
-            None => {}
         }
         let recovery_digest = plan.transition_digest().map_err(AppError::bad_request)?;
         let recovery_value = serde_json::to_value(recovery)
@@ -259,11 +269,12 @@ impl MlsRepository {
                   owner_set_sequence, owner_set, genesis, genesis_hash,
                   last_finalized_height, last_finalized_epoch,
                   last_block_hash, status)
-             VALUES ($1,$2,$3,2,$4,$5,$6,$6,$7,$8,$9,$10,$11,$12,0,1,NULL,'active')",
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,0,1,NULL,'active')",
         )
         .bind(plan.conversation_id)
         .bind(plan.new_genesis.incarnation as i64)
         .bind(group_id)
+        .bind(MLS_SUITE_SQL)
         .bind(&plan.new_genesis.roster_commitment)
         .bind(plan.new_genesis.member_count as i32)
         .bind(
@@ -402,18 +413,7 @@ async fn load_previous_state(
     tx: &mut Transaction<'_, Postgres>,
     conversation_id: Uuid,
 ) -> AppResult<PreviousRecoveryState> {
-    let row: Option<(
-        i64,
-        String,
-        i64,
-        i64,
-        Option<String>,
-        String,
-        i32,
-        Value,
-        Value,
-        Value,
-    )> = sqlx::query_as(
+    let row: Option<PreviousRecoveryRow> = sqlx::query_as(
         "SELECT i.incarnation, i.genesis_hash, i.last_finalized_height,
                 i.last_finalized_epoch, i.last_block_hash,
                 i.roster_commitment, i.member_count, i.participant_domains,

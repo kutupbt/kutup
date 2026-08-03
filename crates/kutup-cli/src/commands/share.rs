@@ -10,13 +10,16 @@ use rand::RngCore;
 use serde::Serialize;
 
 use crate::api::federation::IncomingShare;
-use crate::api::{ApiError, FederatedShareRequest, FileMetadata, PublicShareRequest, ShareRequest};
+use crate::api::{
+    ApiError, Collection, FederatedShareRequest, FileMetadata, PublicShareRequest, ShareRequest,
+};
 use crate::commands::confirm;
 use crate::context::{require_session, Ctx};
 use crate::cryptohelpers::{decrypt_collection_key, decrypt_collections, find_collection};
 use crate::errors::NotFound;
 use crate::session::Session;
-use kutup_crypto::{sealedbox, secretbox, stream};
+use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
+use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 
 #[derive(Subcommand)]
 pub enum ShareCmd {
@@ -101,13 +104,19 @@ pub fn run(profile: &str, json: bool, cmd: &ShareCmd) -> Result<()> {
     }
 }
 
-/// Looks up an owned collection and returns its unwrapped key.
-fn owned_collection_key(ctx: &Ctx, collection_id: &str) -> Result<Vec<u8>> {
+/// Looks up an owned collection and returns its record plus unwrapped key.
+fn owned_collection(ctx: &Ctx, collection_id: &str) -> Result<(Collection, Vec<u8>)> {
     let master_key = ctx.session.master_key_bytes()?;
     let cols = decrypt_collections(ctx.client.list_collections()?, &master_key, &ctx.session);
     let col = find_collection(&cols, collection_id)
         .ok_or_else(|| NotFound(format!("collection {collection_id} not found")))?;
-    decrypt_collection_key(col, &master_key, &ctx.session).context("decrypt collection key")
+    let key =
+        decrypt_collection_key(col, &master_key, &ctx.session).context("decrypt collection key")?;
+    Ok((col.clone(), key))
+}
+
+fn owned_collection_key(ctx: &Ctx, collection_id: &str) -> Result<Vec<u8>> {
+    Ok(owned_collection(ctx, collection_id)?.1)
 }
 
 fn b64() -> base64::engine::GeneralPurpose {
@@ -129,18 +138,41 @@ fn share_folder(
         .client
         .get_user_by_email(email)
         .with_context(|| format!("look up user {email}"))?;
-    let recipient_pub = b64()
-        .decode(&recipient.public_key)
-        .context("decode recipient public key")?;
-    let sealed = sealedbox::seal_anonymous(&collection_key, &recipient_pub)
-        .context("seal collection key")?;
+    let master_key = ctx.session.master_key_bytes()?;
+    let master_key_array: &[u8; 32] = master_key
+        .as_slice()
+        .try_into()
+        .context("master key must be 32 bytes")?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(master_key_array)?;
+    let (_, domain) = recipient
+        .account
+        .split_once('@')
+        .ok_or_else(|| anyhow!("recipient account is invalid"))?;
+    let envelope = kutup_crypto::named_share::NamedShareEnvelopeV1::seal(
+        &collection_key,
+        collection_id,
+        ctx.client
+            .list_collections()?
+            .into_iter()
+            .find(|collection| collection.id == collection_id)
+            .ok_or_else(|| NotFound(format!("collection {collection_id} not found")))?
+            .key_epoch,
+        &format!("{}@{domain}", ctx.session.username),
+        &identity.incarnation_id(),
+        identity.drive_signing_key(),
+        &recipient.account,
+        &recipient.account_incarnation_id,
+        &b64()
+            .decode(&recipient.drive_hpke_public_key)
+            .context("decode recipient HPKE public key")?,
+    )?;
 
     ctx.client
         .share_collection(
             collection_id,
             &ShareRequest {
                 recipient_user_id: recipient.user_id,
-                encrypted_collection_key: b64().encode(&sealed),
+                named_share_envelope: envelope.encode_b64()?,
                 can_upload: upload,
                 can_delete: delete,
                 upload_quota_bytes: None,
@@ -176,11 +208,32 @@ fn share_federated(
         .client
         .get_fed_pubkey(username, server)
         .context("fetch remote public key")?;
-    let recipient_pub = b64()
-        .decode(&remote.public_key)
-        .context("decode remote public key")?;
-    let sealed = sealedbox::seal_anonymous(&collection_key, &recipient_pub)
-        .context("seal collection key")?;
+    let collection = ctx
+        .client
+        .list_collections()?
+        .into_iter()
+        .find(|collection| collection.id == collection_id)
+        .ok_or_else(|| NotFound(format!("collection {collection_id} not found")))?;
+    let master_key = ctx.session.master_key_bytes()?;
+    let master_key_array: &[u8; 32] = master_key
+        .as_slice()
+        .try_into()
+        .context("master key must be 32 bytes")?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(master_key_array)?;
+    let local_domain = ctx.client.settings()?.chat.server_name;
+    let envelope = kutup_crypto::named_share::NamedShareEnvelopeV1::seal(
+        &collection_key,
+        collection_id,
+        collection.key_epoch,
+        &format!("{}@{local_domain}", ctx.session.username),
+        &identity.incarnation_id(),
+        identity.drive_signing_key(),
+        &remote.account,
+        &remote.account_incarnation_id,
+        &b64()
+            .decode(&remote.drive_hpke_public_key)
+            .context("decode remote HPKE public key")?,
+    )?;
 
     let resp = ctx
         .client
@@ -189,7 +242,7 @@ fn share_federated(
             &FederatedShareRequest {
                 recipient_username: username.to_string(),
                 recipient_server: server.to_string(),
-                encrypted_collection_key: b64().encode(&sealed),
+                named_share_envelope: envelope.encode_b64()?,
                 can_upload: upload,
                 can_delete: delete,
                 upload_quota_bytes: None,
@@ -207,20 +260,27 @@ fn share_federated(
 
 fn share_public(profile: &str, json: bool, collection_id: &str) -> Result<()> {
     let ctx = require_session(profile)?;
-    let collection_key = owned_collection_key(&ctx, collection_id)?;
+    let (collection, collection_key) = owned_collection(&ctx, collection_id)?;
 
     // Random link key — never sent to the server (lives in the URL fragment).
     let mut link_key = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut link_key);
-    let (enc_key, key_nonce) = secretbox::seal(&collection_key, &link_key)?;
+    let envelope_context = DriveEnvelopeContextV1::new(
+        DriveEnvelopePurpose::PublicLinkCollectionKey,
+        collection.key_epoch,
+        1,
+        collection_id,
+        &ctx.session.user_id,
+    )?;
+    let collection_key_envelope =
+        drive_envelope::seal_b64(&collection_key, &link_key, envelope_context)?;
 
     let resp = ctx
         .client
         .create_public_share(&PublicShareRequest {
             share_type: "collection".into(),
             target_id: collection_id.to_string(),
-            encrypted_collection_key: b64().encode(&enc_key),
-            encrypted_collection_key_nonce: b64().encode(key_nonce),
+            collection_key_envelope,
             expires_in_hours: None,
         })
         .context("create public share")?;
@@ -254,12 +314,30 @@ fn is_zero(v: &i64) -> bool {
 }
 
 fn unwrap_shared_collection_key(s: &IncomingShare, sess: &Session) -> Result<Vec<u8>> {
-    let enc = b64()
-        .decode(&s.encrypted_collection_key)
-        .context("collection key base64")?;
-    let priv_k = sess.private_key_bytes()?;
-    let pub_k = sess.public_key_bytes()?;
-    sealedbox::open_anonymous(&enc, &pub_k, &priv_k).context("unseal collection key")
+    let collection = crate::api::Collection {
+        id: s.remote_collection_id.clone(),
+        owner_user_id: s.owner_user_id.clone(),
+        name_envelope: s.name_envelope.clone(),
+        owner_key_envelope: None,
+        named_share_envelope: Some(s.named_share_envelope.clone()),
+        key_epoch: s.key_epoch,
+        name_revision: s.name_revision,
+        epoch_statement: s.epoch_statement.clone(),
+        epoch_statement_hash: s.epoch_statement_hash.clone(),
+        owner_account: Some(s.owner_account.clone()),
+        owner_incarnation_id: Some(s.owner_incarnation_id.clone()),
+        owner_drive_signing_public_key: Some(s.owner_signing_public_key.clone()),
+        owner_authority_public_key: Some(s.owner_authority_public_key.clone()),
+        parent_collection_id: None,
+        color: None,
+        is_shared: true,
+        is_remote: true,
+        can_upload: s.can_upload,
+        can_delete: s.can_delete,
+        upload_quota_bytes: s.upload_quota_bytes,
+        name: String::new(),
+    };
+    crate::collection_crypto::open_key(&collection, &sess.master_key_bytes()?, sess)
 }
 
 fn resolve_shared_collection_key(ctx: &Ctx, share_id: &str) -> Result<(IncomingShare, Vec<u8>)> {
@@ -277,17 +355,11 @@ fn resolve_shared_collection_key(ctx: &Ctx, share_id: &str) -> Result<(IncomingS
 }
 
 fn decrypt_file_display(f: &crate::api::File, col_key: &[u8]) -> FileDisplay {
-    let inner = || -> Result<(String, i64)> {
-        let file_key = secretbox::open_b64(&f.encrypted_file_key, &f.file_key_nonce, col_key)?;
-        let meta_bytes = secretbox::open_b64(&f.encrypted_metadata, &f.metadata_nonce, &file_key)?;
-        let meta: FileMetadata = serde_json::from_slice(&meta_bytes)?;
-        Ok((meta.name, meta.size))
-    };
-    match inner() {
-        Ok((name, size)) => FileDisplay {
+    match crate::file_crypto::open(f, col_key) {
+        Ok((_, meta)) => FileDisplay {
             id: f.id.clone(),
-            name,
-            size,
+            name: meta.name,
+            size: meta.size,
         },
         Err(_) => FileDisplay {
             id: f.id.clone(),
@@ -344,31 +416,26 @@ fn share_download(
         .find(|f| f.id == file_id)
         .ok_or_else(|| NotFound(format!("file {file_id} not found in share {share_id}")))?;
 
-    let file_key =
-        secretbox::open_b64(&target.encrypted_file_key, &target.file_key_nonce, &col_key)
-            .context("decrypt file key")?;
-    let meta_bytes = secretbox::open_b64(
-        &target.encrypted_metadata,
-        &target.metadata_nonce,
-        &file_key,
-    )
-    .context("decrypt metadata")?;
-    let meta: FileMetadata = serde_json::from_slice(&meta_bytes).unwrap_or_default();
+    let (file_key, meta) =
+        crate::file_crypto::open(target, &col_key).context("decrypt file record")?;
 
     let dest_path = resolve_dest(dest_dir, &meta.name);
     let resp = ctx.client.proxy_download_stream(share_id, file_id)?;
     let bar = crate::output::progress_bar(resp.content_length(), &meta.name);
     let mut out = std::fs::File::create(&dest_path).context("open dest")?;
-    let written = match crate::transfer::stream_download(resp, &file_key, &mut out, |n| {
-        bar.set_position(n as u64)
-    }) {
-        Ok(w) => w,
-        Err(e) => {
-            drop(out);
-            let _ = std::fs::remove_file(&dest_path);
-            return Err(e).context("decrypt-write");
-        }
-    };
+    let blob_context =
+        DriveFileBlobContextV1::new(&target.id, &target.collection_id, target.key_epoch)?;
+    let written =
+        match crate::transfer::stream_download(resp, &file_key, blob_context, &mut out, |n| {
+            bar.set_position(n as u64)
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                drop(out);
+                let _ = std::fs::remove_file(&dest_path);
+                return Err(e).context("decrypt-write");
+            }
+        };
     bar.finish_and_clear();
 
     let dest_str = dest_path.to_string_lossy().into_owned();
@@ -395,14 +462,6 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
     }
 
     let data = std::fs::read(path).context("read local file")?;
-    let mut file_key = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut file_key);
-    let encrypted = stream::encrypt_stream(&data, &file_key).context("encrypt content")?;
-
-    // Wrap the file key under the share's unwrapped collection key.
-    let (enc_file_key, file_key_nonce) =
-        secretbox::seal(&file_key, &col_key).context("wrap file key")?;
-
     let name = Path::new(path)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -412,19 +471,23 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
         mime_type: crate::mimetype::guess_mime(Path::new(path)),
         size: data.len() as i64,
     };
-    let meta_bytes = serde_json::to_vec(&meta)?;
-    let (enc_meta, meta_nonce) =
-        secretbox::seal(&meta_bytes, &file_key).context("encrypt metadata")?;
-
-    let e = b64();
+    let record = crate::file_crypto::create(
+        &share.remote_collection_id,
+        share.key_epoch,
+        &col_key,
+        &meta,
+    )?;
+    let blob_context =
+        DriveFileBlobContextV1::new(&record.id, &share.remote_collection_id, record.key_epoch)?;
+    let encrypted = drive_object::encrypt_file_blob(&data, &record.file_key, blob_context)
+        .context("encrypt content")?;
     let resp = ctx
         .client
         .proxy_upload_file(
             share_id,
-            &e.encode(&enc_meta),
-            &e.encode(meta_nonce),
-            &e.encode(&enc_file_key),
-            &e.encode(file_key_nonce),
+            &record.id,
+            &record.metadata_envelope,
+            &record.file_key_envelope,
             encrypted,
         )
         .map_err(|err| {
@@ -435,6 +498,9 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
             };
             err.context(hint)
         })?;
+    if resp.id != record.id {
+        bail!("federated server returned a different file id");
+    }
 
     if json {
         crate::output::print_json(
@@ -466,8 +532,30 @@ struct IncomingDisplay {
 
 fn decrypt_incoming_name(s: &IncomingShare, sess: &Session) -> Result<String> {
     let col_key = unwrap_shared_collection_key(s, sess)?;
-    let name = secretbox::open_b64(&s.encrypted_name, &s.name_nonce, &col_key)?;
-    Ok(String::from_utf8_lossy(&name).into_owned())
+    let collection = crate::api::Collection {
+        id: s.remote_collection_id.clone(),
+        owner_user_id: s.owner_user_id.clone(),
+        name_envelope: s.name_envelope.clone(),
+        owner_key_envelope: None,
+        named_share_envelope: None,
+        key_epoch: s.key_epoch,
+        name_revision: s.name_revision,
+        epoch_statement: s.epoch_statement.clone(),
+        epoch_statement_hash: s.epoch_statement_hash.clone(),
+        owner_account: None,
+        owner_incarnation_id: None,
+        owner_drive_signing_public_key: None,
+        owner_authority_public_key: None,
+        parent_collection_id: None,
+        color: None,
+        is_shared: true,
+        is_remote: true,
+        can_upload: s.can_upload,
+        can_delete: s.can_delete,
+        upload_quota_bytes: s.upload_quota_bytes,
+        name: String::new(),
+    };
+    crate::collection_crypto::open_name(&collection, &col_key)
 }
 
 fn incoming_list(profile: &str, json: bool) -> Result<()> {

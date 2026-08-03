@@ -2,20 +2,16 @@
 // chunk-by-chunk so we can feed a ReadableStream of encrypted bytes to
 // tus-js-client without buffering the whole file.
 //
-// Wire format matches the existing one-shot encryptStream() in
-// symmetric.ts and the pure-Go port in
-// cmd/kutup/internal/crypto/stream.go: 24-byte secretstream header
-// followed by 5 MB plaintext chunks each producing 5 MB + 17 B
-// ciphertext (the 16-byte Poly1305 MAC + the 1-byte secretstream tag).
+// This module is the primitive-only browser adapter used by fileBlob.ts.
+// It emits a 24-byte secretstream header followed by 5 MB plaintext chunks,
+// each producing 5 MB + 17 B ciphertext. fileBlob.ts owns the persistent
+// Drive header, purpose key, AAD, context validation and mandatory final frame.
 // crypto_secretstream_xchacha20poly1305 with TAG_FINAL on the last
 // chunk.
 //
-// Why a separate module: the streaming path needs the same primitives
-// as encryptStream() but exposed at the chunk granularity. Rather than
-// refactor symmetric.ts and risk regressions in the one-shot callers
-// (downloads-decrypt, asset uploads, etc.), we add a thin wrapper here
-// and let encryptStream stay one-shot. The cost is a tiny duplicated
-// per-chunk loop; the benefit is zero risk to the existing path.
+// This stays separate from the Rust-owned format adapter because a browser
+// upload must push bounded chunks across the JS/WASM boundary. It never owns a
+// persistent header, suite choice, KDF label or validation rule.
 
 import { getSodium } from './sodium'
 
@@ -51,8 +47,9 @@ export const CIPHER_CHUNK = PLAIN_CHUNK + ABYTES
  * to set tus's Upload-Length up-front (the server soft-reserves quota
  * against this number).
  *
- * - Empty input: just the 24-byte header. Matches encryptStream()'s
- *   behaviour for an empty Uint8Array.
+ * This helper describes only the raw secretstream primitive. A persisted
+ * Drive object uses fileBlobCipherSize(), which always includes a FINAL frame.
+ * - Empty input: raw header only (not a valid persistent Drive object).
  * - Non-empty: header + plaintext + 17 bytes per chunk.
  */
 export function cipherSize(plainBytes: number): number {
@@ -72,7 +69,10 @@ export interface StreamEncryptor {
   push(plain: Uint8Array, isLast: boolean): Uint8Array
 }
 
-export async function newStreamEncryptor(key: Uint8Array): Promise<StreamEncryptor> {
+export async function newStreamEncryptor(
+  key: Uint8Array,
+  associatedData?: Uint8Array,
+): Promise<StreamEncryptor> {
   const sodium = await getSodium()
   const { state, header } =
     sodium.crypto_secretstream_xchacha20poly1305_init_push(key)
@@ -83,7 +83,7 @@ export async function newStreamEncryptor(key: Uint8Array): Promise<StreamEncrypt
         ? sodium.crypto_secretstream_xchacha20poly1305_TAG_FINAL
         : sodium.crypto_secretstream_xchacha20poly1305_TAG_MESSAGE
       return sodium.crypto_secretstream_xchacha20poly1305_push(
-        state, plain, null, tag,
+        state, plain, associatedData ?? null, tag,
       )
     },
   }

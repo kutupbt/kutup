@@ -3,9 +3,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use kutup_chat_core::{ChatError, ChatTransport, Result as CoreResult, SendOutcome};
 use kutup_chat_proto::{
-    DeviceListMismatch, DeviceManifest, MailboxPage, PreKeyCountResponse, PublishManifestResponse,
-    RegisterChatDeviceRequest, RegisterChatDeviceResponse, ReplenishKeysRequest,
-    SendMessagesRequest, UserPreKeyBundlesResponse,
+    AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1,
+    DeviceListMismatch, MailboxPage, PreKeyCountResponse, RegisterChatDeviceRequest,
+    RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest,
+    UserPreKeyBundlesResponse,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -42,15 +43,11 @@ impl ChatTransport for NativeTransport {
         Ok(response.device_id)
     }
 
-    async fn fetch_bundles(
-        &self,
-        username: &str,
-        transparency_tree_size: u64,
-    ) -> CoreResult<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(&self, username: &str) -> CoreResult<UserPreKeyBundlesResponse> {
         self.json::<(), _>(
             ChatHttpMethod::Get,
             format!(
-                "/chat/users/{}/keys?transparencyTreeSize={transparency_tree_size}",
+                "/chat/users/{}/keys",
                 urlencoding::encode(username)
             ),
             None,
@@ -62,12 +59,11 @@ impl ChatTransport for NativeTransport {
         &self,
         username: &str,
         current_device_id: u32,
-        transparency_tree_size: u64,
     ) -> CoreResult<UserPreKeyBundlesResponse> {
         self.json::<(), _>(
             ChatHttpMethod::Get,
             format!(
-                "/chat/users/{}/keys?syncDeviceId={current_device_id}&transparencyTreeSize={transparency_tree_size}",
+                "/chat/users/{}/keys?syncDeviceId={current_device_id}",
                 urlencoding::encode(username)
             ),
             None,
@@ -75,7 +71,7 @@ impl ChatTransport for NativeTransport {
         .await
     }
 
-    async fn fetch_manifest(&self, username: &str) -> CoreResult<Option<DeviceManifest>> {
+    async fn fetch_manifest(&self, username: &str) -> CoreResult<Option<AccountManifestV1>> {
         let response = self
             .request(
                 ChatHttpMethod::Get,
@@ -92,13 +88,26 @@ impl ChatTransport for NativeTransport {
 
     async fn publish_manifest(
         &self,
-        manifest: &DeviceManifest,
-        transparency_tree_size: u64,
-    ) -> CoreResult<PublishManifestResponse> {
-        self.json(
-            ChatHttpMethod::Post,
-            format!("/chat/manifest?transparencyTreeSize={transparency_tree_size}"),
-            Some(manifest),
+        manifest: &AccountManifestV1,
+    ) -> CoreResult<AccountManifestPublicationV1> {
+        self.json(ChatHttpMethod::Post, "/chat/manifest".into(), Some(manifest))
+        .await
+    }
+
+    async fn fetch_manifest_history(
+        &self,
+        username: &str,
+        from_sequence: u64,
+        to_sequence: u64,
+        page_from_sequence: u64,
+    ) -> CoreResult<AccountManifestHistoryPageV1> {
+        self.json::<(), _>(
+            ChatHttpMethod::Get,
+            format!(
+                "/chat/users/{}/manifest-history?fromSequence={from_sequence}&toSequence={to_sequence}&pageFromSequence={page_from_sequence}",
+                urlencoding::encode(username)
+            ),
+            None,
         )
         .await
     }

@@ -1,2 +1,1 @@
-ALTER TABLE uploads RENAME COLUMN storage_path TO storage_temp_key;
-ALTER TABLE uploads DROP COLUMN file_id;
+-- No-op; migration 017 owns these columns in the pre-V1 schema.

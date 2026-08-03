@@ -1,8 +1,7 @@
 //! `kutup trash` — list, restore, and permanently delete trashed items.
 //!
-//! Trash is owner-scoped: every wrapped key in the listing is the owner's
-//! master-key secretbox wrap (never a sealed box), so decryption here doesn't
-//! need the shared-collection branch of `cryptohelpers`.
+//! Trash is owner-scoped: every wrapped key in the listing is an authenticated
+//! owner envelope, so decryption here does not need named-share handling.
 
 use anyhow::Result;
 use clap::Subcommand;
@@ -13,7 +12,7 @@ use crate::api::{ApiError, FileMetadata};
 use crate::commands::confirm;
 use crate::context::require_session;
 use crate::output::{format_bytes, format_time, header, print_json};
-use kutup_crypto::secretbox;
+use crate::session::Session;
 
 #[derive(Subcommand)]
 pub enum TrashCmd {
@@ -67,26 +66,76 @@ struct TrashEntry {
 
 /// master key → folder's own collection key → name. `[encrypted]` on failure
 /// so one bad row never aborts the listing.
-fn folder_name(f: &TrashFolder, master_key: &[u8]) -> String {
+fn folder_name(f: &TrashFolder, master_key: &[u8], session: &Session) -> String {
     let inner = || -> Result<String> {
-        let col_key = secretbox::open_b64(&f.encrypted_key, &f.encrypted_key_nonce, master_key)?;
-        let name = secretbox::open_b64(&f.encrypted_name, &f.name_nonce, &col_key)?;
-        Ok(String::from_utf8_lossy(&name).into_owned())
+        let collection = crate::api::Collection {
+            id: f.id.clone(),
+            owner_user_id: f.owner_user_id.clone(),
+            name_envelope: f.name_envelope.clone(),
+            owner_key_envelope: Some(f.owner_key_envelope.clone()),
+            named_share_envelope: None,
+            key_epoch: f.key_epoch,
+            name_revision: f.name_revision,
+            epoch_statement: f.epoch_statement.clone(),
+            epoch_statement_hash: f.epoch_statement_hash.clone(),
+            owner_account: None,
+            owner_incarnation_id: None,
+            owner_drive_signing_public_key: None,
+            owner_authority_public_key: None,
+            parent_collection_id: None,
+            color: f.color.clone(),
+            is_shared: false,
+            is_remote: false,
+            can_upload: false,
+            can_delete: false,
+            upload_quota_bytes: None,
+            name: String::new(),
+        };
+        let col_key = crate::collection_crypto::open_key(&collection, master_key, session)?;
+        crate::collection_crypto::open_name(&collection, &col_key)
     };
     inner().unwrap_or_else(|_| "[encrypted]".to_string())
 }
 
 /// master key → row-level collection key wrap → file key → metadata.
-fn file_meta(f: &TrashFile, master_key: &[u8]) -> (String, Option<i64>) {
+fn file_meta(f: &TrashFile, master_key: &[u8], session: &Session) -> (String, Option<i64>) {
     let inner = || -> Result<FileMetadata> {
-        let col_key = secretbox::open_b64(
-            &f.collection_encrypted_key,
-            &f.collection_encrypted_key_nonce,
-            master_key,
-        )?;
-        let file_key = secretbox::open_b64(&f.encrypted_file_key, &f.file_key_nonce, &col_key)?;
-        let meta_bytes = secretbox::open_b64(&f.encrypted_metadata, &f.metadata_nonce, &file_key)?;
-        Ok(serde_json::from_slice(&meta_bytes)?)
+        let collection = crate::api::Collection {
+            id: f.collection_id.clone(),
+            owner_user_id: f.collection_owner_user_id.clone(),
+            name_envelope: String::new(),
+            owner_key_envelope: Some(f.collection_owner_key_envelope.clone()),
+            named_share_envelope: None,
+            key_epoch: f.collection_key_epoch,
+            name_revision: 1,
+            epoch_statement: f.collection_epoch_statement.clone(),
+            epoch_statement_hash: f.collection_epoch_statement_hash.clone(),
+            owner_account: None,
+            owner_incarnation_id: None,
+            owner_drive_signing_public_key: None,
+            owner_authority_public_key: None,
+            parent_collection_id: None,
+            color: None,
+            is_shared: false,
+            is_remote: false,
+            can_upload: false,
+            can_delete: false,
+            upload_quota_bytes: None,
+            name: String::new(),
+        };
+        let col_key = crate::collection_crypto::open_key(&collection, master_key, session)?;
+        let file = crate::api::File {
+            id: f.id.clone(),
+            collection_id: f.collection_id.clone(),
+            metadata_envelope: f.metadata_envelope.clone(),
+            file_key_envelope: f.file_key_envelope.clone(),
+            key_epoch: f.key_epoch,
+            metadata_revision: f.metadata_revision,
+            encrypted_size_bytes: 0,
+            created_at: String::new(),
+        };
+        let (_, metadata) = crate::file_crypto::open(&file, &col_key)?;
+        Ok(metadata)
     };
     match inner() {
         Ok(meta) => (meta.name, Some(meta.size)),
@@ -104,7 +153,7 @@ fn ls(profile: &str, json: bool) -> Result<()> {
         entries.push(TrashEntry {
             id: f.id.clone(),
             entry_type: "folder",
-            name: folder_name(f, &master_key),
+            name: folder_name(f, &master_key, &ctx.session),
             deleted_at: f.deleted_at.clone(),
             size: None,
             items: Some(f.items),
@@ -112,7 +161,7 @@ fn ls(profile: &str, json: bool) -> Result<()> {
         });
     }
     for f in &trash.files {
-        let (name, size) = file_meta(f, &master_key);
+        let (name, size) = file_meta(f, &master_key, &ctx.session);
         entries.push(TrashEntry {
             id: f.id.clone(),
             entry_type: "file",

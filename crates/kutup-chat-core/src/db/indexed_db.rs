@@ -19,9 +19,9 @@ use serde_wasm_bindgen::Serializer;
 use wasm_bindgen::JsValue;
 
 use crate::db::{
-    ChatDb, ContactRecord, InboundEnvelope, InboxMessage, LocalIdentity, LocalProfile,
-    ManifestHistoryRecord, ManifestTrust, MlsHistoryMessage, MlsOutboxEntry, OutboxEntry,
-    PeerProfile, Pending, SentMessage, TransparencyMonitorStatus, TransparencyTrust,
+    AccountManifestHistoryRecordV1, ChatDb, ContactRecord, InboundEnvelope, InboxMessage,
+    LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxEntry, OutboxEntry,
+    PeerProfile, Pending, SentMessage,
 };
 use crate::error::{ChatError, Result};
 
@@ -43,14 +43,12 @@ const SENT_MESSAGES: &str = "sent_messages";
 const INBOUND: &str = "inbound";
 const MANIFEST_TRUST: &str = "manifest_trust";
 const MANIFEST_HISTORY: &str = "manifest_history";
-const TRANSPARENCY_TRUST: &str = "transparency_trust";
-const TRANSPARENCY_MONITOR_STATUS: &str = "transparency_monitor_status";
 const CONTACTS: &str = "contacts";
 const LOCAL_PROFILE: &str = "local_profile";
 const PEER_PROFILES: &str = "peer_profiles";
 const META: &str = "meta";
 
-const ALL_STORES: [&str; 24] = [
+const ALL_STORES: [&str; 22] = [
     LOCAL_IDENTITY,
     SESSIONS,
     IDENTITIES,
@@ -69,8 +67,6 @@ const ALL_STORES: [&str; 24] = [
     INBOUND,
     MANIFEST_TRUST,
     MANIFEST_HISTORY,
-    TRANSPARENCY_TRUST,
-    TRANSPARENCY_MONITOR_STATUS,
     CONTACTS,
     LOCAL_PROFILE,
     PEER_PROFILES,
@@ -308,22 +304,14 @@ impl ChatDb for IndexedDbChatDb {
     async fn load_manifest_history(
         &self,
         peer: &str,
+        incarnation_id: &str,
         version: u64,
-    ) -> Result<Option<ManifestHistoryRecord>> {
-        self.get(MANIFEST_HISTORY, pair_key(peer, &version.to_string()))
-            .await
-    }
-
-    async fn load_transparency_trust(&self, scope: &str) -> Result<Option<TransparencyTrust>> {
-        self.get(TRANSPARENCY_TRUST, string_key(scope)).await
-    }
-
-    async fn load_transparency_monitor_status(
-        &self,
-        scope: &str,
-    ) -> Result<Option<TransparencyMonitorStatus>> {
-        self.get(TRANSPARENCY_MONITOR_STATUS, string_key(scope))
-            .await
+    ) -> Result<Option<AccountManifestHistoryRecordV1>> {
+        self.get(
+            MANIFEST_HISTORY,
+            triple_key(peer, incarnation_id, &version.to_string()),
+        )
+        .await
     }
 
     async fn load_contact(&self, peer: &str) -> Result<Option<ContactRecord>> {
@@ -377,8 +365,11 @@ impl ChatDb for IndexedDbChatDb {
         // IndexedDB has one writer in this engine. Check immutable records
         // before opening the atomic write transaction; an existing different
         // value is a durable cryptographic contradiction, never an upsert.
-        for ((peer, version), record) in &pending.manifest_history {
-            if let Some(existing) = self.load_manifest_history(peer, *version).await? {
+        for ((peer, incarnation_id, version), record) in &pending.manifest_history {
+            if let Some(existing) = self
+                .load_manifest_history(peer, incarnation_id, *version)
+                .await?
+            {
                 if existing != *record {
                     return Err(ChatError::Trust(format!(
                         "immutable manifest history conflicts at {peer} version {version}"
@@ -411,8 +402,6 @@ impl ChatDb for IndexedDbChatDb {
         let inbound = idb(transaction.store(INBOUND))?;
         let manifest_trust = idb(transaction.store(MANIFEST_TRUST))?;
         let manifest_history = idb(transaction.store(MANIFEST_HISTORY))?;
-        let transparency_trust = idb(transaction.store(TRANSPARENCY_TRUST))?;
-        let transparency_monitor_status = idb(transaction.store(TRANSPARENCY_MONITOR_STATUS))?;
         let contacts = idb(transaction.store(CONTACTS))?;
         let local_profile = idb(transaction.store(LOCAL_PROFILE))?;
         let peer_profiles = idb(transaction.store(PEER_PROFILES))?;
@@ -464,23 +453,13 @@ impl ChatDb for IndexedDbChatDb {
         stage_puts(&mut operations, &sent_messages, writes.sent_messages);
         stage_map(&mut operations, &inbound, writes.inbound);
         stage_puts(&mut operations, &manifest_trust, writes.manifest_trust);
-        for ((peer, version), value) in writes.manifest_history {
+        for ((peer, incarnation_id, version), value) in writes.manifest_history {
             operations.push(put_op(
                 &manifest_history,
                 value,
-                pair_key(&peer, &version.to_string()),
+                triple_key(&peer, &incarnation_id, &version.to_string()),
             ));
         }
-        stage_puts(
-            &mut operations,
-            &transparency_trust,
-            writes.transparency_trust,
-        );
-        stage_puts(
-            &mut operations,
-            &transparency_monitor_status,
-            writes.transparency_monitor_status,
-        );
         stage_puts(&mut operations, &contacts, writes.contacts);
         if let Some(value) = writes.local_profile.take() {
             operations.push(put_op(&local_profile, value, string_key(SINGLETON)));
@@ -597,9 +576,7 @@ struct PreparedWrites {
     sent_messages: Vec<(String, JsValue)>,
     inbound: Vec<(String, Option<JsValue>)>,
     manifest_trust: Vec<(String, JsValue)>,
-    manifest_history: Vec<((String, u64), JsValue)>,
-    transparency_trust: Vec<(String, JsValue)>,
-    transparency_monitor_status: Vec<(String, JsValue)>,
+    manifest_history: Vec<((String, String, u64), JsValue)>,
     contacts: Vec<(String, JsValue)>,
     local_profile: Option<JsValue>,
     peer_profiles: Vec<(String, JsValue)>,
@@ -643,8 +620,6 @@ impl PreparedWrites {
             inbound: serialize_optional_map(&pending.inbound)?,
             manifest_trust: serialize_map(&pending.manifest_trust)?,
             manifest_history: serialize_map(&pending.manifest_history)?,
-            transparency_trust: serialize_map(&pending.transparency_trust)?,
-            transparency_monitor_status: serialize_map(&pending.transparency_monitor_status)?,
             contacts: serialize_map(&pending.contacts)?,
             local_profile: pending.local_profile.as_ref().map(to_js).transpose()?,
             peer_profiles: serialize_map(&pending.peer_profiles)?,
@@ -698,6 +673,10 @@ fn number_key(value: u32) -> JsValue {
 
 fn pair_key(left: &str, right: &str) -> JsValue {
     Array::of2(&string_key(left), &string_key(right)).into()
+}
+
+fn triple_key(first: &str, second: &str, third: &str) -> JsValue {
+    Array::of3(&string_key(first), &string_key(second), &string_key(third)).into()
 }
 
 fn kyber_seen_key(kyber_id: u32, ec_id: u32, base_key: &[u8]) -> String {
@@ -799,13 +778,18 @@ mod tests {
             "alice".into(),
             ManifestTrust {
                 peer: "alice".into(),
+                account: "alice@a.test".into(),
+                incarnation_id: "incarnation".into(),
                 authority_key_id: "authority".into(),
                 self_authority_key: "key".into(),
-                highest_version: u64::MAX,
+                drive_hpke_public_key: "drive".into(),
+                drive_share_signing_public_key: "share".into(),
+                highest_sequence: u64::MAX,
                 manifest_hash: "hash".into(),
                 trust: AuthorityTrust::Verified,
-                transparency_position: Some(u64::MAX),
                 continuity_gap: false,
+                quarantine_reason: None,
+                pending_reset: None,
             },
         );
         pending.prekey_upload = Some(Some(vec![15]));
@@ -844,7 +828,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap()
-                .highest_version,
+                .highest_sequence,
             u64::MAX
         );
         assert_eq!(

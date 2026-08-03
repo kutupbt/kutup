@@ -94,7 +94,6 @@ pub(crate) async fn get_identified_key_packages(
         .as_deref()
         .ok_or_else(unavailable)?;
     authenticated_remote_policy(&state, destination).await?;
-    crate::chat_transparency_monitor::verify_before_remote_use(&state, destination).await?;
     let transaction = FederatedIdentifiedMlsKeyPackageRequestV1 {
         origin_domain: federation.server_name().to_owned(),
         requester,
@@ -146,13 +145,10 @@ pub(crate) async fn get_identified_key_packages(
     bundle
         .validate(OffsetDateTime::now_utc().unix_timestamp())
         .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error))?;
-    if bundle.recipient != request.recipient
-        || bundle.transparency.consistency_from
-            != request.known_tree_size().map_err(AppError::bad_request)?
-    {
+    if bundle.recipient != request.recipient {
         return Err(AppError::new(
             StatusCode::BAD_GATEWAY,
-            "remote identified MLS KeyPackage proof is bound incorrectly",
+            "remote identified MLS KeyPackage recipient is bound incorrectly",
         ));
     }
     Ok(Json(bundle).into_response())
@@ -260,13 +256,8 @@ async fn claim_local_identified_key_packages(
     .await?;
     rate_tx.commit().await?;
 
-    let publication = crate::handlers::chat::load_manifest_proof(
-        state,
-        recipient_user_id,
-        request.known_tree_size().map_err(AppError::bad_request)?,
-    )
-    .await?;
-    if publication.manifest.version != manifest_version {
+    let manifest = crate::handlers::chat::load_account_manifest(state, recipient_user_id).await?;
+    if manifest.sequence != manifest_version {
         return Err(unavailable());
     }
     let key_packages = MlsRepository::new(state.pool.clone())
@@ -279,8 +270,7 @@ async fn claim_local_identified_key_packages(
         .await?;
     let bundle = MlsKeyPackageBundleV1 {
         recipient: request.recipient.clone(),
-        manifest: publication.manifest,
-        transparency: publication.transparency,
+        manifest,
         key_packages,
     };
     bundle

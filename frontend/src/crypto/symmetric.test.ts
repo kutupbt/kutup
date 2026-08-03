@@ -1,78 +1,38 @@
 // @vitest-environment node
 // jsdom mangles the Uint8Array typing libsodium's secretstream expects.
-import { describe, it, expect } from 'vitest'
-import {
-  encrypt,
-  decrypt,
-  encryptStream,
-  decryptStream,
-  generateKey,
-} from './symmetric'
+import { describe, it, expect, vi } from 'vitest'
+
+vi.mock('./rustWasm', async () => {
+  const [{ readFile }, module] = await Promise.all([
+    import('node:fs/promises'),
+    import('../../public/crypto-wasm/kutup_crypto_wasm.js'),
+  ])
+  const wasm = await readFile(new URL(
+    '../../public/crypto-wasm/kutup_crypto_wasm_bg.wasm',
+    import.meta.url,
+  ))
+  await module.default({ module_or_path: wasm })
+  return { getCryptoWasm: async () => module }
+})
+import { encryptStream, decryptStream, generateKey } from './symmetric'
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
 
-describe('symmetric — encrypt/decrypt (XSalsa20-Poly1305 / secretbox)', () => {
-  it('round-trips an arbitrary payload', async () => {
-    const key = await generateKey()
-    const plaintext = enc.encode('hello kutup — utf-8 åéîøü 🔐')
-    const { ciphertext, nonce } = await encrypt(plaintext, key)
-    expect(ciphertext.length).toBe(plaintext.length + 16) // +Poly1305 tag
-    expect(nonce.length).toBe(24) // crypto_secretbox_NONCEBYTES
-    const out = await decrypt(ciphertext, nonce, key)
-    expect(dec.decode(out)).toBe('hello kutup — utf-8 åéîøü 🔐')
-  })
-
-  it('round-trips empty bytes', async () => {
-    const key = await generateKey()
-    const { ciphertext, nonce } = await encrypt(new Uint8Array(0), key)
-    const out = await decrypt(ciphertext, nonce, key)
-    expect(out.length).toBe(0)
-  })
-
-  it('produces a fresh random nonce per encrypt', async () => {
-    const key = await generateKey()
-    const a = await encrypt(enc.encode('same'), key)
-    const b = await encrypt(enc.encode('same'), key)
-    // Different nonces → different ciphertexts even for identical plaintext.
-    expect(Array.from(a.nonce)).not.toEqual(Array.from(b.nonce))
-    expect(Array.from(a.ciphertext)).not.toEqual(Array.from(b.ciphertext))
-  })
-
-  it('throws on wrong key', async () => {
-    const k1 = await generateKey()
-    const k2 = await generateKey()
-    const { ciphertext, nonce } = await encrypt(enc.encode('secret'), k1)
-    await expect(decrypt(ciphertext, nonce, k2)).rejects.toThrow()
-  })
-
-  it('throws on tampered ciphertext (auth tag verifies)', async () => {
-    const key = await generateKey()
-    const { ciphertext, nonce } = await encrypt(enc.encode('integrity'), key)
-    ciphertext[0] ^= 0xff
-    // Note: libsodium-js throws its own "wrong secret key for the given
-    // ciphertext" before our wrapper's Error fires; either message is fine.
-    await expect(decrypt(ciphertext, nonce, key)).rejects.toThrow()
-  })
-
-  it('throws on tampered nonce', async () => {
-    const key = await generateKey()
-    const { ciphertext, nonce } = await encrypt(enc.encode('integrity'), key)
-    nonce[0] ^= 0xff
-    // Note: libsodium-js throws its own "wrong secret key for the given
-    // ciphertext" before our wrapper's Error fires; either message is fine.
-    await expect(decrypt(ciphertext, nonce, key)).rejects.toThrow()
-  })
-})
-
 describe('symmetric — encryptStream/decryptStream (XChaCha20-Poly1305 secretstream)', () => {
+  const context = {
+    fileId: '11111111-1111-4111-8111-111111111111',
+    collectionId: '22222222-2222-4222-8222-222222222222',
+    epoch: 1,
+  }
+
   it('round-trips a small payload (single chunk)', async () => {
     const key = await generateKey()
     const plaintext = enc.encode('a small file')
-    const blob = await encryptStream(plaintext, key)
-    // header (24) + chunk overhead (17) + plaintext
-    expect(blob.length).toBe(24 + 17 + plaintext.length)
-    const out = await decryptStream(blob, key)
+    const blob = await encryptStream(plaintext, key, context)
+    // Drive header (48) + secretstream header (24) + frame overhead (17).
+    expect(blob.length).toBe(48 + 24 + 17 + plaintext.length)
+    const out = await decryptStream(blob, key, context)
     expect(dec.decode(out)).toBe('a small file')
   })
 
@@ -82,8 +42,8 @@ describe('symmetric — encryptStream/decryptStream (XChaCha20-Poly1305 secretst
     const size = 5 * 1024 * 1024 + 512 * 1024
     const plaintext = new Uint8Array(size)
     for (let i = 0; i < size; i++) plaintext[i] = (i * 31) & 0xff
-    const blob = await encryptStream(plaintext, key)
-    const out = await decryptStream(blob, key)
+    const blob = await encryptStream(plaintext, key, context)
+    const out = await decryptStream(blob, key, context)
     expect(out.length).toBe(size)
     // Spot-check a few bytes rather than full equality (faster).
     expect(out[0]).toBe(plaintext[0])
@@ -93,31 +53,46 @@ describe('symmetric — encryptStream/decryptStream (XChaCha20-Poly1305 secretst
 
   it('round-trips empty bytes', async () => {
     const key = await generateKey()
-    const blob = await encryptStream(new Uint8Array(0), key)
-    const out = await decryptStream(blob, key)
+    const blob = await encryptStream(new Uint8Array(0), key, context)
+    expect(blob.length).toBe(48 + 24 + 17)
+    const out = await decryptStream(blob, key, context)
     expect(out.length).toBe(0)
   })
 
   it('throws on wrong key', async () => {
     const k1 = await generateKey()
     const k2 = await generateKey()
-    const blob = await encryptStream(enc.encode('hi'), k1)
-    await expect(decryptStream(blob, k2)).rejects.toThrow()
+    const blob = await encryptStream(enc.encode('hi'), k1, context)
+    await expect(decryptStream(blob, k2, context)).rejects.toThrow()
   })
 
   it('throws on tampered chunk', async () => {
     const key = await generateKey()
-    const blob = await encryptStream(enc.encode('payload-data'), key)
+    const blob = await encryptStream(enc.encode('payload-data'), key, context)
     // Flip a byte well past the header, in the encrypted-chunk region.
     blob[blob.length - 5] ^= 0xff
-    await expect(decryptStream(blob, key)).rejects.toThrow()
+    await expect(decryptStream(blob, key, context)).rejects.toThrow()
+  })
+
+  it('rejects relocation to another file, collection, or epoch', async () => {
+    const key = await generateKey()
+    const blob = await encryptStream(enc.encode('bound payload'), key, context)
+    await expect(decryptStream(blob, key, {
+      ...context,
+      fileId: '33333333-3333-4333-8333-333333333333',
+    })).rejects.toThrow()
+    await expect(decryptStream(blob, key, {
+      ...context,
+      collectionId: '44444444-4444-4444-8444-444444444444',
+    })).rejects.toThrow()
+    await expect(decryptStream(blob, key, { ...context, epoch: 2 })).rejects.toThrow()
   })
 })
 
 describe('symmetric — generateKey', () => {
   it('returns 32-byte (256-bit) keys', async () => {
     const k = await generateKey()
-    expect(k.length).toBe(32) // crypto_secretbox_KEYBYTES
+    expect(k.length).toBe(32)
   })
 
   it('returns different keys on each call', async () => {

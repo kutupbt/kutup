@@ -50,7 +50,7 @@ impl MlsClient {
         validate_group_id(mls_group_id)?;
         if proposal_id.is_nil()
             || created_at_seconds < 0
-            || additions.len() + removed_device_ids.len() > 127
+            || additions.len() + removed_device_ids.len() > MAX_MLS_DEVICES_PER_ACCOUNT * 2
             || (additions.is_empty() && removed_device_ids.is_empty())
         {
             return Err(ChatError::Invalid(
@@ -186,9 +186,9 @@ impl MlsClient {
             .len()
             .saturating_sub(removed_device_ids.len())
             .saturating_add(added_ids.len());
-        if remaining == 0 || remaining > 127 {
+        if remaining == 0 || remaining > MAX_MLS_DEVICES_PER_ACCOUNT {
             return Err(ChatError::Trust(
-                "MLS device synchronization must retain 1-127 local leaves".into(),
+                "MLS device synchronization must retain 1-10 local leaves".into(),
             ));
         }
         let removed_identities = removed_device_ids
@@ -232,19 +232,20 @@ impl MlsClient {
             created_at_seconds,
             &next_private_control,
         )?;
-        let control = build_pending_membership_change(
-            &metadata,
-            &conversation,
-            mls_group_id,
-            proposal_id,
-            &conversation.current_roster,
-            additions,
-            &removed_identities,
-            &current_devices,
-            &pending,
-            MlsControlActionTypeV1::DeviceSync,
-            created_at_seconds,
-        )?;
+        let control =
+            build_pending_membership_change(super::membership::PendingMembershipChangeInput {
+                metadata: &metadata,
+                conversation: &conversation,
+                mls_group_id,
+                proposal_id,
+                next_roster: &conversation.current_roster,
+                additions,
+                removed_credential_identities: &removed_identities,
+                current_devices: &current_devices,
+                pending: &pending,
+                action_type: MlsControlActionTypeV1::DeviceSync,
+                created_at_seconds,
+            })?;
         metadata
             .pending_membership_changes
             .insert(group_key, control.clone());

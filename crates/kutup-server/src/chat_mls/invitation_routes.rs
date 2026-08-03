@@ -21,6 +21,8 @@ use crate::middleware::AuthUser;
 use crate::telemetry;
 use crate::AppState;
 
+type InvitationResponseRow = (String, Option<OffsetDateTime>, i64, Option<String>, String);
+
 pub(crate) async fn list_invitations(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -87,21 +89,20 @@ pub(crate) async fn respond_invitation(
         .to_owned();
     let user_id = trusted_uuid(&auth.user_id)?;
     let mut tx = state.pool.begin().await?;
-    let row: Option<(String, Option<OffsetDateTime>, i64, Option<String>, String)> =
-        sqlx::query_as(
-            "SELECT m.membership_status, m.invitation_expires_at, m.joined_epoch,
+    let row: Option<InvitationResponseRow> = sqlx::query_as(
+        "SELECT m.membership_status, m.invitation_expires_at, m.joined_epoch,
                 m.invited_by_domain, u.username
          FROM chat_mls_local_members m
          JOIN users u ON u.id = m.user_id
          WHERE m.conversation_id = $1 AND m.incarnation = $2
            AND m.user_id = $3 AND m.removed_epoch IS NULL
          FOR UPDATE",
-        )
-        .bind(request.conversation_id)
-        .bind(request.incarnation as i64)
-        .bind(user_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+    )
+    .bind(request.conversation_id)
+    .bind(request.incarnation as i64)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     let (status, expires_at, invited_epoch, invited_by_domain, username) =
         row.ok_or_else(|| AppError::not_found("MLS invitation not found"))?;
     let requested_status = if request.accept { "active" } else { "rejected" };

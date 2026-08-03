@@ -7,8 +7,8 @@
 //
 // On snapshot:
 //   1. Encode current Yjs state via Y.encodeStateAsUpdateV2.
-//   2. Call encryptSnapshot() (provided by caller — wraps the bytes in AEAD with
-//      the per-file content key and prepends the nonce).
+//   2. Call encryptSnapshot() (provided by caller — the V1 browser uses the
+//      same typed, context-bound Drive file-blob format as other snapshots).
 //   3. PUT the encrypted bytes to /api/files/:fileId/snapshot-blob, get a
 //      {storagePath, s3VersionId} back.
 //   4. POST /api/files/:fileId/versions with the snapshot metadata + caller's
@@ -25,7 +25,7 @@ const IDLE_MS = 30_000
 const HARD_CEILING = 200
 
 export interface SnapshotEncryptResult {
-  /** Bytes to PUT to S3. Caller is responsible for prepending the nonce / framing. */
+  /** Complete typed encrypted blob to persist. */
   ciphertext: Uint8Array
   /** Carried into the version-record API call. */
   storageHints: { docKeyId: number; sizeBytes: number }
@@ -34,7 +34,7 @@ export interface SnapshotEncryptResult {
 export interface SnapshotOpts {
   fileId: string
   ydoc: Y.Doc
-  /** Encrypt the encoded state. The caller decides framing (nonce prefix, etc.). */
+  /** Encrypt and frame the encoded state as a complete persistent blob. */
   encryptSnapshot: (bytes: Uint8Array) => Promise<SnapshotEncryptResult>
   /** Latest known per-device sequence number at snapshot time — drives log truncation server-side. */
   getSeq: () => number

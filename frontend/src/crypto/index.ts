@@ -7,12 +7,24 @@ import {
   generateAccountProtectionSalt,
 } from './kdf'
 import { fromBase64, toBase64 } from './base64'
-import { encrypt, decrypt, generateKey } from './symmetric'
-import { generateKeypair } from './asymmetric'
+import { generateKey } from './symmetric'
+import {
+  ACCOUNT_ENVELOPE_PURPOSE,
+  openAccountEnvelope,
+  sealAccountEnvelope,
+} from './accountEnvelope'
+import { deriveAccountIdentityKeys } from './identity'
 import { encodeMnemonic } from './mnemonic'
 
 export { encryptStream, decryptStream } from './symmetric'
-export { wrapKeyForRecipient, unwrapKeyFromSender } from './asymmetric'
+export {
+  decryptFileBlobV1,
+  encryptFileBlobV1,
+  fileBlobCipherSize,
+  newFileBlobStreamEncryptorV1,
+  openFileBlobStreamV1,
+} from './fileBlob'
+export type { FileBlobContextV1 } from './fileBlob'
 export { decodeMnemonic, validateMnemonic } from './mnemonic'
 export {
   ACCOUNT_PROTECTION_DEFAULTS,
@@ -21,18 +33,61 @@ export {
   deriveRecoveryAuthProof,
   generateAccountProtectionSalt,
 } from './kdf'
-export { encrypt, decrypt, generateKey } from './symmetric'
+export { generateKey } from './symmetric'
 export { fromBase64, toBase64 } from './base64'
+export { deriveAccountIdentityKeys } from './identity'
+export type { AccountIdentityKeysV1 } from './identity'
+export {
+  DRIVE_ENVELOPE_PURPOSE,
+  openDriveEnvelope,
+  sealDriveEnvelope,
+} from './driveEnvelope'
+export type { DriveEnvelopeContextV1, DriveEnvelopePurpose } from './driveEnvelope'
+export {
+  createCollectionEpochStatement,
+  verifyCollectionEpochStatement,
+} from './collectionEpoch'
+export { openNamedShareEnvelope, sealNamedShareEnvelope } from './namedShare'
+export type { NamedShareContextV1 } from './namedShare'
+export {
+  openPublicLinkCollectionKeyV1,
+  sealPublicLinkCollectionKeyV1,
+} from './publicLink'
+export type { PublicLinkCollectionContextV1 } from './publicLink'
+export {
+  createOwnedCollectionV1,
+  openOwnedCollectionV1,
+  openOwnedCollectionKeyV1,
+  openSharedCollectionV1,
+  renameOwnedCollectionV1,
+} from './ownedCollection'
+export type { CreateOwnedCollectionV1, OwnedCollectionWireV1 } from './ownedCollection'
+export {
+  createFileRecordV1,
+  openFileRecordV1,
+  renameFileRecordV1,
+} from './fileRecord'
+export type {
+  CreatedFileRecordV1,
+  FileMetadataV1,
+  FileWireV1,
+} from './fileRecord'
+export {
+  ACCOUNT_ENVELOPE_PURPOSE,
+  openAccountEnvelope,
+  sealAccountEnvelope,
+} from './accountEnvelope'
 
 export interface RegistrationKeys {
   // For API call
-  encryptedMasterKey: string    // base64
-  masterKeyNonce: string        // base64
-  encryptedRecoveryKey: string  // base64
-  recoveryKeyNonce: string      // base64
-  encryptedPrivateKey: string   // base64
-  privateKeyNonce: string       // base64
+  masterKeyEnvelope: string      // canonical base64 AccountEnvelopeV1
+  recoveryKeyEnvelope: string    // canonical base64 AccountEnvelopeV1
+  drivePrivateKeyEnvelope: string // canonical base64 AccountEnvelopeV1
   publicKey: string             // base64
+  accountAuthorityPublicKey: string
+  accountAuthorityKeyId: string
+  accountIncarnationId: string
+  driveSigningPublicKey: string
   accountProtectionSuite: number
   accountProtectionSalt: string // base64
   argonMemoryKib: number
@@ -77,26 +132,41 @@ export async function generateRegistrationKeys(
     loginEmail,
   )
 
-  // 5. Generate X25519 keypair
-  const keypair = await generateKeypair()
+  // 5. Derive the purpose-separated account identity. Account keys and their
+  // typed private-key envelope are owned by the canonical Rust implementation.
+  const accountIdentity = await deriveAccountIdentityKeys(toBase64(masterKey))
+  const driveHpkePublicKey = fromBase64(accountIdentity.driveHpkePublicKey)
+  const driveHpkePrivateKey = fromBase64(accountIdentity.driveHpkePrivateKey)
 
-  // 6. Encrypt masterKey with keyEncryptionKey
-  const encMK = await encrypt(masterKey, keyEncryptionKey)
-
-  // 7. Encrypt masterKey with recoveryKey (for account recovery)
-  const encMKRecovery = await encrypt(masterKey, recoveryKeyEntropy)
-
-  // 8. Encrypt privateKey with masterKey
-  const encPK = await encrypt(keypair.privateKey, masterKey)
+  // 6–8. Rust owns the suite-bearing, purpose- and account-bound envelopes.
+  const masterKeyEnvelope = await sealAccountEnvelope(
+    masterKey,
+    keyEncryptionKey,
+    ACCOUNT_ENVELOPE_PURPOSE.passwordMasterKey,
+    loginEmail,
+  )
+  const recoveryKeyEnvelope = await sealAccountEnvelope(
+    masterKey,
+    recoveryKeyEntropy,
+    ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey,
+    loginEmail,
+  )
+  const drivePrivateKeyEnvelope = await sealAccountEnvelope(
+    driveHpkePrivateKey,
+    masterKey,
+    ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey,
+    loginEmail,
+  )
 
   return {
-    encryptedMasterKey: toBase64(encMK.ciphertext),
-    masterKeyNonce: toBase64(encMK.nonce),
-    encryptedRecoveryKey: toBase64(encMKRecovery.ciphertext),
-    recoveryKeyNonce: toBase64(encMKRecovery.nonce),
-    encryptedPrivateKey: toBase64(encPK.ciphertext),
-    privateKeyNonce: toBase64(encPK.nonce),
-    publicKey: toBase64(keypair.publicKey),
+    masterKeyEnvelope,
+    recoveryKeyEnvelope,
+    drivePrivateKeyEnvelope,
+    publicKey: toBase64(driveHpkePublicKey),
+    accountAuthorityPublicKey: accountIdentity.authorityPublicKey,
+    accountAuthorityKeyId: accountIdentity.authorityKeyId,
+    accountIncarnationId: accountIdentity.incarnationId,
+    driveSigningPublicKey: accountIdentity.driveSigningPublicKey,
     accountProtectionSuite: accountProtection.suite,
     accountProtectionSalt: accountProtection.salt,
     argonMemoryKib: accountProtection.memoryKib,
@@ -106,7 +176,7 @@ export async function generateRegistrationKeys(
     recoveryProof,
     mnemonic,
     masterKey,
-    privateKey: keypair.privateKey,
+    privateKey: driveHpkePrivateKey,
   }
 }
 
@@ -117,17 +187,27 @@ export interface LoginResult {
 
 // decryptMasterKey runs after login — decrypts masterKey using derived keyEncryptionKey.
 export async function decryptMasterKey(
-  encryptedMasterKey: string,
-  masterKeyNonce: string,
+  masterKeyEnvelope: string,
   keyEncryptionKey: Uint8Array,
+  loginEmail: string,
 ): Promise<Uint8Array> {
-  return decrypt(fromBase64(encryptedMasterKey), fromBase64(masterKeyNonce), keyEncryptionKey)
+  return openAccountEnvelope(
+    masterKeyEnvelope,
+    keyEncryptionKey,
+    ACCOUNT_ENVELOPE_PURPOSE.passwordMasterKey,
+    loginEmail,
+  )
 }
 
 export async function decryptPrivateKey(
-  encryptedPrivateKey: string,
-  privateKeyNonce: string,
+  drivePrivateKeyEnvelope: string,
   masterKey: Uint8Array,
+  loginEmail: string,
 ): Promise<Uint8Array> {
-  return decrypt(fromBase64(encryptedPrivateKey), fromBase64(privateKeyNonce), masterKey)
+  return openAccountEnvelope(
+    drivePrivateKeyEnvelope,
+    masterKey,
+    ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey,
+    loginEmail,
+  )
 }

@@ -1,2 +1,1 @@
-DROP TABLE IF EXISTS chat_transparency_map_checkpoints;
-DROP TABLE IF EXISTS chat_transparency_map_nodes;
+-- Reserved preproduction migration number; see migration 028.

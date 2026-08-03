@@ -6,29 +6,37 @@
 //! labels, validation and suite policy live here rather than in each client.
 //!
 //! Backing libraries:
-//! - [`dryoc`] — pure-Rust, libsodium-compatible `crypto_pwhash` (Argon2id),
-//!   `crypto_secretbox` (XSalsa20-Poly1305), `crypto_box_seal` (X25519), and
-//!   `crypto_secretstream_xchacha20poly1305`.
-//! - [`hkdf`] + [`sha2`] — HKDF-SHA256 for the per-file content key.
-//! - [`chacha20poly1305`] — XChaCha20-Poly1305-IETF AEAD for asset blobs.
+//! - [`dryoc`] — pure-Rust, libsodium-compatible `crypto_pwhash` (Argon2id)
+//!   and `crypto_secretstream_xchacha20poly1305`.
+//! - [`hkdf`] + [`sha2`] — purpose-separated HKDF-SHA256 subkeys.
+//! - [`chacha20poly1305`] — XChaCha20-Poly1305-IETF AEAD for typed envelopes.
 //! - [`ed25519_dalek`] — Ed25519 collab-frame signatures.
 //!
 //! ## Modules
-//! - [`kdf`] — one-root Argon2id account protection, recovery proof, and HKDF content keys.
+//! - [`kdf`] — one-root Argon2id account protection and recovery proof.
 //! - [`mnemonic`] — BIP39 recovery-phrase encode/decode (registration).
-//! - [`secretbox`] — XSalsa20-Poly1305 (keys, metadata).
-//! - [`sealedbox`] — anonymous X25519 sealed box (key sharing).
+//! - [`account_envelope`] — suite-bearing, purpose- and account-bound XChaCha account wraps.
+//! - [`drive_envelope`] — suite-bearing, purpose/key-separated and UUID/epoch/revision-bound Drive values.
+//! - [`drive_object`] — the Drive suite registry and typed, context-bound file-blob framing.
+//! - [`named_share`] — authenticated HPKE named-recipient collection sharing.
 //! - [`stream`] — XChaCha20-Poly1305 secretstream (file content, 5 MiB chunks).
 //! - [`asset`] — XChaCha20-Poly1305-IETF asset blobs.
 //! - [`envelope`] — collab-edit frame wire format + Ed25519 sign/verify.
+//! - [`local_state`] — typed XChaCha client-local state such as CLI sessions.
 
+pub mod account_envelope;
 pub mod asset;
+pub mod collection_epoch;
+pub mod drive_envelope;
+pub mod drive_object;
 pub mod envelope;
 pub mod error;
+pub mod identity;
 pub mod kdf;
+pub mod local_state;
+#[cfg(feature = "mnemonic")]
 pub mod mnemonic;
-pub mod sealedbox;
-pub mod secretbox;
+pub mod named_share;
 pub mod stream;
 
 pub use error::{CryptoError, Result};

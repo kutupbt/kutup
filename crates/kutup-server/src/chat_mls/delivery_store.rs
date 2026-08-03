@@ -193,7 +193,7 @@ impl MlsRepository {
             packages.push(MlsKeyPackageV1 {
                 device_id: device_id as u32,
                 manifest_version: manifest_version as u64,
-                suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+                suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
                 key_package_ref,
                 key_package: STANDARD.encode(key_package),
                 expires_at: expires_at.unix_timestamp(),

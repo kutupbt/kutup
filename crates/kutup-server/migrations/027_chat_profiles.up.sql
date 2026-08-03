@@ -3,6 +3,7 @@
 -- only one row is the owner-visible current revision.
 CREATE TABLE chat_profiles (
     user_id              UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    suite                SMALLINT NOT NULL CHECK (suite = 1),
     version              CHAR(64) NOT NULL,
     revision             BIGINT NOT NULL CHECK (revision > 0),
     source_device_id     INTEGER NOT NULL CHECK (source_device_id BETWEEN 1 AND 127),

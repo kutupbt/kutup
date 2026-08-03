@@ -1,4 +1,4 @@
-FROM rust:1.96-bookworm AS chat-wasm
+FROM rust:1.96-bookworm AS browser-wasm
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends protobuf-compiler \
@@ -6,13 +6,16 @@ RUN apt-get update \
 RUN cargo install wasm-bindgen-cli --version 0.2.126 --locked
 
 WORKDIR /src
-COPY Cargo.toml Cargo.toml
-COPY crates/kutup-federation-proto crates/kutup-federation-proto
-COPY crates/kutup-chat-proto crates/kutup-chat-proto
-COPY crates/kutup-chat-core crates/kutup-chat-core
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
 COPY scripts/build-chat-wasm.sh scripts/build-chat-wasm.sh
+COPY scripts/build-crypto-wasm.sh scripts/build-crypto-wasm.sh
 COPY frontend/public frontend/public
-RUN rustup target add wasm32-unknown-unknown \
+RUN --mount=type=cache,id=kutup-browser-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=kutup-browser-root-target,target=/src/target,sharing=locked \
+    --mount=type=cache,id=kutup-browser-chat-target,target=/src/crates/kutup-chat-core/target,sharing=locked \
+    rustup target add wasm32-unknown-unknown \
+    && bash scripts/build-crypto-wasm.sh \
     && bash scripts/build-chat-wasm.sh
 
 FROM node:20-alpine AS builder
@@ -28,7 +31,8 @@ COPY frontend/package.json frontend/pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile
 
 COPY frontend .
-COPY --from=chat-wasm /src/frontend/public/chat-wasm ./public/chat-wasm
+COPY --from=browser-wasm /src/frontend/public/crypto-wasm ./public/crypto-wasm
+COPY --from=browser-wasm /src/frontend/public/chat-wasm ./public/chat-wasm
 RUN pnpm run build:web
 
 FROM nginx:alpine

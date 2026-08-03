@@ -48,6 +48,9 @@ const DEFAULT_KEY_PACKAGE_TARGET = 20
 const KEY_PACKAGE_LIFETIME_SECONDS = 30 * 24 * 60 * 60
 const MAX_MAILBOX_PAGES = 64
 const MAX_CONTROL_HISTORY_PAGES = 1024
+const MAX_MLS_GROUP_ACCOUNTS = 256
+const MAX_MLS_DEVICES_PER_ACCOUNT = 10
+const MAX_MLS_GROUP_LEAVES = MAX_MLS_GROUP_ACCOUNTS * MAX_MLS_DEVICES_PER_ACCOUNT
 
 type CryptoLock = <T>(operation: () => Promise<T>) => Promise<T>
 
@@ -77,7 +80,7 @@ export interface VerifiedMlsInvitation {
   mlsGroupId: string
   invitedEpoch: number
   /**
-   * Exact device roster produced by the shared transparency verifier from the
+   * Exact device roster produced by the shared signed-manifest verifier from the
    * authenticated participant-bootstrap/control history. A server status label
    * is never sufficient.
    */
@@ -339,7 +342,7 @@ export class MlsConversationService {
   }
 
   /**
-   * Reconcile this account's current transparency-logged devices into every
+   * Reconcile this account's current account-signed devices into every
    * active group as independent MLS leaves. No OpenMLS snapshot or private
    * credential is copied between devices.
    */
@@ -352,7 +355,7 @@ export class MlsConversationService {
     if (
       desired.size !== manifestDeviceIds.length
       || desired.size < 1
-      || desired.size > 127
+      || desired.size > 10
       || manifestDeviceIds.some(deviceId =>
         !Number.isSafeInteger(deviceId) || deviceId < 1 || deviceId > 127)
     ) {
@@ -486,7 +489,7 @@ export class MlsConversationService {
     owners: Array<{ address: AccountAddress; ownerId: string; publicKey: string }>,
   ): Promise<FinalizedMlsOwnerChange | null> {
     const conversation = await this.requireActiveConversation(conversationId)
-    if (owners.length < 1 || owners.length > 1024) {
+    if (owners.length < 1 || owners.length > MAX_MLS_GROUP_ACCOUNTS) {
       throw new Error('MLS owner set must contain 1-1024 members')
     }
     const byAddress = new Map<string, { ownerId: string; publicKey: string }>()
@@ -1001,7 +1004,7 @@ export class MlsConversationService {
   /**
    * Decrypt a pending Welcome into untrusted credential claims without joining.
    * The caller must resolve every `account#device` claim through authenticated
-   * transparency history before constructing `VerifiedMlsInvitation`.
+   * signed manifest history before constructing `VerifiedMlsInvitation`.
    */
   async inspectInvitation(pending: PendingMlsInvitation): Promise<MlsWelcomeInspection> {
     validateInvitation(pending, Math.floor(Date.now() / 1000))
@@ -1021,7 +1024,7 @@ export class MlsConversationService {
       inspection.epoch !== pending.invitedEpoch
       || !equalBytes(inspection.mlsGroupId, groupId)
       || inspection.claimedMembers.length < 1
-      || inspection.claimedMembers.length > 1000
+      || inspection.claimedMembers.length > MAX_MLS_GROUP_LEAVES
       || inspection.privateControlState.protocolVersion !== MLS_PROTOCOL_VERSION
       || inspection.privateControlState.conversationId !== pending.conversationId
       || inspection.privateControlState.incarnation !== pending.incarnation
@@ -1034,7 +1037,7 @@ export class MlsConversationService {
 
   /**
    * Resolve every untrusted Welcome claim through the shared Rust engine's
-   * authenticated policy, manifest-chain, transparency, and device-key checks.
+   * authenticated policy, manifest-chain, durable pin, and device-key checks.
    * No JavaScript or server-provided status label can mint a verified roster.
    */
   async verifyInvitation(pending: PendingMlsInvitation): Promise<VerifiedMlsInvitation> {
@@ -1593,7 +1596,11 @@ export class MlsConversationService {
   private async publishCurrentDeliveryCapability(
     conversation: LocalMlsConversationRecord,
   ): Promise<void> {
-    if (!this.selfAddress) return
+    // Closing or archiving an incarnation invalidates its capability at the
+    // server. Do not attempt to republish after applying that terminal
+    // control Commit; a 404 here is expected server behavior, not a retryable
+    // delivery failure.
+    if (!this.selfAddress || conversation.status !== 'active') return
     const recipient = requireCanonicalAddress(this.selfAddress)
     if (!conversation.currentRoster.some(
       member => canonicalAccountAddress(member.address) === canonicalAccountAddress(recipient),
@@ -2001,13 +2008,13 @@ function validateLocalGenesisRecord(record: LocalMlsConversationRecord): void {
     || genesis.initialEpoch !== (recovered ? 1 : 0)
     || genesis.memberCount !== record.request.members.length
     || genesis.memberCount < 1
-    || genesis.memberCount > 1000
+    || genesis.memberCount > 256
     || !Number.isSafeInteger(record.lastFinalizedHeight)
     || record.lastFinalizedHeight < 0
     || !Number.isSafeInteger(record.lastFinalizedEpoch)
     || record.lastFinalizedEpoch < 0
     || record.currentRoster.length < 1
-    || record.currentRoster.length > 1000
+    || record.currentRoster.length > 256
     || !hasValidInvitationReadiness(record)
     || record.currentAuthoritySet.authorities.length < 1
     || record.currentOwnerSet.owners.length < 1
@@ -2088,7 +2095,7 @@ function isCryptographicPolicy(
     && value.policyVersion === 1
     && Number.isSafeInteger(value.sequence)
     && value.sequence >= 1
-    && value.suite === 2
+    && value.suite === 3
     && value.requiredPrivateControlExtension === 0xff4b
     && value.maximumPastEpochs === 2
     && value.anonymousDeliveryRequired === true
@@ -2110,9 +2117,9 @@ function validateVerifiedKeyPackage(
     || keyPackage.wire.deviceId > 127
     || keyPackage.credential?.credentialIdentity
       !== `${expectedAccount}#${keyPackage.wire.deviceId}`
-    || keyPackage.credential.credentialPublicKey.length !== 65
+    || keyPackage.credential.credentialPublicKey.length !== 32
   ) {
-    throw new Error('transparency-verified recovery KeyPackage has an invalid device binding')
+    throw new Error('manifest-verified recovery KeyPackage has an invalid device binding')
   }
 }
 
@@ -2141,7 +2148,7 @@ function validatePendingRecovery(
     || genesis.mlsGroupId !== encodeBase64(expectedNewGroupId)
     || genesis.memberCount !== control.request.members.length
     || control.request.members.length < 1
-    || control.request.members.length > 1000
+    || control.request.members.length > 256
     || !Array.isArray(control.request.deliveries)
     || control.request.deliveries.length !== plan.participantDomains.length
     || !Array.isArray(plan.deliveries)
@@ -2193,7 +2200,7 @@ function validateResolvedRoster(
 }
 
 function validateGroupDevices(devices: MlsConversationDevice[]): void {
-  if (!Array.isArray(devices) || devices.length < 1 || devices.length > 32_000) {
+  if (!Array.isArray(devices) || devices.length < 1 || devices.length > MAX_MLS_GROUP_LEAVES) {
     throw new Error('shared MLS group device roster is outside its bound')
   }
   let previous = ''
@@ -2223,7 +2230,7 @@ function validatePendingMembershipChange(
     || !isSha256(control.commitHash)
     || !Array.isArray(control.nextRoster)
     || control.nextRoster.length < 1
-    || control.nextRoster.length > 1000
+    || control.nextRoster.length > 256
     || !Array.isArray(control.deliveries)
     || control.deliveries.length < 1
     || !block
@@ -2283,7 +2290,7 @@ function validatePendingOwnerChange(
     || !isSha256(control.commitHash)
     || !Array.isArray(control.nextRoster)
     || control.nextRoster.length < 1
-    || control.nextRoster.length > 1000
+    || control.nextRoster.length > 256
     || !Array.isArray(control.deliveries)
     || control.deliveries.length < 1
     || !block
@@ -2296,7 +2303,7 @@ function validatePendingOwnerChange(
     || change.nextOwnerSet.sequence < 2
     || !Array.isArray(change.nextOwnerSet.owners)
     || change.nextOwnerSet.owners.length < 1
-    || change.nextOwnerSet.owners.length > 1024
+    || change.nextOwnerSet.owners.length > MAX_MLS_GROUP_ACCOUNTS
     || block.epochAfter !== block.epochBefore + 1
   ) {
     throw new Error('invalid durable MLS owner control record')
@@ -2315,7 +2322,7 @@ function validatePendingClose(
     || !isSha256(control.commitHash)
     || !Array.isArray(control.currentRoster)
     || control.currentRoster.length < 1
-    || control.currentRoster.length > 1000
+    || control.currentRoster.length > 256
     || !Array.isArray(control.deliveries)
     || control.deliveries.length < 1
     || !block
@@ -2344,7 +2351,7 @@ function validatePendingPolicyChange(
     || !isSha256(control.commitHash)
     || !Array.isArray(control.currentRoster)
     || control.currentRoster.length < 1
-    || control.currentRoster.length > 1000
+    || control.currentRoster.length > 256
     || !Array.isArray(control.deliveries)
     || control.deliveries.length < 1
     || !block
@@ -2370,7 +2377,7 @@ function validatePendingPolicyChange(
         cryptographic.policyVersion !== 1
         || !Number.isSafeInteger(cryptographic.sequence)
         || cryptographic.sequence < 2
-        || cryptographic.suite !== 2
+        || cryptographic.suite !== 3
         || cryptographic.maximumPastEpochs !== 2
         || cryptographic.anonymousDeliveryRequired !== true
         || cryptographic.paddingBlockBytes !== 1024
@@ -2563,7 +2570,7 @@ function validateVerifiedInvitation(
     || verified.mlsGroupId !== pending.mlsGroupId
     || verified.invitedEpoch !== pending.invitedEpoch
     || verified.expectedMembers.length < 1
-    || verified.expectedMembers.length > 1000
+    || verified.expectedMembers.length > MAX_MLS_GROUP_LEAVES
   ) {
     throw new Error('authenticated MLS invitation evidence differs from the pending invitation')
   }
@@ -2574,9 +2581,9 @@ function validateVerifiedInvitation(
       || member.credentialIdentity.length < 1
       || member.credentialIdentity.length > 512
       || identities.has(member.credentialIdentity)
-      || member.credentialPublicKey.length !== 65
+      || member.credentialPublicKey.length !== 32
     ) {
-      throw new Error('invalid transparency-verified MLS roster')
+      throw new Error('invalid manifest-verified MLS roster')
     }
     identities.add(member.credentialIdentity)
   }

@@ -10,9 +10,8 @@ CLI workspace.
 Rust owns:
 
 - Signal registration, PQXDH/Triple Ratchet sessions, prekeys, and ciphertext.
-- Signed account device manifests, peer authority continuity/monitor positions,
-  and durable homeserver transparency checkpoints with chronological,
-  current-map, consistency, and operator-signature verification.
+- Signed account manifests, complete hash-linked history, durable TOFU/
+  verified/quarantined authority pins, and pair-bound safety numbers.
 - Endpoint paths, request/response JSON, exact-device recovery, durable outbox,
   mailbox journal/decrypt/ack ordering, and history mapping.
 - Note to Self routing and encrypted sent-transcript synchronization for all
@@ -67,17 +66,9 @@ openNativeChatClient(
   username,
   serverName,
   accountMasterKey,
-  transparencyPolicy,
   authenticatedHttpClient
 )
 ```
-
-`transparencyPolicy` is application-supplied and contains one or more
-`ChatTransparencyScopePolicy` records: the scope (`local` or a federation
-server name) and pinned operator key id/public key. Production apps should
-bundle or securely fetch the local deployment policy independently of the chat
-API. Unknown remote scopes use durable first-observation pinning until an
-authenticated remote policy distribution mechanism lands.
 
 The FFI crate has only a SQLCipher feature and fails if SQLCipher is absent or
 the key cannot unlock an existing database. Input vectors are zeroized in Rust
@@ -93,10 +84,11 @@ documented in the native plans:
 
 Opening is restart-safe. A partially registered install reuses its persisted
 registration request; an installed device reopens without registering again.
-The supplied policy is validated before the worker opens, and every verified
-operator observation is committed with the manifest checkpoint. The
-call publishes or confirms the account-signed local device manifest before
-returning.
+The call publishes or confirms the account-signed local manifest before
+returning. A server response can create only a gray TOFU pin. Native UI obtains
+`safetyNumber(peer)` and passes the scanned peer QR to
+`verifySafetyNumber(peer, payload)`; Rust performs the exact comparison and
+atomic promotion. There is no blind native `verifyAuthority` operation.
 
 ## Generated API
 
@@ -105,7 +97,7 @@ The exported object currently covers the phase-2b native engine contract:
 - `sendText`, `reconcile`, `history`, `pendingSendCount`
 - `maintainPrekeys`, `syncManifest`
 - `inboundAttention`, `quarantineInbound`, `resolveDeadLetter`
-- `verifyAuthority`
+- `safetyNumber`, `verifySafetyNumber`
 - `shutdown` for logout/account-lock cleanup
 
 Swift receives `async throws`; Kotlin receives `suspend` functions and typed

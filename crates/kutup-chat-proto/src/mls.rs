@@ -7,21 +7,23 @@
 use std::collections::BTreeSet;
 
 use base64::Engine as _;
-use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use hkdf::Hkdf;
-use p256::ecdsa::{signature::Verifier as _, Signature as P256Signature, VerifyingKey as P256Key};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
-use crate::{AccountAddress, DeviceManifest, ManifestTransparencyProof};
+use crate::{AccountAddress, AccountManifestV1};
 
 pub const MLS_PROTOCOL_VERSION: u16 = 1;
 pub const MLS_ORDERING_SERVICE_POLICY_VERSION: u16 = 1;
 pub const MLS_GROUP_AUTHORIZATION_POLICY_VERSION: u16 = 1;
 pub const MLS_GROUP_CRYPTOGRAPHIC_POLICY_VERSION: u16 = 1;
 pub const MLS_INVITATION_FEEDBACK_VERSION: u16 = 1;
-pub const MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256: u16 = 0x0002;
+pub const MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519: u16 = 0x0003;
+pub const MAX_MLS_GROUP_ACCOUNTS: usize = 256;
+pub const MAX_MLS_DEVICES_PER_ACCOUNT: usize = 10;
+pub const MAX_MLS_GROUP_LEAVES: usize = 2_560;
 /// Private-use RFC 9420 GroupContext extension carrying Kutup's
 /// group-encrypted authorization/control state. Every V1 KeyPackage advertises
 /// this extension and every V1 group requires it.
@@ -38,7 +40,7 @@ const MAX_ANONYMOUS_ENVELOPES: usize = 32;
 const MAX_AUTHORITY_BOOTSTRAP_COMMITS_PER_PAGE: usize = 64;
 const MAX_AUTHORITY_BOOTSTRAP_PAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_MEMBERSHIP_DELIVERY_BYTES: usize = 8 * 1024 * 1024;
-const MAX_MEMBERSHIP_ENVELOPES: usize = 4096;
+const MAX_MEMBERSHIP_ENVELOPES: usize = MAX_MLS_GROUP_LEAVES;
 
 mod conversation;
 pub use conversation::*;
@@ -77,10 +79,19 @@ fn validate_hash(name: &str, value: &str) -> Result<[u8; 32], String> {
         .map_err(|_| format!("{name} has the wrong length"))
 }
 
-fn validate_uncompressed_p256(name: &str, value: &str) -> Result<(), String> {
-    let bytes = decode_canonical_base64(name, value, 65, 65)?;
-    if bytes.first() != Some(&4) || p256::PublicKey::from_sec1_bytes(&bytes).is_err() {
-        return Err(format!("{name} must be a valid uncompressed P-256 point"));
+fn validate_ed25519_public_key(name: &str, value: &str) -> Result<(), String> {
+    let bytes: [u8; 32] = decode_canonical_base64(name, value, 32, 32)?
+        .try_into()
+        .map_err(|_| format!("{name} must be a 32-byte Ed25519 public key"))?;
+    VerifyingKey::from_bytes(&bytes)
+        .map(|_| ())
+        .map_err(|_| format!("{name} must be a valid Ed25519 public key"))
+}
+
+fn validate_x25519_public_key(name: &str, value: &str) -> Result<(), String> {
+    let bytes = decode_canonical_base64(name, value, 32, 32)?;
+    if bytes.iter().all(|byte| *byte == 0) {
+        return Err(format!("{name} must not be the all-zero X25519 key"));
     }
     Ok(())
 }

@@ -187,12 +187,12 @@ kutup/
 │   ├── kutup-cli/           # The `kutup` CLI (clap)
 │   │   └── src/{commands,api,session,syncengine,transfer}/  # commands, HTTP client, session store, sync
 │   └── kutup-crypto/        # Shared E2EE primitives (dryoc + RustCrypto)
-│       ├── src/{kdf,secretbox,sealedbox,stream,asset,envelope,mnemonic}.rs
+│       ├── src/{kdf,account_envelope,drive_envelope,drive_object,named_share,stream,envelope}.rs
 │       └── tests/vectors/   # Checked-in byte-parity vectors
 ├── frontend/
 │   ├── src/
 │   │   ├── api/client.ts    # Axios instance with auth interceptors
-│   │   ├── crypto/          # All libsodium wrappers (symmetric, asymmetric, KDF, mnemonic)
+│   │   ├── crypto/          # Thin Rust/WASM format adapters + primitive-only stream adapter
 │   │   ├── collab/          # Envelope, transport, AEAD frame helpers (collab WS layer)
 │   │   ├── components/editors/
 │   │   │   ├── TextCollabEditor.tsx       # Notes / code (CodeMirror 6 + Yjs)
@@ -200,7 +200,7 @@ kutup/
 │   │   │   └── whiteboard/WhiteboardEditor.tsx  # .excalidraw (Excalidraw + last-write-wins)
 │   │   ├── pages/           # Route-level components (Drive, FileEditorPage, Settings, Admin, …)
 │   │   ├── store/           # Redux slices (auth state)
-│   │   └── workers/         # Web Worker for Argon2id KDF
+│   │   └── workers/         # Web Worker for Rust/WASM Argon2id KDF
 │   ├── public/onlyoffice/   # CryptPad-pinned OnlyOffice bundle (gitignored; install via script)
 │   └── vite.config.ts       # Dev server proxy config
 │   (CLI commands: register, login, ls, upload, download, sync, share, versions, devices, 2fa, pub, mv, color;

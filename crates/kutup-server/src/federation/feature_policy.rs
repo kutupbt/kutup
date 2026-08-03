@@ -5,9 +5,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use kutup_chat_proto::{
-    ChatTransparencyPolicyV1, MlsOrderingServicePolicyV1, SealedSenderServicePolicyV1,
-};
+use kutup_chat_proto::{MlsOrderingServicePolicyV1, SealedSenderServicePolicyV1};
 use kutup_federation_proto::{
     FederatedFeaturePolicyEnvelopeV1, FederatedFeaturePolicyHistoryV1,
     FederatedFeaturePolicyTypeV1, FederationIdentityDocumentV1,
@@ -449,7 +447,6 @@ fn configured(state: &AppState) -> AppResult<&FederationStack> {
 
 fn parse_feature(value: &str) -> AppResult<FederatedFeaturePolicyTypeV1> {
     match value {
-        "chat-transparency" => Ok(FederatedFeaturePolicyTypeV1::ChatTransparency),
         "sealed-sender" => Ok(FederatedFeaturePolicyTypeV1::SealedSenderService),
         "mls-ordering" => Ok(FederatedFeaturePolicyTypeV1::MlsOrderingService),
         _ => Err(AppError::not_found("unknown feature policy type")),
@@ -458,7 +455,6 @@ fn parse_feature(value: &str) -> AppResult<FederatedFeaturePolicyTypeV1> {
 
 fn feature_name(value: FederatedFeaturePolicyTypeV1) -> &'static str {
     match value {
-        FederatedFeaturePolicyTypeV1::ChatTransparency => "chat-transparency",
         FederatedFeaturePolicyTypeV1::SealedSenderService => "sealed-sender",
         FederatedFeaturePolicyTypeV1::MlsOrderingService => "mls-ordering",
     }
@@ -469,9 +465,6 @@ fn validate_feature_payload(
     payload: &[u8],
 ) -> anyhow::Result<()> {
     match feature_type {
-        FederatedFeaturePolicyTypeV1::ChatTransparency => {
-            ChatTransparencyPolicyV1::from_canonical_bytes(payload).map_err(anyhow::Error::msg)?;
-        }
         FederatedFeaturePolicyTypeV1::SealedSenderService => {
             SealedSenderServicePolicyV1::from_canonical_bytes(payload)
                 .map_err(anyhow::Error::msg)?;

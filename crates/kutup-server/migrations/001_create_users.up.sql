@@ -3,14 +3,16 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE TABLE users (
     id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email                   TEXT NOT NULL UNIQUE,
-    -- Encrypted key material (base64-encoded ciphertext)
-    encrypted_master_key    TEXT NOT NULL,
-    master_key_nonce        TEXT NOT NULL,
-    encrypted_recovery_key  TEXT NOT NULL,
-    recovery_key_nonce      TEXT NOT NULL,
-    encrypted_private_key   TEXT NOT NULL,
-    private_key_nonce       TEXT NOT NULL,
+    -- Canonical base64 AccountEnvelopeV1 values. Each envelope carries its
+    -- suite, purpose, account context, nonce and exact ciphertext length.
+    master_key_envelope       TEXT NOT NULL,
+    recovery_key_envelope     TEXT NOT NULL,
+    drive_private_key_envelope TEXT NOT NULL,
     public_key              TEXT NOT NULL,
+    account_authority_public_key TEXT NOT NULL,
+    account_authority_key_id CHAR(64) NOT NULL,
+    account_incarnation_id CHAR(64) NOT NULL,
+    drive_signing_public_key TEXT NOT NULL,
     -- Complete per-account password-protection suite. Suite zero plus an
     -- empty salt is reserved for an administrator-created first-login account.
     account_protection_suite SMALLINT NOT NULL CHECK (account_protection_suite IN (0, 1)),
@@ -31,6 +33,8 @@ CREATE TABLE users (
     is_active               BOOLEAN NOT NULL DEFAULT true,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    ,CHECK (account_authority_key_id = '' OR account_authority_key_id ~ '^[0-9a-f]{64}$')
+    ,CHECK (account_incarnation_id = '' OR account_incarnation_id ~ '^[0-9a-f]{64}$')
 );
 
 CREATE INDEX idx_users_email ON users(email);

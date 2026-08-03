@@ -37,14 +37,15 @@ fn authority_set(count: usize) -> (MlsAuthoritySetV1, BTreeMap<String, SigningKe
 }
 
 #[test]
-fn suite_is_exactly_wire_suite_zero_x_two() {
+fn suite_is_exactly_wire_suite_zero_x_three() {
     assert_eq!(
-        serde_json::to_string(&MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256).unwrap(),
-        "2"
+        serde_json::to_string(&MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519)
+            .unwrap(),
+        "3"
     );
     assert!(
-        serde_json::from_str::<MlsCipherSuiteId>("1").is_err(),
-        "the old direct-chat suite must not be accepted as MLS"
+        serde_json::from_str::<MlsCipherSuiteId>("2").is_err(),
+        "the preproduction P-256 suite must not be accepted as MLS"
     );
 }
 
@@ -151,11 +152,9 @@ fn owner_candidate_has_a_stable_signing_vector_and_sender_binding() {
 
 #[test]
 fn owner_approval_cannot_be_replayed_for_a_substituted_transition() {
-    use p256::ecdsa::signature::Signer as _;
-
     let conversation_id = Uuid::from_u128(0x2234);
-    let proposer_key = p256::ecdsa::SigningKey::from_bytes((&[7u8; 32]).into()).unwrap();
-    let proposer_public = proposer_key.verifying_key().to_encoded_point(false);
+    let proposer_key = SigningKey::from_bytes(&[7u8; 32]);
+    let proposer_public = proposer_key.verifying_key();
     let payload = b"encrypted owner transition";
     let mut proposal = MlsControlProposalV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
@@ -172,9 +171,9 @@ fn owner_approval_cannot_be_replayed_for_a_substituted_transition() {
         created_at: 1_700_000_001,
         proposer_signature: String::new(),
     };
-    let signature: p256::ecdsa::Signature = proposer_key.sign(&proposal.signing_bytes().unwrap());
+    let signature: Signature = proposer_key.sign(&proposal.signing_bytes().unwrap());
     proposal.proposer_signature =
-        base64::engine::general_purpose::STANDARD.encode(signature.to_der().as_bytes());
+        base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
 
     let owner_key = SigningKey::from_bytes(&[11; 32]);
     let owner = MlsOwnerV1 {
@@ -261,8 +260,6 @@ fn owner_approval_cannot_be_replayed_for_a_substituted_transition() {
 
 #[test]
 fn owner_approval_request_has_one_exact_private_transition_vector() {
-    use p256::ecdsa::signature::Signer as _;
-
     let conversation_id = Uuid::from_u128(0x3234);
     let proposal_id = Uuid::from_u128(0x3235);
     let owner_key = SigningKey::from_bytes(&[21; 32]);
@@ -313,8 +310,8 @@ fn owner_approval_request_has_one_exact_private_transition_vector() {
         },
         delivery_transition: transition,
     };
-    let proposer_key = p256::ecdsa::SigningKey::from_bytes((&[22u8; 32]).into()).unwrap();
-    let proposer_public = proposer_key.verifying_key().to_encoded_point(false);
+    let proposer_key = SigningKey::from_bytes(&[22u8; 32]);
+    let proposer_public = proposer_key.verifying_key();
     let payload = b"encrypted exact owner transition";
     let mut proposal = MlsControlProposalV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
@@ -331,9 +328,9 @@ fn owner_approval_request_has_one_exact_private_transition_vector() {
         created_at: 1_700_000_100,
         proposer_signature: String::new(),
     };
-    let signature: p256::ecdsa::Signature = proposer_key.sign(&proposal.signing_bytes().unwrap());
+    let signature: Signature = proposer_key.sign(&proposal.signing_bytes().unwrap());
     proposal.proposer_signature =
-        base64::engine::general_purpose::STANDARD.encode(signature.to_der().as_bytes());
+        base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
     let request = MlsOwnerApprovalRequestV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
         owner_set_sequence: 4,
@@ -351,7 +348,7 @@ fn owner_approval_request_has_one_exact_private_transition_vector() {
     request.validate().unwrap();
     assert_eq!(
         request.request_hash().unwrap(),
-        "10b612e60ba0e5214a464b6d39b61019c30b5ef1273df12935d5d26d8e92c7a0"
+        "7fa97d088d2bd358b895f4f267bcc6f0a41c0d38ac49a1f0cf1f757c94292353"
     );
     let encoded = serde_json::to_vec(&request).unwrap();
     let decoded: MlsOwnerApprovalRequestV1 = serde_json::from_slice(&encoded).unwrap();
@@ -367,10 +364,9 @@ fn owner_approval_request_has_one_exact_private_transition_vector() {
     let mut close_proposal = request.proposal.clone();
     close_proposal.action_type = MlsControlActionTypeV1::CloseConversation;
     close_proposal.proposer_signature.clear();
-    let signature: p256::ecdsa::Signature =
-        proposer_key.sign(&close_proposal.signing_bytes().unwrap());
+    let signature: Signature = proposer_key.sign(&close_proposal.signing_bytes().unwrap());
     close_proposal.proposer_signature =
-        base64::engine::general_purpose::STANDARD.encode(signature.to_der().as_bytes());
+        base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
     let close_request = MlsOwnerApprovalRequestV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
         owner_set_sequence: 4,
@@ -424,8 +420,6 @@ fn owner_approval_request_has_one_exact_private_transition_vector() {
 
 #[test]
 fn incarnation_recovery_is_owner_bound_append_only_and_destination_private() {
-    use p256::ecdsa::signature::Signer as _;
-
     let conversation_id = Uuid::from_u128(0x7331);
     let proposal_id = Uuid::from_u128(0x7332);
     let owner_key = SigningKey::from_bytes(&[31; 32]);
@@ -459,7 +453,7 @@ fn incarnation_recovery_is_owner_bound_append_only_and_destination_private() {
         incarnation: 4,
         mls_group_id: base64::engine::general_purpose::STANDARD.encode([44; 32]),
         kind: MlsConversationKindV1::Group,
-        suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+        suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
         roster_commitment: roster_hash.clone(),
         member_count: 2,
         authority_set: authorities,
@@ -526,8 +520,8 @@ fn incarnation_recovery_is_owner_bound_append_only_and_destination_private() {
             .collect(),
     };
     let recovery_digest = plan.transition_digest().unwrap();
-    let proposer_key = p256::ecdsa::SigningKey::from_bytes((&[32u8; 32]).into()).unwrap();
-    let proposer_public = proposer_key.verifying_key().to_encoded_point(false);
+    let proposer_key = SigningKey::from_bytes(&[32u8; 32]);
+    let proposer_public = proposer_key.verifying_key();
     let payload = b"encrypted recovery approval context";
     let mut proposal = MlsControlProposalV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
@@ -544,9 +538,9 @@ fn incarnation_recovery_is_owner_bound_append_only_and_destination_private() {
         created_at: 1_700_000_999,
         proposer_signature: String::new(),
     };
-    let signature: p256::ecdsa::Signature = proposer_key.sign(&proposal.signing_bytes().unwrap());
+    let signature: Signature = proposer_key.sign(&proposal.signing_bytes().unwrap());
     proposal.proposer_signature =
-        base64::engine::general_purpose::STANDARD.encode(signature.to_der().as_bytes());
+        base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
     let proposal_hash = proposal.proposal_hash().unwrap();
     let mut approval = MlsOwnerApprovalV1 {
         conversation_id,
@@ -584,7 +578,7 @@ fn incarnation_recovery_is_owner_bound_append_only_and_destination_private() {
     request.validate_shape().unwrap();
     assert_eq!(
         recovery_digest,
-        "27ea6ac37236364770fb7641513a090e95a9d7d1b492ef94f58f73ab1b2a3790"
+        "b24eaf5befedb52be1e43f25da2a419ee798d6126466549360331640ecdfa5ff"
     );
 
     let mut substituted = request.clone();
@@ -632,7 +626,7 @@ fn direct_roster_requires_exact_participant_authorities() {
             incarnation: 1,
             mls_group_id: base64::engine::general_purpose::STANDARD.encode([7u8; 16]),
             kind: MlsConversationKindV1::Direct,
-            suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+            suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
             roster_commitment: roster_commitment(&members).unwrap(),
             member_count: 2,
             authority_set: authorities,
@@ -802,8 +796,6 @@ fn authority_change_has_a_stable_composite_digest_and_rejects_roster_changes() {
 
 #[test]
 fn new_participant_bootstrap_requires_complete_qc_history_and_private_digest() {
-    use p256::ecdsa::signature::Signer as _;
-
     let conversation_id = Uuid::from_u128(81);
     let proposal_id = Uuid::from_u128(82);
     let (authorities, authority_keys) = authority_set(2);
@@ -892,8 +884,8 @@ fn new_participant_bootstrap_requires_complete_qc_history_and_private_digest() {
             },
         ],
     };
-    let proposer_key = p256::ecdsa::SigningKey::from_bytes((&[19u8; 32]).into()).unwrap();
-    let proposer_public = proposer_key.verifying_key().to_encoded_point(false);
+    let proposer_key = SigningKey::from_bytes(&[19u8; 32]);
+    let proposer_public = proposer_key.verifying_key();
     let payload = b"encrypted membership change";
     let mut proposal = MlsControlProposalV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
@@ -910,9 +902,9 @@ fn new_participant_bootstrap_requires_complete_qc_history_and_private_digest() {
         created_at: 1,
         proposer_signature: String::new(),
     };
-    let signature: p256::ecdsa::Signature = proposer_key.sign(&proposal.signing_bytes().unwrap());
+    let signature: Signature = proposer_key.sign(&proposal.signing_bytes().unwrap());
     proposal.proposer_signature =
-        base64::engine::general_purpose::STANDARD.encode(signature.to_der().as_bytes());
+        base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
     let block = MlsControlBlockV1 {
         conversation_id,
         incarnation: 1,
@@ -972,7 +964,7 @@ fn new_participant_bootstrap_requires_complete_qc_history_and_private_digest() {
             incarnation: 1,
             mls_group_id: base64::engine::general_purpose::STANDARD.encode([9u8; 16]),
             kind: MlsConversationKindV1::Direct,
-            suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+            suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
             roster_commitment: previous_roster,
             member_count: 2,
             authority_set: authorities,
@@ -1056,8 +1048,6 @@ fn ordering_certificate_requires_distinct_matching_precommits() {
 
 #[test]
 fn new_authority_bootstrap_requires_old_quorum_and_exact_history() {
-    use p256::ecdsa::signature::Signer as _;
-
     let conversation_id = Uuid::from_u128(31);
     let (current, current_keys) = authority_set(2);
     let (new_authority, _) = authority("a2.example", 9);
@@ -1092,8 +1082,8 @@ fn new_authority_bootstrap_requires_old_quorum_and_exact_history() {
         delivery_transition,
     };
 
-    let proposer_key = p256::ecdsa::SigningKey::from_bytes((&[17u8; 32]).into()).unwrap();
-    let proposer_public = proposer_key.verifying_key().to_encoded_point(false);
+    let proposer_key = SigningKey::from_bytes(&[17u8; 32]);
+    let proposer_public = proposer_key.verifying_key();
     let payload = b"encrypted authority transition";
     let mut proposal = MlsControlProposalV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
@@ -1110,9 +1100,9 @@ fn new_authority_bootstrap_requires_old_quorum_and_exact_history() {
         created_at: 1,
         proposer_signature: String::new(),
     };
-    let signature: p256::ecdsa::Signature = proposer_key.sign(&proposal.signing_bytes().unwrap());
+    let signature: Signature = proposer_key.sign(&proposal.signing_bytes().unwrap());
     proposal.proposer_signature =
-        base64::engine::general_purpose::STANDARD.encode(signature.to_der().as_bytes());
+        base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
     let block = MlsControlBlockV1 {
         conversation_id,
         incarnation: 1,
@@ -1163,7 +1153,7 @@ fn new_authority_bootstrap_requires_old_quorum_and_exact_history() {
             incarnation: 1,
             mls_group_id: base64::engine::general_purpose::STANDARD.encode([3u8; 16]),
             kind: MlsConversationKindV1::Direct,
-            suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+            suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
             roster_commitment: "ab".repeat(32),
             member_count: 2,
             authority_set: current.clone(),
@@ -1204,10 +1194,8 @@ fn new_authority_bootstrap_requires_old_quorum_and_exact_history() {
 
 #[test]
 fn control_proposal_is_bound_to_the_pseudonymous_mls_credential() {
-    use p256::ecdsa::signature::Signer as _;
-
-    let signing_key = p256::ecdsa::SigningKey::from_bytes((&[7u8; 32]).into()).unwrap();
-    let public_key = signing_key.verifying_key().to_encoded_point(false);
+    let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+    let public_key = signing_key.verifying_key();
     let public_key = public_key.as_bytes();
     let mut proposal = MlsControlProposalV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
@@ -1224,17 +1212,15 @@ fn control_proposal_is_bound_to_the_pseudonymous_mls_credential() {
         created_at: 1,
         proposer_signature: String::new(),
     };
-    let signature: p256::ecdsa::Signature = signing_key.sign(&proposal.signing_bytes().unwrap());
+    let signature: Signature = signing_key.sign(&proposal.signing_bytes().unwrap());
     proposal.proposer_signature =
-        base64::engine::general_purpose::STANDARD.encode(signature.to_der().as_bytes());
+        base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
     proposal.verify().unwrap();
 
     let mut replaced = proposal.clone();
     replaced.proposer_credential_public_key = base64::engine::general_purpose::STANDARD.encode(
-        p256::ecdsa::SigningKey::from_bytes((&[8u8; 32]).into())
-            .unwrap()
+        SigningKey::from_bytes(&[8u8; 32])
             .verifying_key()
-            .to_encoded_point(false)
             .as_bytes(),
     );
     assert!(replaced.verify().is_err());
@@ -1260,20 +1246,16 @@ fn pending_policy_is_bounded_and_strictest_wins() {
 
 #[test]
 fn anonymous_submission_has_stable_aad_and_hides_conversation_id() {
-    let encapsulation_key = p256::ecdsa::SigningKey::from_bytes((&[4u8; 32]).into())
-        .unwrap()
-        .verifying_key()
-        .to_encoded_point(false);
+    let encapsulation_key = [4u8; 32];
     let submission = AnonymousMlsSubmissionV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
         recipient: "alice@example.org".parse().unwrap(),
         send_id: Uuid::from_u128(9),
         capability: base64::engine::general_purpose::STANDARD.encode([7u8; 16]),
-        suite: MlsAnonymousDeliverySuiteV1::DhKemP256HkdfSha256Aes128Gcm,
+        suite: MlsAnonymousDeliverySuiteV1::DhKemX25519HkdfSha256ChaCha20Poly1305,
         envelopes: vec![AnonymousMlsDeviceEnvelopeV1 {
             device_id: 1,
-            encapsulated_key: base64::engine::general_purpose::STANDARD
-                .encode(encapsulation_key.as_bytes()),
+            encapsulated_key: base64::engine::general_purpose::STANDARD.encode(encapsulation_key),
             ciphertext: base64::engine::general_purpose::STANDARD.encode([5u8; 17]),
         }],
     };
@@ -1287,21 +1269,17 @@ fn anonymous_submission_has_stable_aad_and_hides_conversation_id() {
 }
 
 #[test]
-fn anonymous_key_package_checkpoint_cursor_is_lossless_and_canonical() {
-    let mut request = AnonymousMlsKeyPackageRequestV1 {
+fn anonymous_key_package_request_has_no_server_proof_cursor() {
+    let request = AnonymousMlsKeyPackageRequestV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
         recipient: "alice@example.org".parse().unwrap(),
         capability: base64::engine::general_purpose::STANDARD.encode([7u8; 16]),
-        transparency_tree_size: u64::MAX.to_string(),
     };
     request.validate().unwrap();
-    assert_eq!(request.known_tree_size().unwrap(), u64::MAX);
-    assert_eq!(
-        serde_json::to_value(&request).unwrap()["transparencyTreeSize"],
-        u64::MAX.to_string()
-    );
-    request.transparency_tree_size = "01".into();
-    assert!(request.validate().is_err());
+    assert!(serde_json::to_value(&request)
+        .unwrap()
+        .get("transparencyTreeSize")
+        .is_none());
 }
 
 #[test]
@@ -1345,12 +1323,13 @@ fn ordering_policy_requires_production_group_capacity() {
     let policy = MlsOrderingServicePolicyV1 {
         policy_version: MLS_ORDERING_SERVICE_POLICY_VERSION,
         canonical_domain: "orderer.example".into(),
-        suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
-        anonymous_delivery_suite: MlsAnonymousDeliverySuiteV1::DhKemP256HkdfSha256Aes128Gcm,
+        suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
+        anonymous_delivery_suite:
+            MlsAnonymousDeliverySuiteV1::DhKemX25519HkdfSha256ChaCha20Poly1305,
         control_signing_key_id: authority.key_id,
         control_signing_public_key: authority.public_key,
         accepts_group_ordering: true,
-        maximum_group_members: 1000,
+        maximum_group_members: 256,
         maximum_authorities: 64,
         maximum_control_payload_bytes: 1024 * 1024,
         pending_message_requests: PendingMessageRequestPolicyV1::default(),
@@ -1415,7 +1394,7 @@ fn private_control_and_client_history_have_stable_canonical_vectors() {
         incarnation: 1,
         mls_group_id: base64::engine::general_purpose::STANDARD.encode([6; 16]),
         kind: MlsConversationKindV1::Group,
-        suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+        suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
         roster_commitment: roster_commitment(&roster).unwrap(),
         member_count: 1,
         authority_set: authorities,
@@ -1438,11 +1417,11 @@ fn private_control_and_client_history_have_stable_canonical_vectors() {
     );
     assert_eq!(
         hex::encode(Sha256::digest(&private_bytes)),
-        "247a283bfb4cf3b2bb3d65f2a48ee3f0f5b4a43ab5ac791598161edb80dfdd66"
+        "37d09d4995b3112593e10bffb17b088add934f7ee9f506525390f9590ca7ab8f"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&page_bytes)),
-        "8c9cc89d2276c5a1b4e73e399ec7755b5c36a1d473d6c3493238ed3211f505c4"
+        "6a368a890586365f915fe104b035bd32d3ed2b59ad694e96f38edaf56cfd24aa"
     );
     let pretty = serde_json::to_vec_pretty(&page).unwrap();
     assert!(MlsClientControlHistoryPageV1::from_canonical_bytes(&pretty).is_err());
@@ -1476,14 +1455,12 @@ fn private_group_policies_have_stable_canonical_vectors() {
     );
     assert_eq!(
         cryptographic.policy_digest().unwrap(),
-        "af88bc6a47502751ad485059e6373d99352d225b68a9cef177f0969c641a73a4"
+        "02022f987460f6317c4b9b9627c941a29e1de1aeb1c36538b4d61ff09c0d3581"
     );
 }
 
 #[test]
 fn client_control_history_replays_exactly_across_page_boundaries() {
-    use p256::ecdsa::signature::Signer as _;
-
     let (authorities, authority_keys) = authority_set(1);
     let authority = &authorities.authorities[0];
     let authority_key = &authority_keys[&authority.domain];
@@ -1510,7 +1487,7 @@ fn client_control_history_replays_exactly_across_page_boundaries() {
         incarnation: 1,
         mls_group_id: base64::engine::general_purpose::STANDARD.encode([7; 16]),
         kind: MlsConversationKindV1::Group,
-        suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+        suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
         roster_commitment: roster_commitment(&roster).unwrap(),
         member_count: 1,
         authority_set: authorities.clone(),
@@ -1518,8 +1495,8 @@ fn client_control_history_replays_exactly_across_page_boundaries() {
         initial_epoch: 0,
         created_at: 1_700_000_000,
     };
-    let proposer_key = p256::ecdsa::SigningKey::from_bytes((&[46; 32]).into()).unwrap();
-    let proposer_public = proposer_key.verifying_key().to_encoded_point(false);
+    let proposer_key = SigningKey::from_bytes(&[46; 32]);
+    let proposer_public = proposer_key.verifying_key();
     let proposer_id = hex::encode(Sha256::digest(proposer_public.as_bytes()));
     let proposer_public =
         base64::engine::general_purpose::STANDARD.encode(proposer_public.as_bytes());
@@ -1541,10 +1518,9 @@ fn client_control_history_replays_exactly_across_page_boundaries() {
             created_at: 1_700_000_000 + height as i64,
             proposer_signature: String::new(),
         };
-        let signature: p256::ecdsa::Signature =
-            proposer_key.sign(&proposal.signing_bytes().unwrap());
+        let signature: Signature = proposer_key.sign(&proposal.signing_bytes().unwrap());
         proposal.proposer_signature =
-            base64::engine::general_purpose::STANDARD.encode(signature.to_der().as_bytes());
+            base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
         let block = MlsControlBlockV1 {
             conversation_id,
             incarnation: 1,
@@ -1610,7 +1586,7 @@ fn client_control_history_replays_exactly_across_page_boundaries() {
         .proposal
         .proposer_signature
         .clear();
-    let forked_proposal_signature: p256::ecdsa::Signature = proposer_key.sign(
+    let forked_proposal_signature: Signature = proposer_key.sign(
         &forked_commit
             .finalized
             .block
@@ -1619,8 +1595,7 @@ fn client_control_history_replays_exactly_across_page_boundaries() {
             .unwrap(),
     );
     forked_commit.finalized.block.proposal.proposer_signature =
-        base64::engine::general_purpose::STANDARD
-            .encode(forked_proposal_signature.to_der().as_bytes());
+        base64::engine::general_purpose::STANDARD.encode(forked_proposal_signature.to_bytes());
     let forked_block_hash = forked_commit.finalized.block.block_hash().unwrap();
     let forked_vote = &mut forked_commit.finalized.quorum_certificate.votes[0];
     forked_vote.block_hash = forked_block_hash.clone();

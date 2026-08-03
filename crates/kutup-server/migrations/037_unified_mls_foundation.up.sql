@@ -2,22 +2,16 @@
 -- groups. This migration is additive: the legacy libsignal path remains
 -- unadvertised for MLS until the complete client and federation cutover lands.
 
-ALTER TABLE federation_feature_policy_documents
-    DROP CONSTRAINT federation_feature_policy_documents_feature_type_check;
-ALTER TABLE federation_feature_policy_documents
-    ADD CONSTRAINT federation_feature_policy_documents_feature_type_check
-    CHECK (feature_type IN (1, 2, 3));
-
--- A chat-capable device has a distinct P-256 MLS credential and a distinct
--- P-256 anonymous-delivery HPKE key. Both are bound into the accepted signed
+-- A chat-capable device has a distinct Ed25519 MLS credential and a distinct
+-- X25519 anonymous-delivery HPKE key. Both are bound into the accepted signed
 -- manifest; the server cannot replace either key independently.
 CREATE TABLE chat_mls_devices (
     user_id                       UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     device_id                     INTEGER     NOT NULL CHECK (device_id BETWEEN 1 AND 127),
     manifest_version              BIGINT      NOT NULL CHECK (manifest_version > 0),
-    suite                         SMALLINT    NOT NULL CHECK (suite = 2),
-    credential_public_key         BYTEA       NOT NULL CHECK (octet_length(credential_public_key) = 65),
-    anonymous_delivery_public_key BYTEA       NOT NULL CHECK (octet_length(anonymous_delivery_public_key) = 65),
+    suite                         SMALLINT    NOT NULL CHECK (suite = 3),
+    credential_public_key         BYTEA       NOT NULL CHECK (octet_length(credential_public_key) = 32),
+    anonymous_delivery_public_key BYTEA       NOT NULL CHECK (octet_length(anonymous_delivery_public_key) = 32),
     name                          TEXT        NOT NULL DEFAULT '',
     created_at                    TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen_at                  TIMESTAMPTZ,
@@ -31,7 +25,7 @@ CREATE TABLE chat_mls_key_packages (
     device_id           INTEGER     NOT NULL,
     key_package_ref     CHAR(64)    NOT NULL,
     manifest_version    BIGINT      NOT NULL CHECK (manifest_version > 0),
-    suite               SMALLINT    NOT NULL CHECK (suite = 2),
+    suite               SMALLINT    NOT NULL CHECK (suite = 3),
     key_package          BYTEA       NOT NULL CHECK (octet_length(key_package) BETWEEN 1 AND 65536),
     expires_at           TIMESTAMPTZ NOT NULL,
     claimed_at           TIMESTAMPTZ,
@@ -61,9 +55,9 @@ CREATE TABLE chat_mls_incarnations (
     conversation_id       UUID        NOT NULL REFERENCES chat_mls_conversations ON DELETE CASCADE,
     incarnation           BIGINT      NOT NULL CHECK (incarnation > 0),
     mls_group_id           BYTEA       NOT NULL CHECK (octet_length(mls_group_id) BETWEEN 16 AND 255),
-    suite                  SMALLINT    NOT NULL CHECK (suite = 2),
+    suite                  SMALLINT    NOT NULL CHECK (suite = 3),
     roster_commitment      CHAR(64)    NOT NULL,
-    member_count           INTEGER     NOT NULL CHECK (member_count BETWEEN 1 AND 1000),
+    member_count           INTEGER     NOT NULL CHECK (member_count BETWEEN 1 AND 256),
     genesis_participant_domains JSONB  NOT NULL CHECK (jsonb_typeof(genesis_participant_domains) = 'array'),
     participant_domains    JSONB       NOT NULL CHECK (jsonb_typeof(participant_domains) = 'array'),
     authority_set_sequence BIGINT      NOT NULL CHECK (authority_set_sequence > 0),

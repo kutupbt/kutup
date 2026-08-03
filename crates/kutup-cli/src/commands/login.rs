@@ -6,7 +6,10 @@ use base64::Engine;
 use crate::api::{Client, LoginRequest, TotpRequest};
 use crate::commands::prompt_line;
 use crate::session::{Session, Store};
-use kutup_crypto::{kdf, secretbox};
+use kutup_crypto::{
+    account_envelope::{self, AccountEnvelopePurpose},
+    kdf,
+};
 
 pub fn run(
     profile: &str,
@@ -101,16 +104,18 @@ pub(crate) fn login_with_password(
 
     // Step 5: derive the KEK and decrypt the master + private keys.
     eprintln!("Decrypting vault…");
-    let master_key = secretbox::open_b64(
-        &resp.encrypted_master_key,
-        &resp.master_key_nonce,
+    let master_key = account_envelope::open_b64(
+        &resp.master_key_envelope,
         account_keys.key_encryption_key.as_slice(),
+        AccountEnvelopePurpose::PasswordMasterKey,
+        email,
     )
     .context("decrypt master key")?;
-    let private_key = secretbox::open_b64(
-        &resp.encrypted_private_key,
-        &resp.private_key_nonce,
+    let private_key = account_envelope::open_b64(
+        &resp.drive_private_key_envelope,
         &master_key,
+        AccountEnvelopePurpose::DriveHpkePrivateKey,
+        email,
     )
     .context("decrypt private key")?;
 
@@ -126,10 +131,8 @@ pub(crate) fn login_with_password(
         master_key: b64.encode(&master_key),
         private_key: b64.encode(&private_key),
         public_key: resp.public_key,
-        encrypted_master_key: resp.encrypted_master_key,
-        master_key_nonce: resp.master_key_nonce,
-        encrypted_private_key: resp.encrypted_private_key,
-        private_key_nonce: resp.private_key_nonce,
+        master_key_envelope: resp.master_key_envelope,
+        drive_private_key_envelope: resp.drive_private_key_envelope,
         storage_quota_bytes: resp.storage_quota_bytes,
         storage_used_bytes: resp.storage_used_bytes,
     };

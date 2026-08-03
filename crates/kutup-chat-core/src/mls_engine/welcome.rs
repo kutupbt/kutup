@@ -18,7 +18,7 @@ impl MlsClient {
         if welcome_bytes.is_empty()
             || welcome_bytes.len() > MAX_APPLICATION_BYTES
             || expected_members.is_empty()
-            || expected_members.len() > 1000
+            || expected_members.len() > MAX_MLS_GROUP_LEAVES
         {
             return Err(ChatError::Invalid(
                 "MLS Welcome or expected roster is outside v1 bounds".into(),
@@ -86,7 +86,7 @@ impl MlsClient {
     ///
     /// A server-supplied roster or status label is never trusted here. The
     /// Welcome authenticates the group-private account/role state, callers
-    /// independently bind every device credential through transparency, and
+    /// independently bind every device credential through signed manifest history, and
     /// the protocol verifier replays every signed ordering block from genesis.
     pub async fn join_from_welcome_with_control_history(
         &self,
@@ -101,7 +101,7 @@ impl MlsClient {
         if welcome_bytes.is_empty()
             || welcome_bytes.len() > MAX_APPLICATION_BYTES
             || expected_members.is_empty()
-            || expected_members.len() > 1000
+            || expected_members.len() > MAX_MLS_GROUP_LEAVES
             || history_page_bytes.is_empty()
             || history_page_bytes.len() > 1024
         {
@@ -132,7 +132,7 @@ impl MlsClient {
             .clone();
         if genesis.mls_group_id != BASE64.encode(expected_group_id)
             || genesis.kind != MlsConversationKindV1::Group
-            || genesis.suite != MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256
+            || genesis.suite != MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519
         {
             return Err(ChatError::Trust(
                 "MLS control history genesis differs from the expected group".into(),
@@ -267,8 +267,7 @@ impl MlsClient {
             .genesis
             .genesis_hash()
             .map_err(ChatError::Protocol)?;
-        let (local_address, _) =
-            parse_device_credential_identity(&metadata.credential_identity)?;
+        let (local_address, _) = parse_device_credential_identity(&metadata.credential_identity)?;
         let mut member_joined_epochs = private_control
             .roster
             .iter()
@@ -394,7 +393,7 @@ impl MlsClient {
                 credential_public_key,
             });
         }
-        if claimed_members.is_empty() || claimed_members.len() > 1000 {
+        if claimed_members.is_empty() || claimed_members.len() > MAX_MLS_GROUP_LEAVES {
             return Err(ChatError::Trust(
                 "MLS Welcome roster is outside v1 bounds".into(),
             ));

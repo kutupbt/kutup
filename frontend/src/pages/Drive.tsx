@@ -23,9 +23,12 @@ import {
   type FolderEntry,
 } from '@/upload/uploadFolder'
 import {
-  encrypt, decrypt, generateKey, encryptStream,
-  wrapKeyForRecipient, unwrapKeyFromSender,
-  toBase64, fromBase64,
+  generateKey, encryptStream,
+  toBase64,
+  createFileRecordV1, openFileRecordV1,
+  createOwnedCollectionV1, openOwnedCollectionV1, openSharedCollectionV1,
+  renameOwnedCollectionV1, deriveAccountIdentityKeys, sealNamedShareEnvelope,
+  sealPublicLinkCollectionKeyV1,
 } from '@/crypto'
 import { toast } from 'sonner'
 import { formatBytes } from '@/lib/format'
@@ -149,28 +152,21 @@ export default function Drive() {
   }
 
   async function autoCreateMyFiles(): Promise<Collection> {
-    const collectionKey = await generateKey()
-    const encKey = await encrypt(collectionKey, masterKey!)
-    const nameBytes = new TextEncoder().encode('My Files')
-    const encName = await encrypt(nameBytes, collectionKey)
-    const res = await api.post('/collections/', {
-      encryptedName: toBase64(encName.ciphertext),
-      nameNonce: toBase64(encName.nonce),
-      encryptedKey: toBase64(encKey.ciphertext),
-      encryptedKeyNonce: toBase64(encKey.nonce),
-      parentCollectionId: null,
-    })
+    const created = await createOwnedCollectionV1(masterKey!, auth.userId!, 'My Files', null)
+    await api.post('/collections/', created.payload)
     return {
-      id: res.data.id,
+      id: created.payload.id,
       ownerUserId: auth.userId!,
-      encryptedName: toBase64(encName.ciphertext),
-      nameNonce: toBase64(encName.nonce),
-      encryptedKey: toBase64(encKey.ciphertext),
-      encryptedKeyNonce: toBase64(encKey.nonce),
+      nameEnvelope: created.payload.nameEnvelope,
+      ownerKeyEnvelope: created.payload.ownerKeyEnvelope,
+      keyEpoch: 1,
+      nameRevision: 1,
+      epochStatement: created.payload.epochStatement,
+      epochStatementHash: created.epochStatementHash,
       parentCollectionId: null,
       color: null,
       decryptedName: 'My Files',
-      collectionKey,
+      collectionKey: created.collectionKey,
     }
   }
 
@@ -182,18 +178,38 @@ export default function Drive() {
       dispatch(updateStorageQuota(meRes.data.storageQuotaBytes))
       dispatch(setColor(meRes.data.color || null))
 
-      const res = await api.get('/collections/')
+      const [res, settings, identity] = await Promise.all([
+        api.get('/collections/'),
+        api.get('/auth/settings'),
+        deriveAccountIdentityKeys(toBase64(masterKey)),
+      ])
+      const recipientAccount = `${auth.username}@${settings.data.chat.serverName}`
       const decrypted: Collection[] = await Promise.all(
         res.data.map(async (col: Collection) => {
           try {
-            let collectionKey: Uint8Array
+            let opened: { collectionKey: Uint8Array; name: string }
             if (col.ownerUserId !== auth.userId) {
-              collectionKey = await unwrapKeyFromSender(fromBase64(col.encryptedKey), fromBase64(auth.publicKey!), privateKey!)
+              if (!col.namedShareEnvelope || !col.ownerAccount || !col.ownerIncarnationId
+                || !col.ownerDriveSigningPublicKey || !col.ownerAuthorityPublicKey || !privateKey) {
+                throw new Error('incomplete named share')
+              }
+              opened = await openSharedCollectionV1(
+                { ...col, namedShareEnvelope: col.namedShareEnvelope, ownerAccount: col.ownerAccount,
+                  ownerIncarnationId: col.ownerIncarnationId,
+                  ownerDriveSigningPublicKey: col.ownerDriveSigningPublicKey,
+                  ownerAuthorityPublicKey: col.ownerAuthorityPublicKey },
+                privateKey,
+                recipientAccount,
+                identity.incarnationId,
+              )
             } else {
-              collectionKey = await decrypt(fromBase64(col.encryptedKey), fromBase64(col.encryptedKeyNonce!), masterKey)
+              if (!col.ownerKeyEnvelope) throw new Error('owner key envelope missing')
+              opened = await openOwnedCollectionV1(
+                { ...col, ownerKeyEnvelope: col.ownerKeyEnvelope },
+                masterKey,
+              )
             }
-            const nameBytes = await decrypt(fromBase64(col.encryptedName), fromBase64(col.nameNonce), collectionKey)
-            return { ...col, decryptedName: new TextDecoder().decode(nameBytes), collectionKey }
+            return { ...col, decryptedName: opened.name, collectionKey: opened.collectionKey }
           } catch {
             return { ...col, decryptedName: '[encrypted]' }
           }
@@ -219,19 +235,38 @@ export default function Drive() {
           await Promise.all(
             remoteRes.data.map(async (share: any) => {
               try {
-                const collectionKey = await unwrapKeyFromSender(fromBase64(share.encryptedCollectionKey), fromBase64(auth.publicKey!), privateKey!)
-                const nameBytes = await decrypt(fromBase64(share.encryptedName), fromBase64(share.nameNonce), collectionKey)
+                if (!privateKey) throw new Error('Drive private key is unavailable')
+                const opened = await openSharedCollectionV1({
+                  id: share.remoteCollectionId,
+                  ownerUserId: share.ownerUserId,
+                  nameEnvelope: share.nameEnvelope,
+                  namedShareEnvelope: share.namedShareEnvelope,
+                  keyEpoch: share.keyEpoch,
+                  nameRevision: share.nameRevision,
+                  epochStatement: share.epochStatement,
+                  epochStatementHash: share.epochStatementHash,
+                  ownerAccount: share.ownerAccount,
+                  ownerIncarnationId: share.ownerIncarnationId,
+                  ownerDriveSigningPublicKey: share.ownerSigningPublicKey,
+                  ownerAuthorityPublicKey: share.ownerAuthorityPublicKey,
+                }, privateKey, recipientAccount, identity.incarnationId)
                 return {
-                  id: share.id,
-                  ownerUserId: '',
-                  encryptedName: share.encryptedName,
-                  nameNonce: share.nameNonce,
-                  encryptedKey: share.encryptedCollectionKey,
-                  encryptedKeyNonce: '',
+                  id: share.remoteCollectionId,
+                  ownerUserId: share.ownerUserId,
+                  nameEnvelope: share.nameEnvelope,
+                  namedShareEnvelope: share.namedShareEnvelope,
+                  keyEpoch: share.keyEpoch,
+                  nameRevision: share.nameRevision,
+                  epochStatement: share.epochStatement,
+                  epochStatementHash: share.epochStatementHash,
+                  ownerAccount: share.ownerAccount,
+                  ownerIncarnationId: share.ownerIncarnationId,
+                  ownerDriveSigningPublicKey: share.ownerSigningPublicKey,
+                  ownerAuthorityPublicKey: share.ownerAuthorityPublicKey,
                   parentCollectionId: null,
                   color: null,
-                  decryptedName: new TextDecoder().decode(nameBytes),
-                  collectionKey,
+                  decryptedName: opened.name,
+                  collectionKey: opened.collectionKey,
                   isRemote: true,
                   remoteShareId: share.id,
                   canUpload: share.canUpload,
@@ -265,9 +300,7 @@ export default function Drive() {
       const decrypted: DecryptedFile[] = await Promise.all(
         res.data.map(async (file: DecryptedFile) => {
           try {
-            const fileKey = await decrypt(fromBase64(file.encryptedFileKey), fromBase64(file.fileKeyNonce), collection.collectionKey!)
-            const metaBytes = await decrypt(fromBase64(file.encryptedMetadata), fromBase64(file.metadataNonce), fileKey)
-            const meta: FileMetadata = JSON.parse(new TextDecoder().decode(metaBytes))
+            const { fileKey, metadata: meta } = await openFileRecordV1(file, collection.collectionKey!)
             return { ...file, decryptedName: meta.name, decryptedMimeType: meta.mimeType, decryptedSize: meta.size, _fileKey: fileKey }
           } catch {
             return { ...file, decryptedName: '[encrypted]' }
@@ -381,10 +414,17 @@ export default function Drive() {
         await Promise.all(
           res.data.map(async (f: any) => {
             try {
-              const fileKey = await decrypt(fromBase64(f.encryptedFileKey), fromBase64(f.fileKeyNonce), col.collectionKey!)
-              const metaBytes = await decrypt(fromBase64(f.encryptedMetadata), fromBase64(f.metadataNonce), fileKey)
-              const meta = JSON.parse(new TextDecoder().decode(metaBytes))
-              return { id: f.id, name: meta.name, size: meta.size, fileKey, isRemote: col.isRemote, remoteShareId: col.remoteShareId }
+              const { fileKey, metadata: meta } = await openFileRecordV1(f, col.collectionKey!)
+              return {
+                id: f.id,
+                collectionId: col.id,
+                keyEpoch: col.keyEpoch,
+                name: meta.name,
+                size: meta.size,
+                fileKey,
+                isRemote: col.isRemote,
+                remoteShareId: col.remoteShareId,
+              }
             } catch { return null }
           }),
         )
@@ -443,23 +483,27 @@ export default function Drive() {
   // --- File/folder operations ---
 
   async function uploadFile(file: File, collection: Collection, onProgress?: (loaded: number, total: number) => void) {
-    // Federated uploads still use the old in-memory multipart path — the
-    // remote peer doesn't speak tus yet. Local uploads go through the
+    // Federated uploads use an in-memory multipart path; local uploads go through the
     // streaming tus endpoint: memory stays bounded at ~10 MB regardless
     // of file size, replacing the previous full-file-in-RAM pipeline.
     if (collection.isRemote) {
-      const fileKey = await generateKey()
-      const buffer = await file.arrayBuffer()
-      const encryptedData = await encryptStream(new Uint8Array(buffer), fileKey)
       const meta: FileMetadata = { name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size }
-      const encMeta = await encrypt(new TextEncoder().encode(JSON.stringify(meta)), fileKey)
-      const encFileKey = await encrypt(fileKey, collection.collectionKey!)
+      const record = await createFileRecordV1(
+        collection.id,
+        collection.keyEpoch,
+        collection.collectionKey!,
+        meta,
+      )
+      const buffer = await file.arrayBuffer()
+      const encryptedData = await encryptStream(new Uint8Array(buffer), record.fileKey, {
+        fileId: record.fileId,
+        collectionId: collection.id,
+        epoch: collection.keyEpoch,
+      })
       const form = new FormData()
-      form.append('collectionId', collection.id)
-      form.append('encryptedMetadata', toBase64(encMeta.ciphertext))
-      form.append('metadataNonce', toBase64(encMeta.nonce))
-      form.append('encryptedFileKey', toBase64(encFileKey.ciphertext))
-      form.append('fileKeyNonce', toBase64(encFileKey.nonce))
+      form.append('fileId', record.fileId)
+      form.append('metadataEnvelope', record.metadataEnvelope)
+      form.append('fileKeyEnvelope', record.fileKeyEnvelope)
       form.append('file', new Blob([encryptedData.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'encrypted')
       await api.post(`/drive/federation/shares/${collection.remoteShareId}/files`, form, {
         onUploadProgress: (e) => { if (e.total && onProgress) onProgress(e.loaded, e.total) },
@@ -471,7 +515,11 @@ export default function Drive() {
     if (!accessToken) throw new Error('Not logged in')
     await streamUpload({
       file,
-      collection: { id: collection.id, collectionKey: collection.collectionKey! },
+      collection: {
+        id: collection.id,
+        keyEpoch: collection.keyEpoch,
+        collectionKey: collection.collectionKey!,
+      },
       accessToken,
       onProgress: onProgress
         ? (plainSent, plainTotal) => onProgress(plainSent, plainTotal)
@@ -549,6 +597,11 @@ export default function Drive() {
       await streamDownload({
         url,
         fileKey: file._fileKey,
+        context: {
+          fileId: file.id,
+          collectionId: currentFolder!.id,
+          epoch: currentFolder!.keyEpoch,
+        },
         filename: file.decryptedName ?? 'file',
         mimeType: file.decryptedMimeType ?? 'application/octet-stream',
         expectedPlainSize: file.decryptedSize,
@@ -688,16 +741,13 @@ export default function Drive() {
 
   async function handleCreateFolder(name: string) {
     if (!masterKey) throw new Error('Not logged in')
-    const collectionKey = await generateKey()
-    const encKey = await encrypt(collectionKey, masterKey)
-    const encName = await encrypt(new TextEncoder().encode(name), collectionKey)
-    await api.post('/collections/', {
-      encryptedName: toBase64(encName.ciphertext),
-      nameNonce: toBase64(encName.nonce),
-      encryptedKey: toBase64(encKey.ciphertext),
-      encryptedKeyNonce: toBase64(encKey.nonce),
-      parentCollectionId: currentFolder?.id ?? null,
-    })
+    const created = await createOwnedCollectionV1(
+      masterKey,
+      auth.userId!,
+      name,
+      currentFolder?.id ?? null,
+    )
+    await api.post('/collections/', created.payload)
     await loadCollections()
   }
 
@@ -717,11 +767,11 @@ export default function Drive() {
 
   async function handleRenameFolder(col: Collection, newName: string) {
     if (!col.collectionKey) return
-    const encName = await encrypt(new TextEncoder().encode(newName), col.collectionKey)
-    await api.put(`/collections/${col.id}`, { encryptedName: toBase64(encName.ciphertext), nameNonce: toBase64(encName.nonce) })
-    setCollections((prev) => prev.map((c) => c.id === col.id ? { ...c, decryptedName: newName } : c))
-    if (currentFolder?.id === col.id) setCurrentFolder((prev) => prev ? { ...prev, decryptedName: newName } : prev)
-    if (myFilesCollection?.id === col.id) setMyFilesCollection((prev) => prev ? { ...prev, decryptedName: newName } : prev)
+    const renamed = await renameOwnedCollectionV1(col, col.collectionKey, newName)
+    await api.put(`/collections/${col.id}`, renamed)
+    setCollections((prev) => prev.map((c) => c.id === col.id ? { ...c, ...renamed, decryptedName: newName } : c))
+    if (currentFolder?.id === col.id) setCurrentFolder((prev) => prev ? { ...prev, ...renamed, decryptedName: newName } : prev)
+    if (myFilesCollection?.id === col.id) setMyFilesCollection((prev) => prev ? { ...prev, ...renamed, decryptedName: newName } : prev)
   }
 
   async function handleRenameFile(file: DecryptedFile, newName: string) {
@@ -764,7 +814,13 @@ export default function Drive() {
       // We can't tell a local email from a remote `user@other-server` by string
       // alone (both look like emails), so probe the local directory first and
       // only fall back to a federated invite when there's no local match.
-      let local: { userId: string; publicKey: string } | null = null
+      let local: {
+        userId: string
+        account: string
+        driveHpkePublicKey: string
+        accountIncarnationId: string
+        driveSigningPublicKey: string
+      } | null = null
       try {
         const res = await api.get(`/users/by-email/${encodeURIComponent(params.recipient)}`)
         local = res.data
@@ -774,10 +830,26 @@ export default function Drive() {
       }
 
       if (local) {
-        const sealedKey = await wrapKeyForRecipient(shareTarget.collectionKey, fromBase64(local.publicKey))
+        const [identity, settings] = await Promise.all([
+          deriveAccountIdentityKeys(toBase64(masterKey!)),
+          api.get('/auth/settings'),
+        ])
+        const namedShareEnvelope = await sealNamedShareEnvelope(
+          shareTarget.collectionKey,
+          masterKey!,
+          local.driveHpkePublicKey,
+          {
+            collectionId: shareTarget.id,
+            epoch: shareTarget.keyEpoch,
+            senderAccount: `${auth.username}@${settings.data.chat.serverName}`,
+            senderIncarnationId: identity.incarnationId,
+            recipientAccount: local.account,
+            recipientIncarnationId: local.accountIncarnationId,
+          },
+        )
         await api.post(`/collections/${shareTarget.id}/share`, {
           recipientUserId: local.userId,
-          encryptedCollectionKey: toBase64(sealedKey),
+          namedShareEnvelope,
           canUpload: params.canUpload,
           canDelete: params.canDelete,
           uploadQuotaBytes: params.canUpload && params.quotaBytes ? params.quotaBytes : null,
@@ -796,11 +868,25 @@ export default function Drive() {
       const username = params.recipient.slice(0, at)
       const server = params.recipient.slice(at + 1)
       const pkRes = await api.get(`/drive/federation/users/${encodeURIComponent(username)}?server=${encodeURIComponent(server)}`)
-      const sealedKey = await wrapKeyForRecipient(shareTarget.collectionKey, fromBase64(pkRes.data.publicKey))
+      const identity = await deriveAccountIdentityKeys(toBase64(masterKey!))
+      const settings = await api.get('/auth/settings')
+      const namedShareEnvelope = await sealNamedShareEnvelope(
+        shareTarget.collectionKey,
+        masterKey!,
+        pkRes.data.driveHpkePublicKey,
+        {
+          collectionId: shareTarget.id,
+          epoch: shareTarget.keyEpoch,
+          senderAccount: `${auth.username}@${settings.data.chat.serverName}`,
+          senderIncarnationId: identity.incarnationId,
+          recipientAccount: pkRes.data.account,
+          recipientIncarnationId: pkRes.data.accountIncarnationId,
+        },
+      )
       const res = await api.post(`/collections/${shareTarget.id}/federated-shares`, {
         recipientUsername: username,
         recipientServer: server,
-        encryptedCollectionKey: toBase64(sealedKey),
+        namedShareEnvelope,
         canUpload: params.canUpload,
         canDelete: params.canDelete,
         uploadQuotaBytes: params.canUpload && params.quotaBytes ? params.quotaBytes : null,
@@ -813,14 +899,17 @@ export default function Drive() {
   }
 
   async function handleCreatePublicLink(col: Collection) {
-    if (!col.collectionKey) return
+    if (!col.collectionKey || !auth.userId) return
     const linkKey = await generateKey()
-    const encCollKey = await encrypt(col.collectionKey, linkKey)
+    const collectionKeyEnvelope = await sealPublicLinkCollectionKeyV1(
+      col.collectionKey,
+      linkKey,
+      { collectionId: col.id, ownerUserId: auth.userId, epoch: col.keyEpoch },
+    )
     const res = await api.post('/share/', {
       shareType: 'collection',
       targetId: col.id,
-      encryptedCollectionKey: toBase64(encCollKey.ciphertext),
-      encryptedCollectionKeyNonce: toBase64(encCollKey.nonce),
+      collectionKeyEnvelope,
     })
     const link = `${window.location.origin}/s/${res.data.token}#key=${toBase64(linkKey)}`
     setPublicShareUrl(link)
@@ -905,8 +994,13 @@ export default function Drive() {
       let filesDone = 0
       await uploadFolder({
         entries,
-        parentCollection: { id: folder.id, collectionKey: folder.collectionKey },
+        parentCollection: {
+          id: folder.id,
+          keyEpoch: folder.keyEpoch,
+          collectionKey: folder.collectionKey,
+        },
         masterKey,
+        ownerUserId: auth.userId!,
         accessToken,
         onProgress: (done, total, current) => {
           filesDone = done
@@ -1042,7 +1136,7 @@ export default function Drive() {
           item={detailItem}
           onClose={() => setDetailItem(null)}
           onOpen={(it) => {
-            if ('encryptedName' in it) enterFolder(it)
+            if ('nameEnvelope' in it) enterFolder(it)
             else handleFileClick(it)
           }}
           onChangeColor={(folder, color) => handleColorFolder(folder, color)}

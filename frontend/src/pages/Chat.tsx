@@ -38,10 +38,10 @@ import { Input } from '@/components/ui/input'
 import { QRCodeSVG } from 'qrcode.react'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { useAppSelector } from '@/store'
-import api from '@/api/client'
 import { ChatService, ChatServiceError } from '@/chat/service'
 import { MlsSendError } from '@/chat/mls-service'
 import { MlsGroupSecurityDetails } from '@/chat/MlsGroupSecurityDetails'
+import { SafetyVerificationDialog } from '@/chat/SafetyVerificationDialog'
 import { mlsGroupInvitationReadiness } from '@/chat/group-readiness'
 import { isSupportedChat, useChatCapabilities } from '@/chat/capabilities'
 import {
@@ -67,7 +67,7 @@ import type {
   PendingMlsOwnerApprovalRequest,
   PendingMlsInvitation,
   PeerChatProfile,
-  TransparencyMonitorStatus,
+  SafetyNumberV1,
 } from '@/chat/types'
 import { cn } from '@/lib/utils'
 import { copyText } from '@/lib/format'
@@ -128,8 +128,6 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     useState<MlsInvitationFeedback[]>([])
   const [ownerApprovalRequests, setOwnerApprovalRequests] =
     useState<PendingMlsOwnerApprovalRequest[]>([])
-  const [transparencyStatuses, setTransparencyStatuses] =
-    useState<Record<string, TransparencyMonitorStatus>>({})
   const [selectedConversation, setSelectedConversation] = useState<ConversationId | null>(null)
   const [newPeer, setNewPeer] = useState('')
   const [draft, setDraft] = useState('')
@@ -147,6 +145,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     useState<MlsAuthorityPolicyInspection[]>([])
   const [groupAuthorityPoliciesLoading, setGroupAuthorityPoliciesLoading] = useState(false)
   const [groupMaximumPlaintext, setGroupMaximumPlaintext] = useState('')
+  const [selectedSafety, setSelectedSafety] = useState<SafetyNumberV1 | null>(null)
   const [error, setError] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const selfAccount = useMemo(
@@ -172,13 +171,12 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     const refresh = async () => {
       if (!opened || cancelled) return
       try {
-        const [nextHistory, nextAttention, nextContacts, nextProfile, nextProfiles, nextTransparency, nextGroups, nextInvitations, nextInvitationFeedback, nextOwnerApprovals] = await Promise.all([
+        const [nextHistory, nextAttention, nextContacts, nextProfile, nextProfiles, nextGroups, nextInvitations, nextInvitationFeedback, nextOwnerApprovals] = await Promise.all([
           opened.history(),
           opened.inboundAttention(),
           opened.contacts(),
           opened.profile(),
           opened.profiles(),
-          opened.transparencyStatus(),
           capabilities.mlsGroups ? opened.groups() : Promise.resolve([]),
           capabilities.mlsGroups ? opened.groupInvitations() : Promise.resolve([]),
           capabilities.mlsGroups ? opened.groupInvitationFeedback() : Promise.resolve([]),
@@ -194,9 +192,6 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
           setGroupInvitations(nextInvitations)
           setGroupInvitationFeedback(nextInvitationFeedback)
           setOwnerApprovalRequests(nextOwnerApprovals)
-          if (nextTransparency) {
-            setTransparencyStatuses((current) => ({ ...current, local: nextTransparency }))
-          }
           setError(null)
         }
       } catch (cause) {
@@ -221,7 +216,10 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
         await refresh()
       })
       .catch((cause) => {
-        if (!cancelled) setError(errorMessage(cause, t))
+        if (!cancelled) {
+          console.error('Secure chat failed to initialize', cause)
+          setError(errorMessage(cause, t))
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -388,12 +386,6 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     ? t('chat.noteToSelf')
     : selectedProfile?.displayName || selectedLabel || t('chat.selectConversation')
   const selectedContact = selectedAddress ? contactsByPeer.get(selectedAddress) : undefined
-  const selectedAccount = selectedAddress ? parseAccountAddress(selectedAddress) : null
-  const selectedTransparencyScope = selectedAccount?.server &&
-    selectedAccount.server !== capabilities.serverName
-    ? selectedAccount.server
-    : 'local'
-  const transparencyStatus = transparencyStatuses[selectedTransparencyScope]
   const requestSelected = selectedContact?.state === 'pendingIncoming'
   const blockedSelected = selectedContact?.state === 'blocked'
   const canSend = Boolean(
@@ -405,37 +397,6 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       && !selectedGroupReadiness.blocksSending,
   )
 
-  useEffect(() => {
-    if (!service || selectedTransparencyScope === 'local') return
-    let cancelled = false
-    void service.monitorTransparency(selectedTransparencyScope)
-      .then((status) => {
-        if (!cancelled) {
-          setTransparencyStatuses((current) => ({
-            ...current,
-            [selectedTransparencyScope]: status,
-          }))
-        }
-      })
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
-    }
-  }, [selectedTransparencyScope, service])
-
-  async function retryTransparency() {
-    if (!service) return
-    try {
-      const status = await service.monitorTransparency(selectedTransparencyScope)
-      setTransparencyStatuses((current) => ({
-        ...current,
-        [selectedTransparencyScope]: status,
-      }))
-    } catch (cause) {
-      toast.error(errorMessage(cause, t))
-    }
-  }
-
   const messages = useMemo(
     () =>
       selectedKey
@@ -443,6 +404,26 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
         : [],
     [history, selectedKey],
   )
+
+  useEffect(() => {
+    if (!service || !selectedAddress || noteSelected) {
+      setSelectedSafety(null)
+      return
+    }
+    let cancelled = false
+    setSelectedSafety(null)
+    void service
+      .safetyNumber(selectedAddress)
+      .then(safety => {
+        if (!cancelled) setSelectedSafety(safety)
+      })
+      .catch(() => {
+        if (!cancelled) setSelectedSafety(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [contacts.length, history.length, noteSelected, selectedAddress, service])
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -817,32 +798,13 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
               >
                 {t('chat.title')}
               </h1>
-              <p className="truncate text-xs text-muted-foreground">
+              <p
+                className="truncate text-xs text-muted-foreground"
+                data-testid="chat-device-status"
+              >
                 {t('chat.device', { device: service?.deviceId ?? '…' })}
               </p>
             </div>
-            {transparencyStatus?.state === 'verificationFailed' ? (
-              <AlertTriangle
-                className="h-5 w-5 shrink-0 text-destructive"
-                aria-label={t('chat.transparency.verificationFailed')}
-                data-testid="chat-sidebar-transparency-status"
-              />
-            ) : (
-              <ShieldCheck
-                className={cn(
-                  'h-5 w-5 shrink-0',
-                  transparencyStatus?.state === 'unavailable'
-                    ? 'text-warning'
-                    : 'text-success',
-                )}
-                aria-label={
-                  transparencyStatus?.state === 'unavailable'
-                    ? t('chat.transparency.unavailable')
-                    : t('chat.transparency.healthy')
-                }
-                data-testid="chat-sidebar-transparency-status"
-              />
-            )}
             {selfAccount?.server && selfAddress && (
               <Dialog>
                 <DialogTrigger asChild>
@@ -1163,15 +1125,33 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
             )}
             <div className="min-w-0 flex-1">
               <h2 className="truncate font-semibold">{selectedTitle}</h2>
-              <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                <ShieldCheck className="h-3 w-3" />
-                <span className="truncate">
-                  {!noteSelected && selectedProfile?.displayName
-                    ? selectedLabel
-                    : t('chat.protocolEncryption')}
-                </span>
-              </p>
+              {!noteSelected && selectedProfile?.displayName && (
+                <p className="truncate text-xs text-muted-foreground">{selectedLabel}</p>
+              )}
             </div>
+            {selectedAddress && !noteSelected && selectedSafety && service && (
+              <SafetyVerificationDialog
+                peer={selectedAddress}
+                safety={selectedSafety}
+                onVerify={async scannedPayload => {
+                  const verified = await service.verifySafetyNumber(selectedAddress, scannedPayload)
+                  setSelectedSafety(verified)
+                  return verified
+                }}
+              />
+            )}
+            {selectedAddress && !noteSelected && !selectedSafety && (
+              <Shield
+                className="h-4 w-4 shrink-0 text-muted-foreground"
+                aria-label="Encrypted identity has not been pinned yet"
+              />
+            )}
+            {(noteSelected || selectedGroup) && (
+              <ShieldCheck
+                className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+                aria-label="End-to-end encrypted"
+              />
+            )}
             {selectedGroup && (
               <Dialog open={groupMembersOpen} onOpenChange={setGroupMembersOpen}>
                 <DialogTrigger asChild>
@@ -1437,7 +1417,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                       </Button>
                     </form>
                     <p className="mt-2 text-xs text-muted-foreground">
-                      Suite 0x0002, anonymous delivery, 1024-byte padding, and two retained past
+                      Suite 0x0003, anonymous delivery, 1024-byte padding, and two retained past
                       epochs are mandatory in V1. The user-message plaintext maximum can only
                       decrease; typed governance controls retain the fixed V1 control limit.
                     </p>
@@ -1494,7 +1474,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     <DialogHeader>
                       <DialogTitle>Add MLS group member</DialogTitle>
                       <DialogDescription>
-                        A fresh KeyPackage is verified through key transparency before the membership commit is ordered.
+                        A fresh KeyPackage is bound to the account-signed manifest before the membership commit is ordered.
                       </DialogDescription>
                     </DialogHeader>
                     <Input
@@ -1527,11 +1507,6 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
               <RefreshCw className="h-4 w-4" />
               <span className="sr-only">{t('chat.sync')}</span>
             </Button>
-            <TransparencyDetails
-              scope={selectedTransparencyScope}
-              capabilities={capabilities}
-              status={transparencyStatus}
-            />
             {!noteSelected &&
               selectedContact &&
               selectedContact.state !== 'pendingIncoming' &&
@@ -1554,34 +1529,6 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
             <div className="flex items-center gap-2 border-b border-destructive/20 bg-destructive-faint px-4 py-2 text-sm text-destructive">
               <AlertTriangle className="h-4 w-4 shrink-0" />
               <span className="flex-1">{error}</span>
-            </div>
-          )}
-          {transparencyStatus?.state === 'verificationFailed' && (
-            <div className="flex items-center gap-2 border-b border-destructive/30 bg-destructive-faint px-4 py-2 text-sm text-destructive">
-              <AlertTriangle className="h-4 w-4 shrink-0" />
-              <span className="flex-1">{t('chat.transparency.verificationFailed')}</span>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void retryTransparency()}
-                disabled={!service}
-              >
-                {t('chat.transparency.retry')}
-              </Button>
-            </div>
-          )}
-          {transparencyStatus?.state === 'unavailable' && (
-            <div className="flex items-center gap-2 border-b border-warning/30 bg-warning-faint px-4 py-2 text-sm">
-              <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
-              <span className="flex-1">{t('chat.transparency.unavailable')}</span>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void retryTransparency()}
-                disabled={!service}
-              >
-                {t('chat.transparency.retry')}
-              </Button>
             </div>
           )}
           {attention.length > 0 && (
@@ -1683,232 +1630,6 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       )}
     </div>
   )
-}
-
-interface TransparencyPolicyEnvelope {
-  sequence: string | number
-  payloadDigest: string
-  issuedAt: number
-  payload: string
-}
-
-interface TransparencyPolicyHistory {
-  domain: string
-  policies: TransparencyPolicyEnvelope[]
-}
-
-interface TransparencyPolicyPayload {
-  logId: string
-  operatorKeyId: string
-  operatorPublicKey: string
-  maximumCheckpointAgeSeconds: number
-}
-
-interface TransparencyCheckpointDetails {
-  checkpoint: { logId: string; treeSize: string | number; rootHash: string }
-  mapRoot: string
-  authentication: {
-    issuedAt: number
-    operatorKeyId: string
-    operatorPublicKey: string
-  }
-}
-
-interface TransparencyServerStatus {
-  policySequence: string | number
-  lastSuccessfulAt?: string
-  nextAttemptAt: string
-  failureClass?: string
-  warning: boolean
-  blocked: boolean
-  evidenceDigest?: string
-}
-
-function TransparencyDetails({
-  scope,
-  capabilities,
-  status,
-}: {
-  scope: string
-  capabilities: ChatCapabilities
-  status?: TransparencyMonitorStatus
-}) {
-  const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [failure, setFailure] = useState(false)
-  const [history, setHistory] = useState<TransparencyPolicyHistory | null>(null)
-  const [policy, setPolicy] = useState<TransparencyPolicyPayload | null>(null)
-  const [checkpoint, setCheckpoint] = useState<TransparencyCheckpointDetails | null>(null)
-  const [serverStatus, setServerStatus] = useState<TransparencyServerStatus | null>(null)
-  const domain = scope === 'local' ? capabilities.serverName : scope
-
-  useEffect(() => {
-    if (!open || !domain) return
-    let cancelled = false
-    setLoading(true)
-    setFailure(false)
-    const policyRequest = api
-      .get<TransparencyPolicyHistory>(
-        `/chat/transparency/domains/${encodeURIComponent(domain)}/policy`,
-      )
-      .then((response) => response.data)
-    const checkpointRequest = api
-      .get<TransparencyCheckpointDetails>(
-        scope === 'local'
-          ? '/chat/transparency/checkpoint'
-          : `/chat/transparency/domains/${encodeURIComponent(domain)}/checkpoint`,
-        { params: { fromTreeSize: '0' } },
-      )
-      .then((response) => response.data)
-    const statusRequest = scope === 'local'
-      ? Promise.resolve(null)
-      : api
-          .get<TransparencyServerStatus>(
-            `/chat/transparency/domains/${encodeURIComponent(domain)}/status`,
-          )
-          .then((response) => response.data)
-    void Promise.all([policyRequest, checkpointRequest, statusRequest])
-      .then(([nextHistory, nextCheckpoint, nextServerStatus]) => {
-        const current = nextHistory.policies.at(-1)
-        if (!current) throw new Error('empty transparency policy history')
-        const nextPolicy = decodePolicyPayload(current.payload)
-        if (!cancelled) {
-          setHistory(nextHistory)
-          setPolicy(nextPolicy)
-          setCheckpoint(nextCheckpoint)
-          setServerStatus(nextServerStatus)
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setFailure(true)
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [domain, open, scope])
-
-  const failed = status?.state === 'verificationFailed' || serverStatus?.blocked
-  const warning = status?.state === 'unavailable' || serverStatus?.warning
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          disabled={!domain}
-          aria-label={t('chat.transparency.details', { defaultValue: 'Transparency details' })}
-        >
-          {failed
-            ? <AlertTriangle className="h-4 w-4 text-destructive" />
-            : <ShieldCheck className={cn('h-4 w-4', warning ? 'text-warning' : 'text-success')} />}
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>
-            {t('chat.transparency.details', { defaultValue: 'Transparency details' })}
-          </DialogTitle>
-          <DialogDescription className="break-all">{domain}</DialogDescription>
-        </DialogHeader>
-        {loading && (
-          <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            {t('common.loading', { defaultValue: 'Loading…' })}
-          </div>
-        )}
-        {failure && (
-          <div className="rounded-lg border border-warning/30 bg-warning-faint p-3 text-sm">
-            {t('chat.transparency.detailsUnavailable', {
-              defaultValue: 'Detailed transparency evidence is temporarily unavailable.',
-            })}
-          </div>
-        )}
-        {!loading && policy && checkpoint && history && (
-          <div className="grid gap-4 text-sm">
-            <div className="grid grid-cols-2 gap-3 rounded-lg border bg-muted/30 p-3">
-              <Detail label="Client state" value={status?.state ?? 'unknown'} />
-              <Detail label="Policy sequence" value={String(history.policies.at(-1)?.sequence)} />
-              <Detail label="History length" value={String(history.policies.length)} />
-              <Detail label="Tree size" value={String(checkpoint.checkpoint.treeSize)} />
-              <Detail
-                label="Checkpoint age"
-                value={formatAge(checkpoint.authentication.issuedAt)}
-              />
-              {serverStatus?.lastSuccessfulAt && (
-                <Detail label="Server last verified" value={serverStatus.lastSuccessfulAt} />
-              )}
-              {serverStatus?.nextAttemptAt && (
-                <Detail label="Server next attempt" value={serverStatus.nextAttemptAt} />
-              )}
-              {serverStatus?.failureClass && (
-                <Detail label="Failure class" value={serverStatus.failureClass} />
-              )}
-            </div>
-            <Fingerprint label="Log ID" value={policy.logId} />
-            <Fingerprint label="Checkpoint root" value={checkpoint.checkpoint.rootHash} />
-            <Fingerprint label="Sparse-map root" value={checkpoint.mapRoot} />
-            <Fingerprint label="Operator key ID" value={policy.operatorKeyId} />
-            <Fingerprint label="Operator public key" value={policy.operatorPublicKey} />
-            {serverStatus?.evidenceDigest && (
-              <Fingerprint label="Blocking evidence digest" value={serverStatus.evidenceDigest} />
-            )}
-            <details className="rounded-lg border p-3">
-              <summary className="cursor-pointer font-medium">Authenticated policy history</summary>
-              <div className="mt-3 grid gap-2">
-                {history.policies.map((entry) => (
-                  <div key={String(entry.sequence)} className="rounded bg-muted/40 p-2 text-xs">
-                    <div>Sequence {String(entry.sequence)} · {formatTimestamp(entry.issuedAt)}</div>
-                    <code className="mt-1 block break-all text-muted-foreground">
-                      {entry.payloadDigest}
-                    </code>
-                  </div>
-                ))}
-              </div>
-            </details>
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function Detail({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="break-all font-medium">{value}</div>
-    </div>
-  )
-}
-
-function Fingerprint({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="mb-1 text-xs font-medium text-muted-foreground">{label}</div>
-      <code className="block break-all rounded-lg border bg-muted/30 p-2 text-xs">{value}</code>
-    </div>
-  )
-}
-
-function decodePolicyPayload(payload: string): TransparencyPolicyPayload {
-  const binary = atob(payload)
-  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
-  return JSON.parse(new TextDecoder().decode(bytes)) as TransparencyPolicyPayload
-}
-
-function formatAge(unixSeconds: number): string {
-  const seconds = Math.max(0, Math.round(Date.now() / 1000) - unixSeconds)
-  if (seconds < 60) return `${seconds}s`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
-  return `${Math.floor(seconds / 3600)}h`
-}
-
-function formatTimestamp(unixSeconds: number): string {
-  return new Date(unixSeconds * 1000).toLocaleString()
 }
 
 type AvatarProfile = Pick<ChatProfile, 'displayName' | 'avatar' | 'avatarContentType'>

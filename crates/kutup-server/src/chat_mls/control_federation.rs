@@ -12,7 +12,7 @@ use kutup_federation_proto::FederationFeature;
 
 use super::{
     active_policy, notify_mls_conversation_mailbox, signed_federation_error,
-    signed_federation_json, MlsRepository,
+    signed_federation_json, CommitControlContext, MlsRepository,
 };
 use crate::error::{AppError, AppResult};
 use crate::AppState;
@@ -206,13 +206,15 @@ pub(crate) async fn federated_commit_control_block(
     }
     match MlsRepository::new(state.pool.clone())
         .commit_control_block(
-            federation.server_name(),
-            None,
-            Some(authenticated.origin()),
             &replica.commit,
-            replica.membership_delivery.as_ref(),
-            policy.maximum_group_members,
-            false,
+            CommitControlContext {
+                local_domain: federation.server_name(),
+                local_submitter: None,
+                federated_origin: Some(authenticated.origin()),
+                incoming_membership_delivery: replica.membership_delivery.as_ref(),
+                maximum_group_members: policy.maximum_group_members,
+                verified_history_replay: false,
+            },
         )
         .await
     {

@@ -12,9 +12,9 @@ import api from '@/api/client'
 import { KutupLogo } from '@/components/KutupLogo'
 import {
   decodeMnemonic, validateMnemonic,
-  decrypt, encrypt,
+  ACCOUNT_ENVELOPE_PURPOSE, openAccountEnvelope, sealAccountEnvelope,
   ACCOUNT_PROTECTION_DEFAULTS, deriveRecoveryAuthProof, generateAccountProtectionSalt,
-  toBase64, fromBase64,
+  toBase64,
 } from '@/crypto'
 import { deriveAccountProtectionInWorker } from '@/crypto/accountProtectionWorker'
 import { Button } from '@/components/ui/button'
@@ -81,10 +81,15 @@ export default function Recovery() {
     setStep('deriving')
     try {
       const recoveryDataRes = await api.get(`/auth/recover/preflight?email=${encodeURIComponent(data.email)}`)
-      const { encryptedRecoveryKey, recoveryKeyNonce } = recoveryDataRes.data
+      const { recoveryKeyEnvelope } = recoveryDataRes.data
 
       const recoveryKey = decodeMnemonic(data.mnemonic.trim().toLowerCase())
-      const masterKey = await decrypt(fromBase64(encryptedRecoveryKey), fromBase64(recoveryKeyNonce), recoveryKey)
+      const masterKey = await openAccountEnvelope(
+        recoveryKeyEnvelope,
+        recoveryKey,
+        ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey,
+        data.email,
+      )
 
       const accountProtectionSalt = generateAccountProtectionSalt()
       const accountProtection = {
@@ -95,14 +100,18 @@ export default function Recovery() {
         data.newPassword,
         accountProtection,
       )
-      const newEncMK = await encrypt(masterKey, keyEncryptionKey)
+      const newMasterKeyEnvelope = await sealAccountEnvelope(
+        masterKey,
+        keyEncryptionKey,
+        ACCOUNT_ENVELOPE_PURPOSE.passwordMasterKey,
+        data.email,
+      )
       const recoveryProof = await deriveRecoveryAuthProof(toBase64(recoveryKey), data.email)
 
       await api.post('/auth/recover', {
         email: data.email,
         newLoginKey: toBase64(loginKey),
-        newEncryptedMasterKey: toBase64(newEncMK.ciphertext),
-        newMasterKeyNonce: toBase64(newEncMK.nonce),
+        newMasterKeyEnvelope,
         newAccountProtectionSuite: accountProtection.suite,
         newAccountProtectionSalt: accountProtection.salt,
         newArgonMemoryKib: accountProtection.memoryKib,

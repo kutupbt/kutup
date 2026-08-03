@@ -27,8 +27,11 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
+use kutup_crypto::drive_envelope::{DriveEnvelopeContextV1, DriveEnvelopePurpose};
+use kutup_crypto::drive_object::{DriveFileBlobContextV1, FILE_BLOB_PREFIX_BYTES};
 use uuid::Uuid;
 
+use crate::handlers::files::{canonical_uuid, validate_envelope, validate_file_blob_prefix};
 use crate::middleware::AuthUser;
 use crate::storage::CompletedPart;
 use crate::AppState;
@@ -95,7 +98,9 @@ fn parse_upload_metadata(
             .map_err(|_| format!("upload-metadata: bad base64 for {key:?}"))?;
         let s = String::from_utf8(raw)
             .map_err(|_| format!("upload-metadata: bad base64 for {key:?}"))?;
-        out.insert(key.to_string(), s);
+        if out.insert(key.to_string(), s).is_some() {
+            return Err(format!("upload-metadata: duplicate key {key:?}"));
+        }
     }
     Ok(out)
 }
@@ -132,8 +137,8 @@ pub async fn options() -> Response {
 // ---------------------------------------------------------------------------
 
 /// Opens a new tus upload session — mirrors `Create`. Requires `Upload-Length` and an
-/// `Upload-Metadata` carrying `collectionId, encryptedMetadata, metadataNonce,
-/// encryptedFileKey, fileKeyNonce`. Returns 201 with `Location`, `Upload-Offset: 0` and a
+/// `Upload-Metadata` carrying `fileId, collectionId, metadataEnvelope,
+/// fileKeyEnvelope`. Returns 201 with `Location`, `Upload-Offset: 0` and a
 /// `{"fileId": …}` body (tus-js-client surfaces it to the browser path).
 #[utoipa::path(
     post,
@@ -144,7 +149,7 @@ pub async fn options() -> Response {
     params(
         ("Tus-Resumable" = String, Header, description = "Must be 1.0.0"),
         ("Upload-Length" = i64, Header, description = "Total upload size in bytes"),
-        ("Upload-Metadata" = String, Header, description = "Comma-separated `key <base64>` pairs: collectionId, encryptedMetadata, metadataNonce, encryptedFileKey, fileKeyNonce")
+        ("Upload-Metadata" = String, Header, description = "Comma-separated `key <base64>` pairs: fileId, collectionId, metadataEnvelope, fileKeyEnvelope")
     ),
     responses((status = 201, description = "Session created; `Location` + `Upload-Offset: 0` headers and a `{\"fileId\": …}` body"))
 )]
@@ -162,11 +167,11 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         return tus_text(StatusCode::BAD_REQUEST, "Upload-Length header required");
     }
     let total_bytes: i64 = match total_bytes_str.parse() {
-        Ok(n) if n >= 0 => n,
+        Ok(n) if n >= (FILE_BLOB_PREFIX_BYTES + kutup_crypto::stream::ABYTES) as i64 => n,
         _ => {
             return tus_text(
                 StatusCode::BAD_REQUEST,
-                "Upload-Length must be a non-negative integer",
+                "Upload-Length is too small for a Drive file blob",
             )
         }
     };
@@ -178,29 +183,29 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         }
     };
     let empty = String::new();
+    let file_id_text = meta.get("fileId").unwrap_or(&empty);
     let coll_id = meta.get("collectionId").unwrap_or(&empty);
-    let enc_metadata = meta.get("encryptedMetadata").unwrap_or(&empty);
-    let metadata_nonce = meta.get("metadataNonce").unwrap_or(&empty);
-    let enc_file_key = meta.get("encryptedFileKey").unwrap_or(&empty);
-    let file_key_nonce = meta.get("fileKeyNonce").unwrap_or(&empty);
-    if coll_id.is_empty()
-        || enc_metadata.is_empty()
-        || metadata_nonce.is_empty()
-        || enc_file_key.is_empty()
-        || file_key_nonce.is_empty()
+    let metadata_envelope = meta.get("metadataEnvelope").unwrap_or(&empty);
+    let file_key_envelope = meta.get("fileKeyEnvelope").unwrap_or(&empty);
+    if meta.len() != 4
+        || file_id_text.is_empty()
+        || coll_id.is_empty()
+        || metadata_envelope.is_empty()
+        || file_key_envelope.is_empty()
     {
         return tus_text(
             StatusCode::BAD_REQUEST,
-            "Upload-Metadata must include collectionId, encryptedMetadata, \
-             metadataNonce, encryptedFileKey, fileKeyNonce",
+            "Upload-Metadata must contain exactly fileId, collectionId, \
+             metadataEnvelope, fileKeyEnvelope",
         );
     }
-    // The storage path uses the raw collectionId string (matches Go's fmt.Sprintf).
+    let file_id = match canonical_uuid(file_id_text) {
+        Ok(id) => id,
+        Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid file id"),
+    };
     let coll_uuid = match Uuid::parse_str(coll_id) {
-        Ok(u) => u,
-        // A bad collectionId can't be owned/shared → forbidden, as in Go (the COUNT/share
-        // lookups fail and isOwner stays false / the share read errors).
-        Err(_) => return tus_text(StatusCode::FORBIDDEN, "forbidden"),
+        Ok(u) if u.to_string() == *coll_id => u,
+        _ => return tus_text(StatusCode::FORBIDDEN, "forbidden"),
     };
 
     let mut tx = match state.pool.begin().await {
@@ -209,15 +214,18 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     };
 
     // Permission check + quota gate, mirroring files.rs upload.
-    let owner_n: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM collections WHERE id=$1 AND owner_user_id=$2 AND deleted_at IS NULL",
+    let collection: Option<(Uuid, i32)> = sqlx::query_as(
+        "SELECT owner_user_id, key_epoch FROM collections WHERE id=$1 AND deleted_at IS NULL",
     )
     .bind(coll_uuid)
-    .bind(user_id)
-    .fetch_one(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await
-    .unwrap_or(0);
-    let is_owner = owner_n > 0;
+    .ok()
+    .flatten();
+    let Some((owner_user_id, key_epoch)) = collection else {
+        return tus_text(StatusCode::FORBIDDEN, "forbidden");
+    };
+    let is_owner = owner_user_id == user_id;
 
     let mut upload_quota_bytes: Option<i64> = None;
     if !is_owner {
@@ -236,6 +244,36 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
             Some((true, q)) => upload_quota_bytes = q,
             _ => return tus_text(StatusCode::FORBIDDEN, "forbidden"),
         }
+    }
+
+    let epoch = match u32::try_from(key_epoch) {
+        Ok(epoch) => epoch,
+        Err(_) => return tus_text(StatusCode::CONFLICT, "invalid collection epoch"),
+    };
+    let file_key_context = match DriveEnvelopeContextV1::new(
+        DriveEnvelopePurpose::FileKey,
+        epoch,
+        1,
+        file_id_text,
+        coll_id,
+    ) {
+        Ok(context) => context,
+        Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid Drive envelope"),
+    };
+    let metadata_context = match DriveEnvelopeContextV1::new(
+        DriveEnvelopePurpose::FileMetadata,
+        epoch,
+        1,
+        file_id_text,
+        coll_id,
+    ) {
+        Ok(context) => context,
+        Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid Drive envelope"),
+    };
+    if validate_envelope(file_key_envelope, file_key_context).is_err()
+        || validate_envelope(metadata_envelope, metadata_context).is_err()
+    {
+        return tus_text(StatusCode::BAD_REQUEST, "invalid Drive envelope");
     }
 
     // User-level quota: committed + reserved (in-flight) + this one ≤ cap. FOR UPDATE
@@ -288,11 +326,11 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         }
     }
 
-    // Allocate the upload-session id + file id up-front; open the S3 multipart directly at
+    // Allocate the upload-session id; the client allocated the file id before
+    // constructing its object-bound envelopes. Open the S3 multipart directly at
     // the canonical {userId}/{collectionId}/{fileId} key (no temp→final copy — S3 hides
     // incomplete multiparts from GetObject until Complete runs).
     let upload_id = Uuid::new_v4();
-    let file_id = Uuid::new_v4();
     let storage_path = format!("{}/{}/{}", user.user_id, coll_id, file_id);
     let s3_upload_id = match state.storage.create_multipart(&storage_path).await {
         Ok(id) => id,
@@ -307,7 +345,7 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     let ins = sqlx::query(
         "INSERT INTO uploads \
             (id, user_id, collection_id, file_id, total_bytes, \
-             encrypted_metadata, metadata_nonce, encrypted_file_key, file_key_nonce, \
+             metadata_envelope, file_key_envelope, key_epoch, metadata_revision, \
              storage_path, s3_upload_id) \
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
     )
@@ -316,10 +354,10 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     .bind(coll_uuid)
     .bind(file_id)
     .bind(total_bytes)
-    .bind(enc_metadata)
-    .bind(metadata_nonce)
-    .bind(enc_file_key)
-    .bind(file_key_nonce)
+    .bind(metadata_envelope)
+    .bind(file_key_envelope)
+    .bind(key_epoch)
+    .bind(1_i64)
     .bind(&storage_path)
     .bind(&s3_upload_id)
     .execute(&mut *tx)
@@ -491,17 +529,17 @@ pub async fn patch(
         Uuid,              // file_id
         i64,               // total_bytes
         i64,               // received_bytes
-        String,            // encrypted_metadata
-        String,            // metadata_nonce
-        String,            // encrypted_file_key
-        String,            // file_key_nonce
+        String,            // metadata_envelope
+        String,            // file_key_envelope
+        i32,               // key_epoch
+        i64,               // metadata_revision
         String,            // storage_path
         String,            // s3_upload_id
         serde_json::Value, // s3_part_etags
     );
     let row: Option<UploadRow> = sqlx::query_as(
         "SELECT collection_id, file_id, total_bytes, received_bytes, \
-                encrypted_metadata, metadata_nonce, encrypted_file_key, file_key_nonce, \
+                metadata_envelope, file_key_envelope, key_epoch, metadata_revision, \
                 storage_path, s3_upload_id, s3_part_etags \
          FROM uploads WHERE id=$1 AND user_id=$2 FOR UPDATE",
     )
@@ -516,10 +554,10 @@ pub async fn patch(
         file_id,
         total_bytes,
         received_bytes,
-        enc_metadata,
-        metadata_nonce,
-        enc_file_key,
-        file_key_nonce,
+        metadata_envelope,
+        file_key_envelope,
+        key_epoch,
+        metadata_revision,
         storage_path,
         s3_upload_id,
         part_etags_json,
@@ -541,6 +579,20 @@ pub async fn patch(
     }
     if received_bytes + chunk_len > total_bytes {
         return tus_text(StatusCode::PAYLOAD_TOO_LARGE, "chunk exceeds Upload-Length");
+    }
+    if received_bytes == 0 {
+        let epoch = match u32::try_from(key_epoch) {
+            Ok(epoch) => epoch,
+            Err(_) => return tus_text(StatusCode::CONFLICT, "invalid collection epoch"),
+        };
+        let context =
+            match DriveFileBlobContextV1::new(&file_id.to_string(), &coll_id.to_string(), epoch) {
+                Ok(context) => context,
+                Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid Drive file blob"),
+            };
+        if validate_file_blob_prefix(&body, context).is_err() {
+            return tus_text(StatusCode::BAD_REQUEST, "invalid Drive file blob");
+        }
     }
 
     let mut parts: Vec<CompletedPart> = match serde_json::from_value(part_etags_json) {
@@ -634,17 +686,17 @@ pub async fn patch(
     if sqlx::query(
         "INSERT INTO files \
             (id, collection_id, uploader_user_id, \
-             encrypted_metadata, metadata_nonce, encrypted_file_key, file_key_nonce, \
+             metadata_envelope, file_key_envelope, key_epoch, metadata_revision, \
              storage_path, encrypted_size_bytes) \
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
     )
     .bind(file_id)
     .bind(coll_id)
     .bind(user_id)
-    .bind(&enc_metadata)
-    .bind(&metadata_nonce)
-    .bind(&enc_file_key)
-    .bind(&file_key_nonce)
+    .bind(&metadata_envelope)
+    .bind(&file_key_envelope)
+    .bind(key_epoch)
+    .bind(metadata_revision)
     .bind(&storage_path)
     .bind(total_bytes)
     .execute(&mut *tx)
@@ -775,13 +827,13 @@ mod tests {
     #[test]
     fn parses_metadata_pairs() {
         let header = format!(
-            "collectionId {}, encryptedMetadata {}",
+            "collectionId {}, metadataEnvelope {}",
             b64("coll-1"),
             b64("blob")
         );
         let m = parse_upload_metadata(&header).unwrap();
         assert_eq!(m.get("collectionId").unwrap(), "coll-1");
-        assert_eq!(m.get("encryptedMetadata").unwrap(), "blob");
+        assert_eq!(m.get("metadataEnvelope").unwrap(), "blob");
     }
 
     #[test]
@@ -798,5 +850,11 @@ mod tests {
     #[test]
     fn bad_base64_errs() {
         assert!(parse_upload_metadata("k !!!notbase64!!!").is_err());
+    }
+
+    #[test]
+    fn duplicate_metadata_keys_are_rejected() {
+        let header = format!("fileId {}, fileId {}", b64("a"), b64("b"));
+        assert!(parse_upload_metadata(&header).is_err());
     }
 }

@@ -137,12 +137,13 @@ mod tests {
         MlsOrderingServicePolicyV1 {
             policy_version: MLS_ORDERING_SERVICE_POLICY_VERSION,
             canonical_domain: domain.into(),
-            suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
-            anonymous_delivery_suite: MlsAnonymousDeliverySuiteV1::DhKemP256HkdfSha256Aes128Gcm,
+            suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
+            anonymous_delivery_suite:
+                MlsAnonymousDeliverySuiteV1::DhKemX25519HkdfSha256ChaCha20Poly1305,
             control_signing_key_id: hex::encode(Sha256::digest(public_key)),
             control_signing_public_key: BASE64.encode(public_key),
             accepts_group_ordering: true,
-            maximum_group_members: 1000,
+            maximum_group_members: 256,
             maximum_authorities: 64,
             maximum_control_payload_bytes: 1024 * 1024,
             pending_message_requests: PendingMessageRequestPolicyV1::default(),

@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use kutup_chat_proto::PutChatProfileRequest;
-use kutup_chat_proto::{ContactState, DeviceManifest};
+use kutup_chat_proto::{AccountManifestV1, ContactState};
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod indexed_db;
@@ -319,11 +319,13 @@ pub struct InboundEnvelope {
 /// How the user has authenticated a peer account's self-authority key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuthorityTrust {
-    /// First valid key observed for the account. Key transparency will replace
-    /// this first-contact assumption without changing the stored manifest leaf.
+    /// First valid key observed for the account.
     Tofu,
     /// The user compared an out-of-band safety number / QR code.
     Verified,
+    /// A cryptographic contradiction or signed replacement is durably blocked
+    /// until an exact out-of-band comparison explicitly resolves it.
+    Quarantined,
 }
 
 #[cfg(feature = "sqlite")]
@@ -332,6 +334,7 @@ impl AuthorityTrust {
         match self {
             Self::Tofu => 0,
             Self::Verified => 1,
+            Self::Quarantined => 2,
         }
     }
 
@@ -339,6 +342,7 @@ impl AuthorityTrust {
         match code {
             0 => Ok(Self::Tofu),
             1 => Ok(Self::Verified),
+            2 => Ok(Self::Quarantined),
             _ => Err(crate::error::ChatError::Db(format!(
                 "unknown authority trust state {code}"
             ))),
@@ -349,93 +353,46 @@ impl AuthorityTrust {
 /// Durable anti-rollback pin for one peer account's signed device directory.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestTrust {
+    /// Request/routing key used by the local application (may be bare for a
+    /// same-origin peer).
     pub peer: String,
+    /// Canonical account address authenticated inside the manifest.
+    pub account: String,
+    pub incarnation_id: String,
     pub authority_key_id: String,
     pub self_authority_key: String,
-    pub highest_version: u64,
+    pub drive_hpke_public_key: String,
+    pub drive_share_signing_public_key: String,
+    pub highest_sequence: u64,
     pub manifest_hash: String,
     pub trust: AuthorityTrust,
-    /// Chronological-log position of the accepted manifest event. This is the
-    /// per-account monitoring cursor; an unchanged current-map proof must keep
-    /// the same position and an update must move forward.
-    #[serde(default)]
-    pub transparency_position: Option<u64>,
     /// True if this client first observed a version after v1 or skipped one or
     /// more signed versions while offline. The latest state is still authentic,
     /// but the local client cannot prove the complete update chain.
     pub continuity_gap: bool,
+    /// Stable, identifier-free reason retained for red-shield inspection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quarantine_reason: Option<String>,
+    /// A complete independently signed replacement incarnation. The retained
+    /// pin remains authoritative until the user verifies this candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_reset: Option<Box<PendingAccountIdentityResetV1>>,
 }
 
-/// One complete, transparency-included account manifest. These records are
+/// One complete account-signed manifest. These records are
 /// append-only and are committed in the same client transaction as the latest
 /// trust pin, so a recovered version gap can never be partially accepted.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ManifestHistoryRecord {
+pub struct AccountManifestHistoryRecordV1 {
     pub peer: String,
-    pub version: u64,
-    pub manifest: DeviceManifest,
-    pub leaf_index: u64,
-}
-
-/// Highest globally verified checkpoint for one homeserver namespace.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TransparencyTrust {
-    /// Reserved `local` for the authenticated homeserver, otherwise the
-    /// canonical DNS suffix from `username@server`.
-    pub scope: String,
-    pub log_id: String,
-    pub tree_size: u64,
-    pub root_hash: String,
-    /// Pinned long-term operator identity. Empty only while upgrading a store
-    /// that predates signed checkpoints; the next verified proof fills it.
-    #[serde(default)]
-    pub operator_key_id: String,
-    #[serde(default)]
-    pub operator_public_key: String,
-    #[serde(default)]
-    pub checkpoint_issued_at: i64,
-}
-
-/// Durable result of the most recent independent checkpoint poll. Transport
-/// unavailability is distinct from a cryptographic/policy verification failure.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum TransparencyMonitorState {
-    Healthy,
-    Unavailable,
-    VerificationFailed,
+    pub sequence: u64,
+    pub manifest: AccountManifestV1,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TransparencyMonitorStatus {
-    pub scope: String,
-    pub state: TransparencyMonitorState,
-    pub last_checked_at_ms: i64,
-    pub last_success_at_ms: Option<i64>,
-    pub tree_size: Option<u64>,
-    pub detail: Option<String>,
-}
-
-#[cfg(feature = "sqlite")]
-pub(crate) fn transparency_monitor_state_code(state: TransparencyMonitorState) -> i64 {
-    match state {
-        TransparencyMonitorState::Healthy => 0,
-        TransparencyMonitorState::Unavailable => 1,
-        TransparencyMonitorState::VerificationFailed => 2,
-    }
-}
-
-#[cfg(feature = "sqlite")]
-pub(crate) fn transparency_monitor_state_from_code(code: i64) -> Result<TransparencyMonitorState> {
-    match code {
-        0 => Ok(TransparencyMonitorState::Healthy),
-        1 => Ok(TransparencyMonitorState::Unavailable),
-        2 => Ok(TransparencyMonitorState::VerificationFailed),
-        _ => Err(crate::error::ChatError::Db(format!(
-            "unknown transparency monitor state {code}"
-        ))),
-    }
+pub struct PendingAccountIdentityResetV1 {
+    pub candidate: ManifestTrust,
+    pub history: Vec<AccountManifestHistoryRecordV1>,
 }
 
 #[cfg(feature = "sqlite")]
@@ -570,12 +527,8 @@ pub struct Pending {
     pub(crate) inbound: HashMap<String, Option<InboundEnvelope>>,
     /// Peer username → latest accepted signed-manifest trust record.
     pub(crate) manifest_trust: HashMap<String, ManifestTrust>,
-    /// `(peer, version)` → immutable complete manifest and log position.
-    pub(crate) manifest_history: HashMap<(String, u64), ManifestHistoryRecord>,
-    /// Homeserver scope → highest verified append-only checkpoint.
-    pub(crate) transparency_trust: HashMap<String, TransparencyTrust>,
-    /// Homeserver scope → most recent independent checkpoint monitor result.
-    pub(crate) transparency_monitor_status: HashMap<String, TransparencyMonitorStatus>,
+    /// `(peer, incarnation, version)` → immutable complete signed manifest.
+    pub(crate) manifest_history: HashMap<(String, String, u64), AccountManifestHistoryRecordV1>,
     /// Canonical peer → local contact/request state.
     pub(crate) contacts: HashMap<String, ContactRecord>,
     /// The local account's profile singleton.
@@ -620,8 +573,6 @@ impl Pending {
             && self.inbound.is_empty()
             && self.manifest_trust.is_empty()
             && self.manifest_history.is_empty()
-            && self.transparency_trust.is_empty()
-            && self.transparency_monitor_status.is_empty()
             && self.contacts.is_empty()
             && self.local_profile.is_none()
             && self.peer_profiles.is_empty()
@@ -725,17 +676,9 @@ pub trait ChatDb {
     async fn load_manifest_history(
         &self,
         peer: &str,
+        incarnation_id: &str,
         version: u64,
-    ) -> Result<Option<ManifestHistoryRecord>>;
-
-    /// Highest verified append-only checkpoint for one homeserver namespace.
-    async fn load_transparency_trust(&self, scope: &str) -> Result<Option<TransparencyTrust>>;
-
-    /// Most recent scheduled/foreground checkpoint monitor result.
-    async fn load_transparency_monitor_status(
-        &self,
-        scope: &str,
-    ) -> Result<Option<TransparencyMonitorStatus>>;
+    ) -> Result<Option<AccountManifestHistoryRecordV1>>;
 
     /// Client-owned relationship state for one canonical peer.
     async fn load_contact(&self, peer: &str) -> Result<Option<ContactRecord>>;

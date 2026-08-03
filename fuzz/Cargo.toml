@@ -14,11 +14,33 @@ libfuzzer-sys = "0.4"
 libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0.97.2" }
 serde_json = "1"
 kutup-chat-proto = { path = "../crates/kutup-chat-proto" }
+kutup-crypto = { path = "../crates/kutup-crypto", default-features = false }
 kutup-federation-proto = { path = "../crates/kutup-federation-proto" }
 
 [[bin]]
-name = "policy_transparency_parsers"
-path = "fuzz_targets/policy_transparency_parsers.rs"
+name = "account_envelope_parser"
+path = "fuzz_targets/account_envelope_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "drive_envelope_parser"
+path = "fuzz_targets/drive_envelope_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "profile_envelope_parser"
+path = "fuzz_targets/profile_envelope_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "account_policy_parsers"
+path = "fuzz_targets/account_policy_parsers.rs"
 test = false
 doc = false
 bench = false

@@ -16,9 +16,11 @@ pub struct PublicShare {
     #[serde(default)]
     pub target_id: String,
     #[serde(default)]
-    pub encrypted_collection_key: Option<String>,
+    pub collection_key_envelope: String,
     #[serde(default)]
-    pub encrypted_collection_key_nonce: Option<String>,
+    pub collection_key_epoch: u32,
+    #[serde(default)]
+    pub owner_user_id: String,
     #[serde(default)]
     pub expires_at: Option<String>,
 }

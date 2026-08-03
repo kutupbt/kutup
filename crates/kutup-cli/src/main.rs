@@ -4,11 +4,13 @@
 //! (no stubs). See `docs/roadmap.md` / the rewrite branch for what remains.
 
 mod api;
+mod collection_crypto;
 mod commands;
 mod config;
 mod context;
 mod cryptohelpers;
 mod errors;
+mod file_crypto;
 mod mimetype;
 mod output;
 mod session;

@@ -10,13 +10,11 @@ const supported: ChatCapabilities = {
   maxContentBytes: 65_536,
   mailboxRetentionDays: 30,
   deviceExpiryDays: 90,
+  maximumActiveDevices: 10,
   serverName: 'chat.example',
   federation: false,
   manifests: true,
   profiles: true,
-  keyTransparency: true,
-  transparencyOperatorKeyId: '11'.repeat(32),
-  transparencyOperatorPublicKey: 'MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM=',
   sealedSender: false,
 }
 
@@ -48,8 +46,8 @@ describe('isSupportedChat', () => {
     expect(isSupportedChat({ ...supported, suites: [1, 2] })).toBe(true)
     expect(isSupportedChat({ ...supported, manifests: false })).toBe(false)
     expect(isSupportedChat({ ...supported, profiles: false })).toBe(false)
-    expect(isSupportedChat({ ...supported, keyTransparency: false })).toBe(false)
-    expect(isSupportedChat({ ...supported, transparencyOperatorKeyId: undefined })).toBe(false)
+    expect(isSupportedChat({ ...supported, maximumActiveDevices: 0 })).toBe(false)
+    expect(isSupportedChat({ ...supported, maximumActiveDevices: 11 })).toBe(false)
     expect(isSupportedChat({ ...supported, federation: true, serverName: undefined })).toBe(false)
     expect(
       isSupportedChat({ ...supported, federation: true, serverName: 'chat.example' }),

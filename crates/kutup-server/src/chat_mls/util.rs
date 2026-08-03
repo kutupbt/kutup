@@ -42,7 +42,9 @@ pub(super) fn validate_participant_domains(
     members: &[kutup_chat_proto::MlsConversationMemberV1],
     participant_domains: &[String],
 ) -> AppResult<()> {
-    if participant_domains.is_empty() || participant_domains.len() > 1000 {
+    if participant_domains.is_empty()
+        || participant_domains.len() > kutup_chat_proto::MAX_MLS_GROUP_ACCOUNTS
+    {
         return Err(AppError::bad_request(
             "MLS participant-domain set is empty or too large",
         ));

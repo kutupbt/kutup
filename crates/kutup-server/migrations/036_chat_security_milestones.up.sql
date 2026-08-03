@@ -1,5 +1,5 @@
--- Authenticated feature policies, complete manifest history, independent
--- transparency auditing, and contacts-only sealed delivery.
+-- Authenticated feature policies, complete account-signed manifest history,
+-- and contacts-only sealed delivery.
 
 CREATE TABLE federation_feature_policy_documents (
     domain                       TEXT        NOT NULL,
@@ -34,49 +34,27 @@ CREATE TABLE federation_feature_policy_failures (
     CHECK (evidence_digest ~ '^[0-9a-f]{64}$')
 );
 
-CREATE TABLE chat_transparency_monitor_cursors (
-    domain                    TEXT        PRIMARY KEY,
-    policy_sequence           BIGINT      NOT NULL CHECK (policy_sequence >= 0),
-    log_id                    CHAR(64),
-    checkpoint                JSONB,
-    last_successful_at        TIMESTAMPTZ,
-    next_attempt_at           TIMESTAMPTZ NOT NULL,
-    consecutive_failures      INTEGER     NOT NULL DEFAULT 0 CHECK (consecutive_failures >= 0),
-    failure_class             TEXT,
-    warning                   BOOLEAN     NOT NULL DEFAULT false,
-    blocked                   BOOLEAN     NOT NULL DEFAULT false,
-    evidence_digest           CHAR(64),
-    updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CHECK (log_id IS NULL OR log_id ~ '^[0-9a-f]{64}$'),
-    CHECK (checkpoint IS NULL OR jsonb_typeof(checkpoint) = 'object'),
-    CHECK (evidence_digest IS NULL OR evidence_digest ~ '^[0-9a-f]{64}$')
-);
-
-CREATE INDEX chat_transparency_monitor_due_idx
-    ON chat_transparency_monitor_cursors (next_attempt_at, domain);
-
 -- Every accepted complete manifest is inserted in the same publication
--- transaction as the mutable head, chronological log, map, and signed head.
+-- transaction as the mutable head. Clients verify the account signature and
+-- complete hash-linked sequence before atomically advancing their durable pin.
 CREATE TABLE chat_device_manifest_history (
     user_id          UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    incarnation_id   CHAR(64)    NOT NULL,
     version          BIGINT      NOT NULL CHECK (version > 0),
     manifest_hash    CHAR(64)    NOT NULL,
     authority_key_id CHAR(64)    NOT NULL,
     manifest         JSONB       NOT NULL CHECK (jsonb_typeof(manifest) = 'object'),
-    leaf_position    BIGINT      NOT NULL UNIQUE REFERENCES chat_transparency_leaves(position),
     accepted_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (user_id, version),
+    PRIMARY KEY (user_id, incarnation_id, version),
+    CHECK (incarnation_id ~ '^[0-9a-f]{64}$'),
     CHECK (manifest_hash ~ '^[0-9a-f]{64}$'),
     CHECK (authority_key_id ~ '^[0-9a-f]{64}$')
 );
 
 INSERT INTO chat_device_manifest_history
-    (user_id, version, manifest_hash, authority_key_id, manifest, leaf_position, accepted_at)
-SELECT m.user_id, m.version, m.manifest_hash, m.authority_key_id, m.manifest,
-       l.position, m.updated_at
-FROM chat_device_manifests m
-JOIN chat_transparency_leaves l
-  ON l.user_id = m.user_id AND l.manifest_version = m.version;
+    (user_id, incarnation_id, version, manifest_hash, authority_key_id, manifest, accepted_at)
+SELECT user_id, manifest->>'incarnationId', version, manifest_hash, authority_key_id, manifest, updated_at
+FROM chat_device_manifests;
 
 -- One current verifier per recipient. Raw 16-byte capabilities are never
 -- persisted at the destination.

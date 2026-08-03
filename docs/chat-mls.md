@@ -1,7 +1,7 @@
 # Kutup MLS conversations
 
-This document is the normative architecture for Kutup MLS SelfSync, Direct,
-and private Group conversations. It replaces the earlier GV2/sender-key group
+This document is the normative architecture for Kutup private MLS Group
+conversations. It replaces the earlier GV2/sender-key group
 proposal. RFC 9420 MLS 1.0 is the V1 cryptographic protocol; post-quantum MLS
 remains a later suite upgrade after the relevant IETF work and interoperable
 library support stabilize.
@@ -11,8 +11,7 @@ federation-identity-authenticated MLS ordering policy and the administrator has
 publicly enabled Chat in the shared federation control plane. The same
 fail-closed gate drives `/api/auth/settings` and the administrative MLS status;
 disabling Chat withdraws the browser capability without deleting durable group
-state. SelfSync and Direct MLS remain unadvertised foundations: Note to Self
-and 1:1 Chat continue to use their existing production paths.
+state. Note to Self and 1:1 Chat use libsignal and have no MLS fallback.
 
 Protocol types, durable storage, authenticated federation routes, OpenMLS
 client state, WASM bindings, anonymous delivery, authority catch-up,
@@ -35,12 +34,13 @@ reloads, authenticated immutable evidence retrieval, recipient-side Welcome
 and manifest verification before durable join, post-recovery messaging, and
 recovered-state persistence after reload. The member-visible security panel
 now renders every group-scoped owner credential, exact group-pinned control
-key, independently verified federation-identity fingerprint, current typed
+key, pinned federation-identity fingerprint, current typed
 ordering policy, and authenticated policy-hash history. Its two-server gate
 compares the displayed values with the signed genesis and actual policy
-responses from both authorities. All implementation and activation gates pass.
-The adversarial/scale gate uses an actual 256-member OpenMLS group, signed fork
-and malformed-bootstrap cases, raw two-server
+responses from both authorities.
+The adversarial/scale gate uses an actual 256-account, ten-device-per-account
+OpenMLS tree (2,560 distinct manifest-bound leaves), signed fork and
+malformed-bootstrap cases, raw two-server
 replay/enumeration/capability-rotation probes, and a destination-log privacy
 assertion.
 Linked-device group state is complete: the two-server browser gate adds an
@@ -54,17 +54,15 @@ remote policy pinning, and recovery after the tightened policy.
 
 ## Conversation model
 
-One implementation serves three typed conversation kinds:
+MLS V1 serves private group conversations only. Direct conversations and Note
+to Self continue to use libsignal; Kutup does not create one- or two-member MLS
+groups as an implementation shortcut.
 
-- `SelfSync`: the account's devices. The authority set is the account's own
-  server (`N=1`, `q=1`); there is no anonymous delivery.
-- `Direct`: two accounts. The initial authority set is exactly the participant
-  server set, including the `N=1` local case. First contact is identified and
-  bounded; established delivery is capability-authenticated and anonymous.
-- `Group`: 1-1000 members at the protocol layer. Server policy must permit at
-  least 256 and may permit up to 1000. Announcement channels with 100,000+
-  recipients are a separate deferred fan-out design, not an oversized MLS
-  group.
+A private group contains 1-256 accounts. Each account may have 1-10 active
+devices and every device is an independent MLS leaf, so the absolute tree cap
+is 2,560 leaves. The account cap is a protocol constant, not an operator claim
+that silently changes client validation. Announcement channels are a separate
+pull/fan-out protocol and are never represented as oversized MLS groups.
 
 Every conversation has a random UUID, an independent 16-255-byte MLS GroupId,
 and append-only incarnations. Recovery creates a new incarnation; it never
@@ -72,34 +70,33 @@ rewrites security history.
 
 A Group genesis contains only its creator. Every later addition is an explicit
 MLS membership transition and identified invitation; creating a group never
-silently enrolls remote accounts. Direct remains a two-member genesis in the
-unadvertised foundation and must gain the same consent/product treatment before
-the existing libsignal Direct path can be replaced.
+silently enrolls remote accounts. There is no Direct or SelfSync MLS
+compatibility path in V1.
 
 ## Cryptographic profile
 
-Kutup MLS V1 accepts exactly RFC 9420 ciphersuite `0x0002`
-(`MLS_128_DHKEMP256_AES128GCM_SHA256_P256`). OpenMLS owns the state machine.
+Kutup MLS V1 accepts exactly RFC 9420 ciphersuite `0x0003`
+(`MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519`). OpenMLS owns the state machine.
 Kutup code owns persistence, manifest binding, policy, federation ordering,
 and delivery.
 
-Each device manifest binds two distinct uncompressed P-256 keys:
+Each device manifest binds two distinct 32-byte public keys:
 
 - the MLS BasicCredential signing key;
 - the anonymous-delivery HPKE key.
 
 Claimed KeyPackages are accepted only when their ciphersuite, KeyPackageRef,
-lifetime, credential identity, and signature key exactly match a
-transparency-verified manifest. Welcome, Commit, application, and sender-leaf
+lifetime, credential identity, and signature key exactly match an
+account-manifest-verified manifest. Welcome, Commit, application, and sender-leaf
 processing all fail closed on a manifest mismatch.
 
-Anonymous KeyPackage retrieval carries the requester's prior transparency tree
-size as a lossless canonical decimal string. Its response includes the complete
-signed current manifest plus inclusion, current-map, consistency, and operator
-evidence. The shared Rust engine authenticates and durably pins that
-evidence, recovers every skipped manifest version, requires one package for
-every MLS-enabled manifest device, and validates each OpenMLS KeyPackage before
-returning it to browser orchestration. This path consumes no Signal prekeys.
+Anonymous KeyPackage retrieval carries only the group delivery capability and
+bounded request metadata. Its response includes the complete signed current
+account manifest. The shared Rust engine verifies the account signature,
+durable authority/incarnation pin and every missing hash-linked manifest,
+requires one package for every MLS-enabled manifest device, and validates each
+OpenMLS KeyPackage before returning it to browser orchestration. This path
+consumes no Signal prekeys and has no transparency/witness dependency.
 
 The OpenMLS provider snapshot, pending Commit bytes, Welcome retry bytes,
 group-scoped control and Ed25519 owner keys, exact pending genesis request,
@@ -146,7 +143,7 @@ only in the mandatory MLS GroupContext extension:
 
 - `MlsGroupAuthorizationPolicyV1` selects whether all members or only
   administrators may send user-visible application messages.
-- `MlsGroupCryptographicPolicyV1` fixes suite `0x0002`, private-control
+- `MlsGroupCryptographicPolicyV1` fixes suite `0x0003`, private-control
   extension `0xff4b`, anonymous delivery, 1024-byte padding, two retained past
   epochs, and a maximum canonical user-application plaintext size. Typed MLS
   governance controls are exempt from that configurable user-message ceiling
@@ -214,7 +211,7 @@ Welcome delivery. V1 replacement authorities must be prior participant or
 authority servers because only those servers possess the immutable old public
 history needed to verify the owner keys.
 
-The initiating browser claims fresh, transparency-verified KeyPackages for
+The initiating browser claims fresh, account-manifest-verified KeyPackages for
 every preserved manifest device except its own initiating device, stages a
 fresh OpenMLS group and one full-roster Commit from epoch zero to epoch one,
 and persists the exact request before any network write. The initiating owner
@@ -233,7 +230,7 @@ A recipient treats an incarnation+1 membership-control envelope as a recovery
 candidate. It fetches the signed recovery only through its authenticated
 same-origin server, verifies the statement against its exact durable old head,
 inspects the Welcome without joining, resolves every device credential through
-the shared transparency verifier, and then atomically archives the old local
+the shared account-manifest verifier, and then atomically archives the old local
 state and installs epoch one. Mailbox acknowledgement occurs only after this
 transaction. Invalid, missing, reordered, replayed, or mismatched recovery
 material leaves the old pin unchanged and blocks the transition; there is no
@@ -260,7 +257,7 @@ most one block hash per incarnation/height; a conflicting race fails closed
 and requires explicit recovery.
 
 Control proposals expose conversation/incarnation, epoch, action class,
-ciphertext digest, and a random group-scoped P-256 control pseudonym. The
+ciphertext digest, and a random group-scoped Ed25519 control pseudonym. The
 actual operation is MLS-encrypted. External authorities can hold a proposer
 accountable inside one group without correlating that device across groups.
 
@@ -394,8 +391,8 @@ using distinct lock names preserves a fixed, non-recursive lock order.
 
 For invitations, the coordinator decrypts the Welcome only into untrusted
 `account@server#device` claims, then calls the shared Rust engine to fetch
-authenticated policy history and current-manifest proofs, recover every
-skipped manifest, pin rollback/fork state, and compare the exact P-256
+authenticated policy history and current signed manifests, recover every
+skipped manifest, retain rollback/equivocation state, and compare the exact Ed25519
 credential key. Only that result can reach OpenMLS join. It commits OpenMLS
 state, reconstructed genesis/control pin, and exact mailbox receipt in one
 encrypted transaction, activates the server invitation second, and
@@ -448,7 +445,7 @@ change.
 
 For inbound roster changes, the browser processes mailbox rows in
 cursor order, stages each Commit without writing state, resolves every claimed
-MLS device key through the transparency verifier, and fetches exactly the next
+MLS device key through the account-manifest verifier, and fetches exactly the next
 canonical public history entry. Rust requires that the quorum-certified block,
 Commit digest, current pin, public transition, private GroupContext, and exact
 manifest-bound device roster all agree. It then merges one epoch, advances the
@@ -478,7 +475,7 @@ removed leaves remain in immutable history and may be re-added only as a later
 leaf.
 
 On Chat startup and manifest change, the browser compares each active local
-group with the transparency-verified signed device set. It claims identified
+group with the account-manifest-verified signed device set. It claims identified
 KeyPackages only for its own missing devices and submits the exact add/remove
 transition. A new installation may auto-install a `DeviceSync` Welcome only
 when its account is already active on the destination server, no account
@@ -509,7 +506,7 @@ Anonymous established delivery uses:
   to conversation, incarnation, epoch, and recipient;
 - only `SHA-256(capability)` at the destination, compared in constant time;
 - RFC 9180 Base-mode HPKE
-  `DHKEM(P-256, HKDF-SHA256)/HKDF-SHA256/AES-128-GCM`;
+  `DHKEM(X25519, HKDF-SHA256)/HKDF-SHA256/ChaCha20-Poly1305`;
 - a fresh encapsulation per destination device;
 - authenticated recipient/device/send-ID/suite AAD;
 - padding inside HPKE to 1024-byte buckets.
@@ -560,11 +557,11 @@ claim:
 
 - `mls_engine::scale_tests::openmls_group_operates_with_256_manifest_bound_members`
   creates 255 independently manifest-bound KeyPackages, commits a real
-  256-leaf OpenMLS tree, joins the final member, and exchanges application
+  256-account/256-leaf OpenMLS tree, joins the final member, and exchanges application
   ciphertext at epoch one;
 - the protocol suite rejects a fully signed alternate control branch,
   incomplete/reordered/duplicated history, invalid bootstrap pages, malformed
-  P-256 encapsulations, unknown suites, 33-envelope requests, and requests over
+  X25519 encapsulations, unknown suites, 33-envelope requests, and requests over
   1 MiB;
 - the native client suite rejects forged Welcome/Commit/certificate material,
   manifest/roster mismatch, identity replacement, rollback, and send-ID reuse;

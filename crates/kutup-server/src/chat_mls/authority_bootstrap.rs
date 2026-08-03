@@ -605,13 +605,15 @@ async fn materialize_complete_bootstrap(
     for request in &history {
         MlsRepository::new(state.pool.clone())
             .commit_control_block(
-                local_domain,
-                None,
-                Some(origin),
                 request,
-                None,
-                active_policy(state).await?.maximum_group_members,
-                true,
+                super::CommitControlContext {
+                    local_domain,
+                    local_submitter: None,
+                    federated_origin: Some(origin),
+                    incoming_membership_delivery: None,
+                    maximum_group_members: active_policy(state).await?.maximum_group_members,
+                    verified_history_replay: true,
+                },
             )
             .await?;
     }

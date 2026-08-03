@@ -5,38 +5,37 @@ It succeeds `cmd/kutup/internal/crypto/` + `backend/services/envelope/`. See als
 crate's own `crates/kutup-crypto/README.md`, and `../decisions.md` for the param /
 wire-format facts that must never regress.
 
-## Primitives
+## Current V1 primitives
 
 | Module | Construction | Backing crate |
 |---|---|---|
 | `kdf` | Argon2id (3 / 64 MiB / p=1 / 32 B) + HKDF-SHA256 | `dryoc`, `hkdf`+`sha2` |
-| `secretbox` | XSalsa20-Poly1305 | `dryoc` |
-| `sealedbox` | X25519 anonymous sealed box | `dryoc` |
+| `account_envelope` / `drive_envelope` | typed XChaCha20-Poly1305 | `chacha20poly1305` |
+| `named_share` | authenticated X25519 HPKE + Ed25519 | `hpke-rs`, `ed25519-dalek` |
 | `stream` | XChaCha20-Poly1305 secretstream, 5 MiB chunks | `dryoc` |
-| `asset` | XChaCha20-Poly1305-IETF AEAD | `chacha20poly1305` |
-| `envelope` | collab-frame wire format + Ed25519 | `ed25519-dalek` |
+| `asset` | purpose-bound XChaCha20-Poly1305 | `chacha20poly1305` |
+| `envelope` | XChaCha20-Poly1305 collab-frame format + Ed25519 | RustCrypto |
+| `local_state` | profile-bound XChaCha20-Poly1305 | `chacha20poly1305` |
 
 ## Module API surface
 
-- `kdf::{derive_account_protection_keys, derive_account_protection_keys_b64, derive_recovery_auth_proof, derive_content_key}`
-- `secretbox::{seal, seal_with_nonce, open, open_b64}`
-- `sealedbox::{seal_anonymous, open_anonymous}`
+- `kdf::{derive_account_protection_keys, derive_account_protection_keys_b64, derive_recovery_auth_proof}`
+- `account_envelope`, `drive_envelope`, `drive_object`, `named_share` and `collection_epoch`
 - `stream::{StreamEncryptor, StreamDecryptor, encrypt_stream, decrypt_stream}` + consts
   (`CHUNK_SIZE`, `HEADER_BYTES`, `ABYTES`, `TAG_MESSAGE`, `TAG_FINAL`)
 - `asset::{encrypt_asset, decrypt_asset}`
-- `envelope::{Frame, sign, verify, kind::*}`
+- `envelope::{seal, open, inspect, verify_signature}`
+- `local_state::{seal, open}`
 
-## Regenerate parity vectors after ANY crypto change
+## Verify canonical vectors after any crypto change
 
 ```sh
-go -C cmd/kutup run ./tools/genvectors > crates/kutup-crypto/tests/vectors/crypto.json
-go -C backend   run ./tools/genvectors > crates/kutup-crypto/tests/vectors/envelope.json
 cargo test -p kutup-crypto
+pnpm --dir frontend run build:crypto-wasm
+node scripts/test-crypto-wasm.mjs
 ```
 
-The generators (`cmd/kutup/tools/genvectors`, `backend/tools/genvectors`) use the **real
-Go packages** as the oracle. Vectors pin Go-produced ciphertext (verifies the Rust
-*decrypt* direction) and, where the primitive is deterministic (KDF, HKDF, secretbox with
-a fixed nonce, Ed25519 signing), pin exact output too (verifies *encrypt*). The committed
-secretstream vectors are single-chunk to keep the repo light; multi-chunk framing is
-covered by a Rust round-trip test (`stream_multichunk_roundtrip`).
+Rust is the canonical implementation. Checked-in deterministic vectors pin its
+public formats and the browser runs those operations through the generated WASM
+module. The committed secretstream vectors are single-chunk to keep the repo
+light; multi-chunk framing is covered by `stream_multichunk_roundtrip`.

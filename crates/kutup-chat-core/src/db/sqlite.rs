@@ -17,11 +17,10 @@ use rusqlite::{Connection, OptionalExtension};
 use zeroize::Zeroize as _;
 
 use crate::db::{
-    contact_state_code, contact_state_from_code, transparency_monitor_state_code,
-    transparency_monitor_state_from_code, AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope,
-    InboundFailureKind, InboundState, InboxMessage, LocalIdentity, LocalProfile,
-    ManifestHistoryRecord, ManifestTrust, MlsHistoryMessage, MlsOutboxDelivery, MlsOutboxEntry,
-    OutboxEntry, PeerProfile, Pending, SentMessage, TransparencyMonitorStatus, TransparencyTrust,
+    contact_state_code, contact_state_from_code, AccountManifestHistoryRecordV1, AuthorityTrust,
+    ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState, InboxMessage,
+    LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxDelivery,
+    MlsOutboxEntry, OutboxEntry, PeerProfile, Pending, SentMessage,
 };
 use crate::error::{ChatError, Result};
 
@@ -160,37 +159,25 @@ CREATE INDEX IF NOT EXISTS inbound_by_cursor ON inbound_envelopes (cursor, id);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, 0);
 CREATE TABLE IF NOT EXISTS manifest_trust (
     peer               TEXT PRIMARY KEY,
+    account            TEXT    NOT NULL,
+    incarnation_id     TEXT    NOT NULL,
     authority_key_id   TEXT    NOT NULL,
     self_authority_key TEXT    NOT NULL,
-    highest_version    INTEGER NOT NULL,
+    drive_hpke_public_key TEXT NOT NULL,
+    drive_share_signing_public_key TEXT NOT NULL,
+    highest_sequence    INTEGER NOT NULL,
     manifest_hash      TEXT    NOT NULL,
     trust_state        INTEGER NOT NULL,
-    transparency_position INTEGER,
-    continuity_gap     INTEGER NOT NULL
+    continuity_gap     INTEGER NOT NULL,
+    quarantine_reason  TEXT,
+    pending_reset_json TEXT
 );
 CREATE TABLE IF NOT EXISTS manifest_history (
     peer          TEXT    NOT NULL,
-    version       INTEGER NOT NULL,
+    incarnation_id TEXT   NOT NULL,
+    sequence      INTEGER NOT NULL,
     manifest_json TEXT    NOT NULL,
-    leaf_index    INTEGER NOT NULL,
-    PRIMARY KEY (peer, version)
-);
-CREATE TABLE IF NOT EXISTS transparency_trust (
-    scope                TEXT PRIMARY KEY,
-    log_id               TEXT    NOT NULL,
-    tree_size            INTEGER NOT NULL,
-    root_hash            TEXT    NOT NULL,
-    operator_key_id      TEXT    NOT NULL DEFAULT '',
-    operator_public_key  TEXT    NOT NULL DEFAULT '',
-    checkpoint_issued_at INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS transparency_monitor_status (
-    scope                TEXT PRIMARY KEY,
-    state                INTEGER NOT NULL,
-    last_checked_at_ms   INTEGER NOT NULL,
-    last_success_at_ms   INTEGER,
-    tree_size            INTEGER,
-    detail               TEXT
+    PRIMARY KEY (peer, incarnation_id, sequence)
 );
 CREATE TABLE IF NOT EXISTS pending_prekey_upload (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
@@ -545,30 +532,46 @@ impl ChatDb for SqliteChatDb {
         let conn = self.conn.borrow();
         db(conn
             .query_row(
-                "SELECT peer, authority_key_id, self_authority_key, highest_version,
-                        manifest_hash, trust_state, transparency_position, continuity_gap
+                "SELECT peer, account, incarnation_id, authority_key_id,
+                        self_authority_key, drive_hpke_public_key,
+                        drive_share_signing_public_key, highest_sequence,
+                        manifest_hash, trust_state, continuity_gap,
+                        quarantine_reason, pending_reset_json
                  FROM manifest_trust WHERE peer = ?1",
                 [peer],
                 |row| {
-                    let trust_state: i64 = row.get(5)?;
+                    let trust_state: i64 = row.get(9)?;
                     let trust = AuthorityTrust::from_code(trust_state).map_err(|error| {
                         rusqlite::Error::FromSqlConversionFailure(
-                            5,
+                            9,
                             rusqlite::types::Type::Integer,
                             Box::new(error),
                         )
                     })?;
                     Ok(ManifestTrust {
                         peer: row.get(0)?,
-                        authority_key_id: row.get(1)?,
-                        self_authority_key: row.get(2)?,
-                        highest_version: row.get::<_, i64>(3)? as u64,
-                        manifest_hash: row.get(4)?,
+                        account: row.get(1)?,
+                        incarnation_id: row.get(2)?,
+                        authority_key_id: row.get(3)?,
+                        self_authority_key: row.get(4)?,
+                        drive_hpke_public_key: row.get(5)?,
+                        drive_share_signing_public_key: row.get(6)?,
+                        highest_sequence: row.get::<_, i64>(7)? as u64,
+                        manifest_hash: row.get(8)?,
                         trust,
-                        transparency_position: row
-                            .get::<_, Option<i64>>(6)?
-                            .map(|value| value as u64),
-                        continuity_gap: row.get::<_, i64>(7)? != 0,
+                        continuity_gap: row.get::<_, i64>(10)? != 0,
+                        quarantine_reason: row.get(11)?,
+                        pending_reset: row
+                            .get::<_, Option<String>>(12)?
+                            .map(|value| serde_json::from_str(&value))
+                            .transpose()
+                            .map_err(|error| {
+                                rusqlite::Error::FromSqlConversionFailure(
+                                    12,
+                                    rusqlite::types::Type::Text,
+                                    Box::new(error),
+                                )
+                            })?,
                     })
                 },
             )
@@ -578,84 +581,27 @@ impl ChatDb for SqliteChatDb {
     async fn load_manifest_history(
         &self,
         peer: &str,
-        version: u64,
-    ) -> Result<Option<ManifestHistoryRecord>> {
+        incarnation_id: &str,
+        sequence: u64,
+    ) -> Result<Option<AccountManifestHistoryRecordV1>> {
         let conn = self.conn.borrow();
-        let row: Option<(String, i64)> = db(conn
+        let row: Option<String> = db(conn
             .query_row(
-                "SELECT manifest_json, leaf_index FROM manifest_history
-                 WHERE peer = ?1 AND version = ?2",
-                rusqlite::params![peer, version as i64],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                "SELECT manifest_json FROM manifest_history
+                 WHERE peer = ?1 AND incarnation_id = ?2 AND sequence = ?3",
+                rusqlite::params![peer, incarnation_id, sequence as i64],
+                |row| row.get(0),
             )
             .optional())?;
-        row.map(|(manifest, leaf_index)| {
-            Ok(ManifestHistoryRecord {
+        row.map(|manifest| {
+            Ok(AccountManifestHistoryRecordV1 {
                 peer: peer.to_string(),
-                version,
+                sequence,
                 manifest: serde_json::from_str(&manifest)
                     .map_err(|error| ChatError::Db(error.to_string()))?,
-                leaf_index: u64::try_from(leaf_index)
-                    .map_err(|_| ChatError::Db("negative manifest history position".into()))?,
             })
         })
         .transpose()
-    }
-
-    async fn load_transparency_trust(&self, scope: &str) -> Result<Option<TransparencyTrust>> {
-        let conn = self.conn.borrow();
-        db(conn
-            .query_row(
-                "SELECT scope, log_id, tree_size, root_hash, operator_key_id,
-                        operator_public_key, checkpoint_issued_at
-                 FROM transparency_trust WHERE scope = ?1",
-                [scope],
-                |row| {
-                    Ok(TransparencyTrust {
-                        scope: row.get(0)?,
-                        log_id: row.get(1)?,
-                        tree_size: row.get::<_, i64>(2)? as u64,
-                        root_hash: row.get(3)?,
-                        operator_key_id: row.get(4)?,
-                        operator_public_key: row.get(5)?,
-                        checkpoint_issued_at: row.get(6)?,
-                    })
-                },
-            )
-            .optional())
-    }
-
-    async fn load_transparency_monitor_status(
-        &self,
-        scope: &str,
-    ) -> Result<Option<TransparencyMonitorStatus>> {
-        let conn = self.conn.borrow();
-        db(conn
-            .query_row(
-                "SELECT scope, state, last_checked_at_ms, last_success_at_ms,
-                        tree_size, detail
-                 FROM transparency_monitor_status WHERE scope = ?1",
-                [scope],
-                |row| {
-                    let state =
-                        transparency_monitor_state_from_code(row.get(1)?).map_err(|error| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                1,
-                                rusqlite::types::Type::Integer,
-                                Box::new(error),
-                            )
-                        })?;
-                    Ok(TransparencyMonitorStatus {
-                        scope: row.get(0)?,
-                        state,
-                        last_checked_at_ms: row.get(2)?,
-                        last_success_at_ms: row.get(3)?,
-                        tree_size: row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
-                        detail: row.get(5)?,
-                    })
-                },
-            )
-            .optional())
     }
 
     async fn load_contact(&self, peer: &str) -> Result<Option<ContactRecord>> {
@@ -1027,98 +973,63 @@ impl ChatDb for SqliteChatDb {
         for (peer, trust) in &pending.manifest_trust {
             db(tx.execute(
                 "INSERT INTO manifest_trust
-                     (peer, authority_key_id, self_authority_key, highest_version,
-                      manifest_hash, trust_state, transparency_position, continuity_gap)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                     (peer, account, incarnation_id, authority_key_id,
+                      self_authority_key, drive_hpke_public_key,
+                      drive_share_signing_public_key, highest_sequence,
+                      manifest_hash, trust_state, continuity_gap,
+                      quarantine_reason, pending_reset_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                  ON CONFLICT(peer) DO UPDATE SET
+                     account = excluded.account,
+                     incarnation_id = excluded.incarnation_id,
                      authority_key_id = excluded.authority_key_id,
                      self_authority_key = excluded.self_authority_key,
-                     highest_version = excluded.highest_version,
+                     drive_hpke_public_key = excluded.drive_hpke_public_key,
+                     drive_share_signing_public_key = excluded.drive_share_signing_public_key,
+                     highest_sequence = excluded.highest_sequence,
                      manifest_hash = excluded.manifest_hash,
                      trust_state = excluded.trust_state,
-                     transparency_position = excluded.transparency_position,
-                     continuity_gap = excluded.continuity_gap",
+                     continuity_gap = excluded.continuity_gap,
+                     quarantine_reason = excluded.quarantine_reason,
+                     pending_reset_json = excluded.pending_reset_json",
                 rusqlite::params![
                     peer,
+                    trust.account,
+                    trust.incarnation_id,
                     trust.authority_key_id,
                     trust.self_authority_key,
-                    trust.highest_version as i64,
+                    trust.drive_hpke_public_key,
+                    trust.drive_share_signing_public_key,
+                    trust.highest_sequence as i64,
                     trust.manifest_hash,
                     trust.trust.code(),
-                    trust.transparency_position.map(|value| value as i64),
                     i64::from(trust.continuity_gap),
+                    trust.quarantine_reason,
+                    trust
+                        .pending_reset
+                        .as_ref()
+                        .map(serde_json::to_string)
+                        .transpose()
+                        .map_err(|error| ChatError::Db(error.to_string()))?,
                 ],
             ))?;
         }
-        for ((peer, version), record) in &pending.manifest_history {
+        for ((peer, incarnation_id, sequence), record) in &pending.manifest_history {
             let manifest_json = serde_json::to_string(&record.manifest)
                 .map_err(|error| ChatError::Db(error.to_string()))?;
             let changed = db(tx.execute(
-                "INSERT INTO manifest_history (peer, version, manifest_json, leaf_index)
+                "INSERT INTO manifest_history (peer, incarnation_id, sequence, manifest_json)
                  VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(peer, version) DO UPDATE SET
-                   manifest_json = excluded.manifest_json,
-                   leaf_index = excluded.leaf_index
-                 WHERE manifest_history.manifest_json = excluded.manifest_json
-                   AND manifest_history.leaf_index = excluded.leaf_index",
-                rusqlite::params![
-                    peer,
-                    *version as i64,
-                    manifest_json,
-                    record.leaf_index as i64
-                ],
+                 ON CONFLICT(peer, incarnation_id, sequence) DO UPDATE SET
+                   manifest_json = excluded.manifest_json
+                 WHERE manifest_history.manifest_json = excluded.manifest_json",
+                rusqlite::params![peer, incarnation_id, *sequence as i64, manifest_json],
             ))?;
             if changed != 1 {
                 return Err(ChatError::Trust(format!(
-                    "immutable manifest history conflicts at {peer} version {version}"
+                    "immutable manifest history conflicts at {peer} sequence {sequence}"
                 )));
             }
-        }
-        for (scope, trust) in &pending.transparency_trust {
-            db(tx.execute(
-                "INSERT INTO transparency_trust
-                     (scope, log_id, tree_size, root_hash, operator_key_id,
-                      operator_public_key, checkpoint_issued_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                 ON CONFLICT(scope) DO UPDATE SET
-                     log_id = excluded.log_id,
-                     tree_size = excluded.tree_size,
-                     root_hash = excluded.root_hash,
-                     operator_key_id = excluded.operator_key_id,
-                     operator_public_key = excluded.operator_public_key,
-                     checkpoint_issued_at = excluded.checkpoint_issued_at",
-                rusqlite::params![
-                    scope,
-                    trust.log_id,
-                    trust.tree_size as i64,
-                    trust.root_hash,
-                    trust.operator_key_id,
-                    trust.operator_public_key,
-                    trust.checkpoint_issued_at,
-                ],
-            ))?;
-        }
-        for (scope, status) in &pending.transparency_monitor_status {
-            db(tx.execute(
-                "INSERT INTO transparency_monitor_status
-                     (scope, state, last_checked_at_ms, last_success_at_ms,
-                      tree_size, detail)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT(scope) DO UPDATE SET
-                     state = excluded.state,
-                     last_checked_at_ms = excluded.last_checked_at_ms,
-                     last_success_at_ms = excluded.last_success_at_ms,
-                     tree_size = excluded.tree_size,
-                     detail = excluded.detail",
-                rusqlite::params![
-                    scope,
-                    transparency_monitor_state_code(status.state),
-                    status.last_checked_at_ms,
-                    status.last_success_at_ms,
-                    status.tree_size.map(|value| value as i64),
-                    status.detail,
-                ],
-            ))?;
         }
         for (peer, contact) in &pending.contacts {
             db(tx.execute(
@@ -1291,35 +1202,9 @@ fn ensure_schema_upgrades(conn: &Connection) -> Result<()> {
             [],
         ))?;
     }
-    if !has_column(conn, "manifest_trust", "transparency_position")? {
-        db(conn.execute(
-            "ALTER TABLE manifest_trust ADD COLUMN transparency_position INTEGER",
-            [],
-        ))?;
-    }
-    for (column, definition) in [
-        ("operator_key_id", "TEXT NOT NULL DEFAULT ''"),
-        ("operator_public_key", "TEXT NOT NULL DEFAULT ''"),
-        ("checkpoint_issued_at", "INTEGER NOT NULL DEFAULT 0"),
-    ] {
-        if !has_column(conn, "transparency_trust", column)? {
-            db(conn.execute(
-                &format!("ALTER TABLE transparency_trust ADD COLUMN {column} {definition}"),
-                [],
-            ))?;
-        }
-    }
     db(conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS pending_chat_registration (
              id INTEGER PRIMARY KEY CHECK (id = 1), request BLOB NOT NULL
-         );
-         CREATE TABLE IF NOT EXISTS transparency_monitor_status (
-             scope TEXT PRIMARY KEY,
-             state INTEGER NOT NULL,
-             last_checked_at_ms INTEGER NOT NULL,
-             last_success_at_ms INTEGER,
-             tree_size INTEGER,
-             detail TEXT
          );
          CREATE TABLE IF NOT EXISTS mls_messages (
              record_id TEXT PRIMARY KEY,
@@ -1651,6 +1536,115 @@ mod tests {
         assert_eq!(block_on(db.load_pre_key(7)).unwrap(), Some(vec![1, 2, 3]));
         assert_eq!(block_on(db.purge_used_pre_keys(i64::MAX)).unwrap(), 1);
         assert_eq!(block_on(db.load_pre_key(7)).unwrap(), None);
+    }
+
+    #[test]
+    fn quarantined_replacement_and_both_incarnation_histories_round_trip_atomically() {
+        use base64::Engine as _;
+        use futures_executor::block_on;
+        use kutup_chat_proto::{AccountManifestDeviceV1, AccountManifestV1, DirectChatSuiteId};
+
+        fn manifest(seed: u8) -> AccountManifestV1 {
+            crate::AccountAuthority::derive(&[seed; 32])
+                .unwrap()
+                .sign_manifest(
+                    "bob@chat.example",
+                    1,
+                    None,
+                    vec![AccountManifestDeviceV1 {
+                        device_id: 1,
+                        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+                        identity_key: base64::engine::general_purpose::STANDARD.encode([seed; 33]),
+                        registration_id: 7,
+                        mls: None,
+                    }],
+                    "2026-07-29T00:00:00Z",
+                )
+                .unwrap()
+        }
+
+        fn pin(manifest: &AccountManifestV1, trust: AuthorityTrust) -> ManifestTrust {
+            ManifestTrust {
+                peer: manifest.account.clone(),
+                account: manifest.account.clone(),
+                incarnation_id: manifest.incarnation_id.clone(),
+                authority_key_id: manifest.authority_key_id.clone(),
+                self_authority_key: manifest.self_authority_key.clone(),
+                drive_hpke_public_key: manifest.drive.hpke_public_key.clone(),
+                drive_share_signing_public_key: manifest.drive.share_signing_public_key.clone(),
+                highest_sequence: manifest.sequence,
+                manifest_hash: manifest.manifest_hash().unwrap(),
+                trust,
+                continuity_gap: false,
+                quarantine_reason: None,
+                pending_reset: None,
+            }
+        }
+
+        let retained_manifest = manifest(3);
+        let candidate_manifest = manifest(4);
+        let retained_record = AccountManifestHistoryRecordV1 {
+            peer: retained_manifest.account.clone(),
+            sequence: 1,
+            manifest: retained_manifest.clone(),
+        };
+        let candidate_record = AccountManifestHistoryRecordV1 {
+            peer: candidate_manifest.account.clone(),
+            sequence: 1,
+            manifest: candidate_manifest.clone(),
+        };
+        let mut retained = pin(&retained_manifest, AuthorityTrust::Quarantined);
+        retained.quarantine_reason = Some("authority changed".into());
+        retained.pending_reset = Some(Box::new(crate::PendingAccountIdentityResetV1 {
+            candidate: pin(&candidate_manifest, AuthorityTrust::Tofu),
+            history: vec![candidate_record.clone()],
+        }));
+
+        let db = SqliteChatDb::open_in_memory().unwrap();
+        let mut pending = Pending::default();
+        pending
+            .manifest_trust
+            .insert(retained.peer.clone(), retained.clone());
+        pending.manifest_history.insert(
+            (
+                retained_record.peer.clone(),
+                retained_record.manifest.incarnation_id.clone(),
+                1,
+            ),
+            retained_record.clone(),
+        );
+        pending.manifest_history.insert(
+            (
+                candidate_record.peer.clone(),
+                candidate_record.manifest.incarnation_id.clone(),
+                1,
+            ),
+            candidate_record.clone(),
+        );
+        block_on(db.apply(&pending)).unwrap();
+
+        assert_eq!(
+            block_on(db.load_manifest_trust("bob@chat.example")).unwrap(),
+            Some(retained)
+        );
+        assert_eq!(
+            block_on(db.load_manifest_history(
+                "bob@chat.example",
+                &retained_manifest.incarnation_id,
+                1,
+            ))
+            .unwrap(),
+            Some(retained_record)
+        );
+        assert_eq!(
+            block_on(db.load_manifest_history(
+                "bob@chat.example",
+                &candidate_manifest.incarnation_id,
+                1,
+            ))
+            .unwrap(),
+            Some(candidate_record)
+        );
     }
 
     #[cfg(not(feature = "sqlcipher"))]

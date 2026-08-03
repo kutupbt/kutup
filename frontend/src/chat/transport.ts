@@ -18,41 +18,20 @@ export class ApiChatTransport implements ChatTransportPort {
     return api.post('/chat/device', request).then((response) => response.data)
   }
 
-  async fetchBundles(username: string, transparencyTreeSize: string): Promise<unknown> {
+  async fetchBundles(username: string): Promise<unknown> {
     return api
-      .get(`/chat/users/${encodeURIComponent(username)}/keys`, {
-        params: { transparencyTreeSize },
-      })
+      .get(`/chat/users/${encodeURIComponent(username)}/keys`)
       .then((response) => response.data)
   }
 
   async fetchSyncBundles(
     username: string,
     currentDeviceId: number,
-    transparencyTreeSize: string,
   ): Promise<unknown> {
     return api
       .get(`/chat/users/${encodeURIComponent(username)}/keys`, {
-        params: { syncDeviceId: currentDeviceId, transparencyTreeSize },
+        params: { syncDeviceId: currentDeviceId },
       })
-      .then((response) => response.data)
-  }
-
-  async fetchTransparencyCheckpoint(
-    scope: string,
-    fromTreeSize: string,
-  ): Promise<unknown> {
-    const path = scope === 'local'
-      ? '/chat/transparency/checkpoint'
-      : `/chat/transparency/domains/${encodeURIComponent(scope)}/checkpoint`
-    return api
-      .get(path, { params: { fromTreeSize } })
-      .then((response) => response.data)
-  }
-
-  async fetchTransparencyPolicy(domain: string): Promise<unknown> {
-    return api
-      .get(`/chat/transparency/domains/${encodeURIComponent(domain)}/policy`)
       .then((response) => response.data)
   }
 
@@ -73,33 +52,18 @@ export class ApiChatTransport implements ChatTransportPort {
     }
   }
 
-  async fetchManifestPublication(
+  async fetchManifestHistory(
     username: string,
-    transparencyTreeSize: string,
-  ): Promise<unknown> {
-    return api
-      .get(`/chat/users/${encodeURIComponent(username)}/manifest-proof`, {
-        params: { transparencyTreeSize },
-      })
-      .then((response) => response.data)
-  }
-
-  async fetchManifestRange(
-    username: string,
-    fromVersion: string,
-    toVersion: string,
-    pageFromVersion: string,
-    cursor: string | null,
-    transparencyTreeSize: string,
+    fromSequence: string,
+    toSequence: string,
+    pageFromSequence: string,
   ): Promise<unknown> {
     return api
       .get(`/chat/users/${encodeURIComponent(username)}/manifest-history`, {
         params: {
-          fromVersion,
-          toVersion,
-          pageFromVersion,
-          ...(cursor === null ? {} : { cursor }),
-          transparencyTreeSize,
+          fromSequence,
+          toSequence,
+          pageFromSequence,
         },
       })
       .then((response) => response.data)
@@ -120,21 +84,18 @@ export class ApiChatTransport implements ChatTransportPort {
   async fetchSealedBundles(
     username: string,
     capability: string,
-    transparencyTreeSize: string,
   ): Promise<unknown> {
     return axios
       .post(
         `${apiBase()}/chat/anonymous/users/${encodeURIComponent(username)}/keys`,
-        { capability, transparencyTreeSize },
+        { capability },
         { withCredentials: false, headers: { Authorization: undefined } },
       )
       .then((response) => response.data)
   }
 
-  async publishManifest(manifest: unknown, transparencyTreeSize: string): Promise<unknown> {
-    return api
-      .post('/chat/manifest', manifest, { params: { transparencyTreeSize } })
-      .then((response) => response.data)
+  async publishManifest(manifest: unknown): Promise<unknown> {
+    return api.post('/chat/manifest', manifest).then((response) => response.data)
   }
 
   async fetchOwnProfile(): Promise<unknown | null> {

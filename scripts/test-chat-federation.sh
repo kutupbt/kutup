@@ -82,7 +82,11 @@ if [[ "${KUTUP_FEDERATION_SKIP_BROWSER:-0}" != "1" ]]; then
     cd "$root_dir/tests/e2e"
     E2E_BASE_URL="http://127.0.0.1:$port_a" \
     E2E_SECONDARY_BASE_URL="http://127.0.0.1:$port_b" \
+    E2E_ADMIN_EMAIL="federation-admin-a@example.test" \
+    E2E_ADMIN_PASSWORD="federation-live-password" \
+    E2E_BOOTSTRAP_PASSWORD="federation-admin-temp" \
       npm exec -- playwright test \
+        specs/25-tus-upload.spec.ts \
         specs/32-chat-two-server-security.spec.ts --project=chromium
   )
 

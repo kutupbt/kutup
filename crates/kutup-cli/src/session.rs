@@ -2,7 +2,7 @@
 //!
 //! Two-tier model: a 32-byte **device key** lives in the OS keyring (service
 //! `kutup-cli/<profile>`, account `device-key`), and the session JSON is
-//! encrypted with it (XSalsa20-Poly1305, nonce-prepended) at rest.
+//! encrypted with it in a profile-bound `LocalStateEnvelopeV1` at rest.
 //!
 //! Storage backend: `redb` (the Go CLI used BoltDB). The on-disk file is named
 //! `kutup.redb` so it never collides with a Go-era `kutup.db` BoltDB file —
@@ -18,7 +18,6 @@ use crate::config;
 
 const KEYRING_ACCOUNT: &str = "device-key";
 const DB_FILE: &str = "kutup.redb";
-const NONCE_BYTES: usize = 24;
 
 /// `(key -> value)` blobs. `data` holds the encrypted session.
 const SESSION: TableDefinition<&str, &[u8]> = TableDefinition::new("session");
@@ -51,10 +50,8 @@ pub struct Session {
     pub private_key: String,
     pub public_key: String,
     /// Server-returned encrypted blobs (kept for possible re-derivation).
-    pub encrypted_master_key: String,
-    pub master_key_nonce: String,
-    pub encrypted_private_key: String,
-    pub private_key_nonce: String,
+    pub master_key_envelope: String,
+    pub drive_private_key_envelope: String,
     pub storage_quota_bytes: i64,
     pub storage_used_bytes: i64,
 }
@@ -65,9 +62,6 @@ impl Session {
     }
     pub fn private_key_bytes(&self) -> Result<Vec<u8>> {
         b64(&self.private_key)
-    }
-    pub fn public_key_bytes(&self) -> Result<Vec<u8>> {
-        b64(&self.public_key)
     }
 }
 
@@ -206,28 +200,28 @@ impl Store {
         Ok(())
     }
 
-    // --- device-key encryption (XSalsa20-Poly1305, nonce-prepended) ---
+    // --- device-key encryption (typed, profile-bound XChaCha envelope) ---
 
     fn encrypt(&self, data: &[u8]) -> Result<Vec<u8>> {
         let key = self.device_key.expect("device key present");
-        let mut nonce = [0u8; NONCE_BYTES];
-        rand::rngs::OsRng.fill_bytes(&mut nonce);
-        let ct = kutup_crypto::secretbox::seal_with_nonce(data, &nonce, &key)
-            .map_err(|e| anyhow!("session encrypt: {e}"))?;
-        let mut out = Vec::with_capacity(NONCE_BYTES + ct.len());
-        out.extend_from_slice(&nonce);
-        out.extend_from_slice(&ct);
-        Ok(out)
+        kutup_crypto::local_state::seal(
+            data,
+            &key,
+            kutup_crypto::local_state::LocalStatePurpose::CliSession,
+            &self.profile,
+        )
+        .map_err(|e| anyhow!("session encrypt: {e}"))
     }
 
     fn decrypt(&self, data: &[u8]) -> Result<Vec<u8>> {
-        if data.len() < NONCE_BYTES {
-            return Err(anyhow!("session data too short"));
-        }
         let key = self.device_key.expect("device key present");
-        let (nonce, ct) = data.split_at(NONCE_BYTES);
-        kutup_crypto::secretbox::open(ct, nonce, &key)
-            .map_err(|_| anyhow!("session decryption failed — wrong device key"))
+        kutup_crypto::local_state::open(
+            data,
+            &key,
+            kutup_crypto::local_state::LocalStatePurpose::CliSession,
+            &self.profile,
+        )
+        .map_err(|_| anyhow!("session decryption failed — wrong device key"))
     }
 
     // --- sync state v2 (used by the sync engine) ---
@@ -362,7 +356,7 @@ impl Store {
 
 /// State needed to resume an interrupted tus upload. Values in the sync/resume
 /// tables are plaintext JSON, so the file key is stored only in its
-/// collection-key wrap (`enc_file_key` — the exact blob the server already
+/// collection-key wrap (`file_key_envelope` — the exact blob the server already
 /// holds), never raw; the 24-byte header is public (it's the first bytes of
 /// ciphertext the server already received).
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -371,9 +365,9 @@ pub struct ResumeState {
     pub upload_id: String,
     /// Pre-allocated file id from the tus create body.
     pub file_id: String,
-    /// base64, wrapped with the collection key.
-    pub enc_file_key: String,
-    pub file_key_nonce: String,
+    /// Typed envelope wrapped with the collection key.
+    pub file_key_envelope: String,
+    pub key_epoch: u32,
     /// base64 24-byte secretstream header.
     pub header: String,
     pub plain_size: i64,

@@ -12,6 +12,7 @@
 // fetchDecrypt.ts, shared with the folder-as-ZIP path (lib/zipDownload.ts).
 
 import { fetchDecryptedChunks } from './fetchDecrypt'
+import type { FileBlobContextV1 } from '@/crypto/fileBlob'
 import { isTauri } from '@/lib/isTauri'
 
 export interface StreamDownloadOptions {
@@ -21,6 +22,8 @@ export interface StreamDownloadOptions {
   /** Per-file content key (unwrapped from the collection key by the
    *  caller — same flow as the existing handleDownload). */
   fileKey: Uint8Array
+  /** Exact authenticated Drive object binding expected in the blob header. */
+  context: FileBlobContextV1
   /** Display name + MIME shown in the save picker / `<a download>`. */
   filename: string
   mimeType?: string
@@ -67,6 +70,7 @@ export async function streamDownload(opts: StreamDownloadOptions): Promise<void>
     for await (const { plain } of fetchDecryptedChunks(
       opts.url,
       opts.fileKey,
+      opts.context,
       opts.accessToken,
       opts.signal,
     )) {

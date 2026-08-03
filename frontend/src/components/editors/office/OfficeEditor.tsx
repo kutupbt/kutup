@@ -22,9 +22,8 @@ import {
 import { useAppDispatch, useAppSelector } from '@/store'
 import { setDeviceId } from '@/store/authSlice'
 import { CollabTransport, type HelloMsg } from '@/collab/transport'
-import { pack, unpack, KIND, type Frame } from '@/collab/envelope'
-import { encryptOOOp, decryptOOOp, encryptOOCursor, decryptOOCursor } from '@/collab/cryptoFrame'
-import { ed25519Sign } from '@/collab/sign'
+import { KIND } from '@/collab/envelope'
+import { encryptCollabFrameV1, openCollabFrameV1 } from '@/collab/cryptoFrame'
 import {
   generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64,
 } from '@/collab/devices'
@@ -40,8 +39,10 @@ export interface OfficeEditorHandle {
 
 interface Props {
   fileId: string
+  collectionId: string
   filename: string
   collectionMaster: Uint8Array
+  keyEpoch: number
   initialBytes?: Uint8Array
   /** Fires when inner.html intercepts Cmd/Ctrl+S inside the OO iframe.
    *  Parent should call its save handler. */
@@ -105,7 +106,15 @@ function ensureRegistered(pubKeyB64: string, label: string): Promise<number> {
 }
 
 function OfficeEditorBase(
-  { fileId, filename, initialBytes, collectionMaster, onSaveShortcut }: Props,
+  {
+    fileId,
+    collectionId,
+    filename,
+    initialBytes,
+    collectionMaster,
+    keyEpoch,
+    onSaveShortcut,
+  }: Props,
   ref: Ref<OfficeEditorHandle>,
 ) {
   // Stable ref so the postMessage handler doesn't need to re-bind when
@@ -190,15 +199,20 @@ function OfficeEditorBase(
       }
       try {
         outboundSeqRef.current = outboundSeqRef.current + 1n
-        const f = await encryptOOOp(
+        const packed = await encryptCollabFrameV1(
           new TextEncoder().encode(payload),
-          fileId, docKeyIdRef.current, BigInt(did), outboundSeqRef.current,
+          KIND.OO_OP,
+          {
+            fileId,
+            collectionId,
+            keyEpoch,
+            docKeyId: docKeyIdRef.current,
+            deviceId: BigInt(did),
+            sequence: outboundSeqRef.current,
+          },
           collectionMaster,
+          kp.privateKey,
         )
-        const packed = pack(f)
-        const body = packed.subarray(0, packed.length - 64)
-        const sig = await ed25519Sign(body, kp.privateKey)
-        packed.set(sig, packed.length - 64)
         transport.send(packed)
       } catch (e) {
         console.warn('office: send op failed', e)
@@ -212,15 +226,20 @@ function OfficeEditorBase(
       if (!transport || !did || !kp) return
       try {
         outboundSeqRef.current = outboundSeqRef.current + 1n
-        const f = await encryptOOCursor(
+        const packed = await encryptCollabFrameV1(
           new TextEncoder().encode(payload),
-          fileId, docKeyIdRef.current, BigInt(did), outboundSeqRef.current,
+          KIND.OO_CURSOR,
+          {
+            fileId,
+            collectionId,
+            keyEpoch,
+            docKeyId: docKeyIdRef.current,
+            deviceId: BigInt(did),
+            sequence: outboundSeqRef.current,
+          },
           collectionMaster,
+          kp.privateKey,
         )
-        const packed = pack(f)
-        const body = packed.subarray(0, packed.length - 64)
-        const sig = await ed25519Sign(body, kp.privateKey)
-        packed.set(sig, packed.length - 64)
         transport.send(packed)
       } catch (e) {
         console.warn('office: send cursor failed', e)
@@ -389,9 +408,13 @@ function OfficeEditorBase(
         },
         onFrame: async (bs: Uint8Array) => {
           try {
-            const f: Frame = unpack(bs)
+            const f = await openCollabFrameV1(bs, collectionMaster, {
+              fileId,
+              collectionId,
+              keyEpoch,
+            })
             if (f.kind === KIND.OO_OP) {
-              const payload = await decryptOOOp(f, fileId, collectionMaster)
+              const payload = f.plaintext
               const iframe = iframeRef.current
               if (iframe && iframe.contentWindow) {
                 iframe.contentWindow.postMessage(
@@ -403,7 +426,7 @@ function OfficeEditorBase(
                 )
               }
             } else if (f.kind === KIND.OO_CURSOR) {
-              const payload = await decryptOOCursor(f, fileId, collectionMaster)
+              const payload = f.plaintext
               const iframe = iframeRef.current
               if (iframe && iframe.contentWindow) {
                 iframe.contentWindow.postMessage(

@@ -216,14 +216,12 @@ wire encoding remain unchanged. Authenticated per-device suite capabilities
 and suite-tagged local libsignal sessions remain the next Direct Chat slice;
 they must land before a second Direct Chat suite is introduced.
 
-Drive, Account Protection, encrypted profiles, and account identity currently
-encode most constructions implicitly. Before the first stable tag Kutup will
-replace those development formats with explicit V1 suite-bearing formats and
-recreate development state; it will not ship dormant legacy readers. After the
-first stable tag, changing a binding or format requires a new suite and the
-explicit migration protocol above. The collaboration frame's
-signed-and-AEAD-bound version byte can remain its sole suite selector after
-strict version validation is added.
+Account Protection, account identity, Drive records, file blobs, named shares,
+public-link wraps, whiteboard assets, collaboration frames and encrypted
+profiles now use explicit V1 suite-bearing formats. Kutup recreates development
+state rather than shipping dormant legacy readers. After the first stable tag,
+changing any binding or format requires a new suite and the explicit migration
+protocol above.
 
 The canonical implementation for Kutup-owned cryptographic formats is Rust in
 `kutup-crypto`. The browser consumes it through WASM. A narrow browser
@@ -235,6 +233,27 @@ owns headers, suite dispatch, derivation labels, validation or policy.
 The unified federation implementation owns only
 `FederationAuthProfileId`. It must treat Chat and Drive payloads as opaque and
 must not negotiate their feature suites.
+
+## Cryptographic dependency ownership
+
+Kutup uses pinned upstream protocol libraries and keeps them behind
+purpose-specific Kutup APIs:
+
+- Direct Chat and sealed-sender certificate/envelope primitives use
+  `libsignal-protocol` pinned to the repository tag declared in
+  `crates/kutup-chat-core/Cargo.toml` and `crates/kutup-server/Cargo.toml`.
+- MLS groups use the pinned OpenMLS crates declared in
+  `crates/kutup-chat-core/Cargo.toml`. Kutup owns federation ordering, role and
+  authority policy, manifest binding and persistence; it does not fork or
+  reimplement TreeKEM.
+- Kutup-owned account and Drive formats use `dryoc` for libsodium-compatible
+  Argon2id/secretstream, RustCrypto `chacha20poly1305`, `ed25519-dalek`,
+  `hkdf`/`sha2`, and pinned `hpke-rs` for RFC 9180 named-share envelopes.
+
+Dependency versions are locked in Cargo lockfiles. An upstream protocol type
+must not leak through a public Kutup client or federation API; this preserves
+the typed suite boundary and permits reviewed library updates without silently
+changing a Kutup wire format.
 
 ## Research basis
 

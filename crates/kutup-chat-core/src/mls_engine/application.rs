@@ -482,9 +482,11 @@ impl MlsClient {
         }
         let (_, metadata) = self.load_provider().await?;
         let key_bytes = ensure_group_control_key(&metadata, mls_group_id)?;
-        let signer = P256SigningKey::from_slice(key_bytes)
+        let seed: [u8; 32] = key_bytes
+            .try_into()
             .map_err(|_| ChatError::Db("invalid durable MLS group control key".into()))?;
-        let public_key = signer.verifying_key().to_encoded_point(false);
+        let signer = Ed25519SigningKey::from_bytes(&seed);
+        let public_key = signer.verifying_key();
         let mut proposal = MlsControlProposalV1 {
             protocol_version: MLS_PROTOCOL_VERSION,
             conversation_id,
@@ -499,9 +501,11 @@ impl MlsClient {
             created_at: created_at_seconds,
             proposer_signature: String::new(),
         };
-        let signature: P256Signature =
-            signer.sign(&proposal.signing_bytes().map_err(ChatError::Invalid)?);
-        proposal.proposer_signature = BASE64.encode(signature.to_der().as_bytes());
+        proposal.proposer_signature = BASE64.encode(
+            signer
+                .sign(&proposal.signing_bytes().map_err(ChatError::Invalid)?)
+                .to_bytes(),
+        );
         proposal.verify().map_err(ChatError::Protocol)?;
         Ok(proposal)
     }
@@ -668,12 +672,10 @@ impl MlsClient {
             })?;
         ensure_v1_group(&group)?;
         let is_group_control = is_typed_group_control(plaintext);
-        if group.pending_commit().is_some() {
-            if !is_group_control {
-                return Err(ChatError::Trust(
-                    "only typed MLS group control may be sent while a Commit is pending".into(),
-                ));
-            }
+        if group.pending_commit().is_some() && !is_group_control {
+            return Err(ChatError::Trust(
+                "only typed MLS group control may be sent while a Commit is pending".into(),
+            ));
         }
         // Production groups always carry an authenticated conversation pin.
         // The empty branch is reachable only through the cfg(test) low-level
@@ -726,7 +728,7 @@ impl MlsClient {
         let signer = SignatureKeyPair::read(
             provider.storage(),
             signer_public_key,
-            SignatureScheme::ECDSA_SECP256R1_SHA256,
+            SignatureScheme::ED25519,
         )
         .ok_or_else(|| {
             ChatError::MissingKeyMaterial("MLS leaf signing key is unavailable".into())

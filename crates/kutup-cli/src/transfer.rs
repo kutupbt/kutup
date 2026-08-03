@@ -9,20 +9,20 @@ use std::io::{self, ErrorKind, Read, Write};
 
 use anyhow::{bail, Result};
 
+use kutup_crypto::drive_object::{
+    self, DriveFileBlobContextV1, FILE_BLOB_HEADER_BYTES, FILE_BLOB_PREFIX_BYTES,
+};
 use kutup_crypto::stream::{
     StreamDecryptor, StreamEncryptor, ABYTES, CHUNK_SIZE, HEADER_BYTES, TAG_FINAL, TAG_MESSAGE,
 };
 
-/// Total ciphertext byte count for `plain_bytes` of plaintext, given the
-/// secretstream framing (24-byte header + 17 B per chunk). Used as the tus
-/// `Upload-Length`. An empty plaintext is just the header. Mirrors `CipherSize`.
+/// Total ciphertext byte count for `plain_bytes`: typed Drive header +
+/// secretstream header + at least one authenticated frame.
 pub fn cipher_size(plain_bytes: i64) -> i64 {
-    if plain_bytes <= 0 {
-        return HEADER_BYTES as i64;
-    }
     let chunk = CHUNK_SIZE as i64;
-    let num_chunks = (plain_bytes + chunk - 1) / chunk;
-    HEADER_BYTES as i64 + plain_bytes + ABYTES as i64 * num_chunks
+    let plain_bytes = plain_bytes.max(0);
+    let num_chunks = ((plain_bytes + chunk - 1) / chunk).max(1);
+    FILE_BLOB_PREFIX_BYTES as i64 + plain_bytes + ABYTES as i64 * num_chunks
 }
 
 /// Reads into `buf` until full or EOF; returns the number of bytes read
@@ -41,9 +41,19 @@ fn read_full(r: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
     Ok(filled)
 }
 
+fn file_blob_prefix(
+    object_header: &[u8; FILE_BLOB_HEADER_BYTES],
+    stream_header: &[u8; HEADER_BYTES],
+) -> [u8; FILE_BLOB_PREFIX_BYTES] {
+    let mut prefix = [0u8; FILE_BLOB_PREFIX_BYTES];
+    prefix[..FILE_BLOB_HEADER_BYTES].copy_from_slice(object_header);
+    prefix[FILE_BLOB_HEADER_BYTES..].copy_from_slice(stream_header);
+    prefix
+}
+
 /// Returns the number of whole ciphertext chunks a tus `Upload-Offset`
 /// represents, or `None` if the offset doesn't sit on a chunk boundary.
-/// Valid offsets are `0` (nothing sent) or `HEADER + k·(CHUNK+ABYTES)` —
+/// Valid offsets are `0` (nothing sent) or `PREFIX + k·(CHUNK+ABYTES)` —
 /// the CLI ships exactly one chunk per PATCH (the first with the header
 /// prepended) and the server only advances by whole PATCH bodies.
 pub fn chunk_boundary(offset: i64) -> Option<u64> {
@@ -51,7 +61,7 @@ pub fn chunk_boundary(offset: i64) -> Option<u64> {
         return Some(0);
     }
     let per = (CHUNK_SIZE + ABYTES) as i64;
-    let body = offset - HEADER_BYTES as i64;
+    let body = offset - FILE_BLOB_PREFIX_BYTES as i64;
     if body <= 0 || body % per != 0 {
         return None;
     }
@@ -63,7 +73,7 @@ pub fn chunk_boundary(offset: i64) -> Option<u64> {
 /// `StreamEncryptor` / `NextChunk`.
 pub struct StreamUploader<R: Read> {
     enc: StreamEncryptor,
-    header: Option<[u8; HEADER_BYTES]>,
+    prefix: Option<[u8; FILE_BLOB_PREFIX_BYTES]>,
     /// Retained copy for persisting resume state (never consumed).
     header_copy: [u8; HEADER_BYTES],
     reader: R,
@@ -74,11 +84,19 @@ pub struct StreamUploader<R: Read> {
 }
 
 impl<R: Read> StreamUploader<R> {
-    pub fn new(reader: R, key: &[u8], plain_total: i64) -> Result<Self> {
-        let (enc, header) = StreamEncryptor::new(key)?;
+    pub fn new(
+        reader: R,
+        file_key: &[u8],
+        plain_total: i64,
+        context: DriveFileBlobContextV1,
+    ) -> Result<Self> {
+        let object_header = drive_object::file_blob_header(context);
+        let stream_key = drive_object::derive_file_blob_key(file_key, context)?;
+        let (enc, header) = StreamEncryptor::new_with_aad(stream_key.as_slice(), &object_header)?;
+        let prefix = file_blob_prefix(&object_header, &header);
         Ok(Self {
             enc,
-            header: Some(header),
+            prefix: Some(prefix),
             header_copy: header,
             reader,
             plain_total,
@@ -100,11 +118,15 @@ impl<R: Read> StreamUploader<R> {
         plain_total: i64,
         header: &[u8; HEADER_BYTES],
         skip_cipher_bytes: i64,
+        context: DriveFileBlobContextV1,
     ) -> Result<Self> {
         let Some(k) = chunk_boundary(skip_cipher_bytes) else {
             bail!("offset {skip_cipher_bytes} is not a chunk boundary");
         };
-        let mut enc = StreamEncryptor::resume(key, header)?;
+        let object_header = drive_object::file_blob_header(context);
+        let stream_key = drive_object::derive_file_blob_key(key, context)?;
+        let mut enc =
+            StreamEncryptor::resume_with_aad(stream_key.as_slice(), header, &object_header)?;
         let mut buf = vec![0u8; CHUNK_SIZE];
         let mut replayed = 0i64;
         for _ in 0..k {
@@ -126,7 +148,11 @@ impl<R: Read> StreamUploader<R> {
         }
         Ok(Self {
             enc,
-            header: if k == 0 { Some(*header) } else { None },
+            prefix: if k == 0 {
+                Some(file_blob_prefix(&object_header, header))
+            } else {
+                None
+            },
             header_copy: *header,
             reader,
             plain_total,
@@ -153,10 +179,18 @@ impl<R: Read> StreamUploader<R> {
         }
         let remaining = self.plain_total - self.plain_read;
 
-        // Empty-file edge: emit just the header once, then end.
+        // Empty files still emit an authenticated FINAL frame so the typed
+        // object header is never accepted without a MAC.
         if remaining <= 0 {
             self.done = true;
-            return Ok(self.header.take().map(|h| h.to_vec()));
+            let Some(prefix) = self.prefix.take() else {
+                return Ok(None);
+            };
+            let final_frame = self.enc.push(&[], TAG_FINAL)?;
+            let mut output = Vec::with_capacity(prefix.len() + final_frame.len());
+            output.extend_from_slice(&prefix);
+            output.extend_from_slice(&final_frame);
+            return Ok(Some(output));
         }
 
         let to_read = remaining.min(CHUNK_SIZE as i64) as usize;
@@ -167,10 +201,10 @@ impl<R: Read> StreamUploader<R> {
         let tag = if is_last { TAG_FINAL } else { TAG_MESSAGE };
         let cipher = self.enc.push(&self.buf[..n], tag)?;
 
-        let out = match self.header.take() {
-            Some(h) => {
-                let mut v = Vec::with_capacity(h.len() + cipher.len());
-                v.extend_from_slice(&h);
+        let out = match self.prefix.take() {
+            Some(prefix) => {
+                let mut v = Vec::with_capacity(prefix.len() + cipher.len());
+                v.extend_from_slice(&prefix);
                 v.extend_from_slice(&cipher);
                 v
             }
@@ -188,15 +222,22 @@ impl<R: Read> StreamUploader<R> {
 /// stays bounded (~10 MiB) regardless of size. Mirrors `download.Stream`.
 pub fn stream_download(
     mut src: impl Read,
-    key: &[u8],
+    file_key: &[u8],
+    context: DriveFileBlobContextV1,
     dst: &mut impl Write,
     mut on_progress: impl FnMut(i64),
 ) -> Result<i64> {
+    let mut object_header = [0u8; FILE_BLOB_HEADER_BYTES];
+    if read_full(&mut src, &mut object_header)? < FILE_BLOB_HEADER_BYTES {
+        bail!("Drive file-blob header truncated");
+    }
+    drive_object::validate_file_blob_header(&object_header, context)?;
     let mut header = [0u8; HEADER_BYTES];
     if read_full(&mut src, &mut header)? < HEADER_BYTES {
         bail!("stream header truncated");
     }
-    let mut dec = StreamDecryptor::new(key, &header)?;
+    let stream_key = drive_object::derive_file_blob_key(file_key, context)?;
+    let mut dec = StreamDecryptor::new_with_aad(stream_key.as_slice(), &header, &object_header)?;
 
     let mut buf = vec![0u8; CHUNK_SIZE + ABYTES];
     let mut plain_written = 0i64;
@@ -204,9 +245,7 @@ pub fn stream_download(
         let n = read_full(&mut src, &mut buf)?;
         let at_eof = n < buf.len();
         if n == 0 {
-            // Clean EOF without a trailing chunk: header-only (empty file) or
-            // the prior chunk was already FINAL.
-            return Ok(plain_written);
+            bail!("stream cut before FINAL chunk");
         }
         let (plain, tag) = dec.pull(&buf[..n])?;
         dst.write_all(&plain)?;
@@ -238,13 +277,22 @@ pub fn stream_download(
 mod tests {
     use super::*;
 
+    fn context() -> DriveFileBlobContextV1 {
+        DriveFileBlobContextV1::new(
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            3,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn upload_download_roundtrip() {
         let key = [9u8; 32];
         // Spans two chunks to exercise framing.
         let plain: Vec<u8> = (0..CHUNK_SIZE + 1234).map(|i| (i % 251) as u8).collect();
 
-        let mut up = StreamUploader::new(&plain[..], &key, plain.len() as i64).unwrap();
+        let mut up = StreamUploader::new(&plain[..], &key, plain.len() as i64, context()).unwrap();
         let mut wire = Vec::new();
         while let Some(chunk) = up.next_chunk().unwrap() {
             wire.extend_from_slice(&chunk);
@@ -252,7 +300,7 @@ mod tests {
         assert_eq!(wire.len() as i64, cipher_size(plain.len() as i64));
 
         let mut out = Vec::new();
-        let n = stream_download(&wire[..], &key, &mut out, |_| {}).unwrap();
+        let n = stream_download(&wire[..], &key, context(), &mut out, |_| {}).unwrap();
         assert_eq!(n, plain.len() as i64);
         assert_eq!(out, plain);
     }
@@ -263,14 +311,14 @@ mod tests {
     fn exact_chunk_multiple_roundtrip() {
         let key = [4u8; 32];
         let plain: Vec<u8> = (0..2 * CHUNK_SIZE).map(|i| (i % 253) as u8).collect();
-        let mut up = StreamUploader::new(&plain[..], &key, plain.len() as i64).unwrap();
+        let mut up = StreamUploader::new(&plain[..], &key, plain.len() as i64, context()).unwrap();
         let mut wire = Vec::new();
         while let Some(c) = up.next_chunk().unwrap() {
             wire.extend_from_slice(&c);
         }
         assert_eq!(wire.len() as i64, cipher_size(plain.len() as i64));
         let mut out = Vec::new();
-        let n = stream_download(&wire[..], &key, &mut out, |_| {}).unwrap();
+        let n = stream_download(&wire[..], &key, context(), &mut out, |_| {}).unwrap();
         assert_eq!(n, plain.len() as i64);
         assert_eq!(out, plain);
     }
@@ -279,21 +327,21 @@ mod tests {
     fn trailing_garbage_still_rejected() {
         let key = [4u8; 32];
         let plain = vec![7u8; CHUNK_SIZE]; // exact single chunk
-        let mut up = StreamUploader::new(&plain[..], &key, plain.len() as i64).unwrap();
+        let mut up = StreamUploader::new(&plain[..], &key, plain.len() as i64, context()).unwrap();
         let mut wire = Vec::new();
         while let Some(c) = up.next_chunk().unwrap() {
             wire.extend_from_slice(&c);
         }
         wire.push(0xAA); // junk after the FINAL chunk
         let mut out = Vec::new();
-        let err = stream_download(&wire[..], &key, &mut out, |_| {}).unwrap_err();
+        let err = stream_download(&wire[..], &key, context(), &mut out, |_| {}).unwrap_err();
         assert!(err.to_string().contains("bytes remain"), "{err}");
     }
 
     #[test]
     fn chunk_boundaries() {
         let per = (CHUNK_SIZE + ABYTES) as i64;
-        let h = HEADER_BYTES as i64;
+        let h = FILE_BLOB_PREFIX_BYTES as i64;
         assert_eq!(chunk_boundary(0), Some(0));
         assert_eq!(chunk_boundary(h + per), Some(1));
         assert_eq!(chunk_boundary(h + 3 * per), Some(3));
@@ -311,7 +359,7 @@ mod tests {
         let plain: Vec<u8> = (0..2 * CHUNK_SIZE + 777).map(|i| (i % 249) as u8).collect();
         let total = plain.len() as i64;
 
-        let mut full_up = StreamUploader::new(&plain[..], &key, total).unwrap();
+        let mut full_up = StreamUploader::new(&plain[..], &key, total, context()).unwrap();
         let header = full_up.header_bytes();
         let mut full_wire = Vec::new();
         while let Some(c) = full_up.next_chunk().unwrap() {
@@ -319,12 +367,14 @@ mod tests {
         }
 
         // "Send" only the first PATCH (header + chunk 0), then resume.
-        let mut first = StreamUploader::resume(&plain[..], &key, total, &header, 0).unwrap();
+        let mut first =
+            StreamUploader::resume(&plain[..], &key, total, &header, 0, context()).unwrap();
         let mut sent = first.next_chunk().unwrap().unwrap();
         let offset = sent.len() as i64;
         assert_eq!(chunk_boundary(offset), Some(1));
 
-        let mut resumed = StreamUploader::resume(&plain[..], &key, total, &header, offset).unwrap();
+        let mut resumed =
+            StreamUploader::resume(&plain[..], &key, total, &header, offset, context()).unwrap();
         assert_eq!(resumed.plain_read(), CHUNK_SIZE as i64);
         while let Some(c) = resumed.next_chunk().unwrap() {
             sent.extend_from_slice(&c);
@@ -333,7 +383,7 @@ mod tests {
 
         // And it decrypts back to the original plaintext.
         let mut out = Vec::new();
-        stream_download(&sent[..], &key, &mut out, |_| {}).unwrap();
+        stream_download(&sent[..], &key, context(), &mut out, |_| {}).unwrap();
         assert_eq!(out, plain);
     }
 
@@ -343,29 +393,41 @@ mod tests {
         let plain = vec![0u8; CHUNK_SIZE + 10];
         let header = [9u8; HEADER_BYTES];
         // Mid-chunk offset.
-        assert!(
-            StreamUploader::resume(&plain[..], &key, plain.len() as i64, &header, 100).is_err()
-        );
+        assert!(StreamUploader::resume(
+            &plain[..],
+            &key,
+            plain.len() as i64,
+            &header,
+            100,
+            context(),
+        )
+        .is_err());
         // Offset claiming more chunks than the plaintext holds.
         let per = (CHUNK_SIZE + ABYTES) as i64;
-        let too_far = HEADER_BYTES as i64 + 3 * per;
-        assert!(
-            StreamUploader::resume(&plain[..], &key, plain.len() as i64, &header, too_far).is_err()
-        );
+        let too_far = FILE_BLOB_PREFIX_BYTES as i64 + 3 * per;
+        assert!(StreamUploader::resume(
+            &plain[..],
+            &key,
+            plain.len() as i64,
+            &header,
+            too_far,
+            context(),
+        )
+        .is_err());
     }
 
     #[test]
     fn empty_file_roundtrip() {
         let key = [3u8; 32];
-        let mut up = StreamUploader::new(&[][..], &key, 0).unwrap();
+        let mut up = StreamUploader::new(&[][..], &key, 0, context()).unwrap();
         let mut wire = Vec::new();
         while let Some(c) = up.next_chunk().unwrap() {
             wire.extend_from_slice(&c);
         }
-        assert_eq!(wire.len(), HEADER_BYTES); // header only
+        assert_eq!(wire.len(), FILE_BLOB_PREFIX_BYTES + ABYTES);
         let mut out = Vec::new();
         assert_eq!(
-            stream_download(&wire[..], &key, &mut out, |_| {}).unwrap(),
+            stream_download(&wire[..], &key, context(), &mut out, |_| {}).unwrap(),
             0
         );
         assert!(out.is_empty());

@@ -5,30 +5,56 @@ use base64::Engine;
 use kutup_chat_proto::{
     CommitMlsControlBlockResponseV1, CommitMlsControlBlockV1, FederatedMlsControlReplicaV1,
     FederatedMlsOrderingVoteRequestV1, MlsAuthoritySetV1, MlsControlActionTypeV1,
-    MlsMembershipDeliveryV1, MlsOrderingVoteTypeV1, MlsOrderingVoteV1, MlsOwnerSetV1,
+    MlsOrderingVoteTypeV1, MlsOrderingVoteV1, MlsOwnerSetV1,
 };
 use serde_json::Value;
 use sqlx::{Postgres, Transaction};
 use std::collections::BTreeSet;
 use time::OffsetDateTime;
-use uuid::Uuid;
 
 use super::{
-    decode_canonical_base64, prepare_membership_finalization, MlsOrderingService, MlsRepository,
+    decode_canonical_base64, prepare_membership_finalization, CommitControlContext,
+    MlsOrderingService, MlsRepository,
 };
 use crate::error::{AppError, AppResult};
+
+type ControlConversationRow = (
+    i16,
+    Value,
+    Option<Value>,
+    Value,
+    String,
+    i32,
+    i64,
+    i64,
+    Option<String>,
+    String,
+);
+type OrderingVoteConversationRow = (
+    i16,
+    Value,
+    Option<Value>,
+    Value,
+    i64,
+    i64,
+    Option<String>,
+    String,
+);
 
 impl MlsRepository {
     pub(super) async fn commit_control_block(
         &self,
-        local_domain: &str,
-        local_submitter: Option<Uuid>,
-        federated_origin: Option<&str>,
         request: &CommitMlsControlBlockV1,
-        incoming_membership_delivery: Option<&MlsMembershipDeliveryV1>,
-        maximum_group_members: u16,
-        verified_history_replay: bool,
+        context: CommitControlContext<'_>,
     ) -> AppResult<CommitMlsControlBlockResponseV1> {
+        let CommitControlContext {
+            local_domain,
+            local_submitter,
+            federated_origin,
+            incoming_membership_delivery,
+            maximum_group_members,
+            verified_history_replay,
+        } = context;
         request.validate_shape().map_err(AppError::bad_request)?;
         let block = &request.finalized.block;
         block.proposal.verify().map_err(AppError::bad_request)?;
@@ -57,18 +83,7 @@ impl MlsRepository {
                 ));
             }
         }
-        let row: Option<(
-            i16,
-            Value,
-            Option<Value>,
-            Value,
-            String,
-            i32,
-            i64,
-            i64,
-            Option<String>,
-            String,
-        )> = sqlx::query_as(
+        let row: Option<ControlConversationRow> = sqlx::query_as(
             "SELECT c.kind, i.authority_set, i.owner_set, i.participant_domains,
                         i.roster_commitment, i.member_count,
                         i.last_finalized_height, i.last_finalized_epoch,
@@ -544,16 +559,7 @@ impl MlsRepository {
                 "MLS authority bootstrap must materialize completely before voting",
             ));
         }
-        let row: Option<(
-            i16,
-            Value,
-            Option<Value>,
-            Value,
-            i64,
-            i64,
-            Option<String>,
-            String,
-        )> = sqlx::query_as(
+        let row: Option<OrderingVoteConversationRow> = sqlx::query_as(
             "SELECT c.kind, i.authority_set, i.owner_set, i.participant_domains,
                         i.last_finalized_height, i.last_finalized_epoch,
                         i.last_block_hash, i.status

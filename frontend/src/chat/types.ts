@@ -102,27 +102,14 @@ export interface ChatCapabilities {
   maxContentBytes: number
   mailboxRetentionDays: number
   deviceExpiryDays: number
+  maximumActiveDevices: number
   serverName?: string
   federation: boolean
   manifests: boolean
   profiles: boolean
-  keyTransparency: boolean
-  transparencyOperatorKeyId?: string
-  transparencyOperatorPublicKey?: string
   sealedSender: boolean
   /** Complete browser + local + federated MLS group path is available. */
   mlsGroups?: boolean
-}
-
-export type TransparencyMonitorState = 'healthy' | 'unavailable' | 'verificationFailed'
-
-export interface TransparencyMonitorStatus {
-  scope: string
-  state: TransparencyMonitorState
-  lastCheckedAtMs: number
-  lastSuccessAtMs?: number
-  treeSize?: string
-  detail?: string
 }
 
 export interface PendingMlsInvitation {
@@ -360,7 +347,7 @@ export interface MlsGroupAuthorizationPolicy {
 export interface MlsGroupCryptographicPolicy {
   policyVersion: 1
   sequence: number
-  suite: 2
+  suite: 3
   requiredPrivateControlExtension: number
   maximumPastEpochs: 2
   anonymousDeliveryRequired: true
@@ -750,36 +737,26 @@ export interface AppliedInboundMlsApplication {
 
 export interface ChatTransportPort {
   registerDevice(request: unknown): Promise<unknown>
-  fetchBundles(username: string, transparencyTreeSize: string): Promise<unknown>
+  fetchBundles(username: string): Promise<unknown>
   fetchSyncBundles(
     username: string,
     currentDeviceId: number,
-    transparencyTreeSize: string,
   ): Promise<unknown>
-  fetchTransparencyCheckpoint(scope: string, fromTreeSize: string): Promise<unknown>
-  fetchTransparencyPolicy(domain: string): Promise<unknown>
   fetchMlsOrderingPolicy(domain: string): Promise<unknown>
   fetchManifest(username: string): Promise<unknown | null>
-  fetchManifestPublication(
+  fetchManifestHistory(
     username: string,
-    transparencyTreeSize: string,
-  ): Promise<unknown>
-  fetchManifestRange(
-    username: string,
-    fromVersion: string,
-    toVersion: string,
-    pageFromVersion: string,
-    cursor: string | null,
-    transparencyTreeSize: string,
+    fromSequence: string,
+    toSequence: string,
+    pageFromSequence: string,
   ): Promise<unknown>
   fetchSealedSenderPolicy(domain: string): Promise<unknown>
   fetchSenderCertificate(deviceId: number): Promise<unknown>
   fetchSealedBundles(
     username: string,
     capability: string,
-    transparencyTreeSize: string,
   ): Promise<unknown>
-  publishManifest(manifest: unknown, transparencyTreeSize: string): Promise<unknown>
+  publishManifest(manifest: unknown): Promise<unknown>
   fetchOwnProfile(): Promise<unknown | null>
   publishProfile(profile: unknown): Promise<unknown>
   fetchProfile(username: string, version: string, accessKey: string): Promise<unknown | null>
@@ -1165,7 +1142,6 @@ export interface WasmChatClientHandle {
   unblockContact(peer: string): Promise<ContactRecord>
   inboundAttention(): Promise<InboundAttention[]>
   maintainPrekeys(): Promise<unknown>
-  monitorTransparency(scope: string): Promise<TransparencyMonitorStatus>
   pendingSendCount(): Promise<number>
   quarantineInbound(id: string): Promise<void>
   reconcile(): Promise<ReceiveReport>
@@ -1177,9 +1153,21 @@ export interface WasmChatClientHandle {
     text: string,
   ): Promise<SendSummary>
   syncManifest(): Promise<unknown>
-  transparencyMonitorStatus(scope: string): Promise<TransparencyMonitorStatus | undefined>
-  verifyAuthority(peer: string): Promise<unknown>
+  safetyNumber(peer: string): Promise<SafetyNumberV1>
+  verifySafetyNumber(peer: string, scannedPayload: string): Promise<SafetyNumberV1>
   free(): void
+}
+
+export interface SafetyNumberV1 {
+  localAccount: string
+  peerAccount: string
+  fingerprint: string
+  qrPayload: string
+  authorityKeyId: string
+  trust: 'Tofu' | 'Verified' | 'Quarantined'
+  continuityGap: boolean
+  retainedAuthorityKeyId?: string
+  quarantineReason?: string
 }
 
 export interface ChatWasmModule {
@@ -1192,7 +1180,6 @@ export interface ChatWasmModule {
       sealedSenderEnabled: boolean,
       masterKey: Uint8Array,
       transport: ChatTransportPort,
-      transparencyPolicy: unknown,
     ): Promise<WasmChatClientHandle>
   }
 }

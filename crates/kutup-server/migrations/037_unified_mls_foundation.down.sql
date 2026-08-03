@@ -38,11 +38,3 @@ DROP TABLE chat_mls_incarnations;
 DROP TABLE chat_mls_conversations;
 DROP TABLE chat_mls_key_packages;
 DROP TABLE chat_mls_devices;
-
-DELETE FROM federation_feature_policy_failures WHERE feature_type = 3;
-DELETE FROM federation_feature_policy_documents WHERE feature_type = 3;
-ALTER TABLE federation_feature_policy_documents
-    DROP CONSTRAINT federation_feature_policy_documents_feature_type_check;
-ALTER TABLE federation_feature_policy_documents
-    ADD CONSTRAINT federation_feature_policy_documents_feature_type_check
-    CHECK (feature_type IN (1, 2));

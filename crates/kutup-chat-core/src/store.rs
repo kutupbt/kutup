@@ -19,13 +19,13 @@ use std::rc::Rc;
 
 use async_trait::async_trait;
 use base64::Engine as _;
-use kutup_chat_proto::{ManifestDevice, MlsManifestDeviceV1};
+use kutup_chat_proto::{AccountManifestDeviceV1, MlsManifestDeviceV1};
 use libsignal_protocol::*;
 use uuid::Uuid;
 
 use crate::db::{
-    ChatDb, ContactRecord, InboundEnvelope, InboxMessage, LocalIdentity, ManifestHistoryRecord,
-    ManifestTrust, OutboxEntry, Pending, SentMessage,
+    AccountManifestHistoryRecordV1, ChatDb, ContactRecord, InboundEnvelope, InboxMessage,
+    LocalIdentity, ManifestTrust, OutboxEntry, Pending, SentMessage,
 };
 use crate::error::{ChatError, Result as ChatResult};
 
@@ -197,28 +197,12 @@ impl ChatStore {
             .insert(trust.peer.clone(), trust);
     }
 
-    pub(crate) fn stage_manifest_history(&self, record: ManifestHistoryRecord) {
-        self.pending
-            .borrow_mut()
-            .manifest_history
-            .insert((record.peer.clone(), record.version), record);
-    }
-
-    pub(crate) fn stage_transparency_trust(&self, trust: crate::TransparencyTrust) {
-        self.pending
-            .borrow_mut()
-            .transparency_trust
-            .insert(trust.scope.clone(), trust);
-    }
-
-    pub(crate) fn stage_transparency_monitor_status(
-        &self,
-        status: crate::TransparencyMonitorStatus,
-    ) {
-        self.pending
-            .borrow_mut()
-            .transparency_monitor_status
-            .insert(status.scope.clone(), status);
+    pub(crate) fn stage_manifest_history(&self, record: AccountManifestHistoryRecordV1) {
+        let incarnation_id = record.manifest.incarnation_id.clone();
+        self.pending.borrow_mut().manifest_history.insert(
+            (record.peer.clone(), incarnation_id, record.sequence),
+            record,
+        );
     }
 
     pub(crate) fn stage_contact(&self, contact: ContactRecord) {
@@ -246,7 +230,7 @@ impl ChatStore {
             .insert(peer.to_string());
     }
 
-    pub(crate) fn local_manifest_device(&self, device_id: u32) -> ManifestDevice {
+    pub(crate) fn local_manifest_device(&self, device_id: u32) -> AccountManifestDeviceV1 {
         self.local_manifest_device_with_mls(device_id, None)
     }
 
@@ -254,9 +238,10 @@ impl ChatStore {
         &self,
         device_id: u32,
         mls: Option<MlsManifestDeviceV1>,
-    ) -> ManifestDevice {
-        ManifestDevice {
+    ) -> AccountManifestDeviceV1 {
+        AccountManifestDeviceV1 {
             device_id,
+            direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
             identity_key: base64::engine::general_purpose::STANDARD
                 .encode(self.identity_store.key_pair.identity_key().serialize()),
             registration_id: self.identity_store.registration_id,

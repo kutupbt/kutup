@@ -23,9 +23,8 @@ pub(crate) use config::FederationRuntimeConfig;
 pub(crate) use discovery::{public_discovery, public_identity_document};
 pub(crate) use feature_policy::{
     get_federated_feature_policy, get_local_feature_policy, FeaturePolicyStore,
-    RemotePolicySyncError,
 };
-pub(crate) use identity::{insert_system_audit, rotate_local_identity, LocalFederationIdentity};
+pub(crate) use identity::{rotate_local_identity, LocalFederationIdentity};
 use policy::FederationPolicyStore;
 use replay::FederationReplayStore;
 use transport::FederationTransportState;

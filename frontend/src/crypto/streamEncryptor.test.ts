@@ -17,8 +17,8 @@
 // is strictly stronger because both encrypt + decrypt run end-to-end.
 
 import { describe, it, expect } from 'vitest'
-import { decryptStream } from './symmetric'
 import { getSodium } from './sodium'
+import { newStreamDecryptor } from './streamDecryptor'
 import {
   newStreamEncryptor,
   cipherSize,
@@ -88,6 +88,18 @@ async function encryptChunked(plain: Uint8Array, key: Uint8Array): Promise<Uint8
   return out
 }
 
+async function decryptChunked(cipher: Uint8Array, key: Uint8Array): Promise<Uint8Array> {
+  const dec = await newStreamDecryptor(key, cipher.subarray(0, HEADER_BYTES))
+  const chunks: Uint8Array[] = []
+  for (let offset = HEADER_BYTES; offset < cipher.length; offset += PLAIN_CHUNK + ABYTES) {
+    chunks.push(dec.pull(cipher.subarray(offset, offset + PLAIN_CHUNK + ABYTES)).plain)
+  }
+  const output = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0))
+  let offset = 0
+  for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.length }
+  return output
+}
+
 describe('cipherSize', () => {
   it('returns just the header for empty plaintext', () => {
     expect(cipherSize(0)).toBe(HEADER_BYTES)
@@ -132,7 +144,7 @@ describe('newStreamEncryptor', () => {
     const plain = new Uint8Array(n)
     for (let i = 0; i < n; i++) plain[i] = (i * 31 + 7) & 0xff
     const cipher = await encryptChunked(plain, key)
-    const back = await decryptStream(cipher, key)
+    const back = await decryptChunked(cipher, key)
     expect(back.length).toBe(n)
     expect(back).toEqual(plain)
   }, LIBSODIUM_TIMEOUT_MS)

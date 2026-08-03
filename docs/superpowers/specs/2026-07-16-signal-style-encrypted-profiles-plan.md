@@ -1,5 +1,9 @@
 # Signal-style encrypted profiles
 
+> Historical design note. V1 replaced the proposed AES construction with the
+> suite-bearing XChaCha20-Poly1305 `ProfileEnvelopeV1`; see
+> `docs/chat-protocol.md` and `docs/crypto-agility.md` for normative behavior.
+
 ## Goal
 
 Add changeable, non-unique display names and optional avatars without turning

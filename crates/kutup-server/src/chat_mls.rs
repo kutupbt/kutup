@@ -87,6 +87,8 @@ use crate::federation::{AuthenticatedFederationRequest, FederationStack};
 use crate::AppState;
 
 const MAX_DEVICE_ID: u32 = 127;
+const MLS_SUITE_SQL: i16 =
+    kutup_chat_proto::MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519 as i16;
 
 #[derive(Clone)]
 pub(crate) struct MlsRepository {
@@ -97,6 +99,16 @@ impl MlsRepository {
     pub(crate) fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+}
+
+/// Authenticated origin and local-policy context for one finalized MLS block.
+struct CommitControlContext<'a> {
+    local_domain: &'a str,
+    local_submitter: Option<Uuid>,
+    federated_origin: Option<&'a str>,
+    incoming_membership_delivery: Option<&'a kutup_chat_proto::MlsMembershipDeliveryV1>,
+    maximum_group_members: u16,
+    verified_history_replay: bool,
 }
 
 /// Wake live browser sessions after durable MLS mailbox writes. The mailbox is

@@ -1,42 +1,36 @@
 # kutup-crypto
 
-Shared end-to-end-encryption primitives for kutup, in Rust. This crate is the
-**Rust mirror** of [`frontend/src/crypto/`](../../frontend/src/crypto) (the
-canonical libsodium-wrappers implementation) and the successor to the Go
-packages [`cmd/kutup/internal/crypto/`](../../cmd/kutup/internal/crypto) and
-[`backend/services/envelope/`](../../backend/services/envelope).
-
-All three implementations **must stay byte-for-byte compatible on the wire.**
+Canonical end-to-end-encryption implementation for Kutup-owned account, Drive
+and collaboration formats. Browser clients consume this crate through
+`kutup-crypto-wasm`; the CLI and native clients call it directly. TypeScript
+does not duplicate headers, parsers, KDF labels or AEAD constructions.
 
 ## Primitives
 
 | Module | Construction | Backing crate | Used for |
 |---|---|---|---|
-| `kdf` | Argon2id (opslimit 3, memlimit 64 MiB, parallelism 1, 32-byte out) + HKDF-SHA256 | `dryoc`, `hkdf`+`sha2` | KEK / login key; per-file content key |
-| `secretbox` | XSalsa20-Poly1305 | `dryoc` | master/private/collection/file keys, metadata |
-| `sealedbox` | X25519 anonymous sealed box | `dryoc` | wrapping collection keys when sharing |
-| `stream` | XChaCha20-Poly1305 secretstream, 5 MiB chunks | `dryoc` | file content |
-| `asset` | XChaCha20-Poly1305-IETF AEAD | `chacha20poly1305` | whiteboard asset blobs |
-| `envelope` | wire framing + Ed25519 signatures | `ed25519-dalek` | collab-edit frames |
+| `kdf` | Argon2id + HKDF-SHA256 | `dryoc`, `hkdf`/`sha2` | account protection and purpose subkeys |
+| `account_envelope` | suite-bearing XChaCha20-Poly1305 | `chacha20poly1305` | password/recovery/private account wraps |
+| `identity` / `collection_epoch` | deterministic account keys and signed epoch chains | `ed25519-dalek`, `hkdf`/`sha2` | account authority and collection continuity |
+| `drive_envelope` / `asset` | purpose-bound XChaCha20-Poly1305 | `chacha20poly1305` | Drive records, public links and whiteboard assets |
+| `drive_object` / `stream` | context-bound XChaCha20 secretstream, 5 MiB frames | `dryoc` | originals and version snapshots |
+| `named_share` | RFC 9180 X25519 HPKE + Ed25519 | `hpke-rs`, `ed25519-dalek` | authenticated local/federated collection shares |
+| `envelope` | XChaCha20-Poly1305 + Ed25519 | RustCrypto, `ed25519-dalek` | canonical collaboration frames |
+| `local_state` | profile-bound XChaCha20-Poly1305 | `chacha20poly1305` | CLI session cache |
 
-## Verifying parity
+## Verifying formats
 
-Parity with the Go reference is enforced by cross-language vectors generated
-from the **real Go packages** (true differential testing):
+Checked-in deterministic vectors pin every current Kutup-owned public format:
 
 ```sh
-# Regenerate vectors after any crypto change:
-go -C cmd/kutup run ./tools/genvectors > crates/kutup-crypto/tests/vectors/crypto.json
-go -C backend   run ./tools/genvectors > crates/kutup-crypto/tests/vectors/envelope.json
-
-# Check the Rust port reproduces / accepts them byte-for-byte:
 cargo test -p kutup-crypto
+pnpm --dir frontend run build:crypto-wasm
+node scripts/test-crypto-wasm.mjs
 ```
 
-The vectors pin Go-produced ciphertext (so the Rust decrypt direction is
-verified) and, where the primitive is deterministic (KDF, HKDF, secretbox with a
-fixed nonce, Ed25519 signing), also pin exact output so the Rust **encrypt**
-direction is verified too.
+The Rust vector suite pins deterministic headers, KDF outputs, ciphertext and
+signatures and tests strict negative cases. The WASM gate consumes the same
+implementation rather than maintaining a second browser construction.
 
 ## Notes / intentional deviations
 

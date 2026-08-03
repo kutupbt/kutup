@@ -56,7 +56,7 @@ pub(crate) async fn stage_membership_delivery(
     .bind(submitter)
     .fetch_optional(&state.pool)
     .await?;
-    if !membership.is_some_and(|(_, status)| status == "active") {
+    if membership.is_none_or(|(_, status)| status != "active") {
         return Err(AppError::forbidden(
             "MLS delivery staging requires an active local member",
         ));
@@ -195,18 +195,13 @@ pub(super) async fn prepare_membership_finalization(
         maximum_group_members,
     )?;
 
-    let deliveries = if local_submitter.is_some() {
+    let deliveries = if let Some(local_submitter) = local_submitter {
         if incoming_delivery.is_some() {
             return Err(AppError::bad_request(
                 "local MLS finalization cannot supply a federation delivery",
             ));
         }
-        load_staged_deliveries(
-            tx,
-            transition,
-            local_submitter.expect("checked local submitter"),
-        )
-        .await?
+        load_staged_deliveries(tx, transition, local_submitter).await?
     } else {
         let local_affected = transition.delivery_commitment(local_domain).is_some();
         match (local_affected, incoming_delivery, verified_history_replay) {
@@ -372,7 +367,7 @@ fn validate_transition_against_state(
         2 => transition.next_member_count == 2,
         3 => {
             (1..=u32::from(maximum_group_members)).contains(&transition.next_member_count)
-                && transition.next_member_count <= 1000
+                && transition.next_member_count <= kutup_chat_proto::MAX_MLS_GROUP_ACCOUNTS as u32
         }
         _ => false,
     };

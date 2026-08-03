@@ -87,7 +87,7 @@ impl MlsClient {
                 incarnation: 1,
                 mls_group_id: group_key,
                 kind: MlsConversationKindV1::Group,
-                suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+                suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
                 roster_commitment: roster_commitment(&members).map_err(ChatError::Invalid)?,
                 member_count: 1,
                 authority_set,

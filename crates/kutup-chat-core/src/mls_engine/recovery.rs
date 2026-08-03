@@ -68,7 +68,7 @@ pub struct FinalizedMlsRecovery {
 
 impl MlsClient {
     /// Join a destination-private recovery Welcome after independently binding
-    /// every device credential to transparency and verifying the owner-signed
+    /// every device credential to signed account-manifest history and verifying the owner-signed
     /// recovery against the exact durable previous-incarnation head.
     pub async fn join_from_recovery_welcome(
         &self,
@@ -84,7 +84,7 @@ impl MlsClient {
         if welcome_bytes.is_empty()
             || welcome_bytes.len() > MAX_APPLICATION_BYTES
             || expected_members.is_empty()
-            || expected_members.len() > 1000
+            || expected_members.len() > MAX_MLS_GROUP_LEAVES
             || recovery.plan.new_genesis.mls_group_id != BASE64.encode(expected_group_id)
         {
             return Err(ChatError::Invalid(
@@ -338,7 +338,7 @@ impl MlsClient {
     }
 
     /// Stage one exact replacement incarnation. `additions` must contain a
-    /// fresh, transparency-verified KeyPackage for every destination device
+    /// fresh, account-manifest-verified KeyPackage for every destination device
     /// except the initiating device, which becomes the fresh group's creator.
     pub async fn prepare_group_recovery(
         &self,
@@ -514,7 +514,7 @@ impl MlsClient {
             incarnation: new_incarnation,
             mls_group_id: new_group_key.clone(),
             kind: MlsConversationKindV1::Group,
-            suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+            suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
             roster_commitment: roster_commitment(&members).map_err(ChatError::Invalid)?,
             member_count: members.len() as u32,
             authority_set: authority_set.clone(),

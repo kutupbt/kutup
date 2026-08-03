@@ -8,11 +8,16 @@ use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use ed25519_dalek::{Signer as _, SigningKey};
+use ed25519_dalek::Signer as _;
 use kutup_chat_proto::{
-    DeviceManifest, ManifestDevice, ManifestUpdateRangeProofV1, TransparencyCheckpoint,
-    UserPreKeyBundlesResponse,
+    AccountIdentitySuiteId, AccountManifestDeviceV1, AccountManifestDriveKeysV1,
+    AccountManifestHistoryPageV1, AccountManifestV1, DirectChatSuiteId, UserPreKeyBundlesResponse,
 };
+use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
+use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
+use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
+use kutup_crypto::identity::AccountIdentityKeysV1;
+use kutup_crypto::named_share::NamedShareEnvelopeV1;
 use rand::RngCore;
 use reqwest::blocking::{Client, Response};
 use serde_json::{json, Value};
@@ -39,6 +44,13 @@ fn client() -> Client {
         .timeout(Duration::from_secs(10))
         .build()
         .unwrap()
+}
+
+fn test_master_key(email: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"kutup/two-server-live/account-master/v1\0");
+    hasher.update(email.as_bytes());
+    hasher.finalize().into()
 }
 
 fn json_response(response: Response, context: &str) -> Value {
@@ -73,10 +85,9 @@ fn federation_peer<'a>(control_plane: &'a Value, domain: &str) -> &'a Value {
 
 fn registration_payload(email: &str, username: &str) -> Value {
     let mut rng = rand::thread_rng();
-    let mut master_key = [0u8; 32];
+    let master_key = test_master_key(email);
     let mut recovery_entropy = [0u8; 32];
     let mut account_protection_salt = [0u8; 16];
-    rng.fill_bytes(&mut master_key);
     rng.fill_bytes(&mut recovery_entropy);
     rng.fill_bytes(&mut account_protection_salt);
 
@@ -88,25 +99,42 @@ fn registration_payload(email: &str, username: &str) -> Value {
     .unwrap();
     let recovery_proof =
         kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, email).unwrap();
-    let (public_key, secret_key) = kutup_crypto::sealedbox::generate_keypair();
-    let (encrypted_master_key, master_key_nonce) =
-        kutup_crypto::secretbox::seal(&master_key, keys.key_encryption_key.as_slice()).unwrap();
-    let (encrypted_recovery_key, recovery_key_nonce) =
-        kutup_crypto::secretbox::seal(&master_key, &recovery_entropy).unwrap();
-    let (encrypted_private_key, private_key_nonce) =
-        kutup_crypto::secretbox::seal(&secret_key, &master_key).unwrap();
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap();
+    use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+    let master_key_envelope = account_envelope::seal_b64(
+        &master_key,
+        keys.key_encryption_key.as_slice(),
+        AccountEnvelopePurpose::PasswordMasterKey,
+        email,
+    )
+    .unwrap();
+    let recovery_key_envelope = account_envelope::seal_b64(
+        &master_key,
+        &recovery_entropy,
+        AccountEnvelopePurpose::RecoveryMasterKey,
+        email,
+    )
+    .unwrap();
+    let drive_private_key_envelope = account_envelope::seal_b64(
+        identity.drive_hpke_private_key(),
+        &master_key,
+        AccountEnvelopePurpose::DriveHpkePrivateKey,
+        email,
+    )
+    .unwrap();
 
     json!({
         "email": email,
         "username": username,
         "loginKey": b64(keys.login_key.as_slice()),
-        "encryptedMasterKey": b64(&encrypted_master_key),
-        "masterKeyNonce": b64(&master_key_nonce),
-        "encryptedRecoveryKey": b64(&encrypted_recovery_key),
-        "recoveryKeyNonce": b64(&recovery_key_nonce),
-        "encryptedPrivateKey": b64(&encrypted_private_key),
-        "privateKeyNonce": b64(&private_key_nonce),
-        "publicKey": b64(&public_key),
+        "masterKeyEnvelope": master_key_envelope,
+        "recoveryKeyEnvelope": recovery_key_envelope,
+        "drivePrivateKeyEnvelope": drive_private_key_envelope,
+        "publicKey": b64(&identity.drive_hpke_public_key()),
+        "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
+        "accountAuthorityKeyId": identity.authority_key_id(),
+        "accountIncarnationId": identity.incarnation_id(),
+        "driveSigningPublicKey": b64(&identity.drive_signing_public_key()),
         "accountProtectionSuite": 1,
         "accountProtectionSalt": b64(&account_protection_salt),
         "argonMemoryKib": 65536,
@@ -116,14 +144,16 @@ fn registration_payload(email: &str, username: &str) -> Value {
     })
 }
 
-fn register_account(c: &Client, base: &str, email: &str, username: &str) -> String {
+fn register_account(c: &Client, base: &str, email: &str, username: &str) -> (String, String) {
+    let payload = registration_payload(email, username);
+    let public_key = payload["publicKey"].as_str().unwrap().to_owned();
     let response = c
         .post(format!("{base}/api/auth/register"))
-        .json(&registration_payload(email, username))
+        .json(&payload)
         .send()
         .unwrap();
     json_response(response, &format!("register {username}"));
-    login(c, base, email)
+    (login(c, base, email), public_key)
 }
 
 fn setup_admin(c: &Client, base: &str, email: &str, username: &str) -> String {
@@ -151,10 +181,11 @@ fn setup_admin(c: &Client, base: &str, email: &str, username: &str) -> String {
     );
     assert_eq!(login["requiresSetup"], true);
     let setup_token = login["setupToken"].as_str().unwrap();
+    let setup_payload = registration_payload(email, username);
     let setup = json_response(
         c.post(format!("{base}/api/auth/complete-setup"))
             .bearer_auth(setup_token)
-            .json(&registration_payload(email, username))
+            .json(&setup_payload)
             .send()
             .unwrap(),
         "bootstrap admin setup",
@@ -319,28 +350,40 @@ fn register_device(c: &Client, base: &str, token: &str, registration_id: u32, se
     response["deviceId"].as_u64().unwrap() as u32
 }
 
-fn manifest_device(device_id: u32, registration_id: u32, seed: u8) -> ManifestDevice {
-    ManifestDevice {
+fn manifest_device(device_id: u32, registration_id: u32, seed: u8) -> AccountManifestDeviceV1 {
+    AccountManifestDeviceV1 {
         device_id,
+        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
         registration_id,
         identity_key: b64(&[seed.wrapping_add(1); 33]),
         mls: None,
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn publish_manifest(
     c: &Client,
     base: &str,
     token: &str,
-    signing: &SigningKey,
-    version: u64,
+    identity: &AccountIdentityKeysV1,
+    account: &str,
+    drive_public_key: &str,
+    sequence: u64,
     previous_hash: Option<String>,
-    devices: Vec<ManifestDevice>,
-) -> DeviceManifest {
-    let public = signing.verifying_key();
-    let mut manifest = DeviceManifest {
-        version,
+    devices: Vec<AccountManifestDeviceV1>,
+) -> AccountManifestV1 {
+    let public = identity.authority_signing_key().verifying_key();
+    let mut manifest = AccountManifestV1 {
+        manifest_version: 1,
+        account: account.into(),
+        incarnation_id: identity.incarnation_id(),
+        sequence,
         previous_hash,
+        drive: AccountManifestDriveKeysV1 {
+            suite: AccountIdentitySuiteId::X25519Ed25519V1,
+            hpke_public_key: drive_public_key.into(),
+            share_signing_public_key: b64(&identity.drive_signing_public_key()),
+        },
         devices,
         issued_at: time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
@@ -349,7 +392,10 @@ fn publish_manifest(
         self_authority_key: b64(public.as_bytes()),
         signature: String::new(),
     };
-    manifest.signature = b64(&signing.sign(&manifest.signing_bytes().unwrap()).to_bytes());
+    manifest.signature = b64(&identity
+        .authority_signing_key()
+        .sign(&manifest.signing_bytes().unwrap())
+        .to_bytes());
     let response = c
         .post(format!("{base}/api/chat/manifest"))
         .bearer_auth(token)
@@ -414,13 +460,18 @@ fn assert_content_once(messages: &[Value], content: &[u8]) {
     );
 }
 
-fn drive_upload_body(boundary: &str, ciphertext: &[u8]) -> Vec<u8> {
+fn drive_upload_body(
+    boundary: &str,
+    file_id: &str,
+    metadata_envelope: &str,
+    file_key_envelope: &str,
+    ciphertext: &[u8],
+) -> Vec<u8> {
     let mut body = Vec::new();
     for (name, value) in [
-        ("encryptedMetadata", "drive-encrypted-metadata"),
-        ("metadataNonce", "drive-metadata-nonce"),
-        ("encryptedFileKey", "drive-wrapped-file-key"),
-        ("fileKeyNonce", "drive-file-key-nonce"),
+        ("fileId", file_id),
+        ("metadataEnvelope", metadata_envelope),
+        ("fileKeyEnvelope", file_key_envelope),
     ] {
         body.extend_from_slice(
             format!(
@@ -441,20 +492,167 @@ fn drive_upload_body(boundary: &str, ciphertext: &[u8]) -> Vec<u8> {
 }
 
 fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: &str) {
-    let collection = json_response(
+    let alice_master = test_master_key(ALICE_EMAIL);
+    let bob_master = test_master_key(BOB_EMAIL);
+    let alice_identity = AccountIdentityKeysV1::derive(&alice_master).unwrap();
+    let bob_identity = AccountIdentityKeysV1::derive(&bob_master).unwrap();
+    let alice_me = json_response(
+        c.get(format!("{a}/api/user/me"))
+            .bearer_auth(alice_token)
+            .send()
+            .unwrap(),
+        "get Drive collection owner",
+    );
+    let owner_user_id = alice_me["id"].as_str().unwrap();
+    let collection_id = uuid::Uuid::new_v4().to_string();
+    let collection_key = [0x45; 32];
+    let owner_key_context = DriveEnvelopeContextV1::new(
+        DriveEnvelopePurpose::CollectionKey,
+        1,
+        1,
+        &collection_id,
+        owner_user_id,
+    )
+    .unwrap();
+    let name_context = DriveEnvelopeContextV1::new(
+        DriveEnvelopePurpose::CollectionName,
+        1,
+        1,
+        &collection_id,
+        owner_user_id,
+    )
+    .unwrap();
+    let owner_key_envelope =
+        drive_envelope::seal_b64(&collection_key, &alice_master, owner_key_context).unwrap();
+    let name_envelope =
+        drive_envelope::seal_b64(b"Federated V2 collection", &collection_key, name_context)
+            .unwrap();
+    let epoch_statement = CollectionEpochStatementV1::create(
+        &collection_id,
+        owner_user_id,
+        1,
+        None,
+        &collection_key,
+        alice_identity.authority_signing_key(),
+    )
+    .unwrap();
+    let epoch_statement_hash = epoch_statement.statement_hash();
+    let created = json_response(
         c.post(format!("{a}/api/collections"))
             .bearer_auth(alice_token)
             .json(&json!({
-                "encryptedName": "drive-encrypted-name",
-                "nameNonce": "drive-name-nonce",
-                "encryptedKey": "drive-owner-key",
-                "encryptedKeyNonce": "drive-owner-key-nonce"
+                "id": collection_id,
+                "nameEnvelope": name_envelope,
+                "ownerKeyEnvelope": owner_key_envelope,
+                "epochStatement": epoch_statement.encode_b64()
             }))
             .send()
             .unwrap(),
         "create Drive collection",
     );
-    let collection_id = collection["id"].as_str().unwrap();
+    assert_eq!(created["id"], collection_id);
+    let collection = json_response(
+        c.get(format!("{a}/api/collections/{collection_id}"))
+            .bearer_auth(alice_token)
+            .send()
+            .unwrap(),
+        "read owned Drive collection",
+    );
+    assert_eq!(collection["keyEpoch"], 1);
+    assert_eq!(collection["nameRevision"], 1);
+    assert_eq!(collection["epochStatementHash"], epoch_statement_hash);
+    assert_eq!(
+        drive_envelope::open_b64(
+            collection["ownerKeyEnvelope"].as_str().unwrap(),
+            &alice_master,
+            owner_key_context,
+        )
+        .unwrap(),
+        collection_key
+    );
+    assert_eq!(
+        drive_envelope::open_b64(
+            collection["nameEnvelope"].as_str().unwrap(),
+            &collection_key,
+            name_context,
+        )
+        .unwrap(),
+        b"Federated V2 collection"
+    );
+
+    // Public links reuse the same typed Drive envelope implementation while
+    // keeping the random link key exclusively in the URL fragment.
+    let link_key = [0x4c; 32];
+    let public_link_context = DriveEnvelopeContextV1::new(
+        DriveEnvelopePurpose::PublicLinkCollectionKey,
+        1,
+        1,
+        &collection_id,
+        owner_user_id,
+    )
+    .unwrap();
+    let public_link_envelope =
+        drive_envelope::seal_b64(&collection_key, &link_key, public_link_context).unwrap();
+    let public_link = json_response(
+        c.post(format!("{a}/api/share/"))
+            .bearer_auth(alice_token)
+            .json(&json!({
+                "shareType": "collection",
+                "targetId": collection_id,
+                "collectionKeyEnvelope": public_link_envelope,
+            }))
+            .send()
+            .unwrap(),
+        "create public Drive share",
+    );
+    let public_link_token = public_link["token"].as_str().unwrap();
+    let public_link_record = json_response(
+        c.get(format!("{a}/api/share/{public_link_token}"))
+            .send()
+            .unwrap(),
+        "read public Drive share",
+    );
+    assert_eq!(public_link_record["targetId"], collection_id);
+    assert_eq!(public_link_record["ownerUserId"], owner_user_id);
+    assert_eq!(public_link_record["collectionKeyEpoch"], 1);
+    assert_eq!(
+        drive_envelope::open_b64(
+            public_link_record["collectionKeyEnvelope"]
+                .as_str()
+                .unwrap(),
+            &link_key,
+            public_link_context,
+        )
+        .unwrap(),
+        collection_key
+    );
+    let stale_public_envelope = drive_envelope::seal_b64(
+        &collection_key,
+        &link_key,
+        DriveEnvelopeContextV1::new(
+            DriveEnvelopePurpose::PublicLinkCollectionKey,
+            2,
+            1,
+            &collection_id,
+            owner_user_id,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        c.post(format!("{a}/api/share/"))
+            .bearer_auth(alice_token)
+            .json(&json!({
+                "shareType": "collection",
+                "targetId": collection_id,
+                "collectionKeyEnvelope": stale_public_envelope,
+            }))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        400
+    );
 
     let remote_user = json_response(
         drive_remote_user(c, a, alice_token),
@@ -462,7 +660,40 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
     );
     assert_eq!(remote_user["username"], BOB_USERNAME);
     assert_eq!(remote_user["server"], "b.test");
-    assert!(!remote_user["publicKey"].as_str().unwrap().is_empty());
+    assert_eq!(remote_user["account"], "bobfed@b.test");
+    assert_eq!(
+        remote_user["driveHpkePublicKey"],
+        b64(&bob_identity.drive_hpke_public_key())
+    );
+    assert_eq!(
+        remote_user["driveSigningPublicKey"],
+        b64(&bob_identity.drive_signing_public_key())
+    );
+    assert_eq!(
+        remote_user["accountAuthorityPublicKey"],
+        b64(&bob_identity.authority_public_key())
+    );
+    assert_eq!(
+        remote_user["accountIncarnationId"],
+        bob_identity.incarnation_id()
+    );
+    let recipient_hpke = STANDARD
+        .decode(remote_user["driveHpkePublicKey"].as_str().unwrap())
+        .unwrap();
+    let named_share = NamedShareEnvelopeV1::seal(
+        &collection_key,
+        &collection_id,
+        1,
+        "alicefed@a.test",
+        &alice_identity.incarnation_id(),
+        alice_identity.drive_signing_key(),
+        remote_user["account"].as_str().unwrap(),
+        remote_user["accountIncarnationId"].as_str().unwrap(),
+        &recipient_hpke,
+    )
+    .unwrap()
+    .encode_b64()
+    .unwrap();
 
     let share = json_response(
         c.post(format!(
@@ -472,7 +703,7 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         .json(&json!({
             "recipientUsername": BOB_USERNAME,
             "recipientServer": "b.test",
-            "encryptedCollectionKey": "drive-recipient-wrapped-key",
+            "namedShareEnvelope": named_share,
             "canUpload": true,
             "canDelete": true,
             "uploadQuotaBytes": 1048576
@@ -514,6 +745,55 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
     assert_eq!(incoming.as_array().unwrap().len(), 1);
     assert!(incoming[0].get("capability").is_none());
     assert!(incoming[0].get("remoteCapability").is_none());
+    assert_eq!(incoming[0]["remoteCollectionId"], collection_id);
+    assert_eq!(incoming[0]["epochStatementHash"], epoch_statement_hash);
+    let accepted_share =
+        NamedShareEnvelopeV1::decode_b64(incoming[0]["namedShareEnvelope"].as_str().unwrap())
+            .unwrap();
+    assert_eq!(
+        accepted_share
+            .open(
+                &collection_id,
+                1,
+                "alicefed@a.test",
+                &alice_identity.incarnation_id(),
+                &alice_identity.drive_signing_public_key(),
+                "bobfed@b.test",
+                &bob_identity.incarnation_id(),
+                bob_identity.drive_hpke_private_key(),
+            )
+            .unwrap(),
+        collection_key
+    );
+    let accepted_epoch =
+        CollectionEpochStatementV1::decode_b64(incoming[0]["epochStatement"].as_str().unwrap())
+            .unwrap();
+    accepted_epoch
+        .verify_authority(&alice_identity.authority_public_key())
+        .unwrap();
+    accepted_epoch
+        .verify_current_binding(&collection_id, owner_user_id, 1)
+        .unwrap();
+    accepted_epoch
+        .verify_collection_key(&collection_key)
+        .unwrap();
+    assert_eq!(accepted_epoch.statement_hash(), epoch_statement_hash);
+    assert_eq!(
+        drive_envelope::open_b64(
+            incoming[0]["nameEnvelope"].as_str().unwrap(),
+            &collection_key,
+            DriveEnvelopeContextV1::new(
+                DriveEnvelopePurpose::CollectionName,
+                1,
+                1,
+                &collection_id,
+                owner_user_id,
+            )
+            .unwrap(),
+        )
+        .unwrap(),
+        b"Federated V2 collection"
+    );
 
     let empty = json_response(
         c.get(format!(
@@ -527,8 +807,49 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
     assert!(empty.as_array().unwrap().is_empty());
 
     let boundary = "kutup-drive-live-boundary";
-    let ciphertext = b"phase-d-encrypted-drive-object";
-    let upload_body = drive_upload_body(boundary, ciphertext);
+    let plaintext = b"phase-d-encrypted-drive-object";
+    let proposed_file_id = uuid::Uuid::new_v4().to_string();
+    let file_key = [0x46; 32];
+    let file_key_envelope = drive_envelope::seal_b64(
+        &file_key,
+        &collection_key,
+        DriveEnvelopeContextV1::new(
+            DriveEnvelopePurpose::FileKey,
+            1,
+            1,
+            &proposed_file_id,
+            &collection_id,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let metadata_plaintext = br#"{"name":"federated.txt","mimeType":"text/plain","size":31}"#;
+    let metadata_envelope = drive_envelope::seal_b64(
+        metadata_plaintext,
+        &file_key,
+        DriveEnvelopeContextV1::new(
+            DriveEnvelopePurpose::FileMetadata,
+            1,
+            1,
+            &proposed_file_id,
+            &collection_id,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let ciphertext = drive_object::encrypt_file_blob(
+        plaintext,
+        &file_key,
+        DriveFileBlobContextV1::new(&proposed_file_id, &collection_id, 1).unwrap(),
+    )
+    .unwrap();
+    let upload_body = drive_upload_body(
+        boundary,
+        &proposed_file_id,
+        &metadata_envelope,
+        &file_key_envelope,
+        &ciphertext,
+    );
     let upload = |body: Vec<u8>| {
         c.post(format!(
             "{b}/api/drive/federation/shares/{incoming_id}/files"
@@ -542,10 +863,54 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         .send()
         .unwrap()
     };
+    let relocated = drive_upload_body(
+        boundary,
+        &uuid::Uuid::new_v4().to_string(),
+        &metadata_envelope,
+        &file_key_envelope,
+        &ciphertext,
+    );
+    assert_eq!(upload(relocated).status().as_u16(), 400);
+    let blob_relocation_id = uuid::Uuid::new_v4().to_string();
+    let blob_relocation_file_key = drive_envelope::seal_b64(
+        &file_key,
+        &collection_key,
+        DriveEnvelopeContextV1::new(
+            DriveEnvelopePurpose::FileKey,
+            1,
+            1,
+            &blob_relocation_id,
+            &collection_id,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let blob_relocation_metadata = drive_envelope::seal_b64(
+        metadata_plaintext,
+        &file_key,
+        DriveEnvelopeContextV1::new(
+            DriveEnvelopePurpose::FileMetadata,
+            1,
+            1,
+            &blob_relocation_id,
+            &collection_id,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let relocated_blob = drive_upload_body(
+        boundary,
+        &blob_relocation_id,
+        &blob_relocation_metadata,
+        &blob_relocation_file_key,
+        &ciphertext,
+    );
+    assert_eq!(upload(relocated_blob).status().as_u16(), 400);
     let first_upload = json_response(upload(upload_body.clone()), "federated Drive upload");
     let retried_upload = json_response(upload(upload_body), "idempotent Drive upload retry");
     assert_eq!(first_upload["id"], retried_upload["id"]);
     let file_id = first_upload["id"].as_str().unwrap();
+    assert_eq!(file_id, proposed_file_id);
 
     let files = json_response(
         c.get(format!(
@@ -558,7 +923,42 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
     );
     assert_eq!(files.as_array().unwrap().len(), 1);
     assert_eq!(files[0]["id"], file_id);
-    assert_eq!(files[0]["encryptedMetadata"], "drive-encrypted-metadata");
+    assert_eq!(files[0]["metadataEnvelope"], metadata_envelope);
+    assert_eq!(files[0]["fileKeyEnvelope"], file_key_envelope);
+    assert_eq!(files[0]["keyEpoch"], 1);
+    assert_eq!(files[0]["metadataRevision"], 1);
+    assert_eq!(
+        drive_envelope::open_b64(
+            files[0]["fileKeyEnvelope"].as_str().unwrap(),
+            &collection_key,
+            DriveEnvelopeContextV1::new(
+                DriveEnvelopePurpose::FileKey,
+                1,
+                1,
+                file_id,
+                &collection_id,
+            )
+            .unwrap(),
+        )
+        .unwrap(),
+        file_key,
+    );
+    assert_eq!(
+        drive_envelope::open_b64(
+            files[0]["metadataEnvelope"].as_str().unwrap(),
+            &file_key,
+            DriveEnvelopeContextV1::new(
+                DriveEnvelopePurpose::FileMetadata,
+                1,
+                1,
+                file_id,
+                &collection_id,
+            )
+            .unwrap(),
+        )
+        .unwrap(),
+        metadata_plaintext,
+    );
 
     let download = c
         .get(format!(
@@ -568,7 +968,7 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         .send()
         .unwrap();
     assert_eq!(download.status().as_u16(), 200);
-    assert_eq!(download.bytes().unwrap().as_ref(), ciphertext);
+    assert_eq!(download.bytes().unwrap().as_ref(), ciphertext.as_slice());
 
     let delete = || {
         c.delete(format!(
@@ -589,7 +989,7 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         .json(&json!({
             "recipientUsername": BOB_USERNAME,
             "recipientServer": "http://b.test",
-            "encryptedCollectionKey": "wrapped",
+            "namedShareEnvelope": "not-reached-because-the-domain-is-invalid",
             "canUpload": false,
             "canDelete": false
         }))
@@ -700,8 +1100,8 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     update_feature_mode(c, a, &admin_a, "drive", "open");
     update_feature_mode(c, b, &admin_b, "drive", "open");
 
-    let alice_token = register_account(c, a, ALICE_EMAIL, ALICE_USERNAME);
-    let bob_token = register_account(c, b, BOB_EMAIL, BOB_USERNAME);
+    let (alice_token, _alice_drive_public) = register_account(c, a, ALICE_EMAIL, ALICE_USERNAME);
+    let (bob_token, bob_drive_public) = register_account(c, b, BOB_EMAIL, BOB_USERNAME);
     drive_round_trip(c, a, b, &alice_token, &bob_token);
 
     // Drive is deliberately the first feature to contact B. Capture the one
@@ -742,12 +1142,14 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         register_device(c, b, &bob_token, BOB_REGISTRATION_ID_1, 20),
         1
     );
-    let bob_authority = SigningKey::from_bytes(&[82; 32]);
+    let bob_identity = AccountIdentityKeysV1::derive(&test_master_key(BOB_EMAIL)).unwrap();
     let bob_manifest_v1 = publish_manifest(
         c,
         b,
         &bob_token,
-        &bob_authority,
+        &bob_identity,
+        "bobfed@b.test",
+        &bob_drive_public,
         1,
         None,
         vec![manifest_device(1, BOB_REGISTRATION_ID_1, 20)],
@@ -1077,12 +1479,10 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
 
     let typed_first: UserPreKeyBundlesResponse =
         serde_json::from_value(bundles_first.clone()).unwrap();
-    let first_proof = typed_first.transparency.as_ref().unwrap();
-    first_proof.verify_inclusion().unwrap();
-    first_proof.verify_current_map().unwrap();
-    first_proof.verify_authentication().unwrap();
-    first_proof.verify_consistency_from(None).unwrap();
-    let first_checkpoint: TransparencyCheckpoint = first_proof.checkpoint.clone();
+    assert_eq!(
+        typed_first.manifest.as_ref().unwrap().account,
+        remote_address
+    );
 
     let direct_content = b"federated-direct";
     let direct_id = "10000000-0000-4000-8000-000000000001";
@@ -1128,7 +1528,9 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         c,
         b,
         &bob_token,
-        &bob_authority,
+        &bob_identity,
+        "bobfed@b.test",
+        &bob_drive_public,
         2,
         Some(bob_manifest_v1.manifest_hash().unwrap()),
         vec![
@@ -1137,25 +1539,15 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         ],
     );
     let refreshed_bundles = json_response(
-        c.get(format!(
-            "{a}/api/chat/users/{remote_address}/keys?transparencyTreeSize={}",
-            first_checkpoint.tree_size
-        ))
-        .bearer_auth(&alice_token)
-        .send()
-        .unwrap(),
-        "remote bundle transparency refresh",
+        c.get(format!("{a}/api/chat/users/{remote_address}/keys"))
+            .bearer_auth(&alice_token)
+            .send()
+            .unwrap(),
+        "remote bundle manifest refresh",
     );
     let typed_refreshed: UserPreKeyBundlesResponse =
         serde_json::from_value(refreshed_bundles).unwrap();
     assert_eq!(typed_refreshed.manifest.as_ref(), Some(&bob_manifest_v2));
-    let refreshed_proof = typed_refreshed.transparency.as_ref().unwrap();
-    refreshed_proof.verify_inclusion().unwrap();
-    refreshed_proof.verify_current_map().unwrap();
-    refreshed_proof.verify_authentication().unwrap();
-    refreshed_proof
-        .verify_consistency_from(Some(&first_checkpoint))
-        .unwrap();
 
     // Materialize enough complete, signed account history to cross the
     // protocol's 64-entry page boundary. Fetch it through A's same-origin
@@ -1171,60 +1563,48 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
             c,
             b,
             &bob_token,
-            &bob_authority,
+            &bob_identity,
+            "bobfed@b.test",
+            &bob_drive_public,
             version,
             Some(latest_manifest.manifest_hash().unwrap()),
             bob_devices.clone(),
         );
     }
     let history_url = format!("{a}/api/chat/users/{remote_address}/manifest-history");
-    let first_page: ManifestUpdateRangeProofV1 = serde_json::from_value(json_response(
+    let first_page: AccountManifestHistoryPageV1 = serde_json::from_value(json_response(
         c.get(&history_url)
             .bearer_auth(&alice_token)
             .query(&[
-                ("fromVersion", "1"),
-                ("toVersion", "66"),
-                ("pageFromVersion", "1"),
-                ("transparencyTreeSize", "0"),
+                ("fromSequence", "1"),
+                ("toSequence", "66"),
+                ("pageFromSequence", "1"),
             ])
             .send()
             .unwrap(),
         "first federated manifest-history page",
     ))
     .unwrap();
-    assert_eq!(first_page.entries.len(), 64);
-    assert_eq!(first_page.page_to_version, 64);
-    first_page
-        .verify_page(&remote_address, 1, None, None)
-        .unwrap();
-    let cursor = first_page.next_cursor.clone().unwrap();
-    let first_page_last = first_page.entries.last().unwrap().manifest.clone();
-    let second_page: ManifestUpdateRangeProofV1 = serde_json::from_value(json_response(
+    assert_eq!(first_page.manifests.len(), 64);
+    first_page.validate().unwrap();
+    assert_eq!(first_page.next_sequence, Some(65));
+    let second_page: AccountManifestHistoryPageV1 = serde_json::from_value(json_response(
         c.get(&history_url)
             .bearer_auth(&alice_token)
             .query(&[
-                ("fromVersion", "1"),
-                ("toVersion", "66"),
-                ("pageFromVersion", "65"),
-                ("cursor", cursor.as_str()),
-                ("transparencyTreeSize", "0"),
+                ("fromSequence", "1"),
+                ("toSequence", "66"),
+                ("pageFromSequence", "65"),
             ])
             .send()
             .unwrap(),
         "second federated manifest-history page",
     ))
     .unwrap();
-    assert_eq!(second_page.entries.len(), 2);
-    assert_eq!(
-        second_page.entries.last().unwrap().manifest,
-        latest_manifest
-    );
-    assert!(second_page.next_cursor.is_none());
-    assert_eq!(second_page.checkpoint, first_page.checkpoint);
-    assert_eq!(second_page.authentication, first_page.authentication);
-    second_page
-        .verify_page(&remote_address, 1, Some(&first_page_last), None)
-        .unwrap();
+    assert_eq!(second_page.manifests.len(), 2);
+    assert_eq!(*second_page.manifests.last().unwrap(), latest_manifest);
+    assert!(second_page.next_sequence.is_none());
+    second_page.validate().unwrap();
 
     let mismatch_id = "10000000-0000-4000-8000-000000000002";
     let mismatch = send(
@@ -1342,20 +1722,6 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
     }
 
     let alice_token = login(c, a, ALICE_EMAIL);
-    let monitor = json_response(
-        c.get(format!("{a}/api/chat/transparency/domains/b.test/status"))
-            .bearer_auth(&alice_token)
-            .send()
-            .unwrap(),
-        "restart-restored remote transparency monitor cursor",
-    );
-    assert_eq!(monitor["domain"], "b.test");
-    assert_eq!(monitor["policySequence"], 1);
-    assert_eq!(monitor["blocked"], false);
-    assert!(monitor["lastSuccessfulAt"].as_str().is_some());
-    assert!(monitor["checkpoint"]["checkpoint"]["treeSize"]
-        .as_u64()
-        .is_some_and(|tree_size| tree_size >= 2));
 
     let follow_up = b"after-origin-restart";
     json_response(

@@ -157,11 +157,12 @@ export default function Login() {
 
   async function finalizeLogin(data: any, keyEncryptionKey: Uint8Array) {
     setStep('decrypting')
-    const masterKey = await decryptMasterKey(data.encryptedMasterKey, data.masterKeyNonce, keyEncryptionKey)
-    const privateKey = await decryptPrivateKey(data.encryptedPrivateKey, data.privateKeyNonce, masterKey)
+    const loginEmail = savedEmail || credForm.getValues('email')
+    const masterKey = await decryptMasterKey(data.masterKeyEnvelope, keyEncryptionKey, loginEmail)
+    const privateKey = await decryptPrivateKey(data.drivePrivateKeyEnvelope, masterKey, loginEmail)
     dispatch(setAuth({
       userId: data.userId,
-      email: savedEmail || credForm.getValues('email'),
+      email: loginEmail,
       username: data.username,
       accessToken: data.accessToken,
       masterKey,

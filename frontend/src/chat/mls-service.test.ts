@@ -45,12 +45,12 @@ function verifiedPolicyDetails(domain: string) {
       policy: {
         policyVersion: 1,
         canonicalDomain: domain,
-        suite: 2,
+        suite: 3,
         anonymousDeliverySuite: 1,
         controlSigningKeyId: keyId,
         controlSigningPublicKey: publicKey,
         acceptsGroupOrdering: true,
-        maximumGroupMembers: 1000,
+        maximumGroupMembers: 256,
         maximumAuthorities: 64,
         maximumControlPayloadBytes: 1024 * 1024,
         pendingMessageRequests: {
@@ -81,7 +81,7 @@ function pendingGenesis(): LocalMlsConversationRecord {
         incarnation: 1,
         mlsGroupId: genesisGroupId,
         kind: 'group',
-        suite: 2,
+        suite: 3,
         rosterCommitment: 'cd'.repeat(32),
         memberCount: 1,
         authoritySet: {
@@ -157,7 +157,7 @@ function pendingGenesis(): LocalMlsConversationRecord {
     genesisCryptographicPolicy: {
       policyVersion: 1,
       sequence: 1,
-      suite: 2,
+      suite: 3,
       requiredPrivateControlExtension: 0xff4b,
       maximumPastEpochs: 2,
       anonymousDeliveryRequired: true,
@@ -172,7 +172,7 @@ function pendingGenesis(): LocalMlsConversationRecord {
     currentCryptographicPolicy: {
       policyVersion: 1,
       sequence: 1,
-      suite: 2,
+      suite: 3,
       requiredPrivateControlExtension: 0xff4b,
       maximumPastEpochs: 2,
       anonymousDeliveryRequired: true,
@@ -699,9 +699,9 @@ function harness(
         wire: { deviceId: 7 },
         credential: {
           credentialIdentity: `${recipient.username}@${recipient.server}#7`,
-          credentialPublicKey: [...new Uint8Array(65).fill(4)],
+          credentialPublicKey: [...new Uint8Array(32).fill(4)],
         },
-        anonymousDeliveryPublicKey: [...new Uint8Array(65).fill(5)],
+        anonymousDeliveryPublicKey: [...new Uint8Array(32).fill(5)],
       }],
     ),
     prepareMlsGroupRecovery: vi.fn().mockResolvedValue({
@@ -733,19 +733,19 @@ function harness(
       claimedMembers: [
         {
           credentialIdentity: 'alice@example.test#7',
-          credentialPublicKey: [...new Uint8Array(65).fill(4)],
+          credentialPublicKey: [...new Uint8Array(32).fill(4)],
         },
       ],
     }),
     resolveMlsWelcomeClaims: vi.fn().mockResolvedValue([
       {
         credentialIdentity: 'alice@example.test#7',
-        credentialPublicKey: [...new Uint8Array(65).fill(4)],
+        credentialPublicKey: [...new Uint8Array(32).fill(4)],
       },
     ]),
     resolveMlsSenderClaim: vi.fn().mockResolvedValue({
       credentialIdentity: 'alice@example.test#7',
-      credentialPublicKey: [...new Uint8Array(65).fill(4)],
+      credentialPublicKey: [...new Uint8Array(32).fill(4)],
     }),
     processedMlsControlEnvelope: vi.fn().mockResolvedValue(null),
     inspectInboundMlsCommit: vi.fn().mockResolvedValue({
@@ -756,7 +756,7 @@ function harness(
       claimedMembers: [
         {
           credentialIdentity: 'alice@example.test#7',
-          credentialPublicKey: [...new Uint8Array(65).fill(4)],
+          credentialPublicKey: [...new Uint8Array(32).fill(4)],
         },
       ],
       privateControlState: {
@@ -840,7 +840,7 @@ function harness(
       epoch: 1,
       claimedSender: {
         credentialIdentity: 'alice@example.test#7',
-        credentialPublicKey: [...new Uint8Array(65).fill(4)],
+        credentialPublicKey: [...new Uint8Array(32).fill(4)],
       },
     }),
     processedMlsApplicationEnvelope: vi.fn().mockResolvedValue(null),
@@ -1363,6 +1363,7 @@ describe('MlsConversationService', () => {
       genesisGroupBytes,
       expect.objectContaining({ blockHash: controlBlockHash }),
     )
+    expect(transport.publishMlsDeliveryCapability).not.toHaveBeenCalled()
   })
 
   it('keeps private sender policy pending for owner approval and resumes exact finalization', async () => {
@@ -1526,16 +1527,16 @@ describe('MlsConversationService', () => {
       wire: {
         deviceId: 8,
         manifestVersion: 2,
-        suite: 2,
+        suite: 3,
         keyPackageRef: '55'.repeat(32),
         keyPackage: btoa('package'),
         expiresAt: 1_800_000_000,
       },
       credential: {
         credentialIdentity: 'alice@alpha.example#8',
-        credentialPublicKey: [...new Uint8Array(65).fill(4)],
+        credentialPublicKey: [...new Uint8Array(32).fill(4)],
       },
-      anonymousDeliveryPublicKey: [...new Uint8Array(65).fill(5)],
+      anonymousDeliveryPublicKey: [...new Uint8Array(32).fill(5)],
     }])
 
     await expect(service.reconcileLinkedDevices([7, 8])).resolves.toHaveLength(1)
@@ -1676,7 +1677,7 @@ describe('MlsConversationService', () => {
     const { client, transport, service } = harness(null, [activeGenesis()])
     const anonymousEnvelope = {
       deviceId: 7,
-      encapsulatedKey: btoa(String.fromCharCode(...new Uint8Array(65).fill(3))),
+      encapsulatedKey: btoa(String.fromCharCode(...new Uint8Array(32).fill(3))),
       ciphertext: btoa(String.fromCharCode(...new Uint8Array([4, 5, 6]))),
     }
     vi.mocked(transport.drainMlsMailbox).mockResolvedValueOnce({
@@ -1701,7 +1702,7 @@ describe('MlsConversationService', () => {
     ])
     expect(client.resolveMlsSenderClaim).toHaveBeenCalledWith({
       credentialIdentity: 'alice@example.test#7',
-      credentialPublicKey: [...new Uint8Array(65).fill(4)],
+      credentialPublicKey: [...new Uint8Array(32).fill(4)],
     })
     expect(client.resolveMlsWelcomeClaims).not.toHaveBeenCalled()
     expect(client.applyAnonymousMlsApplicationEnvelope).toHaveBeenCalledWith(
@@ -1713,7 +1714,7 @@ describe('MlsConversationService', () => {
       anonymousEnvelope,
       {
         credentialIdentity: 'alice@example.test#7',
-        credentialPublicKey: [...new Uint8Array(65).fill(4)],
+        credentialPublicKey: [...new Uint8Array(32).fill(4)],
       },
     )
     expect(transport.ackMlsMailbox).toHaveBeenCalledWith(7, [envelopeId])
@@ -1729,7 +1730,7 @@ describe('MlsConversationService', () => {
     expect(client.resolveMlsWelcomeClaims).toHaveBeenCalledWith([
       {
         credentialIdentity: 'alice@example.test#7',
-        credentialPublicKey: [...new Uint8Array(65).fill(4)],
+        credentialPublicKey: [...new Uint8Array(32).fill(4)],
       },
     ])
     expect(client.joinMlsFromWelcomeWithControlHistory).toHaveBeenCalledWith(
@@ -1831,11 +1832,11 @@ describe('MlsConversationService', () => {
     const claims = [
       {
         credentialIdentity: 'alice@alpha.example#7',
-        credentialPublicKey: [...new Uint8Array(65).fill(4)],
+        credentialPublicKey: [...new Uint8Array(32).fill(4)],
       },
       {
         credentialIdentity: 'bobby@beta.example#7',
-        credentialPublicKey: [...new Uint8Array(65).fill(5)],
+        credentialPublicKey: [...new Uint8Array(32).fill(5)],
       },
     ]
     vi.mocked(client.inspectMlsWelcome).mockResolvedValueOnce({
@@ -1911,7 +1912,7 @@ describe('MlsConversationService', () => {
     vi.mocked(client.resolveMlsWelcomeClaims).mockResolvedValueOnce([
       {
         credentialIdentity: 'mallory@example.test#7',
-        credentialPublicKey: [...new Uint8Array(65).fill(4)],
+        credentialPublicKey: [...new Uint8Array(32).fill(4)],
       },
     ])
     await expect(service.acceptInvitation(invitation())).rejects.toThrow(

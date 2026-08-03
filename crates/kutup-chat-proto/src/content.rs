@@ -75,6 +75,12 @@ pub struct ChatContent {
     /// normal messages as well as dedicated `profileKeyUpdate` controls.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_key: Option<String>,
+    /// Numeric `ProfileSuiteId` for `profileKey`. Kept as an open wire code so
+    /// a newer profile suite does not make otherwise-readable message content
+    /// fail to deserialize; clients accept the capability only after closed
+    /// conversion through the local registry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_suite: Option<u16>,
     /// Kind-specific payload. Untyped so unknown kinds survive; use the typed
     /// accessors ([`ChatContent::as_text`]) for known kinds.
     pub body: serde_json::Value,
@@ -97,6 +103,7 @@ impl ChatContent {
             seq,
             message_id: None,
             profile_key: None,
+            profile_suite: None,
             body: serde_json::to_value(TextBody { text: text.into() }).unwrap_or_default(),
             extra: serde_json::Map::new(),
         }
@@ -118,6 +125,7 @@ impl ChatContent {
     /// Attaches the sender's encrypted-channel profile capability.
     pub fn with_profile_key(mut self, profile_key: impl Into<String>) -> Self {
         self.profile_key = Some(profile_key.into());
+        self.profile_suite = Some(crate::profile::ProfileSuiteId::XChaCha20Poly1305V1.as_u16());
         self
     }
 
@@ -135,6 +143,7 @@ impl ChatContent {
             seq,
             message_id: Some(message_id.into()),
             profile_key: Some(profile_key.into()),
+            profile_suite: Some(crate::profile::ProfileSuiteId::XChaCha20Poly1305V1.as_u16()),
             body: serde_json::Value::Object(serde_json::Map::new()),
             extra: serde_json::Map::new(),
         }
@@ -164,6 +173,7 @@ impl ChatContent {
             seq: content.seq,
             message_id: content.message_id.clone(),
             profile_key: content.profile_key.clone(),
+            profile_suite: content.profile_suite,
             body: serde_json::to_value(SentTranscriptBody {
                 send_id: send_id.into(),
                 peer: peer.into(),
@@ -202,6 +212,7 @@ impl ChatContent {
             seq,
             message_id: Some(message_id.into()),
             profile_key: None,
+            profile_suite: None,
             body: serde_json::to_value(body).unwrap_or_default(),
             extra: serde_json::Map::new(),
         }
@@ -383,6 +394,7 @@ mod tests {
         assert!(content.is_known_kind());
         assert_eq!(content.kind, kind::PROFILE_KEY_UPDATE);
         assert_eq!(value["profileKey"], "cHJvZmlsZS1rZXk=");
+        assert_eq!(value["profileSuite"], 1);
         assert_eq!(value["body"], serde_json::json!({}));
         assert_eq!(content.as_text(), None);
     }

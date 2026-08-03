@@ -50,17 +50,30 @@ fn key_array(key: &[u8]) -> Result<Key> {
 /// Incremental stream encryptor. Mirrors the Go `Encryptor`.
 pub struct StreamEncryptor {
     state: State,
+    aad: Vec<u8>,
 }
 
 impl StreamEncryptor {
     /// Initializes a new stream, returning the encryptor and the 24-byte header
     /// that must be written first.
     pub fn new(key: &[u8]) -> Result<(Self, [u8; HEADER_BYTES])> {
+        Self::new_with_aad(key, &[])
+    }
+
+    /// Initializes a stream whose every frame authenticates the same static
+    /// associated data. Typed Drive blobs use their canonical object header.
+    pub fn new_with_aad(key: &[u8], aad: &[u8]) -> Result<(Self, [u8; HEADER_BYTES])> {
         let k = key_array(key)?;
         let mut state = State::new();
         let mut header: Header = [0u8; HEADER_BYTES];
         crypto_secretstream_xchacha20poly1305_init_push(&mut state, &mut header, &k);
-        Ok((Self { state }, header))
+        Ok((
+            Self {
+                state,
+                aad: aad.to_vec(),
+            },
+            header,
+        ))
     }
 
     /// Rebuilds the encryptor for a stream previously started with `header`
@@ -73,6 +86,10 @@ impl StreamEncryptor {
     /// same order therefore reproduces the original ciphertext byte-for-byte —
     /// the property upload resume relies on.
     pub fn resume(key: &[u8], header: &[u8]) -> Result<Self> {
+        Self::resume_with_aad(key, header, &[])
+    }
+
+    pub fn resume_with_aad(key: &[u8], header: &[u8], aad: &[u8]) -> Result<Self> {
         let k = key_array(key)?;
         let h: Header = header.try_into().map_err(|_| CryptoError::InvalidLength {
             expected: HEADER_BYTES,
@@ -80,7 +97,10 @@ impl StreamEncryptor {
         })?;
         let mut state = State::new();
         crypto_secretstream_xchacha20poly1305_init_pull(&mut state, &h, &k);
-        Ok(Self { state })
+        Ok(Self {
+            state,
+            aad: aad.to_vec(),
+        })
     }
 
     /// Encrypts one chunk with `tag`, returning `plaintext.len() + ABYTES` bytes.
@@ -90,7 +110,7 @@ impl StreamEncryptor {
             &mut self.state,
             &mut ciphertext,
             plaintext,
-            None,
+            (!self.aad.is_empty()).then_some(self.aad.as_slice()),
             tag,
         )
         .map_err(|e| CryptoError::Backend(format!("secretstream push: {e}")))?;
@@ -101,11 +121,16 @@ impl StreamEncryptor {
 /// Incremental stream decryptor. Mirrors the Go `Decryptor`.
 pub struct StreamDecryptor {
     state: State,
+    aad: Vec<u8>,
 }
 
 impl StreamDecryptor {
     /// Initializes a decryptor from `key` and the 24-byte stream `header`.
     pub fn new(key: &[u8], header: &[u8]) -> Result<Self> {
+        Self::new_with_aad(key, header, &[])
+    }
+
+    pub fn new_with_aad(key: &[u8], header: &[u8], aad: &[u8]) -> Result<Self> {
         let k = key_array(key)?;
         let h: Header = header.try_into().map_err(|_| CryptoError::InvalidLength {
             expected: HEADER_BYTES,
@@ -113,7 +138,10 @@ impl StreamDecryptor {
         })?;
         let mut state = State::new();
         crypto_secretstream_xchacha20poly1305_init_pull(&mut state, &h, &k);
-        Ok(Self { state })
+        Ok(Self {
+            state,
+            aad: aad.to_vec(),
+        })
     }
 
     /// Decrypts and authenticates one chunk, returning `(plaintext, tag)`.
@@ -128,7 +156,7 @@ impl StreamDecryptor {
             &mut plaintext,
             &mut tag,
             ciphertext,
-            None,
+            (!self.aad.is_empty()).then_some(self.aad.as_slice()),
         )
         .map_err(|_| CryptoError::AuthFailed)?;
         Ok((plaintext, tag))

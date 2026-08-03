@@ -2,6 +2,7 @@ import { expect, test, type Browser, type BrowserContext, type Page } from '@pla
 
 const SECONDARY = process.env.E2E_SECONDARY_BASE_URL
 const PASSWORD = 'Deneme123*FederatedSecurityPassword'
+const pageErrors = new WeakMap<Page, string[]>()
 
 async function captureMnemonic(page: Page): Promise<string> {
   const allText = await page.evaluate(() => document.body.innerText)
@@ -44,24 +45,27 @@ async function login(context: BrowserContext, email: string): Promise<Page> {
 }
 
 async function openChat(page: Page): Promise<void> {
+  const errors: string[] = []
+  pageErrors.set(page, errors)
+  page.on('pageerror', error => errors.push(error.stack ?? error.message))
   await page.goto('/chat')
   await expect(page.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
-  await expect(page.getByText(/Device \d+/)).toBeVisible({ timeout: 90_000 })
+  await expect(page.getByTestId('chat-device-status')).toHaveText(/Device \d+/, { timeout: 90_000 })
   const headerLayout = await page.evaluate(() => {
     const header = document.querySelector<HTMLElement>('[data-testid="chat-sidebar-header"]')
     const title = document.querySelector<HTMLElement>('[data-testid="chat-sidebar-title"]')
-    const status = document.querySelector<HTMLElement>(
-      '[data-testid="chat-sidebar-transparency-status"]',
-    )
-    if (!header || !title || !status) throw new Error('Chat sidebar header is incomplete')
+    const device = document.querySelector<HTMLElement>('[data-testid="chat-device-status"]')
+    if (!header || !title || !device) throw new Error('Chat sidebar header is incomplete')
     const headerBox = header.getBoundingClientRect()
     const titleBox = title.getBoundingClientRect()
-    const statusBox = status.getBoundingClientRect()
+    const deviceBox = device.getBoundingClientRect()
     return {
+      headerLeft: headerBox.left,
       headerRight: headerBox.right,
+      titleLeft: titleBox.left,
       titleRight: titleBox.right,
-      statusLeft: statusBox.left,
-      statusRight: statusBox.right,
+      deviceLeft: deviceBox.left,
+      deviceRight: deviceBox.right,
       titleClientWidth: title.clientWidth,
       titleScrollWidth: title.scrollWidth,
       titleOverflowX: getComputedStyle(title).overflowX,
@@ -69,8 +73,14 @@ async function openChat(page: Page): Promise<void> {
   })
   expect(headerLayout.titleOverflowX).toBe('hidden')
   expect(headerLayout.titleScrollWidth).toBeLessThanOrEqual(headerLayout.titleClientWidth)
-  expect(headerLayout.titleRight).toBeLessThanOrEqual(headerLayout.statusLeft)
-  expect(headerLayout.statusRight).toBeLessThanOrEqual(headerLayout.headerRight)
+  expect(headerLayout.titleLeft).toBeGreaterThanOrEqual(headerLayout.headerLeft)
+  expect(headerLayout.deviceLeft).toBeGreaterThanOrEqual(headerLayout.headerLeft)
+  expect(headerLayout.titleRight).toBeLessThanOrEqual(headerLayout.headerRight)
+  expect(headerLayout.deviceRight).toBeLessThanOrEqual(headerLayout.headerRight)
+}
+
+function expectNoPageErrors(...pages: Page[]): void {
+  expect(pages.flatMap(page => pageErrors.get(page) ?? [])).toEqual([])
 }
 
 async function cloneAuthenticatedInstall(
@@ -143,10 +153,17 @@ function bubble(page: Page, text: string) {
   return page.getByRole('main').getByText(text, { exact: true })
 }
 
+async function closeGroupMembers(page: Page): Promise<void> {
+  const dialog = page.getByRole('dialog', { name: 'MLS group members' })
+  if (!await dialog.isVisible()) return
+  await dialog.getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(dialog).toBeHidden()
+}
+
 test.describe('two-server secure chat', () => {
   test.skip(!SECONDARY, 'set E2E_SECONDARY_BASE_URL for the isolated federation topology')
 
-  test('pins remote policy, establishes sealed delivery, rotates capability, and never falls back', async ({ browser, baseURL }) => {
+  test('verifies the account pair, establishes sealed delivery, rotates capability, and never falls back', async ({ browser, baseURL }) => {
     test.slow()
     if (!baseURL || !SECONDARY) throw new Error('two-server base URLs are required')
     const contextA = await browser.newContext({ baseURL })
@@ -188,6 +205,26 @@ test.describe('two-server secure chat', () => {
     await acceptRequest.click()
     await expect(acceptRequest).toBeHidden({ timeout: 45_000 })
 
+    // The server can distribute signed manifests but cannot promote trust.
+    // Both installations independently derive the same full pair/key binding;
+    // only an exact face-to-face QR exchange turns the gray shields green.
+    await pageA.getByTestId('chat-safety-open').click()
+    const safetyA = pageA.getByRole('dialog')
+    const qrA = await safetyA.getByTestId('chat-safety-qr').getAttribute('data-value')
+    expect(qrA).toMatch(/^kutup:\/\/verify\/chat\/v1\//)
+    await pageB.getByTestId('chat-safety-open').click()
+    const safetyB = pageB.getByRole('dialog')
+    const qrB = await safetyB.getByTestId('chat-safety-qr').getAttribute('data-value')
+    expect(qrB).toBe(qrA)
+    await safetyB.getByPlaceholder('kutup://verify/chat/v1/…').fill(qrA!)
+    await safetyB.getByRole('button', { name: 'Verify exact match' }).click()
+    await expect(safetyB.getByText('Verified face to face on this device.')).toBeVisible()
+    await pageB.keyboard.press('Escape')
+    await safetyA.getByPlaceholder('kutup://verify/chat/v1/…').fill(qrB!)
+    await safetyA.getByRole('button', { name: 'Verify exact match' }).click()
+    await expect(safetyA.getByText('Verified face to face on this device.')).toBeVisible()
+    await pageA.keyboard.press('Escape')
+
     const sealedReplyResponse = pageB.waitForResponse((response) => {
       const path = new URL(response.url()).pathname
       return response.request().method() === 'POST'
@@ -200,13 +237,6 @@ test.describe('two-server secure chat', () => {
     // The acceptance/profile update and immediate sealed reply use independent
     // durable paths. Reconciliation must recover either arrival order.
     await syncUntilVisible(pageA, reply)
-
-    // Selecting the remote peer triggers the shared engine's independent
-    // policy/checkpoint verification. The dialog exposes exact policy material.
-    await pageA.getByLabel('Transparency details').click()
-    const details = pageA.getByRole('dialog')
-    await expect(details.getByText('b.test', { exact: true })).toBeVisible({ timeout: 30_000 })
-    await pageA.keyboard.press('Escape')
 
     const destinationEnvelopes: Array<Record<string, unknown>> = []
     pageB.on('response', (response) => {
@@ -260,6 +290,7 @@ test.describe('two-server secure chat', () => {
     expect(identifiedToBob).toEqual([])
     await expect(bubble(pageB, `rejected-stale-capability-${tag}`)).toHaveCount(0)
 
+    expectNoPageErrors(pageA, pageB)
     await contextA.close()
     await contextB.close()
   })
@@ -672,7 +703,7 @@ test.describe('two-server secure chat', () => {
     await expect(
       pageA.getByTestId(`chat-group-member-owner-${bob}@b.test`),
     ).toHaveCount(0, { timeout: 90_000 })
-    await pageA.keyboard.press('Escape')
+    await closeGroupMembers(pageA)
 
     // The owner changes ordering authorities through one owner-approved MLS
     // Commit and joint old/new quorums. Removing b.test still delivers the
@@ -689,12 +720,12 @@ test.describe('two-server secure chat', () => {
     expect((await requireResponseOrUiError(pageA, removeAuthorityCommit)).ok()).toBe(true)
     await expect(pageA.getByTestId('chat-group-authority-a.test')).toBeVisible({ timeout: 90_000 })
     await expect(pageA.getByTestId('chat-group-authority-b.test')).toHaveCount(0)
-    await pageA.keyboard.press('Escape')
+    await closeGroupMembers(pageA)
 
     await pageB.getByTestId('chat-group-members').click()
     await expect(pageB.getByTestId('chat-group-authority-a.test')).toBeVisible({ timeout: 90_000 })
     await expect(pageB.getByTestId('chat-group-authority-b.test')).toHaveCount(0)
-    await pageB.keyboard.press('Escape')
+    await closeGroupMembers(pageB)
 
     // Adding b.test back exercises exact history bootstrap before b.test may
     // contribute its new-set vote. Both participant clients then pin sequence 3.
@@ -708,11 +739,11 @@ test.describe('two-server secure chat', () => {
     await pageA.getByTestId('chat-group-save-authorities').click()
     expect((await requireResponseOrUiError(pageA, addAuthorityCommit)).ok()).toBe(true)
     await expect(pageA.getByTestId('chat-group-authority-b.test')).toBeVisible({ timeout: 90_000 })
-    await pageA.keyboard.press('Escape')
+    await closeGroupMembers(pageA)
 
     await pageB.getByTestId('chat-group-members').click()
     await expect(pageB.getByTestId('chat-group-authority-b.test')).toBeVisible({ timeout: 90_000 })
-    await pageB.keyboard.press('Escape')
+    await closeGroupMembers(pageB)
 
     const destinationMailbox: Array<Record<string, unknown>> = []
     pageB.on('response', (response) => {
@@ -799,7 +830,6 @@ test.describe('two-server secure chat', () => {
               protocolVersion: 1,
               recipient,
               capability: 'AAAAAAAAAAAAAAAAAAAAAA==',
-              transparencyTreeSize: '0',
             }),
           })
           return { status: response.status, body: await response.text() }
@@ -1249,6 +1279,7 @@ test.describe('two-server secure chat', () => {
     await expect(pageA.getByPlaceholder('This MLS group is closed')).toBeDisabled()
     await expect(pageB.getByPlaceholder('This MLS group is closed')).toBeDisabled()
 
+    expectNoPageErrors(pageA, pageA2, pageB, pageC, pageD)
     await contextA.close()
     await contextA2.close()
     await contextB.close()

@@ -1,5 +1,4 @@
-// KDF Web Worker — runs Argon2id off the main thread.
-// libsodium-sumo must be initialized separately inside the worker.
+// KDF Web Worker — runs canonical Rust/WASM Argon2id off the main thread.
 import '../polyfills'
 import { generateRegistrationKeys, deriveAccountProtectionKeys } from '../crypto/index'
 import type { AccountProtectionConfig } from '../crypto/kdf'

@@ -3,10 +3,17 @@
 export interface CollectionRow {
   id: string
   ownerUserId: string
-  encryptedName: string
-  nameNonce: string
-  encryptedKey: string
-  encryptedKeyNonce: string
+  nameEnvelope: string
+  ownerKeyEnvelope?: string
+  namedShareEnvelope?: string
+  keyEpoch: number
+  nameRevision: number
+  epochStatement: string
+  epochStatementHash: string
+  ownerAccount?: string
+  ownerIncarnationId?: string
+  ownerDriveSigningPublicKey?: string
+  ownerAuthorityPublicKey?: string
   parentCollectionId: string | null
   color: string | null
   canUpload: boolean
@@ -20,10 +27,10 @@ export interface FileRow {
   id: string
   collectionId: string
   uploaderUserId: string
-  encryptedMetadata: string
-  metadataNonce: string
-  encryptedFileKey: string
-  fileKeyNonce: string
+  metadataEnvelope: string
+  fileKeyEnvelope: string
+  keyEpoch: number
+  metadataRevision: number
   encryptedSizeBytes: number
   createdAt: string
   updatedAt: string
@@ -56,10 +63,8 @@ export interface LoginResponse {
   accessToken: string
   userId: string
   username: string
-  encryptedMasterKey: string
-  masterKeyNonce: string
-  encryptedPrivateKey: string
-  privateKeyNonce: string
+  masterKeyEnvelope: string
+  drivePrivateKeyEnvelope: string
   publicKey: string
   isAdmin: boolean
   storageQuotaBytes: number
@@ -70,9 +75,18 @@ export interface LoginResponse {
 export interface IncomingShare {
   id: string
   remoteDomain: string
-  encryptedCollectionKey: string
-  encryptedName: string
-  nameNonce: string
+  remoteCollectionId: string
+  namedShareEnvelope: string
+  nameEnvelope: string
+  keyEpoch: number
+  nameRevision: number
+  epochStatement: string
+  epochStatementHash: string
+  ownerUserId: string
+  ownerAccount: string
+  ownerIncarnationId: string
+  ownerSigningPublicKey: string
+  ownerAuthorityPublicKey: string
   canUpload: boolean
   canDelete: boolean
   uploadQuotaBytes: number | null
@@ -239,16 +253,19 @@ export interface MeResponse {
 
 export interface UserByEmailResponse {
   userId: string
-  username: string
-  publicKey: string
+  account: string
+  driveHpkePublicKey: string
+  accountIncarnationId: string
+  driveSigningPublicKey: string
 }
 
 export interface PublicShareData {
   id: string
   shareType: string
   targetId: string
-  encryptedCollectionKey: string
-  encryptedCollectionKeyNonce: string
+  collectionKeyEnvelope: string
+  collectionKeyEpoch: number
+  ownerUserId: string
   expiresAt?: string
 }
 

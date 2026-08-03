@@ -715,7 +715,7 @@ fn verify_bootstrap_owner_authorization(
 }
 
 pub(super) fn validate_participant_domain_set(domains: &[String]) -> Result<(), String> {
-    if domains.is_empty() || domains.len() > 1000 {
+    if domains.is_empty() || domains.len() > MAX_MLS_GROUP_ACCOUNTS {
         return Err("MLS participant-domain set is empty or too large".into());
     }
     let mut previous = None;

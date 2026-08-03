@@ -37,6 +37,9 @@ pub struct Config {
     /// Chat devices with no authenticated activity for this many days are
     /// expired with their prekeys/mailbox. `0` disables expiry.
     pub chat_device_expiry_days: i64,
+    /// Maximum simultaneously active chat devices per account. V1 permits
+    /// 1..=10; device ids retain their independent libsignal wire range.
+    pub chat_max_active_devices: u32,
     /// Canonical DNS identity for the unified federation v2 stack.
     pub federation_server_name: String,
     /// Base64 raw 32-byte Ed25519 seed for unified federation v2.
@@ -45,9 +48,6 @@ pub struct Config {
     pub federation_next_signing_key: String,
     /// Test-only HTTP/private-network escape hatch for the v2 stack.
     pub federation_test_allow_private: bool,
-    /// Base64 raw 32-byte Ed25519 seed for stable transparency checkpoints.
-    /// This key is deliberately distinct from federation request signing.
-    pub chat_transparency_signing_key: String,
     /// Complete authenticated sealed-sender service policy JSON. It contains
     /// public roots and root-signed online certificates, never an offline root.
     pub chat_sealed_sender_policy: String,
@@ -66,6 +66,10 @@ impl Config {
     /// a too-short JWT secret (mirrors the Go `Load`).
     pub fn load() -> Config {
         let app_env = get_env("APP_ENV", "development");
+        let chat_max_active_devices = get_env_i64("CHAT_MAX_ACTIVE_DEVICES", 10);
+        if !(1..=10).contains(&chat_max_active_devices) {
+            panic!("CHAT_MAX_ACTIVE_DEVICES must be between 1 and 10");
+        }
         let cfg = Config {
             database_url: must_env("DATABASE_URL"),
             jwt_secret: must_env("JWT_SECRET"),
@@ -88,11 +92,11 @@ impl Config {
             chat_mailbox_retention_days: get_env_i64("CHAT_MAILBOX_RETENTION_DAYS", 30),
             chat_send_retention_days: get_env_i64("CHAT_SEND_RETENTION_DAYS", 30),
             chat_device_expiry_days: get_env_i64("CHAT_DEVICE_EXPIRY_DAYS", 90),
+            chat_max_active_devices: chat_max_active_devices as u32,
             federation_server_name: get_env("FEDERATION_SERVER_NAME", ""),
             federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
             federation_test_allow_private: get_env_bool("FEDERATION_TEST_ALLOW_PRIVATE", false),
-            chat_transparency_signing_key: get_env("CHAT_TRANSPARENCY_SIGNING_KEY", ""),
             chat_sealed_sender_policy: get_env("CHAT_SEALED_SENDER_POLICY", ""),
             chat_sealed_sender_online_private_key: get_env(
                 "CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY",

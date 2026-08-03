@@ -14,11 +14,29 @@ pub struct IncomingShare {
     #[serde(default)]
     pub remote_domain: String,
     #[serde(default)]
-    pub encrypted_collection_key: String,
+    pub remote_collection_id: String,
     #[serde(default)]
-    pub encrypted_name: String,
+    pub named_share_envelope: String,
     #[serde(default)]
-    pub name_nonce: String,
+    pub name_envelope: String,
+    #[serde(default)]
+    pub key_epoch: u32,
+    #[serde(default)]
+    pub name_revision: u64,
+    #[serde(default)]
+    pub epoch_statement: String,
+    #[serde(default)]
+    pub epoch_statement_hash: String,
+    #[serde(default)]
+    pub owner_user_id: String,
+    #[serde(default)]
+    pub owner_account: String,
+    #[serde(default)]
+    pub owner_incarnation_id: String,
+    #[serde(default)]
+    pub owner_signing_public_key: String,
+    #[serde(default)]
+    pub owner_authority_public_key: String,
     #[serde(default)]
     pub can_upload: bool,
     #[serde(default)]
@@ -106,20 +124,18 @@ impl Client {
     pub fn proxy_upload_file(
         &self,
         share_id: &str,
-        encrypted_metadata: &str,
-        metadata_nonce: &str,
-        encrypted_file_key: &str,
-        file_key_nonce: &str,
+        file_id: &str,
+        metadata_envelope: &str,
+        file_key_envelope: &str,
         encrypted_content: Vec<u8>,
     ) -> Result<ProxyUploadResponse> {
         let part = Part::bytes(encrypted_content)
             .file_name("blob")
             .mime_str("application/octet-stream")?;
         let form = Form::new()
-            .text("encryptedMetadata", encrypted_metadata.to_string())
-            .text("metadataNonce", metadata_nonce.to_string())
-            .text("encryptedFileKey", encrypted_file_key.to_string())
-            .text("fileKeyNonce", file_key_nonce.to_string())
+            .text("fileId", file_id.to_string())
+            .text("metadataEnvelope", metadata_envelope.to_string())
+            .text("fileKeyEnvelope", file_key_envelope.to_string())
             .part("file", part);
         let resp = self
             .request(

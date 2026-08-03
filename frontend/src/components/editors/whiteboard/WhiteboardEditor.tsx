@@ -51,12 +51,8 @@ import type {
 import { useAppDispatch, useAppSelector } from '@/store'
 import { setDeviceId } from '@/store/authSlice'
 import { CollabTransport, type HelloMsg, type PeerInfo } from '@/collab/transport'
-import { pack, unpack, KIND, type Frame } from '@/collab/envelope'
-import {
-  encryptExcalidrawOp, decryptExcalidrawOp,
-  encryptExcalidrawCursor, decryptExcalidrawCursor,
-} from '@/collab/cryptoFrame'
-import { ed25519Sign } from '@/collab/sign'
+import { KIND } from '@/collab/envelope'
+import { encryptCollabFrameV1, openCollabFrameV1 } from '@/collab/cryptoFrame'
 import {
   generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64,
 } from '@/collab/devices'
@@ -79,8 +75,10 @@ export interface WhiteboardEditorHandle {
 
 interface Props {
   fileId: string
+  collectionId: string
   filename: string
   collectionMaster: Uint8Array
+  keyEpoch: number
   initialBytes?: Uint8Array
 }
 
@@ -107,7 +105,7 @@ interface CursorPayload {
 }
 
 function WhiteboardEditorBase(
-  { fileId, initialBytes, collectionMaster }: Props,
+  { fileId, collectionId, initialBytes, collectionMaster, keyEpoch }: Props,
   ref: Ref<WhiteboardEditorHandle>,
 ) {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null)
@@ -281,12 +279,15 @@ function WhiteboardEditorBase(
         },
         onFrame: async (bs: Uint8Array) => {
           try {
-            const f: Frame = unpack(bs)
+            const f = await openCollabFrameV1(bs, collectionMaster, {
+              fileId,
+              collectionId,
+              keyEpoch,
+            })
             const api = apiRef.current
             if (!api) return
             if (f.kind === KIND.EXCALIDRAW_OP) {
-              const payload = await decryptExcalidrawOp(f, fileId, collectionMaster)
-              const remote = JSON.parse(new TextDecoder().decode(payload)) as OrderedExcalidrawElement[]
+              const remote = JSON.parse(new TextDecoder().decode(f.plaintext)) as OrderedExcalidrawElement[]
               // reconcileElements expects (localElements, remoteElements,
               // localAppState). It returns merged element array honouring
               // versionNonce — last-write-wins per element.
@@ -312,8 +313,7 @@ function WhiteboardEditorBase(
               // until the file lands.
               maybeFetchMissingAssets(merged as OrderedExcalidrawElement[])
             } else if (f.kind === KIND.EXCALIDRAW_CURSOR) {
-              const payload = await decryptExcalidrawCursor(f, fileId, collectionMaster)
-              const data = JSON.parse(new TextDecoder().decode(payload)) as CursorPayload
+              const data = JSON.parse(new TextDecoder().decode(f.plaintext)) as CursorPayload
               const senderId = String(f.senderDeviceId)
               const myDid = deviceIdRef.current
               if (myDid !== null && f.senderDeviceId === BigInt(myDid)) return
@@ -409,13 +409,14 @@ function WhiteboardEditorBase(
       try {
         outboundSeqRef.current = outboundSeqRef.current + 1n
         const bytes = new TextEncoder().encode(JSON.stringify(payload))
-        const f = await encryptExcalidrawCursor(
-          bytes, fileId, docKeyIdRef.current, BigInt(did), outboundSeqRef.current, collectionMaster,
-        )
-        const packed = pack(f)
-        const body = packed.subarray(0, packed.length - 64)
-        const sig = await ed25519Sign(body, kp.privateKey)
-        packed.set(sig, packed.length - 64)
+        const packed = await encryptCollabFrameV1(bytes, KIND.EXCALIDRAW_CURSOR, {
+          fileId,
+          collectionId,
+          keyEpoch,
+          docKeyId: docKeyIdRef.current,
+          deviceId: BigInt(did),
+          sequence: outboundSeqRef.current,
+        }, collectionMaster, kp.privateKey)
         transport.send(packed)
       } catch (e) {
         console.warn('whiteboard: cursor send failed', e)
@@ -477,7 +478,12 @@ function WhiteboardEditorBase(
       ;(async () => {
         try {
           const plain = new TextEncoder().encode(data.dataURL)
-          await uploadAsset(fileId, fid, plain, collectionMaster)
+          await uploadAsset({
+            fileId,
+            collectionId,
+            assetId: fid,
+            epoch: keyEpoch,
+          }, plain, collectionMaster)
           assetSavedRef.current.add(fid)
           flipImageStatus(elemId, 'saved')
         } catch (e) {
@@ -516,7 +522,12 @@ function WhiteboardEditorBase(
       fetchedAssetsRef.current.add(fid)
       ;(async () => {
         try {
-          const plain = await fetchAsset(fileId, fid, collectionMaster)
+          const plain = await fetchAsset({
+            fileId,
+            collectionId,
+            assetId: fid,
+            epoch: keyEpoch,
+          }, collectionMaster)
           const dataURL = new TextDecoder().decode(plain)
           // Recover mimeType from the dataURL prefix; default to png.
           const match = dataURL.match(/^data:([^;]+);/i)
@@ -567,13 +578,14 @@ function WhiteboardEditorBase(
       try {
         outboundSeqRef.current = outboundSeqRef.current + 1n
         const payload = new TextEncoder().encode(JSON.stringify(changed))
-        const f = await encryptExcalidrawOp(
-          payload, fileId, docKeyIdRef.current, BigInt(did), outboundSeqRef.current, collectionMaster,
-        )
-        const packed = pack(f)
-        const body = packed.subarray(0, packed.length - 64)
-        const sig = await ed25519Sign(body, kp.privateKey)
-        packed.set(sig, packed.length - 64)
+        const packed = await encryptCollabFrameV1(payload, KIND.EXCALIDRAW_OP, {
+          fileId,
+          collectionId,
+          keyEpoch,
+          docKeyId: docKeyIdRef.current,
+          deviceId: BigInt(did),
+          sequence: outboundSeqRef.current,
+        }, collectionMaster, kp.privateKey)
         transport.send(packed)
         for (const el of changed) {
           last.set(el.id, el.version ?? 0)

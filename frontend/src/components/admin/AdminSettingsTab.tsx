@@ -4,7 +4,6 @@ import { useAdminSettings, useUpdateAdminSettings, useAdminStats } from '@/api/h
 import { formatBytes } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { AdminFederationPolicyCard } from '@/components/admin/AdminFederationPolicyCard'
-import { AdminTransparencyCard } from '@/components/admin/AdminTransparencyCard'
 
 /**
  * AdminSettingsTab — Settings surface for the desktop admin redesign.
@@ -19,7 +18,7 @@ import { AdminTransparencyCard } from '@/components/admin/AdminTransparencyCard'
  *  - **Storage backend** — driver (static label, SeaweedFS S3-compatible),
  *    a real "Storage used: X of Y · Z free" row + bar if the new
  *    `storageTotalBytes` value is configured (env-var `STORAGE_TOTAL_BYTES`),
- *    and a static "Encryption: AES-256-GCM (per-file)" row.
+ *    and a static "Encryption: XChaCha20-Poly1305" row.
  */
 export function AdminSettingsTab() {
   const { t } = useTranslation()
@@ -70,8 +69,6 @@ export function AdminSettingsTab() {
       </SettingsCard>
 
       <AdminFederationPolicyCard className="mb-5" />
-
-      <AdminTransparencyCard />
 
       {/* Storage backend */}
       <SettingsCard
@@ -133,7 +130,7 @@ export function AdminSettingsTab() {
         <SettingsRow label={t('admin.settings.storageEncryption', 'Encryption')} last>
           <span className="text-[13px] text-success font-medium inline-flex items-center gap-1">
             <Icon d={ICONS.lock} size={12} />
-            AES-256-GCM (per-file)
+            XChaCha20-Poly1305 (E2EE)
           </span>
         </SettingsRow>
       </SettingsCard>

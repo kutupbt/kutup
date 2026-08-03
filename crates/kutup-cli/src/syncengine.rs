@@ -20,13 +20,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use kutup_crypto::drive_object::DriveFileBlobContextV1;
 
 use crate::api::Client;
 use crate::cryptohelpers::{decrypt_collection_key, decrypt_file_meta};
 use crate::session::{sync_pair_id, Session, Store, SyncDirState, SyncFileState};
 use crate::transfer::stream_download;
-use crate::uploader::{self, now_unix, Progress};
-use kutup_crypto::secretbox;
+use crate::uploader::{self, now_unix, Progress, UploadRequest};
 
 pub struct SyncOptions {
     /// Propagate deletions (both directions). Off = count + skip.
@@ -219,6 +219,7 @@ pub(crate) fn plan_dirs(
 
 struct RemoteDir {
     collection_id: String,
+    key_epoch: u32,
     key: Vec<u8>,
 }
 
@@ -264,6 +265,7 @@ pub fn sync(
         String::new(),
         RemoteDir {
             collection_id: collection_id.to_string(),
+            key_epoch: root_col.key_epoch,
             key: root_key,
         },
     );
@@ -275,8 +277,8 @@ pub fn sync(
                 result.errors.push(format!("decrypt folder key {}", sub.id));
                 continue;
             };
-            let name = match secretbox::open_b64(&sub.encrypted_name, &sub.name_nonce, &key) {
-                Ok(n) => sanitize_name(&String::from_utf8_lossy(&n)),
+            let name = match crate::collection_crypto::open_name(sub, &key) {
+                Ok(name) => sanitize_name(&name),
                 Err(_) => {
                     result
                         .errors
@@ -296,6 +298,7 @@ pub fn sync(
                 sub_rel,
                 RemoteDir {
                     collection_id: sub.id.clone(),
+                    key_epoch: sub.key_epoch,
                     key,
                 },
             );
@@ -424,6 +427,7 @@ pub fn sync(
                         client,
                         leaf,
                         &parent.collection_id,
+                        &sess.user_id,
                         &master_key,
                     ) {
                         Ok((id, key)) => {
@@ -438,6 +442,7 @@ pub fn sync(
                                 rel,
                                 RemoteDir {
                                     collection_id: id,
+                                    key_epoch: 1,
                                     key: key.to_vec(),
                                 },
                             );
@@ -585,10 +590,13 @@ fn execute_file_action(
                 client,
                 store,
                 &abs,
-                &dir.collection_id,
-                &dir.key,
-                true,
-                Progress::Quiet,
+                UploadRequest {
+                    collection_id: &dir.collection_id,
+                    key_epoch: dir.key_epoch,
+                    collection_key: &dir.key,
+                    resume: true,
+                    progress: Progress::Quiet,
+                },
             )?;
             // Upload-first, then retire the superseded id (soft → trash).
             if let FileAction::PushUpdate { old_file_id } = action {
@@ -726,11 +734,11 @@ fn download_decrypt(
     tmp: &Path,
 ) -> Result<()> {
     let f = &entry.file;
-    let file_key = secretbox::open_b64(&f.encrypted_file_key, &f.file_key_nonce, dir_key)
-        .context("decrypt file key")?;
+    let file_key = crate::file_crypto::open_key(f, dir_key).context("decrypt file key")?;
     let (stream, _) = client.latest_encrypted_stream(&f.id)?;
     let mut out = std::fs::File::create(tmp).context("create temp file")?;
-    match stream_download(stream, &file_key, &mut out, |_| {}) {
+    let blob_context = DriveFileBlobContextV1::new(&f.id, &f.collection_id, f.key_epoch)?;
+    match stream_download(stream, &file_key, blob_context, &mut out, |_| {}) {
         Ok(_) => Ok(()),
         Err(e) => {
             drop(out);

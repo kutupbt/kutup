@@ -28,13 +28,13 @@ flowchart TD
     LK["server login key<br/>HKDF purpose subkey"]
     RE["random recovery entropy<br/>(32 bytes)"]
     M["mnemonic<br/>(BIP39 encoding of recovery entropy)"]
-    EMK["encryptedMasterKey<br/>(stored server-side)"]
-    ERK["encryptedRecoveryKey<br/>(stored server-side)"]
+    EMK["password master-key envelope<br/>(stored server-side)"]
+    ERK["recovery master-key envelope<br/>(stored server-side)"]
     MK["master key<br/>(browser memory only)"]
-    CK["per-collection key<br/>XSalsa20-Poly1305<br/>via crypto_secretbox"]
-    NACL["NaCl keypair<br/>publicKey + encryptedPrivateKey<br/>(for cross-user sharing)"]
+    CK["per-collection key<br/>wrapped by typed DriveEnvelopeV1"]
+    DRIVE["account Drive keypair<br/>publicKey + private-key envelope<br/>(for cross-user sharing)"]
     FK["per-file key<br/>(random, per file)"]
-    BLOB["encrypted file content<br/>XChaCha20-Poly1305<br/>crypto_secretstream, 5 MB chunks<br/>→ SeaweedFS"]
+    BLOB["typed Drive file blob<br/>context-bound XChaCha20 secretstream<br/>5 MB chunks → SeaweedFS"]
 
     P --> APR
     APS --> APR
@@ -47,7 +47,7 @@ flowchart TD
     EMK -->|client-side decrypt with KEK| MK
     ERK -->|recovery decrypt with entropy| MK
     MK -->|encrypts| CK
-    MK -->|encrypts| NACL
+    MK -->|encrypts| DRIVE
     CK -->|encrypts| FK
     FK -->|encrypts| BLOB
 ```
@@ -69,22 +69,36 @@ remains a ciphertext relay.
    **key-encryption key** and a **login key**. Only the base64-encoded login key
    is sent to the server, which bcrypts it into `login_key_hash`. The password,
    root and key-encryption key never leave the client.
-3. Client generates a NaCl box **keypair** (`publicKey`, `privateKey`).
+3. Client derives the account authority, incarnation, Drive X25519 keypair and
+   Drive Ed25519 share-signing key from the master key under independent fixed
+   HKDF labels. Their public values are bound to the account at registration
+   and later published unchanged in the signed account manifest; private keys
+   are never sent in plaintext.
 4. Client generates 32 random bytes of **recovery entropy** and encodes those
    exact bytes as a 24-word BIP39 mnemonic. BIP39 is an encoding here; the
    recovery path does not run Argon2id.
-5. Client encrypts:
-   - `masterKey` with the recovery entropy → `encryptedRecoveryKey` + `recoveryKeyNonce`
-   - `masterKey` with the key-encryption key → `encryptedMasterKey` + `masterKeyNonce`
-   - `privateKey` with the master key → `encryptedPrivateKey` + `privateKeyNonce`
+5. The canonical Rust implementation creates three XChaCha20-Poly1305
+   `AccountEnvelopeV1` values:
+   - `masterKey` under the key-encryption key with purpose `PasswordMasterKey`;
+   - `masterKey` under the recovery entropy with purpose `RecoveryMasterKey`;
+   - the Drive private key under the master key with purpose
+     `DriveHpkePrivateKey`.
+   Each single envelope carries and authenticates its closed suite ID, typed
+   purpose, canonical lowercase login email, 24-byte nonce and exact ciphertext
+   length. Separate nonce columns and implicit account-wrap formats do not
+   exist in V1.
 6. Client also derives a **recovery authorization proof** with HKDF-SHA256 from
    the recovery entropy, the fixed purpose
    `kutup/account-recovery/auth-proof/v1`, and the canonical lowercase login
    email.
    The server bcrypts only that proof into `recovery_key_verifier`. The proof is
    password-equivalent for recovery authorization, but cannot decrypt
-   `encryptedRecoveryKey`; the raw recovery entropy never leaves the client.
-7. Client POSTs the encrypted bundle to `POST /api/auth/register`. The server stores all ciphertext, the public key, and the recovery verifier. The mnemonic is shown to the user once and never stored anywhere.
+   `recoveryKeyEnvelope`; the raw recovery entropy never leaves the client.
+7. Client POSTs the encrypted bundle to `POST /api/auth/register`. The server
+   stores all ciphertext, the complete public account-identity binding, and the
+   recovery verifier. The mnemonic is shown to the user once and never stored
+   anywhere. Every later account manifest must match the registered authority,
+   incarnation, Drive encryption key and Drive signing key exactly.
 
 ---
 
@@ -100,8 +114,8 @@ sequenceDiagram
     S-->>B: { accountProtectionSuite, salt, parameters }
     Note over B: Argon2id(password, suite params) → root<br/>HKDF(root, purpose) → loginKey + KEK
     B->>S: POST /auth/login { loginKey }
-    S-->>B: { accessToken, encryptedMasterKey, ... }<br/>+ refresh_token cookie (httpOnly)
-    Note over B: Decrypt encryptedMasterKey<br/>with KEK → master key<br/>(browser memory only)
+    S-->>B: { accessToken, masterKeyEnvelope, ... }<br/>+ refresh_token cookie (httpOnly)
+    Note over B: Open masterKeyEnvelope<br/>with KEK + expected email/purpose<br/>→ master key (browser memory only)
 ```
 
 1. Client fetches `GET /api/auth/login/preflight?email=...` to retrieve the
@@ -110,10 +124,10 @@ sequenceDiagram
    login key and key-encryption key with distinct fixed HKDF purposes.
 3. Client POSTs the base64 `loginKey` to `POST /api/auth/login`. Server bcrypt-compares it against the stored `login_key_hash`.
 4. On success the server returns an **access token** (short-lived JWT) in the JSON body and sets the **refresh token** as an HTTP-only `refresh_token` cookie scoped to `/api/auth/refresh`.
-5. The login response also carries `encryptedMasterKey` + `masterKeyNonce` (and
-   the encrypted private key); the client decrypts the master key locally with
-   the key-encryption key. The server-facing login key cannot decrypt it. The
-   master key lives only in browser memory.
+5. The login response carries `masterKeyEnvelope` and
+   `drivePrivateKeyEnvelope`; the client opens them locally with the expected
+   account and purpose bindings. The server-facing login key cannot decrypt
+   either. The master key lives only in client memory.
 6. If 2FA is enabled, the server returns `{requiresTotp: true, preAuthToken: ...}` instead of full tokens. The client completes login at `POST /api/auth/login/2fa` with a TOTP code before receiving the full JWT.
 7. For accounts created via `ADMIN_ACCOUNT` that have not yet generated a recovery phrase, the server returns `{requiresSetup: true, setupToken: ...}`. The client derives a fresh key bundle and submits it to `POST /api/auth/complete-setup`.
 
@@ -123,12 +137,27 @@ sequenceDiagram
 
 For each file upload:
 
-1. Client generates a random **file key**.
-2. Client encrypts the file bytes with the file key → `encryptedFileContent`.
-3. Client encrypts file metadata (name, size, MIME type) with the file key → `encryptedMetadata` + `metadataNonce`.
-4. Client encrypts the file key with the **collection key** → `encryptedFileKey` + `fileKeyNonce`.
-5. Client uploads the ciphertext blob and encrypted metadata as a multipart POST.
-6. Backend stores the blob in SeaweedFS and records the encrypted metadata in PostgreSQL.
+1. Client generates the canonical file UUID and random **file key** before contacting the server.
+2. Client constructs a 48-byte `DriveFileBlobHeaderV1` containing magic,
+   `DriveObjectSuiteId`, file-blob purpose, collection epoch, file UUID and
+   collection UUID. HKDF-SHA256 derives a stream key from the random file key
+   and that exact header.
+3. Client encrypts the bytes in 5 MiB XChaCha20 secretstream frames. The Drive
+   header is associated data on every frame, and even an empty object emits an
+   authenticated `TAG_FINAL` frame. The stored prefix is the 48-byte Drive
+   header followed by the 24-byte secretstream header.
+4. Client seals `{name, mimeType, size}` as a `FileMetadata`
+   `DriveEnvelopeV1` under the file key. Its authenticated context binds the
+   file UUID, collection UUID, collection-key epoch, and metadata revision.
+5. Client seals the file key as a `FileKey` `DriveEnvelopeV1` under the
+   collection key, bound to the same UUIDs and epoch.
+6. Client uploads the UUID, two canonical envelopes, and opaque content. The
+   backend independently checks all three public headers against the current
+   collection epoch before storage. Multipart, tus, version snapshots and
+   signed federation use identical blob semantics.
+7. Rename creates the exact next metadata revision; rollback, gaps, relocation,
+   wrong purpose, stale epoch, stream truncation and bytes after `TAG_FINAL`
+   fail closed.
 
 On download, the client receives the blob and all encrypted fields, then reverses the process locally.
 
@@ -136,14 +165,20 @@ On download, the client receives the blob and all encrypted fields, then reverse
 
 ## Collection Sharing
 
-Sharing a collection with another user:
+Sharing a collection with another user uses the recipient's account-manifest-bound
+Drive HPKE key and the owner's manifest-bound Drive signing key. A
+`NamedShareEnvelopeV1` authenticates the owner, recipient, collection, epoch,
+canonical accounts, and both account incarnations. Local and federated sharing
+use the same cryptographic envelope; federation adds only signed routing and a
+domain-bound delivery capability. The server stores the envelope but cannot
+open the collection key.
 
-1. Sharer fetches the recipient's `publicKey` from `GET /api/users/by-email/:email`.
-2. Sharer seals the **collection key** to the recipient's public key using NaCl crypto_box (sender-anonymous via sealed-box; recipient decrypts with their own private key alone).
-3. Sharer POSTs the sealed collection key to `POST /api/collections/:id/share` along with the recipient's user ID and two boolean grants — `canUpload` and `canDelete`. Read access is implicit; an optional `uploadQuotaBytes` caps how much the recipient may upload to this share.
-4. Recipient sees the shared collection on next list. They unseal the collection key using their own private key (decrypted from `encryptedPrivateKey` using their master key).
-
-The server stores the encrypted collection key — it cannot read it.
+Public links use the same typed envelope implementation with the distinct
+`PublicLinkCollectionKey` purpose. The random link key stays exclusively in
+the URL fragment. The server validates the envelope's public header against
+the owned collection, owner account and current epoch before storing it, but
+cannot open it. A V1 public link targets one collection; it is never treated as
+a named-user or federated identity grant.
 
 ---
 
@@ -254,6 +289,13 @@ reject, block, and unblock are client-held relationship state; blocking also
 rotates the local encrypted-profile capability so the blocked peer cannot read
 future profile versions.
 
+Encrypted profile fields use `ProfileSuiteId = 1` and canonical
+`ProfileEnvelopeV1` XChaCha envelopes. HKDF separates display-name, avatar and
+master-key-wrapped profile-key purposes; the authenticated context binds the
+canonical owner, version, revision and source device. The encrypted E2EE
+profile-key capability carries the matching suite code, so a future or missing
+suite cannot be silently interpreted as V1.
+
 Accepted contacts use sealed sender when both servers advertise a complete
 authenticated service policy. The destination receives only an origin domain,
 recipient, capability, send id, and opaque per-device envelopes; mailbox rows
@@ -338,7 +380,7 @@ messages, calls, push delivery and native-client integration are tracked in
 Files are stored in **SeaweedFS** accessed via its S3-compatible API. The backend uses the Rust `aws-sdk-s3` crate configured to point at the internal SeaweedFS S3 gateway.
 
 - The backend acts as a **streaming proxy** — multipart uploads are spooled to a temp file and streamed to SeaweedFS; the tus.io path uploads ≥5 MiB S3 multipart chunks, so neither buffers the whole file in memory.
-- Each file is stored under a UUID key; the human-readable name exists only in `encryptedMetadata` which the server cannot read.
+- Each file is stored under its client-generated UUID; the human-readable name exists only in its authenticated metadata envelope, which the server cannot read.
 - The SeaweedFS cluster (master + volume + filer + S3 gateway) runs as Docker services on the same network as the backend. No S3 ports are exposed externally.
 - Storage quotas are enforced by the backend before accepting uploads; the current usage is tracked in PostgreSQL.
 
@@ -384,8 +426,8 @@ sequenceDiagram
     participant B as Browser B<br/>(Editor)
 
     Note over A: edit → diff → encrypt
-    A->>A: derive content_key =<br/>HKDF(collection_master, fileId)
-    A->>A: AEAD encrypt (XChaCha20-Poly1305)<br/>AAD = 30-byte header
+    A->>A: derive frame key = HKDF(collection key,<br/>suite + kind + epoch + doc generation + UUIDs)
+    A->>A: AEAD encrypt (XChaCha20-Poly1305)<br/>AAD = canonical 96-byte header
     A->>A: Ed25519-sign (header + ciphertext)
     A->>R: WS frame (header + ciphertext + sig)
     R->>R: verify signature + epoch
@@ -395,8 +437,7 @@ sequenceDiagram
         Note over R: no persistence
     end
     R->>B: broadcast frame (unchanged bytes)
-    B->>B: verify signature
-    B->>B: AEAD decrypt → plaintext op
+    B->>B: strict Rust/WASM parse + AEAD decrypt → plaintext op
     B->>B: apply (CRDT merge / OO setOp / reconcile)
 ```
 
@@ -407,10 +448,21 @@ Three engines run side-by-side, each routed by `KIND` byte in the envelope:
 - **Excalidraw op** (`KIND.EXCALIDRAW_OP` = 8) carries an array of changed elements. Convergence relies on each element's `versionNonce` plus Excalidraw's `reconcileElements` — last-write-wins per element, no CRDT semantics. Ephemeral on the wire (canonical state lives in snapshots).
 
 ### Wire envelope
-Each frame is wrapped in an XChaCha20-Poly1305 AEAD with `(version, kind, doc_key_id, sender_device_id, sequence)` as additional authenticated data, then signed with the sender's Ed25519 device key. The server validates the signature and stores the opaque ciphertext.
+`CollabFrameSuiteId = 1` is encoded as a canonical 96-byte big-endian header,
+XChaCha20-Poly1305 ciphertext/tag and a trailing 64-byte Ed25519 signature. The
+header authenticates suite, kind, collection-key epoch, document-key
+generation, file and collection UUIDs, sender device, sequence, nonce and exact
+ciphertext length. The server strictly parses the same Rust format, verifies
+the registered sender signature, requires the exact current context and stores
+only the opaque bytes.
 
-### Per-file content key
-Derived deterministically as `HKDF-SHA256(collection_master_key, "kutup/file-content/v1", utf8(fileId))`. No new key wrapping — the existing collection-key plumbing already distributes the master key to authorized members.
+### Collaboration frame key
+The canonical Rust implementation derives a purpose key with HKDF-SHA256 from
+the current collection key. Suite, kind, collection epoch, document-key
+generation, file UUID and collection UUID are derivation inputs and header
+AAD. A key or frame cannot be relocated to another document, collection,
+epoch, generation or kind. Browser clients call this implementation through
+WASM; CLI/native clients call the same crate directly.
 
 ### Device keys
 Each browser tab session and each CLI session generates a fresh Ed25519 keypair. The public key is registered to the user account; the private key never leaves the device. Revocation marks the device inactive and forces existing WebSocket connections to close.
@@ -433,6 +485,6 @@ Existing collection-share + federation flows are unchanged. A live-edited file i
 Each frame carries a per-device monotonically-increasing sequence number. The `file_update_log` has a `UNIQUE (file_id, sender_device, sender_seq)` constraint that rejects replays at the database level. Combined with Ed25519 signature verification on every frame, this prevents both forgery and replay attacks.
 
 ### File editor route + cross-tab session
-Editable files open at `/file/:cid/:fid` in a new browser tab via `window.open`. The route mounts `FileEditorPage`, which decrypts the collection key (owner: secretbox via masterKey; shared: sealed-box via privateKey), then the per-file key + metadata, then mounts `TextCollabEditor` full height.
+Editable files open at `/file/:cid/:fid` in a new browser tab via `window.open`. The route mounts `FileEditorPage`, which opens the typed owner or named-share collection-key envelope, then the typed per-file key and metadata records, then mounts `TextCollabEditor` full height.
 
 Sensitive material is held tab-locally (Redux + `sessionStorage`). To avoid forcing a fresh login when a new editor tab opens, an already-authenticated tab broadcasts its session payload over a same-origin `BroadcastChannel('kutup-session')`. The fresh tab requests the session on boot (500 ms timeout); on hit it dispatches `setAuth`, on miss it redirects to `/login?next=<path>`. Logout is also broadcast — every tab signs out together so a sibling tab can't re-hydrate a fresh tab after sign-out. See `frontend/src/lib/sessionSync.ts`.

@@ -132,53 +132,6 @@ pub fn policy_event(feature: &'static str, outcome: &'static str) {
         );
 }
 
-pub fn monitor_event(outcome: &'static str, checkpoint_age_seconds: Option<u64>) {
-    static COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
-    static AGE: OnceLock<Histogram<u64>> = OnceLock::new();
-    COUNTER
-        .get_or_init(|| {
-            global::meter(INSTRUMENTATION_SCOPE)
-                .u64_counter("kutup.chat.transparency.monitor.events")
-                .with_description("Remote transparency monitor verification outcomes")
-                .build()
-        })
-        .add(1, &[KeyValue::new("outcome", outcome)]);
-    if let Some(age) = checkpoint_age_seconds {
-        AGE.get_or_init(|| {
-            global::meter(INSTRUMENTATION_SCOPE)
-                .u64_histogram("kutup.chat.transparency.monitor.checkpoint_age_seconds")
-                .with_description("Age of authenticated remote checkpoints at verification")
-                .with_unit("s")
-                .build()
-        })
-        .record(age, &[KeyValue::new("outcome", outcome)]);
-    }
-}
-
-pub fn proof_event(profile: &'static str, outcome: &'static str, entries: u64) {
-    static COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
-    static SIZE: OnceLock<Histogram<u64>> = OnceLock::new();
-    let attributes = [
-        KeyValue::new("profile", profile),
-        KeyValue::new("outcome", outcome),
-    ];
-    COUNTER
-        .get_or_init(|| {
-            global::meter(INSTRUMENTATION_SCOPE)
-                .u64_counter("kutup.chat.transparency.proof.events")
-                .with_description("Transparency proof generation and verification outcomes")
-                .build()
-        })
-        .add(1, &attributes);
-    SIZE.get_or_init(|| {
-        global::meter(INSTRUMENTATION_SCOPE)
-            .u64_histogram("kutup.chat.transparency.proof.entries")
-            .with_description("Number of manifest records bound into a range-proof page")
-            .build()
-    })
-    .record(entries, &attributes);
-}
-
 pub fn certificate_event(outcome: &'static str) {
     event_counter(
         &CERTIFICATE_COUNTER,

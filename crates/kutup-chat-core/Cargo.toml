@@ -39,6 +39,7 @@ wasm = [
 # The wire contract (path dep across the workspace boundary).
 kutup-chat-proto = { path = "../kutup-chat-proto" }
 kutup-federation-proto = { path = "../kutup-federation-proto" }
+kutup-crypto = { path = "../kutup-crypto", default-features = false }
 # Pinned to the tag studied in docs/research/11-federated-chat.md and proven on
 # wasm32 by spikes/libsignal-wasm. Resolves the in-repo `spqr` git dep (SPQR
 # v1.5.1) transitively. libsignal needs protoc at build time.
@@ -52,10 +53,11 @@ openmls_basic_credential = { version = "=0.5.0" }
 openmls_memory_storage = { version = "=0.5.0" }
 tls_codec = { version = "=0.4.2", features = ["derive", "serde", "mls"] }
 # RFC 9180 outer encryption for capability-authenticated anonymous MLS
-# delivery. The suite is fixed to DHKEM(P-256)/HKDF-SHA256/AES-128-GCM.
+# delivery. The suite is fixed to DHKEM(X25519)/HKDF-SHA256/ChaCha20-Poly1305.
 hpke-rs = { version = "=0.6.1" }
+hpke-rs-crypto = { version = "=0.6.1" }
 hpke-rs-rust-crypto = { version = "=0.6.1" }
-p256 = { version = "0.13", features = ["ecdsa"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 # Match libsignal's rand major so its `impl Rng + CryptoRng` bounds line up.
 rand = "0.9"
 futures-util = { version = "0.3", default-features = false }
@@ -65,7 +67,7 @@ base64 = "0.22"
 thiserror = "2"
 hkdf = "0.12"
 sha2 = "0.10"
-aes-gcm = "0.10"
+chacha20poly1305 = "0.10"
 ed25519-dalek = "2"
 hex = "0.4"
 zeroize = "1"

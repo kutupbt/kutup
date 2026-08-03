@@ -11,14 +11,14 @@ use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
+    AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1,
     AnonymousMlsDeviceEnvelopeV1, ChatProfileResponse, CommitMlsControlBlockResponseV1,
-    DeviceListMismatch, DeviceManifest, MailboxPage, MlsClientControlHistoryPageV1,
-    MlsControlActionTypeV1, MlsConversationMemberV1, MlsGroupAuthorizationPolicyV1,
-    MlsGroupCryptographicPolicyV1, MlsIncarnationRecoveryV1, MlsOrderingQuorumCertificateV1,
-    MlsOrderingServicePolicyV1, MlsOwnerSetV1, OwnChatProfileResponse, PreKeyCountResponse,
-    PublishManifestResponse, PutChatProfileRequest, RecoverMlsConversationResponseV1,
-    RegisterChatDeviceRequest, RegisterChatDeviceResponse, ReplenishKeysRequest,
-    SendMessagesRequest, TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
+    DeviceListMismatch, MailboxPage, MlsClientControlHistoryPageV1, MlsControlActionTypeV1,
+    MlsConversationMemberV1, MlsGroupAuthorizationPolicyV1, MlsGroupCryptographicPolicyV1,
+    MlsIncarnationRecoveryV1, MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1,
+    MlsOwnerSetV1, OwnChatProfileResponse, PreKeyCountResponse, PutChatProfileRequest,
+    RecoverMlsConversationResponseV1, RegisterChatDeviceRequest, RegisterChatDeviceResponse,
+    ReplenishKeysRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::TryRngCore as _;
@@ -29,30 +29,26 @@ use zeroize::Zeroize as _;
 
 use crate::{
     AccountAddress, AccountAuthority, AnonymousMlsRecipientDevice, ChatContent, ChatError,
-    ChatTransport, ConversationId, Engine, InboundEnvelope, IndexedDbChatDb, ManifestTrust,
+    ChatTransport, ConversationId, Engine, InboundEnvelope, IndexedDbChatDb,
     MlsApplicationEnvelopeContext, MlsClient, MlsControlEnvelopeContext, ReceiveReport, Result,
-    SendOutcome, TransparencyMonitorState, TransparencyMonitorStatus, VerifiedMlsCredential,
-    VerifiedMlsKeyPackage,
+    SendOutcome, VerifiedMlsCredential, VerifiedMlsKeyPackage,
 };
 
 #[wasm_bindgen(typescript_custom_section)]
 const TRANSPORT_TYPES: &str = r#"
 export interface KutupChatTransport {
   registerDevice(request: unknown): Promise<unknown>;
-  fetchBundles(username: string, transparencyTreeSize: string): Promise<unknown>;
-  fetchSyncBundles(username: string, currentDeviceId: number, transparencyTreeSize: string): Promise<unknown>;
-  fetchTransparencyCheckpoint(scope: string, fromTreeSize: string): Promise<unknown>;
-  fetchTransparencyPolicy(domain: string): Promise<unknown>;
+  fetchBundles(username: string): Promise<unknown>;
+  fetchSyncBundles(username: string, currentDeviceId: number): Promise<unknown>;
   fetchMlsOrderingPolicy(domain: string): Promise<unknown>;
   fetchManifest(username: string): Promise<unknown | null>;
-  fetchManifestPublication(username: string, transparencyTreeSize: string): Promise<unknown>;
-  fetchManifestRange(username: string, fromVersion: string, toVersion: string, pageFromVersion: string, cursor: string | null, transparencyTreeSize: string): Promise<unknown>;
+  fetchManifestHistory(username: string, fromSequence: string, toSequence: string, pageFromSequence: string): Promise<unknown>;
   fetchAnonymousMlsKeyPackages(request: unknown): Promise<unknown>;
   fetchIdentifiedMlsKeyPackages(request: unknown): Promise<unknown>;
   fetchSealedSenderPolicy(domain: string): Promise<unknown>;
   fetchSenderCertificate(deviceId: number): Promise<unknown>;
-  fetchSealedBundles(username: string, capability: string, transparencyTreeSize: string): Promise<unknown>;
-  publishManifest(manifest: unknown, transparencyTreeSize: string): Promise<unknown>;
+  fetchSealedBundles(username: string, capability: string): Promise<unknown>;
+  publishManifest(manifest: unknown): Promise<unknown>;
   fetchOwnProfile(): Promise<unknown | null>;
   publishProfile(profile: unknown): Promise<unknown>;
   fetchProfile(username: string, version: string, accessKey: string): Promise<unknown | null>;
@@ -151,7 +147,6 @@ extern "C" {
     async fn js_fetch_bundles(
         this: &JsChatTransport,
         username: &str,
-        transparency_tree_size: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = fetchSyncBundles)]
@@ -159,20 +154,6 @@ extern "C" {
         this: &JsChatTransport,
         username: &str,
         current_device_id: u32,
-        transparency_tree_size: &str,
-    ) -> std::result::Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(method, catch, js_name = fetchTransparencyCheckpoint)]
-    async fn js_fetch_transparency_checkpoint(
-        this: &JsChatTransport,
-        scope: &str,
-        from_tree_size: &str,
-    ) -> std::result::Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(method, catch, js_name = fetchTransparencyPolicy)]
-    async fn js_fetch_transparency_policy(
-        this: &JsChatTransport,
-        domain: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = fetchMlsOrderingPolicy)]
@@ -187,22 +168,13 @@ extern "C" {
         username: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
-    #[wasm_bindgen(method, catch, js_name = fetchManifestPublication)]
-    async fn js_fetch_manifest_publication(
+    #[wasm_bindgen(method, catch, js_name = fetchManifestHistory)]
+    async fn js_fetch_manifest_history(
         this: &JsChatTransport,
         username: &str,
-        transparency_tree_size: &str,
-    ) -> std::result::Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(method, catch, js_name = fetchManifestRange)]
-    async fn js_fetch_manifest_range(
-        this: &JsChatTransport,
-        username: &str,
-        from_version: &str,
-        to_version: &str,
-        page_from_version: &str,
-        cursor: JsValue,
-        transparency_tree_size: &str,
+        from_sequence: &str,
+        to_sequence: &str,
+        page_from_sequence: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = fetchAnonymousMlsKeyPackages)]
@@ -234,14 +206,12 @@ extern "C" {
         this: &JsChatTransport,
         username: &str,
         capability: &str,
-        transparency_tree_size: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = publishManifest)]
     async fn js_publish_manifest(
         this: &JsChatTransport,
         manifest: JsValue,
-        transparency_tree_size: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = fetchOwnProfile)]
@@ -338,15 +308,10 @@ impl ChatTransport for BrowserTransport {
         Ok(response.device_id)
     }
 
-    async fn fetch_bundles(
-        &self,
-        username: &str,
-        transparency_tree_size: u64,
-    ) -> Result<UserPreKeyBundlesResponse> {
-        let transparency_tree_size = transparency_tree_size.to_string();
+    async fn fetch_bundles(&self, username: &str) -> Result<UserPreKeyBundlesResponse> {
         from_transport(
             self.js
-                .js_fetch_bundles(username, &transparency_tree_size)
+                .js_fetch_bundles(username)
                 .await
                 .map_err(transport_error)?,
         )
@@ -356,38 +321,10 @@ impl ChatTransport for BrowserTransport {
         &self,
         username: &str,
         current_device_id: u32,
-        transparency_tree_size: u64,
     ) -> Result<UserPreKeyBundlesResponse> {
-        let transparency_tree_size = transparency_tree_size.to_string();
         from_transport(
             self.js
-                .js_fetch_sync_bundles(username, current_device_id, &transparency_tree_size)
-                .await
-                .map_err(transport_error)?,
-        )
-    }
-
-    async fn fetch_transparency_checkpoint(
-        &self,
-        scope: &str,
-        from_tree_size: u64,
-    ) -> Result<TransparencyCheckpointResponse> {
-        let from_tree_size = from_tree_size.to_string();
-        from_transport(
-            self.js
-                .js_fetch_transparency_checkpoint(scope, &from_tree_size)
-                .await
-                .map_err(transport_error)?,
-        )
-    }
-
-    async fn fetch_transparency_policy(
-        &self,
-        domain: &str,
-    ) -> Result<kutup_federation_proto::FederatedFeaturePolicyHistoryV1> {
-        from_transport(
-            self.js
-                .js_fetch_transparency_policy(domain)
+                .js_fetch_sync_bundles(username, current_device_id)
                 .await
                 .map_err(transport_error)?,
         )
@@ -405,7 +342,7 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
-    async fn fetch_manifest(&self, username: &str) -> Result<Option<DeviceManifest>> {
+    async fn fetch_manifest(&self, username: &str) -> Result<Option<AccountManifestV1>> {
         from_transport(
             self.js
                 .js_fetch_manifest(username)
@@ -414,37 +351,20 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
-    async fn fetch_manifest_publication(
+    async fn fetch_manifest_history(
         &self,
         username: &str,
-        transparency_tree_size: u64,
-    ) -> Result<PublishManifestResponse> {
+        from_sequence: u64,
+        to_sequence: u64,
+        page_from_sequence: u64,
+    ) -> Result<AccountManifestHistoryPageV1> {
         from_transport(
             self.js
-                .js_fetch_manifest_publication(username, &transparency_tree_size.to_string())
-                .await
-                .map_err(transport_error)?,
-        )
-    }
-
-    async fn fetch_manifest_range(
-        &self,
-        username: &str,
-        from_version: u64,
-        to_version: u64,
-        page_from_version: u64,
-        cursor: Option<&str>,
-        transparency_tree_size: u64,
-    ) -> Result<kutup_chat_proto::ManifestUpdateRangeProofV1> {
-        from_transport(
-            self.js
-                .js_fetch_manifest_range(
+                .js_fetch_manifest_history(
                     username,
-                    &from_version.to_string(),
-                    &to_version.to_string(),
-                    &page_from_version.to_string(),
-                    cursor.map(JsValue::from_str).unwrap_or(JsValue::NULL),
-                    &transparency_tree_size.to_string(),
+                    &from_sequence.to_string(),
+                    &to_sequence.to_string(),
+                    &page_from_sequence.to_string(),
                 )
                 .await
                 .map_err(transport_error)?,
@@ -503,15 +423,10 @@ impl ChatTransport for BrowserTransport {
         &self,
         username: &str,
         capability: &[u8; 16],
-        transparency_tree_size: u64,
     ) -> Result<UserPreKeyBundlesResponse> {
         from_transport(
             self.js
-                .js_fetch_sealed_bundles(
-                    username,
-                    &STANDARD.encode(capability),
-                    &transparency_tree_size.to_string(),
-                )
+                .js_fetch_sealed_bundles(username, &STANDARD.encode(capability))
                 .await
                 .map_err(transport_error)?,
         )
@@ -519,13 +434,11 @@ impl ChatTransport for BrowserTransport {
 
     async fn publish_manifest(
         &self,
-        manifest: &DeviceManifest,
-        transparency_tree_size: u64,
-    ) -> Result<PublishManifestResponse> {
-        let transparency_tree_size = transparency_tree_size.to_string();
+        manifest: &AccountManifestV1,
+    ) -> Result<AccountManifestPublicationV1> {
         from_transport(
             self.js
-                .js_publish_manifest(to_transport(manifest)?, &transparency_tree_size)
+                .js_publish_manifest(to_transport(manifest)?)
                 .await
                 .map_err(transport_error)?,
         )
@@ -689,7 +602,6 @@ impl WasmChatClient {
         sealed_sender_enabled: bool,
         master_key: Vec<u8>,
         transport: JsChatTransport,
-        transparency_policy: JsValue,
     ) -> std::result::Result<WasmChatClient, JsValue> {
         let master_key: [u8; 32] = master_key
             .try_into()
@@ -709,9 +621,6 @@ impl WasmChatClient {
             .map_err(chat_error)?;
         engine.set_local_server(&server_name).map_err(chat_error)?;
         engine.set_sealed_sender_enabled(sealed_sender_enabled);
-        engine
-            .set_transparency_policy(from_transport(transparency_policy).map_err(chat_error)?)
-            .map_err(chat_error)?;
         engine
             .sync_own_manifest(&authority, now_rfc3339())
             .await
@@ -2210,35 +2119,6 @@ impl WasmChatClient {
         to_output(&report)
     }
 
-    #[wasm_bindgen(js_name = monitorTransparency)]
-    pub async fn monitor_transparency(
-        &mut self,
-        scope: String,
-    ) -> std::result::Result<JsValue, JsValue> {
-        let status = self
-            .engine
-            .monitor_transparency(&scope)
-            .await
-            .map_err(chat_error)?;
-        to_output(&TransparencyMonitorStatusView::from(status))
-    }
-
-    #[wasm_bindgen(js_name = transparencyMonitorStatus)]
-    pub async fn transparency_monitor_status(
-        &self,
-        scope: String,
-    ) -> std::result::Result<JsValue, JsValue> {
-        let status = self
-            .engine
-            .transparency_monitor_status(&scope)
-            .await
-            .map_err(chat_error)?;
-        match status {
-            Some(status) => to_output(&TransparencyMonitorStatusView::from(status)),
-            None => Ok(JsValue::UNDEFINED),
-        }
-    }
-
     pub async fn history(&self) -> std::result::Result<JsValue, JsValue> {
         let incoming = self.engine.session().history().await.map_err(chat_error)?;
         let outgoing = self
@@ -2412,17 +2292,28 @@ impl WasmChatClient {
             .map_err(chat_error)
     }
 
-    #[wasm_bindgen(js_name = verifyAuthority)]
-    pub async fn verify_authority(
-        &mut self,
-        peer: String,
-    ) -> std::result::Result<JsValue, JsValue> {
-        let trust = self
+    #[wasm_bindgen(js_name = safetyNumber)]
+    pub async fn safety_number(&mut self, peer: String) -> std::result::Result<JsValue, JsValue> {
+        let safety_number = self
             .engine
-            .mark_authority_verified(&peer)
+            .safety_number(&self.authority, &peer)
             .await
             .map_err(chat_error)?;
-        to_output(&ManifestTrustView::from(trust))
+        to_output(&safety_number)
+    }
+
+    #[wasm_bindgen(js_name = verifySafetyNumber)]
+    pub async fn verify_safety_number(
+        &mut self,
+        peer: String,
+        scanned_payload: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let safety_number = self
+            .engine
+            .verify_safety_number(&self.authority, &peer, &scanned_payload)
+            .await
+            .map_err(chat_error)?;
+        to_output(&safety_number)
     }
 }
 
@@ -2462,33 +2353,6 @@ struct ReceiveReportView {
     undecodable: Vec<String>,
     errors: Vec<InboundFailureView>,
     duplicates: Vec<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TransparencyMonitorStatusView {
-    scope: String,
-    state: TransparencyMonitorState,
-    last_checked_at_ms: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    last_success_at_ms: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tree_size: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    detail: Option<String>,
-}
-
-impl From<TransparencyMonitorStatus> for TransparencyMonitorStatusView {
-    fn from(status: TransparencyMonitorStatus) -> Self {
-        Self {
-            scope: status.scope,
-            state: status.state,
-            last_checked_at_ms: status.last_checked_at_ms,
-            last_success_at_ms: status.last_success_at_ms,
-            tree_size: status.tree_size.map(|value| value.to_string()),
-            detail: status.detail,
-        }
-    }
 }
 
 impl From<ReceiveReport> for ReceiveReportView {
@@ -2797,34 +2661,6 @@ impl From<InboundEnvelope> for InboundEnvelopeView {
             failure_kind: item.failure_kind.map(|kind| format!("{kind:?}")),
             last_error: item.last_error,
             received_at: item.received_at,
-        }
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ManifestTrustView {
-    peer: String,
-    authority_key_id: String,
-    self_authority_key: String,
-    highest_version: String,
-    manifest_hash: String,
-    trust: String,
-    transparency_position: Option<String>,
-    continuity_gap: bool,
-}
-
-impl From<ManifestTrust> for ManifestTrustView {
-    fn from(trust: ManifestTrust) -> Self {
-        Self {
-            peer: trust.peer,
-            authority_key_id: trust.authority_key_id,
-            self_authority_key: trust.self_authority_key,
-            highest_version: trust.highest_version.to_string(),
-            manifest_hash: trust.manifest_hash,
-            trust: format!("{:?}", trust.trust),
-            transparency_position: trust.transparency_position.map(|value| value.to_string()),
-            continuity_gap: trust.continuity_gap,
         }
     }
 }

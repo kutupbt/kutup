@@ -6,6 +6,5 @@ DROP TABLE chat_anonymous_rate_counters;
 DROP TABLE chat_anonymous_send_ids;
 DROP TABLE chat_delivery_capabilities;
 DROP TABLE chat_device_manifest_history;
-DROP TABLE chat_transparency_monitor_cursors;
 DROP TABLE federation_feature_policy_failures;
 DROP TABLE federation_feature_policy_documents;

@@ -33,6 +33,16 @@ impl PendingMlsOwnerApprovalRequest {
     }
 }
 
+pub(super) struct DeterministicGroupControlMessage<'a> {
+    pub mls_group_id: &'a [u8],
+    pub conversation: &'a LocalMlsConversationRecord,
+    pub domain: &'a [u8],
+    pub id_material: &'a [u8],
+    pub sent_at_seconds: i64,
+    pub body: MlsGroupControlBodyV1,
+    pub expected_recipients: Vec<String>,
+}
+
 impl MlsClient {
     pub async fn pending_owner_approval_requests(
         &self,
@@ -203,18 +213,18 @@ impl MlsClient {
                 "MLS owner quorum is missing but no other current owner is reachable".into(),
             ));
         }
-        self.create_deterministic_group_control_message(
+        self.create_deterministic_group_control_message(DeterministicGroupControlMessage {
             mls_group_id,
-            &conversation,
-            b"kutup/mls/owner-approval-request-message/v1\0",
-            request
+            conversation: &conversation,
+            domain: b"kutup/mls/owner-approval-request-message/v1\0",
+            id_material: request
                 .request_hash()
                 .map_err(ChatError::Protocol)?
                 .as_bytes(),
-            request.requested_at,
-            MlsGroupControlBodyV1::OwnerApprovalRequest { request },
+            sent_at_seconds: request.requested_at,
+            body: MlsGroupControlBodyV1::OwnerApprovalRequest { request },
             expected_recipients,
-        )
+        })
         .await
     }
 
@@ -296,15 +306,15 @@ impl MlsClient {
             .request_hash()
             .map_err(ChatError::Protocol)?;
         let entry = self
-            .create_deterministic_group_control_message(
+            .create_deterministic_group_control_message(DeterministicGroupControlMessage {
                 mls_group_id,
-                &conversation,
-                b"kutup/mls/owner-approval-response-message/v1\0",
-                format!("{request_hash}:{}", approval.owner_id).as_bytes(),
-                approved_at_seconds,
-                MlsGroupControlBodyV1::OwnerApproval { approval },
-                vec![pending.requester.canonical()],
-            )
+                conversation: &conversation,
+                domain: b"kutup/mls/owner-approval-response-message/v1\0",
+                id_material: format!("{request_hash}:{}", approval.owner_id).as_bytes(),
+                sent_at_seconds: approved_at_seconds,
+                body: MlsGroupControlBodyV1::OwnerApproval { approval },
+                expected_recipients: vec![pending.requester.canonical()],
+            })
             .await?;
         let (provider, mut metadata) = self.load_provider().await?;
         if metadata
@@ -345,14 +355,17 @@ impl MlsClient {
 
     pub(super) async fn create_deterministic_group_control_message(
         &self,
-        mls_group_id: &[u8],
-        conversation: &LocalMlsConversationRecord,
-        domain: &[u8],
-        id_material: &[u8],
-        sent_at_seconds: i64,
-        body: MlsGroupControlBodyV1,
-        expected_recipients: Vec<String>,
+        message: DeterministicGroupControlMessage<'_>,
     ) -> Result<Option<MlsOutboxEntry>> {
+        let DeterministicGroupControlMessage {
+            mls_group_id,
+            conversation,
+            domain,
+            id_material,
+            sent_at_seconds,
+            body,
+            expected_recipients,
+        } = message;
         let mut hash = Sha256::new();
         hash.update(domain);
         hash.update(conversation.request.genesis.conversation_id.as_bytes());
@@ -421,6 +434,7 @@ impl MlsClient {
             seq,
             message_id: Some(send_id.clone()),
             profile_key: None,
+            profile_suite: None,
             body: serde_json::to_value(body)
                 .map_err(|error| ChatError::Content(error.to_string()))?,
             extra: serde_json::Map::new(),
@@ -462,10 +476,10 @@ pub(super) fn record_owner_approval_request(
         .ok_or_else(|| {
             ChatError::Trust("MLS approval requester is absent from the roster".into())
         })?;
-    if !sender_member
+    if sender_member
         .owner_id
         .as_deref()
-        .is_some_and(|owner_id| conversation.current_owner_set.owner(owner_id).is_some())
+        .is_none_or(|owner_id| conversation.current_owner_set.owner(owner_id).is_none())
     {
         return Err(ChatError::Trust(
             "MLS approval requester is not a current owner".into(),

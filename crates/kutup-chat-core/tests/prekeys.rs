@@ -57,11 +57,7 @@ impl ChatTransport for KeyServer {
         unreachable!()
     }
 
-    async fn fetch_bundles(
-        &self,
-        _username: &str,
-        _transparency_tree_size: u64,
-    ) -> Result<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(&self, _username: &str) -> Result<UserPreKeyBundlesResponse> {
         unreachable!()
     }
 

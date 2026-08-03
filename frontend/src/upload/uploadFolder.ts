@@ -22,7 +22,7 @@
 // already on LAN speeds.
 
 import api from '@/api/client'
-import { generateKey, encrypt, toBase64 } from '@/crypto'
+import { createOwnedCollectionV1 } from '@/crypto'
 import { streamUpload } from './streamUpload'
 
 /** One file + the directory path it lives in, relative to the drop root. */
@@ -37,9 +37,10 @@ export interface FolderEntry {
 export interface UploadFolderOptions {
   entries: FolderEntry[]
   /** The collection the user dropped the folder into (current Drive view). */
-  parentCollection: { id: string; collectionKey: Uint8Array }
+  parentCollection: { id: string; keyEpoch: number; collectionKey: Uint8Array }
   /** User's master key — needed to wrap new collection keys. */
   masterKey: Uint8Array
+  ownerUserId: string
   /** Bearer JWT for the tus calls. */
   accessToken: string
   onProgress?: (filesDone: number, filesTotal: number, currentName: string) => void
@@ -53,18 +54,16 @@ async function createSubcollection(
   name: string,
   parentCollectionId: string,
   masterKey: Uint8Array,
-): Promise<{ id: string; collectionKey: Uint8Array }> {
-  const collectionKey = await generateKey()
-  const encKey = await encrypt(collectionKey, masterKey)
-  const encName = await encrypt(new TextEncoder().encode(name), collectionKey)
-  const res = await api.post('/collections/', {
-    encryptedName: toBase64(encName.ciphertext),
-    nameNonce: toBase64(encName.nonce),
-    encryptedKey: toBase64(encKey.ciphertext),
-    encryptedKeyNonce: toBase64(encKey.nonce),
+  ownerUserId: string,
+): Promise<{ id: string; keyEpoch: number; collectionKey: Uint8Array }> {
+  const created = await createOwnedCollectionV1(
+    masterKey,
+    ownerUserId,
+    name,
     parentCollectionId,
-  })
-  return { id: res.data.id, collectionKey }
+  )
+  await api.post('/collections/', created.payload)
+  return { id: created.payload.id, keyEpoch: 1, collectionKey: created.collectionKey }
 }
 
 export async function uploadFolder(opts: UploadFolderOptions): Promise<void> {
@@ -90,7 +89,7 @@ export async function uploadFolder(opts: UploadFolderOptions): Promise<void> {
   })
 
   // 3. Build the path → collection map, starting with the drop root.
-  const collMap = new Map<string, { id: string; collectionKey: Uint8Array }>()
+  const collMap = new Map<string, { id: string; keyEpoch: number; collectionKey: Uint8Array }>()
   collMap.set('', opts.parentCollection)
 
   for (const dir of orderedDirs) {
@@ -102,7 +101,7 @@ export async function uploadFolder(opts: UploadFolderOptions): Promise<void> {
     if (!parent) {
       throw new Error(`uploadFolder: missing parent ${parentKey || '<root>'} for ${dir}`)
     }
-    const created = await createSubcollection(childName, parent.id, opts.masterKey)
+    const created = await createSubcollection(childName, parent.id, opts.masterKey, opts.ownerUserId)
     collMap.set(dir, created)
   }
 

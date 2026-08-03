@@ -12,7 +12,13 @@ use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use futures_util::stream;
+use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
+use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
+use kutup_crypto::drive_object::DriveFileBlobContextV1;
+use kutup_crypto::named_share::NamedShareEnvelopeV1;
 use kutup_federation_proto::{
     content_digest_sha256_from_digest, validate_server_name, FederationFeature,
 };
@@ -31,6 +37,7 @@ use crate::error::{AppError, AppResult};
 use crate::federation::{
     AuthenticatedFederationRequest, FederationDirection, FederationRequestSpec, FederationStack,
 };
+use crate::handlers::files::{canonical_uuid, validate_envelope, validate_file_blob_file};
 use crate::handlers::{random_token, trusted_uuid};
 use crate::middleware::AuthUser;
 use crate::AppState;
@@ -54,7 +61,11 @@ pub struct RemoteDriveUserQuery {
 pub struct RemoteDriveUserResponse {
     pub username: String,
     pub server: String,
-    pub public_key: String,
+    pub account: String,
+    pub drive_hpke_public_key: String,
+    pub account_incarnation_id: String,
+    pub drive_signing_public_key: String,
+    pub account_authority_public_key: String,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -62,7 +73,7 @@ pub struct RemoteDriveUserResponse {
 pub struct CreateFederatedShareRequest {
     pub recipient_username: String,
     pub recipient_server: String,
-    pub encrypted_collection_key: String,
+    pub named_share_envelope: String,
     pub can_upload: bool,
     pub can_delete: bool,
     pub upload_quota_bytes: Option<i64>,
@@ -78,10 +89,19 @@ pub struct CreateFederatedShareResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DriveInviteResponse {
     pub source_server: String,
+    pub collection_id: Uuid,
     pub recipient_username: String,
-    pub wrapped_key: String,
-    pub encrypted_name: String,
-    pub name_nonce: String,
+    pub named_share_envelope: String,
+    pub name_envelope: String,
+    pub key_epoch: i32,
+    pub name_revision: i64,
+    pub epoch_statement: String,
+    pub epoch_statement_hash: String,
+    pub owner_user_id: Uuid,
+    pub owner_account: String,
+    pub owner_incarnation_id: String,
+    pub owner_signing_public_key: String,
+    pub owner_authority_public_key: String,
     pub can_upload: bool,
     pub can_delete: bool,
     pub upload_quota_bytes: Option<i64>,
@@ -99,9 +119,18 @@ pub struct AcceptFederatedShareRequest {
 pub struct IncomingDriveShare {
     pub id: Uuid,
     pub remote_domain: String,
-    pub encrypted_collection_key: String,
-    pub encrypted_name: String,
-    pub name_nonce: String,
+    pub remote_collection_id: Uuid,
+    pub named_share_envelope: String,
+    pub name_envelope: String,
+    pub key_epoch: i32,
+    pub name_revision: i64,
+    pub epoch_statement: String,
+    pub epoch_statement_hash: String,
+    pub owner_user_id: Uuid,
+    pub owner_account: String,
+    pub owner_incarnation_id: String,
+    pub owner_signing_public_key: String,
+    pub owner_authority_public_key: String,
     pub can_upload: bool,
     pub can_delete: bool,
     pub upload_quota_bytes: Option<i64>,
@@ -115,10 +144,10 @@ pub struct FederatedDriveFile {
     pub id: Uuid,
     pub collection_id: Uuid,
     pub uploader_user_id: Uuid,
-    pub encrypted_metadata: String,
-    pub metadata_nonce: String,
-    pub encrypted_file_key: String,
-    pub file_key_nonce: String,
+    pub metadata_envelope: String,
+    pub file_key_envelope: String,
+    pub key_epoch: i32,
+    pub metadata_revision: i64,
     pub encrypted_size_bytes: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -140,6 +169,7 @@ struct OutgoingShare {
     can_upload: bool,
     can_delete: bool,
     upload_quota_bytes: Option<i64>,
+    key_epoch: i32,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -150,10 +180,9 @@ struct IncomingShareSecret {
 
 #[derive(Debug)]
 struct ParsedUpload {
-    encrypted_metadata: String,
-    metadata_nonce: String,
-    encrypted_file_key: String,
-    file_key_nonce: String,
+    file_id: Uuid,
+    metadata_envelope: String,
+    file_key_envelope: String,
     file: NamedTempFile,
     size: i64,
     digest: String,
@@ -184,6 +213,38 @@ fn canonical_username(username: &str) -> AppResult<&str> {
 fn canonical_domain(domain: &str) -> AppResult<&str> {
     validate_server_name(domain).map_err(|error| AppError::bad_request(error.to_string()))?;
     Ok(domain)
+}
+
+fn canonical_public_key(value: &str) -> AppResult<Vec<u8>> {
+    let bytes = STANDARD
+        .decode(value)
+        .map_err(|_| AppError::bad_request("invalid Drive identity key"))?;
+    if bytes.len() != 32 || STANDARD.encode(&bytes) != value {
+        return Err(AppError::bad_request("invalid Drive identity key"));
+    }
+    Ok(bytes)
+}
+
+fn validate_name_envelope(invite: &DriveInviteResponse) -> AppResult<()> {
+    let bytes = STANDARD
+        .decode(&invite.name_envelope)
+        .map_err(|_| AppError::bad_request("invalid Drive name envelope"))?;
+    let context = DriveEnvelopeContextV1::new(
+        DriveEnvelopePurpose::CollectionName,
+        u32::try_from(invite.key_epoch)
+            .map_err(|_| AppError::bad_request("invalid Drive epoch"))?,
+        u64::try_from(invite.name_revision)
+            .map_err(|_| AppError::bad_request("invalid Drive revision"))?,
+        &invite.collection_id.to_string(),
+        &invite.owner_user_id.to_string(),
+    )
+    .map_err(|_| AppError::bad_request("invalid Drive name envelope"))?;
+    if STANDARD.encode(&bytes) != invite.name_envelope
+        || drive_envelope::validate(&bytes, context).is_err()
+    {
+        return Err(AppError::bad_request("invalid Drive name envelope"));
+    }
+    Ok(())
 }
 
 fn capability_header(capability: &str) -> AppResult<(HeaderName, HeaderValue)> {
@@ -309,7 +370,14 @@ pub async fn fetch_remote_user(
     }
     let remote: RemoteDriveUserResponse = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote Drive user"))?;
-    if remote.username != username || remote.server != server || remote.public_key.is_empty() {
+    if remote.username != username
+        || remote.server != server
+        || remote.account != format!("{username}@{server}")
+        || canonical_public_key(&remote.drive_hpke_public_key).is_err()
+        || canonical_public_key(&remote.drive_signing_public_key).is_err()
+        || canonical_public_key(&remote.account_authority_public_key).is_err()
+        || remote.account_incarnation_id.len() != 64
+    {
         return Err(AppError::new(
             StatusCode::BAD_GATEWAY,
             "remote Drive directory returned the wrong account",
@@ -338,7 +406,7 @@ pub async fn create_federated_share(
     let federation = configured_stack(&state)?;
     let recipient_username = canonical_username(&request.recipient_username)?;
     let recipient_domain = canonical_domain(&request.recipient_server)?;
-    if request.encrypted_collection_key.is_empty()
+    if request.named_share_envelope.is_empty()
         || request.upload_quota_bytes.is_some_and(|quota| quota < 0)
     {
         return Err(AppError::bad_request("invalid federated share"));
@@ -356,22 +424,50 @@ pub async fn create_federated_share(
     let owner = trusted_uuid(&user.user_id)?;
     let collection_id =
         Uuid::parse_str(&collection_id).map_err(|_| AppError::forbidden("forbidden"))?;
-    let actual_owner: Option<Uuid> = sqlx::query_scalar(
-        "SELECT owner_user_id FROM collections WHERE id = $1 AND deleted_at IS NULL",
+    let collection: Option<(Uuid, i32)> = sqlx::query_as(
+        "SELECT owner_user_id, key_epoch FROM collections WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(collection_id)
     .fetch_optional(&state.pool)
     .await?;
-    if actual_owner != Some(owner) {
+    let Some((actual_owner, key_epoch)) = collection else {
+        return Err(AppError::forbidden("forbidden"));
+    };
+    if actual_owner != owner {
         return Err(AppError::forbidden("forbidden"));
     }
+
+    let sender: (Option<String>, String, String) = sqlx::query_as(
+        "SELECT username, account_incarnation_id, drive_signing_public_key FROM users WHERE id = $1",
+    )
+    .bind(owner)
+    .fetch_one(&state.pool)
+    .await?;
+    let sender_username = sender
+        .0
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::conflict("sender identity is unavailable"))?;
+    let named_share = NamedShareEnvelopeV1::decode_b64(&request.named_share_envelope)
+        .map_err(|_| AppError::bad_request("invalid named share envelope"))?;
+    named_share
+        .verify_binding_and_signature(
+            &collection_id.to_string(),
+            u32::try_from(key_epoch).map_err(|_| AppError::conflict("invalid collection epoch"))?,
+            &format!("{}@{}", sender_username, federation.server_name()),
+            &sender.1,
+            &canonical_public_key(&sender.2)?,
+            &format!("{recipient_username}@{recipient_domain}"),
+            &hex::encode(named_share.recipient_incarnation_id),
+        )
+        .map_err(|_| AppError::bad_request("invalid named share envelope"))?;
 
     let capability = random_token(32);
     let hash = capability_hash(&capability);
     sqlx::query(
         "INSERT INTO federated_outgoing_shares
             (collection_id, sharer_user_id, recipient_username,
-             recipient_domain, encrypted_collection_key, capability_hash,
+             recipient_domain, named_share_envelope, capability_hash,
              can_upload, can_delete, upload_quota_bytes)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
     )
@@ -379,7 +475,7 @@ pub async fn create_federated_share(
     .bind(owner)
     .bind(recipient_username)
     .bind(recipient_domain)
-    .bind(&request.encrypted_collection_key)
+    .bind(&request.named_share_envelope)
     .bind(hash)
     .bind(request.can_upload)
     .bind(request.can_delete)
@@ -430,13 +526,15 @@ pub async fn get_user(
             Ok(username) => username,
             Err(error) => return signed_app_error(federation, &authenticated, error),
         };
-        let public_key: Option<String> = sqlx::query_scalar(
-            "SELECT public_key FROM users WHERE username = $1 AND is_active = true",
+        let identity: Option<(String, String, String, String)> = sqlx::query_as(
+            "SELECT public_key, account_incarnation_id, drive_signing_public_key,
+                    account_authority_public_key
+             FROM users WHERE username = $1 AND is_active = true",
         )
         .bind(username)
         .fetch_optional(&state.pool)
         .await?;
-        let Some(public_key) = public_key else {
+        let Some((hpke_key, incarnation_id, signing_key, authority_key)) = identity else {
             return signed_app_error(
                 federation,
                 &authenticated,
@@ -450,7 +548,11 @@ pub async fn get_user(
             &RemoteDriveUserResponse {
                 username: username.to_owned(),
                 server: federation.server_name().to_owned(),
-                public_key,
+                account: format!("{}@{}", username, federation.server_name()),
+                drive_hpke_public_key: hpke_key,
+                account_incarnation_id: incarnation_id,
+                drive_signing_public_key: signing_key,
+                account_authority_public_key: authority_key,
             },
         )
     }
@@ -480,12 +582,14 @@ pub async fn accept_incoming_share(
     let server = canonical_domain(&request.server)?;
     validate_capability(&request.capability)?;
     let user_id = trusted_uuid(&user.user_id)?;
-    let local_username: Option<String> =
-        sqlx::query_scalar("SELECT username FROM users WHERE id = $1 AND is_active = true")
-            .bind(user_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    let local_username = local_username.ok_or_else(|| AppError::unauthorized("unauthorized"))?;
+    let local_identity: Option<(String, String)> = sqlx::query_as(
+        "SELECT username, account_incarnation_id FROM users WHERE id = $1 AND is_active = true",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let (local_username, local_incarnation) =
+        local_identity.ok_or_else(|| AppError::unauthorized("unauthorized"))?;
     let response = federation
         .send(
             server,
@@ -517,17 +621,77 @@ pub async fn accept_incoming_share(
             "federated Drive invite is intended for another account or server",
         ));
     }
+    if !invite.owner_account.ends_with(&format!("@{server}")) {
+        return Err(AppError::forbidden(
+            "federated Drive owner identity is invalid",
+        ));
+    }
+    validate_name_envelope(&invite)?;
+    let named_share = NamedShareEnvelopeV1::decode_b64(&invite.named_share_envelope)
+        .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid named share envelope"))?;
+    named_share
+        .verify_binding_and_signature(
+            &invite.collection_id.to_string(),
+            u32::try_from(invite.key_epoch)
+                .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid Drive epoch"))?,
+            &invite.owner_account,
+            &invite.owner_incarnation_id,
+            &canonical_public_key(&invite.owner_signing_public_key)?,
+            &format!("{}@{}", local_username, federation.server_name()),
+            &local_incarnation,
+        )
+        .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid named share envelope"))?;
+    let epoch_statement =
+        CollectionEpochStatementV1::decode_b64(&invite.epoch_statement).map_err(|_| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "invalid collection epoch statement",
+            )
+        })?;
+    epoch_statement
+        .verify_authority(&canonical_public_key(&invite.owner_authority_public_key)?)
+        .and_then(|_| {
+            epoch_statement.verify_current_binding(
+                &invite.collection_id.to_string(),
+                &invite.owner_user_id.to_string(),
+                u32::try_from(invite.key_epoch).unwrap_or(0),
+            )
+        })
+        .map_err(|_| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "invalid collection epoch statement",
+            )
+        })?;
+    if epoch_statement.statement_hash() != invite.epoch_statement_hash {
+        return Err(AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "collection epoch statement hash mismatch",
+        ));
+    }
     let hash = capability_hash(&request.capability);
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO federated_incoming_shares
             (user_id, remote_domain, remote_capability, capability_hash,
-             encrypted_collection_key, encrypted_name, name_nonce,
+             remote_collection_id, named_share_envelope, name_envelope,
+             key_epoch, name_revision, epoch_statement, epoch_statement_hash,
+             owner_user_id, owner_account, owner_incarnation_id,
+             owner_signing_public_key, owner_authority_public_key,
              can_upload, can_delete, upload_quota_bytes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
          ON CONFLICT (user_id, remote_domain, capability_hash) DO UPDATE SET
-             encrypted_collection_key = EXCLUDED.encrypted_collection_key,
-             encrypted_name = EXCLUDED.encrypted_name,
-             name_nonce = EXCLUDED.name_nonce,
+             remote_collection_id = EXCLUDED.remote_collection_id,
+             named_share_envelope = EXCLUDED.named_share_envelope,
+             name_envelope = EXCLUDED.name_envelope,
+             key_epoch = EXCLUDED.key_epoch,
+             name_revision = EXCLUDED.name_revision,
+             epoch_statement = EXCLUDED.epoch_statement,
+             epoch_statement_hash = EXCLUDED.epoch_statement_hash,
+             owner_user_id = EXCLUDED.owner_user_id,
+             owner_account = EXCLUDED.owner_account,
+             owner_incarnation_id = EXCLUDED.owner_incarnation_id,
+             owner_signing_public_key = EXCLUDED.owner_signing_public_key,
+             owner_authority_public_key = EXCLUDED.owner_authority_public_key,
              can_upload = EXCLUDED.can_upload,
              can_delete = EXCLUDED.can_delete,
              upload_quota_bytes = EXCLUDED.upload_quota_bytes
@@ -537,9 +701,18 @@ pub async fn accept_incoming_share(
     .bind(server)
     .bind(&request.capability)
     .bind(hash)
-    .bind(&invite.wrapped_key)
-    .bind(&invite.encrypted_name)
-    .bind(&invite.name_nonce)
+    .bind(invite.collection_id)
+    .bind(&invite.named_share_envelope)
+    .bind(&invite.name_envelope)
+    .bind(invite.key_epoch)
+    .bind(invite.name_revision)
+    .bind(&invite.epoch_statement)
+    .bind(&invite.epoch_statement_hash)
+    .bind(invite.owner_user_id)
+    .bind(&invite.owner_account)
+    .bind(&invite.owner_incarnation_id)
+    .bind(&invite.owner_signing_public_key)
+    .bind(&invite.owner_authority_public_key)
     .bind(invite.can_upload)
     .bind(invite.can_delete)
     .bind(invite.upload_quota_bytes)
@@ -550,9 +723,18 @@ pub async fn accept_incoming_share(
         Json(IncomingDriveShare {
             id,
             remote_domain: server.to_owned(),
-            encrypted_collection_key: invite.wrapped_key,
-            encrypted_name: invite.encrypted_name,
-            name_nonce: invite.name_nonce,
+            remote_collection_id: invite.collection_id,
+            named_share_envelope: invite.named_share_envelope,
+            name_envelope: invite.name_envelope,
+            key_epoch: invite.key_epoch,
+            name_revision: invite.name_revision,
+            epoch_statement: invite.epoch_statement,
+            epoch_statement_hash: invite.epoch_statement_hash,
+            owner_user_id: invite.owner_user_id,
+            owner_account: invite.owner_account,
+            owner_incarnation_id: invite.owner_incarnation_id,
+            owner_signing_public_key: invite.owner_signing_public_key,
+            owner_authority_public_key: invite.owner_authority_public_key,
             can_upload: invite.can_upload,
             can_delete: invite.can_delete,
             upload_quota_bytes: invite.upload_quota_bytes,
@@ -575,8 +757,12 @@ pub async fn list_incoming_shares(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let rows: Vec<IncomingDriveShare> = sqlx::query_as(
-        "SELECT id, remote_domain, encrypted_collection_key, encrypted_name,
-                  name_nonce, can_upload, can_delete, upload_quota_bytes, created_at
+        "SELECT id, remote_domain, remote_collection_id, named_share_envelope,
+                  name_envelope, key_epoch, name_revision, epoch_statement,
+                  epoch_statement_hash, owner_user_id, owner_account,
+                  owner_incarnation_id, owner_signing_public_key,
+                  owner_authority_public_key, can_upload, can_delete,
+                  upload_quota_bytes, created_at
            FROM federated_incoming_shares
            WHERE user_id = $1 ORDER BY created_at ASC",
     )
@@ -855,16 +1041,49 @@ pub async fn get_invite(State(state): State<AppState>, headers: HeaderMap) -> Ap
             Ok(share) => share,
             Err(error) => return signed_app_error(federation, &authenticated, error),
         };
-        let collection: Option<(String, String, String)> = sqlx::query_as(
-            "SELECT c.encrypted_name, c.name_nonce, s.encrypted_collection_key
+        type InviteRow = (
+            Uuid,
+            String,
+            i32,
+            i64,
+            String,
+            String,
+            Uuid,
+            String,
+            String,
+            String,
+            String,
+            String,
+        );
+        let collection: Option<InviteRow> = sqlx::query_as(
+            "SELECT c.id, c.name_envelope, c.key_epoch, c.name_revision,
+                    c.epoch_statement, c.epoch_statement_hash, c.owner_user_id,
+                    s.named_share_envelope, owner.username,
+                    owner.account_incarnation_id, owner.drive_signing_public_key,
+                    owner.account_authority_public_key
          FROM collections c
          JOIN federated_outgoing_shares s ON s.collection_id = c.id
+         JOIN users owner ON owner.id = c.owner_user_id
          WHERE s.id = $1 AND c.deleted_at IS NULL",
         )
         .bind(share.id)
         .fetch_optional(&state.pool)
         .await?;
-        let Some((encrypted_name, name_nonce, wrapped_key)) = collection else {
+        let Some((
+            collection_id,
+            name_envelope,
+            key_epoch,
+            name_revision,
+            epoch_statement,
+            epoch_statement_hash,
+            owner_user_id,
+            named_share_envelope,
+            owner_username,
+            owner_incarnation_id,
+            owner_signing_public_key,
+            owner_authority_public_key,
+        )) = collection
+        else {
             return signed_app_error(
                 federation,
                 &authenticated,
@@ -877,10 +1096,19 @@ pub async fn get_invite(State(state): State<AppState>, headers: HeaderMap) -> Ap
             StatusCode::OK,
             &DriveInviteResponse {
                 source_server: federation.server_name().to_owned(),
+                collection_id,
                 recipient_username: share.recipient_username,
-                wrapped_key,
-                encrypted_name,
-                name_nonce,
+                named_share_envelope,
+                name_envelope,
+                key_epoch,
+                name_revision,
+                epoch_statement,
+                epoch_statement_hash,
+                owner_user_id,
+                owner_account: format!("{}@{}", owner_username, federation.server_name()),
+                owner_incarnation_id,
+                owner_signing_public_key,
+                owner_authority_public_key,
                 can_upload: share.can_upload,
                 can_delete: share.can_delete,
                 upload_quota_bytes: share.upload_quota_bytes,
@@ -918,8 +1146,8 @@ pub async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> Ap
             Err(error) => return signed_app_error(federation, &authenticated, error),
         };
         let files: Vec<FederatedDriveFile> = sqlx::query_as(
-            "SELECT id, collection_id, uploader_user_id, encrypted_metadata,
-                metadata_nonce, encrypted_file_key, file_key_nonce,
+            "SELECT id, collection_id, uploader_user_id, metadata_envelope,
+                file_key_envelope, key_epoch, metadata_revision,
                 encrypted_size_bytes, created_at, updated_at
          FROM files WHERE collection_id = $1 AND deleted_at IS NULL
          ORDER BY created_at DESC",
@@ -1084,6 +1312,31 @@ pub async fn upload_file(
             Ok(parsed) => parsed,
             Err(error) => return signed_app_error(federation, &authenticated, error),
         };
+        let epoch = u32::try_from(share.key_epoch)
+            .map_err(|_| AppError::conflict("invalid collection epoch"))?;
+        let file_id_text = parsed.file_id.to_string();
+        let collection_id_text = share.collection_id.to_string();
+        let file_key_context = DriveEnvelopeContextV1::new(
+            DriveEnvelopePurpose::FileKey,
+            epoch,
+            1,
+            &file_id_text,
+            &collection_id_text,
+        )
+        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?;
+        let metadata_context = DriveEnvelopeContextV1::new(
+            DriveEnvelopePurpose::FileMetadata,
+            epoch,
+            1,
+            &file_id_text,
+            &collection_id_text,
+        )
+        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?;
+        validate_envelope(&parsed.file_key_envelope, file_key_context)?;
+        validate_envelope(&parsed.metadata_envelope, metadata_context)?;
+        let blob_context = DriveFileBlobContextV1::new(&file_id_text, &collection_id_text, epoch)
+            .map_err(|_| AppError::bad_request("invalid Drive file blob"))?;
+        validate_file_blob_file(&parsed.file, blob_context)?;
         let metadata = authenticated.replay_metadata()?;
         let operation = "upload";
         let mut tx = state.pool.begin().await?;
@@ -1123,7 +1376,7 @@ pub async fn upload_file(
             );
         }
 
-        let file_id = Uuid::new_v4();
+        let file_id = parsed.file_id;
         let storage_path = format!("fed/{}/{}/{}", share.id, share.collection_id, file_id);
         let object = ByteStream::from_path(parsed.file.path())
             .await
@@ -1138,18 +1391,18 @@ pub async fn upload_file(
         let result: AppResult<()> = async {
             sqlx::query(
                 "INSERT INTO files
-                (id, collection_id, uploader_user_id, encrypted_metadata,
-                 metadata_nonce, encrypted_file_key, file_key_nonce,
+                (id, collection_id, uploader_user_id, metadata_envelope,
+                 file_key_envelope, key_epoch, metadata_revision,
                  storage_path, encrypted_size_bytes, ciphertext_sha256)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
             )
             .bind(file_id)
             .bind(share.collection_id)
             .bind(share.sharer_user_id)
-            .bind(&parsed.encrypted_metadata)
-            .bind(&parsed.metadata_nonce)
-            .bind(&parsed.encrypted_file_key)
-            .bind(&parsed.file_key_nonce)
+            .bind(&parsed.metadata_envelope)
+            .bind(&parsed.file_key_envelope)
+            .bind(share.key_epoch)
+            .bind(1_i64)
             .bind(&storage_path)
             .bind(parsed.size)
             .bind(&parsed.digest)
@@ -1348,7 +1601,7 @@ async fn outgoing_share(
     let hash = capability_hash(capability);
     sqlx::query_as(
         "SELECT s.id, s.collection_id, s.sharer_user_id, s.recipient_username,
-                s.can_upload, s.can_delete, s.upload_quota_bytes
+                s.can_upload, s.can_delete, s.upload_quota_bytes, c.key_epoch
          FROM federated_outgoing_shares s
          JOIN collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
          WHERE s.capability_hash = $1 AND s.recipient_domain = $2",
@@ -1365,10 +1618,9 @@ async fn parse_upload(content_type: &str, body: Bytes) -> AppResult<ParsedUpload
         .map_err(|_| AppError::bad_request("invalid multipart form"))?;
     let body_stream = stream::once(async move { Ok::<Bytes, std::io::Error>(body) });
     let mut multipart = multer::Multipart::new(body_stream, boundary);
-    let mut encrypted_metadata = None;
-    let mut metadata_nonce = None;
-    let mut encrypted_file_key = None;
-    let mut file_key_nonce = None;
+    let mut file_id = None;
+    let mut metadata_envelope = None;
+    let mut file_key_envelope = None;
     let mut uploaded_file = None;
     while let Some(mut field) = multipart
         .next_field()
@@ -1376,12 +1628,24 @@ async fn parse_upload(content_type: &str, body: Bytes) -> AppResult<ParsedUpload
         .map_err(|_| AppError::bad_request("invalid multipart form"))?
     {
         match field.name() {
-            Some("encryptedMetadata") => {
-                encrypted_metadata = Some(limited_field_text(field).await?)
+            Some("fileId") => {
+                if file_id.is_some() {
+                    return Err(AppError::bad_request("duplicate fileId"));
+                }
+                file_id = Some(limited_field_text(field).await?);
             }
-            Some("metadataNonce") => metadata_nonce = Some(limited_field_text(field).await?),
-            Some("encryptedFileKey") => encrypted_file_key = Some(limited_field_text(field).await?),
-            Some("fileKeyNonce") => file_key_nonce = Some(limited_field_text(field).await?),
+            Some("metadataEnvelope") => {
+                if metadata_envelope.is_some() {
+                    return Err(AppError::bad_request("duplicate metadataEnvelope"));
+                }
+                metadata_envelope = Some(limited_field_text(field).await?);
+            }
+            Some("fileKeyEnvelope") => {
+                if file_key_envelope.is_some() {
+                    return Err(AppError::bad_request("duplicate fileKeyEnvelope"));
+                }
+                file_key_envelope = Some(limited_field_text(field).await?);
+            }
             Some("file") => {
                 if uploaded_file.is_some() {
                     return Err(AppError::bad_request("only one file may be uploaded"));
@@ -1405,7 +1669,7 @@ async fn parse_upload(content_type: &str, body: Bytes) -> AppResult<ParsedUpload
                 }
                 uploaded_file = Some((file, size, hex::encode(digest.finalize())));
             }
-            _ => {}
+            _ => return Err(AppError::bad_request("unexpected multipart field")),
         }
     }
     let (file, size, digest) =
@@ -1415,11 +1679,11 @@ async fn parse_upload(content_type: &str, body: Bytes) -> AppResult<ParsedUpload
             .filter(|value| !value.is_empty())
             .ok_or_else(|| AppError::bad_request(format!("{name} required")))
     };
+    let file_id = required(file_id, "fileId")?;
     Ok(ParsedUpload {
-        encrypted_metadata: required(encrypted_metadata, "encryptedMetadata")?,
-        metadata_nonce: required(metadata_nonce, "metadataNonce")?,
-        encrypted_file_key: required(encrypted_file_key, "encryptedFileKey")?,
-        file_key_nonce: required(file_key_nonce, "fileKeyNonce")?,
+        file_id: canonical_uuid(&file_id)?,
+        metadata_envelope: required(metadata_envelope, "metadataEnvelope")?,
+        file_key_envelope: required(file_key_envelope, "fileKeyEnvelope")?,
         file,
         size,
         digest,
@@ -1684,12 +1948,12 @@ mod tests {
     async fn multipart_upload_hashes_exact_ciphertext() {
         let boundary = "kutup-drive-test-boundary";
         let ciphertext = b"encrypted bytes, not plaintext";
+        let file_id = "e66ebd22-01e5-4dcc-9ea8-4fd9e45252d0";
         let mut body = Vec::new();
         for (name, value) in [
-            ("encryptedMetadata", "metadata"),
-            ("metadataNonce", "metadata-nonce"),
-            ("encryptedFileKey", "wrapped-file-key"),
-            ("fileKeyNonce", "file-key-nonce"),
+            ("fileId", file_id),
+            ("metadataEnvelope", "metadata"),
+            ("fileKeyEnvelope", "wrapped-file-key"),
         ] {
             body.extend_from_slice(
                 format!(
@@ -1715,6 +1979,7 @@ mod tests {
         .unwrap();
         assert_eq!(upload.size, ciphertext.len() as i64);
         assert_eq!(upload.digest, hex::encode(Sha256::digest(ciphertext)));
-        assert_eq!(upload.encrypted_metadata, "metadata");
+        assert_eq!(upload.file_id.to_string(), file_id);
+        assert_eq!(upload.metadata_envelope, "metadata");
     }
 }

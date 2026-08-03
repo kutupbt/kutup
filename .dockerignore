@@ -8,6 +8,7 @@ target/
 # to WASM. Keep its sources in context while excluding generated/heavy assets.
 frontend/dist/
 frontend/public/chat-wasm/
+frontend/public/crypto-wasm/
 frontend/public/onlyoffice/dist/
 frontend/public/onlyoffice/templates/
 src-tauri/

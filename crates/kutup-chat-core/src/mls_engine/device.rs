@@ -8,7 +8,7 @@ impl MlsClient {
     }
 
     /// Parse and authenticate an untrusted KeyPackage against the exact
-    /// transparency-verified manifest credential before it is used in a
+    /// account-manifest-verified manifest credential before it is used in a
     /// membership proposal.
     pub fn validate_verified_key_package(
         verified: &VerifiedMlsKeyPackage,
@@ -17,7 +17,7 @@ impl MlsClient {
         parse_verified_key_package(&KutupMlsProvider::default(), verified, now_seconds).map(|_| ())
     }
 
-    /// Install a new P-256 MLS credential and independent anonymous-delivery
+    /// Install a new Ed25519 MLS credential and independent X25519 delivery
     /// HPKE key, or reopen the exact existing identity. A different identity
     /// never replaces keys implicitly.
     pub async fn initialize(
@@ -43,11 +43,14 @@ impl MlsClient {
             .store(provider.storage())
             .map_err(|error| mls_error("store MLS credential", error))?;
 
-        let anonymous_private_key = p256::SecretKey::random(&mut OsRng);
+        let (anonymous_private_key, _) = super::delivery::hpke_suite()
+            .generate_key_pair()
+            .map_err(|error| mls_error("generate anonymous-delivery key", error))?
+            .into_keys();
         let metadata = SnapshotMetadata {
             credential_identity: canonical_device_identity.to_owned(),
             credential_public_key: signer.to_public_vec(),
-            anonymous_delivery_private_key: anonymous_private_key.to_bytes().to_vec(),
+            anonymous_delivery_private_key: anonymous_private_key.as_slice().to_vec(),
             pending_commits: BTreeMap::new(),
             pending_membership_changes: BTreeMap::new(),
             pending_authority_changes: BTreeMap::new(),
@@ -127,7 +130,7 @@ impl MlsClient {
         let wire = MlsKeyPackageV1 {
             device_id,
             manifest_version,
-            suite: MlsCipherSuiteId::Mls128DhKemP256Aes128GcmSha256P256,
+            suite: MlsCipherSuiteId::Mls128DhKemX25519ChaCha20Poly1305Sha256Ed25519,
             key_package_ref: hex::encode(package_ref.as_slice()),
             key_package: BASE64.encode(package_bytes),
             expires_at: expires_at_seconds,

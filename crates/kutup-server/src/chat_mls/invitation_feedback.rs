@@ -35,6 +35,7 @@ use crate::telemetry;
 use crate::AppState;
 
 const FEEDBACK_CLOCK_SKEW_SECONDS: i64 = 300;
+type InvitationFeedbackOutboxRow = (String, Uuid, i64, String, i64, String, Value, i32);
 
 pub(super) async fn record_ready_invitation_feedback(
     state: &AppState,
@@ -432,7 +433,7 @@ async fn insert_feedback(
 }
 
 pub(super) async fn retry_invitation_feedback_once(state: &AppState) -> AppResult<()> {
-    let row: Option<(String, Uuid, i64, String, i64, String, Value, i32)> = sqlx::query_as(
+    let row: Option<InvitationFeedbackOutboxRow> = sqlx::query_as(
         "SELECT destination, conversation_id, incarnation, member_address,
                 invited_epoch, feedback_digest, feedback, attempts
          FROM chat_mls_invitation_feedback_outbox

@@ -73,7 +73,7 @@ async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
     sqlx::query(
         "INSERT INTO federation_feature_policy_documents
              (domain, feature_type, sequence)
-         VALUES ('a.example', 3, 1)",
+         VALUES ('a.example', 2, 1)",
     )
     .execute(&mut connection)
     .await
@@ -81,7 +81,7 @@ async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
     assert!(sqlx::query(
         "INSERT INTO federation_feature_policy_documents
                  (domain, feature_type, sequence)
-             VALUES ('a.example', 4, 1)",
+             VALUES ('a.example', 3, 1)",
     )
     .execute(&mut connection)
     .await
@@ -112,7 +112,7 @@ async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
               genesis_participant_domains, participant_domains,
               authority_set_sequence, authority_set,
               genesis, genesis_hash)
-         VALUES ($1, 1, $2, 2, $3, 1,
+         VALUES ($1, 1, $2, 3, $3, 1,
                  '[\"a.example\"]'::jsonb, '[\"a.example\"]'::jsonb,
                  1, '{}'::jsonb, '{}'::jsonb, $4)",
     )
@@ -129,11 +129,11 @@ async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
         "INSERT INTO chat_mls_devices
              (user_id, device_id, manifest_version, suite,
               credential_public_key, anonymous_delivery_public_key)
-         VALUES ($1, 1, 1, 2, $2, $3)",
+         VALUES ($1, 1, 1, 3, $2, $3)",
     )
     .bind(user_id)
-    .bind(vec![4u8; 65])
-    .bind(vec![5u8; 65])
+    .bind(vec![4u8; 32])
+    .bind(vec![5u8; 32])
     .execute(&mut connection)
     .await
     .unwrap();
@@ -397,7 +397,7 @@ async fn mls_foundation_enforces_metadata_and_append_only_boundaries() {
                genesis_participant_domains, participant_domains,
                authority_set_sequence, authority_set,
                genesis, genesis_hash, last_finalized_epoch, status)
-         VALUES ($1, 2, $2, 2, $3, 1,
+         VALUES ($1, 2, $2, 3, $3, 1,
                  '[\"a.example\"]'::jsonb, '[\"a.example\"]'::jsonb,
                  1, '{}'::jsonb, '{}'::jsonb, $4, 1, 'active')",
     )

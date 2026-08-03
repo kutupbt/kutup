@@ -77,7 +77,7 @@ pub struct MlsControlProposalV1 {
     /// to this group so external ordering authorities cannot correlate the
     /// same device across conversations.
     pub proposer_id: String,
-    /// Canonical uncompressed P-256 group-control key. Members bind this key to
+    /// Canonical Ed25519 group-control key. Members bind this key to
     /// the manifest-verified MLS sender inside `encryptedPayload`; authorities
     /// learn only the group-scoped pseudonym. The origin server separately
     /// attests local authorization without disclosing the account.
@@ -102,15 +102,15 @@ impl MlsControlProposalV1 {
             );
         }
         validate_hash("proposerId", &self.proposer_id)?;
-        validate_uncompressed_p256(
+        validate_ed25519_public_key(
             "proposerCredentialPublicKey",
             &self.proposer_credential_public_key,
         )?;
         let proposer_key = decode_canonical_base64(
             "proposerCredentialPublicKey",
             &self.proposer_credential_public_key,
-            65,
-            65,
+            32,
+            32,
         )?;
         if hex::encode(Sha256::digest(proposer_key)) != self.proposer_id {
             return Err("MLS proposerId does not match the credential public key".into());
@@ -125,15 +125,10 @@ impl MlsControlProposalV1 {
         if hex::encode(Sha256::digest(payload)) != self.payload_digest {
             return Err("MLS control payload digest does not match".into());
         }
-        // A canonical P-256 ECDSA DER signature is at most 72 bytes, but it is
-        // not fixed-width: DER removes redundant leading zero octets from the
-        // two INTEGER values.  Let the strict DER parser enforce the lower
-        // bound instead of rejecting the rare valid 69-byte (or shorter)
-        // encoding before it reaches the parser.
         let signature =
-            decode_canonical_base64("proposer signature", &self.proposer_signature, 8, 72)?;
-        P256Signature::from_der(&signature)
-            .map_err(|_| "MLS proposer signature is not canonical P-256 DER")?;
+            decode_canonical_base64("proposer signature", &self.proposer_signature, 64, 64)?;
+        Signature::from_slice(&signature)
+            .map_err(|_| "MLS proposer signature is not canonical Ed25519")?;
         Ok(())
     }
 
@@ -158,15 +153,18 @@ impl MlsControlProposalV1 {
         let public_key = decode_canonical_base64(
             "proposerCredentialPublicKey",
             &self.proposer_credential_public_key,
-            65,
-            65,
+            32,
+            32,
         )?;
-        let public_key = P256Key::from_sec1_bytes(&public_key)
-            .map_err(|_| "MLS proposer credential key is not P-256")?;
+        let public_key: [u8; 32] = public_key
+            .try_into()
+            .map_err(|_| "MLS proposer credential key is not Ed25519")?;
+        let public_key = VerifyingKey::from_bytes(&public_key)
+            .map_err(|_| "MLS proposer credential key is not Ed25519")?;
         let signature =
-            decode_canonical_base64("proposer signature", &self.proposer_signature, 8, 72)?;
-        let signature = P256Signature::from_der(&signature)
-            .map_err(|_| "MLS proposer signature is not canonical P-256 DER")?;
+            decode_canonical_base64("proposer signature", &self.proposer_signature, 64, 64)?;
+        let signature = Signature::from_slice(&signature)
+            .map_err(|_| "MLS proposer signature is not canonical Ed25519")?;
         public_key
             .verify(&self.signing_bytes()?, &signature)
             .map_err(|_| "MLS proposal signature is invalid".into())

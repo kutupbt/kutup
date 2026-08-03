@@ -122,7 +122,6 @@ pub(super) async fn authenticated_remote_policy(
         .federation
         .as_ref()
         .ok_or_else(|| AppError::not_found("MLS federation unavailable"))?;
-    crate::chat_transparency_monitor::verify_before_remote_use(state, domain).await?;
     federation
         .feature_policies()
         .sync_remote(

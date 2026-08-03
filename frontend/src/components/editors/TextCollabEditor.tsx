@@ -2,7 +2,6 @@
 // Mounts in place of the existing file preview when the file extension matches a
 // CodeMirror language (see ../components/editors/dispatch.tsx, written in G1).
 import { useEffect, useMemo, useRef, useState } from 'react'
-import _sodium from 'libsodium-wrappers-sumo'
 import * as Y from 'yjs'
 import { yCollab } from 'y-codemirror.next'
 import { Awareness, encodeAwarenessUpdate, applyAwarenessUpdate } from 'y-protocols/awareness'
@@ -21,10 +20,10 @@ import { useTheme } from '@/hooks/useTheme'
 
 import { langForExtension } from './lang'
 import { CollabTransport, type HelloMsg } from '../../collab/transport'
-import { pack, unpack, KIND, type Frame } from '../../collab/envelope'
-import { encryptYjsUpdate, decryptYjsUpdate, encryptAwareness, decryptAwareness, deriveContentKey } from '../../collab/cryptoFrame'
+import { KIND } from '../../collab/envelope'
+import { encryptCollabFrameV1, openCollabFrameV1 } from '../../collab/cryptoFrame'
+import { decryptFileBlobV1, encryptFileBlobV1 } from '../../crypto/fileBlob'
 import { SnapshotTrigger } from '../../collab/snapshot'
-import { ed25519Sign } from '../../collab/sign'
 import { generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64 } from '../../collab/devices'
 import { registerDevice, listVersions, claimSeed } from '../../api/collab'
 import { QuotaExceededError } from '../../api/errors'
@@ -66,11 +65,16 @@ function ensureRegistered(pubKeyB64: string, label: string): Promise<number> {
 
 interface Props {
   fileId: string
+  collectionId: string
   filename: string
   /** Collection master key (32 bytes). MUST be referentially stable across renders —
    *  otherwise the editor tears down and reconnects every parent re-render. The G1
    *  caller is responsible for memoizing or pulling from a stable Redux selector. */
   collectionMaster: Uint8Array
+  /** Stable purpose-specific file key for persistent snapshot blobs. */
+  fileKey: Uint8Array
+  /** Authenticated collection epoch bound into every persistent snapshot. */
+  keyEpoch: number
   /** Plaintext content of the original encrypted file blob (kutup's existing per-file
    *  encryption flow). Used as the initial Y.Text content when no Yjs snapshot exists
    *  yet — i.e. on the very first time a freshly-uploaded file is opened in the editor.
@@ -78,7 +82,15 @@ interface Props {
   initialContent?: string
 }
 
-export default function TextCollabEditor({ fileId, filename, collectionMaster, initialContent }: Props) {
+export default function TextCollabEditor({
+  fileId,
+  collectionId,
+  filename,
+  collectionMaster,
+  fileKey,
+  keyEpoch,
+  initialContent,
+}: Props) {
   const { t } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<'connecting' | 'ready' | 'error'>('connecting')
@@ -222,15 +234,11 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
         ydoc,
         getSeq: () => Number(outboundSeq),
         encryptSnapshot: async (bytes: Uint8Array) => {
-          await _sodium.ready
-          const key = await deriveContentKey(collectionMaster, fileId)
-          const nonce = _sodium.randombytes_buf(24)
-          const ct = _sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(bytes, null, null, nonce, key)
-          // Self-contained snapshot: nonce(24) || aead(state).
-          // Decrypter must split: nonce = blob[:24], aead_ct = blob[24:].
-          const out = new Uint8Array(24 + ct.length)
-          out.set(nonce, 0)
-          out.set(ct, 24)
+          const out = await encryptFileBlobV1(bytes, fileKey, {
+            fileId,
+            collectionId,
+            epoch: keyEpoch,
+          })
           return { ciphertext: out, storageHints: { docKeyId, sizeBytes: out.length } }
         },
         // Surface 413 quota errors as a localized toast. Other errors are
@@ -259,12 +267,11 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
             responseType: 'arraybuffer',
           })
           const blob = new Uint8Array(r.data as ArrayBuffer)
-          if (blob.length < 24 + 17) throw new Error('snapshot blob too short')
-          const nonce = blob.subarray(0, 24)
-          const ct = blob.subarray(24)
-          await _sodium.ready
-          const key = await deriveContentKey(collectionMaster, fileId)
-          const stateBytes = _sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ct, null, nonce, key)
+          const stateBytes = await decryptFileBlobV1(blob, fileKey, {
+            fileId,
+            collectionId,
+            epoch: keyEpoch,
+          })
           // Materialize the old state in a throwaway doc, extract the plaintext.
           const oldDoc = new Y.Doc()
           Y.applyUpdateV2(oldDoc, stateBytes)
@@ -287,17 +294,7 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
       }
       if (alive) setRestoreHandler(() => handleRestore)
 
-      // 3. Sign-and-send helper.
-      const signAndSend = async (f: Frame) => {
-        if (!transport) return
-        const packed = pack(f)
-        const body = packed.subarray(0, packed.length - 64)
-        const sig = await ed25519Sign(body, kp!.privateKey)
-        packed.set(sig, packed.length - 64)
-        transport.send(packed)
-      }
-
-      // 4. Local Yjs update -> encrypt + sign + send.
+      // 4. Local Yjs update -> canonical Rust frame + device signature.
       const onLocalUpdate = (update: Uint8Array, origin: unknown) => {
         if (origin === 'remote') return
         ;(async () => {
@@ -307,8 +304,15 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
           // index in migration 013 deduplicates either way; Yjs convergence handles
           // out-of-order application.
           outboundSeq++
-          const f = await encryptYjsUpdate(update, fileId, docKeyId, BigInt(deviceId!), outboundSeq, collectionMaster)
-          await signAndSend(f)
+          const frame = await encryptCollabFrameV1(update, KIND.YJS_UPDATE, {
+            fileId,
+            collectionId,
+            keyEpoch,
+            docKeyId,
+            deviceId: BigInt(deviceId!),
+            sequence: outboundSeq,
+          }, collectionMaster, kp!.privateKey)
+          transport?.send(frame)
         })()
       }
       ydoc.on('update', onLocalUpdate)
@@ -324,8 +328,15 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
         ;(async () => {
           const upd = encodeAwarenessUpdate(awareness!, changed)
           outboundSeq++
-          const f = await encryptAwareness(upd, fileId, docKeyId, BigInt(deviceId!), outboundSeq, collectionMaster)
-          await signAndSend(f)
+          const frame = await encryptCollabFrameV1(upd, KIND.YJS_AWARENESS, {
+            fileId,
+            collectionId,
+            keyEpoch,
+            docKeyId,
+            deviceId: BigInt(deviceId!),
+            sequence: outboundSeq,
+          }, collectionMaster, kp!.privateKey)
+          transport?.send(frame)
         })()
       }
       awareness.on('change', onAwarenessChange)
@@ -367,14 +378,12 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
             responseType: 'arraybuffer',
           })
           const blob = new Uint8Array(r.data as ArrayBuffer)
-          if (blob.length >= 24 + 17) {
-            const nonce = blob.subarray(0, 24)
-            const ct = blob.subarray(24)
-            await _sodium.ready
-            const key = await deriveContentKey(collectionMaster, fileId)
-            const stateBytes = _sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
-              null, ct, null, nonce, key,
-            )
+          if (blob.length > 0) {
+            const stateBytes = await decryptFileBlobV1(blob, fileKey, {
+              fileId,
+              collectionId,
+              epoch: keyEpoch,
+            })
             Y.applyUpdateV2(ydoc, stateBytes, 'remote')
             lastSeenSeq = latest.seqAtSnapshot
           }
@@ -433,13 +442,15 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
         },
         onFrame: async (bs) => {
           try {
-            const f = unpack(bs)
+            const f = await openCollabFrameV1(bs, collectionMaster, {
+              fileId,
+              collectionId,
+              keyEpoch,
+            })
             if (f.kind === KIND.YJS_UPDATE) {
-              const upd = await decryptYjsUpdate(f, fileId, collectionMaster)
-              Y.applyUpdate(ydoc!, upd, 'remote')
+              Y.applyUpdate(ydoc!, f.plaintext, 'remote')
             } else if (f.kind === KIND.YJS_AWARENESS) {
-              const upd = await decryptAwareness(f, fileId, collectionMaster)
-              applyAwarenessUpdate(awareness!, upd, 'remote')
+              applyAwarenessUpdate(awareness!, f.plaintext, 'remote')
             }
             // Snapshot/oo_* kinds ignored in v1 text path.
           } catch (e) {
@@ -830,4 +841,3 @@ export default function TextCollabEditor({ fileId, filename, collectionMaster, i
     </div>
   )
 }
-

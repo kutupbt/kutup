@@ -13,7 +13,10 @@ use rand::RngCore;
 
 use crate::api::{Client, RecoverRequest};
 use crate::commands::prompt_line;
-use kutup_crypto::{kdf, mnemonic, secretbox};
+use kutup_crypto::{
+    account_envelope::{self, AccountEnvelopePurpose},
+    kdf, mnemonic,
+};
 
 pub fn run(
     profile: &str,
@@ -70,10 +73,11 @@ pub fn run(
 
     // A wrong phrase — or an unknown email, which the server answers with
     // deterministic fake data — fails to unwrap here, before anything changes.
-    let master_key = secretbox::open_b64(
-        &pre.encrypted_recovery_key,
-        &pre.recovery_key_nonce,
+    let master_key = account_envelope::open_b64(
+        &pre.recovery_key_envelope,
         &entropy,
+        AccountEnvelopePurpose::RecoveryMasterKey,
+        &email,
     )
     .map_err(|_| {
         anyhow::anyhow!("recovery phrase does not match this account (wrong phrase or email)")
@@ -91,16 +95,19 @@ pub fn run(
     .context("derive account-protection keys")?;
     let recovery_proof = kdf::derive_recovery_auth_proof(&entropy, &email)
         .context("derive recovery authorization proof")?;
-    let (enc_mk, mk_nonce) =
-        secretbox::seal(&master_key, account_keys.key_encryption_key.as_slice())
-            .context("seal master key")?;
+    let new_master_key_envelope = account_envelope::seal_b64(
+        &master_key,
+        account_keys.key_encryption_key.as_slice(),
+        AccountEnvelopePurpose::PasswordMasterKey,
+        &email,
+    )
+    .context("seal master-key envelope")?;
 
     client
         .recover(&RecoverRequest {
             email: email.clone(),
             new_login_key: b64.encode(account_keys.login_key.as_slice()),
-            new_encrypted_master_key: b64.encode(&enc_mk),
-            new_master_key_nonce: b64.encode(mk_nonce),
+            new_master_key_envelope,
             new_account_protection_suite: kdf::AccountProtectionSuiteId::Argon2idHkdfSha256V1
                 .as_u16(),
             new_account_protection_salt: b64.encode(account_protection_salt),

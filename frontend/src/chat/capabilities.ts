@@ -21,9 +21,9 @@ export function isSupportedChat(capabilities: ChatCapabilities | null | undefine
       ) &&
       capabilities.manifests &&
       capabilities.profiles &&
-      capabilities.keyTransparency &&
-      /^[0-9a-f]{64}$/.test(capabilities.transparencyOperatorKeyId ?? '') &&
-      Boolean(capabilities.transparencyOperatorPublicKey) &&
+      Number.isInteger(capabilities.maximumActiveDevices) &&
+      capabilities.maximumActiveDevices >= 1 &&
+      capabilities.maximumActiveDevices <= 10 &&
       canonicalServer,
   )
 }

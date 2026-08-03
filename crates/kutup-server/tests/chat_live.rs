@@ -15,8 +15,9 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ed25519_dalek::{Signer as _, SigningKey};
 use kutup_chat_proto::{
-    DeviceManifest, ManifestDevice, PublishManifestResponse, TransparencyCheckpoint,
-    UserPreKeyBundlesResponse,
+    AccountIdentitySuiteId, AccountManifestDeviceV1, AccountManifestDriveKeysV1,
+    AccountManifestPublicationV1, AccountManifestV1, DirectChatSuiteId, ProfileEnvelopeContextV1,
+    ProfileEnvelopePurpose, UserPreKeyBundlesResponse,
 };
 use rand::RngCore;
 use reqwest::{blocking::Client, StatusCode};
@@ -27,6 +28,28 @@ fn b64(b: &[u8]) -> String {
     STANDARD.encode(b)
 }
 
+fn opaque_profile_envelope(
+    account: &str,
+    version: &str,
+    revision: u64,
+    source_device_id: u32,
+    purpose: ProfileEnvelopePurpose,
+    ciphertext_len: usize,
+    fill: u8,
+) -> String {
+    let context =
+        ProfileEnvelopeContextV1::new(purpose, account, version, revision, source_device_id)
+            .unwrap();
+    let mut envelope = kutup_chat_proto::encode_profile_envelope_header(
+        &context,
+        &[fill; 24],
+        ciphertext_len as u32,
+    )
+    .unwrap();
+    envelope.extend(vec![fill; ciphertext_len]);
+    b64(&envelope)
+}
+
 fn client() -> Client {
     Client::builder()
         .danger_accept_invalid_certs(true)
@@ -35,7 +58,7 @@ fn client() -> Client {
 }
 
 /// Registers a fresh account and returns `(email, username, access_token)`.
-fn register_and_login(c: &Client, base: &str, tag: &str) -> (String, String, String) {
+fn register_and_login(c: &Client, base: &str, tag: &str) -> (String, String, String, String) {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -60,19 +83,41 @@ fn register_and_login(c: &Client, base: &str, tag: &str) -> (String, String, Str
     .unwrap();
     let recovery_proof =
         kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &email).unwrap();
-    let (public_key, secret_key) = kutup_crypto::sealedbox::generate_keypair();
-    let (enc_mk, mk_nonce) =
-        kutup_crypto::secretbox::seal(&master_key, keys.key_encryption_key.as_slice()).unwrap();
-    let (enc_rk, rk_nonce) = kutup_crypto::secretbox::seal(&master_key, &recovery_entropy).unwrap();
-    let (enc_pk, pk_nonce) = kutup_crypto::secretbox::seal(&secret_key, &master_key).unwrap();
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap();
+    use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+    let master_key_envelope = account_envelope::seal_b64(
+        &master_key,
+        keys.key_encryption_key.as_slice(),
+        AccountEnvelopePurpose::PasswordMasterKey,
+        &email,
+    )
+    .unwrap();
+    let recovery_key_envelope = account_envelope::seal_b64(
+        &master_key,
+        &recovery_entropy,
+        AccountEnvelopePurpose::RecoveryMasterKey,
+        &email,
+    )
+    .unwrap();
+    let drive_private_key_envelope = account_envelope::seal_b64(
+        identity.drive_hpke_private_key(),
+        &master_key,
+        AccountEnvelopePurpose::DriveHpkePrivateKey,
+        &email,
+    )
+    .unwrap();
 
     let reg = json!({
         "email": email, "username": username,
         "loginKey": b64(keys.login_key.as_slice()),
-        "encryptedMasterKey": b64(&enc_mk), "masterKeyNonce": b64(&mk_nonce),
-        "encryptedRecoveryKey": b64(&enc_rk), "recoveryKeyNonce": b64(&rk_nonce),
-        "encryptedPrivateKey": b64(&enc_pk), "privateKeyNonce": b64(&pk_nonce),
-        "publicKey": b64(&public_key),
+        "masterKeyEnvelope": master_key_envelope,
+        "recoveryKeyEnvelope": recovery_key_envelope,
+        "drivePrivateKeyEnvelope": drive_private_key_envelope,
+        "publicKey": b64(&identity.drive_hpke_public_key()),
+        "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
+        "accountAuthorityKeyId": identity.authority_key_id(),
+        "accountIncarnationId": identity.incarnation_id(),
+        "driveSigningPublicKey": b64(&identity.drive_signing_public_key()),
         "accountProtectionSuite": 1,
         "accountProtectionSalt": b64(&account_protection_salt),
         "argonMemoryKib": 65536, "argonIterations": 3, "argonParallelism": 1,
@@ -106,7 +151,12 @@ fn register_and_login(c: &Client, base: &str, tag: &str) -> (String, String, Str
         .json()
         .unwrap();
     let token = resp["accessToken"].as_str().unwrap().to_string();
-    (email, username, token)
+    (
+        email,
+        username,
+        token,
+        b64(&identity.drive_hpke_public_key()),
+    )
 }
 
 /// A synthetic (base64-valid, crypto-meaningless) chat device registration.
@@ -189,19 +239,34 @@ fn register_chat_device(c: &Client, base: &str, token: &str) -> (u32, u32, Strin
     (device_id, reg_id, identity_key)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn publish_manifest(
     c: &Client,
     base: &str,
     token: &str,
     signing: &SigningKey,
-    version: u64,
+    account: &str,
+    drive_public_key: &str,
+    sequence: u64,
     previous_hash: Option<String>,
-    devices: Vec<ManifestDevice>,
-) -> DeviceManifest {
+    devices: Vec<AccountManifestDeviceV1>,
+) -> AccountManifestV1 {
     let public = signing.verifying_key();
-    let mut manifest = DeviceManifest {
-        version,
+    let mut incarnation = Sha256::new();
+    incarnation.update(b"kutup/account-incarnation/v1\0");
+    incarnation.update(public.as_bytes());
+    let drive_signing = SigningKey::from_bytes(&[99; 32]);
+    let mut manifest = AccountManifestV1 {
+        manifest_version: 1,
+        account: account.into(),
+        incarnation_id: hex::encode(incarnation.finalize()),
+        sequence,
         previous_hash,
+        drive: AccountManifestDriveKeysV1 {
+            suite: AccountIdentitySuiteId::X25519Ed25519V1,
+            hpke_public_key: drive_public_key.into(),
+            share_signing_public_key: b64(drive_signing.verifying_key().as_bytes()),
+        },
         devices,
         issued_at: time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
@@ -231,14 +296,11 @@ fn publish_manifest(
     let response = response.expect("manifest publication retry loop returns a response");
     assert!(
         response.status().is_success(),
-        "publish manifest v{version}: {}",
+        "publish manifest sequence {sequence}: {}",
         response.status()
     );
-    let published = response.json::<PublishManifestResponse>().unwrap();
+    let published = response.json::<AccountManifestPublicationV1>().unwrap();
     assert_eq!(published.manifest, manifest);
-    published.transparency.verify_inclusion().unwrap();
-    published.transparency.verify_current_map().unwrap();
-    published.transparency.verify_authentication().unwrap();
     manifest
 }
 
@@ -270,20 +332,16 @@ fn chat_v1_contract() {
     );
     assert_eq!(chat["manifests"], true);
     assert_eq!(chat["profiles"], true);
-    assert_eq!(chat["keyTransparency"], true);
-    assert_eq!(
-        chat["transparencyOperatorKeyId"].as_str().unwrap().len(),
-        64
-    );
-    assert!(chat["transparencyOperatorPublicKey"].is_string());
-    assert!(chat.get("transparencyWitnessQuorum").is_none());
-    assert!(chat.get("transparencyWitnesses").is_none());
+    assert!(chat.get("keyTransparency").is_none());
     assert!(chat["mailboxRetentionDays"].is_number());
     assert!(chat["deviceExpiryDays"].is_number());
     println!("ok  - capability block");
 
-    let (_ea, ua, ta) = register_and_login(&c, &base, "a");
-    let (_eb, ub, tb) = register_and_login(&c, &base, "b");
+    let (_ea, ua, ta, drive_a) = register_and_login(&c, &base, "a");
+    let (_eb, ub, tb, drive_b) = register_and_login(&c, &base, "b");
+    let domain = std::env::var("KUTUP_LIVE_SERVER_NAME").unwrap_or_else(|_| "local.test".into());
+    let account_a = format!("{ua}@{domain}");
+    let account_b = format!("{ub}@{domain}");
     println!("ok  - two accounts registered + logged in");
 
     let (dev_a, reg_a, identity_a) = register_chat_device(&c, &base, &ta);
@@ -297,10 +355,13 @@ fn chat_v1_contract() {
         &base,
         &ta,
         &authority_a,
+        &account_a,
+        &drive_a,
         1,
         None,
-        vec![ManifestDevice {
+        vec![AccountManifestDeviceV1 {
             device_id: dev_a,
+            direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
             identity_key: identity_a.clone(),
             registration_id: reg_a,
             mls: None,
@@ -311,10 +372,13 @@ fn chat_v1_contract() {
         &base,
         &tb,
         &authority_b,
+        &account_b,
+        &drive_b,
         1,
         None,
-        vec![ManifestDevice {
+        vec![AccountManifestDeviceV1 {
             device_id: dev_b,
+            direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
             identity_key: identity_b,
             registration_id: reg_b,
             mls: None,
@@ -326,12 +390,15 @@ fn chat_v1_contract() {
     // ciphertext version while its key update is in flight.
     let access_v1 = [21u8; 16];
     let delivery_v1 = [23u8; 16];
+    let profile_v1_version = "11".repeat(32);
     let profile_v1 = json!({
-        "version": "11".repeat(32),
+        "suite": 1,
+        "account": account_a,
+        "version": profile_v1_version,
         "revision": 1,
         "sourceDeviceId": dev_a,
-        "name": b64(&[31u8; 12 + 53 + 16]),
-        "wrappedKey": b64(&[41u8; 12 + 32 + 16]),
+        "name": opaque_profile_envelope(&account_a, &profile_v1_version, 1, dev_a, ProfileEnvelopePurpose::DisplayName, 53 + 16, 31),
+        "wrappedKey": opaque_profile_envelope(&account_a, &profile_v1_version, 1, dev_a, ProfileEnvelopePurpose::WrappedProfileKey, 32 + 16, 41),
         "accessKeyVerifier": hex::encode(Sha256::digest(access_v1)),
         "deliveryCapabilityVerifier": hex::encode(Sha256::digest(delivery_v1)),
     });
@@ -373,12 +440,15 @@ fn chat_v1_contract() {
 
     let access_v2 = [22u8; 16];
     let delivery_v2 = [24u8; 16];
+    let profile_v2_version = "12".repeat(32);
     let profile_v2 = json!({
-        "version": "12".repeat(32),
+        "suite": 1,
+        "account": account_a,
+        "version": profile_v2_version,
         "revision": 2,
         "sourceDeviceId": dev_a,
-        "name": b64(&[32u8; 12 + 53 + 16]),
-        "wrappedKey": b64(&[42u8; 12 + 32 + 16]),
+        "name": opaque_profile_envelope(&account_a, &profile_v2_version, 2, dev_a, ProfileEnvelopePurpose::DisplayName, 53 + 16, 32),
+        "wrappedKey": opaque_profile_envelope(&account_a, &profile_v2_version, 2, dev_a, ProfileEnvelopePurpose::WrappedProfileKey, 32 + 16, 42),
         "accessKeyVerifier": hex::encode(Sha256::digest(access_v2)),
         "deliveryCapabilityVerifier": hex::encode(Sha256::digest(delivery_v2)),
     });
@@ -417,17 +487,21 @@ fn chat_v1_contract() {
         &base,
         &ta,
         &authority_a,
+        &account_a,
+        &drive_a,
         2,
         Some(manifest_a1.manifest_hash().unwrap()),
         vec![
-            ManifestDevice {
+            AccountManifestDeviceV1 {
                 device_id: dev_a,
+                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
                 identity_key: identity_a.clone(),
                 registration_id: reg_a,
                 mls: None,
             },
-            ManifestDevice {
+            AccountManifestDeviceV1 {
                 device_id: dev_a2,
+                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
                 identity_key: identity_a2,
                 registration_id: reg_a2,
                 mls: None,
@@ -436,7 +510,7 @@ fn chat_v1_contract() {
     );
     let sync_bundles_value: Value = c
         .get(format!(
-            "{base}/api/chat/users/{ua}/keys?syncDeviceId={dev_a}&transparencyTreeSize=0"
+            "{base}/api/chat/users/{ua}/keys?syncDeviceId={dev_a}"
         ))
         .bearer_auth(&ta)
         .send()
@@ -445,16 +519,7 @@ fn chat_v1_contract() {
         .unwrap();
     let sync_bundles: UserPreKeyBundlesResponse =
         serde_json::from_value(sync_bundles_value.clone()).unwrap();
-    let sync_proof = sync_bundles.transparency.as_ref().unwrap();
-    sync_proof.verify_inclusion().unwrap();
-    sync_proof.verify_current_map().unwrap();
-    sync_proof.verify_authentication().unwrap();
-    sync_proof.verify_consistency_from(None).unwrap();
-    sync_proof
-        .leaf
-        .matches_manifest(&ua, sync_bundles.manifest.as_ref().unwrap())
-        .unwrap();
-    let first_checkpoint: TransparencyCheckpoint = sync_proof.checkpoint.clone();
+    assert_eq!(sync_bundles.manifest.as_ref().unwrap().account, account_a);
     let sync_bundles = sync_bundles_value;
     let sync_devices = sync_bundles["devices"].as_array().unwrap();
     assert_eq!(sync_devices.len(), 2);
@@ -465,13 +530,14 @@ fn chat_v1_contract() {
     assert!(current.get("oneTimePreKey").is_none());
     println!("ok  - linked-device bundle fetch preserves current prekeys");
 
-    // Grow the log, then require a non-trivial consistency proof from the
-    // checkpoint just pinned above.
+    // Advance the complete account-signed manifest history.
     publish_manifest(
         &c,
         &base,
         &ta,
         &authority_a,
+        &account_a,
+        &drive_a,
         3,
         Some(manifest_a2.manifest_hash().unwrap()),
         manifest_a2.devices.clone(),
@@ -525,10 +591,7 @@ fn chat_v1_contract() {
 
     // A fetches B's bundles: kyber always present, one-time EC consumed.
     let bundles_value: Value = c
-        .get(format!(
-            "{base}/api/chat/users/{ub}/keys?transparencyTreeSize={}",
-            first_checkpoint.tree_size
-        ))
+        .get(format!("{base}/api/chat/users/{ub}/keys"))
         .bearer_auth(&ta)
         .send()
         .unwrap()
@@ -536,17 +599,7 @@ fn chat_v1_contract() {
         .unwrap();
     let typed_bundles: UserPreKeyBundlesResponse =
         serde_json::from_value(bundles_value.clone()).unwrap();
-    let proof = typed_bundles.transparency.as_ref().unwrap();
-    proof.verify_inclusion().unwrap();
-    proof.verify_current_map().unwrap();
-    proof.verify_authentication().unwrap();
-    proof
-        .verify_consistency_from(Some(&first_checkpoint))
-        .unwrap();
-    proof
-        .leaf
-        .matches_manifest(&ub, typed_bundles.manifest.as_ref().unwrap())
-        .unwrap();
+    assert_eq!(typed_bundles.manifest.as_ref().unwrap().account, account_b);
     let bundles = bundles_value;
     let devs = bundles["devices"].as_array().unwrap();
     assert_eq!(devs.len(), 1, "B has one device");
@@ -557,7 +610,7 @@ fn chat_v1_contract() {
         d["oneTimePreKey"].is_object(),
         "one-time EC consumed by fetch"
     );
-    println!("ok  - bundle fetch + current-map and append-only transparency proofs");
+    println!("ok  - bundle fetch + account-signed manifest binding");
 
     let send = |send_id: &str, dev: u32, reg: u32, content: &str| {
         c.post(format!("{base}/api/chat/users/{ub}/messages"))

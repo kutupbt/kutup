@@ -14,11 +14,11 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use kutup_chat_proto::{
-    AnonymousMlsKeyPackageRequestV1, ChatProfileResponse, DeviceListMismatch, DeviceManifest,
-    IdentifiedMlsKeyPackageRequestV1, MailboxPage, ManifestUpdateRangeProofV1,
-    MlsKeyPackageBundleV1, OwnChatProfileResponse, PreKeyCountResponse, PublishManifestResponse,
-    PutChatProfileRequest, RegisterChatDeviceRequest, ReplenishKeysRequest, SendMessagesRequest,
-    TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
+    AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1,
+    AnonymousMlsKeyPackageRequestV1, ChatProfileResponse, DeviceListMismatch,
+    IdentifiedMlsKeyPackageRequestV1, MailboxPage, MlsKeyPackageBundleV1, OwnChatProfileResponse,
+    PreKeyCountResponse, PutChatProfileRequest, RegisterChatDeviceRequest, ReplenishKeysRequest,
+    SendMessagesRequest, UserPreKeyBundlesResponse,
 };
 use kutup_federation_proto::FederatedFeaturePolicyHistoryV1;
 
@@ -43,11 +43,7 @@ pub trait ChatTransport {
 
     /// `GET /api/chat/users/{username}/keys` — every active device's bundle
     /// (consumes one one-time prekey per device server-side).
-    async fn fetch_bundles(
-        &self,
-        username: &str,
-        transparency_tree_size: u64,
-    ) -> Result<UserPreKeyBundlesResponse>;
+    async fn fetch_bundles(&self, username: &str) -> Result<UserPreKeyBundlesResponse>;
 
     /// Fetch the local account's complete signed bundle set for an encrypted
     /// linked-device sync. The server does not consume one-time prekeys for
@@ -56,35 +52,9 @@ pub trait ChatTransport {
         &self,
         _username: &str,
         _current_device_id: u32,
-        _transparency_tree_size: u64,
     ) -> Result<UserPreKeyBundlesResponse> {
         Err(crate::ChatError::Transport(
             "transport does not implement linked-device bundle fetches".into(),
-        ))
-    }
-
-    /// Public checkpoint monitor endpoint. `scope` is `local` for the
-    /// authenticated homeserver; transports may reject remote scopes until an
-    /// authenticated federation monitor proxy is available.
-    async fn fetch_transparency_checkpoint(
-        &self,
-        _scope: &str,
-        _from_tree_size: u64,
-    ) -> Result<TransparencyCheckpointResponse> {
-        Err(crate::ChatError::Transport(
-            "transport does not implement transparency monitoring".into(),
-        ))
-    }
-
-    /// Complete authenticated feature-policy history for a transparency
-    /// namespace. Clients verify it independently before accepting any remote
-    /// checkpoint, manifest, or bundle evidence.
-    async fn fetch_transparency_policy(
-        &self,
-        _domain: &str,
-    ) -> Result<FederatedFeaturePolicyHistoryV1> {
-        Err(crate::ChatError::Transport(
-            "transport does not implement transparency policy retrieval".into(),
         ))
     }
 
@@ -101,38 +71,22 @@ pub trait ChatTransport {
     }
 
     /// Latest account-signed device manifest. `None` maps the endpoint's 404.
-    async fn fetch_manifest(&self, _username: &str) -> Result<Option<DeviceManifest>> {
+    async fn fetch_manifest(&self, _username: &str) -> Result<Option<AccountManifestV1>> {
         Err(crate::ChatError::Transport(
             "transport does not implement device manifests".into(),
         ))
     }
 
-    /// Fetch the exact current account manifest with inclusion, current-map,
-    /// consistency and operator-signature evidence. Unlike a
-    /// bundle fetch, this consumes no one-time Signal or MLS key material.
-    async fn fetch_manifest_publication(
+    /// Fetch one page of a complete signed manifest interval.
+    async fn fetch_manifest_history(
         &self,
         _username: &str,
-        _transparency_tree_size: u64,
-    ) -> Result<PublishManifestResponse> {
+        _from_sequence: u64,
+        _to_sequence: u64,
+        _page_from_sequence: u64,
+    ) -> Result<AccountManifestHistoryPageV1> {
         Err(crate::ChatError::Transport(
-            "transport does not implement current manifest proofs".into(),
-        ))
-    }
-
-    /// Fetch one page of the exact missing manifest interval. `cursor` is
-    /// opaque and checkpoint-bound; transports must pass it unchanged.
-    async fn fetch_manifest_range(
-        &self,
-        _username: &str,
-        _from_version: u64,
-        _to_version: u64,
-        _page_from_version: u64,
-        _cursor: Option<&str>,
-        _transparency_tree_size: u64,
-    ) -> Result<ManifestUpdateRangeProofV1> {
-        Err(crate::ChatError::Transport(
-            "transport does not implement manifest range proofs".into(),
+            "transport does not implement account manifest history".into(),
         ))
     }
 
@@ -178,7 +132,6 @@ pub trait ChatTransport {
         &self,
         _username: &str,
         _capability: &[u8; 16],
-        _transparency_tree_size: u64,
     ) -> Result<UserPreKeyBundlesResponse> {
         Err(crate::ChatError::Transport(
             "transport does not implement anonymous prekey retrieval".into(),
@@ -198,9 +151,8 @@ pub trait ChatTransport {
     /// Publish the caller's next account-signed manifest.
     async fn publish_manifest(
         &self,
-        _manifest: &DeviceManifest,
-        _transparency_tree_size: u64,
-    ) -> Result<PublishManifestResponse> {
+        _manifest: &AccountManifestV1,
+    ) -> Result<AccountManifestPublicationV1> {
         Err(crate::ChatError::Transport(
             "transport does not implement device manifests".into(),
         ))

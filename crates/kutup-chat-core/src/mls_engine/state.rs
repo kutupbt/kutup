@@ -9,6 +9,9 @@ use std::sync::RwLock;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use hpke_rs::hpke_types::KemAlgorithm;
+use hpke_rs_crypto::HpkeCrypto as _;
+use hpke_rs_rust_crypto::HpkeRustCrypto;
 use kutup_chat_proto::MlsOwnerCandidateV1;
 use openmls::prelude::{BasicCredential, CredentialWithKey};
 use openmls_basic_credential::SignatureKeyPair;
@@ -16,8 +19,6 @@ use openmls_memory_storage::MemoryStorage;
 use openmls_rust_crypto::RustCrypto;
 use openmls_traits::types::SignatureScheme;
 use openmls_traits::OpenMlsProvider;
-use p256::ecdsa::SigningKey as P256SigningKey;
-use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -26,8 +27,8 @@ use super::{
     PendingMlsAuthorityChange, PendingMlsClose, PendingMlsCommit, PendingMlsMembershipChange,
     PendingMlsOwnerApprovalRequest, PendingMlsOwnerChange, PendingMlsPolicyChange,
     PendingMlsRecovery, ProcessedMlsControlEnvelope, MAX_PENDING_COMMITS, MAX_STATE_BYTES,
-    MAX_STATE_RECORDS, MAX_STATE_RECORD_BYTES, MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256,
-    STATE_FORMAT_VERSION,
+    MAX_STATE_RECORDS, MAX_STATE_RECORD_BYTES,
+    MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519, STATE_FORMAT_VERSION,
 };
 use crate::error::{ChatError, Result};
 
@@ -88,7 +89,7 @@ impl SnapshotMetadata {
         SignatureKeyPair::read(
             provider.storage(),
             &self.credential_public_key,
-            SignatureScheme::ECDSA_SECP256R1_SHA256,
+            SignatureScheme::ED25519,
         )
         .ok_or_else(|| {
             ChatError::MissingKeyMaterial("MLS device signing key is unavailable".into())
@@ -96,22 +97,21 @@ impl SnapshotMetadata {
     }
 
     pub(super) fn public_material(&self) -> Result<MlsDevicePublicMaterial> {
-        let secret = p256::SecretKey::from_slice(&self.anonymous_delivery_private_key)
-            .map_err(|_| ChatError::Db("invalid durable anonymous-delivery private key".into()))?;
+        let public_key = HpkeRustCrypto::secret_to_public(
+            KemAlgorithm::DhKem25519,
+            &self.anonymous_delivery_private_key,
+        )
+        .map_err(|_| ChatError::Db("invalid durable anonymous-delivery private key".into()))?;
         Ok(MlsDevicePublicMaterial {
             credential_public_key: self.credential_public_key.clone(),
-            anonymous_delivery_public_key: secret
-                .public_key()
-                .to_encoded_point(false)
-                .as_bytes()
-                .to_vec(),
+            anonymous_delivery_public_key: public_key,
         })
     }
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PersistedMlsStateV10 {
+struct PersistedMlsStateV11 {
     format_version: u16,
     ciphersuite: u16,
     credential_identity: String,
@@ -191,9 +191,9 @@ pub(super) fn snapshot_provider(
             value: BASE64.encode(value),
         });
     }
-    let state = PersistedMlsStateV10 {
+    let state = PersistedMlsStateV11 {
         format_version: STATE_FORMAT_VERSION,
-        ciphersuite: MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256,
+        ciphersuite: MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519,
         credential_identity: metadata.credential_identity.clone(),
         credential_public_key: BASE64.encode(&metadata.credential_public_key),
         anonymous_delivery_private_key: BASE64.encode(&metadata.anonymous_delivery_private_key),
@@ -270,10 +270,10 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
     if bytes.is_empty() || bytes.len() > MAX_STATE_BYTES {
         return Err(ChatError::Db("OpenMLS state size is invalid".into()));
     }
-    let state: PersistedMlsStateV10 =
+    let state: PersistedMlsStateV11 =
         serde_json::from_slice(bytes).map_err(|error| ChatError::Db(error.to_string()))?;
     if state.format_version != STATE_FORMAT_VERSION
-        || state.ciphersuite != MLS_CIPHERSUITE_P256_AES128GCM_SHA256_P256
+        || state.ciphersuite != MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519
         || state.records.len() > MAX_STATE_RECORDS
         || state.pending_commits.len() > MAX_PENDING_COMMITS
         || state.pending_membership_changes.len() > MAX_PENDING_COMMITS
@@ -480,8 +480,11 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
         previous_control_group = Some(entry.group_id.clone());
         let private_key =
             decode_canonical_base64("MLS group control private key", &entry.private_key, 32)?;
-        P256SigningKey::from_slice(&private_key)
+        let seed: [u8; 32] = private_key
+            .as_slice()
+            .try_into()
             .map_err(|_| ChatError::Db("invalid durable MLS group control key".into()))?;
+        ed25519_dalek::SigningKey::from_bytes(&seed);
         if group_control_private_keys
             .insert(entry.group_id, private_key)
             .is_some()
@@ -665,7 +668,7 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
         credential_public_key: decode_canonical_base64(
             "MLS credential public key",
             &state.credential_public_key,
-            65,
+            32,
         )?,
         anonymous_delivery_private_key: decode_canonical_base64(
             "anonymous-delivery private key",

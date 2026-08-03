@@ -18,8 +18,7 @@ impl MlsClient {
         validate_group_id(mls_group_id)?;
         let (_, metadata) = self.load_provider().await?;
         let conversation = active_conversation_for_group(&metadata, mls_group_id)?.clone();
-        let (local_address, _) =
-            parse_device_credential_identity(&metadata.credential_identity)?;
+        let (local_address, _) = parse_device_credential_identity(&metadata.credential_identity)?;
         let local_member = conversation
             .current_roster
             .iter()
@@ -28,8 +27,7 @@ impl MlsClient {
                 ChatError::Trust("MLS invitation accepter is absent from the roster".into())
             })?;
         if conversation.member_joined_epochs.get(&local_address) != Some(&invited_epoch)
-            || conversation.accepted_invitation_epochs.get(&local_address)
-                != Some(&invited_epoch)
+            || conversation.accepted_invitation_epochs.get(&local_address) != Some(&invited_epoch)
         {
             return Err(ChatError::Trust(
                 "MLS invitation acceptance differs from the local join epoch".into(),
@@ -69,13 +67,15 @@ impl MlsClient {
         let mut id_material = local_address.into_bytes();
         id_material.extend_from_slice(&invited_epoch.to_be_bytes());
         self.create_deterministic_group_control_message(
-            mls_group_id,
-            &conversation,
-            b"kutup/mls/invitation-acceptance-message/v1\0",
-            &id_material,
-            accepted_at_seconds,
-            MlsGroupControlBodyV1::InvitationAccepted { acceptance },
-            expected_recipients,
+            super::owner_approval::DeterministicGroupControlMessage {
+                mls_group_id,
+                conversation: &conversation,
+                domain: b"kutup/mls/invitation-acceptance-message/v1\0",
+                id_material: &id_material,
+                sent_at_seconds: accepted_at_seconds,
+                body: MlsGroupControlBodyV1::InvitationAccepted { acceptance },
+                expected_recipients,
+            },
         )
         .await
     }

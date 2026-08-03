@@ -39,16 +39,22 @@ const WHITEBOARD_EXT = new Set(['excalidraw'])
 
 export interface CollabEditorProps {
   fileId: string
+  collectionId: string
   filename: string
   collectionMaster: Uint8Array
+  /** Purpose-specific file key used by the typed persistent snapshot blob. */
+  fileKey: Uint8Array
+  keyEpoch: number
   /** Optional plaintext seed for cold-start (no Yjs snapshot yet). */
   initialContent?: string
 }
 
 export interface OfficeEditorProps {
   fileId: string
+  collectionId: string
   filename: string
   collectionMaster: Uint8Array
+  keyEpoch: number
   /** Decrypted file bytes (the OOXML blob), if the file already exists.
    *  Undefined when creating a brand-new doc — phase 2d. */
   initialBytes?: Uint8Array
@@ -58,8 +64,10 @@ export interface OfficeEditorProps {
 
 export interface WhiteboardEditorProps {
   fileId: string
+  collectionId: string
   filename: string
   collectionMaster: Uint8Array
+  keyEpoch: number
   /** Decrypted .excalidraw JSON bytes if the file already exists. */
   initialBytes?: Uint8Array
 }

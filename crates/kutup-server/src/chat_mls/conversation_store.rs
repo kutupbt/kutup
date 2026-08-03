@@ -6,7 +6,7 @@ use kutup_chat_proto::{
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::{decode_canonical_base64, validate_participant_domains, MlsRepository};
+use super::{decode_canonical_base64, validate_participant_domains, MlsRepository, MLS_SUITE_SQL};
 use crate::error::{AppError, AppResult};
 
 impl MlsRepository {
@@ -204,11 +204,12 @@ impl MlsRepository {
                   authority_set_sequence, authority_set,
                   owner_set_sequence, owner_set, genesis, genesis_hash,
                   last_finalized_epoch, status)
-             VALUES ($1,$2,$3,2,$4,$5,$6,$6,$7,$8,$9,$10,$11,$12,$13,'active')",
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,'active')",
         )
         .bind(request.genesis.conversation_id)
         .bind(request.genesis.incarnation as i64)
         .bind(group_id)
+        .bind(MLS_SUITE_SQL)
         .bind(&request.genesis.roster_commitment)
         .bind(request.genesis.member_count as i32)
         .bind(serde_json::to_value(participant_domains).map_err(|error| {

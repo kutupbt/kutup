@@ -19,6 +19,9 @@ use crate::federation::FederationPolicyFeature;
 use crate::middleware::AdminUser;
 use crate::AppState;
 
+type AdminIncarnationRow = (i64, String, String, String, i32, i64, i64, Option<String>);
+type AdminAuditRow = (String, Option<i64>, Option<String>, Value, OffsetDateTime);
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AdminMlsStatusV1 {
@@ -290,18 +293,17 @@ pub(crate) async fn conversation(
     .bind(row.incarnation)
     .fetch_one(&state.pool)
     .await?;
-    let incarnation_rows: Vec<(i64, String, String, String, i32, i64, i64, Option<String>)> =
-        sqlx::query_as(
-            "SELECT incarnation, status, genesis_hash, roster_commitment,
+    let incarnation_rows: Vec<AdminIncarnationRow> = sqlx::query_as(
+        "SELECT incarnation, status, genesis_hash, roster_commitment,
                     member_count, last_finalized_height, last_finalized_epoch,
                     last_block_hash
              FROM chat_mls_incarnations
              WHERE conversation_id = $1
              ORDER BY incarnation",
-        )
-        .bind(conversation_id)
-        .fetch_all(&state.pool)
-        .await?;
+    )
+    .bind(conversation_id)
+    .fetch_all(&state.pool)
+    .await?;
     let recovery_rows: Vec<(String, i64, i64, String, Value, OffsetDateTime)> = sqlx::query_as(
         "SELECT recovery_digest, previous_incarnation, new_incarnation,
                     origin_domain, recovery, created_at
@@ -324,17 +326,16 @@ pub(crate) async fn conversation(
         .bind(row.incarnation)
         .fetch_all(&state.pool)
         .await?;
-    let audit_rows: Vec<(String, Option<i64>, Option<String>, Value, OffsetDateTime)> =
-        sqlx::query_as(
-            "SELECT event_type, incarnation, evidence_digest, details, occurred_at
+    let audit_rows: Vec<AdminAuditRow> = sqlx::query_as(
+        "SELECT event_type, incarnation, evidence_digest, details, occurred_at
              FROM chat_mls_admin_audit_events
              WHERE conversation_id = $1
              ORDER BY occurred_at DESC, id
              LIMIT 100",
-        )
-        .bind(conversation_id)
-        .fetch_all(&state.pool)
-        .await?;
+    )
+    .bind(conversation_id)
+    .fetch_all(&state.pool)
+    .await?;
     Ok(Json(AdminMlsConversationV1 {
         conversation_id,
         kind: checked_u16(row.kind, "conversation kind")?,

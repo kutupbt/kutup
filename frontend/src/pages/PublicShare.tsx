@@ -5,7 +5,12 @@ import { useTranslation } from 'react-i18next'
 import { useParams } from 'react-router-dom'
 import { Download, Lock, Loader2, FileText } from 'lucide-react'
 import api from '@/api/client'
-import { decrypt, decryptStream, fromBase64 } from '@/crypto'
+import {
+  decryptStream,
+  fromBase64,
+  openFileRecordV1,
+  openPublicLinkCollectionKeyV1,
+} from '@/crypto'
 import { KutupLogo } from '@/components/KutupLogo'
 import { formatBytes } from '@/lib/format'
 import { Button } from '@/components/ui/button'
@@ -25,10 +30,10 @@ import { Badge } from '@/components/ui/badge'
 interface DecryptedFile {
   id: string
   collectionId: string
-  encryptedMetadata: string
-  metadataNonce: string
-  encryptedFileKey: string
-  fileKeyNonce: string
+  metadataEnvelope: string
+  fileKeyEnvelope: string
+  keyEpoch: number
+  metadataRevision: number
   encryptedSizeBytes: number
   createdAt: string
   decryptedName?: string
@@ -72,19 +77,21 @@ export default function PublicShare() {
         return
       }
 
-      const collKey = await decrypt(
-        fromBase64(share.encryptedCollectionKey),
-        fromBase64(share.encryptedCollectionKeyNonce),
+      const collKey = await openPublicLinkCollectionKeyV1(
+        share.collectionKeyEnvelope,
         linkKey,
+        {
+          collectionId: share.targetId,
+          ownerUserId: share.ownerUserId,
+          epoch: share.collectionKeyEpoch,
+        },
       )
 
       const filesRes = await api.get(`/share/${token}/files`)
       const decrypted: DecryptedFile[] = await Promise.all(
         filesRes.data.map(async (file: DecryptedFile) => {
           try {
-            const fileKey = await decrypt(fromBase64(file.encryptedFileKey), fromBase64(file.fileKeyNonce), collKey)
-            const metaBytes = await decrypt(fromBase64(file.encryptedMetadata), fromBase64(file.metadataNonce), fileKey)
-            const meta = JSON.parse(new TextDecoder().decode(metaBytes))
+            const { fileKey, metadata: meta } = await openFileRecordV1(file, collKey)
             return { ...file, decryptedName: meta.name, decryptedMimeType: meta.mimeType, decryptedSize: meta.size, _fileKey: fileKey }
           } catch {
             return { ...file, decryptedName: '[could not decrypt]' }
@@ -110,7 +117,11 @@ export default function PublicShare() {
       // for external clients).
       const res = await api.get(`/share/${token}/download/${file.id}`, { responseType: 'arraybuffer' })
       const encData = new Uint8Array(res.data)
-      const plaintext = await decryptStream(encData, file._fileKey)
+      const plaintext = await decryptStream(encData, file._fileKey, {
+        fileId: file.id,
+        collectionId: file.collectionId,
+        epoch: file.keyEpoch,
+      })
       const blob = new Blob([plaintext.buffer as ArrayBuffer], { type: file.decryptedMimeType ?? 'application/octet-stream' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')

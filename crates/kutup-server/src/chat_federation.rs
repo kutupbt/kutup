@@ -13,12 +13,12 @@ use axum::response::Response;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    capability_hash, AccountAddress, AnonymousPreKeyRequestV1, ChatProfileResponse,
-    ChatWsServerMessage, DeliveredEnvelope, DeviceListMismatch, FederatedChatTransaction,
-    FederatedSealedTransactionV1, FederationDeliveryError, FederationDeliveryRejection,
-    FederationDeliveryResponse, ManifestUpdateRangeProofV1, PublishManifestResponse,
+    capability_hash, AccountAddress, AccountManifestHistoryPageV1, AccountManifestV1,
+    AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsServerMessage, DeliveredEnvelope,
+    DeviceListMismatch, FederatedChatTransaction, FederatedSealedTransactionV1,
+    FederationDeliveryError, FederationDeliveryRejection, FederationDeliveryResponse,
     SealedDeliveryResponseV1, SealedMessageSubmissionV1, SendMessagesRequest,
-    TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
+    UserPreKeyBundlesResponse,
 };
 use rand::Rng as _;
 use reqwest::Method;
@@ -50,16 +50,13 @@ fn configured_stack(state: &AppState) -> AppResult<&FederationStack> {
 pub async fn fetch_remote_bundles(
     state: &AppState,
     address: &AccountAddress,
-    transparency_tree_size: u64,
 ) -> AppResult<UserPreKeyBundlesResponse> {
     let federation = configured_stack(state)?;
     let destination = address
         .server
         .as_deref()
         .ok_or_else(|| AppError::bad_request("remote account requires a server"))?;
-    crate::chat_transparency_monitor::verify_before_remote_use(state, destination).await?;
     let path = format!("/api/fed/chat/users/{}/keys", address.username);
-    let query = format!("transparencyTreeSize={transparency_tree_size}");
     let response = federation
         .send(
             destination,
@@ -67,7 +64,7 @@ pub async fn fetch_remote_bundles(
                 feature: FederationFeature::ChatV1,
                 method: Method::GET,
                 path,
-                query: Some(query),
+                query: None,
                 content_type: JSON_CONTENT_TYPE.into(),
                 body: Vec::new(),
                 request_id: Uuid::new_v4().to_string(),
@@ -112,7 +109,6 @@ pub async fn fetch_remote_sealed_bundles(
         .server
         .as_deref()
         .ok_or_else(|| AppError::not_found("sealed delivery unavailable"))?;
-    crate::chat_transparency_monitor::verify_before_remote_use(state, destination).await?;
     let path = format!("/api/fed/chat/sealed/users/{}/keys", address.username);
     let body = serde_json::to_vec(request)
         .map_err(|error| AppError::internal(format!("encode sealed bundle request: {error}")))?;
@@ -144,17 +140,17 @@ pub async fn fetch_remote_sealed_bundles(
     Ok(bundles)
 }
 
-pub async fn fetch_remote_manifest_range(
+pub async fn fetch_remote_manifest_history(
     state: &AppState,
     address: &AccountAddress,
-    query: &crate::handlers::chat::ManifestRangeQuery,
-) -> AppResult<ManifestUpdateRangeProofV1> {
+    query: &crate::handlers::chat::ManifestHistoryQuery,
+) -> AppResult<AccountManifestHistoryPageV1> {
     let federation = configured_stack(state)?;
     let destination = address
         .server
         .as_deref()
         .ok_or_else(|| AppError::bad_request("remote account requires a server"))?;
-    let query_string = manifest_range_query_string(query);
+    let query_string = manifest_history_query_string(query);
     let response = federation
         .send(
             destination,
@@ -183,30 +179,32 @@ pub async fn fetch_remote_manifest_range(
             format!("remote manifest history returned {}", response.status),
         ));
     }
-    let proof: ManifestUpdateRangeProofV1 = serde_json::from_slice(&response.body)
+    let page: AccountManifestHistoryPageV1 = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote manifest history"))?;
-    if proof.account != address.canonical() || proof.from_version != query.from_version {
+    if page.account != address.canonical()
+        || page.from_sequence != query.page_from_sequence.unwrap_or(query.from_sequence)
+        || page.to_sequence != query.to_sequence
+    {
         return Err(AppError::new(
             StatusCode::BAD_GATEWAY,
             "remote manifest history returned the wrong account or range",
         ));
     }
-    Ok(proof)
+    page.validate()
+        .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote manifest history"))?;
+    Ok(page)
 }
 
-pub async fn fetch_remote_manifest_proof(
+pub async fn fetch_remote_manifest(
     state: &AppState,
     address: &AccountAddress,
-    transparency_tree_size: u64,
-) -> AppResult<PublishManifestResponse> {
+) -> AppResult<AccountManifestV1> {
     let federation = configured_stack(state)?;
     let destination = address
         .server
         .as_deref()
         .ok_or_else(|| AppError::bad_request("remote account requires a server"))?;
-    crate::chat_transparency_monitor::verify_before_remote_use(state, destination).await?;
-    let path = format!("/api/fed/chat/users/{}/manifest-proof", address.username);
-    let query = format!("transparencyTreeSize={transparency_tree_size}");
+    let path = format!("/api/fed/chat/users/{}/manifest", address.username);
     let response = federation
         .send(
             destination,
@@ -214,7 +212,7 @@ pub async fn fetch_remote_manifest_proof(
                 feature: FederationFeature::ChatV1,
                 method: Method::GET,
                 path,
-                query: Some(query),
+                query: None,
                 content_type: JSON_CONTENT_TYPE.into(),
                 body: Vec::new(),
                 request_id: Uuid::new_v4().to_string(),
@@ -233,83 +231,30 @@ pub async fn fetch_remote_manifest_proof(
             format!("remote manifest proof returned {}", response.status),
         ));
     }
-    let publication: PublishManifestResponse =
-        serde_json::from_slice(&response.body).map_err(|_| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "invalid remote manifest proof response",
-            )
-        })?;
-    publication
-        .transparency
-        .leaf
-        .matches_manifest(&address.username, &publication.manifest)
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "remote manifest proof returned the wrong account",
-            )
-        })?;
-    Ok(publication)
-}
-
-pub async fn fetch_remote_checkpoint(
-    state: &AppState,
-    destination: &str,
-    from_tree_size: u64,
-) -> AppResult<TransparencyCheckpointResponse> {
-    let federation = configured_stack(state)?;
-    let response = federation
-        .send(
-            destination,
-            FederationRequestSpec {
-                feature: FederationFeature::ChatV1,
-                method: Method::GET,
-                path: "/api/fed/chat/transparency/checkpoint".into(),
-                query: Some(format!("fromTreeSize={from_tree_size}")),
-                content_type: JSON_CONTENT_TYPE.into(),
-                body: Vec::new(),
-                request_id: Uuid::new_v4().to_string(),
-                extra_headers: Vec::new(),
-                response_limit: MAX_DIRECTORY_RESPONSE_BYTES,
-            },
-        )
-        .await
-        .map_err(federation_gateway_error)?;
-    if response.status != StatusCode::OK {
+    let manifest: AccountManifestV1 = serde_json::from_slice(&response.body)
+        .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote manifest response"))?;
+    manifest
+        .verify()
+        .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote manifest response"))?;
+    if manifest.account != address.canonical() {
         return Err(AppError::new(
             StatusCode::BAD_GATEWAY,
-            format!(
-                "remote transparency checkpoint returned {}",
-                response.status
-            ),
+            "remote manifest returned the wrong account",
         ));
     }
-    serde_json::from_slice(&response.body).map_err(|_| {
-        AppError::new(
-            StatusCode::BAD_GATEWAY,
-            "invalid remote transparency checkpoint response",
-        )
-    })
+    Ok(manifest)
 }
 
-fn manifest_range_query_string(query: &crate::handlers::chat::ManifestRangeQuery) -> String {
+fn manifest_history_query_string(query: &crate::handlers::chat::ManifestHistoryQuery) -> String {
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-    serializer.append_pair("fromVersion", &query.from_version.to_string());
-    serializer.append_pair("toVersion", &query.to_version.to_string());
+    serializer.append_pair("fromSequence", &query.from_sequence.to_string());
+    serializer.append_pair("toSequence", &query.to_sequence.to_string());
     serializer.append_pair(
-        "pageFromVersion",
+        "pageFromSequence",
         &query
-            .page_from_version
-            .unwrap_or(query.from_version)
+            .page_from_sequence
+            .unwrap_or(query.from_sequence)
             .to_string(),
-    );
-    if let Some(cursor) = &query.cursor {
-        serializer.append_pair("cursor", cursor);
-    }
-    serializer.append_pair(
-        "transparencyTreeSize",
-        &query.transparency_tree_size.unwrap_or(0).to_string(),
     );
     serializer.finish()
 }
@@ -325,7 +270,6 @@ pub async fn fetch_remote_profile(
         .server
         .as_deref()
         .ok_or_else(|| AppError::bad_request("remote account requires a server"))?;
-    crate::chat_transparency_monitor::verify_before_remote_use(state, destination).await?;
     let profile_header = HeaderName::from_static(crate::handlers::chat::PROFILE_ACCESS_KEY_HEADER);
     let profile_value = HeaderValue::from_str(&STANDARD.encode(access_key))
         .map_err(|_| AppError::bad_request("invalid chat profile access key"))?;
@@ -424,7 +368,6 @@ pub async fn enqueue_sealed_send(
             "local sealed recipients use local mailbox delivery",
         ));
     }
-    crate::chat_transparency_monitor::verify_before_remote_use(state, destination).await?;
     let send_id = Uuid::parse_str(&request.send_id)
         .map_err(|_| AppError::bad_request("sealed sendId is invalid"))?;
     let mut tx = state.pool.begin().await?;
@@ -703,7 +646,6 @@ pub async fn enqueue_send(
             "local recipients must use local mailbox delivery",
         ));
     }
-    crate::chat_transparency_monitor::verify_before_remote_use(state, destination).await?;
     let request_value = serde_json::to_value(&request)
         .map_err(|error| AppError::internal(format!("serialize chat send: {error}")))?;
 
@@ -1131,8 +1073,7 @@ async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
     path = "/api/fed/chat/users/{username}/keys",
     tag = "chat federation",
     params(
-        ("username" = String, Path, description = "Recipient username local to this server"),
-        ("transparencyTreeSize" = Option<u64>, Query, description = "Origin client's highest verified checkpoint for this destination log")
+        ("username" = String, Path, description = "Recipient username local to this server")
     ),
     responses(
         (status = 200, description = "Signed manifest and replay-safe PQ bundles", body = UserPreKeyBundlesResponse),
@@ -1143,7 +1084,6 @@ async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
 pub async fn get_user_bundles(
     State(state): State<AppState>,
     Path(username): Path<String>,
-    Query(query): Query<crate::handlers::chat::BundleQuery>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = state
@@ -1152,18 +1092,9 @@ pub async fn get_user_bundles(
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
     let account = AccountAddress::local(&username)
         .map_err(|error| AppError::bad_request(error.to_string()))?;
-    let transparency_tree_size = query.transparency_tree_size.unwrap_or(0);
     let path = format!("/api/fed/chat/users/{}/keys", account.username);
-    let query = format!("transparencyTreeSize={transparency_tree_size}");
     let authenticated = federation
-        .authenticate_inbound(
-            &headers,
-            "GET",
-            &path,
-            Some(&query),
-            &[],
-            FederationFeature::ChatV1,
-        )
+        .authenticate_inbound(&headers, "GET", &path, None, &[], FederationFeature::ChatV1)
         .await?;
     let response_username = format!("{}@{}", account.username, federation.server_name());
     let bundles = match crate::handlers::chat::load_user_bundles(
@@ -1172,7 +1103,6 @@ pub async fn get_user_bundles(
         &response_username,
         None,
         false,
-        transparency_tree_size,
         None,
     )
     .await
@@ -1233,7 +1163,6 @@ pub async fn get_sealed_user_bundles(
         &response_username,
         None,
         true,
-        request.transparency_tree_size,
         Some(&capability_hash(&capability)),
     )
     .await
@@ -1416,43 +1345,13 @@ pub async fn deliver_sealed_messages(
     }
 }
 
-pub async fn get_transparency_checkpoint(
-    State(state): State<AppState>,
-    Query(query): Query<crate::handlers::chat::CheckpointQuery>,
-    headers: HeaderMap,
-) -> AppResult<Response> {
-    let federation = state
-        .federation
-        .as_ref()
-        .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
-    let from_tree_size = query.from_tree_size.unwrap_or(0);
-    let query_string = format!("fromTreeSize={from_tree_size}");
-    let authenticated = federation
-        .authenticate_inbound(
-            &headers,
-            "GET",
-            "/api/fed/chat/transparency/checkpoint",
-            Some(&query_string),
-            &[],
-            FederationFeature::ChatV1,
-        )
-        .await?;
-    let mut tx = state.pool.begin().await?;
-    let response = match crate::chat_transparency::prove_checkpoint(&mut tx, from_tree_size).await {
-        Ok(response) => response,
-        Err(error) => return signed_app_error(federation, &authenticated, error),
-    };
-    tx.commit().await?;
-    signed_json(federation, &authenticated, StatusCode::OK, &response)
-}
-
 /// Signed server-to-server skipped-manifest recovery. The exact query is
 /// reconstructed in canonical field order and is covered by the common HTTP
 /// signature profile.
 pub async fn get_manifest_history(
     State(state): State<AppState>,
     Path(username): Path<String>,
-    Query(query): Query<crate::handlers::chat::ManifestRangeQuery>,
+    Query(query): Query<crate::handlers::chat::ManifestHistoryQuery>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = state
@@ -1462,7 +1361,7 @@ pub async fn get_manifest_history(
     let account = AccountAddress::local(&username)
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     let path = format!("/api/fed/chat/users/{}/manifest-history", account.username);
-    let query_string = manifest_range_query_string(&query);
+    let query_string = manifest_history_query_string(&query);
     let authenticated = federation
         .authenticate_inbound(
             &headers,
@@ -1485,34 +1384,88 @@ pub async fn get_manifest_history(
             AppError::not_found("chat manifest history not found"),
         );
     };
-    let canonical = format!("{}@{}", account.username, federation.server_name());
-    let mut tx = state.pool.begin().await?;
-    let proof = match crate::chat_transparency::prove_manifest_range(
-        &mut tx,
-        target_id,
-        &canonical,
-        query.from_version,
-        query.to_version,
-        query.page_from_version.unwrap_or(query.from_version),
-        query.cursor.as_deref(),
-        query.transparency_tree_size.unwrap_or(0),
+    let incarnation_id: Option<String> = match sqlx::query_scalar(
+        "SELECT manifest->>'incarnationId' FROM chat_device_manifests WHERE user_id = $1",
     )
+    .bind(target_id)
+    .fetch_optional(&state.pool)
     .await
     {
-        Ok(proof) => proof,
-        Err(error) => return signed_app_error(federation, &authenticated, error),
+        Ok(value) => value,
+        Err(error) => return signed_app_error(federation, &authenticated, error.into()),
     };
-    tx.commit().await?;
-    signed_json(federation, &authenticated, StatusCode::OK, &proof)
+    let Some(incarnation_id) = incarnation_id else {
+        return signed_app_error(
+            federation,
+            &authenticated,
+            AppError::not_found("chat manifest history not found"),
+        );
+    };
+    if query.from_sequence == 0 || query.to_sequence < query.from_sequence {
+        return signed_app_error(
+            federation,
+            &authenticated,
+            AppError::bad_request("invalid manifest history bounds"),
+        );
+    }
+    let page_from = query.page_from_sequence.unwrap_or(query.from_sequence);
+    if page_from < query.from_sequence || page_from > query.to_sequence {
+        return signed_app_error(
+            federation,
+            &authenticated,
+            AppError::bad_request("invalid manifest history page cursor"),
+        );
+    }
+    let values: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT manifest FROM chat_device_manifest_history
+         WHERE user_id = $1 AND incarnation_id = $2 AND version BETWEEN $3 AND $4
+         ORDER BY version LIMIT 65",
+    )
+    .bind(target_id)
+    .bind(incarnation_id)
+    .bind(page_from as i64)
+    .bind(query.to_sequence as i64)
+    .fetch_all(&state.pool)
+    .await?;
+    if values.is_empty() {
+        return signed_app_error(
+            federation,
+            &authenticated,
+            AppError::not_found("chat manifest history not found"),
+        );
+    }
+    let mut manifests = values
+        .into_iter()
+        .map(serde_json::from_value::<AccountManifestV1>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| AppError::internal(format!("stored chat manifest: {error}")))?;
+    let next_sequence = if manifests.len() > 64 {
+        manifests.truncate(64);
+        Some(manifests.last().expect("nonempty page").sequence + 1)
+    } else {
+        None
+    };
+    let page = AccountManifestHistoryPageV1 {
+        account: manifests[0].account.clone(),
+        from_sequence: page_from,
+        to_sequence: query.to_sequence,
+        manifests,
+        next_sequence,
+    };
+    if let Err(error) = page.validate() {
+        return signed_app_error(
+            federation,
+            &authenticated,
+            AppError::internal(format!("stored chat manifest history: {error}")),
+        );
+    }
+    signed_json(federation, &authenticated, StatusCode::OK, &page)
 }
 
-/// Signed server-to-server current-manifest proof. The exact query is covered
-/// by the common HTTP signature and the response is destination-bound by that
-/// same federation stack.
-pub async fn get_manifest_proof(
+/// Signed server-to-server current account manifest.
+pub async fn get_manifest(
     State(state): State<AppState>,
     Path(username): Path<String>,
-    Query(query): Query<crate::handlers::chat::TransparencyQuery>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = state
@@ -1521,18 +1474,9 @@ pub async fn get_manifest_proof(
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
     let account = AccountAddress::local(&username)
         .map_err(|error| AppError::bad_request(error.to_string()))?;
-    let path = format!("/api/fed/chat/users/{}/manifest-proof", account.username);
-    let transparency_tree_size = query.transparency_tree_size.unwrap_or(0);
-    let query_string = format!("transparencyTreeSize={transparency_tree_size}");
+    let path = format!("/api/fed/chat/users/{}/manifest", account.username);
     let authenticated = federation
-        .authenticate_inbound(
-            &headers,
-            "GET",
-            &path,
-            Some(&query_string),
-            &[],
-            FederationFeature::ChatV1,
-        )
+        .authenticate_inbound(&headers, "GET", &path, None, &[], FederationFeature::ChatV1)
         .await?;
     let target_id: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
@@ -1546,14 +1490,21 @@ pub async fn get_manifest_proof(
             AppError::not_found("chat manifest not found"),
         );
     };
-    let response =
-        match crate::handlers::chat::load_manifest_proof(&state, target_id, transparency_tree_size)
-            .await
-        {
-            Ok(response) => response,
-            Err(error) => return signed_app_error(federation, &authenticated, error),
-        };
-    signed_json(federation, &authenticated, StatusCode::OK, &response)
+    let value: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
+            .bind(target_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some(value) = value else {
+        return signed_app_error(
+            federation,
+            &authenticated,
+            AppError::not_found("chat manifest not found"),
+        );
+    };
+    let manifest: AccountManifestV1 = serde_json::from_value(value)
+        .map_err(|error| AppError::internal(format!("stored chat manifest: {error}")))?;
+    signed_json(federation, &authenticated, StatusCode::OK, &manifest)
 }
 
 /// Signed server-to-server encrypted profile lookup. The profile access key is

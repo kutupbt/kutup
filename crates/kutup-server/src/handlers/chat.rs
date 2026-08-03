@@ -28,14 +28,15 @@ use uuid::Uuid;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use kutup_chat_proto::{
-    capability_hash, constant_time_capability_hash_eq, AccountAddress, AckRequest,
+    capability_hash, constant_time_capability_hash_eq, AccountAddress,
+    AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1, AckRequest,
     AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsServerMessage, ChatWsTicketResponse,
-    DeliveredEnvelope, DeviceListMismatch, DeviceManifest, DevicePreKeyBundle, DirectChatSuiteId,
-    EcPreKey, EnvelopeType, KemPreKey, MailboxPage, ManifestUpdateRangeProofV1, OutgoingEnvelope,
-    OwnChatProfileResponse, PreKeyCountResponse, PublishManifestResponse, PutChatProfileRequest,
-    RegisterChatDeviceRequest, RegisterChatDeviceResponse, ReplenishKeysRequest,
-    SealedDeliveryResponseV1, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1,
-    SendMessagesRequest, TransparencyCheckpointResponse, UserPreKeyBundlesResponse,
+    DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, DirectChatSuiteId, EcPreKey,
+    EnvelopeType, KemPreKey, MailboxPage, OutgoingEnvelope, OwnChatProfileResponse,
+    PreKeyCountResponse, ProfileEnvelopeContextV1, ProfileEnvelopePurpose, ProfileSuiteId,
+    PutChatProfileRequest, RegisterChatDeviceRequest, RegisterChatDeviceResponse,
+    ReplenishKeysRequest, SealedDeliveryResponseV1, SealedMessageSubmissionV1,
+    SealedOutgoingEnvelopeV1, SendMessagesRequest, UserPreKeyBundlesResponse,
 };
 
 use crate::chat_hub::ChatWsOut;
@@ -65,6 +66,19 @@ fn direct_chat_suite_from_db(value: i16, source: &'static str) -> AppResult<Dire
         ))
     })
 }
+
+fn profile_suite_from_db(value: i16, source: &'static str) -> AppResult<ProfileSuiteId> {
+    let code = u16::try_from(value).map_err(|_| {
+        AppError::internal(format!(
+            "invalid encrypted profile suite {value} stored in {source}"
+        ))
+    })?;
+    ProfileSuiteId::try_from(code).map_err(|_| {
+        AppError::internal(format!(
+            "unknown encrypted profile suite {value} stored in {source}"
+        ))
+    })
+}
 const DEFAULT_DRAIN_LIMIT: i64 = 100;
 /// Max decoded ciphertext bytes per envelope (advertised as `maxContentBytes`).
 /// Kilobyte-scale headroom over a `PreKeySignalMessage` (~1.8 KB with the PQ KEM).
@@ -73,11 +87,9 @@ const WS_TICKET_TTL_SECONDS: i64 = 60;
 const MAX_PREKEY_BATCH: usize = 100;
 pub(crate) const PROFILE_ACCESS_KEY_HEADER: &str = "x-kutup-profile-access-key";
 const PROFILE_ACCESS_KEY_BYTES: usize = 16;
-const PROFILE_NAME_CIPHERTEXT_LENGTHS: [usize; 2] = [12 + 53 + 16, 12 + 257 + 16];
-const MAX_PROFILE_AVATAR_CIPHERTEXT_BYTES: usize = 512 * 1024 + 1 + 12 + 16;
-const WRAPPED_PROFILE_KEY_BYTES: usize = 12 + 32 + 16;
-type PublicProfileRow = (String, i64, i32, String, Option<String>, Vec<u8>);
+type PublicProfileRow = (i16, String, i64, i32, String, Option<String>, Vec<u8>);
 type OwnProfileRow = (
+    i16,
     String,
     i64,
     i32,
@@ -88,55 +100,14 @@ type OwnProfileRow = (
     Vec<u8>,
 );
 
-#[derive(Debug, Default, Deserialize)]
-pub struct TransparencyQuery {
-    #[serde(rename = "transparencyTreeSize")]
-    pub transparency_tree_size: Option<u64>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub struct CheckpointQuery {
-    #[serde(rename = "fromTreeSize")]
-    pub from_tree_size: Option<u64>,
-}
-
 #[derive(Debug, Deserialize)]
-pub struct ManifestRangeQuery {
-    #[serde(rename = "fromVersion")]
-    pub from_version: u64,
-    #[serde(rename = "toVersion")]
-    pub to_version: u64,
-    #[serde(rename = "pageFromVersion")]
-    pub page_from_version: Option<u64>,
-    pub cursor: Option<String>,
-    #[serde(rename = "transparencyTreeSize")]
-    pub transparency_tree_size: Option<u64>,
-}
-
-/// Public operator-signed head for client monitors. This does not touch a user
-/// directory or consume one-time keys.
-#[utoipa::path(
-    get,
-    path = "/api/chat/transparency/checkpoint",
-    tag = "chat",
-    operation_id = "getChatTransparencyCheckpoint",
-    params(("fromTreeSize" = Option<u64>, Query, description = "Previously verified tree size")),
-    responses(
-        (status = 200, description = "Signed head and append-only consistency proof", body = TransparencyCheckpointResponse),
-        (status = 404, description = "Transparency log is empty"),
-        (status = 409, description = "Requested prior head is newer than this view")
-    )
-)]
-pub async fn get_transparency_checkpoint(
-    State(state): State<AppState>,
-    Query(query): Query<CheckpointQuery>,
-) -> AppResult<Response> {
-    let mut tx = state.pool.begin().await?;
-    let response =
-        crate::chat_transparency::prove_checkpoint(&mut tx, query.from_tree_size.unwrap_or(0))
-            .await?;
-    tx.commit().await?;
-    Ok(Json(response).into_response())
+pub struct ManifestHistoryQuery {
+    #[serde(rename = "fromSequence")]
+    pub from_sequence: u64,
+    #[serde(rename = "toSequence")]
+    pub to_sequence: u64,
+    #[serde(rename = "pageFromSequence")]
+    pub page_from_sequence: Option<u64>,
 }
 
 /// Validates a base64 field and returns the decoded bytes (callers that only
@@ -187,8 +158,8 @@ fn envelope_type_from_code(code: i16) -> EnvelopeType {
     }
 }
 
-fn validate_manifest(manifest: &DeviceManifest) -> AppResult<()> {
-    if manifest.version > i64::MAX as u64 {
+fn validate_manifest(manifest: &AccountManifestV1) -> AppResult<()> {
+    if manifest.sequence > i64::MAX as u64 {
         return Err(AppError::bad_request("manifest version is too large"));
     }
     manifest.verify().map_err(AppError::bad_request)?;
@@ -202,7 +173,15 @@ fn validate_manifest(manifest: &DeviceManifest) -> AppResult<()> {
     Ok(())
 }
 
-fn validate_profile(profile: &PutChatProfileRequest) -> AppResult<(Vec<u8>, Vec<u8>)> {
+fn validate_profile(
+    profile: &PutChatProfileRequest,
+    expected_account: &str,
+) -> AppResult<(Vec<u8>, Vec<u8>)> {
+    if profile.suite != ProfileSuiteId::XChaCha20Poly1305V1 || profile.account != expected_account {
+        return Err(AppError::bad_request(
+            "profile suite or account does not match the authenticated account",
+        ));
+    }
     if !canonical_profile_version(&profile.version) {
         return Err(AppError::bad_request(
             "profile version must be lowercase SHA-256 hex",
@@ -216,25 +195,15 @@ fn validate_profile(profile: &PutChatProfileRequest) -> AppResult<(Vec<u8>, Vec<
             "profile sourceDeviceId is out of range",
         ));
     }
-    let name = b64_field("profile name", &profile.name)?;
-    if !PROFILE_NAME_CIPHERTEXT_LENGTHS.contains(&name.len()) {
-        return Err(AppError::bad_request(
-            "encrypted profile name has an invalid padded length",
-        ));
-    }
+    validate_profile_envelope(&profile.name, ProfileEnvelopePurpose::DisplayName, profile)?;
     if let Some(avatar) = profile.avatar.as_deref() {
-        let avatar = b64_field("profile avatar", avatar)?;
-        if avatar.len() < 12 + 16 + 2 || avatar.len() > MAX_PROFILE_AVATAR_CIPHERTEXT_BYTES {
-            return Err(AppError::bad_request(
-                "encrypted profile avatar has an invalid size",
-            ));
-        }
+        validate_profile_envelope(avatar, ProfileEnvelopePurpose::Avatar, profile)?;
     }
-    if b64_field("wrapped profile key", &profile.wrapped_key)?.len() != WRAPPED_PROFILE_KEY_BYTES {
-        return Err(AppError::bad_request(
-            "wrapped profile key has an invalid length",
-        ));
-    }
+    validate_profile_envelope(
+        &profile.wrapped_key,
+        ProfileEnvelopePurpose::WrappedProfileKey,
+        profile,
+    )?;
     let verifier = hex::decode(&profile.access_key_verifier)
         .map_err(|_| AppError::bad_request("profile access verifier must be SHA-256 hex"))?;
     if verifier.len() != 32 || hex::encode(&verifier) != profile.access_key_verifier {
@@ -254,6 +223,64 @@ fn validate_profile(profile: &PutChatProfileRequest) -> AppResult<(Vec<u8>, Vec<
     Ok((verifier, delivery_verifier))
 }
 
+fn validate_profile_envelope(
+    encoded: &str,
+    purpose: ProfileEnvelopePurpose,
+    profile: &PutChatProfileRequest,
+) -> AppResult<()> {
+    validate_profile_envelope_context(
+        encoded,
+        purpose,
+        &profile.account,
+        &profile.version,
+        profile.revision,
+        profile.source_device_id,
+    )
+}
+
+fn validate_profile_envelope_context(
+    encoded: &str,
+    purpose: ProfileEnvelopePurpose,
+    account: &str,
+    version: &str,
+    revision: u64,
+    source_device_id: u32,
+) -> AppResult<()> {
+    let expected =
+        ProfileEnvelopeContextV1::new(purpose, account, version, revision, source_device_id)
+            .map_err(AppError::bad_request)?;
+    let decoded =
+        kutup_chat_proto::decode_profile_envelope(encoded).map_err(AppError::bad_request)?;
+    if decoded.context != expected {
+        return Err(AppError::bad_request(
+            "encrypted profile envelope context does not match",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_public_profile_envelopes(profile: &ChatProfileResponse) -> AppResult<()> {
+    validate_profile_envelope_context(
+        &profile.name,
+        ProfileEnvelopePurpose::DisplayName,
+        &profile.account,
+        &profile.version,
+        profile.revision,
+        profile.source_device_id,
+    )?;
+    if let Some(avatar) = profile.avatar.as_deref() {
+        validate_profile_envelope_context(
+            avatar,
+            ProfileEnvelopePurpose::Avatar,
+            &profile.account,
+            &profile.version,
+            profile.revision,
+            profile.source_device_id,
+        )?;
+    }
+    Ok(())
+}
+
 pub(crate) fn canonical_profile_version(value: &str) -> bool {
     hex::decode(value).is_ok_and(|decoded| decoded.len() == 32 && hex::encode(decoded) == value)
 }
@@ -269,7 +296,8 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 }
 
 /// `POST /api/chat/device` — register this client as a chat device. The server assigns
-/// the lowest free device id (1..=127).
+/// the lowest free device id while enforcing the configured 1..=10 active
+/// device limit.
 #[utoipa::path(
     post,
     path = "/api/chat/device",
@@ -279,7 +307,7 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     responses(
         (status = 200, description = "Registered", body = RegisterChatDeviceResponse),
         (status = 400, description = "Malformed key material"),
-        (status = 409, description = "Device limit (127) reached"),
+        (status = 409, description = "Configured active-device limit reached"),
     ),
     security(("bearerAuth" = []))
 )]
@@ -345,6 +373,9 @@ pub async fn register_device(
     .bind(user_id)
     .fetch_all(&mut *tx)
     .await?;
+    if taken.len() >= state.config.chat_max_active_devices as usize {
+        return Err(AppError::conflict("chat active-device limit reached"));
+    }
     let mut device_id: i32 = 1;
     for t in &taken {
         if *t == device_id {
@@ -399,23 +430,19 @@ pub async fn register_device(
     post,
     path = "/api/chat/manifest",
     tag = "chat",
-    operation_id = "publishChatDeviceManifest",
-    request_body = DeviceManifest,
+    operation_id = "publishChatAccountManifestV1",
+    request_body = AccountManifestV1,
     responses(
-        (status = 200, description = "Published manifest and append proof", body = PublishManifestResponse),
+        (status = 200, description = "Published manifest", body = AccountManifestPublicationV1),
         (status = 400, description = "Malformed or invalid signature"),
         (status = 409, description = "Version, chain, authority, or device-set conflict"),
-    ),
-    params(
-        ("transparencyTreeSize" = Option<u64>, Query, description = "Highest verified local transparency checkpoint")
     ),
     security(("bearerAuth" = []))
 )]
 pub async fn publish_manifest(
     State(state): State<AppState>,
     auth: AuthUser,
-    Query(query): Query<TransparencyQuery>,
-    Json(manifest): Json<DeviceManifest>,
+    Json(manifest): Json<AccountManifestV1>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
     validate_manifest(&manifest)?;
@@ -425,17 +452,50 @@ pub async fn publish_manifest(
     // This is the common serialization point for every device-set mutation and
     // observation. It also locks the first-manifest case, where selecting the
     // (not-yet-existent) manifest row `FOR UPDATE` cannot lock anything.
-    let username: Option<String> =
-        sqlx::query_scalar("SELECT username FROM users WHERE id = $1 FOR UPDATE")
-            .bind(user_id)
-            .fetch_one(&mut *tx)
-            .await?;
+    let account: (Option<String>, String, String, String, String, String) = sqlx::query_as(
+        "SELECT username, public_key, account_authority_public_key,
+                account_authority_key_id, account_incarnation_id, drive_signing_public_key
+         FROM users WHERE id = $1 FOR UPDATE",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let (
+        username,
+        drive_public_key,
+        authority_public_key,
+        authority_key_id,
+        incarnation_id,
+        drive_signing_public_key,
+    ) = account;
     let username = username
         .filter(|username| !username.is_empty())
         .ok_or_else(|| AppError::conflict("account requires a username for chat"))?;
+    let domain = state
+        .federation
+        .as_ref()
+        .map(|federation| federation.server_name())
+        .filter(|domain| !domain.is_empty())
+        .ok_or_else(|| AppError::conflict("account manifests require a federation domain"))?;
+    let canonical_account = format!("{username}@{domain}");
+    if manifest.account != canonical_account {
+        return Err(AppError::conflict(
+            "manifest account does not match the authenticated account",
+        ));
+    }
+    if manifest.drive.hpke_public_key != drive_public_key
+        || manifest.drive.share_signing_public_key != drive_signing_public_key
+        || manifest.self_authority_key != authority_public_key
+        || manifest.authority_key_id != authority_key_id
+        || manifest.incarnation_id != incarnation_id
+    {
+        return Err(AppError::conflict(
+            "manifest identity does not match the registered account identity",
+        ));
+    }
 
-    let current: Option<(i64, String, String)> = sqlx::query_as(
-        "SELECT version, manifest_hash, authority_key_id
+    let current: Option<(i64, String, serde_json::Value)> = sqlx::query_as(
+        "SELECT version, manifest_hash, manifest
          FROM chat_device_manifests WHERE user_id = $1 FOR UPDATE",
     )
     .bind(user_id)
@@ -444,30 +504,37 @@ pub async fn publish_manifest(
 
     let mut idempotent = false;
     match current {
-        None if manifest.version != 1 || manifest.previous_hash.is_some() => {
+        None if manifest.sequence != 1 || manifest.previous_hash.is_some() => {
             return Err(AppError::conflict("first manifest must be version 1"));
         }
         None => {}
-        Some((version, current_hash, authority_key_id)) => {
-            if manifest.version == version as u64 && manifest_hash == current_hash {
+        Some((version, current_hash, current_value)) => {
+            let current_manifest: AccountManifestV1 = serde_json::from_value(current_value)
+                .map_err(|error| AppError::internal(format!("stored manifest: {error}")))?;
+            if manifest.sequence == version as u64 && manifest_hash == current_hash {
                 idempotent = true;
-            } else if manifest.version != version as u64 + 1 {
+            } else if manifest.sequence != version as u64 + 1 {
                 return Err(AppError::conflict(
                     "manifest version must advance by exactly one",
                 ));
             } else if manifest.previous_hash.as_deref() != Some(current_hash.as_str()) {
                 return Err(AppError::conflict("manifest previousHash mismatch"));
             }
-            if manifest.authority_key_id != authority_key_id {
+            if manifest.account != current_manifest.account
+                || manifest.incarnation_id != current_manifest.incarnation_id
+                || manifest.authority_key_id != current_manifest.authority_key_id
+                || manifest.self_authority_key != current_manifest.self_authority_key
+                || manifest.drive != current_manifest.drive
+            {
                 return Err(AppError::conflict(
-                    "account authority rotation is not supported in v1",
+                    "stable account identity cannot change inside one incarnation",
                 ));
             }
         }
     }
 
-    let registered: Vec<(i32, i64, String)> = sqlx::query_as(
-        "SELECT device_id, registration_id, identity_key
+    let registered: Vec<(i32, i16, i64, String)> = sqlx::query_as(
+        "SELECT device_id, suite, registration_id, identity_key
          FROM chat_devices WHERE user_id = $1 ORDER BY device_id FOR SHARE",
     )
     .bind(user_id)
@@ -478,8 +545,9 @@ pub async fn publish_manifest(
     }
     let exact_match = registered.len() == manifest.devices.len()
         && registered.iter().zip(&manifest.devices).all(
-            |((device_id, registration_id, identity_key), declared)| {
+            |((device_id, suite, registration_id, identity_key), declared)| {
                 declared.device_id == *device_id as u32
+                    && declared.direct_chat_suite.as_u16() == *suite as u16
                     && declared.registration_id == *registration_id as u32
                     && declared.identity_key == *identity_key
             },
@@ -491,17 +559,7 @@ pub async fn publish_manifest(
     }
     if idempotent {
         tx.commit().await?;
-        let transparency = prove_manifest_authentication(
-            &state,
-            user_id,
-            query.transparency_tree_size.unwrap_or(0),
-        )
-        .await?;
-        return Ok(Json(PublishManifestResponse {
-            manifest,
-            transparency,
-        })
-        .into_response());
+        return Ok(Json(AccountManifestPublicationV1 { manifest }).into_response());
     }
 
     let value = serde_json::to_value(&manifest)
@@ -518,57 +576,46 @@ pub async fn publish_manifest(
              updated_at = now()",
     )
     .bind(user_id)
-    .bind(manifest.version as i64)
-    .bind(manifest_hash)
+    .bind(manifest.sequence as i64)
+    .bind(&manifest_hash)
     .bind(&manifest.authority_key_id)
     .bind(value)
     .execute(&mut *tx)
     .await?;
-    crate::chat_transparency::append_manifest_update(
-        &mut tx,
-        user_id,
-        &username,
-        &manifest,
-        &state.transparency_authority,
+    sqlx::query(
+        "INSERT INTO chat_device_manifest_history
+             (user_id, incarnation_id, version, manifest_hash, authority_key_id, manifest)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (user_id, incarnation_id, version) DO NOTHING",
     )
+    .bind(user_id)
+    .bind(&manifest.incarnation_id)
+    .bind(manifest.sequence as i64)
+    .bind(&manifest_hash)
+    .bind(&manifest.authority_key_id)
+    .bind(
+        serde_json::to_value(&manifest).map_err(|error| {
+            AppError::internal(format!("serialize chat manifest history: {error}"))
+        })?,
+    )
+    .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    let transparency =
-        prove_manifest_authentication(&state, user_id, query.transparency_tree_size.unwrap_or(0))
-            .await?;
-
-    Ok(Json(PublishManifestResponse {
-        manifest,
-        transparency,
-    })
-    .into_response())
+    Ok(Json(AccountManifestPublicationV1 { manifest }).into_response())
 }
 
-/// Return the operator-authenticated proof for an atomically committed manifest.
-pub(crate) async fn prove_manifest_authentication(
-    state: &AppState,
-    user_id: Uuid,
-    known_tree_size: u64,
-) -> AppResult<kutup_chat_proto::ManifestTransparencyProof> {
-    let mut tx = state.pool.begin().await?;
-    let proof = crate::chat_transparency::prove_manifest(&mut tx, user_id, known_tree_size).await?;
-    tx.commit().await?;
-    Ok(proof)
-}
-
-/// `GET /api/chat/users/{username}/manifest` — fetch a local account's latest
+/// `GET /api/chat/users/{username}/manifest` — fetch an account's latest
 /// signed device manifest without consuming any one-time prekeys.
 #[utoipa::path(
     get,
     path = "/api/chat/users/{username}/manifest",
     tag = "chat",
-    operation_id = "getChatDeviceManifest",
+    operation_id = "getChatAccountManifestV1",
     params(
-        ("username" = String, Path, description = "Local username"),
-        ("syncDeviceId" = Option<u32>, Query, description = "Authenticated current device; preserves its one-time keys for own-device sync")
+        ("username" = String, Path, description = "Local username or canonical federated account")
     ),
     responses(
-        (status = 200, description = "Latest signed manifest", body = DeviceManifest),
+        (status = 200, description = "Latest signed manifest", body = AccountManifestV1),
         (status = 404, description = "Unknown user or no manifest"),
     ),
     security(("bearerAuth" = []))
@@ -578,114 +625,76 @@ pub async fn get_user_manifest(
     _auth: AuthUser,
     Path(username): Path<String>,
 ) -> AppResult<Response> {
+    let address: AccountAddress =
+        username
+            .parse()
+            .map_err(|error: kutup_chat_proto::AddressError| {
+                AppError::bad_request(error.to_string())
+            })?;
+    if let Some(server) = address.server.as_deref() {
+        let federation = state
+            .federation
+            .as_ref()
+            .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
+        if server != federation.server_name() {
+            let manifest = crate::chat_federation::fetch_remote_manifest(&state, &address).await?;
+            return Ok(Json(manifest).into_response());
+        }
+    }
     let value: Option<serde_json::Value> = sqlx::query_scalar(
         "SELECT m.manifest
          FROM chat_device_manifests m
          JOIN users u ON u.id = m.user_id
          WHERE u.username = $1 AND u.is_active = true",
     )
-    .bind(username)
+    .bind(&address.username)
     .fetch_optional(&state.pool)
     .await?;
     let value = value.ok_or_else(|| AppError::not_found("chat manifest not found"))?;
-    let manifest: DeviceManifest = serde_json::from_value(value)
+    let manifest: AccountManifestV1 = serde_json::from_value(value)
+        .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
+    manifest
+        .verify()
         .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
     Ok(Json(manifest).into_response())
 }
 
-/// `GET /api/chat/users/{username}/manifest-proof` — retrieve an exact current
-/// manifest and independently verifiable transparency evidence without
-/// consuming any Signal or MLS one-time key material. Federated accounts are
-/// resolved only through the authenticated same-origin federation proxy.
-#[utoipa::path(
-    get,
-    path = "/api/chat/users/{username}/manifest-proof",
-    tag = "chat",
-    operation_id = "getChatDeviceManifestProof",
-    params(
-        ("username" = String, Path, description = "Canonical local or federated account address"),
-        ("transparencyTreeSize" = Option<u64>, Query, description = "Highest verified checkpoint for the account's transparency log")
-    ),
-    responses(
-        (status = 200, description = "Latest signed manifest and authenticated transparency proof", body = PublishManifestResponse),
-        (status = 404, description = "Unknown account or no manifest"),
-    ),
-    security(("bearerAuth" = []))
-)]
-#[tracing::instrument(name = "chat.transparency.current_manifest", skip_all)]
-pub async fn get_user_manifest_proof(
-    State(state): State<AppState>,
-    _auth: AuthUser,
-    Path(username): Path<String>,
-    Query(query): Query<TransparencyQuery>,
-) -> AppResult<Response> {
-    let address: AccountAddress =
-        username
-            .parse()
-            .map_err(|error: kutup_chat_proto::AddressError| {
-                AppError::bad_request(error.to_string())
-            })?;
-    if let Some(server) = address.server.as_deref() {
-        let federation = state
-            .federation
-            .as_ref()
-            .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
-        if server != federation.server_name() {
-            let response = crate::chat_federation::fetch_remote_manifest_proof(
-                &state,
-                &address,
-                query.transparency_tree_size.unwrap_or(0),
-            )
-            .await?;
-            crate::telemetry::proof_event("current_manifest_remote", "served", 1);
-            return Ok(Json(response).into_response());
-        }
-    }
-
-    let target_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
-            .bind(&address.username)
-            .fetch_optional(&state.pool)
-            .await?;
-    let target_id = target_id.ok_or_else(|| AppError::not_found("chat manifest not found"))?;
-    let response =
-        load_manifest_proof(&state, target_id, query.transparency_tree_size.unwrap_or(0)).await?;
-    crate::telemetry::proof_event("current_manifest_local", "served", 1);
-    Ok(Json(response).into_response())
-}
-
-pub(crate) async fn load_manifest_proof(
+pub(crate) async fn load_account_manifest(
     state: &AppState,
     user_id: Uuid,
-    known_tree_size: u64,
-) -> AppResult<PublishManifestResponse> {
+) -> AppResult<AccountManifestV1> {
     let value: Option<serde_json::Value> =
         sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
             .bind(user_id)
             .fetch_optional(&state.pool)
             .await?;
-    let value = value.ok_or_else(|| AppError::not_found("chat manifest not found"))?;
-    let manifest: DeviceManifest = serde_json::from_value(value)
-        .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
+    let manifest: AccountManifestV1 = serde_json::from_value(
+        value.ok_or_else(|| AppError::not_found("chat manifest not found"))?,
+    )
+    .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
     manifest
         .verify()
         .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
-    let transparency = prove_manifest_authentication(state, user_id, known_tree_size).await?;
-    Ok(PublishManifestResponse {
-        manifest,
-        transparency,
-    })
+    Ok(manifest)
 }
 
-/// Retrieve every skipped manifest version as checkpoint-bound pages of at
-/// most 64 complete, individually included records.
-#[tracing::instrument(name = "chat.transparency.manifest_range", skip_all)]
+/// Retrieve every skipped manifest sequence in pages of at most 64 complete,
+/// individually account-signed records.
+#[tracing::instrument(name = "chat.account_manifest.history", skip_all)]
 pub async fn get_manifest_history(
     State(state): State<AppState>,
     _auth: AuthUser,
     Path(username): Path<String>,
-    Query(query): Query<ManifestRangeQuery>,
+    Query(query): Query<ManifestHistoryQuery>,
 ) -> AppResult<Response> {
+    if query.from_sequence == 0
+        || query.to_sequence < query.from_sequence
+        || query
+            .page_from_sequence
+            .is_some_and(|page| page < query.from_sequence || page > query.to_sequence)
+    {
+        return Err(AppError::bad_request("invalid manifest history bounds"));
+    }
     let address: AccountAddress =
         username
             .parse()
@@ -698,22 +707,10 @@ pub async fn get_manifest_history(
             .as_ref()
             .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
         if server != federation.server_name() {
-            let proof =
-                match crate::chat_federation::fetch_remote_manifest_range(&state, &address, &query)
-                    .await
-                {
-                    Ok(proof) => proof,
-                    Err(error) => {
-                        crate::telemetry::proof_event("manifest_range_remote", "failed", 0);
-                        return Err(error);
-                    }
-                };
-            crate::telemetry::proof_event(
-                "manifest_range_remote",
-                "served",
-                proof.entries.len() as u64,
-            );
-            return Ok(Json(proof).into_response());
+            let page =
+                crate::chat_federation::fetch_remote_manifest_history(&state, &address, &query)
+                    .await?;
+            return Ok(Json(page).into_response());
         }
     }
     let target_id: Option<Uuid> =
@@ -722,34 +719,58 @@ pub async fn get_manifest_history(
             .fetch_optional(&state.pool)
             .await?;
     let target_id = target_id.ok_or_else(|| AppError::not_found("chat manifest not found"))?;
-    let account = if address.server.is_some() {
-        address.canonical()
-    } else {
-        address.username.clone()
-    };
-    let page_from = query.page_from_version.unwrap_or(query.from_version);
-    let mut tx = state.pool.begin().await?;
-    let proof = match crate::chat_transparency::prove_manifest_range(
-        &mut tx,
-        target_id,
-        &account,
-        query.from_version,
-        query.to_version,
-        page_from,
-        query.cursor.as_deref(),
-        query.transparency_tree_size.unwrap_or(0),
+    let incarnation_id: Option<String> = sqlx::query_scalar(
+        "SELECT manifest->>'incarnationId' FROM chat_device_manifests WHERE user_id = $1",
     )
-    .await
-    {
-        Ok(proof) => proof,
-        Err(error) => {
-            crate::telemetry::proof_event("manifest_range_local", "failed", 0);
-            return Err(error);
-        }
+    .bind(target_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let incarnation_id =
+        incarnation_id.ok_or_else(|| AppError::not_found("chat manifest not found"))?;
+    let page_from = query.page_from_sequence.unwrap_or(query.from_sequence);
+    let values: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT manifest FROM chat_device_manifest_history
+         WHERE user_id = $1 AND incarnation_id = $2 AND version BETWEEN $3 AND $4
+         ORDER BY version LIMIT 65",
+    )
+    .bind(target_id)
+    .bind(incarnation_id)
+    .bind(page_from as i64)
+    .bind(query.to_sequence as i64)
+    .fetch_all(&state.pool)
+    .await?;
+    if values.is_empty() {
+        return Err(AppError::not_found("chat manifest history not found"));
+    }
+    let mut manifests = values
+        .into_iter()
+        .map(|value| {
+            serde_json::from_value::<AccountManifestV1>(value)
+                .map_err(|error| AppError::internal(format!("stored chat manifest: {error}")))
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    let next_sequence = if manifests.len() > 64 {
+        manifests.truncate(64);
+        Some(
+            manifests
+                .last()
+                .expect("nonempty bounded page")
+                .sequence
+                .checked_add(1)
+                .ok_or_else(|| AppError::internal("manifest sequence exhausted"))?,
+        )
+    } else {
+        None
     };
-    tx.commit().await?;
-    crate::telemetry::proof_event("manifest_range_local", "served", proof.entries.len() as u64);
-    Ok(Json::<ManifestUpdateRangeProofV1>(proof).into_response())
+    let page = AccountManifestHistoryPageV1 {
+        account: manifests[0].account.clone(),
+        from_sequence: page_from,
+        to_sequence: query.to_sequence,
+        manifests,
+        next_sequence,
+    };
+    page.validate().map_err(AppError::internal)?;
+    Ok(Json(page).into_response())
 }
 
 /// `PUT /api/chat/profile` — replace the caller's current opaque encrypted
@@ -775,12 +796,23 @@ pub async fn put_profile(
     Json(profile): Json<PutChatProfileRequest>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
-    let (verifier, delivery_verifier) = validate_profile(&profile)?;
     let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
+    let username: Option<String> =
+        sqlx::query_scalar("SELECT username FROM users WHERE id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let username = username
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::conflict("account requires a username for chat"))?;
+    let domain = state
+        .federation
+        .as_ref()
+        .map(|federation| federation.server_name())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::conflict("encrypted profiles require a federation domain"))?;
+    let canonical_account = format!("{username}@{domain}");
+    let (verifier, delivery_verifier) = validate_profile(&profile, &canonical_account)?;
     let device_exists: Option<i32> =
         sqlx::query_scalar("SELECT 1 FROM chat_devices WHERE user_id = $1 AND device_id = $2")
             .bind(user_id)
@@ -793,7 +825,7 @@ pub async fn put_profile(
         ));
     }
 
-    let current = load_own_profile_in(&mut tx, user_id, true).await?;
+    let current = load_own_profile_in(&mut tx, user_id, &canonical_account, true).await?;
     if let Some(current) = current {
         let incoming_order = (profile.revision, profile.source_device_id);
         let current_order = (current.revision, current.source_device_id);
@@ -823,10 +855,11 @@ pub async fn put_profile(
 
     sqlx::query(
         "INSERT INTO chat_profiles
-             (user_id, version, revision, source_device_id, name_ciphertext,
+             (user_id, suite, version, revision, source_device_id, name_ciphertext,
               avatar_ciphertext, wrapped_key, access_key_verifier, is_current)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true)
          ON CONFLICT (user_id, version) DO UPDATE SET
+             suite = EXCLUDED.suite,
              revision = EXCLUDED.revision,
              source_device_id = EXCLUDED.source_device_id,
              name_ciphertext = EXCLUDED.name_ciphertext,
@@ -837,6 +870,7 @@ pub async fn put_profile(
              updated_at = now()",
     )
     .bind(user_id)
+    .bind(profile.suite.as_u16() as i16)
     .bind(&profile.version)
     .bind(profile.revision as i64)
     .bind(profile.source_device_id as i32)
@@ -881,8 +915,22 @@ pub async fn put_profile(
 )]
 pub async fn get_own_profile(State(state): State<AppState>, auth: AuthUser) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
+    let username: Option<String> = sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(&state.pool)
+        .await?;
+    let username = username
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::conflict("account requires a username for chat"))?;
+    let domain = state
+        .federation
+        .as_ref()
+        .map(|federation| federation.server_name())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::conflict("encrypted profiles require a federation domain"))?;
+    let canonical_account = format!("{username}@{domain}");
     let mut tx = state.pool.begin().await?;
-    let profile = load_own_profile_in(&mut tx, user_id, false)
+    let profile = load_own_profile_in(&mut tx, user_id, &canonical_account, false)
         .await?
         .ok_or_else(|| AppError::not_found("chat profile not found"))?;
     tx.commit().await?;
@@ -966,7 +1014,7 @@ pub(crate) async fn load_public_profile(
     access_key: &[u8],
 ) -> AppResult<Option<ChatProfileResponse>> {
     let row: Option<PublicProfileRow> = sqlx::query_as(
-        "SELECT p.version, p.revision, p.source_device_id, p.name_ciphertext,
+        "SELECT p.suite, p.version, p.revision, p.source_device_id, p.name_ciphertext,
                 p.avatar_ciphertext, p.access_key_verifier
          FROM chat_profiles p
          JOIN users u ON u.id = p.user_id
@@ -976,30 +1024,43 @@ pub(crate) async fn load_public_profile(
     .bind(version)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((version, revision, source_device_id, name, avatar, verifier)) = row else {
+    let Some((suite, version, revision, source_device_id, name, avatar, verifier)) = row else {
         return Ok(None);
     };
     let presented = Sha256::digest(access_key);
     if !constant_time_eq(&verifier, &presented) {
         return Ok(None);
     }
-    Ok(Some(ChatProfileResponse {
+    let domain = state
+        .federation
+        .as_ref()
+        .map(|federation| federation.server_name())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::internal("encrypted profile federation domain is unavailable"))?;
+    let account = format!("{username}@{domain}");
+    let suite = profile_suite_from_db(suite, "chat_profiles")?;
+    let response = ChatProfileResponse {
+        suite,
+        account,
         version,
         revision: revision as u64,
         source_device_id: source_device_id as u32,
         name,
         avatar,
-    }))
+    };
+    validate_public_profile_envelopes(&response)?;
+    Ok(Some(response))
 }
 
 async fn load_own_profile_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
+    account: &str,
     lock: bool,
 ) -> AppResult<Option<OwnChatProfileResponse>> {
     let suffix = if lock { " FOR UPDATE" } else { "" };
     let sql = format!(
-        "SELECT p.version, p.revision, p.source_device_id, p.name_ciphertext,
+        "SELECT p.suite, p.version, p.revision, p.source_device_id, p.name_ciphertext,
                 p.avatar_ciphertext, p.wrapped_key, p.access_key_verifier,
                 c.capability_hash
          FROM chat_profiles p
@@ -1011,8 +1072,9 @@ async fn load_own_profile_in(
         .bind(user_id)
         .fetch_optional(&mut **tx)
         .await?;
-    Ok(row.map(
+    row.map(
         |(
+            suite,
             version,
             revision,
             source_device_id,
@@ -1022,7 +1084,9 @@ async fn load_own_profile_in(
             verifier,
             delivery_verifier,
         )| {
-            PutChatProfileRequest {
+            let profile = PutChatProfileRequest {
+                suite: profile_suite_from_db(suite, "chat_profiles")?,
+                account: account.to_string(),
                 version,
                 revision: revision as u64,
                 source_device_id: source_device_id as u32,
@@ -1031,9 +1095,24 @@ async fn load_own_profile_in(
                 wrapped_key,
                 access_key_verifier: hex::encode(verifier),
                 delivery_capability_verifier: hex::encode(delivery_verifier),
+            };
+            validate_profile_envelope(
+                &profile.name,
+                ProfileEnvelopePurpose::DisplayName,
+                &profile,
+            )?;
+            if let Some(avatar) = profile.avatar.as_deref() {
+                validate_profile_envelope(avatar, ProfileEnvelopePurpose::Avatar, &profile)?;
             }
+            validate_profile_envelope(
+                &profile.wrapped_key,
+                ProfileEnvelopePurpose::WrappedProfileKey,
+                &profile,
+            )?;
+            Ok(profile)
         },
-    ))
+    )
+    .transpose()
 }
 
 async fn insert_ec_pool(
@@ -1179,10 +1258,6 @@ pub struct BundleQuery {
     /// verification, but its one-time keys are not consumed.
     #[serde(rename = "syncDeviceId")]
     pub(crate) sync_device_id: Option<i32>,
-    /// Prior verified transparency checkpoint. The response carries an RFC
-    /// 6962 consistency proof from this size to its current checkpoint.
-    #[serde(rename = "transparencyTreeSize")]
-    pub(crate) transparency_tree_size: Option<u64>,
 }
 
 /// Asserts the (user, device) pair exists; used by the device-scoped endpoints.
@@ -1333,8 +1408,7 @@ pub async fn prekey_count(
     operation_id = "chatUserPreKeyBundles",
     params(
         ("username" = String, Path, description = "Local or canonical federated username"),
-        ("syncDeviceId" = Option<u32>, Query, description = "Authenticated current device for own-account sync"),
-        ("transparencyTreeSize" = Option<u64>, Query, description = "Highest verified homeserver transparency checkpoint; zero on first observation")
+        ("syncDeviceId" = Option<u32>, Query, description = "Authenticated current device for own-account sync")
     ),
     responses(
         (status = 200, description = "Bundles for all devices", body = UserPreKeyBundlesResponse),
@@ -1371,12 +1445,7 @@ pub async fn get_user_bundles(
                     "linked-device key fetch is limited to the local account",
                 ));
             }
-            let bundles = crate::chat_federation::fetch_remote_bundles(
-                &state,
-                &address,
-                query.transparency_tree_size.unwrap_or(0),
-            )
-            .await?;
+            let bundles = crate::chat_federation::fetch_remote_bundles(&state, &address).await?;
             return Ok(Json(bundles).into_response());
         }
     }
@@ -1395,13 +1464,19 @@ pub async fn get_user_bundles(
         }
     }
 
+    let local_domain = state
+        .federation
+        .as_ref()
+        .map(|federation| federation.server_name())
+        .filter(|domain| !domain.is_empty())
+        .ok_or_else(|| AppError::conflict("account manifests require a federation domain"))?;
+    let response_account = format!("{}@{local_domain}", address.username);
     let bundles = load_user_bundles(
         &state,
         &address.username,
-        &address.canonical(),
+        &response_account,
         query.sync_device_id,
         true,
-        query.transparency_tree_size.unwrap_or(0),
         None,
     )
     .await?;
@@ -1434,13 +1509,19 @@ pub async fn get_anonymous_bundles(
             return Ok(Json(bundles).into_response());
         }
     }
+    let local_domain = state
+        .federation
+        .as_ref()
+        .map(|federation| federation.server_name())
+        .filter(|domain| !domain.is_empty())
+        .ok_or_else(|| AppError::not_found("sealed delivery unavailable"))?;
+    let response_account = format!("{}@{local_domain}", address.username);
     let bundles = load_user_bundles(
         &state,
         &address.username,
-        &address.canonical(),
+        &response_account,
         None,
         true,
-        request.transparency_tree_size,
         Some(&capability_hash),
     )
     .await?;
@@ -1498,7 +1579,6 @@ pub(crate) async fn load_user_bundles(
     response_username: &str,
     sync_device_id: Option<i32>,
     consume_one_time: bool,
-    transparency_tree_size: u64,
     delivery_capability: Option<&[u8; 32]>,
 ) -> AppResult<UserPreKeyBundlesResponse> {
     let mut tx = state.pool.begin().await?;
@@ -1661,21 +1741,12 @@ pub(crate) async fn load_user_bundles(
         .map(serde_json::from_value)
         .transpose()
         .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
-    let transparency = if manifest.is_some() {
-        Some(
-            crate::chat_transparency::prove_manifest(&mut tx, target_id, transparency_tree_size)
-                .await?,
-        )
-    } else {
-        None
-    };
     tx.commit().await?;
 
     Ok(UserPreKeyBundlesResponse {
         username: response_username.to_string(),
         devices: bundles,
         manifest,
-        transparency,
     })
 }
 
@@ -2574,14 +2645,38 @@ async fn handle_connection(state: AppState, socket: WebSocket, user_id: Uuid, de
 mod tests {
     use super::*;
 
+    const PROFILE_TEST_ACCOUNT: &str = "alice@example.test";
+
+    fn opaque_profile_envelope(purpose: ProfileEnvelopePurpose, ciphertext_len: usize) -> String {
+        let context =
+            ProfileEnvelopeContextV1::new(purpose, PROFILE_TEST_ACCOUNT, &"01".repeat(32), 1, 1)
+                .unwrap();
+        let mut envelope = kutup_chat_proto::encode_profile_envelope_header(
+            &context,
+            &[4; 24],
+            ciphertext_len as u32,
+        )
+        .unwrap();
+        envelope.extend(vec![0u8; ciphertext_len]);
+        STANDARD.encode(envelope)
+    }
+
     fn valid_profile() -> PutChatProfileRequest {
         PutChatProfileRequest {
+            suite: ProfileSuiteId::XChaCha20Poly1305V1,
+            account: PROFILE_TEST_ACCOUNT.into(),
             version: "01".repeat(32),
             revision: 1,
             source_device_id: 1,
-            name: STANDARD.encode(vec![0u8; PROFILE_NAME_CIPHERTEXT_LENGTHS[0]]),
+            name: opaque_profile_envelope(
+                ProfileEnvelopePurpose::DisplayName,
+                kutup_chat_proto::PROFILE_NAME_PADDED_LENGTHS[0] + 16,
+            ),
             avatar: None,
-            wrapped_key: STANDARD.encode(vec![0u8; WRAPPED_PROFILE_KEY_BYTES]),
+            wrapped_key: opaque_profile_envelope(
+                ProfileEnvelopePurpose::WrappedProfileKey,
+                32 + 16,
+            ),
             access_key_verifier: "02".repeat(32),
             delivery_capability_verifier: "03".repeat(32),
         }
@@ -2643,22 +2738,31 @@ mod tests {
     fn encrypted_profile_validation_accepts_only_bounded_opaque_fields() {
         let profile = valid_profile();
         assert_eq!(
-            validate_profile(&profile).unwrap(),
+            validate_profile(&profile, PROFILE_TEST_ACCOUNT).unwrap(),
             (vec![2u8; 32], vec![3u8; 32])
         );
 
         let mut oversized_avatar = profile.clone();
-        oversized_avatar.avatar =
-            Some(STANDARD.encode(vec![0u8; MAX_PROFILE_AVATAR_CIPHERTEXT_BYTES + 1]));
+        let valid_avatar = opaque_profile_envelope(
+            ProfileEnvelopePurpose::Avatar,
+            kutup_chat_proto::MAX_PROFILE_AVATAR_BYTES + 1 + 16,
+        );
+        let mut decoded_avatar = STANDARD.decode(valid_avatar).unwrap();
+        decoded_avatar.push(0);
+        oversized_avatar.avatar = Some(STANDARD.encode(decoded_avatar));
         assert_eq!(
-            validate_profile(&oversized_avatar).unwrap_err().status,
+            validate_profile(&oversized_avatar, PROFILE_TEST_ACCOUNT)
+                .unwrap_err()
+                .status,
             StatusCode::BAD_REQUEST
         );
 
         let mut noncanonical_version = profile;
         noncanonical_version.version = "AA".repeat(32);
         assert_eq!(
-            validate_profile(&noncanonical_version).unwrap_err().status,
+            validate_profile(&noncanonical_version, PROFILE_TEST_ACCOUNT)
+                .unwrap_err()
+                .status,
             StatusCode::BAD_REQUEST
         );
     }

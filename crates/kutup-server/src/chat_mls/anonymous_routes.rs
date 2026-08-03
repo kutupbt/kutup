@@ -47,7 +47,6 @@ pub(crate) async fn get_anonymous_key_packages(
             .as_deref()
             .ok_or_else(unavailable)?;
         authenticated_remote_policy(&state, destination).await?;
-        crate::chat_transparency_monitor::verify_before_remote_use(&state, destination).await?;
         let body = serde_json::to_vec(&request)
             .map_err(|error| AppError::internal(format!("serialize MLS request: {error}")))?;
         let response = state
@@ -100,14 +99,6 @@ pub(crate) async fn get_anonymous_key_packages(
                 "remote MLS KeyPackage response names another recipient",
             ));
         }
-        if bundles.transparency.consistency_from
-            != request.known_tree_size().map_err(AppError::bad_request)?
-        {
-            return Err(AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "remote MLS KeyPackage proof starts at the wrong checkpoint",
-            ));
-        }
         return Ok(Json(bundles).into_response());
     }
     let response =
@@ -127,13 +118,8 @@ pub(super) async fn claim_local_anonymous_key_packages(
     let (user_id, manifest_version) = repository
         .authorize_anonymous_key_package_claim(&username, &capability, limits, now)
         .await?;
-    let publication = crate::handlers::chat::load_manifest_proof(
-        state,
-        user_id,
-        request.known_tree_size().map_err(AppError::bad_request)?,
-    )
-    .await?;
-    if publication.manifest.version != manifest_version {
+    let manifest = crate::handlers::chat::load_account_manifest(state, user_id).await?;
+    if manifest.sequence != manifest_version {
         return Err(unavailable());
     }
     let key_packages = repository
@@ -141,8 +127,7 @@ pub(super) async fn claim_local_anonymous_key_packages(
         .await?;
     let response = MlsKeyPackageBundleV1 {
         recipient: request.recipient.clone(),
-        manifest: publication.manifest,
-        transparency: publication.transparency,
+        manifest,
         key_packages,
     };
     response

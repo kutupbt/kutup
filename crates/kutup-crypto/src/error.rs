@@ -6,7 +6,7 @@ use thiserror::Error;
 ///
 /// Authentication failures are deliberately coarse (`AuthFailed`) so callers
 /// cannot distinguish *why* a decryption failed — mirroring the Go code, which
-/// returns a single opaque "decryption failed" for secretbox/sealed-box/asset.
+/// returns a single opaque authentication failure for every typed envelope.
 #[derive(Debug, Error)]
 pub enum CryptoError {
     /// A structurally valid value is not permitted by the selected suite.

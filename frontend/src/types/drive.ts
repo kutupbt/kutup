@@ -3,10 +3,17 @@
 export interface Collection {
   id: string
   ownerUserId: string
-  encryptedName: string
-  nameNonce: string
-  encryptedKey: string
-  encryptedKeyNonce: string
+  nameEnvelope: string
+  ownerKeyEnvelope?: string
+  namedShareEnvelope?: string
+  keyEpoch: number
+  nameRevision: number
+  epochStatement: string
+  epochStatementHash: string
+  ownerAccount?: string
+  ownerIncarnationId?: string
+  ownerDriveSigningPublicKey?: string
+  ownerAuthorityPublicKey?: string
   parentCollectionId: string | null
   color: string | null
   // Server privilege fields
@@ -26,10 +33,10 @@ export interface Collection {
 export interface DecryptedFile {
   id: string
   collectionId: string
-  encryptedMetadata: string
-  metadataNonce: string
-  encryptedFileKey: string
-  fileKeyNonce: string
+  metadataEnvelope: string
+  fileKeyEnvelope: string
+  keyEpoch: number
+  metadataRevision: number
   encryptedSizeBytes: number
   createdAt: string
   // Decrypted client-side

@@ -18,7 +18,7 @@ use uuid::Uuid;
 use super::authority_bootstrap::bounded_history_chunks;
 use super::{
     active_policy, authenticated_remote_policy, notify_mls_conversation_mailbox,
-    signed_federation_error, signed_federation_json, MlsRepository,
+    signed_federation_error, signed_federation_json, CommitControlContext, MlsRepository,
 };
 use crate::error::{AppError, AppResult};
 use crate::federation::FederationRequestSpec;
@@ -467,25 +467,29 @@ async fn materialize_participant_bootstrap(
     for request in &history {
         MlsRepository::new(state.pool.clone())
             .commit_control_block(
-                local_domain,
-                None,
-                Some(origin),
                 request,
-                None,
-                policy.maximum_group_members,
-                true,
+                CommitControlContext {
+                    local_domain,
+                    local_submitter: None,
+                    federated_origin: Some(origin),
+                    incoming_membership_delivery: None,
+                    maximum_group_members: policy.maximum_group_members,
+                    verified_history_replay: true,
+                },
             )
             .await?;
     }
     MlsRepository::new(state.pool.clone())
         .commit_control_block(
-            local_domain,
-            None,
-            Some(origin),
             &first.descriptor.transition_request,
-            Some(delivery),
-            policy.maximum_group_members,
-            false,
+            CommitControlContext {
+                local_domain,
+                local_submitter: None,
+                federated_origin: Some(origin),
+                incoming_membership_delivery: Some(delivery),
+                maximum_group_members: policy.maximum_group_members,
+                verified_history_replay: false,
+            },
         )
         .await?;
     sqlx::query(

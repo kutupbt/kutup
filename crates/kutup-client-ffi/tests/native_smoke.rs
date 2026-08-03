@@ -2,30 +2,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
-use ed25519_dalek::SigningKey;
-use kutup_chat_proto::{
-    hash_transparency_map_checkpoint, hash_transparency_map_leaf, hash_transparency_node,
-    map_key_bit, transparency_map_empty_hashes, transparency_map_key, DeviceManifest,
-    ManifestTransparencyLeaf, ManifestTransparencyMapProof, ManifestTransparencyProof,
-    PublishManifestResponse, TransparencyCheckpoint,
-};
+use kutup_chat_proto::{AccountManifestPublicationV1, AccountManifestV1};
 use kutup_client_ffi::{
     open_native_chat_client, ChatHttpClient, ChatHttpMethod, ChatHttpRequest, ChatHttpResponse,
-    ChatTransparencyPolicy, ChatTransparencyScopePolicy, KutupChatError,
+    KutupChatError,
 };
-
-fn transparency_policy() -> ChatTransparencyPolicy {
-    let key = SigningKey::from_bytes(&[93; 32]).verifying_key();
-    ChatTransparencyPolicy {
-        scopes: vec![ChatTransparencyScopePolicy {
-            scope: "local".into(),
-            operator_key_id: kutup_chat_proto::transparency_signing_key_id(&key),
-            operator_public_key: STANDARD.encode(key.as_bytes()),
-        }],
-    }
-}
 
 struct MockHttp {
     registrations: AtomicUsize,
@@ -40,59 +21,6 @@ impl MockHttp {
             registration: Mutex::new(None),
             manifest: Mutex::new(None),
         }
-    }
-}
-
-fn transparency_proof(
-    username: &str,
-    manifest: &DeviceManifest,
-    consistency_from: u64,
-) -> ManifestTransparencyProof {
-    let hex_hash = |hash: [u8; 32]| {
-        hash.iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    };
-    let leaf = ManifestTransparencyLeaf::from_manifest(username, manifest).unwrap();
-    let key = transparency_map_key(username).unwrap();
-    let defaults = transparency_map_empty_hashes();
-    let mut map_root = hash_transparency_map_leaf(&leaf).unwrap();
-    for depth in (0..256).rev() {
-        map_root = if map_key_bit(&key, depth) == 0 {
-            hash_transparency_node(map_root, defaults[depth + 1])
-        } else {
-            hash_transparency_node(defaults[depth + 1], map_root)
-        };
-    }
-    let event_hash = leaf.hash().unwrap();
-    let checkpoint_hash = hash_transparency_map_checkpoint(map_root);
-    let checkpoint = TransparencyCheckpoint {
-        log_id: "01".repeat(32),
-        tree_size: 2,
-        root_hash: hex_hash(hash_transparency_node(event_hash, checkpoint_hash)),
-    };
-    let map_root = hex_hash(map_root);
-    let authentication = kutup_chat_proto::TransparencyCheckpointAuthentication::sign(
-        &checkpoint,
-        &map_root,
-        1_752_688_000,
-        &SigningKey::from_bytes(&[93; 32]),
-    )
-    .unwrap();
-    ManifestTransparencyProof {
-        leaf_index: 0,
-        checkpoint,
-        leaf,
-        inclusion: vec![hex_hash(checkpoint_hash)],
-        consistency_from,
-        consistency: Vec::new(),
-        map: ManifestTransparencyMapProof {
-            root_hash: map_root,
-            checkpoint_leaf_index: 1,
-            checkpoint_inclusion: vec![hex_hash(event_hash)],
-            siblings: Vec::new(),
-        },
-        authentication,
     }
 }
 
@@ -124,26 +52,19 @@ impl ChatHttpClient for MockHttp {
                     },
                 })
             }
-            (ChatHttpMethod::Post, path) if path.starts_with("/chat/manifest?") => {
+            (ChatHttpMethod::Post, "/chat/manifest") => {
                 let body_json = request.body_json.expect("manifest body");
                 *self.manifest.lock().unwrap() = Some(body_json.clone());
-                let manifest: DeviceManifest = serde_json::from_str(&body_json).unwrap();
-                let consistency_from = path.rsplit('=').next().unwrap().parse::<u64>().unwrap();
-                let response = PublishManifestResponse {
-                    transparency: transparency_proof("alice", &manifest, consistency_from),
-                    manifest,
-                };
+                let manifest: AccountManifestV1 = serde_json::from_str(&body_json).unwrap();
+                let response = AccountManifestPublicationV1 { manifest };
                 Ok(ChatHttpResponse {
                     status: 200,
                     body_json: serde_json::to_string(&response).unwrap(),
                 })
             }
-            (ChatHttpMethod::Get, path)
-                if path
-                    .starts_with("/chat/users/alice/keys?syncDeviceId=7&transparencyTreeSize=") =>
-            {
+            (ChatHttpMethod::Get, "/chat/users/alice/keys?syncDeviceId=7") => {
                 let registration = self.registration.lock().unwrap().clone().unwrap();
-                let manifest: DeviceManifest = serde_json::from_str(
+                let manifest: AccountManifestV1 = serde_json::from_str(
                     self.manifest
                         .lock()
                         .unwrap()
@@ -151,12 +72,10 @@ impl ChatHttpClient for MockHttp {
                         .expect("published manifest"),
                 )
                 .unwrap();
-                let consistency_from = path.rsplit('=').next().unwrap().parse::<u64>().unwrap();
-                let transparency = transparency_proof("alice", &manifest, consistency_from);
                 Ok(ChatHttpResponse {
                     status: 200,
                     body_json: serde_json::json!({
-                        "username": "alice",
+                        "username": "alice@chat.test",
                         "devices": [{
                             "deviceId": 7,
                             "registrationId": registration["registrationId"],
@@ -165,8 +84,7 @@ impl ChatHttpClient for MockHttp {
                             "signedPreKey": registration["signedPreKey"],
                             "kyberPreKey": registration["lastResortKyberPreKey"]
                         }],
-                        "manifest": manifest,
-                        "transparency": transparency
+                        "manifest": manifest
                     })
                     .to_string(),
                 })
@@ -191,7 +109,6 @@ fn encrypted_install_registers_once_and_reopens() {
         "alice".into(),
         "chat.test".into(),
         vec![9; 32],
-        transparency_policy(),
         http.clone(),
     ))
     .unwrap();
@@ -229,7 +146,6 @@ fn encrypted_install_registers_once_and_reopens() {
         "alice".into(),
         "chat.test".into(),
         vec![9; 32],
-        transparency_policy(),
         http.clone(),
     ));
     assert!(matches!(wrong_key, Err(KutupChatError::Storage { .. })));
@@ -240,7 +156,6 @@ fn encrypted_install_registers_once_and_reopens() {
         "alice".into(),
         "chat.test".into(),
         vec![9; 32],
-        transparency_policy(),
         http.clone(),
     ))
     .unwrap();

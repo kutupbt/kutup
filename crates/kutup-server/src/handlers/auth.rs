@@ -43,13 +43,14 @@ pub struct RegisterRequest {
     email: String,
     username: String,
     login_key: String,
-    encrypted_master_key: String,
-    master_key_nonce: String,
-    encrypted_recovery_key: String,
-    recovery_key_nonce: String,
-    encrypted_private_key: String,
-    private_key_nonce: String,
+    master_key_envelope: String,
+    recovery_key_envelope: String,
+    drive_private_key_envelope: String,
     public_key: String,
+    account_authority_public_key: String,
+    account_authority_key_id: String,
+    account_incarnation_id: String,
+    drive_signing_public_key: String,
     account_protection_suite: u16,
     account_protection_salt: String,
     argon_memory_kib: u32,
@@ -74,10 +75,8 @@ pub struct LoginResponse {
     access_token: String,
     user_id: String,
     username: String,
-    encrypted_master_key: String,
-    master_key_nonce: String,
-    encrypted_private_key: String,
-    private_key_nonce: String,
+    master_key_envelope: String,
+    drive_private_key_envelope: String,
     public_key: String,
     is_admin: bool,
     storage_quota_bytes: i64,
@@ -105,8 +104,7 @@ pub struct TwoFALoginRequest {
 pub struct RecoverRequest {
     email: String,
     new_login_key: String,
-    new_encrypted_master_key: String,
-    new_master_key_nonce: String,
+    new_master_key_envelope: String,
     new_account_protection_suite: u16,
     new_account_protection_salt: String,
     new_argon_memory_kib: u32,
@@ -196,6 +194,39 @@ fn validate_account_protection(
     .map_err(|_| AppError::bad_request("unsupported Argon2id parameters"))
 }
 
+fn validate_account_envelope(
+    value: &str,
+    purpose: kutup_crypto::account_envelope::AccountEnvelopePurpose,
+    email: &str,
+    field: &str,
+) -> AppResult<()> {
+    let envelope = kutup_crypto::account_envelope::decode_canonical_b64(value)
+        .map_err(|_| AppError::bad_request(format!("invalid {field} encoding")))?;
+    kutup_crypto::account_envelope::validate(&envelope, purpose, email, 32)
+        .map_err(|_| AppError::bad_request(format!("invalid {field} binding")))
+}
+
+fn validate_account_identity(req: &RegisterRequest) -> AppResult<()> {
+    let authority = decode_canonical_base64_exact(
+        &req.account_authority_public_key,
+        32,
+        "accountAuthorityPublicKey",
+    )?;
+    let authority: [u8; 32] = authority.try_into().expect("validated length");
+    decode_canonical_base64_exact(&req.public_key, 32, "publicKey")?;
+    decode_canonical_base64_exact(&req.drive_signing_public_key, 32, "driveSigningPublicKey")?;
+    if req.account_authority_key_id
+        != kutup_crypto::identity::authority_key_id_from_public(&authority)
+        || req.account_incarnation_id
+            != kutup_crypto::identity::incarnation_id_from_authority_public(&authority)
+    {
+        return Err(AppError::bad_request(
+            "account identity identifiers do not match the authority key",
+        ));
+    }
+    Ok(())
+}
+
 fn hash_recovery_proof(proof: &str) -> AppResult<String> {
     if proof.is_empty() {
         return Err(AppError::bad_request("recoveryProof is required"));
@@ -256,6 +287,7 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
             .chat_device_expiry_days
             .try_into()
             .unwrap_or(u32::MAX),
+        maximum_active_devices: state.config.chat_max_active_devices,
         server_name: federation_enabled.then(|| {
             state
                 .federation
@@ -265,8 +297,6 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
                 .to_string()
         }),
         federation: federation_enabled,
-        transparency_operator_key_id: Some(state.transparency_authority.key_id()),
-        transparency_operator_public_key: Some(state.transparency_authority.public_key_base64()),
         sealed_sender: sealed_sender_policy.is_some(),
         mls_groups,
         sealed_sender_policy,
@@ -316,34 +346,56 @@ pub async fn register(
         req.argon_iterations,
         req.argon_parallelism,
     )?;
+    use kutup_crypto::account_envelope::AccountEnvelopePurpose;
+    validate_account_envelope(
+        &req.master_key_envelope,
+        AccountEnvelopePurpose::PasswordMasterKey,
+        &req.email,
+        "masterKeyEnvelope",
+    )?;
+    validate_account_envelope(
+        &req.recovery_key_envelope,
+        AccountEnvelopePurpose::RecoveryMasterKey,
+        &req.email,
+        "recoveryKeyEnvelope",
+    )?;
+    validate_account_envelope(
+        &req.drive_private_key_envelope,
+        AccountEnvelopePurpose::DriveHpkePrivateKey,
+        &req.email,
+        "drivePrivateKeyEnvelope",
+    )?;
+    validate_account_identity(&req)?;
 
     let login_key_bytes = decode_canonical_base64_exact(&req.login_key, 32, "loginKey")?;
     let hash =
         bcrypt::hash(login_key_bytes, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))?;
 
     // This is an HKDF-derived authorization proof, never the recovery entropy
-    // that opens encryptedRecoveryKey.
+    // that opens recoveryKeyEnvelope.
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
 
     let res = sqlx::query(
         r#"INSERT INTO users (
-            email, username, encrypted_master_key, master_key_nonce,
-            encrypted_recovery_key, recovery_key_nonce,
-            encrypted_private_key, private_key_nonce,
-            public_key, account_protection_suite, account_protection_salt,
+            email, username, master_key_envelope, recovery_key_envelope,
+            drive_private_key_envelope,
+            public_key, account_authority_public_key, account_authority_key_id,
+            account_incarnation_id, drive_signing_public_key,
+            account_protection_suite, account_protection_salt,
             argon_memory_kib, argon_iterations, argon_parallelism,
             login_key_hash, recovery_key_verifier
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)"#,
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)"#,
     )
     .bind(&req.email)
     .bind(&req.username)
-    .bind(&req.encrypted_master_key)
-    .bind(&req.master_key_nonce)
-    .bind(&req.encrypted_recovery_key)
-    .bind(&req.recovery_key_nonce)
-    .bind(&req.encrypted_private_key)
-    .bind(&req.private_key_nonce)
+    .bind(&req.master_key_envelope)
+    .bind(&req.recovery_key_envelope)
+    .bind(&req.drive_private_key_envelope)
     .bind(&req.public_key)
+    .bind(&req.account_authority_public_key)
+    .bind(&req.account_authority_key_id)
+    .bind(&req.account_incarnation_id)
+    .bind(&req.drive_signing_public_key)
     .bind(i16::try_from(req.account_protection_suite).unwrap_or(i16::MAX))
     .bind(&req.account_protection_salt)
     .bind(i32::try_from(req.argon_memory_kib).unwrap_or(i32::MAX))
@@ -441,8 +493,6 @@ pub async fn login(
         String,
         String,
         String,
-        String,
-        String,
         bool,
         bool,
         i64,
@@ -453,8 +503,8 @@ pub async fn login(
         String,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT id, login_key_hash, encrypted_master_key, master_key_nonce,
-                  encrypted_private_key, private_key_nonce, public_key,
+        r#"SELECT id, login_key_hash, master_key_envelope,
+                  drive_private_key_envelope, public_key,
                   totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes, is_active,
                   account_protection_salt,
                   COALESCE(username, ''), COALESCE(color, '')
@@ -467,10 +517,8 @@ pub async fn login(
     let Some((
         id,
         login_key_hash,
-        enc_mk,
-        mk_nonce,
-        enc_pk,
-        pk_nonce,
+        master_key_envelope,
+        drive_private_key_envelope,
         pub_key,
         totp_enabled,
         is_admin,
@@ -532,10 +580,8 @@ pub async fn login(
         &state,
         &user_id,
         &username,
-        &enc_mk,
-        &mk_nonce,
-        &enc_pk,
-        &pk_nonce,
+        &master_key_envelope,
+        &drive_private_key_envelope,
         &pub_key,
         is_admin,
         quota_bytes,
@@ -572,8 +618,6 @@ pub async fn login_two_fa(
         String,
         String,
         String,
-        String,
-        String,
         bool,
         i64,
         i64,
@@ -582,8 +626,8 @@ pub async fn login_two_fa(
         String,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT totp_secret, encrypted_master_key, master_key_nonce,
-                  encrypted_private_key, private_key_nonce, public_key,
+        r#"SELECT totp_secret, master_key_envelope,
+                  drive_private_key_envelope, public_key,
                   is_admin, storage_quota_bytes, storage_used_bytes,
                   COALESCE(username, ''), is_active, COALESCE(color, '')
            FROM users WHERE id = $1"#,
@@ -594,10 +638,8 @@ pub async fn login_two_fa(
 
     let Some((
         totp_secret,
-        enc_mk,
-        mk_nonce,
-        enc_pk,
-        pk_nonce,
+        master_key_envelope,
+        drive_private_key_envelope,
         pub_key,
         is_admin,
         quota_bytes,
@@ -632,10 +674,8 @@ pub async fn login_two_fa(
         &state,
         &user_id,
         &username,
-        &enc_mk,
-        &mk_nonce,
-        &enc_pk,
-        &pk_nonce,
+        &master_key_envelope,
+        &drive_private_key_envelope,
         &pub_key,
         is_admin,
         quota_bytes,
@@ -661,27 +701,18 @@ pub async fn get_recovery_preflight(
         .filter(|e| !e.is_empty())
         .ok_or_else(|| AppError::bad_request("email required"))?;
 
-    let row: Option<(String, String, String, String)> = sqlx::query_as(
-        r#"SELECT encrypted_recovery_key, recovery_key_nonce,
-                  encrypted_private_key, private_key_nonce
-           FROM users WHERE email = $1"#,
-    )
-    .bind(&email)
-    .fetch_optional(&state.pool)
-    .await?;
+    let row: Option<String> =
+        sqlx::query_scalar("SELECT recovery_key_envelope FROM users WHERE email = $1")
+            .bind(&email)
+            .fetch_optional(&state.pool)
+            .await?;
 
     let resp = match row {
-        Some((erk, rkn, epk, pkn)) => PreflightRecoverResponse {
-            encrypted_recovery_key: erk,
-            recovery_key_nonce: rkn,
-            encrypted_private_key: epk,
-            private_key_nonce: pkn,
+        Some(recovery_key_envelope) => PreflightRecoverResponse {
+            recovery_key_envelope,
         },
         None => PreflightRecoverResponse {
-            encrypted_recovery_key: deterministic_fake_bytes(&email, "recovery", 48),
-            recovery_key_nonce: deterministic_fake_bytes(&email, "recovery-nonce", 24),
-            encrypted_private_key: deterministic_fake_bytes(&email, "private", 48),
-            private_key_nonce: deterministic_fake_bytes(&email, "private-nonce", 24),
+            recovery_key_envelope: deterministic_fake_account_envelope(&email),
         },
     };
     Ok(Json(resp).into_response())
@@ -711,6 +742,12 @@ pub async fn recover(
         req.new_argon_iterations,
         req.new_argon_parallelism,
     )?;
+    validate_account_envelope(
+        &req.new_master_key_envelope,
+        kutup_crypto::account_envelope::AccountEnvelopePurpose::PasswordMasterKey,
+        &req.email,
+        "newMasterKeyEnvelope",
+    )?;
 
     let stored: Option<String> =
         sqlx::query_scalar("SELECT recovery_key_verifier FROM users WHERE email = $1")
@@ -739,20 +776,18 @@ pub async fn recover(
     let res = sqlx::query(
         r#"UPDATE users SET
               login_key_hash = $1,
-              encrypted_master_key = $2,
-              master_key_nonce = $3,
-              account_protection_suite = $4,
-              account_protection_salt = $5,
-              argon_memory_kib = $6,
-              argon_iterations = $7,
-              argon_parallelism = $8,
+              master_key_envelope = $2,
+              account_protection_suite = $3,
+              account_protection_salt = $4,
+              argon_memory_kib = $5,
+              argon_iterations = $6,
+              argon_parallelism = $7,
               is_first_login = false,
               updated_at = NOW()
-           WHERE email = $9"#,
+           WHERE email = $8"#,
     )
     .bind(&hash)
-    .bind(&req.new_encrypted_master_key)
-    .bind(&req.new_master_key_nonce)
+    .bind(&req.new_master_key_envelope)
     .bind(i16::try_from(req.new_account_protection_suite).unwrap_or(i16::MAX))
     .bind(&req.new_account_protection_salt)
     .bind(i32::try_from(req.new_argon_memory_kib).unwrap_or(i32::MAX))
@@ -905,17 +940,31 @@ pub async fn get_user_by_email(
     _user: AuthUser,
     Path(email): Path<String>,
 ) -> AppResult<Response> {
-    let row: Option<(Uuid, String)> =
-        sqlx::query_as("SELECT id, public_key FROM users WHERE email = $1 AND is_active = true")
-            .bind(&email)
-            .fetch_optional(&state.pool)
-            .await?;
-    let Some((id, public_key)) = row else {
+    let row: Option<(Uuid, Option<String>, String, String, String)> = sqlx::query_as(
+        "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key
+         FROM users WHERE email = $1 AND is_active = true",
+    )
+    .bind(&email)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((id, username, public_key, incarnation_id, signing_public_key)) = row else {
         return Err(AppError::not_found("user not found"));
     };
+    let username = username
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::conflict("recipient identity is unavailable"))?;
+    let domain = state
+        .federation
+        .as_ref()
+        .map(|federation| federation.server_name())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::conflict("named shares require a canonical server domain"))?;
     Ok(Json(UserLookupResponse {
         user_id: id.to_string(),
-        public_key,
+        account: format!("{username}@{domain}"),
+        drive_hpke_public_key: public_key,
+        account_incarnation_id: incarnation_id,
+        drive_signing_public_key: signing_public_key,
     })
     .into_response())
 }
@@ -1059,13 +1108,14 @@ pub async fn complete_setup(
     let user_id = jwt::validate_setup_token(token, &state.config.jwt_secret)
         .map_err(|_| AppError::unauthorized("invalid setup token"))?;
 
-    let is_active: Option<bool> = sqlx::query_scalar("SELECT is_active FROM users WHERE id = $1")
-        .bind(parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
-        .fetch_optional(&state.pool)
-        .await?;
-    if is_active != Some(true) {
+    let account: Option<(bool, String)> =
+        sqlx::query_as("SELECT is_active, email FROM users WHERE id = $1")
+            .bind(parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some((true, account_email)) = account else {
         return Err(AppError::unauthorized("account disabled"));
-    }
+    };
 
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
 
@@ -1076,6 +1126,26 @@ pub async fn complete_setup(
         req.argon_iterations,
         req.argon_parallelism,
     )?;
+    use kutup_crypto::account_envelope::AccountEnvelopePurpose;
+    validate_account_envelope(
+        &req.master_key_envelope,
+        AccountEnvelopePurpose::PasswordMasterKey,
+        &account_email,
+        "masterKeyEnvelope",
+    )?;
+    validate_account_envelope(
+        &req.recovery_key_envelope,
+        AccountEnvelopePurpose::RecoveryMasterKey,
+        &account_email,
+        "recoveryKeyEnvelope",
+    )?;
+    validate_account_envelope(
+        &req.drive_private_key_envelope,
+        AccountEnvelopePurpose::DriveHpkePrivateKey,
+        &account_email,
+        "drivePrivateKeyEnvelope",
+    )?;
+    validate_account_identity(&req)?;
     let login_key_bytes = decode_canonical_base64_exact(&req.login_key, 32, "loginKey")?;
     let hash =
         bcrypt::hash(login_key_bytes, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))?;
@@ -1087,24 +1157,25 @@ pub async fn complete_setup(
     let res = sqlx::query(
         r#"UPDATE users SET
               login_key_hash = $1,
-              encrypted_master_key = $2, master_key_nonce = $3,
-              encrypted_recovery_key = $4, recovery_key_nonce = $5,
-              encrypted_private_key = $6, private_key_nonce = $7,
-              public_key = $8,
-              account_protection_suite = $9, account_protection_salt = $10,
-              argon_memory_kib = $11, argon_iterations = $12,
-              argon_parallelism = $13, recovery_key_verifier = $14,
+              master_key_envelope = $2, recovery_key_envelope = $3,
+              drive_private_key_envelope = $4, public_key = $5,
+              account_authority_public_key = $6, account_authority_key_id = $7,
+              account_incarnation_id = $8, drive_signing_public_key = $9,
+              account_protection_suite = $10, account_protection_salt = $11,
+              argon_memory_kib = $12, argon_iterations = $13,
+              argon_parallelism = $14, recovery_key_verifier = $15,
               is_first_login = false, updated_at = NOW()
-           WHERE id = $15 AND account_protection_salt = ''"#,
+           WHERE id = $16 AND account_protection_salt = ''"#,
     )
     .bind(&hash)
-    .bind(&req.encrypted_master_key)
-    .bind(&req.master_key_nonce)
-    .bind(&req.encrypted_recovery_key)
-    .bind(&req.recovery_key_nonce)
-    .bind(&req.encrypted_private_key)
-    .bind(&req.private_key_nonce)
+    .bind(&req.master_key_envelope)
+    .bind(&req.recovery_key_envelope)
+    .bind(&req.drive_private_key_envelope)
     .bind(&req.public_key)
+    .bind(&req.account_authority_public_key)
+    .bind(&req.account_authority_key_id)
+    .bind(&req.account_incarnation_id)
+    .bind(&req.drive_signing_public_key)
     .bind(i16::try_from(req.account_protection_suite).unwrap_or(i16::MAX))
     .bind(&req.account_protection_salt)
     .bind(i32::try_from(req.argon_memory_kib).unwrap_or(i32::MAX))
@@ -1157,10 +1228,8 @@ fn issue_tokens_and_respond(
     state: &AppState,
     user_id: &str,
     username: &str,
-    enc_mk: &str,
-    mk_nonce: &str,
-    enc_pk: &str,
-    pk_nonce: &str,
+    master_key_envelope: &str,
+    drive_private_key_envelope: &str,
     pub_key: &str,
     is_admin: bool,
     quota: i64,
@@ -1179,10 +1248,8 @@ fn issue_tokens_and_respond(
             access_token: access,
             user_id: user_id.to_string(),
             username: username.to_string(),
-            encrypted_master_key: enc_mk.to_string(),
-            master_key_nonce: mk_nonce.to_string(),
-            encrypted_private_key: enc_pk.to_string(),
-            private_key_nonce: pk_nonce.to_string(),
+            master_key_envelope: master_key_envelope.to_string(),
+            drive_private_key_envelope: drive_private_key_envelope.to_string(),
             public_key: pub_key.to_string(),
             is_admin,
             storage_quota_bytes: quota,
@@ -1259,6 +1326,28 @@ fn deterministic_fake_bytes(email: &str, purpose: &str, len: usize) -> String {
     STANDARD.encode(b)
 }
 
+fn deterministic_fake_account_envelope(email: &str) -> String {
+    let key = STANDARD
+        .decode(deterministic_fake_bytes(email, "recovery-envelope-key", 32))
+        .expect("deterministic fake key is base64");
+    let nonce = STANDARD
+        .decode(deterministic_fake_bytes(
+            email,
+            "recovery-envelope-nonce",
+            24,
+        ))
+        .expect("deterministic fake nonce is base64");
+    let envelope = kutup_crypto::account_envelope::seal_with_nonce(
+        &[0u8; 32],
+        &key,
+        kutup_crypto::account_envelope::AccountEnvelopePurpose::RecoveryMasterKey,
+        email,
+        &nonce,
+    )
+    .expect("fake recovery envelope inputs are valid");
+    STANDARD.encode(envelope)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1294,6 +1383,21 @@ mod tests {
     }
 
     #[test]
+    fn fake_recovery_envelope_is_stable_and_structurally_valid() {
+        let first = deterministic_fake_account_envelope("User@Example.com");
+        let second = deterministic_fake_account_envelope("User@Example.com");
+        assert_eq!(first, second);
+        let decoded = kutup_crypto::account_envelope::decode_canonical_b64(&first).unwrap();
+        kutup_crypto::account_envelope::validate(
+            &decoded,
+            kutup_crypto::account_envelope::AccountEnvelopePurpose::RecoveryMasterKey,
+            "user@example.com",
+            32,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn account_protection_rejects_unknown_or_modified_parameters() {
         let salt = STANDARD.encode([0u8; 16]);
         assert!(validate_account_protection(1, &salt, 65_536, 3, 1).is_ok());
@@ -1301,6 +1405,25 @@ mod tests {
         assert!(validate_account_protection(1, &salt, 8_192, 3, 1).is_err());
         assert!(validate_account_protection(1, &salt, 65_536, 3, 2).is_err());
         assert!(validate_account_protection(1, &STANDARD.encode([0u8; 15]), 65_536, 3, 1).is_err());
+    }
+
+    #[test]
+    fn registered_account_identity_identifiers_are_key_bound() {
+        let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[9u8; 32]).unwrap();
+        let mut request = RegisterRequest {
+            public_key: STANDARD.encode(identity.drive_hpke_public_key()),
+            account_authority_public_key: STANDARD.encode(identity.authority_public_key()),
+            account_authority_key_id: identity.authority_key_id(),
+            account_incarnation_id: identity.incarnation_id(),
+            drive_signing_public_key: STANDARD.encode(identity.drive_signing_public_key()),
+            ..Default::default()
+        };
+        validate_account_identity(&request).unwrap();
+        request.account_incarnation_id = "0".repeat(64);
+        assert!(validate_account_identity(&request).is_err());
+        request.account_incarnation_id = identity.incarnation_id();
+        request.drive_signing_public_key = STANDARD.encode([0u8; 31]);
+        assert!(validate_account_identity(&request).is_err());
     }
 
     #[test]

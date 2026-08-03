@@ -19,30 +19,14 @@ pub(crate) struct FederationRuntimeConfig {
 
 impl FederationRuntimeConfig {
     pub fn from_server_config(config: &Config) -> anyhow::Result<Option<Self>> {
-        let parsed = Self::parse(
+        Self::parse(
             &config.federation_server_name,
             &config.server_url,
             &config.federation_signing_key,
             &config.federation_next_signing_key,
             config.federation_test_allow_private,
             &config.app_env,
-        )?;
-        if let Some(runtime) = &parsed {
-            let transparency_key = config.chat_transparency_signing_key.as_str();
-            reject_cross_purpose_key_reuse(
-                &runtime.signing_key,
-                "CHAT_TRANSPARENCY_SIGNING_KEY",
-                transparency_key,
-            )?;
-            if let Some(next) = &runtime.next_signing_key {
-                reject_cross_purpose_key_reuse(
-                    next,
-                    "CHAT_TRANSPARENCY_SIGNING_KEY",
-                    transparency_key,
-                )?;
-            }
-        }
-        Ok(parsed)
+        )
     }
 
     fn parse(
@@ -123,23 +107,6 @@ fn decode_signing_key(name: &str, encoded: &str) -> anyhow::Result<SigningKey> {
         .try_into()
         .map_err(|_| anyhow::anyhow!("{name} must decode to exactly 32 bytes"))?;
     Ok(SigningKey::from_bytes(&seed))
-}
-
-fn reject_cross_purpose_key_reuse(
-    federation_key: &SigningKey,
-    other_name: &str,
-    other_encoded: &str,
-) -> anyhow::Result<()> {
-    if other_encoded.is_empty() {
-        return Ok(());
-    }
-    let other = decode_signing_key(other_name, other_encoded)?;
-    if federation_key.verifying_key() == other.verifying_key() {
-        anyhow::bail!(
-            "unified federation identity keys must not reuse the purpose-specific {other_name} seed"
-        );
-    }
-    Ok(())
 }
 
 fn canonical_api_base(value: &str, allow_http_for_test: bool) -> anyhow::Result<String> {
@@ -281,9 +248,5 @@ mod tests {
             "production",
         )
         .is_err());
-
-        let shared = SigningKey::from_bytes(&[7; 32]);
-        assert!(reject_cross_purpose_key_reuse(&shared, "OTHER_KEY", &seed(7)).is_err());
-        reject_cross_purpose_key_reuse(&shared, "OTHER_KEY", &seed(8)).unwrap();
     }
 }

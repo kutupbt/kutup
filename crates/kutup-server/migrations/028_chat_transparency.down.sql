@@ -1,3 +1,1 @@
-DROP TABLE IF EXISTS chat_transparency_nodes;
-DROP TABLE IF EXISTS chat_transparency_leaves;
-DROP TABLE IF EXISTS chat_transparency_log;
+-- Reserved preproduction migration number; see the matching up migration.

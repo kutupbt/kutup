@@ -290,6 +290,7 @@ impl MlsClient {
             seq,
             message_id: Some(send_id.clone()),
             profile_key: None,
+            profile_suite: None,
             body: serde_json::to_value(MlsGroupControlBodyV1::OwnerCandidate { candidate })
                 .map_err(|error| ChatError::Content(error.to_string()))?,
             extra: serde_json::Map::new(),
@@ -781,9 +782,7 @@ fn candidate_conversation_id(content: &ChatContent) -> Result<Uuid> {
             Ok(request.proposal.conversation_id)
         }
         MlsGroupControlBodyV1::OwnerApproval { approval } => Ok(approval.conversation_id),
-        MlsGroupControlBodyV1::InvitationAccepted { acceptance } => {
-            Ok(acceptance.conversation_id)
-        }
+        MlsGroupControlBodyV1::InvitationAccepted { acceptance } => Ok(acceptance.conversation_id),
     }
 }
 
@@ -849,10 +848,15 @@ pub(super) fn validate_owner_role_transition(
 pub(super) fn promote_local_owner_candidate(
     metadata: &mut SnapshotMetadata,
     mls_group_id: &[u8],
+    previous_roster: &[MlsConversationMemberV1],
     private_control: &MlsPrivateControlStateV1,
 ) -> Result<()> {
     let group_key = BASE64.encode(mls_group_id);
     let (local_address, _) = parse_device_credential_identity(&metadata.credential_identity)?;
+    let previous_owner_id = previous_roster
+        .iter()
+        .find(|member| member.address.canonical() == local_address)
+        .and_then(|member| member.owner_id.as_deref());
     let Some(owner_id) = private_control
         .roster
         .iter()
@@ -861,6 +865,14 @@ pub(super) fn promote_local_owner_candidate(
     else {
         return Ok(());
     };
+    // Owner credentials are deliberately held by the device that published
+    // the account's proof-of-possession candidate; DeviceSync never clones
+    // that private seed to another installation. An already-owned account's
+    // linked devices therefore observe unrelated owner-set changes without
+    // trying to promote key material they correctly do not possess.
+    if previous_owner_id == Some(owner_id) {
+        return Ok(());
+    }
     if let Some(seed) = metadata.group_owner_private_keys.get(&group_key) {
         let credential = owner_credential_from_seed(seed)?;
         if credential.owner_id != owner_id {

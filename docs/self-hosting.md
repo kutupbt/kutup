@@ -44,9 +44,8 @@ SERVER_URL=https://kutup.example.com
 # FEDERATION_SERVER_NAME=kutup.example.com
 # FEDERATION_SIGNING_KEY=<base64-32-byte-ed25519-seed>
 
-# Required dedicated key-transparency operator identity. Generate a different
-# seed once, back it up, and do not reuse the federation identity.
-CHAT_TRANSPARENCY_SIGNING_KEY=<base64-32-byte-ed25519-seed>
+# Active Chat installations per account. V1 permits 1..=10.
+CHAT_MAX_ACTIVE_DEVICES=10
 
 # Optional contacts-only sealed sender. The policy contains public offline roots
 # and root-signed online certificates; the normal server receives only the
@@ -248,7 +247,8 @@ The unified v2 stack uses `FEDERATION_SERVER_NAME` and
 `FEDERATION_SIGNING_KEY`. The name is the stable suffix in
 `username@server`; no alias namespace is created. The stack persists a
 self-signed genesis document and refuses startup if the configured seed is
-silently changed. Use a distinct random seed for key transparency. Production
+silently changed. Account manifests are signed by clients and need no separate
+server transparency seed. Production
 federation requires public HTTPS and rejects loopback, private, link-local, and
 other non-public resolved addresses; redirects are disabled.
 
@@ -305,50 +305,33 @@ docker compose up -d --build backend
 
 ---
 
-## Chat key transparency
+## Chat account manifests and device limit
 
-Chat key transparency requires a persistent operator seed even when chat
-federation is disabled:
+V1 needs no transparency signing key, witness process, auditor service or
+checkpoint monitor. Remove `CHAT_TRANSPARENCY_SIGNING_KEY` from deployment
+configuration. Every account signs its own complete manifest locally; the
+server verifies and distributes the current head and append-only history but
+cannot mark a peer verified.
 
-```sh
-openssl rand -base64 32
-```
-
-Store that output as `CHAT_TRANSPARENCY_SIGNING_KEY`, separately from the
-federation key, and back it up. The database pins the derived public identity
-and refuses a silent replacement; planned rotation will require an
-authenticated transition rather than an environment-variable swap.
-
-With federation enabled, the server publishes the complete transparency policy
-inside the federation-identity-signed feature-policy chain. Change the operator
-key or a security parameter only with an explicit authenticated rotation:
+`CHAT_MAX_ACTIVE_DEVICES` defaults to 10 and accepts values from 1 through 10.
+A lower value is a local resource/product policy. Ten is the V1 protocol hard
+cap and cannot be raised by configuration:
 
 ```sh
-docker compose run --rm backend feature-policy rotate chat-transparency
+CHAT_MAX_ACTIVE_DEVICES=10
 ```
 
-Remote policy histories and monitor cursors survive restarts. The monitor runs
-every 15 minutes with jitter/retry and never follows a browser-provided URL.
-The browser independently verifies the proxied policy chain and checkpoint on
-Chat open, first remote use, reconnect, foreground, restored connectivity, and
-before stale evidence is used. Network unavailability warns and retains the
-last valid pin. Rollback, signature/proof failure, policy-chain failure, or
-log/key replacement blocks new sends to only that domain.
+First contact shows a gray shield. Users who require independent identity
+authentication meet face to face and scan the conversation safety QR; an exact
+match produces a green shield on that installation. A rollback, equivocation
+or signed account-incarnation replacement produces a red quarantine and blocks
+new sends. A healthy server response cannot clear it. For a legitimate
+destructive account reset, the user scans the replacement QR; the client keeps
+the old signed incarnation history and atomically promotes the new one.
 
-V1 deliberately has no independent witness or auditor service. Operator
-signatures plus durable pins detect rollback and contradictions observed by the
-same client or monitor, but cannot detect two internally consistent views that
-never meet. Users can still compare safety numbers out of band. This limitation
-is explicit so a small self-hosted deployment does not need to operate a second
-security service merely to enable Chat.
-
-A cryptographic quarantine never clears merely because a remote server becomes
-reachable again. Inspect its exact evidence digest in the admin transparency
-card, document the decision, and use the card's break-glass recovery action.
-The server requires a fresh valid checkpoint before clearing the block and
-writes the digest and reason to the administrative audit log. The equivalent
-API is `POST /api/admin/chat/transparency/domains/{domain}/recover`; it does not
-replace keys or skip verification.
+Back up account recovery material. Recovery with the original phrase restores
+the same master key and account authority. Administrative wipe is termination,
+not recovery: it creates a new authority and requires contacts to re-verify.
 
 ## Contacts-only sealed sender
 

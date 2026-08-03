@@ -35,8 +35,11 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
 
     type FolderTuple = (
         Uuid,
+        Uuid,
         String,
         String,
+        i32,
+        i64,
         String,
         String,
         Option<String>,
@@ -44,8 +47,8 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
         OffsetDateTime,
     );
     let folders: Vec<FolderTuple> = sqlx::query_as(
-        r#"SELECT c.id, c.encrypted_name, c.name_nonce, c.encrypted_key, c.encrypted_key_nonce,
-                  c.color,
+        r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.owner_key_envelope,
+                  c.key_epoch, c.name_revision, c.epoch_statement, c.epoch_statement_hash, c.color,
                   (SELECT COUNT(*) FROM files f WHERE f.trash_root_id = c.id),
                   c.deleted_at
            FROM collections c
@@ -61,16 +64,20 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
         Uuid,
         String,
         String,
+        i32,
+        i64,
+        Uuid,
         String,
-        String,
+        i32,
         String,
         String,
         OffsetDateTime,
     );
     let files: Vec<FileTuple> = sqlx::query_as(
-        r#"SELECT f.id, f.collection_id, f.encrypted_metadata, f.metadata_nonce,
-                  f.encrypted_file_key, f.file_key_nonce,
-                  c.encrypted_key, c.encrypted_key_nonce, f.deleted_at
+        r#"SELECT f.id, f.collection_id, f.metadata_envelope, f.file_key_envelope,
+                  f.key_epoch, f.metadata_revision,
+                  c.owner_user_id, c.owner_key_envelope, c.key_epoch,
+                  c.epoch_statement, c.epoch_statement_hash, f.deleted_at
            FROM files f JOIN collections c ON c.id = f.collection_id
            WHERE c.owner_user_id = $1 AND f.trash_root_id = f.id
            ORDER BY f.deleted_at DESC"#,
@@ -83,12 +90,27 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
         folders: folders
             .into_iter()
             .map(
-                |(id, en, nn, ek, ekn, color, items, deleted_at)| TrashFolderRow {
+                |(
+                    id,
+                    owner,
+                    name,
+                    owner_key,
+                    epoch,
+                    revision,
+                    statement,
+                    statement_hash,
+                    color,
+                    items,
+                    deleted_at,
+                )| TrashFolderRow {
                     id: id.to_string(),
-                    encrypted_name: en,
-                    name_nonce: nn,
-                    encrypted_key: ek,
-                    encrypted_key_nonce: ekn,
+                    owner_user_id: owner.to_string(),
+                    name_envelope: name,
+                    owner_key_envelope: owner_key,
+                    key_epoch: epoch,
+                    name_revision: revision,
+                    epoch_statement: statement,
+                    epoch_statement_hash: statement_hash,
                     color,
                     items,
                     deleted_at,
@@ -98,15 +120,31 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
         files: files
             .into_iter()
             .map(
-                |(id, cid, em, mn, efk, fkn, cek, cekn, deleted_at)| TrashFileRow {
+                |(
+                    id,
+                    cid,
+                    metadata,
+                    file_key,
+                    key_epoch,
+                    metadata_revision,
+                    owner,
+                    owner_key,
+                    collection_epoch,
+                    statement,
+                    statement_hash,
+                    deleted_at,
+                )| TrashFileRow {
                     id: id.to_string(),
                     collection_id: cid.to_string(),
-                    encrypted_metadata: em,
-                    metadata_nonce: mn,
-                    encrypted_file_key: efk,
-                    file_key_nonce: fkn,
-                    collection_encrypted_key: cek,
-                    collection_encrypted_key_nonce: cekn,
+                    metadata_envelope: metadata,
+                    file_key_envelope: file_key,
+                    key_epoch,
+                    metadata_revision,
+                    collection_owner_user_id: owner.to_string(),
+                    collection_owner_key_envelope: owner_key,
+                    collection_key_epoch: collection_epoch,
+                    collection_epoch_statement: statement,
+                    collection_epoch_statement_hash: statement_hash,
                     deleted_at,
                 },
             )

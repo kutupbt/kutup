@@ -57,8 +57,7 @@ export function useCreatePublicShare() {
     mutationFn: (body: {
       shareType: string
       targetId: string
-      encryptedCollectionKey: string
-      encryptedCollectionKeyNonce: string
+      collectionKeyEnvelope: string
       expiresInHours?: number
     }) =>
       api

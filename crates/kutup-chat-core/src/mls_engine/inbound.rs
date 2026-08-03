@@ -38,7 +38,7 @@ impl MlsClient {
         if commit_bytes.is_empty()
             || commit_bytes.len() > MAX_APPLICATION_BYTES
             || expected_next_members.is_empty()
-            || expected_next_members.len() > 1000
+            || expected_next_members.len() > MAX_MLS_GROUP_LEAVES
         {
             return Err(ChatError::Invalid(
                 "MLS mailbox Commit, cursor, or expected roster is outside v1 bounds".into(),
@@ -407,6 +407,7 @@ impl MlsClient {
             ownership::promote_local_owner_candidate(
                 &mut metadata,
                 mls_group_id,
+                &conversation.current_roster,
                 &private_control,
             )?;
         }
@@ -481,7 +482,7 @@ impl MlsClient {
         if commit_bytes.is_empty()
             || commit_bytes.len() > MAX_APPLICATION_BYTES
             || expected_next_members.is_empty()
-            || expected_next_members.len() > 1000
+            || expected_next_members.len() > MAX_MLS_GROUP_LEAVES
         {
             return Err(ChatError::Invalid(
                 "MLS Commit or expected roster is outside v1 bounds".into(),

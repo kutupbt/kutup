@@ -4,7 +4,7 @@ Base URL: `http://localhost` (through Nginx proxy) or your configured `SERVER_UR
 
 All authenticated endpoints require `Authorization: Bearer <accessToken>`.
 
-> **Note:** File content and metadata are end-to-end encrypted by the client. The API transports ciphertext and base64-encoded nonces — the server never interprets their contents.
+> **Note:** File content and metadata are end-to-end encrypted by the client. Account secrets use one canonical, suite-bearing envelope per value; the server validates only its public framing and never sees the plaintext or key.
 
 ---
 
@@ -23,18 +23,22 @@ Returns public server settings (e.g. registration enabled/disabled).
   "chat": {
     "enabled": true,
     "protocolVersion": 1,
-    "keyTransparency": true,
-    "transparencyOperatorKeyId": "<64 lowercase hex>",
-    "transparencyOperatorPublicKey": "<base64 Ed25519 public key>"
+    "suites": [1],
+    "maximumActiveDevices": 10,
+    "manifests": true,
+    "profiles": true,
+    "federation": true,
+    "sealedSender": true,
+    "mlsGroups": true
   }
 }
 ```
 
-The chat block also advertises suites, size/retention limits, federation,
-manifests, profiles, and sealed-sender support. Browser clients pin the
-operator fields as their local transparency policy. Applications that need an
-independent trust root must pin the same policy out of band rather than
-treating this same-origin response as authoritative.
+The chat block also advertises size/retention limits, the canonical federation
+server name when enabled, and the authenticated sealed-sender service-policy
+history. `maximumActiveDevices` is operator-configurable from 1 through the V1
+hard cap of 10. A capability is advertised only when its complete local and
+federated path is enabled.
 
 ---
 
@@ -50,13 +54,14 @@ Create a new account with an encrypted key bundle. Rate-limited (10/hr/IP, `RATE
   "email": "user@example.com",
   "username": "alice",
   "loginKey": "<base64>",
-  "encryptedMasterKey": "<base64>",
-  "masterKeyNonce": "<base64>",
-  "encryptedRecoveryKey": "<base64>",
-  "recoveryKeyNonce": "<base64>",
-  "encryptedPrivateKey": "<base64>",
-  "privateKeyNonce": "<base64>",
+  "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
+  "recoveryKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
+  "drivePrivateKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "publicKey": "<base64>",
+  "accountAuthorityPublicKey": "<base64 32 bytes>",
+  "accountAuthorityKeyId": "<lowercase SHA-256 hex>",
+  "accountIncarnationId": "<lowercase SHA-256 hex>",
+  "driveSigningPublicKey": "<base64 32 bytes>",
   "accountProtectionSuite": 1,
   "accountProtectionSalt": "<base64 16 bytes>",
   "argonMemoryKib": 65536,
@@ -70,7 +75,15 @@ All key material is encrypted client-side before being sent. One parameterized
 Argon2id invocation derives an account-protection root; HKDF purpose subkeys
 produce the master-key KEK and `loginKey`. The server bcrypts only `loginKey`.
 `recoveryProof` is a distinct HKDF output bound to the canonical login email;
-the raw recovery entropy that decrypts `encryptedRecoveryKey` is never sent.
+the raw recovery entropy that opens `recoveryKeyEnvelope` is never sent. Each
+envelope authenticates its suite, purpose, canonical login email, nonce and
+exact ciphertext length as AEAD associated data. The three purposes cannot be
+substituted for one another or relocated to another account.
+
+The complete account identity is fixed at registration: the account authority,
+incarnation, Drive X25519 key, and Drive Ed25519 share-signing key are persisted
+as one binding. A later account manifest must match all of them exactly; a
+self-signed first manifest cannot select a replacement authority.
 
 **Response:** `201 Created`
 
@@ -118,10 +131,8 @@ Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RA
   "accessToken": "<jwt>",
   "userId": "<uuid>",
   "username": "alice",
-  "encryptedMasterKey": "<base64>",
-  "masterKeyNonce": "<base64>",
-  "encryptedPrivateKey": "<base64>",
-  "privateKeyNonce": "<base64>",
+  "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
+  "drivePrivateKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "publicKey": "<base64>",
   "isAdmin": false,
   "storageQuotaBytes": 5368709120,
@@ -165,10 +176,7 @@ Fetch the encrypted recovery key bundle so the client can decrypt the master key
 **Response:**
 ```json
 {
-  "encryptedRecoveryKey": "<base64>",
-  "recoveryKeyNonce": "<base64>",
-  "encryptedPrivateKey": "<base64>",
-  "privateKeyNonce": "<base64>"
+  "recoveryKeyEnvelope": "<canonical base64 AccountEnvelopeV1>"
 }
 ```
 
@@ -186,8 +194,7 @@ Recover an account using a mnemonic-derived recovery key. The client proves poss
   "email": "user@example.com",
   "recoveryProof": "<base64>",
   "newLoginKey": "<base64>",
-  "newEncryptedMasterKey": "<base64>",
-  "newMasterKeyNonce": "<base64>",
+  "newMasterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "newAccountProtectionSuite": 1,
   "newAccountProtectionSalt": "<base64 16 bytes>",
   "newArgonMemoryKib": 65536,
@@ -226,7 +233,7 @@ Exchange a refresh token for a new access token. The refresh token is normally r
 
 ### POST /api/auth/complete-setup
 
-Called after first login by accounts created via `ADMIN_ACCOUNT` that haven't yet generated a recovery phrase. The client derives a full key bundle (mnemonic, master key, recovery key, NaCl box keypair) and submits it here.
+Called after first login by accounts created via `ADMIN_ACCOUNT` that haven't yet generated a recovery phrase. The client derives a full key bundle (mnemonic, master key, recovery entropy, account Drive keys and typed account envelopes) and submits it here.
 
 **Auth:** Bearer `setupToken` (returned by `/api/auth/login` when `requiresSetup` is true)
 
@@ -320,7 +327,7 @@ Disable TOTP for the current user. Requires a valid TOTP code to prevent a stole
 
 ### GET /api/users/by-email/:email
 
-Look up another user's public key (used when sharing a collection).
+Look up another local user's registered Drive identity (used when sharing a collection).
 
 **Auth:** Bearer JWT
 **Param:** `:email` — URL-encoded email address
@@ -329,7 +336,10 @@ Look up another user's public key (used when sharing a collection).
 ```json
 {
   "userId": "<uuid>",
-  "publicKey": "<base64>"
+  "account": "bob@example.com",
+  "driveHpkePublicKey": "<canonical base64, 32 bytes>",
+  "accountIncarnationId": "<lowercase SHA-256 hex>",
+  "driveSigningPublicKey": "<canonical base64, 32 bytes>"
 }
 ```
 
@@ -343,17 +353,27 @@ List all collections accessible to the current user (owned and shared).
 
 **Auth:** Bearer JWT
 
-**Response:** Array of collection objects. Owned and shared collections are returned in the same array; for shared collections `encryptedKey` is the recipient-specific copy and `isShared` is `true`.
+**Response:** Array of collection objects. Owned and shared collections use the
+same authenticated record. An owned row contains `ownerKeyEnvelope`; a shared
+row contains `namedShareEnvelope`, `isShared: true`, and the owner's registered
+identity fields required for independent client verification. Neither key
+envelope is returned in the other row type.
 
 ```json
 [
   {
     "id": "<uuid>",
     "ownerUserId": "<uuid>",
-    "encryptedName": "<base64>",
-    "nameNonce": "<base64>",
-    "encryptedKey": "<base64>",
-    "encryptedKeyNonce": "<base64>",
+    "nameEnvelope": "<DriveEnvelopeV1 base64>",
+    "namedShareEnvelope": "<NamedShareEnvelopeV1 base64>",
+    "keyEpoch": 1,
+    "nameRevision": 1,
+    "epochStatement": "<CollectionEpochStatementV1 base64>",
+    "epochStatementHash": "<lowercase SHA-256 hex>",
+    "ownerAccount": "alice@example.com",
+    "ownerIncarnationId": "<lowercase SHA-256 hex>",
+    "ownerDriveSigningPublicKey": "<canonical base64, 32 bytes>",
+    "ownerAuthorityPublicKey": "<canonical base64, 32 bytes>",
     "parentCollectionId": null,
     "color": "blue",
     "canUpload": true,
@@ -365,7 +385,11 @@ List all collections accessible to the current user (owned and shared).
 ]
 ```
 
-`canUpload`, `canDelete`, `uploadQuotaBytes`, `uploadUsedBytes`, and `isShared` are present only on shared collections (the owner has full rights implicitly).
+`canUpload`, `canDelete`, `uploadQuotaBytes`, `uploadUsedBytes`, `isShared`, and
+the owner identity fields are present only on shared collections (the owner has
+full rights implicitly). Clients verify the named-share signature, recipient
+incarnation, epoch statement, epoch hash, collection-key commitment and name
+envelope before displaying or using a shared collection.
 
 ---
 
@@ -378,15 +402,19 @@ Create a new collection.
 **Request body:**
 ```json
 {
-  "encryptedName": "<base64>",
-  "nameNonce": "<base64>",
-  "encryptedKey": "<base64>",
-  "encryptedKeyNonce": "<base64>",
+  "id": "<client-generated canonical uuid>",
+  "nameEnvelope": "<DriveEnvelopeV1 base64>",
+  "ownerKeyEnvelope": "<DriveEnvelopeV1 base64>",
+  "epochStatement": "<CollectionEpochStatementV1 base64>",
   "parentCollectionId": null
 }
 ```
 
-`encryptedKey` is the collection key encrypted with the owner's master key.
+The name envelope is bound to `(collection ID, owner user ID, epoch 1,
+revision 1)`. The owner-key envelope binds the same identifiers with the
+collection-key purpose. The account authority signs the epoch-1 statement.
+Creation writes the collection and its first immutable epoch-history row in one
+database transaction.
 
 **Response:** `201 Created`
 ```json
@@ -399,7 +427,8 @@ Create a new collection.
 
 ### GET /api/collections/:id
 
-Get a single collection by ID. Owner-only — returns `404` for collections owned by other users (even if shared with you; use `GET /api/collections/` for those).
+Get a single owned or shared collection by ID. The response has the same
+owner-vs-recipient key-envelope separation as the list route.
 
 **Auth:** Bearer JWT
 
@@ -408,10 +437,12 @@ Get a single collection by ID. Owner-only — returns `404` for collections owne
 {
   "id": "<uuid>",
   "ownerUserId": "<uuid>",
-  "encryptedName": "<base64>",
-  "nameNonce": "<base64>",
-  "encryptedKey": "<base64>",
-  "encryptedKeyNonce": "<base64>",
+  "nameEnvelope": "<DriveEnvelopeV1 base64>",
+  "ownerKeyEnvelope": "<DriveEnvelopeV1 base64>",
+  "keyEpoch": 1,
+  "nameRevision": 1,
+  "epochStatement": "<CollectionEpochStatementV1 base64>",
+  "epochStatementHash": "<lowercase SHA-256 hex>",
   "parentCollectionId": null,
   "color": "blue"
 }
@@ -428,10 +459,14 @@ Rename a collection (client re-encrypts the name with the collection key).
 **Request body:**
 ```json
 {
-  "encryptedName": "<base64>",
-  "nameNonce": "<base64>"
+  "nameEnvelope": "<DriveEnvelopeV1 base64>",
+  "nameRevision": 2
 }
 ```
+
+The revision must be exactly one greater than the stored revision and the
+envelope must authenticate that exact revision, current epoch, collection and
+owner. Concurrent/stale renames fail instead of overwriting a newer name.
 
 **Response:** `200 OK` `{"message": "updated"}`.
 
@@ -474,14 +509,19 @@ Share a collection with another user on this server.
 ```json
 {
   "recipientUserId": "<uuid>",
-  "encryptedCollectionKey": "<base64>",
+  "namedShareEnvelope": "<NamedShareEnvelopeV1 base64>",
   "canUpload": false,
   "canDelete": false,
   "uploadQuotaBytes": null
 }
 ```
 
-`encryptedCollectionKey` is the collection key encrypted with the recipient's public key (NaCl box, sealed). All recipients have read access; `canUpload` and `canDelete` are independent boolean grants. `uploadQuotaBytes` optionally caps how much the recipient may upload to this share — omit (or `null`) for no per-share cap.
+`namedShareEnvelope` HPKE-encrypts the collection key to the recipient's
+registered Drive key and signs the collection, epoch, sender/recipient accounts
+and both incarnation IDs with the sender's registered Drive signing key. All
+recipients have read access; `canUpload` and `canDelete` are independent boolean
+grants. `uploadQuotaBytes` optionally caps uploads; omit (or `null`) for no
+per-share cap.
 
 **Response:** `201 Created` `{"message": "shared"}`. Re-sharing with the same recipient updates the existing grant (upsert).
 
@@ -500,7 +540,11 @@ the collection key.
 {
   "username": "bob",
   "server": "other.example.com",
-  "publicKey": "<base64>"
+  "account": "bob@other.example.com",
+  "driveHpkePublicKey": "<canonical base64, 32 bytes>",
+  "accountIncarnationId": "<lowercase SHA-256 hex>",
+  "driveSigningPublicKey": "<canonical base64, 32 bytes>",
+  "accountAuthorityPublicKey": "<canonical base64, 32 bytes>"
 }
 ```
 
@@ -520,17 +564,20 @@ Create a domain-bound share for a user on a remote Kutup instance.
 {
   "recipientUsername": "bob",
   "recipientServer": "other.example.com",
-  "encryptedCollectionKey": "<base64>",
+  "namedShareEnvelope": "<NamedShareEnvelopeV1 base64>",
   "canUpload": true,
   "canDelete": false,
   "uploadQuotaBytes": null
 }
 ```
 
-`encryptedCollectionKey` is the collection key sealed to the exact
-`bob@other.example.com` public key returned by the lookup above. The server
-stores the canonical recipient domain and a SHA-256 capability verifier, not a
-remote URL or plaintext capability.
+The named envelope is sealed to the exact `bob@other.example.com` identity
+returned by the lookup above. The origin validates the sender signature and all
+routing bindings before storing it. The destination repeats that validation
+against Bob's current registered incarnation and verifies the owner-signed epoch
+statement before accepting the invite. The origin stores the canonical
+recipient domain and a SHA-256 capability verifier, not a remote URL or
+plaintext capability.
 
 **Response:** `201 Created`
 ```json
@@ -557,17 +604,22 @@ Upload an encrypted file to a collection. Multipart form.
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `fileId` | string (canonical UUID) | Client-generated before envelope construction |
 | `collectionId` | string (UUID) | Target collection |
-| `encryptedMetadata` | string (base64) | Encrypted filename, size, MIME type |
-| `metadataNonce` | string (base64) | Nonce for metadata ciphertext |
-| `encryptedFileKey` | string (base64) | Per-file key encrypted with collection key |
-| `fileKeyNonce` | string (base64) | Nonce for file key ciphertext |
-| `file` | binary | Encrypted file content (`application/octet-stream`) |
+| `metadataEnvelope` | string (canonical base64) | `DriveEnvelopeV1` metadata record bound to file, collection, epoch, and revision 1 |
+| `fileKeyEnvelope` | string (canonical base64) | `DriveEnvelopeV1` file-key record bound to file, collection, epoch, and revision 1 |
+| `file` | binary | Complete typed V1 Drive file blob (`application/octet-stream`) |
+
+The server obtains the current collection epoch itself and rejects malformed,
+noncanonical, relocated, stale-epoch, wrong-purpose, or wrong-revision
+envelopes. It also validates that the blob's authenticated-format header binds
+the same file, collection and epoch before storage. It never accepts a
+server-generated replacement for `fileId`.
 
 **Response:** `201 Created`
 ```json
 {
-  "id": "<uuid>"
+  "id": "<same client-generated uuid>"
 }
 ```
 
@@ -586,10 +638,10 @@ List files in a collection.
     "id": "<uuid>",
     "collectionId": "<uuid>",
     "uploaderUserId": "<uuid>",
-    "encryptedMetadata": "<base64>",
-    "metadataNonce": "<base64>",
-    "encryptedFileKey": "<base64>",
-    "fileKeyNonce": "<base64>",
+    "metadataEnvelope": "<DriveEnvelopeV1 base64>",
+    "fileKeyEnvelope": "<DriveEnvelopeV1 base64>",
+    "keyEpoch": 1,
+    "metadataRevision": 1,
     "encryptedSizeBytes": 4096,
     "createdAt": "2026-03-14T12:00:00Z",
     "updatedAt": "2026-03-14T12:00:00Z"
@@ -597,7 +649,25 @@ List files in a collection.
 ]
 ```
 
-`encryptedSizeBytes` is the size of the ciphertext blob on disk (slightly larger than the plaintext due to per-chunk auth tags from the secretstream wrapping).
+`encryptedSizeBytes` is the size of the ciphertext blob on disk: a 48-byte
+typed Drive header, a 24-byte secretstream header, and at least one frame with
+a 17-byte authentication/tag overhead.
+
+---
+
+### PUT /api/files/:id
+
+Replace only the authenticated metadata envelope. The request must advance the
+stored revision by exactly one; gaps, rollback, replay, a wrong file or
+collection binding, and a stale epoch return `409` or `400` without changing
+the row.
+
+```json
+{
+  "metadataEnvelope": "<DriveEnvelopeV1 base64>",
+  "metadataRevision": 2
+}
+```
 
 ---
 
@@ -627,7 +697,10 @@ Trash is **owner-scoped**: an item lives in the trash of the user who owns the c
 
 ### GET /api/trash
 
-List the caller's trash roots, newest first. Like everything else, names arrive encrypted: folder rows carry the folder's owner-wrapped key; file rows additionally carry the parent collection's owner-wrapped key (`collectionEncryptedKey`/`collectionEncryptedKeyNonce`) so the metadata chain decrypts even when the folder isn't in the live listing.
+List the caller's trash roots, newest first. Folder rows carry the complete
+authenticated owner collection record. File rows additionally carry the parent
+collection's owner-key envelope and signed epoch record so the metadata chain
+can be verified even when the collection is absent from the live listing.
 
 **Auth:** Bearer JWT
 
@@ -637,10 +710,13 @@ List the caller's trash roots, newest first. Like everything else, names arrive 
   "folders": [
     {
       "id": "<uuid>",
-      "encryptedName": "<base64>",
-      "nameNonce": "<base64>",
-      "encryptedKey": "<base64>",
-      "encryptedKeyNonce": "<base64>",
+      "ownerUserId": "<uuid>",
+      "nameEnvelope": "<DriveEnvelopeV1 base64>",
+      "ownerKeyEnvelope": "<DriveEnvelopeV1 base64>",
+      "keyEpoch": 1,
+      "nameRevision": 1,
+      "epochStatement": "<CollectionEpochStatementV1 base64>",
+      "epochStatementHash": "<lowercase SHA-256 hex>",
       "color": "blue",
       "items": 12,
       "deletedAt": "2026-06-11T11:22:33Z"
@@ -650,12 +726,15 @@ List the caller's trash roots, newest first. Like everything else, names arrive 
     {
       "id": "<uuid>",
       "collectionId": "<uuid>",
-      "encryptedMetadata": "<base64>",
-      "metadataNonce": "<base64>",
-      "encryptedFileKey": "<base64>",
-      "fileKeyNonce": "<base64>",
-      "collectionEncryptedKey": "<base64>",
-      "collectionEncryptedKeyNonce": "<base64>",
+      "metadataEnvelope": "<DriveEnvelopeV1 base64>",
+      "fileKeyEnvelope": "<DriveEnvelopeV1 base64>",
+      "keyEpoch": 1,
+      "metadataRevision": 1,
+      "collectionOwnerUserId": "<uuid>",
+      "collectionOwnerKeyEnvelope": "<DriveEnvelopeV1 base64>",
+      "collectionKeyEpoch": 1,
+      "collectionEpochStatement": "<CollectionEpochStatementV1 base64>",
+      "collectionEpochStatementHash": "<lowercase SHA-256 hex>",
       "deletedAt": "2026-06-11T11:22:33Z"
     }
   ]
@@ -694,7 +773,9 @@ Empty the caller's whole trash. Irreversible.
 
 ### POST /api/share/
 
-Create a public share link for a collection or file. The link key (used to decrypt the wrapped collection key) lives only in the URL fragment — the server never sees it.
+Create a public share link for one collection. The link key used to open the
+typed collection-key envelope lives only in the URL fragment; the server never
+sees it.
 
 **Auth:** Bearer JWT
 
@@ -703,13 +784,16 @@ Create a public share link for a collection or file. The link key (used to decry
 {
   "shareType": "collection",
   "targetId": "<uuid>",
-  "encryptedCollectionKey": "<base64>",
-  "encryptedCollectionKeyNonce": "<base64>",
+  "collectionKeyEnvelope": "<DriveEnvelopeV1 base64>",
   "expiresInHours": 48
 }
 ```
 
-`shareType` is `"collection"` or `"file"`. `expiresInHours` is optional — omit (or `null`) for no expiry. `encryptedCollectionKey` is the collection key wrapped under a randomly-generated link key that the client keeps in the URL fragment.
+V1 accepts only `shareType: "collection"`. `expiresInHours` is optional; omit
+or send `null` for no expiry. `collectionKeyEnvelope` uses the public-link
+purpose and binds the target collection, owner and current collection epoch.
+Malformed, relocated, stale-epoch or wrong-purpose envelopes are rejected
+before storage.
 
 **Response:** `201 Created`
 ```json
@@ -719,7 +803,9 @@ Create a public share link for a collection or file. The link key (used to decry
 }
 ```
 
-The client builds the share URL as `<SERVER_URL>/s/<token>#<linkKey>` — the server returns only the token.
+The client builds the share URL as
+`<SERVER_URL>/s/<token>#key=<base64-link-key>`; the server returns only the
+token.
 
 ---
 
@@ -735,8 +821,9 @@ Get metadata for a public share. The wrapped collection key is included; the lin
   "id": "<uuid>",
   "shareType": "collection",
   "targetId": "<uuid>",
-  "encryptedCollectionKey": "<base64>",
-  "encryptedCollectionKeyNonce": "<base64>",
+  "collectionKeyEnvelope": "<DriveEnvelopeV1 base64>",
+  "collectionKeyEpoch": 1,
+  "ownerUserId": "<uuid>",
   "expiresAt": "2026-04-01T00:00:00Z"
 }
 ```
@@ -757,10 +844,10 @@ List files in a public share.
   {
     "id": "<uuid>",
     "collectionId": "<uuid>",
-    "encryptedMetadata": "<base64>",
-    "metadataNonce": "<base64>",
-    "encryptedFileKey": "<base64>",
-    "fileKeyNonce": "<base64>",
+    "metadataEnvelope": "<DriveEnvelopeV1 base64>",
+    "fileKeyEnvelope": "<DriveEnvelopeV1 base64>",
+    "keyEpoch": 1,
+    "metadataRevision": 1,
     "encryptedSizeBytes": 4096,
     "createdAt": "2026-03-14T12:00:00Z"
   }
@@ -789,9 +876,9 @@ The local slice of the federated chat track ("ileti" — design: `docs/research/
 
 ### POST /api/chat/device
 
-Register the calling client as a chat device. The server assigns the lowest free device id (`1..=127` per user). Body: `registrationId` (libsignal, `1..16380`), `identityKey`, `signedPreKey` (signature required), `lastResortKyberPreKey` (bundles are never non-PQ), optional `oneTimePreKeys[]` / `oneTimeKyberPreKeys[]` pools, optional `name`. All key material base64.
+Register the calling client as a chat device. The server assigns the lowest free device id and enforces its configured active-device limit, never exceeding the V1 hard cap of 10. Body: `suite` (`1`), `registrationId` (libsignal, `1..16383`), `identityKey`, `signedPreKey` (signature required), `lastResortKyberPreKey` (bundles are never non-PQ), optional `oneTimePreKeys[]` / `oneTimeKyberPreKeys[]` pools, optional `name`. All key material is canonical base64.
 
-**Response:** `200 OK` → `{ "deviceId": 1 }` · `409` when all 127 ids are taken.
+**Response:** `200 OK` → `{ "deviceId": 1 }` · `409` when the configured active-device limit is reached.
 
 ### GET /api/chat/device
 
@@ -809,32 +896,43 @@ Rotate `signedPreKey` / `lastResortKyberPreKey` and/or upload more one-time prek
 
 Remaining one-time pool sizes: `{ "oneTimePreKeys": n, "oneTimeKyberPreKeys": n }` — clients replenish below a threshold.
 
-### POST /api/chat/manifest?transparencyTreeSize=N
+### POST /api/chat/manifest
 
-Publish the account-authority-signed current device manifest. Versions must
-advance by exactly one and hash-link to the preceding manifest; the authority
-key cannot rotate silently. The signed device ids, registration ids, and
-identity keys must exactly match the server's registered device set. Suite 1 is
-currently server-bounded and mandatory; authenticated per-device suite lists
-will be added to the next manifest format before another suite ships.
-`transparencyTreeSize` is the client's highest verified local checkpoint. A
-successful publish transactionally advances both the chronological log and
-current-value sparse map and returns the manifest with its transparency proof.
-Exact replay is idempotent; version, chain, authority, or device-set conflicts
-return `409`.
+Publish one complete `AccountManifestV1`, signed by the account self-authority.
+Sequences advance by exactly one and hash-link to the preceding signed record.
+The authority and incarnation cannot change inside a chain. The signed device
+ids, registration ids, direct-chat identity keys, MLS credential/delivery
+keys, and suites must exactly match the server's current registered device
+set. The Drive HPKE and share-signing keys are account-scoped fields in the
+same manifest. Publication atomically updates the current head and immutable
+history; exact replay is idempotent. Malformed signatures, gaps, forks,
+authority replacement, or device-set conflicts return `409`.
 
 ### GET /api/chat/users/{username}/manifest
 
 Return the current account-signed device manifest for a local user. This direct
-manifest endpoint is authenticated, but new-session directory reads should use
-the keys endpoint below because its response also binds the manifest to key
-transparency and supplies the PQXDH bundles.
+manifest endpoint is authenticated. A client independently verifies its
+signature, authority continuity, and hash chain rather than trusting a server
+status label.
+
+### GET /api/chat/users/{username}/manifest-history
+
+Return complete, individually account-signed manifest records for an exact
+inclusive range. Query parameters are `fromSequence`, `toSequence`, and an
+optional `pageFromSequence`. Pages contain at most 64 records and carry the
+next exact sequence, never an opaque server cursor. Missing, duplicated,
+reordered, cross-incarnation, or partially verified history does not clear a
+client gap and blocks new sends to that peer. A remote canonical address is
+resolved only through the authenticated federation transport.
 
 ### GET /api/chat/profile
 
 Owner-only recovery of the current opaque encrypted profile, including the
 random profile key wrapped under the account master key for linked-device
 recovery. Returns `404` until a profile has been published.
+The response carries `suite: 1`, canonical `account`, version, revision,
+source device, and canonical `ProfileEnvelopeV1` fields. The owner-only
+response includes the wrapped profile-key envelope; peer responses omit it.
 
 ### PUT /api/chat/profile
 
@@ -843,6 +941,10 @@ only ciphertext, a profile-key-derived version, an access-key verifier, a
 master-key-wrapped profile key, revision, and source device. Revision plus
 source-device ordering resolves concurrent linked-device writes; exact replay
 is idempotent and a stale/conflicting revision returns `409`.
+Every encrypted field binds the exact profile suite, authenticated canonical
+account, version, revision, source device and purpose. Unknown suites,
+noncanonical base64, malformed headers, relocation and trailing bytes return
+`400` before persistence.
 
 ### GET /api/chat/users/{username}/profile/{version}
 
@@ -851,39 +953,17 @@ address. The caller supplies the profile access key in the dedicated request
 header rather than the URL. A wrong version or capability is deliberately
 indistinguishable from a missing profile and returns `404`.
 
-### GET /api/chat/transparency/checkpoint?fromTreeSize=N
+### GET /api/chat/users/{username}/keys
 
-Public monitor endpoint; it does not consume prekeys or require a user account.
-Returns the current chronological checkpoint, sparse-map root, the persistent
-operator signature, and an RFC 6962 consistency path from `N` (`0` for first
-observation). Returns `404` while the log is empty and `409` when `N` is newer
-than the presented view. Clients verify the response before advancing durable
-state. The web client polls this endpoint on open,
-online/foreground/reconnect transitions, and every 15 visible minutes. It
-preserves the last valid pin on network failure and blocks new sends when
-authentication, consistency, or policy verification fails.
-
-### Remote transparency monitoring
-
-Authenticated clients use same-origin routes rather than supplying remote
-URLs: `GET /api/chat/transparency/domains/{domain}/status`, `POST
-/api/chat/transparency/domains/{domain}/verify`, `GET
-/api/chat/transparency/domains/{domain}/policy`, and `GET
-/api/chat/transparency/domains/{domain}/checkpoint?fromTreeSize=N`. Remote
-traffic stays inside the unified federation transport and its admission,
-resolution, timeout, size, and signature checks. The policy endpoint returns
-the complete authenticated history so the client can verify it independently.
-
-`POST /api/admin/chat/transparency/domains/{domain}/recover` is an
-administrator-only break-glass operation. Its body is `{ "evidenceDigest":
-"<active digest>", "reason": "<operator explanation>" }`. Recovery succeeds
-only when the digest names the current quarantine and a new monitor attempt
-obtains fresh valid evidence; the decision is persisted in the administrative
-audit log. It never installs a replacement key or bypasses proof verification.
-
-### GET /api/chat/users/{username}/keys?transparencyTreeSize=N
-
-PQXDH prekey bundles for **every** chat device of `username` (a message must encrypt to all of them), plus the account-signed device manifest and its transparency proof. `transparencyTreeSize` is the client's highest verified homeserver checkpoint (`0` initially); the response proves chronological inclusion of the exact manifest, sparse-map membership as the account's current value, inclusion of that map root as the checkpoint's final leaf, RFC 6962 consistency from the requested size, and the operator signature for the exact checkpoint. Each bundle carries `identityKey`, `signedPreKey`, `kyberPreKey` (a one-time Kyber prekey, **consumed** by this fetch, or the reusable last-resort key when the pool is empty) and optionally a consumed one-time EC prekey. Fetches are limited to 30/min per authenticated account (`RATE_LIMIT_CHAT_KEYS_PER_MIN`) with a coarse 120/min IP wall (`RATE_LIMIT_CHAT_KEYS_IP_PER_MIN`).
+Return PQXDH prekey bundles for **every** active Chat device of `username`
+(a logical message encrypts to all of them), together with the exact complete
+account-signed manifest. Each bundle carries `identityKey`, `signedPreKey`,
+`kyberPreKey` (a consumed one-time ML-KEM-1024 prekey, or the reusable
+last-resort key when the pool is empty), and optionally a consumed one-time EC
+prekey. The client verifies manifest and bundle identity equality before
+creating sessions. Fetches are limited to 30/min per authenticated account
+(`RATE_LIMIT_CHAT_KEYS_PER_MIN`) with a coarse 120/min IP wall
+(`RATE_LIMIT_CHAT_KEYS_IP_PER_MIN`).
 
 ### POST /api/chat/users/{username}/messages
 
@@ -950,13 +1030,23 @@ Return one immutable identity document from the locally verified, contiguous
 history. Genesis is sequence zero. Every rotation hash-links its predecessor
 and is signed by both old and new keys.
 
-### GET /api/fed/chat/users/{username}/keys?transparencyTreeSize=N
+### GET /api/fed/chat/users/{username}/keys
 
 Authenticated server-to-server directory lookup. Returns the remote user's
-account-signed device manifest, remote transparency proof, and replay-safe
-last-resort PQ bundles. It deliberately does not consume one-time prekeys, so a
-replayed signed read cannot exhaust the remote recipient's pool. The signed URI
-binds the caller's highest verified remote checkpoint.
+account-signed complete manifest and replay-safe last-resort PQ bundles. It
+deliberately does not consume one-time prekeys, so a replayed signed read cannot
+exhaust the remote recipient's pool.
+
+### GET /api/fed/chat/users/{username}/manifest
+
+Return the current complete account-signed manifest through an authenticated,
+origin- and destination-bound federation response.
+
+### GET /api/fed/chat/users/{username}/manifest-history
+
+Return the same exact-sequence, maximum-64-entry history pages as the local
+route. The signed request URI binds `fromSequence`, `toSequence`, and optional
+`pageFromSequence`.
 
 ### GET /api/fed/chat/users/{username}/profile/{version}
 
@@ -1004,9 +1094,18 @@ intended recipient username match the authenticated local account. Success is
 {
   "id": "<uuid>",
   "remoteDomain": "sharer.example.com",
-  "encryptedCollectionKey": "<base64>",
-  "encryptedName": "<base64>",
-  "nameNonce": "<base64>",
+  "remoteCollectionId": "<uuid>",
+  "namedShareEnvelope": "<NamedShareEnvelopeV1 base64>",
+  "nameEnvelope": "<DriveEnvelopeV1 base64>",
+  "keyEpoch": 1,
+  "nameRevision": 1,
+  "epochStatement": "<CollectionEpochStatementV1 base64>",
+  "epochStatementHash": "<lowercase SHA-256 hex>",
+  "ownerUserId": "<uuid>",
+  "ownerAccount": "alice@sharer.example.com",
+  "ownerIncarnationId": "<lowercase SHA-256 hex>",
+  "ownerSigningPublicKey": "<canonical base64, 32 bytes>",
+  "ownerAuthorityPublicKey": "<canonical base64, 32 bytes>",
   "canUpload": true,
   "canDelete": false,
   "uploadQuotaBytes": null,
@@ -1038,8 +1137,8 @@ then releases the verified stream to the browser.
 
 ### POST /api/drive/federation/shares/:shareId/files
 
-Upload encrypted multipart fields (`encryptedMetadata`, `metadataNonce`,
-`encryptedFileKey`, `fileKeyNonce`, and `file`). Exact retries are idempotent
+Upload encrypted multipart fields (`fileId`, `metadataEnvelope`,
+`fileKeyEnvelope`, and `file`). Exact retries are idempotent
 and return the same `201 { "id": "<uuid>" }` result.
 
 ### DELETE /api/drive/federation/shares/:shareId/files/:fileId
@@ -1513,7 +1612,24 @@ WebSocket upgrade. Auth via `Authorization: Bearer ...` header **or** `?token=..
 
 PreUpgrade validates: JWT (rejects setup/pre-auth tokens), file access (owner OR collection-share recipient), device registration (must belong to user, must be active). Failures return HTTP 401/403/404 BEFORE the WS handshake completes.
 
-On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{deviceId, userId}]}`. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then enters bidirectional binary mode. See `docs/superpowers/specs/2026-05-04-collab-edit-design.md` §5 for the wire envelope.
+On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{deviceId, userId}]}`. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then enters bidirectional binary mode. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF1\0` format documented in `docs/v1-format-inventory.md`; the server rejects an unknown suite, malformed length, invalid device signature, or any file/collection/epoch/document-generation mismatch.
+
+### PUT /api/files/:fileId/assets/:assetId
+
+Upload one whiteboard image as multipart field `file`. The part must be a
+complete `DriveEnvelopeV1` purpose-6 asset envelope for the exact live file,
+collection, current collection-key epoch and path `assetId`. Asset IDs are
+1–128 bytes and may not contain slash, backslash or `..`. Plaintext is capped
+at 25 MiB; oversized or invalid public envelopes are rejected before quota or
+object-storage mutation. **Auth:** Bearer JWT and file access. **Response:**
+`204` (content-addressed re-upload is idempotent).
+
+### GET /api/files/:fileId/assets/:assetId
+
+Return the stored opaque asset envelope as `application/octet-stream`. The
+client opens it with the current collection key and the same exact context;
+key, file, collection, epoch, asset-ID relocation and tampering fail closed.
+**Auth:** Bearer JWT and file access.
 
 ---
 
@@ -1524,7 +1640,11 @@ List all versions newest-first.
 **Response:** array of `{id, s3VersionId, storagePath, seqAtSnapshot, docKeyId, authorUserId, sizeBytes, label, keepForever, createdAt}`.
 
 ### GET /api/files/:fileId/versions/:vid/download
-Get the encrypted snapshot bytes for a specific version. Returns `application/octet-stream`. Headers: `X-Kutup-Doc-Key-Id`, `X-Kutup-Seq`, `X-Kutup-S3-Version`. The blob format is `nonce(24) || aead_ciphertext` encrypted under the per-file content key (HKDF-derived as documented above).
+Get the encrypted snapshot bytes for a specific version. Returns
+`application/octet-stream`. Headers: `X-Kutup-Doc-Key-Id`, `X-Kutup-Seq`,
+`X-Kutup-S3-Version`. The snapshot uses the same typed,
+file/collection/epoch-bound Drive file-blob format as an original file. There
+is no snapshot-specific legacy decoder.
 
 ### PATCH /api/files/:fileId/versions/:vid
 **Body:** `{label?: string, keepForever?: boolean}` — set or unset.
@@ -1536,5 +1656,9 @@ Record a new snapshot. Server inserts the row and truncates `file_update_log` up
 **Response 201:** `{id}` — the version row id.
 
 ### POST /api/files/:fileId/snapshot-blob
-Multipart `file` upload of the encrypted snapshot bytes. Companion to POST /versions; uploads the actual blob to S3 (with versioning enabled), returns the S3 metadata for the client to hand to /versions.
+Multipart `file` upload of a complete typed Drive file blob. Companion to POST
+/versions; validates its exact file, collection and current epoch binding,
+uploads the opaque bytes to S3 with versioning enabled, then returns the S3
+metadata for the client to hand to /versions. Text, office and whiteboard
+snapshots use this one format.
 **Response:** `{storagePath, s3VersionId}`.

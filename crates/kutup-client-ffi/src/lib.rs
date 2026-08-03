@@ -123,8 +123,21 @@ impl NativeChatClient {
             .await
     }
 
-    pub async fn verify_authority(&self, peer: String) -> Result<ChatManifestTrust> {
-        self.dispatch(|reply| Command::VerifyAuthority { peer, reply })
+    pub async fn safety_number(&self, peer: String) -> Result<ChatSafetyNumber> {
+        self.dispatch(|reply| Command::SafetyNumber { peer, reply })
+            .await
+    }
+
+    pub async fn verify_safety_number(
+        &self,
+        peer: String,
+        scanned_payload: String,
+    ) -> Result<ChatSafetyNumber> {
+        self.dispatch(|reply| Command::VerifySafetyNumber {
+            peer,
+            scanned_payload,
+            reply,
+        })
             .await
     }
 }
@@ -171,7 +184,6 @@ pub async fn open_native_chat_client(
     user: String,
     server_name: String,
     master_key: Vec<u8>,
-    transparency_policy: ChatTransparencyPolicy,
     http: Arc<dyn ChatHttpClient>,
 ) -> Result<Arc<NativeChatClient>> {
     if database_path.trim().is_empty() {
@@ -204,7 +216,6 @@ pub async fn open_native_chat_client(
                     master_key,
                     user: worker_user,
                     server_name,
-                    transparency_policy: transparency_policy.into(),
                     http,
                 },
                 receiver,
@@ -241,7 +252,6 @@ struct WorkerConfig {
     master_key: [u8; 32],
     user: String,
     server_name: String,
-    transparency_policy: kutup_chat_core::TransparencyPolicy,
     http: Arc<dyn ChatHttpClient>,
 }
 
@@ -267,9 +277,14 @@ enum Command {
         id: String,
         reply: oneshot::Sender<Result<()>>,
     },
-    VerifyAuthority {
+    SafetyNumber {
         peer: String,
-        reply: oneshot::Sender<Result<ChatManifestTrust>>,
+        reply: oneshot::Sender<Result<ChatSafetyNumber>>,
+    },
+    VerifySafetyNumber {
+        peer: String,
+        scanned_payload: String,
+        reply: oneshot::Sender<Result<ChatSafetyNumber>>,
     },
     Shutdown(oneshot::Sender<Result<()>>),
 }
@@ -292,7 +307,6 @@ fn worker_main(
         let mut engine =
             Engine::register(database, transport, config.user, INITIAL_PREKEYS, &mut rng).await?;
         engine.set_local_server(&config.server_name)?;
-        engine.set_transparency_policy(config.transparency_policy)?;
         engine.sync_own_manifest(&authority, now_rfc3339()?).await?;
         Result::<_>::Ok((engine, authority))
     });
@@ -393,9 +407,22 @@ fn worker_main(
                 });
                 let _ = reply.send(result);
             }
-            Command::VerifyAuthority { peer, reply } => {
+            Command::SafetyNumber { peer, reply } => {
                 let result = futures_executor::block_on(async {
-                    Ok(engine.mark_authority_verified(&peer).await?.into())
+                    Ok(engine.safety_number(&authority, &peer).await?.into())
+                });
+                let _ = reply.send(result);
+            }
+            Command::VerifySafetyNumber {
+                peer,
+                scanned_payload,
+                reply,
+            } => {
+                let result = futures_executor::block_on(async {
+                    Ok(engine
+                        .verify_safety_number(&authority, &peer, &scanned_payload)
+                        .await?
+                        .into())
                 });
                 let _ = reply.send(result);
             }
