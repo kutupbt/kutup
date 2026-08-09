@@ -85,6 +85,30 @@ An account may have 1-10 active devices. `CHAT_MAX_ACTIVE_DEVICES` may lower
 the local limit but cannot exceed ten. Device wire IDs remain 1-127 and are not
 reused as an assertion of active-device capacity.
 
+### 4.1 Web installation continuity
+
+A browser installation is a cryptographic device, not merely a login session.
+IndexedDB/site-data loss, a private window, a new browser profile or storage
+eviction therefore creates a new device key tuple. Password-derived account
+authority proves that the account may authorize the tuple; it does not make
+old per-device libsignal ciphertext decryptable by the replacement.
+
+Before V1, clients must provide explicit active-installation review, last-seen
+information and revocation. Linking a new installation while an authorized
+device survives must offer an authenticated one-time E2EE history transfer.
+The old device packages a bounded local history and recent-media snapshot,
+encrypts it to an ephemeral key authenticated by both exact manifest devices,
+and the new device verifies the transcript before import. The homeserver may
+relay and temporarily retain only opaque bounded transfer frames; it never
+receives plaintext or a reusable history key.
+
+History transfer is distinct from message delivery. Senders fan out only to
+the exact signed destination manifest observed for that send. Adding a device
+does not authorize the server to copy or transform an older device's mailbox.
+If no authorized old device or E2EE backup survives, old device-addressed
+ciphertext is unrecoverable and the UI must disclose that condition. It must
+not silently render an empty history as proof that no messages were sent.
+
 `AccountManifestV1` contains:
 
 - canonical account and account-identity suite;

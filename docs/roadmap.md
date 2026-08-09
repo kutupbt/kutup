@@ -51,6 +51,13 @@ The following are release blockers:
   epochs;
 - an administrator-controlled 1–10 active-device limit (default and hard cap
   10), enforced identically by every Chat and identity path;
+- Signal-class web-device continuity: explicit active-installation review and
+  revocation plus an authenticated, end-to-end encrypted history transfer from
+  an existing device to a newly linked browser installation. Clearing browser
+  storage, using a private window, or losing a profile must never create a
+  silent permanent mailbox. The homeserver never decrypts or re-encrypts
+  history, and a replacement with no surviving device/backup must state that
+  old ciphertext is unrecoverable;
 - MLS suite `0x0003` and real 256-account/2,560-leaf group gates; and
 - confidential broadcast for 1,000,000 accounts and up to 10,000,000 device
   grants using the separate LKH plus small-MLS-control-group design.
@@ -236,6 +243,20 @@ names unambiguous):
 | 9 | Native clients | Freeze UniFFI APIs, package XCFramework/AAR, add Keychain/Keystore, then integrate iOS and Android against the proven web protocol. |
 
 Device-list authenticity (the signed per-account device manifest) is **not** in phase 7 — it is a phase-2b/2 wire-contract requirement per the comparative study.
+
+Device continuity is also a **V1 blocker**, not generic PWA polish. Browser
+installations are volatile: site-data eviction, private windows, profile
+replacement and manual storage clearing all create new cryptographic devices.
+V1 must expose active Chat installations and last activity, support immediate
+revocation, and offer a Signal-style first-link history transfer when an
+existing authorized device is available. The transfer is a one-time
+authenticated E2EE device-to-device channel carrying a bounded history/media
+snapshot; the provider only relays opaque bytes. New messages fan out to the
+new manifest only after it is signed. Messages addressed solely to an
+abandoned device are not server-recoverable, and the UI must say so rather
+than presenting an unexplained empty inbox. Automated manual-fixture setup
+must not publish disposable headless devices unless it retains or revokes
+them.
 
 #### Phase 6 attachment storage and download decision
 
