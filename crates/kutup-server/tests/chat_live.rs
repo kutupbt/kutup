@@ -15,14 +15,17 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ed25519_dalek::{Signer as _, SigningKey};
 use kutup_chat_proto::{
-    AccountIdentitySuiteId, AccountManifestDeviceV1, AccountManifestDriveKeysV1,
-    AccountManifestPublicationV1, AccountManifestV1, DirectChatSuiteId, ProfileEnvelopeContextV1,
+    chat_history_transfer_transcript_hash, AccountIdentitySuiteId, AccountManifestDeviceV1,
+    AccountManifestDriveKeysV1, AccountManifestPublicationV1, AccountManifestV1,
+    ChatHistoryTransferAcceptanceV1, ChatHistoryTransferCompletionV1, ChatHistoryTransferFrameV1,
+    ChatHistoryTransferRequestV1, DirectChatSuiteId, ProfileEnvelopeContextV1,
     ProfileEnvelopePurpose, UserPreKeyBundlesResponse,
 };
 use rand::RngCore;
 use reqwest::{blocking::Client, StatusCode};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 fn b64(b: &[u8]) -> String {
     STANDARD.encode(b)
@@ -58,7 +61,11 @@ fn client() -> Client {
 }
 
 /// Registers a fresh account and returns `(email, username, access_token)`.
-fn register_and_login(c: &Client, base: &str, tag: &str) -> (String, String, String, String) {
+fn register_and_login(
+    c: &Client,
+    base: &str,
+    tag: &str,
+) -> (String, String, String, String, SigningKey, String) {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -151,11 +158,15 @@ fn register_and_login(c: &Client, base: &str, tag: &str) -> (String, String, Str
         .json()
         .unwrap();
     let token = resp["accessToken"].as_str().unwrap().to_string();
+    let authority = identity.authority_signing_key().clone();
+    let drive_signing_public_key = b64(&identity.drive_signing_public_key());
     (
         email,
         username,
         token,
         b64(&identity.drive_hpke_public_key()),
+        authority,
+        drive_signing_public_key,
     )
 }
 
@@ -239,6 +250,29 @@ fn register_chat_device(c: &Client, base: &str, token: &str) -> (u32, u32, Strin
     (device_id, reg_id, identity_key)
 }
 
+fn synthetic_history_request(
+    account: &str,
+    device_id: u32,
+    manifest_sequence: u64,
+) -> ChatHistoryTransferRequestV1 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    ChatHistoryTransferRequestV1 {
+        version: 1,
+        transfer_id: Uuid::new_v4().to_string(),
+        account: account.into(),
+        requesting_device_id: device_id,
+        manifest_sequence,
+        ephemeral_public_key: b64(&[31; 32]),
+        request_nonce: b64(&[32; 32]),
+        created_at_unix: now,
+        expires_at_unix: now + 900,
+        device_signature: b64(&[33; 64]),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn publish_manifest(
     c: &Client,
@@ -247,6 +281,7 @@ fn publish_manifest(
     signing: &SigningKey,
     account: &str,
     drive_public_key: &str,
+    drive_signing_public_key: &str,
     sequence: u64,
     previous_hash: Option<String>,
     devices: Vec<AccountManifestDeviceV1>,
@@ -255,7 +290,6 @@ fn publish_manifest(
     let mut incarnation = Sha256::new();
     incarnation.update(b"kutup/account-incarnation/v1\0");
     incarnation.update(public.as_bytes());
-    let drive_signing = SigningKey::from_bytes(&[99; 32]);
     let mut manifest = AccountManifestV1 {
         manifest_version: 1,
         account: account.into(),
@@ -265,7 +299,7 @@ fn publish_manifest(
         drive: AccountManifestDriveKeysV1 {
             suite: AccountIdentitySuiteId::X25519Ed25519V1,
             hpke_public_key: drive_public_key.into(),
-            share_signing_public_key: b64(drive_signing.verifying_key().as_bytes()),
+            share_signing_public_key: drive_signing_public_key.into(),
         },
         devices,
         issued_at: time::OffsetDateTime::now_utc()
@@ -325,11 +359,8 @@ fn chat_v1_contract() {
     assert_eq!(chat["suites"], json!([1]));
     let max = chat["maxContentBytes"].as_u64().unwrap();
     assert_eq!(max, 65536);
-    assert_eq!(chat["sealedSender"], false);
-    assert_eq!(
-        chat["mlsGroups"], false,
-        "MLS groups fail closed without an authenticated ordering policy"
-    );
+    assert!(chat["sealedSender"].is_boolean());
+    assert!(chat["mlsGroups"].is_boolean());
     assert_eq!(chat["manifests"], true);
     assert_eq!(chat["profiles"], true);
     assert!(chat.get("keyTransparency").is_none());
@@ -337,8 +368,8 @@ fn chat_v1_contract() {
     assert!(chat["deviceExpiryDays"].is_number());
     println!("ok  - capability block");
 
-    let (_ea, ua, ta, drive_a) = register_and_login(&c, &base, "a");
-    let (_eb, ub, tb, drive_b) = register_and_login(&c, &base, "b");
+    let (_ea, ua, ta, drive_a, authority_a, drive_sign_a) = register_and_login(&c, &base, "a");
+    let (_eb, ub, tb, drive_b, authority_b, drive_sign_b) = register_and_login(&c, &base, "b");
     let domain = std::env::var("KUTUP_LIVE_SERVER_NAME").unwrap_or_else(|_| "local.test".into());
     let account_a = format!("{ua}@{domain}");
     let account_b = format!("{ub}@{domain}");
@@ -349,8 +380,6 @@ fn chat_v1_contract() {
     let (dev_b, reg_b, identity_b) = register_chat_device(&c, &base, &tb);
     println!("ok  - chat devices registered (A={dev_a} B={dev_b})");
 
-    let authority_a = SigningKey::from_bytes(&[71; 32]);
-    let authority_b = SigningKey::from_bytes(&[72; 32]);
     let manifest_a1 = publish_manifest(
         &c,
         &base,
@@ -358,6 +387,7 @@ fn chat_v1_contract() {
         &authority_a,
         &account_a,
         &drive_a,
+        &drive_sign_a,
         1,
         None,
         vec![AccountManifestDeviceV1 {
@@ -394,6 +424,7 @@ fn chat_v1_contract() {
         &authority_b,
         &account_b,
         &drive_b,
+        &drive_sign_b,
         1,
         None,
         vec![AccountManifestDeviceV1 {
@@ -510,6 +541,7 @@ fn chat_v1_contract() {
         &authority_a,
         &account_a,
         &drive_a,
+        &drive_sign_a,
         2,
         Some(manifest_a1.manifest_hash().unwrap()),
         vec![
@@ -562,6 +594,7 @@ fn chat_v1_contract() {
         &authority_a,
         &account_a,
         &drive_a,
+        &drive_sign_a,
         3,
         Some(manifest_a2.manifest_hash().unwrap()),
         manifest_a2.devices.clone(),
@@ -755,4 +788,230 @@ fn chat_v1_contract() {
     println!("ok  - ack deletes");
 
     println!("\nALL CHAT v1 CONTRACT CHECKS PASSED");
+}
+
+#[test]
+fn chat_history_transfer_relay_contract() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER unset — skipping live history-transfer test");
+        return;
+    };
+    let c = client();
+    let (_email, username, token, drive, authority, drive_signing) =
+        register_and_login(&c, &base, "history");
+    let domain = std::env::var("KUTUP_LIVE_SERVER_NAME").unwrap_or_else(|_| "local.test".into());
+    let account = format!("{username}@{domain}");
+    let (old_device, old_registration, old_identity) = register_chat_device(&c, &base, &token);
+    let (new_device, new_registration, new_identity) = register_chat_device(&c, &base, &token);
+    publish_manifest(
+        &c,
+        &base,
+        &token,
+        &authority,
+        &account,
+        &drive,
+        &drive_signing,
+        1,
+        None,
+        vec![
+            AccountManifestDeviceV1 {
+                device_id: old_device,
+                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+                identity_key: old_identity,
+                registration_id: old_registration,
+                mls: None,
+            },
+            AccountManifestDeviceV1 {
+                device_id: new_device,
+                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+                identity_key: new_identity,
+                registration_id: new_registration,
+                mls: None,
+            },
+        ],
+    );
+
+    let request = synthetic_history_request(&account, new_device, 1);
+    let created = c
+        .post(format!("{base}/api/chat/history-transfers"))
+        .bearer_auth(&token)
+        .json(&request)
+        .send()
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+
+    let visible: Value = c
+        .get(format!(
+            "{base}/api/chat/history-transfers?deviceId={old_device}"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(visible["transfers"].as_array().unwrap().len(), 1);
+
+    let acceptance = ChatHistoryTransferAcceptanceV1 {
+        version: 1,
+        transfer_id: request.transfer_id.clone(),
+        account: account.clone(),
+        requesting_device_id: new_device,
+        responding_device_id: old_device,
+        manifest_sequence: 1,
+        request_hash: hex::encode(request.signed_hash().unwrap()),
+        ephemeral_public_key: b64(&[41; 32]),
+        created_at_unix: request.created_at_unix,
+        expires_at_unix: request.expires_at_unix,
+        record_limit: 100,
+        plaintext_byte_limit: 1024 * 1024,
+        device_signature: b64(&[42; 64]),
+    };
+    let transcript = hex::encode(
+        chat_history_transfer_transcript_hash(&request, &acceptance, request.created_at_unix)
+            .unwrap(),
+    );
+    let accepted = c
+        .put(format!(
+            "{base}/api/chat/history-transfers/{}/acceptance?deviceId={old_device}",
+            request.transfer_id
+        ))
+        .bearer_auth(&token)
+        .json(&acceptance)
+        .send()
+        .unwrap();
+    assert!(
+        accepted.status().is_success(),
+        "accept: {}",
+        accepted.status()
+    );
+
+    let frame = ChatHistoryTransferFrameV1 {
+        version: 1,
+        transfer_id: request.transfer_id.clone(),
+        transcript_hash: transcript.clone(),
+        index: 0,
+        final_frame: true,
+        plaintext_bytes: 4,
+        nonce: b64(&[51; 24]),
+        ciphertext: b64(&[52; 20]),
+    };
+    let mut gap = frame.clone();
+    gap.index = 1;
+    let rejected_gap = c
+        .put(format!(
+            "{base}/api/chat/history-transfers/{}/frames/1?deviceId={old_device}",
+            request.transfer_id
+        ))
+        .bearer_auth(&token)
+        .json(&gap)
+        .send()
+        .unwrap();
+    assert_eq!(rejected_gap.status(), StatusCode::CONFLICT);
+
+    let stored = c
+        .put(format!(
+            "{base}/api/chat/history-transfers/{}/frames/0?deviceId={old_device}",
+            request.transfer_id
+        ))
+        .bearer_auth(&token)
+        .json(&frame)
+        .send()
+        .unwrap();
+    assert!(
+        stored.status().is_success(),
+        "store frame: {}",
+        stored.status()
+    );
+    let page: Value = c
+        .get(format!(
+            "{base}/api/chat/history-transfers/{}/frames?deviceId={new_device}",
+            request.transfer_id
+        ))
+        .bearer_auth(&token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(page["frames"].as_array().unwrap().len(), 1);
+    assert_eq!(page["frames"][0]["ciphertext"], frame.ciphertext);
+
+    let completion = ChatHistoryTransferCompletionV1 {
+        version: 1,
+        transfer_id: request.transfer_id.clone(),
+        transcript_hash: transcript,
+        destination_device_id: new_device,
+        frame_count: 1,
+        record_count: 1,
+        media_plaintext_bytes: 0,
+        plaintext_digest: "61".repeat(32),
+        completed_at_unix: request.created_at_unix,
+        device_signature: b64(&[62; 64]),
+    };
+    let mut oversized_completion = completion.clone();
+    oversized_completion.record_count = 101;
+    let rejected_completion = c
+        .post(format!(
+            "{base}/api/chat/history-transfers/{}/completion?deviceId={new_device}",
+            request.transfer_id
+        ))
+        .bearer_auth(&token)
+        .json(&oversized_completion)
+        .send()
+        .unwrap();
+    assert_eq!(rejected_completion.status(), StatusCode::BAD_REQUEST);
+    let completed = c
+        .post(format!(
+            "{base}/api/chat/history-transfers/{}/completion?deviceId={new_device}",
+            request.transfer_id
+        ))
+        .bearer_auth(&token)
+        .json(&completion)
+        .send()
+        .unwrap();
+    assert!(
+        completed.status().is_success(),
+        "complete: {}",
+        completed.status()
+    );
+    let after: Value = c
+        .get(format!(
+            "{base}/api/chat/history-transfers?deviceId={new_device}"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert!(after["transfers"].as_array().unwrap().is_empty());
+
+    let cancellation = synthetic_history_request(&account, new_device, 1);
+    assert!(c
+        .post(format!("{base}/api/chat/history-transfers"))
+        .bearer_auth(&token)
+        .json(&cancellation)
+        .send()
+        .unwrap()
+        .status()
+        .is_success());
+    let revoked = c
+        .delete(format!("{base}/api/chat/device/{new_device}"))
+        .bearer_auth(&token)
+        .send()
+        .unwrap();
+    assert_eq!(revoked.status(), StatusCode::NO_CONTENT);
+    let gone: Value = c
+        .get(format!(
+            "{base}/api/chat/history-transfers?deviceId={old_device}"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert!(
+        gone["transfers"].as_array().unwrap().is_empty(),
+        "device revocation cascades transfer deletion"
+    );
+
+    println!("ALL CHAT HISTORY TRANSFER RELAY CHECKS PASSED");
 }

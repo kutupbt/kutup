@@ -484,6 +484,35 @@ fn build_router(state: AppState) -> Router {
             post(chat::register_device).get(chat::list_devices),
         )
         .route("/api/chat/device/:deviceId", delete(chat::revoke_device))
+        .route(
+            "/api/chat/history-transfers",
+            post(handlers::chat_history_transfer::create)
+                .get(handlers::chat_history_transfer::list)
+                .route_layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/chat/history-transfers/:transferId",
+            delete(handlers::chat_history_transfer::cancel),
+        )
+        .route(
+            "/api/chat/history-transfers/:transferId/acceptance",
+            put(handlers::chat_history_transfer::accept)
+                .route_layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/chat/history-transfers/:transferId/frames/:index",
+            put(handlers::chat_history_transfer::put_frame)
+                .route_layer(DefaultBodyLimit::max(400 * 1024)),
+        )
+        .route(
+            "/api/chat/history-transfers/:transferId/frames",
+            get(handlers::chat_history_transfer::drain_frames),
+        )
+        .route(
+            "/api/chat/history-transfers/:transferId/completion",
+            post(handlers::chat_history_transfer::complete)
+                .route_layer(DefaultBodyLimit::max(16 * 1024)),
+        )
         .route("/api/chat/manifest", post(chat::publish_manifest))
         .route(
             "/api/chat/profile",

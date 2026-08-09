@@ -886,7 +886,53 @@ The caller's chat devices: `{ "devices": [{ "deviceId", "suite", "name", "create
 
 ### DELETE /api/chat/device/{deviceId}
 
-Revoke a chat device — hard delete; prekey pools and mailbox rows cascade, live sockets close. `204`.
+Revoke a chat device — hard delete; prekey pools, mailbox rows, and any history
+transfer involving it cascade, and live sockets close. `204`.
+
+### POST /api/chat/history-transfers
+
+Stage a structurally validated, manifest-bound `ChatHistoryTransferRequestV1`.
+The exact requesting device must be present in the current signed manifest.
+The request expires after at most 15 minutes. Exact retries are idempotent;
+reuse of a transfer UUID for different bytes returns `409`.
+
+### GET /api/chat/history-transfers?deviceId=N
+
+List unexpired transfer requests visible to one exact current manifest device.
+Pending requests are visible to the account's other devices; after acceptance,
+only the two participants see the transfer.
+
+### PUT /api/chat/history-transfers/{transferId}/acceptance?deviceId=N
+
+Explicitly accept a request as a distinct existing manifest device. The signed
+acceptance must bind the request hash, both device IDs, manifest sequence,
+ephemeral key, expiry, record ceiling, and plaintext-byte ceiling. Only one
+responder can accept.
+
+### PUT /api/chat/history-transfers/{transferId}/frames/{index}?deviceId=N
+
+Upload one opaque `ChatHistoryTransferFrameV1` as the responding device.
+Indexes are contiguous from zero; retries must be byte-identical; only one
+final frame is accepted. V1 permits at most 1,024 frames, 256 KiB plaintext per
+frame, and 256 MiB total plaintext (an acceptance may select lower limits).
+
+### GET /api/chat/history-transfers/{transferId}/frames?deviceId=N
+
+Drain opaque frames as the exact requesting device. Optional `after` and
+`limit` parameters page the ordered frame set. The homeserver never decrypts
+or validates archive plaintext.
+
+### POST /api/chat/history-transfers/{transferId}/completion?deviceId=N
+
+Store the requesting-device-signed completion only when its transcript and
+frame count match a stored set containing exactly one final frame. All opaque
+ciphertext frames are deleted in the same transaction.
+
+### DELETE /api/chat/history-transfers/{transferId}?deviceId=N
+
+Cancel and erase a transfer as either participant. Expiry maintenance removes
+stale transfers; revoking either Chat device deletes the transfer by foreign-key
+cascade.
 
 ### PUT /api/chat/keys?deviceId=N
 

@@ -92,6 +92,7 @@ pub struct ChatSweepResult {
     pub federation_transaction_rows: u64,
     pub devices: u64,
     pub ws_tickets: u64,
+    pub history_transfers: u64,
 }
 
 /// Bound offline-ciphertext and idempotency storage and retire abandoned chat
@@ -110,6 +111,16 @@ pub async fn chat_maintenance_once(
     {
         Ok(done) => result.ws_tickets = done.rows_affected(),
         Err(error) => tracing::warn!("chat maintenance: WS ticket cleanup failed: {error}"),
+    }
+    match sqlx::query(
+        "DELETE FROM chat_history_transfers
+         WHERE expires_at <= now() OR (state='completed' AND updated_at < now()-interval '15 minutes')",
+    )
+    .execute(pool)
+    .await
+    {
+        Ok(done) => result.history_transfers = done.rows_affected(),
+        Err(error) => tracing::warn!("chat maintenance: history transfer cleanup failed: {error}"),
     }
     if policy.mailbox_retention_days > 0 {
         match sqlx::query(
@@ -193,6 +204,7 @@ pub async fn chat_maintenance_once(
             federation_transaction_rows = result.federation_transaction_rows,
             devices = result.devices,
             ws_tickets = result.ws_tickets,
+            history_transfers = result.history_transfers,
             "chat maintenance complete"
         );
     }

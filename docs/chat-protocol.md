@@ -169,6 +169,11 @@ Relevant routes:
 |---|---|
 | `POST /api/chat/device` | restart-safe device registration |
 | `DELETE /api/chat/device/{deviceId}` | revoke one device |
+| `POST/GET /api/chat/history-transfers` | create/list account-local signed transfer requests |
+| `PUT /api/chat/history-transfers/{id}/acceptance` | one existing device explicitly accepts |
+| `PUT/GET /api/chat/history-transfers/{id}/frames[/index]` | upload/drain bounded opaque frames |
+| `POST /api/chat/history-transfers/{id}/completion` | record destination completion and erase frames |
+| `DELETE /api/chat/history-transfers/{id}` | cancel and erase a participant's transfer |
 | `POST /api/chat/manifest` | publish exact next signed manifest |
 | `GET /api/chat/users/{username}/manifest` | current local/federated manifest |
 | `GET /api/chat/users/{username}/manifest-history` | bounded complete history page |

@@ -767,6 +767,10 @@ pub enum ChatWsServerMessage {
     /// Sent after connect once the pre-existing mailbox backlog should be drained via
     /// REST (avoids replaying a large backlog through the socket).
     DrainMailbox,
+    /// An account-local history-transfer request or state change is available.
+    /// The socket carries no archive metadata; clients fetch authenticated
+    /// opaque relay state over REST.
+    HistoryTransferAvailable { transfer_id: String },
 }
 
 /// [ADD] The `chat` block of `GET /api/auth/settings` — how a client
