@@ -304,7 +304,7 @@ fn decode_canonical_base64(label: &str, value: &str) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::{ChatDb, SqliteChatDb};

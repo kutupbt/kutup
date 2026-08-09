@@ -669,7 +669,7 @@ fn verify_private_control_accounts<'a>(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 fn advance_test_private_control<'a>(
     mut state: MlsPrivateControlStateV1,
     additions: impl Iterator<Item = &'a str>,
@@ -984,9 +984,9 @@ fn group_control_credential(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod policy_tests;
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod scale_tests;
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests;

@@ -248,7 +248,7 @@ impl MlsClient {
 
     /// Create an epoch-zero group using the authenticated genesis `GroupId`.
     /// Existing group state is returned idempotently and is never overwritten.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "sqlite"))]
     pub(crate) async fn create_group(&self, mls_group_id: &[u8]) -> Result<LocalMlsGroupState> {
         validate_group_id(mls_group_id)?;
         let (provider, mut metadata) = self.load_provider().await?;

@@ -19,9 +19,9 @@ use serde_wasm_bindgen::Serializer;
 use wasm_bindgen::JsValue;
 
 use crate::db::{
-    AccountManifestHistoryRecordV1, ChatDb, ContactRecord, InboundEnvelope, InboxMessage,
-    LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxEntry, OutboxEntry,
-    PeerProfile, Pending, SentMessage,
+    AccountManifestHistoryRecordV1, ChatDb, ContactRecord, ImportedHistoryRecordV1,
+    InboundEnvelope, InboxMessage, LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage,
+    MlsOutboxEntry, OutboxEntry, PeerProfile, Pending, SentMessage,
 };
 use crate::error::{ChatError, Result};
 
@@ -40,6 +40,7 @@ const MLS_OUTBOX: &str = "mls_outbox";
 const MLS_MESSAGES: &str = "mls_messages";
 const MESSAGES: &str = "messages";
 const SENT_MESSAGES: &str = "sent_messages";
+const IMPORTED_HISTORY: &str = "imported_history";
 const INBOUND: &str = "inbound";
 const MANIFEST_TRUST: &str = "manifest_trust";
 const MANIFEST_HISTORY: &str = "manifest_history";
@@ -48,7 +49,7 @@ const LOCAL_PROFILE: &str = "local_profile";
 const PEER_PROFILES: &str = "peer_profiles";
 const META: &str = "meta";
 
-const ALL_STORES: [&str; 22] = [
+const ALL_STORES: [&str; 23] = [
     LOCAL_IDENTITY,
     SESSIONS,
     IDENTITIES,
@@ -64,6 +65,7 @@ const ALL_STORES: [&str; 22] = [
     MLS_MESSAGES,
     MESSAGES,
     SENT_MESSAGES,
+    IMPORTED_HISTORY,
     INBOUND,
     MANIFEST_TRUST,
     MANIFEST_HISTORY,
@@ -97,7 +99,7 @@ impl IndexedDbChatDb {
             ));
         }
 
-        let mut builder = Rexie::builder(name).version(9);
+        let mut builder = Rexie::builder(name).version(10);
         for store in ALL_STORES {
             builder = builder.add_object_store(ObjectStore::new(store));
         }
@@ -287,6 +289,26 @@ impl ChatDb for IndexedDbChatDb {
         Ok(messages)
     }
 
+    async fn load_imported_history(
+        &self,
+        transfer_id: &str,
+        source_record_id: &str,
+    ) -> Result<Option<ImportedHistoryRecordV1>> {
+        self.get(IMPORTED_HISTORY, pair_key(transfer_id, source_record_id))
+            .await
+    }
+
+    async fn list_imported_history(&self) -> Result<Vec<ImportedHistoryRecordV1>> {
+        let mut records = self.all::<ImportedHistoryRecordV1>(IMPORTED_HISTORY).await?;
+        records.sort_by(|left, right| {
+            left.timestamp_ms
+                .cmp(&right.timestamp_ms)
+                .then_with(|| left.transfer_id.cmp(&right.transfer_id))
+                .then_with(|| left.source_record_id.cmp(&right.source_record_id))
+        });
+        Ok(records)
+    }
+
     async fn list_inbound(&self) -> Result<Vec<InboundEnvelope>> {
         let mut inbound = self.all::<InboundEnvelope>(INBOUND).await?;
         inbound.sort_by(|left, right| {
@@ -377,6 +399,18 @@ impl ChatDb for IndexedDbChatDb {
                 }
             }
         }
+        for ((transfer_id, source_record_id), record) in &pending.imported_history {
+            if let Some(existing) = self
+                .load_imported_history(transfer_id, source_record_id)
+                .await?
+            {
+                if existing != *record {
+                    return Err(ChatError::Trust(format!(
+                        "immutable imported history conflicts at {transfer_id}/{source_record_id}"
+                    )));
+                }
+            }
+        }
 
         // Serialize before opening the transaction. Serialization cannot leave
         // a partially queued write-set, and 64-bit counters become JS BigInts
@@ -399,6 +433,7 @@ impl ChatDb for IndexedDbChatDb {
         let mls_messages = idb(transaction.store(MLS_MESSAGES))?;
         let messages = idb(transaction.store(MESSAGES))?;
         let sent_messages = idb(transaction.store(SENT_MESSAGES))?;
+        let imported_history = idb(transaction.store(IMPORTED_HISTORY))?;
         let inbound = idb(transaction.store(INBOUND))?;
         let manifest_trust = idb(transaction.store(MANIFEST_TRUST))?;
         let manifest_history = idb(transaction.store(MANIFEST_HISTORY))?;
@@ -451,6 +486,13 @@ impl ChatDb for IndexedDbChatDb {
             operations.push(delete_op(&messages, string_key(&id)));
         }
         stage_puts(&mut operations, &sent_messages, writes.sent_messages);
+        for ((transfer_id, source_record_id), value) in writes.imported_history {
+            operations.push(put_op(
+                &imported_history,
+                value,
+                pair_key(&transfer_id, &source_record_id),
+            ));
+        }
         stage_map(&mut operations, &inbound, writes.inbound);
         stage_puts(&mut operations, &manifest_trust, writes.manifest_trust);
         for ((peer, incarnation_id, version), value) in writes.manifest_history {
@@ -574,6 +616,7 @@ struct PreparedWrites {
     mls_messages: Vec<(String, JsValue)>,
     messages: Vec<(String, JsValue)>,
     sent_messages: Vec<(String, JsValue)>,
+    imported_history: Vec<((String, String), JsValue)>,
     inbound: Vec<(String, Option<JsValue>)>,
     manifest_trust: Vec<(String, JsValue)>,
     manifest_history: Vec<((String, String, u64), JsValue)>,
@@ -617,6 +660,7 @@ impl PreparedWrites {
                 .map(|message| Ok((message.id.clone(), to_js(message)?)))
                 .collect::<Result<_>>()?,
             sent_messages: serialize_map(&pending.sent_messages)?,
+            imported_history: serialize_map(&pending.imported_history)?,
             inbound: serialize_optional_map(&pending.inbound)?,
             manifest_trust: serialize_map(&pending.manifest_trust)?,
             manifest_history: serialize_map(&pending.manifest_history)?,
@@ -761,6 +805,27 @@ mod tests {
                 deduplicated: false,
             },
         );
+        let imported = ImportedHistoryRecordV1 {
+            transfer_id: "11111111-1111-4111-8111-111111111111".into(),
+            source_record_id: "source-1".into(),
+            source_device_id: 1,
+            conversation: kutup_chat_proto::ConversationId::direct(
+                kutup_chat_proto::AccountAddress::federated("alice", "a.test").unwrap(),
+            ),
+            sender: "alice@a.test".into(),
+            sender_device_id: 1,
+            outgoing: false,
+            content: vec![18],
+            timestamp_ms: 98,
+            delivered: true,
+        };
+        pending.imported_history.insert(
+            (
+                imported.transfer_id.clone(),
+                imported.source_record_id.clone(),
+            ),
+            imported.clone(),
+        );
         pending.inbound.insert(
             "inbound-1".into(),
             Some(InboundEnvelope {
@@ -815,6 +880,7 @@ mod tests {
         assert_eq!(db.list_outbox().await.unwrap().len(), 1);
         assert_eq!(db.list_messages().await.unwrap().len(), 1);
         assert_eq!(db.list_sent_messages().await.unwrap().len(), 1);
+        assert_eq!(db.list_imported_history().await.unwrap(), vec![imported]);
         assert!(
             db.load_sent_message("sent-1")
                 .await

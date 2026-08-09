@@ -293,6 +293,83 @@ impl Session {
         )
     }
 
+    /// Atomically expose a verified, commitment-complete imported archive.
+    /// Records remain isolated from every live cryptographic state table.
+    pub async fn import_history(
+        &self,
+        records: Vec<crate::ImportedHistoryRecordV1>,
+    ) -> Result<()> {
+        let mut normalized = std::collections::HashMap::new();
+        let mut provenance: Option<(&str, u32)> = None;
+        for record in &records {
+            let transfer_id = uuid::Uuid::parse_str(&record.transfer_id)
+                .map_err(|_| ChatError::Invalid("history transfer id must be a UUID".into()))?;
+            if transfer_id.to_string() != record.transfer_id {
+                return Err(ChatError::Invalid(
+                    "history transfer id must use canonical UUID form".into(),
+                ));
+            }
+            if record.source_record_id.is_empty() || record.source_record_id.len() > 256 {
+                return Err(ChatError::Invalid(
+                    "history source record id must contain 1 to 256 bytes".into(),
+                ));
+            }
+            if record.source_device_id == 0 || record.sender_device_id == 0 {
+                return Err(ChatError::Invalid(
+                    "history record device ids must be positive".into(),
+                ));
+            }
+            let sender: kutup_chat_proto::AccountAddress = record
+                .sender
+                .parse()
+                .map_err(|error: kutup_chat_proto::AddressError| {
+                    ChatError::Invalid(error.to_string())
+                })?;
+            if sender.canonical() != record.sender {
+                return Err(ChatError::Invalid(
+                    "history record sender is not canonical".into(),
+                ));
+            }
+            let content = serde_json::from_slice::<ChatContent>(&record.content)
+                .map_err(|error| ChatError::Content(error.to_string()))?;
+            if serde_json::to_vec(&content)
+                .map_err(|error| ChatError::Content(error.to_string()))?
+                != record.content
+            {
+                return Err(ChatError::Invalid(
+                    "history record content is not canonical".into(),
+                ));
+            }
+            match provenance {
+                None => provenance = Some((&record.transfer_id, record.source_device_id)),
+                Some((transfer_id, source_device_id))
+                    if transfer_id == record.transfer_id
+                        && source_device_id == record.source_device_id => {}
+                Some(_) => {
+                    return Err(ChatError::Invalid(
+                        "one history import must have one transfer and source device".into(),
+                    ))
+                }
+            }
+            let key = (record.transfer_id.clone(), record.source_record_id.clone());
+            if let Some(existing) = normalized.insert(key, record.clone()) {
+                if existing != *record {
+                    return Err(ChatError::Trust(
+                        "history import contains conflicting duplicate records".into(),
+                    ));
+                }
+            }
+        }
+        for record in normalized.into_values() {
+            self.store.stage_imported_history(record);
+        }
+        self.store.commit().await
+    }
+
+    pub async fn imported_history(&self) -> Result<Vec<crate::ImportedHistoryRecordV1>> {
+        self.store.list_imported_history().await
+    }
+
     /// Bind a bare account opened from an authenticated local session to the
     /// server's canonical federation domain. This must happen before any
     /// account comparison, self-sync encryption, or manifest publication.

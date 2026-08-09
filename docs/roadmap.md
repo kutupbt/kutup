@@ -55,8 +55,9 @@ The following are release blockers:
   revocation are implemented; the canonical transfer handshake/frame types are
   frozen, the bounded opaque homeserver relay is implemented, and the shared
   core now performs manifest-bound device signatures plus transcript-bound
-  ephemeral X25519/HKDF/XChaCha framing; archive export/import and approval UI
-  remain.** The
+  ephemeral X25519/HKDF/XChaCha framing, with imported display history isolated
+  transactionally from live ratchet state in SQLite and IndexedDB; archive
+  export/framing orchestration and approval UI remain.** The
   complete requirement is explicit review/revocation plus an authenticated,
   end-to-end encrypted history transfer from
   an existing device to a newly linked browser installation. Clearing browser

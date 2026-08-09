@@ -140,6 +140,19 @@ impl ChatStore {
             .insert(entry.send_id.clone(), Some(entry));
     }
 
+    pub(crate) fn stage_imported_history(&self, record: crate::ImportedHistoryRecordV1) {
+        self.pending.borrow_mut().imported_history.insert(
+            (record.transfer_id.clone(), record.source_record_id.clone()),
+            record,
+        );
+    }
+
+    pub(crate) async fn list_imported_history(
+        &self,
+    ) -> ChatResult<Vec<crate::ImportedHistoryRecordV1>> {
+        self.db.list_imported_history().await
+    }
+
     /// Stage an outbox delete (the send was delivered).
     pub(crate) fn delete_outbox(&self, send_id: &str) {
         self.pending

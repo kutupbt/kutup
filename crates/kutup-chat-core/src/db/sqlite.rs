@@ -18,9 +18,9 @@ use zeroize::Zeroize as _;
 
 use crate::db::{
     contact_state_code, contact_state_from_code, AccountManifestHistoryRecordV1, AuthorityTrust,
-    ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState, InboxMessage,
-    LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxDelivery,
-    MlsOutboxEntry, OutboxEntry, PeerProfile, Pending, SentMessage,
+    ChatDb, ContactRecord, ImportedHistoryRecordV1, InboundEnvelope, InboundFailureKind,
+    InboundState, InboxMessage, LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage,
+    MlsOutboxDelivery, MlsOutboxEntry, OutboxEntry, PeerProfile, Pending, SentMessage,
 };
 use crate::error::{ChatError, Result};
 
@@ -145,6 +145,21 @@ CREATE TABLE IF NOT EXISTS sent_messages (
 );
 CREATE INDEX IF NOT EXISTS sent_messages_by_created_at
     ON sent_messages (created_at, send_id);
+CREATE TABLE IF NOT EXISTS imported_history (
+    transfer_id       TEXT NOT NULL,
+    source_record_id  TEXT NOT NULL,
+    source_device_id  INTEGER NOT NULL CHECK (source_device_id > 0),
+    conversation_json TEXT NOT NULL,
+    sender            TEXT NOT NULL,
+    sender_device_id  INTEGER NOT NULL CHECK (sender_device_id > 0),
+    outgoing          INTEGER NOT NULL,
+    content           BLOB NOT NULL,
+    timestamp_ms      INTEGER NOT NULL,
+    delivered         INTEGER NOT NULL,
+    PRIMARY KEY (transfer_id, source_record_id)
+);
+CREATE INDEX IF NOT EXISTS imported_history_by_time
+    ON imported_history (timestamp_ms, transfer_id, source_record_id);
 CREATE TABLE IF NOT EXISTS inbound_envelopes (
     id          TEXT PRIMARY KEY,
     cursor      INTEGER NOT NULL,
@@ -214,6 +229,7 @@ INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (13, 0);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (14, 0);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (15, 0);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (16, 0);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (17, 0);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value INTEGER NOT NULL
@@ -511,6 +527,38 @@ impl ChatDb for SqliteChatDb {
              FROM sent_messages ORDER BY created_at, send_id",
         ))?;
         let rows = db(stmt.query_map([], sent_message_row))?;
+        rows.map(db).collect()
+    }
+
+    async fn load_imported_history(
+        &self,
+        transfer_id: &str,
+        source_record_id: &str,
+    ) -> Result<Option<ImportedHistoryRecordV1>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT transfer_id, source_record_id, source_device_id,
+                        conversation_json, sender, sender_device_id, outgoing,
+                        content, timestamp_ms, delivered
+                 FROM imported_history
+                 WHERE transfer_id = ?1 AND source_record_id = ?2",
+                rusqlite::params![transfer_id, source_record_id],
+                imported_history_row,
+            )
+            .optional())
+    }
+
+    async fn list_imported_history(&self) -> Result<Vec<ImportedHistoryRecordV1>> {
+        let conn = self.conn.borrow();
+        let mut statement = db(conn.prepare(
+            "SELECT transfer_id, source_record_id, source_device_id,
+                    conversation_json, sender, sender_device_id, outgoing,
+                    content, timestamp_ms, delivered
+             FROM imported_history
+             ORDER BY timestamp_ms, transfer_id, source_record_id",
+        ))?;
+        let rows = db(statement.query_map([], imported_history_row))?;
         rows.map(db).collect()
     }
 
@@ -945,6 +993,44 @@ impl ChatDb for SqliteChatDb {
                     i64::from(message.deduplicated),
                 ],
             ))?;
+        }
+        for ((transfer_id, source_record_id), record) in &pending.imported_history {
+            let conversation_json = serde_json::to_string(&record.conversation)
+                .map_err(|error| ChatError::Db(error.to_string()))?;
+            let changed = db(tx.execute(
+                "INSERT INTO imported_history
+                     (transfer_id, source_record_id, source_device_id,
+                      conversation_json, sender, sender_device_id, outgoing,
+                      content, timestamp_ms, delivered)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ON CONFLICT(transfer_id, source_record_id) DO UPDATE SET
+                   transfer_id = excluded.transfer_id
+                 WHERE imported_history.source_device_id = excluded.source_device_id
+                   AND imported_history.conversation_json = excluded.conversation_json
+                   AND imported_history.sender = excluded.sender
+                   AND imported_history.sender_device_id = excluded.sender_device_id
+                   AND imported_history.outgoing = excluded.outgoing
+                   AND imported_history.content = excluded.content
+                   AND imported_history.timestamp_ms = excluded.timestamp_ms
+                   AND imported_history.delivered = excluded.delivered",
+                rusqlite::params![
+                    transfer_id,
+                    source_record_id,
+                    record.source_device_id,
+                    conversation_json,
+                    record.sender,
+                    record.sender_device_id,
+                    i64::from(record.outgoing),
+                    record.content,
+                    record.timestamp_ms,
+                    i64::from(record.delivered),
+                ],
+            ))?;
+            if changed != 1 {
+                return Err(ChatError::Trust(format!(
+                    "immutable imported history conflicts at {transfer_id}/{source_record_id}"
+                )));
+            }
         }
         for (id, inbound) in &pending.inbound {
             match inbound {
@@ -1465,6 +1551,29 @@ fn sent_message_row(row: &rusqlite::Row) -> rusqlite::Result<SentMessage> {
     })
 }
 
+fn imported_history_row(row: &rusqlite::Row) -> rusqlite::Result<ImportedHistoryRecordV1> {
+    let conversation_json: String = row.get(3)?;
+    let conversation = serde_json::from_str(&conversation_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            3,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })?;
+    Ok(ImportedHistoryRecordV1 {
+        transfer_id: row.get(0)?,
+        source_record_id: row.get(1)?,
+        source_device_id: row.get(2)?,
+        conversation,
+        sender: row.get(4)?,
+        sender_device_id: row.get(5)?,
+        outgoing: row.get::<_, i64>(6)? != 0,
+        content: row.get(7)?,
+        timestamp_ms: row.get(8)?,
+        delivered: row.get::<_, i64>(9)? != 0,
+    })
+}
+
 /// `SELECT <col-named `record`> FROM <table> WHERE <key_col> = <key>`.
 fn blob(conn: &Connection, table: &str, key_col: &str, key: &str) -> Result<Option<Vec<u8>>> {
     let sql = format!("SELECT record FROM {table} WHERE {key_col} = ?1");
@@ -1536,6 +1645,74 @@ mod tests {
         assert_eq!(block_on(db.load_pre_key(7)).unwrap(), Some(vec![1, 2, 3]));
         assert_eq!(block_on(db.purge_used_pre_keys(i64::MAX)).unwrap(), 1);
         assert_eq!(block_on(db.load_pre_key(7)).unwrap(), None);
+    }
+
+    #[test]
+    fn imported_history_is_atomic_immutable_idempotent_and_presentation_ordered() {
+        use futures_executor::block_on;
+
+        fn record(id: &str, timestamp_ms: i64) -> ImportedHistoryRecordV1 {
+            ImportedHistoryRecordV1 {
+                transfer_id: "11111111-1111-4111-8111-111111111111".into(),
+                source_record_id: id.into(),
+                source_device_id: 1,
+                conversation: kutup_chat_proto::ConversationId::direct(
+                    kutup_chat_proto::AccountAddress::federated("bob", "b.test").unwrap(),
+                ),
+                sender: "bob@b.test".into(),
+                sender_device_id: 1,
+                outgoing: false,
+                content: serde_json::to_vec(&kutup_chat_proto::ChatContent::text(
+                    "2026-08-09T00:00:00Z",
+                    1,
+                    "hello",
+                ))
+                .unwrap(),
+                timestamp_ms,
+                delivered: true,
+            }
+        }
+
+        let db = SqliteChatDb::open_in_memory().unwrap();
+        let later = record("later", 200);
+        let earlier = record("earlier", 100);
+        let mut initial = Pending::default();
+        for record in [later.clone(), earlier.clone()] {
+            initial.imported_history.insert(
+                (record.transfer_id.clone(), record.source_record_id.clone()),
+                record,
+            );
+        }
+        block_on(db.apply(&initial)).unwrap();
+        block_on(db.apply(&initial)).unwrap();
+
+        assert_eq!(
+            block_on(db.list_imported_history()).unwrap(),
+            vec![earlier.clone(), later]
+        );
+        assert_eq!(
+            block_on(db.load_imported_history(&earlier.transfer_id, "earlier")).unwrap(),
+            Some(earlier.clone())
+        );
+
+        let mut conflicting = earlier;
+        conflicting.content = serde_json::to_vec(&kutup_chat_proto::ChatContent::text(
+            "2026-08-09T00:00:00Z",
+            1,
+            "tampered",
+        ))
+        .unwrap();
+        let mut rejected = Pending::default();
+        rejected.imported_history.insert(
+            (
+                conflicting.transfer_id.clone(),
+                conflicting.source_record_id.clone(),
+            ),
+            conflicting,
+        );
+        rejected.last_cursor = Some(99);
+        assert!(matches!(block_on(db.apply(&rejected)), Err(ChatError::Trust(_))));
+        assert_eq!(block_on(db.load_last_cursor()).unwrap(), None);
     }
 
     #[test]

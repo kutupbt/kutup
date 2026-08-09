@@ -448,7 +448,7 @@ impl MlsClient {
     /// Stage an add-members Commit after validating every claimed KeyPackage
     /// against a account-manifest-verified manifest credential. The pending
     /// OpenMLS state and exact Commit/Welcome bytes are persisted atomically.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "sqlite"))]
     pub(crate) async fn prepare_add_members(
         &self,
         mls_group_id: &[u8],
@@ -487,7 +487,7 @@ impl MlsClient {
 
     /// Stage a remove-members Commit using exact current credential
     /// identities. The same durable ordering boundary as additions applies.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "sqlite"))]
     pub(crate) async fn prepare_remove_members(
         &self,
         mls_group_id: &[u8],

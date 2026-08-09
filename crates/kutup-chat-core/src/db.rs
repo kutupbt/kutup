@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use kutup_chat_proto::PutChatProfileRequest;
-use kutup_chat_proto::{AccountManifestV1, ContactState};
+use kutup_chat_proto::{AccountManifestV1, ContactState, ConversationId};
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod indexed_db;
@@ -212,6 +212,27 @@ pub struct SentMessage {
     pub delivered_at: Option<i64>,
     pub delivered: bool,
     pub deduplicated: bool,
+}
+
+/// Immutable display-history copied from another authorized installation.
+/// These rows are deliberately separate from live Signal/MLS state: importing
+/// one cannot advance a ratchet, mailbox cursor, receipt, or group epoch.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedHistoryRecordV1 {
+    /// One-time transfer UUID that established this row's provenance.
+    pub transfer_id: String,
+    /// Stable source-local id, unique within `transfer_id`.
+    pub source_record_id: String,
+    pub source_device_id: u32,
+    pub conversation: ConversationId,
+    pub sender: String,
+    pub sender_device_id: u32,
+    pub outgoing: bool,
+    /// Canonical serialized [`kutup_chat_proto::ChatContent`].
+    pub content: Vec<u8>,
+    pub timestamp_ms: i64,
+    pub delivered: bool,
 }
 
 /// Durable state of a raw inbound mailbox envelope. Ciphertext is journaled
@@ -522,6 +543,8 @@ pub struct Pending {
     pub(crate) messages: Vec<InboxMessage>,
     /// Outbound history upserts, keyed by `sendId`.
     pub(crate) sent_messages: HashMap<String, SentMessage>,
+    /// Immutable imported display rows keyed by `(transferId, sourceRecordId)`.
+    pub(crate) imported_history: HashMap<(String, String), ImportedHistoryRecordV1>,
     /// Raw inbound journal updates keyed by mailbox id. `None` removes an entry
     /// only after its REST acknowledgement succeeds.
     pub(crate) inbound: HashMap<String, Option<InboundEnvelope>>,
@@ -570,6 +593,7 @@ impl Pending {
             && self.mls_state.is_none()
             && self.messages.is_empty()
             && self.sent_messages.is_empty()
+            && self.imported_history.is_empty()
             && self.inbound.is_empty()
             && self.manifest_trust.is_empty()
             && self.manifest_history.is_empty()
@@ -664,6 +688,21 @@ pub trait ChatDb {
     async fn load_sent_message(&self, send_id: &str) -> Result<Option<SentMessage>>;
     /// All outbound history, oldest first.
     async fn list_sent_messages(&self) -> Result<Vec<SentMessage>>;
+
+    /// One immutable imported display-history row.
+    async fn load_imported_history(
+        &self,
+        transfer_id: &str,
+        source_record_id: &str,
+    ) -> Result<Option<ImportedHistoryRecordV1>> {
+        let _ = (transfer_id, source_record_id);
+        Ok(None)
+    }
+
+    /// All imported display-history rows ordered for presentation.
+    async fn list_imported_history(&self) -> Result<Vec<ImportedHistoryRecordV1>> {
+        Ok(Vec::new())
+    }
 
     /// Every raw inbound entry, ordered by cursor, including ack retries and
     /// visible dead letters.

@@ -39,9 +39,9 @@ pub use db::indexed_db::IndexedDbChatDb;
 pub use db::sqlite::SqliteChatDb;
 pub use db::{
     AccountManifestHistoryRecordV1, AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope,
-    InboundFailureKind, InboundState, InboxMessage, LocalIdentity, LocalProfile, ManifestTrust,
-    MlsHistoryMessage, MlsOutboxDelivery, MlsOutboxEntry, OutboxEntry, OutboxSyncLeg, PeerProfile,
-    Pending, PendingAccountIdentityResetV1, SentMessage,
+    ImportedHistoryRecordV1, InboundFailureKind, InboundState, InboxMessage, LocalIdentity,
+    LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxDelivery, MlsOutboxEntry, OutboxEntry,
+    OutboxSyncLeg, PeerProfile, Pending, PendingAccountIdentityResetV1, SentMessage,
 };
 pub use engine::{
     ChatEvent, Engine, EngineState, InboundFailure, PreKeyMaintenanceReport, ReceiveReport,

@@ -105,9 +105,9 @@ single-responder constraints, but never validates archive plaintext.
    validation vectors in `kutup-chat-proto`.
 2. **Implemented:** add bounded account-local relay tables/routes, expiry cleanup
    and device revocation cancellation.
-3. **Partially implemented:** core signing, signature verification and
-   X25519/HKDF/XChaCha framing are complete. The normalized imported-history
-   store for SQLite and IndexedDB remains.
+3. **Implemented:** core signing, signature verification,
+   X25519/HKDF/XChaCha framing, and the immutable normalized imported-history
+   store for SQLite and IndexedDB.
 4. Add WASM/transport bindings and the new/existing-device approval UI.
 5. Extend the two-browser federation harness with success, denial, expiry,
    tampering, replay, interrupted-resume and no-surviving-device cases.
