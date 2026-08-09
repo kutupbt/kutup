@@ -900,13 +900,16 @@ Remaining one-time pool sizes: `{ "oneTimePreKeys": n, "oneTimeKyberPreKeys": n 
 
 Publish one complete `AccountManifestV1`, signed by the account self-authority.
 Sequences advance by exactly one and hash-link to the preceding signed record.
-The authority and incarnation cannot change inside a chain. The signed device
-ids, registration ids, direct-chat identity keys, MLS credential/delivery
-keys, and suites must exactly match the server's current registered device
-set. The Drive HPKE and share-signing keys are account-scoped fields in the
-same manifest. Publication atomically updates the current head and immutable
-history; exact replay is idempotent. Malformed signatures, gaps, forks,
-authority replacement, or device-set conflicts return `409`.
+The authority and incarnation cannot change inside a chain. Every signed
+device id, registration id, direct-chat identity key, MLS credential/delivery
+key and suite must exactly match a registered server tuple. Registered rows
+not selected by the authority-signed manifest are pruned atomically; this
+recovers a crash between device registration and manifest publication without
+allowing an unmanifested device to become trusted. The Drive HPKE and
+share-signing keys are account-scoped fields in the same manifest. Publication
+atomically updates the current head and immutable history; exact replay is
+idempotent. Malformed signatures, gaps, forks, authority replacement, or a
+declared device-key conflict return `409`.
 
 ### GET /api/chat/users/{username}/manifest
 

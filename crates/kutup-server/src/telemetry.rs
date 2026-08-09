@@ -177,6 +177,31 @@ pub fn rate_limit_rejection(scope: &'static str) {
     );
 }
 
+/// Record Chat-media lifecycle outcomes using a deliberately closed,
+/// identifier-free attribute set. Callers must pass only the static stage and
+/// outcome literals defined by the protocol implementation—never domains,
+/// accounts, attachment/message ids, byte digests, capabilities, or storage
+/// paths.
+pub fn chat_media_event(stage: &'static str, outcome: &'static str) {
+    static COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
+    COUNTER
+        .get_or_init(|| {
+            global::meter(INSTRUMENTATION_SCOPE)
+                .u64_counter("kutup.chat.media.events")
+                .with_description(
+                    "Opaque Chat-media upload, delivery, retry, and lifecycle outcomes",
+                )
+                .build()
+        })
+        .add(
+            1,
+            &[
+                KeyValue::new("stage", stage),
+                KeyValue::new("outcome", outcome),
+            ],
+        );
+}
+
 pub fn mls_control_event(operation: &'static str, outcome: &'static str) {
     static COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
     COUNTER

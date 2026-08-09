@@ -13,7 +13,7 @@ registry, purpose-specific keys, and an independent migration boundary.
 | `libsignal-protocol` pinned to tag `v0.97.2` and its Cargo lock commit | Direct Chat, Note to Self, PQXDH, Triple Ratchet/SPQR, sealed-sender envelope and certificate primitives | Signal protocol state machines, wire parsing, ratchets and KEM negotiation | Account/device binding, storage transactions, federation, capabilities, abuse controls, padding policy and fail-closed UX |
 | OpenMLS `0.8.1`, traits/basic-credential/memory-storage `0.5.0`, RustCrypto provider `0.5.1` | RFC 9420 private groups and the small broadcast administrator control group | MLS encoding, key schedule, TreeKEM, Commit/Welcome processing and epoch state | Manifest credential binding, authorization, multi-authority ordering, delivery, history, persistence and application policy |
 | `hpke-rs` and `hpke-rs-rust-crypto` `0.6.1` | Named Drive share envelopes and anonymous MLS delivery | RFC 9180 context setup and KEM/KDF/AEAD operation | Suite selection, sender signature, account binding, `info`/AAD, limits and persistence |
-| `dryoc` `0.7` | Argon2id-compatible password derivation and XChaCha secretstream-compatible Drive blobs | Primitive implementation | Parameters, typed formats, key hierarchy, chunk framing and failure policy |
+| `dryoc` `0.7` | Argon2id-compatible password derivation and XChaCha secretstream-compatible Drive and Chat-media blobs | Primitive implementation | Parameters, typed formats, key hierarchy, chunk framing and failure policy |
 | RustCrypto `chacha20poly1305` `0.10`, `ed25519-dalek` `2`, `hkdf` `0.12`, `sha2` `0.10` | Kutup-owned envelopes, signatures, hashing and derivation | Primitive implementation and strict key/signature parsing | Canonical encoding, domain separation, nonce generation, context binding and suite policy |
 | `bip39` `2` | Human-readable encoding of 32 random recovery bytes | English word encoding and checksum | Entropy generation, key use and recovery UX |
 | `bcrypt` `0.16` | Server-only verifier for the high-entropy login key | Password-hash implementation | Login rate limits, lockout, account-protection suite and client-side Argon2id |
@@ -24,6 +24,12 @@ libsodium adapter is permitted only for a primitive that is reproducibly at
 least ten times slower through Rust/WASM or cannot complete because of a
 platform memory/runtime failure. Such an adapter never owns a header,
 derivation label, parser, suite decision or persistent format.
+
+Generated Chat and Crypto WASM glue and binaries use stable public filenames.
+They are deployed atomically with their matching frontend and backend and are
+always revalidated (`Cache-Control: no-cache, must-revalidate`); an immutable
+cache may otherwise mix incompatible Rust and transport DTO versions. Ordinary
+content-hashed web assets remain immutable.
 
 Kutup does not fork or reimplement libsignal or OpenMLS. Their types do not
 cross Kutup's public API boundary; Kutup-owned DTOs make dependency upgrades
@@ -38,8 +44,9 @@ explicit and testable.
 - Kutup persistent AEAD: XChaCha20-Poly1305.
 - Standards-constrained AEAD: ChaCha20-Poly1305 for HPKE and MLS suite
   `0x0003`.
-- Large Drive blobs: `crypto_secretstream_xchacha20poly1305`, 5 MiB plaintext
-  chunks and an authenticated final tag.
+- Large Drive and Chat-media blobs: `crypto_secretstream_xchacha20poly1305`,
+  5 MiB plaintext chunks and an authenticated final tag, with independent typed
+  headers and keys.
 
 Algorithms used internally by libsignal are part of the pinned Direct Chat
 suite and are not replaced for palette uniformity. Drive post-quantum wrapping

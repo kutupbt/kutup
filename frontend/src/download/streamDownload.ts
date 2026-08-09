@@ -63,7 +63,7 @@ export async function streamDownload(opts: StreamDownloadOptions): Promise<void>
   // user cancels the save picker we want to fail fast without having
   // touched the response stream. (fetchDecryptedChunks's fetch() is lazy
   // — it fires on the first `for await` step, after this.)
-  const sink = await openSink(opts)
+  const sink = await openDownloadSink(opts)
 
   let plainWritten = 0
   try {
@@ -89,13 +89,15 @@ export async function streamDownload(opts: StreamDownloadOptions): Promise<void>
 // Sink abstraction — FSA WritableStream OR growing Blob fallback.
 // ---------------------------------------------------------------------------
 
-interface Sink {
+export interface DownloadSink {
   write(plain: Uint8Array): Promise<void>
   finalize(): Promise<void>
   abort(): Promise<void>
 }
 
-async function openSink(opts: StreamDownloadOptions): Promise<Sink> {
+export async function openDownloadSink(
+  opts: Pick<StreamDownloadOptions, 'filename' | 'mimeType'>,
+): Promise<DownloadSink> {
   // Tauri desktop / mobile: WebKitGTK / WKWebView don't have
   // showSaveFilePicker, and a Blob + `<a download>` doesn't reliably
   // surface a save dialog inside the Tauri webview. Use the native
@@ -132,7 +134,9 @@ async function openSink(opts: StreamDownloadOptions): Promise<Sink> {
 // Tauri-native sink: native save dialog → streaming write to the chosen
 // path via @tauri-apps/plugin-fs. Dynamic imports keep the Tauri plugins
 // out of the web bundle.
-async function openTauriSink(opts: StreamDownloadOptions): Promise<Sink> {
+async function openTauriSink(
+  opts: Pick<StreamDownloadOptions, 'filename' | 'mimeType'>,
+): Promise<DownloadSink> {
   const [{ save }, fs] = await Promise.all([
     import('@tauri-apps/plugin-dialog'),
     import('@tauri-apps/plugin-fs'),
@@ -177,7 +181,9 @@ interface FSAWritable {
   abort?(): Promise<void>
 }
 
-async function openFSASink(opts: StreamDownloadOptions): Promise<Sink> {
+async function openFSASink(
+  opts: Pick<StreamDownloadOptions, 'filename' | 'mimeType'>,
+): Promise<DownloadSink> {
   const w = window as unknown as FSAGlobals
   const types = opts.mimeType
     ? [{ accept: { [opts.mimeType]: [extOf(opts.filename)] } }]
@@ -204,7 +210,9 @@ async function openFSASink(opts: StreamDownloadOptions): Promise<Sink> {
   }
 }
 
-function openBlobSink(opts: StreamDownloadOptions): Sink {
+function openBlobSink(
+  opts: Pick<StreamDownloadOptions, 'filename' | 'mimeType'>,
+): DownloadSink {
   const parts: Uint8Array[] = []
   let total = 0
   return {

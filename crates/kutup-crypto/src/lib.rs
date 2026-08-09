@@ -16,6 +16,8 @@
 //! - [`kdf`] — one-root Argon2id account protection and recovery proof.
 //! - [`mnemonic`] — BIP39 recovery-phrase encode/decode (registration).
 //! - [`account_envelope`] — suite-bearing, purpose- and account-bound XChaCha account wraps.
+//! - [`chat_attachment_ledger`] — account-private attachment-index envelopes.
+//! - [`chat_media`] — immutable typed Chat-media secretstream objects.
 //! - [`drive_envelope`] — suite-bearing, purpose/key-separated and UUID/epoch/revision-bound Drive values.
 //! - [`drive_object`] — the Drive suite registry and typed, context-bound file-blob framing.
 //! - [`named_share`] — authenticated HPKE named-recipient collection sharing.
@@ -26,6 +28,8 @@
 
 pub mod account_envelope;
 pub mod asset;
+pub mod chat_attachment_ledger;
+pub mod chat_media;
 pub mod collection_epoch;
 pub mod drive_envelope;
 pub mod drive_object;

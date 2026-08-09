@@ -38,10 +38,10 @@ use crate::AppState;
 
 /// The protocol version we advertise + require. Clients send `Tus-Resumable: 1.0.0` on
 /// every non-OPTIONS request; mismatch → 412. Mirrors `tusVersion`.
-const TUS_VERSION: &str = "1.0.0";
+pub(crate) const TUS_VERSION: &str = "1.0.0";
 
 /// S3's lower bound on every multipart part except the last (5 MiB). Mirrors `minPartSize`.
-const MIN_PART_SIZE: i64 = 5 * 1024 * 1024;
+pub(crate) const MIN_PART_SIZE: i64 = 5 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -49,13 +49,13 @@ const MIN_PART_SIZE: i64 = 5 * 1024 * 1024;
 
 /// Plain-text tus response carrying the `Tus-Resumable` header — mirrors the bodies
 /// Fiber produced via `c.Status(...).SendString(...)`.
-fn tus_text(status: StatusCode, body: &'static str) -> Response {
+pub(crate) fn tus_text(status: StatusCode, body: &'static str) -> Response {
     (status, [("Tus-Resumable", TUS_VERSION)], body).into_response()
 }
 
 /// Enforces the protocol-version header on every non-OPTIONS request — mirrors
 /// `requireTusResumable`. Returns the 412 response if it doesn't match.
-fn require_tus_resumable(headers: &HeaderMap) -> Option<Response> {
+pub(crate) fn require_tus_resumable(headers: &HeaderMap) -> Option<Response> {
     if headers.get("Tus-Resumable").and_then(|v| v.to_str().ok()) == Some(TUS_VERSION) {
         return None;
     }
@@ -72,7 +72,7 @@ fn require_tus_resumable(headers: &HeaderMap) -> Option<Response> {
 /// Decodes the `Upload-Metadata` header: comma-separated `key <base64>` pairs (values are
 /// base64-encoded UTF-8). Flag-style keys with no value are ignored. Mirrors
 /// `parseUploadMetadata`. `Err` carries a 400 body for a bad base64 value.
-fn parse_upload_metadata(
+pub(crate) fn parse_upload_metadata(
     header: &str,
 ) -> Result<std::collections::HashMap<String, String>, String> {
     let mut out = std::collections::HashMap::new();
@@ -105,7 +105,7 @@ fn parse_upload_metadata(
     Ok(out)
 }
 
-fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
+pub(crate) fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
     headers
         .get(name)
         .and_then(|v| v.to_str().ok())
@@ -289,7 +289,10 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read user"),
     };
     let reserved: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(total_bytes - received_bytes), 0)::bigint FROM uploads WHERE user_id=$1",
+        "SELECT (SELECT COALESCE(SUM(total_bytes - received_bytes), 0)::bigint FROM uploads WHERE user_id=$1) +
+                (SELECT COALESCE(SUM(total_bytes - received_bytes), 0)::bigint FROM chat_media_uploads WHERE user_id=$1) +
+                (SELECT COALESCE(SUM(ciphertext_bytes),0)::bigint
+                   FROM chat_media_federation_inbound_pending WHERE recipient_user_id=$1)",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)

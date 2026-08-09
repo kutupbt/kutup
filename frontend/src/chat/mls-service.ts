@@ -3,6 +3,7 @@ import type {
   AnonymousMlsDeviceEnvelope,
   AppliedInboundMlsCommit,
   AppliedInboundMlsApplication,
+  ChatAttachmentDescriptorV1,
   ChatTransportPort,
   DerivedMlsDeliveryCapability,
   FinalizedMlsAuthorityChange,
@@ -42,6 +43,7 @@ import {
   canonicalAccountAddress,
   parseAccountAddress,
 } from './identity'
+import { deliverChatMediaV1 } from './media'
 
 const MLS_PROTOCOL_VERSION = 1
 const DEFAULT_KEY_PACKAGE_TARGET = 20
@@ -958,6 +960,71 @@ export class MlsConversationService {
         String(Date.now()),
       ))
       .catch(cause => { throw new MlsSendError('encryption', cause) })
+    await this.deliverApplicationEntry(entry).catch(cause => {
+      if (cause instanceof MlsSendError) throw cause
+      throw new MlsSendError('envelope_staging', cause)
+    })
+    return {
+      delivered: true,
+      deduplicated: entry.attempts > 0,
+      attempts: Math.max(1, entry.expectedRecipients.length),
+    }
+  }
+
+  async sendAttachment(
+    conversationId: string,
+    sendId: string,
+    descriptor: ChatAttachmentDescriptorV1,
+  ): Promise<{ delivered: boolean; deduplicated: boolean; attempts: number }> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const entry = await this.withCryptoLock(() =>
+      this.client.createMlsAttachmentMessage(
+        sendId,
+        conversationId,
+        String(conversation.request.genesis.incarnation),
+        groupId,
+        new Date().toISOString(),
+        descriptor,
+        String(Date.now()),
+      ),
+    ).catch(cause => { throw new MlsSendError('encryption', cause) })
+
+    for (const recipientText of entry.expectedRecipients) {
+      const recipient = parseAccountAddress(recipientText)
+      if (!recipient?.server || canonicalAccountAddress(recipient) !== recipientText) {
+        throw new MlsSendError('recipient', new Error('invalid media recipient'))
+      }
+      const derived = await this.withCryptoLock(() =>
+        this.client.deriveMlsDeliveryCapability(
+          Uint8Array.from(entry.mlsGroupId),
+          bytesToUuid(entry.conversationId),
+          String(entry.incarnation),
+          recipient,
+        ),
+      ).catch(cause => { throw new MlsSendError('capability', cause) })
+      if (derived.epoch !== entry.epoch || derived.capability.length !== 16) {
+        throw new MlsSendError(
+          'capability_binding',
+          new Error('MLS media capability differs from the durable ciphertext epoch'),
+        )
+      }
+      const receipt = await deliverChatMediaV1(
+        descriptor,
+        recipient,
+        encodeBase64(Uint8Array.from(derived.capability)),
+      ).catch(cause => { throw new MlsSendError('receipt', cause) })
+      if (receipt.status === 'storage_full') {
+        throw new MlsSendError('receipt', new Error('recipient Chat-media storage is full'))
+      }
+    }
+    // Store the opaque object for every destination before exposing its
+    // descriptor through MLS. Partial media delivery is safely idempotent;
+    // the application entry remains locally staged until the full set passes.
     await this.deliverApplicationEntry(entry).catch(cause => {
       if (cause instanceof MlsSendError) throw cause
       throw new MlsSendError('envelope_staging', cause)

@@ -47,8 +47,8 @@ pub use engine::{
 };
 pub use error::{ChatError, Result};
 pub use kutup_chat_proto::{
-    AccountAddress, ChatContent, ContactControlBody, ContactState, ConversationId,
-    DeliveredEnvelope, OutgoingEnvelope, TextBody,
+    AccountAddress, ChatAttachmentDescriptorV1, ChatContent, ContactControlBody, ContactState,
+    ConversationId, DeliveredEnvelope, OutgoingEnvelope, TextBody,
 };
 pub use manifest::{
     derive_safety_number, verify_bundle_response, verify_manifest, AccountAuthority,

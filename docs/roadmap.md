@@ -217,7 +217,9 @@ Sealed sender remains all-or-nothing with no identified fallback, and all
 federation continues to use the common authenticated transport rather than a
 room DAG.
 
-Phases (each lands as its own PR-series; do not start N+1 with N unmerged):
+Phases (each lands as its own PR-series; the table order is the current delivery
+priority, while the stable phase labels keep existing specifications and test
+names unambiguous):
 
 | # | Slice | Gate |
 |---|---|---|
@@ -225,15 +227,101 @@ Phases (each lands as its own PR-series; do not start N+1 with N unmerged):
 | 2 | Server slice: `kutup-chat-proto` + prekey directory, per-device mailboxes, WSS drain | ✅ landed — `crates/kutup-chat-proto`, migration 021, `handlers/chat.rs`, `chat_hub.rs`, nginx `/api/chat/ws`; full REST + WS contract smoke-verified against the live stack (incl. one-time-prekey consumption, last-resort fallback, the 409 missing/stale/extra device contract, live envelope push). Playwright chat spec lands with phase 2b |
 | 2b | Shared core + minimal 1:1 reference web UI | **Implemented and live-stack verified on `codex/chat-architecture-hardening`.** Includes durable typed inbound journal/quarantine, SQLCipher/IndexedDB stores, crash-safe registration/prekeys, signed manifests, WASM transport, Web Locks, REST+WS reconciliation, history, Note to Self, and ordinary linked-device sent transcripts. Web remains the product client until the messaging milestone is complete; native packaging/integration is not a gate. |
 | 3 | Web federation foundation | **Implemented and two-server live verified:** canonical `username@server`, typed conversations, one persistent v2 server identity, signed `.well-known` endpoint/capability discovery, immutable identity history and authenticated rotation, strict RFC 9421/9530 request/response authentication, replay reservation, DNS-rebinding/SSRF-safe resolution, durable per-destination in-order Chat delivery, device-mismatch recovery, terminal rejection, and sequence-gap replay. Drive now uses that same stack for signed account lookup, domain-bound fragment capabilities, invite acceptance, file lists, idempotent upload/delete, persisted ciphertext digests, and verify-before-release streaming downloads. The isolated harness proves the Drive round trip, that Chat reuses a Drive-established pin, and that Chat retry survives an origin restart while the destination is offline. The generic responsive admin control plane provides a global stop, feature-scoped `disabled`/`allowlist`/`blocklist`/`open` admission and trust floors, directional domain rules, shared Chat/Drive diagnostics, peer search/trust filters, retry-one/retry-visible workflows, TOFU verification, exact immutable quarantine/history evidence, break-glass re-pin, and filtered audit presentation/CSV export. A disabled feature is omitted from discovery while the other remains available. Both old feature-specific federation stacks and raw remote URL routes were removed; there is no v1 downgrade. No alias namespace. See `docs/federation-protocol.md`. |
-| 4 | Web contact privacy and trust | **V1 identity and delivery cutover implemented; profile-envelope cutover remains.** Account-signed complete manifest history, durable gray-TOFU/green-QR/red-quarantine state, explicit account-incarnation replacement, message requests/blocking, contacts-only libsignal sealed sender, offline-root/online-certificate policy, database-backed abuse limits, anonymous local/federated delivery, capability rotation on block and no identified fallback are restart- and two-server-browser verified. The remaining V1 work in this slice is the shared typed XChaCha profile envelope. |
+| 4 | Web contact privacy and trust | **Implemented and two-server verified.** Account-signed complete manifest history, durable gray-TOFU/green-QR/red-quarantine state, explicit account-incarnation replacement, message requests/blocking, contacts-only libsignal sealed sender, offline-root/online-certificate policy, database-backed abuse limits, anonymous local/federated delivery, capability rotation on block, no identified fallback, and the shared typed XChaCha profile envelope are restart- and two-server-browser verified. |
 | 5 | MLS private groups | **V1 binding implemented, activated and two-server verified.** Durable OpenMLS state, manifest-bound devices, private role/control state, quorum-certified multi-authority ordering, owner-approved governance/recovery, destination-private delivery, invitation consent, linked-device sync, restart reconciliation and exact group security inspection use RFC 9420 suite `0x0003` with X25519/ChaCha/Ed25519. The native scale gate operates an actual 256-account × 10-device OpenMLS tree (2,560 independent leaves); the same Rust core builds for WASM, while browser lifecycle, adversarial replay/enumeration, restart/federation and destination-metadata gates pass. Direct and Note to Self remain libsignal. See `docs/chat-mls.md`. |
-| 5b | Confidential broadcast | **V1 blocker, not an oversized MLS group.** A small MLS owner/admin control group authorizes publishers and the replaceable ordering authorities. A fixed-depth account-leaf LKH serves up to 1,000,000 subscribed accounts; each account access secret is independently wrapped to up to ten manifest devices (10,000,000 grants). Posts are encrypted once and pulled/cached by subscriber homeservers. Removal rekeys before the next post, owner removal performs a restart-safe full rebuild, and history policy is `0..=365` days (default 30) over daily one-way content epochs. See `docs/broadcast-security-threat-model.md`. |
-| 6 | Web messaging and media | Replies, reactions, edits/deletes, receipts, typing, disappearing messages, local search, encrypted drive/tus attachments, and voice notes. |
+| 6 | Web messaging and media | **Chat-media slice implemented, advertised and clean two-server verified.** Direct, Note-to-Self and MLS attachments use one immutable Rust/WASM-secretstream object, resumable tus upload, sender-free durable federation copies, shared account quota, manual streaming download, clearable encrypted per-conversation accounting and restart-safe linked-device rebuild. The server limit defaults to the V1 2 GiB ceiling and may only be lowered. Replies, reactions, edits/deletes, receipts, typing, disappearing messages, local search, capture UX and voice-note recording remain the next Phase 6 slices. See `docs/chat-media.md`. |
+| 5b | Confidential broadcast | **V1 blocker scheduled after Phase 6, not an oversized MLS group.** A small MLS owner/admin control group authorizes publishers and the replaceable ordering authorities. A fixed-depth account-leaf LKH serves up to 1,000,000 subscribed accounts; each account access secret is independently wrapped to up to ten manifest devices (10,000,000 grants). Posts are encrypted once and pulled/cached by subscriber homeservers. Removal rekeys before the next post, owner removal performs a restart-safe full rebuild, and history policy is `0..=365` days (default 30) over daily one-way content epochs. See `docs/broadcast-security-threat-model.md`. |
 | 7 | Web PWA completion | Generic content-free Web Push, offline/restart recovery, responsive/accessibility/browser matrix, security/load tests, and protocol freeze. |
 | 8 | Calls | 1:1 WebRTC → SFU group calls; TURN + SNI demux on 443. Separate from the messaging-complete web milestone. |
 | 9 | Native clients | Freeze UniFFI APIs, package XCFramework/AAR, add Keychain/Keystore, then integrate iOS and Android against the proven web protocol. |
 
 Device-list authenticity (the signed per-account device manifest) is **not** in phase 7 — it is a phase-2b/2 wire-contract requirement per the comparative study.
+
+#### Phase 6 attachment storage and download decision
+
+The normative protocol and threat model are
+[`chat-media.md`](chat-media.md) and
+[`chat-media-security-threat-model.md`](chat-media-security-threat-model.md).
+
+Chat attachments reuse Kutup's encrypted Drive/TUS and federation machinery;
+they do not introduce a second object-storage stack. The sender uploads an
+immutable encrypted attachment and retains a retry/outbox copy until every
+destination homeserver has durably accepted it. Each destination homeserver
+stores one opaque ciphertext copy, reference-counted for all of its local group
+members and devices, so a received attachment remains available if the sender
+or sender's server later goes offline. Its logical bytes are reported as Chat
+media and count against the recipient's single total account quota.
+
+V1 uses one administrator-configured total account quota, currently 10 GiB by
+default. Drive and Chat media are usage categories, not reserved allocations or
+independent hard caps: either may consume all remaining account capacity. At
+minimum the user-facing storage view separates Drive and Chat media; a future
+Photos product receives its own namespace rather than classifying encrypted
+MIME data. The same view must show Chat-media usage per conversation (for
+example, `Family group — 842 MiB`) and let the user review or clear that
+conversation's stored media. Clearing a recipient's copy releases its quota
+and affects that account's linked devices, but never deletes another
+participant's copy. Do not add a user-adjustable Chat-media budget in V1;
+service-specific caps remain an additive future policy only if operational
+evidence requires them.
+
+Per-conversation accounting must not weaken sealed-sender metadata privacy.
+The homeserver stores only the recipient, opaque attachment/reference IDs,
+storage namespace and bounded ciphertext byte counts; it does not persist a
+sender identity or sender-recipient/chat correlation. The client joins those
+opaque IDs to its E2EE message index and computes the named per-chat totals
+locally.
+
+The attachment-reference index follows the client-derived encrypted-entity
+pattern used by Ente for private user entities and derived file data. Kutup
+defines a typed `ChatAttachmentLedgerV1` payload and purpose-specific key, while
+reusing the common Rust/WASM envelope, canonical encoding and parser machinery.
+The homeserver persists only a suite-bearing encrypted entity, random opaque
+entity ID, exact ciphertext size, monotonic account cursor/revision and
+tombstone state. It cannot read the conversation ID, message ID, media kind or
+display name. Clients fetch bounded cursor pages, decrypt and validate them,
+then maintain a disposable local IndexedDB/SQLCipher projection for instant
+per-chat totals. A recovered or newly linked device can rebuild that projection
+from the encrypted remote ledger without trusting another device to remain
+online.
+
+Unlike an unauthenticated last-write-wins blob, ledger updates require exact
+previous revision/digest continuity and idempotent operation IDs so concurrent
+linked devices cannot silently overwrite one another. The server's separate
+opaque byte-accounting rows remain authoritative for quota enforcement; the
+encrypted client index is authoritative only for private presentation and
+cleanup selection. This shares machinery with other future encrypted account
+state without sharing its key or typed payload.
+
+V1 device download is always manual: receiving a message may persist its
+encrypted attachment at the homeserver, but no photo, audio, video or file is
+downloaded to a recipient device until the user taps **Download**. A message
+request carries only the encrypted attachment descriptor; its destination
+homeserver must not fetch or allocate storage for the blob before the recipient
+accepts the request. This prevents an unauthenticated sender from consuming the
+recipient's storage quota.
+
+The V1 protocol ceiling is a 2 GiB plaintext-class attachment plus the exact
+bounded overhead of its typed ciphertext framing. Every server defaults to that
+ceiling and may advertise a lower local limit, but cannot advertise a larger V1
+limit. Admission reserves the exact ciphertext bytes before transfer and
+rejects an oversized object before object-storage mutation. The server applies
+one media-object limit because MIME type remains encrypted; client recording
+and preview code may use smaller type-specific limits.
+
+**Save to Drive** decrypts and re-encrypts the attachment into a visible,
+recipient-owned Drive collection. Promotion transfers the logical quota charge
+instead of permanently charging for both the Chat-media object and the saved
+Drive object. Names, captions, thumbnails, MIME details, capabilities and keys
+remain inside the E2EE message; servers handle only bounded opaque ciphertext
+and public size/accounting fields.
+
+Post-V1 clients may add WhatsApp-style per-user automatic-download policy,
+separately for mobile data, Wi-Fi and roaming and separately for photos, audio,
+videos and files, with optional size limits. The settings synchronize between
+the user's devices through encrypted Note-to-Self state. They control only
+device downloads and never weaken the homeserver's durable-storage rule after
+an accepted delivery.
 
 ### Platform · Advanced traffic-inspection protection [TODO, post-MLS v1]
 

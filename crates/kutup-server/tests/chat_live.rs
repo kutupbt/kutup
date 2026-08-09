@@ -345,6 +345,7 @@ fn chat_v1_contract() {
     println!("ok  - two accounts registered + logged in");
 
     let (dev_a, reg_a, identity_a) = register_chat_device(&c, &base, &ta);
+    let (interrupted_a, _, _) = register_chat_device(&c, &base, &ta);
     let (dev_b, reg_b, identity_b) = register_chat_device(&c, &base, &tb);
     println!("ok  - chat devices registered (A={dev_a} B={dev_b})");
 
@@ -367,6 +368,25 @@ fn chat_v1_contract() {
             mls: None,
         }],
     );
+    let devices_after_first_manifest: Value = c
+        .get(format!("{base}/api/chat/device"))
+        .bearer_auth(&ta)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(
+        devices_after_first_manifest["devices"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        devices_after_first_manifest["devices"][0]["deviceId"],
+        dev_a
+    );
+    assert_ne!(interrupted_a, dev_a);
     publish_manifest(
         &c,
         &base,
@@ -481,6 +501,7 @@ fn chat_v1_contract() {
 
     // A links a second device. A sync-mode bundle fetch returns the complete
     // signed-set shape, but does not consume a one-time key for the caller.
+    let (interrupted_a2, _, _) = register_chat_device(&c, &base, &ta);
     let (dev_a2, reg_a2, identity_a2) = register_chat_device(&c, &base, &ta);
     let manifest_a2 = publish_manifest(
         &c,
@@ -523,6 +544,9 @@ fn chat_v1_contract() {
     let sync_bundles = sync_bundles_value;
     let sync_devices = sync_bundles["devices"].as_array().unwrap();
     assert_eq!(sync_devices.len(), 2);
+    assert!(sync_devices
+        .iter()
+        .all(|device| device["deviceId"] != interrupted_a2));
     let current = sync_devices
         .iter()
         .find(|device| device["deviceId"] == dev_a)

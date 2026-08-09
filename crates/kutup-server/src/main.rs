@@ -8,6 +8,7 @@
 
 mod chat_federation;
 mod chat_hub;
+mod chat_media_federation;
 mod chat_mls;
 mod config;
 mod db;
@@ -272,6 +273,7 @@ async fn main() -> anyhow::Result<()> {
         federation.spawn_maintenance();
     }
     chat_federation::spawn_retry_worker(state.clone());
+    chat_media_federation::spawn_retry_worker(state.clone());
     chat_mls::spawn_retry_worker(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
 
@@ -386,8 +388,8 @@ fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
 
     use handlers::{
-        admin, auth, chat, collab, collections, devices, file_assets, file_versions, files, shares,
-        trash, tus,
+        admin, auth, chat, chat_media, collab, collections, devices, file_assets, file_versions,
+        files, shares, trash, tus,
     };
 
     Router::new()
@@ -618,6 +620,34 @@ fn build_router(state: AppState) -> Router {
         .route("/api/chat/messages/ack", post(chat::ack_messages))
         .route("/api/chat/ws-ticket", post(chat::create_ws_ticket))
         .route("/api/chat/ws", get(chat::ws))
+        // Chat-media uses the same storage client and tus multipart semantics,
+        // but a separate typed object namespace and quota reference model.
+        .route("/api/chat/media/uploads", post(chat_media::create_upload))
+        .route(
+            "/api/chat/media/uploads/:id",
+            patch(chat_media::patch_upload)
+                .head(chat_media::head_upload)
+                .delete(chat_media::delete_upload)
+                .route_layer(DefaultBodyLimit::max(6 * 1024 * 1024)),
+        )
+        .route(
+            "/api/chat/media/objects/:attachmentId",
+            get(chat_media::download_object).delete(chat_media::discard_origin_object),
+        )
+        .route(
+            "/api/chat/media/references/:attachmentId",
+            get(chat_media::reference_info).delete(chat_media::clear_reference),
+        )
+        .route(
+            "/api/chat/media/deliveries",
+            post(chat_media::deliver_local).route_layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route("/api/chat/media/storage", get(chat_media::storage_summary))
+        .route("/api/chat/media/ledger", get(chat_media::ledger_diff))
+        .route(
+            "/api/chat/media/ledger/:entityId",
+            put(chat_media::put_ledger_entity),
+        )
         // --- tus.io resumable uploads. The OPTIONS discovery is served by the
         // `tus_options_passthrough` layer (mirroring Fiber, which lets non-preflight
         // OPTIONS reach the handler); the rest authenticate via the AuthUser extractor
@@ -778,6 +808,18 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/chat/messages",
             post(chat_federation::deliver_messages)
                 .route_layer(DefaultBodyLimit::max(FED_CHAT_BODY_LIMIT_BYTES))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/media/offers",
+            post(chat_media_federation::receive_offer)
+                .route_layer(DefaultBodyLimit::max(64 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/media/objects",
+            post(chat_media_federation::serve_object)
+                .route_layer(DefaultBodyLimit::max(64 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(

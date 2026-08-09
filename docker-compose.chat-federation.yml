@@ -38,7 +38,11 @@ services:
 
   seaweedfs-volume:
     image: chrislusf/seaweedfs:latest
-    command: volume -mserver=seaweedfs-master:9333 -dir=/data -max=10
+    # SeaweedFS grows collection-specific volumes in batches. Two isolated
+    # homeserver buckets plus the default collection exceed ten volumes before
+    # meaningful payload data is stored, which produces a false storage-full
+    # failure in the federation E2E topology.
+    command: volume -mserver=seaweedfs-master:9333 -dir=/data -max=100
     tmpfs:
       - /data
     depends_on:

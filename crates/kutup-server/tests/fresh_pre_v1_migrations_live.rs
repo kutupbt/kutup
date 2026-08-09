@@ -247,4 +247,77 @@ async fn all_migrations_build_the_exact_v1_manifest_and_mls_schema() {
     .await
     .unwrap();
     assert_eq!(removed_tables, 0);
+
+    let chat_media_tables: Vec<String> = sqlx::query_scalar(
+        "SELECT table_name FROM information_schema.tables
+         WHERE table_schema='public' AND table_name LIKE 'chat_media%'
+         ORDER BY table_name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    for required in [
+        "chat_media_federation_inbound_state",
+        "chat_media_federation_inbound_pending",
+        "chat_media_federation_inbound_transactions",
+        "chat_media_federation_outbox",
+        "chat_media_federation_pull_grants",
+        "chat_media_federation_sequences",
+        "chat_media_objects",
+        "chat_media_rate_counters",
+        "chat_media_references",
+        "chat_media_uploads",
+        "chat_media_origin_delivery_operations",
+    ] {
+        assert!(
+            chat_media_tables.iter().any(|table| table == required),
+            "missing {required}"
+        );
+    }
+    let media_object_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT column_name FROM information_schema.columns
+         WHERE table_schema='public' AND table_name='chat_media_objects'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    for required in ["origin_domain", "ciphertext_sha256", "retrieval_token_hash"] {
+        assert!(media_object_columns.iter().any(|column| column == required));
+    }
+    let origin_delivery_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT column_name FROM information_schema.columns
+         WHERE table_schema='public'
+           AND table_name='chat_media_origin_delivery_operations'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(origin_delivery_columns
+        .iter()
+        .any(|column| column == "offer_digest"));
+    let origin_user_nullable: String = sqlx::query_scalar(
+        "SELECT is_nullable FROM information_schema.columns
+         WHERE table_schema='public' AND table_name='chat_media_objects'
+           AND column_name='origin_user_id'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(origin_user_nullable, "YES");
+    let ledger_tables: Vec<String> = sqlx::query_scalar(
+        "SELECT table_name FROM information_schema.tables
+         WHERE table_schema='public' AND table_name LIKE 'chat_attachment_ledger%'
+         ORDER BY table_name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        ledger_tables,
+        [
+            "chat_attachment_ledger_entities",
+            "chat_attachment_ledger_history",
+            "chat_attachment_ledger_operations"
+        ]
+    );
 }

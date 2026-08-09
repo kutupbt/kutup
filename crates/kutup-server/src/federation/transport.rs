@@ -95,6 +95,9 @@ pub(crate) struct AuthenticatedFederationStreamResponse {
     pub status: StatusCode,
     pub content_type: String,
     pub content_length: u64,
+    /// Digest computed before any bytes are released and authenticated by the
+    /// pinned peer response signature.
+    pub content_sha256: [u8; 32],
     pub file: tokio::fs::File,
 }
 
@@ -531,6 +534,7 @@ impl FederationStack {
             status,
             content_type,
             content_length: length,
+            content_sha256: digest,
             file,
         })
     }

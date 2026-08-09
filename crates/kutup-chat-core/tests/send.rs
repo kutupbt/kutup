@@ -1025,6 +1025,34 @@ fn single_device_note_to_self_is_local_and_never_posts_an_envelope() {
 }
 
 #[test]
+fn canonical_single_device_note_to_self_does_not_loop_back_as_incoming() {
+    let mut rng = test_rng();
+    let alice = device("alice", 1, &mut rng);
+    let bundle = bundle_of(&alice, 1);
+    let server = Rc::new(MockServer::default());
+    server.script_sync(vec![vec![bundle.clone()]]);
+    server.script_sync_manifests(vec![Some(signed_manifest("alice@example.test", &bundle))]);
+    server.set_sync_active(vec![(1, reg_id(&alice))]);
+    let mut engine = Engine::new_for_development(alice, server.clone());
+    engine.set_local_server("example.test").unwrap();
+
+    assert_eq!(engine.session().user(), "alice@example.test");
+    let summary = block_on(engine.send(
+        "note-canonical-local",
+        "alice@example.test",
+        &ChatContent::text("2026-07-16T10:00:00Z", 1, "canonical note"),
+        &mut rng,
+    ))
+    .unwrap();
+
+    assert!(summary.delivered);
+    assert_eq!(summary.attempts, 0);
+    assert!(server.synced.borrow().is_empty());
+    assert_eq!(block_on(engine.session().sent_history()).unwrap().len(), 1);
+    assert!(block_on(engine.session().history()).unwrap().is_empty());
+}
+
+#[test]
 fn linked_device_note_arrives_as_outgoing_history_via_encrypted_transcript() {
     let mut rng = test_rng();
     let alice1 = device("alice", 1, &mut rng);

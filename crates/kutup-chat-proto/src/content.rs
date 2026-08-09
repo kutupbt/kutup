@@ -13,6 +13,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::ChatAttachmentDescriptorV1;
+
 /// Reserved `kind` values. [`TEXT`] is user-visible content and
 /// [`SENT_TRANSCRIPT`] is the encrypted linked-device synchronization wrapper;
 /// the rest are reserved so the registry can't be re-used incompatibly. See
@@ -35,8 +37,9 @@ pub mod kind {
     pub const RECEIPT: &str = "receipt";
     /// Typing indicator; ephemeral, a client MAY drop it. [RSV]
     pub const TYPING: &str = "typing";
-    /// Attachment pointer into the E2EE drive (tus); the blob rides the drive,
-    /// not the mailbox. [RSV] (phase 5)
+    /// Attachment descriptor for the immutable encrypted Chat-media object;
+    /// bytes ride the shared Drive/TUS object stack, not the mailbox. [IMPL]
+    /// (phase 6; `docs/chat-media.md`)
     pub const ATTACHMENT: &str = "attachment";
     /// Encrypted group-state operation. [RSV] (phase 4)
     pub const GROUP_CONTROL: &str = "groupControl";
@@ -156,6 +159,43 @@ impl ChatContent {
         } else {
             None
         }
+    }
+
+    /// Builds an attachment message whose descriptor stays inside the Direct
+    /// Chat or MLS application ciphertext. The immutable blob is transferred
+    /// separately through the authenticated Chat-media service.
+    pub fn attachment_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        descriptor: ChatAttachmentDescriptorV1,
+    ) -> Result<Self, String> {
+        descriptor.validate()?;
+        Ok(ChatContent {
+            v: Self::VERSION,
+            kind: kind::ATTACHMENT.to_string(),
+            sent_at: sent_at.into(),
+            seq,
+            message_id: Some(message_id.into()),
+            profile_key: None,
+            profile_suite: None,
+            body: serde_json::to_value(descriptor)
+                .map_err(|error| format!("encode Chat attachment descriptor: {error}"))?,
+            extra: serde_json::Map::new(),
+        })
+    }
+
+    /// Returns only a strictly validated V1 attachment descriptor. Unknown
+    /// suites and malformed metadata remain a visible unsupported message;
+    /// they never authorize object retrieval.
+    pub fn as_attachment(&self) -> Option<ChatAttachmentDescriptorV1> {
+        if self.kind != kind::ATTACHMENT || self.v != Self::VERSION || self.message_id.is_none() {
+            return None;
+        }
+        let descriptor: ChatAttachmentDescriptorV1 =
+            serde_json::from_value(self.body.clone()).ok()?;
+        descriptor.validate().ok()?;
+        Some(descriptor)
     }
 
     /// Builds the encrypted linked-device wrapper used by Note to Self and,

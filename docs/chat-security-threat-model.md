@@ -1,9 +1,11 @@
 # Chat security threat model
 
 This document is normative for V1 Direct Chat, Note to Self, private MLS
-groups, signed account manifests, and contacts-only sealed delivery. Calls,
-group calls, native product UI, million-account broadcast channels, anonymity
-relays, and traffic-shape protection are separate milestones.
+groups, signed account manifests, contacts-only sealed delivery, and the common
+identity/delivery foundation used by Chat media. Attachment-specific storage,
+quota and parser threats are defined in `chat-media-security-threat-model.md`.
+Calls, group calls, native product UI, million-account broadcast channels,
+anonymity relays, and traffic-shape protection are separate milestones.
 
 ## Trust boundaries and protected assets
 

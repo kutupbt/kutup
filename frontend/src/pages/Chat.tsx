@@ -8,10 +8,14 @@ import {
   Check,
   CheckCheck,
   Copy,
+  Download,
+  FileText,
+  HardDrive,
   Loader2,
   MessageCircle,
   MessageSquareWarning,
   Plus,
+  Paperclip,
   QrCode,
   RefreshCw,
   Send,
@@ -38,7 +42,7 @@ import { Input } from '@/components/ui/input'
 import { QRCodeSVG } from 'qrcode.react'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { useAppSelector } from '@/store'
-import { ChatService, ChatServiceError } from '@/chat/service'
+import { ChatService, ChatServiceError, type ChatMediaStorageView } from '@/chat/service'
 import { MlsSendError } from '@/chat/mls-service'
 import { MlsGroupSecurityDetails } from '@/chat/MlsGroupSecurityDetails'
 import { SafetyVerificationDialog } from '@/chat/SafetyVerificationDialog'
@@ -71,6 +75,7 @@ import type {
 } from '@/chat/types'
 import { cn } from '@/lib/utils'
 import { copyText } from '@/lib/format'
+import { downloadChatMediaV1, uploadChatMediaV1 } from '@/chat/media'
 
 export default function Chat() {
   const { t } = useTranslation()
@@ -147,7 +152,12 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [groupMaximumPlaintext, setGroupMaximumPlaintext] = useState('')
   const [selectedSafety, setSelectedSafety] = useState<SafetyNumberV1 | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [mediaStorageOpen, setMediaStorageOpen] = useState(false)
+  const [mediaStorage, setMediaStorage] = useState<ChatMediaStorageView | null>(null)
+  const [mediaStorageLoading, setMediaStorageLoading] = useState(false)
+  const [mediaStorageClearing, setMediaStorageClearing] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
+  const attachmentInputRef = useRef<HTMLInputElement>(null)
   const selfAccount = useMemo(
     () =>
       auth.username
@@ -396,6 +406,11 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       && selectedGroupCanSend
       && !selectedGroupReadiness.blocksSending,
   )
+  const canSendMedia = canSend && Boolean(
+    selectedConversation?.kind === 'group'
+      || noteSelected
+      || selectedContact?.state === 'accepted',
+  )
 
   const messages = useMemo(
     () =>
@@ -424,6 +439,23 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       cancelled = true
     }
   }, [contacts.length, history.length, noteSelected, selectedAddress, service])
+
+  useEffect(() => {
+    if (!mediaStorageOpen || !service || !capabilities.media) return
+    let cancelled = false
+    setMediaStorageLoading(true)
+    void service.chatMediaStorage()
+      .then(storage => {
+        if (!cancelled) setMediaStorage(storage)
+      })
+      .catch(cause => {
+        if (!cancelled) toast.error(errorMessage(cause, t))
+      })
+      .finally(() => {
+        if (!cancelled) setMediaStorageLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [capabilities.media, mediaStorageOpen, service, t])
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -458,6 +490,37 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       toast.error(errorMessage(cause, t))
     } finally {
       setSending(false)
+    }
+  }
+
+  async function sendAttachmentFile(file: File) {
+    if (!service || !selectedConversation || !auth.accessToken || sending ||
+        !capabilities.media || !capabilities.serverName) return
+    if (file.size > capabilities.media.maximumPlaintextBytes) {
+      toast.error(`Attachment exceeds this server's ${formatBytes(capabilities.media.maximumPlaintextBytes)} limit`)
+      return
+    }
+    setSending(true)
+    try {
+      const uploaded = await uploadChatMediaV1({
+        file,
+        originDomain: capabilities.serverName,
+        accessToken: auth.accessToken,
+      })
+      const summary = await service.sendAttachment(
+        selectedConversation,
+        uploaded.descriptor,
+        uploaded.storageReferenceId,
+      )
+      if (summary.safetyNumberChanges.length > 0) {
+        toast.warning(t('chat.safetyNumberChanged'))
+      }
+      setHistory(await service.history())
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setSending(false)
+      if (attachmentInputRef.current) attachmentInputRef.current.value = ''
     }
   }
 
@@ -770,7 +833,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       {showPeerList && (
         <aside className="flex w-full shrink-0 flex-col border-r bg-sidebar md:w-80">
           <header
-            className="flex h-16 items-center gap-1.5 border-b px-3"
+            className="flex h-16 items-center gap-1 border-b px-2"
             data-testid="chat-sidebar-header"
           >
             <Button
@@ -805,6 +868,109 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 {t('chat.device', { device: service?.deviceId ?? '…' })}
               </p>
             </div>
+            {capabilities.media && (
+              <Dialog open={mediaStorageOpen} onOpenChange={setMediaStorageOpen}>
+                <DialogTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="shrink-0"
+                    disabled={!service}
+                    aria-label="Chat storage"
+                    data-testid="chat-storage-button"
+                  >
+                    <HardDrive className="h-5 w-5" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>Account storage</DialogTitle>
+                    <DialogDescription>
+                      Drive and Chat share one quota. Conversation labels are decrypted and calculated only on this device.
+                    </DialogDescription>
+                  </DialogHeader>
+                  {mediaStorageLoading || !mediaStorage ? (
+                    <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" /> Loading encrypted accounting…
+                    </div>
+                  ) : (
+                    <div className="grid gap-4" data-testid="chat-storage-summary">
+                      <div className="rounded-lg border p-4">
+                        <div className="flex justify-between text-sm font-medium">
+                          <span>{formatBytes(mediaStorage.totalUsedBytes)} used</span>
+                          <span>{formatBytes(mediaStorage.totalQuotaBytes)}</span>
+                        </div>
+                        <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
+                          <div
+                            className="h-full bg-primary"
+                            style={{ width: `${Math.min(100, mediaStorage.totalQuotaBytes > 0
+                              ? mediaStorage.totalUsedBytes * 100 / mediaStorage.totalQuotaBytes
+                              : 0)}%` }}
+                          />
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                          <div className="rounded bg-muted/50 p-2">
+                            <span className="block text-xs text-muted-foreground">Drive</span>
+                            {formatBytes(mediaStorage.driveBytes)}
+                          </div>
+                          <div className="rounded bg-muted/50 p-2">
+                            <span className="block text-xs text-muted-foreground">Chat media</span>
+                            {formatBytes(mediaStorage.chatMediaBytes)}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid max-h-72 gap-2 overflow-y-auto">
+                        {mediaStorage.byConversation.map(item => {
+                          const profile = profilesByPeer.get(item.conversationReference)
+                          const group = groups.find(candidate =>
+                            candidate.request.genesis.conversationId === item.conversationReference)
+                          const label = item.conversationReference === selfAddress
+                            ? t('chat.noteToSelf')
+                            : profile?.displayName
+                              ?? (group ? `Group ${item.conversationReference.slice(0, 8)}`
+                                : item.conversationReference)
+                          return (
+                            <div
+                              key={item.conversationReference}
+                              className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm"
+                            >
+                              <span className="min-w-0 truncate">{label}</span>
+                              <span className="ml-auto shrink-0 text-muted-foreground">{formatBytes(item.bytes)}</span>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={mediaStorageClearing !== null}
+                                onClick={() => {
+                                  if (!service || !window.confirm(
+                                    `Clear stored Chat media for ${label}? Messages remain, but downloaded files may become unavailable.`,
+                                  )) return
+                                  setMediaStorageClearing(item.conversationReference)
+                                  void service.clearChatMediaConversation(item.conversationReference)
+                                    .then(setMediaStorage)
+                                    .catch(cause => toast.error(errorMessage(cause, t)))
+                                    .finally(() => setMediaStorageClearing(null))
+                                }}
+                                aria-label={`Clear stored Chat media for ${label}`}
+                              >
+                                {mediaStorageClearing === item.conversationReference
+                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  : 'Clear'}
+                              </Button>
+                            </div>
+                          )
+                        })}
+                        {mediaStorage.byConversation.length === 0 && (
+                          <p className="py-5 text-center text-sm text-muted-foreground">
+                            No categorized Chat attachments yet.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </DialogContent>
+              </Dialog>
+            )}
             {selfAccount?.server && selfAddress && (
               <Dialog>
                 <DialogTrigger asChild>
@@ -1576,6 +1742,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                   key={`${message.direction}:${message.id}`}
                   message={message}
                   newerClientLabel={t('chat.newerClient')}
+                  accessToken={auth.accessToken ?? undefined}
                 />
               ))}
               <div ref={endRef} />
@@ -1594,6 +1761,31 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
               </div>
             )}
             <div className="mx-auto flex max-w-3xl items-end gap-2">
+              {capabilities.media && (
+                <>
+                  <input
+                    ref={attachmentInputRef}
+                    type="file"
+                    className="hidden"
+                    onChange={event => {
+                      const file = event.target.files?.[0]
+                      if (file) void sendAttachmentFile(file)
+                    }}
+                    data-testid="chat-attachment-input"
+                  />
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    disabled={!service || !canSendMedia || sending}
+                    onClick={() => attachmentInputRef.current?.click()}
+                    aria-label="Send encrypted attachment"
+                    data-testid="chat-attachment-button"
+                  >
+                    <Paperclip className="h-4 w-4" />
+                  </Button>
+                </>
+              )}
               <Input
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
@@ -1820,11 +2012,15 @@ function ProfileEditor({
 function MessageBubble({
   message,
   newerClientLabel,
+  accessToken,
 }: {
   message: ChatHistoryEntry
   newerClientLabel: string
+  accessToken?: string
 }) {
   const outgoing = message.direction === 'outgoing'
+  const [downloading, setDownloading] = useState(false)
+  const attachment = message.content.attachment
   return (
     <div className={cn('flex', outgoing ? 'justify-end' : 'justify-start')}>
       <div
@@ -1835,9 +2031,43 @@ function MessageBubble({
             : 'rounded-bl-md border bg-card',
         )}
       >
-        <p className="whitespace-pre-wrap break-words text-sm">
-          {message.content.text ?? newerClientLabel}
-        </p>
+        {attachment ? (
+          <div className="flex min-w-52 items-center gap-3">
+            <FileText className="h-7 w-7 shrink-0" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium">{attachment.filename}</span>
+              <span className={cn(
+                'block text-[11px]',
+                outgoing ? 'text-primary-foreground/70' : 'text-muted-foreground',
+              )}>
+                {formatBytes(attachment.plaintextBytes)} · encrypted
+              </span>
+            </span>
+            <Button
+              type="button"
+              size="icon"
+              variant={outgoing ? 'secondary' : 'ghost'}
+              className="h-8 w-8 shrink-0"
+              disabled={!accessToken || downloading}
+              onClick={() => {
+                if (!accessToken || downloading) return
+                setDownloading(true)
+                void downloadChatMediaV1(attachment, accessToken)
+                  .catch(() => toast.error('Encrypted attachment download failed'))
+                  .finally(() => setDownloading(false))
+              }}
+              aria-label={`Download ${attachment.filename}`}
+            >
+              {downloading
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <Download className="h-4 w-4" />}
+            </Button>
+          </div>
+        ) : (
+          <p className="whitespace-pre-wrap break-words text-sm">
+            {message.content.text ?? newerClientLabel}
+          </p>
+        )}
         <span
           className={cn(
             'mt-1 flex items-center justify-end gap-1 text-[10px]',
@@ -1850,6 +2080,18 @@ function MessageBubble({
       </div>
     </div>
   )
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KiB', 'MiB', 'GiB']
+  let value = bytes
+  let unit = -1
+  do {
+    value /= 1024
+    unit += 1
+  } while (value >= 1024 && unit < units.length - 1)
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`
 }
 
 const MAX_PROFILE_AVATAR_BYTES = 512 * 1024

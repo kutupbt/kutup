@@ -258,9 +258,8 @@ pub async fn version_cleanup_tick(pool: &PgPool, storage: &StorageService) -> us
     pruned
 }
 
-/// Rewrites `users.storage_used_bytes` from the authoritative row sums (files + file_assets +
-/// file_versions) for any drifted user — mirrors `QuotaReconcile.Tick`. Returns the number of
-/// users corrected.
+/// Rewrites `users.storage_used_bytes` from authoritative Drive rows and
+/// logical Chat-media references for any drifted user.
 pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
     let rows: Vec<(Uuid, i64)> = match sqlx::query_as(
         r#"WITH child_bytes AS (
@@ -269,6 +268,8 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
              SELECT uploader_user_id,            size_bytes              FROM file_assets
              UNION ALL
              SELECT author_user_id,              size_bytes              FROM file_versions
+             UNION ALL
+             SELECT user_id,                     logical_bytes           FROM chat_media_references
            ),
            expected AS (
              SELECT u.id AS user_id, COALESCE(SUM(c.bytes), 0) AS bytes
@@ -337,7 +338,80 @@ pub async fn uploads_sweep_once(pool: &PgPool, storage: &StorageService) -> usiz
         tracing::info!("uploads-sweeper: reaped upload={id} path={path}");
         reaped += 1;
     }
+    let stale_media: Vec<(Uuid, String, String)> = match sqlx::query_as(
+        "SELECT id, storage_path, s3_upload_id FROM chat_media_uploads \
+         WHERE updated_at < NOW() - $1 * interval '1 second'",
+    )
+    .bind(UPLOADS_STALE_AFTER_SECS)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(error = %error, "Chat-media upload sweeper list failed");
+            return reaped;
+        }
+    };
+    for (id, path, s3_upload_id) in stale_media {
+        if storage.abort_multipart(&path, &s3_upload_id).await.is_err() {
+            continue;
+        }
+        if sqlx::query("DELETE FROM chat_media_uploads WHERE id=$1")
+            .bind(id)
+            .execute(pool)
+            .await
+            .is_ok()
+        {
+            // Do not emit user, attachment, token, or storage-path identifiers.
+            tracing::info!("reaped one abandoned Chat-media upload");
+            reaped += 1;
+        }
+    }
+    if let Err(error) = sweep_chat_media_orphans(pool, storage).await {
+        tracing::warn!(error = %error, "Chat-media orphan sweep failed");
+    }
     reaped
+}
+
+/// Remove completed Chat-media objects whose database transaction never
+/// committed. Object identifiers and paths are deliberately absent from logs.
+async fn sweep_chat_media_orphans(pool: &PgPool, storage: &StorageService) -> anyhow::Result<()> {
+    let cutoff = OffsetDateTime::now_utc() - Duration::from_secs(UPLOADS_STALE_AFTER_SECS as u64);
+    let mut token = None;
+    let mut removed = 0_u64;
+    loop {
+        let (objects, next) = storage
+            .list_objects_page("chat-media/", token.take())
+            .await?;
+        let candidates: Vec<String> = objects
+            .into_iter()
+            .filter(|object| object.last_modified <= cutoff)
+            .map(|object| object.key)
+            .collect();
+        if !candidates.is_empty() {
+            let alive: Vec<String> = sqlx::query_scalar(
+                "SELECT storage_path FROM chat_media_objects WHERE storage_path=ANY($1)",
+            )
+            .bind(&candidates)
+            .fetch_all(pool)
+            .await?;
+            let alive: std::collections::HashSet<_> = alive.into_iter().collect();
+            let orphaned: Vec<String> = candidates
+                .into_iter()
+                .filter(|path| !alive.contains(path))
+                .collect();
+            storage.delete_objects_batch(&orphaned).await?;
+            removed = removed.saturating_add(orphaned.len() as u64);
+        }
+        match next {
+            Some(next) => token = Some(next),
+            None => break,
+        }
+    }
+    if removed > 0 {
+        tracing::info!(removed, "removed orphaned Chat-media objects");
+    }
+    Ok(())
 }
 
 // --- trash purge (shared by the trash endpoints + the retention sweeper) ---

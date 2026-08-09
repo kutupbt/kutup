@@ -6,6 +6,58 @@ export interface ChatContentView {
   messageId?: string
   body: unknown
   text?: string
+  /** Present only after strict Rust descriptor validation. */
+  attachment?: ChatAttachmentDescriptorV1
+}
+
+export type ChatMediaClassV1 = 'file' | 'photo' | 'video' | 'audio'
+
+export interface ChatMediaPreviewV1 {
+  mimeType: string
+  data: string
+}
+
+/** Exact E2EE attachment body validated again by the Rust Chat engine. */
+export interface ChatAttachmentDescriptorV1 {
+  version: 1
+  suite: 1
+  attachmentId: string
+  originDomain: string
+  retrievalToken: string
+  ciphertextBytes: number
+  ciphertextSha256: string
+  attachmentKey: string
+  plaintextBytes: number
+  filename: string
+  mimeType: string
+  mediaClass: ChatMediaClassV1
+  caption?: string
+  width?: number
+  height?: number
+  durationMs?: number
+  preview?: ChatMediaPreviewV1
+}
+
+export type ChatMediaConversationKindV1 = 'direct' | 'mls_group' | 'note_to_self'
+export type ChatAttachmentLedgerStateV1 =
+  | 'active'
+  | 'cleared'
+  | 'saved_to_drive'
+  | 'expired'
+
+export interface ChatAttachmentLedgerEntryV1 {
+  version: 1
+  conversationKind: ChatMediaConversationKindV1
+  conversationReference: string
+  messageId: string
+  attachmentId: string
+  storageReferenceId: string
+  ciphertextBytes: number
+  state: ChatAttachmentLedgerStateV1
+  mediaClass: ChatMediaClassV1
+  displayName: string
+  updatedAtMs: number
+  driveFileId?: string
 }
 
 export interface AccountAddress {
@@ -110,6 +162,12 @@ export interface ChatCapabilities {
   sealedSender: boolean
   /** Complete browser + local + federated MLS group path is available. */
   mlsGroups?: boolean
+  /** Present only after immutable media works locally, federated, and in the browser. */
+  media?: {
+    protocolVersion: number
+    suites: number[]
+    maximumPlaintextBytes: number
+  }
 }
 
 export interface PendingMlsInvitation {
@@ -1064,6 +1122,15 @@ export interface WasmChatClientHandle {
     text: string,
     createdAtMs: string,
   ): Promise<MlsOutboxEntry>
+  createMlsAttachmentMessage(
+    sendId: string,
+    conversationId: string,
+    incarnation: string,
+    mlsGroupId: Uint8Array,
+    sentAt: string,
+    descriptor: ChatAttachmentDescriptorV1,
+    createdAtMs: string,
+  ): Promise<MlsOutboxEntry>
   pendingMlsApplicationMessages(): Promise<MlsOutboxEntry[]>
   stageMlsApplicationDelivery(
     sendId: string,
@@ -1152,6 +1219,13 @@ export interface WasmChatClientHandle {
     sentAt: string,
     text: string,
   ): Promise<SendSummary>
+  sendAttachment(
+    sendId: string,
+    peer: string,
+    sentAt: string,
+    descriptor: ChatAttachmentDescriptorV1,
+  ): Promise<SendSummary>
+  mediaDeliveryCapability(peer: string): Promise<string>
   syncManifest(): Promise<unknown>
   safetyNumber(peer: string): Promise<SafetyNumberV1>
   verifySafetyNumber(peer: string, scannedPayload: string): Promise<SafetyNumberV1>

@@ -64,6 +64,10 @@ run_phase queue
 compose restart backend-a
 compose start edge-b
 compose up --detach --wait
+# Compose can recreate an anonymous-volume dependency (notably Postgres on a
+# cold machine) without restarting an already-running dependent backend. Reset
+# both connection pools after every convergence before probing through nginx.
+compose restart backend-a backend-b
 # The nginx test edges resolve their upstreams when nginx starts. Compose may
 # recreate a build-backed dependency such as the frontend above, so restart both
 # edges only after every dependency has settled on its final container address.
@@ -72,6 +76,28 @@ wait_url "http://127.0.0.1:$port_a/api/health"
 wait_url "http://127.0.0.1:$port_b/api/health"
 
 run_phase verify-retry
+
+# Destination Chat-media state may contain the authenticated origin domain and
+# its own local recipient, but never the remote sender account/device. Pending
+# reservations must also be empty after the durable retry finishes.
+media_sender_rows="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
+  "SELECT COUNT(*) FROM chat_media_objects WHERE origin_domain='a.test' AND origin_user_id IS NOT NULL")"
+media_pending_rows="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
+  "SELECT COUNT(*) FROM chat_media_federation_inbound_pending")"
+media_sender_columns="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
+  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='public' AND table_name LIKE 'chat_media_federation_inbound%' AND column_name LIKE 'sender%'")"
+media_plaintext_columns="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
+  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='public' AND table_name LIKE 'chat_media%' AND (column_name LIKE '%filename%' OR column_name LIKE '%mime%' OR column_name LIKE '%conversation%' OR column_name LIKE '%certificate%' OR column_name LIKE 'sender%')")"
+if [[ "$media_sender_rows" != "0" || "$media_pending_rows" != "0" || "$media_sender_columns" != "0" || "$media_plaintext_columns" != "0" ]]; then
+  echo "destination Chat-media state retained sender metadata or a completed reservation" >&2
+  exit 1
+fi
+if compose logs --no-color backend-b \
+    | grep -Eq 'federation-alice@example\.test|alicefed|sender-free-federated-chat-media|chat-media-queued-across-origin-restart|senderCertificate|ciphertextSha256|retrievalToken|deliveryCapability|ampqampqampqampqampqag==|UlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlI='; then
+  echo "destination Chat-media logs contain sender identity, plaintext, certificate, capability, token, or digest fields" >&2
+  exit 1
+fi
+echo "CHAT MEDIA DESTINATION METADATA PRIVACY VERIFIED"
 
 if [[ "${KUTUP_FEDERATION_SKIP_BROWSER:-0}" != "1" ]]; then
   # The API may be healthy while nginx is still reconnecting its separate

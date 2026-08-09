@@ -218,4 +218,62 @@ assert.throws(
   /authentication failed/,
 )
 
+const attachmentId = '11111111-1111-4111-8111-111111111111'
+const attachmentKey = Buffer.alloc(32, 0x42).toString('base64')
+const chatMedia = crypto.prepareChatMediaObject(attachmentKey, attachmentId)
+assert.deepEqual(chatMedia, {
+  objectHeader: 'S1VUUENNMQAAAQEAERERERERQRGBEREREREREQ==',
+  streamKey: 'pV4kyXvsX6NrGxJmf9SVT3kNGZu2EgwWQWC/qS2kbF8=',
+})
+assert.equal(
+  crypto.openChatMediaObjectHeader(chatMedia.objectHeader, attachmentKey, attachmentId),
+  chatMedia.streamKey,
+)
+assert.throws(
+  () => crypto.openChatMediaObjectHeader(
+    chatMedia.objectHeader,
+    attachmentKey,
+    '22222222-2222-4222-8222-222222222222',
+  ),
+  /context does not match/,
+)
+
+const ledgerMaster = Buffer.alloc(32, 0x33).toString('base64')
+const ledgerKey = crypto.deriveChatAttachmentLedgerKey(ledgerMaster)
+assert.equal(ledgerKey, 'DMmsEZ6NNSfT7l124msOjoY/0UfO2sYFtMqQwZ3m2SU=')
+const ledgerIncarnation = '11'.repeat(32)
+const ledgerEntity = '22222222-2222-4222-8222-222222222222'
+const ledgerPlaintext = Buffer.from('canonical ledger entry').toString('base64')
+const ledgerEnvelope = crypto.sealChatAttachmentLedger(
+  ledgerPlaintext,
+  ledgerKey,
+  ledgerIncarnation,
+  ledgerEntity,
+  1n,
+  '',
+)
+assert.equal(
+  crypto.openChatAttachmentLedger(
+    ledgerEnvelope,
+    ledgerKey,
+    ledgerIncarnation,
+    ledgerEntity,
+    1n,
+    '',
+  ),
+  ledgerPlaintext,
+)
+assert.match(crypto.chatAttachmentLedgerEnvelopeDigest(ledgerEnvelope), /^[0-9a-f]{64}$/)
+assert.throws(
+  () => crypto.openChatAttachmentLedger(
+    ledgerEnvelope,
+    ledgerKey,
+    ledgerIncarnation,
+    '33333333-3333-4333-8333-333333333333',
+    1n,
+    '',
+  ),
+  /authentication failed/,
+)
+
 console.log('crypto WASM canonical vectors passed')

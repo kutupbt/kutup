@@ -11,8 +11,10 @@ use base64::Engine;
 use ed25519_dalek::Signer as _;
 use kutup_chat_proto::{
     AccountIdentitySuiteId, AccountManifestDeviceV1, AccountManifestDriveKeysV1,
-    AccountManifestHistoryPageV1, AccountManifestV1, DirectChatSuiteId, UserPreKeyBundlesResponse,
+    AccountManifestHistoryPageV1, AccountManifestV1, DirectChatSuiteId, ProfileEnvelopeContextV1,
+    ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest, UserPreKeyBundlesResponse,
 };
+use kutup_crypto::chat_media::{self, ChatMediaObjectContextV1};
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
@@ -22,6 +24,8 @@ use rand::RngCore;
 use reqwest::blocking::{Client, Response};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
+use time::OffsetDateTime;
+use uuid::Uuid;
 
 const ALICE_EMAIL: &str = "federation-alice@example.test";
 const ALICE_USERNAME: &str = "alicefed";
@@ -34,9 +38,405 @@ const ADMIN_B_EMAIL: &str = "federation-admin-b@example.test";
 const ALICE_REGISTRATION_ID: u32 = 4101;
 const BOB_REGISTRATION_ID_1: u32 = 4201;
 const BOB_REGISTRATION_ID_2: u32 = 4202;
+const QUEUED_MEDIA_ATTACHMENT_ID: &str = "50000000-0000-4000-8000-000000000003";
+const QUEUED_MEDIA_OPERATION_ID: &str = "50000000-0000-4000-8000-000000000004";
+const QUEUED_MEDIA_PLAINTEXT: &[u8] = b"chat-media-queued-across-origin-restart";
 
 fn b64(bytes: &[u8]) -> String {
     STANDARD.encode(bytes)
+}
+
+fn metadata_value(value: &str) -> String {
+    STANDARD.encode(value.as_bytes())
+}
+
+fn opaque_profile_envelope(
+    account: &str,
+    version: &str,
+    purpose: ProfileEnvelopePurpose,
+    ciphertext_len: usize,
+) -> String {
+    let context = ProfileEnvelopeContextV1::new(purpose, account, version, 1, 1).unwrap();
+    let mut envelope =
+        kutup_chat_proto::encode_profile_envelope_header(&context, &[4; 24], ciphertext_len as u32)
+            .unwrap();
+    envelope.extend(vec![0; ciphertext_len]);
+    b64(&envelope)
+}
+
+fn publish_direct_delivery_capability(
+    c: &Client,
+    base: &str,
+    token: &str,
+    account: &str,
+    capability: &[u8; 16],
+) {
+    let version = "71".repeat(32);
+    let profile = PutChatProfileRequest {
+        suite: ProfileSuiteId::XChaCha20Poly1305V1,
+        account: account.into(),
+        version: version.clone(),
+        revision: 1,
+        source_device_id: 1,
+        name: opaque_profile_envelope(
+            account,
+            &version,
+            ProfileEnvelopePurpose::DisplayName,
+            kutup_chat_proto::PROFILE_NAME_PADDED_LENGTHS[0] + 16,
+        ),
+        avatar: None,
+        wrapped_key: opaque_profile_envelope(
+            account,
+            &version,
+            ProfileEnvelopePurpose::WrappedProfileKey,
+            48,
+        ),
+        access_key_verifier: "72".repeat(32),
+        delivery_capability_verifier: hex::encode(Sha256::digest(capability)),
+    };
+    json_response(
+        c.put(format!("{base}/api/chat/profile"))
+            .bearer_auth(token)
+            .json(&profile)
+            .send()
+            .unwrap(),
+        "publish recipient media capability",
+    );
+}
+
+fn chat_media_round_trip(
+    c: &Client,
+    a: &str,
+    b: &str,
+    alice_token: &str,
+    bob_token: &str,
+    admin_b: &str,
+) {
+    let capability = [0x6a; 16];
+    publish_direct_delivery_capability(
+        c,
+        b,
+        bob_token,
+        &format!("{BOB_USERNAME}@b.test"),
+        &capability,
+    );
+    let attachment_id = "50000000-0000-4000-8000-000000000001";
+    let attachment_key = [0x51; 32];
+    let retrieval_token = [0x52; 32];
+    let plaintext = b"sender-free-federated-chat-media";
+    let context = ChatMediaObjectContextV1::new(attachment_id).unwrap();
+    let object = chat_media::encrypt_object(plaintext, &attachment_key, context).unwrap();
+    let (digest, _origin_reference) =
+        upload_chat_media(c, a, alice_token, attachment_id, &retrieval_token, &object);
+    assert_eq!(digest, chat_media::object_sha256(&object));
+    let operation_id = "50000000-0000-4000-8000-000000000002";
+    let offer = json!({
+        "version": 1,
+        "originDomain": "a.test",
+        "destinationDomain": "b.test",
+        "recipient": format!("{BOB_USERNAME}@b.test"),
+        "operationId": operation_id,
+        "attachmentId": attachment_id,
+        "suite": 1,
+        "ciphertextBytes": object.len(),
+        "ciphertextSha256": digest,
+        "retrievalToken": b64(&retrieval_token),
+        "deliveryCapability": b64(&capability),
+        "expiresAt": OffsetDateTime::now_utc().unix_timestamp() + 30 * 86_400,
+    });
+    let first = json_response(
+        c.post(format!("{a}/api/chat/media/deliveries"))
+            .bearer_auth(alice_token)
+            .json(&offer)
+            .send()
+            .unwrap(),
+        "federated Chat-media delivery",
+    );
+    assert_eq!(first["operationId"], operation_id);
+    assert_eq!(first["status"], "stored");
+    let destination_reference = first["storageReferenceId"].as_str().unwrap();
+    Uuid::parse_str(destination_reference).unwrap();
+
+    let retry = json_response(
+        c.post(format!("{a}/api/chat/media/deliveries"))
+            .bearer_auth(alice_token)
+            .json(&offer)
+            .send()
+            .unwrap(),
+        "idempotent federated Chat-media delivery",
+    );
+    assert_eq!(retry["storageReferenceId"], destination_reference);
+
+    let mut changed_offer = offer.clone();
+    changed_offer["retrievalToken"] = Value::String(b64(&[0x53; 32]));
+    let changed_replay = c
+        .post(format!("{a}/api/chat/media/deliveries"))
+        .bearer_auth(alice_token)
+        .json(&changed_offer)
+        .send()
+        .unwrap();
+    assert_eq!(changed_replay.status().as_u16(), 409);
+
+    let discard_origin = c
+        .delete(format!("{a}/api/chat/media/objects/{attachment_id}"))
+        .bearer_auth(alice_token)
+        .send()
+        .unwrap();
+    assert_eq!(discard_origin.status().as_u16(), 204);
+
+    let downloaded = c
+        .get(format!("{b}/api/chat/media/objects/{attachment_id}"))
+        .bearer_auth(bob_token)
+        .send()
+        .unwrap();
+    assert_eq!(downloaded.status().as_u16(), 200);
+    assert_eq!(downloaded.bytes().unwrap().as_ref(), object.as_slice());
+    let storage = json_response(
+        c.get(format!("{b}/api/chat/media/storage"))
+            .bearer_auth(bob_token)
+            .send()
+            .unwrap(),
+        "destination Chat-media quota",
+    );
+    assert_eq!(storage["chatMediaBytes"], object.len() as u64);
+
+    let clear = c
+        .delete(format!("{b}/api/chat/media/references/{attachment_id}"))
+        .bearer_auth(bob_token)
+        .send()
+        .unwrap();
+    assert_eq!(clear.status().as_u16(), 204);
+    assert_eq!(
+        c.get(format!("{b}/api/chat/media/objects/{attachment_id}"))
+            .bearer_auth(bob_token)
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        404
+    );
+
+    chat_media_capability_and_quota_recovery(c, a, b, alice_token, bob_token, admin_b);
+}
+
+fn admin_user_id(c: &Client, base: &str, admin: &str, email: &str) -> String {
+    let users = json_response(
+        c.get(format!("{base}/api/admin/users"))
+            .bearer_auth(admin)
+            .send()
+            .unwrap(),
+        "list users for Chat-media quota gate",
+    );
+    users
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|user| user["email"] == email)
+        .and_then(|user| user["id"].as_str())
+        .expect("registered Chat-media recipient must be visible to its admin")
+        .to_owned()
+}
+
+fn set_user_quota(c: &Client, base: &str, admin: &str, user_id: &str, bytes: i64) {
+    json_response(
+        c.put(format!("{base}/api/admin/users/{user_id}"))
+            .bearer_auth(admin)
+            .json(&json!({ "storageQuotaBytes": bytes }))
+            .send()
+            .unwrap(),
+        "set Chat-media recipient quota",
+    );
+}
+
+fn chat_media_capability_and_quota_recovery(
+    c: &Client,
+    a: &str,
+    b: &str,
+    alice_token: &str,
+    bob_token: &str,
+    admin_b: &str,
+) {
+    let capability = [0x6a; 16];
+    let attachment_id = "50000000-0000-4000-8000-000000000005";
+    let attachment_key = [0x71; 32];
+    let retrieval_token = [0x72; 32];
+    let plaintext = b"chat-media-quota-recovery";
+    let context = ChatMediaObjectContextV1::new(attachment_id).unwrap();
+    let object = chat_media::encrypt_object(plaintext, &attachment_key, context).unwrap();
+    let (digest, _) =
+        upload_chat_media(c, a, alice_token, attachment_id, &retrieval_token, &object);
+    let offer = |operation_id: &str, recipient: &str, presented_capability: &[u8; 16]| {
+        json!({
+            "version": 1,
+            "originDomain": "a.test",
+            "destinationDomain": "b.test",
+            "recipient": recipient,
+            "operationId": operation_id,
+            "attachmentId": attachment_id,
+            "suite": 1,
+            "ciphertextBytes": object.len(),
+            "ciphertextSha256": digest,
+            "retrievalToken": b64(&retrieval_token),
+            "deliveryCapability": b64(presented_capability),
+            "expiresAt": OffsetDateTime::now_utc().unix_timestamp() + 30 * 86_400,
+        })
+    };
+
+    // Unknown accounts and invalid capabilities are deliberately
+    // indistinguishable, allocate no recipient storage, and consume their
+    // signed origin sequence as terminal rejections.
+    let invalid_capability = c
+        .post(format!("{a}/api/chat/media/deliveries"))
+        .bearer_auth(alice_token)
+        .json(&offer(
+            "50000000-0000-4000-8000-000000000006",
+            &format!("{BOB_USERNAME}@b.test"),
+            &[0x73; 16],
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(invalid_capability.status().as_u16(), 404);
+    let invalid_body = invalid_capability.text().unwrap();
+    let unknown_recipient = c
+        .post(format!("{a}/api/chat/media/deliveries"))
+        .bearer_auth(alice_token)
+        .json(&offer(
+            "50000000-0000-4000-8000-000000000007",
+            "missing@b.test",
+            &capability,
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(unknown_recipient.status().as_u16(), 404);
+    assert_eq!(unknown_recipient.text().unwrap(), invalid_body);
+    assert_eq!(
+        c.get(format!("{b}/api/chat/media/objects/{attachment_id}"))
+            .bearer_auth(bob_token)
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        404
+    );
+
+    let bob_id = admin_user_id(c, b, admin_b, BOB_EMAIL);
+    set_user_quota(c, b, admin_b, &bob_id, 1);
+    let full = json_response(
+        c.post(format!("{a}/api/chat/media/deliveries"))
+            .bearer_auth(alice_token)
+            .json(&offer(
+                "50000000-0000-4000-8000-000000000008",
+                &format!("{BOB_USERNAME}@b.test"),
+                &capability,
+            ))
+            .send()
+            .unwrap(),
+        "destination Chat-media quota rejection",
+    );
+    assert_eq!(full["status"], "storage_full");
+    assert!(full["storageReferenceId"].is_null());
+
+    // Restoring quota and retrying the exact immutable object with a fresh
+    // operation must pull it again and produce a usable reference. This is a
+    // regression gate for blob/DB cleanup after the post-pull quota recheck.
+    set_user_quota(c, b, admin_b, &bob_id, 10 * 1024 * 1024 * 1024);
+    let recovered = json_response(
+        c.post(format!("{a}/api/chat/media/deliveries"))
+            .bearer_auth(alice_token)
+            .json(&offer(
+                "50000000-0000-4000-8000-000000000009",
+                &format!("{BOB_USERNAME}@b.test"),
+                &capability,
+            ))
+            .send()
+            .unwrap(),
+        "Chat-media delivery after quota recovery",
+    );
+    assert_eq!(recovered["status"], "stored");
+    let downloaded = c
+        .get(format!("{b}/api/chat/media/objects/{attachment_id}"))
+        .bearer_auth(bob_token)
+        .send()
+        .unwrap();
+    assert_eq!(downloaded.status().as_u16(), 200);
+    assert_eq!(downloaded.bytes().unwrap().as_ref(), object.as_slice());
+
+    assert_eq!(
+        c.delete(format!("{b}/api/chat/media/references/{attachment_id}"))
+            .bearer_auth(bob_token)
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        204
+    );
+    assert_eq!(
+        c.delete(format!("{a}/api/chat/media/objects/{attachment_id}"))
+            .bearer_auth(alice_token)
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        204
+    );
+}
+
+fn upload_chat_media(
+    c: &Client,
+    base: &str,
+    token: &str,
+    attachment_id: &str,
+    retrieval_token: &[u8; 32],
+    object: &[u8],
+) -> (String, String) {
+    let encoded_token = b64(retrieval_token);
+    let metadata = format!(
+        "attachmentId {},suite {},retrievalToken {}",
+        metadata_value(attachment_id),
+        metadata_value("1"),
+        metadata_value(&encoded_token),
+    );
+    let create = c
+        .post(format!("{base}/api/chat/media/uploads"))
+        .bearer_auth(token)
+        .header("Tus-Resumable", "1.0.0")
+        .header("Upload-Length", object.len())
+        .header("Upload-Metadata", metadata)
+        .send()
+        .unwrap();
+    let location = create
+        .headers()
+        .get("Location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(create.status().as_u16(), 201);
+    let complete = c
+        .patch(format!("{base}{location}"))
+        .bearer_auth(token)
+        .header("Tus-Resumable", "1.0.0")
+        .header("Upload-Offset", "0")
+        .header("Content-Type", "application/offset+octet-stream")
+        .body(object.to_vec())
+        .send()
+        .unwrap();
+    assert_eq!(complete.status().as_u16(), 204);
+    let digest = complete
+        .headers()
+        .get("X-Kutup-Ciphertext-Sha256")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let reference = complete
+        .headers()
+        .get("X-Kutup-Storage-Reference-Id")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    (digest, reference)
 }
 
 fn client() -> Client {
@@ -1142,6 +1542,11 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         register_device(c, b, &bob_token, BOB_REGISTRATION_ID_1, 20),
         1
     );
+    assert_eq!(
+        register_device(c, b, &bob_token, 4299, 21),
+        2,
+        "interrupted registration occupies a pending device id"
+    );
     let bob_identity = AccountIdentityKeysV1::derive(&test_master_key(BOB_EMAIL)).unwrap();
     let bob_manifest_v1 = publish_manifest(
         c,
@@ -1154,6 +1559,21 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         None,
         vec![manifest_device(1, BOB_REGISTRATION_ID_1, 20)],
     );
+    let bob_devices_after_manifest = json_response(
+        c.get(format!("{b}/api/chat/device"))
+            .bearer_auth(&bob_token)
+            .send()
+            .unwrap(),
+        "device list after interrupted-registration recovery",
+    );
+    assert_eq!(
+        bob_devices_after_manifest["devices"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(bob_devices_after_manifest["devices"][0]["deviceId"], 1);
 
     // The local server signs this lookup, B authenticates A through discovery,
     // and replay-safe remote reads do not consume B's one-time prekeys.
@@ -1667,6 +2087,8 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_content_once(&mailbox(c, b, &bob_token, 1), after_rejection);
     assert_content_once(&mailbox(c, b, &bob_token, 2), after_rejection);
 
+    chat_media_round_trip(c, a, b, &alice_token, &bob_token, &admin_b);
+
     let unsigned = c
         .get(format!("{b}/api/fed/chat/users/{BOB_USERNAME}/keys"))
         .send()
@@ -1698,6 +2120,44 @@ fn queue_phase(c: &Client, a: &str) {
         ],
     );
     assert_eq!(response.status().as_u16(), 503);
+
+    let attachment_key = [0x61; 32];
+    let retrieval_token = [0x62; 32];
+    let context = ChatMediaObjectContextV1::new(QUEUED_MEDIA_ATTACHMENT_ID).unwrap();
+    let object =
+        chat_media::encrypt_object(QUEUED_MEDIA_PLAINTEXT, &attachment_key, context).unwrap();
+    let (digest, _) = upload_chat_media(
+        c,
+        a,
+        &alice_token,
+        QUEUED_MEDIA_ATTACHMENT_ID,
+        &retrieval_token,
+        &object,
+    );
+    let queued = json_response(
+        c.post(format!("{a}/api/chat/media/deliveries"))
+            .bearer_auth(&alice_token)
+            .json(&json!({
+                "version": 1,
+                "originDomain": "a.test",
+                "destinationDomain": "b.test",
+                "recipient": format!("{BOB_USERNAME}@b.test"),
+                "operationId": QUEUED_MEDIA_OPERATION_ID,
+                "attachmentId": QUEUED_MEDIA_ATTACHMENT_ID,
+                "suite": 1,
+                "ciphertextBytes": object.len(),
+                "ciphertextSha256": digest,
+                "retrievalToken": b64(&retrieval_token),
+                "deliveryCapability": b64(&[0x6a; 16]),
+                "expiresAt": OffsetDateTime::now_utc().unix_timestamp() + 30 * 86_400,
+            }))
+            .send()
+            .unwrap(),
+        "queue federated Chat-media delivery while destination is offline",
+    );
+    assert_eq!(queued["operationId"], QUEUED_MEDIA_OPERATION_ID);
+    assert_eq!(queued["status"], "queued");
+    assert!(queued["storageReferenceId"].is_null());
 }
 
 fn verify_retry_phase(c: &Client, a: &str, b: &str) {
@@ -1717,6 +2177,30 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
         assert!(
             Instant::now() < deadline,
             "durably queued federation send was not retried"
+        );
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    let media_deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let response = c
+            .get(format!(
+                "{b}/api/chat/media/objects/{QUEUED_MEDIA_ATTACHMENT_ID}"
+            ))
+            .bearer_auth(&bob_token)
+            .send()
+            .unwrap();
+        if response.status().is_success() {
+            let ciphertext = response.bytes().unwrap();
+            let context = ChatMediaObjectContextV1::new(QUEUED_MEDIA_ATTACHMENT_ID).unwrap();
+            let plaintext = chat_media::decrypt_object(&ciphertext, &[0x61; 32], context).unwrap();
+            assert_eq!(plaintext, QUEUED_MEDIA_PLAINTEXT);
+            break;
+        }
+        assert_eq!(response.status().as_u16(), 404);
+        assert!(
+            Instant::now() < media_deadline,
+            "durably queued Chat-media object was not retried"
         );
         std::thread::sleep(Duration::from_millis(500));
     }

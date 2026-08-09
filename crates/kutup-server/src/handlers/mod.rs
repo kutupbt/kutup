@@ -3,6 +3,7 @@
 pub mod admin;
 pub mod auth;
 pub mod chat;
+pub mod chat_media;
 pub mod collab;
 pub mod collections;
 pub mod devices;

@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 pub mod content;
 pub mod federation;
 mod identity;
+mod media;
 mod mls;
 mod profile;
 mod sealed_sender;
@@ -30,6 +31,16 @@ pub use federation::{
     FederationDeliveryResponse, FEDERATED_CHAT_FEATURE,
 };
 pub use identity::{AccountAddress, AddressError, ConversationId};
+pub use media::{
+    ChatAttachmentDescriptorV1, ChatAttachmentLedgerDiffPageV1, ChatAttachmentLedgerEntryV1,
+    ChatAttachmentLedgerPutReceiptV1, ChatAttachmentLedgerPutRequestV1,
+    ChatAttachmentLedgerStateV1, ChatAttachmentLedgerWireEntityV1, ChatMediaCapabilitiesV1,
+    ChatMediaClassV1, ChatMediaConversationKindV1, ChatMediaDeliveryOfferV1,
+    ChatMediaDeliveryStatusV1, ChatMediaOfferResponseV1, ChatMediaPreviewV1,
+    FederatedChatMediaTransactionV1, CHAT_ATTACHMENT_LEDGER_ENTRY_VERSION, CHAT_ATTACHMENT_VERSION,
+    CHAT_MEDIA_PROTOCOL_VERSION, MAX_CHAT_ATTACHMENT_LEDGER_PAGE_ENTITIES,
+    MAX_CHAT_MEDIA_CAPTION_BYTES, MAX_CHAT_MEDIA_DISPLAY_NAME_BYTES, MAX_CHAT_MEDIA_PREVIEW_BYTES,
+};
 pub use mls::{
     anonymous_mls_delivery_aad, derive_group_delivery_capability, mls_authority_history_digest,
     mls_transition_digest, roster_commitment, verify_mls_authority_bootstrap_history,
@@ -792,6 +803,11 @@ pub struct ChatCapabilities {
     /// application delivery are complete on the local and federated paths.
     #[serde(default)]
     pub mls_groups: bool,
+    /// Immutable E2EE attachment upload, local/federated durable delivery,
+    /// encrypted ledger and browser download are complete. Omitted until the
+    /// entire Phase 6 path passes its gates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<ChatMediaCapabilitiesV1>,
     /// Complete authenticated local service-policy history. Present only when
     /// the certificate, anonymous bundle, local delivery, and federation paths
     /// are all enabled.
@@ -816,6 +832,7 @@ impl Default for ChatCapabilities {
             profiles: true,
             sealed_sender: false,
             mls_groups: false,
+            media: None,
             sealed_sender_policy: None,
         }
     }
@@ -965,6 +982,7 @@ mod tests {
         assert_eq!(v["sealedSender"], false);
         assert_eq!(v["manifests"], true);
         assert_eq!(v["profiles"], true);
+        assert!(v.get("media").is_none());
     }
 
     #[test]

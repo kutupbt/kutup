@@ -25,6 +25,25 @@ export {
   openFileBlobStreamV1,
 } from './fileBlob'
 export type { FileBlobContextV1 } from './fileBlob'
+export {
+  CHAT_MEDIA_OBJECT_HEADER_BYTES,
+  CHAT_MEDIA_OBJECT_PREFIX_BYTES,
+  CHAT_MEDIA_SUITE_V1,
+  MAX_CHAT_MEDIA_PLAINTEXT_BYTES,
+  chatAttachmentLedgerEnvelopeDigest,
+  chatMediaCipherSize,
+  decryptChatMediaV1,
+  deriveChatAttachmentLedgerKey,
+  encryptChatMediaV1,
+  newChatMediaStreamEncryptorV1,
+  openChatAttachmentLedger,
+  openChatMediaStreamV1,
+  sealChatAttachmentLedger,
+} from './chatMedia'
+export type {
+  ChatAttachmentLedgerContextV1,
+  ChatMediaStreamEncryptorV1,
+} from './chatMedia'
 export { decodeMnemonic, validateMnemonic } from './mnemonic'
 export {
   ACCOUNT_PROTECTION_DEFAULTS,

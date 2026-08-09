@@ -161,6 +161,7 @@ impl Engine {
     pub fn set_local_server(&mut self, server: &str) -> Result<()> {
         kutup_chat_proto::AccountAddress::federated("validation", server)
             .map_err(|error| ChatError::Invalid(error.to_string()))?;
+        self.session.bind_local_server(server)?;
         self.local_server = Some(server.to_string());
         Ok(())
     }
@@ -1253,7 +1254,7 @@ impl Engine {
                     | ContactState::Rejected => {}
                 }
             }
-            if let Some(capability) = self.sealed_delivery_capability(peer_user).await? {
+            if let Some(capability) = self.media_delivery_capability(peer_user).await? {
                 let recipient_bundles = self
                     .fetch_verified_sealed_bundles(peer_user, &capability)
                     .await?;
@@ -1756,7 +1757,10 @@ impl Engine {
             .await
     }
 
-    async fn sealed_delivery_capability(&self, peer: &str) -> Result<Option<[u8; 16]>> {
+    /// Derive the contacts-only delivery capability used by sealed messages
+    /// and immutable Chat media. It is unavailable until the contact is
+    /// accepted and the authenticated profile key is present.
+    pub async fn media_delivery_capability(&self, peer: &str) -> Result<Option<[u8; 16]>> {
         if !self.sealed_sender_enabled
             || self.local_server.is_none()
             || !self

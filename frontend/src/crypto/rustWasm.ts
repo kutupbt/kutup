@@ -1,10 +1,15 @@
 // One loader for Kutup-owned browser cryptography. Feature adapters expose
 // typed operations; this module owns only generated-module initialization.
 
-const MODULE_URL = '/crypto-wasm/kutup_crypto_wasm.js'
+// Epoch 2 escapes the pre-fix immutable browser cache used by the original
+// stable URLs. Future deployments rely on mandatory revalidation and do not
+// need an epoch bump unless the public path itself changes again.
+const RUNTIME_CACHE_EPOCH = '2'
+const MODULE_URL = `/crypto-wasm/kutup_crypto_wasm.js?runtime=${RUNTIME_CACHE_EPOCH}`
+const WASM_URL = `/crypto-wasm/kutup_crypto_wasm_bg.wasm?runtime=${RUNTIME_CACHE_EPOCH}`
 
 export interface CryptoWasmModule {
-  default(): Promise<unknown>
+  default(input?: unknown): Promise<unknown>
   deriveAccountProtectionKeys(
     password: string,
     saltBase64: string,
@@ -81,6 +86,42 @@ export interface CryptoWasmModule {
     expectedCollectionId: string,
     expectedEpoch: number,
   ): string
+  prepareChatMediaObject(
+    attachmentKeyBase64: string,
+    attachmentId: string,
+  ): { objectHeader: string; streamKey: string }
+  openChatMediaObjectHeader(
+    objectHeaderBase64: string,
+    attachmentKeyBase64: string,
+    expectedAttachmentId: string,
+  ): string
+  deriveChatAttachmentLedgerKey(masterKeyBase64: string): string
+  sealChatAttachmentLedger(
+    plaintextBase64: string,
+    ledgerKeyBase64: string,
+    accountIncarnationId: string,
+    entityId: string,
+    revision: bigint,
+    previousEnvelopeDigest: string,
+  ): string
+  openChatAttachmentLedger(
+    envelopeBase64: string,
+    ledgerKeyBase64: string,
+    expectedAccountIncarnationId: string,
+    expectedEntityId: string,
+    expectedRevision: bigint,
+    expectedPreviousEnvelopeDigest: string,
+  ): string
+  chatAttachmentLedgerEnvelopeDigest(envelopeBase64: string): string
+  inspectChatAttachmentLedgerEnvelope(envelopeBase64: string): {
+    suite: number
+    accountIncarnationId: string
+    entityId: string
+    revision: string
+    previousEnvelopeDigest: string
+  }
+  encodeChatAttachmentLedgerEntry(entry: unknown): string
+  decodeChatAttachmentLedgerEntry(entryBase64: string): unknown
   sealCollabFrame(
     plaintextBase64: string,
     collectionKeyBase64: string,
@@ -155,7 +196,7 @@ export async function getCryptoWasm(): Promise<CryptoWasmModule> {
   if (!modulePromise) {
     modulePromise = (async () => {
       const module = (await import(/* @vite-ignore */ MODULE_URL)) as CryptoWasmModule
-      await module.default()
+      await module.default(WASM_URL)
       return module
     })()
   }

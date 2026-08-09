@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use kutup_chat_proto::{
-    capability_hash, constant_time_capability_hash_eq, AccountAddress,
+    capability_hash, constant_time_capability_hash_eq, AccountAddress, AccountManifestDeviceV1,
     AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1, AckRequest,
     AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsServerMessage, ChatWsTicketResponse,
     DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, DirectChatSuiteId, EcPreKey,
@@ -543,19 +543,48 @@ pub async fn publish_manifest(
     if registered.is_empty() {
         return Err(AppError::conflict("account has no registered chat devices"));
     }
-    let exact_match = registered.len() == manifest.devices.len()
-        && registered.iter().zip(&manifest.devices).all(
-            |((device_id, suite, registration_id, identity_key), declared)| {
-                declared.device_id == *device_id as u32
-                    && declared.direct_chat_suite.as_u16() == *suite as u16
-                    && declared.registration_id == *registration_id as u32
-                    && declared.identity_key == *identity_key
-            },
-        );
-    if !exact_match {
+    let registered_matches =
+        |(device_id, suite, registration_id, identity_key): &(i32, i16, i64, String),
+         declared: &AccountManifestDeviceV1| {
+            declared.device_id == *device_id as u32
+                && declared.direct_chat_suite.as_u16() == *suite as u16
+                && declared.registration_id == *registration_id as u32
+                && declared.identity_key == *identity_key
+        };
+    let every_declared_device_is_registered = manifest.devices.iter().all(|declared| {
+        registered
+            .iter()
+            .any(|registered| registered_matches(registered, declared))
+    });
+    if !every_declared_device_is_registered {
         return Err(AppError::conflict(
             "manifest devices do not match registered chat devices",
         ));
+    }
+
+    // Registration deliberately precedes signed-manifest publication so a
+    // device can obtain its server-assigned id. A browser crash in that gap
+    // must not leave an unauthenticated row that permanently blocks this
+    // account. The authority-signed manifest is the source of truth: every
+    // declared device must match a registered key tuple above, while rows the
+    // authority did not select are pruned in this same transaction. Cascades
+    // remove their prekeys, mailbox rows and WebSocket tickets. This also turns
+    // a server-injected row into recoverable state rather than manifest
+    // inclusion; the server still cannot invent a device accepted by clients.
+    if registered.len() != manifest.devices.len() {
+        let selected_device_ids = manifest
+            .devices
+            .iter()
+            .map(|device| device.device_id as i32)
+            .collect::<Vec<_>>();
+        sqlx::query(
+            "DELETE FROM chat_devices
+             WHERE user_id = $1 AND NOT (device_id = ANY($2))",
+        )
+        .bind(user_id)
+        .bind(&selected_device_ids)
+        .execute(&mut *tx)
+        .await?;
     }
     if idempotent {
         tx.commit().await?;

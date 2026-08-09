@@ -299,6 +299,14 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         federation: federation_enabled,
         sealed_sender: sealed_sender_policy.is_some(),
         mls_groups,
+        media: federation_enabled
+            .then(|| {
+                kutup_chat_proto::ChatMediaCapabilitiesV1::v1(
+                    state.config.chat_media_max_plaintext_bytes,
+                )
+            })
+            .transpose()
+            .map_err(AppError::internal)?,
         sealed_sender_policy,
         ..Default::default()
     };

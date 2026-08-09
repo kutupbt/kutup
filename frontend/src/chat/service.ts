@@ -4,6 +4,7 @@ import { ApiChatTransport } from './transport'
 import type {
   AccountAddress,
   ChatCapabilities,
+  ChatAttachmentDescriptorV1,
   ChatHistoryEntry,
   ContactRecord,
   ConversationId,
@@ -29,6 +30,8 @@ import {
   withHomeServer,
 } from './identity'
 import { MlsConversationService } from './mls-service'
+import { deliverChatMediaV1 } from './media'
+import { ChatAttachmentLedger } from './attachment-ledger'
 
 type UpdateListener = () => void
 
@@ -46,6 +49,14 @@ export interface ChatServiceOptions {
   username: string
   masterKey: Uint8Array
   capabilities: ChatCapabilities
+}
+
+export interface ChatMediaStorageView {
+  totalQuotaBytes: number
+  totalUsedBytes: number
+  driveBytes: number
+  chatMediaBytes: number
+  byConversation: Array<{ conversationReference: string; bytes: number }>
 }
 
 /**
@@ -76,6 +87,7 @@ export class ChatService {
     capabilities: ChatCapabilities,
     transport: ApiChatTransport,
     private readonly username: string,
+    private readonly attachmentLedger: ChatAttachmentLedger | null,
   ) {
     this.client = client
     this.deviceId = client.deviceId
@@ -124,6 +136,15 @@ export class ChatService {
       ),
     )
 
+    let attachmentLedger: ChatAttachmentLedger | null = null
+    try {
+      attachmentLedger = capabilities.media
+        ? await ChatAttachmentLedger.open(options.masterKey)
+        : null
+    } catch (error) {
+      client.free()
+      throw error
+    }
     const service = new ChatService(
       client,
       lockName,
@@ -131,6 +152,7 @@ export class ChatService {
       capabilities,
       transport,
       options.username,
+      attachmentLedger,
     )
     try {
       await service.initializeMls()
@@ -243,6 +265,152 @@ export class ChatService {
     return summary
   }
 
+  async sendAttachment(
+    conversation: ConversationId,
+    descriptor: ChatAttachmentDescriptorV1,
+    storageReferenceId: string,
+  ): Promise<SendSummary> {
+    if (descriptor.originDomain !== this.capabilities.serverName) {
+      throw new Error('attachment origin differs from the active homeserver')
+    }
+    const sendId = crypto.randomUUID()
+    await this.recordAttachment(
+      conversation,
+      sendId,
+      descriptor,
+      storageReferenceId,
+    )
+    if (conversation.kind === 'group') {
+      const summary = await this.withMlsWorkflow(() =>
+        this.requireMls().sendAttachment(conversation.groupId, sendId, descriptor),
+      )
+      this.notifyPeers()
+      return { ...summary, safetyNumberChanges: [] }
+    }
+    const address = withHomeServer(conversation.address, this.capabilities.serverName)
+    const peer = toCoreAccountAddress(address, this.capabilities.serverName)
+    const self = `${this.username}@${this.capabilities.serverName}`
+    const capability = peer === self
+      ? null
+      : await this.withLock(() => this.client.mediaDeliveryCapability(peer))
+    if (capability) {
+      const receipt = await deliverChatMediaV1(descriptor, address, capability)
+      if (receipt.status === 'storage_full') {
+        throw new Error('recipient Chat-media storage is full')
+      }
+    }
+    // The opaque destination copy must be durable before the descriptor can
+    // enter the recipient's mailbox. A failed media receipt therefore never
+    // creates a visibly broken attachment message.
+    const summary = await this.withLock(() =>
+      this.client.sendAttachment(
+        sendId,
+        peer,
+        new Date().toISOString(),
+        descriptor,
+      ),
+    )
+    this.notifyPeers()
+    return summary
+  }
+
+  async chatMediaStorage(): Promise<ChatMediaStorageView> {
+    if (!this.attachmentLedger) throw new Error('Chat media is not enabled')
+    await this.withAttachmentLedgerLock(() => this.attachmentLedger!.sync())
+    const response = await api.get<Omit<ChatMediaStorageView, 'byConversation'>>(
+      '/chat/media/storage',
+    )
+    const byConversation = Array.from(
+      this.attachmentLedger.totalsByConversation(),
+      ([conversationReference, bytes]) => ({ conversationReference, bytes }),
+    ).sort((left, right) => right.bytes - left.bytes)
+    return { ...response.data, byConversation }
+  }
+
+  async clearChatMediaConversation(conversationReference: string): Promise<ChatMediaStorageView> {
+    if (!this.attachmentLedger) throw new Error('Chat media is not enabled')
+    await this.withAttachmentLedgerLock(async () => {
+      await this.attachmentLedger!.sync()
+      const targets = this.attachmentLedger!.activeEntries(conversationReference)
+      const allActive = this.attachmentLedger!.activeEntries()
+      const targetIds = new Set(targets.map(target => target.entityId))
+      const keepAttachments = new Set(
+        allActive
+          .filter(entity => !targetIds.has(entity.entityId))
+          .map(entity => entity.entry.attachmentId),
+      )
+      const clearedAttachments = new Set<string>()
+      for (const target of targets) {
+        const attachmentId = target.entry.attachmentId
+        if (!keepAttachments.has(attachmentId) && !clearedAttachments.has(attachmentId)) {
+          try {
+            await api.delete(`/chat/media/references/${encodeURIComponent(attachmentId)}`)
+          } catch (error: unknown) {
+            const status = typeof error === 'object' && error !== null && 'response' in error
+              ? (error as { response?: { status?: number } }).response?.status
+              : undefined
+            if (status !== 404) throw error
+          }
+          clearedAttachments.add(attachmentId)
+        }
+        await this.attachmentLedger!.markCleared(target.entityId, Date.now())
+      }
+    })
+    return this.chatMediaStorage()
+  }
+
+  private async recordAttachment(
+    conversation: ConversationId,
+    messageId: string,
+    descriptor: ChatAttachmentDescriptorV1,
+    storageReferenceId: string,
+  ): Promise<void> {
+    if (!this.attachmentLedger) {
+      throw new Error('Chat attachment ledger is unavailable')
+    }
+    await this.withAttachmentLedgerLock(async () => {
+      await this.attachmentLedger!.sync()
+      if (this.attachmentLedger!.hasAttachment(messageId, descriptor.attachmentId)) return
+      await this.createAttachmentLedgerEntry(
+        conversation,
+        messageId,
+        descriptor,
+        storageReferenceId,
+      )
+    })
+  }
+
+  private async createAttachmentLedgerEntry(
+    conversation: ConversationId,
+    messageId: string,
+    descriptor: ChatAttachmentDescriptorV1,
+    storageReferenceId: string,
+  ): Promise<void> {
+    if (!this.attachmentLedger) throw new Error('Chat attachment ledger is unavailable')
+    const address = conversation.kind === 'direct'
+      ? canonicalAccountAddress(withHomeServer(
+          conversation.address,
+          this.capabilities.serverName,
+        ))
+      : conversation.groupId
+    const self = `${this.username}@${this.capabilities.serverName}`
+    await this.attachmentLedger.create({
+      version: 1,
+      conversationKind: conversation.kind === 'group'
+        ? 'mls_group'
+        : address === self ? 'note_to_self' : 'direct',
+      conversationReference: address,
+      messageId,
+      attachmentId: descriptor.attachmentId,
+      storageReferenceId,
+      ciphertextBytes: descriptor.ciphertextBytes,
+      state: 'active',
+      mediaClass: descriptor.mediaClass,
+      displayName: descriptor.filename,
+      updatedAtMs: Date.now(),
+    })
+  }
+
   reconcile(): Promise<ReceiveReport> {
     if (this.reconcilePromise) return this.reconcilePromise
     this.reconcilePromise = this.withLock(() => this.client.reconcile())
@@ -250,6 +418,7 @@ export class ChatService {
         await this.withMlsWorkflow(async () => {
           await this.mls?.reconcile()
         })
+        await this.reconcileAttachmentLedger()
         this.notifyPeers()
         return report
       })
@@ -483,6 +652,7 @@ export class ChatService {
     document.removeEventListener('visibilitychange', this.handleVisibilityChange)
     this.channel.close()
     this.listeners.clear()
+    this.attachmentLedger?.dispose()
     this.client.free()
   }
 
@@ -492,6 +662,63 @@ export class ChatService {
       { mode: 'exclusive' },
       async () => await operation(),
     )
+  }
+
+  private async withAttachmentLedgerLock<T>(operation: () => Promise<T>): Promise<T> {
+    return navigator.locks.request(
+      `${this.lockName}:attachment-ledger`,
+      { mode: 'exclusive' },
+      operation,
+    )
+  }
+
+  private async reconcileAttachmentLedger(): Promise<void> {
+    if (!this.attachmentLedger) return
+    const [history, contacts] = await Promise.all([this.history(), this.contacts()])
+    const accepted = new Set(
+      contacts.filter(contact => contact.state === 'accepted').map(contact => contact.peer),
+    )
+    const self = `${this.username}@${this.capabilities.serverName}`
+    await this.withAttachmentLedgerLock(async () => {
+      await this.attachmentLedger!.sync()
+      for (const message of history) {
+        const descriptor = message.content.attachment
+        const messageId = message.content.messageId
+        if (!descriptor || !messageId ||
+            this.attachmentLedger!.hasAttachment(messageId, descriptor.attachmentId)) continue
+        if (message.conversation.kind === 'direct') {
+          const peer = canonicalAccountAddress(message.conversation.address)
+          if (peer !== self && !accepted.has(peer)) continue
+        }
+        try {
+          const response = await api.get<{
+            attachmentId: string
+            storageReferenceId: string
+            ciphertextBytes: number
+            ciphertextSha256: string
+          }>(`/chat/media/references/${encodeURIComponent(descriptor.attachmentId)}`)
+          const reference = response.data
+          if (reference.attachmentId !== descriptor.attachmentId ||
+              reference.ciphertextBytes !== descriptor.ciphertextBytes ||
+              reference.ciphertextSha256 !== descriptor.ciphertextSha256) {
+            throw new Error('Chat-media reference differs from its E2EE descriptor')
+          }
+          await this.createAttachmentLedgerEntry(
+            message.conversation,
+            messageId,
+            descriptor,
+            reference.storageReferenceId,
+          )
+        } catch (error: unknown) {
+          const status = typeof error === 'object' && error !== null && 'response' in error
+            ? (error as { response?: { status?: number } }).response?.status
+            : undefined
+          // Delivery may still be retrying or a message request may be
+          // unaccepted. A later reconcile retries without allocating storage.
+          if (status !== 404) throw error
+        }
+      }
+    })
   }
 
   /**

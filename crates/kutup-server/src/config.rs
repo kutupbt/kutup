@@ -40,6 +40,9 @@ pub struct Config {
     /// Maximum simultaneously active chat devices per account. V1 permits
     /// 1..=10; device ids retain their independent libsignal wire range.
     pub chat_max_active_devices: u32,
+    /// Maximum Chat-media plaintext-class bytes accepted per immutable object.
+    /// Administrators may lower, but never raise, the V1 2 GiB protocol cap.
+    pub chat_media_max_plaintext_bytes: u64,
     /// Canonical DNS identity for the unified federation v2 stack.
     pub federation_server_name: String,
     /// Base64 raw 32-byte Ed25519 seed for unified federation v2.
@@ -70,6 +73,15 @@ impl Config {
         if !(1..=10).contains(&chat_max_active_devices) {
             panic!("CHAT_MAX_ACTIVE_DEVICES must be between 1 and 10");
         }
+        let chat_media_max_plaintext_bytes = get_env_i64(
+            "CHAT_MEDIA_MAX_PLAINTEXT_BYTES",
+            kutup_crypto::chat_media::MAX_CHAT_MEDIA_PLAINTEXT_BYTES as i64,
+        );
+        if !(1..=kutup_crypto::chat_media::MAX_CHAT_MEDIA_PLAINTEXT_BYTES as i64)
+            .contains(&chat_media_max_plaintext_bytes)
+        {
+            panic!("CHAT_MEDIA_MAX_PLAINTEXT_BYTES must be between 1 and 2147483648");
+        }
         let cfg = Config {
             database_url: must_env("DATABASE_URL"),
             jwt_secret: must_env("JWT_SECRET"),
@@ -93,6 +105,7 @@ impl Config {
             chat_send_retention_days: get_env_i64("CHAT_SEND_RETENTION_DAYS", 30),
             chat_device_expiry_days: get_env_i64("CHAT_DEVICE_EXPIRY_DAYS", 90),
             chat_max_active_devices: chat_max_active_devices as u32,
+            chat_media_max_plaintext_bytes: chat_media_max_plaintext_bytes as u64,
             federation_server_name: get_env("FEDERATION_SERVER_NAME", ""),
             federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),

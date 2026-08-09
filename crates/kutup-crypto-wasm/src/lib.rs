@@ -5,7 +5,10 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use kutup_chat_proto::ChatAttachmentLedgerEntryV1;
 use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+use kutup_crypto::chat_attachment_ledger::{self, ChatAttachmentLedgerContextV1};
+use kutup_crypto::chat_media::{self, ChatMediaObjectContextV1};
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::envelope::{self, CollabFrameContextV1};
@@ -36,6 +39,23 @@ struct AccountIdentityKeysView {
 struct DriveFileBlobPreparationView {
     object_header: String,
     stream_key: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatMediaObjectPreparationView {
+    object_header: String,
+    stream_key: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatAttachmentLedgerHeaderView {
+    suite: u16,
+    account_incarnation_id: String,
+    entity_id: String,
+    revision: String,
+    previous_envelope_digest: String,
 }
 
 #[derive(Serialize)]
@@ -283,6 +303,143 @@ pub fn open_drive_file_blob_header(
     let stream_key = drive_object::derive_file_blob_key(&file_key, expected)
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(stream_key.as_slice()))
+}
+
+/// Return the canonical Chat-media header and its purpose-derived stream key.
+/// JS owns only bounded secretstream I/O, exactly as for Drive file blobs.
+#[wasm_bindgen(js_name = prepareChatMediaObject)]
+pub fn prepare_chat_media_object(
+    attachment_key_base64: &str,
+    attachment_id: &str,
+) -> Result<JsValue, JsValue> {
+    let attachment_key = decode_canonical_base64(attachment_key_base64, "attachment key")?;
+    let context = ChatMediaObjectContextV1::new(attachment_id)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let object_header = chat_media::object_header(context);
+    let stream_key = chat_media::derive_object_key(&attachment_key, context)
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&ChatMediaObjectPreparationView {
+        object_header: STANDARD.encode(object_header),
+        stream_key: STANDARD.encode(stream_key.as_slice()),
+    })
+    .map_err(|error| js_error(&format!("encode Chat-media preparation: {error}")))
+}
+
+#[wasm_bindgen(js_name = openChatMediaObjectHeader)]
+pub fn open_chat_media_object_header(
+    object_header_base64: &str,
+    attachment_key_base64: &str,
+    expected_attachment_id: &str,
+) -> Result<String, JsValue> {
+    let object_header = decode_canonical_base64(object_header_base64, "object header")?;
+    let attachment_key = decode_canonical_base64(attachment_key_base64, "attachment key")?;
+    let expected = ChatMediaObjectContextV1::new(expected_attachment_id)
+        .map_err(|error| js_error(&error.to_string()))?;
+    chat_media::validate_object_header(&object_header, expected)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let stream_key = chat_media::derive_object_key(&attachment_key, expected)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(stream_key.as_slice()))
+}
+
+#[wasm_bindgen(js_name = sealChatAttachmentLedger)]
+#[allow(clippy::too_many_arguments)]
+pub fn seal_chat_attachment_ledger(
+    plaintext_base64: &str,
+    ledger_key_base64: &str,
+    account_incarnation_id: &str,
+    entity_id: &str,
+    revision: u64,
+    previous_envelope_digest: &str,
+) -> Result<String, JsValue> {
+    let plaintext = decode_canonical_base64(plaintext_base64, "ledger plaintext")?;
+    let ledger_key = decode_canonical_base64(ledger_key_base64, "ledger key")?;
+    let context = ChatAttachmentLedgerContextV1::new(
+        account_incarnation_id,
+        entity_id,
+        revision,
+        (!previous_envelope_digest.is_empty()).then_some(previous_envelope_digest),
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    chat_attachment_ledger::seal_b64(&plaintext, &ledger_key, context)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+#[wasm_bindgen(js_name = deriveChatAttachmentLedgerKey)]
+pub fn derive_chat_attachment_ledger_key(master_key_base64: &str) -> Result<String, JsValue> {
+    let master_key = decode_canonical_base64(master_key_base64, "master key")?;
+    let key = chat_attachment_ledger::derive_account_ledger_key(&master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(key.as_slice()))
+}
+
+#[wasm_bindgen(js_name = openChatAttachmentLedger)]
+#[allow(clippy::too_many_arguments)]
+pub fn open_chat_attachment_ledger(
+    envelope_base64: &str,
+    ledger_key_base64: &str,
+    expected_account_incarnation_id: &str,
+    expected_entity_id: &str,
+    expected_revision: u64,
+    expected_previous_envelope_digest: &str,
+) -> Result<String, JsValue> {
+    let envelope = chat_attachment_ledger::decode_canonical_b64(envelope_base64)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let ledger_key = decode_canonical_base64(ledger_key_base64, "ledger key")?;
+    let expected = ChatAttachmentLedgerContextV1::new(
+        expected_account_incarnation_id,
+        expected_entity_id,
+        expected_revision,
+        (!expected_previous_envelope_digest.is_empty())
+            .then_some(expected_previous_envelope_digest),
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    let plaintext = chat_attachment_ledger::open(&envelope, &ledger_key, expected)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(plaintext))
+}
+
+#[wasm_bindgen(js_name = chatAttachmentLedgerEnvelopeDigest)]
+pub fn chat_attachment_ledger_envelope_digest(envelope_base64: &str) -> Result<String, JsValue> {
+    let envelope = chat_attachment_ledger::decode_canonical_b64(envelope_base64)
+        .map_err(|error| js_error(&error.to_string()))?;
+    chat_attachment_ledger::envelope_digest(&envelope).map_err(|error| js_error(&error.to_string()))
+}
+
+#[wasm_bindgen(js_name = inspectChatAttachmentLedgerEnvelope)]
+pub fn inspect_chat_attachment_ledger_envelope(envelope_base64: &str) -> Result<JsValue, JsValue> {
+    let envelope = chat_attachment_ledger::decode_canonical_b64(envelope_base64)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let header =
+        chat_attachment_ledger::inspect(&envelope).map_err(|error| js_error(&error.to_string()))?;
+    let view = ChatAttachmentLedgerHeaderView {
+        suite: header.suite.as_u16(),
+        account_incarnation_id: hex::encode(header.context.account_incarnation_id),
+        entity_id: uuid::Uuid::from_bytes(header.context.entity_id)
+            .hyphenated()
+            .to_string(),
+        revision: header.context.revision.to_string(),
+        previous_envelope_digest: hex::encode(header.context.previous_envelope_digest),
+    };
+    serde_wasm_bindgen::to_value(&view)
+        .map_err(|error| js_error(&format!("encode Chat attachment ledger header: {error}")))
+}
+
+#[wasm_bindgen(js_name = encodeChatAttachmentLedgerEntry)]
+pub fn encode_chat_attachment_ledger_entry(entry: JsValue) -> Result<String, JsValue> {
+    let entry: ChatAttachmentLedgerEntryV1 = serde_wasm_bindgen::from_value(entry)
+        .map_err(|error| js_error(&format!("decode Chat attachment ledger entry: {error}")))?;
+    let bytes = entry.canonical_bytes().map_err(|error| js_error(&error))?;
+    Ok(STANDARD.encode(bytes))
+}
+
+#[wasm_bindgen(js_name = decodeChatAttachmentLedgerEntry)]
+pub fn decode_chat_attachment_ledger_entry(entry_base64: &str) -> Result<JsValue, JsValue> {
+    let bytes = decode_canonical_base64(entry_base64, "Chat attachment ledger entry")?;
+    let entry = ChatAttachmentLedgerEntryV1::from_canonical_bytes(&bytes)
+        .map_err(|error| js_error(&error))?;
+    serde_wasm_bindgen::to_value(&entry)
+        .map_err(|error| js_error(&format!("encode Chat attachment ledger entry: {error}")))
 }
 
 #[wasm_bindgen(js_name = sealCollabFrame)]

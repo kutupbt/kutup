@@ -46,6 +46,7 @@ SERVER_URL=https://kutup.example.com
 
 # Active Chat installations per account. V1 permits 1..=10.
 CHAT_MAX_ACTIVE_DEVICES=10
+CHAT_MEDIA_MAX_PLAINTEXT_BYTES=2147483648
 
 # Optional contacts-only sealed sender. The policy contains public offline roots
 # and root-signed online certificates; the normal server receives only the
@@ -319,7 +320,14 @@ cap and cannot be raised by configuration:
 
 ```sh
 CHAT_MAX_ACTIVE_DEVICES=10
+CHAT_MEDIA_MAX_PLAINTEXT_BYTES=2147483648
 ```
+
+`CHAT_MEDIA_MAX_PLAINTEXT_BYTES` is the per-attachment plaintext-class ceiling.
+It defaults to the V1 hard cap of 2 GiB; an operator may lower it, but cannot
+raise it without a future typed media-suite/protocol revision. Drive and Chat
+media still share the account's one total quota—this is an individual-object
+admission limit, not a reserved Chat storage budget.
 
 First contact shows a gray shield. Users who require independent identity
 authentication meet face to face and scan the conversation safety QR; an exact
@@ -454,6 +462,21 @@ kutup.example.com {
     reverse_proxy localhost:8080
 }
 ```
+
+### Browser WASM cache policy
+
+Kutup's generated `/chat-wasm/` and `/crypto-wasm/` JavaScript glue and WASM
+binaries use stable filenames and form one deployment unit with the web bundle
+and API server. They must be revalidated and must never receive an immutable
+cache policy from an outer reverse proxy or CDN. The bundled frontend sends
+`Cache-Control: no-cache, must-revalidate` for both paths. Preserve that header
+when adding a cache layer. Normal Vite `/assets/` filenames are content-hashed
+and may remain immutable.
+
+Serving stale generated WASM with a newer JavaScript bundle can produce a
+fail-closed Chat or Drive initialization error because the Rust and HTTP DTOs
+no longer agree. Deploy the frontend, its generated WASM directories, and the
+backend from the same release.
 
 ---
 

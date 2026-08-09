@@ -79,6 +79,21 @@ async function openChat(page: Page): Promise<void> {
   expect(headerLayout.deviceRight).toBeLessThanOrEqual(headerLayout.headerRight)
 }
 
+async function expectWasmRuntimeRevalidation(page: Page): Promise<void> {
+  for (const path of [
+    '/chat-wasm/kutup_chat_core.js?runtime=2',
+    '/chat-wasm/kutup_chat_core_bg.wasm?runtime=2',
+    '/crypto-wasm/kutup_crypto_wasm.js?runtime=2',
+    '/crypto-wasm/kutup_crypto_wasm_bg.wasm?runtime=2',
+  ]) {
+    const response = await page.context().request.head(path)
+    expect(response.ok(), `${path} must be deployed with the page`).toBe(true)
+    const cacheControl = response.headers()['cache-control'] ?? ''
+    expect(cacheControl, `${path} must revalidate`).toContain('no-cache')
+    expect(cacheControl, `${path} must not be immutable`).not.toContain('immutable')
+  }
+}
+
 function expectNoPageErrors(...pages: Page[]): void {
   expect(pages.flatMap(page => pageErrors.get(page) ?? [])).toEqual([])
 }
@@ -101,11 +116,11 @@ async function cloneAuthenticatedInstall(
 }
 
 async function send(page: Page, text: string): Promise<void> {
-  const input = page.locator('main form input')
+  const input = page.getByRole('main').getByRole('textbox')
   await input.fill(text)
   // Wait out the application's own transition, then use the keyboard submit
   // path so a transient bottom-right success toast cannot intercept it.
-  const button = page.getByRole('button', { name: 'Send' })
+  const button = page.getByRole('button', { name: 'Send', exact: true })
   await expect(button).toBeEnabled({ timeout: 45_000 })
   await input.press('Enter')
 }
@@ -121,6 +136,98 @@ async function syncUntilVisible(page: Page, text: string): Promise<void> {
     intervals: [500, 1_000, 2_000],
     message: `durable message ${text} was not recovered by mailbox reconciliation`,
   }).toBe(true)
+}
+
+async function sendAttachment(
+  page: Page,
+  filename: string,
+  plaintext: string,
+  expectsDeliveryReceipt = true,
+): Promise<void> {
+  const receipt = expectsDeliveryReceipt ? page.waitForResponse((response) => {
+    const path = new URL(response.url()).pathname
+    return response.request().method() === 'POST'
+      && path === '/api/chat/media/deliveries'
+  }) : null
+  await page.getByTestId('chat-attachment-input').setInputFiles({
+    name: filename,
+    mimeType: 'text/plain',
+    buffer: Buffer.from(plaintext, 'utf8'),
+  })
+  if (receipt) expect((await receipt).ok()).toBe(true)
+}
+
+async function syncUntilAttachment(page: Page, filename: string): Promise<void> {
+  await expect.poll(async () => {
+    if (await page.getByText(filename, { exact: true }).count() > 0) return true
+    await page.getByRole('button', { name: 'Sync messages' }).click()
+    await page.waitForTimeout(500)
+    return await page.getByText(filename, { exact: true }).count() > 0
+  }, {
+    timeout: 90_000,
+    intervals: [500, 1_000, 2_000],
+    message: `encrypted attachment ${filename} was not reconciled`,
+  }).toBe(true)
+}
+
+async function downloadAttachment(page: Page, filename: string): Promise<string> {
+  // Chromium exposes the File System Access API, so Kutup correctly streams
+  // decrypted chunks into a picker-backed writable instead of building a
+  // Blob download. Install a deterministic in-memory picker: this exercises
+  // the production streaming path and lets the test compare exact plaintext
+  // without relying on a host save dialog.
+  await page.evaluate(() => {
+    type DownloadCapture = Window & {
+      __kutupDownloadChunks?: number[][]
+      __kutupDownloadComplete?: boolean
+      showSaveFilePicker?: () => Promise<{
+        createWritable(): Promise<{
+          write(data: BufferSource): Promise<void>
+          close(): Promise<void>
+          abort(): Promise<void>
+        }>
+      }>
+    }
+    const target = window as DownloadCapture
+    target.__kutupDownloadChunks = []
+    target.__kutupDownloadComplete = false
+    target.showSaveFilePicker = async () => ({
+      createWritable: async () => ({
+        write: async (data) => {
+          const view = data instanceof ArrayBuffer
+            ? new Uint8Array(data)
+            : new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+          target.__kutupDownloadChunks!.push(Array.from(view))
+        },
+        close: async () => {
+          target.__kutupDownloadComplete = true
+        },
+        abort: async () => {
+          target.__kutupDownloadComplete = false
+        },
+      }),
+    })
+  })
+  await page.getByRole('button', { name: `Download ${filename}` }).click()
+  await expect.poll(
+    () => page.evaluate(() => (
+      window as Window & { __kutupDownloadComplete?: boolean }
+    ).__kutupDownloadComplete === true),
+    { timeout: 45_000, message: `download ${filename} did not finish` },
+  ).toBe(true)
+  return page.evaluate(() => {
+    const chunks = (
+      window as Window & { __kutupDownloadChunks?: number[][] }
+    ).__kutupDownloadChunks ?? []
+    const byteLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+    const plaintext = new Uint8Array(byteLength)
+    let offset = 0
+    for (const chunk of chunks) {
+      plaintext.set(chunk, offset)
+      offset += chunk.length
+    }
+    return new TextDecoder().decode(plaintext)
+  })
 }
 
 async function requireResponseOrUiError(
@@ -166,7 +273,7 @@ test.describe('two-server secure chat', () => {
   test('verifies the account pair, establishes sealed delivery, rotates capability, and never falls back', async ({ browser, baseURL }) => {
     test.slow()
     if (!baseURL || !SECONDARY) throw new Error('two-server base URLs are required')
-    const contextA = await browser.newContext({ baseURL })
+    const abandonedContextA = await browser.newContext({ baseURL })
     const contextB = await browser.newContext({ baseURL: SECONDARY })
     const tag = Date.now() % 1_000_000
     const alice = `sealalice${tag}`
@@ -174,12 +281,35 @@ test.describe('two-server secure chat', () => {
     const aliceEmail = `${alice}@example.test`
     const bobEmail = `${bob}@example.test`
 
-    await register(contextA, aliceEmail, alice)
+    await register(abandonedContextA, aliceEmail, alice)
     await register(contextB, bobEmail, bob)
+    const abandonedPageA = await login(abandonedContextA, aliceEmail)
+    let interruptedManifestAttempts = 0
+    await abandonedPageA.route('**/api/chat/manifest', async (route) => {
+      if (route.request().method() === 'POST') {
+        interruptedManifestAttempts += 1
+        await route.abort('connectionfailed')
+        return
+      }
+      await route.continue()
+    })
+    await abandonedPageA.goto('/chat')
+    await expect(abandonedPageA.getByText('Secure chat is temporarily unavailable.')).toBeVisible({
+      timeout: 90_000,
+    })
+    expect(interruptedManifestAttempts).toBeGreaterThan(0)
+    await abandonedContextA.close()
+
+    // A different installation must be able to recover the abandoned,
+    // unmanifested server registration. Its authority-signed first manifest
+    // selects only its own exact key tuple and atomically prunes the orphan.
+    const contextA = await browser.newContext({ baseURL })
     const pageA = await login(contextA, aliceEmail)
     const pageB = await login(contextB, bobEmail)
     await openChat(pageA)
     await openChat(pageB)
+    await expectWasmRuntimeRevalidation(pageA)
+    await expectWasmRuntimeRevalidation(pageB)
 
     const identifiedToBob: string[] = []
     pageA.on('request', (request) => {
@@ -191,6 +321,9 @@ test.describe('two-server secure chat', () => {
 
     await pageA.getByPlaceholder('Username').fill(`${bob}@b.test`)
     await pageA.getByRole('button', { name: 'Start chat' }).click()
+    // V1 does not allocate destination media for a message request. Direct
+    // attachments become available only after the contact is accepted.
+    await expect(pageA.getByTestId('chat-attachment-button')).toBeDisabled()
     const firstIdentified = pageA.waitForResponse((response) => {
       const path = new URL(response.url()).pathname
       return response.request().method() === 'POST' && path.includes('/api/chat/users/') && path.endsWith('/messages')
@@ -268,6 +401,38 @@ test.describe('two-server secure chat', () => {
     expect(destinationEnvelope?.senderDeviceId).toBe(0)
     await expect(bubble(pageB, sealed)).toBeVisible({ timeout: 45_000 })
     expect(identifiedToBob).toEqual([])
+
+    const directAttachment = `direct-attachment-${tag}.txt`
+    const directAttachmentBody = `federated encrypted attachment ${tag}`
+    await expect(pageA.getByTestId('chat-attachment-button')).toBeEnabled({ timeout: 45_000 })
+    await sendAttachment(pageA, directAttachment, directAttachmentBody)
+    await syncUntilAttachment(pageB, directAttachment)
+    expect(await downloadAttachment(pageB, directAttachment)).toBe(directAttachmentBody)
+
+    await pageB.getByTestId('chat-storage-button').click()
+    await expect(pageB.getByTestId('chat-storage-summary')).toBeVisible({ timeout: 45_000 })
+    await expect(pageB.getByText('Chat media', { exact: true })).toBeVisible()
+    pageB.once('dialog', dialog => void dialog.accept())
+    await pageB.getByRole('button', { name: /Clear stored Chat media/ }).click()
+    await expect(pageB.getByText('No categorized Chat attachments yet.')).toBeVisible({
+      timeout: 45_000,
+    })
+    await pageB.keyboard.press('Escape')
+    await pageB.getByRole('button', { name: `Download ${directAttachment}` }).click()
+    await expect(pageB.locator('[data-sonner-toast][data-type="error"]')).toContainText(
+      'Encrypted attachment download failed',
+      { timeout: 45_000 },
+    )
+
+    const noteAttachment = `note-attachment-${tag}.txt`
+    const noteAttachmentBody = `encrypted note to self attachment ${tag}`
+    await pageA.getByText('Note to Self', { exact: true }).first().click()
+    await expect(pageA.getByTestId('chat-attachment-button')).toBeEnabled()
+    await sendAttachment(pageA, noteAttachment, noteAttachmentBody, false)
+    await syncUntilAttachment(pageA, noteAttachment)
+    expect(await downloadAttachment(pageA, noteAttachment)).toBe(noteAttachmentBody)
+
+    await pageA.getByRole('button', { name: new RegExp(bob) }).click()
 
     // Blocking publishes the new profile key/capability before returning.
     // Alice's stolen/stale capability receives the uniform 404 and the
@@ -367,7 +532,7 @@ test.describe('two-server secure chat', () => {
     await expect(pageA.getByTestId('chat-group-delivery-readiness')).toContainText(
       `Waiting for ${bob}@b.test to accept`,
     )
-    await expect(pageA.getByRole('button', { name: 'Send' })).toBeDisabled()
+    await expect(pageA.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
 
     // No manual Sync action: the destination server sends only a generic
     // DrainMailbox WebSocket hint after committing the federated Welcome.
@@ -855,11 +1020,24 @@ test.describe('two-server secure chat', () => {
     expect((await requireResponseOrUiError(pageB, sentToAlice)).ok()).toBe(true)
     await expect(bubble(pageA, fromBob)).toBeVisible({ timeout: 90_000 })
 
+    const groupAttachment = `mls-attachment-${tag}.txt`
+    const groupAttachmentBody = `MLS encrypted attachment ${tag}`
+    await sendAttachment(pageA, groupAttachment, groupAttachmentBody)
+    await syncUntilAttachment(pageB, groupAttachment)
+    expect(await downloadAttachment(pageB, groupAttachment)).toBe(groupAttachmentBody)
+
     await pageB.reload()
     await expect(pageB.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
     await expect(pageB.getByTestId(`chat-group-${conversationId}`)).toBeVisible({ timeout: 90_000 })
     await expect(bubble(pageB, fromAlice)).toBeVisible({ timeout: 90_000 })
     await expect(bubble(pageB, fromBob)).toBeVisible({ timeout: 90_000 })
+    await pageB.getByTestId('chat-storage-button').click()
+    await expect(pageB.getByTestId('chat-storage-summary')).toBeVisible({ timeout: 45_000 })
+    await expect(pageB.getByRole('button', {
+      name: `Clear stored Chat media for Group ${conversationId.slice(0, 8)}`,
+    })).toBeVisible()
+    await pageB.keyboard.press('Escape')
+    expect(await downloadAttachment(pageB, groupAttachment)).toBe(groupAttachmentBody)
 
     // A fresh Alice install owns independent MLS credentials and leaf secrets.
     // The existing Alice device commits a manifest-bound DeviceSync Welcome;
@@ -912,6 +1090,12 @@ test.describe('two-server secure chat', () => {
     await expect(pageA2.getByTestId(`chat-group-${conversationId}`)).toBeVisible({
       timeout: 90_000,
     })
+    await pageA2.getByTestId('chat-storage-button').click()
+    await expect(pageA2.getByTestId('chat-storage-summary')).toBeVisible({ timeout: 45_000 })
+    await expect(pageA2.getByRole('button', {
+      name: `Clear stored Chat media for Group ${conversationId.slice(0, 8)}`,
+    })).toBeVisible()
+    await pageA2.keyboard.press('Escape')
     await expect.poll(
       () => bobCapabilityEpochs.includes(linkedDeviceEpoch),
       { timeout: 90_000 },
@@ -1008,8 +1192,11 @@ test.describe('two-server secure chat', () => {
     await expect(pageA.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
     await pageA.getByTestId(`chat-group-${conversationId}`).click()
 
-    await pageB.getByTestId('chat-group-members').click()
-    await expect(pageB.getByText('Approve who may send messages?')).toBeVisible({ timeout: 90_000 })
+    const senderPolicyApprovalPrompt = pageB.getByText('Approve who may send messages?')
+    if (!(await senderPolicyApprovalPrompt.isVisible())) {
+      await pageB.getByTestId('chat-group-members').click()
+    }
+    await expect(senderPolicyApprovalPrompt).toBeVisible({ timeout: 90_000 })
     await pageB.reload()
     await expect(pageB.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
     await pageB.getByTestId(`chat-group-${conversationId}`).click()

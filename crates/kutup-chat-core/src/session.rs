@@ -144,6 +144,9 @@ pub struct Session {
     /// The registration payload to publish — `Some` right after [`Session::generate`],
     /// `None` for a device reloaded via [`Session::open`] (already registered).
     registration: Option<RegisterChatDeviceRequest>,
+    /// Canonical account address used by every account-level comparison.
+    /// `address` retains the parsed user/domain split required by libsignal.
+    account: String,
     address: ChatAddress,
 }
 
@@ -159,6 +162,8 @@ impl Session {
         num_one_time: usize,
         rng: &mut R,
     ) -> Result<Self> {
+        let address = ChatAddress::from_sender(&user.into(), device_id)?;
+        let account = address.name();
         let material = keys::generate("kutup device", num_one_time, rng)?;
         // Install the whole device (identity + every prekey) in one transaction.
         db.apply(&material.seed).await?;
@@ -166,12 +171,15 @@ impl Session {
         Ok(Session {
             store,
             registration: Some(material.registration),
-            address: ChatAddress::local(user, device_id),
+            account,
+            address,
         })
     }
 
     /// Reopen the device already installed in `db` (e.g. on app restart).
     pub async fn open(db: Rc<dyn ChatDb>, user: impl Into<String>, device_id: u32) -> Result<Self> {
+        let address = ChatAddress::from_sender(&user.into(), device_id)?;
+        let account = address.name();
         let local = db
             .load_local_identity()
             .await?
@@ -193,7 +201,8 @@ impl Session {
         let mut session = Session {
             store,
             registration: None,
-            address: ChatAddress::local(user, device_id),
+            account,
+            address,
         };
         session.bootstrap_contacts().await?;
         Ok(session)
@@ -206,6 +215,8 @@ impl Session {
         user: impl Into<String>,
         local: LocalIdentity,
     ) -> Result<Self> {
+        let address = ChatAddress::from_sender(&user.into(), 1)?;
+        let account = address.name();
         if local.device_id.is_some() {
             return Err(ChatError::Invalid(
                 "chat device is already registered".into(),
@@ -220,7 +231,8 @@ impl Session {
         Ok(Self {
             store,
             registration: Some(registration),
-            address: ChatAddress::local(user, 1),
+            account,
+            address,
         })
     }
 
@@ -235,7 +247,28 @@ impl Session {
     }
 
     pub fn user(&self) -> &str {
-        &self.address.user
+        &self.account
+    }
+
+    /// Bind a bare account opened from an authenticated local session to the
+    /// server's canonical federation domain. This must happen before any
+    /// account comparison, self-sync encryption, or manifest publication.
+    pub(crate) fn bind_local_server(&mut self, server: &str) -> Result<()> {
+        let validated = kutup_chat_proto::AccountAddress::federated(&self.address.user, server)
+            .map_err(|error| ChatError::Invalid(error.to_string()))?;
+        if self
+            .address
+            .domain
+            .as_deref()
+            .is_some_and(|domain| domain != server)
+        {
+            return Err(ChatError::Invalid(
+                "chat account domain differs from the local server".into(),
+            ));
+        }
+        self.address.domain = Some(server.to_owned());
+        self.account = validated.canonical();
+        Ok(())
     }
 
     pub(crate) fn local_identity_public_key(&self) -> PublicKey {

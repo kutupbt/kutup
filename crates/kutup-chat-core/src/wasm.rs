@@ -28,10 +28,10 @@ use wasm_bindgen::prelude::*;
 use zeroize::Zeroize as _;
 
 use crate::{
-    AccountAddress, AccountAuthority, AnonymousMlsRecipientDevice, ChatContent, ChatError,
-    ChatTransport, ConversationId, Engine, InboundEnvelope, IndexedDbChatDb,
-    MlsApplicationEnvelopeContext, MlsClient, MlsControlEnvelopeContext, ReceiveReport, Result,
-    SendOutcome, VerifiedMlsCredential, VerifiedMlsKeyPackage,
+    AccountAddress, AccountAuthority, AnonymousMlsRecipientDevice, ChatAttachmentDescriptorV1,
+    ChatContent, ChatError, ChatTransport, ConversationId, Engine, InboundEnvelope,
+    IndexedDbChatDb, MlsApplicationEnvelopeContext, MlsClient, MlsControlEnvelopeContext,
+    ReceiveReport, Result, SendOutcome, VerifiedMlsCredential, VerifiedMlsKeyPackage,
 };
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -78,6 +78,7 @@ export interface KutupChatContentView {
   messageId?: string;
   body: unknown;
   text?: string;
+  attachment?: unknown;
 }
 
 export interface KutupChatAccountAddress {
@@ -1806,6 +1807,38 @@ impl WasmChatClient {
         to_output(&entry)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = createMlsAttachmentMessage)]
+    pub async fn create_mls_attachment_message(
+        &self,
+        send_id: String,
+        conversation_id: String,
+        incarnation: String,
+        mls_group_id: Vec<u8>,
+        sent_at: String,
+        descriptor: JsValue,
+        created_at_ms: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let conversation_id = uuid::Uuid::parse_str(&conversation_id)
+            .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
+        let descriptor: ChatAttachmentDescriptorV1 =
+            from_transport(descriptor).map_err(chat_error)?;
+        let entry = self
+            .mls_client()
+            .create_attachment_application_message(
+                &send_id,
+                conversation_id,
+                parse_u64_string("MLS incarnation", &incarnation)?,
+                &mls_group_id,
+                &sent_at,
+                descriptor,
+                parse_i64_string("MLS message clock", &created_at_ms)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&entry)
+    }
+
     #[wasm_bindgen(js_name = pendingMlsApplicationMessages)]
     pub async fn pending_mls_application_messages(&self) -> std::result::Result<JsValue, JsValue> {
         let pending = self
@@ -2075,6 +2108,47 @@ impl WasmChatClient {
             .await
             .map_err(chat_error)?;
         to_output(&SendSummaryView::from(summary))
+    }
+
+    #[wasm_bindgen(js_name = sendAttachment)]
+    pub async fn send_attachment(
+        &mut self,
+        send_id: String,
+        peer: String,
+        sent_at: String,
+        descriptor: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let descriptor: ChatAttachmentDescriptorV1 =
+            from_transport(descriptor).map_err(chat_error)?;
+        let mut rng = OsRng.unwrap_err();
+        let seq = self
+            .engine
+            .session()
+            .next_sent_seq()
+            .await
+            .map_err(chat_error)?;
+        let content = ChatContent::attachment_with_id(&send_id, sent_at, seq, descriptor)
+            .map_err(|error| js_error(&error))?;
+        let summary = self
+            .engine
+            .send(&send_id, &peer, &content, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&SendSummaryView::from(summary))
+    }
+
+    #[wasm_bindgen(js_name = mediaDeliveryCapability)]
+    pub async fn media_delivery_capability(
+        &self,
+        peer: String,
+    ) -> std::result::Result<String, JsValue> {
+        let capability = self
+            .engine
+            .media_delivery_capability(&peer)
+            .await
+            .map_err(chat_error)?
+            .ok_or_else(|| js_error("accepted contact media capability is unavailable"))?;
+        Ok(STANDARD.encode(capability))
     }
 
     /// Flush crash-surviving sends, drain/decrypt/ack the mailbox, and return
@@ -2506,11 +2580,14 @@ struct ContentView {
     body: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attachment: Option<ChatAttachmentDescriptorV1>,
 }
 
 impl From<ChatContent> for ContentView {
     fn from(content: ChatContent) -> Self {
         let text = content.as_text().map(|body| body.text);
+        let attachment = content.as_attachment();
         Self {
             version: content.v,
             kind: content.kind,
@@ -2519,6 +2596,7 @@ impl From<ChatContent> for ContentView {
             message_id: content.message_id,
             body: content.body,
             text,
+            attachment,
         }
     }
 }

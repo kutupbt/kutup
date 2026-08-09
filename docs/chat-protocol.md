@@ -105,9 +105,12 @@ JSON is transport only.
 ## 5. Manifest history and trust
 
 The server stores the mutable manifest head and every complete accepted
-manifest in one transaction. Publication requires exact registered-device and
-stable account-key agreement. A normal update increments by one and names the
-exact previous hash.
+manifest in one transaction. Every manifest device must exactly match a
+registered key tuple and all account keys remain stable. Registration rows not
+selected by the authority-signed manifest are pruned in that transaction, so
+an interrupted registration cannot permanently block the account or gain
+manifest membership. A normal update increments by one and names the exact
+previous hash.
 
 Clients persist history by `(peer, incarnation, sequence)` and the current
 anti-rollback pin in one transaction. First observation above sequence 1 or a

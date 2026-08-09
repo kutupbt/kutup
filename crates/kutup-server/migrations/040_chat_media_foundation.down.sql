@@ -1,0 +1,15 @@
+DROP TABLE IF EXISTS chat_attachment_ledger_operations;
+DROP TABLE IF EXISTS chat_attachment_ledger_history;
+DROP TABLE IF EXISTS chat_attachment_ledger_entities;
+DROP SEQUENCE IF EXISTS chat_attachment_ledger_cursor_seq;
+DROP TABLE IF EXISTS chat_media_uploads;
+DROP TABLE IF EXISTS chat_media_federation_inbound_transactions;
+DROP TABLE IF EXISTS chat_media_federation_inbound_pending;
+DROP TABLE IF EXISTS chat_media_federation_inbound_state;
+DROP TABLE IF EXISTS chat_media_rate_counters;
+DROP TABLE IF EXISTS chat_media_federation_outbox;
+DROP TABLE IF EXISTS chat_media_federation_sequences;
+DROP TABLE IF EXISTS chat_media_federation_pull_grants;
+DROP TABLE IF EXISTS chat_media_origin_delivery_operations;
+DROP TABLE IF EXISTS chat_media_references;
+DROP TABLE IF EXISTS chat_media_objects;

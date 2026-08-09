@@ -58,3 +58,10 @@ path = "fuzz_targets/mls_control_parsers.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "chat_media_parsers"
+path = "fuzz_targets/chat_media_parsers.rs"
+test = false
+doc = false
+bench = false

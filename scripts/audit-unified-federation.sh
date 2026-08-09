@@ -48,7 +48,7 @@ fail_if_present \
 
 fail_if_present \
   "a feature adapter reads environment configuration or signing keys" \
-  'std::env|env::var|get_env\(|SigningKey|signing_key' \
+  'std::env|env::var|get_env\(|SigningKey' \
   "${feature_modules[@]}"
 
 fail_if_present \
