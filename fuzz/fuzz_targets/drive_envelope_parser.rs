@@ -1,10 +1,10 @@
 #![no_main]
 
+use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1, FILE_BLOB_HEADER_BYTES};
-use kutup_crypto::named_share::NamedShareEnvelopeV1;
 use kutup_crypto::envelope;
-use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
+use kutup_crypto::named_share::NamedShareEnvelopeV1;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

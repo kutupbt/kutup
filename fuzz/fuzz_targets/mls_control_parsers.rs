@@ -4,9 +4,8 @@ use kutup_chat_proto::{
     AnonymousMlsKeyPackageRequestV1, AnonymousMlsSubmissionV1, CommitMlsControlBlockV1,
     FederatedAnonymousMlsTransactionV1, FederatedMlsAuthorityBootstrapPageV1,
     FederatedMlsControlReplicaV1, FederatedMlsOrderingVoteRequestV1,
-    FederatedMlsParticipantBootstrapPageV1, MlsAuthorityChangeV1,
-    MlsClientControlHistoryPageV1, MlsInvitationFeedbackV1, MlsMailboxPageV1,
-    MlsMembershipDeliveryV1, MlsPrivateControlStateV1,
+    FederatedMlsParticipantBootstrapPageV1, MlsAuthorityChangeV1, MlsClientControlHistoryPageV1,
+    MlsInvitationFeedbackV1, MlsMailboxPageV1, MlsMembershipDeliveryV1, MlsPrivateControlStateV1,
 };
 use libfuzzer_sys::fuzz_target;
 
