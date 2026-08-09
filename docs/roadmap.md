@@ -59,7 +59,9 @@ The following are release blockers:
   transactionally from live ratchet state in SQLite and IndexedDB; canonical
   archive packing, final digest verification, and bounded deterministic export
   across direct, MLS and previously imported display history are implemented.
-  The crash-safe transfer journal, relay bindings and approval UI remain.** The
+  Exact ephemeral secrets, handshake progress and immutable retry frames now
+  survive reload atomically in SQLite and IndexedDB. Relay bindings and approval
+  UI remain.** The
   complete requirement is explicit review/revocation plus an authenticated,
   end-to-end encrypted history transfer from
   an existing device to a newly linked browser installation. Clearing browser

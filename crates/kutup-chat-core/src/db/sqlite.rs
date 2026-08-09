@@ -18,9 +18,10 @@ use zeroize::Zeroize as _;
 
 use crate::db::{
     contact_state_code, contact_state_from_code, AccountManifestHistoryRecordV1, AuthorityTrust,
-    ChatDb, ContactRecord, ImportedHistoryRecordV1, InboundEnvelope, InboundFailureKind,
-    InboundState, InboxMessage, LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage,
-    MlsOutboxDelivery, MlsOutboxEntry, OutboxEntry, PeerProfile, Pending, SentMessage,
+    ChatDb, ContactRecord, HistoryTransferJournalV1, ImportedHistoryRecordV1, InboundEnvelope,
+    InboundFailureKind, InboundState, InboxMessage, LocalIdentity, LocalProfile, ManifestTrust,
+    MlsHistoryMessage, MlsOutboxDelivery, MlsOutboxEntry, OutboxEntry, PeerProfile, Pending,
+    SentMessage,
 };
 use crate::error::{ChatError, Result};
 
@@ -160,6 +161,16 @@ CREATE TABLE IF NOT EXISTS imported_history (
 );
 CREATE INDEX IF NOT EXISTS imported_history_by_time
     ON imported_history (timestamp_ms, transfer_id, source_record_id);
+CREATE TABLE IF NOT EXISTS history_transfer_journals (
+    transfer_id TEXT PRIMARY KEY,
+    journal     BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS history_transfer_frames (
+    transfer_id TEXT NOT NULL,
+    frame_index INTEGER NOT NULL CHECK (frame_index >= 0),
+    frame       BLOB NOT NULL,
+    PRIMARY KEY (transfer_id, frame_index)
+);
 CREATE TABLE IF NOT EXISTS inbound_envelopes (
     id          TEXT PRIMARY KEY,
     cursor      INTEGER NOT NULL,
@@ -230,6 +241,7 @@ INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (14, 0);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (15, 0);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (16, 0);
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (17, 0);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (18, 0);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value INTEGER NOT NULL
@@ -560,6 +572,42 @@ impl ChatDb for SqliteChatDb {
         ))?;
         let rows = db(statement.query_map([], imported_history_row))?;
         rows.map(db).collect()
+    }
+
+    async fn load_history_transfer_journal(
+        &self,
+        transfer_id: &str,
+    ) -> Result<Option<HistoryTransferJournalV1>> {
+        let conn = self.conn.borrow();
+        let encoded: Option<Vec<u8>> = db(conn
+            .query_row(
+                "SELECT journal FROM history_transfer_journals WHERE transfer_id = ?1",
+                [transfer_id],
+                |row| row.get(0),
+            )
+            .optional())?;
+        encoded
+            .map(|value| {
+                serde_json::from_slice(&value).map_err(|error| ChatError::Db(error.to_string()))
+            })
+            .transpose()
+    }
+
+    async fn list_history_transfer_frames(
+        &self,
+        transfer_id: &str,
+    ) -> Result<Vec<kutup_chat_proto::ChatHistoryTransferFrameV1>> {
+        let conn = self.conn.borrow();
+        let mut statement = db(conn.prepare(
+            "SELECT frame FROM history_transfer_frames
+             WHERE transfer_id = ?1 ORDER BY frame_index",
+        ))?;
+        let rows = db(statement.query_map([transfer_id], |row| row.get::<_, Vec<u8>>(0)))?;
+        rows.map(|row| {
+            let encoded = db(row)?;
+            serde_json::from_slice(&encoded).map_err(|error| ChatError::Db(error.to_string()))
+        })
+        .collect()
     }
 
     async fn list_inbound(&self) -> Result<Vec<InboundEnvelope>> {
@@ -1030,6 +1078,57 @@ impl ChatDb for SqliteChatDb {
                 return Err(ChatError::Trust(format!(
                     "immutable imported history conflicts at {transfer_id}/{source_record_id}"
                 )));
+            }
+        }
+        for (transfer_id, journal) in &pending.history_transfer_journals {
+            match journal {
+                Some(journal) => {
+                    let encoded = serde_json::to_vec(journal)
+                        .map_err(|error| ChatError::Db(error.to_string()))?;
+                    db(tx.execute(
+                        "INSERT INTO history_transfer_journals (transfer_id, journal)
+                         VALUES (?1, ?2)
+                         ON CONFLICT(transfer_id) DO UPDATE SET journal = excluded.journal",
+                        rusqlite::params![transfer_id, encoded],
+                    ))?;
+                }
+                None => {
+                    db(tx.execute(
+                        "DELETE FROM history_transfer_frames WHERE transfer_id = ?1",
+                        [transfer_id],
+                    ))?;
+                    db(tx.execute(
+                        "DELETE FROM history_transfer_journals WHERE transfer_id = ?1",
+                        [transfer_id],
+                    ))?;
+                }
+            }
+        }
+        for ((transfer_id, index), frame) in &pending.history_transfer_frames {
+            match frame {
+                Some(frame) => {
+                    let encoded = serde_json::to_vec(frame)
+                        .map_err(|error| ChatError::Db(error.to_string()))?;
+                    let changed = db(tx.execute(
+                        "INSERT INTO history_transfer_frames (transfer_id, frame_index, frame)
+                         VALUES (?1, ?2, ?3)
+                         ON CONFLICT(transfer_id, frame_index) DO UPDATE SET frame = excluded.frame
+                         WHERE history_transfer_frames.frame = excluded.frame",
+                        rusqlite::params![transfer_id, *index as i64, encoded],
+                    ))?;
+                    if changed != 1 {
+                        return Err(ChatError::Trust(format!(
+                            "history transfer frame {transfer_id}/{index} changed across retry"
+                        )));
+                    }
+                }
+                None => {
+                    db(tx.execute(
+                        "DELETE FROM history_transfer_frames
+                         WHERE transfer_id = ?1 AND frame_index = ?2",
+                        rusqlite::params![transfer_id, *index as i64],
+                    ))?;
+                }
             }
         }
         for (id, inbound) in &pending.inbound {
@@ -1713,6 +1812,84 @@ mod tests {
         rejected.last_cursor = Some(99);
         assert!(matches!(block_on(db.apply(&rejected)), Err(ChatError::Trust(_))));
         assert_eq!(block_on(db.load_last_cursor()).unwrap(), None);
+    }
+
+    #[test]
+    fn history_transfer_journal_and_exact_frames_survive_restart_boundaries() {
+        use base64::Engine as _;
+        use futures_executor::block_on;
+
+        let b64 = |byte, len| base64::engine::general_purpose::STANDARD.encode(vec![byte; len]);
+        let request = kutup_chat_proto::ChatHistoryTransferRequestV1 {
+            version: 1,
+            transfer_id: "11111111-1111-4111-8111-111111111111".into(),
+            account: "alice@a.test".into(),
+            requesting_device_id: 2,
+            manifest_sequence: 1,
+            ephemeral_public_key: b64(1, 32),
+            request_nonce: b64(2, 32),
+            created_at_unix: 1_000,
+            expires_at_unix: 1_900,
+            device_signature: b64(3, 64),
+        };
+        let journal = HistoryTransferJournalV1 {
+            transfer_id: request.transfer_id.clone(),
+            role: crate::HistoryTransferRoleV1::Requester,
+            state: crate::HistoryTransferJournalStateV1::Requested,
+            request,
+            acceptance: None,
+            ephemeral_secret: [4; 32],
+            next_frame_index: 0,
+            updated_at_unix: 1_000,
+        };
+        let frame = kutup_chat_proto::ChatHistoryTransferFrameV1 {
+            version: 1,
+            transfer_id: journal.transfer_id.clone(),
+            transcript_hash: "05".repeat(32),
+            index: 0,
+            final_frame: true,
+            plaintext_bytes: 1,
+            nonce: b64(6, 24),
+            ciphertext: b64(7, 17),
+        };
+        let db = SqliteChatDb::open_in_memory().unwrap();
+        let mut pending = Pending::default();
+        pending
+            .history_transfer_journals
+            .insert(journal.transfer_id.clone(), Some(journal.clone()));
+        pending.history_transfer_frames.insert(
+            (frame.transfer_id.clone(), frame.index),
+            Some(frame.clone()),
+        );
+        block_on(db.apply(&pending)).unwrap();
+        assert_eq!(
+            block_on(db.load_history_transfer_journal(&journal.transfer_id)).unwrap(),
+            Some(journal.clone())
+        );
+        assert_eq!(
+            block_on(db.list_history_transfer_frames(&journal.transfer_id)).unwrap(),
+            vec![frame.clone()]
+        );
+
+        let mut changed = frame;
+        changed.ciphertext = b64(8, 17);
+        let mut conflict = Pending::default();
+        conflict.history_transfer_frames.insert(
+            (changed.transfer_id.clone(), changed.index),
+            Some(changed),
+        );
+        conflict.last_cursor = Some(9);
+        assert!(matches!(block_on(db.apply(&conflict)), Err(ChatError::Trust(_))));
+        assert_eq!(block_on(db.load_last_cursor()).unwrap(), None);
+
+        let mut delete = Pending::default();
+        delete
+            .history_transfer_journals
+            .insert(journal.transfer_id.clone(), None);
+        block_on(db.apply(&delete)).unwrap();
+        assert!(block_on(db.list_history_transfer_frames(&journal.transfer_id))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

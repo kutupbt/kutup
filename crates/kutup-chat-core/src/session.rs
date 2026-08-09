@@ -456,6 +456,190 @@ impl Session {
         Ok(records)
     }
 
+    /// Persist a newly signed request before its first relay write, retaining
+    /// the exact ephemeral secret needed to resume after a browser reload.
+    pub async fn journal_prepared_history_request(
+        &self,
+        prepared: &PreparedHistoryTransferRequest,
+        now_unix: i64,
+    ) -> Result<()> {
+        self.save_history_transfer_progress(
+            crate::HistoryTransferJournalV1 {
+                transfer_id: prepared.request.transfer_id.clone(),
+                role: crate::HistoryTransferRoleV1::Requester,
+                state: crate::HistoryTransferJournalStateV1::Requested,
+                request: prepared.request.clone(),
+                acceptance: None,
+                ephemeral_secret: prepared.ephemeral_secret.journal_bytes(),
+                next_frame_index: 0,
+                updated_at_unix: now_unix,
+            },
+            Vec::new(),
+            now_unix,
+        )
+        .await
+    }
+
+    /// Persist an approved response and its exact encrypted archive before the
+    /// first frame upload. A restart resumes at `next_frame_index == 0` without
+    /// regenerating an X25519 key, nonce, or ciphertext.
+    pub async fn journal_prepared_history_response(
+        &self,
+        request: &kutup_chat_proto::ChatHistoryTransferRequestV1,
+        prepared: &PreparedHistoryTransferAcceptance,
+        archive: &crate::PreparedHistoryArchiveV1,
+        now_unix: i64,
+    ) -> Result<()> {
+        self.save_history_transfer_progress(
+            crate::HistoryTransferJournalV1 {
+                transfer_id: request.transfer_id.clone(),
+                role: crate::HistoryTransferRoleV1::Responder,
+                state: crate::HistoryTransferJournalStateV1::FramesReady,
+                request: request.clone(),
+                acceptance: Some(prepared.acceptance.clone()),
+                ephemeral_secret: prepared.ephemeral_secret.journal_bytes(),
+                next_frame_index: 0,
+                updated_at_unix: now_unix,
+            },
+            archive.frames.clone(),
+            now_unix,
+        )
+        .await
+    }
+
+    /// Atomically persist a validated journal update and every exact encrypted
+    /// frame needed for retry. Frame ciphertext is immutable by transfer/index.
+    pub async fn save_history_transfer_progress(
+        &self,
+        journal: crate::HistoryTransferJournalV1,
+        frames: Vec<kutup_chat_proto::ChatHistoryTransferFrameV1>,
+        now_unix: i64,
+    ) -> Result<()> {
+        journal.request.validate(now_unix).map_err(ChatError::Invalid)?;
+        if journal.transfer_id != journal.request.transfer_id
+            || journal.request.account != self.user()
+        {
+            return Err(ChatError::Trust(
+                "history transfer journal account/request binding mismatch".into(),
+            ));
+        }
+        match journal.role {
+            crate::HistoryTransferRoleV1::Requester
+                if journal.request.requesting_device_id == self.device_id() => {}
+            crate::HistoryTransferRoleV1::Responder
+                if journal
+                    .acceptance
+                    .as_ref()
+                    .is_some_and(|value| value.responding_device_id == self.device_id()) => {}
+            _ => {
+                return Err(ChatError::Trust(
+                    "history transfer journal role does not belong to this device".into(),
+                ))
+            }
+        }
+        let transcript_hash = journal
+            .acceptance
+            .as_ref()
+            .map(|acceptance| {
+                acceptance
+                    .validate(&journal.request, now_unix)
+                    .map_err(ChatError::Invalid)?;
+                kutup_chat_proto::chat_history_transfer_transcript_hash(
+                    &journal.request,
+                    acceptance,
+                    now_unix,
+                )
+                .map_err(ChatError::Invalid)
+            })
+            .transpose()?;
+        match journal.state {
+            crate::HistoryTransferJournalStateV1::Requested
+                if journal.acceptance.is_none()
+                    && frames.is_empty()
+                    && journal.next_frame_index == 0 => {}
+            crate::HistoryTransferJournalStateV1::Accepted
+            | crate::HistoryTransferJournalStateV1::FramesReady
+            | crate::HistoryTransferJournalStateV1::ImportReady
+            | crate::HistoryTransferJournalStateV1::Completed
+                if journal.acceptance.is_some() => {}
+            crate::HistoryTransferJournalStateV1::Cancelled => {}
+            _ => {
+                return Err(ChatError::Invalid(
+                    "history transfer journal state is inconsistent".into(),
+                ))
+            }
+        }
+        if journal.next_frame_index as usize > frames.len() {
+            return Err(ChatError::Invalid(
+                "history transfer progress escapes the retained frames".into(),
+            ));
+        }
+        for (position, frame) in frames.iter().enumerate() {
+            frame.validate().map_err(ChatError::Invalid)?;
+            if frame.transfer_id != journal.transfer_id || frame.index as usize != position {
+                return Err(ChatError::Trust(
+                    "history transfer journal frames are not contiguous".into(),
+                ));
+            }
+            if transcript_hash
+                .is_some_and(|hash| frame.transcript_hash != hex::encode(hash))
+            {
+                return Err(ChatError::Trust(
+                    "history transfer journal frame transcript mismatch".into(),
+                ));
+            }
+        }
+        if let Some(existing) = self
+            .store
+            .load_history_transfer_journal(&journal.transfer_id)
+            .await?
+        {
+            if existing.role != journal.role
+                || existing.request != journal.request
+                || existing.ephemeral_secret != journal.ephemeral_secret
+                || existing.acceptance.is_some() && existing.acceptance != journal.acceptance
+                || matches!(
+                    existing.state,
+                    crate::HistoryTransferJournalStateV1::Completed
+                        | crate::HistoryTransferJournalStateV1::Cancelled
+                ) && journal.state != existing.state
+                || history_transfer_state_rank(journal.state)
+                    < history_transfer_state_rank(existing.state)
+                || journal.next_frame_index < existing.next_frame_index
+                || journal.updated_at_unix < existing.updated_at_unix
+            {
+                return Err(ChatError::Trust(
+                    "history transfer journal attempted rollback or key substitution".into(),
+                ));
+            }
+        }
+        self.store.stage_history_transfer_journal(journal);
+        for frame in frames {
+            self.store.stage_history_transfer_frame(frame);
+        }
+        self.store.commit().await
+    }
+
+    pub async fn history_transfer_progress(
+        &self,
+        transfer_id: &str,
+    ) -> Result<(
+        Option<crate::HistoryTransferJournalV1>,
+        Vec<kutup_chat_proto::ChatHistoryTransferFrameV1>,
+    )> {
+        Ok((
+            self.store.load_history_transfer_journal(transfer_id).await?,
+            self.store.list_history_transfer_frames(transfer_id).await?,
+        ))
+    }
+
+    pub async fn delete_history_transfer_progress(&self, transfer_id: &str) -> Result<()> {
+        let frames = self.store.list_history_transfer_frames(transfer_id).await?;
+        let indices = frames.iter().map(|frame| frame.index).collect::<Vec<_>>();
+        self.store.delete_history_transfer(transfer_id, &indices);
+        self.store.commit().await
+    }
+
     /// Bind a bare account opened from an authenticated local session to the
     /// server's canonical federation domain. This must happen before any
     /// account comparison, self-sync encryption, or manifest publication.
@@ -2490,6 +2674,17 @@ fn canonical_account(value: &str) -> Result<String> {
     Ok(canonical)
 }
 
+fn history_transfer_state_rank(state: crate::HistoryTransferJournalStateV1) -> u8 {
+    use crate::HistoryTransferJournalStateV1::*;
+    match state {
+        Requested => 0,
+        Accepted => 1,
+        FramesReady => 2,
+        ImportReady => 3,
+        Completed | Cancelled => 4,
+    }
+}
+
 fn direct_conversation(value: &str) -> Result<kutup_chat_proto::ConversationId> {
     let address: kutup_chat_proto::AccountAddress = canonical_account(value)?
         .parse()
@@ -2611,7 +2806,7 @@ mod sealed_tests {
     fn archive_snapshot_merges_domains_and_keeps_the_newest_bound() {
         let mut rng = OsRng.unwrap_err();
         let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
-        let session = block_on(Session::generate(
+        let mut session = block_on(Session::generate(
             db.clone(),
             "alice@a.test",
             1,
@@ -2619,6 +2814,7 @@ mod sealed_tests {
             &mut rng,
         ))
         .unwrap();
+        block_on(session.complete_registration(1)).unwrap();
         let content = |text: &str, seq| {
             serde_json::to_vec(&ChatContent::text(
                 "2026-08-09T00:00:00Z",
@@ -2698,6 +2894,22 @@ mod sealed_tests {
             snapshot[2].conversation,
             kutup_chat_proto::ConversationId::Group { .. }
         ));
+
+        let prepared = session
+            .prepare_history_transfer_request(1, 1_000, &mut rng)
+            .unwrap();
+        block_on(session.journal_prepared_history_request(&prepared, 1_000)).unwrap();
+        let (journal, frames) = block_on(
+            session.history_transfer_progress(&prepared.request.transfer_id),
+        )
+        .unwrap();
+        assert_eq!(journal.unwrap().ephemeral_secret, prepared.ephemeral_secret.journal_bytes());
+        assert!(frames.is_empty());
+        block_on(session.delete_history_transfer_progress(&prepared.request.transfer_id)).unwrap();
+        assert!(block_on(session.history_transfer_progress(&prepared.request.transfer_id))
+            .unwrap()
+            .0
+            .is_none());
     }
 
     #[test]

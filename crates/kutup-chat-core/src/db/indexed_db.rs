@@ -19,9 +19,10 @@ use serde_wasm_bindgen::Serializer;
 use wasm_bindgen::JsValue;
 
 use crate::db::{
-    AccountManifestHistoryRecordV1, ChatDb, ContactRecord, ImportedHistoryRecordV1,
-    InboundEnvelope, InboxMessage, LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage,
-    MlsOutboxEntry, OutboxEntry, PeerProfile, Pending, SentMessage,
+    AccountManifestHistoryRecordV1, ChatDb, ContactRecord, HistoryTransferJournalV1,
+    ImportedHistoryRecordV1, InboundEnvelope, InboxMessage, LocalIdentity, LocalProfile,
+    ManifestTrust, MlsHistoryMessage, MlsOutboxEntry, OutboxEntry, PeerProfile, Pending,
+    SentMessage,
 };
 use crate::error::{ChatError, Result};
 
@@ -41,6 +42,8 @@ const MLS_MESSAGES: &str = "mls_messages";
 const MESSAGES: &str = "messages";
 const SENT_MESSAGES: &str = "sent_messages";
 const IMPORTED_HISTORY: &str = "imported_history";
+const HISTORY_TRANSFER_JOURNALS: &str = "history_transfer_journals";
+const HISTORY_TRANSFER_FRAMES: &str = "history_transfer_frames";
 const INBOUND: &str = "inbound";
 const MANIFEST_TRUST: &str = "manifest_trust";
 const MANIFEST_HISTORY: &str = "manifest_history";
@@ -49,7 +52,7 @@ const LOCAL_PROFILE: &str = "local_profile";
 const PEER_PROFILES: &str = "peer_profiles";
 const META: &str = "meta";
 
-const ALL_STORES: [&str; 23] = [
+const ALL_STORES: [&str; 25] = [
     LOCAL_IDENTITY,
     SESSIONS,
     IDENTITIES,
@@ -66,6 +69,8 @@ const ALL_STORES: [&str; 23] = [
     MESSAGES,
     SENT_MESSAGES,
     IMPORTED_HISTORY,
+    HISTORY_TRANSFER_JOURNALS,
+    HISTORY_TRANSFER_FRAMES,
     INBOUND,
     MANIFEST_TRUST,
     MANIFEST_HISTORY,
@@ -99,7 +104,7 @@ impl IndexedDbChatDb {
             ));
         }
 
-        let mut builder = Rexie::builder(name).version(10);
+        let mut builder = Rexie::builder(name).version(11);
         for store in ALL_STORES {
             builder = builder.add_object_store(ObjectStore::new(store));
         }
@@ -309,6 +314,36 @@ impl ChatDb for IndexedDbChatDb {
         Ok(records)
     }
 
+    async fn load_history_transfer_journal(
+        &self,
+        transfer_id: &str,
+    ) -> Result<Option<HistoryTransferJournalV1>> {
+        self.get(HISTORY_TRANSFER_JOURNALS, string_key(transfer_id))
+            .await
+    }
+
+    async fn list_history_transfer_frames(
+        &self,
+        transfer_id: &str,
+    ) -> Result<Vec<kutup_chat_proto::ChatHistoryTransferFrameV1>> {
+        let transaction = idb(self.db.transaction(
+            &[HISTORY_TRANSFER_FRAMES],
+            TransactionMode::ReadOnly,
+        ))?;
+        let store = idb(transaction.store(HISTORY_TRANSFER_FRAMES))?;
+        let mut frames = Vec::new();
+        for (key, value) in idb(store.scan(None, None, None, None).await)? {
+            let key = Array::from(&key);
+            if key.length() == 2
+                && key.get(0).as_string().as_deref() == Some(transfer_id)
+            {
+                frames.push(from_js(value)?);
+            }
+        }
+        frames.sort_by_key(|frame: &kutup_chat_proto::ChatHistoryTransferFrameV1| frame.index);
+        Ok(frames)
+    }
+
     async fn list_inbound(&self) -> Result<Vec<InboundEnvelope>> {
         let mut inbound = self.all::<InboundEnvelope>(INBOUND).await?;
         inbound.sort_by(|left, right| {
@@ -383,6 +418,17 @@ impl ChatDb for IndexedDbChatDb {
                 .map(|message| message.id)
                 .collect()
         };
+        let mut cascaded_transfer_frame_deletes = Vec::new();
+        for (transfer_id, journal) in &pending.history_transfer_journals {
+            if journal.is_none() {
+                for frame in self.list_history_transfer_frames(transfer_id).await? {
+                    let key = (transfer_id.clone(), frame.index);
+                    if !pending.history_transfer_frames.contains_key(&key) {
+                        cascaded_transfer_frame_deletes.push(key);
+                    }
+                }
+            }
+        }
 
         // IndexedDB has one writer in this engine. Check immutable records
         // before opening the atomic write transaction; an existing different
@@ -411,6 +457,21 @@ impl ChatDb for IndexedDbChatDb {
                 }
             }
         }
+        for ((transfer_id, index), frame) in &pending.history_transfer_frames {
+            if let Some(existing) = self
+                .get::<kutup_chat_proto::ChatHistoryTransferFrameV1>(
+                    HISTORY_TRANSFER_FRAMES,
+                    pair_number_key(transfer_id, *index),
+                )
+                .await?
+            {
+                if frame.as_ref().is_some_and(|frame| *frame != existing) {
+                    return Err(ChatError::Trust(format!(
+                        "history transfer frame {transfer_id}/{index} changed across retry"
+                    )));
+                }
+            }
+        }
 
         // Serialize before opening the transaction. Serialization cannot leave
         // a partially queued write-set, and 64-bit counters become JS BigInts
@@ -434,6 +495,8 @@ impl ChatDb for IndexedDbChatDb {
         let messages = idb(transaction.store(MESSAGES))?;
         let sent_messages = idb(transaction.store(SENT_MESSAGES))?;
         let imported_history = idb(transaction.store(IMPORTED_HISTORY))?;
+        let history_transfer_journals = idb(transaction.store(HISTORY_TRANSFER_JOURNALS))?;
+        let history_transfer_frames = idb(transaction.store(HISTORY_TRANSFER_FRAMES))?;
         let inbound = idb(transaction.store(INBOUND))?;
         let manifest_trust = idb(transaction.store(MANIFEST_TRUST))?;
         let manifest_history = idb(transaction.store(MANIFEST_HISTORY))?;
@@ -491,6 +554,24 @@ impl ChatDb for IndexedDbChatDb {
                 &imported_history,
                 value,
                 pair_key(&transfer_id, &source_record_id),
+            ));
+        }
+        stage_map(
+            &mut operations,
+            &history_transfer_journals,
+            writes.history_transfer_journals,
+        );
+        for ((transfer_id, index), value) in writes.history_transfer_frames {
+            let key = pair_number_key(&transfer_id, index);
+            match value {
+                Some(value) => operations.push(put_op(&history_transfer_frames, value, key)),
+                None => operations.push(delete_op(&history_transfer_frames, key)),
+            }
+        }
+        for (transfer_id, index) in cascaded_transfer_frame_deletes {
+            operations.push(delete_op(
+                &history_transfer_frames,
+                pair_number_key(&transfer_id, index),
             ));
         }
         stage_map(&mut operations, &inbound, writes.inbound);
@@ -617,6 +698,8 @@ struct PreparedWrites {
     messages: Vec<(String, JsValue)>,
     sent_messages: Vec<(String, JsValue)>,
     imported_history: Vec<((String, String), JsValue)>,
+    history_transfer_journals: Vec<(String, Option<JsValue>)>,
+    history_transfer_frames: Vec<((String, u32), Option<JsValue>)>,
     inbound: Vec<(String, Option<JsValue>)>,
     manifest_trust: Vec<(String, JsValue)>,
     manifest_history: Vec<((String, String, u64), JsValue)>,
@@ -661,6 +744,10 @@ impl PreparedWrites {
                 .collect::<Result<_>>()?,
             sent_messages: serialize_map(&pending.sent_messages)?,
             imported_history: serialize_map(&pending.imported_history)?,
+            history_transfer_journals: serialize_optional_map(
+                &pending.history_transfer_journals,
+            )?,
+            history_transfer_frames: serialize_optional_map(&pending.history_transfer_frames)?,
             inbound: serialize_optional_map(&pending.inbound)?,
             manifest_trust: serialize_map(&pending.manifest_trust)?,
             manifest_history: serialize_map(&pending.manifest_history)?,
@@ -719,6 +806,10 @@ fn pair_key(left: &str, right: &str) -> JsValue {
     Array::of2(&string_key(left), &string_key(right)).into()
 }
 
+fn pair_number_key(left: &str, right: u32) -> JsValue {
+    Array::of2(&string_key(left), &number_key(right)).into()
+}
+
 fn triple_key(first: &str, second: &str, third: &str) -> JsValue {
     Array::of3(&string_key(first), &string_key(second), &string_key(third)).into()
 }
@@ -746,6 +837,7 @@ fn idb<T>(result: rexie::Result<T>) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
     use crate::db::{AuthorityTrust, InboundFailureKind, InboundState};
     use wasm_bindgen_test::*;
 
@@ -826,6 +918,46 @@ mod tests {
             ),
             imported.clone(),
         );
+        let b64 = |byte, len| base64::engine::general_purpose::STANDARD.encode(vec![byte; len]);
+        let request = kutup_chat_proto::ChatHistoryTransferRequestV1 {
+            version: 1,
+            transfer_id: "11111111-1111-4111-8111-111111111111".into(),
+            account: "alice@a.test".into(),
+            requesting_device_id: 3,
+            manifest_sequence: 1,
+            ephemeral_public_key: b64(1, 32),
+            request_nonce: b64(2, 32),
+            created_at_unix: 1_000,
+            expires_at_unix: 1_900,
+            device_signature: b64(3, 64),
+        };
+        let journal = HistoryTransferJournalV1 {
+            transfer_id: request.transfer_id.clone(),
+            role: crate::HistoryTransferRoleV1::Requester,
+            state: crate::HistoryTransferJournalStateV1::Requested,
+            request,
+            acceptance: None,
+            ephemeral_secret: [4; 32],
+            next_frame_index: 0,
+            updated_at_unix: 1_000,
+        };
+        let transfer_frame = kutup_chat_proto::ChatHistoryTransferFrameV1 {
+            version: 1,
+            transfer_id: journal.transfer_id.clone(),
+            transcript_hash: "05".repeat(32),
+            index: 0,
+            final_frame: true,
+            plaintext_bytes: 1,
+            nonce: b64(6, 24),
+            ciphertext: b64(7, 17),
+        };
+        pending
+            .history_transfer_journals
+            .insert(journal.transfer_id.clone(), Some(journal.clone()));
+        pending.history_transfer_frames.insert(
+            (transfer_frame.transfer_id.clone(), transfer_frame.index),
+            Some(transfer_frame.clone()),
+        );
         pending.inbound.insert(
             "inbound-1".into(),
             Some(InboundEnvelope {
@@ -881,6 +1013,18 @@ mod tests {
         assert_eq!(db.list_messages().await.unwrap().len(), 1);
         assert_eq!(db.list_sent_messages().await.unwrap().len(), 1);
         assert_eq!(db.list_imported_history().await.unwrap(), vec![imported]);
+        assert_eq!(
+            db.load_history_transfer_journal(&journal.transfer_id)
+                .await
+                .unwrap(),
+            Some(journal.clone())
+        );
+        assert_eq!(
+            db.list_history_transfer_frames(&journal.transfer_id)
+                .await
+                .unwrap(),
+            vec![transfer_frame]
+        );
         assert!(
             db.load_sent_message("sent-1")
                 .await
@@ -907,6 +1051,17 @@ mod tests {
         );
         assert_eq!(db.load_last_cursor().await.unwrap(), Some(u64::MAX));
         assert_eq!(db.load_last_sent_seq().await.unwrap(), Some(u64::MAX - 1));
+
+        let mut clear_transfer = Pending::default();
+        clear_transfer
+            .history_transfer_journals
+            .insert(journal.transfer_id.clone(), None);
+        db.apply(&clear_transfer).await.unwrap();
+        assert!(db
+            .list_history_transfer_frames(&journal.transfer_id)
+            .await
+            .unwrap()
+            .is_empty());
 
         let mut consumed = Pending::default();
         consumed.pre_keys.insert(7, None);

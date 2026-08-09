@@ -36,6 +36,10 @@ impl HistoryTransferEphemeralSecret {
     fn public_key(&self) -> [u8; 32] {
         X25519PublicKey::from(&StaticSecret::from(*self.0)).to_bytes()
     }
+
+    pub(crate) fn journal_bytes(&self) -> [u8; 32] {
+        *self.0
+    }
 }
 
 pub struct PreparedHistoryTransferRequest {

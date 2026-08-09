@@ -112,8 +112,10 @@ single-responder constraints, but never validates archive plaintext.
    store for SQLite and IndexedDB. Canonical bounded archive packing, ordered
    frame-digest verification and conversion into isolated import rows are also
    implemented. Source-history collection deterministically merges direct, MLS
-   and prior imported display rows and retains the newest negotiated bound; the
-   crash-safe transfer journal remains.
+   and prior imported display rows and retains the newest negotiated bound. The
+   crash-safe SQLite/IndexedDB journal retains the exact ephemeral secret,
+   monotonic state/progress and immutable encrypted frames across reload; frame
+   substitution or rollback aborts the whole update.
 4. Add WASM/transport bindings and the new/existing-device approval UI.
 5. Extend the two-browser federation harness with success, denial, expiry,
    tampering, replay, interrupted-resume and no-surviving-device cases.

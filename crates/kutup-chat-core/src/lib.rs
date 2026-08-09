@@ -39,6 +39,7 @@ pub use db::indexed_db::IndexedDbChatDb;
 pub use db::sqlite::SqliteChatDb;
 pub use db::{
     AccountManifestHistoryRecordV1, AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope,
+    HistoryTransferJournalStateV1, HistoryTransferJournalV1, HistoryTransferRoleV1,
     ImportedHistoryRecordV1, InboundFailureKind, InboundState, InboxMessage, LocalIdentity,
     LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxDelivery, MlsOutboxEntry, OutboxEntry,
     OutboxSyncLeg, PeerProfile, Pending, PendingAccountIdentityResetV1, SentMessage,

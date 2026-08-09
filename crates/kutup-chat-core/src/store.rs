@@ -153,6 +153,52 @@ impl ChatStore {
         self.db.list_imported_history().await
     }
 
+    pub(crate) fn stage_history_transfer_journal(
+        &self,
+        journal: crate::HistoryTransferJournalV1,
+    ) {
+        self.pending
+            .borrow_mut()
+            .history_transfer_journals
+            .insert(journal.transfer_id.clone(), Some(journal));
+    }
+
+    pub(crate) fn stage_history_transfer_frame(
+        &self,
+        frame: kutup_chat_proto::ChatHistoryTransferFrameV1,
+    ) {
+        self.pending.borrow_mut().history_transfer_frames.insert(
+            (frame.transfer_id.clone(), frame.index),
+            Some(frame),
+        );
+    }
+
+    pub(crate) async fn load_history_transfer_journal(
+        &self,
+        transfer_id: &str,
+    ) -> ChatResult<Option<crate::HistoryTransferJournalV1>> {
+        self.db.load_history_transfer_journal(transfer_id).await
+    }
+
+    pub(crate) async fn list_history_transfer_frames(
+        &self,
+        transfer_id: &str,
+    ) -> ChatResult<Vec<kutup_chat_proto::ChatHistoryTransferFrameV1>> {
+        self.db.list_history_transfer_frames(transfer_id).await
+    }
+
+    pub(crate) fn delete_history_transfer(&self, transfer_id: &str, frame_indices: &[u32]) {
+        let mut pending = self.pending.borrow_mut();
+        pending
+            .history_transfer_journals
+            .insert(transfer_id.to_owned(), None);
+        for index in frame_indices {
+            pending
+                .history_transfer_frames
+                .insert((transfer_id.to_owned(), *index), None);
+        }
+    }
+
     /// Stage an outbox delete (the send was delivered).
     pub(crate) fn delete_outbox(&self, send_id: &str) {
         self.pending
