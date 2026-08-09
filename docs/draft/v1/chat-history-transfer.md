@@ -58,8 +58,10 @@ Frames must be strictly contiguous from zero. Repeated indexes are accepted
 only when their nonce and ciphertext digest are byte-for-byte identical.
 
 The final decrypted frame commits to the ordered plaintext-frame digest,
-record count and media byte count. The importer verifies this commitment
-before atomically exposing imported rows.
+record count and media byte count. The digest is SHA-256 over the domain
+`kutup/chat/history-archive-plaintext/v1\0`, followed by each preceding frame's
+big-endian 32-bit plaintext length and exact plaintext bytes. The importer
+verifies this commitment before atomically exposing imported rows.
 
 The relay stores only signed handshake objects and opaque frames. V1 bounds
 are: 15-minute handshake/relay expiry, 256 KiB maximum plaintext per frame,
@@ -107,7 +109,10 @@ single-responder constraints, but never validates archive plaintext.
    and device revocation cancellation.
 3. **Implemented:** core signing, signature verification,
    X25519/HKDF/XChaCha framing, and the immutable normalized imported-history
-   store for SQLite and IndexedDB.
+   store for SQLite and IndexedDB. Canonical bounded archive packing, ordered
+   frame-digest verification and conversion into isolated import rows are also
+   implemented; source-history collection and the crash-safe transfer journal
+   remain.
 4. Add WASM/transport bindings and the new/existing-device approval UI.
 5. Extend the two-browser federation harness with success, denial, expiry,
    tampering, replay, interrupted-resume and no-surviving-device cases.

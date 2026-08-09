@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
-use crate::AccountAddress;
+use crate::{AccountAddress, ChatContent, ConversationId};
 
 pub const CHAT_HISTORY_TRANSFER_VERSION: u16 = 1;
 pub const CHAT_HISTORY_TRANSFER_TTL_SECONDS: i64 = 15 * 60;
@@ -217,6 +217,171 @@ pub struct ChatHistoryTransferFrameV1 {
     pub nonce: String,
     /// Canonical padded base64 ciphertext including the 16-byte AEAD tag.
     pub ciphertext: String,
+}
+
+/// First decrypted archive frame. It binds all following plaintext to the
+/// authenticated handshake and fixes the complete snapshot bounds up front.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatHistoryArchiveHeaderV1 {
+    pub version: u16,
+    pub transfer_id: String,
+    pub account: String,
+    pub source_device_id: u32,
+    pub destination_device_id: u32,
+    pub manifest_sequence: u64,
+    pub transcript_hash: String,
+    pub created_at_unix: i64,
+    pub record_count: u32,
+    pub media_plaintext_bytes: u64,
+}
+
+impl ChatHistoryArchiveHeaderV1 {
+    pub fn validate(
+        &self,
+        acceptance: &ChatHistoryTransferAcceptanceV1,
+        transcript_hash: &[u8; 32],
+    ) -> Result<(), String> {
+        require_version(self.version)?;
+        require_uuid("transferId", &self.transfer_id)?;
+        require_account(&self.account)?;
+        require_device_id("sourceDeviceId", self.source_device_id)?;
+        require_device_id("destinationDeviceId", self.destination_device_id)?;
+        require_hash("transcriptHash", &self.transcript_hash)?;
+        if self.transfer_id != acceptance.transfer_id
+            || self.account != acceptance.account
+            || self.source_device_id != acceptance.responding_device_id
+            || self.destination_device_id != acceptance.requesting_device_id
+            || self.manifest_sequence != acceptance.manifest_sequence
+            || self.transcript_hash != hex::encode(transcript_hash)
+        {
+            return Err("history archive header does not bind the accepted transfer".into());
+        }
+        if self.created_at_unix < acceptance.created_at_unix
+            || self.created_at_unix > acceptance.expires_at_unix
+        {
+            return Err("history archive creation time escapes the accepted transfer".into());
+        }
+        if self.record_count > acceptance.record_limit {
+            return Err("history archive record count exceeds the accepted limit".into());
+        }
+        if self.media_plaintext_bytes > acceptance.plaintext_byte_limit {
+            return Err("history archive media bytes exceed the accepted limit".into());
+        }
+        Ok(())
+    }
+}
+
+/// One normalized, display-only history record inside an encrypted archive.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatHistoryArchiveRecordV1 {
+    pub source_record_id: String,
+    pub conversation: ConversationId,
+    pub sender: String,
+    pub sender_device_id: u32,
+    pub outgoing: bool,
+    pub content: ChatContent,
+    pub timestamp_ms: i64,
+    pub delivered: bool,
+}
+
+impl ChatHistoryArchiveRecordV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.source_record_id.is_empty() || self.source_record_id.len() > 256 {
+            return Err("history sourceRecordId must contain 1 to 256 bytes".into());
+        }
+        require_account(&self.sender)?;
+        require_device_id("senderDeviceId", self.sender_device_id)?;
+        match &self.conversation {
+            ConversationId::Direct { address } => require_account(&address.canonical())?,
+            ConversationId::Group { group_id } => require_uuid("groupId", group_id)?,
+        }
+        Ok(())
+    }
+}
+
+/// A bounded batch used for every middle plaintext frame.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatHistoryArchiveRecordsV1 {
+    pub version: u16,
+    pub records: Vec<ChatHistoryArchiveRecordV1>,
+}
+
+impl ChatHistoryArchiveRecordsV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        require_version(self.version)?;
+        if self.records.is_empty() {
+            return Err("history archive record frame must not be empty".into());
+        }
+        for record in &self.records {
+            record.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// Last decrypted frame. The digest covers the exact ordered plaintext bytes
+/// of every preceding header/record/media frame, never this self-referential
+/// final value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatHistoryArchiveFinalV1 {
+    pub version: u16,
+    pub transfer_id: String,
+    pub transcript_hash: String,
+    pub frame_count: u32,
+    pub record_count: u32,
+    pub media_plaintext_bytes: u64,
+    pub plaintext_digest: String,
+}
+
+impl ChatHistoryArchiveFinalV1 {
+    pub fn validate(&self, header: &ChatHistoryArchiveHeaderV1) -> Result<(), String> {
+        require_version(self.version)?;
+        require_uuid("transferId", &self.transfer_id)?;
+        require_hash("transcriptHash", &self.transcript_hash)?;
+        require_hash("plaintextDigest", &self.plaintext_digest)?;
+        if self.frame_count < 2 || self.frame_count > MAX_CHAT_HISTORY_TRANSFER_FRAMES {
+            return Err("history archive frame count is outside the V1 bounds".into());
+        }
+        if self.transfer_id != header.transfer_id
+            || self.transcript_hash != header.transcript_hash
+            || self.record_count != header.record_count
+            || self.media_plaintext_bytes != header.media_plaintext_bytes
+        {
+            return Err("history archive final commitment differs from its header".into());
+        }
+        Ok(())
+    }
+}
+
+/// Canonical JSON plaintext carried by one encrypted frame.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ChatHistoryArchiveFramePlaintextV1 {
+    Header(ChatHistoryArchiveHeaderV1),
+    Records(ChatHistoryArchiveRecordsV1),
+    Final(ChatHistoryArchiveFinalV1),
+}
+
+impl ChatHistoryArchiveFramePlaintextV1 {
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        serde_json::to_vec(self).map_err(|error| error.to_string())
+    }
+
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() > MAX_CHAT_HISTORY_TRANSFER_FRAME_PLAINTEXT as usize {
+            return Err("history archive plaintext frame exceeds the V1 limit".into());
+        }
+        let value: Self = serde_json::from_slice(bytes)
+            .map_err(|error| format!("invalid history archive frame: {error}"))?;
+        if value.canonical_bytes()? != bytes {
+            return Err("history archive frame is not canonical JSON".into());
+        }
+        Ok(value)
+    }
 }
 
 impl ChatHistoryTransferFrameV1 {
@@ -534,6 +699,80 @@ mod tests {
         assert_ne!(aad, changed.aad().unwrap());
         changed.plaintext_bytes = 4;
         assert!(changed.validate().is_err());
+    }
+
+    #[test]
+    fn archive_plaintext_is_canonical_bounded_and_transcript_committed() {
+        let request = request();
+        let acceptance = acceptance(&request);
+        let transcript_hash = [0x66; 32];
+        let header = ChatHistoryArchiveHeaderV1 {
+            version: 1,
+            transfer_id: request.transfer_id,
+            account: request.account,
+            source_device_id: 1,
+            destination_device_id: 2,
+            manifest_sequence: 4,
+            transcript_hash: hex::encode(transcript_hash),
+            created_at_unix: 1_100,
+            record_count: 1,
+            media_plaintext_bytes: 0,
+        };
+        header.validate(&acceptance, &transcript_hash).unwrap();
+
+        let records = ChatHistoryArchiveRecordsV1 {
+            version: 1,
+            records: vec![ChatHistoryArchiveRecordV1 {
+                source_record_id: "in:mailbox-1".into(),
+                conversation: ConversationId::direct(
+                    AccountAddress::federated("bob", "b.test").unwrap(),
+                ),
+                sender: "bob@b.test".into(),
+                sender_device_id: 1,
+                outgoing: false,
+                content: ChatContent::text("2026-08-09T00:00:00Z", 1, "hello"),
+                timestamp_ms: 1_700_000_000_000,
+                delivered: true,
+            }],
+        };
+        records.validate().unwrap();
+        let header_bytes = ChatHistoryArchiveFramePlaintextV1::Header(header.clone())
+            .canonical_bytes()
+            .unwrap();
+        let record_bytes = ChatHistoryArchiveFramePlaintextV1::Records(records)
+            .canonical_bytes()
+            .unwrap();
+        let mut digest = Sha256::new();
+        digest.update(b"kutup/chat/history-archive-plaintext/v1\0");
+        for bytes in [&header_bytes, &record_bytes] {
+            digest.update((bytes.len() as u32).to_be_bytes());
+            digest.update(bytes);
+        }
+        let final_frame = ChatHistoryArchiveFinalV1 {
+            version: 1,
+            transfer_id: header.transfer_id.clone(),
+            transcript_hash: header.transcript_hash.clone(),
+            frame_count: 3,
+            record_count: 1,
+            media_plaintext_bytes: 0,
+            plaintext_digest: hex::encode(digest.finalize()),
+        };
+        final_frame.validate(&header).unwrap();
+
+        let decoded =
+            ChatHistoryArchiveFramePlaintextV1::from_canonical_bytes(&header_bytes).unwrap();
+        assert_eq!(decoded, ChatHistoryArchiveFramePlaintextV1::Header(header));
+        let mut noncanonical = header_bytes;
+        noncanonical.push(b' ');
+        assert!(ChatHistoryArchiveFramePlaintextV1::from_canonical_bytes(&noncanonical).is_err());
+
+        let mut wrong_destination = acceptance.clone();
+        wrong_destination.requesting_device_id = 3;
+        if let ChatHistoryArchiveFramePlaintextV1::Header(header) = decoded {
+            assert!(header
+                .validate(&wrong_destination, &transcript_hash)
+                .is_err());
+        }
     }
 
     #[test]

@@ -6,13 +6,15 @@ use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use hkdf::Hkdf;
 use kutup_chat_proto::{
-    chat_history_transfer_transcript_hash, AccountManifestV1, ChatHistoryTransferAcceptanceV1,
-    ChatHistoryTransferFrameV1, ChatHistoryTransferRequestV1, CHAT_HISTORY_TRANSFER_VERSION,
-    MAX_CHAT_HISTORY_TRANSFER_FRAME_PLAINTEXT,
+    chat_history_transfer_transcript_hash, AccountManifestV1, ChatHistoryArchiveFinalV1,
+    ChatHistoryArchiveFramePlaintextV1, ChatHistoryArchiveHeaderV1, ChatHistoryArchiveRecordV1,
+    ChatHistoryArchiveRecordsV1, ChatHistoryTransferAcceptanceV1, ChatHistoryTransferFrameV1,
+    ChatHistoryTransferRequestV1, CHAT_HISTORY_TRANSFER_VERSION,
+    MAX_CHAT_HISTORY_TRANSFER_FRAMES, MAX_CHAT_HISTORY_TRANSFER_FRAME_PLAINTEXT,
 };
 use libsignal_protocol::{IdentityKeyPair, PublicKey};
 use rand::{CryptoRng, Rng};
-use sha2::Sha256;
+use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
@@ -20,6 +22,7 @@ use zeroize::Zeroizing;
 use crate::{ChatError, Result};
 
 const KEY_INFO: &[u8] = b"kutup/chat/history-transfer-key/v1\0";
+const ARCHIVE_DIGEST_DOMAIN: &[u8] = b"kutup/chat/history-archive-plaintext/v1\0";
 
 pub struct HistoryTransferEphemeralSecret(Zeroizing<[u8; 32]>);
 
@@ -44,6 +47,18 @@ pub struct PreparedHistoryTransferAcceptance {
     pub acceptance: ChatHistoryTransferAcceptanceV1,
     pub ephemeral_secret: HistoryTransferEphemeralSecret,
     pub transcript_hash: [u8; 32],
+}
+
+pub struct PreparedHistoryArchiveV1 {
+    pub frames: Vec<ChatHistoryTransferFrameV1>,
+    pub plaintext_digest: [u8; 32],
+    pub record_count: u32,
+}
+
+pub struct VerifiedHistoryArchiveV1 {
+    pub header: ChatHistoryArchiveHeaderV1,
+    pub records: Vec<crate::ImportedHistoryRecordV1>,
+    pub plaintext_digest: [u8; 32],
 }
 
 pub(crate) fn prepare_history_transfer_request<R: Rng + CryptoRng>(
@@ -244,6 +259,271 @@ pub fn open_history_transfer_frame(
         .map_err(|_| ChatError::Trust("history transfer frame authentication failed".into()))
 }
 
+pub fn prepare_history_archive<R: Rng + CryptoRng>(
+    acceptance: &ChatHistoryTransferAcceptanceV1,
+    transcript_hash: &[u8; 32],
+    records: Vec<ChatHistoryArchiveRecordV1>,
+    created_at_unix: i64,
+    key: &[u8; 32],
+    rng: &mut R,
+) -> Result<PreparedHistoryArchiveV1> {
+    acceptance.signing_bytes().map_err(ChatError::Invalid)?;
+    let record_count = u32::try_from(records.len())
+        .map_err(|_| ChatError::Invalid("history archive has too many records".into()))?;
+    if record_count > acceptance.record_limit {
+        return Err(ChatError::Invalid(
+            "history archive exceeds the accepted record limit".into(),
+        ));
+    }
+    let mut ids = std::collections::HashSet::with_capacity(records.len());
+    for record in &records {
+        record.validate().map_err(ChatError::Invalid)?;
+        if !ids.insert(record.source_record_id.as_str()) {
+            return Err(ChatError::Trust(
+                "history archive contains duplicate source record ids".into(),
+            ));
+        }
+    }
+
+    let header = ChatHistoryArchiveHeaderV1 {
+        version: CHAT_HISTORY_TRANSFER_VERSION,
+        transfer_id: acceptance.transfer_id.clone(),
+        account: acceptance.account.clone(),
+        source_device_id: acceptance.responding_device_id,
+        destination_device_id: acceptance.requesting_device_id,
+        manifest_sequence: acceptance.manifest_sequence,
+        transcript_hash: hex::encode(transcript_hash),
+        created_at_unix,
+        record_count,
+        media_plaintext_bytes: 0,
+    };
+    header
+        .validate(acceptance, transcript_hash)
+        .map_err(ChatError::Invalid)?;
+
+    let mut plaintexts = vec![
+        ChatHistoryArchiveFramePlaintextV1::Header(header.clone())
+            .canonical_bytes()
+            .map_err(ChatError::Content)?,
+    ];
+    let mut batch = Vec::new();
+    for record in records {
+        batch.push(record);
+        let candidate = records_plaintext(batch.clone())?;
+        if candidate.len() > MAX_CHAT_HISTORY_TRANSFER_FRAME_PLAINTEXT as usize {
+            let last = batch.pop().expect("batch was just populated");
+            if batch.is_empty() {
+                return Err(ChatError::Invalid(
+                    "one history record exceeds the frame plaintext limit".into(),
+                ));
+            }
+            plaintexts.push(records_plaintext(std::mem::take(&mut batch))?);
+            batch.push(last);
+        }
+    }
+    if !batch.is_empty() {
+        plaintexts.push(records_plaintext(batch)?);
+    }
+
+    let mut digest = Sha256::new();
+    digest.update(ARCHIVE_DIGEST_DOMAIN);
+    let mut total_plaintext = 0u64;
+    for plaintext in &plaintexts {
+        update_archive_digest(&mut digest, plaintext)?;
+        total_plaintext = total_plaintext
+            .checked_add(plaintext.len() as u64)
+            .ok_or_else(|| ChatError::Invalid("history archive size overflow".into()))?;
+    }
+    let plaintext_digest: [u8; 32] = digest.finalize().into();
+    let frame_count = u32::try_from(plaintexts.len() + 1)
+        .map_err(|_| ChatError::Invalid("history archive has too many frames".into()))?;
+    if frame_count > MAX_CHAT_HISTORY_TRANSFER_FRAMES {
+        return Err(ChatError::Invalid(
+            "history archive exceeds the frame-count limit".into(),
+        ));
+    }
+    let final_plaintext = ChatHistoryArchiveFramePlaintextV1::Final(ChatHistoryArchiveFinalV1 {
+        version: CHAT_HISTORY_TRANSFER_VERSION,
+        transfer_id: header.transfer_id.clone(),
+        transcript_hash: header.transcript_hash.clone(),
+        frame_count,
+        record_count,
+        media_plaintext_bytes: 0,
+        plaintext_digest: hex::encode(plaintext_digest),
+    })
+    .canonical_bytes()
+    .map_err(ChatError::Content)?;
+    total_plaintext = total_plaintext
+        .checked_add(final_plaintext.len() as u64)
+        .ok_or_else(|| ChatError::Invalid("history archive size overflow".into()))?;
+    if total_plaintext > acceptance.plaintext_byte_limit {
+        return Err(ChatError::Invalid(
+            "history archive exceeds the accepted plaintext limit".into(),
+        ));
+    }
+    plaintexts.push(final_plaintext);
+
+    let mut frames = Vec::with_capacity(plaintexts.len());
+    for (index, plaintext) in plaintexts.iter().enumerate() {
+        frames.push(seal_history_transfer_frame(
+            &acceptance.transfer_id,
+            transcript_hash,
+            index as u32,
+            index + 1 == plaintexts.len(),
+            plaintext,
+            key,
+            rng,
+        )?);
+    }
+    Ok(PreparedHistoryArchiveV1 {
+        frames,
+        plaintext_digest,
+        record_count,
+    })
+}
+
+pub fn verify_history_archive(
+    acceptance: &ChatHistoryTransferAcceptanceV1,
+    transcript_hash: &[u8; 32],
+    frames: &[ChatHistoryTransferFrameV1],
+    key: &[u8; 32],
+) -> Result<VerifiedHistoryArchiveV1> {
+    acceptance.signing_bytes().map_err(ChatError::Invalid)?;
+    if frames.len() < 2 || frames.len() > MAX_CHAT_HISTORY_TRANSFER_FRAMES as usize {
+        return Err(ChatError::Invalid(
+            "history archive frame count is outside the V1 bounds".into(),
+        ));
+    }
+    let mut header = None;
+    let mut records = Vec::new();
+    let mut source_ids = std::collections::HashSet::new();
+    let mut digest = Sha256::new();
+    digest.update(ARCHIVE_DIGEST_DOMAIN);
+    let mut total_plaintext = 0u64;
+
+    for (position, frame) in frames.iter().enumerate() {
+        if frame.index as usize != position
+            || frame.final_frame != (position + 1 == frames.len())
+        {
+            return Err(ChatError::Trust(
+                "history archive frames are not exactly contiguous".into(),
+            ));
+        }
+        let plaintext = open_history_transfer_frame(
+            frame,
+            &acceptance.transfer_id,
+            transcript_hash,
+            key,
+        )?;
+        total_plaintext = total_plaintext
+            .checked_add(plaintext.len() as u64)
+            .ok_or_else(|| ChatError::Invalid("history archive size overflow".into()))?;
+        if total_plaintext > acceptance.plaintext_byte_limit {
+            return Err(ChatError::Invalid(
+                "history archive exceeds the accepted plaintext limit".into(),
+            ));
+        }
+        let decoded = ChatHistoryArchiveFramePlaintextV1::from_canonical_bytes(&plaintext)
+            .map_err(ChatError::Invalid)?;
+        match (position, decoded) {
+            (0, ChatHistoryArchiveFramePlaintextV1::Header(value)) => {
+                value
+                    .validate(acceptance, transcript_hash)
+                    .map_err(ChatError::Trust)?;
+                update_archive_digest(&mut digest, &plaintext)?;
+                header = Some(value);
+            }
+            (_, ChatHistoryArchiveFramePlaintextV1::Records(batch))
+                if position + 1 < frames.len() =>
+            {
+                batch.validate().map_err(ChatError::Invalid)?;
+                for record in batch.records {
+                    if !source_ids.insert(record.source_record_id.clone()) {
+                        return Err(ChatError::Trust(
+                            "history archive repeats a source record id".into(),
+                        ));
+                    }
+                    records.push(record);
+                }
+                update_archive_digest(&mut digest, &plaintext)?;
+            }
+            (_, ChatHistoryArchiveFramePlaintextV1::Final(final_value))
+                if position + 1 == frames.len() =>
+            {
+                let header = header.as_ref().ok_or_else(|| {
+                    ChatError::Trust("history archive is missing its header".into())
+                })?;
+                final_value.validate(header).map_err(ChatError::Trust)?;
+                let computed: [u8; 32] = digest.finalize().into();
+                if final_value.frame_count != frames.len() as u32
+                    || final_value.record_count != records.len() as u32
+                    || final_value.plaintext_digest != hex::encode(computed)
+                {
+                    return Err(ChatError::Trust(
+                        "history archive final commitment does not verify".into(),
+                    ));
+                }
+                let imported = records
+                    .into_iter()
+                    .map(|record| archive_record_to_imported(header, record))
+                    .collect::<Result<Vec<_>>>()?;
+                return Ok(VerifiedHistoryArchiveV1 {
+                    header: header.clone(),
+                    records: imported,
+                    plaintext_digest: computed,
+                });
+            }
+            _ => {
+                return Err(ChatError::Trust(
+                    "history archive frame kind appears out of order".into(),
+                ))
+            }
+        }
+    }
+    Err(ChatError::Trust(
+        "history archive is missing its final commitment".into(),
+    ))
+}
+
+fn records_plaintext(records: Vec<ChatHistoryArchiveRecordV1>) -> Result<Vec<u8>> {
+    let batch = ChatHistoryArchiveRecordsV1 {
+        version: CHAT_HISTORY_TRANSFER_VERSION,
+        records,
+    };
+    batch.validate().map_err(ChatError::Invalid)?;
+    ChatHistoryArchiveFramePlaintextV1::Records(batch)
+        .canonical_bytes()
+        .map_err(ChatError::Content)
+}
+
+fn update_archive_digest(digest: &mut Sha256, plaintext: &[u8]) -> Result<()> {
+    let length = u32::try_from(plaintext.len())
+        .map_err(|_| ChatError::Invalid("history archive frame length overflow".into()))?;
+    digest.update(length.to_be_bytes());
+    digest.update(plaintext);
+    Ok(())
+}
+
+fn archive_record_to_imported(
+    header: &ChatHistoryArchiveHeaderV1,
+    record: ChatHistoryArchiveRecordV1,
+) -> Result<crate::ImportedHistoryRecordV1> {
+    record.validate().map_err(ChatError::Invalid)?;
+    Ok(crate::ImportedHistoryRecordV1 {
+        transfer_id: header.transfer_id.clone(),
+        source_record_id: record.source_record_id,
+        source_device_id: header.source_device_id,
+        conversation: record.conversation,
+        sender: record.sender,
+        sender_device_id: record.sender_device_id,
+        outgoing: record.outgoing,
+        content: serde_json::to_vec(&record.content)
+            .map_err(|error| ChatError::Content(error.to_string()))?,
+        timestamp_ms: record.timestamp_ms,
+        delivered: record.delivered,
+    })
+}
+
 fn exact_manifest_device<'a>(
     manifest: &'a AccountManifestV1,
     account: &str,
@@ -358,6 +638,52 @@ mod tests {
         )
         .unwrap();
         assert_eq!(&*sender_key, &*recipient_key);
+
+        let archive = prepare_history_archive(
+            &prepared_acceptance.acceptance,
+            &transcript,
+            vec![ChatHistoryArchiveRecordV1 {
+                source_record_id: "in:mailbox-1".into(),
+                conversation: kutup_chat_proto::ConversationId::direct(
+                    kutup_chat_proto::AccountAddress::federated("bob", "b.test").unwrap(),
+                ),
+                sender: "bob@b.test".into(),
+                sender_device_id: 1,
+                outgoing: false,
+                content: kutup_chat_proto::ChatContent::text(
+                    "2026-08-09T00:00:00Z",
+                    1,
+                    "hello from history",
+                ),
+                timestamp_ms: 1_700_000_000_000,
+                delivered: true,
+            }],
+            1_002,
+            &sender_key,
+            &mut rng,
+        )
+        .unwrap();
+        assert_eq!(archive.frames.len(), 3);
+        let verified = verify_history_archive(
+            &prepared_acceptance.acceptance,
+            &transcript,
+            &archive.frames,
+            &recipient_key,
+        )
+        .unwrap();
+        assert_eq!(verified.records.len(), 1);
+        assert_eq!(verified.records[0].source_device_id, 1);
+        assert_eq!(verified.plaintext_digest, archive.plaintext_digest);
+        let mut reordered = archive.frames.clone();
+        reordered.swap(0, 1);
+        assert!(verify_history_archive(
+            &prepared_acceptance.acceptance,
+            &transcript,
+            &reordered,
+            &recipient_key,
+        )
+        .is_err());
+
         let frame = seal_history_transfer_frame(
             &prepared_request.request.transfer_id,
             &transcript,

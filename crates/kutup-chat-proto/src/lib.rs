@@ -32,11 +32,13 @@ pub use federation::{
     FederationDeliveryResponse, FEDERATED_CHAT_FEATURE,
 };
 pub use history_transfer::{
-    chat_history_transfer_transcript_hash, ChatHistoryTransferAcceptanceV1,
-    ChatHistoryTransferCompletionV1, ChatHistoryTransferFrameV1, ChatHistoryTransferRequestV1,
-    CHAT_HISTORY_TRANSFER_TTL_SECONDS, CHAT_HISTORY_TRANSFER_VERSION,
-    MAX_CHAT_HISTORY_TRANSFER_FRAMES, MAX_CHAT_HISTORY_TRANSFER_FRAME_PLAINTEXT,
-    MAX_CHAT_HISTORY_TRANSFER_PLAINTEXT, MAX_CHAT_HISTORY_TRANSFER_RECORDS,
+    chat_history_transfer_transcript_hash, ChatHistoryArchiveFinalV1,
+    ChatHistoryArchiveFramePlaintextV1, ChatHistoryArchiveHeaderV1, ChatHistoryArchiveRecordV1,
+    ChatHistoryArchiveRecordsV1, ChatHistoryTransferAcceptanceV1, ChatHistoryTransferCompletionV1,
+    ChatHistoryTransferFrameV1, ChatHistoryTransferRequestV1, CHAT_HISTORY_TRANSFER_TTL_SECONDS,
+    CHAT_HISTORY_TRANSFER_VERSION, MAX_CHAT_HISTORY_TRANSFER_FRAMES,
+    MAX_CHAT_HISTORY_TRANSFER_FRAME_PLAINTEXT, MAX_CHAT_HISTORY_TRANSFER_PLAINTEXT,
+    MAX_CHAT_HISTORY_TRANSFER_RECORDS,
 };
 pub use identity::{AccountAddress, AddressError, ConversationId};
 pub use media::{

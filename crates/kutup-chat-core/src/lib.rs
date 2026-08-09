@@ -56,9 +56,10 @@ pub use manifest::{
     ManifestPolicy, SafetyNumberV1,
 };
 pub use history_transfer::{
-    derive_history_transfer_key, open_history_transfer_frame, seal_history_transfer_frame,
-    verify_history_transfer_acceptance, verify_history_transfer_request,
-    HistoryTransferEphemeralSecret, PreparedHistoryTransferAcceptance, PreparedHistoryTransferRequest,
+    derive_history_transfer_key, open_history_transfer_frame, prepare_history_archive,
+    seal_history_transfer_frame, verify_history_archive, verify_history_transfer_acceptance,
+    verify_history_transfer_request, HistoryTransferEphemeralSecret, PreparedHistoryArchiveV1,
+    PreparedHistoryTransferAcceptance, PreparedHistoryTransferRequest, VerifiedHistoryArchiveV1,
 };
 pub use mls_engine::{
     AnonymousMlsRecipientDevice, AppliedInboundMlsApplication, AppliedInboundMlsCommit,

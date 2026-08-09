@@ -56,8 +56,10 @@ The following are release blockers:
   frozen, the bounded opaque homeserver relay is implemented, and the shared
   core now performs manifest-bound device signatures plus transcript-bound
   ephemeral X25519/HKDF/XChaCha framing, with imported display history isolated
-  transactionally from live ratchet state in SQLite and IndexedDB; archive
-  export/framing orchestration and approval UI remain.** The
+  transactionally from live ratchet state in SQLite and IndexedDB; canonical
+  archive packing and final digest verification are implemented. Local-history
+  export, the crash-safe transfer journal, relay bindings and approval UI
+  remain.** The
   complete requirement is explicit review/revocation plus an authenticated,
   end-to-end encrypted history transfer from
   an existing device to a newly linked browser installation. Clearing browser
