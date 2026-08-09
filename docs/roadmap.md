@@ -57,9 +57,9 @@ The following are release blockers:
   core now performs manifest-bound device signatures plus transcript-bound
   ephemeral X25519/HKDF/XChaCha framing, with imported display history isolated
   transactionally from live ratchet state in SQLite and IndexedDB; canonical
-  archive packing and final digest verification are implemented. Local-history
-  export, the crash-safe transfer journal, relay bindings and approval UI
-  remain.** The
+  archive packing, final digest verification, and bounded deterministic export
+  across direct, MLS and previously imported display history are implemented.
+  The crash-safe transfer journal, relay bindings and approval UI remain.** The
   complete requirement is explicit review/revocation plus an authenticated,
   end-to-end encrypted history transfer from
   an existing device to a newly linked browser installation. Clearing browser

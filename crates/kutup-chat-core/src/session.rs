@@ -370,6 +370,92 @@ impl Session {
         self.store.list_imported_history().await
     }
 
+    /// Collect a deterministic, display-only snapshot suitable for archive
+    /// packing. The newest `record_limit` rows are retained and returned in
+    /// chronological order. No session, cursor, outbox, or MLS state is copied.
+    pub async fn history_archive_records(
+        &self,
+        record_limit: u32,
+    ) -> Result<Vec<kutup_chat_proto::ChatHistoryArchiveRecordV1>> {
+        if record_limit == 0
+            || record_limit > kutup_chat_proto::MAX_CHAT_HISTORY_TRANSFER_RECORDS
+        {
+            return Err(ChatError::Invalid(
+                "history archive record limit is outside the V1 bounds".into(),
+            ));
+        }
+        let db = self.store.db();
+        let mut records = Vec::new();
+        for message in db.list_messages().await? {
+            records.push(kutup_chat_proto::ChatHistoryArchiveRecordV1 {
+                source_record_id: format!("direct-in:{}", message.id),
+                conversation: direct_conversation(&message.peer)?,
+                sender: canonical_account(&message.peer)?,
+                sender_device_id: message.sender_device_id,
+                outgoing: false,
+                content: decode_canonical_history_content(&message.content)?,
+                timestamp_ms: message.received_at,
+                delivered: true,
+            });
+        }
+        for message in db.list_sent_messages().await? {
+            records.push(kutup_chat_proto::ChatHistoryArchiveRecordV1 {
+                source_record_id: format!("direct-out:{}", message.send_id),
+                conversation: direct_conversation(&message.peer)?,
+                sender: self.user().to_owned(),
+                sender_device_id: self.device_id(),
+                outgoing: true,
+                content: decode_canonical_history_content(&message.content)?,
+                timestamp_ms: message.created_at,
+                delivered: message.delivered,
+            });
+        }
+        for message in db.list_mls_messages().await? {
+            records.push(kutup_chat_proto::ChatHistoryArchiveRecordV1 {
+                source_record_id: format!("mls:{}", message.record_id),
+                conversation: kutup_chat_proto::ConversationId::Group {
+                    group_id: uuid::Uuid::from_bytes(message.conversation_id).to_string(),
+                },
+                sender: canonical_account(&message.sender)?,
+                sender_device_id: message.sender_device_id,
+                outgoing: message.outgoing,
+                content: decode_canonical_history_content(&message.content)?,
+                timestamp_ms: message.timestamp_ms,
+                delivered: message.delivered,
+            });
+        }
+        for message in db.list_imported_history().await? {
+            let mut digest = Sha256::new();
+            digest.update(b"kutup/chat/imported-source-record/v1\0");
+            digest.update(message.transfer_id.as_bytes());
+            digest.update([0]);
+            digest.update(message.source_record_id.as_bytes());
+            records.push(kutup_chat_proto::ChatHistoryArchiveRecordV1 {
+                source_record_id: format!("imported:{}", hex::encode(digest.finalize())),
+                conversation: message.conversation,
+                sender: canonical_account(&message.sender)?,
+                sender_device_id: message.sender_device_id,
+                outgoing: message.outgoing,
+                content: decode_canonical_history_content(&message.content)?,
+                timestamp_ms: message.timestamp_ms,
+                delivered: message.delivered,
+            });
+        }
+        for record in &records {
+            record.validate().map_err(ChatError::Invalid)?;
+        }
+        records.sort_by(|left, right| {
+            left.timestamp_ms
+                .cmp(&right.timestamp_ms)
+                .then_with(|| left.source_record_id.cmp(&right.source_record_id))
+        });
+        let keep = record_limit as usize;
+        if records.len() > keep {
+            records.drain(..records.len() - keep);
+        }
+        Ok(records)
+    }
+
     /// Bind a bare account opened from an authenticated local session to the
     /// server's canonical federation domain. This must happen before any
     /// account comparison, self-sync encryption, or manifest publication.
@@ -2391,6 +2477,39 @@ fn current_profile_key(content: &kutup_chat_proto::ChatContent) -> Option<&str> 
 
 /// Look up the bundle for `device_id` in a served set (a 409 names a device the
 /// server should also have handed us a bundle for).
+fn canonical_account(value: &str) -> Result<String> {
+    let address: kutup_chat_proto::AccountAddress = value
+        .parse()
+        .map_err(|error: kutup_chat_proto::AddressError| ChatError::Invalid(error.to_string()))?;
+    let canonical = address.canonical();
+    if canonical != value {
+        return Err(ChatError::Invalid(
+            "history account address is not canonical".into(),
+        ));
+    }
+    Ok(canonical)
+}
+
+fn direct_conversation(value: &str) -> Result<kutup_chat_proto::ConversationId> {
+    let address: kutup_chat_proto::AccountAddress = canonical_account(value)?
+        .parse()
+        .map_err(|error: kutup_chat_proto::AddressError| ChatError::Invalid(error.to_string()))?;
+    Ok(kutup_chat_proto::ConversationId::direct(address))
+}
+
+fn decode_canonical_history_content(bytes: &[u8]) -> Result<ChatContent> {
+    let content: ChatContent = serde_json::from_slice(bytes)
+        .map_err(|error| ChatError::Content(error.to_string()))?;
+    let canonical =
+        serde_json::to_vec(&content).map_err(|error| ChatError::Content(error.to_string()))?;
+    if canonical != bytes {
+        return Err(ChatError::Invalid(
+            "durable history content is not canonical".into(),
+        ));
+    }
+    Ok(content)
+}
+
 fn find_bundle(bundles: &[DevicePreKeyBundle], device_id: u32) -> Result<&DevicePreKeyBundle> {
     bundles
         .iter()
@@ -2468,7 +2587,7 @@ mod sealed_tests {
     use rand::rngs::OsRng;
     use rand::TryRngCore as _;
 
-    use crate::SqliteChatDb;
+    use crate::{Pending, SqliteChatDb};
     use kutup_chat_proto::{DeliveredEnvelope, DevicePreKeyBundle, EnvelopeType};
 
     fn bundle(session: &Session) -> DevicePreKeyBundle {
@@ -2486,6 +2605,99 @@ mod sealed_tests {
                 .unwrap_or_else(|| registration.last_resort_kyber_pre_key.clone()),
             one_time_pre_key: registration.one_time_pre_keys.first().cloned(),
         }
+    }
+
+    #[test]
+    fn archive_snapshot_merges_domains_and_keeps_the_newest_bound() {
+        let mut rng = OsRng.unwrap_err();
+        let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
+        let session = block_on(Session::generate(
+            db.clone(),
+            "alice@a.test",
+            1,
+            1,
+            &mut rng,
+        ))
+        .unwrap();
+        let content = |text: &str, seq| {
+            serde_json::to_vec(&ChatContent::text(
+                "2026-08-09T00:00:00Z",
+                seq,
+                text,
+            ))
+            .unwrap()
+        };
+        let mut pending = Pending::default();
+        pending.messages.push(InboxMessage {
+            id: "mailbox-1".into(),
+            peer: "bob@b.test".into(),
+            sender_device_id: 1,
+            cursor: 1,
+            content: content("old inbound", 1),
+            received_at: 100,
+        });
+        pending.sent_messages.insert(
+            "send-1".into(),
+            SentMessage {
+                send_id: "send-1".into(),
+                peer: "bob@b.test".into(),
+                content: content("sent", 2),
+                created_at: 200,
+                delivered_at: Some(201),
+                delivered: true,
+                deduplicated: false,
+            },
+        );
+        let imported = crate::ImportedHistoryRecordV1 {
+            transfer_id: "11111111-1111-4111-8111-111111111111".into(),
+            source_record_id: "older-source".into(),
+            source_device_id: 2,
+            conversation: direct_conversation("carol@c.test").unwrap(),
+            sender: "carol@c.test".into(),
+            sender_device_id: 2,
+            outgoing: false,
+            content: content("imported", 3),
+            timestamp_ms: 300,
+            delivered: true,
+        };
+        pending.imported_history.insert(
+            (
+                imported.transfer_id.clone(),
+                imported.source_record_id.clone(),
+            ),
+            imported,
+        );
+        pending.mls_messages.insert(
+            "in:mls-1".into(),
+            crate::MlsHistoryMessage {
+                record_id: "in:mls-1".into(),
+                message_id: "22222222-2222-4222-8222-222222222222".into(),
+                conversation_id: [4; 16],
+                incarnation: 1,
+                mls_group_id: vec![5; 16],
+                epoch: 1,
+                sender: "dave@d.test".into(),
+                sender_device_id: 1,
+                outgoing: false,
+                cursor: Some(2),
+                transport_digest: [6; 32],
+                content: content("group", 4),
+                timestamp_ms: 400,
+                delivered: true,
+                deduplicated: false,
+            },
+        );
+        block_on(db.apply(&pending)).unwrap();
+
+        let snapshot = block_on(session.history_archive_records(3)).unwrap();
+        assert_eq!(snapshot.len(), 3);
+        assert_eq!(snapshot[0].source_record_id, "direct-out:send-1");
+        assert!(snapshot[1].source_record_id.starts_with("imported:"));
+        assert_eq!(snapshot[2].source_record_id, "mls:in:mls-1");
+        assert!(matches!(
+            snapshot[2].conversation,
+            kutup_chat_proto::ConversationId::Group { .. }
+        ));
     }
 
     #[test]

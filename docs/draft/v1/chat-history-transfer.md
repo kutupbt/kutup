@@ -111,8 +111,9 @@ single-responder constraints, but never validates archive plaintext.
    X25519/HKDF/XChaCha framing, and the immutable normalized imported-history
    store for SQLite and IndexedDB. Canonical bounded archive packing, ordered
    frame-digest verification and conversion into isolated import rows are also
-   implemented; source-history collection and the crash-safe transfer journal
-   remain.
+   implemented. Source-history collection deterministically merges direct, MLS
+   and prior imported display rows and retains the newest negotiated bound; the
+   crash-safe transfer journal remains.
 4. Add WASM/transport bindings and the new/existing-device approval UI.
 5. Extend the two-browser federation harness with success, denial, expiry,
    tampering, replay, interrupted-resume and no-surviving-device cases.
