@@ -51,8 +51,11 @@ The following are release blockers:
   epochs;
 - an administrator-controlled 1–10 active-device limit (default and hard cap
   10), enforced identically by every Chat and identity path;
-- Signal-class web-device continuity: explicit active-installation review and
-  revocation plus an authenticated, end-to-end encrypted history transfer from
+- Signal-class web-device continuity: **active-installation review and safe
+  revocation are implemented; the canonical transfer handshake/frame types are
+  frozen, while relay, archive import and approval UI remain.** The complete
+  requirement is explicit review/revocation plus an authenticated,
+  end-to-end encrypted history transfer from
   an existing device to a newly linked browser installation. Clearing browser
   storage, using a private window, or losing a profile must never create a
   silent permanent mailbox. The homeserver never decrypts or re-encrypts

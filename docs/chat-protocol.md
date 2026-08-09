@@ -109,6 +109,9 @@ If no authorized old device or E2EE backup survives, old device-addressed
 ciphertext is unrecoverable and the UI must disclose that condition. It must
 not silently render an empty history as proof that no messages were sent.
 
+The canonical handshake, framing, snapshot/import boundary and relay lifecycle
+are specified in [`draft/v1/chat-history-transfer.md`](draft/v1/chat-history-transfer.md).
+
 `AccountManifestV1` contains:
 
 - canonical account and account-identity suite;

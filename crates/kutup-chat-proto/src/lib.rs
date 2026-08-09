@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod content;
 pub mod federation;
+mod history_transfer;
 mod identity;
 mod media;
 mod mls;
@@ -29,6 +30,13 @@ pub use content::{ChatContent, ContactControlBody, ContactState, SentTranscriptB
 pub use federation::{
     FederatedChatTransaction, FederationDeliveryError, FederationDeliveryRejection,
     FederationDeliveryResponse, FEDERATED_CHAT_FEATURE,
+};
+pub use history_transfer::{
+    chat_history_transfer_transcript_hash, ChatHistoryTransferAcceptanceV1,
+    ChatHistoryTransferCompletionV1, ChatHistoryTransferFrameV1, ChatHistoryTransferRequestV1,
+    CHAT_HISTORY_TRANSFER_TTL_SECONDS, CHAT_HISTORY_TRANSFER_VERSION,
+    MAX_CHAT_HISTORY_TRANSFER_FRAMES, MAX_CHAT_HISTORY_TRANSFER_FRAME_PLAINTEXT,
+    MAX_CHAT_HISTORY_TRANSFER_PLAINTEXT, MAX_CHAT_HISTORY_TRANSFER_RECORDS,
 };
 pub use identity::{AccountAddress, AddressError, ConversationId};
 pub use media::{
