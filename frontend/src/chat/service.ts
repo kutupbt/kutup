@@ -5,6 +5,7 @@ import type {
   AccountAddress,
   ChatCapabilities,
   ChatAttachmentDescriptorV1,
+  ChatDevice,
   ChatHistoryEntry,
   ContactRecord,
   ConversationId,
@@ -85,7 +86,7 @@ export class ChatService {
     lockName: string,
     channelName: string,
     capabilities: ChatCapabilities,
-    transport: ApiChatTransport,
+    private readonly transport: ApiChatTransport,
     private readonly username: string,
     private readonly attachmentLedger: ChatAttachmentLedger | null,
   ) {
@@ -200,6 +201,26 @@ export class ChatService {
 
   profile(): Promise<ChatProfile> {
     return this.withLock(() => this.client.profile())
+  }
+
+  devices(): Promise<ChatDevice[]> {
+    return this.transport.listDevices()
+  }
+
+  async revokeDevice(deviceId: number): Promise<ChatDevice[]> {
+    if (deviceId === this.deviceId) {
+      throw new Error('the current Chat device cannot revoke itself')
+    }
+    await this.withMlsWorkflow(async () => {
+      await this.transport.revokeDevice(deviceId)
+      const manifest = await this.withLock(() => this.client.syncManifest())
+      if (!this.mls) return
+      const sequence = requireManifestSequence(manifest)
+      await this.mls.maintainKeyPackages(sequence)
+      await this.mls.reconcileLinkedDevices(requireMlsManifestDeviceIds(manifest))
+    })
+    this.notifyPeers()
+    return this.devices()
   }
 
   async profiles(): Promise<PeerChatProfile[]> {
@@ -745,12 +766,12 @@ export class ChatService {
   }
 
   private async initializeMls(): Promise<void> {
-    if (!this.mls) return
     await this.withMlsWorkflow(async () => {
       const manifest = await this.withLock(() => this.client.syncManifest())
+      if (!this.mls) return
       const sequence = requireManifestSequence(manifest)
-      await this.mls?.maintainKeyPackages(sequence)
-      await this.mls?.reconcileLinkedDevices(requireMlsManifestDeviceIds(manifest))
+      await this.mls.maintainKeyPackages(sequence)
+      await this.mls.reconcileLinkedDevices(requireMlsManifestDeviceIds(manifest))
     })
   }
 

@@ -2,6 +2,7 @@ import axios from 'axios'
 import api from '@/api/client'
 import { apiBase } from '@/lib/apiBase'
 import type {
+  ChatDevice,
   ChatTransportPort,
   MlsInvitationDecision,
   MlsInvitationDecisionResponse,
@@ -14,6 +15,16 @@ import type {
 
 /** Authenticated REST adapter consumed by the Rust engine. */
 export class ApiChatTransport implements ChatTransportPort {
+  async listDevices(): Promise<ChatDevice[]> {
+    return api
+      .get<{ devices: ChatDevice[] }>('/chat/device')
+      .then((response) => response.data.devices)
+  }
+
+  async revokeDevice(deviceId: number): Promise<void> {
+    await api.delete(`/chat/device/${deviceId}`)
+  }
+
   async registerDevice(request: unknown): Promise<unknown> {
     return api.post('/chat/device', request).then((response) => response.data)
   }

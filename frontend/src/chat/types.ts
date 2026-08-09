@@ -136,6 +136,14 @@ export interface PeerChatProfile extends ChatProfile {
   peer: string
 }
 
+export interface ChatDevice {
+  deviceId: number
+  suite: number
+  name: string
+  createdAt: string
+  lastSeenAt?: string | null
+}
+
 export interface InboundAttention {
   id: string
   cursor: string

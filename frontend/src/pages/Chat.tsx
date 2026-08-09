@@ -14,6 +14,7 @@ import {
   Loader2,
   MessageCircle,
   MessageSquareWarning,
+  MonitorSmartphone,
   Plus,
   Paperclip,
   QrCode,
@@ -59,6 +60,7 @@ import {
 } from '@/chat/identity'
 import type {
   ChatCapabilities,
+  ChatDevice,
   ChatHistoryEntry,
   ChatProfile,
   ContactRecord,
@@ -152,6 +154,10 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [groupMaximumPlaintext, setGroupMaximumPlaintext] = useState('')
   const [selectedSafety, setSelectedSafety] = useState<SafetyNumberV1 | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [devicesOpen, setDevicesOpen] = useState(false)
+  const [devices, setDevices] = useState<ChatDevice[]>([])
+  const [devicesLoading, setDevicesLoading] = useState(false)
+  const [deviceRevoking, setDeviceRevoking] = useState<number | null>(null)
   const [mediaStorageOpen, setMediaStorageOpen] = useState(false)
   const [mediaStorage, setMediaStorage] = useState<ChatMediaStorageView | null>(null)
   const [mediaStorageLoading, setMediaStorageLoading] = useState(false)
@@ -441,6 +447,23 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   }, [contacts.length, history.length, noteSelected, selectedAddress, service])
 
   useEffect(() => {
+    if (!devicesOpen || !service) return
+    let cancelled = false
+    setDevicesLoading(true)
+    void service.devices()
+      .then(nextDevices => {
+        if (!cancelled) setDevices(nextDevices)
+      })
+      .catch(cause => {
+        if (!cancelled) toast.error(errorMessage(cause, t))
+      })
+      .finally(() => {
+        if (!cancelled) setDevicesLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [devicesOpen, service, t])
+
+  useEffect(() => {
     if (!mediaStorageOpen || !service || !capabilities.media) return
     let cancelled = false
     setMediaStorageLoading(true)
@@ -456,6 +479,21 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       })
     return () => { cancelled = true }
   }, [capabilities.media, mediaStorageOpen, service, t])
+
+  async function revokeChatDevice(device: ChatDevice) {
+    if (!service || device.deviceId === service.deviceId || !window.confirm(
+      t('chat.devices.confirm', { device: device.name || `Device ${device.deviceId}` }),
+    )) return
+    setDeviceRevoking(device.deviceId)
+    try {
+      setDevices(await service.revokeDevice(device.deviceId))
+      toast.success(t('chat.devices.revoked'))
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setDeviceRevoking(null)
+    }
+  }
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -868,6 +906,84 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 {t('chat.device', { device: service?.deviceId ?? '…' })}
               </p>
             </div>
+            <Dialog open={devicesOpen} onOpenChange={setDevicesOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="shrink-0"
+                  disabled={!service}
+                  aria-label={t('chat.devices.open')}
+                  data-testid="chat-devices-button"
+                >
+                  <MonitorSmartphone className="h-5 w-5" />
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>{t('chat.devices.title')}</DialogTitle>
+                  <DialogDescription>{t('chat.devices.description')}</DialogDescription>
+                </DialogHeader>
+                {devicesLoading ? (
+                  <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    {t('chat.devices.loading')}
+                  </div>
+                ) : (
+                  <div className="grid max-h-[55vh] gap-2 overflow-y-auto" data-testid="chat-devices-list">
+                    {devices.map(device => {
+                      const current = device.deviceId === service?.deviceId
+                      const lastSeen = formatDeviceTime(device.lastSeenAt)
+                      return (
+                        <div
+                          key={device.deviceId}
+                          className="flex items-center gap-3 rounded-lg border p-3"
+                          data-testid={`chat-device-${device.deviceId}`}
+                        >
+                          <MonitorSmartphone className="h-5 w-5 shrink-0 text-muted-foreground" />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="truncate text-sm font-medium">
+                                {device.name || t('chat.device', { device: device.deviceId })}
+                              </span>
+                              {current && (
+                                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                                  {t('chat.devices.current')}
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {t('chat.devices.created', { time: formatDeviceTime(device.createdAt) })}
+                              {' · '}
+                              {lastSeen
+                                ? t('chat.devices.lastSeen', { time: lastSeen })
+                                : t('chat.devices.neverSeen')}
+                            </p>
+                          </div>
+                          {!current && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={deviceRevoking !== null}
+                              onClick={() => void revokeChatDevice(device)}
+                              data-testid={`chat-device-revoke-${device.deviceId}`}
+                            >
+                              {deviceRevoking === device.deviceId
+                                ? <Loader2 className="h-4 w-4 animate-spin" />
+                                : t('chat.devices.revoke')}
+                            </Button>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  {t('chat.devices.historyWarning')}
+                </p>
+              </DialogContent>
+            </Dialog>
             {capabilities.media && (
               <Dialog open={mediaStorageOpen} onOpenChange={setMediaStorageOpen}>
                 <DialogTrigger asChild>
@@ -2169,6 +2285,16 @@ function formatTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return ''
   return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(date)
+}
+
+function formatDeviceTime(value?: string | null): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date)
 }
 
 function errorMessage(
