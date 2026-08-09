@@ -32,6 +32,10 @@ use crate::db::{
     OutboxEntry, OutboxLeg, OutboxSyncLeg, PeerProfile, SentMessage,
 };
 use crate::error::{ChatError, Result};
+use crate::history_transfer::{
+    prepare_history_transfer_acceptance, prepare_history_transfer_request,
+    PreparedHistoryTransferAcceptance, PreparedHistoryTransferRequest,
+};
 use crate::keys;
 use crate::manifest::{verify_bundle_trust, verify_manifest_evidence, ManifestPolicy};
 use crate::store::ChatStore;
@@ -248,6 +252,45 @@ impl Session {
 
     pub fn user(&self) -> &str {
         &self.account
+    }
+
+    /// Create and device-sign a short-lived request to copy display history
+    /// from another device on this account.
+    pub fn prepare_history_transfer_request<R: Rng + CryptoRng>(
+        &self,
+        manifest_sequence: u64,
+        now_unix: i64,
+        rng: &mut R,
+    ) -> Result<PreparedHistoryTransferRequest> {
+        prepare_history_transfer_request(
+            &self.store.local_identity_key_pair(),
+            self.user(),
+            self.device_id(),
+            manifest_sequence,
+            now_unix,
+            rng,
+        )
+    }
+
+    /// Accept and device-sign a verified history request, negotiating strict
+    /// archive size limits before any encrypted frame is produced.
+    pub fn prepare_history_transfer_acceptance<R: Rng + CryptoRng>(
+        &self,
+        request: &kutup_chat_proto::ChatHistoryTransferRequestV1,
+        record_limit: u32,
+        plaintext_byte_limit: u64,
+        now_unix: i64,
+        rng: &mut R,
+    ) -> Result<PreparedHistoryTransferAcceptance> {
+        prepare_history_transfer_acceptance(
+            &self.store.local_identity_key_pair(),
+            request,
+            self.device_id(),
+            record_limit,
+            plaintext_byte_limit,
+            now_unix,
+            rng,
+        )
     }
 
     /// Bind a bare account opened from an authenticated local session to the

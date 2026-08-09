@@ -53,8 +53,10 @@ The following are release blockers:
   10), enforced identically by every Chat and identity path;
 - Signal-class web-device continuity: **active-installation review and safe
   revocation are implemented; the canonical transfer handshake/frame types are
-  frozen and the bounded opaque homeserver relay is implemented; archive
-  export/import, device signatures/encryption and approval UI remain.** The
+  frozen, the bounded opaque homeserver relay is implemented, and the shared
+  core now performs manifest-bound device signatures plus transcript-bound
+  ephemeral X25519/HKDF/XChaCha framing; archive export/import and approval UI
+  remain.** The
   complete requirement is explicit review/revocation plus an authenticated,
   end-to-end encrypted history transfer from
   an existing device to a newly linked browser installation. Clearing browser

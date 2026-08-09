@@ -19,6 +19,7 @@ mod db;
 mod engine;
 mod error;
 mod keys;
+mod history_transfer;
 mod manifest;
 mod mls_engine;
 mod mls_policy;
@@ -53,6 +54,11 @@ pub use kutup_chat_proto::{
 pub use manifest::{
     derive_safety_number, verify_bundle_response, verify_manifest, AccountAuthority,
     ManifestPolicy, SafetyNumberV1,
+};
+pub use history_transfer::{
+    derive_history_transfer_key, open_history_transfer_frame, seal_history_transfer_frame,
+    verify_history_transfer_acceptance, verify_history_transfer_request,
+    HistoryTransferEphemeralSecret, PreparedHistoryTransferAcceptance, PreparedHistoryTransferRequest,
 };
 pub use mls_engine::{
     AnonymousMlsRecipientDevice, AppliedInboundMlsApplication, AppliedInboundMlsCommit,
