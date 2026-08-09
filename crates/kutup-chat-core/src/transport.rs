@@ -11,11 +11,14 @@
 //! design (and the wasm world, where `fetch` futures are `!Send`).
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use kutup_chat_proto::{
     AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1,
-    AnonymousMlsKeyPackageRequestV1, ChatProfileResponse, DeviceListMismatch,
+    AnonymousMlsKeyPackageRequestV1, ChatHistoryTransferAcceptanceV1,
+    ChatHistoryTransferCompletionV1, ChatHistoryTransferFrameV1, ChatHistoryTransferRequestV1,
+    ChatProfileResponse, DeviceListMismatch,
     IdentifiedMlsKeyPackageRequestV1, MailboxPage, MlsKeyPackageBundleV1, OwnChatProfileResponse,
     PreKeyCountResponse, PutChatProfileRequest, RegisterChatDeviceRequest, ReplenishKeysRequest,
     SendMessagesRequest, UserPreKeyBundlesResponse,
@@ -30,6 +33,31 @@ pub enum SendOutcome {
     Delivered { deduplicated: bool },
     /// The request's device set didn't match the recipient's active devices.
     Mismatch(DeviceListMismatch),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HistoryTransferSummaryV1 {
+    pub transfer_id: String,
+    pub request: ChatHistoryTransferRequestV1,
+    pub acceptance: Option<ChatHistoryTransferAcceptanceV1>,
+    pub state: String,
+    pub requesting_device_id: u32,
+    pub responding_device_id: Option<u32>,
+    pub frame_count: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HistoryTransferListV1 {
+    pub transfers: Vec<HistoryTransferSummaryV1>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HistoryTransferFramePageV1 {
+    pub transcript_hash: Option<String>,
+    pub frames: Vec<ChatHistoryTransferFrameV1>,
 }
 
 /// The chat server, as the engine sees it. Implementations translate these to the
@@ -155,6 +183,69 @@ pub trait ChatTransport {
     ) -> Result<AccountManifestPublicationV1> {
         Err(crate::ChatError::Transport(
             "transport does not implement device manifests".into(),
+        ))
+    }
+
+    async fn create_history_transfer(&self, _request: &ChatHistoryTransferRequestV1) -> Result<()> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement history transfer creation".into(),
+        ))
+    }
+
+    async fn list_history_transfers(&self, _device_id: u32) -> Result<HistoryTransferListV1> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement history transfer listing".into(),
+        ))
+    }
+
+    async fn accept_history_transfer(
+        &self,
+        _transfer_id: &str,
+        _device_id: u32,
+        _acceptance: &ChatHistoryTransferAcceptanceV1,
+    ) -> Result<()> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement history transfer acceptance".into(),
+        ))
+    }
+
+    async fn upload_history_transfer_frame(
+        &self,
+        _transfer_id: &str,
+        _device_id: u32,
+        _frame: &ChatHistoryTransferFrameV1,
+    ) -> Result<()> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement history transfer frame upload".into(),
+        ))
+    }
+
+    async fn drain_history_transfer_frames(
+        &self,
+        _transfer_id: &str,
+        _device_id: u32,
+        _after: Option<u32>,
+        _limit: u32,
+    ) -> Result<HistoryTransferFramePageV1> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement history transfer frame drain".into(),
+        ))
+    }
+
+    async fn complete_history_transfer(
+        &self,
+        _transfer_id: &str,
+        _device_id: u32,
+        _completion: &ChatHistoryTransferCompletionV1,
+    ) -> Result<()> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement history transfer completion".into(),
+        ))
+    }
+
+    async fn cancel_history_transfer(&self, _transfer_id: &str, _device_id: u32) -> Result<()> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement history transfer cancellation".into(),
         ))
     }
 

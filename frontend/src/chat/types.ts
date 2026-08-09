@@ -823,6 +823,31 @@ export interface ChatTransportPort {
     capability: string,
   ): Promise<unknown>
   publishManifest(manifest: unknown): Promise<unknown>
+  createHistoryTransfer(request: unknown): Promise<void>
+  listHistoryTransfers(deviceId: number): Promise<unknown>
+  acceptHistoryTransfer(
+    transferId: string,
+    deviceId: number,
+    acceptance: unknown,
+  ): Promise<void>
+  uploadHistoryTransferFrame(
+    transferId: string,
+    deviceId: number,
+    index: number,
+    frame: unknown,
+  ): Promise<void>
+  drainHistoryTransferFrames(
+    transferId: string,
+    deviceId: number,
+    after: number | null,
+    limit: number,
+  ): Promise<unknown>
+  completeHistoryTransfer(
+    transferId: string,
+    deviceId: number,
+    completion: unknown,
+  ): Promise<void>
+  cancelHistoryTransfer(transferId: string, deviceId: number): Promise<void>
   fetchOwnProfile(): Promise<unknown | null>
   publishProfile(profile: unknown): Promise<unknown>
   fetchProfile(username: string, version: string, accessKey: string): Promise<unknown | null>

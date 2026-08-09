@@ -77,6 +77,46 @@ describe('ApiChatTransport', () => {
     expect(post).toHaveBeenCalledWith('/chat/manifest', { sequence: 2 })
   })
 
+  it('uses the authenticated opaque history-transfer relay contract', async () => {
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: { transfers: [] } } as never)
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: {} } as never)
+    const put = vi.spyOn(api, 'put').mockResolvedValue({ data: {} } as never)
+    const remove = vi.spyOn(api, 'delete').mockResolvedValue({ data: {} } as never)
+    const transport = new ApiChatTransport()
+    const id = '11111111-1111-4111-8111-111111111111'
+
+    await transport.createHistoryTransfer({ transferId: id })
+    expect(post).toHaveBeenCalledWith('/chat/history-transfers', { transferId: id })
+    await transport.listHistoryTransfers(2)
+    expect(get).toHaveBeenCalledWith('/chat/history-transfers', { params: { deviceId: 2 } })
+    await transport.acceptHistoryTransfer(id, 1, { respondingDeviceId: 1 })
+    expect(put).toHaveBeenCalledWith(
+      `/chat/history-transfers/${id}/acceptance`,
+      { respondingDeviceId: 1 },
+      { params: { deviceId: 1 } },
+    )
+    await transport.uploadHistoryTransferFrame(id, 1, 0, { index: 0 })
+    expect(put).toHaveBeenCalledWith(
+      `/chat/history-transfers/${id}/frames/0`,
+      { index: 0 },
+      { params: { deviceId: 1 } },
+    )
+    await transport.drainHistoryTransferFrames(id, 2, null, 64)
+    expect(get).toHaveBeenCalledWith(`/chat/history-transfers/${id}/frames`, {
+      params: { deviceId: 2, after: undefined, limit: 64 },
+    })
+    await transport.completeHistoryTransfer(id, 2, { frameCount: 1 })
+    expect(post).toHaveBeenCalledWith(
+      `/chat/history-transfers/${id}/completion`,
+      { frameCount: 1 },
+      { params: { deviceId: 2 } },
+    )
+    await transport.cancelHistoryTransfer(id, 2)
+    expect(remove).toHaveBeenCalledWith(`/chat/history-transfers/${id}`, {
+      params: { deviceId: 2 },
+    })
+  })
+
   it('treats only a manifest 404 as an absent manifest', async () => {
     const get = vi.spyOn(api, 'get').mockRejectedValue({
       isAxiosError: true,

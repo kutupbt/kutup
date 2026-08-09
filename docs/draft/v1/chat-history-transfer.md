@@ -116,6 +116,9 @@ single-responder constraints, but never validates archive plaintext.
    crash-safe SQLite/IndexedDB journal retains the exact ephemeral secret,
    monotonic state/progress and immutable encrypted frames across reload; frame
    substitution or rollback aborts the whole update.
-4. Add WASM/transport bindings and the new/existing-device approval UI.
+4. **Partially implemented:** the complete relay surface is wired through the
+   shared transport trait, wasm-bindgen DTO boundary and authenticated web
+   adapter. High-level WASM workflow operations and the new/existing-device
+   approval UI remain.
 5. Extend the two-browser federation harness with success, denial, expiry,
    tampering, replay, interrupted-resume and no-surviving-device cases.

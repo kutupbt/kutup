@@ -60,8 +60,9 @@ The following are release blockers:
   archive packing, final digest verification, and bounded deterministic export
   across direct, MLS and previously imported display history are implemented.
   Exact ephemeral secrets, handshake progress and immutable retry frames now
-  survive reload atomically in SQLite and IndexedDB. Relay bindings and approval
-  UI remain.** The
+  survive reload atomically in SQLite and IndexedDB. The complete authenticated
+  relay API is wired through the Rust transport, WASM boundary and web adapter;
+  high-level workflow bindings and approval UI remain.** The
   complete requirement is explicit review/revocation plus an authenticated,
   end-to-end encrypted history transfer from
   an existing device to a newly linked browser installation. Clearing browser

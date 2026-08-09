@@ -49,6 +49,13 @@ export interface KutupChatTransport {
   fetchSenderCertificate(deviceId: number): Promise<unknown>;
   fetchSealedBundles(username: string, capability: string): Promise<unknown>;
   publishManifest(manifest: unknown): Promise<unknown>;
+  createHistoryTransfer(request: unknown): Promise<void>;
+  listHistoryTransfers(deviceId: number): Promise<unknown>;
+  acceptHistoryTransfer(transferId: string, deviceId: number, acceptance: unknown): Promise<void>;
+  uploadHistoryTransferFrame(transferId: string, deviceId: number, index: number, frame: unknown): Promise<void>;
+  drainHistoryTransferFrames(transferId: string, deviceId: number, after: number | null, limit: number): Promise<unknown>;
+  completeHistoryTransfer(transferId: string, deviceId: number, completion: unknown): Promise<void>;
+  cancelHistoryTransfer(transferId: string, deviceId: number): Promise<void>;
   fetchOwnProfile(): Promise<unknown | null>;
   publishProfile(profile: unknown): Promise<unknown>;
   fetchProfile(username: string, version: string, accessKey: string): Promise<unknown | null>;
@@ -214,6 +221,59 @@ extern "C" {
         this: &JsChatTransport,
         manifest: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = createHistoryTransfer)]
+    async fn js_create_history_transfer(
+        this: &JsChatTransport,
+        request: JsValue,
+    ) -> std::result::Result<(), JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = listHistoryTransfers)]
+    async fn js_list_history_transfers(
+        this: &JsChatTransport,
+        device_id: u32,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = acceptHistoryTransfer)]
+    async fn js_accept_history_transfer(
+        this: &JsChatTransport,
+        transfer_id: &str,
+        device_id: u32,
+        acceptance: JsValue,
+    ) -> std::result::Result<(), JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = uploadHistoryTransferFrame)]
+    async fn js_upload_history_transfer_frame(
+        this: &JsChatTransport,
+        transfer_id: &str,
+        device_id: u32,
+        index: u32,
+        frame: JsValue,
+    ) -> std::result::Result<(), JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = drainHistoryTransferFrames)]
+    async fn js_drain_history_transfer_frames(
+        this: &JsChatTransport,
+        transfer_id: &str,
+        device_id: u32,
+        after: Option<u32>,
+        limit: u32,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = completeHistoryTransfer)]
+    async fn js_complete_history_transfer(
+        this: &JsChatTransport,
+        transfer_id: &str,
+        device_id: u32,
+        completion: JsValue,
+    ) -> std::result::Result<(), JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = cancelHistoryTransfer)]
+    async fn js_cancel_history_transfer(
+        this: &JsChatTransport,
+        transfer_id: &str,
+        device_id: u32,
+    ) -> std::result::Result<(), JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = fetchOwnProfile)]
     async fn js_fetch_own_profile(this: &JsChatTransport) -> std::result::Result<JsValue, JsValue>;
@@ -443,6 +503,91 @@ impl ChatTransport for BrowserTransport {
                 .await
                 .map_err(transport_error)?,
         )
+    }
+
+    async fn create_history_transfer(
+        &self,
+        request: &kutup_chat_proto::ChatHistoryTransferRequestV1,
+    ) -> Result<()> {
+        self.js
+            .js_create_history_transfer(to_transport(request)?)
+            .await
+            .map_err(transport_error)
+    }
+
+    async fn list_history_transfers(
+        &self,
+        device_id: u32,
+    ) -> Result<crate::HistoryTransferListV1> {
+        from_transport(
+            self.js
+                .js_list_history_transfers(device_id)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn accept_history_transfer(
+        &self,
+        transfer_id: &str,
+        device_id: u32,
+        acceptance: &kutup_chat_proto::ChatHistoryTransferAcceptanceV1,
+    ) -> Result<()> {
+        self.js
+            .js_accept_history_transfer(transfer_id, device_id, to_transport(acceptance)?)
+            .await
+            .map_err(transport_error)
+    }
+
+    async fn upload_history_transfer_frame(
+        &self,
+        transfer_id: &str,
+        device_id: u32,
+        frame: &kutup_chat_proto::ChatHistoryTransferFrameV1,
+    ) -> Result<()> {
+        self.js
+            .js_upload_history_transfer_frame(
+                transfer_id,
+                device_id,
+                frame.index,
+                to_transport(frame)?,
+            )
+            .await
+            .map_err(transport_error)
+    }
+
+    async fn drain_history_transfer_frames(
+        &self,
+        transfer_id: &str,
+        device_id: u32,
+        after: Option<u32>,
+        limit: u32,
+    ) -> Result<crate::HistoryTransferFramePageV1> {
+        from_transport(
+            self.js
+                .js_drain_history_transfer_frames(transfer_id, device_id, after, limit)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn complete_history_transfer(
+        &self,
+        transfer_id: &str,
+        device_id: u32,
+        completion: &kutup_chat_proto::ChatHistoryTransferCompletionV1,
+    ) -> Result<()> {
+        self.js
+            .js_complete_history_transfer(transfer_id, device_id, to_transport(completion)?)
+            .await
+            .map_err(transport_error)
+    }
+
+    async fn cancel_history_transfer(&self, transfer_id: &str, device_id: u32) -> Result<()> {
+        self.js
+            .js_cancel_history_transfer(transfer_id, device_id)
+            .await
+            .map_err(transport_error)
     }
 
     async fn fetch_own_profile(&self) -> Result<Option<OwnChatProfileResponse>> {

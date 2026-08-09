@@ -109,6 +109,72 @@ export class ApiChatTransport implements ChatTransportPort {
     return api.post('/chat/manifest', manifest).then((response) => response.data)
   }
 
+  async createHistoryTransfer(request: unknown): Promise<void> {
+    await api.post('/chat/history-transfers', request)
+  }
+
+  async listHistoryTransfers(deviceId: number): Promise<unknown> {
+    return api
+      .get('/chat/history-transfers', { params: { deviceId } })
+      .then((response) => response.data)
+  }
+
+  async acceptHistoryTransfer(
+    transferId: string,
+    deviceId: number,
+    acceptance: unknown,
+  ): Promise<void> {
+    await api.put(
+      `/chat/history-transfers/${encodeURIComponent(transferId)}/acceptance`,
+      acceptance,
+      { params: { deviceId } },
+    )
+  }
+
+  async uploadHistoryTransferFrame(
+    transferId: string,
+    deviceId: number,
+    index: number,
+    frame: unknown,
+  ): Promise<void> {
+    await api.put(
+      `/chat/history-transfers/${encodeURIComponent(transferId)}/frames/${index}`,
+      frame,
+      { params: { deviceId } },
+    )
+  }
+
+  async drainHistoryTransferFrames(
+    transferId: string,
+    deviceId: number,
+    after: number | null,
+    limit: number,
+  ): Promise<unknown> {
+    return api
+      .get(`/chat/history-transfers/${encodeURIComponent(transferId)}/frames`, {
+        params: { deviceId, after: after ?? undefined, limit },
+      })
+      .then((response) => response.data)
+  }
+
+  async completeHistoryTransfer(
+    transferId: string,
+    deviceId: number,
+    completion: unknown,
+  ): Promise<void> {
+    await api.post(
+      `/chat/history-transfers/${encodeURIComponent(transferId)}/completion`,
+      completion,
+      { params: { deviceId } },
+    )
+  }
+
+  async cancelHistoryTransfer(transferId: string, deviceId: number): Promise<void> {
+    await api.delete(`/chat/history-transfers/${encodeURIComponent(transferId)}`, {
+      params: { deviceId },
+    })
+  }
+
   async fetchOwnProfile(): Promise<unknown | null> {
     try {
       return await api.get('/chat/profile').then((response) => response.data)
