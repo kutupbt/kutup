@@ -150,6 +150,10 @@
       "prompt": "Enter words to search your local Chat history.",
       "empty": "No matching messages on this device."
     },
+    "attachments": {
+      "send": "Send encrypted attachment",
+      "capture": "Take a photo or video"
+    },
   "safetyNumberChanged": "A recipient device identity changed. Verify the safety number.",
   "requests": {
     "title_one": "{{count}} message request",

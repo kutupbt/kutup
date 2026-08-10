@@ -239,6 +239,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [mediaStorageClearing, setMediaStorageClearing] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const attachmentInputRef = useRef<HTMLInputElement>(null)
+  const captureInputRef = useRef<HTMLInputElement>(null)
   const historyRefreshGeneration = useRef(0)
   const receiptAttempted = useRef(new Set<string>())
   const typingSentAt = useRef(new Map<string, number>())
@@ -1159,6 +1160,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     } finally {
       setSending(false)
       if (attachmentInputRef.current) attachmentInputRef.current.value = ''
+      if (captureInputRef.current) captureInputRef.current.value = ''
     }
   }
 
@@ -2887,16 +2889,39 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     }}
                     data-testid="chat-attachment-input"
                   />
+                  <input
+                    ref={captureInputRef}
+                    type="file"
+                    accept="image/*,video/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={event => {
+                      const file = event.target.files?.[0]
+                      if (file) void sendAttachmentFile(file)
+                    }}
+                    data-testid="chat-capture-input"
+                  />
                   <Button
                     type="button"
                     size="icon"
                     variant="ghost"
                     disabled={!service || !canSendMedia || sending}
                     onClick={() => attachmentInputRef.current?.click()}
-                    aria-label="Send encrypted attachment"
+                    aria-label={t('chat.attachments.send')}
                     data-testid="chat-attachment-button"
                   >
                     <Paperclip className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    disabled={!service || !canSendMedia || sending}
+                    onClick={() => captureInputRef.current?.click()}
+                    aria-label={t('chat.attachments.capture')}
+                    data-testid="chat-capture-button"
+                  >
+                    <Camera className="h-4 w-4" />
                   </Button>
                 </>
               )}

@@ -257,6 +257,11 @@ cross-restart rollback pinning is unavailable on that device.
 
 ## 9. Client behavior
 
+- The composer offers the platform-native rear-camera photo/video capture UI.
+  Camera permission remains browser/OS-owned; Kutup does not retain a media
+  stream. The resulting `File` enters the exact attachment encryption and
+  upload path above, so captured plaintext never receives a separate server
+  route or plaintext fallback.
 - V1 never automatically downloads full attachment bytes to a device. The user
   taps **Download** or **View**.
 - The recipient server may already hold the durable encrypted copy. Device
@@ -289,6 +294,7 @@ following passed:
   digest/length mismatch, truncation, trailing data, oversized stream and
   storage-full tests;
 - [x] Direct Chat, Note to Self and MLS browser send/download/clear paths;
+- [x] native photo/video capture through the same encrypted attachment path;
 - [x] two-server offline/retry delivery with origin restart and destination object
   durability after origin deletion;
 - [x] message-request non-allocation before acceptance;

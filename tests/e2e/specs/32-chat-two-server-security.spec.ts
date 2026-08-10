@@ -277,6 +277,27 @@ async function sendAttachment(
   if (receipt) expect((await receipt).ok()).toBe(true)
 }
 
+async function sendCapturedMedia(
+  page: Page,
+  filename: string,
+  plaintext: string,
+): Promise<void> {
+  const input = page.getByTestId('chat-capture-input')
+  await expect(input).toHaveAttribute('accept', 'image/*,video/*')
+  await expect(input).toHaveAttribute('capture', 'environment')
+  const receipt = page.waitForResponse((response) => {
+    const path = new URL(response.url()).pathname
+    return response.request().method() === 'POST'
+      && path === '/api/chat/media/deliveries'
+  })
+  await input.setInputFiles({
+    name: filename,
+    mimeType: 'image/png',
+    buffer: Buffer.from(plaintext, 'utf8'),
+  })
+  expect((await receipt).ok()).toBe(true)
+}
+
 async function syncUntilAttachment(page: Page, filename: string): Promise<void> {
   await expect.poll(async () => {
     if (await page.getByText(filename, { exact: true }).count() > 0) return true
@@ -610,6 +631,13 @@ test.describe('two-server secure chat', () => {
     await sendAttachment(pageA, directAttachment, directAttachmentBody)
     await syncUntilAttachment(pageB, directAttachment)
     expect(await downloadAttachment(pageB, directAttachment)).toBe(directAttachmentBody)
+
+    const capturedPhoto = `captured-photo-${tag}.png`
+    const capturedPhotoBody = `native camera bytes encrypted before upload ${tag}`
+    await expect(pageA.getByTestId('chat-capture-button')).toBeEnabled()
+    await sendCapturedMedia(pageA, capturedPhoto, capturedPhotoBody)
+    await syncUntilAttachment(pageB, capturedPhoto)
+    expect(await downloadAttachment(pageB, capturedPhoto)).toBe(capturedPhotoBody)
 
     await pageB.getByTestId('chat-storage-button').click()
     await expect(pageB.getByTestId('chat-storage-summary')).toBeVisible({ timeout: 45_000 })

@@ -150,6 +150,10 @@
       "prompt": "Yerel Sohbet geçmişinizde aramak için sözcük girin.",
       "empty": "Bu cihazda eşleşen mesaj yok."
     },
+    "attachments": {
+      "send": "Şifreli ek gönder",
+      "capture": "Fotoğraf veya video çek"
+    },
   "safetyNumberChanged": "Bir alıcı cihazın kimliği değişti. Güvenlik numarasını doğrulayın.",
   "requests": {
     "title_one": "{{count}} mesaj isteği",
