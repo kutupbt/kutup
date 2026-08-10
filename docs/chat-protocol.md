@@ -257,6 +257,37 @@ typing outboxes are discarded after ten seconds rather than delivered late.
 The homeservers and MLS ordering authorities see only the ordinary padded
 ciphertext delivery, never the typing kind or state.
 
+### Disappearing-message V1 contract
+
+A hidden E2EE `disappearingTimer` operation changes the duration for future
+messages in one conversation. Its strict body is either an integer
+`durationSeconds` or an omitted value meaning off. V1 accepts 30 seconds
+through 30 days. Direct sends use the normal linked-device transcript and MLS
+sends use the normal authenticated application path, so the timer is never a
+homeserver setting.
+
+Every affected `text` or `attachment` also repeats the chosen duration as the
+authenticated top-level `expiresAfterSeconds` field. This per-message binding
+is authoritative: delayed, duplicated or reordered timer controls cannot
+retime a message, disabling a timer cannot resurrect old content, and an edit
+does not restart the countdown. Reactions, receipts, mutations, typing and
+control messages cannot carry the field.
+
+The sender counts from its durable local creation time. Each receiving device
+counts from the time it durably commits the decrypted message; an offline
+recipient therefore still receives the full viewing window. At expiry the
+client removes the local plaintext, derived previews/reactions/receipts and
+releases any unsaved Chat-media reference. Replies remain as independent
+messages but show their expired target as unavailable. Expiry is inherent in
+the original ciphertext and does not emit a deletion control or reveal a timer
+to a server.
+
+This is cooperative recipient-side deletion, as in other E2EE messengers. It
+does not prevent screenshots, notification capture, a modified recipient,
+external backups or a user copying plaintext before expiry, and the UI must not
+claim otherwise. Saved-to-Drive copies are new recipient-owned objects and do
+not expire with the Chat message.
+
 Incoming strangers are message requests. Accept/reject/block/unblock are
 client relationship state. First-contact/request traffic stays identified.
 

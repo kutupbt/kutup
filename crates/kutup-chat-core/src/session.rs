@@ -34,8 +34,8 @@ use crate::db::{
 use crate::error::{ChatError, Result};
 use crate::history_transfer::{
     prepare_history_transfer_acceptance, prepare_history_transfer_completion,
-    prepare_history_transfer_request,
-    PreparedHistoryTransferAcceptance, PreparedHistoryTransferRequest,
+    prepare_history_transfer_request, PreparedHistoryTransferAcceptance,
+    PreparedHistoryTransferRequest,
 };
 use crate::keys;
 use crate::manifest::{verify_bundle_trust, verify_manifest_evidence, ManifestPolicy};
@@ -111,6 +111,13 @@ pub struct ReceivedMessage {
     pub cursor: u64,
     /// The mailbox id (ack handle).
     pub id: String,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpiryReport {
+    pub expired_messages: u32,
+    pub expired_attachment_ids: Vec<String>,
 }
 
 /// The result of processing one delivered envelope. Both variants are already
@@ -318,10 +325,7 @@ impl Session {
 
     /// Atomically expose a verified, commitment-complete imported archive.
     /// Records remain isolated from every live cryptographic state table.
-    pub async fn import_history(
-        &self,
-        records: Vec<crate::ImportedHistoryRecordV1>,
-    ) -> Result<()> {
+    pub async fn import_history(&self, records: Vec<crate::ImportedHistoryRecordV1>) -> Result<()> {
         let mut normalized = std::collections::HashMap::new();
         let mut provenance: Option<(&str, u32)> = None;
         for record in &records {
@@ -342,12 +346,13 @@ impl Session {
                     "history record device ids must be positive".into(),
                 ));
             }
-            let sender: kutup_chat_proto::AccountAddress = record
-                .sender
-                .parse()
-                .map_err(|error: kutup_chat_proto::AddressError| {
-                    ChatError::Invalid(error.to_string())
-                })?;
+            let sender: kutup_chat_proto::AccountAddress =
+                record
+                    .sender
+                    .parse()
+                    .map_err(|error: kutup_chat_proto::AddressError| {
+                        ChatError::Invalid(error.to_string())
+                    })?;
             if sender.canonical() != record.sender {
                 return Err(ChatError::Invalid(
                     "history record sender is not canonical".into(),
@@ -383,7 +388,31 @@ impl Session {
                 }
             }
         }
-        for record in normalized.into_values() {
+        let imported_at_ms = now_millis();
+        for mut record in normalized.into_values() {
+            let content = serde_json::from_slice::<ChatContent>(&record.content)
+                .map_err(|error| ChatError::Content(error.to_string()))?;
+            if content
+                .disappearing_after_seconds()
+                .map_err(ChatError::Content)?
+                .is_some()
+            {
+                if let Some(existing) = self
+                    .store
+                    .db()
+                    .load_imported_history(&record.transfer_id, &record.source_record_id)
+                    .await?
+                {
+                    record.timestamp_ms = existing.timestamp_ms;
+                    if record != existing {
+                        return Err(ChatError::Trust(
+                            "history import conflicts with an immutable record".into(),
+                        ));
+                    }
+                    continue;
+                }
+                record.timestamp_ms = imported_at_ms;
+            }
             self.store.stage_imported_history(record);
         }
         self.store.commit().await
@@ -400,16 +429,18 @@ impl Session {
         &self,
         record_limit: u32,
     ) -> Result<Vec<kutup_chat_proto::ChatHistoryArchiveRecordV1>> {
-        if record_limit == 0
-            || record_limit > kutup_chat_proto::MAX_CHAT_HISTORY_TRANSFER_RECORDS
-        {
+        if record_limit == 0 || record_limit > kutup_chat_proto::MAX_CHAT_HISTORY_TRANSFER_RECORDS {
             return Err(ChatError::Invalid(
                 "history archive record limit is outside the V1 bounds".into(),
             ));
         }
         let db = self.store.db();
+        let snapshot_at_ms = now_millis();
         let mut records = Vec::new();
         for message in db.list_messages().await? {
+            if expired_content(&message.content, message.received_at, snapshot_at_ms)?.is_some() {
+                continue;
+            }
             records.push(kutup_chat_proto::ChatHistoryArchiveRecordV1 {
                 source_record_id: format!("direct-in:{}", message.id),
                 conversation: direct_conversation(&message.peer)?,
@@ -422,6 +453,9 @@ impl Session {
             });
         }
         for message in db.list_sent_messages().await? {
+            if expired_content(&message.content, message.created_at, snapshot_at_ms)?.is_some() {
+                continue;
+            }
             records.push(kutup_chat_proto::ChatHistoryArchiveRecordV1 {
                 source_record_id: format!("direct-out:{}", message.send_id),
                 conversation: direct_conversation(&message.peer)?,
@@ -434,6 +468,9 @@ impl Session {
             });
         }
         for message in db.list_mls_messages().await? {
+            if expired_content(&message.content, message.timestamp_ms, snapshot_at_ms)?.is_some() {
+                continue;
+            }
             records.push(kutup_chat_proto::ChatHistoryArchiveRecordV1 {
                 source_record_id: format!("mls:{}", message.record_id),
                 conversation: kutup_chat_proto::ConversationId::Group {
@@ -448,6 +485,9 @@ impl Session {
             });
         }
         for message in db.list_imported_history().await? {
+            if expired_content(&message.content, message.timestamp_ms, snapshot_at_ms)?.is_some() {
+                continue;
+            }
             let mut digest = Sha256::new();
             digest.update(b"kutup/chat/imported-source-record/v1\0");
             digest.update(message.transfer_id.as_bytes());
@@ -538,7 +578,10 @@ impl Session {
         frames: Vec<kutup_chat_proto::ChatHistoryTransferFrameV1>,
         now_unix: i64,
     ) -> Result<()> {
-        journal.request.validate(now_unix).map_err(ChatError::Invalid)?;
+        journal
+            .request
+            .validate(now_unix)
+            .map_err(ChatError::Invalid)?;
         if journal.transfer_id != journal.request.transfer_id
             || journal.request.account != self.user()
         {
@@ -604,9 +647,7 @@ impl Session {
                     "history transfer journal frames are not contiguous".into(),
                 ));
             }
-            if transcript_hash
-                .is_some_and(|hash| frame.transcript_hash != hex::encode(hash))
-            {
+            if transcript_hash.is_some_and(|hash| frame.transcript_hash != hex::encode(hash)) {
                 return Err(ChatError::Trust(
                     "history transfer journal frame transcript mismatch".into(),
                 ));
@@ -651,7 +692,9 @@ impl Session {
         Vec<kutup_chat_proto::ChatHistoryTransferFrameV1>,
     )> {
         Ok((
-            self.store.load_history_transfer_journal(transfer_id).await?,
+            self.store
+                .load_history_transfer_journal(transfer_id)
+                .await?,
             self.store.list_history_transfer_frames(transfer_id).await?,
         ))
     }
@@ -1388,12 +1431,22 @@ impl Session {
             } else {
                 self.stage_transcript_contact(&transcript.peer, received_at)
                     .await?;
+                let created_at = if transcript
+                    .content
+                    .disappearing_after_seconds()
+                    .map_err(ChatError::Content)?
+                    .is_some()
+                {
+                    received_at
+                } else {
+                    transcript.timestamp_ms
+                };
                 let message = SentMessage {
                     send_id: transcript.send_id,
                     peer: transcript.peer,
                     content: serde_json::to_vec(&transcript.content)
                         .map_err(|e| ChatError::Content(e.to_string()))?,
-                    created_at: transcript.timestamp_ms,
+                    created_at,
                     delivered_at: Some(received_at),
                     delivered: true,
                     deduplicated: false,
@@ -1409,6 +1462,15 @@ impl Session {
             let is_typing = parsed
                 .as_ref()
                 .is_some_and(|content| content.as_typing().is_some());
+            let is_disappearing_timer = parsed
+                .as_ref()
+                .is_some_and(|content| content.as_disappearing_timer().is_some());
+            if let Some(content) = parsed.as_ref() {
+                if let Err(error) = content.disappearing_after_seconds() {
+                    self.store.discard();
+                    return Err(ChatError::Content(error));
+                }
+            }
             if parsed
                 .as_ref()
                 .is_some_and(|content| content.kind == kutup_chat_proto::content::kind::TYPING)
@@ -1417,6 +1479,15 @@ impl Session {
                 self.store.discard();
                 return Err(ChatError::Content(
                     "invalid encrypted typing control".into(),
+                ));
+            }
+            if parsed.as_ref().is_some_and(|content| {
+                content.kind == kutup_chat_proto::content::kind::DISAPPEARING_TIMER
+            }) && !is_disappearing_timer
+            {
+                self.store.discard();
+                return Err(ChatError::Content(
+                    "invalid encrypted disappearing-message timer".into(),
                 ));
             }
             profile_control = is_profile_update;
@@ -1451,6 +1522,25 @@ impl Session {
                         ContactState::PendingOutgoing | ContactState::Accepted
                     )
                 });
+            } else if is_disappearing_timer {
+                // A timer is durable conversation state, but it cannot create
+                // or reopen a request without a real user-visible message.
+                suppressed = !prior_contact.as_ref().is_some_and(|contact| {
+                    matches!(
+                        contact.state,
+                        ContactState::PendingOutgoing | ContactState::Accepted
+                    )
+                });
+                if !suppressed {
+                    self.store.stage_message(InboxMessage {
+                        id: envelope.id.clone(),
+                        peer: sender.clone(),
+                        sender_device_id,
+                        cursor: envelope.cursor,
+                        content: plaintext.clone(),
+                        received_at,
+                    });
+                }
             } else {
                 suppressed = self.stage_incoming_contact(&sender, received_at).await?;
                 if !suppressed {
@@ -1658,6 +1748,99 @@ impl Session {
     /// Durable outbound history, including sends still pending in the outbox.
     pub async fn sent_history(&self) -> Result<Vec<SentMessage>> {
         self.store.db().list_sent_messages().await
+    }
+
+    /// Remove elapsed disappearing plaintext, derived mutation/reaction rows,
+    /// and undelivered ciphertexts that have outlived their usefulness. The
+    /// ratchet/MLS state remains advanced; expiry never rewinds crypto.
+    pub async fn purge_expired_history(&mut self, now_ms: i64) -> Result<ExpiryReport> {
+        if now_ms < 0 {
+            return Err(ChatError::Invalid(
+                "expiry clock must not be negative".into(),
+            ));
+        }
+        let incoming = self.store.db().list_messages().await?;
+        let outgoing = self.store.db().list_sent_messages().await?;
+        let mls = self.store.db().list_mls_messages().await?;
+        let imported = self.store.db().list_imported_history().await?;
+        let mut expired_ids = std::collections::BTreeSet::new();
+        let mut attachment_ids = std::collections::BTreeSet::new();
+        let mut expired_messages = 0u32;
+
+        for message in &incoming {
+            if let Some(expired) = expired_content(&message.content, message.received_at, now_ms)? {
+                self.store.delete_message(&message.id);
+                collect_expired(expired, &mut expired_ids, &mut attachment_ids);
+                expired_messages = expired_messages.saturating_add(1);
+            }
+        }
+        for message in &outgoing {
+            if let Some(expired) = expired_content(&message.content, message.created_at, now_ms)? {
+                self.store.delete_sent_message(&message.send_id);
+                collect_expired(expired, &mut expired_ids, &mut attachment_ids);
+                expired_messages = expired_messages.saturating_add(1);
+            }
+        }
+        for message in &mls {
+            if let Some(expired) = expired_content(&message.content, message.timestamp_ms, now_ms)?
+            {
+                self.store.delete_mls_message(&message.record_id);
+                collect_expired(expired, &mut expired_ids, &mut attachment_ids);
+                expired_messages = expired_messages.saturating_add(1);
+            }
+        }
+        for message in &imported {
+            if let Some(expired) = expired_content(&message.content, message.timestamp_ms, now_ms)?
+            {
+                self.store
+                    .delete_imported_history(&message.transfer_id, &message.source_record_id);
+                collect_expired(expired, &mut expired_ids, &mut attachment_ids);
+                expired_messages = expired_messages.saturating_add(1);
+            }
+        }
+
+        // Once a target is gone, retaining its reaction/edit operation keeps
+        // no product value and unnecessarily preserves its stable identifier.
+        for message in &incoming {
+            if content_targets_any(&message.content, &expired_ids)? {
+                self.store.delete_message(&message.id);
+            }
+        }
+        for message in &outgoing {
+            if content_targets_any(&message.content, &expired_ids)? {
+                self.store.delete_sent_message(&message.send_id);
+            }
+        }
+        for message in &mls {
+            if content_targets_any(&message.content, &expired_ids)? {
+                self.store.delete_mls_message(&message.record_id);
+            }
+        }
+        for message in &imported {
+            if content_targets_any(&message.content, &expired_ids)? {
+                self.store
+                    .delete_imported_history(&message.transfer_id, &message.source_record_id);
+            }
+        }
+        for entry in self.store.db().list_outbox().await? {
+            if expired_content(&entry.content, entry.created_at, now_ms)?.is_some()
+                || content_targets_any(&entry.content, &expired_ids)?
+            {
+                self.store.delete_outbox(&entry.send_id);
+            }
+        }
+        for entry in self.store.db().list_mls_outbox().await? {
+            if expired_content(&entry.content, entry.created_at, now_ms)?.is_some()
+                || content_targets_any(&entry.content, &expired_ids)?
+            {
+                self.store.delete_mls_outbox(&entry.send_id);
+            }
+        }
+        self.store.commit().await?;
+        Ok(ExpiryReport {
+            expired_messages,
+            expired_attachment_ids: attachment_ids.into_iter().collect(),
+        })
     }
 
     /// Next content sequence for this local device. It becomes durable only
@@ -2781,8 +2964,8 @@ fn direct_conversation(value: &str) -> Result<kutup_chat_proto::ConversationId> 
 }
 
 fn decode_canonical_history_content(bytes: &[u8]) -> Result<ChatContent> {
-    let content: ChatContent = serde_json::from_slice(bytes)
-        .map_err(|error| ChatError::Content(error.to_string()))?;
+    let content: ChatContent =
+        serde_json::from_slice(bytes).map_err(|error| ChatError::Content(error.to_string()))?;
     let canonical =
         serde_json::to_vec(&content).map_err(|error| ChatError::Content(error.to_string()))?;
     if canonical != bytes {
@@ -2798,6 +2981,73 @@ fn find_bundle(bundles: &[DevicePreKeyBundle], device_id: u32) -> Result<&Device
         .iter()
         .find(|b| b.device_id == device_id)
         .ok_or(ChatError::MissingBundle(device_id))
+}
+
+struct ExpiredContent {
+    message_id: Option<String>,
+    attachment_id: Option<String>,
+}
+
+fn expired_content(bytes: &[u8], base_ms: i64, now_ms: i64) -> Result<Option<ExpiredContent>> {
+    // Direct history deliberately retains undecodable authenticated payloads
+    // for forward compatibility. A future content kind must not permanently
+    // block expiry maintenance for every other row.
+    let Ok(content) = serde_json::from_slice::<ChatContent>(bytes) else {
+        return Ok(None);
+    };
+    let Some(seconds) = content
+        .disappearing_after_seconds()
+        .map_err(ChatError::Content)?
+    else {
+        return Ok(None);
+    };
+    let expires_at = base_ms.saturating_add(i64::from(seconds).saturating_mul(1_000));
+    if now_ms < expires_at {
+        return Ok(None);
+    }
+    Ok(Some(ExpiredContent {
+        message_id: content.message_id.clone(),
+        attachment_id: content
+            .as_attachment()
+            .map(|attachment| attachment.attachment_id),
+    }))
+}
+
+fn collect_expired(
+    expired: ExpiredContent,
+    message_ids: &mut std::collections::BTreeSet<String>,
+    attachment_ids: &mut std::collections::BTreeSet<String>,
+) {
+    if let Some(message_id) = expired.message_id {
+        message_ids.insert(message_id);
+    }
+    if let Some(attachment_id) = expired.attachment_id {
+        attachment_ids.insert(attachment_id);
+    }
+}
+
+fn content_targets_any(
+    bytes: &[u8],
+    message_ids: &std::collections::BTreeSet<String>,
+) -> Result<bool> {
+    if message_ids.is_empty() {
+        return Ok(false);
+    }
+    let Ok(content) = serde_json::from_slice::<ChatContent>(bytes) else {
+        return Ok(false);
+    };
+    Ok(content
+        .as_reaction()
+        .is_some_and(|reaction| message_ids.contains(&reaction.target_message_id))
+        || content
+            .as_message_mutation()
+            .is_some_and(|mutation| message_ids.contains(&mutation.target_message_id))
+        || content.as_receipt().is_some_and(|receipt| {
+            receipt
+                .message_ids
+                .iter()
+                .any(|message_id| message_ids.contains(message_id))
+        }))
 }
 
 /// The wall clock libsignal uses for prekey/session staleness checks. The
@@ -2904,12 +3154,7 @@ mod sealed_tests {
         .unwrap();
         block_on(session.complete_registration(1)).unwrap();
         let content = |text: &str, seq| {
-            serde_json::to_vec(&ChatContent::text(
-                "2026-08-09T00:00:00Z",
-                seq,
-                text,
-            ))
-            .unwrap()
+            serde_json::to_vec(&ChatContent::text("2026-08-09T00:00:00Z", seq, text)).unwrap()
         };
         let mut pending = Pending::default();
         pending.messages.push(InboxMessage {
@@ -2987,17 +3232,264 @@ mod sealed_tests {
             .prepare_history_transfer_request(1, 1_000, &mut rng)
             .unwrap();
         block_on(session.journal_prepared_history_request(&prepared, 1_000)).unwrap();
-        let (journal, frames) = block_on(
-            session.history_transfer_progress(&prepared.request.transfer_id),
-        )
-        .unwrap();
-        assert_eq!(journal.unwrap().ephemeral_secret, prepared.ephemeral_secret.journal_bytes());
+        let (journal, frames) =
+            block_on(session.history_transfer_progress(&prepared.request.transfer_id)).unwrap();
+        assert_eq!(
+            journal.unwrap().ephemeral_secret,
+            prepared.ephemeral_secret.journal_bytes()
+        );
         assert!(frames.is_empty());
         block_on(session.delete_history_transfer_progress(&prepared.request.transfer_id)).unwrap();
-        assert!(block_on(session.history_transfer_progress(&prepared.request.transfer_id))
+        assert!(
+            block_on(session.history_transfer_progress(&prepared.request.transfer_id))
+                .unwrap()
+                .0
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn disappearing_history_purge_is_atomic_across_all_history_stores() {
+        let mut rng = OsRng.unwrap_err();
+        let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
+        let mut session = block_on(Session::generate(
+            db.clone(),
+            "alice@a.test",
+            1,
+            1,
+            &mut rng,
+        ))
+        .unwrap();
+        block_on(session.complete_registration(1)).unwrap();
+
+        let expiring = |id: &str, seq: u64, text: &str| {
+            serde_json::to_vec(
+                &ChatContent::text_with_id(id, "2026-08-10T00:00:00Z", seq, text)
+                    .with_disappearing_after(30)
+                    .unwrap(),
+            )
             .unwrap()
-            .0
+        };
+        let incoming_id = "10000000-0000-4000-8000-000000000001";
+        let sent_id = "20000000-0000-4000-8000-000000000002";
+        let mls_id = "30000000-0000-4000-8000-000000000003";
+        let imported_id = "40000000-0000-4000-8000-000000000004";
+        let live_id = "50000000-0000-4000-8000-000000000005";
+        let reaction_id = "60000000-0000-4000-8000-000000000006";
+        let reaction = serde_json::to_vec(
+            &ChatContent::reaction_with_id(
+                reaction_id,
+                "2026-08-10T00:00:01Z",
+                6,
+                incoming_id,
+                "👍",
+                true,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut pending = Pending::default();
+        pending.messages.extend([
+            InboxMessage {
+                id: "mailbox-expiring".into(),
+                peer: "bob@b.test".into(),
+                sender_device_id: 1,
+                cursor: 1,
+                content: expiring(incoming_id, 1, "inbound"),
+                received_at: 1_000,
+            },
+            InboxMessage {
+                id: "mailbox-live".into(),
+                peer: "bob@b.test".into(),
+                sender_device_id: 1,
+                cursor: 2,
+                content: serde_json::to_vec(&ChatContent::text_with_id(
+                    live_id,
+                    "2026-08-10T00:00:01Z",
+                    5,
+                    "retained",
+                ))
+                .unwrap(),
+                received_at: 1_000,
+            },
+            InboxMessage {
+                id: "mailbox-reaction".into(),
+                peer: "bob@b.test".into(),
+                sender_device_id: 1,
+                cursor: 3,
+                content: reaction.clone(),
+                received_at: 2_000,
+            },
+            InboxMessage {
+                id: "mailbox-future-content".into(),
+                peer: "bob@b.test".into(),
+                sender_device_id: 1,
+                cursor: 4,
+                content: b"a future authenticated content encoding".to_vec(),
+                received_at: 2_000,
+            },
+        ]);
+        pending.sent_messages.insert(
+            sent_id.into(),
+            SentMessage {
+                send_id: sent_id.into(),
+                peer: "bob@b.test".into(),
+                content: expiring(sent_id, 2, "outbound"),
+                created_at: 1_000,
+                delivered_at: Some(2_000),
+                delivered: true,
+                deduplicated: false,
+            },
+        );
+        pending.outbox.insert(
+            "direct-derived".into(),
+            Some(OutboxEntry {
+                send_id: "direct-derived".into(),
+                peer: "bob@b.test".into(),
+                content: reaction.clone(),
+                envelopes: vec![1],
+                sealed_sender: false,
+                sealed_capability: None,
+                attempts: 0,
+                created_at: 2_000,
+                primary_delivered: false,
+                sync: None,
+            }),
+        );
+        pending.mls_outbox.insert(
+            "mls-derived".into(),
+            Some(crate::MlsOutboxEntry {
+                send_id: "mls-derived".into(),
+                conversation_id: [4; 16],
+                incarnation: 1,
+                mls_group_id: vec![5; 16],
+                epoch: 1,
+                content_digest: [7; 32],
+                content: reaction,
+                ciphertext: vec![8],
+                expected_recipients: Vec::new(),
+                deliveries: Vec::new(),
+                created_at: 2_000,
+                attempts: 0,
+            }),
+        );
+        pending.mls_messages.insert(
+            "in:mls-expiring".into(),
+            crate::MlsHistoryMessage {
+                record_id: "in:mls-expiring".into(),
+                message_id: mls_id.into(),
+                conversation_id: [4; 16],
+                incarnation: 1,
+                mls_group_id: vec![5; 16],
+                epoch: 1,
+                sender: "bob@b.test".into(),
+                sender_device_id: 1,
+                outgoing: false,
+                cursor: Some(4),
+                transport_digest: [6; 32],
+                content: expiring(mls_id, 3, "group"),
+                timestamp_ms: 1_000,
+                delivered: true,
+                deduplicated: false,
+            },
+        );
+        let imported = crate::ImportedHistoryRecordV1 {
+            transfer_id: "70000000-0000-4000-8000-000000000007".into(),
+            source_record_id: "imported-expiring".into(),
+            source_device_id: 2,
+            conversation: direct_conversation("carol@c.test").unwrap(),
+            sender: "carol@c.test".into(),
+            sender_device_id: 2,
+            outgoing: false,
+            content: expiring(imported_id, 4, "imported"),
+            timestamp_ms: 1_000,
+            delivered: true,
+        };
+        pending.imported_history.insert(
+            (
+                imported.transfer_id.clone(),
+                imported.source_record_id.clone(),
+            ),
+            imported,
+        );
+        block_on(db.apply(&pending)).unwrap();
+
+        assert_eq!(
+            block_on(session.purge_expired_history(30_999)).unwrap(),
+            ExpiryReport::default()
+        );
+        let report = block_on(session.purge_expired_history(31_000)).unwrap();
+        assert_eq!(report.expired_messages, 4);
+        assert!(report.expired_attachment_ids.is_empty());
+        let remaining = block_on(db.list_messages()).unwrap();
+        assert_eq!(remaining.len(), 2);
+        assert_eq!(remaining[0].id, "mailbox-live");
+        assert_eq!(remaining[1].id, "mailbox-future-content");
+        assert!(block_on(db.list_sent_messages()).unwrap().is_empty());
+        assert!(block_on(db.list_mls_messages()).unwrap().is_empty());
+        assert!(block_on(db.list_imported_history()).unwrap().is_empty());
+        assert!(block_on(db.load_outbox("direct-derived"))
+            .unwrap()
             .is_none());
+        assert!(block_on(db.load_mls_outbox("mls-derived"))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn imported_disappearing_message_gets_one_idempotent_local_window() {
+        let mut rng = OsRng.unwrap_err();
+        let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
+        let mut session = block_on(Session::generate(db, "alice@a.test", 1, 1, &mut rng)).unwrap();
+        block_on(session.complete_registration(1)).unwrap();
+        let content = serde_json::to_vec(
+            &ChatContent::text_with_id(
+                "80000000-0000-4000-8000-000000000008",
+                "2026-08-10T00:00:00Z",
+                1,
+                "restored temporary message",
+            )
+            .with_disappearing_after(30)
+            .unwrap(),
+        )
+        .unwrap();
+        let record = crate::ImportedHistoryRecordV1 {
+            transfer_id: "90000000-0000-4000-8000-000000000009".into(),
+            source_record_id: "temporary-source".into(),
+            source_device_id: 2,
+            conversation: direct_conversation("bob@b.test").unwrap(),
+            sender: "bob@b.test".into(),
+            sender_device_id: 2,
+            outgoing: false,
+            content,
+            timestamp_ms: 1,
+            delivered: true,
+        };
+
+        let before = now_millis();
+        block_on(session.import_history(vec![record.clone()])).unwrap();
+        let imported = block_on(session.imported_history()).unwrap();
+        assert_eq!(imported.len(), 1);
+        assert!(imported[0].timestamp_ms >= before);
+        let local_origin = imported[0].timestamp_ms;
+        block_on(session.import_history(vec![record])).unwrap();
+        assert_eq!(
+            block_on(session.imported_history()).unwrap()[0].timestamp_ms,
+            local_origin,
+            "a retry must not restart the countdown"
+        );
+        assert_eq!(
+            block_on(session.purge_expired_history(local_origin + 29_999))
+                .unwrap()
+                .expired_messages,
+            0
+        );
+        assert_eq!(
+            block_on(session.purge_expired_history(local_origin + 30_000))
+                .unwrap()
+                .expired_messages,
+            1
+        );
     }
 
     #[test]

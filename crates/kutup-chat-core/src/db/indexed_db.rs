@@ -304,7 +304,9 @@ impl ChatDb for IndexedDbChatDb {
     }
 
     async fn list_imported_history(&self) -> Result<Vec<ImportedHistoryRecordV1>> {
-        let mut records = self.all::<ImportedHistoryRecordV1>(IMPORTED_HISTORY).await?;
+        let mut records = self
+            .all::<ImportedHistoryRecordV1>(IMPORTED_HISTORY)
+            .await?;
         records.sort_by(|left, right| {
             left.timestamp_ms
                 .cmp(&right.timestamp_ms)
@@ -326,17 +328,14 @@ impl ChatDb for IndexedDbChatDb {
         &self,
         transfer_id: &str,
     ) -> Result<Vec<kutup_chat_proto::ChatHistoryTransferFrameV1>> {
-        let transaction = idb(self.db.transaction(
-            &[HISTORY_TRANSFER_FRAMES],
-            TransactionMode::ReadOnly,
-        ))?;
+        let transaction = idb(self
+            .db
+            .transaction(&[HISTORY_TRANSFER_FRAMES], TransactionMode::ReadOnly))?;
         let store = idb(transaction.store(HISTORY_TRANSFER_FRAMES))?;
         let mut frames = Vec::new();
         for (key, value) in idb(store.scan(None, None, None, None).await)? {
             let key = Array::from(&key);
-            if key.length() == 2
-                && key.get(0).as_string().as_deref() == Some(transfer_id)
-            {
+            if key.length() == 2 && key.get(0).as_string().as_deref() == Some(transfer_id) {
                 frames.push(from_js(value)?);
             }
         }
@@ -542,18 +541,33 @@ impl ChatDb for IndexedDbChatDb {
         }
         stage_map(&mut operations, &mls_outbox, writes.mls_outbox);
         stage_puts(&mut operations, &mls_messages, writes.mls_messages);
+        for record_id in &pending.delete_mls_message_ids {
+            operations.push(delete_op(&mls_messages, string_key(record_id)));
+        }
         for (id, value) in writes.messages {
             operations.push(put_op(&messages, value, string_key(&id)));
         }
         for id in message_deletes {
             operations.push(delete_op(&messages, string_key(&id)));
         }
+        for id in &pending.delete_message_ids {
+            operations.push(delete_op(&messages, string_key(id)));
+        }
         stage_puts(&mut operations, &sent_messages, writes.sent_messages);
+        for send_id in &pending.delete_sent_message_ids {
+            operations.push(delete_op(&sent_messages, string_key(send_id)));
+        }
         for ((transfer_id, source_record_id), value) in writes.imported_history {
             operations.push(put_op(
                 &imported_history,
                 value,
                 pair_key(&transfer_id, &source_record_id),
+            ));
+        }
+        for (transfer_id, source_record_id) in &pending.delete_imported_history_ids {
+            operations.push(delete_op(
+                &imported_history,
+                pair_key(transfer_id, source_record_id),
             ));
         }
         stage_map(
@@ -744,9 +758,7 @@ impl PreparedWrites {
                 .collect::<Result<_>>()?,
             sent_messages: serialize_map(&pending.sent_messages)?,
             imported_history: serialize_map(&pending.imported_history)?,
-            history_transfer_journals: serialize_optional_map(
-                &pending.history_transfer_journals,
-            )?,
+            history_transfer_journals: serialize_optional_map(&pending.history_transfer_journals)?,
             history_transfer_frames: serialize_optional_map(&pending.history_transfer_frames)?,
             inbound: serialize_optional_map(&pending.inbound)?,
             manifest_trust: serialize_map(&pending.manifest_trust)?,
@@ -837,8 +849,8 @@ fn idb<T>(result: rexie::Result<T>) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine as _;
     use crate::db::{AuthorityTrust, InboundFailureKind, InboundState};
+    use base64::Engine as _;
     use wasm_bindgen_test::*;
 
     wasm_bindgen_test_configure!(run_in_browser);

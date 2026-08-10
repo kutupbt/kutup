@@ -153,10 +153,7 @@ impl ChatStore {
         self.db.list_imported_history().await
     }
 
-    pub(crate) fn stage_history_transfer_journal(
-        &self,
-        journal: crate::HistoryTransferJournalV1,
-    ) {
+    pub(crate) fn stage_history_transfer_journal(&self, journal: crate::HistoryTransferJournalV1) {
         self.pending
             .borrow_mut()
             .history_transfer_journals
@@ -167,10 +164,10 @@ impl ChatStore {
         &self,
         frame: kutup_chat_proto::ChatHistoryTransferFrameV1,
     ) {
-        self.pending.borrow_mut().history_transfer_frames.insert(
-            (frame.transfer_id.clone(), frame.index),
-            Some(frame),
-        );
+        self.pending
+            .borrow_mut()
+            .history_transfer_frames
+            .insert((frame.transfer_id.clone(), frame.index), Some(frame));
     }
 
     pub(crate) async fn load_history_transfer_journal(
@@ -204,6 +201,13 @@ impl ChatStore {
         self.pending
             .borrow_mut()
             .outbox
+            .insert(send_id.to_string(), None);
+    }
+
+    pub(crate) fn delete_mls_outbox(&self, send_id: &str) {
+        self.pending
+            .borrow_mut()
+            .mls_outbox
             .insert(send_id.to_string(), None);
     }
 
@@ -287,6 +291,34 @@ impl ChatStore {
             .borrow_mut()
             .delete_messages_for_peers
             .insert(peer.to_string());
+    }
+
+    pub(crate) fn delete_message(&self, id: &str) {
+        self.pending
+            .borrow_mut()
+            .delete_message_ids
+            .insert(id.to_string());
+    }
+
+    pub(crate) fn delete_sent_message(&self, send_id: &str) {
+        self.pending
+            .borrow_mut()
+            .delete_sent_message_ids
+            .insert(send_id.to_string());
+    }
+
+    pub(crate) fn delete_mls_message(&self, record_id: &str) {
+        self.pending
+            .borrow_mut()
+            .delete_mls_message_ids
+            .insert(record_id.to_string());
+    }
+
+    pub(crate) fn delete_imported_history(&self, transfer_id: &str, source_record_id: &str) {
+        self.pending
+            .borrow_mut()
+            .delete_imported_history_ids
+            .insert((transfer_id.to_string(), source_record_id.to_string()));
     }
 
     pub(crate) fn local_manifest_device(&self, device_id: u32) -> AccountManifestDeviceV1 {

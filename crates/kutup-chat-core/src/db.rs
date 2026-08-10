@@ -600,11 +600,9 @@ pub struct Pending {
     /// Immutable imported display rows keyed by `(transferId, sourceRecordId)`.
     pub(crate) imported_history: HashMap<(String, String), ImportedHistoryRecordV1>,
     /// Transfer id → restart journal update/removal.
-    pub(crate) history_transfer_journals:
-        HashMap<String, Option<HistoryTransferJournalV1>>,
+    pub(crate) history_transfer_journals: HashMap<String, Option<HistoryTransferJournalV1>>,
     /// Exact opaque frame update/removal, retained byte-for-byte across retry.
-    pub(crate) history_transfer_frames:
-        HashMap<(String, u32), Option<ChatHistoryTransferFrameV1>>,
+    pub(crate) history_transfer_frames: HashMap<(String, u32), Option<ChatHistoryTransferFrameV1>>,
     /// Raw inbound journal updates keyed by mailbox id. `None` removes an entry
     /// only after its REST acknowledgement succeeds.
     pub(crate) inbound: HashMap<String, Option<InboundEnvelope>>,
@@ -621,6 +619,11 @@ pub struct Pending {
     /// Reject deletes the request plaintext in the same transaction as the
     /// state change, without touching libsignal session/identity state.
     pub(crate) delete_messages_for_peers: HashSet<String>,
+    /// Exact local history rows removed by disappearing-message expiry.
+    pub(crate) delete_message_ids: HashSet<String>,
+    pub(crate) delete_sent_message_ids: HashSet<String>,
+    pub(crate) delete_mls_message_ids: HashSet<String>,
+    pub(crate) delete_imported_history_ids: HashSet<(String, String)>,
     /// Serialized `ReplenishKeysRequest` whose private keys are already durable
     /// but whose server response has not yet been confirmed.
     pub(crate) prekey_upload: Option<Option<Vec<u8>>>,
@@ -663,6 +666,10 @@ impl Pending {
             && self.local_profile.is_none()
             && self.peer_profiles.is_empty()
             && self.delete_messages_for_peers.is_empty()
+            && self.delete_message_ids.is_empty()
+            && self.delete_sent_message_ids.is_empty()
+            && self.delete_mls_message_ids.is_empty()
+            && self.delete_imported_history_ids.is_empty()
             && self.prekey_upload.is_none()
             && self.registration_upload.is_none()
             && self.last_cursor.is_none()

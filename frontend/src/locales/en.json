@@ -125,6 +125,22 @@
       "one": "{{name}} is typing…",
       "many": "{{count}} people are typing…"
     },
+    "disappearing": {
+      "setting": "Disappearing messages",
+      "off": "Disappearing messages are off",
+      "active": "New messages disappear after {{duration}}",
+      "enabled": "New messages will disappear after {{duration}}",
+      "disabled": "Disappearing messages turned off",
+      "expires": "Disappears in {{time}}",
+      "presets": {
+        "off": "Off",
+        "thirtySeconds": "30 seconds",
+        "oneHour": "1 hour",
+        "oneDay": "1 day",
+        "oneWeek": "1 week",
+        "thirtyDays": "30 days"
+      }
+    },
   "safetyNumberChanged": "A recipient device identity changed. Verify the safety number.",
   "requests": {
     "title_one": "{{count}} message request",

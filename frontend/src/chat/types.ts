@@ -13,6 +13,8 @@ export interface ChatContentView {
   mutation?: ChatMessageMutationV1
   receipt?: ChatReceiptV1
   typing?: ChatTypingV1
+  disappearingTimer?: ChatDisappearingTimerV1
+  expiresAfterSeconds?: number
 }
 
 export interface ChatReactionV1 {
@@ -34,6 +36,15 @@ export interface ChatReceiptV1 {
 
 export interface ChatTypingV1 {
   active: boolean
+}
+
+export interface ChatDisappearingTimerV1 {
+  durationSeconds?: number
+}
+
+export interface ChatExpiryReport {
+  expiredMessages: number
+  expiredAttachmentIds: string[]
 }
 
 export type ChatMediaClassV1 = 'file' | 'photo' | 'video' | 'audio'
@@ -1226,6 +1237,7 @@ export interface WasmChatClientHandle {
     text: string,
     createdAtMs: string,
     replyTo?: string,
+    expiresAfterSeconds?: number,
   ): Promise<MlsOutboxEntry>
   createMlsAttachmentMessage(
     sendId: string,
@@ -1235,6 +1247,16 @@ export interface WasmChatClientHandle {
     sentAt: string,
     descriptor: ChatAttachmentDescriptorV1,
     createdAtMs: string,
+    expiresAfterSeconds?: number,
+  ): Promise<MlsOutboxEntry>
+  createMlsDisappearingTimer(
+    sendId: string,
+    conversationId: string,
+    incarnation: string,
+    mlsGroupId: Uint8Array,
+    sentAt: string,
+    createdAtMs: string,
+    durationSeconds?: number,
   ): Promise<MlsOutboxEntry>
   createMlsReactionMessage(
     sendId: string,
@@ -1341,6 +1363,7 @@ export interface WasmChatClientHandle {
     envelope: unknown,
   ): Promise<Uint8Array>
   history(): Promise<ChatHistoryEntry[]>
+  purgeExpiredMessages(nowMs: string): Promise<ChatExpiryReport>
   contacts(): Promise<ContactRecord[]>
   profile(): Promise<ChatProfile>
   profiles(): Promise<PeerChatProfile[]>
@@ -1365,12 +1388,14 @@ export interface WasmChatClientHandle {
     sentAt: string,
     text: string,
     replyTo?: string,
+    expiresAfterSeconds?: number,
   ): Promise<SendSummary>
   sendAttachment(
     sendId: string,
     peer: string,
     sentAt: string,
     descriptor: ChatAttachmentDescriptorV1,
+    expiresAfterSeconds?: number,
   ): Promise<SendSummary>
   sendReaction(
     sendId: string,
@@ -1400,6 +1425,12 @@ export interface WasmChatClientHandle {
     peer: string,
     sentAt: string,
     active: boolean,
+  ): Promise<SendSummary>
+  sendDisappearingTimer(
+    sendId: string,
+    peer: string,
+    sentAt: string,
+    durationSeconds?: number,
   ): Promise<SendSummary>
   mediaDeliveryCapability(peer: string): Promise<string>
   syncManifest(): Promise<unknown>

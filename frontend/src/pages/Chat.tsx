@@ -26,12 +26,14 @@ import {
   ShieldCheck,
   SmilePlus,
   Trash2,
+  Timer,
   UserMinus,
   Users,
   X,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -92,8 +94,22 @@ import type {
 import { cn } from '@/lib/utils'
 import { copyText } from '@/lib/format'
 import { downloadChatMediaV1, uploadChatMediaV1 } from '@/chat/media'
+import {
+  disappearingMessageExpiresAt,
+  formatRemainingTime,
+  isVisibleChatMessage,
+  reduceDisappearingTimers,
+} from '@/chat/disappearing'
 
 const CHAT_REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const
+const DISAPPEARING_PRESETS = [
+  { key: 'off', durationSeconds: undefined },
+  { key: 'thirtySeconds', durationSeconds: 30 },
+  { key: 'oneHour', durationSeconds: 60 * 60 },
+  { key: 'oneDay', durationSeconds: 24 * 60 * 60 },
+  { key: 'oneWeek', durationSeconds: 7 * 24 * 60 * 60 },
+  { key: 'thirtyDays', durationSeconds: 30 * 24 * 60 * 60 },
+] as const
 type ChatReactionEmoji = ChatReactionV1['emoji']
 
 interface ReactionAggregate {
@@ -177,6 +193,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [sending, setSending] = useState(false)
   const [reactionSending, setReactionSending] = useState<string | null>(null)
   const [mutationSending, setMutationSending] = useState(false)
+  const [timerSending, setTimerSending] = useState(false)
+  const [nowMs, setNowMs] = useState(() => Date.now())
   const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(() =>
     window.localStorage.getItem('kutup:chat:read-receipts') === '1')
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState === 'visible')
@@ -212,6 +230,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const historyRefreshGeneration = useRef(0)
   const receiptAttempted = useRef(new Set<string>())
   const typingSentAt = useRef(new Map<string, number>())
+  const expiryRefreshPending = useRef(false)
   const selfAccount = useMemo(
     () =>
       auth.username
@@ -317,10 +336,14 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     [peerProfiles],
   )
 
-  const visibleHistory = useMemo(
-    () => history.filter(message =>
-      !message.content.reaction && !message.content.mutation && !message.content.receipt),
+  const activeTimersByConversation = useMemo(
+    () => reduceDisappearingTimers(history),
     [history],
+  )
+
+  const visibleHistory = useMemo(
+    () => history.filter(message => isVisibleChatMessage(message, nowMs)),
+    [history, nowMs],
   )
 
   const peers = useMemo(() => {
@@ -373,6 +396,9 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   }, [groups, peers, selectedConversation])
 
   const selectedKey = selectedConversation ? conversationKey(selectedConversation) : null
+  const selectedTimerSeconds = selectedKey
+    ? activeTimersByConversation.get(selectedKey)?.durationSeconds
+    : undefined
   const selectedAddress = selectedConversation ? directAddress(selectedConversation) : null
   const selectedGroup = selectedConversation?.kind === 'group'
     ? groups.find(group =>
@@ -484,6 +510,11 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       || noteSelected
       || selectedContact?.state === 'accepted',
   )
+  const canSetDisappearingTimer = canSend && Boolean(
+    selectedConversation?.kind === 'group'
+      || noteSelected
+      || selectedContact?.state === 'accepted',
+  )
   const canSendTyping = canSend && Boolean(
     selectedConversation?.kind === 'group'
       || selectedContact?.state === 'accepted'
@@ -499,6 +530,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   useEffect(() => {
     const timer = window.setInterval(() => {
       const now = Date.now()
+      setNowMs(now)
       setTypingByConversation((current) => {
         let changed = false
         const nextState = new Map<string, Map<string, number>>()
@@ -512,6 +544,20 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     }, 1_000)
     return () => window.clearInterval(timer)
   }, [])
+
+  useEffect(() => {
+    if (!service || expiryRefreshPending.current) return
+    const elapsed = history.some(message => {
+      const expiresAt = disappearingMessageExpiresAt(message)
+      return expiresAt !== undefined && nowMs >= expiresAt
+    })
+    if (!elapsed) return
+    expiryRefreshPending.current = true
+    void service.history()
+      .then(setHistory)
+      .catch(cause => console.warn('Expired Chat history could not be purged', cause))
+      .finally(() => { expiryRefreshPending.current = false })
+  }, [history, nowMs, service])
 
   useEffect(() => {
     if (
@@ -959,6 +1005,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
         selectedConversation,
         text,
         replyingTo?.content.messageId,
+        selectedTimerSeconds,
       )
       if (summary.safetyNumberChanges.length > 0) {
         toast.warning(t('chat.safetyNumberChanged'))
@@ -1055,6 +1102,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
         selectedConversation,
         uploaded.descriptor,
         uploaded.storageReferenceId,
+        selectedTimerSeconds,
       )
       if (summary.safetyNumberChanges.length > 0) {
         toast.warning(t('chat.safetyNumberChanged'))
@@ -1065,6 +1113,30 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     } finally {
       setSending(false)
       if (attachmentInputRef.current) attachmentInputRef.current.value = ''
+    }
+  }
+
+  async function updateDisappearingTimer(durationSeconds?: number) {
+    if (!service || !selectedConversation || !canSetDisappearingTimer || timerSending) return
+    setTimerSending(true)
+    try {
+      const summary = await service.sendDisappearingTimer(
+        selectedConversation,
+        durationSeconds,
+      )
+      if (summary.safetyNumberChanges.length > 0) {
+        toast.warning(t('chat.safetyNumberChanged'))
+      }
+      setHistory(await service.history())
+      toast.success(durationSeconds === undefined
+        ? t('chat.disappearing.disabled')
+        : t('chat.disappearing.enabled', {
+            duration: disappearingPresetLabel(durationSeconds, t),
+          }))
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setTimerSending(false)
     }
   }
 
@@ -2060,6 +2132,45 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 aria-label="End-to-end encrypted"
               />
             )}
+            {selectedConversation && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant={selectedTimerSeconds === undefined ? 'ghost' : 'secondary'}
+                    size="icon"
+                    disabled={!service || !canSetDisappearingTimer || timerSending}
+                    aria-label={t('chat.disappearing.setting')}
+                    title={selectedTimerSeconds === undefined
+                      ? t('chat.disappearing.off')
+                      : t('chat.disappearing.active', {
+                          duration: disappearingPresetLabel(selectedTimerSeconds, t),
+                        })}
+                    data-testid="chat-disappearing-timer"
+                  >
+                    {timerSending
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <Timer className="h-4 w-4" />}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" data-testid="chat-disappearing-menu">
+                  {DISAPPEARING_PRESETS.map(option => (
+                    <DropdownMenuItem
+                      key={option.key}
+                      onSelect={() => void updateDisappearingTimer(option.durationSeconds)}
+                      data-testid={`chat-disappearing-${option.key}`}
+                    >
+                      <span className="flex-1">
+                        {t(`chat.disappearing.presets.${option.key}`)}
+                      </span>
+                      {selectedTimerSeconds === option.durationSeconds && (
+                        <Check className="ml-3 h-4 w-4" />
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
             {selectedGroup && (
               <Dialog open={groupMembersOpen} onOpenChange={setGroupMembersOpen}>
                 <DialogTrigger asChild>
@@ -2525,6 +2636,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                   receipt={message.content.messageId
                     ? receiptsByMessageId.get(message.content.messageId)
                     : undefined}
+                  nowMs={nowMs}
                 />
               ))}
               {typingLabel && (
@@ -2874,6 +2986,7 @@ function MessageBubble({
   onDelete,
   mutationBusy,
   receipt,
+  nowMs,
 }: {
   message: ChatHistoryEntry
   newerClientLabel: string
@@ -2889,11 +3002,13 @@ function MessageBubble({
   onDelete?: () => void
   mutationBusy?: boolean
   receipt?: MessageReceiptState
+  nowMs: number
 }) {
   const { t } = useTranslation()
   const outgoing = message.direction === 'outgoing'
   const [downloading, setDownloading] = useState(false)
   const attachment = message.content.attachment
+  const expiresAtMs = disappearingMessageExpiresAt(message)
   return (
     <div
       className={cn('group flex items-center gap-1', outgoing ? 'justify-end' : 'justify-start')}
@@ -3013,6 +3128,18 @@ function MessageBubble({
           {formatTime(message.content.sentAt)}
           {mutation?.editedText && !mutation.deleted && (
             <span data-testid="chat-message-edited">· {t('chat.mutations.edited')}</span>
+          )}
+          {expiresAtMs !== undefined && (
+            <span
+              className="flex items-center gap-0.5"
+              title={t('chat.disappearing.expires', {
+                time: formatRemainingTime(expiresAtMs - nowMs),
+              })}
+              data-testid="chat-message-expiry"
+            >
+              <Timer className="h-3 w-3" />
+              {formatRemainingTime(expiresAtMs - nowMs)}
+            </span>
           )}
           {outgoing && receipt?.read ? (
             <span
@@ -3169,6 +3296,11 @@ function compareContentOperations(left: ChatHistoryEntry, right: ChatHistoryEntr
   if (sequence !== 0) return sequence
   const device = (left.senderDeviceId ?? 0) - (right.senderDeviceId ?? 0)
   return device !== 0 ? device : left.id.localeCompare(right.id)
+}
+
+function disappearingPresetLabel(seconds: number, t: TFunction): string {
+  const preset = DISAPPEARING_PRESETS.find(option => option.durationSeconds === seconds)
+  return preset ? t(`chat.disappearing.presets.${preset.key}`) : formatRemainingTime(seconds * 1_000)
 }
 
 function messageActor(

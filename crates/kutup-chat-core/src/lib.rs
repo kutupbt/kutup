@@ -18,8 +18,8 @@ mod clock;
 mod db;
 mod engine;
 mod error;
-mod keys;
 mod history_transfer;
+mod keys;
 mod manifest;
 mod mls_engine;
 mod mls_policy;
@@ -38,16 +38,23 @@ pub use db::indexed_db::IndexedDbChatDb;
 #[cfg(feature = "sqlite")]
 pub use db::sqlite::SqliteChatDb;
 pub use db::{
-    AccountManifestHistoryRecordV1, AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope,
+    AccountManifestHistoryRecordV1, AuthorityTrust, ChatDb, ContactRecord,
     HistoryTransferJournalStateV1, HistoryTransferJournalV1, HistoryTransferRoleV1,
-    ImportedHistoryRecordV1, InboundFailureKind, InboundState, InboxMessage, LocalIdentity,
-    LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxDelivery, MlsOutboxEntry, OutboxEntry,
-    OutboxSyncLeg, PeerProfile, Pending, PendingAccountIdentityResetV1, SentMessage,
+    ImportedHistoryRecordV1, InboundEnvelope, InboundFailureKind, InboundState, InboxMessage,
+    LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxDelivery,
+    MlsOutboxEntry, OutboxEntry, OutboxSyncLeg, PeerProfile, Pending,
+    PendingAccountIdentityResetV1, SentMessage,
 };
 pub use engine::{
     ChatEvent, Engine, EngineState, InboundFailure, PreKeyMaintenanceReport, ReceiveReport,
 };
 pub use error::{ChatError, Result};
+pub use history_transfer::{
+    derive_history_transfer_key, open_history_transfer_frame, prepare_history_archive,
+    seal_history_transfer_frame, verify_history_archive, verify_history_transfer_acceptance,
+    verify_history_transfer_request, HistoryTransferEphemeralSecret, PreparedHistoryArchiveV1,
+    PreparedHistoryTransferAcceptance, PreparedHistoryTransferRequest, VerifiedHistoryArchiveV1,
+};
 pub use kutup_chat_proto::{
     AccountAddress, ChatAttachmentDescriptorV1, ChatContent, ContactControlBody, ContactState,
     ConversationId, DeliveredEnvelope, OutgoingEnvelope, TextBody,
@@ -55,12 +62,6 @@ pub use kutup_chat_proto::{
 pub use manifest::{
     derive_safety_number, verify_bundle_response, verify_manifest, AccountAuthority,
     ManifestPolicy, SafetyNumberV1,
-};
-pub use history_transfer::{
-    derive_history_transfer_key, open_history_transfer_frame, prepare_history_archive,
-    seal_history_transfer_frame, verify_history_archive, verify_history_transfer_acceptance,
-    verify_history_transfer_request, HistoryTransferEphemeralSecret, PreparedHistoryArchiveV1,
-    PreparedHistoryTransferAcceptance, PreparedHistoryTransferRequest, VerifiedHistoryArchiveV1,
 };
 pub use mls_engine::{
     AnonymousMlsRecipientDevice, AppliedInboundMlsApplication, AppliedInboundMlsCommit,
@@ -85,8 +86,8 @@ pub use mls_policy::{
 pub use profile::{derive_wrapping_key, MAX_AVATAR_BYTES};
 pub use session::{ReceivedMessage, SendSummary, Session};
 pub use transport::{
-    ChatTransport, HistoryTransferFramePageV1, HistoryTransferListV1,
-    HistoryTransferSummaryV1, SendOutcome,
+    ChatTransport, HistoryTransferFramePageV1, HistoryTransferListV1, HistoryTransferSummaryV1,
+    SendOutcome,
 };
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub use wasm::WasmChatClient;

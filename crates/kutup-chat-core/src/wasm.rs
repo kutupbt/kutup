@@ -91,6 +91,8 @@ export interface KutupChatContentView {
   mutation?: unknown;
   receipt?: unknown;
   typing?: unknown;
+  disappearingTimer?: unknown;
+  expiresAfterSeconds?: number;
 }
 
 export interface KutupChatAccountAddress {
@@ -520,10 +522,7 @@ impl ChatTransport for BrowserTransport {
             .map_err(transport_error)
     }
 
-    async fn list_history_transfers(
-        &self,
-        device_id: u32,
-    ) -> Result<crate::HistoryTransferListV1> {
+    async fn list_history_transfers(&self, device_id: u32) -> Result<crate::HistoryTransferListV1> {
         from_transport(
             self.js
                 .js_list_history_transfers(device_id)
@@ -920,17 +919,16 @@ impl WasmChatClient {
                 .map_err(chat_error)?;
                 self.engine
                     .session()
-                    .journal_prepared_history_response(
-                        &request,
-                        &prepared,
-                        &archive,
-                        now,
-                    )
+                    .journal_prepared_history_response(&request, &prepared, &archive, now)
                     .await
                     .map_err(chat_error)?;
                 (prepared.acceptance, archive.frames, 0)
             }
-            _ => return Err(js_error("history transfer id is bound to another local journal")),
+            _ => {
+                return Err(js_error(
+                    "history transfer id is bound to another local journal",
+                ))
+            }
         };
 
         let transport = Rc::clone(self.engine.transport());
@@ -940,11 +938,7 @@ impl WasmChatClient {
             .map_err(chat_error)?;
         for frame in frames.iter().skip(start_index) {
             transport
-                .upload_history_transfer_frame(
-                    &request.transfer_id,
-                    self.device_id(),
-                    frame,
-                )
+                .upload_history_transfer_frame(&request.transfer_id, self.device_id(), frame)
                 .await
                 .map_err(chat_error)?;
         }
@@ -983,12 +977,16 @@ impl WasmChatClient {
             .await
             .map_err(chat_error)?
         else {
-            return Err(js_error("this device has no journal for that history transfer"));
+            return Err(js_error(
+                "this device has no journal for that history transfer",
+            ));
         };
         if journal.role != crate::HistoryTransferRoleV1::Requester
             || journal.request.requesting_device_id != self.device_id()
         {
-            return Err(js_error("history transfer does not belong to this requesting device"));
+            return Err(js_error(
+                "history transfer does not belong to this requesting device",
+            ));
         }
 
         let acceptance = match journal.acceptance.clone() {
@@ -1028,9 +1026,8 @@ impl WasmChatClient {
             now,
         )
         .map_err(chat_error)?;
-        let secret = crate::HistoryTransferEphemeralSecret::from_journal_bytes(
-            journal.ephemeral_secret,
-        );
+        let secret =
+            crate::HistoryTransferEphemeralSecret::from_journal_bytes(journal.ephemeral_secret);
         let key = crate::derive_history_transfer_key(
             &secret,
             &acceptance.ephemeral_public_key,
@@ -2279,12 +2276,13 @@ impl WasmChatClient {
         text: String,
         created_at_ms: String,
         reply_to: Option<String>,
+        expires_after_seconds: Option<u32>,
     ) -> std::result::Result<JsValue, JsValue> {
         let conversation_id = uuid::Uuid::parse_str(&conversation_id)
             .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
         let entry = self
             .mls_client()
-            .create_text_reply_application_message(
+            .create_expiring_text_reply_application_message(
                 &send_id,
                 conversation_id,
                 parse_u64_string("MLS incarnation", &incarnation)?,
@@ -2292,6 +2290,7 @@ impl WasmChatClient {
                 &sent_at,
                 &text,
                 reply_to.as_deref(),
+                expires_after_seconds,
                 parse_i64_string("MLS message clock", &created_at_ms)?,
             )
             .await
@@ -2310,6 +2309,7 @@ impl WasmChatClient {
         sent_at: String,
         descriptor: JsValue,
         created_at_ms: String,
+        expires_after_seconds: Option<u32>,
     ) -> std::result::Result<JsValue, JsValue> {
         let conversation_id = uuid::Uuid::parse_str(&conversation_id)
             .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
@@ -2317,13 +2317,14 @@ impl WasmChatClient {
             from_transport(descriptor).map_err(chat_error)?;
         let entry = self
             .mls_client()
-            .create_attachment_application_message(
+            .create_expiring_attachment_application_message(
                 &send_id,
                 conversation_id,
                 parse_u64_string("MLS incarnation", &incarnation)?,
                 &mls_group_id,
                 &sent_at,
                 descriptor,
+                expires_after_seconds,
                 parse_i64_string("MLS message clock", &created_at_ms)?,
             )
             .await
@@ -2455,6 +2456,36 @@ impl WasmChatClient {
                 &mls_group_id,
                 &sent_at,
                 active,
+                parse_i64_string("MLS message clock", &created_at_ms)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&entry)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = createMlsDisappearingTimer)]
+    pub async fn create_mls_disappearing_timer(
+        &self,
+        send_id: String,
+        conversation_id: String,
+        incarnation: String,
+        mls_group_id: Vec<u8>,
+        sent_at: String,
+        created_at_ms: String,
+        duration_seconds: Option<u32>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let conversation_id = uuid::Uuid::parse_str(&conversation_id)
+            .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
+        let entry = self
+            .mls_client()
+            .create_disappearing_timer_application_message(
+                &send_id,
+                conversation_id,
+                parse_u64_string("MLS incarnation", &incarnation)?,
+                &mls_group_id,
+                &sent_at,
+                duration_seconds,
                 parse_i64_string("MLS message clock", &created_at_ms)?,
             )
             .await
@@ -2713,6 +2744,7 @@ impl WasmChatClient {
         sent_at: String,
         text: String,
         reply_to: Option<String>,
+        expires_after_seconds: Option<u32>,
     ) -> std::result::Result<JsValue, JsValue> {
         let mut rng = OsRng.unwrap_err();
         let seq = self
@@ -2721,9 +2753,14 @@ impl WasmChatClient {
             .next_sent_seq()
             .await
             .map_err(chat_error)?;
-        let content = ChatContent::text_with_id(&send_id, sent_at, seq, text)
+        let mut content = ChatContent::text_with_id(&send_id, sent_at, seq, text)
             .with_reply_to(reply_to.as_deref())
             .map_err(|error| js_error(&error))?;
+        if let Some(seconds) = expires_after_seconds {
+            content = content
+                .with_disappearing_after(seconds)
+                .map_err(|error| js_error(&error))?;
+        }
         let summary = self
             .engine
             .send(&send_id, &peer, &content, &mut rng)
@@ -2739,6 +2776,7 @@ impl WasmChatClient {
         peer: String,
         sent_at: String,
         descriptor: JsValue,
+        expires_after_seconds: Option<u32>,
     ) -> std::result::Result<JsValue, JsValue> {
         let descriptor: ChatAttachmentDescriptorV1 =
             from_transport(descriptor).map_err(chat_error)?;
@@ -2749,8 +2787,13 @@ impl WasmChatClient {
             .next_sent_seq()
             .await
             .map_err(chat_error)?;
-        let content = ChatContent::attachment_with_id(&send_id, sent_at, seq, descriptor)
+        let mut content = ChatContent::attachment_with_id(&send_id, sent_at, seq, descriptor)
             .map_err(|error| js_error(&error))?;
+        if let Some(seconds) = expires_after_seconds {
+            content = content
+                .with_disappearing_after(seconds)
+                .map_err(|error| js_error(&error))?;
+        }
         let summary = self
             .engine
             .send(&send_id, &peer, &content, &mut rng)
@@ -2877,6 +2920,32 @@ impl WasmChatClient {
         to_output(&SendSummaryView::from(summary))
     }
 
+    #[wasm_bindgen(js_name = sendDisappearingTimer)]
+    pub async fn send_disappearing_timer(
+        &mut self,
+        send_id: String,
+        peer: String,
+        sent_at: String,
+        duration_seconds: Option<u32>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let seq = self
+            .engine
+            .session()
+            .next_sent_seq()
+            .await
+            .map_err(chat_error)?;
+        let content =
+            ChatContent::disappearing_timer_with_id(&send_id, sent_at, seq, duration_seconds)
+                .map_err(|error| js_error(&error))?;
+        let summary = self
+            .engine
+            .send(&send_id, &peer, &content, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&SendSummaryView::from(summary))
+    }
+
     #[wasm_bindgen(js_name = mediaDeliveryCapability)]
     pub async fn media_delivery_capability(
         &self,
@@ -2984,6 +3053,20 @@ impl WasmChatClient {
                 .then_with(|| left.id.cmp(&right.id))
         });
         to_output(&history)
+    }
+
+    #[wasm_bindgen(js_name = purgeExpiredMessages)]
+    pub async fn purge_expired_messages(
+        &mut self,
+        now_ms: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let report = self
+            .engine
+            .session_mut()
+            .purge_expired_history(parse_i64_string("disappearing-message clock", &now_ms)?)
+            .await
+            .map_err(chat_error)?;
+        to_output(&report)
     }
 
     pub async fn contacts(&self) -> std::result::Result<JsValue, JsValue> {
@@ -3345,6 +3428,10 @@ struct ContentView {
     receipt: Option<kutup_chat_proto::ReceiptBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     typing: Option<kutup_chat_proto::TypingBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disappearing_timer: Option<kutup_chat_proto::DisappearingTimerBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_after_seconds: Option<u32>,
 }
 
 impl From<ChatContent> for ContentView {
@@ -3355,6 +3442,8 @@ impl From<ChatContent> for ContentView {
         let mutation = content.as_message_mutation();
         let receipt = content.as_receipt();
         let typing = content.as_typing();
+        let disappearing_timer = content.as_disappearing_timer();
+        let expires_after_seconds = content.disappearing_after_seconds().ok().flatten();
         Self {
             version: content.v,
             kind: content.kind,
@@ -3369,6 +3458,8 @@ impl From<ChatContent> for ContentView {
             mutation,
             receipt,
             typing,
+            disappearing_timer,
+            expires_after_seconds,
         }
     }
 }
@@ -3489,7 +3580,10 @@ impl HistoryEntry {
             ConversationId::Group { .. } => message.sender.clone(),
         };
         Ok(Self {
-            id: format!("imported:{}:{}", message.transfer_id, message.source_record_id),
+            id: format!(
+                "imported:{}:{}",
+                message.transfer_id, message.source_record_id
+            ),
             conversation: message.conversation,
             peer,
             direction: if message.outgoing {

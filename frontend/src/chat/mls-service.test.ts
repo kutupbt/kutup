@@ -841,6 +841,7 @@ function harness(
       attempts: 0,
     }),
     createMlsTypingMessage: vi.fn().mockResolvedValue(applicationOutboxEntry()),
+    createMlsDisappearingTimer: vi.fn().mockResolvedValue(applicationOutboxEntry()),
     markMlsApplicationDelivered: vi.fn().mockResolvedValue(undefined),
     createMlsInvitationAcceptanceMessage: vi.fn().mockResolvedValue(null),
     deriveMlsDeliveryCapability: vi.fn().mockResolvedValue({
@@ -1711,6 +1712,7 @@ describe('MlsConversationService', () => {
       'federated group message',
       expect.stringMatching(/^[0-9]+$/),
       replyTo,
+      undefined,
     )
 
     expect(client.fetchVerifiedMlsKeyPackages).toHaveBeenCalledWith(
@@ -1838,6 +1840,31 @@ describe('MlsConversationService', () => {
       expect.any(String),
       true,
       expect.stringMatching(/^[0-9]+$/),
+    )
+    expect(client.stageMlsApplicationDelivery).toHaveBeenCalledOnce()
+  })
+
+  it('delivers an MLS disappearing timer through the normal application outbox', async () => {
+    vi.stubGlobal('crypto', {
+      randomUUID: () => sendId,
+      getRandomValues: (value: Uint8Array) => value,
+    })
+    const { client, service } = harness(null, [activeGenesis()])
+
+    await expect(service.sendDisappearingTimer(conversationId, 3_600)).resolves.toEqual({
+      delivered: true,
+      deduplicated: false,
+      attempts: 1,
+    })
+
+    expect(client.createMlsDisappearingTimer).toHaveBeenCalledWith(
+      sendId,
+      conversationId,
+      '1',
+      expect.any(Uint8Array),
+      expect.any(String),
+      expect.stringMatching(/^[0-9]+$/),
+      3_600,
     )
     expect(client.stageMlsApplicationDelivery).toHaveBeenCalledOnce()
   })

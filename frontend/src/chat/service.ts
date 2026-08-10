@@ -7,6 +7,7 @@ import type {
   ChatAttachmentDescriptorV1,
   ChatDevice,
   ChatHistoryEntry,
+  ChatExpiryReport,
   ChatHistoryTransferDownloadResult,
   ChatHistoryTransferList,
   ChatHistoryTransferRequest,
@@ -192,7 +193,11 @@ export class ChatService {
   }
 
   async history(): Promise<ChatHistoryEntry[]> {
-    const history = await this.withLock(() => this.client.history())
+    const { history, expiry } = await this.withLock(async () => {
+      const expiry = await this.client.purgeExpiredMessages(String(Date.now()))
+      return { expiry, history: await this.client.history() }
+    })
+    await this.releaseExpiredAttachments(expiry)
     return history.map((entry) => {
       if (entry.conversation.kind !== 'direct') return entry
       const address = withHomeServer(entry.conversation.address, this.capabilities.serverName)
@@ -326,10 +331,16 @@ export class ChatService {
     conversation: ConversationId,
     text: string,
     replyTo?: string,
+    expiresAfterSeconds?: number,
   ): Promise<SendSummary> {
     if (conversation.kind === 'group') {
       const summary = await this.withMlsWorkflow(() =>
-        this.requireMls().sendText(conversation.groupId, text, replyTo),
+        this.requireMls().sendText(
+          conversation.groupId,
+          text,
+          replyTo,
+          expiresAfterSeconds,
+        ),
       )
       this.notifyPeers()
       return { ...summary, safetyNumberChanges: [] }
@@ -337,7 +348,14 @@ export class ChatService {
     const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
     const sendId = crypto.randomUUID()
     const summary = await this.withLock(() =>
-      this.client.sendText(sendId, peer, new Date().toISOString(), text, replyTo),
+      this.client.sendText(
+        sendId,
+        peer,
+        new Date().toISOString(),
+        text,
+        replyTo,
+        expiresAfterSeconds,
+      ),
     )
     this.notifyPeers()
     return summary
@@ -347,6 +365,7 @@ export class ChatService {
     conversation: ConversationId,
     descriptor: ChatAttachmentDescriptorV1,
     storageReferenceId: string,
+    expiresAfterSeconds?: number,
   ): Promise<SendSummary> {
     if (descriptor.originDomain !== this.capabilities.serverName) {
       throw new Error('attachment origin differs from the active homeserver')
@@ -360,7 +379,12 @@ export class ChatService {
     )
     if (conversation.kind === 'group') {
       const summary = await this.withMlsWorkflow(() =>
-        this.requireMls().sendAttachment(conversation.groupId, sendId, descriptor),
+        this.requireMls().sendAttachment(
+          conversation.groupId,
+          sendId,
+          descriptor,
+          expiresAfterSeconds,
+        ),
       )
       this.notifyPeers()
       return { ...summary, safetyNumberChanges: [] }
@@ -386,6 +410,7 @@ export class ChatService {
         peer,
         new Date().toISOString(),
         descriptor,
+        expiresAfterSeconds,
       ),
     )
     this.notifyPeers()
@@ -496,6 +521,28 @@ export class ChatService {
     ))
   }
 
+  async sendDisappearingTimer(
+    conversation: ConversationId,
+    durationSeconds?: number,
+  ): Promise<SendSummary> {
+    if (conversation.kind === 'group') {
+      const summary = await this.withMlsWorkflow(() =>
+        this.requireMls().sendDisappearingTimer(conversation.groupId, durationSeconds),
+      )
+      this.notifyPeers()
+      return { ...summary, safetyNumberChanges: [] }
+    }
+    const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
+    const summary = await this.withLock(() => this.client.sendDisappearingTimer(
+      crypto.randomUUID(),
+      peer,
+      new Date().toISOString(),
+      durationSeconds,
+    ))
+    this.notifyPeers()
+    return summary
+  }
+
   async chatMediaStorage(): Promise<ChatMediaStorageView> {
     if (!this.attachmentLedger) throw new Error('Chat media is not enabled')
     await this.withAttachmentLedgerLock(() => this.attachmentLedger!.sync())
@@ -595,8 +642,12 @@ export class ChatService {
 
   reconcile(): Promise<ReceiveReport> {
     if (this.reconcilePromise) return this.reconcilePromise
-    this.reconcilePromise = this.withLock(() => this.client.reconcile())
-      .then(async (report) => {
+    this.reconcilePromise = this.withLock(async () => {
+      const expiry = await this.client.purgeExpiredMessages(String(Date.now()))
+      return { expiry, report: await this.client.reconcile() }
+    })
+      .then(async ({ expiry, report }) => {
+        await this.releaseExpiredAttachments(expiry)
         const mlsTyping = await this.withMlsWorkflow(async () => {
           return await this.mls?.reconcile() ?? []
         })
@@ -879,6 +930,14 @@ export class ChatService {
     const self = `${this.username}@${this.capabilities.serverName}`
     await this.withAttachmentLedgerLock(async () => {
       await this.attachmentLedger!.sync()
+      // An expiry revision is durable and account-private. Retry its opaque
+      // server-reference deletion after a crash or a transient network error;
+      // DELETE is idempotent and a missing reference is already success.
+      for (const entity of this.attachmentLedger!.entries()) {
+        if (entity.entry.state === 'expired') {
+          await this.deleteAttachmentReference(entity.entry.attachmentId)
+        }
+      }
       for (const message of history) {
         const descriptor = message.content.attachment
         const messageId = message.content.messageId
@@ -917,6 +976,35 @@ export class ChatService {
         }
       }
     })
+  }
+
+  private async releaseExpiredAttachments(report: ChatExpiryReport): Promise<void> {
+    if (!this.attachmentLedger || report.expiredAttachmentIds.length === 0) return
+    const expiredIds = new Set(report.expiredAttachmentIds)
+    await this.withAttachmentLedgerLock(async () => {
+      await this.attachmentLedger!.sync()
+      const targets = this.attachmentLedger!.activeEntries().filter(
+        entity => expiredIds.has(entity.entry.attachmentId),
+      )
+      const expiredAt = Date.now()
+      for (const target of targets) {
+        await this.attachmentLedger!.markExpired(target.entityId, expiredAt)
+      }
+      for (const attachmentId of expiredIds) {
+        await this.deleteAttachmentReference(attachmentId)
+      }
+    })
+  }
+
+  private async deleteAttachmentReference(attachmentId: string): Promise<void> {
+    try {
+      await api.delete(`/chat/media/references/${encodeURIComponent(attachmentId)}`)
+    } catch (error: unknown) {
+      const status = typeof error === 'object' && error !== null && 'response' in error
+        ? (error as { response?: { status?: number } }).response?.status
+        : undefined
+      if (status !== 404) throw error
+    }
   }
 
   /**

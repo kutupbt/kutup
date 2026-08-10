@@ -931,7 +931,12 @@ export class MlsConversationService {
     )
   }
 
-  async sendText(conversationId: string, text: string, replyTo?: string): Promise<{
+  async sendText(
+    conversationId: string,
+    text: string,
+    replyTo?: string,
+    expiresAfterSeconds?: number,
+  ): Promise<{
     delivered: boolean
     deduplicated: boolean
     attempts: number
@@ -961,6 +966,7 @@ export class MlsConversationService {
         text,
         String(Date.now()),
         replyTo,
+        expiresAfterSeconds,
       ))
       .catch(cause => { throw new MlsSendError('encryption', cause) })
     await this.deliverApplicationEntry(entry).catch(cause => {
@@ -978,6 +984,7 @@ export class MlsConversationService {
     conversationId: string,
     sendId: string,
     descriptor: ChatAttachmentDescriptorV1,
+    expiresAfterSeconds?: number,
   ): Promise<{ delivered: boolean; deduplicated: boolean; attempts: number }> {
     const conversation = await this.requireActiveConversation(conversationId)
     const groupId = decodeCanonicalBase64(
@@ -994,6 +1001,7 @@ export class MlsConversationService {
         new Date().toISOString(),
         descriptor,
         String(Date.now()),
+        expiresAfterSeconds,
       ),
     ).catch(cause => { throw new MlsSendError('encryption', cause) })
 
@@ -1028,6 +1036,36 @@ export class MlsConversationService {
     // Store the opaque object for every destination before exposing its
     // descriptor through MLS. Partial media delivery is safely idempotent;
     // the application entry remains locally staged until the full set passes.
+    await this.deliverApplicationEntry(entry).catch(cause => {
+      if (cause instanceof MlsSendError) throw cause
+      throw new MlsSendError('envelope_staging', cause)
+    })
+    return {
+      delivered: true,
+      deduplicated: entry.attempts > 0,
+      attempts: Math.max(1, entry.expectedRecipients.length),
+    }
+  }
+
+  async sendDisappearingTimer(
+    conversationId: string,
+    durationSeconds?: number,
+  ): Promise<{ delivered: boolean; deduplicated: boolean; attempts: number }> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const entry = await this.withCryptoLock(() => this.client.createMlsDisappearingTimer(
+      requireBrowserCrypto().randomUUID(),
+      conversationId,
+      String(conversation.request.genesis.incarnation),
+      groupId,
+      new Date().toISOString(),
+      String(Date.now()),
+      durationSeconds,
+    )).catch(cause => { throw new MlsSendError('encryption', cause) })
     await this.deliverApplicationEntry(entry).catch(cause => {
       if (cause instanceof MlsSendError) throw cause
       throw new MlsSendError('envelope_staging', cause)

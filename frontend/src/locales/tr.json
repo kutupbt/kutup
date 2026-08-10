@@ -125,6 +125,22 @@
       "one": "{{name}} yazıyor…",
       "many": "{{count}} kişi yazıyor…"
     },
+    "disappearing": {
+      "setting": "Kaybolan mesajlar",
+      "off": "Kaybolan mesajlar kapalı",
+      "active": "Yeni mesajlar {{duration}} sonra kaybolur",
+      "enabled": "Yeni mesajlar {{duration}} sonra kaybolacak",
+      "disabled": "Kaybolan mesajlar kapatıldı",
+      "expires": "{{time}} sonra kaybolur",
+      "presets": {
+        "off": "Kapalı",
+        "thirtySeconds": "30 saniye",
+        "oneHour": "1 saat",
+        "oneDay": "1 gün",
+        "oneWeek": "1 hafta",
+        "thirtyDays": "30 gün"
+      }
+    },
   "safetyNumberChanged": "Bir alıcı cihazın kimliği değişti. Güvenlik numarasını doğrulayın.",
   "requests": {
     "title_one": "{{count}} mesaj isteği",

@@ -204,6 +204,20 @@ async function syncUntilTyping(page: Page): Promise<void> {
   }).toBe(true)
 }
 
+async function syncUntilDisappearingTimer(page: Page, title: string): Promise<void> {
+  await expect.poll(async () => {
+    const timer = page.getByTestId('chat-disappearing-timer')
+    if (await timer.getAttribute('title') === title) return true
+    await page.getByRole('button', { name: 'Sync messages' }).click()
+    await page.waitForTimeout(500)
+    return await timer.getAttribute('title') === title
+  }, {
+    timeout: 45_000,
+    intervals: [500, 1_000, 2_000],
+    message: `encrypted disappearing timer ${title} was not reconciled`,
+  }).toBe(true)
+}
+
 async function syncUntilReaction(
   page: Page,
   target: string,
@@ -485,6 +499,33 @@ test.describe('two-server secure chat', () => {
     await syncUntilVisible(pageA, reply)
     await expect(pageA.getByTestId('chat-typing-indicator')).toHaveCount(0)
     await syncUntilReceipt(pageB, reply, 'chat-receipt-delivered')
+
+    // Timer state and each affected duration are authenticated inside the
+    // ordinary Direct ciphertext. Both devices remove their own durable
+    // plaintext after their independent local 30-second viewing windows.
+    await pageA.getByTestId('chat-disappearing-timer').click()
+    await pageA.getByTestId('chat-disappearing-thirtySeconds').click()
+    await expect(pageA.getByTestId('chat-disappearing-timer')).toHaveAttribute(
+      'title',
+      'New messages disappear after 30 seconds',
+    )
+    await syncUntilDisappearingTimer(pageB, 'New messages disappear after 30 seconds')
+    const temporary = `temporary-direct-${tag}`
+    await send(pageA, temporary)
+    await syncUntilVisible(pageB, temporary)
+    await expect(reactionTarget(pageA, temporary).getByTestId('chat-message-expiry')).toBeVisible()
+    await expect(reactionTarget(pageB, temporary).getByTestId('chat-message-expiry')).toBeVisible()
+    await expect.poll(async () => ({
+      sender: await bubble(pageA, temporary).count(),
+      receiver: await bubble(pageB, temporary).count(),
+    }), {
+      timeout: 45_000,
+      intervals: [1_000],
+      message: 'Direct disappearing plaintext outlived its authenticated duration',
+    }).toEqual({ sender: 0, receiver: 0 })
+    await pageA.getByTestId('chat-disappearing-timer').click()
+    await pageA.getByTestId('chat-disappearing-off').click()
+    await syncUntilDisappearingTimer(pageB, 'Disappearing messages are off')
 
     const destinationEnvelopes: Array<Record<string, unknown>> = []
     pageB.on('response', (response) => {

@@ -208,6 +208,18 @@ export class ChatAttachmentLedger {
     })
   }
 
+  async markExpired(entityId: string, updatedAtMs: number): Promise<void> {
+    const current = this.current.get(entityId)
+    if (!current) throw new Error('unknown Chat attachment ledger entity')
+    if (current.entry.state === 'expired') return
+    await this.update(entityId, {
+      ...current.entry,
+      state: 'expired',
+      updatedAtMs,
+      driveFileId: undefined,
+    })
+  }
+
   totalsByConversation(): Map<string, number> {
     const totals = new Map<string, number>()
     for (const { entry } of this.current.values()) {

@@ -27,8 +27,9 @@ mod sealed_sender;
 mod security_policy;
 
 pub use content::{
-    ChatContent, ContactControlBody, ContactState, MessageMutationBody, MessageMutationOperation,
-    ReactionBody, ReceiptBody, ReceiptState, SentTranscriptBody, TextBody, TypingBody,
+    ChatContent, ContactControlBody, ContactState, DisappearingTimerBody, MessageMutationBody,
+    MessageMutationOperation, ReactionBody, ReceiptBody, ReceiptState, SentTranscriptBody,
+    TextBody, TypingBody,
 };
 pub use federation::{
     FederatedChatTransaction, FederationDeliveryError, FederationDeliveryRejection,

@@ -248,6 +248,11 @@ impl Engine {
         &self.session
     }
 
+    #[cfg(feature = "wasm")]
+    pub(crate) fn session_mut(&mut self) -> &mut Session {
+        &mut self.session
+    }
+
     pub(crate) fn transport(&self) -> &Rc<dyn ChatTransport> {
         &self.transport
     }
@@ -1179,6 +1184,18 @@ impl Engine {
         if is_typing && peer_user == self.session.user() {
             return Err(ChatError::Invalid(
                 "Note to Self does not emit typing indicators".into(),
+            ));
+        }
+        if content.as_disappearing_timer().is_some()
+            && peer_user != self.session.user()
+            && !self
+                .session
+                .contact(peer_user)
+                .await?
+                .is_some_and(|contact| contact.state == ContactState::Accepted)
+        {
+            return Err(ChatError::Invalid(
+                "disappearing-message timers require an established conversation".into(),
             ));
         }
         if content

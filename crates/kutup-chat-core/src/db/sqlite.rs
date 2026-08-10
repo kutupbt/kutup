@@ -299,6 +299,9 @@ impl SqliteChatDb {
         // ack happens only after the decrypt transaction commits.
         db(conn.pragma_update(None, "journal_mode", "WAL"))?;
         db(conn.pragma_update(None, "synchronous", "NORMAL"))?;
+        // Disappearing-message plaintext should not remain recoverable from
+        // SQLite free pages after its logical row is removed.
+        db(conn.pragma_update(None, "secure_delete", "ON"))?;
         db(conn.execute_batch(SCHEMA))?;
         ensure_schema_upgrades(&conn)?;
         Ok(Self {
@@ -1002,6 +1005,9 @@ impl ChatDb for SqliteChatDb {
                 )));
             }
         }
+        for record_id in &pending.delete_mls_message_ids {
+            db(tx.execute("DELETE FROM mls_messages WHERE record_id = ?1", [record_id]))?;
+        }
         for msg in &pending.messages {
             // INSERT OR IGNORE: redelivery of the same mailbox id is a no-op.
             db(tx.execute(
@@ -1020,6 +1026,9 @@ impl ChatDb for SqliteChatDb {
         }
         for peer in &pending.delete_messages_for_peers {
             db(tx.execute("DELETE FROM messages WHERE peer = ?1", [peer]))?;
+        }
+        for id in &pending.delete_message_ids {
+            db(tx.execute("DELETE FROM messages WHERE id = ?1", [id]))?;
         }
         for (send_id, message) in &pending.sent_messages {
             db(tx.execute(
@@ -1041,6 +1050,9 @@ impl ChatDb for SqliteChatDb {
                     i64::from(message.deduplicated),
                 ],
             ))?;
+        }
+        for send_id in &pending.delete_sent_message_ids {
+            db(tx.execute("DELETE FROM sent_messages WHERE send_id = ?1", [send_id]))?;
         }
         for ((transfer_id, source_record_id), record) in &pending.imported_history {
             let conversation_json = serde_json::to_string(&record.conversation)
@@ -1079,6 +1091,12 @@ impl ChatDb for SqliteChatDb {
                     "immutable imported history conflicts at {transfer_id}/{source_record_id}"
                 )));
             }
+        }
+        for (transfer_id, source_record_id) in &pending.delete_imported_history_ids {
+            db(tx.execute(
+                "DELETE FROM imported_history WHERE transfer_id = ?1 AND source_record_id = ?2",
+                rusqlite::params![transfer_id, source_record_id],
+            ))?;
         }
         for (transfer_id, journal) in &pending.history_transfer_journals {
             match journal {
@@ -1653,11 +1671,7 @@ fn sent_message_row(row: &rusqlite::Row) -> rusqlite::Result<SentMessage> {
 fn imported_history_row(row: &rusqlite::Row) -> rusqlite::Result<ImportedHistoryRecordV1> {
     let conversation_json: String = row.get(3)?;
     let conversation = serde_json::from_str(&conversation_json).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(
-            3,
-            rusqlite::types::Type::Text,
-            Box::new(error),
-        )
+        rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(error))
     })?;
     Ok(ImportedHistoryRecordV1 {
         transfer_id: row.get(0)?,
@@ -1810,7 +1824,10 @@ mod tests {
             conflicting,
         );
         rejected.last_cursor = Some(99);
-        assert!(matches!(block_on(db.apply(&rejected)), Err(ChatError::Trust(_))));
+        assert!(matches!(
+            block_on(db.apply(&rejected)),
+            Err(ChatError::Trust(_))
+        ));
         assert_eq!(block_on(db.load_last_cursor()).unwrap(), None);
     }
 
@@ -1874,12 +1891,14 @@ mod tests {
         let mut changed = frame;
         changed.ciphertext = b64(8, 17);
         let mut conflict = Pending::default();
-        conflict.history_transfer_frames.insert(
-            (changed.transfer_id.clone(), changed.index),
-            Some(changed),
-        );
+        conflict
+            .history_transfer_frames
+            .insert((changed.transfer_id.clone(), changed.index), Some(changed));
         conflict.last_cursor = Some(9);
-        assert!(matches!(block_on(db.apply(&conflict)), Err(ChatError::Trust(_))));
+        assert!(matches!(
+            block_on(db.apply(&conflict)),
+            Err(ChatError::Trust(_))
+        ));
         assert_eq!(block_on(db.load_last_cursor()).unwrap(), None);
 
         let mut delete = Pending::default();
@@ -1887,9 +1906,11 @@ mod tests {
             .history_transfer_journals
             .insert(journal.transfer_id.clone(), None);
         block_on(db.apply(&delete)).unwrap();
-        assert!(block_on(db.list_history_transfer_frames(&journal.transfer_id))
-            .unwrap()
-            .is_empty());
+        assert!(
+            block_on(db.list_history_transfer_frames(&journal.transfer_id))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

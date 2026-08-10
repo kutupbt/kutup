@@ -431,6 +431,73 @@ fn typing_is_live_only_for_accepted_contacts_and_never_creates_history() {
 }
 
 #[test]
+fn disappearing_timer_is_durable_only_for_established_conversations() {
+    let mut rng = test_rng();
+    let bob_addr = ChatAddress::local("bob", 1);
+    let bob_session = in_memory("bob", 1, &mut rng);
+    let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
+    let mut alice = in_memory("alice", 1, &mut rng);
+    block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
+    let contents = [
+        ChatContent::disappearing_timer_with_id(
+            "11111111-1111-4111-8111-111111111111",
+            "2026-08-10T12:00:00Z",
+            1,
+            Some(30),
+        )
+        .unwrap(),
+        ChatContent::text_with_id(
+            "22222222-2222-4222-8222-222222222222",
+            "2026-08-10T12:00:01Z",
+            2,
+            "message request",
+        ),
+        ChatContent::disappearing_timer_with_id(
+            "33333333-3333-4333-8333-333333333333",
+            "2026-08-10T12:00:02Z",
+            3,
+            Some(3_600),
+        )
+        .unwrap(),
+    ];
+    let encrypted = contents
+        .iter()
+        .map(|content| {
+            block_on(alice.encrypt(&bob_addr, bundle.registration_id, content, &mut rng)).unwrap()
+        })
+        .collect::<Vec<_>>();
+    let server = Rc::new(Mailbox::default());
+    let mut bob = Engine::new(bob_session, server.clone());
+
+    server.deposit(vec![deliver(&encrypted[0], "alice", "timer-1", 1)]);
+    let unknown = block_on(bob.receive(&mut rng)).unwrap();
+    assert!(unknown.messages.is_empty());
+    assert_eq!(unknown.suppressed, vec!["timer-1"]);
+    assert!(block_on(bob.contacts()).unwrap().is_empty());
+    assert!(block_on(bob.session().history()).unwrap().is_empty());
+
+    server.deposit(vec![deliver(&encrypted[1], "alice", "request-2", 2)]);
+    assert_eq!(block_on(bob.receive(&mut rng)).unwrap().messages.len(), 1);
+    block_on(bob.accept_contact("alice", "2026-08-10T12:00:02Z", &mut rng)).unwrap();
+
+    server.deposit(vec![deliver(&encrypted[2], "alice", "timer-3", 3)]);
+    let accepted = block_on(bob.receive(&mut rng)).unwrap();
+    assert_eq!(accepted.messages.len(), 1);
+    assert_eq!(
+        accepted.messages[0]
+            .content
+            .as_disappearing_timer()
+            .and_then(|timer| timer.duration_seconds),
+        Some(3_600)
+    );
+    assert_eq!(
+        block_on(bob.session().history()).unwrap().len(),
+        2,
+        "the real request and accepted timer are durable"
+    );
+}
+
+#[test]
 fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
     let mut rng = test_rng();
     let bob_addr = ChatAddress::local("bob", 1);
