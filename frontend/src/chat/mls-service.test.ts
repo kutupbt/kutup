@@ -812,6 +812,20 @@ function harness(
       createdAt: 1_700_000_000_000,
       attempts: 0,
     }),
+    createMlsMessageMutation: vi.fn().mockResolvedValue({
+      sendId,
+      conversationId: [...genesisGroupBytes.subarray(0, 16)],
+      incarnation: 1,
+      mlsGroupId: [...genesisGroupBytes],
+      epoch: 1,
+      contentDigest: [...new Uint8Array(32).fill(6)],
+      content: [1, 2, 3],
+      ciphertext: [4, 5, 6],
+      expectedRecipients: ['bobby@beta.example'],
+      deliveries: [],
+      createdAt: 1_700_000_000_000,
+      attempts: 0,
+    }),
     createMlsInvitationAcceptanceMessage: vi.fn().mockResolvedValue(null),
     deriveMlsDeliveryCapability: vi.fn().mockResolvedValue({
       epoch: 1,
@@ -1727,6 +1741,34 @@ describe('MlsConversationService', () => {
       targetMessageId,
       '❤️',
       true,
+      expect.stringMatching(/^[0-9]+$/),
+    )
+    expect(client.stageMlsApplicationDelivery).toHaveBeenCalledOnce()
+  })
+
+  it('creates and delivers an encrypted MLS delete operation', async () => {
+    vi.stubGlobal('crypto', {
+      randomUUID: () => sendId,
+      getRandomValues: (value: Uint8Array) => value,
+    })
+    const { client, service } = harness(null, [activeGenesis()])
+    const targetMessageId = '11111111-1111-4111-8111-111111111111'
+
+    await expect(service.mutateMessage(
+      conversationId,
+      targetMessageId,
+      'delete',
+    )).resolves.toEqual({ delivered: true, deduplicated: false, attempts: 1 })
+
+    expect(client.createMlsMessageMutation).toHaveBeenCalledWith(
+      sendId,
+      conversationId,
+      '1',
+      expect.any(Uint8Array),
+      expect.any(String),
+      targetMessageId,
+      'delete',
+      undefined,
       expect.stringMatching(/^[0-9]+$/),
     )
     expect(client.stageMlsApplicationDelivery).toHaveBeenCalledOnce()

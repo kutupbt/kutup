@@ -17,6 +17,7 @@ import {
   MonitorSmartphone,
   Plus,
   Paperclip,
+  Pencil,
   QrCode,
   RefreshCw,
   Reply,
@@ -85,6 +86,7 @@ import type {
   PeerChatProfile,
   SafetyNumberV1,
   ChatReactionV1,
+  ChatMessageMutationV1,
 } from '@/chat/types'
 import { cn } from '@/lib/utils'
 import { copyText } from '@/lib/format'
@@ -97,6 +99,11 @@ interface ReactionAggregate {
   emoji: ChatReactionEmoji
   count: number
   reactedBySelf: boolean
+}
+
+interface MessageMutationState {
+  editedText?: string
+  deleted: boolean
 }
 
 export default function Chat() {
@@ -159,9 +166,11 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [newPeer, setNewPeer] = useState('')
   const [draft, setDraft] = useState('')
   const [replyingTo, setReplyingTo] = useState<ChatHistoryEntry | null>(null)
+  const [editingMessage, setEditingMessage] = useState<ChatHistoryEntry | null>(null)
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [reactionSending, setReactionSending] = useState<string | null>(null)
+  const [mutationSending, setMutationSending] = useState(false)
   const [contactUpdating, setContactUpdating] = useState(false)
   const [groupUpdating, setGroupUpdating] = useState(false)
   const [newGroupOpen, setNewGroupOpen] = useState(false)
@@ -283,7 +292,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   )
 
   const visibleHistory = useMemo(
-    () => history.filter(message => !message.content.reaction),
+    () => history.filter(message => !message.content.reaction && !message.content.mutation),
     [history],
   )
 
@@ -480,7 +489,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       if (!reactor) continue
       const key = `${reaction.targetMessageId}\u0000${reactor}\u0000${reaction.emoji}`
       const previous = latest.get(key)
-      if (!previous || compareReactionOperations(previous.message, message) < 0) {
+      if (!previous || compareContentOperations(previous.message, message) < 0) {
         latest.set(key, { message, reaction, reactor })
       }
     }
@@ -504,8 +513,49 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     }
     return result
   }, [history, messages, selectedConversation, selectedKey, selfAddress])
+  const mutationsByMessageId = useMemo(() => {
+    if (!selfAddress) {
+      return new Map<string, MessageMutationState>()
+    }
+    const targets = new Map(visibleHistory.flatMap(message =>
+      message.content.messageId ? [[message.content.messageId, message] as const] : []))
+    const edits = new Map<string, { message: ChatHistoryEntry; mutation: ChatMessageMutationV1 }>()
+    const deleted = new Set<string>()
+    for (const message of history) {
+      const mutation = message.content.mutation
+      if (!mutation) continue
+      const target = targets.get(mutation.targetMessageId)
+      if (!target
+          || conversationKey(message.conversation) !== conversationKey(target.conversation)) continue
+      const actor = messageActor(message, message.conversation, selfAddress)
+      const targetAuthor = messageActor(target, target.conversation, selfAddress)
+      if (!actor || actor !== targetAuthor) continue
+      if (mutation.operation === 'delete') {
+        deleted.add(mutation.targetMessageId)
+        continue
+      }
+      const previous = edits.get(mutation.targetMessageId)
+      if (!previous || compareContentOperations(previous.message, message) < 0) {
+        edits.set(mutation.targetMessageId, { message, mutation })
+      }
+    }
+    const result = new Map<string, MessageMutationState>()
+    for (const targetMessageId of targets.keys()) {
+      const edit = edits.get(targetMessageId)?.mutation.replacementText
+      if (edit !== undefined || deleted.has(targetMessageId)) {
+        result.set(targetMessageId, {
+          editedText: edit,
+          deleted: deleted.has(targetMessageId),
+        })
+      }
+    }
+    return result
+  }, [history, selfAddress, visibleHistory])
 
-  useEffect(() => setReplyingTo(null), [selectedKey])
+  useEffect(() => {
+    setReplyingTo(null)
+    setEditingMessage(null)
+  }, [selectedKey])
 
   useEffect(() => {
     if (!service || !selectedAddress || noteSelected) {
@@ -662,7 +712,29 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   async function sendMessage(event: FormEvent) {
     event.preventDefault()
     const text = draft.trim()
-    if (!service || !selectedConversation || !text || sending) return
+    if (!service || !selectedConversation || !text || sending || mutationSending) return
+    if (editingMessage?.content.messageId) {
+      setMutationSending(true)
+      try {
+        const summary = await service.mutateMessage(
+          selectedConversation,
+          editingMessage.content.messageId,
+          'edit',
+          text,
+        )
+        if (summary.safetyNumberChanges.length > 0) {
+          toast.warning(t('chat.safetyNumberChanged'))
+        }
+        setHistory(await service.history())
+        setDraft('')
+        setEditingMessage(null)
+      } catch (cause) {
+        toast.error(errorMessage(cause, t))
+      } finally {
+        setMutationSending(false)
+      }
+      return
+    }
     setSending(true)
     setDraft('')
     try {
@@ -681,6 +753,43 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       toast.error(errorMessage(cause, t))
     } finally {
       setSending(false)
+    }
+  }
+
+  function beginEditing(message: ChatHistoryEntry) {
+    const messageId = message.content.messageId
+    const text = messageId
+      ? mutationsByMessageId.get(messageId)?.editedText ?? message.content.text
+      : message.content.text
+    if (!text) return
+    setReplyingTo(null)
+    setEditingMessage(message)
+    setDraft(text)
+  }
+
+  async function deleteMessage(message: ChatHistoryEntry) {
+    const targetMessageId = message.content.messageId
+    if (!service || !selectedConversation || !targetMessageId || mutationSending
+        || !window.confirm(t('chat.mutations.confirmDelete'))) return
+    setMutationSending(true)
+    try {
+      const summary = await service.mutateMessage(
+        selectedConversation,
+        targetMessageId,
+        'delete',
+      )
+      if (summary.safetyNumberChanges.length > 0) {
+        toast.warning(t('chat.safetyNumberChanged'))
+      }
+      setHistory(await service.history())
+      if (editingMessage?.content.messageId === targetMessageId) {
+        setEditingMessage(null)
+        setDraft('')
+      }
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setMutationSending(false)
     }
   }
 
@@ -1470,7 +1579,16 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                       </span>
                     )}
                     <span className="block truncate text-xs text-muted-foreground">
-                      {message?.content.text ?? t('chat.newerClient')}
+                      {message
+                        ? replyPreview(
+                            message,
+                            t('chat.newerClient'),
+                            message.content.messageId
+                              ? mutationsByMessageId.get(message.content.messageId)
+                              : undefined,
+                            t('chat.mutations.deleted'),
+                          )
+                        : t('chat.newerClient')}
                     </span>
                   </span>
                 </button>
@@ -1548,7 +1666,16 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                         Group {groupId.slice(0, 8)}{group.status === 'closed' ? ' · Closed' : ''}
                       </span>
                       <span className="block truncate text-xs text-muted-foreground">
-                        {latest?.content.text ?? `${group.currentRoster.length} members · epoch ${group.lastFinalizedEpoch}`}
+                        {latest
+                          ? replyPreview(
+                              latest,
+                              t('chat.newerClient'),
+                              latest.content.messageId
+                                ? mutationsByMessageId.get(latest.content.messageId)
+                                : undefined,
+                              t('chat.mutations.deleted'),
+                            )
+                          : `${group.currentRoster.length} members · epoch ${group.lastFinalizedEpoch}`}
                       </span>
                     </span>
                   </button>
@@ -1624,7 +1751,14 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     </span>
                   )}
                   <span className="block truncate text-xs text-muted-foreground">
-                    {message.content.text ?? t('chat.newerClient')}
+                    {replyPreview(
+                      message,
+                      t('chat.newerClient'),
+                      message.content.messageId
+                        ? mutationsByMessageId.get(message.content.messageId)
+                        : undefined,
+                      t('chat.mutations.deleted'),
+                    )}
                   </span>
                 </span>
                 <span className="text-[11px] text-muted-foreground">
@@ -2113,16 +2247,40 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                   repliedMessage={message.content.replyTo
                     ? messagesById.get(message.content.replyTo)
                     : undefined}
+                  mutation={message.content.messageId
+                    ? mutationsByMessageId.get(message.content.messageId)
+                    : undefined}
+                  repliedMessageMutation={message.content.replyTo
+                    ? mutationsByMessageId.get(message.content.replyTo)
+                    : undefined}
                   onReply={message.content.messageId
-                    ? () => setReplyingTo(message)
+                    && !mutationsByMessageId.get(message.content.messageId)?.deleted
+                    ? () => {
+                        setEditingMessage(null)
+                        setReplyingTo(message)
+                      }
                     : undefined}
                   reactions={message.content.messageId
                     ? reactionsByMessageId.get(message.content.messageId)
                     : undefined}
                   reactionBusy={reactionSending}
-                  onReact={message.content.messageId && canSend
+                  onReact={message.content.messageId
+                    && canSend
+                    && !mutationsByMessageId.get(message.content.messageId)?.deleted
                     ? (emoji, active) => void toggleReaction(message, emoji, active)
                     : undefined}
+                  onEdit={message.direction === 'outgoing'
+                    && message.content.messageId
+                    && message.content.text
+                    && !mutationsByMessageId.get(message.content.messageId)?.deleted
+                    ? () => beginEditing(message)
+                    : undefined}
+                  onDelete={message.direction === 'outgoing'
+                    && message.content.messageId
+                    && !mutationsByMessageId.get(message.content.messageId)?.deleted
+                    ? () => void deleteMessage(message)
+                    : undefined}
+                  mutationBusy={mutationSending}
                 />
               ))}
               <div ref={endRef} />
@@ -2149,7 +2307,14 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 <span className="min-w-0 flex-1">
                   <span className="block text-xs font-medium">{t('chat.replies.replying')}</span>
                   <span className="block truncate text-xs text-muted-foreground">
-                    {replyPreview(replyingTo, t('chat.newerClient'))}
+                    {replyPreview(
+                      replyingTo,
+                      t('chat.newerClient'),
+                      replyingTo.content.messageId
+                        ? mutationsByMessageId.get(replyingTo.content.messageId)
+                        : undefined,
+                      t('chat.mutations.deleted'),
+                    )}
                   </span>
                 </span>
                 <Button
@@ -2159,6 +2324,30 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                   className="h-7 w-7"
                   onClick={() => setReplyingTo(null)}
                   aria-label={t('chat.replies.cancel')}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+            {editingMessage && (
+              <div
+                className="mx-auto mb-2 flex max-w-3xl items-center gap-3 rounded-md border-l-4 border-primary bg-muted/50 px-3 py-2"
+                data-testid="chat-edit-composer"
+              >
+                <Pencil className="h-4 w-4 shrink-0 text-primary" />
+                <span className="min-w-0 flex-1 text-xs font-medium">
+                  {t('chat.mutations.editing')}
+                </span>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7"
+                  onClick={() => {
+                    setEditingMessage(null)
+                    setDraft('')
+                  }}
+                  aria-label={t('chat.mutations.cancelEdit')}
                 >
                   <X className="h-4 w-4" />
                 </Button>
@@ -2212,12 +2401,16 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                       })
                     : t('chat.selectConversation')
                 }
-                disabled={!service || !canSend || sending}
+                disabled={!service || !canSend || sending || mutationSending}
                 maxLength={16_000}
                 autoComplete="off"
               />
-              <Button type="submit" size="icon" disabled={!draft.trim() || !service || !canSend || sending}>
-                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              <Button type="submit" size="icon" disabled={!draft.trim() || !service || !canSend || sending || mutationSending}>
+                {sending || mutationSending
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                  : editingMessage
+                    ? <Check className="h-4 w-4" />
+                    : <Send className="h-4 w-4" />}
                 <span className="sr-only">{t('chat.send')}</span>
               </Button>
             </div>
@@ -2418,19 +2611,29 @@ function MessageBubble({
   newerClientLabel,
   accessToken,
   repliedMessage,
+  repliedMessageMutation,
+  mutation,
   onReply,
   reactions = [],
   reactionBusy,
   onReact,
+  onEdit,
+  onDelete,
+  mutationBusy,
 }: {
   message: ChatHistoryEntry
   newerClientLabel: string
   accessToken?: string
   repliedMessage?: ChatHistoryEntry
+  repliedMessageMutation?: MessageMutationState
+  mutation?: MessageMutationState
   onReply?: () => void
   reactions?: ReactionAggregate[]
   reactionBusy?: string | null
   onReact?: (emoji: ChatReactionEmoji, active: boolean) => void
+  onEdit?: () => void
+  onDelete?: () => void
+  mutationBusy?: boolean
 }) {
   const { t } = useTranslation()
   const outgoing = message.direction === 'outgoing'
@@ -2442,7 +2645,14 @@ function MessageBubble({
       data-testid="chat-message"
     >
       {outgoing && (
-        <MessageActions onReply={onReply} onReact={onReact} reactionBusy={reactionBusy} />
+        <MessageActions
+          onReply={onReply}
+          onReact={onReact}
+          reactionBusy={reactionBusy}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          mutationBusy={mutationBusy}
+        />
       )}
       <div
         className={cn(
@@ -2464,12 +2674,16 @@ function MessageBubble({
           >
             <span className="block truncate">
               {repliedMessage
-                ? replyPreview(repliedMessage, newerClientLabel)
+                ? replyPreview(repliedMessage, newerClientLabel, repliedMessageMutation, t('chat.mutations.deleted'))
                 : t('chat.replies.unavailable')}
             </span>
           </div>
         )}
-        {attachment ? (
+        {mutation?.deleted ? (
+          <p className="text-sm italic opacity-75" data-testid="chat-message-deleted">
+            {t('chat.mutations.deleted')}
+          </p>
+        ) : attachment ? (
           <div className="flex min-w-52 items-center gap-3">
             <FileText className="h-7 w-7 shrink-0" />
             <span className="min-w-0 flex-1">
@@ -2503,10 +2717,10 @@ function MessageBubble({
           </div>
         ) : (
           <p className="whitespace-pre-wrap break-words text-sm">
-            {message.content.text ?? newerClientLabel}
+            {mutation?.editedText ?? message.content.text ?? newerClientLabel}
           </p>
         )}
-        {reactions.length > 0 && (
+        {!mutation?.deleted && reactions.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1" data-testid="chat-reactions">
             {reactions.map(reaction => (
               <button
@@ -2542,11 +2756,18 @@ function MessageBubble({
           )}
         >
           {formatTime(message.content.sentAt)}
+          {mutation?.editedText && !mutation.deleted && (
+            <span data-testid="chat-message-edited">· {t('chat.mutations.edited')}</span>
+          )}
           {outgoing && (message.delivered ? <CheckCheck className="h-3 w-3" /> : <Check className="h-3 w-3" />)}
         </span>
       </div>
       {!outgoing && (
-        <MessageActions onReply={onReply} onReact={onReact} reactionBusy={reactionBusy} />
+        <MessageActions
+          onReply={onReply}
+          onReact={onReact}
+          reactionBusy={reactionBusy}
+        />
       )}
     </div>
   )
@@ -2556,13 +2777,19 @@ function MessageActions({
   onReply,
   onReact,
   reactionBusy,
+  onEdit,
+  onDelete,
+  mutationBusy,
 }: {
   onReply?: () => void
   onReact?: (emoji: ChatReactionEmoji, active: boolean) => void
   reactionBusy?: string | null
+  onEdit?: () => void
+  onDelete?: () => void
+  mutationBusy?: boolean
 }) {
   const { t } = useTranslation()
-  if (!onReply && !onReact) return null
+  if (!onReply && !onReact && !onEdit && !onDelete) return null
   return (
     <span className="flex shrink-0 items-center">
       {onReact && (
@@ -2597,6 +2824,34 @@ function MessageActions({
           </DropdownMenuContent>
         </DropdownMenu>
       )}
+      {onEdit && (
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="h-7 w-7 opacity-70 md:opacity-0 md:transition-opacity md:group-hover:opacity-100 md:focus-visible:opacity-100"
+          disabled={mutationBusy}
+          onClick={onEdit}
+          aria-label={t('chat.mutations.edit')}
+          data-testid="chat-edit-button"
+        >
+          <Pencil className="h-3.5 w-3.5" />
+        </Button>
+      )}
+      {onDelete && (
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="h-7 w-7 opacity-70 md:opacity-0 md:transition-opacity md:group-hover:opacity-100 md:focus-visible:opacity-100"
+          disabled={mutationBusy}
+          onClick={onDelete}
+          aria-label={t('chat.mutations.delete')}
+          data-testid="chat-delete-button"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      )}
       {onReply && <ReplyButton onReply={onReply} label={t('chat.replies.reply')} />}
     </span>
   )
@@ -2618,18 +2873,34 @@ function ReplyButton({ onReply, label }: { onReply: () => void; label: string })
   )
 }
 
-function replyPreview(message: ChatHistoryEntry, newerClientLabel: string): string {
-  return message.content.text
+function replyPreview(
+  message: ChatHistoryEntry,
+  newerClientLabel: string,
+  mutation?: MessageMutationState,
+  deletedLabel = newerClientLabel,
+): string {
+  if (mutation?.deleted) return deletedLabel
+  return mutation?.editedText
+    ?? message.content.text
     ?? message.content.attachment?.filename
     ?? newerClientLabel
 }
 
-function compareReactionOperations(left: ChatHistoryEntry, right: ChatHistoryEntry): number {
+function compareContentOperations(left: ChatHistoryEntry, right: ChatHistoryEntry): number {
   if (left.timestampMs !== right.timestampMs) return left.timestampMs - right.timestampMs
   const sequence = compareDecimalStrings(left.content.seq, right.content.seq)
   if (sequence !== 0) return sequence
   const device = (left.senderDeviceId ?? 0) - (right.senderDeviceId ?? 0)
   return device !== 0 ? device : left.id.localeCompare(right.id)
+}
+
+function messageActor(
+  message: ChatHistoryEntry,
+  conversation: ConversationId,
+  selfAddress: string,
+): string | null {
+  if (message.direction === 'outgoing') return selfAddress
+  return conversation.kind === 'direct' ? directAddress(conversation) : message.peer
 }
 
 function compareDecimalStrings(left: string, right: string): number {

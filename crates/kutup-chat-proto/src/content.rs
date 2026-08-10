@@ -40,6 +40,8 @@ pub mod kind {
     pub const TYPING: &str = "typing";
     /// Add/remove one bounded emoji reaction to a stable logical message. [IMPL]
     pub const REACTION: &str = "reaction";
+    /// Edit or irreversibly tombstone one stable logical message. [IMPL]
+    pub const MESSAGE_MUTATION: &str = "messageMutation";
     /// Attachment descriptor for the immutable encrypted Chat-media object;
     /// bytes ride the shared Drive/TUS object stack, not the mailbox. [IMPL]
     /// (phase 6; `docs/chat-media.md`)
@@ -262,6 +264,47 @@ impl ChatContent {
         Some(body)
     }
 
+    pub fn message_mutation_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        target_message_id: impl Into<String>,
+        operation: MessageMutationOperation,
+        replacement_text: Option<String>,
+    ) -> Result<Self, String> {
+        let body = MessageMutationBody {
+            target_message_id: target_message_id.into(),
+            operation,
+            replacement_text,
+        };
+        body.validate()?;
+        Ok(ChatContent {
+            v: Self::VERSION,
+            kind: kind::MESSAGE_MUTATION.to_string(),
+            sent_at: sent_at.into(),
+            seq,
+            message_id: Some(message_id.into()),
+            reply_to: None,
+            profile_key: None,
+            profile_suite: None,
+            body: serde_json::to_value(body)
+                .map_err(|error| format!("encode Chat message mutation: {error}"))?,
+            extra: serde_json::Map::new(),
+        })
+    }
+
+    pub fn as_message_mutation(&self) -> Option<MessageMutationBody> {
+        if self.kind != kind::MESSAGE_MUTATION
+            || self.v != Self::VERSION
+            || self.message_id.is_none()
+        {
+            return None;
+        }
+        let body: MessageMutationBody = serde_json::from_value(self.body.clone()).ok()?;
+        body.validate().ok()?;
+        Some(body)
+    }
+
     /// Builds the encrypted linked-device wrapper used by Note to Self and,
     /// later, ordinary sent-message synchronization.
     pub fn sent_transcript(
@@ -344,6 +387,7 @@ impl ChatContent {
                 | kind::RECEIPT
                 | kind::TYPING
                 | kind::REACTION
+                | kind::MESSAGE_MUTATION
                 | kind::ATTACHMENT
                 | kind::GROUP_CONTROL
                 | kind::SESSION_CONTROL
@@ -379,6 +423,46 @@ impl ReactionBody {
             return Err("Chat reaction emoji is not in the V1 set".into());
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MessageMutationOperation {
+    Edit,
+    Delete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MessageMutationBody {
+    pub target_message_id: String,
+    pub operation: MessageMutationOperation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_text: Option<String>,
+}
+
+impl MessageMutationBody {
+    pub fn validate(&self) -> Result<(), String> {
+        let target = Uuid::parse_str(&self.target_message_id)
+            .map_err(|_| "Chat message-mutation target must be a UUID".to_string())?;
+        if target.is_nil() || target.to_string() != self.target_message_id {
+            return Err("Chat message-mutation target must be a canonical non-nil UUID".into());
+        }
+        match (&self.operation, &self.replacement_text) {
+            (MessageMutationOperation::Edit, Some(text))
+                if !text.trim().is_empty() && text.chars().count() <= 16_000 =>
+            {
+                Ok(())
+            }
+            (MessageMutationOperation::Edit, _) => {
+                Err("Chat edit text must contain 1 to 16000 characters".into())
+            }
+            (MessageMutationOperation::Delete, None) => Ok(()),
+            (MessageMutationOperation::Delete, Some(_)) => {
+                Err("Chat delete must not contain replacement text".into())
+            }
+        }
     }
 }
 
@@ -516,6 +600,36 @@ mod tests {
             target,
             "🔥",
             true,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn message_mutation_is_typed_and_strict() {
+        let target = "018f8ad5-d7db-7c7c-8c4b-4f53467f4431";
+        let edit = ChatContent::message_mutation_with_id(
+            "018f8ad5-d7db-7c7c-8c4b-4f53467f4432",
+            "2026-08-10T10:00:00Z",
+            44,
+            target,
+            MessageMutationOperation::Edit,
+            Some("corrected".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            edit.as_message_mutation()
+                .unwrap()
+                .replacement_text
+                .as_deref(),
+            Some("corrected")
+        );
+        assert!(ChatContent::message_mutation_with_id(
+            "018f8ad5-d7db-7c7c-8c4b-4f53467f4432",
+            "t",
+            1,
+            target,
+            MessageMutationOperation::Delete,
+            Some("forbidden".into()),
         )
         .is_err());
     }

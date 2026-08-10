@@ -105,6 +105,15 @@
       "addEmoji": "{{emoji}} ile tepki ver",
       "remove": "{{emoji}} tepkisini kaldır"
     },
+    "mutations": {
+      "edit": "Mesajı düzenle",
+      "delete": "Mesajı sil",
+      "editing": "Mesaj düzenleniyor",
+      "cancelEdit": "Düzenlemeyi iptal et",
+      "edited": "düzenlendi",
+      "deleted": "Mesaj silindi",
+      "confirmDelete": "Bu mesaj herkes için silinsin mi? Bu işlem geri alınamaz."
+    },
   "safetyNumberChanged": "Bir alıcı cihazın kimliği değişti. Güvenlik numarasını doğrulayın.",
   "requests": {
     "title_one": "{{count}} mesaj isteği",

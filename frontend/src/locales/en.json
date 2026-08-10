@@ -105,6 +105,15 @@
       "addEmoji": "React with {{emoji}}",
       "remove": "Remove {{emoji}} reaction"
     },
+    "mutations": {
+      "edit": "Edit message",
+      "delete": "Delete message",
+      "editing": "Editing message",
+      "cancelEdit": "Cancel edit",
+      "edited": "edited",
+      "deleted": "Message deleted",
+      "confirmDelete": "Delete this message for everyone? This cannot be undone."
+    },
   "safetyNumberChanged": "A recipient device identity changed. Verify the safety number.",
   "requests": {
     "title_one": "{{count}} message request",

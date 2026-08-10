@@ -10,12 +10,19 @@ export interface ChatContentView {
   /** Present only after strict Rust descriptor validation. */
   attachment?: ChatAttachmentDescriptorV1
   reaction?: ChatReactionV1
+  mutation?: ChatMessageMutationV1
 }
 
 export interface ChatReactionV1 {
   targetMessageId: string
   emoji: '👍' | '❤️' | '😂' | '😮' | '😢' | '🙏'
   active: boolean
+}
+
+export interface ChatMessageMutationV1 {
+  targetMessageId: string
+  operation: 'edit' | 'delete'
+  replacementText?: string
 }
 
 export type ChatMediaClassV1 = 'file' | 'photo' | 'video' | 'audio'
@@ -1214,6 +1221,17 @@ export interface WasmChatClientHandle {
     active: boolean,
     createdAtMs: string,
   ): Promise<MlsOutboxEntry>
+  createMlsMessageMutation(
+    sendId: string,
+    conversationId: string,
+    incarnation: string,
+    mlsGroupId: Uint8Array,
+    sentAt: string,
+    targetMessageId: string,
+    operation: 'edit' | 'delete',
+    replacementText: string | undefined,
+    createdAtMs: string,
+  ): Promise<MlsOutboxEntry>
   pendingMlsApplicationMessages(): Promise<MlsOutboxEntry[]>
   stageMlsApplicationDelivery(
     sendId: string,
@@ -1316,6 +1334,14 @@ export interface WasmChatClientHandle {
     targetMessageId: string,
     emoji: string,
     active: boolean,
+  ): Promise<SendSummary>
+  sendMessageMutation(
+    sendId: string,
+    peer: string,
+    sentAt: string,
+    targetMessageId: string,
+    operation: 'edit' | 'delete',
+    replacementText?: string,
   ): Promise<SendSummary>
   mediaDeliveryCapability(peer: string): Promise<string>
   syncManifest(): Promise<unknown>

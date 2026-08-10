@@ -88,6 +88,7 @@ export interface KutupChatContentView {
   text?: string;
   attachment?: unknown;
   reaction?: unknown;
+  mutation?: unknown;
 }
 
 export interface KutupChatAccountAddress {
@@ -2362,6 +2363,41 @@ impl WasmChatClient {
         to_output(&entry)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = createMlsMessageMutation)]
+    pub async fn create_mls_message_mutation(
+        &self,
+        send_id: String,
+        conversation_id: String,
+        incarnation: String,
+        mls_group_id: Vec<u8>,
+        sent_at: String,
+        target_message_id: String,
+        operation: String,
+        replacement_text: Option<String>,
+        created_at_ms: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let conversation_id = uuid::Uuid::parse_str(&conversation_id)
+            .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
+        let operation = parse_message_mutation_operation(&operation)?;
+        let entry = self
+            .mls_client()
+            .create_message_mutation_application_message(
+                &send_id,
+                conversation_id,
+                parse_u64_string("MLS incarnation", &incarnation)?,
+                &mls_group_id,
+                &sent_at,
+                &target_message_id,
+                operation,
+                replacement_text,
+                parse_i64_string("MLS message clock", &created_at_ms)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&entry)
+    }
+
     #[wasm_bindgen(js_name = pendingMlsApplicationMessages)]
     pub async fn pending_mls_application_messages(&self) -> std::result::Result<JsValue, JsValue> {
         let pending = self
@@ -2679,6 +2715,40 @@ impl WasmChatClient {
         let content =
             ChatContent::reaction_with_id(&send_id, sent_at, seq, target_message_id, emoji, active)
                 .map_err(|error| js_error(&error))?;
+        let summary = self
+            .engine
+            .send(&send_id, &peer, &content, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&SendSummaryView::from(summary))
+    }
+
+    #[wasm_bindgen(js_name = sendMessageMutation)]
+    pub async fn send_message_mutation(
+        &mut self,
+        send_id: String,
+        peer: String,
+        sent_at: String,
+        target_message_id: String,
+        operation: String,
+        replacement_text: Option<String>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let seq = self
+            .engine
+            .session()
+            .next_sent_seq()
+            .await
+            .map_err(chat_error)?;
+        let content = ChatContent::message_mutation_with_id(
+            &send_id,
+            sent_at,
+            seq,
+            target_message_id,
+            parse_message_mutation_operation(&operation)?,
+            replacement_text,
+        )
+        .map_err(|error| js_error(&error))?;
         let summary = self
             .engine
             .send(&send_id, &peer, &content, &mut rng)
@@ -3149,6 +3219,8 @@ struct ContentView {
     attachment: Option<ChatAttachmentDescriptorV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reaction: Option<kutup_chat_proto::ReactionBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mutation: Option<kutup_chat_proto::MessageMutationBody>,
 }
 
 impl From<ChatContent> for ContentView {
@@ -3156,6 +3228,7 @@ impl From<ChatContent> for ContentView {
         let text = content.as_text().map(|body| body.text);
         let attachment = content.as_attachment();
         let reaction = content.as_reaction();
+        let mutation = content.as_message_mutation();
         Self {
             version: content.v,
             kind: content.kind,
@@ -3167,7 +3240,18 @@ impl From<ChatContent> for ContentView {
             text,
             attachment,
             reaction,
+            mutation,
         }
+    }
+}
+
+fn parse_message_mutation_operation(
+    operation: &str,
+) -> std::result::Result<kutup_chat_proto::MessageMutationOperation, JsValue> {
+    match operation {
+        "edit" => Ok(kutup_chat_proto::MessageMutationOperation::Edit),
+        "delete" => Ok(kutup_chat_proto::MessageMutationOperation::Delete),
+        _ => Err(js_error("Chat message mutation operation is invalid")),
     }
 }
 

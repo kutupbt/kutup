@@ -170,6 +170,48 @@ describe('ChatService MLS workflow coordination', () => {
     )
   })
 
+  it('keeps a Direct Chat edit target and replacement inside the WASM content call', async () => {
+    installQueuedWebLocks()
+    const sendId = '44444444-4444-4444-8444-444444444444'
+    const targetMessageId = '11111111-1111-4111-8111-111111111111'
+    vi.stubGlobal('crypto', { randomUUID: () => sendId })
+    const summary = {
+      delivered: true,
+      deduplicated: false,
+      attempts: 1,
+      safetyNumberChanges: [],
+      content: [],
+      ciphertext: [],
+    }
+    const client = { sendMessageMutation: vi.fn(async () => summary) }
+    const service = Object.create(ChatService.prototype) as ChatService
+    Object.assign(service, {
+      client,
+      username: 'alice',
+      capabilities: { serverName: 'a.test' },
+      lockName: 'kutup-chat-engine:test',
+      channel: { postMessage: vi.fn() },
+      listeners: new Set(),
+      mls: null,
+    })
+
+    await expect(service.mutateMessage(
+      { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
+      targetMessageId,
+      'edit',
+      'corrected',
+    )).resolves.toEqual(summary)
+
+    expect(client.sendMessageMutation).toHaveBeenCalledWith(
+      sendId,
+      'bob@b.test',
+      expect.any(String),
+      targetMessageId,
+      'edit',
+      'corrected',
+    )
+  })
+
   it('repairs the signed manifest and MLS membership after revocation', async () => {
     installQueuedWebLocks()
     const calls: string[] = []

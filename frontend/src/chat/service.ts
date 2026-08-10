@@ -411,6 +411,37 @@ export class ChatService {
     return summary
   }
 
+  async mutateMessage(
+    conversation: ConversationId,
+    targetMessageId: string,
+    operation: 'edit' | 'delete',
+    replacementText?: string,
+  ): Promise<SendSummary> {
+    if (conversation.kind === 'group') {
+      const summary = await this.withMlsWorkflow(() =>
+        this.requireMls().mutateMessage(
+          conversation.groupId,
+          targetMessageId,
+          operation,
+          replacementText,
+        ),
+      )
+      this.notifyPeers()
+      return { ...summary, safetyNumberChanges: [] }
+    }
+    const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
+    const summary = await this.withLock(() => this.client.sendMessageMutation(
+      crypto.randomUUID(),
+      peer,
+      new Date().toISOString(),
+      targetMessageId,
+      operation,
+      replacementText,
+    ))
+    this.notifyPeers()
+    return summary
+  }
+
   async chatMediaStorage(): Promise<ChatMediaStorageView> {
     if (!this.attachmentLedger) throw new Error('Chat media is not enabled')
     await this.withAttachmentLedgerLock(() => this.attachmentLedger!.sync())

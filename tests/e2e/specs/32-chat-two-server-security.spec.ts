@@ -138,6 +138,34 @@ async function reactTo(page: Page, target: string, emoji: string): Promise<void>
   await page.getByRole('menuitem', { name: `React with ${emoji}` }).click()
 }
 
+async function editMessage(page: Page, target: string, replacement: string): Promise<void> {
+  await reactionTarget(page, target).getByTestId('chat-edit-button').click()
+  await expect(page.getByTestId('chat-edit-composer')).toBeVisible()
+  const input = page.getByRole('main').getByRole('textbox')
+  await input.fill(replacement)
+  await input.press('Enter')
+  await expect(reactionTarget(page, replacement)).toBeVisible({ timeout: 45_000 })
+}
+
+async function deleteMessage(page: Page, target: string): Promise<void> {
+  page.once('dialog', dialog => void dialog.accept())
+  await reactionTarget(page, target).getByTestId('chat-delete-button').click()
+  await expect(page.getByTestId('chat-message-deleted')).toBeVisible({ timeout: 45_000 })
+}
+
+async function syncUntilDeleted(page: Page): Promise<void> {
+  await expect.poll(async () => {
+    if (await page.getByTestId('chat-message-deleted').count() > 0) return true
+    await page.getByRole('button', { name: 'Sync messages' }).click()
+    await page.waitForTimeout(500)
+    return await page.getByTestId('chat-message-deleted').count() > 0
+  }, {
+    timeout: 45_000,
+    intervals: [500, 1_000, 2_000],
+    message: 'encrypted message tombstone was not reconciled',
+  }).toBe(true)
+}
+
 async function syncUntilReaction(
   page: Page,
   target: string,
@@ -456,6 +484,12 @@ test.describe('two-server secure chat', () => {
       .getByTestId('chat-reaction-aggregate')
       .click()
     await syncUntilReaction(pageA, sealed, '👍', 1)
+    const editedSealed = `edited-sealed-${tag}`
+    await editMessage(pageA, sealed, editedSealed)
+    await syncUntilVisible(pageB, editedSealed)
+    await expect(reactionTarget(pageB, editedSealed).getByTestId('chat-message-edited')).toBeVisible()
+    await deleteMessage(pageA, editedSealed)
+    await syncUntilDeleted(pageB)
     expect(identifiedToBob).toEqual([])
 
     const directAttachment = `direct-attachment-${tag}.txt`
@@ -1094,6 +1128,10 @@ test.describe('two-server secure chat', () => {
     await expect(pageB.getByTestId(`chat-group-${conversationId}`)).toBeVisible({ timeout: 90_000 })
     await expect(bubble(pageB, fromAlice)).toBeVisible({ timeout: 90_000 })
     await expect(bubble(pageB, fromBob)).toBeVisible({ timeout: 90_000 })
+    const editedFromBob = `mls-edited-from-bob-${tag}`
+    await editMessage(pageB, fromBob, editedFromBob)
+    await syncUntilVisible(pageA, editedFromBob)
+    await expect(reactionTarget(pageA, editedFromBob).getByTestId('chat-message-edited')).toBeVisible()
     await pageB.getByTestId('chat-storage-button').click()
     await expect(pageB.getByTestId('chat-storage-summary')).toBeVisible({ timeout: 45_000 })
     await expect(pageB.getByRole('button', {

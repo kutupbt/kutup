@@ -215,6 +215,19 @@ the deterministic tuple `(sentAt, seq, senderDeviceId, operation ID)`, then
 aggregate active reactors. Targets absent from bounded local history are
 ignored without affecting the encrypted operation history.
 
+Edits and deletions use a hidden `messageMutation` operation with a canonical
+`targetMessageId`, an `edit` or `delete` discriminator, and replacement text
+only for edits. An edit is bounded to 16,000 characters. A client applies the
+operation only when its authenticated account actor is the original target
+author; another group member cannot mutate someone else's message. Valid edits
+use the same deterministic operation ordering as reactions. A valid delete is
+an irreversible display tombstone and wins over every edit regardless of
+arrival order, preventing a stale linked device from resurrecting deleted
+content. Mutation operations remain encrypted history and never appear as
+messages or previews. Deleting an attachment tombstones its descriptor in the
+conversation; it does not claim cryptographic erasure of ciphertext already
+retained or downloaded under the Chat-media policy.
+
 Incoming strangers are message requests. Accept/reject/block/unblock are
 client relationship state. First-contact/request traffic stays identified.
 
