@@ -469,6 +469,26 @@ describe('ChatService MLS workflow coordination', () => {
     )
   })
 
+  it('notifies local-cache expiry listeners even when media accounting is unavailable', async () => {
+    installQueuedWebLocks()
+    const purgeLocal = vi.fn().mockResolvedValue(undefined)
+    const service = Object.create(ChatService.prototype) as ChatService
+    Object.assign(service, {
+      client: {
+        purgeExpiredMessages: vi.fn().mockResolvedValue({
+          expiredMessages: 1,
+          expiredAttachmentIds: ['temporary-attachment'],
+        }),
+        history: vi.fn().mockResolvedValue([]),
+      },
+      attachmentLedger: null,
+      attachmentExpiryListeners: new Set([purgeLocal]),
+      lockName: 'kutup-chat-engine:test',
+    })
+    await expect(service.history()).resolves.toEqual([])
+    expect(purgeLocal).toHaveBeenCalledWith(['temporary-attachment'])
+  })
+
   it('repairs the signed manifest and MLS membership after revocation', async () => {
     installQueuedWebLocks()
     const calls: string[] = []

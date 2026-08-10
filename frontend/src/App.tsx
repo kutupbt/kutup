@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import { Loader2 } from 'lucide-react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
@@ -13,6 +13,8 @@ import { broadcastSession, requestSession, startSessionResponder, startLogoutLis
 import { isTauri } from '@/lib/isTauri'
 import { resolveApiBase } from '@/lib/apiBase'
 import { restoreSession, type RestoreRoute } from '@/lib/restoreSession'
+import { cancelChatMediaCacheRequestsV1 } from '@/chat/media'
+import { purgePrivateCiphertextCacheForAccountV1 } from '@/mediaCache'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import FirstLogin from './pages/FirstLogin'
@@ -62,6 +64,8 @@ export default function App() {
   const dispatch = useAppDispatch()
   const masterKey = useAppSelector(selectMasterKey)
   const accessToken = useAppSelector((s) => s.auth.accessToken)
+  const userId = useAppSelector((s) => s.auth.userId)
+  const previousUserId = useRef<string | null>(null)
   const [ready, setReady] = useState(false)
   // Tauri-only: where to land on first paint. `/` redirects here after
   // bootstrap completes. Web stays at `/drive` (existing behaviour).
@@ -135,6 +139,18 @@ export default function App() {
   useEffect(() => {
     return startLogoutListener(() => dispatch(logout()))
   }, [dispatch])
+
+  // The persistent media cache is account-private. A logout or direct account
+  // switch cancels active transfers and removes that account's ciphertext.
+  useEffect(() => {
+    const previous = previousUserId.current
+    previousUserId.current = userId
+    if (!previous || previous === userId) return
+    cancelChatMediaCacheRequestsV1()
+    void purgePrivateCiphertextCacheForAccountV1(previous).catch(cause => {
+      console.warn('Private media cache could not be purged during logout', cause)
+    })
+  }, [userId])
 
   // BroadcastChannel color listener — when any tab updates its presence
   // color, mirror it locally so OO's foreign-cursor renderer picks up the

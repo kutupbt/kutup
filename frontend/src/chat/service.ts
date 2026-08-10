@@ -85,6 +85,9 @@ export class ChatService {
   private readonly channel: BroadcastChannel
   private readonly listeners = new Set<UpdateListener>()
   private readonly typingListeners = new Set<TypingListener>()
+  private readonly attachmentExpiryListeners = new Set<(
+    attachmentIds: readonly string[],
+  ) => Promise<void> | void>()
   private socket: WebSocket | null = null
   private socketRetry: ReturnType<typeof setTimeout> | null = null
   private retryAttempt = 0
@@ -190,6 +193,13 @@ export class ChatService {
   subscribeTyping(listener: TypingListener): () => void {
     this.typingListeners.add(listener)
     return () => this.typingListeners.delete(listener)
+  }
+
+  subscribeAttachmentExpiry(
+    listener: (attachmentIds: readonly string[]) => Promise<void> | void,
+  ): () => void {
+    this.attachmentExpiryListeners.add(listener)
+    return () => this.attachmentExpiryListeners.delete(listener)
   }
 
   async history(): Promise<ChatHistoryEntry[]> {
@@ -917,6 +927,7 @@ export class ChatService {
     this.channel.close()
     this.listeners.clear()
     this.typingListeners.clear()
+    this.attachmentExpiryListeners.clear()
     this.attachmentLedger?.dispose()
     this.client.free()
   }
@@ -995,21 +1006,26 @@ export class ChatService {
   }
 
   private async releaseExpiredAttachments(report: ChatExpiryReport): Promise<void> {
-    if (!this.attachmentLedger || report.expiredAttachmentIds.length === 0) return
+    if (report.expiredAttachmentIds.length === 0) return
     const expiredIds = new Set(report.expiredAttachmentIds)
-    await this.withAttachmentLedgerLock(async () => {
-      await this.attachmentLedger!.sync()
-      const targets = this.attachmentLedger!.activeEntries().filter(
-        entity => expiredIds.has(entity.entry.attachmentId),
-      )
-      const expiredAt = Date.now()
-      for (const target of targets) {
-        await this.attachmentLedger!.markExpired(target.entityId, expiredAt)
-      }
-      for (const attachmentId of expiredIds) {
-        await this.deleteAttachmentReference(attachmentId)
-      }
-    })
+    if (this.attachmentLedger) {
+      await this.withAttachmentLedgerLock(async () => {
+        await this.attachmentLedger!.sync()
+        const targets = this.attachmentLedger!.activeEntries().filter(
+          entity => expiredIds.has(entity.entry.attachmentId),
+        )
+        const expiredAt = Date.now()
+        for (const target of targets) {
+          await this.attachmentLedger!.markExpired(target.entityId, expiredAt)
+        }
+        for (const attachmentId of expiredIds) {
+          await this.deleteAttachmentReference(attachmentId)
+        }
+      })
+    }
+    await Promise.allSettled([...this.attachmentExpiryListeners].map(
+      listener => listener([...expiredIds]),
+    ))
   }
 
   private async deleteAttachmentReference(attachmentId: string): Promise<void> {

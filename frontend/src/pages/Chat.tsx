@@ -16,6 +16,7 @@ import {
   MessageSquareWarning,
   Mic,
   MonitorSmartphone,
+  MoreVertical,
   Plus,
   Paperclip,
   Pencil,
@@ -62,6 +63,8 @@ import { ChatService, ChatServiceError, type ChatMediaStorageView } from '@/chat
 import { MlsSendError } from '@/chat/mls-service'
 import { MlsGroupSecurityDetails } from '@/chat/MlsGroupSecurityDetails'
 import { SafetyVerificationDialog } from '@/chat/SafetyVerificationDialog'
+import { ChatAttachmentPreview } from '@/chat/ChatAttachmentPreview'
+import { ChatAttachmentViewer } from '@/chat/ChatAttachmentViewer'
 import { mlsGroupInvitationReadiness } from '@/chat/group-readiness'
 import { isSupportedChat, useChatCapabilities } from '@/chat/capabilities'
 import {
@@ -96,7 +99,17 @@ import type {
 } from '@/chat/types'
 import { cn } from '@/lib/utils'
 import { copyText } from '@/lib/format'
-import { downloadChatMediaV1, uploadChatMediaV1 } from '@/chat/media'
+import {
+  clearCachedChatMediaV1,
+  downloadChatMediaToCacheV1,
+  isChatMediaAvailableInKutupV1,
+  saveCachedChatMediaToDeviceV1,
+  uploadChatMediaV1,
+} from '@/chat/media'
+import {
+  privateCiphertextCacheForAccountV1,
+  type PrivateCiphertextCacheV1,
+} from '@/mediaCache'
 import {
   disappearingMessageExpiresAt,
   formatRemainingTime,
@@ -201,6 +214,10 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     () => (auth.masterKey ? new Uint8Array(auth.masterKey) : null),
     [auth.masterKey],
   )
+  const mediaCache = useMemo(
+    () => auth.userId ? privateCiphertextCacheForAccountV1(auth.userId) : null,
+    [auth.userId],
+  )
   const [service, setService] = useState<ChatService | null>(null)
   const [history, setHistory] = useState<ChatHistoryEntry[]>([])
   const [contacts, setContacts] = useState<ContactRecord[]>([])
@@ -287,6 +304,13 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     : null
 
   useEffect(() => {
+    if (!mediaCache) return
+    void mediaCache.initialize().catch(cause => {
+      console.warn('Private media cache could not be initialized', cause)
+    })
+  }, [mediaCache])
+
+  useEffect(() => {
     voiceMountedRef.current = true
     return () => {
       voiceMountedRef.current = false
@@ -357,6 +381,13 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
         opened = next
         setService(next)
         next.subscribe(() => void refresh())
+        if (mediaCache) {
+          next.subscribeAttachmentExpiry(async attachmentIds => {
+            await Promise.all(attachmentIds.map(
+              attachmentId => mediaCache.removeObject('chat', attachmentId),
+            ))
+          })
+        }
         next.subscribeTyping((event: ChatTypingEvent) => {
           const key = conversationKey(event.conversation)
           setTypingByConversation((current) => {
@@ -385,7 +416,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       cancelled = true
       opened?.dispose()
     }
-  }, [auth.userId, auth.username, capabilities, masterKey, t])
+  }, [auth.userId, auth.username, capabilities, masterKey, mediaCache, t])
 
   const contactsByPeer = useMemo(
     () => new Map(contacts.map((contact) => [contact.peer, contact])),
@@ -2948,6 +2979,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                   message={message}
                   newerClientLabel={t('chat.newerClient')}
                   accessToken={auth.accessToken ?? undefined}
+                  mediaCache={mediaCache ?? undefined}
+                  attachmentAccepted={!requestSelected && !blockedSelected}
                   repliedMessage={message.content.replyTo
                     ? messagesById.get(message.content.replyTo)
                     : undefined}
@@ -3402,6 +3435,8 @@ function MessageBubble({
   message,
   newerClientLabel,
   accessToken,
+  mediaCache,
+  attachmentAccepted = true,
   repliedMessage,
   repliedMessageMutation,
   mutation,
@@ -3420,6 +3455,8 @@ function MessageBubble({
   message: ChatHistoryEntry
   newerClientLabel: string
   accessToken?: string
+  mediaCache?: PrivateCiphertextCacheV1
+  attachmentAccepted?: boolean
   repliedMessage?: ChatHistoryEntry
   repliedMessageMutation?: MessageMutationState
   mutation?: MessageMutationState
@@ -3437,10 +3474,57 @@ function MessageBubble({
 }) {
   const { t } = useTranslation()
   const outgoing = message.direction === 'outgoing'
-  const [downloading, setDownloading] = useState(false)
+  const [cacheState, setCacheState] = useState<'checking' | 'remote' | 'downloading' | 'available'>('checking')
+  const [downloadProgress, setDownloadProgress] = useState(0)
+  const [saving, setSaving] = useState(false)
+  const [viewerOpen, setViewerOpen] = useState(false)
+  const downloadControllerRef = useRef<AbortController | null>(null)
   const bubbleRef = useRef<HTMLDivElement>(null)
   const attachment = message.content.attachment
   const expiresAtMs = disappearingMessageExpiresAt(message)
+  const canOpenAttachment = attachment?.mediaClass === 'photo' ||
+    attachment?.mediaClass === 'audio' || attachment?.mediaClass === 'video'
+
+  useEffect(() => {
+    let cancelled = false
+    downloadControllerRef.current?.abort()
+    setDownloadProgress(0)
+    if (!attachment || !mediaCache) {
+      setCacheState('remote')
+      return
+    }
+    setCacheState('checking')
+    void isChatMediaAvailableInKutupV1(mediaCache, attachment)
+      .then(available => {
+        if (!cancelled) setCacheState(available ? 'available' : 'remote')
+      })
+      .catch(() => { if (!cancelled) setCacheState('remote') })
+    return () => {
+      cancelled = true
+      downloadControllerRef.current?.abort()
+    }
+  }, [attachment, mediaCache])
+
+  useEffect(() => {
+    if (!attachment || !mediaCache || !mutation?.deleted) return
+    setViewerOpen(false)
+    setCacheState('remote')
+    void clearCachedChatMediaV1(mediaCache, attachment).catch(() => undefined)
+  }, [attachment, mediaCache, mutation?.deleted])
+
+  useEffect(() => {
+    if (attachmentAccepted) return
+    downloadControllerRef.current?.abort()
+    setViewerOpen(false)
+  }, [attachmentAccepted])
+
+  useEffect(() => {
+    if (!attachment || !mediaCache || expiresAtMs === undefined || expiresAtMs > nowMs) return
+    downloadControllerRef.current?.abort()
+    setViewerOpen(false)
+    setCacheState('remote')
+    void clearCachedChatMediaV1(mediaCache, attachment).catch(() => undefined)
+  }, [attachment, expiresAtMs, mediaCache, nowMs])
   useEffect(() => {
     const element = bubbleRef.current
     if (!element || !onVisible || typeof IntersectionObserver === 'undefined') return
@@ -3501,36 +3585,139 @@ function MessageBubble({
             {t('chat.mutations.deleted')}
           </p>
         ) : attachment ? (
-          <div className="flex min-w-52 items-center gap-3">
-            <FileText className="h-7 w-7 shrink-0" />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-medium">{attachment.filename}</span>
-              <span className={cn(
-                'block text-[11px]',
-                outgoing ? 'text-primary-foreground/70' : 'text-muted-foreground',
-              )}>
-                {formatBytes(attachment.plaintextBytes)} · encrypted
+          <div className="min-w-52">
+            <ChatAttachmentPreview
+              attachment={attachment}
+              visible={attachmentAccepted}
+              className="mb-2"
+            />
+            <div className="flex items-center gap-3">
+              <FileText className="h-7 w-7 shrink-0" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">{attachment.filename}</span>
+                <span className={cn(
+                  'block text-[11px]',
+                  outgoing ? 'text-primary-foreground/70' : 'text-muted-foreground',
+                )}>
+                  {formatBytes(attachment.plaintextBytes)} · {
+                    cacheState === 'available'
+                      ? 'available in Kutup'
+                      : cacheState === 'downloading'
+                        ? `${downloadProgress}% downloaded`
+                        : 'encrypted'
+                  }
+                </span>
               </span>
-            </span>
-            <Button
-              type="button"
-              size="icon"
-              variant={outgoing ? 'secondary' : 'ghost'}
-              className="h-8 w-8 shrink-0"
-              disabled={!accessToken || downloading}
-              onClick={() => {
-                if (!accessToken || downloading) return
-                setDownloading(true)
-                void downloadChatMediaV1(attachment, accessToken)
-                  .catch(() => toast.error('Encrypted attachment download failed'))
-                  .finally(() => setDownloading(false))
-              }}
-              aria-label={`Download ${attachment.filename}`}
-            >
-              {downloading
-                ? <Loader2 className="h-4 w-4 animate-spin" />
-                : <Download className="h-4 w-4" />}
-            </Button>
+              <Button
+                type="button"
+                size="icon"
+                variant={outgoing ? 'secondary' : 'ghost'}
+                className="h-8 w-8 shrink-0"
+                disabled={!attachmentAccepted || !mediaCache || cacheState === 'checking' ||
+                  (cacheState === 'remote' && !accessToken) ||
+                  (cacheState === 'available' && !canOpenAttachment)}
+                onClick={() => {
+                  if (cacheState === 'downloading') {
+                    downloadControllerRef.current?.abort()
+                    return
+                  }
+                  if (cacheState === 'available') {
+                    if (canOpenAttachment) setViewerOpen(true)
+                    return
+                  }
+                  if (!accessToken || !mediaCache || cacheState !== 'remote') return
+                  const controller = new AbortController()
+                  downloadControllerRef.current = controller
+                  setCacheState('downloading')
+                  setDownloadProgress(0)
+                  void downloadChatMediaToCacheV1(
+                    mediaCache,
+                    attachment,
+                    accessToken,
+                    (received, total) => setDownloadProgress(Math.floor(received / total * 100)),
+                    controller.signal,
+                    expiresAtMs === undefined ? {} : { expiresAtMs },
+                  )
+                    .then(() => setCacheState('available'))
+                    .catch(cause => {
+                      setCacheState('remote')
+                      if (!(cause instanceof DOMException && cause.name === 'AbortError')) {
+                        toast.error('Encrypted attachment download failed')
+                      }
+                    })
+                    .finally(() => { downloadControllerRef.current = null })
+                }}
+                aria-label={cacheState === 'downloading'
+                  ? `Cancel download of ${attachment.filename}`
+                  : cacheState === 'available'
+                    ? canOpenAttachment
+                      ? `Open ${attachment.filename}`
+                      : `${attachment.filename} is available in Kutup`
+                    : `Download ${attachment.filename} into Kutup`}
+              >
+                {cacheState === 'checking'
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                  : cacheState === 'downloading'
+                    ? <X className="h-4 w-4" />
+                    : cacheState === 'available'
+                      ? <HardDrive className="h-4 w-4" />
+                      : <Download className="h-4 w-4" />}
+              </Button>
+              {attachmentAccepted && cacheState === 'available' && mediaCache && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant={outgoing ? 'secondary' : 'ghost'}
+                      className="h-8 w-8 shrink-0"
+                      aria-label={`More actions for ${attachment.filename}`}
+                    >
+                      {saving
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                        : <MoreVertical className="h-4 w-4" />}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem
+                      disabled={saving}
+                      onSelect={() => {
+                        setSaving(true)
+                        void saveCachedChatMediaToDeviceV1(mediaCache, attachment)
+                          .catch(cause => {
+                            if (!(cause instanceof DOMException && cause.name === 'AbortError')) {
+                              toast.error('Attachment could not be saved to this device')
+                            }
+                          })
+                          .finally(() => setSaving(false))
+                      }}
+                    >
+                      <Download className="mr-2 h-4 w-4" />
+                      Save to device
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={() => {
+                        setViewerOpen(false)
+                        void clearCachedChatMediaV1(mediaCache, attachment)
+                          .then(() => setCacheState('remote'))
+                          .catch(() => toast.error('Local encrypted copy could not be cleared'))
+                      }}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Clear local copy
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </div>
+            {mediaCache && (
+              <ChatAttachmentViewer
+                open={viewerOpen}
+                onOpenChange={setViewerOpen}
+                cache={mediaCache}
+                attachment={attachment}
+              />
+            )}
           </div>
         ) : (
           <p className="whitespace-pre-wrap break-words text-sm">
