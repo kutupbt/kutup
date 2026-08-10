@@ -7,6 +7,9 @@ import type {
   ChatAttachmentDescriptorV1,
   ChatDevice,
   ChatHistoryEntry,
+  ChatHistoryTransferDownloadResult,
+  ChatHistoryTransferList,
+  ChatHistoryTransferRequest,
   ContactRecord,
   ConversationId,
   InboundAttention,
@@ -205,6 +208,36 @@ export class ChatService {
 
   devices(): Promise<ChatDevice[]> {
     return this.transport.listDevices()
+  }
+
+  historyTransfers(): Promise<ChatHistoryTransferList> {
+    return this.withLock(() => this.client.listHistoryTransfers())
+  }
+
+  async requestHistoryTransfer(): Promise<ChatHistoryTransferRequest> {
+    const request = await this.withLock(() => this.client.requestHistoryTransfer())
+    this.notifyPeers()
+    return request
+  }
+
+  async approveHistoryTransfer(
+    request: ChatHistoryTransferRequest,
+  ): Promise<{ acceptance: unknown; frameCount: number }> {
+    const result = await this.withLock(() => this.client.approveHistoryTransfer(
+      request,
+      100_000,
+      String(256 * 1024 * 1024),
+    ))
+    this.notifyPeers()
+    return result
+  }
+
+  async downloadHistoryTransfer(
+    transferId: string,
+  ): Promise<ChatHistoryTransferDownloadResult> {
+    const result = await this.withLock(() => this.client.downloadHistoryTransfer(transferId))
+    if (result.ready) this.notifyPeers()
+    return result
   }
 
   async revokeDevice(deviceId: number): Promise<ChatDevice[]> {

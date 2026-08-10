@@ -144,6 +144,36 @@ export interface ChatDevice {
   lastSeenAt?: string | null
 }
 
+export interface ChatHistoryTransferRequest {
+  version: number
+  transferId: string
+  account: string
+  requestingDeviceId: number
+  createdAtUnix: number
+  expiresAtUnix: number
+  [key: string]: unknown
+}
+
+export interface ChatHistoryTransferSummary {
+  transferId: string
+  request: ChatHistoryTransferRequest
+  acceptance?: unknown
+  state: 'pending' | 'accepted' | string
+  requestingDeviceId: number
+  respondingDeviceId?: number
+  frameCount: number
+}
+
+export interface ChatHistoryTransferList {
+  transfers: ChatHistoryTransferSummary[]
+}
+
+export interface ChatHistoryTransferDownloadResult {
+  ready: boolean
+  frameCount: number
+  importedCount?: number
+}
+
 export interface InboundAttention {
   id: string
   cursor: string
@@ -1260,6 +1290,14 @@ export interface WasmChatClientHandle {
   ): Promise<SendSummary>
   mediaDeliveryCapability(peer: string): Promise<string>
   syncManifest(): Promise<unknown>
+  requestHistoryTransfer(): Promise<ChatHistoryTransferRequest>
+  listHistoryTransfers(): Promise<ChatHistoryTransferList>
+  approveHistoryTransfer(
+    request: ChatHistoryTransferRequest,
+    recordLimit: number,
+    plaintextByteLimit: string,
+  ): Promise<{ acceptance: unknown; frameCount: number }>
+  downloadHistoryTransfer(transferId: string): Promise<ChatHistoryTransferDownloadResult>
   safetyNumber(peer: string): Promise<SafetyNumberV1>
   verifySafetyNumber(peer: string, scannedPayload: string): Promise<SafetyNumberV1>
   free(): void

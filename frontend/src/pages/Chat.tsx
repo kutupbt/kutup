@@ -62,6 +62,7 @@ import type {
   ChatCapabilities,
   ChatDevice,
   ChatHistoryEntry,
+  ChatHistoryTransferSummary,
   ChatProfile,
   ContactRecord,
   ConversationId,
@@ -158,6 +159,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [devices, setDevices] = useState<ChatDevice[]>([])
   const [devicesLoading, setDevicesLoading] = useState(false)
   const [deviceRevoking, setDeviceRevoking] = useState<number | null>(null)
+  const [historyTransfers, setHistoryTransfers] = useState<ChatHistoryTransferSummary[]>([])
+  const [historyTransferBusy, setHistoryTransferBusy] = useState<string | null>(null)
   const [mediaStorageOpen, setMediaStorageOpen] = useState(false)
   const [mediaStorage, setMediaStorage] = useState<ChatMediaStorageView | null>(null)
   const [mediaStorageLoading, setMediaStorageLoading] = useState(false)
@@ -450,17 +453,27 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     if (!devicesOpen || !service) return
     let cancelled = false
     setDevicesLoading(true)
-    void service.devices()
-      .then(nextDevices => {
-        if (!cancelled) setDevices(nextDevices)
-      })
-      .catch(cause => {
-        if (!cancelled) toast.error(errorMessage(cause, t))
-      })
-      .finally(() => {
-        if (!cancelled) setDevicesLoading(false)
-      })
-    return () => { cancelled = true }
+    const load = (showError: boolean) => {
+      void Promise.all([service.devices(), service.historyTransfers()])
+        .then(([nextDevices, nextTransfers]) => {
+          if (!cancelled) {
+            setDevices(nextDevices)
+            setHistoryTransfers(nextTransfers.transfers)
+          }
+        })
+        .catch(cause => {
+          if (!cancelled && showError) toast.error(errorMessage(cause, t))
+        })
+        .finally(() => {
+          if (!cancelled) setDevicesLoading(false)
+        })
+    }
+    load(true)
+    const polling = window.setInterval(() => load(false), 3_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(polling)
+    }
   }, [devicesOpen, service, t])
 
   useEffect(() => {
@@ -492,6 +505,57 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       toast.error(errorMessage(cause, t))
     } finally {
       setDeviceRevoking(null)
+    }
+  }
+
+  async function refreshHistoryTransfers() {
+    if (!service) return
+    setHistoryTransfers((await service.historyTransfers()).transfers)
+  }
+
+  async function requestChatHistory() {
+    if (!service) return
+    setHistoryTransferBusy('request')
+    try {
+      await service.requestHistoryTransfer()
+      await refreshHistoryTransfers()
+      toast.success(t('chat.devices.historyRequested'))
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setHistoryTransferBusy(null)
+    }
+  }
+
+  async function approveChatHistory(transfer: ChatHistoryTransferSummary) {
+    if (!service) return
+    setHistoryTransferBusy(transfer.transferId)
+    try {
+      await service.approveHistoryTransfer(transfer.request)
+      await refreshHistoryTransfers()
+      toast.success(t('chat.devices.historyApproved'))
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setHistoryTransferBusy(null)
+    }
+  }
+
+  async function restoreChatHistory(transfer: ChatHistoryTransferSummary) {
+    if (!service) return
+    setHistoryTransferBusy(transfer.transferId)
+    try {
+      const result = await service.downloadHistoryTransfer(transfer.transferId)
+      await refreshHistoryTransfers()
+      if (result.ready) {
+        toast.success(t('chat.devices.historyRestored', { count: result.importedCount ?? 0 }))
+      } else {
+        toast.info(t('chat.devices.historyUploading'))
+      }
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setHistoryTransferBusy(null)
     }
   }
 
@@ -982,6 +1046,77 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 <p className="text-xs text-muted-foreground">
                   {t('chat.devices.historyWarning')}
                 </p>
+                <div className="grid gap-3 border-t pt-4" data-testid="chat-history-recovery">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-medium">{t('chat.devices.historyTitle')}</h3>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {t('chat.devices.historyDescription')}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={historyTransferBusy !== null || historyTransfers.some(transfer =>
+                        transfer.requestingDeviceId === service?.deviceId)}
+                      onClick={() => void requestChatHistory()}
+                      data-testid="chat-history-request"
+                    >
+                      {historyTransferBusy === 'request'
+                        ? <Loader2 className="h-4 w-4 animate-spin" />
+                        : <Download className="mr-2 h-4 w-4" />}
+                      {t('chat.devices.historyRequest')}
+                    </Button>
+                  </div>
+                  {historyTransfers.map(transfer => {
+                    const requestingHere = transfer.requestingDeviceId === service?.deviceId
+                    const busy = historyTransferBusy === transfer.transferId
+                    return (
+                      <div
+                        key={transfer.transferId}
+                        className="flex items-center justify-between gap-3 rounded-lg border p-3"
+                        data-testid={`chat-history-transfer-${transfer.transferId}`}
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">
+                            {requestingHere
+                              ? t('chat.devices.historyThisDevice')
+                              : t('chat.devices.historyOtherDevice', {
+                                  device: transfer.requestingDeviceId,
+                                })}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {transfer.state === 'accepted'
+                              ? t('chat.devices.historyReady', { count: transfer.frameCount })
+                              : t('chat.devices.historyPending')}
+                          </p>
+                        </div>
+                        {requestingHere && transfer.acceptance ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={historyTransferBusy !== null}
+                            onClick={() => void restoreChatHistory(transfer)}
+                          >
+                            {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            {t('chat.devices.historyRestore')}
+                          </Button>
+                        ) : !requestingHere && transfer.state === 'pending' ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={historyTransferBusy !== null}
+                            onClick={() => void approveChatHistory(transfer)}
+                          >
+                            {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            {t('chat.devices.historyApprove')}
+                          </Button>
+                        ) : null}
+                      </div>
+                    )
+                  })}
+                </div>
               </DialogContent>
             </Dialog>
             {capabilities.media && (
