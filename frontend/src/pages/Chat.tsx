@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -231,6 +231,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const receiptAttempted = useRef(new Set<string>())
   const typingSentAt = useRef(new Map<string, number>())
   const expiryRefreshPending = useRef(false)
+  const expiryStartAttempted = useRef(new Set<string>())
   const selfAccount = useMemo(
     () =>
       auth.username
@@ -1139,6 +1140,34 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       setTimerSending(false)
     }
   }
+
+  const startVisibleDisappearingMessage = useCallback((message: ChatHistoryEntry) => {
+    const messageId = message.content.messageId
+    if (
+      !service
+      || !pageVisible
+      || message.direction !== 'incoming'
+      || !messageId
+      || message.content.expiresAfterSeconds === undefined
+      || message.content.expiresAtMs !== undefined
+      || expiryStartAttempted.current.has(messageId)
+    ) return
+    expiryStartAttempted.current.add(messageId)
+    void service.startDisappearingExpiry(message.conversation, messageId)
+      .catch(cause => console.warn('Encrypted disappearing expiry start could not be sent', cause))
+      .then(() => service.history())
+      .then(nextHistory => {
+        setHistory(nextHistory)
+        const durableStart = nextHistory.some(candidate =>
+          candidate.content.messageId === messageId
+          && candidate.content.expiresAtMs !== undefined)
+        if (!durableStart) expiryStartAttempted.current.delete(messageId)
+      })
+      .catch(cause => {
+        expiryStartAttempted.current.delete(messageId)
+        console.warn('Disappearing expiry state could not be refreshed', cause)
+      })
+  }, [pageVisible, service])
 
   async function updateContact(action: 'accept' | 'reject' | 'block' | 'unblock') {
     if (!service || !selectedAddress || contactUpdating) return
@@ -2637,6 +2666,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     ? receiptsByMessageId.get(message.content.messageId)
                     : undefined}
                   nowMs={nowMs}
+                  onVisible={startVisibleDisappearingMessage}
                 />
               ))}
               {typingLabel && (
@@ -2987,6 +3017,7 @@ function MessageBubble({
   mutationBusy,
   receipt,
   nowMs,
+  onVisible,
 }: {
   message: ChatHistoryEntry
   newerClientLabel: string
@@ -3003,14 +3034,26 @@ function MessageBubble({
   mutationBusy?: boolean
   receipt?: MessageReceiptState
   nowMs: number
+  onVisible?: (message: ChatHistoryEntry) => void
 }) {
   const { t } = useTranslation()
   const outgoing = message.direction === 'outgoing'
   const [downloading, setDownloading] = useState(false)
+  const bubbleRef = useRef<HTMLDivElement>(null)
   const attachment = message.content.attachment
   const expiresAtMs = disappearingMessageExpiresAt(message)
+  useEffect(() => {
+    const element = bubbleRef.current
+    if (!element || !onVisible || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) onVisible(message)
+    }, { threshold: 0.1 })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [message, onVisible])
   return (
     <div
+      ref={bubbleRef}
       className={cn('group flex items-center gap-1', outgoing ? 'justify-end' : 'justify-start')}
       data-testid="chat-message"
     >

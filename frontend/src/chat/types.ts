@@ -15,6 +15,7 @@ export interface ChatContentView {
   typing?: ChatTypingV1
   disappearingTimer?: ChatDisappearingTimerV1
   expiresAfterSeconds?: number
+  expiresAtMs?: number
 }
 
 export interface ChatReactionV1 {
@@ -1431,6 +1432,13 @@ export interface WasmChatClientHandle {
     peer: string,
     sentAt: string,
     durationSeconds?: number,
+  ): Promise<SendSummary>
+  startDisappearingExpiry(
+    sendId: string,
+    sentAt: string,
+    conversation: ConversationId,
+    targetMessageId: string,
+    startedAtMs: string,
   ): Promise<SendSummary>
   mediaDeliveryCapability(peer: string): Promise<string>
   syncManifest(): Promise<unknown>

@@ -373,6 +373,49 @@ describe('ChatService MLS workflow coordination', () => {
     expect(channel.postMessage).toHaveBeenCalledWith({ type: 'updated' })
   })
 
+  it('synchronizes a recipient first-view deadline through the encrypted account path', async () => {
+    installQueuedWebLocks()
+    const sendId = '99999999-9999-4999-8999-999999999999'
+    const targetMessageId = '88888888-8888-4888-8888-888888888888'
+    const startedAtMs = 1_786_315_200_000
+    const conversation = {
+      kind: 'direct' as const,
+      address: { username: 'bob', server: 'b.test' },
+    }
+    vi.stubGlobal('crypto', { randomUUID: () => sendId })
+    const summary = {
+      delivered: true,
+      deduplicated: false,
+      attempts: 1,
+      safetyNumberChanges: [],
+    }
+    const client = { startDisappearingExpiry: vi.fn().mockResolvedValue(summary) }
+    const channel = { postMessage: vi.fn() }
+    const service = Object.create(ChatService.prototype) as ChatService
+    Object.assign(service, {
+      client,
+      lockName: 'kutup-chat-engine:test',
+      channel,
+      listeners: new Set(),
+      mls: null,
+    })
+
+    await expect(service.startDisappearingExpiry(
+      conversation,
+      targetMessageId,
+      startedAtMs,
+    )).resolves.toEqual(summary)
+
+    expect(client.startDisappearingExpiry).toHaveBeenCalledWith(
+      sendId,
+      new Date(startedAtMs).toISOString(),
+      conversation,
+      targetMessageId,
+      String(startedAtMs),
+    )
+    expect(channel.postMessage).toHaveBeenCalledWith({ type: 'updated' })
+  })
+
   it('durably expires attachment accounting before deletion and retries after failure', async () => {
     installQueuedWebLocks()
     const entry = {

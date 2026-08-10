@@ -17,8 +17,8 @@ use kutup_chat_core::{
     InboundState, Result, SendOutcome, Session, SqliteChatDb,
 };
 use kutup_chat_proto::{
-    DeliveredEnvelope, DevicePreKeyBundle, MailboxPage, OutgoingEnvelope,
-    RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
+    AccountAddress, ConversationId, DeliveredEnvelope, DevicePreKeyBundle, MailboxPage,
+    OutgoingEnvelope, RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};
@@ -495,6 +495,37 @@ fn disappearing_timer_is_durable_only_for_established_conversations() {
         2,
         "the real request and accepted timer are durable"
     );
+}
+
+#[test]
+fn a_peer_cannot_inject_a_recipient_disappearing_expiry_start() {
+    let mut rng = test_rng();
+    let bob_addr = ChatAddress::local("bob", 1);
+    let bob_session = in_memory("bob", 1, &mut rng);
+    let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
+    let mut alice = in_memory("alice", 1, &mut rng);
+    block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
+    let control = ChatContent::disappearing_expiry_start_with_id(
+        "44444444-4444-4444-8444-444444444444",
+        "2026-08-10T12:00:03Z",
+        1,
+        ConversationId::direct(AccountAddress::local("alice").unwrap()),
+        "55555555-5555-4555-8555-555555555555",
+        1,
+    )
+    .unwrap();
+    let encrypted =
+        block_on(alice.encrypt(&bob_addr, bundle.registration_id, &control, &mut rng)).unwrap();
+    let server = Rc::new(Mailbox::default());
+    server.deposit(vec![deliver(&encrypted, "alice", "forged-expiry-start", 1)]);
+
+    let mut bob = Engine::new(bob_session, server.clone());
+    let report = block_on(bob.receive(&mut rng)).unwrap();
+    assert!(report.messages.is_empty());
+    assert_eq!(report.errors.len(), 1);
+    assert_eq!(report.errors[0].kind, InboundFailureKind::Unknown);
+    assert!(server.acked().is_empty());
+    assert!(block_on(bob.session().history()).unwrap().is_empty());
 }
 
 #[test]

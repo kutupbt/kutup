@@ -1198,6 +1198,20 @@ impl Engine {
                 "disappearing-message timers require an established conversation".into(),
             ));
         }
+        if let Some(start) = content.as_disappearing_expiry_start() {
+            if peer_user != self.session.user() {
+                return Err(ChatError::Invalid(
+                    "disappearing expiry starts are same-account controls".into(),
+                ));
+            }
+            self.session
+                .validate_disappearing_expiry_start(&start, crate::clock::unix_millis())
+                .await?;
+        } else if content.kind == kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START {
+            return Err(ChatError::Invalid(
+                "disappearing expiry start is invalid".into(),
+            ));
+        }
         if content
             .message_id
             .as_deref()

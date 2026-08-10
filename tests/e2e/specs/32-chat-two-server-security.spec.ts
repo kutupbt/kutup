@@ -501,8 +501,9 @@ test.describe('two-server secure chat', () => {
     await syncUntilReceipt(pageB, reply, 'chat-receipt-delivered')
 
     // Timer state and each affected duration are authenticated inside the
-    // ordinary Direct ciphertext. Both devices remove their own durable
-    // plaintext after their independent local 30-second viewing windows.
+    // ordinary Direct ciphertext. Alice counts from send; Bob remains unread
+    // until the bubble is actually visible, then privately synchronizes that
+    // absolute first-view deadline to Bob's own linked devices.
     await pageA.getByTestId('chat-disappearing-timer').click()
     await pageA.getByTestId('chat-disappearing-thirtySeconds').click()
     await expect(pageA.getByTestId('chat-disappearing-timer')).toHaveAttribute(
@@ -510,19 +511,24 @@ test.describe('two-server secure chat', () => {
       'New messages disappear after 30 seconds',
     )
     await syncUntilDisappearingTimer(pageB, 'New messages disappear after 30 seconds')
+    await pageB.getByText('Note to Self', { exact: true }).first().click()
     const temporary = `temporary-direct-${tag}`
     await send(pageA, temporary)
-    await syncUntilVisible(pageB, temporary)
     await expect(reactionTarget(pageA, temporary).getByTestId('chat-message-expiry')).toBeVisible()
-    await expect(reactionTarget(pageB, temporary).getByTestId('chat-message-expiry')).toBeVisible()
-    await expect.poll(async () => ({
-      sender: await bubble(pageA, temporary).count(),
-      receiver: await bubble(pageB, temporary).count(),
-    }), {
+    await pageB.getByRole('button', { name: 'Sync messages' }).click()
+    await expect.poll(async () => await bubble(pageA, temporary).count(), {
       timeout: 45_000,
       intervals: [1_000],
-      message: 'Direct disappearing plaintext outlived its authenticated duration',
-    }).toEqual({ sender: 0, receiver: 0 })
+      message: 'sender disappearing plaintext outlived its authenticated duration',
+    }).toBe(0)
+    await pageB.getByRole('button', { name: new RegExp(alice) }).click()
+    await syncUntilVisible(pageB, temporary)
+    await expect(reactionTarget(pageB, temporary).getByTestId('chat-message-expiry')).toBeVisible()
+    await expect.poll(async () => await bubble(pageB, temporary).count(), {
+      timeout: 45_000,
+      intervals: [1_000],
+      message: 'recipient disappearing plaintext outlived its first-view duration',
+    }).toBe(0)
     await pageA.getByTestId('chat-disappearing-timer').click()
     await pageA.getByTestId('chat-disappearing-off').click()
     await syncUntilDisappearingTimer(pageB, 'Disappearing messages are off')

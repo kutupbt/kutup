@@ -273,14 +273,24 @@ retime a message, disabling a timer cannot resurrect old content, and an edit
 does not restart the countdown. Reactions, receipts, mutations, typing and
 control messages cannot carry the field.
 
-The sender counts from its durable local creation time. Each receiving device
-counts from the time it durably commits the decrypted message; an offline
-recipient therefore still receives the full viewing window. At expiry the
-client removes the local plaintext, derived previews/reactions/receipts and
-releases any unsaved Chat-media reference. Replies remain as independent
-messages but show their expired target as unavailable. Expiry is inherent in
-the original ciphertext and does not emit a deletion control or reveal a timer
-to a server.
+The sender counts from its durable local creation time. The recipient counts
+from the first time the message is actually visible on any of their devices,
+not from mailbox receipt or background decryption. That device emits a hidden
+`disappearingExpiryStart` operation containing the conversation, target
+message UUID and absolute start time through the normal encrypted
+Note-to-Self linked-device path. The earliest authenticated start wins across
+the recipient's devices. Alice's sender countdown and Bob's recipient
+countdown are intentionally independent, and this account-internal operation
+is independent of optional read receipts and is never sent back to Alice.
+
+An unread offline recipient therefore still receives the full viewing window.
+Once viewing has started, linked-device history transfer and browser-device
+replacement preserve the absolute deadline and cannot restart or extend it.
+At expiry the client removes the local plaintext, derived
+previews/reactions/receipts and releases any unsaved Chat-media reference.
+Replies remain as independent messages but show their expired target as
+unavailable. Expiry does not emit a deletion control to the other account or
+reveal a timer to a server.
 
 This is cooperative recipient-side deletion, as in other E2EE messengers. It
 does not prevent screenshots, notification capture, a modified recipient,

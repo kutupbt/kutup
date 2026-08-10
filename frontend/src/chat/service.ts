@@ -543,6 +543,22 @@ export class ChatService {
     return summary
   }
 
+  async startDisappearingExpiry(
+    conversation: ConversationId,
+    targetMessageId: string,
+    startedAtMs = Date.now(),
+  ): Promise<SendSummary> {
+    const summary = await this.withLock(() => this.client.startDisappearingExpiry(
+      crypto.randomUUID(),
+      new Date(startedAtMs).toISOString(),
+      conversation,
+      targetMessageId,
+      String(startedAtMs),
+    ))
+    this.notifyPeers()
+    return summary
+  }
+
   async chatMediaStorage(): Promise<ChatMediaStorageView> {
     if (!this.attachmentLedger) throw new Error('Chat media is not enabled')
     await this.withAttachmentLedgerLock(() => this.attachmentLedger!.sync())

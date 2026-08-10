@@ -44,8 +44,8 @@ use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_
 use kutup_chat_proto::{
     AccountAddress, AccountManifestDeviceV1, AccountManifestV1, ChatContent, ContactControlBody,
     ContactState, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, DirectChatSuiteId,
-    OutgoingEnvelope, RegisterChatDeviceRequest, ReplenishKeysRequest, SealedOutgoingEnvelopeV1,
-    UserPreKeyBundlesResponse,
+    DisappearingExpiryStartBody, OutgoingEnvelope, RegisterChatDeviceRequest, ReplenishKeysRequest,
+    SealedOutgoingEnvelopeV1, UserPreKeyBundlesResponse,
 };
 
 /// What a [`Engine::send`](crate::Engine::send) did: whether it landed, and any
@@ -388,30 +388,18 @@ impl Session {
                 }
             }
         }
-        let imported_at_ms = now_millis();
-        for mut record in normalized.into_values() {
-            let content = serde_json::from_slice::<ChatContent>(&record.content)
-                .map_err(|error| ChatError::Content(error.to_string()))?;
-            if content
-                .disappearing_after_seconds()
-                .map_err(ChatError::Content)?
-                .is_some()
+        for record in normalized.into_values() {
+            if let Some(start) = serde_json::from_slice::<ChatContent>(&record.content)
+                .map_err(|error| ChatError::Content(error.to_string()))?
+                .as_disappearing_expiry_start()
             {
-                if let Some(existing) = self
-                    .store
-                    .db()
-                    .load_imported_history(&record.transfer_id, &record.source_record_id)
-                    .await?
-                {
-                    record.timestamp_ms = existing.timestamp_ms;
-                    if record != existing {
-                        return Err(ChatError::Trust(
-                            "history import conflicts with an immutable record".into(),
-                        ));
-                    }
-                    continue;
+                if !record.outgoing || record.sender != self.user() {
+                    return Err(ChatError::Trust(
+                        "history expiry starts must come from the local account's outgoing transcript"
+                            .into(),
+                    ));
                 }
-                record.timestamp_ms = imported_at_ms;
+                start.validate().map_err(ChatError::Content)?;
             }
             self.store.stage_imported_history(record);
         }
@@ -420,6 +408,94 @@ impl Session {
 
     pub async fn imported_history(&self) -> Result<Vec<crate::ImportedHistoryRecordV1>> {
         self.store.list_imported_history().await
+    }
+
+    pub(crate) async fn disappearing_expiry_starts(&self) -> Result<DisappearingExpiryStarts> {
+        let outgoing = self.store.db().list_sent_messages().await?;
+        let imported = self.store.db().list_imported_history().await?;
+        collect_disappearing_expiry_starts(&outgoing, &imported, self.user())
+    }
+
+    pub(crate) async fn validate_disappearing_expiry_start(
+        &self,
+        start: &DisappearingExpiryStartBody,
+        now_ms: i64,
+    ) -> Result<()> {
+        start.validate().map_err(ChatError::Content)?;
+        if now_ms < 0 || start.started_at_ms > now_ms.saturating_add(5 * 60 * 1_000) {
+            return Err(ChatError::Invalid(
+                "disappearing expiry-start clock is too far in the future".into(),
+            ));
+        }
+        let target_matches = |content: &[u8]| -> Result<bool> {
+            let Ok(content) = serde_json::from_slice::<ChatContent>(content) else {
+                return Ok(false);
+            };
+            Ok(
+                content.message_id.as_deref() == Some(start.target_message_id.as_str())
+                    && content
+                        .disappearing_after_seconds()
+                        .map_err(ChatError::Content)?
+                        .is_some(),
+            )
+        };
+        let db = self.store.db();
+        let found = match &start.conversation {
+            kutup_chat_proto::ConversationId::Direct { address } => {
+                let peer = address.canonical();
+                let mut found = false;
+                for message in db.list_messages().await? {
+                    if message.peer == peer && target_matches(&message.content)? {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    for message in db.list_imported_history().await? {
+                        if !message.outgoing
+                            && message.conversation == start.conversation
+                            && target_matches(&message.content)?
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                found
+            }
+            kutup_chat_proto::ConversationId::Group { group_id } => {
+                let group_id = uuid::Uuid::parse_str(group_id)
+                    .map_err(|_| ChatError::Invalid("expiry-start group is invalid".into()))?;
+                let mut found = false;
+                for message in db.list_mls_messages().await? {
+                    if !message.outgoing
+                        && message.conversation_id == *group_id.as_bytes()
+                        && target_matches(&message.content)?
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    for message in db.list_imported_history().await? {
+                        if !message.outgoing
+                            && message.conversation == start.conversation
+                            && target_matches(&message.content)?
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                found
+            }
+        };
+        if !found {
+            return Err(ChatError::Invalid(
+                "disappearing expiry start does not target an incoming disappearing message".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Collect a deterministic, display-only snapshot suitable for archive
@@ -436,14 +512,29 @@ impl Session {
         }
         let db = self.store.db();
         let snapshot_at_ms = now_millis();
+        let incoming = db.list_messages().await?;
+        let outgoing = db.list_sent_messages().await?;
+        let mls = db.list_mls_messages().await?;
+        let imported = db.list_imported_history().await?;
+        let starts = collect_disappearing_expiry_starts(&outgoing, &imported, self.user())?;
         let mut records = Vec::new();
-        for message in db.list_messages().await? {
-            if expired_content(&message.content, message.received_at, snapshot_at_ms)?.is_some() {
+        for message in incoming {
+            let conversation = direct_conversation(&message.peer)?;
+            if expired_content(
+                &message.content,
+                &conversation,
+                false,
+                message.received_at,
+                &starts,
+                snapshot_at_ms,
+            )?
+            .is_some()
+            {
                 continue;
             }
             records.push(kutup_chat_proto::ChatHistoryArchiveRecordV1 {
                 source_record_id: format!("direct-in:{}", message.id),
-                conversation: direct_conversation(&message.peer)?,
+                conversation,
                 sender: canonical_account(&message.peer)?,
                 sender_device_id: message.sender_device_id,
                 outgoing: false,
@@ -452,13 +543,23 @@ impl Session {
                 delivered: true,
             });
         }
-        for message in db.list_sent_messages().await? {
-            if expired_content(&message.content, message.created_at, snapshot_at_ms)?.is_some() {
+        for message in outgoing {
+            let conversation = direct_conversation(&message.peer)?;
+            if expired_content(
+                &message.content,
+                &conversation,
+                true,
+                message.created_at,
+                &starts,
+                snapshot_at_ms,
+            )?
+            .is_some()
+            {
                 continue;
             }
             records.push(kutup_chat_proto::ChatHistoryArchiveRecordV1 {
                 source_record_id: format!("direct-out:{}", message.send_id),
-                conversation: direct_conversation(&message.peer)?,
+                conversation,
                 sender: self.user().to_owned(),
                 sender_device_id: self.device_id(),
                 outgoing: true,
@@ -467,15 +568,25 @@ impl Session {
                 delivered: message.delivered,
             });
         }
-        for message in db.list_mls_messages().await? {
-            if expired_content(&message.content, message.timestamp_ms, snapshot_at_ms)?.is_some() {
+        for message in mls {
+            let conversation = kutup_chat_proto::ConversationId::Group {
+                group_id: uuid::Uuid::from_bytes(message.conversation_id).to_string(),
+            };
+            if expired_content(
+                &message.content,
+                &conversation,
+                message.outgoing,
+                message.timestamp_ms,
+                &starts,
+                snapshot_at_ms,
+            )?
+            .is_some()
+            {
                 continue;
             }
             records.push(kutup_chat_proto::ChatHistoryArchiveRecordV1 {
                 source_record_id: format!("mls:{}", message.record_id),
-                conversation: kutup_chat_proto::ConversationId::Group {
-                    group_id: uuid::Uuid::from_bytes(message.conversation_id).to_string(),
-                },
+                conversation,
                 sender: canonical_account(&message.sender)?,
                 sender_device_id: message.sender_device_id,
                 outgoing: message.outgoing,
@@ -484,8 +595,17 @@ impl Session {
                 delivered: message.delivered,
             });
         }
-        for message in db.list_imported_history().await? {
-            if expired_content(&message.content, message.timestamp_ms, snapshot_at_ms)?.is_some() {
+        for message in imported {
+            if expired_content(
+                &message.content,
+                &message.conversation,
+                message.outgoing,
+                message.timestamp_ms,
+                &starts,
+                snapshot_at_ms,
+            )?
+            .is_some()
+            {
                 continue;
             }
             let mut digest = Sha256::new();
@@ -1384,6 +1504,14 @@ impl Session {
         let mut profile_key_updated: Option<String> = None;
         let mut suppressed = false;
         let synced_message = if let Some(transcript) = transcript {
+            if transcript.content.kind == kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
+                && transcript.content.as_disappearing_expiry_start().is_none()
+            {
+                self.store.discard();
+                return Err(ChatError::Content(
+                    "invalid authenticated disappearing expiry start".into(),
+                ));
+            }
             if let Some(control) = transcript.content.as_contact_control() {
                 if transcript.peer != self.user()
                     || control.source_device_id != sender_device_id
@@ -1431,22 +1559,12 @@ impl Session {
             } else {
                 self.stage_transcript_contact(&transcript.peer, received_at)
                     .await?;
-                let created_at = if transcript
-                    .content
-                    .disappearing_after_seconds()
-                    .map_err(ChatError::Content)?
-                    .is_some()
-                {
-                    received_at
-                } else {
-                    transcript.timestamp_ms
-                };
                 let message = SentMessage {
                     send_id: transcript.send_id,
                     peer: transcript.peer,
                     content: serde_json::to_vec(&transcript.content)
                         .map_err(|e| ChatError::Content(e.to_string()))?,
-                    created_at,
+                    created_at: transcript.timestamp_ms,
                     delivered_at: Some(received_at),
                     delivered: true,
                     deduplicated: false,
@@ -1465,6 +1583,9 @@ impl Session {
             let is_disappearing_timer = parsed
                 .as_ref()
                 .is_some_and(|content| content.as_disappearing_timer().is_some());
+            let is_disappearing_expiry_start = parsed.as_ref().is_some_and(|content| {
+                content.kind == kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
+            });
             if let Some(content) = parsed.as_ref() {
                 if let Err(error) = content.disappearing_after_seconds() {
                     self.store.discard();
@@ -1488,6 +1609,13 @@ impl Session {
                 self.store.discard();
                 return Err(ChatError::Content(
                     "invalid encrypted disappearing-message timer".into(),
+                ));
+            }
+            if is_disappearing_expiry_start {
+                self.store.discard();
+                return Err(ChatError::Content(
+                    "disappearing expiry starts are accepted only from an authenticated linked-device transcript"
+                        .into(),
                 ));
             }
             profile_control = is_profile_update;
@@ -1763,35 +1891,67 @@ impl Session {
         let outgoing = self.store.db().list_sent_messages().await?;
         let mls = self.store.db().list_mls_messages().await?;
         let imported = self.store.db().list_imported_history().await?;
+        let starts = collect_disappearing_expiry_starts(&outgoing, &imported, self.user())?;
         let mut expired_ids = std::collections::BTreeSet::new();
         let mut attachment_ids = std::collections::BTreeSet::new();
         let mut expired_messages = 0u32;
 
         for message in &incoming {
-            if let Some(expired) = expired_content(&message.content, message.received_at, now_ms)? {
+            let conversation = direct_conversation(&message.peer)?;
+            if let Some(expired) = expired_content(
+                &message.content,
+                &conversation,
+                false,
+                message.received_at,
+                &starts,
+                now_ms,
+            )? {
                 self.store.delete_message(&message.id);
                 collect_expired(expired, &mut expired_ids, &mut attachment_ids);
                 expired_messages = expired_messages.saturating_add(1);
             }
         }
         for message in &outgoing {
-            if let Some(expired) = expired_content(&message.content, message.created_at, now_ms)? {
+            let conversation = direct_conversation(&message.peer)?;
+            if let Some(expired) = expired_content(
+                &message.content,
+                &conversation,
+                true,
+                message.created_at,
+                &starts,
+                now_ms,
+            )? {
                 self.store.delete_sent_message(&message.send_id);
                 collect_expired(expired, &mut expired_ids, &mut attachment_ids);
                 expired_messages = expired_messages.saturating_add(1);
             }
         }
         for message in &mls {
-            if let Some(expired) = expired_content(&message.content, message.timestamp_ms, now_ms)?
-            {
+            let conversation = kutup_chat_proto::ConversationId::Group {
+                group_id: uuid::Uuid::from_bytes(message.conversation_id).to_string(),
+            };
+            if let Some(expired) = expired_content(
+                &message.content,
+                &conversation,
+                message.outgoing,
+                message.timestamp_ms,
+                &starts,
+                now_ms,
+            )? {
                 self.store.delete_mls_message(&message.record_id);
                 collect_expired(expired, &mut expired_ids, &mut attachment_ids);
                 expired_messages = expired_messages.saturating_add(1);
             }
         }
         for message in &imported {
-            if let Some(expired) = expired_content(&message.content, message.timestamp_ms, now_ms)?
-            {
+            if let Some(expired) = expired_content(
+                &message.content,
+                &message.conversation,
+                message.outgoing,
+                message.timestamp_ms,
+                &starts,
+                now_ms,
+            )? {
                 self.store
                     .delete_imported_history(&message.transfer_id, &message.source_record_id);
                 collect_expired(expired, &mut expired_ids, &mut attachment_ids);
@@ -1823,14 +1983,34 @@ impl Session {
             }
         }
         for entry in self.store.db().list_outbox().await? {
-            if expired_content(&entry.content, entry.created_at, now_ms)?.is_some()
+            let conversation = direct_conversation(&entry.peer)?;
+            if expired_content(
+                &entry.content,
+                &conversation,
+                true,
+                entry.created_at,
+                &starts,
+                now_ms,
+            )?
+            .is_some()
                 || content_targets_any(&entry.content, &expired_ids)?
             {
                 self.store.delete_outbox(&entry.send_id);
             }
         }
         for entry in self.store.db().list_mls_outbox().await? {
-            if expired_content(&entry.content, entry.created_at, now_ms)?.is_some()
+            let conversation = kutup_chat_proto::ConversationId::Group {
+                group_id: uuid::Uuid::from_bytes(entry.conversation_id).to_string(),
+            };
+            if expired_content(
+                &entry.content,
+                &conversation,
+                true,
+                entry.created_at,
+                &starts,
+                now_ms,
+            )?
+            .is_some()
                 || content_targets_any(&entry.content, &expired_ids)?
             {
                 self.store.delete_mls_outbox(&entry.send_id);
@@ -2988,20 +3168,99 @@ struct ExpiredContent {
     attachment_id: Option<String>,
 }
 
-fn expired_content(bytes: &[u8], base_ms: i64, now_ms: i64) -> Result<Option<ExpiredContent>> {
-    // Direct history deliberately retains undecodable authenticated payloads
-    // for forward compatibility. A future content kind must not permanently
-    // block expiry maintenance for every other row.
+pub(crate) type DisappearingExpiryStarts = std::collections::BTreeMap<(String, String), i64>;
+
+fn collect_disappearing_expiry_starts(
+    outgoing: &[SentMessage],
+    imported: &[crate::ImportedHistoryRecordV1],
+    local_account: &str,
+) -> Result<DisappearingExpiryStarts> {
+    let mut starts = DisappearingExpiryStarts::new();
+    for message in outgoing {
+        if message.peer == local_account {
+            collect_disappearing_expiry_start(&message.content, &mut starts)?;
+        }
+    }
+    for message in imported {
+        if message.outgoing && message.sender == local_account {
+            collect_disappearing_expiry_start(&message.content, &mut starts)?;
+        }
+    }
+    Ok(starts)
+}
+
+fn collect_disappearing_expiry_start(
+    bytes: &[u8],
+    starts: &mut DisappearingExpiryStarts,
+) -> Result<()> {
     let Ok(content) = serde_json::from_slice::<ChatContent>(bytes) else {
-        return Ok(None);
+        return Ok(());
     };
+    let start = content.as_disappearing_expiry_start();
+    if content.kind == kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START && start.is_none()
+    {
+        return Err(ChatError::Content(
+            "invalid durable disappearing expiry start".into(),
+        ));
+    }
+    if let Some(start) = start {
+        let key = (start.conversation.key(), start.target_message_id);
+        starts
+            .entry(key)
+            .and_modify(|current| *current = (*current).min(start.started_at_ms))
+            .or_insert(start.started_at_ms);
+    }
+    Ok(())
+}
+
+pub(crate) fn disappearing_deadline_for_content(
+    content: &ChatContent,
+    conversation: &kutup_chat_proto::ConversationId,
+    outgoing: bool,
+    timestamp_ms: i64,
+    starts: &DisappearingExpiryStarts,
+) -> Result<Option<i64>> {
     let Some(seconds) = content
         .disappearing_after_seconds()
         .map_err(ChatError::Content)?
     else {
         return Ok(None);
     };
-    let expires_at = base_ms.saturating_add(i64::from(seconds).saturating_mul(1_000));
+    let base_ms = if outgoing {
+        timestamp_ms
+    } else {
+        let message_id = content.message_id.as_ref().ok_or_else(|| {
+            ChatError::Content("disappearing message has no logical message id".into())
+        })?;
+        let Some(started_at_ms) = starts.get(&(conversation.key(), message_id.clone())) else {
+            return Ok(None);
+        };
+        *started_at_ms
+    };
+    Ok(Some(
+        base_ms.saturating_add(i64::from(seconds).saturating_mul(1_000)),
+    ))
+}
+
+fn expired_content(
+    bytes: &[u8],
+    conversation: &kutup_chat_proto::ConversationId,
+    outgoing: bool,
+    timestamp_ms: i64,
+    starts: &DisappearingExpiryStarts,
+    now_ms: i64,
+) -> Result<Option<ExpiredContent>> {
+    // Direct history deliberately retains undecodable authenticated payloads
+    // for forward compatibility. A future content kind must not permanently
+    // block expiry maintenance for every other row.
+    let Ok(content) = serde_json::from_slice::<ChatContent>(bytes) else {
+        return Ok(None);
+    };
+    let Some(expires_at) =
+        disappearing_deadline_for_content(&content, conversation, outgoing, timestamp_ms, starts)?
+    else {
+        return Ok(None);
+    };
     if now_ms < expires_at {
         return Ok(None);
     }
@@ -3047,7 +3306,14 @@ fn content_targets_any(
                 .message_ids
                 .iter()
                 .any(|message_id| message_ids.contains(message_id))
-        }))
+        })
+        || content
+            .as_disappearing_expiry_start()
+            .is_some_and(|start| message_ids.contains(&start.target_message_id))
+        || content
+            .as_sent_transcript()
+            .and_then(|transcript| transcript.content.as_disappearing_expiry_start())
+            .is_some_and(|start| message_ids.contains(&start.target_message_id)))
 }
 
 /// The wall clock libsignal uses for prekey/session staleness checks. The
@@ -3270,6 +3536,21 @@ mod sealed_tests {
             )
             .unwrap()
         };
+        let expiry_start =
+            |id: &str, seq: u64, conversation: kutup_chat_proto::ConversationId, target: &str| {
+                serde_json::to_vec(
+                    &ChatContent::disappearing_expiry_start_with_id(
+                        id,
+                        "2026-08-10T00:00:01Z",
+                        seq,
+                        conversation,
+                        target,
+                        1_000,
+                    )
+                    .unwrap(),
+                )
+                .unwrap()
+            };
         let incoming_id = "10000000-0000-4000-8000-000000000001";
         let sent_id = "20000000-0000-4000-8000-000000000002";
         let mls_id = "30000000-0000-4000-8000-000000000003";
@@ -3341,6 +3622,41 @@ mod sealed_tests {
                 deduplicated: false,
             },
         );
+        for (id, seq, conversation, target) in [
+            (
+                "71000000-0000-4000-8000-000000000001",
+                7,
+                direct_conversation("bob@b.test").unwrap(),
+                incoming_id,
+            ),
+            (
+                "72000000-0000-4000-8000-000000000002",
+                8,
+                kutup_chat_proto::ConversationId::Group {
+                    group_id: uuid::Uuid::from_bytes([4; 16]).to_string(),
+                },
+                mls_id,
+            ),
+            (
+                "73000000-0000-4000-8000-000000000003",
+                9,
+                direct_conversation("carol@c.test").unwrap(),
+                imported_id,
+            ),
+        ] {
+            pending.sent_messages.insert(
+                id.into(),
+                SentMessage {
+                    send_id: id.into(),
+                    peer: "alice@a.test".into(),
+                    content: expiry_start(id, seq, conversation, target),
+                    created_at: 1_000,
+                    delivered_at: Some(1_001),
+                    delivered: true,
+                    deduplicated: false,
+                },
+            );
+        }
         pending.outbox.insert(
             "direct-derived".into(),
             Some(OutboxEntry {
@@ -3437,7 +3753,7 @@ mod sealed_tests {
     }
 
     #[test]
-    fn imported_disappearing_message_gets_one_idempotent_local_window() {
+    fn imported_disappearing_message_preserves_unread_and_earliest_read_deadline() {
         let mut rng = OsRng.unwrap_err();
         let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
         let mut session = block_on(Session::generate(db, "alice@a.test", 1, 1, &mut rng)).unwrap();
@@ -3466,26 +3782,74 @@ mod sealed_tests {
             delivered: true,
         };
 
-        let before = now_millis();
         block_on(session.import_history(vec![record.clone()])).unwrap();
-        let imported = block_on(session.imported_history()).unwrap();
-        assert_eq!(imported.len(), 1);
-        assert!(imported[0].timestamp_ms >= before);
-        let local_origin = imported[0].timestamp_ms;
         block_on(session.import_history(vec![record])).unwrap();
         assert_eq!(
             block_on(session.imported_history()).unwrap()[0].timestamp_ms,
-            local_origin,
-            "a retry must not restart the countdown"
+            1,
+            "history transfer preserves the source timestamp"
         );
         assert_eq!(
-            block_on(session.purge_expired_history(local_origin + 29_999))
+            block_on(session.purge_expired_history(1_000_000))
+                .unwrap()
+                .expired_messages,
+            0,
+            "an unread imported recipient message has no countdown"
+        );
+
+        let later_start = ChatContent::disappearing_expiry_start_with_id(
+            "a0000000-0000-4000-8000-00000000000a",
+            "2026-08-10T00:00:01Z",
+            2,
+            direct_conversation("bob@b.test").unwrap(),
+            "80000000-0000-4000-8000-000000000008",
+            6_000,
+        )
+        .unwrap();
+        let earlier_start = ChatContent::disappearing_expiry_start_with_id(
+            "b0000000-0000-4000-8000-00000000000b",
+            "2026-08-10T00:00:02Z",
+            3,
+            direct_conversation("bob@b.test").unwrap(),
+            "80000000-0000-4000-8000-000000000008",
+            5_000,
+        )
+        .unwrap();
+        block_on(session.import_history(vec![
+            crate::ImportedHistoryRecordV1 {
+                transfer_id: "90000000-0000-4000-8000-000000000009".into(),
+                source_record_id: "later-expiry-start-source".into(),
+                source_device_id: 2,
+                conversation: direct_conversation("alice@a.test").unwrap(),
+                sender: "alice@a.test".into(),
+                sender_device_id: 2,
+                outgoing: true,
+                content: serde_json::to_vec(&later_start).unwrap(),
+                timestamp_ms: 6_000,
+                delivered: true,
+            },
+            crate::ImportedHistoryRecordV1 {
+                transfer_id: "90000000-0000-4000-8000-000000000009".into(),
+                source_record_id: "earlier-expiry-start-source".into(),
+                source_device_id: 2,
+                conversation: direct_conversation("alice@a.test").unwrap(),
+                sender: "alice@a.test".into(),
+                sender_device_id: 2,
+                outgoing: true,
+                content: serde_json::to_vec(&earlier_start).unwrap(),
+                timestamp_ms: 5_000,
+                delivered: true,
+            },
+        ]))
+        .unwrap();
+        assert_eq!(
+            block_on(session.purge_expired_history(34_999))
                 .unwrap()
                 .expired_messages,
             0
         );
         assert_eq!(
-            block_on(session.purge_expired_history(local_origin + 30_000))
+            block_on(session.purge_expired_history(35_000))
                 .unwrap()
                 .expired_messages,
             1

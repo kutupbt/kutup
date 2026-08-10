@@ -30,8 +30,7 @@ export function isVisibleChatMessage(message: ChatHistoryEntry, nowMs: number): 
 }
 
 export function disappearingMessageExpiresAt(message: ChatHistoryEntry): number | undefined {
-  const duration = message.content.expiresAfterSeconds
-  return duration === undefined ? undefined : message.timestampMs + duration * 1_000
+  return message.content.expiresAtMs
 }
 
 export function formatRemainingTime(milliseconds: number): string {

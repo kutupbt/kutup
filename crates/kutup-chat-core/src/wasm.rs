@@ -93,6 +93,7 @@ export interface KutupChatContentView {
   typing?: unknown;
   disappearingTimer?: unknown;
   expiresAfterSeconds?: number;
+  expiresAtMs?: number;
 }
 
 export interface KutupChatAccountAddress {
@@ -2946,6 +2947,41 @@ impl WasmChatClient {
         to_output(&SendSummaryView::from(summary))
     }
 
+    #[wasm_bindgen(js_name = startDisappearingExpiry)]
+    pub async fn start_disappearing_expiry(
+        &mut self,
+        send_id: String,
+        sent_at: String,
+        conversation: JsValue,
+        target_message_id: String,
+        started_at_ms: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let seq = self
+            .engine
+            .session()
+            .next_sent_seq()
+            .await
+            .map_err(chat_error)?;
+        let conversation: ConversationId = from_transport(conversation).map_err(chat_error)?;
+        let content = ChatContent::disappearing_expiry_start_with_id(
+            &send_id,
+            sent_at,
+            seq,
+            conversation,
+            target_message_id,
+            parse_i64_string("disappearing expiry-start clock", &started_at_ms)?,
+        )
+        .map_err(|error| js_error(&error))?;
+        let local_account = self.engine.session().user().to_owned();
+        let summary = self
+            .engine
+            .send(&send_id, &local_account, &content, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&SendSummaryView::from(summary))
+    }
+
     #[wasm_bindgen(js_name = mediaDeliveryCapability)]
     pub async fn media_delivery_capability(
         &self,
@@ -3021,31 +3057,45 @@ impl WasmChatClient {
             .imported_history()
             .await
             .map_err(chat_error)?;
+        let expiry_starts = self
+            .engine
+            .session()
+            .disappearing_expiry_starts()
+            .await
+            .map_err(chat_error)?;
         let mut history =
             Vec::with_capacity(incoming.len() + outgoing.len() + mls.len() + imported.len());
         for message in incoming {
             if is_contact_control(&message.content).map_err(chat_error)? {
                 continue;
             }
-            history.push(HistoryEntry::incoming(message).map_err(chat_error)?);
+            let mut entry = HistoryEntry::incoming(message).map_err(chat_error)?;
+            entry.apply_disappearing_deadline(&expiry_starts);
+            history.push(entry);
         }
         for message in outgoing {
             if is_contact_control(&message.content).map_err(chat_error)? {
                 continue;
             }
-            history.push(HistoryEntry::outgoing(message).map_err(chat_error)?);
+            let mut entry = HistoryEntry::outgoing(message).map_err(chat_error)?;
+            entry.apply_disappearing_deadline(&expiry_starts);
+            history.push(entry);
         }
         for message in mls {
             if is_invisible_control(&message.content).map_err(chat_error)? {
                 continue;
             }
-            history.push(HistoryEntry::mls(message).map_err(chat_error)?);
+            let mut entry = HistoryEntry::mls(message).map_err(chat_error)?;
+            entry.apply_disappearing_deadline(&expiry_starts);
+            history.push(entry);
         }
         for message in imported {
             if is_invisible_control(&message.content).map_err(chat_error)? {
                 continue;
             }
-            history.push(HistoryEntry::imported(message).map_err(chat_error)?);
+            let mut entry = HistoryEntry::imported(message).map_err(chat_error)?;
+            entry.apply_disappearing_deadline(&expiry_starts);
+            history.push(entry);
         }
         history.sort_by(|left, right| {
             left.timestamp_ms
@@ -3432,6 +3482,8 @@ struct ContentView {
     disappearing_timer: Option<kutup_chat_proto::DisappearingTimerBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_after_seconds: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at_ms: Option<i64>,
 }
 
 impl From<ChatContent> for ContentView {
@@ -3460,6 +3512,7 @@ impl From<ChatContent> for ContentView {
             typing,
             disappearing_timer,
             expires_after_seconds,
+            expires_at_ms: None,
         }
     }
 }
@@ -3503,6 +3556,23 @@ struct HistoryEntry {
 }
 
 impl HistoryEntry {
+    fn apply_disappearing_deadline(&mut self, starts: &crate::session::DisappearingExpiryStarts) {
+        let Some(seconds) = self.content.expires_after_seconds else {
+            return;
+        };
+        let base_ms = if self.direction == "outgoing" {
+            Some(self.timestamp_ms)
+        } else {
+            self.content.message_id.as_ref().and_then(|message_id| {
+                starts
+                    .get(&(self.conversation.key(), message_id.clone()))
+                    .copied()
+            })
+        };
+        self.content.expires_at_ms =
+            base_ms.map(|base_ms| base_ms.saturating_add(i64::from(seconds).saturating_mul(1_000)));
+    }
+
     fn incoming(message: crate::InboxMessage) -> Result<Self> {
         let content = serde_json::from_slice::<ChatContent>(&message.content)
             .map_err(|error| ChatError::Content(error.to_string()))?;
@@ -3616,6 +3686,7 @@ fn is_contact_control(bytes: &[u8]) -> Result<bool> {
         kutup_chat_proto::content::kind::CONTACT_CONTROL
             | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
             | kutup_chat_proto::content::kind::TYPING
+            | kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
     ))
 }
 
@@ -3628,6 +3699,7 @@ fn is_invisible_control(bytes: &[u8]) -> Result<bool> {
             | kutup_chat_proto::content::kind::CONTACT_CONTROL
             | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
             | kutup_chat_proto::content::kind::TYPING
+            | kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
     ))
 }
 

@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::ChatAttachmentDescriptorV1;
+use crate::{ChatAttachmentDescriptorV1, ConversationId};
 
 /// Reserved `kind` values. [`TEXT`] is user-visible content and
 /// [`SENT_TRANSCRIPT`] is the encrypted linked-device synchronization wrapper;
@@ -42,6 +42,9 @@ pub mod kind {
     /// duration is repeated on each visible message so delivery races cannot
     /// change that message's authenticated expiry. [IMPL]
     pub const DISAPPEARING_TIMER: &str = "disappearingTimer";
+    /// Same-account linked-device synchronization for the recipient's first
+    /// view of one disappearing message. [IMPL]
+    pub const DISAPPEARING_EXPIRY_START: &str = "disappearingExpiryStart";
     /// Add/remove one bounded emoji reaction to a stable logical message. [IMPL]
     pub const REACTION: &str = "reaction";
     /// Edit or irreversibly tombstone one stable logical message. [IMPL]
@@ -444,6 +447,47 @@ impl ChatContent {
         Some(body)
     }
 
+    pub fn disappearing_expiry_start_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        conversation: ConversationId,
+        target_message_id: impl Into<String>,
+        started_at_ms: i64,
+    ) -> Result<Self, String> {
+        let body = DisappearingExpiryStartBody {
+            conversation,
+            target_message_id: target_message_id.into(),
+            started_at_ms,
+        };
+        body.validate()?;
+        Ok(ChatContent {
+            v: Self::VERSION,
+            kind: kind::DISAPPEARING_EXPIRY_START.to_string(),
+            sent_at: sent_at.into(),
+            seq,
+            message_id: Some(message_id.into()),
+            reply_to: None,
+            profile_key: None,
+            profile_suite: None,
+            body: serde_json::to_value(body)
+                .map_err(|error| format!("encode Chat disappearing expiry start: {error}"))?,
+            extra: serde_json::Map::new(),
+        })
+    }
+
+    pub fn as_disappearing_expiry_start(&self) -> Option<DisappearingExpiryStartBody> {
+        if self.kind != kind::DISAPPEARING_EXPIRY_START
+            || self.v != Self::VERSION
+            || self.message_id.is_none()
+        {
+            return None;
+        }
+        let body: DisappearingExpiryStartBody = serde_json::from_value(self.body.clone()).ok()?;
+        body.validate().ok()?;
+        Some(body)
+    }
+
     /// Builds the encrypted linked-device wrapper used by Note to Self and,
     /// later, ordinary sent-message synchronization.
     pub fn sent_transcript(
@@ -527,6 +571,7 @@ impl ChatContent {
                     | kind::RECEIPT
                     | kind::TYPING
                     | kind::DISAPPEARING_TIMER
+                    | kind::DISAPPEARING_EXPIRY_START
                     | kind::REACTION
                     | kind::MESSAGE_MUTATION
                     | kind::ATTACHMENT
@@ -634,6 +679,46 @@ pub struct DisappearingTimerBody {
     /// messages retain their own duration and cannot be resurrected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_seconds: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DisappearingExpiryStartBody {
+    pub conversation: ConversationId,
+    pub target_message_id: String,
+    pub started_at_ms: i64,
+}
+
+impl DisappearingExpiryStartBody {
+    pub fn validate(&self) -> Result<(), String> {
+        match &self.conversation {
+            ConversationId::Direct { address } => {
+                let canonical = address.canonical();
+                let reparsed: crate::AccountAddress = canonical
+                    .parse()
+                    .map_err(|_| "Chat expiry-start conversation is invalid".to_string())?;
+                if &reparsed != address {
+                    return Err("Chat expiry-start conversation is not canonical".into());
+                }
+            }
+            ConversationId::Group { group_id } => {
+                let parsed = Uuid::parse_str(group_id)
+                    .map_err(|_| "Chat expiry-start group must be a UUID".to_string())?;
+                if parsed.is_nil() || parsed.to_string() != *group_id {
+                    return Err("Chat expiry-start group must be a canonical non-nil UUID".into());
+                }
+            }
+        }
+        let target = Uuid::parse_str(&self.target_message_id)
+            .map_err(|_| "Chat expiry-start target must be a UUID".to_string())?;
+        if target.is_nil() || target.to_string() != self.target_message_id {
+            return Err("Chat expiry-start target must be a canonical non-nil UUID".into());
+        }
+        if self.started_at_ms <= 0 {
+            return Err("Chat expiry-start clock must be positive".into());
+        }
+        Ok(())
+    }
 }
 
 impl DisappearingTimerBody {
@@ -932,6 +1017,39 @@ mod tests {
             .extra
             .insert("expiresAfterSeconds".into(), serde_json::json!(2_592_001));
         assert!(malformed.disappearing_after_seconds().is_err());
+
+        let conversation = ConversationId::Group {
+            group_id: "11111111-1111-4111-8111-111111111111".into(),
+        };
+        let start = ChatContent::disappearing_expiry_start_with_id(
+            "22222222-2222-4222-8222-222222222222",
+            "2026-08-10T11:00:01Z",
+            49,
+            conversation.clone(),
+            "33333333-3333-4333-8333-333333333333",
+            1_775_992_401_000,
+        )
+        .unwrap();
+        assert_eq!(
+            start.as_disappearing_expiry_start(),
+            Some(DisappearingExpiryStartBody {
+                conversation,
+                target_message_id: "33333333-3333-4333-8333-333333333333".into(),
+                started_at_ms: 1_775_992_401_000,
+            })
+        );
+        assert!(start.is_known_kind());
+        assert!(ChatContent::disappearing_expiry_start_with_id(
+            "22222222-2222-4222-8222-222222222222",
+            "t",
+            1,
+            ConversationId::Group {
+                group_id: "not-a-group".into(),
+            },
+            "33333333-3333-4333-8333-333333333333",
+            1,
+        )
+        .is_err());
     }
 
     #[test]

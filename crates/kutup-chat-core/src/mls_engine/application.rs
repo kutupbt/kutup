@@ -129,6 +129,11 @@ impl MlsClient {
                 "MLS disappearing-message timer is invalid".into(),
             ));
         }
+        if content.kind == kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START {
+            return Err(ChatError::Content(
+                "disappearing expiry starts are same-account controls, not MLS applications".into(),
+            ));
+        }
         let canonical_content =
             serde_json::to_vec(&content).map_err(|error| ChatError::Content(error.to_string()))?;
         if canonical_content != plaintext {

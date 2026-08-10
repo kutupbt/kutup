@@ -49,7 +49,7 @@ describe('disappearing Chat presentation', () => {
     expect(timer?.durationSeconds).toBeUndefined()
   })
 
-  it('uses each durable local timestamp as the exact expiry origin', () => {
+  it('uses the core-computed absolute expiry instead of restarting locally', () => {
     const message = entry('temporary', 10_000, {
       version: 1,
       kind: 'text',
@@ -58,11 +58,27 @@ describe('disappearing Chat presentation', () => {
       body: { text: 'temporary' },
       text: 'temporary',
       expiresAfterSeconds: 30,
+      expiresAtMs: 40_000,
     })
 
     expect(disappearingMessageExpiresAt(message)).toBe(40_000)
     expect(isVisibleChatMessage(message, 39_999)).toBe(true)
     expect(isVisibleChatMessage(message, 40_000)).toBe(false)
+  })
+
+  it('keeps an unread incoming disappearing message until first view', () => {
+    const message = entry('unread-temporary', 10_000, {
+      version: 1,
+      kind: 'text',
+      sentAt: '2026-08-10T00:00:00Z',
+      seq: '1',
+      body: { text: 'unread temporary' },
+      text: 'unread temporary',
+      expiresAfterSeconds: 30,
+    })
+
+    expect(disappearingMessageExpiresAt(message)).toBeUndefined()
+    expect(isVisibleChatMessage(message, 1_000_000)).toBe(true)
   })
 
   it('hides timer and derived controls and formats a bounded countdown', () => {
