@@ -4,6 +4,7 @@ export interface ChatContentView {
   sentAt: string
   seq: string
   messageId?: string
+  replyTo?: string
   body: unknown
   text?: string
   /** Present only after strict Rust descriptor validation. */
@@ -1184,6 +1185,7 @@ export interface WasmChatClientHandle {
     sentAt: string,
     text: string,
     createdAtMs: string,
+    replyTo?: string,
   ): Promise<MlsOutboxEntry>
   createMlsAttachmentMessage(
     sendId: string,
@@ -1281,6 +1283,7 @@ export interface WasmChatClientHandle {
     peer: string,
     sentAt: string,
     text: string,
+    replyTo?: string,
   ): Promise<SendSummary>
   sendAttachment(
     sendId: string,

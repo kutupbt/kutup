@@ -929,7 +929,7 @@ export class MlsConversationService {
     )
   }
 
-  async sendText(conversationId: string, text: string): Promise<{
+  async sendText(conversationId: string, text: string, replyTo?: string): Promise<{
     delivered: boolean
     deduplicated: boolean
     attempts: number
@@ -958,6 +958,7 @@ export class MlsConversationService {
         new Date().toISOString(),
         text,
         String(Date.now()),
+        replyTo,
       ))
       .catch(cause => { throw new MlsSendError('encryption', cause) })
     await this.deliverApplicationEntry(entry).catch(cause => {

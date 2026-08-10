@@ -310,10 +310,14 @@ export class ChatService {
     return this.withLock(() => this.client.inboundAttention())
   }
 
-  async send(conversation: ConversationId, text: string): Promise<SendSummary> {
+  async send(
+    conversation: ConversationId,
+    text: string,
+    replyTo?: string,
+  ): Promise<SendSummary> {
     if (conversation.kind === 'group') {
       const summary = await this.withMlsWorkflow(() =>
-        this.requireMls().sendText(conversation.groupId, text),
+        this.requireMls().sendText(conversation.groupId, text, replyTo),
       )
       this.notifyPeers()
       return { ...summary, safetyNumberChanges: [] }
@@ -321,7 +325,7 @@ export class ChatService {
     const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
     const sendId = crypto.randomUUID()
     const summary = await this.withLock(() =>
-      this.client.sendText(sendId, peer, new Date().toISOString(), text),
+      this.client.sendText(sendId, peer, new Date().toISOString(), text, replyTo),
     )
     this.notifyPeers()
     return summary

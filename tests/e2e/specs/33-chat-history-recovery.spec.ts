@@ -126,6 +126,21 @@ test('a new browser restores signed end-to-end encrypted Chat history after appr
   await target.getByRole('complementary').getByText('Note to Self', { exact: true }).click()
   await expect(target.getByRole('main').getByText(message, { exact: true })).toBeVisible()
 
+  await target.getByTestId('chat-reply-button').click()
+  await expect(target.getByTestId('chat-reply-composer')).toContainText(message)
+  const reply = `reply-to-recovered-history-${tag}`
+  const replyInput = target.getByRole('main').getByRole('textbox')
+  await replyInput.fill(reply)
+  await replyInput.press('Enter')
+  await expect(target.getByRole('main').getByText(reply, { exact: true })).toBeVisible()
+  await expect(target.getByTestId('chat-reply-context')).toContainText(message)
+
+  await target.reload()
+  await expect(target.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
+  await target.getByRole('complementary').getByText('Note to Self', { exact: true }).click()
+  await expect(target.getByRole('main').getByText(reply, { exact: true })).toBeVisible()
+  await expect(target.getByTestId('chat-reply-context')).toContainText(message)
+
   await targetContext.close()
   await sourceContext.close()
 })

@@ -1647,11 +1647,27 @@ describe('MlsConversationService', () => {
     })
     const { client, transport, service } = harness(null, [activeGenesis()])
 
-    await expect(service.sendText(conversationId, 'federated group message')).resolves.toEqual({
+    const replyTo = '11111111-1111-4111-8111-111111111111'
+    await expect(service.sendText(
+      conversationId,
+      'federated group message',
+      replyTo,
+    )).resolves.toEqual({
       delivered: true,
       deduplicated: false,
       attempts: 1,
     })
+
+    expect(client.createMlsTextMessage).toHaveBeenCalledWith(
+      sendId,
+      conversationId,
+      '1',
+      expect.any(Uint8Array),
+      expect.any(String),
+      'federated group message',
+      expect.stringMatching(/^[0-9]+$/),
+      replyTo,
+    )
 
     expect(client.fetchVerifiedMlsKeyPackages).toHaveBeenCalledWith(
       { username: 'bobby', server: 'beta.example' },

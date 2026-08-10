@@ -2273,18 +2273,20 @@ impl WasmChatClient {
         sent_at: String,
         text: String,
         created_at_ms: String,
+        reply_to: Option<String>,
     ) -> std::result::Result<JsValue, JsValue> {
         let conversation_id = uuid::Uuid::parse_str(&conversation_id)
             .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
         let entry = self
             .mls_client()
-            .create_text_application_message(
+            .create_text_reply_application_message(
                 &send_id,
                 conversation_id,
                 parse_u64_string("MLS incarnation", &incarnation)?,
                 &mls_group_id,
                 &sent_at,
                 &text,
+                reply_to.as_deref(),
                 parse_i64_string("MLS message clock", &created_at_ms)?,
             )
             .await
@@ -2574,6 +2576,7 @@ impl WasmChatClient {
         peer: String,
         sent_at: String,
         text: String,
+        reply_to: Option<String>,
     ) -> std::result::Result<JsValue, JsValue> {
         let mut rng = OsRng.unwrap_err();
         let seq = self
@@ -2582,14 +2585,12 @@ impl WasmChatClient {
             .next_sent_seq()
             .await
             .map_err(chat_error)?;
+        let content = ChatContent::text_with_id(&send_id, sent_at, seq, text)
+            .with_reply_to(reply_to.as_deref())
+            .map_err(|error| js_error(&error))?;
         let summary = self
             .engine
-            .send(
-                &send_id,
-                &peer,
-                &ChatContent::text_with_id(&send_id, sent_at, seq, text),
-                &mut rng,
-            )
+            .send(&send_id, &peer, &content, &mut rng)
             .await
             .map_err(chat_error)?;
         to_output(&SendSummaryView::from(summary))
@@ -3075,6 +3076,8 @@ struct ContentView {
     seq: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_to: Option<String>,
     body: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
@@ -3092,6 +3095,7 @@ impl From<ChatContent> for ContentView {
             sent_at: content.sent_at,
             seq: content.seq.to_string(),
             message_id: content.message_id,
+            reply_to: content.reply_to,
             body: content.body,
             text,
             attachment,

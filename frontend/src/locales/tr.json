@@ -94,6 +94,12 @@
     "attention_other": "{{count}} şifreli mesaj ilgilenmenizi bekliyor ve henüz onaylanmadı.",
     "messagePeer": "{{peer}} kullanıcısına mesaj",
     "send": "Gönder",
+    "replies": {
+      "reply": "Mesajı yanıtla",
+      "replying": "Yanıtlanan mesaj",
+      "cancel": "Yanıtı iptal et",
+      "unavailable": "Özgün mesaj kullanılamıyor"
+    },
   "safetyNumberChanged": "Bir alıcı cihazın kimliği değişti. Güvenlik numarasını doğrulayın.",
   "requests": {
     "title_one": "{{count}} mesaj isteği",

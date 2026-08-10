@@ -196,6 +196,14 @@ Note to Self is a self-addressed Direct conversation. Sent-message sync to
 linked devices is authenticated and identified. It never uses anonymous
 delivery or creates an MLS group.
 
+User-visible content carries a stable sender-generated UUID `messageId` inside
+the ciphertext. A text reply adds an optional canonical non-nil UUID `replyTo`
+that references that logical ID. The reference uses the same encrypted content
+shape for Direct, Note to Self and MLS; it is never copied into mailbox,
+attachment or federation metadata. Clients resolve it only within the current
+conversation and show an unavailable placeholder when bounded local history no
+longer contains the target.
+
 Incoming strangers are message requests. Accept/reject/block/unblock are
 client relationship state. First-contact/request traffic stays identified.
 

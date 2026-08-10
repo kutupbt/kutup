@@ -94,6 +94,12 @@
     "attention_other": "{{count}} encrypted messages need attention and remain unacknowledged.",
     "messagePeer": "Message {{peer}}",
     "send": "Send",
+    "replies": {
+      "reply": "Reply to message",
+      "replying": "Replying to",
+      "cancel": "Cancel reply",
+      "unavailable": "Original message unavailable"
+    },
   "safetyNumberChanged": "A recipient device identity changed. Verify the safety number.",
   "requests": {
     "title_one": "{{count}} message request",

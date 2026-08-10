@@ -550,6 +550,31 @@ impl MlsClient {
         text: &str,
         created_at_ms: i64,
     ) -> Result<MlsOutboxEntry> {
+        self.create_text_reply_application_message(
+            send_id,
+            conversation_id,
+            incarnation,
+            mls_group_id,
+            sent_at,
+            text,
+            None,
+            created_at_ms,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_text_reply_application_message(
+        &self,
+        send_id: &str,
+        conversation_id: Uuid,
+        incarnation: u64,
+        mls_group_id: &[u8],
+        sent_at: &str,
+        text: &str,
+        reply_to: Option<&str>,
+        created_at_ms: i64,
+    ) -> Result<MlsOutboxEntry> {
         let parsed_send_id = Uuid::parse_str(send_id)
             .map_err(|_| ChatError::Invalid("MLS send id must be a UUID".into()))?;
         if parsed_send_id.is_nil()
@@ -572,6 +597,7 @@ impl MlsClient {
                 || content.message_id.as_deref() != Some(send_id)
                 || content.sent_at != sent_at
                 || content.as_text().map(|body| body.text) != Some(text.to_owned())
+                || content.reply_to.as_deref() != reply_to
             {
                 return Err(ChatError::Trust(
                     "MLS send id is already bound to different text or conversation".into(),
@@ -608,7 +634,9 @@ impl MlsClient {
             .unwrap_or(0)
             .checked_add(1)
             .ok_or_else(|| ChatError::Invalid("MLS sender sequence overflow".into()))?;
-        let content = ChatContent::text_with_id(send_id, sent_at, seq, text);
+        let content = ChatContent::text_with_id(send_id, sent_at, seq, text)
+            .with_reply_to(reply_to)
+            .map_err(ChatError::Invalid)?;
         let content_bytes =
             serde_json::to_vec(&content).map_err(|error| ChatError::Content(error.to_string()))?;
         self.create_application_message_inner(

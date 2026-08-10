@@ -125,6 +125,13 @@ async function send(page: Page, text: string): Promise<void> {
   await input.press('Enter')
 }
 
+async function replyTo(page: Page, target: string, text: string): Promise<void> {
+  const message = page.getByTestId('chat-message').filter({ hasText: target })
+  await message.getByTestId('chat-reply-button').click()
+  await expect(page.getByTestId('chat-reply-composer')).toContainText(target)
+  await send(page, text)
+}
+
 async function syncUntilVisible(page: Page, text: string): Promise<void> {
   await expect.poll(async () => {
     if (await bubble(page, text).count() > 0) return true
@@ -400,6 +407,11 @@ test.describe('two-server secure chat', () => {
     expect(destinationEnvelope).not.toHaveProperty('sender')
     expect(destinationEnvelope?.senderDeviceId).toBe(0)
     await expect(bubble(pageB, sealed)).toBeVisible({ timeout: 45_000 })
+    const quotedReply = `sealed-quoted-reply-${tag}`
+    await replyTo(pageB, sealed, quotedReply)
+    await syncUntilVisible(pageA, quotedReply)
+    const quotedMessage = pageA.getByTestId('chat-message').filter({ hasText: quotedReply })
+    await expect(quotedMessage.getByTestId('chat-reply-context')).toContainText(sealed)
     expect(identifiedToBob).toEqual([])
 
     const directAttachment = `direct-attachment-${tag}.txt`

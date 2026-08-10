@@ -19,12 +19,14 @@ import {
   Paperclip,
   QrCode,
   RefreshCw,
+  Reply,
   Send,
   Shield,
   ShieldCheck,
   Trash2,
   UserMinus,
   Users,
+  X,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
@@ -139,6 +141,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [selectedConversation, setSelectedConversation] = useState<ConversationId | null>(null)
   const [newPeer, setNewPeer] = useState('')
   const [draft, setDraft] = useState('')
+  const [replyingTo, setReplyingTo] = useState<ChatHistoryEntry | null>(null)
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [contactUpdating, setContactUpdating] = useState(false)
@@ -430,6 +433,12 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
         : [],
     [history, selectedKey],
   )
+  const messagesById = useMemo(
+    () => new Map(messages.map(message => [message.content.messageId ?? message.id, message])),
+    [messages],
+  )
+
+  useEffect(() => setReplyingTo(null), [selectedKey])
 
   useEffect(() => {
     if (!service || !selectedAddress || noteSelected) {
@@ -590,11 +599,16 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     setSending(true)
     setDraft('')
     try {
-      const summary = await service.send(selectedConversation, text)
+      const summary = await service.send(
+        selectedConversation,
+        text,
+        replyingTo?.content.messageId,
+      )
       if (summary.safetyNumberChanges.length > 0) {
         toast.warning(t('chat.safetyNumberChanged'))
       }
       setHistory(await service.history())
+      setReplyingTo(null)
     } catch (cause) {
       setDraft(text)
       toast.error(errorMessage(cause, t))
@@ -941,7 +955,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   return (
     <div className="fixed inset-0 flex bg-background text-foreground">
       {showPeerList && (
-        <aside className="flex w-full shrink-0 flex-col border-r bg-sidebar md:w-80">
+        <aside className="flex w-full shrink-0 flex-col border-r bg-sidebar md:w-96">
           <header
             className="flex h-16 items-center gap-1 border-b px-2"
             data-testid="chat-sidebar-header"
@@ -2002,6 +2016,12 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                   message={message}
                   newerClientLabel={t('chat.newerClient')}
                   accessToken={auth.accessToken ?? undefined}
+                  repliedMessage={message.content.replyTo
+                    ? messagesById.get(message.content.replyTo)
+                    : undefined}
+                  onReply={message.content.messageId
+                    ? () => setReplyingTo(message)
+                    : undefined}
                 />
               ))}
               <div ref={endRef} />
@@ -2017,6 +2037,30 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 {selectedGroupReadiness.refused.length > 0
                   ? `Remove ${selectedGroupReadiness.refused.join(', ')} before sending; the invitation was rejected or expired.`
                   : `Waiting for ${selectedGroupReadiness.pending.join(', ')} to accept the encrypted group invitation.`}
+              </div>
+            )}
+            {replyingTo && (
+              <div
+                className="mx-auto mb-2 flex max-w-3xl items-center gap-3 rounded-md border-l-4 border-primary bg-muted/50 px-3 py-2"
+                data-testid="chat-reply-composer"
+              >
+                <Reply className="h-4 w-4 shrink-0 text-primary" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-medium">{t('chat.replies.replying')}</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {replyPreview(replyingTo, t('chat.newerClient'))}
+                  </span>
+                </span>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7"
+                  onClick={() => setReplyingTo(null)}
+                  aria-label={t('chat.replies.cancel')}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
               </div>
             )}
             <div className="mx-auto flex max-w-3xl items-end gap-2">
@@ -2272,16 +2316,27 @@ function MessageBubble({
   message,
   newerClientLabel,
   accessToken,
+  repliedMessage,
+  onReply,
 }: {
   message: ChatHistoryEntry
   newerClientLabel: string
   accessToken?: string
+  repliedMessage?: ChatHistoryEntry
+  onReply?: () => void
 }) {
+  const { t } = useTranslation()
   const outgoing = message.direction === 'outgoing'
   const [downloading, setDownloading] = useState(false)
   const attachment = message.content.attachment
   return (
-    <div className={cn('flex', outgoing ? 'justify-end' : 'justify-start')}>
+    <div
+      className={cn('group flex items-center gap-1', outgoing ? 'justify-end' : 'justify-start')}
+      data-testid="chat-message"
+    >
+      {outgoing && onReply && (
+        <ReplyButton onReply={onReply} label={t('chat.replies.reply')} />
+      )}
       <div
         className={cn(
           'max-w-[82%] rounded-2xl px-3.5 py-2 shadow-sm md:max-w-[70%]',
@@ -2290,6 +2345,23 @@ function MessageBubble({
             : 'rounded-bl-md border bg-card',
         )}
       >
+        {message.content.replyTo && (
+          <div
+            className={cn(
+              'mb-2 max-w-full rounded-md border-l-2 px-2 py-1 text-xs',
+              outgoing
+                ? 'border-primary-foreground/60 bg-primary-foreground/10'
+                : 'border-primary bg-muted/70',
+            )}
+            data-testid="chat-reply-context"
+          >
+            <span className="block truncate">
+              {repliedMessage
+                ? replyPreview(repliedMessage, newerClientLabel)
+                : t('chat.replies.unavailable')}
+            </span>
+          </div>
+        )}
         {attachment ? (
           <div className="flex min-w-52 items-center gap-3">
             <FileText className="h-7 w-7 shrink-0" />
@@ -2337,8 +2409,33 @@ function MessageBubble({
           {outgoing && (message.delivered ? <CheckCheck className="h-3 w-3" /> : <Check className="h-3 w-3" />)}
         </span>
       </div>
+      {!outgoing && onReply && (
+        <ReplyButton onReply={onReply} label={t('chat.replies.reply')} />
+      )}
     </div>
   )
+}
+
+function ReplyButton({ onReply, label }: { onReply: () => void; label: string }) {
+  return (
+    <Button
+      type="button"
+      size="icon"
+      variant="ghost"
+      className="h-7 w-7 shrink-0 opacity-70 md:opacity-0 md:transition-opacity md:group-hover:opacity-100 md:focus-visible:opacity-100"
+      onClick={onReply}
+      aria-label={label}
+      data-testid="chat-reply-button"
+    >
+      <Reply className="h-3.5 w-3.5" />
+    </Button>
+  )
+}
+
+function replyPreview(message: ChatHistoryEntry, newerClientLabel: string): string {
+  return message.content.text
+    ?? message.content.attachment?.filename
+    ?? newerClientLabel
 }
 
 function formatBytes(bytes: number): string {

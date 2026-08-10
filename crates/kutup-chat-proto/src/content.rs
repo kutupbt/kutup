@@ -12,6 +12,7 @@
 //! helpers exist for the kinds a given version understands.
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::ChatAttachmentDescriptorV1;
 
@@ -73,6 +74,10 @@ pub struct ChatContent {
     /// omits it and remains readable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
+    /// Stable logical message UUID being replied to. It remains inside E2EE
+    /// content and never becomes delivery or federation metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
     /// The sender's current 32-byte profile key, encoded with standard base64.
     /// This field is inside the libsignal ciphertext and is harvested from
     /// normal messages as well as dedicated `profileKeyUpdate` controls.
@@ -105,6 +110,7 @@ impl ChatContent {
             sent_at: sent_at.into(),
             seq,
             message_id: None,
+            reply_to: None,
             profile_key: None,
             profile_suite: None,
             body: serde_json::to_value(TextBody { text: text.into() }).unwrap_or_default(),
@@ -123,6 +129,22 @@ impl ChatContent {
         let mut content = Self::text(sent_at, seq, text);
         content.message_id = Some(message_id.into());
         content
+    }
+
+    /// Adds a canonical, non-nil logical message reference.
+    pub fn with_reply_to(mut self, reply_to: Option<&str>) -> Result<Self, String> {
+        self.reply_to = match reply_to {
+            None => None,
+            Some(value) => {
+                let parsed = Uuid::parse_str(value)
+                    .map_err(|_| "Chat reply target must be a UUID".to_string())?;
+                if parsed.is_nil() || parsed.to_string() != value {
+                    return Err("Chat reply target must be a canonical non-nil UUID".into());
+                }
+                Some(value.to_owned())
+            }
+        };
+        Ok(self)
     }
 
     /// Attaches the sender's encrypted-channel profile capability.
@@ -145,6 +167,7 @@ impl ChatContent {
             sent_at: sent_at.into(),
             seq,
             message_id: Some(message_id.into()),
+            reply_to: None,
             profile_key: Some(profile_key.into()),
             profile_suite: Some(crate::profile::ProfileSuiteId::XChaCha20Poly1305V1.as_u16()),
             body: serde_json::Value::Object(serde_json::Map::new()),
@@ -177,6 +200,7 @@ impl ChatContent {
             sent_at: sent_at.into(),
             seq,
             message_id: Some(message_id.into()),
+            reply_to: None,
             profile_key: None,
             profile_suite: None,
             body: serde_json::to_value(descriptor)
@@ -212,6 +236,7 @@ impl ChatContent {
             sent_at: content.sent_at.clone(),
             seq: content.seq,
             message_id: content.message_id.clone(),
+            reply_to: content.reply_to.clone(),
             profile_key: content.profile_key.clone(),
             profile_suite: content.profile_suite,
             body: serde_json::to_value(SentTranscriptBody {
@@ -251,6 +276,7 @@ impl ChatContent {
             sent_at: sent_at.into(),
             seq,
             message_id: Some(message_id.into()),
+            reply_to: None,
             profile_key: None,
             profile_suite: None,
             body: serde_json::to_value(body).unwrap_or_default(),
@@ -380,11 +406,29 @@ mod tests {
     #[test]
     fn unknown_top_level_fields_survive() {
         let src =
-            r#"{"v":1,"kind":"text","sentAt":"t","seq":1,"body":{"text":"x"},"replyTo":"abc"}"#;
+            r#"{"v":1,"kind":"text","sentAt":"t","seq":1,"body":{"text":"x"},"futureField":"abc"}"#;
         let c: ChatContent = serde_json::from_str(src).unwrap();
-        assert_eq!(c.extra.get("replyTo").and_then(|v| v.as_str()), Some("abc"));
+        assert_eq!(c.extra.get("futureField").and_then(|v| v.as_str()), Some("abc"));
         let back = serde_json::to_value(&c).unwrap();
-        assert_eq!(back["replyTo"], "abc");
+        assert_eq!(back["futureField"], "abc");
+    }
+
+    #[test]
+    fn reply_reference_is_canonical_and_round_trips_inside_content() {
+        let target = "018f8ad5-d7db-7c7c-8c4b-4f53467f4431";
+        let content = ChatContent::text_with_id(
+            "018f8ad5-d7db-7c7c-8c4b-4f53467f4432",
+            "2026-07-13T10:00:00Z",
+            42,
+            "reply",
+        )
+        .with_reply_to(Some(target))
+        .unwrap();
+        let value = serde_json::to_value(&content).unwrap();
+        assert_eq!(value["replyTo"], target);
+        assert!(ChatContent::text("t", 1, "x")
+            .with_reply_to(Some("not-a-uuid"))
+            .is_err());
     }
 
     #[test]

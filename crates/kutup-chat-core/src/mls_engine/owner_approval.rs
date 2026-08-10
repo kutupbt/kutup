@@ -433,6 +433,7 @@ impl MlsClient {
             sent_at: sent_at_seconds.to_string(),
             seq,
             message_id: Some(send_id.clone()),
+            reply_to: None,
             profile_key: None,
             profile_suite: None,
             body: serde_json::to_value(body)
