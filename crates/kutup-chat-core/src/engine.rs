@@ -248,6 +248,10 @@ impl Engine {
         &self.session
     }
 
+    pub(crate) fn transport(&self) -> &Rc<dyn ChatTransport> {
+        &self.transport
+    }
+
     pub fn state(&self) -> EngineState {
         self.state
     }

@@ -973,6 +973,18 @@ fn chat_history_transfer_relay_contract() {
         "complete: {}",
         completed.status()
     );
+    let completed_retry: Value = c
+        .post(format!(
+            "{base}/api/chat/history-transfers/{}/completion?deviceId={new_device}",
+            request.transfer_id
+        ))
+        .bearer_auth(&token)
+        .json(&completion)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(completed_retry["deduplicated"], true);
     let after: Value = c
         .get(format!(
             "{base}/api/chat/history-transfers?deviceId={new_device}"

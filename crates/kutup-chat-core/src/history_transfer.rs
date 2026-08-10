@@ -9,7 +9,7 @@ use kutup_chat_proto::{
     chat_history_transfer_transcript_hash, AccountManifestV1, ChatHistoryArchiveFinalV1,
     ChatHistoryArchiveFramePlaintextV1, ChatHistoryArchiveHeaderV1, ChatHistoryArchiveRecordV1,
     ChatHistoryArchiveRecordsV1, ChatHistoryTransferAcceptanceV1, ChatHistoryTransferFrameV1,
-    ChatHistoryTransferRequestV1, CHAT_HISTORY_TRANSFER_VERSION,
+    ChatHistoryTransferCompletionV1, ChatHistoryTransferRequestV1, CHAT_HISTORY_TRANSFER_VERSION,
     MAX_CHAT_HISTORY_TRANSFER_FRAMES, MAX_CHAT_HISTORY_TRANSFER_FRAME_PLAINTEXT,
 };
 use libsignal_protocol::{IdentityKeyPair, PublicKey};
@@ -39,6 +39,10 @@ impl HistoryTransferEphemeralSecret {
 
     pub(crate) fn journal_bytes(&self) -> [u8; 32] {
         *self.0
+    }
+
+    pub(crate) fn from_journal_bytes(bytes: [u8; 32]) -> Self {
+        Self(Zeroizing::new(bytes))
     }
 }
 
@@ -163,6 +167,39 @@ pub(crate) fn prepare_history_transfer_acceptance<R: Rng + CryptoRng>(
         ephemeral_secret: secret,
         transcript_hash,
     })
+}
+
+pub(crate) fn prepare_history_transfer_completion<R: Rng + CryptoRng>(
+    identity: &IdentityKeyPair,
+    acceptance: &ChatHistoryTransferAcceptanceV1,
+    transcript_hash: &[u8; 32],
+    frame_count: u32,
+    record_count: u32,
+    media_plaintext_bytes: u64,
+    plaintext_digest: &[u8; 32],
+    completed_at_unix: i64,
+    rng: &mut R,
+) -> Result<ChatHistoryTransferCompletionV1> {
+    acceptance.signing_bytes().map_err(ChatError::Invalid)?;
+    let mut completion = ChatHistoryTransferCompletionV1 {
+        version: CHAT_HISTORY_TRANSFER_VERSION,
+        transfer_id: acceptance.transfer_id.clone(),
+        transcript_hash: hex::encode(transcript_hash),
+        destination_device_id: acceptance.requesting_device_id,
+        frame_count,
+        record_count,
+        media_plaintext_bytes,
+        plaintext_digest: hex::encode(plaintext_digest),
+        completed_at_unix,
+        device_signature: STANDARD.encode([0u8; 64]),
+    };
+    completion.validate().map_err(ChatError::Invalid)?;
+    let signature = identity
+        .private_key()
+        .calculate_signature(&completion.signing_bytes().map_err(ChatError::Invalid)?, rng)
+        .map_err(|error| ChatError::Protocol(error.to_string()))?;
+    completion.device_signature = STANDARD.encode(signature);
+    Ok(completion)
 }
 
 pub fn verify_history_transfer_acceptance(
@@ -678,6 +715,27 @@ mod tests {
         assert_eq!(verified.records.len(), 1);
         assert_eq!(verified.records[0].source_device_id, 1);
         assert_eq!(verified.plaintext_digest, archive.plaintext_digest);
+        let completion = prepare_history_transfer_completion(
+            &new_identity,
+            &prepared_acceptance.acceptance,
+            &transcript,
+            archive.frames.len() as u32,
+            verified.header.record_count,
+            verified.header.media_plaintext_bytes,
+            &verified.plaintext_digest,
+            1_003,
+            &mut rng,
+        )
+        .unwrap();
+        completion.validate().unwrap();
+        assert_eq!(completion.transcript_hash, hex::encode(transcript));
+        assert_eq!(completion.plaintext_digest, hex::encode(archive.plaintext_digest));
+        verify_device_signature(
+            &STANDARD.encode(new_identity.identity_key().serialize()),
+            &completion.signing_bytes().unwrap(),
+            &completion.device_signature,
+        )
+        .unwrap();
         let mut reordered = archive.frames.clone();
         reordered.swap(0, 1);
         assert!(verify_history_archive(

@@ -797,6 +797,346 @@ impl WasmChatClient {
         to_output(&manifest)
     }
 
+    #[wasm_bindgen(js_name = requestHistoryTransfer)]
+    pub async fn request_history_transfer(&mut self) -> std::result::Result<JsValue, JsValue> {
+        let manifest = self
+            .engine
+            .sync_own_manifest(&self.authority, now_rfc3339())
+            .await
+            .map_err(chat_error)?;
+        let now = crate::clock::unix_millis() / 1_000;
+        let mut rng = OsRng.unwrap_err();
+        let prepared = self
+            .engine
+            .session()
+            .prepare_history_transfer_request(manifest.sequence, now, &mut rng)
+            .map_err(chat_error)?;
+        self.engine
+            .session()
+            .journal_prepared_history_request(&prepared, now)
+            .await
+            .map_err(chat_error)?;
+        self.engine
+            .transport()
+            .create_history_transfer(&prepared.request)
+            .await
+            .map_err(chat_error)?;
+        to_output(&prepared.request)
+    }
+
+    #[wasm_bindgen(js_name = listHistoryTransfers)]
+    pub async fn list_history_transfers(&self) -> std::result::Result<JsValue, JsValue> {
+        let transfers = self
+            .engine
+            .transport()
+            .list_history_transfers(self.device_id())
+            .await
+            .map_err(chat_error)?;
+        to_output(&transfers)
+    }
+
+    #[wasm_bindgen(js_name = approveHistoryTransfer)]
+    pub async fn approve_history_transfer(
+        &mut self,
+        request: JsValue,
+        record_limit: u32,
+        plaintext_byte_limit: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let request: kutup_chat_proto::ChatHistoryTransferRequestV1 =
+            from_transport(request).map_err(chat_error)?;
+        let now = crate::clock::unix_millis() / 1_000;
+        let plaintext_byte_limit = parse_u64_string(
+            "history transfer plaintext byte limit",
+            &plaintext_byte_limit,
+        )?;
+        let manifest = self
+            .engine
+            .sync_own_manifest(&self.authority, now_rfc3339())
+            .await
+            .map_err(chat_error)?;
+        crate::verify_history_transfer_request(&request, &manifest, now).map_err(chat_error)?;
+
+        let (acceptance, frames, start_index) = match self
+            .engine
+            .session()
+            .history_transfer_progress(&request.transfer_id)
+            .await
+            .map_err(chat_error)?
+        {
+            (Some(journal), frames)
+                if journal.role == crate::HistoryTransferRoleV1::Responder
+                    && journal.request == request =>
+            {
+                let acceptance = journal.acceptance.ok_or_else(|| {
+                    js_error("responder history journal has no signed acceptance")
+                })?;
+                (acceptance, frames, journal.next_frame_index as usize)
+            }
+            (None, _) => {
+                let mut rng = OsRng.unwrap_err();
+                let prepared = self
+                    .engine
+                    .session()
+                    .prepare_history_transfer_acceptance(
+                        &request,
+                        record_limit,
+                        plaintext_byte_limit,
+                        now,
+                        &mut rng,
+                    )
+                    .map_err(chat_error)?;
+                let transcript = crate::verify_history_transfer_acceptance(
+                    &request,
+                    &prepared.acceptance,
+                    &manifest,
+                    now,
+                )
+                .map_err(chat_error)?;
+                let key = crate::derive_history_transfer_key(
+                    &prepared.ephemeral_secret,
+                    &request.ephemeral_public_key,
+                    &transcript,
+                )
+                .map_err(chat_error)?;
+                let records = self
+                    .engine
+                    .session()
+                    .history_archive_records(record_limit)
+                    .await
+                    .map_err(chat_error)?;
+                let archive = crate::prepare_history_archive(
+                    &prepared.acceptance,
+                    &transcript,
+                    records,
+                    now,
+                    &key,
+                    &mut rng,
+                )
+                .map_err(chat_error)?;
+                self.engine
+                    .session()
+                    .journal_prepared_history_response(
+                        &request,
+                        &prepared,
+                        &archive,
+                        now,
+                    )
+                    .await
+                    .map_err(chat_error)?;
+                (prepared.acceptance, archive.frames, 0)
+            }
+            _ => return Err(js_error("history transfer id is bound to another local journal")),
+        };
+
+        let transport = Rc::clone(self.engine.transport());
+        transport
+            .accept_history_transfer(&request.transfer_id, self.device_id(), &acceptance)
+            .await
+            .map_err(chat_error)?;
+        for frame in frames.iter().skip(start_index) {
+            transport
+                .upload_history_transfer_frame(
+                    &request.transfer_id,
+                    self.device_id(),
+                    frame,
+                )
+                .await
+                .map_err(chat_error)?;
+        }
+        let (Some(mut journal), _) = self
+            .engine
+            .session()
+            .history_transfer_progress(&request.transfer_id)
+            .await
+            .map_err(chat_error)?
+        else {
+            return Err(js_error("history transfer journal disappeared"));
+        };
+        journal.next_frame_index = frames.len() as u32;
+        journal.updated_at_unix = now;
+        self.engine
+            .session()
+            .save_history_transfer_progress(journal, frames.clone(), now)
+            .await
+            .map_err(chat_error)?;
+        to_output(&serde_json::json!({
+            "acceptance": acceptance,
+            "frameCount": frames.len(),
+        }))
+    }
+
+    #[wasm_bindgen(js_name = downloadHistoryTransfer)]
+    pub async fn download_history_transfer(
+        &mut self,
+        transfer_id: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let now = crate::clock::unix_millis() / 1_000;
+        let (Some(mut journal), mut frames) = self
+            .engine
+            .session()
+            .history_transfer_progress(&transfer_id)
+            .await
+            .map_err(chat_error)?
+        else {
+            return Err(js_error("this device has no journal for that history transfer"));
+        };
+        if journal.role != crate::HistoryTransferRoleV1::Requester
+            || journal.request.requesting_device_id != self.device_id()
+        {
+            return Err(js_error("history transfer does not belong to this requesting device"));
+        }
+
+        let acceptance = match journal.acceptance.clone() {
+            Some(acceptance) => acceptance,
+            None => {
+                let transfers = self
+                    .engine
+                    .transport()
+                    .list_history_transfers(self.device_id())
+                    .await
+                    .map_err(chat_error)?;
+                let summary = transfers
+                    .transfers
+                    .into_iter()
+                    .find(|summary| summary.transfer_id == transfer_id)
+                    .ok_or_else(|| js_error("history transfer is not available at the relay"))?;
+                if summary.request != journal.request {
+                    return Err(js_error("relay substituted the signed history request"));
+                }
+                summary
+                    .acceptance
+                    .ok_or_else(|| js_error("history transfer is still waiting for approval"))?
+            }
+        };
+
+        let manifest = self
+            .engine
+            .sync_own_manifest(&self.authority, now_rfc3339())
+            .await
+            .map_err(chat_error)?;
+        crate::verify_history_transfer_request(&journal.request, &manifest, now)
+            .map_err(chat_error)?;
+        let transcript = crate::verify_history_transfer_acceptance(
+            &journal.request,
+            &acceptance,
+            &manifest,
+            now,
+        )
+        .map_err(chat_error)?;
+        let secret = crate::HistoryTransferEphemeralSecret::from_journal_bytes(
+            journal.ephemeral_secret,
+        );
+        let key = crate::derive_history_transfer_key(
+            &secret,
+            &acceptance.ephemeral_public_key,
+            &transcript,
+        )
+        .map_err(chat_error)?;
+
+        journal.acceptance = Some(acceptance.clone());
+        journal.state = crate::HistoryTransferJournalStateV1::Accepted;
+        loop {
+            if frames.last().is_some_and(|frame| frame.final_frame) {
+                break;
+            }
+            let after = frames.last().map(|frame| frame.index);
+            let page = self
+                .engine
+                .transport()
+                .drain_history_transfer_frames(&transfer_id, self.device_id(), after, 128)
+                .await
+                .map_err(chat_error)?;
+            if page
+                .transcript_hash
+                .as_deref()
+                .is_some_and(|hash| hash != hex::encode(transcript))
+            {
+                return Err(js_error("relay returned a different transfer transcript"));
+            }
+            if page.frames.is_empty() {
+                journal.next_frame_index = frames.len() as u32;
+                journal.updated_at_unix = now;
+                self.engine
+                    .session()
+                    .save_history_transfer_progress(journal, frames.clone(), now)
+                    .await
+                    .map_err(chat_error)?;
+                return to_output(&serde_json::json!({
+                    "ready": false,
+                    "frameCount": frames.len(),
+                }));
+            }
+            for frame in page.frames {
+                if frame.index as usize != frames.len()
+                    || frames.last().is_some_and(|stored| stored.final_frame)
+                {
+                    return Err(js_error("relay returned non-contiguous history frames"));
+                }
+                frames.push(frame);
+                if frames.len() > kutup_chat_proto::MAX_CHAT_HISTORY_TRANSFER_FRAMES as usize {
+                    return Err(js_error("history transfer exceeds the frame limit"));
+                }
+            }
+            journal.next_frame_index = frames.len() as u32;
+            journal.updated_at_unix = now;
+            journal.state = if frames.last().is_some_and(|frame| frame.final_frame) {
+                crate::HistoryTransferJournalStateV1::ImportReady
+            } else {
+                crate::HistoryTransferJournalStateV1::Accepted
+            };
+            self.engine
+                .session()
+                .save_history_transfer_progress(journal.clone(), frames.clone(), now)
+                .await
+                .map_err(chat_error)?;
+        }
+
+        let archive = crate::verify_history_archive(&acceptance, &transcript, &frames, &key)
+            .map_err(chat_error)?;
+        let imported_count = archive.records.len();
+        let mut rng = OsRng.unwrap_err();
+        let completion = self
+            .engine
+            .session()
+            .prepare_history_transfer_completion(
+                &acceptance,
+                &transcript,
+                &archive,
+                frames.len() as u32,
+                now,
+                &mut rng,
+            )
+            .map_err(chat_error)?;
+        self.engine
+            .session()
+            .import_history(archive.records)
+            .await
+            .map_err(chat_error)?;
+        journal.state = crate::HistoryTransferJournalStateV1::Completed;
+        journal.next_frame_index = frames.len() as u32;
+        journal.updated_at_unix = now;
+        self.engine
+            .session()
+            .save_history_transfer_progress(journal, frames.clone(), now)
+            .await
+            .map_err(chat_error)?;
+        self.engine
+            .transport()
+            .complete_history_transfer(&transfer_id, self.device_id(), &completion)
+            .await
+            .map_err(chat_error)?;
+        self.engine
+            .session()
+            .delete_history_transfer_progress(&transfer_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&serde_json::json!({
+            "ready": true,
+            "frameCount": frames.len(),
+            "importedCount": imported_count,
+        }))
+    }
+
     #[wasm_bindgen(js_name = generateMlsKeyPackage)]
     pub async fn generate_mls_key_package(
         &self,

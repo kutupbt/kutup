@@ -444,6 +444,13 @@ pub async fn complete(
     }
     let mut tx = state.pool.begin().await?;
     let row = load_transfer_for_update(&mut tx, transfer_id, user_id).await?;
+    if row.7 == "completed"
+        && row.1 == query.device_id as i32
+        && row.6.as_deref() == Some(completion.transcript_hash.as_str())
+    {
+        tx.commit().await?;
+        return Ok(Json(json!({ "completed": true, "deduplicated": true })).into_response());
+    }
     if row.7 != "accepted"
         || row.1 != query.device_id as i32
         || row.6.as_deref() != Some(completion.transcript_hash.as_str())

@@ -33,7 +33,8 @@ use crate::db::{
 };
 use crate::error::{ChatError, Result};
 use crate::history_transfer::{
-    prepare_history_transfer_acceptance, prepare_history_transfer_request,
+    prepare_history_transfer_acceptance, prepare_history_transfer_completion,
+    prepare_history_transfer_request,
     PreparedHistoryTransferAcceptance, PreparedHistoryTransferRequest,
 };
 use crate::keys;
@@ -289,6 +290,28 @@ impl Session {
             record_limit,
             plaintext_byte_limit,
             now_unix,
+            rng,
+        )
+    }
+
+    pub fn prepare_history_transfer_completion<R: Rng + CryptoRng>(
+        &self,
+        acceptance: &kutup_chat_proto::ChatHistoryTransferAcceptanceV1,
+        transcript_hash: &[u8; 32],
+        archive: &crate::VerifiedHistoryArchiveV1,
+        frame_count: u32,
+        completed_at_unix: i64,
+        rng: &mut R,
+    ) -> Result<kutup_chat_proto::ChatHistoryTransferCompletionV1> {
+        prepare_history_transfer_completion(
+            &self.store.local_identity_key_pair(),
+            acceptance,
+            transcript_hash,
+            frame_count,
+            archive.header.record_count,
+            archive.header.media_plaintext_bytes,
+            &archive.plaintext_digest,
+            completed_at_unix,
             rng,
         )
     }
