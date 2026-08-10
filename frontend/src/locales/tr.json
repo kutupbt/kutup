@@ -154,6 +154,17 @@
       "send": "Şifreli ek gönder",
       "capture": "Fotoğraf veya video çek"
     },
+    "voice": {
+      "start": "Sesli not kaydet",
+      "stop": "Sesli notu durdur ve gönder",
+      "cancel": "Sesli notu iptal et",
+      "unsupported": "Bu tarayıcı ses kaydını desteklemiyor.",
+      "permissionFailed": "Mikrofon erişimi reddedildi veya başlatılamadı.",
+      "failed": "Ses kaydı başarısız oldu.",
+      "empty": "Ses kaydı boştu.",
+      "tooLarge": "Sesli not {{limit}} kayıt sınırını aşıyor.",
+      "maximumReached": "Azami sesli not süresine ulaşıldı; kayıt gönderiliyor."
+    },
   "safetyNumberChanged": "Bir alıcı cihazın kimliği değişti. Güvenlik numarasını doğrulayın.",
   "requests": {
     "title_one": "{{count}} mesaj isteği",

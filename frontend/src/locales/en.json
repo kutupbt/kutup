@@ -154,6 +154,17 @@
       "send": "Send encrypted attachment",
       "capture": "Take a photo or video"
     },
+    "voice": {
+      "start": "Record a voice note",
+      "stop": "Stop and send voice note",
+      "cancel": "Cancel voice note",
+      "unsupported": "Voice recording is not supported by this browser.",
+      "permissionFailed": "Microphone access was denied or could not be started.",
+      "failed": "Voice recording failed.",
+      "empty": "The voice recording was empty.",
+      "tooLarge": "Voice note exceeds the {{limit}} recording limit.",
+      "maximumReached": "Maximum voice-note duration reached; sending the recording."
+    },
   "safetyNumberChanged": "A recipient device identity changed. Verify the safety number.",
   "requests": {
     "title_one": "{{count}} message request",

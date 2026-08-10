@@ -14,6 +14,7 @@ import {
   Loader2,
   MessageCircle,
   MessageSquareWarning,
+  Mic,
   MonitorSmartphone,
   Plus,
   Paperclip,
@@ -26,6 +27,7 @@ import {
   Shield,
   ShieldCheck,
   SmilePlus,
+  Square,
   Trash2,
   Timer,
   UserMinus,
@@ -102,6 +104,14 @@ import {
   reduceDisappearingTimers,
 } from '@/chat/disappearing'
 import { searchChatHistory } from '@/chat/search'
+import {
+  canonicalVoiceNoteMimeType,
+  formatVoiceNoteElapsed,
+  preferredVoiceNoteMimeType,
+  VOICE_NOTE_MAX_DURATION_MS,
+  VOICE_NOTE_MAX_PLAINTEXT_BYTES,
+  voiceNoteFilename,
+} from '@/chat/voice-note'
 
 const CHAT_REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const
 const DISAPPEARING_PRESETS = [
@@ -118,6 +128,17 @@ interface ReactionAggregate {
   emoji: ChatReactionEmoji
   count: number
   reactedBySelf: boolean
+}
+
+interface VoiceRecordingSession {
+  recorder: MediaRecorder
+  stream: MediaStream
+  chunks: Blob[]
+  plaintextBytes: number
+  startedAt: number
+  conversation: ConversationId
+  disappearingTimerSeconds?: number
+  discard: boolean
 }
 
 interface MessageMutationState {
@@ -237,9 +258,18 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [mediaStorage, setMediaStorage] = useState<ChatMediaStorageView | null>(null)
   const [mediaStorageLoading, setMediaStorageLoading] = useState(false)
   const [mediaStorageClearing, setMediaStorageClearing] = useState<string | null>(null)
+  const [voiceStarting, setVoiceStarting] = useState(false)
+  const [voiceRecording, setVoiceRecording] = useState(false)
+  const [voiceStopping, setVoiceStopping] = useState(false)
+  const [voiceElapsedMs, setVoiceElapsedMs] = useState(0)
   const endRef = useRef<HTMLDivElement>(null)
   const attachmentInputRef = useRef<HTMLInputElement>(null)
   const captureInputRef = useRef<HTMLInputElement>(null)
+  const voiceRecordingRef = useRef<VoiceRecordingSession | null>(null)
+  const voiceTimerRef = useRef<number | null>(null)
+  const voiceMountedRef = useRef(true)
+  const voiceStartingRef = useRef(false)
+  const selectedConversationKeyRef = useRef<string | null>(null)
   const historyRefreshGeneration = useRef(0)
   const receiptAttempted = useRef(new Set<string>())
   const typingSentAt = useRef(new Map<string, number>())
@@ -255,6 +285,22 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const selfAddress = selfAccount
     ? directAddress(directConversation(selfAccount))
     : null
+
+  useEffect(() => {
+    voiceMountedRef.current = true
+    return () => {
+      voiceMountedRef.current = false
+      voiceStartingRef.current = false
+      const session = voiceRecordingRef.current
+      if (session) {
+        session.discard = true
+        if (session.recorder.state !== 'inactive') session.recorder.stop()
+        session.stream.getTracks().forEach(track => track.stop())
+        voiceRecordingRef.current = null
+      }
+      if (voiceTimerRef.current !== null) window.clearInterval(voiceTimerRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     if (!auth.userId || !auth.username || !masterKey) {
@@ -410,6 +456,13 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   }, [groups, peers, selectedConversation])
 
   const selectedKey = selectedConversation ? conversationKey(selectedConversation) : null
+  useEffect(() => {
+    selectedConversationKeyRef.current = selectedKey
+    const session = voiceRecordingRef.current
+    if (session && conversationKey(session.conversation) !== selectedKey) {
+      stopVoiceRecording(true)
+    }
+  }, [selectedKey])
   const selectedTimerSeconds = selectedKey
     ? activeTimersByConversation.get(selectedKey)?.durationSeconds
     : undefined
@@ -1131,8 +1184,16 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     }
   }
 
-  async function sendAttachmentFile(file: File) {
-    if (!service || !selectedConversation || !auth.accessToken || sending ||
+  async function sendAttachmentFile(
+    file: File,
+    mediaOptions: { durationMs?: number } = {},
+    target?: { conversation: ConversationId; disappearingTimerSeconds?: number },
+  ) {
+    const conversation = target?.conversation ?? selectedConversation
+    const disappearingTimerSeconds = target
+      ? target.disappearingTimerSeconds
+      : selectedTimerSeconds
+    if (!service || !conversation || !auth.accessToken || sending ||
         !capabilities.media || !capabilities.serverName) return
     if (file.size > capabilities.media.maximumPlaintextBytes) {
       toast.error(`Attachment exceeds this server's ${formatBytes(capabilities.media.maximumPlaintextBytes)} limit`)
@@ -1144,12 +1205,13 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
         file,
         originDomain: capabilities.serverName,
         accessToken: auth.accessToken,
+        ...mediaOptions,
       })
       const summary = await service.sendAttachment(
-        selectedConversation,
+        conversation,
         uploaded.descriptor,
         uploaded.storageReferenceId,
-        selectedTimerSeconds,
+        disappearingTimerSeconds,
       )
       if (summary.safetyNumberChanges.length > 0) {
         toast.warning(t('chat.safetyNumberChanged'))
@@ -1161,6 +1223,143 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       setSending(false)
       if (attachmentInputRef.current) attachmentInputRef.current.value = ''
       if (captureInputRef.current) captureInputRef.current.value = ''
+    }
+  }
+
+  function releaseVoiceRecording(session: VoiceRecordingSession) {
+    session.stream.getTracks().forEach(track => track.stop())
+    if (voiceRecordingRef.current === session) voiceRecordingRef.current = null
+    if (voiceTimerRef.current !== null) {
+      window.clearInterval(voiceTimerRef.current)
+      voiceTimerRef.current = null
+    }
+    if (voiceMountedRef.current) {
+      setVoiceRecording(false)
+      setVoiceElapsedMs(0)
+    }
+  }
+
+  function stopVoiceRecording(discard: boolean) {
+    const session = voiceRecordingRef.current
+    if (!session) return
+    session.discard = discard
+    if (!discard) setVoiceStopping(true)
+    if (session.recorder.state !== 'inactive') {
+      session.recorder.stop()
+    } else {
+      releaseVoiceRecording(session)
+      if (voiceMountedRef.current) setVoiceStopping(false)
+    }
+  }
+
+  async function startVoiceRecording() {
+    if (!service || !selectedConversation || !canSendMedia || sending ||
+        voiceStartingRef.current || voiceRecording || voiceStopping || !capabilities.media) return
+    if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      toast.error(t('chat.voice.unsupported'))
+      return
+    }
+    const conversation = selectedConversation
+    const targetConversationKey = conversationKey(conversation)
+    const disappearingTimerSeconds = selectedTimerSeconds
+    voiceStartingRef.current = true
+    setVoiceStarting(true)
+    let stream: MediaStream | null = null
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      })
+      if (!voiceMountedRef.current || selectedConversationKeyRef.current !== targetConversationKey) {
+        stream.getTracks().forEach(track => track.stop())
+        return
+      }
+      const preferredMimeType = preferredVoiceNoteMimeType(
+        mimeType => MediaRecorder.isTypeSupported(mimeType),
+      )
+      const recorder = new MediaRecorder(
+        stream,
+        preferredMimeType ? { mimeType: preferredMimeType } : undefined,
+      )
+      const session: VoiceRecordingSession = {
+        recorder,
+        stream,
+        chunks: [],
+        plaintextBytes: 0,
+        startedAt: Date.now(),
+        conversation,
+        disappearingTimerSeconds,
+        discard: false,
+      }
+      voiceRecordingRef.current = session
+      recorder.ondataavailable = event => {
+        if (event.data.size === 0 || session.discard) return
+        session.plaintextBytes += event.data.size
+        const maximumBytes = Math.min(
+          capabilities.media!.maximumPlaintextBytes,
+          VOICE_NOTE_MAX_PLAINTEXT_BYTES,
+        )
+        if (session.plaintextBytes > maximumBytes) {
+          session.discard = true
+          toast.error(t('chat.voice.tooLarge', { limit: formatBytes(maximumBytes) }))
+          if (recorder.state !== 'inactive') recorder.stop()
+          return
+        }
+        session.chunks.push(event.data)
+      }
+      recorder.onerror = () => {
+        session.discard = true
+        toast.error(t('chat.voice.failed'))
+        if (recorder.state !== 'inactive') recorder.stop()
+      }
+      recorder.onstop = () => {
+        const durationMs = Math.max(1, Date.now() - session.startedAt)
+        releaseVoiceRecording(session)
+        if (session.discard) {
+          if (voiceMountedRef.current) setVoiceStopping(false)
+          return
+        }
+        const recorderMimeType = recorder.mimeType || preferredMimeType ||
+          session.chunks.find(chunk => chunk.type)?.type || 'audio/webm'
+        const mimeType = canonicalVoiceNoteMimeType(recorderMimeType)
+        const file = new File(session.chunks, voiceNoteFilename(mimeType), { type: mimeType })
+        if (file.size === 0) {
+          if (voiceMountedRef.current) {
+            setVoiceStopping(false)
+            toast.error(t('chat.voice.empty'))
+          }
+          return
+        }
+        void sendAttachmentFile(
+          file,
+          { durationMs },
+          { conversation: session.conversation,
+            disappearingTimerSeconds: session.disappearingTimerSeconds },
+        ).finally(() => {
+          if (voiceMountedRef.current) setVoiceStopping(false)
+        })
+      }
+      recorder.start(1_000)
+      setVoiceElapsedMs(0)
+      setVoiceRecording(true)
+      voiceTimerRef.current = window.setInterval(() => {
+        const elapsed = Date.now() - session.startedAt
+        setVoiceElapsedMs(Math.min(elapsed, VOICE_NOTE_MAX_DURATION_MS))
+        if (elapsed >= VOICE_NOTE_MAX_DURATION_MS && recorder.state !== 'inactive') {
+          toast.info(t('chat.voice.maximumReached'))
+          stopVoiceRecording(false)
+        }
+      }, 250)
+    } catch {
+      stream?.getTracks().forEach(track => track.stop())
+      if (voiceMountedRef.current) toast.error(t('chat.voice.permissionFailed'))
+    } finally {
+      voiceStartingRef.current = false
+      if (voiceMountedRef.current) setVoiceStarting(false)
     }
   }
 
@@ -2905,7 +3104,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     type="button"
                     size="icon"
                     variant="ghost"
-                    disabled={!service || !canSendMedia || sending}
+                    disabled={!service || !canSendMedia || sending || voiceStarting || voiceRecording || voiceStopping}
                     onClick={() => attachmentInputRef.current?.click()}
                     aria-label={t('chat.attachments.send')}
                     data-testid="chat-attachment-button"
@@ -2916,13 +3115,60 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     type="button"
                     size="icon"
                     variant="ghost"
-                    disabled={!service || !canSendMedia || sending}
+                    disabled={!service || !canSendMedia || sending || voiceStarting || voiceRecording || voiceStopping}
                     onClick={() => captureInputRef.current?.click()}
                     aria-label={t('chat.attachments.capture')}
                     data-testid="chat-capture-button"
                   >
                     <Camera className="h-4 w-4" />
                   </Button>
+                  {voiceRecording ? (
+                    <div
+                      className="flex h-9 items-center gap-1 rounded-md border border-destructive/40 bg-destructive/5 px-1"
+                      data-testid="chat-voice-recording"
+                    >
+                      <span className="ml-1 h-2 w-2 animate-pulse rounded-full bg-destructive" />
+                      <span className="min-w-11 text-center font-mono text-xs">
+                        {formatVoiceNoteElapsed(voiceElapsedMs)}
+                      </span>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        onClick={() => stopVoiceRecording(true)}
+                        aria-label={t('chat.voice.cancel')}
+                        data-testid="chat-voice-cancel"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 text-destructive"
+                        onClick={() => stopVoiceRecording(false)}
+                        aria-label={t('chat.voice.stop')}
+                        data-testid="chat-voice-stop"
+                      >
+                        <Square className="h-3.5 w-3.5 fill-current" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      disabled={!service || !canSendMedia || sending || voiceStarting || voiceStopping}
+                      onClick={() => void startVoiceRecording()}
+                      aria-label={t('chat.voice.start')}
+                      data-testid="chat-voice-button"
+                    >
+                      {voiceStarting || voiceStopping
+                        ? <Loader2 className="h-4 w-4 animate-spin" />
+                        : <Mic className="h-4 w-4" />}
+                    </Button>
+                  )}
                 </>
               )}
               <Input
@@ -2947,11 +3193,11 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                       })
                     : t('chat.selectConversation')
                 }
-                disabled={!service || !canSend || sending || mutationSending}
+                disabled={!service || !canSend || sending || mutationSending || voiceRecording || voiceStopping}
                 maxLength={16_000}
                 autoComplete="off"
               />
-              <Button type="submit" size="icon" disabled={!draft.trim() || !service || !canSend || sending || mutationSending}>
+              <Button type="submit" size="icon" disabled={!draft.trim() || !service || !canSend || sending || mutationSending || voiceRecording || voiceStopping}>
                 {sending || mutationSending
                   ? <Loader2 className="h-4 w-4 animate-spin" />
                   : editingMessage

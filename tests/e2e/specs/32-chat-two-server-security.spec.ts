@@ -298,6 +298,57 @@ async function sendCapturedMedia(
   expect((await receipt).ok()).toBe(true)
 }
 
+async function installVoiceRecorderMock(page: Page, plaintext: string): Promise<void> {
+  await page.evaluate((recordedPlaintext) => {
+    type VoiceTestWindow = Window & { __kutupStoppedAudioTracks?: number }
+    const target = window as VoiceTestWindow
+    target.__kutupStoppedAudioTracks = 0
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: async () => ({
+          getTracks: () => [{
+            stop: () => {
+              target.__kutupStoppedAudioTracks =
+                (target.__kutupStoppedAudioTracks ?? 0) + 1
+            },
+          }],
+        }),
+      },
+    })
+    class TestMediaRecorder {
+      static isTypeSupported(mimeType: string) {
+        return mimeType === 'audio/webm;codecs=opus'
+      }
+
+      readonly mimeType: string
+      state: RecordingState = 'inactive'
+      ondataavailable: ((event: BlobEvent) => void) | null = null
+      onerror: ((event: Event) => void) | null = null
+      onstop: ((event: Event) => void) | null = null
+
+      constructor(_stream: MediaStream, options?: MediaRecorderOptions) {
+        this.mimeType = options?.mimeType ?? 'audio/webm'
+      }
+
+      start() {
+        this.state = 'recording'
+      }
+
+      stop() {
+        this.state = 'inactive'
+        const data = new Blob([recordedPlaintext], { type: this.mimeType })
+        this.ondataavailable?.({ data } as BlobEvent)
+        this.onstop?.(new Event('stop'))
+      }
+    }
+    Object.defineProperty(window, 'MediaRecorder', {
+      configurable: true,
+      value: TestMediaRecorder,
+    })
+  }, plaintext)
+}
+
 async function syncUntilAttachment(page: Page, filename: string): Promise<void> {
   await expect.poll(async () => {
     if (await page.getByText(filename, { exact: true }).count() > 0) return true
@@ -466,6 +517,7 @@ test.describe('two-server secure chat', () => {
     // V1 does not allocate destination media for a message request. Direct
     // attachments become available only after the contact is accepted.
     await expect(pageA.getByTestId('chat-attachment-button')).toBeDisabled()
+    await expect(pageA.getByTestId('chat-voice-button')).toBeDisabled()
     const firstIdentified = pageA.waitForResponse((response) => {
       const path = new URL(response.url()).pathname
       return response.request().method() === 'POST' && path.includes('/api/chat/users/') && path.endsWith('/messages')
@@ -638,6 +690,35 @@ test.describe('two-server secure chat', () => {
     await sendCapturedMedia(pageA, capturedPhoto, capturedPhotoBody)
     await syncUntilAttachment(pageB, capturedPhoto)
     expect(await downloadAttachment(pageB, capturedPhoto)).toBe(capturedPhotoBody)
+
+    const voiceNoteBody = `microphone audio encrypted before upload ${tag}`
+    await installVoiceRecorderMock(pageA, voiceNoteBody)
+    await pageA.getByTestId('chat-voice-button').click()
+    await expect(pageA.getByTestId('chat-voice-recording')).toBeVisible()
+    await pageA.getByTestId('chat-voice-cancel').click()
+    await expect(pageA.getByTestId('chat-voice-recording')).toBeHidden()
+    await expect.poll(() => pageA.evaluate(() => (
+      window as Window & { __kutupStoppedAudioTracks?: number }
+    ).__kutupStoppedAudioTracks)).toBe(1)
+
+    await pageA.getByTestId('chat-voice-button').click()
+    await expect(pageA.getByTestId('chat-voice-recording')).toBeVisible()
+    const voiceReceipt = pageA.waitForResponse((response) => {
+      const path = new URL(response.url()).pathname
+      return response.request().method() === 'POST'
+        && path === '/api/chat/media/deliveries'
+    })
+    await pageA.getByTestId('chat-voice-stop').click()
+    expect((await voiceReceipt).ok()).toBe(true)
+    const voiceFilenameLocator = pageA.getByText(/^voice-note-[0-9]+\.webm$/).last()
+    await expect(voiceFilenameLocator).toBeVisible()
+    const voiceFilename = await voiceFilenameLocator.textContent()
+    expect(voiceFilename).not.toBeNull()
+    await syncUntilAttachment(pageB, voiceFilename!)
+    expect(await downloadAttachment(pageB, voiceFilename!)).toBe(voiceNoteBody)
+    await expect.poll(() => pageA.evaluate(() => (
+      window as Window & { __kutupStoppedAudioTracks?: number }
+    ).__kutupStoppedAudioTracks)).toBe(2)
 
     await pageB.getByTestId('chat-storage-button').click()
     await expect(pageB.getByTestId('chat-storage-summary')).toBeVisible({ timeout: 45_000 })

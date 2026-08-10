@@ -262,6 +262,13 @@ cross-restart rollback pinning is unavailable on that device.
   stream. The resulting `File` enters the exact attachment encryption and
   upload path above, so captured plaintext never receives a separate server
   route or plaintext fallback.
+- Voice notes use the browser `MediaRecorder` API with browser/OS-owned
+  microphone permission. Cancel discards the collected chunks, and cancel,
+  send, failure, size overflow and component teardown all stop every microphone
+  track. V1 bounds the in-memory recording to 10 minutes and 64 MiB (or the
+  lower advertised server limit). The completed audio `File` and its measured
+  duration then enter the same immutable encryption/upload path; no raw audio
+  stream or separate voice endpoint reaches a server.
 - V1 never automatically downloads full attachment bytes to a device. The user
   taps **Download** or **View**.
 - The recipient server may already hold the durable encrypted copy. Device
@@ -295,6 +302,8 @@ following passed:
   storage-full tests;
 - [x] Direct Chat, Note to Self and MLS browser send/download/clear paths;
 - [x] native photo/video capture through the same encrypted attachment path;
+- [x] bounded voice-note recording, cancel cleanup and two-server encrypted
+  exact-byte delivery through that path;
 - [x] two-server offline/retry delivery with origin restart and destination object
   durability after origin deletion;
 - [x] message-request non-allocation before acceptance;
