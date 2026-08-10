@@ -132,6 +132,39 @@ async function replyTo(page: Page, target: string, text: string): Promise<void> 
   await send(page, text)
 }
 
+async function reactTo(page: Page, target: string, emoji: string): Promise<void> {
+  const message = reactionTarget(page, target)
+  await message.getByTestId('chat-reaction-button').click()
+  await page.getByRole('menuitem', { name: `React with ${emoji}` }).click()
+}
+
+async function syncUntilReaction(
+  page: Page,
+  target: string,
+  emoji: string,
+  count: number,
+): Promise<void> {
+  const aggregate = () => reactionTarget(page, target)
+    .locator(`[data-testid="chat-reaction-aggregate"][data-emoji="${emoji}"]`)
+  await expect.poll(async () => {
+    const chip = aggregate()
+    if (await chip.count() > 0 && await chip.first().textContent() === `${emoji} ${count}`) return true
+    await page.getByRole('button', { name: 'Sync messages' }).click()
+    await page.waitForTimeout(500)
+    return await chip.count() > 0 && await chip.first().textContent() === `${emoji} ${count}`
+  }, {
+    timeout: 45_000,
+    intervals: [500, 1_000, 2_000],
+    message: `encrypted ${emoji} reaction count ${count} was not reconciled`,
+  }).toBe(true)
+}
+
+function reactionTarget(page: Page, target: string) {
+  return page.getByTestId('chat-message').filter({
+    has: page.locator('p').getByText(target, { exact: true }),
+  })
+}
+
 async function syncUntilVisible(page: Page, text: string): Promise<void> {
   await expect.poll(async () => {
     if (await bubble(page, text).count() > 0) return true
@@ -412,6 +445,17 @@ test.describe('two-server secure chat', () => {
     await syncUntilVisible(pageA, quotedReply)
     const quotedMessage = pageA.getByTestId('chat-message').filter({ hasText: quotedReply })
     await expect(quotedMessage.getByTestId('chat-reply-context')).toContainText(sealed)
+
+    await reactTo(pageB, sealed, '👍')
+    await syncUntilReaction(pageA, sealed, '👍', 1)
+    await reactionTarget(pageA, sealed)
+      .getByTestId('chat-reaction-aggregate')
+      .click()
+    await syncUntilReaction(pageB, sealed, '👍', 2)
+    await reactionTarget(pageB, sealed)
+      .getByTestId('chat-reaction-aggregate')
+      .click()
+    await syncUntilReaction(pageA, sealed, '👍', 1)
     expect(identifiedToBob).toEqual([])
 
     const directAttachment = `direct-attachment-${tag}.txt`
@@ -1031,6 +1075,13 @@ test.describe('two-server secure chat', () => {
     await send(pageB, fromBob)
     expect((await requireResponseOrUiError(pageB, sentToAlice)).ok()).toBe(true)
     await expect(bubble(pageA, fromBob)).toBeVisible({ timeout: 90_000 })
+
+    await reactTo(pageB, fromAlice, '❤️')
+    await syncUntilReaction(pageA, fromAlice, '❤️', 1)
+    await reactionTarget(pageA, fromAlice)
+      .getByTestId('chat-reaction-aggregate')
+      .click()
+    await syncUntilReaction(pageB, fromAlice, '❤️', 2)
 
     const groupAttachment = `mls-attachment-${tag}.txt`
     const groupAttachmentBody = `MLS encrypted attachment ${tag}`

@@ -100,6 +100,11 @@
       "cancel": "Cancel reply",
       "unavailable": "Original message unavailable"
     },
+    "reactions": {
+      "add": "Add reaction",
+      "addEmoji": "React with {{emoji}}",
+      "remove": "Remove {{emoji}} reaction"
+    },
   "safetyNumberChanged": "A recipient device identity changed. Verify the safety number.",
   "requests": {
     "title_one": "{{count}} message request",

@@ -23,6 +23,7 @@ import {
   Send,
   Shield,
   ShieldCheck,
+  SmilePlus,
   Trash2,
   UserMinus,
   Users,
@@ -42,6 +43,12 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { QRCodeSVG } from 'qrcode.react'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { useAppSelector } from '@/store'
@@ -77,10 +84,20 @@ import type {
   PendingMlsInvitation,
   PeerChatProfile,
   SafetyNumberV1,
+  ChatReactionV1,
 } from '@/chat/types'
 import { cn } from '@/lib/utils'
 import { copyText } from '@/lib/format'
 import { downloadChatMediaV1, uploadChatMediaV1 } from '@/chat/media'
+
+const CHAT_REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const
+type ChatReactionEmoji = ChatReactionV1['emoji']
+
+interface ReactionAggregate {
+  emoji: ChatReactionEmoji
+  count: number
+  reactedBySelf: boolean
+}
 
 export default function Chat() {
   const { t } = useTranslation()
@@ -144,6 +161,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [replyingTo, setReplyingTo] = useState<ChatHistoryEntry | null>(null)
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
+  const [reactionSending, setReactionSending] = useState<string | null>(null)
   const [contactUpdating, setContactUpdating] = useState(false)
   const [groupUpdating, setGroupUpdating] = useState(false)
   const [newGroupOpen, setNewGroupOpen] = useState(false)
@@ -264,9 +282,14 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     [peerProfiles],
   )
 
+  const visibleHistory = useMemo(
+    () => history.filter(message => !message.content.reaction),
+    [history],
+  )
+
   const peers = useMemo(() => {
     const latest = new Map<string, { conversation: ConversationId; message: ChatHistoryEntry }>()
-    for (const message of history) {
+    for (const message of visibleHistory) {
       latest.set(conversationKey(message.conversation), {
         conversation: message.conversation,
         message,
@@ -281,7 +304,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
         return state !== 'pendingIncoming' && state !== 'rejected'
       })
       .sort((left, right) => right.message.timestampMs - left.message.timestampMs)
-  }, [contactsByPeer, history, selfAddress])
+  }, [contactsByPeer, selfAddress, visibleHistory])
 
   const requests = useMemo(
     () =>
@@ -293,14 +316,14 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
             ? [{
                 contact,
                 conversation: directConversation(address),
-                message: history
+                message: visibleHistory
                   .filter((message) => directAddress(message.conversation) === contact.peer)
                   .at(-1),
               }]
             : []
         })
         .sort((left, right) => right.contact.updatedAtMs - left.contact.updatedAtMs),
-    [contacts, history],
+    [contacts, visibleHistory],
   )
 
   useEffect(() => {
@@ -429,14 +452,58 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const messages = useMemo(
     () =>
       selectedKey
-        ? history.filter((message) => conversationKey(message.conversation) === selectedKey)
+        ? visibleHistory.filter((message) => conversationKey(message.conversation) === selectedKey)
         : [],
-    [history, selectedKey],
+    [selectedKey, visibleHistory],
   )
   const messagesById = useMemo(
     () => new Map(messages.map(message => [message.content.messageId ?? message.id, message])),
     [messages],
   )
+  const reactionsByMessageId = useMemo(() => {
+    if (!selectedKey || !selectedConversation || !selfAddress) {
+      return new Map<string, ReactionAggregate[]>()
+    }
+    const targetIds = new Set(messages.flatMap(message =>
+      message.content.messageId ? [message.content.messageId] : []))
+    const latest = new Map<string, { message: ChatHistoryEntry; reaction: ChatReactionV1; reactor: string }>()
+    for (const message of history) {
+      const reaction = message.content.reaction
+      if (!reaction
+          || conversationKey(message.conversation) !== selectedKey
+          || !targetIds.has(reaction.targetMessageId)) continue
+      const reactor = message.direction === 'outgoing'
+        ? selfAddress
+        : selectedConversation.kind === 'direct'
+          ? directAddress(selectedConversation)
+          : message.peer
+      if (!reactor) continue
+      const key = `${reaction.targetMessageId}\u0000${reactor}\u0000${reaction.emoji}`
+      const previous = latest.get(key)
+      if (!previous || compareReactionOperations(previous.message, message) < 0) {
+        latest.set(key, { message, reaction, reactor })
+      }
+    }
+    const reactorsByTargetEmoji = new Map<string, Set<string>>()
+    for (const { reaction, reactor } of latest.values()) {
+      if (!reaction.active) continue
+      const key = `${reaction.targetMessageId}\u0000${reaction.emoji}`
+      const reactors = reactorsByTargetEmoji.get(key) ?? new Set<string>()
+      reactors.add(reactor)
+      reactorsByTargetEmoji.set(key, reactors)
+    }
+    const result = new Map<string, ReactionAggregate[]>()
+    for (const targetMessageId of targetIds) {
+      const aggregates = CHAT_REACTION_EMOJIS.flatMap(emoji => {
+        const reactors = reactorsByTargetEmoji.get(`${targetMessageId}\u0000${emoji}`)
+        return reactors?.size
+          ? [{ emoji, count: reactors.size, reactedBySelf: reactors.has(selfAddress) }]
+          : []
+      })
+      if (aggregates.length > 0) result.set(targetMessageId, aggregates)
+    }
+    return result
+  }, [history, messages, selectedConversation, selectedKey, selfAddress])
 
   useEffect(() => setReplyingTo(null), [selectedKey])
 
@@ -614,6 +681,33 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       toast.error(errorMessage(cause, t))
     } finally {
       setSending(false)
+    }
+  }
+
+  async function toggleReaction(
+    message: ChatHistoryEntry,
+    emoji: ChatReactionEmoji,
+    active: boolean,
+  ) {
+    const targetMessageId = message.content.messageId
+    if (!service || !selectedConversation || !targetMessageId || reactionSending) return
+    const operation = `${targetMessageId}:${emoji}`
+    setReactionSending(operation)
+    try {
+      const summary = await service.sendReaction(
+        selectedConversation,
+        targetMessageId,
+        emoji,
+        active,
+      )
+      if (summary.safetyNumberChanges.length > 0) {
+        toast.warning(t('chat.safetyNumberChanged'))
+      }
+      setHistory(await service.history())
+    } catch (cause) {
+      toast.error(errorMessage(cause, t))
+    } finally {
+      setReactionSending(null)
     }
   }
 
@@ -1431,7 +1525,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 group.status === 'active' || group.status === 'closed').map(group => {
                 const groupId = group.request.genesis.conversationId
                 const conversation: ConversationId = { kind: 'group', groupId }
-                const latest = history.filter(message =>
+                const latest = visibleHistory.filter(message =>
                   conversationKey(message.conversation) === conversationKey(conversation)).at(-1)
                 return (
                   <button
@@ -2022,6 +2116,13 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                   onReply={message.content.messageId
                     ? () => setReplyingTo(message)
                     : undefined}
+                  reactions={message.content.messageId
+                    ? reactionsByMessageId.get(message.content.messageId)
+                    : undefined}
+                  reactionBusy={reactionSending}
+                  onReact={message.content.messageId && canSend
+                    ? (emoji, active) => void toggleReaction(message, emoji, active)
+                    : undefined}
                 />
               ))}
               <div ref={endRef} />
@@ -2318,12 +2419,18 @@ function MessageBubble({
   accessToken,
   repliedMessage,
   onReply,
+  reactions = [],
+  reactionBusy,
+  onReact,
 }: {
   message: ChatHistoryEntry
   newerClientLabel: string
   accessToken?: string
   repliedMessage?: ChatHistoryEntry
   onReply?: () => void
+  reactions?: ReactionAggregate[]
+  reactionBusy?: string | null
+  onReact?: (emoji: ChatReactionEmoji, active: boolean) => void
 }) {
   const { t } = useTranslation()
   const outgoing = message.direction === 'outgoing'
@@ -2334,8 +2441,8 @@ function MessageBubble({
       className={cn('group flex items-center gap-1', outgoing ? 'justify-end' : 'justify-start')}
       data-testid="chat-message"
     >
-      {outgoing && onReply && (
-        <ReplyButton onReply={onReply} label={t('chat.replies.reply')} />
+      {outgoing && (
+        <MessageActions onReply={onReply} onReact={onReact} reactionBusy={reactionBusy} />
       )}
       <div
         className={cn(
@@ -2399,6 +2506,35 @@ function MessageBubble({
             {message.content.text ?? newerClientLabel}
           </p>
         )}
+        {reactions.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1" data-testid="chat-reactions">
+            {reactions.map(reaction => (
+              <button
+                key={reaction.emoji}
+                type="button"
+                className={cn(
+                  'rounded-full border px-2 py-0.5 text-xs transition-colors',
+                  reaction.reactedBySelf
+                    ? outgoing
+                      ? 'border-primary-foreground/70 bg-primary-foreground/20'
+                      : 'border-primary bg-primary/10'
+                    : outgoing
+                      ? 'border-primary-foreground/30 bg-primary-foreground/10'
+                      : 'bg-muted/60',
+                )}
+                disabled={!onReact || reactionBusy !== null && reactionBusy !== undefined}
+                onClick={() => onReact?.(reaction.emoji, !reaction.reactedBySelf)}
+                aria-label={reaction.reactedBySelf
+                  ? t('chat.reactions.remove', { emoji: reaction.emoji })
+                  : t('chat.reactions.addEmoji', { emoji: reaction.emoji })}
+                data-testid="chat-reaction-aggregate"
+                data-emoji={reaction.emoji}
+              >
+                {reaction.emoji} {reaction.count}
+              </button>
+            ))}
+          </div>
+        )}
         <span
           className={cn(
             'mt-1 flex items-center justify-end gap-1 text-[10px]',
@@ -2409,10 +2545,60 @@ function MessageBubble({
           {outgoing && (message.delivered ? <CheckCheck className="h-3 w-3" /> : <Check className="h-3 w-3" />)}
         </span>
       </div>
-      {!outgoing && onReply && (
-        <ReplyButton onReply={onReply} label={t('chat.replies.reply')} />
+      {!outgoing && (
+        <MessageActions onReply={onReply} onReact={onReact} reactionBusy={reactionBusy} />
       )}
     </div>
+  )
+}
+
+function MessageActions({
+  onReply,
+  onReact,
+  reactionBusy,
+}: {
+  onReply?: () => void
+  onReact?: (emoji: ChatReactionEmoji, active: boolean) => void
+  reactionBusy?: string | null
+}) {
+  const { t } = useTranslation()
+  if (!onReply && !onReact) return null
+  return (
+    <span className="flex shrink-0 items-center">
+      {onReact && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7 opacity-70 md:opacity-0 md:transition-opacity md:group-hover:opacity-100 md:focus-visible:opacity-100"
+              disabled={reactionBusy !== null && reactionBusy !== undefined}
+              aria-label={t('chat.reactions.add')}
+              data-testid="chat-reaction-button"
+            >
+              <SmilePlus className="h-3.5 w-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent className="min-w-0" data-testid="chat-reaction-picker">
+            <div className="flex p-1">
+              {CHAT_REACTION_EMOJIS.map(emoji => (
+                <DropdownMenuItem
+                  key={emoji}
+                  className="cursor-pointer px-2 text-lg"
+                  onSelect={() => onReact(emoji, true)}
+                  aria-label={t('chat.reactions.addEmoji', { emoji })}
+                  data-emoji={emoji}
+                >
+                  {emoji}
+                </DropdownMenuItem>
+              ))}
+            </div>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+      {onReply && <ReplyButton onReply={onReply} label={t('chat.replies.reply')} />}
+    </span>
   )
 }
 
@@ -2436,6 +2622,23 @@ function replyPreview(message: ChatHistoryEntry, newerClientLabel: string): stri
   return message.content.text
     ?? message.content.attachment?.filename
     ?? newerClientLabel
+}
+
+function compareReactionOperations(left: ChatHistoryEntry, right: ChatHistoryEntry): number {
+  if (left.timestampMs !== right.timestampMs) return left.timestampMs - right.timestampMs
+  const sequence = compareDecimalStrings(left.content.seq, right.content.seq)
+  if (sequence !== 0) return sequence
+  const device = (left.senderDeviceId ?? 0) - (right.senderDeviceId ?? 0)
+  return device !== 0 ? device : left.id.localeCompare(right.id)
+}
+
+function compareDecimalStrings(left: string, right: string): number {
+  const normalizedLeft = left.replace(/^0+(?=\d)/u, '')
+  const normalizedRight = right.replace(/^0+(?=\d)/u, '')
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return normalizedLeft.length - normalizedRight.length
+  }
+  return normalizedLeft.localeCompare(normalizedRight)
 }
 
 function formatBytes(bytes: number): string {

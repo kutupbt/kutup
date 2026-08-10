@@ -100,6 +100,11 @@
       "cancel": "Yanıtı iptal et",
       "unavailable": "Özgün mesaj kullanılamıyor"
     },
+    "reactions": {
+      "add": "Tepki ekle",
+      "addEmoji": "{{emoji}} ile tepki ver",
+      "remove": "{{emoji}} tepkisini kaldır"
+    },
   "safetyNumberChanged": "Bir alıcı cihazın kimliği değişti. Güvenlik numarasını doğrulayın.",
   "requests": {
     "title_one": "{{count}} mesaj isteği",

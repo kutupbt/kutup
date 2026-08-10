@@ -26,7 +26,9 @@ mod profile;
 mod sealed_sender;
 mod security_policy;
 
-pub use content::{ChatContent, ContactControlBody, ContactState, SentTranscriptBody, TextBody};
+pub use content::{
+    ChatContent, ContactControlBody, ContactState, ReactionBody, SentTranscriptBody, TextBody,
+};
 pub use federation::{
     FederatedChatTransaction, FederationDeliveryError, FederationDeliveryRejection,
     FederationDeliveryResponse, FEDERATED_CHAT_FEATURE,

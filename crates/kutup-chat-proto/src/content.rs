@@ -38,6 +38,8 @@ pub mod kind {
     pub const RECEIPT: &str = "receipt";
     /// Typing indicator; ephemeral, a client MAY drop it. [RSV]
     pub const TYPING: &str = "typing";
+    /// Add/remove one bounded emoji reaction to a stable logical message. [IMPL]
+    pub const REACTION: &str = "reaction";
     /// Attachment descriptor for the immutable encrypted Chat-media object;
     /// bytes ride the shared Drive/TUS object stack, not the mailbox. [IMPL]
     /// (phase 6; `docs/chat-media.md`)
@@ -222,6 +224,44 @@ impl ChatContent {
         Some(descriptor)
     }
 
+    pub fn reaction_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        target_message_id: impl Into<String>,
+        emoji: impl Into<String>,
+        active: bool,
+    ) -> Result<Self, String> {
+        let body = ReactionBody {
+            target_message_id: target_message_id.into(),
+            emoji: emoji.into(),
+            active,
+        };
+        body.validate()?;
+        Ok(ChatContent {
+            v: Self::VERSION,
+            kind: kind::REACTION.to_string(),
+            sent_at: sent_at.into(),
+            seq,
+            message_id: Some(message_id.into()),
+            reply_to: None,
+            profile_key: None,
+            profile_suite: None,
+            body: serde_json::to_value(body)
+                .map_err(|error| format!("encode Chat reaction: {error}"))?,
+            extra: serde_json::Map::new(),
+        })
+    }
+
+    pub fn as_reaction(&self) -> Option<ReactionBody> {
+        if self.kind != kind::REACTION || self.v != Self::VERSION || self.message_id.is_none() {
+            return None;
+        }
+        let body: ReactionBody = serde_json::from_value(self.body.clone()).ok()?;
+        body.validate().ok()?;
+        Some(body)
+    }
+
     /// Builds the encrypted linked-device wrapper used by Note to Self and,
     /// later, ordinary sent-message synchronization.
     pub fn sent_transcript(
@@ -303,6 +343,7 @@ impl ChatContent {
                 | kind::PROFILE_KEY_UPDATE
                 | kind::RECEIPT
                 | kind::TYPING
+                | kind::REACTION
                 | kind::ATTACHMENT
                 | kind::GROUP_CONTROL
                 | kind::SESSION_CONTROL
@@ -315,6 +356,30 @@ impl ChatContent {
 #[serde(rename_all = "camelCase")]
 pub struct TextBody {
     pub text: String,
+}
+
+pub const CHAT_REACTION_EMOJIS_V1: [&str; 6] = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReactionBody {
+    pub target_message_id: String,
+    pub emoji: String,
+    pub active: bool,
+}
+
+impl ReactionBody {
+    pub fn validate(&self) -> Result<(), String> {
+        let target = Uuid::parse_str(&self.target_message_id)
+            .map_err(|_| "Chat reaction target must be a UUID".to_string())?;
+        if target.is_nil() || target.to_string() != self.target_message_id {
+            return Err("Chat reaction target must be a canonical non-nil UUID".into());
+        }
+        if !CHAT_REACTION_EMOJIS_V1.contains(&self.emoji.as_str()) {
+            return Err("Chat reaction emoji is not in the V1 set".into());
+        }
+        Ok(())
+    }
 }
 
 /// Local relationship state for one canonical account. Absence means the peer
@@ -429,6 +494,30 @@ mod tests {
         assert!(ChatContent::text("t", 1, "x")
             .with_reply_to(Some("not-a-uuid"))
             .is_err());
+    }
+
+    #[test]
+    fn reaction_is_bounded_typed_and_round_trips() {
+        let target = "018f8ad5-d7db-7c7c-8c4b-4f53467f4431";
+        let content = ChatContent::reaction_with_id(
+            "018f8ad5-d7db-7c7c-8c4b-4f53467f4432",
+            "2026-07-13T10:00:00Z",
+            43,
+            target,
+            "👍",
+            true,
+        )
+        .unwrap();
+        assert_eq!(content.as_reaction().unwrap().target_message_id, target);
+        assert!(ChatContent::reaction_with_id(
+            "018f8ad5-d7db-7c7c-8c4b-4f53467f4432",
+            "t",
+            1,
+            target,
+            "🔥",
+            true,
+        )
+        .is_err());
     }
 
     #[test]

@@ -1037,6 +1037,41 @@ export class MlsConversationService {
     }
   }
 
+  async sendReaction(
+    conversationId: string,
+    targetMessageId: string,
+    emoji: string,
+    active: boolean,
+  ): Promise<{ delivered: boolean; deduplicated: boolean; attempts: number }> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const sendId = requireBrowserCrypto().randomUUID()
+    const entry = await this.withCryptoLock(() => this.client.createMlsReactionMessage(
+      sendId,
+      conversationId,
+      String(conversation.request.genesis.incarnation),
+      groupId,
+      new Date().toISOString(),
+      targetMessageId,
+      emoji,
+      active,
+      String(Date.now()),
+    )).catch(cause => { throw new MlsSendError('encryption', cause) })
+    await this.deliverApplicationEntry(entry).catch(cause => {
+      if (cause instanceof MlsSendError) throw cause
+      throw new MlsSendError('envelope_staging', cause)
+    })
+    return {
+      delivered: true,
+      deduplicated: entry.attempts > 0,
+      attempts: Math.max(1, entry.expectedRecipients.length),
+    }
+  }
+
   async reconcilePendingApplicationMessages(): Promise<number> {
     const pending = await this.withCryptoLock(() =>
       this.client.pendingMlsApplicationMessages(),

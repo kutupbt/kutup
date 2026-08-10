@@ -653,6 +653,105 @@ impl MlsClient {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_reaction_application_message(
+        &self,
+        send_id: &str,
+        conversation_id: Uuid,
+        incarnation: u64,
+        mls_group_id: &[u8],
+        sent_at: &str,
+        target_message_id: &str,
+        emoji: &str,
+        active: bool,
+        created_at_ms: i64,
+    ) -> Result<MlsOutboxEntry> {
+        let parsed_send_id = Uuid::parse_str(send_id)
+            .map_err(|_| ChatError::Invalid("MLS reaction send id must be a UUID".into()))?;
+        if parsed_send_id.is_nil()
+            || conversation_id.is_nil()
+            || sent_at.is_empty()
+            || sent_at.len() > 128
+        {
+            return Err(ChatError::Invalid(
+                "MLS reaction identifiers or clock are invalid".into(),
+            ));
+        }
+        if let Some(existing) = self.db.load_mls_outbox(send_id).await? {
+            let content: ChatContent = serde_json::from_slice(&existing.content)
+                .map_err(|error| ChatError::Db(error.to_string()))?;
+            let expected = kutup_chat_proto::ReactionBody {
+                target_message_id: target_message_id.to_owned(),
+                emoji: emoji.to_owned(),
+                active,
+            };
+            if existing.conversation_id != *conversation_id.as_bytes()
+                || existing.incarnation != incarnation
+                || existing.mls_group_id != mls_group_id
+                || content.message_id.as_deref() != Some(send_id)
+                || content.sent_at != sent_at
+                || content.as_reaction() != Some(expected)
+            {
+                return Err(ChatError::Trust(
+                    "MLS send id is already bound to a different reaction or conversation".into(),
+                ));
+            }
+            return Ok(existing);
+        }
+
+        let (_, metadata) = self.load_provider().await?;
+        let conversation = active_conversation_for_group(&metadata, mls_group_id)?;
+        if conversation.request.genesis.conversation_id != conversation_id
+            || conversation.request.genesis.incarnation != incarnation
+        {
+            return Err(ChatError::Trust(
+                "MLS reaction conversation differs from the authenticated group".into(),
+            ));
+        }
+        let (self_account, _) = parse_device_credential_identity(&metadata.credential_identity)?;
+        let expected_recipients = conversation
+            .current_roster
+            .iter()
+            .map(|member| member.address.canonical())
+            .filter(|address| address != &self_account)
+            .collect::<Vec<_>>();
+        if expected_recipients.is_empty() {
+            return Err(ChatError::Invalid(
+                "MLS group has no remote account recipient".into(),
+            ));
+        }
+        let seq = self
+            .db
+            .load_last_sent_seq()
+            .await?
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| ChatError::Invalid("MLS sender sequence overflow".into()))?;
+        let content = ChatContent::reaction_with_id(
+            send_id,
+            sent_at,
+            seq,
+            target_message_id,
+            emoji,
+            active,
+        )
+        .map_err(ChatError::Invalid)?;
+        let content_bytes =
+            serde_json::to_vec(&content).map_err(|error| ChatError::Content(error.to_string()))?;
+        self.create_application_message_inner(
+            send_id,
+            *conversation_id.as_bytes(),
+            incarnation,
+            mls_group_id,
+            &content_bytes,
+            &content_bytes,
+            expected_recipients,
+            created_at_ms,
+            Some(seq),
+        )
+        .await
+    }
+
     /// Construct and strictly validate a shared Chat-media descriptor before
     /// consuming an OpenMLS generation. The object bytes remain outside MLS;
     /// only its random key, retrieval capability and immutable metadata are

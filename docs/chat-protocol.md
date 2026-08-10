@@ -204,6 +204,17 @@ attachment or federation metadata. Clients resolve it only within the current
 conversation and show an unavailable placeholder when bounded local history no
 longer contains the target.
 
+A reaction is a hidden `reaction` content operation encrypted by the same
+Direct, Note-to-Self or MLS channel. Its typed body contains only a canonical
+non-nil `targetMessageId`, one V1 emoji from `👍 ❤️ 😂 😮 😢 🙏`, and an
+`active` boolean. Adding and removing a reaction therefore reveal no reaction
+metadata to either homeserver. Clients never render these operations as
+messages or conversation previews. Within the target conversation they retain
+the latest operation for each `(targetMessageId, reactor account, emoji)` by
+the deterministic tuple `(sentAt, seq, senderDeviceId, operation ID)`, then
+aggregate active reactors. Targets absent from bounded local history are
+ignored without affecting the encrypted operation history.
+
 Incoming strangers are message requests. Accept/reject/block/unblock are
 client relationship state. First-contact/request traffic stays identified.
 

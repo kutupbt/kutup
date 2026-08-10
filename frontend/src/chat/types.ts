@@ -9,6 +9,13 @@ export interface ChatContentView {
   text?: string
   /** Present only after strict Rust descriptor validation. */
   attachment?: ChatAttachmentDescriptorV1
+  reaction?: ChatReactionV1
+}
+
+export interface ChatReactionV1 {
+  targetMessageId: string
+  emoji: '👍' | '❤️' | '😂' | '😮' | '😢' | '🙏'
+  active: boolean
 }
 
 export type ChatMediaClassV1 = 'file' | 'photo' | 'video' | 'audio'
@@ -1196,6 +1203,17 @@ export interface WasmChatClientHandle {
     descriptor: ChatAttachmentDescriptorV1,
     createdAtMs: string,
   ): Promise<MlsOutboxEntry>
+  createMlsReactionMessage(
+    sendId: string,
+    conversationId: string,
+    incarnation: string,
+    mlsGroupId: Uint8Array,
+    sentAt: string,
+    targetMessageId: string,
+    emoji: string,
+    active: boolean,
+    createdAtMs: string,
+  ): Promise<MlsOutboxEntry>
   pendingMlsApplicationMessages(): Promise<MlsOutboxEntry[]>
   stageMlsApplicationDelivery(
     sendId: string,
@@ -1290,6 +1308,14 @@ export interface WasmChatClientHandle {
     peer: string,
     sentAt: string,
     descriptor: ChatAttachmentDescriptorV1,
+  ): Promise<SendSummary>
+  sendReaction(
+    sendId: string,
+    peer: string,
+    sentAt: string,
+    targetMessageId: string,
+    emoji: string,
+    active: boolean,
   ): Promise<SendSummary>
   mediaDeliveryCapability(peer: string): Promise<string>
   syncManifest(): Promise<unknown>

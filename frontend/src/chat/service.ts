@@ -380,6 +380,37 @@ export class ChatService {
     return summary
   }
 
+  async sendReaction(
+    conversation: ConversationId,
+    targetMessageId: string,
+    emoji: string,
+    active: boolean,
+  ): Promise<SendSummary> {
+    if (conversation.kind === 'group') {
+      const summary = await this.withMlsWorkflow(() =>
+        this.requireMls().sendReaction(
+          conversation.groupId,
+          targetMessageId,
+          emoji,
+          active,
+        ),
+      )
+      this.notifyPeers()
+      return { ...summary, safetyNumberChanges: [] }
+    }
+    const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
+    const summary = await this.withLock(() => this.client.sendReaction(
+      crypto.randomUUID(),
+      peer,
+      new Date().toISOString(),
+      targetMessageId,
+      emoji,
+      active,
+    ))
+    this.notifyPeers()
+    return summary
+  }
+
   async chatMediaStorage(): Promise<ChatMediaStorageView> {
     if (!this.attachmentLedger) throw new Error('Chat media is not enabled')
     await this.withAttachmentLedgerLock(() => this.attachmentLedger!.sync())
