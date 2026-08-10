@@ -34,7 +34,7 @@ pub mod kind {
     /// `PROFILE_KEY_UPDATE`, it contains no user-visible body; the key itself
     /// is the encrypted top-level [`ChatContent::profile_key`] field. [IMPL]
     pub const PROFILE_KEY_UPDATE: &str = "profileKeyUpdate";
-    /// Delivery/read receipts (E2EE content, never a server feature). [RSV]
+    /// Delivery/read receipts (E2EE content, never a server feature). [IMPL]
     pub const RECEIPT: &str = "receipt";
     /// Typing indicator; ephemeral, a client MAY drop it. [RSV]
     pub const TYPING: &str = "typing";
@@ -305,6 +305,39 @@ impl ChatContent {
         Some(body)
     }
 
+    pub fn receipt_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        message_ids: Vec<String>,
+        state: ReceiptState,
+    ) -> Result<Self, String> {
+        let body = ReceiptBody { message_ids, state };
+        body.validate()?;
+        Ok(ChatContent {
+            v: Self::VERSION,
+            kind: kind::RECEIPT.to_string(),
+            sent_at: sent_at.into(),
+            seq,
+            message_id: Some(message_id.into()),
+            reply_to: None,
+            profile_key: None,
+            profile_suite: None,
+            body: serde_json::to_value(body)
+                .map_err(|error| format!("encode Chat receipt: {error}"))?,
+            extra: serde_json::Map::new(),
+        })
+    }
+
+    pub fn as_receipt(&self) -> Option<ReceiptBody> {
+        if self.kind != kind::RECEIPT || self.v != Self::VERSION || self.message_id.is_none() {
+            return None;
+        }
+        let body: ReceiptBody = serde_json::from_value(self.body.clone()).ok()?;
+        body.validate().ok()?;
+        Some(body)
+    }
+
     /// Builds the encrypted linked-device wrapper used by Note to Self and,
     /// later, ordinary sent-message synchronization.
     pub fn sent_transcript(
@@ -463,6 +496,39 @@ impl MessageMutationBody {
                 Err("Chat delete must not contain replacement text".into())
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReceiptState {
+    Delivered,
+    Read,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReceiptBody {
+    pub message_ids: Vec<String>,
+    pub state: ReceiptState,
+}
+
+impl ReceiptBody {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.message_ids.is_empty() || self.message_ids.len() > 64 {
+            return Err("Chat receipt must contain 1 to 64 message IDs".into());
+        }
+        let mut unique = std::collections::BTreeSet::new();
+        for message_id in &self.message_ids {
+            let parsed = Uuid::parse_str(message_id)
+                .map_err(|_| "Chat receipt message ID must be a UUID".to_string())?;
+            if parsed.is_nil() || parsed.to_string() != *message_id || !unique.insert(message_id) {
+                return Err(
+                    "Chat receipt message IDs must be unique canonical non-nil UUIDs".into(),
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -630,6 +696,28 @@ mod tests {
             target,
             MessageMutationOperation::Delete,
             Some("forbidden".into()),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn receipt_is_bounded_unique_and_typed() {
+        let target = "018f8ad5-d7db-7c7c-8c4b-4f53467f4431";
+        let receipt = ChatContent::receipt_with_id(
+            "018f8ad5-d7db-7c7c-8c4b-4f53467f4432",
+            "2026-08-10T11:00:00Z",
+            45,
+            vec![target.into()],
+            ReceiptState::Read,
+        )
+        .unwrap();
+        assert_eq!(receipt.as_receipt().unwrap().message_ids, [target]);
+        assert!(ChatContent::receipt_with_id(
+            "018f8ad5-d7db-7c7c-8c4b-4f53467f4432",
+            "t",
+            1,
+            vec![target.into(), target.into()],
+            ReceiptState::Delivered,
         )
         .is_err());
     }

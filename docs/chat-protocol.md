@@ -228,6 +228,21 @@ messages or previews. Deleting an attachment tombstones its descriptor in the
 conversation; it does not claim cryptographic erasure of ciphertext already
 retained or downloaded under the Chat-media policy.
 
+Delivery and read state use hidden `receipt` operations. One operation contains
+an exact `delivered` or `read` state and 1–64 unique canonical logical message
+UUIDs, all inside the Direct or MLS ciphertext. Direct clients automatically
+emit a delivery receipt after successful local decryption. Read receipts are
+disabled by default and emitted only when the user enables the per-browser
+privacy setting, the conversation is selected, and the page is visible. MLS
+groups emit only this opt-in `read` state: automatic group delivery receipts
+would consume a claimed one-time KeyPackage for every recipient device and
+double the anonymous delivery rate of an active group. `read` subsumes
+`delivered`. A receipt affects only existing outgoing targets in the same
+conversation and is attributed to its authenticated account actor; MLS views
+aggregate recipient accounts rather than devices. Receipt operations are never
+rendered or used as conversation previews, and no homeserver or MLS ordering
+authority receives the target IDs or state in plaintext.
+
 Incoming strangers are message requests. Accept/reject/block/unblock are
 client relationship state. First-contact/request traffic stays identified.
 

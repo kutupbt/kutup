@@ -442,6 +442,30 @@ export class ChatService {
     return summary
   }
 
+  async sendReceipt(
+    conversation: ConversationId,
+    messageIds: string[],
+    state: 'delivered' | 'read',
+  ): Promise<SendSummary> {
+    if (conversation.kind === 'group') {
+      const summary = await this.withMlsWorkflow(() =>
+        this.requireMls().sendReceipt(conversation.groupId, messageIds, state),
+      )
+      this.notifyPeers()
+      return { ...summary, safetyNumberChanges: [] }
+    }
+    const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
+    const summary = await this.withLock(() => this.client.sendReceipt(
+      crypto.randomUUID(),
+      peer,
+      new Date().toISOString(),
+      messageIds,
+      state,
+    ))
+    this.notifyPeers()
+    return summary
+  }
+
   async chatMediaStorage(): Promise<ChatMediaStorageView> {
     if (!this.attachmentLedger) throw new Error('Chat media is not enabled')
     await this.withAttachmentLedgerLock(() => this.attachmentLedger!.sync())

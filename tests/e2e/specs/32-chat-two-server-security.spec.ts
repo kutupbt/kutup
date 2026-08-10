@@ -166,6 +166,30 @@ async function syncUntilDeleted(page: Page): Promise<void> {
   }).toBe(true)
 }
 
+async function enableReadReceipts(page: Page): Promise<void> {
+  await page.getByTestId('chat-devices-button').click()
+  await page.getByTestId('chat-read-receipts-toggle').check()
+  await page.keyboard.press('Escape')
+}
+
+async function syncUntilReceipt(
+  page: Page,
+  target: string,
+  testId: 'chat-receipt-delivered' | 'chat-receipt-read',
+): Promise<void> {
+  await expect.poll(async () => {
+    const receipt = reactionTarget(page, target).getByTestId(testId)
+    if (await receipt.count() > 0) return true
+    await page.getByRole('button', { name: 'Sync messages' }).click()
+    await page.waitForTimeout(500)
+    return await receipt.count() > 0
+  }, {
+    timeout: 45_000,
+    intervals: [500, 1_000, 2_000],
+    message: `encrypted receipt ${testId} was not reconciled`,
+  }).toBe(true)
+}
+
 async function syncUntilReaction(
   page: Page,
   target: string,
@@ -376,6 +400,7 @@ test.describe('two-server secure chat', () => {
     const pageB = await login(contextB, bobEmail)
     await openChat(pageA)
     await openChat(pageB)
+    await enableReadReceipts(pageB)
     await expectWasmRuntimeRevalidation(pageA)
     await expectWasmRuntimeRevalidation(pageB)
 
@@ -438,6 +463,7 @@ test.describe('two-server secure chat', () => {
     // The acceptance/profile update and immediate sealed reply use independent
     // durable paths. Reconciliation must recover either arrival order.
     await syncUntilVisible(pageA, reply)
+    await syncUntilReceipt(pageB, reply, 'chat-receipt-delivered')
 
     const destinationEnvelopes: Array<Record<string, unknown>> = []
     pageB.on('response', (response) => {
@@ -468,6 +494,7 @@ test.describe('two-server secure chat', () => {
     expect(destinationEnvelope).not.toHaveProperty('sender')
     expect(destinationEnvelope?.senderDeviceId).toBe(0)
     await expect(bubble(pageB, sealed)).toBeVisible({ timeout: 45_000 })
+    await syncUntilReceipt(pageA, sealed, 'chat-receipt-read')
     const quotedReply = `sealed-quoted-reply-${tag}`
     await replyTo(pageB, sealed, quotedReply)
     await syncUntilVisible(pageA, quotedReply)
@@ -577,6 +604,7 @@ test.describe('two-server secure chat', () => {
     const pageD = await login(contextD, daveEmail)
     await openChat(pageA)
     await openChat(pageB)
+    await enableReadReceipts(pageB)
     await openChat(pageC)
     await openChat(pageD)
 
@@ -1029,6 +1057,7 @@ test.describe('two-server secure chat', () => {
     const firstAnonymousSubmission =
       firstAnonymousResponse.request().postDataJSON() as Record<string, unknown>
     await expect(bubble(pageB, fromAlice)).toBeVisible({ timeout: 90_000 })
+    await syncUntilReceipt(pageA, fromAlice, 'chat-receipt-read')
     await expect.poll(
       () => destinationMailbox.some(envelope => envelope.deliveryKind === 'anonymous'),
       { timeout: 45_000 },

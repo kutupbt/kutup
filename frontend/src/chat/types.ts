@@ -11,6 +11,7 @@ export interface ChatContentView {
   attachment?: ChatAttachmentDescriptorV1
   reaction?: ChatReactionV1
   mutation?: ChatMessageMutationV1
+  receipt?: ChatReceiptV1
 }
 
 export interface ChatReactionV1 {
@@ -23,6 +24,11 @@ export interface ChatMessageMutationV1 {
   targetMessageId: string
   operation: 'edit' | 'delete'
   replacementText?: string
+}
+
+export interface ChatReceiptV1 {
+  messageIds: string[]
+  state: 'delivered' | 'read'
 }
 
 export type ChatMediaClassV1 = 'file' | 'photo' | 'video' | 'audio'
@@ -1232,6 +1238,16 @@ export interface WasmChatClientHandle {
     replacementText: string | undefined,
     createdAtMs: string,
   ): Promise<MlsOutboxEntry>
+  createMlsReceiptMessage(
+    sendId: string,
+    conversationId: string,
+    incarnation: string,
+    mlsGroupId: Uint8Array,
+    sentAt: string,
+    messageIds: string[],
+    state: 'delivered' | 'read',
+    createdAtMs: string,
+  ): Promise<MlsOutboxEntry>
   pendingMlsApplicationMessages(): Promise<MlsOutboxEntry[]>
   stageMlsApplicationDelivery(
     sendId: string,
@@ -1342,6 +1358,13 @@ export interface WasmChatClientHandle {
     targetMessageId: string,
     operation: 'edit' | 'delete',
     replacementText?: string,
+  ): Promise<SendSummary>
+  sendReceipt(
+    sendId: string,
+    peer: string,
+    sentAt: string,
+    messageIds: string[],
+    state: 'delivered' | 'read',
   ): Promise<SendSummary>
   mediaDeliveryCapability(peer: string): Promise<string>
   syncManifest(): Promise<unknown>

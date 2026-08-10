@@ -17,7 +17,7 @@ use kutup_chat_core::{
 use kutup_chat_proto::{
     AccountManifestDeviceV1, AccountManifestHistoryPageV1, AccountManifestPublicationV1,
     AccountManifestV1, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle,
-    DirectChatSuiteId, MailboxPage, OwnChatProfileResponse, PutChatProfileRequest,
+    DirectChatSuiteId, MailboxPage, OwnChatProfileResponse, PutChatProfileRequest, ReceiptState,
     RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
@@ -886,6 +886,43 @@ fn outbox_persists_across_failure_and_flush_resends() {
         .text,
         "survives a crash"
     );
+}
+
+#[test]
+fn receipt_retry_failure_does_not_block_reconciliation_flush() {
+    let mut rng = test_rng();
+    let bob = device("bob", 1, &mut rng);
+    let bundle = bundle_of(&bob, 1);
+    let server = Rc::new(MockServer::default());
+    server.script(vec![vec![bundle]]);
+    server.set_active(vec![(1, reg_id(&bob))]);
+    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
+    let send_id = "33333333-3333-4333-8333-333333333333";
+    let target = "11111111-1111-4111-8111-111111111111";
+    let receipt = ChatContent::receipt_with_id(
+        send_id,
+        "2026-08-10T00:00:00Z",
+        1,
+        vec![target.to_string()],
+        ReceiptState::Delivered,
+    )
+    .unwrap();
+
+    *server.fail_sends.borrow_mut() = 2;
+    assert!(matches!(
+        block_on(alice.send(send_id, "bob", &receipt, &mut rng)),
+        Err(ChatError::Transport(_))
+    ));
+    assert!(
+        block_on(alice.flush_outbox_deferring_receipt_failures(&mut rng))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(block_on(alice.pending_send_count()).unwrap(), 1);
+
+    let summaries = block_on(alice.flush_outbox(&mut rng)).unwrap();
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(block_on(alice.pending_send_count()).unwrap(), 0);
 }
 
 #[test]

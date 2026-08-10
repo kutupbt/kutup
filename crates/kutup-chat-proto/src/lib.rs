@@ -28,7 +28,7 @@ mod security_policy;
 
 pub use content::{
     ChatContent, ContactControlBody, ContactState, MessageMutationBody, MessageMutationOperation,
-    ReactionBody, SentTranscriptBody, TextBody,
+    ReactionBody, ReceiptBody, ReceiptState, SentTranscriptBody, TextBody,
 };
 pub use federation::{
     FederatedChatTransaction, FederationDeliveryError, FederationDeliveryRejection,

@@ -89,6 +89,7 @@ export interface KutupChatContentView {
   attachment?: unknown;
   reaction?: unknown;
   mutation?: unknown;
+  receipt?: unknown;
 }
 
 export interface KutupChatAccountAddress {
@@ -2398,6 +2399,38 @@ impl WasmChatClient {
         to_output(&entry)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = createMlsReceiptMessage)]
+    pub async fn create_mls_receipt_message(
+        &self,
+        send_id: String,
+        conversation_id: String,
+        incarnation: String,
+        mls_group_id: Vec<u8>,
+        sent_at: String,
+        message_ids: Vec<String>,
+        state: String,
+        created_at_ms: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let conversation_id = uuid::Uuid::parse_str(&conversation_id)
+            .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
+        let entry = self
+            .mls_client()
+            .create_receipt_application_message(
+                &send_id,
+                conversation_id,
+                parse_u64_string("MLS incarnation", &incarnation)?,
+                &mls_group_id,
+                &sent_at,
+                message_ids,
+                parse_receipt_state(&state)?,
+                parse_i64_string("MLS message clock", &created_at_ms)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&entry)
+    }
+
     #[wasm_bindgen(js_name = pendingMlsApplicationMessages)]
     pub async fn pending_mls_application_messages(&self) -> std::result::Result<JsValue, JsValue> {
         let pending = self
@@ -2757,6 +2790,38 @@ impl WasmChatClient {
         to_output(&SendSummaryView::from(summary))
     }
 
+    #[wasm_bindgen(js_name = sendReceipt)]
+    pub async fn send_receipt(
+        &mut self,
+        send_id: String,
+        peer: String,
+        sent_at: String,
+        message_ids: Vec<String>,
+        state: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let seq = self
+            .engine
+            .session()
+            .next_sent_seq()
+            .await
+            .map_err(chat_error)?;
+        let content = ChatContent::receipt_with_id(
+            &send_id,
+            sent_at,
+            seq,
+            message_ids,
+            parse_receipt_state(&state)?,
+        )
+        .map_err(|error| js_error(&error))?;
+        let summary = self
+            .engine
+            .send(&send_id, &peer, &content, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&SendSummaryView::from(summary))
+    }
+
     #[wasm_bindgen(js_name = mediaDeliveryCapability)]
     pub async fn media_delivery_capability(
         &self,
@@ -2777,7 +2842,7 @@ impl WasmChatClient {
     pub async fn reconcile(&mut self) -> std::result::Result<JsValue, JsValue> {
         let mut rng = OsRng.unwrap_err();
         self.engine
-            .flush_outbox(&mut rng)
+            .flush_outbox_deferring_receipt_failures(&mut rng)
             .await
             .map_err(chat_error)?;
         // Contact controls are durable best-effort account sync. A temporary
@@ -3221,6 +3286,8 @@ struct ContentView {
     reaction: Option<kutup_chat_proto::ReactionBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     mutation: Option<kutup_chat_proto::MessageMutationBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    receipt: Option<kutup_chat_proto::ReceiptBody>,
 }
 
 impl From<ChatContent> for ContentView {
@@ -3229,6 +3296,7 @@ impl From<ChatContent> for ContentView {
         let attachment = content.as_attachment();
         let reaction = content.as_reaction();
         let mutation = content.as_message_mutation();
+        let receipt = content.as_receipt();
         Self {
             version: content.v,
             kind: content.kind,
@@ -3241,6 +3309,7 @@ impl From<ChatContent> for ContentView {
             attachment,
             reaction,
             mutation,
+            receipt,
         }
     }
 }
@@ -3252,6 +3321,16 @@ fn parse_message_mutation_operation(
         "edit" => Ok(kutup_chat_proto::MessageMutationOperation::Edit),
         "delete" => Ok(kutup_chat_proto::MessageMutationOperation::Delete),
         _ => Err(js_error("Chat message mutation operation is invalid")),
+    }
+}
+
+fn parse_receipt_state(
+    state: &str,
+) -> std::result::Result<kutup_chat_proto::ReceiptState, JsValue> {
+    match state {
+        "delivered" => Ok(kutup_chat_proto::ReceiptState::Delivered),
+        "read" => Ok(kutup_chat_proto::ReceiptState::Read),
+        _ => Err(js_error("Chat receipt state is invalid")),
     }
 }
 

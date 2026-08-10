@@ -1332,6 +1332,31 @@ impl Engine {
         Ok(summaries)
     }
 
+    /// Retry every durable send while treating receipt-only transport failures
+    /// as optional. The exact receipt ciphertext remains queued for a later
+    /// reconciliation, but it cannot prevent inbound mailbox processing.
+    /// Ordinary messages and malformed outbox content remain fail-closed.
+    pub async fn flush_outbox_deferring_receipt_failures<R: Rng + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+    ) -> Result<Vec<SendSummary>> {
+        let mut summaries = Vec::new();
+        for entry in self.session.pending_outbox().await? {
+            let is_receipt = serde_json::from_slice::<ChatContent>(&entry.content)
+                .ok()
+                .is_some_and(|content| content.as_receipt().is_some());
+            match self
+                .deliver_outbox_entry(entry, SendSummary::default(), rng)
+                .await
+            {
+                Ok(summary) => summaries.push(summary),
+                Err(_) if is_receipt => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(summaries)
+    }
+
     /// Reconcile the durable local inbound journal and the server mailbox. Raw
     /// ciphertext is journaled before the fetch cursor advances. Only a committed
     /// decrypt (or an explicit dead-letter state) is acknowledged; repairable

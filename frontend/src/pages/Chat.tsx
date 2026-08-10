@@ -106,6 +106,11 @@ interface MessageMutationState {
   deleted: boolean
 }
 
+interface MessageReceiptState {
+  delivered: number
+  read: number
+}
+
 export default function Chat() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -171,6 +176,9 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [sending, setSending] = useState(false)
   const [reactionSending, setReactionSending] = useState<string | null>(null)
   const [mutationSending, setMutationSending] = useState(false)
+  const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(() =>
+    window.localStorage.getItem('kutup:chat:read-receipts') === '1')
+  const [pageVisible, setPageVisible] = useState(() => document.visibilityState === 'visible')
   const [contactUpdating, setContactUpdating] = useState(false)
   const [groupUpdating, setGroupUpdating] = useState(false)
   const [newGroupOpen, setNewGroupOpen] = useState(false)
@@ -198,6 +206,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const endRef = useRef<HTMLDivElement>(null)
   const attachmentInputRef = useRef<HTMLInputElement>(null)
   const historyRefreshGeneration = useRef(0)
+  const receiptAttempted = useRef(new Set<string>())
   const selfAccount = useMemo(
     () =>
       auth.username
@@ -292,7 +301,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   )
 
   const visibleHistory = useMemo(
-    () => history.filter(message => !message.content.reaction && !message.content.mutation),
+    () => history.filter(message =>
+      !message.content.reaction && !message.content.mutation && !message.content.receipt),
     [history],
   )
 
@@ -551,6 +561,128 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     }
     return result
   }, [history, selfAddress, visibleHistory])
+  const ownReceiptStateByMessageId = useMemo(() => {
+    const states = new Map<string, 'delivered' | 'read'>()
+    for (const message of history) {
+      const receipt = message.content.receipt
+      if (!receipt || message.direction !== 'outgoing') continue
+      for (const messageId of receipt.messageIds) {
+        if (receipt.state === 'read' || !states.has(messageId)) {
+          states.set(messageId, receipt.state)
+        }
+      }
+    }
+    return states
+  }, [history])
+  const receiptsByMessageId = useMemo(() => {
+    if (!selfAddress) return new Map<string, MessageReceiptState>()
+    const targets = new Map(visibleHistory.flatMap(message =>
+      message.direction === 'outgoing' && message.content.messageId
+        ? [[message.content.messageId, message] as const]
+        : []))
+    const states = new Map<string, 'delivered' | 'read'>()
+    for (const message of history) {
+      const receipt = message.content.receipt
+      if (!receipt || message.direction !== 'incoming') continue
+      const actor = messageActor(message, message.conversation, selfAddress)
+      if (!actor || actor === selfAddress) continue
+      for (const messageId of receipt.messageIds) {
+        const target = targets.get(messageId)
+        if (!target
+            || conversationKey(target.conversation) !== conversationKey(message.conversation)) continue
+        const key = `${messageId}\u0000${actor}`
+        if (receipt.state === 'read' || !states.has(key)) states.set(key, receipt.state)
+      }
+    }
+    const result = new Map<string, MessageReceiptState>()
+    for (const [key, state] of states) {
+      const messageId = key.slice(0, key.indexOf('\u0000'))
+      const current = result.get(messageId) ?? { delivered: 0, read: 0 }
+      current.delivered += 1
+      if (state === 'read') current.read += 1
+      result.set(messageId, current)
+    }
+    return result
+  }, [history, selfAddress, visibleHistory])
+
+  useEffect(() => {
+    const update = () => setPageVisible(document.visibilityState === 'visible')
+    document.addEventListener('visibilitychange', update)
+    return () => document.removeEventListener('visibilitychange', update)
+  }, [])
+
+  useEffect(() => {
+    if (!service || loading || !selfAddress) return
+    const batches = new Map<string, {
+      conversation: ConversationId
+      state: 'delivered' | 'read'
+      messageIds: string[]
+    }>()
+    for (const message of visibleHistory) {
+      const messageId = message.content.messageId
+      if (message.direction !== 'incoming' || !messageId) continue
+      if (message.conversation.kind === 'group') {
+        const groupId = message.conversation.groupId
+        if (!groups.some(group =>
+          group.status === 'active'
+          && group.request.genesis.conversationId === groupId)) continue
+      }
+      const shouldMarkRead = readReceiptsEnabled
+        && pageVisible
+        && selectedKey === conversationKey(message.conversation)
+      // An MLS receipt consumes a claimed one-time KeyPackage for every
+      // recipient device. Automatic group delivery receipts would double the
+      // package and anonymous-request rate of an active group, so groups emit
+      // only the explicitly enabled read state. Direct delivery remains
+      // automatic because it rides the existing Signal session.
+      if (message.conversation.kind === 'group' && !shouldMarkRead) continue
+      const state = shouldMarkRead ? 'read' : 'delivered'
+      const existing = ownReceiptStateByMessageId.get(messageId)
+      if (existing === 'read' || existing === state) continue
+      const flightKey = `${state}:${messageId}`
+      if (receiptAttempted.current.has(flightKey)) continue
+      const key = `${conversationKey(message.conversation)}\u0000${state}`
+      const batch = batches.get(key) ?? {
+        conversation: message.conversation,
+        state,
+        messageIds: [],
+      }
+      batch.messageIds.push(messageId)
+      batches.set(key, batch)
+      // Once the crypto engine accepts a receipt it owns an exact durable
+      // outbox entry. Re-creating the logical receipt after a transport error
+      // would consume a new MLS generation and can amplify rate limiting.
+      receiptAttempted.current.add(flightKey)
+    }
+    if (batches.size === 0) return
+    let cancelled = false
+    void (async () => {
+      let sent = false
+      for (const batch of batches.values()) {
+        for (let offset = 0; offset < batch.messageIds.length; offset += 64) {
+          const messageIds = batch.messageIds.slice(offset, offset + 64)
+          try {
+            await service.sendReceipt(batch.conversation, messageIds, batch.state)
+            sent = true
+          } catch (cause) {
+            console.warn('Encrypted Chat receipt could not be sent', cause)
+          }
+        }
+      }
+      if (sent && !cancelled) setHistory(await service.history())
+    })()
+    return () => { cancelled = true }
+  }, [
+    groups,
+    loading,
+    ownReceiptStateByMessageId,
+    pageVisible,
+    readReceiptsEnabled,
+    selectedKey,
+    selfAddress,
+    service,
+    visibleHistory,
+  ])
 
   useEffect(() => {
     setReplyingTo(null)
@@ -1213,6 +1345,30 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                   <DialogTitle>{t('chat.devices.title')}</DialogTitle>
                   <DialogDescription>{t('chat.devices.description')}</DialogDescription>
                 </DialogHeader>
+                <label className="flex items-start gap-3 rounded-lg border p-3">
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4 accent-primary"
+                    checked={readReceiptsEnabled}
+                    onChange={event => {
+                      const enabled = event.target.checked
+                      setReadReceiptsEnabled(enabled)
+                      window.localStorage.setItem(
+                        'kutup:chat:read-receipts',
+                        enabled ? '1' : '0',
+                      )
+                    }}
+                    data-testid="chat-read-receipts-toggle"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium">
+                      {t('chat.receipts.setting')}
+                    </span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {t('chat.receipts.settingDescription')}
+                    </span>
+                  </span>
+                </label>
                 {devicesLoading ? (
                   <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -2281,6 +2437,9 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     ? () => void deleteMessage(message)
                     : undefined}
                   mutationBusy={mutationSending}
+                  receipt={message.content.messageId
+                    ? receiptsByMessageId.get(message.content.messageId)
+                    : undefined}
                 />
               ))}
               <div ref={endRef} />
@@ -2620,6 +2779,7 @@ function MessageBubble({
   onEdit,
   onDelete,
   mutationBusy,
+  receipt,
 }: {
   message: ChatHistoryEntry
   newerClientLabel: string
@@ -2634,6 +2794,7 @@ function MessageBubble({
   onEdit?: () => void
   onDelete?: () => void
   mutationBusy?: boolean
+  receipt?: MessageReceiptState
 }) {
   const { t } = useTranslation()
   const outgoing = message.direction === 'outgoing'
@@ -2759,7 +2920,29 @@ function MessageBubble({
           {mutation?.editedText && !mutation.deleted && (
             <span data-testid="chat-message-edited">· {t('chat.mutations.edited')}</span>
           )}
-          {outgoing && (message.delivered ? <CheckCheck className="h-3 w-3" /> : <Check className="h-3 w-3" />)}
+          {outgoing && receipt?.read ? (
+            <span
+              className="flex items-center gap-0.5 font-medium"
+              title={t('chat.receipts.readBy', { count: receipt.read })}
+              aria-label={t('chat.receipts.readBy', { count: receipt.read })}
+              data-testid="chat-receipt-read"
+            >
+              <CheckCheck className="h-3 w-3" />
+              {receipt.read > 1 && receipt.read}
+            </span>
+          ) : outgoing && receipt?.delivered ? (
+            <span
+              className="flex items-center gap-0.5"
+              title={t('chat.receipts.deliveredTo', { count: receipt.delivered })}
+              aria-label={t('chat.receipts.deliveredTo', { count: receipt.delivered })}
+              data-testid="chat-receipt-delivered"
+            >
+              <CheckCheck className="h-3 w-3" />
+              {receipt.delivered > 1 && receipt.delivered}
+            </span>
+          ) : outgoing && message.delivered ? (
+            <Check className="h-3 w-3" aria-label={t('chat.receipts.sent')} />
+          ) : null}
         </span>
       </div>
       {!outgoing && (

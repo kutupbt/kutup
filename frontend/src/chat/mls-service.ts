@@ -110,6 +110,7 @@ interface MlsKeyPackageCount {
  */
 export class MlsConversationService {
   private readonly publishedCapabilityEpochs = new Map<string, string>()
+  private readonly deferredReceiptSendIds = new Set<string>()
 
   constructor(
     private readonly client: WasmChatClientHandle,
@@ -1107,11 +1108,57 @@ export class MlsConversationService {
     }
   }
 
+  async sendReceipt(
+    conversationId: string,
+    messageIds: string[],
+    state: 'delivered' | 'read',
+  ): Promise<{ delivered: boolean; deduplicated: boolean; attempts: number }> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const sendId = requireBrowserCrypto().randomUUID()
+    const entry = await this.withCryptoLock(() => this.client.createMlsReceiptMessage(
+      sendId,
+      conversationId,
+      String(conversation.request.genesis.incarnation),
+      groupId,
+      new Date().toISOString(),
+      messageIds,
+      state,
+      String(Date.now()),
+    )).catch(cause => { throw new MlsSendError('encryption', cause) })
+    await this.deliverApplicationEntry(entry).catch(cause => {
+      this.deferredReceiptSendIds.add(entry.sendId)
+      if (cause instanceof MlsSendError) throw cause
+      throw new MlsSendError('envelope_staging', cause)
+    })
+    return {
+      delivered: true,
+      deduplicated: entry.attempts > 0,
+      attempts: Math.max(1, entry.expectedRecipients.length),
+    }
+  }
+
   async reconcilePendingApplicationMessages(): Promise<number> {
     const pending = await this.withCryptoLock(() =>
       this.client.pendingMlsApplicationMessages(),
     )
-    for (const entry of pending) await this.deliverApplicationEntry(entry)
+    for (const entry of pending) {
+      const receipt = isReceiptOutboxEntry(entry)
+      if (receipt && this.deferredReceiptSendIds.has(entry.sendId)) continue
+      try {
+        await this.deliverApplicationEntry(entry)
+      } catch (cause) {
+        if (!receipt) throw cause
+        // Receipts are optional metadata. Their exact durable outbox entry is
+        // retried once per service lifetime, but a transient rate limit must
+        // never prevent the encrypted conversation itself from opening.
+        this.deferredReceiptSendIds.add(entry.sendId)
+      }
+    }
     return pending.length
   }
 
@@ -2770,6 +2817,17 @@ function encodeBase64(bytes: Uint8Array): string {
 
 function equalBytes(left: number[], right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function isReceiptOutboxEntry(entry: MlsOutboxEntry): boolean {
+  try {
+    const content = JSON.parse(
+      new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(entry.content)),
+    ) as { kind?: unknown }
+    return content.kind === 'receipt'
+  } catch {
+    return false
+  }
 }
 
 function isUuid(value: unknown): value is string {

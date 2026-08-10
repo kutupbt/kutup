@@ -114,6 +114,13 @@
       "deleted": "Message deleted",
       "confirmDelete": "Delete this message for everyone? This cannot be undone."
     },
+    "receipts": {
+      "setting": "Send read receipts",
+      "settingDescription": "When enabled, people can see that this browser opened their messages. Direct-chat delivery receipts are encrypted and automatic.",
+      "sent": "Sent",
+      "deliveredTo": "Delivered to {{count}} recipient accounts",
+      "readBy": "Read by {{count}} recipient accounts"
+    },
   "safetyNumberChanged": "A recipient device identity changed. Verify the safety number.",
   "requests": {
     "title_one": "{{count}} message request",
