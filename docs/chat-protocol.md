@@ -298,6 +298,22 @@ external backups or a user copying plaintext before expiry, and the UI must not
 claim otherwise. Saved-to-Drive copies are new recipient-owned objects and do
 not expire with the Chat message.
 
+### Local search contract
+
+Chat search is a client-only operation over decrypted history already present
+on that installation. Queries, result terms and plaintext indexes are never
+sent to or persisted by a homeserver, federation peer or MLS ordering
+authority. V1 performs an ephemeral in-memory scan, so a replacement browser
+can search only history it has recovered through the normal encrypted
+linked-device transfer.
+
+The searchable view applies product state before matching: hidden controls,
+deleted messages and expired disappearing content are excluded; an edit
+replaces rather than supplements the original text. Text, attachment filenames
+and attachment captions are searchable. Results are bounded and ordered newest
+first, and selecting one navigates to the local conversation copy without a
+network lookup.
+
 Incoming strangers are message requests. Accept/reject/block/unblock are
 client relationship state. First-contact/request traffic stays identified.
 

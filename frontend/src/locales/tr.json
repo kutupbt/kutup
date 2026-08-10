@@ -141,6 +141,15 @@
         "thirtyDays": "30 gün"
       }
     },
+    "search": {
+      "open": "Mesajlarda ara",
+      "title": "Mesajlarda ara",
+      "description": "Bu cihazda bulunan şifresi çözülmüş mesaj geçmişinde arayın.",
+      "placeholder": "Mesajlarda ve eklerde ara",
+      "private": "Arama sorgunuz ve mesaj metinleri bu tarayıcıda kalır, hiçbir sunucuya gönderilmez.",
+      "prompt": "Yerel Sohbet geçmişinizde aramak için sözcük girin.",
+      "empty": "Bu cihazda eşleşen mesaj yok."
+    },
   "safetyNumberChanged": "Bir alıcı cihazın kimliği değişti. Güvenlik numarasını doğrulayın.",
   "requests": {
     "title_one": "{{count}} mesaj isteği",

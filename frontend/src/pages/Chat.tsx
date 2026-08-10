@@ -21,6 +21,7 @@ import {
   QrCode,
   RefreshCw,
   Reply,
+  Search,
   Send,
   Shield,
   ShieldCheck,
@@ -100,6 +101,7 @@ import {
   isVisibleChatMessage,
   reduceDisappearingTimers,
 } from '@/chat/disappearing'
+import { searchChatHistory } from '@/chat/search'
 
 const CHAT_REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const
 const DISAPPEARING_PRESETS = [
@@ -121,6 +123,12 @@ interface ReactionAggregate {
 interface MessageMutationState {
   editedText?: string
   deleted: boolean
+}
+
+interface ChatSearchTarget {
+  conversationKey: string
+  messageId: string
+  direction: ChatHistoryEntry['direction']
 }
 
 interface MessageReceiptState {
@@ -186,6 +194,10 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     useState<PendingMlsOwnerApprovalRequest[]>([])
   const [selectedConversation, setSelectedConversation] = useState<ConversationId | null>(null)
   const [newPeer, setNewPeer] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchTarget, setSearchTarget] = useState<ChatSearchTarget | null>(null)
+  const [highlightedSearchMessage, setHighlightedSearchMessage] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [replyingTo, setReplyingTo] = useState<ChatHistoryEntry | null>(null)
   const [editingMessage, setEditingMessage] = useState<ChatHistoryEntry | null>(null)
@@ -693,6 +705,10 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     }
     return result
   }, [history, selfAddress, visibleHistory])
+  const searchResults = useMemo(
+    () => searchChatHistory(visibleHistory, searchQuery, mutationsByMessageId),
+    [mutationsByMessageId, searchQuery, visibleHistory],
+  )
   const ownReceiptStateByMessageId = useMemo(() => {
     const states = new Map<string, 'delivered' | 'read'>()
     for (const message of history) {
@@ -960,6 +976,35 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [messages.length, selectedKey])
+
+  useEffect(() => {
+    if (!searchTarget || searchTarget.conversationKey !== selectedKey) return
+    const frame = window.requestAnimationFrame(() => {
+      const key = chatMessageDomKey(searchTarget.direction, searchTarget.messageId)
+      const element = document.getElementById(key)
+      setSearchTarget(null)
+      if (!element) return
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setHighlightedSearchMessage(key)
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [messages, searchTarget, selectedKey])
+
+  useEffect(() => {
+    if (!highlightedSearchMessage) return
+    const timeout = window.setTimeout(() => setHighlightedSearchMessage(null), 2_500)
+    return () => window.clearTimeout(timeout)
+  }, [highlightedSearchMessage])
+
+  function openSearchResult(message: ChatHistoryEntry) {
+    setSearchTarget({
+      conversationKey: conversationKey(message.conversation),
+      messageId: message.id,
+      direction: message.direction,
+    })
+    setSelectedConversation(message.conversation)
+    setSearchOpen(false)
+  }
 
   function startConversation(event: FormEvent) {
     event.preventDefault()
@@ -1874,6 +1919,83 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
           </header>
 
           <form className="flex gap-2 border-b p-3" onSubmit={startConversation}>
+            <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="shrink-0"
+                  disabled={loading}
+                  aria-label={t('chat.search.open')}
+                  data-testid="chat-search-open"
+                >
+                  <Search className="h-4 w-4" />
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-xl">
+                <DialogHeader>
+                  <DialogTitle>{t('chat.search.title')}</DialogTitle>
+                  <DialogDescription>{t('chat.search.description')}</DialogDescription>
+                </DialogHeader>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={searchQuery}
+                    onChange={event => setSearchQuery(event.target.value)}
+                    placeholder={t('chat.search.placeholder')}
+                    className="pl-9"
+                    autoFocus
+                    data-testid="chat-search-input"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">{t('chat.search.private')}</p>
+                <div
+                  className="grid max-h-[55vh] gap-1 overflow-y-auto"
+                  data-testid="chat-search-results"
+                >
+                  {!searchQuery.trim() && (
+                    <p className="py-10 text-center text-sm text-muted-foreground">
+                      {t('chat.search.prompt')}
+                    </p>
+                  )}
+                  {searchQuery.trim() && searchResults.length === 0 && (
+                    <p className="py-10 text-center text-sm text-muted-foreground">
+                      {t('chat.search.empty')}
+                    </p>
+                  )}
+                  {searchResults.map(result => {
+                    const address = directAddress(result.message.conversation)
+                    const label = address === selfAddress
+                      ? t('chat.noteToSelf')
+                      : address
+                        ? profilesByPeer.get(address)?.displayName || address
+                        : `Group ${result.message.conversation.kind === 'group'
+                          ? result.message.conversation.groupId.slice(0, 8)
+                          : ''}`
+                    return (
+                      <button
+                        key={`${result.message.direction}:${result.message.id}`}
+                        type="button"
+                        className="rounded-lg px-3 py-3 text-left transition-colors hover:bg-accent focus-visible:bg-accent"
+                        onClick={() => openSearchResult(result.message)}
+                        data-testid="chat-search-result"
+                      >
+                        <span className="flex items-center justify-between gap-3">
+                          <span className="truncate text-xs font-medium text-muted-foreground">
+                            {label}
+                          </span>
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            {formatTime(result.message.content.sentAt)}
+                          </span>
+                        </span>
+                        <span className="mt-1 block line-clamp-2 text-sm">{result.preview}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </DialogContent>
+            </Dialog>
             <Input
               value={newPeer}
               onChange={(event) => setNewPeer(event.target.value)}
@@ -2667,6 +2789,10 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     : undefined}
                   nowMs={nowMs}
                   onVisible={startVisibleDisappearingMessage}
+                  highlighted={highlightedSearchMessage === chatMessageDomKey(
+                    message.direction,
+                    message.id,
+                  )}
                 />
               ))}
               {typingLabel && (
@@ -3018,6 +3144,7 @@ function MessageBubble({
   receipt,
   nowMs,
   onVisible,
+  highlighted,
 }: {
   message: ChatHistoryEntry
   newerClientLabel: string
@@ -3035,6 +3162,7 @@ function MessageBubble({
   receipt?: MessageReceiptState
   nowMs: number
   onVisible?: (message: ChatHistoryEntry) => void
+  highlighted?: boolean
 }) {
   const { t } = useTranslation()
   const outgoing = message.direction === 'outgoing'
@@ -3053,8 +3181,13 @@ function MessageBubble({
   }, [message, onVisible])
   return (
     <div
+      id={chatMessageDomKey(message.direction, message.id)}
       ref={bubbleRef}
-      className={cn('group flex items-center gap-1', outgoing ? 'justify-end' : 'justify-start')}
+      className={cn(
+        'group flex items-center gap-1 rounded-xl transition-shadow',
+        outgoing ? 'justify-end' : 'justify-start',
+        highlighted && 'ring-2 ring-primary ring-offset-2 ring-offset-background',
+      )}
       data-testid="chat-message"
     >
       {outgoing && (
@@ -3331,6 +3464,10 @@ function replyPreview(
     ?? message.content.text
     ?? message.content.attachment?.filename
     ?? newerClientLabel
+}
+
+function chatMessageDomKey(direction: ChatHistoryEntry['direction'], messageId: string): string {
+  return `chat-message-${direction}-${messageId}`
 }
 
 function compareContentOperations(left: ChatHistoryEntry, right: ChatHistoryEntry): number {

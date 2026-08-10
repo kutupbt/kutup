@@ -500,6 +500,23 @@ test.describe('two-server secure chat', () => {
     await expect(pageA.getByTestId('chat-typing-indicator')).toHaveCount(0)
     await syncUntilReceipt(pageB, reply, 'chat-receipt-delivered')
 
+    // Search reads only the already-decrypted browser history. The unique
+    // query must find and navigate to the message without appearing in any
+    // request URL or body.
+    const searchTraffic: string[] = []
+    const captureSearchTraffic = (request: import('@playwright/test').Request) => {
+      searchTraffic.push(`${request.url()}\n${request.postData() ?? ''}`)
+    }
+    pageA.on('request', captureSearchTraffic)
+    await pageA.getByTestId('chat-search-open').click()
+    await pageA.getByTestId('chat-search-input').fill(reply)
+    const searchResult = pageA.getByTestId('chat-search-result').filter({ hasText: reply })
+    await expect(searchResult).toHaveCount(1)
+    await searchResult.click()
+    await expect(bubble(pageA, reply)).toBeVisible()
+    pageA.off('request', captureSearchTraffic)
+    expect(searchTraffic.join('\n')).not.toContain(reply)
+
     // Timer state and each affected duration are authenticated inside the
     // ordinary Direct ciphertext. Alice counts from send; Bob remains unread
     // until the bubble is actually visible, then privately synchronizes that

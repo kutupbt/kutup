@@ -141,6 +141,15 @@
         "thirtyDays": "30 days"
       }
     },
+    "search": {
+      "open": "Search messages",
+      "title": "Search messages",
+      "description": "Search the decrypted message history available on this device.",
+      "placeholder": "Search messages and attachments",
+      "private": "Your query and message text stay in this browser and are never sent to a server.",
+      "prompt": "Enter words to search your local Chat history.",
+      "empty": "No matching messages on this device."
+    },
   "safetyNumberChanged": "A recipient device identity changed. Verify the safety number.",
   "requests": {
     "title_one": "{{count}} message request",
