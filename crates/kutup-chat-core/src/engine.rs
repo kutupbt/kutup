@@ -1175,6 +1175,12 @@ impl Engine {
         content: &ChatContent,
         rng: &mut R,
     ) -> Result<SendSummary> {
+        let is_typing = content.as_typing().is_some();
+        if is_typing && peer_user == self.session.user() {
+            return Err(ChatError::Invalid(
+                "Note to Self does not emit typing indicators".into(),
+            ));
+        }
         if content
             .message_id
             .as_deref()
@@ -1221,7 +1227,7 @@ impl Engine {
             )));
         }
         let mut content = content.clone();
-        if peer_user != self.session.user() && content.profile_key.is_none() {
+        if !is_typing && peer_user != self.session.user() && content.profile_key.is_none() {
             if let Some(profile) = self.session.local_profile().await? {
                 // Signal uploads a rotated profile before allowing the new key
                 // into messages. A pending first upload/edit/rotation is not a
@@ -1264,7 +1270,11 @@ impl Engine {
                     .await?;
                 let certificate = self.issue_verified_sender_certificate().await?;
                 let user = self.session.user().to_string();
-                let sync_bundles = self.fetch_verified_bundles(&user).await?;
+                let sync_bundles = if is_typing {
+                    Vec::new()
+                } else {
+                    self.fetch_verified_bundles(&user).await?
+                };
                 self.session
                     .enqueue_sealed_direct_send(
                         SealedDirectSend {
@@ -1283,7 +1293,11 @@ impl Engine {
             } else {
                 let recipient_bundles = self.fetch_verified_bundles(peer_user).await?;
                 let user = self.session.user().to_string();
-                let sync_bundles = self.fetch_verified_bundles(&user).await?;
+                let sync_bundles = if is_typing {
+                    Vec::new()
+                } else {
+                    self.fetch_verified_bundles(&user).await?
+                };
                 self.session
                     .enqueue_direct_send(
                         DirectSend {
@@ -1332,25 +1346,34 @@ impl Engine {
         Ok(summaries)
     }
 
-    /// Retry every durable send while treating receipt-only transport failures
-    /// as optional. The exact receipt ciphertext remains queued for a later
-    /// reconciliation, but it cannot prevent inbound mailbox processing.
-    /// Ordinary messages and malformed outbox content remain fail-closed.
-    pub async fn flush_outbox_deferring_receipt_failures<R: Rng + CryptoRng>(
+    /// Retry durable sends while treating hidden optional controls as
+    /// best-effort. Receipts retain their exact ciphertext for a later retry;
+    /// typing is discarded after its short usefulness window. Neither may
+    /// prevent inbound mailbox processing. Ordinary messages and malformed
+    /// outbox content remain fail-closed.
+    pub async fn flush_outbox_deferring_optional_failures<R: Rng + CryptoRng>(
         &mut self,
         rng: &mut R,
     ) -> Result<Vec<SendSummary>> {
         let mut summaries = Vec::new();
         for entry in self.session.pending_outbox().await? {
-            let is_receipt = serde_json::from_slice::<ChatContent>(&entry.content)
-                .ok()
+            let content = serde_json::from_slice::<ChatContent>(&entry.content).ok();
+            let is_receipt = content
+                .as_ref()
                 .is_some_and(|content| content.as_receipt().is_some());
+            let is_typing = content
+                .as_ref()
+                .is_some_and(|content| content.as_typing().is_some());
+            if is_typing && unix_millis().saturating_sub(entry.created_at) > 10_000 {
+                self.session.discard_typing_outbox(&entry.send_id).await?;
+                continue;
+            }
             match self
                 .deliver_outbox_entry(entry, SendSummary::default(), rng)
                 .await
             {
                 Ok(summary) => summaries.push(summary),
-                Err(_) if is_receipt => {}
+                Err(_) if is_receipt || is_typing => {}
                 Err(error) => return Err(error),
             }
         }

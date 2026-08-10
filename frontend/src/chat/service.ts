@@ -14,6 +14,7 @@ import type {
   ConversationId,
   InboundAttention,
   ChatProfile,
+  ChatTypingEvent,
   PeerChatProfile,
   ReceiveReport,
   SendSummary,
@@ -38,6 +39,7 @@ import { deliverChatMediaV1 } from './media'
 import { ChatAttachmentLedger } from './attachment-ledger'
 
 type UpdateListener = () => void
+type TypingListener = (event: ChatTypingEvent) => void
 
 function wasmRecord<T>(value: unknown): T {
   return (value instanceof Map ? Object.fromEntries(value) : value) as T
@@ -81,6 +83,7 @@ export class ChatService {
   private readonly mlsWorkflowLockName: string
   private readonly channel: BroadcastChannel
   private readonly listeners = new Set<UpdateListener>()
+  private readonly typingListeners = new Set<TypingListener>()
   private socket: WebSocket | null = null
   private socketRetry: ReturnType<typeof setTimeout> | null = null
   private retryAttempt = 0
@@ -112,7 +115,11 @@ export class ChatService {
         )
       : null
     this.channel = new BroadcastChannel(channelName)
-    this.channel.onmessage = () => this.emitUpdate()
+    this.channel.onmessage = (message: MessageEvent<unknown>) => {
+      const event = parseTypingBroadcast(message.data)
+      if (event) this.emitTyping(event, false)
+      else this.emitUpdate()
+    }
     window.addEventListener('online', this.handleOnline)
     document.addEventListener('visibilitychange', this.handleVisibilityChange)
   }
@@ -177,6 +184,11 @@ export class ChatService {
   subscribe(listener: UpdateListener): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  subscribeTyping(listener: TypingListener): () => void {
+    this.typingListeners.add(listener)
+    return () => this.typingListeners.delete(listener)
   }
 
   async history(): Promise<ChatHistoryEntry[]> {
@@ -466,6 +478,24 @@ export class ChatService {
     return summary
   }
 
+  async sendTyping(conversation: ConversationId, active: boolean): Promise<void> {
+    if (conversation.kind === 'group') {
+      await this.withMlsWorkflow(() =>
+        this.requireMls().sendTyping(conversation.groupId, active),
+      )
+      return
+    }
+    const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
+    const self = `${this.username}@${this.capabilities.serverName}`
+    if (peer === self) return
+    await this.withLock(() => this.client.sendTyping(
+      crypto.randomUUID(),
+      peer,
+      new Date().toISOString(),
+      active,
+    ))
+  }
+
   async chatMediaStorage(): Promise<ChatMediaStorageView> {
     if (!this.attachmentLedger) throw new Error('Chat media is not enabled')
     await this.withAttachmentLedgerLock(() => this.attachmentLedger!.sync())
@@ -567,9 +597,24 @@ export class ChatService {
     if (this.reconcilePromise) return this.reconcilePromise
     this.reconcilePromise = this.withLock(() => this.client.reconcile())
       .then(async (report) => {
-        await this.withMlsWorkflow(async () => {
-          await this.mls?.reconcile()
+        const mlsTyping = await this.withMlsWorkflow(async () => {
+          return await this.mls?.reconcile() ?? []
         })
+        const directTyping = (report.messages ?? []).flatMap((message): ChatTypingEvent[] => {
+          if (message.conversation.kind !== 'direct') return []
+          const address = withHomeServer(
+            message.conversation.address,
+            this.capabilities.serverName,
+          )
+          return [{
+            conversation: { kind: 'direct', address },
+            sender: canonicalAccountAddress(address),
+            // A real encrypted message clears the sender's prior typing state
+            // without adding a second control event.
+            active: message.content.typing?.active ?? false,
+          }]
+        })
+        for (const event of [...directTyping, ...mlsTyping]) this.emitTyping(event, true)
         await this.reconcileAttachmentLedger()
         this.notifyPeers()
         return report
@@ -804,6 +849,7 @@ export class ChatService {
     document.removeEventListener('visibilitychange', this.handleVisibilityChange)
     this.channel.close()
     this.listeners.clear()
+    this.typingListeners.clear()
     this.attachmentLedger?.dispose()
     this.client.free()
   }
@@ -927,6 +973,11 @@ export class ChatService {
     for (const listener of this.listeners) listener()
   }
 
+  private emitTyping(event: ChatTypingEvent, broadcast: boolean): void {
+    if (broadcast) this.channel.postMessage({ type: 'typing', event })
+    for (const listener of this.typingListeners) listener(event)
+  }
+
   private readonly handleOnline = (): void => {
     void this.initializeMls().then(() => this.reconcile())
   }
@@ -975,6 +1026,31 @@ export class ChatService {
       void this.connectSocket()
     }, delay)
   }
+}
+
+function parseTypingBroadcast(value: unknown): ChatTypingEvent | null {
+  if (!value || typeof value !== 'object') return null
+  const message = value as { type?: unknown; event?: unknown }
+  if (message.type !== 'typing' || !message.event || typeof message.event !== 'object') return null
+  const event = message.event as Partial<ChatTypingEvent>
+  if (typeof event.sender !== 'string' || typeof event.active !== 'boolean') return null
+  if (event.conversation?.kind === 'group' && typeof event.conversation.groupId === 'string') {
+    return event as ChatTypingEvent
+  }
+  if (event.conversation?.kind === 'direct') {
+    const address = (event.conversation as { address?: unknown }).address
+    if (address && typeof address === 'object') {
+      const candidate = address as { username?: unknown; server?: unknown }
+      if (
+        typeof candidate.username === 'string'
+        && (candidate.server === undefined || typeof candidate.server === 'string')
+        && parseAccountAddress(canonicalAccountAddress(candidate as AccountAddress))
+      ) {
+        return event as ChatTypingEvent
+      }
+    }
+  }
+  return null
 }
 
 async function accountScope(userId: string): Promise<string> {

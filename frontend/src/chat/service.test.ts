@@ -255,6 +255,33 @@ describe('ChatService MLS workflow coordination', () => {
     )
   })
 
+  it('sends Direct typing only as an ephemeral WASM control', async () => {
+    installQueuedWebLocks()
+    const sendId = '55555555-5555-4555-8555-555555555555'
+    vi.stubGlobal('crypto', { randomUUID: () => sendId })
+    const client = { sendTyping: vi.fn().mockResolvedValue({ delivered: true }) }
+    const service = Object.create(ChatService.prototype) as ChatService
+    Object.assign(service, {
+      client,
+      username: 'alice',
+      capabilities: { serverName: 'a.test' },
+      lockName: 'kutup-chat-engine:test',
+      mls: null,
+    })
+
+    await expect(service.sendTyping(
+      { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
+      true,
+    )).resolves.toBeUndefined()
+
+    expect(client.sendTyping).toHaveBeenCalledWith(
+      sendId,
+      'bob@b.test',
+      expect.any(String),
+      true,
+    )
+  })
+
   it('repairs the signed manifest and MLS membership after revocation', async () => {
     installQueuedWebLocks()
     const calls: string[] = []

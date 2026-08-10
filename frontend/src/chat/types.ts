@@ -12,6 +12,7 @@ export interface ChatContentView {
   reaction?: ChatReactionV1
   mutation?: ChatMessageMutationV1
   receipt?: ChatReceiptV1
+  typing?: ChatTypingV1
 }
 
 export interface ChatReactionV1 {
@@ -29,6 +30,10 @@ export interface ChatMessageMutationV1 {
 export interface ChatReceiptV1 {
   messageIds: string[]
   state: 'delivered' | 'read'
+}
+
+export interface ChatTypingV1 {
+  active: boolean
 }
 
 export type ChatMediaClassV1 = 'file' | 'photo' | 'video' | 'audio'
@@ -118,7 +123,7 @@ export interface InboundFailure {
 }
 
 export interface ReceiveReport {
-  messages: unknown[]
+  messages: ReceivedChatMessage[]
   synced: string[]
   contactSynced: string[]
   profileKeyUpdated: string[]
@@ -127,6 +132,21 @@ export interface ReceiveReport {
   undecodable: string[]
   errors: InboundFailure[]
   duplicates: string[]
+}
+
+export interface ReceivedChatMessage {
+  id: string
+  conversation: ConversationId
+  peer: string
+  senderDeviceId: number
+  cursor: string
+  content: ChatContentView
+}
+
+export interface ChatTypingEvent {
+  conversation: ConversationId
+  sender: string
+  active: boolean
 }
 
 export type ContactState =
@@ -1248,6 +1268,15 @@ export interface WasmChatClientHandle {
     state: 'delivered' | 'read',
     createdAtMs: string,
   ): Promise<MlsOutboxEntry>
+  createMlsTypingMessage(
+    sendId: string,
+    conversationId: string,
+    incarnation: string,
+    mlsGroupId: Uint8Array,
+    sentAt: string,
+    active: boolean,
+    createdAtMs: string,
+  ): Promise<MlsOutboxEntry>
   pendingMlsApplicationMessages(): Promise<MlsOutboxEntry[]>
   stageMlsApplicationDelivery(
     sendId: string,
@@ -1365,6 +1394,12 @@ export interface WasmChatClientHandle {
     sentAt: string,
     messageIds: string[],
     state: 'delivered' | 'read',
+  ): Promise<SendSummary>
+  sendTyping(
+    sendId: string,
+    peer: string,
+    sentAt: string,
+    active: boolean,
   ): Promise<SendSummary>
   mediaDeliveryCapability(peer: string): Promise<string>
   syncManifest(): Promise<unknown>

@@ -243,6 +243,20 @@ aggregate recipient accounts rather than devices. Receipt operations are never
 rendered or used as conversation previews, and no homeserver or MLS ordering
 authority receives the target IDs or state in plaintext.
 
+Typing state uses a hidden `typing` operation whose strict body contains only
+an `active` boolean. It is accepted only from an already accepted contact or an
+authenticated MLS roster member, so a stranger cannot create/reopen a message
+request with typing traffic. The operation is live-only product state: it is
+excluded from messages, previews, linked-device sent transcripts and exported
+history, and expires six seconds after local receipt. An ordinary authenticated
+application message from the same account clears it immediately. Browsers emit
+at most one active operation every four seconds while a visible composer stays
+non-empty; expiry replaces an explicit stop operation so one MLS typing burst
+does not consume a second set of claimed one-time KeyPackages. Stale durable
+typing outboxes are discarded after ten seconds rather than delivered late.
+The homeservers and MLS ordering authorities see only the ordinary padded
+ciphertext delivery, never the typing kind or state.
+
 Incoming strangers are message requests. Accept/reject/block/unblock are
 client relationship state. First-contact/request traffic stays identified.
 

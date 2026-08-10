@@ -121,6 +121,10 @@
       "deliveredTo": "{{count}} alıcı hesaba teslim edildi",
       "readBy": "{{count}} alıcı hesap tarafından okundu"
     },
+    "typing": {
+      "one": "{{name}} yazıyor…",
+      "many": "{{count}} kişi yazıyor…"
+    },
   "safetyNumberChanged": "Bir alıcı cihazın kimliği değişti. Güvenlik numarasını doğrulayın.",
   "requests": {
     "title_one": "{{count}} mesaj isteği",

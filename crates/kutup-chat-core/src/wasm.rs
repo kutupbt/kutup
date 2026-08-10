@@ -90,6 +90,7 @@ export interface KutupChatContentView {
   reaction?: unknown;
   mutation?: unknown;
   receipt?: unknown;
+  typing?: unknown;
 }
 
 export interface KutupChatAccountAddress {
@@ -2431,6 +2432,36 @@ impl WasmChatClient {
         to_output(&entry)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = createMlsTypingMessage)]
+    pub async fn create_mls_typing_message(
+        &self,
+        send_id: String,
+        conversation_id: String,
+        incarnation: String,
+        mls_group_id: Vec<u8>,
+        sent_at: String,
+        active: bool,
+        created_at_ms: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let conversation_id = uuid::Uuid::parse_str(&conversation_id)
+            .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
+        let entry = self
+            .mls_client()
+            .create_typing_application_message(
+                &send_id,
+                conversation_id,
+                parse_u64_string("MLS incarnation", &incarnation)?,
+                &mls_group_id,
+                &sent_at,
+                active,
+                parse_i64_string("MLS message clock", &created_at_ms)?,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&entry)
+    }
+
     #[wasm_bindgen(js_name = pendingMlsApplicationMessages)]
     pub async fn pending_mls_application_messages(&self) -> std::result::Result<JsValue, JsValue> {
         let pending = self
@@ -2822,6 +2853,30 @@ impl WasmChatClient {
         to_output(&SendSummaryView::from(summary))
     }
 
+    #[wasm_bindgen(js_name = sendTyping)]
+    pub async fn send_typing(
+        &mut self,
+        send_id: String,
+        peer: String,
+        sent_at: String,
+        active: bool,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let seq = self
+            .engine
+            .session()
+            .next_sent_seq()
+            .await
+            .map_err(chat_error)?;
+        let content = ChatContent::typing_with_id(&send_id, sent_at, seq, active);
+        let summary = self
+            .engine
+            .send(&send_id, &peer, &content, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&SendSummaryView::from(summary))
+    }
+
     #[wasm_bindgen(js_name = mediaDeliveryCapability)]
     pub async fn media_delivery_capability(
         &self,
@@ -2842,7 +2897,7 @@ impl WasmChatClient {
     pub async fn reconcile(&mut self) -> std::result::Result<JsValue, JsValue> {
         let mut rng = OsRng.unwrap_err();
         self.engine
-            .flush_outbox_deferring_receipt_failures(&mut rng)
+            .flush_outbox_deferring_optional_failures(&mut rng)
             .await
             .map_err(chat_error)?;
         // Contact controls are durable best-effort account sync. A temporary
@@ -3288,6 +3343,8 @@ struct ContentView {
     mutation: Option<kutup_chat_proto::MessageMutationBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     receipt: Option<kutup_chat_proto::ReceiptBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    typing: Option<kutup_chat_proto::TypingBody>,
 }
 
 impl From<ChatContent> for ContentView {
@@ -3297,6 +3354,7 @@ impl From<ChatContent> for ContentView {
         let reaction = content.as_reaction();
         let mutation = content.as_message_mutation();
         let receipt = content.as_receipt();
+        let typing = content.as_typing();
         Self {
             version: content.v,
             kind: content.kind,
@@ -3310,6 +3368,7 @@ impl From<ChatContent> for ContentView {
             reaction,
             mutation,
             receipt,
+            typing,
         }
     }
 }
@@ -3462,6 +3521,7 @@ fn is_contact_control(bytes: &[u8]) -> Result<bool> {
         content.kind.as_str(),
         kutup_chat_proto::content::kind::CONTACT_CONTROL
             | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
+            | kutup_chat_proto::content::kind::TYPING
     ))
 }
 
@@ -3473,6 +3533,7 @@ fn is_invisible_control(bytes: &[u8]) -> Result<bool> {
         kutup_chat_proto::content::kind::GROUP_CONTROL
             | kutup_chat_proto::content::kind::CONTACT_CONTROL
             | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
+            | kutup_chat_proto::content::kind::TYPING
     ))
 }
 

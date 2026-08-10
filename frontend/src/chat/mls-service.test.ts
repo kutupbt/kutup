@@ -840,6 +840,8 @@ function harness(
       createdAt: 1_700_000_000_000,
       attempts: 0,
     }),
+    createMlsTypingMessage: vi.fn().mockResolvedValue(applicationOutboxEntry()),
+    markMlsApplicationDelivered: vi.fn().mockResolvedValue(undefined),
     createMlsInvitationAcceptanceMessage: vi.fn().mockResolvedValue(null),
     deriveMlsDeliveryCapability: vi.fn().mockResolvedValue({
       epoch: 1,
@@ -1815,6 +1817,31 @@ describe('MlsConversationService', () => {
     expect(client.stageMlsApplicationDelivery).toHaveBeenCalledOnce()
   })
 
+  it('creates one encrypted MLS typing control for a typing burst', async () => {
+    vi.stubGlobal('crypto', {
+      randomUUID: () => sendId,
+      getRandomValues: (value: Uint8Array) => value,
+    })
+    const { client, service } = harness(null, [activeGenesis()])
+
+    await expect(service.sendTyping(conversationId, true)).resolves.toEqual({
+      delivered: true,
+      deduplicated: false,
+      attempts: 1,
+    })
+
+    expect(client.createMlsTypingMessage).toHaveBeenCalledWith(
+      sendId,
+      conversationId,
+      '1',
+      expect.any(Uint8Array),
+      expect.any(String),
+      true,
+      expect.stringMatching(/^[0-9]+$/),
+    )
+    expect(client.stageMlsApplicationDelivery).toHaveBeenCalledOnce()
+  })
+
   it('defers a failed durable receipt without blocking MLS reconciliation or retrying it in a loop', async () => {
     const { client, service } = harness(null, [activeGenesis()])
     const receiptEntry = {
@@ -1830,6 +1857,21 @@ describe('MlsConversationService', () => {
     await expect(service.reconcilePendingApplicationMessages()).resolves.toBe(1)
 
     expect(client.deriveMlsDeliveryCapability).toHaveBeenCalledOnce()
+  })
+
+  it('discards stale durable typing instead of delivering it late', async () => {
+    const { client, service } = harness(null, [activeGenesis()])
+    const typingEntry = {
+      ...applicationOutboxEntry(),
+      content: [...new TextEncoder().encode(JSON.stringify({ kind: 'typing' }))],
+      createdAt: Date.now() - 10_001,
+    }
+    client.pendingMlsApplicationMessages = vi.fn().mockResolvedValue([typingEntry])
+
+    await expect(service.reconcilePendingApplicationMessages()).resolves.toBe(1)
+
+    expect(client.markMlsApplicationDelivered).toHaveBeenCalledWith(sendId)
+    expect(client.deriveMlsDeliveryCapability).not.toHaveBeenCalled()
   })
 
   it('verifies one application sender leaf without weakening full-roster verification', async () => {

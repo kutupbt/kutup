@@ -36,7 +36,7 @@ pub mod kind {
     pub const PROFILE_KEY_UPDATE: &str = "profileKeyUpdate";
     /// Delivery/read receipts (E2EE content, never a server feature). [IMPL]
     pub const RECEIPT: &str = "receipt";
-    /// Typing indicator; ephemeral, a client MAY drop it. [RSV]
+    /// Typing indicator; ephemeral, a client MAY drop it. [IMPL]
     pub const TYPING: &str = "typing";
     /// Add/remove one bounded emoji reaction to a stable logical message. [IMPL]
     pub const REACTION: &str = "reaction";
@@ -338,6 +338,36 @@ impl ChatContent {
         Some(body)
     }
 
+    /// Builds a hidden ephemeral typing-state operation. The transport id is
+    /// retained for encrypted-mailbox idempotency only; clients must not turn
+    /// this control into conversation history or a linked-device transcript.
+    pub fn typing_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        active: bool,
+    ) -> Self {
+        ChatContent {
+            v: Self::VERSION,
+            kind: kind::TYPING.to_string(),
+            sent_at: sent_at.into(),
+            seq,
+            message_id: Some(message_id.into()),
+            reply_to: None,
+            profile_key: None,
+            profile_suite: None,
+            body: serde_json::to_value(TypingBody { active }).unwrap_or_default(),
+            extra: serde_json::Map::new(),
+        }
+    }
+
+    pub fn as_typing(&self) -> Option<TypingBody> {
+        if self.kind != kind::TYPING || self.v != Self::VERSION || self.message_id.is_none() {
+            return None;
+        }
+        serde_json::from_value(self.body.clone()).ok()
+    }
+
     /// Builds the encrypted linked-device wrapper used by Note to Self and,
     /// later, ordinary sent-message synchronization.
     pub fn sent_transcript(
@@ -411,20 +441,21 @@ impl ChatContent {
     /// True when `kind` is one this build has a typed meaning for. A UI renders
     /// unknown kinds as "message from a newer client".
     pub fn is_known_kind(&self) -> bool {
-        matches!(
-            self.kind.as_str(),
-            kind::TEXT
-                | kind::SENT_TRANSCRIPT
-                | kind::CONTACT_CONTROL
-                | kind::PROFILE_KEY_UPDATE
-                | kind::RECEIPT
-                | kind::TYPING
-                | kind::REACTION
-                | kind::MESSAGE_MUTATION
-                | kind::ATTACHMENT
-                | kind::GROUP_CONTROL
-                | kind::SESSION_CONTROL
-        )
+        self.v == Self::VERSION
+            && matches!(
+                self.kind.as_str(),
+                kind::TEXT
+                    | kind::SENT_TRANSCRIPT
+                    | kind::CONTACT_CONTROL
+                    | kind::PROFILE_KEY_UPDATE
+                    | kind::RECEIPT
+                    | kind::TYPING
+                    | kind::REACTION
+                    | kind::MESSAGE_MUTATION
+                    | kind::ATTACHMENT
+                    | kind::GROUP_CONTROL
+                    | kind::SESSION_CONTROL
+            )
     }
 }
 
@@ -511,6 +542,12 @@ pub enum ReceiptState {
 pub struct ReceiptBody {
     pub message_ids: Vec<String>,
     pub state: ReceiptState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TypingBody {
+    pub active: bool,
 }
 
 impl ReceiptBody {
@@ -623,7 +660,10 @@ mod tests {
         let src =
             r#"{"v":1,"kind":"text","sentAt":"t","seq":1,"body":{"text":"x"},"futureField":"abc"}"#;
         let c: ChatContent = serde_json::from_str(src).unwrap();
-        assert_eq!(c.extra.get("futureField").and_then(|v| v.as_str()), Some("abc"));
+        assert_eq!(
+            c.extra.get("futureField").and_then(|v| v.as_str()),
+            Some("abc")
+        );
         let back = serde_json::to_value(&c).unwrap();
         assert_eq!(back["futureField"], "abc");
     }
@@ -720,6 +760,21 @@ mod tests {
             ReceiptState::Delivered,
         )
         .is_err());
+    }
+
+    #[test]
+    fn typing_is_strict_typed_ephemeral_content() {
+        let typing = ChatContent::typing_with_id(
+            "018f8ad5-d7db-7c7c-8c4b-4f53467f4432",
+            "2026-08-10T11:00:00Z",
+            46,
+            true,
+        );
+        assert_eq!(typing.as_typing(), Some(TypingBody { active: true }));
+
+        let mut malformed = typing;
+        malformed.body["future"] = serde_json::json!(true);
+        assert_eq!(malformed.as_typing(), None);
     }
 
     #[test]

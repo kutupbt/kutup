@@ -914,7 +914,7 @@ fn receipt_retry_failure_does_not_block_reconciliation_flush() {
         Err(ChatError::Transport(_))
     ));
     assert!(
-        block_on(alice.flush_outbox_deferring_receipt_failures(&mut rng))
+        block_on(alice.flush_outbox_deferring_optional_failures(&mut rng))
             .unwrap()
             .is_empty()
     );
@@ -923,6 +923,35 @@ fn receipt_retry_failure_does_not_block_reconciliation_flush() {
     let summaries = block_on(alice.flush_outbox(&mut rng)).unwrap();
     assert_eq!(summaries.len(), 1);
     assert_eq!(block_on(alice.pending_send_count()).unwrap(), 0);
+}
+
+#[test]
+fn typing_is_delivered_without_history_or_linked_device_transcript() {
+    let mut rng = test_rng();
+    let mut bob = device("bob", 1, &mut rng);
+    let bundle = bundle_of(&bob, 1);
+    let server = Rc::new(MockServer::default());
+    server.script(vec![vec![bundle]]);
+    server.set_active(vec![(1, reg_id(&bob))]);
+    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
+    let send_id = "44444444-4444-4444-8444-444444444444";
+    let typing = ChatContent::typing_with_id(send_id, "2026-08-10T00:00:00Z", 1, true);
+
+    let summary = block_on(alice.send(send_id, "bob", &typing, &mut rng)).unwrap();
+    assert!(summary.delivered);
+    assert!(block_on(alice.session().sent_history()).unwrap().is_empty());
+    assert!(server.synced.borrow().is_empty());
+    assert_eq!(
+        decrypt_for(
+            &mut bob,
+            &ChatAddress::local("alice", 1),
+            &server.last_delivered(),
+            1,
+            &mut rng,
+        )
+        .as_typing(),
+        Some(kutup_chat_proto::TypingBody { active: true })
+    );
 }
 
 #[test]

@@ -121,6 +121,10 @@
       "deliveredTo": "Delivered to {{count}} recipient accounts",
       "readBy": "Read by {{count}} recipient accounts"
     },
+    "typing": {
+      "one": "{{name}} is typing…",
+      "many": "{{count}} people are typing…"
+    },
   "safetyNumberChanged": "A recipient device identity changed. Verify the safety number.",
   "requests": {
     "title_one": "{{count}} message request",

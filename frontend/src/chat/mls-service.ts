@@ -4,6 +4,7 @@ import type {
   AppliedInboundMlsCommit,
   AppliedInboundMlsApplication,
   ChatAttachmentDescriptorV1,
+  ChatTypingEvent,
   ChatTransportPort,
   DerivedMlsDeliveryCapability,
   FinalizedMlsAuthorityChange,
@@ -110,7 +111,7 @@ interface MlsKeyPackageCount {
  */
 export class MlsConversationService {
   private readonly publishedCapabilityEpochs = new Map<string, string>()
-  private readonly deferredReceiptSendIds = new Set<string>()
+  private readonly deferredOptionalSendIds = new Set<string>()
 
   constructor(
     private readonly client: WasmChatClientHandle,
@@ -1131,7 +1132,39 @@ export class MlsConversationService {
       String(Date.now()),
     )).catch(cause => { throw new MlsSendError('encryption', cause) })
     await this.deliverApplicationEntry(entry).catch(cause => {
-      this.deferredReceiptSendIds.add(entry.sendId)
+      this.deferredOptionalSendIds.add(entry.sendId)
+      if (cause instanceof MlsSendError) throw cause
+      throw new MlsSendError('envelope_staging', cause)
+    })
+    return {
+      delivered: true,
+      deduplicated: entry.attempts > 0,
+      attempts: Math.max(1, entry.expectedRecipients.length),
+    }
+  }
+
+  async sendTyping(
+    conversationId: string,
+    active: boolean,
+  ): Promise<{ delivered: boolean; deduplicated: boolean; attempts: number }> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const sendId = requireBrowserCrypto().randomUUID()
+    const entry = await this.withCryptoLock(() => this.client.createMlsTypingMessage(
+      sendId,
+      conversationId,
+      String(conversation.request.genesis.incarnation),
+      groupId,
+      new Date().toISOString(),
+      active,
+      String(Date.now()),
+    )).catch(cause => { throw new MlsSendError('encryption', cause) })
+    await this.deliverApplicationEntry(entry).catch(cause => {
+      this.deferredOptionalSendIds.add(entry.sendId)
       if (cause instanceof MlsSendError) throw cause
       throw new MlsSendError('envelope_staging', cause)
     })
@@ -1147,16 +1180,21 @@ export class MlsConversationService {
       this.client.pendingMlsApplicationMessages(),
     )
     for (const entry of pending) {
-      const receipt = isReceiptOutboxEntry(entry)
-      if (receipt && this.deferredReceiptSendIds.has(entry.sendId)) continue
+      const optional = optionalOutboxKind(entry)
+      if (optional === 'typing' && Date.now() - entry.createdAt > 10_000) {
+        await this.withCryptoLock(() => this.client.markMlsApplicationDelivered(entry.sendId))
+        continue
+      }
+      if (optional && this.deferredOptionalSendIds.has(entry.sendId)) continue
       try {
         await this.deliverApplicationEntry(entry)
       } catch (cause) {
-        if (!receipt) throw cause
-        // Receipts are optional metadata. Their exact durable outbox entry is
-        // retried once per service lifetime, but a transient rate limit must
-        // never prevent the encrypted conversation itself from opening.
-        this.deferredReceiptSendIds.add(entry.sendId)
+        if (!optional) throw cause
+        // Hidden controls are optional metadata. Exact durable entries retry
+        // once per service lifetime, but transient limits cannot prevent the
+        // encrypted conversation itself from opening. Stale typing is dropped
+        // above rather than delivered after its usefulness window.
+        this.deferredOptionalSendIds.add(entry.sendId)
       }
     }
     return pending.length
@@ -1488,7 +1526,7 @@ export class MlsConversationService {
     return applied
   }
 
-  async reconcile(): Promise<void> {
+  async reconcile(): Promise<ChatTypingEvent[]> {
     await this.reconcilePendingGroupGeneses()
     await this.reconcilePendingMembershipChanges()
     await this.reconcilePendingAuthorityChanges()
@@ -1505,11 +1543,25 @@ export class MlsConversationService {
     await this.reconcileInboundLinkedDeviceWelcomes()
     await this.reconcileInboundMembershipCommits()
     await this.reconcilePendingApplicationMessages()
-    await this.reconcileInboundApplicationMessages()
+    const appliedApplications = await this.reconcileInboundApplicationMessages()
     await this.reconcilePendingOwnerChanges()
     await this.reconcilePendingPolicyChanges()
     await this.reconcilePendingCloses()
     await this.reconcilePendingRecoveries()
+    return appliedApplications.flatMap(({ message, idempotent }) => {
+      if (idempotent) return []
+      const typing = decodeTypingContent(message.content)
+      return [{
+        conversation: {
+          kind: 'group' as const,
+          groupId: bytesToUuid(message.conversationId),
+        },
+        sender: message.sender,
+        // Any authenticated application message from this account ends its
+        // prior typing state without requiring a second MLS control send.
+        active: typing ?? false,
+      }]
+    })
   }
 
   /**
@@ -2819,14 +2871,29 @@ function equalBytes(left: number[], right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
-function isReceiptOutboxEntry(entry: MlsOutboxEntry): boolean {
+function optionalOutboxKind(entry: MlsOutboxEntry): 'receipt' | 'typing' | null {
   try {
     const content = JSON.parse(
       new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(entry.content)),
     ) as { kind?: unknown }
-    return content.kind === 'receipt'
+    return content.kind === 'receipt' || content.kind === 'typing' ? content.kind : null
   } catch {
-    return false
+    return null
+  }
+}
+
+function decodeTypingContent(bytes: number[]): boolean | null {
+  try {
+    const content = JSON.parse(
+      new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes)),
+    ) as { kind?: unknown; body?: unknown }
+    if (content.kind !== 'typing' || !content.body || typeof content.body !== 'object') return null
+    const body = content.body as Record<string, unknown>
+    return Object.keys(body).length === 1 && typeof body.active === 'boolean'
+      ? body.active
+      : null
+  } catch {
+    return null
   }
 }
 

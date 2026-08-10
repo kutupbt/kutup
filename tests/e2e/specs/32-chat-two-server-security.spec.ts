@@ -190,6 +190,20 @@ async function syncUntilReceipt(
   }).toBe(true)
 }
 
+async function syncUntilTyping(page: Page): Promise<void> {
+  await expect.poll(async () => {
+    const indicator = page.getByTestId('chat-typing-indicator')
+    if (await indicator.count() > 0) return true
+    await page.getByRole('button', { name: 'Sync messages' }).click()
+    await page.waitForTimeout(300)
+    return await indicator.count() > 0
+  }, {
+    timeout: 45_000,
+    intervals: [300, 500, 1_000],
+    message: 'encrypted typing indicator was not reconciled',
+  }).toBe(true)
+}
+
 async function syncUntilReaction(
   page: Page,
   target: string,
@@ -451,6 +465,12 @@ test.describe('two-server secure chat', () => {
     await expect(safetyA.getByText('Verified face to face on this device.')).toBeVisible()
     await pageA.keyboard.press('Escape')
 
+    const typingDraft = `typing-only-${tag}`
+    await pageB.getByRole('main').getByRole('textbox').fill(typingDraft)
+    await syncUntilTyping(pageA)
+    await expect(pageA.getByTestId('chat-typing-indicator')).toContainText(bob)
+    await expect(pageA.getByText(typingDraft)).toHaveCount(0)
+
     const sealedReplyResponse = pageB.waitForResponse((response) => {
       const path = new URL(response.url()).pathname
       return response.request().method() === 'POST'
@@ -463,6 +483,7 @@ test.describe('two-server secure chat', () => {
     // The acceptance/profile update and immediate sealed reply use independent
     // durable paths. Reconciliation must recover either arrival order.
     await syncUntilVisible(pageA, reply)
+    await expect(pageA.getByTestId('chat-typing-indicator')).toHaveCount(0)
     await syncUntilReceipt(pageB, reply, 'chat-receipt-delivered')
 
     const destinationEnvelopes: Array<Record<string, unknown>> = []
@@ -493,7 +514,7 @@ test.describe('two-server secure chat', () => {
     const destinationEnvelope = destinationEnvelopes.find((envelope) => envelope.sealedSender === true)
     expect(destinationEnvelope).not.toHaveProperty('sender')
     expect(destinationEnvelope?.senderDeviceId).toBe(0)
-    await expect(bubble(pageB, sealed)).toBeVisible({ timeout: 45_000 })
+    await syncUntilVisible(pageB, sealed)
     await syncUntilReceipt(pageA, sealed, 'chat-receipt-read')
     const quotedReply = `sealed-quoted-reply-${tag}`
     await replyTo(pageB, sealed, quotedReply)
@@ -578,7 +599,11 @@ test.describe('two-server secure chat', () => {
   })
 
   test('manages a federated MLS group and exchanges anonymous durable messages', async ({ browser, baseURL }) => {
-    test.slow()
+    // This is the exhaustive MLS browser gate. Encrypted typing adds a real
+    // MLS application operation to separated draft bursts, so the former
+    // six-minute slow-test budget no longer covers the full governance and
+    // recovery sequence on a development VM.
+    test.setTimeout(600_000)
     if (!baseURL || !SECONDARY) throw new Error('two-server base URLs are required')
     const contextA = await browser.newContext({ baseURL })
     const contextB = await browser.newContext({ baseURL: SECONDARY })

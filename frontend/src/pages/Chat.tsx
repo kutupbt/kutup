@@ -74,6 +74,7 @@ import type {
   ChatHistoryEntry,
   ChatHistoryTransferSummary,
   ChatProfile,
+  ChatTypingEvent,
   ContactRecord,
   ConversationId,
   InboundAttention,
@@ -179,6 +180,9 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(() =>
     window.localStorage.getItem('kutup:chat:read-receipts') === '1')
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState === 'visible')
+  const [typingByConversation, setTypingByConversation] = useState(
+    () => new Map<string, Map<string, number>>(),
+  )
   const [contactUpdating, setContactUpdating] = useState(false)
   const [groupUpdating, setGroupUpdating] = useState(false)
   const [newGroupOpen, setNewGroupOpen] = useState(false)
@@ -207,6 +211,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const attachmentInputRef = useRef<HTMLInputElement>(null)
   const historyRefreshGeneration = useRef(0)
   const receiptAttempted = useRef(new Set<string>())
+  const typingSentAt = useRef(new Map<string, number>())
   const selfAccount = useMemo(
     () =>
       auth.username
@@ -273,6 +278,18 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
         opened = next
         setService(next)
         next.subscribe(() => void refresh())
+        next.subscribeTyping((event: ChatTypingEvent) => {
+          const key = conversationKey(event.conversation)
+          setTypingByConversation((current) => {
+            const nextState = new Map(current)
+            const senders = new Map(nextState.get(key) ?? [])
+            if (event.active) senders.set(event.sender, Date.now() + 6_000)
+            else senders.delete(event.sender)
+            if (senders.size > 0) nextState.set(key, senders)
+            else nextState.delete(key)
+            return nextState
+          })
+        })
         await refresh()
       })
       .catch((cause) => {
@@ -467,6 +484,62 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       || noteSelected
       || selectedContact?.state === 'accepted',
   )
+  const canSendTyping = canSend && Boolean(
+    selectedConversation?.kind === 'group'
+      || selectedContact?.state === 'accepted'
+      || selectedContact?.state === 'pendingOutgoing',
+  )
+  const draftWithinTypingLimit = selectedConversation?.kind !== 'group'
+    || Boolean(
+      selectedGroup
+      && new TextEncoder().encode(draft.trim()).byteLength
+        <= selectedGroup.currentCryptographicPolicy.maximumApplicationPlaintextBytes,
+    )
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const now = Date.now()
+      setTypingByConversation((current) => {
+        let changed = false
+        const nextState = new Map<string, Map<string, number>>()
+        for (const [key, senders] of current) {
+          const active = new Map(Array.from(senders).filter(([, expiresAt]) => expiresAt > now))
+          if (active.size !== senders.size) changed = true
+          if (active.size > 0) nextState.set(key, active)
+        }
+        return changed ? nextState : current
+      })
+    }, 1_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    if (
+      !service
+      || !selectedConversation
+      || !selectedKey
+      || noteSelected
+      || !canSendTyping
+      || !draftWithinTypingLimit
+      || !pageVisible
+      || !draft.trim()
+    ) return
+    const now = Date.now()
+    if (now - (typingSentAt.current.get(selectedKey) ?? 0) < 4_000) return
+    typingSentAt.current.set(selectedKey, now)
+    void service.sendTyping(selectedConversation, true).catch(cause => {
+      console.warn('Encrypted Chat typing indicator could not be sent', cause)
+    })
+  }, [
+    canSendTyping,
+    draft,
+    draftWithinTypingLimit,
+    noteSelected,
+    pageVisible,
+    selectedConversation,
+    selectedKey,
+    service,
+  ])
 
   const messages = useMemo(
     () =>
@@ -475,6 +548,18 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
         : [],
     [selectedKey, visibleHistory],
   )
+  const activeTypingSenders = selectedKey
+    ? Array.from(typingByConversation.get(selectedKey)?.keys() ?? [])
+      .filter(sender => sender !== selfAddress)
+    : []
+  const typingLabel = activeTypingSenders.length === 1
+    ? t('chat.typing.one', {
+        name: profilesByPeer.get(activeTypingSenders[0])?.displayName
+          || activeTypingSenders[0].split('@')[0],
+      })
+    : activeTypingSenders.length > 1
+      ? t('chat.typing.many', { count: activeTypingSenders.length })
+      : null
   const messagesById = useMemo(
     () => new Map(messages.map(message => [message.content.messageId ?? message.id, message])),
     [messages],
@@ -2442,6 +2527,15 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     : undefined}
                 />
               ))}
+              {typingLabel && (
+                <div
+                  className="px-3 py-1 text-xs text-muted-foreground"
+                  aria-live="polite"
+                  data-testid="chat-typing-indicator"
+                >
+                  {typingLabel}
+                </div>
+              )}
               <div ref={endRef} />
             </div>
           </div>

@@ -1379,6 +1379,12 @@ impl Session {
                 // profile and therefore must not mutate the peer cache.
                 profile_control = true;
                 None
+            } else if transcript.content.kind == kutup_chat_proto::content::kind::TYPING {
+                // Ephemeral controls are never linked-device history. Current
+                // clients do not sync them, but older/malicious local devices
+                // cannot force one into the durable transcript either.
+                profile_control = true;
+                None
             } else {
                 self.stage_transcript_contact(&transcript.peer, received_at)
                     .await?;
@@ -1400,6 +1406,19 @@ impl Session {
             let is_profile_update = parsed.as_ref().is_some_and(|content| {
                 content.kind == kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
             });
+            let is_typing = parsed
+                .as_ref()
+                .is_some_and(|content| content.as_typing().is_some());
+            if parsed
+                .as_ref()
+                .is_some_and(|content| content.kind == kutup_chat_proto::content::kind::TYPING)
+                && !is_typing
+            {
+                self.store.discard();
+                return Err(ChatError::Content(
+                    "invalid encrypted typing control".into(),
+                ));
+            }
             profile_control = is_profile_update;
             if is_profile_update {
                 // A control message alone cannot create or reopen a message
@@ -1422,6 +1441,16 @@ impl Session {
                         }
                     }
                 }
+            } else if is_typing {
+                // Typing cannot create/reopen a message request and is never
+                // durable plaintext history. The ratchet mutation and mailbox
+                // receipt still commit atomically before the live event emits.
+                suppressed = !prior_contact.as_ref().is_some_and(|contact| {
+                    matches!(
+                        contact.state,
+                        ContactState::PendingOutgoing | ContactState::Accepted
+                    )
+                });
             } else {
                 suppressed = self.stage_incoming_contact(&sender, received_at).await?;
                 if !suppressed {
@@ -2013,6 +2042,7 @@ impl Session {
                 "a sent transcript cannot contain another sent transcript".into(),
             ));
         }
+        let ephemeral = content.as_typing().is_some();
         let result = async {
             let plaintext =
                 serde_json::to_vec(content).map_err(|e| ChatError::Content(e.to_string()))?;
@@ -2020,30 +2050,31 @@ impl Session {
                 .build_send(peer_user, recipient_bundles, &plaintext, summary, rng)
                 .await?;
             let created_at = now_millis();
-            let transcript =
-                ChatContent::sent_transcript(send_id, peer_user, created_at, content.clone());
-            let transcript_plaintext =
-                serde_json::to_vec(&transcript).map_err(|e| ChatError::Content(e.to_string()))?;
-            let mut sync_summary = SendSummary::default();
-            let user = self.user().to_string();
-            let sync_envelopes = self
-                .build_send(
-                    &user,
-                    sync_bundles,
-                    &transcript_plaintext,
-                    &mut sync_summary,
-                    rng,
-                )
-                .await?;
-            let sync = if sync_envelopes.is_empty() {
-                None
+            let (sync, sync_envelopes) = if ephemeral {
+                (None, Vec::new())
             } else {
-                Some(OutboxSyncLeg {
+                let transcript =
+                    ChatContent::sent_transcript(send_id, peer_user, created_at, content.clone());
+                let transcript_plaintext = serde_json::to_vec(&transcript)
+                    .map_err(|e| ChatError::Content(e.to_string()))?;
+                let mut sync_summary = SendSummary::default();
+                let user = self.user().to_string();
+                let sync_envelopes = self
+                    .build_send(
+                        &user,
+                        sync_bundles,
+                        &transcript_plaintext,
+                        &mut sync_summary,
+                        rng,
+                    )
+                    .await?;
+                let sync = (!sync_envelopes.is_empty()).then(|| OutboxSyncLeg {
                     content: transcript_plaintext,
                     envelopes: serde_json::to_vec(&sync_envelopes)
-                        .map_err(|e| ChatError::Content(e.to_string()))?,
+                        .expect("outgoing envelope serialization is infallible"),
                     attempts: 1,
-                })
+                });
+                (sync, sync_envelopes)
             };
             self.store.stage_outbox(OutboxEntry {
                 send_id: send_id.to_string(),
@@ -2059,16 +2090,18 @@ impl Session {
                 sync,
             });
             self.store.stage_sent_seq(content.seq);
-            self.store.stage_sent_message(SentMessage {
-                send_id: send_id.to_string(),
-                peer: peer_user.to_string(),
-                content: plaintext,
-                created_at,
-                delivered_at: None,
-                delivered: false,
-                deduplicated: false,
-            });
-            self.stage_outgoing_contact(peer_user, created_at).await?;
+            if !ephemeral {
+                self.store.stage_sent_message(SentMessage {
+                    send_id: send_id.to_string(),
+                    peer: peer_user.to_string(),
+                    content: plaintext,
+                    created_at,
+                    delivered_at: None,
+                    delivered: false,
+                    deduplicated: false,
+                });
+                self.stage_outgoing_contact(peer_user, created_at).await?;
+            }
             self.store.commit().await?;
             Ok((
                 recipient_envelopes,
@@ -2097,6 +2130,7 @@ impl Session {
             sender_certificate,
             capability,
         } = send;
+        let ephemeral = content.as_typing().is_some();
         let result = async {
             let plaintext =
                 serde_json::to_vec(content).map_err(|e| ChatError::Content(e.to_string()))?;
@@ -2111,27 +2145,32 @@ impl Session {
                 )
                 .await?;
             let created_at = now_millis();
-            let transcript =
-                ChatContent::sent_transcript(send_id, peer_user, created_at, content.clone());
-            let transcript_plaintext =
-                serde_json::to_vec(&transcript).map_err(|e| ChatError::Content(e.to_string()))?;
-            let mut sync_summary = SendSummary::default();
-            let user = self.user().to_string();
-            let sync_envelopes = self
-                .build_send(
-                    &user,
-                    sync_bundles,
-                    &transcript_plaintext,
-                    &mut sync_summary,
-                    rng,
-                )
-                .await?;
-            let sync = (!sync_envelopes.is_empty()).then(|| OutboxSyncLeg {
-                content: transcript_plaintext,
-                envelopes: serde_json::to_vec(&sync_envelopes)
-                    .expect("outgoing envelope serialization is infallible"),
-                attempts: 1,
-            });
+            let (sync, sync_envelopes) = if ephemeral {
+                (None, Vec::new())
+            } else {
+                let transcript =
+                    ChatContent::sent_transcript(send_id, peer_user, created_at, content.clone());
+                let transcript_plaintext = serde_json::to_vec(&transcript)
+                    .map_err(|e| ChatError::Content(e.to_string()))?;
+                let mut sync_summary = SendSummary::default();
+                let user = self.user().to_string();
+                let sync_envelopes = self
+                    .build_send(
+                        &user,
+                        sync_bundles,
+                        &transcript_plaintext,
+                        &mut sync_summary,
+                        rng,
+                    )
+                    .await?;
+                let sync = (!sync_envelopes.is_empty()).then(|| OutboxSyncLeg {
+                    content: transcript_plaintext,
+                    envelopes: serde_json::to_vec(&sync_envelopes)
+                        .expect("outgoing envelope serialization is infallible"),
+                    attempts: 1,
+                });
+                (sync, sync_envelopes)
+            };
             self.store.stage_outbox(OutboxEntry {
                 send_id: send_id.to_string(),
                 peer: peer_user.to_string(),
@@ -2146,16 +2185,18 @@ impl Session {
                 sync,
             });
             self.store.stage_sent_seq(content.seq);
-            self.store.stage_sent_message(SentMessage {
-                send_id: send_id.to_string(),
-                peer: peer_user.to_string(),
-                content: plaintext,
-                created_at,
-                delivered_at: None,
-                delivered: false,
-                deduplicated: false,
-            });
-            self.stage_outgoing_contact(peer_user, created_at).await?;
+            if !ephemeral {
+                self.store.stage_sent_message(SentMessage {
+                    send_id: send_id.to_string(),
+                    peer: peer_user.to_string(),
+                    content: plaintext,
+                    created_at,
+                    delivered_at: None,
+                    delivered: false,
+                    deduplicated: false,
+                });
+                self.stage_outgoing_contact(peer_user, created_at).await?;
+            }
             self.store.commit().await?;
             Ok((
                 recipient_envelopes,
@@ -2356,18 +2397,23 @@ impl Session {
             .ok_or_else(|| ChatError::Db(format!("send {send_id} has no outbox record")))?;
         match leg {
             OutboxLeg::Primary => {
-                let mut message = self
-                    .store
-                    .db()
-                    .load_sent_message(send_id)
-                    .await?
-                    .ok_or_else(|| {
-                        ChatError::Db(format!("send {send_id} has no history record"))
-                    })?;
-                message.delivered = true;
-                message.deduplicated = deduplicated;
-                message.delivered_at = Some(now_millis());
-                self.store.stage_sent_message(message);
+                let ephemeral = serde_json::from_slice::<ChatContent>(&entry.content)
+                    .ok()
+                    .is_some_and(|content| content.as_typing().is_some());
+                if !ephemeral {
+                    let mut message = self
+                        .store
+                        .db()
+                        .load_sent_message(send_id)
+                        .await?
+                        .ok_or_else(|| {
+                            ChatError::Db(format!("send {send_id} has no history record"))
+                        })?;
+                    message.delivered = true;
+                    message.deduplicated = deduplicated;
+                    message.delivered_at = Some(now_millis());
+                    self.store.stage_sent_message(message);
+                }
                 if entry.sync.is_some() {
                     entry.primary_delivered = true;
                     self.store.stage_outbox(entry);
@@ -2398,6 +2444,25 @@ impl Session {
     /// Every still-pending outbound send (for resend-on-startup).
     pub(crate) async fn pending_outbox(&self) -> Result<Vec<OutboxEntry>> {
         self.store.db().list_outbox().await
+    }
+
+    pub(crate) async fn discard_typing_outbox(&mut self, send_id: &str) -> Result<()> {
+        let entry = self
+            .store
+            .db()
+            .load_outbox(send_id)
+            .await?
+            .ok_or_else(|| ChatError::Db(format!("send {send_id} has no outbox record")))?;
+        let is_typing = serde_json::from_slice::<ChatContent>(&entry.content)
+            .ok()
+            .is_some_and(|content| content.as_typing().is_some());
+        if !is_typing {
+            return Err(ChatError::Invalid(
+                "only an encrypted typing outbox may expire".into(),
+            ));
+        }
+        self.store.delete_outbox(send_id);
+        self.store.commit().await
     }
 
     // ----- staged (non-committing) cores -----
