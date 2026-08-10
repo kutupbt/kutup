@@ -147,12 +147,15 @@ describe('ChatService MLS workflow coordination', () => {
     const client = {
       requestHistoryTransfer: vi.fn(async () => request),
       listHistoryTransfers: vi.fn(async () => ({ transfers: [] })),
-      approveHistoryTransfer: vi.fn(async () => ({ acceptance: {}, frameCount: 3 })),
-      downloadHistoryTransfer: vi.fn(async () => ({
-        ready: true,
-        frameCount: 3,
-        importedCount: 1,
-      })),
+      approveHistoryTransfer: vi.fn(async () => new Map<string, unknown>([
+        ['acceptance', {}],
+        ['frameCount', 3],
+      ])),
+      downloadHistoryTransfer: vi.fn(async () => new Map<string, unknown>([
+        ['ready', true],
+        ['frameCount', 3],
+        ['importedCount', 1],
+      ])),
     }
     const channel = { postMessage: vi.fn() }
     const service = Object.create(ChatService.prototype) as ChatService

@@ -39,6 +39,10 @@ import { ChatAttachmentLedger } from './attachment-ledger'
 
 type UpdateListener = () => void
 
+function wasmRecord<T>(value: unknown): T {
+  return (value instanceof Map ? Object.fromEntries(value) : value) as T
+}
+
 export type ChatServiceErrorCode = 'browserUnsupported' | 'serverUnsupported'
 
 export class ChatServiceError extends Error {
@@ -223,11 +227,13 @@ export class ChatService {
   async approveHistoryTransfer(
     request: ChatHistoryTransferRequest,
   ): Promise<{ acceptance: unknown; frameCount: number }> {
-    const result = await this.withLock(() => this.client.approveHistoryTransfer(
-      request,
-      100_000,
-      String(256 * 1024 * 1024),
-    ))
+    const result = wasmRecord<{ acceptance: unknown; frameCount: number }>(
+      await this.withLock(() => this.client.approveHistoryTransfer(
+        request,
+        100_000,
+        String(256 * 1024 * 1024),
+      )),
+    )
     this.notifyPeers()
     return result
   }
@@ -235,7 +241,9 @@ export class ChatService {
   async downloadHistoryTransfer(
     transferId: string,
   ): Promise<ChatHistoryTransferDownloadResult> {
-    const result = await this.withLock(() => this.client.downloadHistoryTransfer(transferId))
+    const result = wasmRecord<ChatHistoryTransferDownloadResult>(
+      await this.withLock(() => this.client.downloadHistoryTransfer(transferId)),
+    )
     if (result.ready) this.notifyPeers()
     return result
   }

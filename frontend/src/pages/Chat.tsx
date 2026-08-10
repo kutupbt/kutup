@@ -167,6 +167,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [mediaStorageClearing, setMediaStorageClearing] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const attachmentInputRef = useRef<HTMLInputElement>(null)
+  const historyRefreshGeneration = useRef(0)
   const selfAccount = useMemo(
     () =>
       auth.username
@@ -189,6 +190,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     let opened: ChatService | null = null
     const refresh = async () => {
       if (!opened || cancelled) return
+      const generation = ++historyRefreshGeneration.current
       try {
         const [nextHistory, nextAttention, nextContacts, nextProfile, nextProfiles, nextGroups, nextInvitations, nextInvitationFeedback, nextOwnerApprovals] = await Promise.all([
           opened.history(),
@@ -202,7 +204,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
           capabilities.mlsGroups ? opened.pendingGroupOwnerApprovals() : Promise.resolve([]),
         ])
         if (!cancelled) {
-          setHistory(nextHistory)
+          if (generation === historyRefreshGeneration.current) setHistory(nextHistory)
           setAttention(nextAttention)
           setContacts(nextContacts)
           setLocalProfile(nextProfile)
@@ -545,11 +547,17 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     if (!service) return
     setHistoryTransferBusy(transfer.transferId)
     try {
-      const result = await service.downloadHistoryTransfer(transfer.transferId)
-      await refreshHistoryTransfers()
+      let result = await service.downloadHistoryTransfer(transfer.transferId)
+      for (let attempt = 0; !result.ready && attempt < 20; attempt += 1) {
+        await new Promise(resolve => window.setTimeout(resolve, 500))
+        result = await service.downloadHistoryTransfer(transfer.transferId)
+      }
       if (result.ready) {
+        setDevicesOpen(false)
         toast.success(t('chat.devices.historyRestored', { count: result.importedCount ?? 0 }))
+        window.setTimeout(() => window.location.reload(), 0)
       } else {
+        await refreshHistoryTransfers()
         toast.info(t('chat.devices.historyUploading'))
       }
     } catch (cause) {
