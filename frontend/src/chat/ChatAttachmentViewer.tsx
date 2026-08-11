@@ -94,6 +94,13 @@ export function ChatAttachmentViewer({
             className="max-h-[75vh] w-full bg-black"
           />
         )}
+        {opened?.kind === 'pdf' && (
+          <iframe
+            src={opened.url}
+            title={attachment.filename}
+            className="h-[75vh] w-full border-0 bg-background"
+          />
+        )}
       </DialogContent>
     </Dialog>
   )

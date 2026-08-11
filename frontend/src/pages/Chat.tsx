@@ -64,7 +64,19 @@ import { MlsSendError } from '@/chat/mls-service'
 import { MlsGroupSecurityDetails } from '@/chat/MlsGroupSecurityDetails'
 import { SafetyVerificationDialog } from '@/chat/SafetyVerificationDialog'
 import { ChatAttachmentPreview } from '@/chat/ChatAttachmentPreview'
+import {
+  ChatAttachmentAction,
+  type ChatAttachmentCacheState,
+} from '@/chat/ChatAttachmentAction'
 import { ChatAttachmentViewer } from '@/chat/ChatAttachmentViewer'
+import { ChatVoiceNotePlayer } from '@/chat/ChatVoiceNotePlayer'
+import {
+  aggregateLatestReactions,
+  CHAT_REACTION_EMOJIS,
+  type ChatReactionEmoji,
+  type ReactionAggregate,
+  type ReactionOperation,
+} from '@/chat/reactions'
 import { mlsGroupInvitationReadiness } from '@/chat/group-readiness'
 import { isSupportedChat, useChatCapabilities } from '@/chat/capabilities'
 import {
@@ -94,13 +106,13 @@ import type {
   PendingMlsInvitation,
   PeerChatProfile,
   SafetyNumberV1,
-  ChatReactionV1,
   ChatMessageMutationV1,
 } from '@/chat/types'
 import { cn } from '@/lib/utils'
 import { copyText } from '@/lib/format'
 import {
   clearCachedChatMediaV1,
+  chatMediaViewerKindV1,
   downloadChatMediaToCacheV1,
   isChatMediaAvailableInKutupV1,
   saveCachedChatMediaToDeviceV1,
@@ -126,7 +138,6 @@ import {
   voiceNoteFilename,
 } from '@/chat/voice-note'
 
-const CHAT_REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const
 const DISAPPEARING_PRESETS = [
   { key: 'off', durationSeconds: undefined },
   { key: 'thirtySeconds', durationSeconds: 30 },
@@ -135,14 +146,6 @@ const DISAPPEARING_PRESETS = [
   { key: 'oneWeek', durationSeconds: 7 * 24 * 60 * 60 },
   { key: 'thirtyDays', durationSeconds: 30 * 24 * 60 * 60 },
 ] as const
-type ChatReactionEmoji = ChatReactionV1['emoji']
-
-interface ReactionAggregate {
-  emoji: ChatReactionEmoji
-  count: number
-  reactedBySelf: boolean
-}
-
 interface VoiceRecordingSession {
   recorder: MediaRecorder
   stream: MediaStream
@@ -714,7 +717,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     }
     const targetIds = new Set(messages.flatMap(message =>
       message.content.messageId ? [message.content.messageId] : []))
-    const latest = new Map<string, { message: ChatHistoryEntry; reaction: ChatReactionV1; reactor: string }>()
+    const operations: ReactionOperation[] = []
     for (const message of history) {
       const reaction = message.content.reaction
       if (!reaction
@@ -726,31 +729,9 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
           ? directAddress(selectedConversation)
           : message.peer
       if (!reactor) continue
-      const key = `${reaction.targetMessageId}\u0000${reactor}\u0000${reaction.emoji}`
-      const previous = latest.get(key)
-      if (!previous || compareContentOperations(previous.message, message) < 0) {
-        latest.set(key, { message, reaction, reactor })
-      }
+      operations.push({ message, reaction, reactor })
     }
-    const reactorsByTargetEmoji = new Map<string, Set<string>>()
-    for (const { reaction, reactor } of latest.values()) {
-      if (!reaction.active) continue
-      const key = `${reaction.targetMessageId}\u0000${reaction.emoji}`
-      const reactors = reactorsByTargetEmoji.get(key) ?? new Set<string>()
-      reactors.add(reactor)
-      reactorsByTargetEmoji.set(key, reactors)
-    }
-    const result = new Map<string, ReactionAggregate[]>()
-    for (const targetMessageId of targetIds) {
-      const aggregates = CHAT_REACTION_EMOJIS.flatMap(emoji => {
-        const reactors = reactorsByTargetEmoji.get(`${targetMessageId}\u0000${emoji}`)
-        return reactors?.size
-          ? [{ emoji, count: reactors.size, reactedBySelf: reactors.has(selfAddress) }]
-          : []
-      })
-      if (aggregates.length > 0) result.set(targetMessageId, aggregates)
-    }
-    return result
+    return aggregateLatestReactions(operations, targetIds, selfAddress)
   }, [history, messages, selectedConversation, selectedKey, selfAddress])
   const mutationsByMessageId = useMemo(() => {
     if (!selfAddress) {
@@ -3001,6 +2982,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     ? reactionsByMessageId.get(message.content.messageId)
                     : undefined}
                   reactionBusy={reactionSending}
+                  selfAddress={selfAddress ?? undefined}
+                  reactionProfiles={profilesByPeer}
                   onReact={message.content.messageId
                     && canSend
                     && !mutationsByMessageId.get(message.content.messageId)?.deleted
@@ -3443,6 +3426,8 @@ function MessageBubble({
   onReply,
   reactions = [],
   reactionBusy,
+  selfAddress,
+  reactionProfiles,
   onReact,
   onEdit,
   onDelete,
@@ -3463,6 +3448,8 @@ function MessageBubble({
   onReply?: () => void
   reactions?: ReactionAggregate[]
   reactionBusy?: string | null
+  selfAddress?: string
+  reactionProfiles?: ReadonlyMap<string, PeerChatProfile>
   onReact?: (emoji: ChatReactionEmoji, active: boolean) => void
   onEdit?: () => void
   onDelete?: () => void
@@ -3474,7 +3461,7 @@ function MessageBubble({
 }) {
   const { t } = useTranslation()
   const outgoing = message.direction === 'outgoing'
-  const [cacheState, setCacheState] = useState<'checking' | 'remote' | 'downloading' | 'available'>('checking')
+  const [cacheState, setCacheState] = useState<ChatAttachmentCacheState>('checking')
   const [downloadProgress, setDownloadProgress] = useState(0)
   const [saving, setSaving] = useState(false)
   const [viewerOpen, setViewerOpen] = useState(false)
@@ -3482,8 +3469,43 @@ function MessageBubble({
   const bubbleRef = useRef<HTMLDivElement>(null)
   const attachment = message.content.attachment
   const expiresAtMs = disappearingMessageExpiresAt(message)
-  const canOpenAttachment = attachment?.mediaClass === 'photo' ||
-    attachment?.mediaClass === 'audio' || attachment?.mediaClass === 'video'
+  const selectedReaction = reactions.find(reaction => reaction.reactedBySelf)?.emoji
+  const viewerKind = attachment ? chatMediaViewerKindV1(attachment) : null
+
+  async function ensureAttachmentAvailable(): Promise<void> {
+    if (!attachmentAccepted || !attachment || !mediaCache) {
+      throw new Error('attachment is not available')
+    }
+    if (cacheState === 'available' || await isChatMediaAvailableInKutupV1(mediaCache, attachment)) {
+      setCacheState('available')
+      return
+    }
+    if (!accessToken) throw new Error('sign in again to download this attachment')
+    const controller = new AbortController()
+    downloadControllerRef.current = controller
+    setCacheState('downloading')
+    setDownloadProgress(0)
+    try {
+      await downloadChatMediaToCacheV1(
+        mediaCache,
+        attachment,
+        accessToken,
+        (received, total) => setDownloadProgress(Math.floor(received / total * 100)),
+        controller.signal,
+        expiresAtMs === undefined ? {} : { expiresAtMs },
+      )
+      setCacheState('available')
+    } catch (cause) {
+      setCacheState('remote')
+      throw cause
+    } finally {
+      downloadControllerRef.current = null
+    }
+  }
+
+  function activateAttachment(): void {
+    if (cacheState === 'available' && viewerKind) setViewerOpen(true)
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -3550,6 +3572,7 @@ function MessageBubble({
           onReply={onReply}
           onReact={onReact}
           reactionBusy={reactionBusy}
+          selectedReaction={selectedReaction}
           onEdit={onEdit}
           onDelete={onDelete}
           mutationBusy={mutationBusy}
@@ -3557,12 +3580,18 @@ function MessageBubble({
       )}
       <div
         className={cn(
-          'max-w-[82%] rounded-2xl px-3.5 py-2 shadow-sm md:max-w-[70%]',
-          outgoing
-            ? 'rounded-br-md bg-primary text-primary-foreground'
-            : 'rounded-bl-md border bg-card',
+          'flex min-w-0 max-w-[82%] flex-col md:max-w-[70%]',
+          outgoing ? 'items-end' : 'items-start',
         )}
       >
+        <div
+          className={cn(
+            'relative min-w-0 max-w-full rounded-2xl px-3.5 py-2 shadow-sm',
+            outgoing
+              ? 'rounded-br-md bg-primary text-primary-foreground'
+              : 'rounded-bl-md border bg-card',
+          )}
+        >
         {message.content.replyTo && (
           <div
             className={cn(
@@ -3586,14 +3615,48 @@ function MessageBubble({
           </p>
         ) : attachment ? (
           <div className="min-w-52">
-            <ChatAttachmentPreview
-              attachment={attachment}
-              visible={attachmentAccepted}
-              className="mb-2"
-            />
+            {attachment.mediaClass !== 'audio' && attachment.preview && (
+              <ChatAttachmentPreview
+                attachment={attachment}
+                visible={attachmentAccepted}
+                className="mb-2"
+                onActivate={() => {
+                  if (cacheState === 'remote') {
+                    void ensureAttachmentAvailable().catch(cause => {
+                      if (!(cause instanceof DOMException && cause.name === 'AbortError')) {
+                        toast.error('Encrypted attachment download failed')
+                      }
+                    })
+                  } else {
+                    activateAttachment()
+                  }
+                }}
+                activationLabel={cacheState === 'remote'
+                  ? `Download ${attachment.filename} into Kutup`
+                  : `Open ${attachment.filename}`}
+                activationMode={cacheState === 'remote' ? 'download' : 'open'}
+                disabled={!attachmentAccepted || !mediaCache || cacheState === 'checking' ||
+                  cacheState === 'downloading' || cacheState === 'remote' && !accessToken ||
+                  cacheState === 'available' && !viewerKind}
+              />
+            )}
             <div className="flex items-center gap-3">
-              <FileText className="h-7 w-7 shrink-0" />
-              <span className="min-w-0 flex-1">
+              {attachment.mediaClass === 'audio' && mediaCache ? (
+                <ChatVoiceNotePlayer
+                  cache={mediaCache}
+                  attachment={attachment}
+                  downloadState={cacheState}
+                  downloadProgress={downloadProgress}
+                  disabled={!attachmentAccepted || cacheState === 'checking' ||
+                    cacheState === 'remote' && !accessToken}
+                  onDownload={ensureAttachmentAvailable}
+                  onCancel={() => downloadControllerRef.current?.abort()}
+                  onError={() => toast.error('Voice note could not be played')}
+                />
+              ) : (
+                <FileText className="h-7 w-7 shrink-0" />
+              )}
+              {attachment.mediaClass !== 'audio' && <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium">{attachment.filename}</span>
                 <span className={cn(
                   'block text-[11px]',
@@ -3607,62 +3670,21 @@ function MessageBubble({
                         : 'encrypted'
                   }
                 </span>
-              </span>
-              <Button
-                type="button"
-                size="icon"
-                variant={outgoing ? 'secondary' : 'ghost'}
-                className="h-8 w-8 shrink-0"
-                disabled={!attachmentAccepted || !mediaCache || cacheState === 'checking' ||
-                  (cacheState === 'remote' && !accessToken) ||
-                  (cacheState === 'available' && !canOpenAttachment)}
-                onClick={() => {
-                  if (cacheState === 'downloading') {
-                    downloadControllerRef.current?.abort()
-                    return
-                  }
-                  if (cacheState === 'available') {
-                    if (canOpenAttachment) setViewerOpen(true)
-                    return
-                  }
-                  if (!accessToken || !mediaCache || cacheState !== 'remote') return
-                  const controller = new AbortController()
-                  downloadControllerRef.current = controller
-                  setCacheState('downloading')
-                  setDownloadProgress(0)
-                  void downloadChatMediaToCacheV1(
-                    mediaCache,
-                    attachment,
-                    accessToken,
-                    (received, total) => setDownloadProgress(Math.floor(received / total * 100)),
-                    controller.signal,
-                    expiresAtMs === undefined ? {} : { expiresAtMs },
-                  )
-                    .then(() => setCacheState('available'))
-                    .catch(cause => {
-                      setCacheState('remote')
-                      if (!(cause instanceof DOMException && cause.name === 'AbortError')) {
-                        toast.error('Encrypted attachment download failed')
-                      }
-                    })
-                    .finally(() => { downloadControllerRef.current = null })
-                }}
-                aria-label={cacheState === 'downloading'
-                  ? `Cancel download of ${attachment.filename}`
-                  : cacheState === 'available'
-                    ? canOpenAttachment
-                      ? `Open ${attachment.filename}`
-                      : `${attachment.filename} is available in Kutup`
-                    : `Download ${attachment.filename} into Kutup`}
-              >
-                {cacheState === 'checking'
-                  ? <Loader2 className="h-4 w-4 animate-spin" />
-                  : cacheState === 'downloading'
-                    ? <X className="h-4 w-4" />
-                    : cacheState === 'available'
-                      ? <HardDrive className="h-4 w-4" />
-                      : <Download className="h-4 w-4" />}
-              </Button>
+              </span>}
+              {attachment.mediaClass !== 'audio' && (
+                <ChatAttachmentAction
+                  attachment={attachment}
+                  cacheState={cacheState}
+                  downloadProgress={downloadProgress}
+                  viewerKind={viewerKind}
+                  outgoing={outgoing}
+                  disabled={!attachmentAccepted || !mediaCache || cacheState === 'remote' && !accessToken}
+                  onDownload={ensureAttachmentAvailable}
+                  onCancel={() => downloadControllerRef.current?.abort()}
+                  onOpen={activateAttachment}
+                  onError={() => toast.error('Encrypted attachment download failed')}
+                />
+              )}
               {attachmentAccepted && cacheState === 'available' && mediaCache && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -3724,35 +3746,6 @@ function MessageBubble({
             {mutation?.editedText ?? message.content.text ?? newerClientLabel}
           </p>
         )}
-        {!mutation?.deleted && reactions.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1" data-testid="chat-reactions">
-            {reactions.map(reaction => (
-              <button
-                key={reaction.emoji}
-                type="button"
-                className={cn(
-                  'rounded-full border px-2 py-0.5 text-xs transition-colors',
-                  reaction.reactedBySelf
-                    ? outgoing
-                      ? 'border-primary-foreground/70 bg-primary-foreground/20'
-                      : 'border-primary bg-primary/10'
-                    : outgoing
-                      ? 'border-primary-foreground/30 bg-primary-foreground/10'
-                      : 'bg-muted/60',
-                )}
-                disabled={!onReact || reactionBusy !== null && reactionBusy !== undefined}
-                onClick={() => onReact?.(reaction.emoji, !reaction.reactedBySelf)}
-                aria-label={reaction.reactedBySelf
-                  ? t('chat.reactions.remove', { emoji: reaction.emoji })
-                  : t('chat.reactions.addEmoji', { emoji: reaction.emoji })}
-                data-testid="chat-reaction-aggregate"
-                data-emoji={reaction.emoji}
-              >
-                {reaction.emoji} {reaction.count}
-              </button>
-            ))}
-          </div>
-        )}
         <span
           className={cn(
             'mt-1 flex items-center justify-end gap-1 text-[10px]',
@@ -3799,14 +3792,106 @@ function MessageBubble({
             <Check className="h-3 w-3" aria-label={t('chat.receipts.sent')} />
           ) : null}
         </span>
+        </div>
+        {!mutation?.deleted && reactions.length > 0 && (
+          <MessageReactionRow
+            reactions={reactions}
+            outgoing={outgoing}
+            selfAddress={selfAddress}
+            reactionProfiles={reactionProfiles}
+            reactionBusy={reactionBusy}
+            onReact={onReact}
+          />
+        )}
       </div>
       {!outgoing && (
         <MessageActions
           onReply={onReply}
           onReact={onReact}
           reactionBusy={reactionBusy}
+          selectedReaction={selectedReaction}
         />
       )}
+    </div>
+  )
+}
+
+function MessageReactionRow({
+  reactions,
+  outgoing,
+  selfAddress,
+  reactionProfiles,
+  reactionBusy,
+  onReact,
+}: {
+  reactions: ReactionAggregate[]
+  outgoing: boolean
+  selfAddress?: string
+  reactionProfiles?: ReadonlyMap<string, PeerChatProfile>
+  reactionBusy?: string | null
+  onReact?: (emoji: ChatReactionEmoji, active: boolean) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div
+      className={cn(
+        'z-10 -mt-1 flex min-h-[22px] max-w-full flex-wrap gap-1 px-2',
+        outgoing ? 'justify-end' : 'justify-start',
+      )}
+      data-testid="chat-reactions"
+    >
+      {reactions.map(reaction => (
+        <DropdownMenu key={reaction.emoji}>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className={cn(
+                'flex h-[22px] min-w-7 items-center justify-center gap-1 rounded-full border border-border bg-muted px-1.5 text-xs text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring',
+                reaction.reactedBySelf && 'border-primary bg-primary text-primary-foreground hover:bg-primary/90',
+              )}
+              aria-label={t('chat.reactions.details', {
+                emoji: reaction.emoji,
+                count: reaction.count,
+              })}
+              data-testid="chat-reaction-aggregate"
+              data-emoji={reaction.emoji}
+            >
+              <span>{reaction.emoji}</span>
+              {reaction.count > 1 && <span className="font-semibold tabular-nums">{reaction.count}</span>}
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align={outgoing ? 'end' : 'start'} className="min-w-56">
+            <div className="border-b px-2 py-1.5 text-xs font-medium text-muted-foreground">
+              {reaction.emoji} {t('chat.reactions.reactedWith')}
+            </div>
+            {reaction.reactors.map(reactor => {
+              const isSelf = reactor === selfAddress
+              const label = isSelf
+                ? t('chat.reactions.you')
+                : reactionProfiles?.get(reactor)?.displayName || reactor
+              if (isSelf && reaction.reactedBySelf && onReact) {
+                return (
+                  <DropdownMenuItem
+                    key={reactor}
+                    disabled={reactionBusy !== null && reactionBusy !== undefined}
+                    onSelect={() => onReact(reaction.emoji, false)}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{label}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {t('chat.reactions.removeMine')}
+                    </span>
+                  </DropdownMenuItem>
+                )
+              }
+              return (
+                <div key={reactor} className="truncate px-2 py-1.5 text-sm">
+                  {label}
+                </div>
+              )
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ))}
     </div>
   )
 }
@@ -3815,6 +3900,7 @@ function MessageActions({
   onReply,
   onReact,
   reactionBusy,
+  selectedReaction,
   onEdit,
   onDelete,
   mutationBusy,
@@ -3822,6 +3908,7 @@ function MessageActions({
   onReply?: () => void
   onReact?: (emoji: ChatReactionEmoji, active: boolean) => void
   reactionBusy?: string | null
+  selectedReaction?: ChatReactionEmoji
   onEdit?: () => void
   onDelete?: () => void
   mutationBusy?: boolean
@@ -3845,14 +3932,20 @@ function MessageActions({
               <SmilePlus className="h-3.5 w-3.5" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent className="min-w-0" data-testid="chat-reaction-picker">
-            <div className="flex p-1">
+          <DropdownMenuContent className="min-w-0 rounded-xl p-1.5" data-testid="chat-reaction-picker">
+            <div className="flex gap-0.5">
               {CHAT_REACTION_EMOJIS.map(emoji => (
                 <DropdownMenuItem
                   key={emoji}
-                  className="cursor-pointer px-2 text-lg"
-                  onSelect={() => onReact(emoji, true)}
-                  aria-label={t('chat.reactions.addEmoji', { emoji })}
+                  className={cn(
+                    'h-9 w-9 cursor-pointer justify-center rounded-lg p-0 text-xl',
+                    selectedReaction === emoji && 'bg-primary text-primary-foreground focus:bg-primary focus:text-primary-foreground',
+                  )}
+                  onSelect={() => onReact(emoji, selectedReaction !== emoji)}
+                  aria-label={selectedReaction === emoji
+                    ? `${emoji} ${t('chat.reactions.removeMine')}`
+                    : t('chat.reactions.addEmoji', { emoji })}
+                  aria-pressed={selectedReaction === emoji}
                   data-emoji={emoji}
                 >
                   {emoji}

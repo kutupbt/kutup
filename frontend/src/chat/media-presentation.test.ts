@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { PREVIEW_WAVEFORM_MIME, type PreviewGenerationResultV1 } from '@/mediaPreview'
-import { chatMediaPresentationV1 } from './media'
+import { chatMediaPresentationV1, chatMediaViewerKindV1 } from './media'
 
 describe('Chat upload preview presentation', () => {
   it('adds generated image dimensions and the existing V1 preview descriptor', () => {
@@ -69,6 +69,14 @@ describe('Chat upload preview presentation', () => {
       mimeType: 'application/zip',
       mediaClass: 'file',
     })
+  })
+
+  it('offers in-app viewers only for matching safe presentation hints', () => {
+    expect(chatMediaViewerKindV1({ filename: 'report.pdf', mimeType: 'application/pdf' })).toBe('pdf')
+    expect(chatMediaViewerKindV1({ filename: 'photo.png', mimeType: 'image/png' })).toBe('image')
+    expect(chatMediaViewerKindV1({ filename: 'clip.mp4', mimeType: 'video/mp4' })).toBe('video')
+    expect(chatMediaViewerKindV1({ filename: 'renamed.pdf', mimeType: 'application/x-executable' })).toBeNull()
+    expect(chatMediaViewerKindV1({ filename: 'program.exe', mimeType: 'application/octet-stream' })).toBeNull()
   })
 })
 

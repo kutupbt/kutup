@@ -532,7 +532,48 @@ export async function saveCachedChatMediaToDeviceV1(
 export interface OpenedChatMediaV1 {
   blob: Blob
   mimeType: string
-  kind: 'image' | 'audio' | 'video'
+  kind: ChatMediaViewerKindV1
+}
+
+export type ChatMediaViewerKindV1 = 'image' | 'audio' | 'video' | 'pdf'
+
+const CHAT_VIEWER_KIND_BY_EXTENSION: Readonly<Record<string, ChatMediaViewerKindV1>> = {
+  aac: 'audio',
+  avif: 'image',
+  bmp: 'image',
+  flac: 'audio',
+  gif: 'image',
+  jpeg: 'image',
+  jpg: 'image',
+  m4a: 'audio',
+  mp3: 'audio',
+  mp4: 'video',
+  oga: 'audio',
+  ogg: 'audio',
+  ogv: 'video',
+  pdf: 'pdf',
+  png: 'image',
+  wav: 'audio',
+  webm: 'video',
+  webp: 'image',
+}
+
+/** A presentation hint only. Full bytes are reclassified after authentication. */
+export function chatMediaViewerKindV1(
+  descriptor: Pick<ChatAttachmentDescriptorV1, 'filename' | 'mimeType'>,
+): ChatMediaViewerKindV1 | null {
+  const extension = descriptor.filename.split('.').pop()?.toLowerCase() ?? ''
+  const hinted = CHAT_VIEWER_KIND_BY_EXTENSION[extension] ?? null
+  if (!hinted) return null
+  const mimeType = descriptor.mimeType.split(';', 1)[0].trim().toLowerCase()
+  if (!mimeType || mimeType === 'application/octet-stream' || mimeType === 'binary/octet-stream') {
+    return hinted
+  }
+  if (extension === 'webm' && mimeType.startsWith('audio/')) return 'audio'
+  if (hinted === 'image') return mimeType.startsWith('image/') ? hinted : null
+  if (hinted === 'audio') return mimeType.startsWith('audio/') ? hinted : null
+  if (hinted === 'video') return mimeType.startsWith('video/') ? hinted : null
+  return mimeType === 'application/pdf' ? hinted : null
 }
 
 const MAX_TRANSIENT_CHAT_MEDIA_BLOB_BYTES = 64 * 1024 * 1024
@@ -576,7 +617,9 @@ export async function openCachedChatMediaV1(
       ? 'audio'
       : mimeType.startsWith('video/')
         ? 'video'
-        : null
+        : mimeType === 'application/pdf'
+          ? 'pdf'
+          : null
   if (!kind) throw new Error('attachment type has no in-app viewer')
   if (kind === 'image') {
     const dimensions = inspectRasterDimensions(plaintext, mimeType)

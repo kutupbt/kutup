@@ -1210,7 +1210,9 @@ function requireMlsManifestDeviceIds(value: unknown): number[] {
   ) {
     throw new Error('signed device manifest returned an invalid MLS device set')
   }
-  const ids = value.devices.map((entry) => {
+  const manifestIds: number[] = []
+  const mlsIds: number[] = []
+  for (const entry of value.devices) {
     if (
       typeof entry !== 'object'
       || entry === null
@@ -1219,16 +1221,21 @@ function requireMlsManifestDeviceIds(value: unknown): number[] {
       || !Number.isSafeInteger(entry.deviceId)
       || entry.deviceId < 1
       || entry.deviceId > 127
-      || !('mls' in entry)
-      || typeof entry.mls !== 'object'
-      || entry.mls === null
     ) {
-      throw new Error('signed device manifest contains a device without MLS keys')
+      throw new Error('signed device manifest contains an invalid device id')
     }
-    return entry.deviceId
-  }).sort((left, right) => left - right)
-  if (new Set(ids).size !== ids.length) {
-    throw new Error('signed device manifest repeats an MLS device id')
+    manifestIds.push(entry.deviceId)
+    if (!('mls' in entry) || entry.mls === null || entry.mls === undefined) continue
+    if (typeof entry.mls !== 'object') {
+      throw new Error('signed device manifest contains invalid MLS keys')
+    }
+    mlsIds.push(entry.deviceId)
   }
-  return ids
+  if (new Set(manifestIds).size !== manifestIds.length) {
+    throw new Error('signed device manifest repeats a device id')
+  }
+  if (mlsIds.length < 1) {
+    throw new Error('signed device manifest has no MLS-capable device')
+  }
+  return mlsIds.sort((left, right) => left - right)
 }

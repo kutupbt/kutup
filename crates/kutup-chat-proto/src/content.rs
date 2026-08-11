@@ -45,7 +45,7 @@ pub mod kind {
     /// Same-account linked-device synchronization for the recipient's first
     /// view of one disappearing message. [IMPL]
     pub const DISAPPEARING_EXPIRY_START: &str = "disappearingExpiryStart";
-    /// Add/remove one bounded emoji reaction to a stable logical message. [IMPL]
+    /// Set/remove one bounded emoji reaction per account on a stable logical message. [IMPL]
     pub const REACTION: &str = "reaction";
     /// Edit or irreversibly tombstone one stable logical message. [IMPL]
     pub const MESSAGE_MUTATION: &str = "messageMutation";

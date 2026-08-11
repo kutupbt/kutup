@@ -103,7 +103,11 @@
     "reactions": {
       "add": "Add reaction",
       "addEmoji": "React with {{emoji}}",
-      "remove": "Remove {{emoji}} reaction"
+      "remove": "Remove {{emoji}} reaction",
+      "details": "Show who reacted with {{emoji}}, {{count}} reactions",
+      "reactedWith": "Reactions",
+      "you": "You",
+      "removeMine": "Remove"
     },
     "mutations": {
       "edit": "Edit message",

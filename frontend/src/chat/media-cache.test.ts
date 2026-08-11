@@ -156,7 +156,7 @@ describe('Chat private ciphertext cache integration', () => {
     expect(backend.chunks.size).toBe(0)
   })
 
-  it('opens only bounded, reclassified image/audio/video plaintext', async () => {
+  it('opens only bounded, reclassified image/audio/video/PDF plaintext', async () => {
     const png = new Uint8Array(24)
     png.set(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
     png.set(new TextEncoder().encode('IHDR'), 12)
@@ -193,5 +193,27 @@ describe('Chat private ciphertext cache integration', () => {
       filename: 'photo.jpg',
       mimeType: 'image/jpeg',
     })).rejects.toThrow(/not safe/)
+
+    const pdfAttachmentId = '22222222-2222-4222-8222-222222222222'
+    const pdf = new TextEncoder().encode('%PDF-1.7\n% bounded test')
+    const pdfCiphertext = await encryptChatMediaV1(pdf, key, pdfAttachmentId)
+    const pdfDescriptor: ChatAttachmentDescriptorV1 = {
+      ...descriptor,
+      attachmentId: pdfAttachmentId,
+      ciphertextBytes: pdfCiphertext.length,
+      ciphertextSha256: sodium.crypto_hash_sha256(pdfCiphertext, 'hex'),
+      plaintextBytes: pdf.length,
+      filename: 'report.pdf',
+      mimeType: 'application/pdf',
+      mediaClass: 'file',
+    }
+    await cache.putVerified(
+      chatMediaCacheBindingV1(pdfDescriptor),
+      split(pdfCiphertext),
+      async () => {},
+    )
+    const openedPdf = await openCachedChatMediaV1(cache, pdfDescriptor)
+    expect(openedPdf).toMatchObject({ kind: 'pdf', mimeType: 'application/pdf' })
+    expect(new Uint8Array(await openedPdf.blob.arrayBuffer())).toEqual(pdf)
   })
 })

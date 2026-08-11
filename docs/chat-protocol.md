@@ -207,13 +207,16 @@ longer contains the target.
 A reaction is a hidden `reaction` content operation encrypted by the same
 Direct, Note-to-Self or MLS channel. Its typed body contains only a canonical
 non-nil `targetMessageId`, one V1 emoji from `👍 ❤️ 😂 😮 😢 🙏`, and an
-`active` boolean. Adding and removing a reaction therefore reveal no reaction
+`active` boolean. Setting, replacing and removing a reaction therefore reveal no reaction
 metadata to either homeserver. Clients never render these operations as
-messages or conversation previews. Within the target conversation they retain
-the latest operation for each `(targetMessageId, reactor account, emoji)` by
-the deterministic tuple `(sentAt, seq, senderDeviceId, operation ID)`, then
-aggregate active reactors. Targets absent from bounded local history are
-ignored without affecting the encrypted operation history.
+messages or conversation previews. Within the target conversation each reactor
+account has one last-writer-wins reaction register per message. Clients retain
+the latest operation for each `(targetMessageId, reactor account)` by the
+deterministic tuple `(sentAt, seq, senderDeviceId, operation ID)`, discard that
+account's older emoji, then aggregate active reactors by the surviving emoji.
+An inactive latest operation clears that account's reaction. Targets absent
+from bounded local history are ignored without affecting the encrypted
+operation history.
 
 Edits and deletions use a hidden `messageMutation` operation with a canonical
 `targetMessageId`, an `edit` or `delete` discriminator, and replacement text

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { CHAT_PREVIEW_PROFILE_V1, PREVIEW_WAVEFORM_MIME } from '@/mediaPreview'
 import type { ChatAttachmentDescriptorV1 } from './types'
@@ -48,6 +48,24 @@ describe('ChatAttachmentPreview', () => {
     expect(revoke).toHaveBeenCalledWith('blob:preview-test')
   })
 
+  it('makes a raster preview directly activatable', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:preview-action')
+    const onActivate = vi.fn()
+    render(<ChatAttachmentPreview
+      attachment={descriptor(encodeChatMediaPreviewV1({
+        kind: 'image',
+        contentType: 'image/webp',
+        width: 100,
+        height: 50,
+        raster: webp(),
+      }))}
+      onActivate={onActivate}
+      activationLabel="Open photo.webp"
+    />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Open photo.webp' }))
+    expect(onActivate).toHaveBeenCalledOnce()
+  })
+
   it('renders the canonical waveform without a Blob URL', () => {
     const samples = new Uint8Array(CHAT_PREVIEW_PROFILE_V1.waveformSamples).fill(128)
     render(<ChatAttachmentPreview attachment={descriptor(encodeChatMediaPreviewV1({
@@ -58,6 +76,22 @@ describe('ChatAttachmentPreview', () => {
     }))} />)
     const waveform = screen.getByTestId('chat-audio-waveform-preview')
     expect(waveform.children).toHaveLength(CHAT_PREVIEW_PROFILE_V1.waveformSamples)
+  })
+
+  it('fills the played portion of an audio waveform', () => {
+    const samples = new Uint8Array(CHAT_PREVIEW_PROFILE_V1.waveformSamples).fill(128)
+    render(<ChatAttachmentPreview
+      attachment={descriptor(encodeChatMediaPreviewV1({
+        kind: 'audio-waveform',
+        contentType: PREVIEW_WAVEFORM_MIME,
+        durationMs: 1000,
+        waveform: samples,
+      }))}
+      progress={0.5}
+    />)
+    const waveform = screen.getByTestId('chat-audio-waveform-preview')
+    expect(waveform.querySelectorAll('.opacity-80')).toHaveLength(CHAT_PREVIEW_PROFILE_V1.waveformSamples / 2)
+    expect(waveform.querySelectorAll('.opacity-25')).toHaveLength(CHAT_PREVIEW_PROFILE_V1.waveformSamples / 2)
   })
 
   it('falls back silently when a hostile preview reaches the UI', async () => {

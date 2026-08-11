@@ -79,4 +79,27 @@ describe('Chat attachment viewer', () => {
     expect(await screen.findByText('attachment type is not safe')).toBeInTheDocument()
     expect(screen.queryByRole('img', { name: 'photo.png' })).not.toBeInTheDocument()
   })
+
+  it('opens a verified PDF inside the app', async () => {
+    openCachedChatMediaV1.mockResolvedValue({
+      blob: new Blob([new TextEncoder().encode('%PDF-1.7')], { type: 'application/pdf' }),
+      mimeType: 'application/pdf',
+      kind: 'pdf',
+    })
+    render(
+      <ChatAttachmentViewer
+        open
+        onOpenChange={() => {}}
+        cache={cache}
+        attachment={{
+          ...attachment,
+          filename: 'report.pdf',
+          mimeType: 'application/pdf',
+          mediaClass: 'file',
+        }}
+      />,
+    )
+
+    expect(await screen.findByTitle('report.pdf')).toHaveAttribute('src', 'blob:verified-chat-media')
+  })
 })

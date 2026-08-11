@@ -103,7 +103,11 @@
     "reactions": {
       "add": "Tepki ekle",
       "addEmoji": "{{emoji}} ile tepki ver",
-      "remove": "{{emoji}} tepkisini kaldır"
+      "remove": "{{emoji}} tepkisini kaldır",
+      "details": "{{emoji}} ile tepki verenleri göster, {{count}} tepki",
+      "reactedWith": "Tepkiler",
+      "you": "Sen",
+      "removeMine": "Kaldır"
     },
     "mutations": {
       "edit": "Mesajı düzenle",

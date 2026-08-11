@@ -506,7 +506,13 @@ describe('ChatService MLS workflow coordination', () => {
     const client = {
       syncManifest: vi.fn(async () => {
         calls.push('manifest')
-        return { sequence: 3, devices: [{ deviceId: 2, mls: {} }] }
+        return {
+          sequence: 3,
+          devices: [
+            { deviceId: 2, mls: {} },
+            { deviceId: 3 },
+          ],
+        }
       }),
     }
     const mls = {
