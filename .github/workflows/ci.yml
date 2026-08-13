@@ -162,6 +162,11 @@ jobs:
         run: npx --prefix tests/e2e playwright install --with-deps chromium
       - name: Start the single-server stack
         run: docker compose up --detach --build --wait
+      - name: Wait for the browser application route
+        run: |
+          curl --fail --silent --show-error --insecure \
+            --retry 60 --retry-delay 1 --retry-connrefused --retry-all-errors \
+            https://localhost:38443/api/auth/settings >/dev/null
       - name: Run clean-browser recovery
         working-directory: tests/e2e
         run: npm exec -- playwright test specs/33-chat-history-recovery.spec.ts --project=chromium
