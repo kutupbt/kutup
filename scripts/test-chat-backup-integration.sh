@@ -13,6 +13,7 @@ export ADMIN_ACCOUNT="$test_admin_email:$test_admin_username:$test_admin_passwor
 export POSTGRES_DB="kutup_backup_test"
 export POSTGRES_USER="kutup_backup_test"
 export POSTGRES_PASSWORD="BackupIntegrationDatabase123!"
+export JWT_SECRET="backup-integration-jwt-secret-at-least-32-bytes"
 
 compose() {
   docker compose \

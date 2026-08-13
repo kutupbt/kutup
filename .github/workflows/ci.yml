@@ -109,10 +109,10 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
       - name: Install frontend dependencies
         run: pnpm -C frontend install --frozen-lockfile
-      - name: Run frontend tests
-        run: pnpm -C frontend exec vitest run --reporter=dot
       - name: Build WASM modules
         run: pnpm -C frontend run build:wasm
+      - name: Run frontend tests
+        run: pnpm -C frontend exec vitest run --reporter=dot
       - name: Verify generated crypto WASM vectors
         run: pnpm -C frontend run test:crypto-wasm
       - name: Build production web app
