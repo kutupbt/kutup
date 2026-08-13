@@ -29,6 +29,8 @@
 pub mod account_envelope;
 pub mod asset;
 pub mod chat_attachment_ledger;
+pub mod chat_backup;
+pub mod chat_backup_media;
 pub mod chat_media;
 pub mod collection_epoch;
 pub mod drive_envelope;

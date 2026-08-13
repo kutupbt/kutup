@@ -1,9 +1,20 @@
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, ICONS } from '@/components/mobile/Icon'
 import { useAdminSettings, useUpdateAdminSettings, useAdminStats } from '@/api/hooks/useAdmin'
 import { formatBytes } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { AdminFederationPolicyCard } from '@/components/admin/AdminFederationPolicyCard'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+
+const GIB = 1024 * 1024 * 1024
+const MAX_RETENTION_DAYS = 3650
+
+function validRetentionDays(value: string): boolean {
+  const days = Number(value)
+  return Number.isInteger(days) && days >= 0 && days <= MAX_RETENTION_DAYS
+}
 
 /**
  * AdminSettingsTab — Settings surface for the desktop admin redesign.
@@ -25,6 +36,16 @@ export function AdminSettingsTab() {
   const { data: settings } = useAdminSettings()
   const update = useUpdateAdminSettings()
   const { data: stats } = useAdminStats()
+  const [chatQuotaGiB, setChatQuotaGiB] = useState('2')
+  const [mailboxRetentionDays, setMailboxRetentionDays] = useState('30')
+  const [mediaRetentionDays, setMediaRetentionDays] = useState('45')
+
+  useEffect(() => {
+    if (!settings) return
+    setChatQuotaGiB(String(settings.defaultChatStorageQuotaBytes / GIB))
+    setMailboxRetentionDays(String(settings.chatMailboxRetentionDays))
+    setMediaRetentionDays(String(settings.chatMediaDeliveryRetentionDays))
+  }, [settings])
 
   const publicReg = !!settings?.registrationEnabled
 
@@ -65,6 +86,111 @@ export function AdminSettingsTab() {
             disabled={update.isPending || !settings}
             onChange={() => update.mutate({ registrationEnabled: !publicReg })}
           />
+        </SettingsRow>
+      </SettingsCard>
+
+      <SettingsCard
+        title={t('admin.settings.chatStorageTitle', 'Chat storage')}
+        description={t(
+          'admin.settings.chatStorageDesc',
+          'Default dedicated quota for encrypted message history and Chat media on new accounts.',
+        )}
+      >
+        <SettingsRow
+          label={t('admin.settings.defaultChatQuota', 'New account quota')}
+          sub={t(
+            'admin.settings.defaultChatQuotaSub',
+            'Existing accounts keep their current quota; edit those from the Users page.',
+          )}
+        >
+          <div className="flex items-center gap-2">
+            <Input
+              className="w-24 h-8"
+              type="number"
+              min="0.01"
+              step="0.25"
+              value={chatQuotaGiB}
+              onChange={(event) => setChatQuotaGiB(event.target.value)}
+              aria-label={t('admin.settings.defaultChatQuota', 'New account quota')}
+            />
+            <span className="text-xs text-text-tertiary">GiB</span>
+            <Button
+              size="sm"
+              disabled={
+                update.isPending ||
+                !Number.isFinite(Number(chatQuotaGiB)) ||
+                Number(chatQuotaGiB) <= 0
+              }
+              onClick={() =>
+                update.mutate({
+                  defaultChatStorageQuotaBytes: Math.round(Number(chatQuotaGiB) * GIB),
+                })
+              }
+            >
+              {t('common.save', 'Save')}
+            </Button>
+          </div>
+        </SettingsRow>
+        <SettingsRow
+          label={t('admin.settings.messageDeliveryRetention', 'Message delivery retention')}
+          sub={t(
+            'admin.settings.messageDeliveryRetentionSub',
+            'Unread Direct and group-message delivery ciphertext. Set 0 to keep indefinitely.',
+          )}
+        >
+          <div className="flex items-center gap-2">
+            <Input
+              className="w-24 h-8"
+              type="number"
+              min="0"
+              max={MAX_RETENTION_DAYS}
+              step="1"
+              value={mailboxRetentionDays}
+              onChange={(event) => setMailboxRetentionDays(event.target.value)}
+              aria-label={t('admin.settings.messageDeliveryRetention', 'Message delivery retention')}
+            />
+            <span className="text-xs text-text-tertiary">{t('common.days', 'days')}</span>
+            <Button
+              size="sm"
+              disabled={update.isPending || !validRetentionDays(mailboxRetentionDays)}
+              onClick={() => update.mutate({
+                chatMailboxRetentionDays: Number(mailboxRetentionDays),
+              })}
+            >
+              {t('common.save', 'Save')}
+            </Button>
+          </div>
+        </SettingsRow>
+        <SettingsRow
+          label={t('admin.settings.mediaDeliveryRetention', 'Media delivery retention')}
+          sub={t(
+            'admin.settings.mediaDeliveryRetentionSub',
+            'Temporary delivery copies only; protected history media is retained. Set 0 to keep indefinitely.',
+          )}
+          last
+        >
+          <div className="flex items-center gap-2">
+            <Input
+              className="w-24 h-8"
+              type="number"
+              min="0"
+              max={MAX_RETENTION_DAYS}
+              step="1"
+              value={mediaRetentionDays}
+              onChange={(event) => setMediaRetentionDays(event.target.value)}
+              aria-label={t('admin.settings.mediaDeliveryRetention', 'Media delivery retention')}
+            />
+            <span className="text-xs text-text-tertiary">{t('common.days', 'days')}</span>
+            <Button
+              size="sm"
+              disabled={update.isPending || !validRetentionDays(mediaRetentionDays)}
+              onClick={() => update.mutate({
+                chatMediaDeliveryRetentionDays: Number(mediaRetentionDays),
+              })}
+            >
+              {t('common.save', 'Save')}
+            </Button>
+          </div>
         </SettingsRow>
       </SettingsCard>
 
@@ -138,7 +264,7 @@ export function AdminSettingsTab() {
       <p className="text-[12px] text-text-tertiary mt-4">
         {t(
           'admin.settings.moreSoonNote',
-          'More admin controls — required 2FA, quota defaults, danger-zone actions — land as the backend grows.',
+          'More admin controls — required 2FA and danger-zone actions — land as the backend grows.',
         )}
       </p>
     </div>

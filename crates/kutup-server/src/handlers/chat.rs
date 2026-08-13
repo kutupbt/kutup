@@ -100,6 +100,19 @@ type OwnProfileRow = (
     Vec<u8>,
 );
 
+/// A qualified account on this Chat server is still local. Federation is only
+/// involved when the canonical suffix names a different server.
+fn is_remote_chat_address(local_server_name: &str, address: &AccountAddress) -> bool {
+    address
+        .server
+        .as_deref()
+        .is_some_and(|server| server != local_server_name)
+}
+
+fn local_chat_account(local_server_name: &str, username: &str) -> String {
+    format!("{username}@{local_server_name}")
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ManifestHistoryQuery {
     #[serde(rename = "fromSequence")]
@@ -471,13 +484,7 @@ pub async fn publish_manifest(
     let username = username
         .filter(|username| !username.is_empty())
         .ok_or_else(|| AppError::conflict("account requires a username for chat"))?;
-    let domain = state
-        .federation
-        .as_ref()
-        .map(|federation| federation.server_name())
-        .filter(|domain| !domain.is_empty())
-        .ok_or_else(|| AppError::conflict("account manifests require a federation domain"))?;
-    let canonical_account = format!("{username}@{domain}");
+    let canonical_account = local_chat_account(&state.config.chat_server_name, &username);
     if manifest.account != canonical_account {
         return Err(AppError::conflict(
             "manifest account does not match the authenticated account",
@@ -660,15 +667,13 @@ pub async fn get_user_manifest(
             .map_err(|error: kutup_chat_proto::AddressError| {
                 AppError::bad_request(error.to_string())
             })?;
-    if let Some(server) = address.server.as_deref() {
-        let federation = state
+    if is_remote_chat_address(&state.config.chat_server_name, &address) {
+        state
             .federation
             .as_ref()
             .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
-        if server != federation.server_name() {
-            let manifest = crate::chat_federation::fetch_remote_manifest(&state, &address).await?;
-            return Ok(Json(manifest).into_response());
-        }
+        let manifest = crate::chat_federation::fetch_remote_manifest(&state, &address).await?;
+        return Ok(Json(manifest).into_response());
     }
     let value: Option<serde_json::Value> = sqlx::query_scalar(
         "SELECT m.manifest
@@ -730,17 +735,14 @@ pub async fn get_manifest_history(
             .map_err(|error: kutup_chat_proto::AddressError| {
                 AppError::bad_request(error.to_string())
             })?;
-    if let Some(server) = address.server.as_deref() {
-        let federation = state
+    if is_remote_chat_address(&state.config.chat_server_name, &address) {
+        state
             .federation
             .as_ref()
             .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
-        if server != federation.server_name() {
-            let page =
-                crate::chat_federation::fetch_remote_manifest_history(&state, &address, &query)
-                    .await?;
-            return Ok(Json(page).into_response());
-        }
+        let page =
+            crate::chat_federation::fetch_remote_manifest_history(&state, &address, &query).await?;
+        return Ok(Json(page).into_response());
     }
     let target_id: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
@@ -834,13 +836,7 @@ pub async fn put_profile(
     let username = username
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::conflict("account requires a username for chat"))?;
-    let domain = state
-        .federation
-        .as_ref()
-        .map(|federation| federation.server_name())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::conflict("encrypted profiles require a federation domain"))?;
-    let canonical_account = format!("{username}@{domain}");
+    let canonical_account = local_chat_account(&state.config.chat_server_name, &username);
     let (verifier, delivery_verifier) = validate_profile(&profile, &canonical_account)?;
     let device_exists: Option<i32> =
         sqlx::query_scalar("SELECT 1 FROM chat_devices WHERE user_id = $1 AND device_id = $2")
@@ -951,13 +947,7 @@ pub async fn get_own_profile(State(state): State<AppState>, auth: AuthUser) -> A
     let username = username
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::conflict("account requires a username for chat"))?;
-    let domain = state
-        .federation
-        .as_ref()
-        .map(|federation| federation.server_name())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::conflict("encrypted profiles require a federation domain"))?;
-    let canonical_account = format!("{username}@{domain}");
+    let canonical_account = local_chat_account(&state.config.chat_server_name, &username);
     let mut tx = state.pool.begin().await?;
     let profile = load_own_profile_in(&mut tx, user_id, &canonical_account, false)
         .await?
@@ -1000,21 +990,15 @@ pub async fn get_user_profile(
             .map_err(|error: kutup_chat_proto::AddressError| {
                 AppError::bad_request(error.to_string())
             })?;
-    if let Some(server) = address.server.as_deref() {
-        let federation = state
+    if is_remote_chat_address(&state.config.chat_server_name, &address) {
+        state
             .federation
             .as_ref()
             .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
-        if server != federation.server_name() {
-            let profile = crate::chat_federation::fetch_remote_profile(
-                &state,
-                &address,
-                &version,
-                &access_key,
-            )
-            .await?;
-            return Ok(Json(profile).into_response());
-        }
+        let profile =
+            crate::chat_federation::fetch_remote_profile(&state, &address, &version, &access_key)
+                .await?;
+        return Ok(Json(profile).into_response());
     }
     let profile = load_public_profile(&state, &address.username, &version, &access_key)
         .await?
@@ -1060,13 +1044,7 @@ pub(crate) async fn load_public_profile(
     if !constant_time_eq(&verifier, &presented) {
         return Ok(None);
     }
-    let domain = state
-        .federation
-        .as_ref()
-        .map(|federation| federation.server_name())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::internal("encrypted profile federation domain is unavailable"))?;
-    let account = format!("{username}@{domain}");
+    let account = local_chat_account(&state.config.chat_server_name, username);
     let suite = profile_suite_from_db(suite, "chat_profiles")?;
     let response = ChatProfileResponse {
         suite,
@@ -1463,20 +1441,18 @@ pub async fn get_user_bundles(
             .map_err(|error: kutup_chat_proto::AddressError| {
                 AppError::bad_request(error.to_string())
             })?;
-    if let Some(server) = address.server.as_deref() {
-        let federation = state
+    if is_remote_chat_address(&state.config.chat_server_name, &address) {
+        state
             .federation
             .as_ref()
             .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
-        if server != federation.server_name() {
-            if query.sync_device_id.is_some() {
-                return Err(AppError::forbidden(
-                    "linked-device key fetch is limited to the local account",
-                ));
-            }
-            let bundles = crate::chat_federation::fetch_remote_bundles(&state, &address).await?;
-            return Ok(Json(bundles).into_response());
+        if query.sync_device_id.is_some() {
+            return Err(AppError::forbidden(
+                "linked-device key fetch is limited to the local account",
+            ));
         }
+        let bundles = crate::chat_federation::fetch_remote_bundles(&state, &address).await?;
+        return Ok(Json(bundles).into_response());
     }
 
     if query.sync_device_id.is_some() {
@@ -1493,13 +1469,7 @@ pub async fn get_user_bundles(
         }
     }
 
-    let local_domain = state
-        .federation
-        .as_ref()
-        .map(|federation| federation.server_name())
-        .filter(|domain| !domain.is_empty())
-        .ok_or_else(|| AppError::conflict("account manifests require a federation domain"))?;
-    let response_account = format!("{}@{local_domain}", address.username);
+    let response_account = local_chat_account(&state.config.chat_server_name, &address.username);
     let bundles = load_user_bundles(
         &state,
         &address.username,
@@ -1526,25 +1496,16 @@ pub async fn get_anonymous_bundles(
     let address: AccountAddress = username
         .parse()
         .map_err(|_| AppError::not_found("sealed delivery unavailable"))?;
-    if let Some(server) = address.server.as_deref() {
-        let federation = state
+    if is_remote_chat_address(&state.config.chat_server_name, &address) {
+        state
             .federation
             .as_ref()
             .ok_or_else(|| AppError::not_found("sealed delivery unavailable"))?;
-        if server != federation.server_name() {
-            let bundles =
-                crate::chat_federation::fetch_remote_sealed_bundles(&state, &address, &request)
-                    .await?;
-            return Ok(Json(bundles).into_response());
-        }
+        let bundles =
+            crate::chat_federation::fetch_remote_sealed_bundles(&state, &address, &request).await?;
+        return Ok(Json(bundles).into_response());
     }
-    let local_domain = state
-        .federation
-        .as_ref()
-        .map(|federation| federation.server_name())
-        .filter(|domain| !domain.is_empty())
-        .ok_or_else(|| AppError::not_found("sealed delivery unavailable"))?;
-    let response_account = format!("{}@{local_domain}", address.username);
+    let response_account = local_chat_account(&state.config.chat_server_name, &address.username);
     let bundles = load_user_bundles(
         &state,
         &address.username,
@@ -1811,32 +1772,28 @@ pub async fn send_messages(
             .map_err(|error: kutup_chat_proto::AddressError| {
                 AppError::bad_request(error.to_string())
             })?;
-    if let Some(server) = address.server.as_deref() {
-        let federation = state
+    if is_remote_chat_address(&state.config.chat_server_name, &address) {
+        state
             .federation
             .as_ref()
             .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
-        if server != federation.server_name() {
-            let envelope_count = req.envelopes.len();
-            return match crate::chat_federation::enqueue_send(&state, sender_id, &address, req)
-                .await?
-            {
-                crate::chat_federation::FederatedSendOutcome::Delivered { deduplicated } => Ok(
-                    Json(json!({ "stored": envelope_count, "deduplicated": deduplicated }))
-                        .into_response(),
-                ),
-                crate::chat_federation::FederatedSendOutcome::Mismatch(mismatch) => {
-                    Ok((StatusCode::CONFLICT, Json(mismatch)).into_response())
-                }
-                crate::chat_federation::FederatedSendOutcome::Rejected(_) => {
-                    Err(AppError::not_found("remote chat recipient is unavailable"))
-                }
-                crate::chat_federation::FederatedSendOutcome::Pending => Err(AppError::new(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "federated send is durably queued for retry",
-                )),
-            };
-        }
+        let envelope_count = req.envelopes.len();
+        return match crate::chat_federation::enqueue_send(&state, sender_id, &address, req).await? {
+            crate::chat_federation::FederatedSendOutcome::Delivered { deduplicated } => Ok(Json(
+                json!({ "stored": envelope_count, "deduplicated": deduplicated }),
+            )
+            .into_response()),
+            crate::chat_federation::FederatedSendOutcome::Mismatch(mismatch) => {
+                Ok((StatusCode::CONFLICT, Json(mismatch)).into_response())
+            }
+            crate::chat_federation::FederatedSendOutcome::Rejected(_) => {
+                Err(AppError::not_found("remote chat recipient is unavailable"))
+            }
+            crate::chat_federation::FederatedSendOutcome::Pending => Err(AppError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "federated send is durably queued for retry",
+            )),
+        };
     }
     let recipient: Option<(Uuid,)> =
         sqlx::query_as("SELECT id FROM users WHERE username = $1 AND is_active = true")
@@ -1862,27 +1819,25 @@ pub async fn send_sealed_messages(
     let address: AccountAddress = username
         .parse()
         .map_err(|_| AppError::not_found("sealed delivery unavailable"))?;
-    if let Some(server) = address.server.as_deref() {
-        let federation = state
+    if is_remote_chat_address(&state.config.chat_server_name, &address) {
+        state
             .federation
             .as_ref()
             .ok_or_else(|| AppError::not_found("sealed delivery unavailable"))?;
-        if server != federation.server_name() {
-            let outcome =
-                crate::chat_federation::enqueue_sealed_send(&state, &address, request).await?;
-            return match outcome {
-                crate::chat_federation::FederatedSealedOutcome::Delivered(response) => {
-                    Ok(Json(response).into_response())
-                }
-                crate::chat_federation::FederatedSealedOutcome::Mismatch(mismatch) => {
-                    Ok((StatusCode::CONFLICT, Json(mismatch)).into_response())
-                }
-                crate::chat_federation::FederatedSealedOutcome::Pending => Err(AppError::new(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "sealed federation delivery is durably queued",
-                )),
-            };
-        }
+        let outcome =
+            crate::chat_federation::enqueue_sealed_send(&state, &address, request).await?;
+        return match outcome {
+            crate::chat_federation::FederatedSealedOutcome::Delivered(response) => {
+                Ok(Json(response).into_response())
+            }
+            crate::chat_federation::FederatedSealedOutcome::Mismatch(mismatch) => {
+                Ok((StatusCode::CONFLICT, Json(mismatch)).into_response())
+            }
+            crate::chat_federation::FederatedSealedOutcome::Pending => Err(AppError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "sealed federation delivery is durably queued",
+            )),
+        };
     }
 
     let mut tx = state.pool.begin().await?;
@@ -2719,6 +2674,21 @@ mod tests {
             suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
             content: STANDARD.encode(b"ciphertext"),
         }
+    }
+
+    #[test]
+    fn canonical_local_accounts_do_not_require_federation() {
+        let unqualified: AccountAddress = "alice".parse().unwrap();
+        let local: AccountAddress = "alice@kutup.local".parse().unwrap();
+        let remote: AccountAddress = "alice@remote.test".parse().unwrap();
+
+        assert!(!is_remote_chat_address("kutup.local", &unqualified));
+        assert!(!is_remote_chat_address("kutup.local", &local));
+        assert!(is_remote_chat_address("kutup.local", &remote));
+        assert_eq!(
+            local_chat_account("kutup.local", "alice"),
+            "alice@kutup.local"
+        );
     }
 
     #[test]

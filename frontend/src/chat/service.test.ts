@@ -504,7 +504,7 @@ describe('ChatService MLS workflow coordination', () => {
       listDevices: vi.fn(async () => remainingDevices),
     }
     const client = {
-      syncManifest: vi.fn(async () => {
+      revokeManifestDevice: vi.fn(async () => {
         calls.push('manifest')
         return {
           sequence: 3,
@@ -535,63 +535,11 @@ describe('ChatService MLS workflow coordination', () => {
     await expect(service.revokeDevice(1)).resolves.toEqual(remainingDevices)
 
     expect(calls).toEqual(['revoke', 'manifest', 'packages', 'mls'])
+    expect(client.revokeManifestDevice).toHaveBeenCalledWith(1)
     expect(mls.maintainKeyPackages).toHaveBeenCalledWith(3)
     expect(mls.reconcileLinkedDevices).toHaveBeenCalledWith([2])
     expect(channel.postMessage).toHaveBeenCalledWith({ type: 'updated' })
     expect(transport.listDevices).toHaveBeenCalledOnce()
   })
 
-  it('serializes history recovery through the engine lock and refreshes peers', async () => {
-    const requestLock = installQueuedWebLocks()
-    const request = {
-      version: 1,
-      transferId: '11111111-1111-4111-8111-111111111111',
-      account: 'alice@a.test',
-      requestingDeviceId: 2,
-      createdAtUnix: 1,
-      expiresAtUnix: 2,
-    }
-    const client = {
-      requestHistoryTransfer: vi.fn(async () => request),
-      listHistoryTransfers: vi.fn(async () => ({ transfers: [] })),
-      approveHistoryTransfer: vi.fn(async () => new Map<string, unknown>([
-        ['acceptance', {}],
-        ['frameCount', 3],
-      ])),
-      downloadHistoryTransfer: vi.fn(async () => new Map<string, unknown>([
-        ['ready', true],
-        ['frameCount', 3],
-        ['importedCount', 1],
-      ])),
-    }
-    const channel = { postMessage: vi.fn() }
-    const service = Object.create(ChatService.prototype) as ChatService
-    Object.assign(service, {
-      client,
-      lockName: 'kutup-chat-engine:test',
-      channel,
-      listeners: new Set(),
-    })
-
-    await expect(service.requestHistoryTransfer()).resolves.toEqual(request)
-    await expect(service.historyTransfers()).resolves.toEqual({ transfers: [] })
-    await expect(service.approveHistoryTransfer(request)).resolves.toEqual({
-      acceptance: {},
-      frameCount: 3,
-    })
-    await expect(service.downloadHistoryTransfer(request.transferId)).resolves.toEqual({
-      ready: true,
-      frameCount: 3,
-      importedCount: 1,
-    })
-
-    expect(client.approveHistoryTransfer).toHaveBeenCalledWith(
-      request,
-      100_000,
-      '268435456',
-    )
-    expect(requestLock.mock.calls.every(([name]) =>
-      name === 'kutup-chat-engine:test')).toBe(true)
-    expect(channel.postMessage).toHaveBeenCalledTimes(3)
-  })
 })

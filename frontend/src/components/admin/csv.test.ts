@@ -5,10 +5,12 @@ import type { UserRow } from '@/types/api'
 function makeUser(overrides: Partial<UserRow> = {}): UserRow {
   return {
     id: 'u1',
-    email: 'maya@kutup.cloud',
-    username: 'maya.k',
+    email: 'user@kutup.dev',
+    username: 'user',
     storageQuotaBytes: 10_737_418_240,
     storageUsedBytes: 4_509_715_200,
+    chatStorageQuotaBytes: 2_147_483_648,
+    chatStorageUsedBytes: 536_870_912,
     isAdmin: false,
     isActive: true,
     totpEnabled: true,
@@ -22,7 +24,7 @@ function makeUser(overrides: Partial<UserRow> = {}): UserRow {
 describe('usersToCsv', () => {
   it('emits a header even for an empty list', () => {
     const csv = usersToCsv([])
-    expect(csv).toMatch(/^email,username,isAdmin,isActive,totpEnabled,storageUsedBytes,storageQuotaBytes,createdAt\n$/)
+    expect(csv).toMatch(/^email,username,isAdmin,isActive,totpEnabled,storageUsedBytes,storageQuotaBytes,chatStorageUsedBytes,chatStorageQuotaBytes,createdAt\n$/)
   })
 
   it('renders one row per user with stable column order', () => {
@@ -30,7 +32,7 @@ describe('usersToCsv', () => {
     const lines = csv.trim().split('\n')
     expect(lines).toHaveLength(2)
     expect(lines[1]).toBe(
-      'maya@kutup.cloud,maya.k,false,true,true,4509715200,10737418240,2026-04-22T09:00:00Z',
+      'user@kutup.dev,user,false,true,true,4509715200,10737418240,536870912,2147483648,2026-04-22T09:00:00Z',
     )
   })
 
@@ -40,8 +42,8 @@ describe('usersToCsv', () => {
     const csvComma = usersToCsv([makeUser({ username: 'has,comma' })])
     expect(csvComma).toContain('"has,comma"')
 
-    const csvQuote = usersToCsv([makeUser({ email: 'has"quote@kutup.cloud' })])
-    expect(csvQuote).toContain('"has""quote@kutup.cloud"')
+    const csvQuote = usersToCsv([makeUser({ email: 'user"quote@kutup.dev' })])
+    expect(csvQuote).toContain('"user""quote@kutup.dev"')
 
     const csvNewline = usersToCsv([makeUser({ username: 'has\nnewline' })])
     expect(csvNewline).toContain('"has\nnewline"')

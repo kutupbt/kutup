@@ -140,6 +140,30 @@ describe('Chat private ciphertext cache integration', () => {
     })
   })
 
+  it('restores the independent backup copy after the 45-day delivery object is gone', async () => {
+    const { ciphertext, descriptor } = await fixture()
+    descriptor.backupMediaId = 'ab'.repeat(32)
+    const backend = new MemoryBackend()
+    const cache = new PrivateCiphertextCacheV1('alice@a.test', {
+      backend,
+      maxBytes: 500_000,
+      chunkBytes: 64 * 1024,
+    })
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 404 }))
+
+    await downloadChatMediaToCacheV1(
+      cache,
+      descriptor,
+      'access-token',
+      undefined,
+      undefined,
+      {},
+      () => split(ciphertext),
+    )
+
+    expect(await isChatMediaAvailableInKutupV1(cache, descriptor)).toBe(true)
+  })
+
   it('removes all persisted chunks when the downloaded object is tampered', async () => {
     const { ciphertext, descriptor } = await fixture()
     const backend = new MemoryBackend()

@@ -276,37 +276,51 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
     let mls_groups = crate::chat_mls::policy::advertised_policy(&state, federation_enabled)
         .await?
         .is_some();
+    let chat_storage_default_quota_bytes: u64 = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM site_settings WHERE key='default_chat_storage_quota_bytes'",
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .and_then(|value| value.parse::<u64>().ok())
+    .filter(|value| *value > 0)
+    .unwrap_or(state.config.chat_storage_default_quota_bytes);
+    let chat_mailbox_retention_days = crate::site_settings::chat_delivery_retention_days(
+        &state.pool,
+        crate::site_settings::CHAT_MAILBOX_RETENTION_DAYS,
+        state.config.chat_mailbox_retention_days,
+    )
+    .await? as u32;
+    let chat_media_delivery_retention_days = crate::site_settings::chat_delivery_retention_days(
+        &state.pool,
+        crate::site_settings::CHAT_MEDIA_DELIVERY_RETENTION_DAYS,
+        state.config.chat_media_delivery_retention_days,
+    )
+    .await? as u32;
     let chat = kutup_chat_proto::ChatCapabilities {
-        mailbox_retention_days: state
-            .config
-            .chat_mailbox_retention_days
-            .try_into()
-            .unwrap_or(u32::MAX),
+        mailbox_retention_days: chat_mailbox_retention_days,
         device_expiry_days: state
             .config
             .chat_device_expiry_days
             .try_into()
             .unwrap_or(u32::MAX),
         maximum_active_devices: state.config.chat_max_active_devices,
-        server_name: federation_enabled.then(|| {
-            state
-                .federation
-                .as_ref()
-                .expect("federation enabled only with configured identity")
-                .server_name()
-                .to_string()
-        }),
+        server_name: Some(state.config.chat_server_name.clone()),
         federation: federation_enabled,
         sealed_sender: sealed_sender_policy.is_some(),
         mls_groups,
-        media: federation_enabled
-            .then(|| {
-                kutup_chat_proto::ChatMediaCapabilitiesV1::v1(
-                    state.config.chat_media_max_plaintext_bytes,
-                )
-            })
-            .transpose()
+        media: Some(
+            kutup_chat_proto::ChatMediaCapabilitiesV1::v1(
+                state.config.chat_media_max_plaintext_bytes,
+            )
             .map_err(AppError::internal)?,
+        ),
+        backup: Some(
+            kutup_chat_proto::ChatBackupCapabilitiesV1::v1(
+                chat_storage_default_quota_bytes,
+                chat_media_delivery_retention_days,
+            )
+            .map_err(AppError::internal)?,
+        ),
         sealed_sender_policy,
         ..Default::default()
     };
@@ -382,6 +396,12 @@ pub async fn register(
     // This is an HKDF-derived authorization proof, never the recovery entropy
     // that opens recoveryKeyEnvelope.
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
+    let chat_storage_quota_bytes: i64 = sqlx::query_scalar(
+        "SELECT value::bigint FROM site_settings WHERE key='default_chat_storage_quota_bytes'",
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .unwrap_or(i64::try_from(kutup_chat_proto::DEFAULT_CHAT_STORAGE_QUOTA_BYTES).unwrap());
 
     let res = sqlx::query(
         r#"INSERT INTO users (
@@ -391,8 +411,8 @@ pub async fn register(
             account_incarnation_id, drive_signing_public_key,
             account_protection_suite, account_protection_salt,
             argon_memory_kib, argon_iterations, argon_parallelism,
-            login_key_hash, recovery_key_verifier
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)"#,
+            login_key_hash, recovery_key_verifier, chat_storage_quota_bytes
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)"#,
     )
     .bind(&req.email)
     .bind(&req.username)
@@ -411,6 +431,7 @@ pub async fn register(
     .bind(i32::try_from(req.argon_parallelism).unwrap_or(i32::MAX))
     .bind(&hash)
     .bind(&recovery_verifier)
+    .bind(chat_storage_quota_bytes)
     .execute(&state.pool)
     .await;
 
@@ -874,17 +895,43 @@ pub async fn refresh(
     responses((status = 200, description = "The caller's profile", body = MeResponse))
 )]
 pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    type Row = (Uuid, String, String, String, bool, i64, i64, bool, String);
+    type Row = (
+        Uuid,
+        String,
+        String,
+        String,
+        bool,
+        i64,
+        i64,
+        i64,
+        i64,
+        bool,
+        String,
+    );
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT id, email, COALESCE(username, ''), public_key, totp_enabled,
-                  storage_quota_bytes, storage_used_bytes, is_admin, COALESCE(color, '')
+                  storage_quota_bytes, storage_used_bytes,
+                  chat_storage_quota_bytes, chat_storage_used_bytes,
+                  is_admin, COALESCE(color, '')
            FROM users WHERE id = $1"#,
     )
     .bind(parse_uuid(&user.user_id)?)
     .fetch_optional(&state.pool)
     .await?;
 
-    let Some((id, email, username, public_key, totp_enabled, quota, used, is_admin, color)) = row
+    let Some((
+        id,
+        email,
+        username,
+        public_key,
+        totp_enabled,
+        quota,
+        used,
+        chat_quota,
+        chat_used,
+        is_admin,
+        color,
+    )) = row
     else {
         return Err(AppError::not_found("user not found"));
     };
@@ -896,6 +943,8 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         totp_enabled,
         storage_quota_bytes: quota,
         storage_used_bytes: used,
+        chat_storage_quota_bytes: chat_quota,
+        chat_storage_used_bytes: chat_used,
         is_admin,
         color,
     })

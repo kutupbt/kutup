@@ -241,7 +241,7 @@ fn set_user_quota(c: &Client, base: &str, admin: &str, user_id: &str, bytes: i64
     json_response(
         c.put(format!("{base}/api/admin/users/{user_id}"))
             .bearer_auth(admin)
-            .json(&json!({ "storageQuotaBytes": bytes }))
+            .json(&json!({ "chatStorageQuotaBytes": bytes }))
             .send()
             .unwrap(),
         "set Chat-media recipient quota",

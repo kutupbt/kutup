@@ -314,7 +314,7 @@ pub async fn create_upload(
         return tus_text(StatusCode::CONFLICT, "attachment id already exists");
     }
     let user_row: Result<(i64, i64), _> = sqlx::query_as(
-        "SELECT storage_quota_bytes, storage_used_bytes FROM users WHERE id=$1 FOR UPDATE",
+        "SELECT chat_storage_quota_bytes, chat_storage_used_bytes FROM users WHERE id=$1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_one(&mut *transaction)
@@ -324,8 +324,7 @@ pub async fn create_upload(
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read user"),
     };
     let reserved: i64 = sqlx::query_scalar(
-        "SELECT (SELECT COALESCE(SUM(total_bytes - received_bytes),0)::bigint FROM uploads WHERE user_id=$1) +
-                (SELECT COALESCE(SUM(total_bytes - received_bytes),0)::bigint FROM chat_media_uploads WHERE user_id=$1) +
+        "SELECT (SELECT COALESCE(SUM(total_bytes - received_bytes),0)::bigint FROM chat_media_uploads WHERE user_id=$1) +
                 (SELECT COALESCE(SUM(ciphertext_bytes),0)::bigint
                    FROM chat_media_federation_inbound_pending WHERE recipient_user_id=$1)",
     )
@@ -599,13 +598,7 @@ pub async fn patch_upload(
     )
     .bind(attachment_id)
     .bind(user_id)
-    .bind(
-        state
-            .federation
-            .as_ref()
-            .map(|value| value.server_name())
-            .unwrap_or(""),
-    )
+    .bind(&state.config.chat_server_name)
     .bind(suite)
     .bind(total)
     .bind(&actual_digest)
@@ -629,12 +622,14 @@ pub async fn patch_upload(
     .ok()
     .flatten();
     if storage_reference_id.is_none()
-        || sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
-            .bind(total)
-            .bind(user_id)
-            .execute(&mut *transaction)
-            .await
-            .is_err()
+        || sqlx::query(
+            "UPDATE users SET chat_storage_used_bytes=chat_storage_used_bytes+$1 WHERE id=$2",
+        )
+        .bind(total)
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await
+        .is_err()
         || sqlx::query("DELETE FROM chat_media_uploads WHERE id=$1")
             .bind(upload_id)
             .execute(&mut *transaction)
@@ -717,12 +712,7 @@ pub async fn deliver_local(
     Json(offer): Json<ChatMediaDeliveryOfferV1>,
 ) -> AppResult<Json<ChatMediaOfferResponseV1>> {
     let origin_user_id = trusted_uuid(&user.user_id)?;
-    let local_domain = state
-        .federation
-        .as_ref()
-        .map(|federation| federation.server_name())
-        .filter(|domain| !domain.is_empty())
-        .ok_or_else(|| AppError::conflict("Chat media requires a canonical server name"))?;
+    let local_domain = state.config.chat_server_name.as_str();
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     offer
         .validate(&offer.destination_domain, now)
@@ -739,6 +729,9 @@ pub async fn deliver_local(
         return Err(AppError::bad_request("invalid Chat media delivery"));
     }
     if offer.destination_domain != local_domain {
+        if state.federation.is_none() {
+            return Err(AppError::conflict("Chat federation is disabled"));
+        }
         return crate::chat_media_federation::stage_remote_delivery(&state, origin_user_id, offer)
             .await
             .map(Json);
@@ -869,7 +862,7 @@ pub async fn deliver_local(
     .await?;
 
     let (quota, used): (i64, i64) = sqlx::query_as(
-        "SELECT storage_quota_bytes,storage_used_bytes FROM users WHERE id=$1 FOR UPDATE",
+        "SELECT chat_storage_quota_bytes,chat_storage_used_bytes FROM users WHERE id=$1 FOR UPDATE",
     )
     .bind(recipient_user_id)
     .fetch_one(&mut *transaction)
@@ -885,8 +878,7 @@ pub async fn deliver_local(
         (reference_id, ChatMediaDeliveryStatusV1::AlreadyStored)
     } else {
         let reserved: i64 = sqlx::query_scalar(
-            "SELECT (SELECT COALESCE(SUM(total_bytes-received_bytes),0)::bigint FROM uploads WHERE user_id=$1) +
-                    (SELECT COALESCE(SUM(total_bytes-received_bytes),0)::bigint FROM chat_media_uploads WHERE user_id=$1) +
+            "SELECT (SELECT COALESCE(SUM(total_bytes-received_bytes),0)::bigint FROM chat_media_uploads WHERE user_id=$1) +
                     (SELECT COALESCE(SUM(ciphertext_bytes),0)::bigint
                        FROM chat_media_federation_inbound_pending WHERE recipient_user_id=$1)",
         )
@@ -914,11 +906,13 @@ pub async fn deliver_local(
         .bind(stored_bytes)
         .fetch_one(&mut *transaction)
         .await?;
-        sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
-            .bind(stored_bytes)
-            .bind(recipient_user_id)
-            .execute(&mut *transaction)
-            .await?;
+        sqlx::query(
+            "UPDATE users SET chat_storage_used_bytes=chat_storage_used_bytes+$1 WHERE id=$2",
+        )
+        .bind(stored_bytes)
+        .bind(recipient_user_id)
+        .execute(&mut *transaction)
+        .await?;
         (reference_id, ChatMediaDeliveryStatusV1::Stored)
     };
     sqlx::query(
@@ -1036,7 +1030,7 @@ pub async fn discard_origin_object(
         return Err(AppError::conflict("Chat media reference changed"));
     }
     sqlx::query(
-        "UPDATE users SET storage_used_bytes=GREATEST(storage_used_bytes-$1,0) WHERE id=$2",
+        "UPDATE users SET chat_storage_used_bytes=GREATEST(chat_storage_used_bytes-$1,0) WHERE id=$2",
     )
     .bind(bytes)
     .bind(user_id)
@@ -1135,7 +1129,7 @@ pub async fn clear_reference(
         .execute(&mut *tx)
         .await?;
     sqlx::query(
-        "UPDATE users SET storage_used_bytes=GREATEST(storage_used_bytes-$1,0) WHERE id=$2",
+        "UPDATE users SET chat_storage_used_bytes=GREATEST(chat_storage_used_bytes-$1,0) WHERE id=$2",
     )
     .bind(logical_bytes)
     .bind(user_id)
@@ -1176,11 +1170,12 @@ pub async fn storage_summary(
     user: AuthUser,
 ) -> AppResult<Json<ChatMediaStorageSummary>> {
     let user_id = trusted_uuid(&user.user_id)?;
-    let (quota, used): (i64, i64) =
-        sqlx::query_as("SELECT storage_quota_bytes,storage_used_bytes FROM users WHERE id=$1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let (quota, used): (i64, i64) = sqlx::query_as(
+        "SELECT chat_storage_quota_bytes,chat_storage_used_bytes FROM users WHERE id=$1",
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
     let drive: i64 = sqlx::query_scalar(
         "SELECT
           (SELECT COALESCE(SUM(encrypted_size_bytes),0)::bigint FROM files WHERE uploader_user_id=$1) +

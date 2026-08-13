@@ -16,6 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 
+mod backup;
 pub mod content;
 pub mod federation;
 mod history_transfer;
@@ -26,6 +27,20 @@ mod profile;
 mod sealed_sender;
 mod security_policy;
 
+pub use backup::{
+    chat_backup_media_reference_set_digest, AppendChatBackupSegmentRequestV1,
+    ChatBackupBasePlaintextV1, ChatBackupBaseReceiptV1, ChatBackupCapabilitiesV1,
+    ChatBackupDisplayRecordV1, ChatBackupManifestCommitReceiptV1, ChatBackupManifestV1,
+    ChatBackupMediaReceiptV1, ChatBackupMediaReconciliationReceiptV1, ChatBackupMediaReferenceV1,
+    ChatBackupSegmentPageV1, ChatBackupSegmentPlaintextV1, ChatBackupSegmentReceiptV1,
+    ChatBackupSignerAuthorizationV1, ChatBackupStatusV1, ChatBackupStorageUsageV1,
+    ChatBackupWireSegmentV1, CommitChatBackupManifestRequestV1, CopyChatBackupMediaRequestV1,
+    ProvisionChatBackupRequestV1, ReconcileChatBackupMediaRequestV1, StageChatBackupBaseRequestV1,
+    UploadChatBackupMediaRequestV1, CHAT_BACKUP_PROTOCOL_VERSION,
+    CHAT_DELIVERY_MEDIA_RETENTION_DAYS, DEFAULT_CHAT_STORAGE_QUOTA_BYTES,
+    MAX_CHAT_BACKUP_BASE_CIPHERTEXT_BYTES, MAX_CHAT_BACKUP_MEDIA_REFERENCES_PER_PAGE,
+    MAX_CHAT_BACKUP_PAGE_SEGMENTS, MAX_CHAT_BACKUP_SEGMENT_CIPHERTEXT_BYTES,
+};
 pub use content::{
     ChatContent, ContactControlBody, ContactState, DisappearingExpiryStartBody,
     DisappearingTimerBody, MessageMutationBody, MessageMutationOperation, ReactionBody,
@@ -801,8 +816,8 @@ pub struct ChatCapabilities {
     /// Server-configured simultaneously active devices per account. V1 has a
     /// protocol hard cap of 10.
     pub maximum_active_devices: u32,
-    /// Canonical DNS suffix in `username@server`. Present exactly when
-    /// federation is enabled; display names never substitute for it.
+    /// Stable canonical DNS suffix in `username@server`. Present whenever Chat
+    /// is enabled; federation controls whether other suffixes are reachable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_name: Option<String>,
     /// [RSV] flips true in the federation phase.
@@ -826,6 +841,9 @@ pub struct ChatCapabilities {
     /// entire Phase 6 path passes its gates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<ChatMediaCapabilitiesV1>,
+    /// Always-on encrypted display-history backup and dedicated Chat quota.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup: Option<ChatBackupCapabilitiesV1>,
     /// Complete authenticated local service-policy history. Present only when
     /// the certificate, anonymous bundle, local delivery, and federation paths
     /// are all enabled.
@@ -851,6 +869,7 @@ impl Default for ChatCapabilities {
             sealed_sender: false,
             mls_groups: false,
             media: None,
+            backup: None,
             sealed_sender_policy: None,
         }
     }

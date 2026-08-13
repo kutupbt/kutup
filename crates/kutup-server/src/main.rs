@@ -24,6 +24,7 @@ mod models;
 mod openapi;
 mod ratelimit;
 mod sealed_sender_service;
+mod site_settings;
 mod ssrf;
 mod storage;
 mod storage_probe;
@@ -249,6 +250,7 @@ async fn main() -> anyhow::Result<()> {
         config.trash_retention_days,
         jobs::ChatMaintenancePolicy {
             mailbox_retention_days: config.chat_mailbox_retention_days,
+            media_delivery_retention_days: config.chat_media_delivery_retention_days,
             send_retention_days: config.chat_send_retention_days,
             device_expiry_days: config.chat_device_expiry_days,
         },
@@ -358,6 +360,15 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
         }
     };
 
+    let chat_storage_quota_bytes: i64 = sqlx::query_scalar(
+        "SELECT value::bigint FROM site_settings WHERE key='default_chat_storage_quota_bytes'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(i64::try_from(kutup_chat_proto::DEFAULT_CHAT_STORAGE_QUOTA_BYTES).unwrap());
+
     let res = sqlx::query(
         r#"INSERT INTO users (
             email, username, login_key_hash,
@@ -367,12 +378,13 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
             account_incarnation_id, drive_signing_public_key,
             account_protection_suite, account_protection_salt,
             argon_memory_kib, argon_iterations, argon_parallelism,
-            is_admin, is_first_login
-        ) VALUES ($1,$2,$3,'','','','','','','','',0,'',0,0,0,true,true)"#,
+            is_admin, is_first_login, chat_storage_quota_bytes
+        ) VALUES ($1,$2,$3,'','','','','','','','',0,'',0,0,0,true,true,$4)"#,
     )
     .bind(email)
     .bind(username)
     .bind(&hash)
+    .bind(chat_storage_quota_bytes)
     .execute(pool)
     .await;
     match res {
@@ -485,33 +497,48 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/api/chat/device/:deviceId", delete(chat::revoke_device))
         .route(
-            "/api/chat/history-transfers",
-            post(handlers::chat_history_transfer::create)
-                .get(handlers::chat_history_transfer::list)
+            "/api/chat/backup",
+            post(handlers::chat_backup::provision)
+                .get(handlers::chat_backup::status)
                 .route_layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .route(
-            "/api/chat/history-transfers/:transferId",
-            delete(handlers::chat_history_transfer::cancel),
-        )
-        .route(
-            "/api/chat/history-transfers/:transferId/acceptance",
-            put(handlers::chat_history_transfer::accept)
-                .route_layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/chat/history-transfers/:transferId/frames/:index",
-            put(handlers::chat_history_transfer::put_frame)
+            "/api/chat/backup/segments",
+            post(handlers::chat_backup::append_segment)
+                .get(handlers::chat_backup::list_segments)
                 .route_layer(DefaultBodyLimit::max(400 * 1024)),
         )
         .route(
-            "/api/chat/history-transfers/:transferId/frames",
-            get(handlers::chat_history_transfer::drain_frames),
+            "/api/chat/backup/bases",
+            post(handlers::chat_backup::stage_base)
+                .route_layer(DefaultBodyLimit::max(129 * 1024 * 1024)),
         )
         .route(
-            "/api/chat/history-transfers/:transferId/completion",
-            post(handlers::chat_history_transfer::complete)
+            "/api/chat/backup/bases/:objectId",
+            get(handlers::chat_backup::download_base),
+        )
+        .route(
+            "/api/chat/backup/manifest",
+            put(handlers::chat_backup::commit_manifest)
                 .route_layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/chat/backup/media/copy",
+            post(handlers::chat_backup::copy_media).route_layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/chat/backup/media",
+            post(handlers::chat_backup::upload_media)
+                .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024 + 1024 * 1024)),
+        )
+        .route(
+            "/api/chat/backup/media/reconciliation",
+            post(handlers::chat_backup::reconcile_media)
+                .route_layer(DefaultBodyLimit::max(256 * 1024)),
+        )
+        .route(
+            "/api/chat/backup/media/:mediaId",
+            get(handlers::chat_backup::download_media),
         )
         .route("/api/chat/manifest", post(chat::publish_manifest))
         .route(

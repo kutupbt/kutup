@@ -52,6 +52,7 @@ pub enum AccountEnvelopePurpose {
     PasswordMasterKey = 1,
     RecoveryMasterKey = 2,
     DriveHpkePrivateKey = 3,
+    ChatBackupRoot = 4,
 }
 
 impl AccountEnvelopePurpose {
@@ -68,6 +69,7 @@ impl TryFrom<u8> for AccountEnvelopePurpose {
             1 => Ok(Self::PasswordMasterKey),
             2 => Ok(Self::RecoveryMasterKey),
             3 => Ok(Self::DriveHpkePrivateKey),
+            4 => Ok(Self::ChatBackupRoot),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown account-envelope purpose {value}"
             ))),

@@ -93,24 +93,14 @@ eviction therefore creates a new device key tuple. Password-derived account
 authority proves that the account may authorize the tuple; it does not make
 old per-device libsignal ciphertext decryptable by the replacement.
 
-Before V1, clients must provide explicit active-installation review, last-seen
-information and revocation. Linking a new installation while an authorized
-device survives must offer an authenticated one-time E2EE history transfer.
-The old device packages a bounded local history and recent-media snapshot,
-encrypts it to an ephemeral key authenticated by both exact manifest devices,
-and the new device verifies the transcript before import. The homeserver may
-relay and temporarily retain only opaque bounded transfer frames; it never
-receives plaintext or a reusable history key.
-
-History transfer is distinct from message delivery. Senders fan out only to
-the exact signed destination manifest observed for that send. Adding a device
-does not authorize the server to copy or transform an older device's mailbox.
-If no authorized old device or E2EE backup survives, old device-addressed
-ciphertext is unrecoverable and the UI must disclose that condition. It must
-not silently render an empty history as proof that no messages were sent.
-
-The canonical handshake, framing, snapshot/import boundary and relay lifecycle
-are specified in [`draft/v1/chat-history-transfer.md`](draft/v1/chat-history-transfer.md).
+Clients provide explicit active-installation review, last-seen information and
+revocation. Chat display history is protected separately by the always-on,
+account-local E2EE backup described in
+[`plans/continuous-e2ee-chat-backup.md`](plans/continuous-e2ee-chat-backup.md).
+A recovered installation verifies and restores the signed encrypted base plus
+its ordered event tail; it never restores device keys, Direct ratchets, MLS
+epochs, mailbox cursors or outboxes. Device-to-device history transfer and its
+relay are not supported.
 
 `AccountManifestV1` contains:
 
@@ -169,11 +159,14 @@ Relevant routes:
 |---|---|
 | `POST /api/chat/device` | restart-safe device registration |
 | `DELETE /api/chat/device/{deviceId}` | revoke one device |
-| `POST/GET /api/chat/history-transfers` | create/list account-local signed transfer requests |
-| `PUT /api/chat/history-transfers/{id}/acceptance` | one existing device explicitly accepts |
-| `PUT/GET /api/chat/history-transfers/{id}/frames[/index]` | upload/drain bounded opaque frames |
-| `POST /api/chat/history-transfers/{id}/completion` | record destination completion and erase frames |
-| `DELETE /api/chat/history-transfers/{id}` | cancel and erase a participant's transfer |
+| `POST/GET /api/chat/backup` | provision or inspect the encrypted history archive |
+| `POST/GET /api/chat/backup/segments` | append or restore ordered encrypted event segments |
+| `POST /api/chat/backup/bases` | stage a client-compacted encrypted base |
+| `GET /api/chat/backup/bases/{id}` | stream the currently committed encrypted base |
+| `PUT /api/chat/backup/manifest` | atomically CAS-commit a signed restore point |
+| `POST /api/chat/backup/media/copy` | outer-encrypt an existing Chat-media ciphertext for history |
+| `POST/GET /api/chat/backup/media[/{id}]` | upload or lazily restore backup-media ciphertext |
+| `POST /api/chat/backup/media/reconciliation` | page the exact next restore-point media reference set |
 | `POST /api/chat/manifest` | publish exact next signed manifest |
 | `GET /api/chat/users/{username}/manifest` | current local/federated manifest |
 | `GET /api/chat/users/{username}/manifest-history` | bounded complete history page |
@@ -287,7 +280,7 @@ countdown are intentionally independent, and this account-internal operation
 is independent of optional read receipts and is never sent back to Alice.
 
 An unread offline recipient therefore still receives the full viewing window.
-Once viewing has started, linked-device history transfer and browser-device
+Once viewing has started, continuous history backup and browser-device
 replacement preserve the absolute deadline and cannot restart or extend it.
 At expiry the client removes the local plaintext, derived
 previews/reactions/receipts and releases any unsaved Chat-media reference.
@@ -307,8 +300,8 @@ Chat search is a client-only operation over decrypted history already present
 on that installation. Queries, result terms and plaintext indexes are never
 sent to or persisted by a homeserver, federation peer or MLS ordering
 authority. V1 performs an ephemeral in-memory scan, so a replacement browser
-can search only history it has recovered through the normal encrypted
-linked-device transfer.
+can search only history it has recovered through the normal server-hosted
+encrypted backup restore.
 
 The searchable view applies product state before matching: hidden controls,
 deleted messages and expired disappearing content are excluded; an edit

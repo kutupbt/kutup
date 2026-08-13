@@ -27,6 +27,7 @@ const CHAT_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 #[derive(Clone, Copy)]
 pub struct ChatMaintenancePolicy {
     pub mailbox_retention_days: i64,
+    pub media_delivery_retention_days: i64,
     pub send_retention_days: i64,
     pub device_expiry_days: i64,
 }
@@ -79,7 +80,7 @@ pub fn spawn_all(
         let mut tick = tokio::time::interval(UPLOADS_SWEEP_INTERVAL);
         loop {
             tick.tick().await;
-            uploads_sweep_once(&pool, &storage).await;
+            uploads_sweep_once(&pool, &storage, chat.media_delivery_retention_days).await;
         }
     });
 }
@@ -87,12 +88,12 @@ pub fn spawn_all(
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ChatSweepResult {
     pub mailbox_rows: u64,
+    pub mls_mailbox_rows: u64,
     pub send_rows: u64,
     pub federation_send_rows: u64,
     pub federation_transaction_rows: u64,
     pub devices: u64,
     pub ws_tickets: u64,
-    pub history_transfers: u64,
 }
 
 /// Bound offline-ciphertext and idempotency storage and retire abandoned chat
@@ -105,6 +106,16 @@ pub async fn chat_maintenance_once(
     chat_hub: Option<&ChatHub>,
 ) -> ChatSweepResult {
     let mut result = ChatSweepResult::default();
+    let mailbox_retention_days = crate::site_settings::chat_delivery_retention_days(
+        pool,
+        crate::site_settings::CHAT_MAILBOX_RETENTION_DAYS,
+        policy.mailbox_retention_days,
+    )
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!(%error, "chat maintenance: retention setting unavailable; mailbox cleanup skipped");
+        0
+    });
     match sqlx::query("DELETE FROM chat_ws_tickets WHERE expires_at <= now()")
         .execute(pool)
         .await
@@ -112,26 +123,14 @@ pub async fn chat_maintenance_once(
         Ok(done) => result.ws_tickets = done.rows_affected(),
         Err(error) => tracing::warn!("chat maintenance: WS ticket cleanup failed: {error}"),
     }
-    match sqlx::query(
-        "DELETE FROM chat_history_transfers
-         WHERE expires_at <= now() OR (state='completed' AND updated_at < now()-interval '15 minutes')",
-    )
-    .execute(pool)
-    .await
-    {
-        Ok(done) => result.history_transfers = done.rows_affected(),
-        Err(error) => tracing::warn!("chat maintenance: history transfer cleanup failed: {error}"),
-    }
-    if policy.mailbox_retention_days > 0 {
-        match sqlx::query(
-            "DELETE FROM chat_mailbox
-             WHERE server_ts < now() - ($1 * interval '1 day')",
-        )
-        .bind(policy.mailbox_retention_days)
-        .execute(pool)
-        .await
-        {
-            Ok(done) => result.mailbox_rows = done.rows_affected(),
+    if mailbox_retention_days > 0 {
+        let cutoff = OffsetDateTime::now_utc()
+            - Duration::from_secs((mailbox_retention_days as u64).saturating_mul(86_400));
+        match sweep_chat_mailboxes_before(pool, cutoff).await {
+            Ok((direct, mls)) => {
+                result.mailbox_rows = direct;
+                result.mls_mailbox_rows = mls;
+            }
             Err(error) => tracing::warn!("chat maintenance: mailbox retention failed: {error}"),
         }
     }
@@ -199,16 +198,38 @@ pub async fn chat_maintenance_once(
     if result != ChatSweepResult::default() {
         tracing::info!(
             mailbox_rows = result.mailbox_rows,
+            mls_mailbox_rows = result.mls_mailbox_rows,
             send_rows = result.send_rows,
             federation_send_rows = result.federation_send_rows,
             federation_transaction_rows = result.federation_transaction_rows,
             devices = result.devices,
             ws_tickets = result.ws_tickets,
-            history_transfers = result.history_transfers,
             "chat maintenance complete"
         );
     }
     result
+}
+
+/// Delete Direct and MLS delivery ciphertext strictly older than an explicit
+/// cutoff. Keeping cutoff calculation outside the repository operation makes
+/// exact-boundary tests deterministic without exposing a production endpoint.
+pub async fn sweep_chat_mailboxes_before(
+    pool: &PgPool,
+    cutoff: OffsetDateTime,
+) -> anyhow::Result<(u64, u64)> {
+    let mut transaction = pool.begin().await?;
+    let direct = sqlx::query("DELETE FROM chat_mailbox WHERE server_ts < $1")
+        .bind(cutoff)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+    let mls = sqlx::query("DELETE FROM chat_mls_mailbox WHERE server_ts < $1")
+        .bind(cutoff)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+    transaction.commit().await?;
+    Ok((direct, mls))
 }
 
 /// Prunes file_versions rows that are BOTH older than KEEP_DAYS AND beyond KEEP_N per file
@@ -270,31 +291,40 @@ pub async fn version_cleanup_tick(pool: &PgPool, storage: &StorageService) -> us
     pruned
 }
 
-/// Rewrites `users.storage_used_bytes` from authoritative Drive rows and
-/// logical Chat-media references for any drifted user.
+/// Rewrites the independent Drive/general and Chat usage counters from their
+/// authoritative logical references for any drifted user.
 pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
-    let rows: Vec<(Uuid, i64)> = match sqlx::query_as(
-        r#"WITH child_bytes AS (
+    let rows: Vec<(Uuid, i64, i64)> = match sqlx::query_as(
+        r#"WITH drive_child_bytes AS (
              SELECT uploader_user_id AS user_id, encrypted_size_bytes AS bytes FROM files
              UNION ALL
              SELECT uploader_user_id,            size_bytes              FROM file_assets
              UNION ALL
              SELECT author_user_id,              size_bytes              FROM file_versions
+           ),
+           chat_child_bytes AS (
+             SELECT user_id, logical_bytes AS bytes FROM chat_media_references
              UNION ALL
-             SELECT user_id,                     logical_bytes           FROM chat_media_references
+             SELECT user_id, ciphertext_bytes FROM chat_backup_segments
+             UNION ALL
+             SELECT user_id, ciphertext_bytes FROM chat_backup_bases
+             UNION ALL
+             SELECT user_id, ciphertext_bytes FROM chat_backup_media_objects
            ),
            expected AS (
-             SELECT u.id AS user_id, COALESCE(SUM(c.bytes), 0) AS bytes
+             SELECT u.id AS user_id,
+                    COALESCE((SELECT SUM(d.bytes) FROM drive_child_bytes d WHERE d.user_id=u.id),0) AS drive_bytes,
+                    COALESCE((SELECT SUM(c.bytes) FROM chat_child_bytes c WHERE c.user_id=u.id),0) AS chat_bytes
              FROM users u
-             LEFT JOIN child_bytes c ON c.user_id = u.id
-             GROUP BY u.id
            )
            UPDATE users
-           SET storage_used_bytes = expected.bytes
+           SET storage_used_bytes = expected.drive_bytes,
+               chat_storage_used_bytes = expected.chat_bytes
            FROM expected
            WHERE users.id = expected.user_id
-             AND users.storage_used_bytes <> expected.bytes
-           RETURNING users.id, users.storage_used_bytes"#,
+             AND (users.storage_used_bytes <> expected.drive_bytes
+                  OR users.chat_storage_used_bytes <> expected.chat_bytes)
+           RETURNING users.id, users.storage_used_bytes, users.chat_storage_used_bytes"#,
     )
     .fetch_all(pool)
     .await
@@ -305,8 +335,10 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
             return 0;
         }
     };
-    for (uid, used) in &rows {
-        tracing::info!("quota reconcile: user={uid} storage_used_bytes={used} (drift corrected)");
+    for (uid, drive_used, chat_used) in &rows {
+        tracing::info!(
+            "quota reconcile: user={uid} drive_bytes={drive_used} chat_bytes={chat_used} (drift corrected)"
+        );
     }
     if !rows.is_empty() {
         tracing::info!("quota reconcile: corrected {} users", rows.len());
@@ -317,7 +349,11 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
 /// Reaps abandoned tus uploads (rows whose `updated_at` is older than 24 h): aborts the S3
 /// multipart, then drops the row (freeing soft-reserved quota) — mirrors
 /// `UploadsSweeper.once`. Returns the number reaped.
-pub async fn uploads_sweep_once(pool: &PgPool, storage: &StorageService) -> usize {
+pub async fn uploads_sweep_once(
+    pool: &PgPool,
+    storage: &StorageService,
+    media_delivery_retention_days: i64,
+) -> usize {
     let stale: Vec<(Uuid, String, String)> = match sqlx::query_as(
         "SELECT id, storage_path, s3_upload_id FROM uploads \
          WHERE updated_at < NOW() - $1 * interval '1 second'",
@@ -382,7 +418,143 @@ pub async fn uploads_sweep_once(pool: &PgPool, storage: &StorageService) -> usiz
     if let Err(error) = sweep_chat_media_orphans(pool, storage).await {
         tracing::warn!(error = %error, "Chat-media orphan sweep failed");
     }
+    if let Err(error) = sweep_chat_backup_orphans(pool, storage).await {
+        tracing::warn!(error = %error, "Chat backup orphan sweep failed");
+    }
+    let media_delivery_retention_days = crate::site_settings::chat_delivery_retention_days(
+        pool,
+        crate::site_settings::CHAT_MEDIA_DELIVERY_RETENTION_DAYS,
+        media_delivery_retention_days,
+    )
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!(%error, "upload maintenance: retention setting unavailable; delivery-media cleanup skipped");
+        0
+    });
+    if media_delivery_retention_days > 0 {
+        let cutoff = OffsetDateTime::now_utc()
+            - Duration::from_secs((media_delivery_retention_days as u64).saturating_mul(86_400));
+        if let Err(error) = sweep_chat_delivery_media_before(pool, storage, cutoff).await {
+            tracing::warn!(error = %error, "Chat-media delivery retention sweep failed");
+        }
+    }
+    if let Err(error) = sweep_expired_chat_backup_staging(pool, storage).await {
+        tracing::warn!(error = %error, "Chat backup staging sweep failed");
+    }
     reaped
+}
+
+async fn sweep_expired_chat_backup_staging(
+    pool: &PgPool,
+    storage: &StorageService,
+) -> anyhow::Result<()> {
+    let mut transaction = pool.begin().await?;
+    let expired: Vec<(Uuid, Uuid, i64, i64, String)> = sqlx::query_as(
+        "SELECT user_id,object_id,generation,ciphertext_bytes,storage_path
+         FROM chat_backup_bases
+         WHERE state='staged' AND expires_at<=NOW()
+         ORDER BY expires_at LIMIT 64 FOR UPDATE SKIP LOCKED",
+    )
+    .fetch_all(&mut *transaction)
+    .await?;
+    for (user_id, object_id, generation, bytes, _) in &expired {
+        sqlx::query("DELETE FROM chat_backup_bases WHERE user_id=$1 AND object_id=$2")
+            .bind(user_id)
+            .bind(object_id)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query(
+            "DELETE FROM chat_backup_media_reconciliations
+             WHERE user_id=$1 AND target_generation=$2",
+        )
+        .bind(user_id)
+        .bind(generation)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            "UPDATE users SET chat_storage_used_bytes=GREATEST(0,chat_storage_used_bytes-$1)
+             WHERE id=$2",
+        )
+        .bind(bytes)
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+    for (_, _, _, _, path) in &expired {
+        if let Err(error) = storage.delete(path).await {
+            tracing::warn!(error = %error, "expired backup base requires orphan sweep");
+        }
+    }
+    if !expired.is_empty() {
+        tracing::info!(objects = expired.len(), "expired staged Chat backup bases");
+    }
+    Ok(())
+}
+
+/// Expire ordinary delivery references after the administrator-selected window while leaving the
+/// independent continuous-history media namespace untouched.
+pub async fn sweep_chat_delivery_media_before(
+    pool: &PgPool,
+    storage: &StorageService,
+    cutoff: OffsetDateTime,
+) -> anyhow::Result<()> {
+    let mut transaction = pool.begin().await?;
+    let expired: Vec<(Uuid, Uuid, Uuid, i64)> = sqlx::query_as(
+        "SELECT id,user_id,attachment_id,logical_bytes
+         FROM chat_media_references
+         WHERE created_at < $1
+         ORDER BY created_at
+         LIMIT 512 FOR UPDATE SKIP LOCKED",
+    )
+    .bind(cutoff)
+    .fetch_all(&mut *transaction)
+    .await?;
+    if expired.is_empty() {
+        transaction.rollback().await?;
+        return Ok(());
+    }
+    for (reference_id, user_id, _, bytes) in &expired {
+        sqlx::query("DELETE FROM chat_media_references WHERE id=$1")
+            .bind(reference_id)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query(
+            "UPDATE users
+             SET chat_storage_used_bytes=GREATEST(chat_storage_used_bytes-$1,0)
+             WHERE id=$2",
+        )
+        .bind(bytes)
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    let attachment_ids: Vec<Uuid> = expired
+        .iter()
+        .map(|(_, _, attachment_id, _)| *attachment_id)
+        .collect();
+    let orphan_paths: Vec<String> = sqlx::query_scalar(
+        "DELETE FROM chat_media_objects o
+         WHERE o.attachment_id = ANY($1)
+           AND NOT EXISTS (
+             SELECT 1 FROM chat_media_references r WHERE r.attachment_id=o.attachment_id
+           )
+         RETURNING o.storage_path",
+    )
+    .bind(&attachment_ids)
+    .fetch_all(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    for path in orphan_paths {
+        if let Err(error) = storage.delete(&path).await {
+            tracing::warn!(error = %error, "expired Chat-media object requires orphan sweep");
+        }
+    }
+    tracing::info!(
+        references = expired.len(),
+        "expired Chat-media delivery references"
+    );
+    Ok(())
 }
 
 /// Remove completed Chat-media objects whose database transaction never
@@ -422,6 +594,49 @@ async fn sweep_chat_media_orphans(pool: &PgPool, storage: &StorageService) -> an
     }
     if removed > 0 {
         tracing::info!(removed, "removed orphaned Chat-media objects");
+    }
+    Ok(())
+}
+
+/// Reconcile object storage after interrupted staging, CAS replacement or
+/// account-lifecycle cleanup. Only database-referenced opaque objects survive.
+async fn sweep_chat_backup_orphans(pool: &PgPool, storage: &StorageService) -> anyhow::Result<()> {
+    let cutoff = OffsetDateTime::now_utc() - Duration::from_secs(UPLOADS_STALE_AFTER_SECS as u64);
+    let mut token = None;
+    let mut removed = 0_u64;
+    loop {
+        let (objects, next) = storage
+            .list_objects_page("chat-backup/", token.take())
+            .await?;
+        let candidates: Vec<String> = objects
+            .into_iter()
+            .filter(|object| object.last_modified <= cutoff)
+            .map(|object| object.key)
+            .collect();
+        if !candidates.is_empty() {
+            let alive: Vec<String> = sqlx::query_scalar(
+                "SELECT storage_path FROM chat_backup_bases WHERE storage_path=ANY($1)
+                 UNION ALL
+                 SELECT storage_path FROM chat_backup_media_objects WHERE storage_path=ANY($1)",
+            )
+            .bind(&candidates)
+            .fetch_all(pool)
+            .await?;
+            let alive: std::collections::HashSet<_> = alive.into_iter().collect();
+            let orphaned: Vec<String> = candidates
+                .into_iter()
+                .filter(|path| !alive.contains(path))
+                .collect();
+            storage.delete_objects_batch(&orphaned).await?;
+            removed = removed.saturating_add(orphaned.len() as u64);
+        }
+        match next {
+            Some(next) => token = Some(next),
+            None => break,
+        }
+    }
+    if removed > 0 {
+        tracing::info!(removed, "removed orphaned Chat backup objects");
     }
     Ok(())
 }
@@ -683,7 +898,13 @@ pub async fn run_orphan_sweep(
 
 #[cfg(test)]
 mod tests {
-    use super::file_id_from_key;
+    use super::{
+        file_id_from_key, quota_reconcile_tick, sweep_chat_delivery_media_before,
+        sweep_chat_mailboxes_before,
+    };
+    use crate::storage::StorageService;
+    use aws_sdk_s3::primitives::ByteStream;
+    use sha2::Digest;
 
     #[test]
     fn key_shape() {
@@ -704,5 +925,324 @@ mod tests {
             None
         );
         assert_eq!(file_id_from_key("files/not-a-uuid/x"), None);
+    }
+
+    #[tokio::test]
+    async fn live_fixed_cutoff_mailbox_retention() {
+        let Ok(database_url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset — skipping live retention test");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .unwrap();
+        let (user_id, device_id): (uuid::Uuid, i32) = sqlx::query_as(
+            "SELECT user_id,device_id FROM chat_devices ORDER BY created_at DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("live Chat device fixture");
+        sqlx::query(
+            "INSERT INTO chat_mls_devices
+             (user_id,device_id,manifest_version,suite,credential_public_key,
+              anonymous_delivery_public_key,name)
+             VALUES ($1,$2,1,3,$3,$4,'retention fixture')
+             ON CONFLICT (user_id,device_id) DO NOTHING",
+        )
+        .bind(user_id)
+        .bind(device_id)
+        .bind(vec![0x31u8; 32])
+        .bind(vec![0x32u8; 32])
+        .execute(&pool)
+        .await
+        .unwrap();
+        let direct_id: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM chat_mailbox WHERE recipient_user_id=$1 LIMIT 1")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await
+                .expect("live Direct mailbox fixture");
+        let mls_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO chat_mls_mailbox
+             (id,recipient_user_id,recipient_device_id,delivery_kind,send_id,opaque_envelope)
+             VALUES ($1,$2,$3,'anonymous',$4,$5)",
+        )
+        .bind(mls_id)
+        .bind(user_id)
+        .bind(device_id)
+        .bind(uuid::Uuid::new_v4())
+        .bind(vec![0x41u8])
+        .execute(&pool)
+        .await
+        .unwrap();
+        let cutoff = time::OffsetDateTime::now_utc();
+        sqlx::query("UPDATE chat_mailbox SET server_ts=$1 WHERE id=$2")
+            .bind(cutoff)
+            .bind(direct_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE chat_mls_mailbox SET server_ts=$1 WHERE id=$2")
+            .bind(cutoff)
+            .bind(mls_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            sweep_chat_mailboxes_before(&pool, cutoff).await.unwrap(),
+            (0, 0)
+        );
+        sqlx::query("UPDATE chat_mailbox SET server_ts=$1 WHERE id=$2")
+            .bind(cutoff - time::Duration::SECOND)
+            .bind(direct_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE chat_mls_mailbox SET server_ts=$1 WHERE id=$2")
+            .bind(cutoff - time::Duration::SECOND)
+            .bind(mls_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            sweep_chat_mailboxes_before(&pool, cutoff).await.unwrap(),
+            (1, 1)
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn live_fixed_cutoff_delivery_media_retention() {
+        let (Ok(database_url), Ok(s3_endpoint)) = (
+            std::env::var("KUTUP_LIVE_DATABASE_URL"),
+            std::env::var("KUTUP_LIVE_S3_ENDPOINT"),
+        ) else {
+            eprintln!("live database/S3 settings unset — skipping live media-retention test");
+            return;
+        };
+        let storage = StorageService::new(
+            &s3_endpoint,
+            &std::env::var("KUTUP_LIVE_S3_ACCESS_KEY").unwrap(),
+            &std::env::var("KUTUP_LIVE_S3_SECRET_KEY").unwrap(),
+            &std::env::var("KUTUP_LIVE_S3_BUCKET").unwrap(),
+            "us-east-1",
+        );
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .unwrap();
+        let user_id: uuid::Uuid =
+            sqlx::query_scalar("SELECT user_id FROM chat_devices ORDER BY created_at DESC LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .expect("live Chat user fixture");
+        let original_used: i64 =
+            sqlx::query_scalar("SELECT chat_storage_used_bytes FROM users WHERE id=$1")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let cutoff = time::OffsetDateTime::now_utc();
+        let expired_attachment = uuid::Uuid::new_v4();
+        let boundary_attachment = uuid::Uuid::new_v4();
+        let backup_incarnation = uuid::Uuid::new_v4();
+        let protected_media_id = vec![0x71u8; 32];
+        let expired_bytes = b"expired".to_vec();
+        let boundary_bytes = b"boundary".to_vec();
+        let protected_bytes = b"protected".to_vec();
+        let expired_path = format!("chat-media/retention/{expired_attachment}");
+        let boundary_path = format!("chat-media/retention/{boundary_attachment}");
+        let protected_path = format!("chat-backup/retention/{backup_incarnation}");
+
+        for (path, bytes) in [
+            (&expired_path, &expired_bytes),
+            (&boundary_path, &boundary_bytes),
+            (&protected_path, &protected_bytes),
+        ] {
+            storage
+                .upload(
+                    path,
+                    ByteStream::from(bytes.clone()),
+                    i64::try_from(bytes.len()).unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+        for (attachment_id, path, bytes) in [
+            (expired_attachment, &expired_path, &expired_bytes),
+            (boundary_attachment, &boundary_path, &boundary_bytes),
+        ] {
+            sqlx::query(
+                "INSERT INTO chat_media_objects
+                 (attachment_id,origin_user_id,origin_domain,suite,ciphertext_bytes,
+                  ciphertext_sha256,retrieval_token_hash,storage_path,created_at)
+                 VALUES ($1,$2,'retention.test',1,$3,$4,$5,$6,$7)",
+            )
+            .bind(attachment_id)
+            .bind(user_id)
+            .bind(i64::try_from(bytes.len()).unwrap())
+            .bind(hex::encode(sha2::Sha256::digest(bytes)))
+            .bind(vec![0x51u8; 32])
+            .bind(path)
+            .bind(cutoff)
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO chat_media_references
+                 (user_id,attachment_id,logical_bytes,created_at) VALUES ($1,$2,$3,$4)",
+            )
+            .bind(user_id)
+            .bind(attachment_id)
+            .bind(i64::try_from(bytes.len()).unwrap())
+            .bind(cutoff)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO chat_backups
+             (user_id,backup_incarnation_id,suite,protection_domain,root_envelope,
+              signer_authorization,signer_authorization_digest)
+             VALUES ($1,$2,1,1,'retention-envelope','{}',repeat('0',64))",
+        )
+        .bind(user_id)
+        .bind(backup_incarnation)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO chat_backup_media_objects
+             (user_id,media_id,ciphertext_bytes,ciphertext_sha256,storage_path,created_at)
+             VALUES ($1,$2,$3,$4,$5,$6)",
+        )
+        .bind(user_id)
+        .bind(&protected_media_id)
+        .bind(i64::try_from(protected_bytes.len()).unwrap())
+        .bind(hex::encode(sha2::Sha256::digest(&protected_bytes)))
+        .bind(&protected_path)
+        .bind(cutoff - time::Duration::DAY)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO chat_backup_media_references (user_id,media_id,reference_id,created_at)
+             VALUES ($1,$2,$3,$4)",
+        )
+        .bind(user_id)
+        .bind(&protected_media_id)
+        .bind(uuid::Uuid::new_v4())
+        .bind(cutoff - time::Duration::DAY)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let fixture_bytes =
+            i64::try_from(expired_bytes.len() + boundary_bytes.len() + protected_bytes.len())
+                .unwrap();
+        sqlx::query(
+            "UPDATE users SET chat_storage_used_bytes=chat_storage_used_bytes+$1 WHERE id=$2",
+        )
+        .bind(fixture_bytes)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // The boundary is strict: delivery references created exactly at the cutoff survive.
+        sweep_chat_delivery_media_before(&pool, &storage, cutoff)
+            .await
+            .unwrap();
+        let at_boundary: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM chat_media_references WHERE user_id=$1")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(at_boundary, 2);
+
+        sqlx::query("UPDATE chat_media_references SET created_at=$1 WHERE attachment_id=$2")
+            .bind(cutoff - time::Duration::SECOND)
+            .bind(expired_attachment)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sweep_chat_delivery_media_before(&pool, &storage, cutoff)
+            .await
+            .unwrap();
+        let used_after_expiry: i64 =
+            sqlx::query_scalar("SELECT chat_storage_used_bytes FROM users WHERE id=$1")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            used_after_expiry,
+            original_used + i64::try_from(boundary_bytes.len() + protected_bytes.len()).unwrap()
+        );
+        assert!(storage.get_object(&expired_path).await.is_err());
+        assert_eq!(
+            storage.get_object(&boundary_path).await.unwrap().1,
+            i64::try_from(boundary_bytes.len()).unwrap()
+        );
+        assert_eq!(
+            storage.get_object(&protected_path).await.unwrap().1,
+            i64::try_from(protected_bytes.len()).unwrap()
+        );
+        let protected_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM chat_backup_media_objects WHERE user_id=$1 AND media_id=$2",
+        )
+        .bind(user_id)
+        .bind(&protected_media_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(protected_rows, 1);
+
+        // Reconciliation derives the exact total from both delivery and protected ledgers.
+        sqlx::query(
+            "UPDATE users SET chat_storage_used_bytes=chat_storage_used_bytes+123 WHERE id=$1",
+        )
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(quota_reconcile_tick(&pool).await >= 1);
+        let reconciled: i64 =
+            sqlx::query_scalar("SELECT chat_storage_used_bytes FROM users WHERE id=$1")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(reconciled, used_after_expiry);
+
+        // Remove the boundary delivery fixture, then explicitly tear down protected history.
+        sqlx::query("UPDATE chat_media_references SET created_at=$1 WHERE attachment_id=$2")
+            .bind(cutoff - time::Duration::SECOND)
+            .bind(boundary_attachment)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sweep_chat_delivery_media_before(&pool, &storage, cutoff)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM chat_backups WHERE user_id=$1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        storage.delete(&protected_path).await.unwrap();
+        sqlx::query("UPDATE users SET chat_storage_used_bytes=$1 WHERE id=$2")
+            .bind(original_used)
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(storage.get_object(&boundary_path).await.is_err());
+        assert!(storage.get_object(&protected_path).await.is_err());
+        pool.close().await;
     }
 }

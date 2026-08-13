@@ -235,6 +235,7 @@ export function useCreateUser() {
       username: string
       tempPassword: string
       storageQuotaBytes: number
+      chatStorageQuotaBytes?: number
     }) => api.post('/admin/users', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'users'] })
@@ -258,7 +259,12 @@ export function useUpdateUser() {
       id: string
       // `isAdmin` promotes/demotes; the backend rejects demoting the
       // break-glass admin (403) and the last usable admin (400).
-      body: Partial<{ isActive: boolean; storageQuotaBytes: number; isAdmin: boolean }>
+      body: Partial<{
+        isActive: boolean
+        storageQuotaBytes: number
+        chatStorageQuotaBytes: number
+        isAdmin: boolean
+      }>
     }) => api.put(`/admin/users/${id}`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'users'] })
@@ -362,6 +368,7 @@ export function useUpdateAdminSettings() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'settings'] })
       qc.invalidateQueries({ queryKey: ['admin', 'activity'] })
+      qc.invalidateQueries({ queryKey: ['public-settings', 'chat'] })
     },
     onError: (err: any) => {
       toast.error(err.response?.data?.error ?? 'Settings update failed')

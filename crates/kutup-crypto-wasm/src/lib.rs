@@ -5,15 +5,24 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use kutup_chat_proto::ChatAttachmentLedgerEntryV1;
+use ed25519_dalek::{Signer as _, SigningKey};
+use kutup_chat_proto::{
+    ChatAttachmentLedgerEntryV1, ChatBackupBasePlaintextV1, ChatBackupManifestV1,
+    ChatBackupSegmentPlaintextV1, ChatBackupSignerAuthorizationV1,
+};
 use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
 use kutup_crypto::chat_attachment_ledger::{self, ChatAttachmentLedgerContextV1};
+use kutup_crypto::chat_backup::{
+    self, ChatBackupContextV1, ChatBackupObjectContextV1, ChatBackupObjectPurposeV1,
+    ChatBackupProtectionDomainV1, ChatBackupSuiteId,
+};
 use kutup_crypto::chat_media::{self, ChatMediaObjectContextV1};
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::envelope::{self, CollabFrameContextV1};
 use kutup_crypto::kdf::{self, AccountProtectionParameters, AccountProtectionSuiteId};
 use serde::Serialize;
+use uuid::Uuid;
 use wasm_bindgen::prelude::*;
 
 #[derive(Serialize)]
@@ -50,6 +59,30 @@ struct ChatMediaObjectPreparationView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ChatBackupMediaPreparationView {
+    media_id: String,
+    outer_encryption_key: String,
+    object_header: String,
+    padded_plaintext_bytes: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenedChatBackupMediaHeaderView {
+    outer_encryption_key: String,
+    source_ciphertext_bytes: u64,
+    padded_plaintext_bytes: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VerifiedChatBackupMetadataView {
+    signer_authorization_digest: String,
+    manifest_digest: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ChatAttachmentLedgerHeaderView {
     suite: u16,
     account_incarnation_id: String,
@@ -67,6 +100,376 @@ struct OpenedCollabFrameView {
     sender_device_id: String,
     sequence: String,
     plaintext: String,
+}
+
+fn chat_backup_context(
+    account_incarnation_id: &str,
+    backup_incarnation_id: &str,
+) -> Result<ChatBackupContextV1, JsValue> {
+    let account = hex::decode(account_incarnation_id)
+        .ok()
+        .and_then(|value| value.try_into().ok())
+        .ok_or_else(|| js_error("account incarnation must be lowercase 32-byte hex"))?;
+    if hex::encode(account) != account_incarnation_id {
+        return Err(js_error(
+            "account incarnation must be canonical lowercase hex",
+        ));
+    }
+    let backup = Uuid::parse_str(backup_incarnation_id)
+        .ok()
+        .filter(|value| !value.is_nil() && value.hyphenated().to_string() == backup_incarnation_id)
+        .ok_or_else(|| js_error("backup incarnation must be a canonical non-nil UUID"))?;
+    Ok(ChatBackupContextV1 {
+        account_incarnation_id: account,
+        backup_incarnation_id: *backup.as_bytes(),
+        protection_domain: ChatBackupProtectionDomainV1::StandardChat,
+    })
+}
+
+#[wasm_bindgen(js_name = createChatBackupSignerAuthorization)]
+pub fn create_chat_backup_signer_authorization(
+    master_key_base64: &str,
+    backup_root_base64: &str,
+    backup_incarnation_id: &str,
+    created_at_unix: i64,
+) -> Result<JsValue, JsValue> {
+    let master_key: [u8; 32] = decode_canonical_base64(master_key_base64, "master key")?
+        .try_into()
+        .map_err(|_| js_error("master key must be 32 bytes"))?;
+    let root: [u8; 32] = decode_canonical_base64(backup_root_base64, "backup root")?
+        .try_into()
+        .map_err(|_| js_error("backup root must be 32 bytes"))?;
+    if created_at_unix <= 0 {
+        return Err(js_error("backup authorization time is invalid"));
+    }
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let context = chat_backup_context(&identity.incarnation_id(), backup_incarnation_id)?;
+    let signer_seed = chat_backup::derive_manifest_signing_seed(&root, context)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let signer = SigningKey::from_bytes(&signer_seed);
+    let mut authorization = ChatBackupSignerAuthorizationV1 {
+        version: 1,
+        backup_incarnation_id: backup_incarnation_id.into(),
+        account_incarnation_id: identity.incarnation_id(),
+        suite: ChatBackupSuiteId::HkdfSha256XChaCha20Poly1305V1,
+        protection_domain: ChatBackupProtectionDomainV1::StandardChat,
+        manifest_signing_public_key: STANDARD.encode(signer.verifying_key().to_bytes()),
+        account_authority_key_id: identity.authority_key_id(),
+        created_at_unix,
+        account_authority_signature: String::new(),
+    };
+    authorization.account_authority_signature = STANDARD.encode(
+        identity
+            .authority_signing_key()
+            .sign(
+                &authorization
+                    .signing_bytes()
+                    .map_err(|error| js_error(&error))?,
+            )
+            .to_bytes(),
+    );
+    serde_wasm_bindgen::to_value(&authorization)
+        .map_err(|error| js_error(&format!("encode backup authorization: {error}")))
+}
+
+/// Verify the complete account-authority -> backup-signer -> manifest chain
+/// against keys derived locally from the recovered account master key.
+#[wasm_bindgen(js_name = verifyChatBackupMetadata)]
+pub fn verify_chat_backup_metadata(
+    signer_authorization: JsValue,
+    manifest: JsValue,
+    master_key_base64: &str,
+    backup_root_base64: &str,
+    expected_backup_incarnation_id: &str,
+) -> Result<JsValue, JsValue> {
+    let master_key: [u8; 32] = decode_canonical_base64(master_key_base64, "master key")?
+        .try_into()
+        .map_err(|_| js_error("master key must be 32 bytes"))?;
+    let root: [u8; 32] = decode_canonical_base64(backup_root_base64, "backup root")?
+        .try_into()
+        .map_err(|_| js_error("backup root must be 32 bytes"))?;
+    let authorization: ChatBackupSignerAuthorizationV1 =
+        serde_wasm_bindgen::from_value(signer_authorization)
+            .map_err(|error| js_error(&format!("decode backup authorization: {error}")))?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let context = chat_backup_context(&identity.incarnation_id(), expected_backup_incarnation_id)?;
+    if authorization.backup_incarnation_id != expected_backup_incarnation_id
+        || authorization.account_incarnation_id != identity.incarnation_id()
+        || authorization.account_authority_key_id != identity.authority_key_id()
+        || authorization.suite != ChatBackupSuiteId::HkdfSha256XChaCha20Poly1305V1
+        || authorization.protection_domain != ChatBackupProtectionDomainV1::StandardChat
+    {
+        return Err(js_error("backup signer authorization context mismatch"));
+    }
+    authorization
+        .verify(&identity.authority_public_key())
+        .map_err(|error| js_error(&error))?;
+    let signer_seed = chat_backup::derive_manifest_signing_seed(&root, context)
+        .map_err(|error| js_error(&error.to_string()))?;
+    if authorization.manifest_signing_public_key
+        != STANDARD.encode(
+            SigningKey::from_bytes(&signer_seed)
+                .verifying_key()
+                .to_bytes(),
+        )
+    {
+        return Err(js_error(
+            "backup manifest signer does not match the backup root",
+        ));
+    }
+    let authorization_digest = authorization.digest().map_err(|error| js_error(&error))?;
+    let manifest_digest = if manifest.is_null() || manifest.is_undefined() {
+        None
+    } else {
+        let manifest: ChatBackupManifestV1 = serde_wasm_bindgen::from_value(manifest)
+            .map_err(|error| js_error(&format!("decode backup manifest: {error}")))?;
+        manifest
+            .verify(&authorization)
+            .map_err(|error| js_error(&error))?;
+        Some(manifest.digest().map_err(|error| js_error(&error))?)
+    };
+    serde_wasm_bindgen::to_value(&VerifiedChatBackupMetadataView {
+        signer_authorization_digest: authorization_digest,
+        manifest_digest,
+    })
+    .map_err(|error| js_error(&format!("encode verified backup metadata: {error}")))
+}
+
+/// Serialize archive plaintext through the canonical Rust protocol types.
+#[wasm_bindgen(js_name = encodeChatBackupPlaintext)]
+pub fn encode_chat_backup_plaintext(value: JsValue, purpose: u8) -> Result<String, JsValue> {
+    let bytes = match ChatBackupObjectPurposeV1::try_from(purpose)
+        .map_err(|error| js_error(&error.to_string()))?
+    {
+        ChatBackupObjectPurposeV1::BaseSnapshot => {
+            let value: ChatBackupBasePlaintextV1 = serde_wasm_bindgen::from_value(value)
+                .map_err(|error| js_error(&format!("decode backup base plaintext: {error}")))?;
+            value.canonical_bytes().map_err(|error| js_error(&error))?
+        }
+        ChatBackupObjectPurposeV1::EventSegment => {
+            let value: ChatBackupSegmentPlaintextV1 = serde_wasm_bindgen::from_value(value)
+                .map_err(|error| js_error(&format!("decode backup segment plaintext: {error}")))?;
+            value.canonical_bytes().map_err(|error| js_error(&error))?
+        }
+    };
+    Ok(STANDARD.encode(bytes))
+}
+
+/// Authenticate canonical archive structure before any record reaches the
+/// isolated display-history store.
+#[wasm_bindgen(js_name = decodeChatBackupPlaintext)]
+pub fn decode_chat_backup_plaintext(
+    plaintext_base64: &str,
+    purpose: u8,
+) -> Result<JsValue, JsValue> {
+    let bytes = decode_canonical_base64(plaintext_base64, "backup plaintext")?;
+    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+    match ChatBackupObjectPurposeV1::try_from(purpose)
+        .map_err(|error| js_error(&error.to_string()))?
+    {
+        ChatBackupObjectPurposeV1::BaseSnapshot => {
+            let value = ChatBackupBasePlaintextV1::from_canonical_bytes(&bytes)
+                .map_err(|error| js_error(&error))?;
+            value
+                .serialize(&serializer)
+                .map_err(|error| js_error(&format!("encode backup base plaintext: {error}")))
+        }
+        ChatBackupObjectPurposeV1::EventSegment => {
+            let value = ChatBackupSegmentPlaintextV1::from_canonical_bytes(&bytes)
+                .map_err(|error| js_error(&error))?;
+            value
+                .serialize(&serializer)
+                .map_err(|error| js_error(&format!("encode backup segment plaintext: {error}")))
+        }
+    }
+}
+
+#[wasm_bindgen(js_name = sealChatBackupObject)]
+#[allow(clippy::too_many_arguments)]
+pub fn seal_chat_backup_object(
+    plaintext_base64: &str,
+    backup_root_base64: &str,
+    account_incarnation_id: &str,
+    backup_incarnation_id: &str,
+    purpose: u8,
+    object_id: &str,
+    source_device_id: u32,
+    device_sequence: u64,
+    previous_segment_digest: &str,
+) -> Result<String, JsValue> {
+    let plaintext = decode_canonical_base64(plaintext_base64, "backup plaintext")?;
+    let root = decode_canonical_base64(backup_root_base64, "backup root")?;
+    let backup = chat_backup_context(account_incarnation_id, backup_incarnation_id)?;
+    let purpose = ChatBackupObjectPurposeV1::try_from(purpose)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let object_id = Uuid::parse_str(object_id)
+        .ok()
+        .filter(|value| !value.is_nil() && value.hyphenated().to_string() == object_id)
+        .ok_or_else(|| js_error("backup object id must be a canonical non-nil UUID"))?;
+    let previous: [u8; 32] = hex::decode(previous_segment_digest)
+        .ok()
+        .and_then(|value| value.try_into().ok())
+        .filter(|value: &[u8; 32]| hex::encode(value) == previous_segment_digest)
+        .ok_or_else(|| js_error("previous segment digest must be lowercase 32-byte hex"))?;
+    let object = chat_backup::seal_object(
+        &plaintext,
+        &root,
+        ChatBackupObjectContextV1 {
+            backup,
+            purpose,
+            object_id: *object_id.as_bytes(),
+            source_device_id,
+            device_sequence,
+            previous_segment_digest: previous,
+        },
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(object))
+}
+
+#[wasm_bindgen(js_name = openChatBackupObject)]
+#[allow(clippy::too_many_arguments)]
+pub fn open_chat_backup_object(
+    object_base64: &str,
+    backup_root_base64: &str,
+    account_incarnation_id: &str,
+    backup_incarnation_id: &str,
+    purpose: u8,
+    object_id: &str,
+    source_device_id: u32,
+    device_sequence: u64,
+    previous_segment_digest: &str,
+) -> Result<String, JsValue> {
+    let object = decode_canonical_base64(object_base64, "backup object")?;
+    let root = decode_canonical_base64(backup_root_base64, "backup root")?;
+    let backup = chat_backup_context(account_incarnation_id, backup_incarnation_id)?;
+    let purpose = ChatBackupObjectPurposeV1::try_from(purpose)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let object_id = Uuid::parse_str(object_id)
+        .ok()
+        .filter(|value| !value.is_nil() && value.hyphenated().to_string() == object_id)
+        .ok_or_else(|| js_error("backup object id must be a canonical non-nil UUID"))?;
+    let previous: [u8; 32] = hex::decode(previous_segment_digest)
+        .ok()
+        .and_then(|value| value.try_into().ok())
+        .filter(|value: &[u8; 32]| hex::encode(value) == previous_segment_digest)
+        .ok_or_else(|| js_error("previous segment digest must be lowercase 32-byte hex"))?;
+    let plaintext = chat_backup::open_object(
+        &object,
+        &root,
+        ChatBackupObjectContextV1 {
+            backup,
+            purpose,
+            object_id: *object_id.as_bytes(),
+            source_device_id,
+            device_sequence,
+            previous_segment_digest: previous,
+        },
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(plaintext))
+}
+
+#[wasm_bindgen(js_name = signChatBackupManifest)]
+pub fn sign_chat_backup_manifest(
+    unsigned_manifest: JsValue,
+    backup_root_base64: &str,
+    account_incarnation_id: &str,
+    backup_incarnation_id: &str,
+) -> Result<JsValue, JsValue> {
+    let root = decode_canonical_base64(backup_root_base64, "backup root")?;
+    let context = chat_backup_context(account_incarnation_id, backup_incarnation_id)?;
+    let mut manifest: ChatBackupManifestV1 = serde_wasm_bindgen::from_value(unsigned_manifest)
+        .map_err(|error| js_error(&format!("decode backup manifest: {error}")))?;
+    manifest.signature.clear();
+    let signer_seed = chat_backup::derive_manifest_signing_seed(&root, context)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let signer = SigningKey::from_bytes(&signer_seed);
+    manifest.signature = STANDARD.encode(
+        signer
+            .sign(&manifest.signing_bytes().map_err(|error| js_error(&error))?)
+            .to_bytes(),
+    );
+    serde_wasm_bindgen::to_value(&manifest)
+        .map_err(|error| js_error(&format!("encode backup manifest: {error}")))
+}
+
+#[wasm_bindgen(js_name = prepareChatBackupMedia)]
+pub fn prepare_chat_backup_media(
+    backup_root_base64: &str,
+    account_incarnation_id: &str,
+    backup_incarnation_id: &str,
+    stable_source_binding: &str,
+    source_ciphertext_bytes: u64,
+) -> Result<JsValue, JsValue> {
+    if stable_source_binding.is_empty() {
+        return Err(js_error("backup media source binding is empty"));
+    }
+    let root = decode_canonical_base64(backup_root_base64, "backup root")?;
+    let context = chat_backup_context(account_incarnation_id, backup_incarnation_id)?;
+    let media_id = chat_backup::derive_media_id(&root, context, stable_source_binding.as_bytes())
+        .map_err(|error| js_error(&error.to_string()))?;
+    let key = chat_backup::derive_media_encryption_key(&root, context, &media_id)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let header = kutup_crypto::chat_backup_media::build_media_header(
+        kutup_crypto::chat_backup_media::ChatBackupMediaContextV1 {
+            account_incarnation_id: context.account_incarnation_id,
+            backup_incarnation_id: context.backup_incarnation_id,
+            protection_domain: context.protection_domain,
+            media_id,
+        },
+        source_ciphertext_bytes,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    let parsed = kutup_crypto::chat_backup_media::inspect_media_header(&header)
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&ChatBackupMediaPreparationView {
+        media_id: hex::encode(media_id),
+        outer_encryption_key: STANDARD.encode(key.as_slice()),
+        object_header: STANDARD.encode(header),
+        padded_plaintext_bytes: parsed.padded_plaintext_bytes,
+    })
+    .map_err(|error| js_error(&format!("encode backup media preparation: {error}")))
+}
+
+#[wasm_bindgen(js_name = openChatBackupMediaHeader)]
+pub fn open_chat_backup_media_header(
+    header_base64: &str,
+    backup_root_base64: &str,
+    expected_account_incarnation_id: &str,
+    expected_backup_incarnation_id: &str,
+    expected_media_id: &str,
+) -> Result<JsValue, JsValue> {
+    let header = decode_canonical_base64(header_base64, "backup media header")?;
+    let root = decode_canonical_base64(backup_root_base64, "backup root")?;
+    let expected = chat_backup_context(
+        expected_account_incarnation_id,
+        expected_backup_incarnation_id,
+    )?;
+    let media_id: [u8; 32] = hex::decode(expected_media_id)
+        .ok()
+        .and_then(|value| value.try_into().ok())
+        .filter(|value: &[u8; 32]| hex::encode(value) == expected_media_id)
+        .ok_or_else(|| js_error("backup media id must be lowercase 32-byte hex"))?;
+    let parsed = kutup_crypto::chat_backup_media::inspect_media_header(&header)
+        .map_err(|error| js_error(&error.to_string()))?;
+    if parsed.context.account_incarnation_id != expected.account_incarnation_id
+        || parsed.context.backup_incarnation_id != expected.backup_incarnation_id
+        || parsed.context.protection_domain != expected.protection_domain
+        || parsed.context.media_id != media_id
+    {
+        return Err(js_error("backup media header context mismatch"));
+    }
+    let key = chat_backup::derive_media_encryption_key(&root, expected, &media_id)
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&OpenedChatBackupMediaHeaderView {
+        outer_encryption_key: STANDARD.encode(key.as_slice()),
+        source_ciphertext_bytes: parsed.source_ciphertext_bytes,
+        padded_plaintext_bytes: parsed.padded_plaintext_bytes,
+    })
+    .map_err(|error| js_error(&format!("encode opened backup media header: {error}")))
 }
 
 /// Run the one expensive V1 Argon2id derivation and expand its two

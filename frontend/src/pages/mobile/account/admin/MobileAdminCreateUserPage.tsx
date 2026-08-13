@@ -112,7 +112,7 @@ export default function MobileAdminCreateUserPage() {
             <Input
               type="email"
               autoComplete="off"
-              placeholder="name@kutup.cloud"
+              placeholder="user@kutup.dev"
               {...form.register('email')}
             />
             {form.formState.errors.email && (

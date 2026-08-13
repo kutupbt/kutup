@@ -94,6 +94,10 @@ pub struct ChatAttachmentDescriptorV1 {
     pub duration_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<ChatMediaPreviewV1>,
+    /// Opaque locator for the independently encrypted continuous-history copy.
+    /// It is present only in backup display records, never required for live delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_media_id: Option<String>,
 }
 
 impl ChatAttachmentDescriptorV1 {
@@ -138,6 +142,9 @@ impl ChatAttachmentDescriptorV1 {
             if decoded.is_empty() || decoded.len() > MAX_CHAT_MEDIA_PREVIEW_BYTES {
                 return Err("Chat attachment preview length is invalid".into());
             }
+        }
+        if let Some(media_id) = &self.backup_media_id {
+            validate_sha256("backupMediaId", media_id)?;
         }
         Ok(())
     }
@@ -754,6 +761,7 @@ mod tests {
             height: Some(20),
             duration_ms: None,
             preview: None,
+            backup_media_id: None,
         }
     }
 

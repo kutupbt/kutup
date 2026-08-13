@@ -17,6 +17,8 @@ const HEADERS = [
   'totpEnabled',
   'storageUsedBytes',
   'storageQuotaBytes',
+  'chatStorageUsedBytes',
+  'chatStorageQuotaBytes',
   'createdAt',
 ] as const
 
@@ -45,6 +47,8 @@ export function usersToCsv(users: UserRow[]): string {
         u.totpEnabled,
         u.storageUsedBytes,
         u.storageQuotaBytes,
+        u.chatStorageUsedBytes,
+        u.chatStorageQuotaBytes,
         u.createdAt,
       ]
         .map(csvField)

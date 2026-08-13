@@ -73,10 +73,11 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # empties when users do it themselves). Default: 30.
 # TRASH_RETENTION_DAYS=30
 
-# Chat mailbox/send-id retention and inactive-device expiry. The hourly
-# maintenance job enforces these; 0 disables an individual policy.
+# Chat mailbox, temporary media-delivery, send-id retention, and inactive-device
+# expiry. The hourly maintenance job enforces these; 0 disables an individual policy.
 # CHAT_MAILBOX_RETENTION_DAYS=30
 # CHAT_SEND_RETENTION_DAYS=30
+# CHAT_MEDIA_DELIVERY_RETENTION_DAYS=45
 # CHAT_DEVICE_EXPIRY_DAYS=90
 
 # Rate limits (defaults shown). Most are per client IP; chat key fetches use a
@@ -106,6 +107,13 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # LOGIN_LOCKOUT_THRESHOLD=5
 # LOGIN_LOCKOUT_MINUTES=15
 ```
+
+`CHAT_MAILBOX_RETENTION_DAYS` and `CHAT_MEDIA_DELIVERY_RETENTION_DAYS` are startup
+fallbacks. An administrator can change both at runtime under **Admin → Settings →
+Chat storage**; persisted values take precedence without a server restart.
+Mailbox retention covers unread Direct and MLS delivery ciphertext. Media retention
+covers only temporary delivery copies and never deletes protected history-media
+copies.
 
 ### OpenTelemetry
 

@@ -253,10 +253,6 @@ impl Engine {
         &mut self.session
     }
 
-    pub(crate) fn transport(&self) -> &Rc<dyn ChatTransport> {
-        &self.transport
-    }
-
     pub fn state(&self) -> EngineState {
         self.state
     }
@@ -800,6 +796,80 @@ impl Engine {
             ));
         }
         self.accept_current_manifest_evidence(&account, &published.manifest)
+            .await?;
+        Ok(published.manifest)
+    }
+
+    /// Publish the account-signed manifest transition that removes a device
+    /// after its server-side directory entry has been revoked. The server
+    /// cannot author this transition because only the account authority may
+    /// sign manifests, and re-running `sync_own_manifest` would preserve every
+    /// device from the prior signed manifest.
+    pub async fn revoke_manifest_device(
+        &mut self,
+        authority: &AccountAuthority,
+        device_id: u32,
+        issued_at: impl Into<String>,
+    ) -> Result<AccountManifestV1> {
+        if device_id == self.session.device_id() {
+            return Err(ChatError::Invalid(
+                "the current device cannot revoke itself from the account manifest".into(),
+            ));
+        }
+        let transport = Rc::clone(&self.transport);
+        let current = transport
+            .fetch_manifest(self.session.user())
+            .await?
+            .ok_or_else(|| ChatError::Trust("account manifest is unavailable".into()))?;
+        current.verify().map_err(ChatError::Trust)?;
+        let canonical_self = self.canonical_self()?;
+        if current.account != canonical_self {
+            return Err(ChatError::Trust(
+                "stored account manifest belongs to another account".into(),
+            ));
+        }
+        if current.authority_key_id != authority.key_id()
+            || current.self_authority_key != authority.public_key_base64()
+        {
+            return Err(ChatError::Trust(
+                "stored account manifest belongs to a different authority".into(),
+            ));
+        }
+        let mut devices = current.devices.clone();
+        let index = devices
+            .binary_search_by_key(&device_id, |device| device.device_id)
+            .map_err(|_| ChatError::Invalid("revoked device is absent from the manifest".into()))?;
+        devices.remove(index);
+        if devices.is_empty() {
+            return Err(ChatError::Invalid(
+                "account manifest cannot remove every device".into(),
+            ));
+        }
+        let next_sequence = current
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| ChatError::Trust("manifest sequence is exhausted".into()))?;
+        let candidate = authority.sign_manifest(
+            canonical_self.clone(),
+            next_sequence,
+            Some(current.manifest_hash().map_err(ChatError::Trust)?),
+            devices,
+            issued_at,
+        )?;
+        let expected_hash = candidate.manifest_hash().map_err(ChatError::Trust)?;
+        let published = transport.publish_manifest(&candidate).await?;
+        published.manifest.verify().map_err(ChatError::Trust)?;
+        if published
+            .manifest
+            .manifest_hash()
+            .map_err(ChatError::Trust)?
+            != expected_hash
+        {
+            return Err(ChatError::Trust(
+                "server returned a different manifest after device revocation".into(),
+            ));
+        }
+        self.accept_current_manifest_evidence(&canonical_self, &published.manifest)
             .await?;
         Ok(published.manifest)
     }

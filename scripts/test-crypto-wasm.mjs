@@ -276,4 +276,113 @@ assert.throws(
   /authentication failed/,
 )
 
+const backupRoot = Buffer.alloc(32, 0x55).toString('base64')
+const backupId = '44444444-4444-4444-8444-444444444444'
+const backupAuthorization = crypto.createChatBackupSignerAuthorization(
+  identityMaster,
+  backupRoot,
+  backupId,
+  1_800_000_000n,
+)
+const verifiedAuthorization = crypto.verifyChatBackupMetadata(
+  backupAuthorization,
+  null,
+  identityMaster,
+  backupRoot,
+  backupId,
+)
+assert.match(verifiedAuthorization.signerAuthorizationDigest, /^[0-9a-f]{64}$/)
+assert.equal(verifiedAuthorization.manifestDigest, undefined)
+
+const backupSegment = {
+  version: 1,
+  records: [{
+    version: 1,
+    recordId: '55555555-5555-4555-8555-555555555555',
+    mutationSequence: 1,
+    conversation: { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
+    sender: 'alice@a.test',
+    senderDeviceId: 1,
+    outgoing: true,
+    content: {
+      version: 1,
+      kind: 'text',
+      sentAt: '2026-08-11T12:00:00Z',
+      seq: '1',
+      body: { text: 'protected' },
+      text: 'protected',
+    },
+    timestampMs: 1_800_000_000_000,
+    delivered: true,
+    tombstone: false,
+  }],
+}
+const canonicalBackupSegment = crypto.encodeChatBackupPlaintext(backupSegment, 2)
+assert.deepEqual(
+  crypto.decodeChatBackupPlaintext(canonicalBackupSegment, 2),
+  backupSegment,
+)
+const backupOperation = '66666666-6666-4666-8666-666666666666'
+const sealedBackupSegment = crypto.sealChatBackupObject(
+  canonicalBackupSegment,
+  backupRoot,
+  crypto.deriveAccountIdentityKeys(identityMaster).incarnationId,
+  backupId,
+  2,
+  backupOperation,
+  1,
+  1n,
+  '0'.repeat(64),
+)
+assert.equal(
+  crypto.openChatBackupObject(
+    sealedBackupSegment,
+    backupRoot,
+    crypto.deriveAccountIdentityKeys(identityMaster).incarnationId,
+    backupId,
+    2,
+    backupOperation,
+    1,
+    1n,
+    '0'.repeat(64),
+  ),
+  canonicalBackupSegment,
+)
+const backupManifest = crypto.signChatBackupManifest({
+  version: 1,
+  backupIncarnationId: backupId,
+  suite: 1,
+  protectionDomain: 1,
+  generation: 1,
+  previousManifestDigest: '0'.repeat(64),
+  baseObjectId: '77777777-7777-4777-8777-777777777777',
+  baseCiphertextBytes: 100,
+  baseCiphertextSha256: '11'.repeat(32),
+  coveredCursor: 1,
+  mediaReferenceSetDigest: '22'.repeat(32),
+  signerAuthorizationDigest: verifiedAuthorization.signerAuthorizationDigest,
+  createdAtUnix: 1_800_000_001,
+  signature: '',
+}, backupRoot, crypto.deriveAccountIdentityKeys(identityMaster).incarnationId, backupId)
+assert.match(
+  crypto.verifyChatBackupMetadata(
+    backupAuthorization,
+    backupManifest,
+    identityMaster,
+    backupRoot,
+    backupId,
+  ).manifestDigest,
+  /^[0-9a-f]{64}$/,
+)
+const backupMedia = crypto.prepareChatBackupMedia(
+  backupRoot,
+  crypto.deriveAccountIdentityKeys(identityMaster).incarnationId,
+  backupId,
+  attachmentId,
+  10_000n,
+)
+assert.match(backupMedia.mediaId, /^[0-9a-f]{64}$/)
+assert.equal(backupMedia.paddedPlaintextBytes >= 10_000, true)
+assert.equal(Buffer.from(backupMedia.objectHeader, 'base64').length, 107)
+
 console.log('crypto WASM canonical vectors passed')

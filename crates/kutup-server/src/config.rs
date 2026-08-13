@@ -43,6 +43,15 @@ pub struct Config {
     /// Maximum Chat-media plaintext-class bytes accepted per immutable object.
     /// Administrators may lower, but never raise, the V1 2 GiB protocol cap.
     pub chat_media_max_plaintext_bytes: u64,
+    /// Days an ordinary Chat-media delivery copy remains available. `0`
+    /// disables expiry. Protected history-media copies are independent.
+    pub chat_media_delivery_retention_days: i64,
+    /// Default per-account quota for all durable Chat history and media.
+    /// The authenticated admin setting may replace this runtime fallback.
+    pub chat_storage_default_quota_bytes: u64,
+    /// Stable canonical DNS suffix used by every local Chat account. This is
+    /// required even when inter-server federation is disabled.
+    pub chat_server_name: String,
     /// Canonical DNS identity for the unified federation v2 stack.
     pub federation_server_name: String,
     /// Base64 raw 32-byte Ed25519 seed for unified federation v2.
@@ -82,6 +91,39 @@ impl Config {
         {
             panic!("CHAT_MEDIA_MAX_PLAINTEXT_BYTES must be between 1 and 2147483648");
         }
+        let chat_storage_default_quota_bytes = get_env_i64(
+            "CHAT_STORAGE_DEFAULT_QUOTA_BYTES",
+            kutup_chat_proto::DEFAULT_CHAT_STORAGE_QUOTA_BYTES as i64,
+        );
+        if chat_storage_default_quota_bytes <= 0 {
+            panic!("CHAT_STORAGE_DEFAULT_QUOTA_BYTES must be positive");
+        }
+        let chat_mailbox_retention_days = get_env_i64("CHAT_MAILBOX_RETENTION_DAYS", 30);
+        crate::site_settings::validate_chat_delivery_retention_days(chat_mailbox_retention_days)
+            .unwrap_or_else(|error| panic!("CHAT_MAILBOX_RETENTION_DAYS: {error}"));
+        let chat_media_delivery_retention_days =
+            get_env_i64("CHAT_MEDIA_DELIVERY_RETENTION_DAYS", 45);
+        crate::site_settings::validate_chat_delivery_retention_days(
+            chat_media_delivery_retention_days,
+        )
+        .unwrap_or_else(|error| panic!("CHAT_MEDIA_DELIVERY_RETENTION_DAYS: {error}"));
+        let federation_server_name = get_env("FEDERATION_SERVER_NAME", "");
+        let chat_server_name = get_env(
+            "CHAT_SERVER_NAME",
+            if federation_server_name.is_empty() {
+                "kutup.local"
+            } else {
+                &federation_server_name
+            },
+        );
+        kutup_federation_proto::validate_server_name(&chat_server_name).unwrap_or_else(|error| {
+            panic!("CHAT_SERVER_NAME must be a canonical DNS name: {error}")
+        });
+        if !federation_server_name.is_empty() && chat_server_name != federation_server_name {
+            panic!(
+                "CHAT_SERVER_NAME must match FEDERATION_SERVER_NAME when federation is configured"
+            );
+        }
         let cfg = Config {
             database_url: must_env("DATABASE_URL"),
             jwt_secret: must_env("JWT_SECRET"),
@@ -101,12 +143,15 @@ impl Config {
             storage_total_bytes: get_env_i64("STORAGE_TOTAL_BYTES", 0),
             seaweedfs_master_url: get_env("SEAWEEDFS_MASTER_URL", "http://seaweedfs-master:9333"),
             trash_retention_days: get_env_i64("TRASH_RETENTION_DAYS", 30),
-            chat_mailbox_retention_days: get_env_i64("CHAT_MAILBOX_RETENTION_DAYS", 30),
+            chat_mailbox_retention_days,
             chat_send_retention_days: get_env_i64("CHAT_SEND_RETENTION_DAYS", 30),
             chat_device_expiry_days: get_env_i64("CHAT_DEVICE_EXPIRY_DAYS", 90),
             chat_max_active_devices: chat_max_active_devices as u32,
             chat_media_max_plaintext_bytes: chat_media_max_plaintext_bytes as u64,
-            federation_server_name: get_env("FEDERATION_SERVER_NAME", ""),
+            chat_media_delivery_retention_days,
+            chat_storage_default_quota_bytes: chat_storage_default_quota_bytes as u64,
+            chat_server_name,
+            federation_server_name,
             federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
             federation_test_allow_private: get_env_bool("FEDERATION_TEST_ALLOW_PRIVATE", false),

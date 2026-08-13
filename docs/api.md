@@ -887,52 +887,78 @@ The caller's chat devices: `{ "devices": [{ "deviceId", "suite", "name", "create
 ### DELETE /api/chat/device/{deviceId}
 
 Revoke a chat device — hard delete; prekey pools, mailbox rows, and any history
-transfer involving it cascade, and live sockets close. `204`.
+delivery rows and live sockets close. It does not delete account-level Chat
+history backup. `204`.
 
-### POST /api/chat/history-transfers
+### POST /api/chat/backup
 
-Stage a structurally validated, manifest-bound `ChatHistoryTransferRequestV1`.
-The exact requesting device must be present in the current signed manifest.
-The request expires after at most 15 minutes. Exact retries are idempotent;
-reuse of a transfer UUID for different bytes returns `409`.
+Idempotently provision the always-on Chat archive after account recovery. The
+body contains a typed account-master-key envelope for the random backup root
+and an account-authority-signed manifest-signer authorization. The server
+validates public bindings and signatures but never receives the root key.
 
-### GET /api/chat/history-transfers?deviceId=N
+### GET /api/chat/backup
 
-List unexpired transfer requests visible to one exact current manifest device.
-Pending requests are visible to the account's other devices; after acceptance,
-only the two participants see the transfer.
+Return provisioning state, current signed manifest/cursor, latest
+server-acknowledged protected time, and dedicated Chat quota usage split into
+message history, administrator-retained delivery media, and history media.
 
-### PUT /api/chat/history-transfers/{transferId}/acceptance?deviceId=N
+### POST /api/chat/backup/segments
 
-Explicitly accept a request as a distinct existing manifest device. The signed
-acceptance must bind the request hash, both device IDs, manifest sequence,
-ephemeral key, expiry, record ceiling, and plaintext-byte ceiling. Only one
-responder can accept.
+Append one idempotent encrypted event segment. Requests bind a random operation
+ID, active source device, contiguous per-device sequence and digest chain,
+account-manifest sequence, ciphertext digest and length. The server assigns the
+monotonic account cursor. `507` means the durable local outbox is not yet
+protected; clients must show the latest acknowledged time and storage action.
 
-### PUT /api/chat/history-transfers/{transferId}/frames/{index}?deviceId=N
+### GET /api/chat/backup/segments?after=N&limit=N
 
-Upload one opaque `ChatHistoryTransferFrameV1` as the responding device.
-Indexes are contiguous from zero; retries must be byte-identical; only one
-final frame is accepted. V1 permits at most 1,024 frames, 256 KiB plaintext per
-frame, and 256 MiB total plaintext (an acceptance may select lower limits).
+Page the complete ordered encrypted event tail. Restoring it does not advance a
+mailbox cursor or establish Direct/MLS protocol state.
 
-### GET /api/chat/history-transfers/{transferId}/frames?deviceId=N
+### POST /api/chat/backup/bases
 
-Drain opaque frames as the exact requesting device. Optional `after` and
-`limit` parameters page the ordered frame set. The homeserver never decrypts
-or validates archive plaintext.
+Stage a typed encrypted compacted base using multipart `metadata` and
+`ciphertext` fields. Staging is bounded and expires after 24 hours. Temporary
+overlap with the current archive is allowed only when the post-CAS footprint
+fits the account's administrator-configured Chat quota.
 
-### POST /api/chat/history-transfers/{transferId}/completion?deviceId=N
+### GET /api/chat/backup/bases/{objectId}
 
-Store the requesting-device-signed completion only when its transcript and
-frame count match a stored set containing exactly one final frame. All opaque
-ciphertext frames are deleted in the same transaction.
+Stream only the currently committed encrypted base and its ciphertext digest.
 
-### DELETE /api/chat/history-transfers/{transferId}?deviceId=N
+### PUT /api/chat/backup/manifest
 
-Cancel and erase a transfer as either participant. Expiry maintenance removes
-stale transfers; revoking either Chat device deletes the transfer by foreign-key
-cascade.
+Verify and compare-and-swap a signed manifest against the exact current
+generation, cursor and digest. Commit atomically activates the staged base and
+reconciled media set, then releases superseded message/media quota.
+
+### POST /api/chat/backup/media/copy
+
+Copy an account-owned ordinary Chat-media ciphertext into a padded,
+backup-specific outer encryption. The client supplies only the derived outer
+key; the original attachment plaintext/key never reaches the server.
+
+### POST /api/chat/backup/media
+
+Multipart direct-upload fallback for a verified outer-encrypted media object
+retained locally after its ordinary delivery object has expired.
+
+### GET /api/chat/backup/media/{mediaId}
+
+Lazily stream one opaque history-media object. Clients validate its typed
+header, digest, secretstream final tag, source length and zero padding before
+placing the inner Chat-media ciphertext in the private cache.
+
+### POST /api/chat/backup/media/reconciliation
+
+Page the exact, digest-bound media reference set for a target generation before
+manifest CAS. Unreferenced history media is garbage-collected only at commit.
+
+There is no Chat-backup DELETE route, ordinary disable action, or
+device-transfer fallback. Account deletion and administrator loss-recovery wipe
+invoke internal lifecycle cleanup that transactionally removes backup database
+state/quota and deletes its object-storage prefix.
 
 ### PUT /api/chat/keys?deviceId=N
 

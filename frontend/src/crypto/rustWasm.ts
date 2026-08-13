@@ -39,6 +39,72 @@ export interface CryptoWasmModule {
     expectedPurpose: number,
     loginEmail: string,
   ): string
+  createChatBackupSignerAuthorization(
+    masterKeyBase64: string,
+    backupRootBase64: string,
+    backupIncarnationId: string,
+    createdAtUnix: bigint,
+  ): unknown
+  verifyChatBackupMetadata(
+    signerAuthorization: unknown,
+    manifest: unknown,
+    masterKeyBase64: string,
+    backupRootBase64: string,
+    expectedBackupIncarnationId: string,
+  ): { signerAuthorizationDigest: string; manifestDigest?: string }
+  encodeChatBackupPlaintext(value: unknown, purpose: number): string
+  decodeChatBackupPlaintext(plaintextBase64: string, purpose: number): unknown
+  sealChatBackupObject(
+    plaintextBase64: string,
+    backupRootBase64: string,
+    accountIncarnationId: string,
+    backupIncarnationId: string,
+    purpose: number,
+    objectId: string,
+    sourceDeviceId: number,
+    deviceSequence: bigint,
+    previousSegmentDigest: string,
+  ): string
+  openChatBackupObject(
+    objectBase64: string,
+    backupRootBase64: string,
+    accountIncarnationId: string,
+    backupIncarnationId: string,
+    purpose: number,
+    objectId: string,
+    sourceDeviceId: number,
+    deviceSequence: bigint,
+    previousSegmentDigest: string,
+  ): string
+  signChatBackupManifest(
+    unsignedManifest: unknown,
+    backupRootBase64: string,
+    accountIncarnationId: string,
+    backupIncarnationId: string,
+  ): unknown
+  prepareChatBackupMedia(
+    backupRootBase64: string,
+    accountIncarnationId: string,
+    backupIncarnationId: string,
+    stableSourceBinding: string,
+    sourceCiphertextBytes: bigint,
+  ): {
+    mediaId: string
+    outerEncryptionKey: string
+    objectHeader: string
+    paddedPlaintextBytes: number
+  }
+  openChatBackupMediaHeader(
+    headerBase64: string,
+    backupRootBase64: string,
+    expectedAccountIncarnationId: string,
+    expectedBackupIncarnationId: string,
+    expectedMediaId: string,
+  ): {
+    outerEncryptionKey: string
+    sourceCiphertextBytes: number
+    paddedPlaintextBytes: number
+  }
   sealDriveEnvelope(
     plaintextBase64: string,
     rootKeyBase64: string,

@@ -33,13 +33,35 @@ wait_url() {
   done
 }
 
+ensure_node_toolchain() {
+  if command -v npm >/dev/null 2>&1; then
+    return
+  fi
+
+  # Managed test runners can preserve the invoking user's HOME while omitting
+  # NVM's interactive-shell PATH setup (for example when Docker needs an
+  # elevated execution boundary). Load the existing NVM installation without
+  # pinning a developer-specific Node version or path.
+  local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+  if [[ -s "$nvm_dir/nvm.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$nvm_dir/nvm.sh"
+    nvm use --silent default >/dev/null
+  fi
+
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "npm is required for the federation browser gate (Node.js 20+)" >&2
+    return 1
+  fi
+}
+
 cleanup() {
   local status=$?
   trap - EXIT
   set +e
   if (( status != 0 )); then
-    compose ps >&2
-    compose logs --no-color frontend edge-a edge-b >&2
+    KUTUP_E2E_DIAGNOSTICS_DIR="${KUTUP_E2E_DIAGNOSTICS_DIR:-$root_dir/tests/e2e/sanitized-results}" \
+      "$root_dir/scripts/collect-chat-e2e-diagnostics.sh" federation "$project" || true
   fi
   compose down --volumes --remove-orphans
   exit "$status"
@@ -100,6 +122,7 @@ fi
 echo "CHAT MEDIA DESTINATION METADATA PRIVACY VERIFIED"
 
 if [[ "${KUTUP_FEDERATION_SKIP_BROWSER:-0}" != "1" ]]; then
+  ensure_node_toolchain
   # The API may be healthy while nginx is still reconnecting its separate
   # frontend upstream after the deliberate edge/backend restart above.
   wait_url "http://127.0.0.1:$port_a/register"
@@ -111,9 +134,12 @@ if [[ "${KUTUP_FEDERATION_SKIP_BROWSER:-0}" != "1" ]]; then
     E2E_ADMIN_EMAIL="federation-admin-a@example.test" \
     E2E_ADMIN_PASSWORD="federation-live-password" \
     E2E_BOOTSTRAP_PASSWORD="federation-admin-temp" \
+    KUTUP_E2E_SAFE_ARTIFACTS="${KUTUP_E2E_SAFE_ARTIFACTS:-0}" \
+    KUTUP_E2E_DIAGNOSTICS_DIR="${KUTUP_E2E_DIAGNOSTICS_DIR:-}" \
       npm exec -- playwright test \
         specs/25-tus-upload.spec.ts \
-        specs/32-chat-two-server-security.spec.ts --project=chromium
+        specs/32-chat-two-server-security.spec.ts \
+        specs/34-chat-backup-two-server-recovery.spec.ts --project=chromium
   )
 
   # The destination necessarily sees its local recipient, but anonymous MLS

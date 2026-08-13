@@ -8,8 +8,8 @@ use hkdf::Hkdf;
 use kutup_chat_proto::{
     chat_history_transfer_transcript_hash, AccountManifestV1, ChatHistoryArchiveFinalV1,
     ChatHistoryArchiveFramePlaintextV1, ChatHistoryArchiveHeaderV1, ChatHistoryArchiveRecordV1,
-    ChatHistoryArchiveRecordsV1, ChatHistoryTransferAcceptanceV1, ChatHistoryTransferFrameV1,
-    ChatHistoryTransferCompletionV1, ChatHistoryTransferRequestV1, CHAT_HISTORY_TRANSFER_VERSION,
+    ChatHistoryArchiveRecordsV1, ChatHistoryTransferAcceptanceV1, ChatHistoryTransferCompletionV1,
+    ChatHistoryTransferFrameV1, ChatHistoryTransferRequestV1, CHAT_HISTORY_TRANSFER_VERSION,
     MAX_CHAT_HISTORY_TRANSFER_FRAMES, MAX_CHAT_HISTORY_TRANSFER_FRAME_PLAINTEXT,
 };
 use libsignal_protocol::{IdentityKeyPair, PublicKey};
@@ -39,10 +39,6 @@ impl HistoryTransferEphemeralSecret {
 
     pub(crate) fn journal_bytes(&self) -> [u8; 32] {
         *self.0
-    }
-
-    pub(crate) fn from_journal_bytes(bytes: [u8; 32]) -> Self {
-        Self(Zeroizing::new(bytes))
     }
 }
 
@@ -157,7 +153,10 @@ pub(crate) fn prepare_history_transfer_acceptance<R: Rng + CryptoRng>(
     };
     let signature = identity
         .private_key()
-        .calculate_signature(&acceptance.signing_bytes().map_err(ChatError::Invalid)?, rng)
+        .calculate_signature(
+            &acceptance.signing_bytes().map_err(ChatError::Invalid)?,
+            rng,
+        )
         .map_err(|error| ChatError::Protocol(error.to_string()))?;
     acceptance.device_signature = STANDARD.encode(signature);
     let transcript_hash = chat_history_transfer_transcript_hash(request, &acceptance, now_unix)
@@ -196,7 +195,10 @@ pub(crate) fn prepare_history_transfer_completion<R: Rng + CryptoRng>(
     completion.validate().map_err(ChatError::Invalid)?;
     let signature = identity
         .private_key()
-        .calculate_signature(&completion.signing_bytes().map_err(ChatError::Invalid)?, rng)
+        .calculate_signature(
+            &completion.signing_bytes().map_err(ChatError::Invalid)?,
+            rng,
+        )
         .map_err(|error| ChatError::Protocol(error.to_string()))?;
     completion.device_signature = STANDARD.encode(signature);
     Ok(completion)
@@ -209,7 +211,9 @@ pub fn verify_history_transfer_acceptance(
     now_unix: i64,
 ) -> Result<[u8; 32]> {
     manifest.verify().map_err(ChatError::Trust)?;
-    acceptance.validate(request, now_unix).map_err(ChatError::Invalid)?;
+    acceptance
+        .validate(request, now_unix)
+        .map_err(ChatError::Invalid)?;
     let device = exact_manifest_device(
         manifest,
         &acceptance.account,
@@ -221,8 +225,7 @@ pub fn verify_history_transfer_acceptance(
         &acceptance.signing_bytes().map_err(ChatError::Invalid)?,
         &acceptance.device_signature,
     )?;
-    chat_history_transfer_transcript_hash(request, acceptance, now_unix)
-        .map_err(ChatError::Invalid)
+    chat_history_transfer_transcript_hash(request, acceptance, now_unix).map_err(ChatError::Invalid)
 }
 
 pub fn derive_history_transfer_key(
@@ -233,7 +236,9 @@ pub fn derive_history_transfer_key(
     let peer: [u8; 32] = decode_exact("history transfer ephemeral key", peer_public_key)?;
     let shared = StaticSecret::from(*secret.0).diffie_hellman(&X25519PublicKey::from(peer));
     if shared.as_bytes().iter().all(|byte| *byte == 0) {
-        return Err(ChatError::Trust("history transfer DH produced the all-zero secret".into()));
+        return Err(ChatError::Trust(
+            "history transfer DH produced the all-zero secret".into(),
+        ));
     }
     let mut key = Zeroizing::new([0u8; 32]);
     Hkdf::<Sha256>::new(Some(transcript_hash), shared.as_bytes())
@@ -252,7 +257,9 @@ pub fn seal_history_transfer_frame<R: Rng + CryptoRng>(
     rng: &mut R,
 ) -> Result<ChatHistoryTransferFrameV1> {
     if plaintext.len() > MAX_CHAT_HISTORY_TRANSFER_FRAME_PLAINTEXT as usize {
-        return Err(ChatError::Invalid("history transfer frame is too large".into()));
+        return Err(ChatError::Invalid(
+            "history transfer frame is too large".into(),
+        ));
     }
     let mut nonce = [0u8; 24];
     rng.fill(&mut nonce);
@@ -269,10 +276,17 @@ pub fn seal_history_transfer_frame<R: Rng + CryptoRng>(
     let aad = frame.aad().map_err(ChatError::Invalid)?;
     let cipher = XChaCha20Poly1305::new_from_slice(key)
         .map_err(|_| ChatError::Protocol("history transfer key length".into()))?;
-    frame.ciphertext = STANDARD.encode(cipher.encrypt(
-        XNonce::from_slice(&nonce),
-        Payload { msg: plaintext, aad: &aad },
-    ).map_err(|_| ChatError::Protocol("history transfer frame seal failed".into()))?);
+    frame.ciphertext = STANDARD.encode(
+        cipher
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: plaintext,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| ChatError::Protocol("history transfer frame seal failed".into()))?,
+    );
     Ok(frame)
 }
 
@@ -286,17 +300,23 @@ pub fn open_history_transfer_frame(
     if frame.transfer_id != expected_transfer_id
         || frame.transcript_hash != hex::encode(expected_transcript_hash)
     {
-        return Err(ChatError::Trust("history transfer frame transcript mismatch".into()));
+        return Err(ChatError::Trust(
+            "history transfer frame transcript mismatch".into(),
+        ));
     }
     let nonce: [u8; 24] = decode_exact("history transfer nonce", &frame.nonce)?;
-    let ciphertext = STANDARD.decode(&frame.ciphertext)
+    let ciphertext = STANDARD
+        .decode(&frame.ciphertext)
         .map_err(|_| ChatError::Invalid("history transfer ciphertext base64".into()))?;
     XChaCha20Poly1305::new_from_slice(key)
         .map_err(|_| ChatError::Protocol("history transfer key length".into()))?
-        .decrypt(XNonce::from_slice(&nonce), Payload {
-            msg: &ciphertext,
-            aad: &frame.aad().map_err(ChatError::Invalid)?,
-        })
+        .decrypt(
+            XNonce::from_slice(&nonce),
+            Payload {
+                msg: &ciphertext,
+                aad: &frame.aad().map_err(ChatError::Invalid)?,
+            },
+        )
         .map_err(|_| ChatError::Trust("history transfer frame authentication failed".into()))
 }
 
@@ -342,11 +362,9 @@ pub fn prepare_history_archive<R: Rng + CryptoRng>(
         .validate(acceptance, transcript_hash)
         .map_err(ChatError::Invalid)?;
 
-    let mut plaintexts = vec![
-        ChatHistoryArchiveFramePlaintextV1::Header(header.clone())
-            .canonical_bytes()
-            .map_err(ChatError::Content)?,
-    ];
+    let mut plaintexts = vec![ChatHistoryArchiveFramePlaintextV1::Header(header.clone())
+        .canonical_bytes()
+        .map_err(ChatError::Content)?];
     let mut batch = Vec::new();
     for record in records {
         batch.push(record);
@@ -443,19 +461,13 @@ pub fn verify_history_archive(
     let mut total_plaintext = 0u64;
 
     for (position, frame) in frames.iter().enumerate() {
-        if frame.index as usize != position
-            || frame.final_frame != (position + 1 == frames.len())
-        {
+        if frame.index as usize != position || frame.final_frame != (position + 1 == frames.len()) {
             return Err(ChatError::Trust(
                 "history archive frames are not exactly contiguous".into(),
             ));
         }
-        let plaintext = open_history_transfer_frame(
-            frame,
-            &acceptance.transfer_id,
-            transcript_hash,
-            key,
-        )?;
+        let plaintext =
+            open_history_transfer_frame(frame, &acceptance.transfer_id, transcript_hash, key)?;
         total_plaintext = total_plaintext
             .checked_add(plaintext.len() as u64)
             .ok_or_else(|| ChatError::Invalid("history archive size overflow".into()))?;
@@ -572,27 +584,41 @@ fn exact_manifest_device<'a>(
     device_id: u32,
 ) -> Result<&'a kutup_chat_proto::AccountManifestDeviceV1> {
     if manifest.account != account || manifest.sequence != sequence {
-        return Err(ChatError::Trust("history transfer manifest binding mismatch".into()));
+        return Err(ChatError::Trust(
+            "history transfer manifest binding mismatch".into(),
+        ));
     }
-    manifest.devices.iter().find(|device| device.device_id == device_id)
-        .ok_or_else(|| ChatError::Trust("history transfer device is absent from the manifest".into()))
+    manifest
+        .devices
+        .iter()
+        .find(|device| device.device_id == device_id)
+        .ok_or_else(|| {
+            ChatError::Trust("history transfer device is absent from the manifest".into())
+        })
 }
 
 fn verify_device_signature(identity_key: &str, message: &[u8], signature: &str) -> Result<()> {
-    let public = PublicKey::deserialize(&STANDARD.decode(identity_key)
-        .map_err(|_| ChatError::Trust("manifest identity key is not base64".into()))?)
-        .map_err(|error| ChatError::Trust(error.to_string()))?;
+    let public = PublicKey::deserialize(
+        &STANDARD
+            .decode(identity_key)
+            .map_err(|_| ChatError::Trust("manifest identity key is not base64".into()))?,
+    )
+    .map_err(|error| ChatError::Trust(error.to_string()))?;
     let signature: [u8; 64] = decode_exact("history transfer signature", signature)?;
     if !public.verify_signature(message, &signature) {
-        return Err(ChatError::Trust("history transfer device signature is invalid".into()));
+        return Err(ChatError::Trust(
+            "history transfer device signature is invalid".into(),
+        ));
     }
     Ok(())
 }
 
 fn decode_exact<const N: usize>(label: &str, value: &str) -> Result<[u8; N]> {
-    STANDARD.decode(value)
+    STANDARD
+        .decode(value)
         .map_err(|_| ChatError::Invalid(format!("{label} is not base64")))?
-        .try_into().map_err(|_| ChatError::Invalid(format!("{label} has the wrong length")))
+        .try_into()
+        .map_err(|_| ChatError::Invalid(format!("{label} has the wrong length")))
 }
 
 #[cfg(test)]
@@ -634,15 +660,9 @@ mod tests {
             )
             .unwrap();
 
-        let prepared_request = prepare_history_transfer_request(
-            &new_identity,
-            "alice@a.test",
-            2,
-            1,
-            1_000,
-            &mut rng,
-        )
-        .unwrap();
+        let prepared_request =
+            prepare_history_transfer_request(&new_identity, "alice@a.test", 2, 1, 1_000, &mut rng)
+                .unwrap();
         verify_history_transfer_request(&prepared_request.request, &manifest, 1_001).unwrap();
         let mut forged_request = prepared_request.request.clone();
         forged_request.device_signature = STANDARD.encode([0u8; 64]);
@@ -729,7 +749,10 @@ mod tests {
         .unwrap();
         completion.validate().unwrap();
         assert_eq!(completion.transcript_hash, hex::encode(transcript));
-        assert_eq!(completion.plaintext_digest, hex::encode(archive.plaintext_digest));
+        assert_eq!(
+            completion.plaintext_digest,
+            hex::encode(archive.plaintext_digest)
+        );
         verify_device_signature(
             &STANDARD.encode(new_identity.identity_key().serialize()),
             &completion.signing_bytes().unwrap(),

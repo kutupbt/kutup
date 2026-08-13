@@ -118,6 +118,68 @@ jobs:
       - name: Build production web app
         run: pnpm -C frontend run build:web
 
+  chat-backup-integration:
+    name: Chat backup lifecycle (Postgres and SeaweedFS)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: chat-backup-integration
+      - name: Run isolated live backup lifecycle
+        run: scripts/test-chat-backup-integration.sh
+
+  chat-backup-browser:
+    name: Clean-browser Chat backup recovery
+    needs:
+      - rust-workspace
+      - web
+      - chat-backup-integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      KUTUP_E2E_SAFE_ARTIFACTS: "1"
+      KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
+      POSTGRES_PASSWORD: chat-backup-ci-postgres
+      JWT_SECRET: chat-backup-ci-jwt-secret-at-least-32-bytes
+      APP_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/e2e/package-lock.json
+      - name: Install browser test dependencies
+        run: npm ci --prefix tests/e2e
+      - name: Install Chromium
+        run: npx --prefix tests/e2e playwright install --with-deps chromium
+      - name: Start the single-server stack
+        run: docker compose up --detach --build --wait
+      - name: Run clean-browser recovery
+        working-directory: tests/e2e
+        run: npm exec -- playwright test specs/33-chat-history-recovery.spec.ts --project=chromium
+      - name: Collect sanitized backup diagnostics
+        if: failure()
+        run: scripts/collect-chat-e2e-diagnostics.sh single
+      - name: Stop the single-server stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+      - name: Upload clean-browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-backup-browser-results
+          if-no-files-found: ignore
+          retention-days: 14
+          path: tests/e2e/sanitized-results/**
+
   chat-security-e2e:
     name: Two-server browser security
     needs:
@@ -125,8 +187,12 @@ jobs:
       - rust-workspace
       - chat-core
       - web
+      - chat-backup-integration
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      KUTUP_E2E_SAFE_ARTIFACTS: "1"
+      KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
     steps:
       - uses: actions/checkout@v4
       - name: Install protobuf compiler
@@ -157,6 +223,4 @@ jobs:
           name: chat-security-playwright-results
           if-no-files-found: ignore
           retention-days: 14
-          path: |
-            tests/e2e/test-results/**
-            tests/e2e/playwright-report/**
+          path: tests/e2e/sanitized-results/**

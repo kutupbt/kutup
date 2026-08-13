@@ -472,6 +472,16 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
     assert_eq!(v2.devices[0], v1.devices[0]);
     assert_eq!(v2.devices[1].device_id, 2);
     assert!(v2.devices[1].mls.is_some());
+
+    let v3 =
+        block_on(second.revoke_manifest_device(&authority, 1, "2026-07-15T12:02:00Z")).unwrap();
+    assert_eq!(v3.sequence, 3);
+    assert_eq!(
+        v3.previous_hash.as_deref(),
+        Some(v2.manifest_hash().unwrap().as_str())
+    );
+    assert_eq!(v3.devices.len(), 1);
+    assert_eq!(v3.devices[0].device_id, 2);
 }
 
 #[test]

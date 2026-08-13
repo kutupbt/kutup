@@ -23,7 +23,7 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 | Direct Chat | `DirectChatSuiteId = 1`, libsignal bytes | Unchanged pinned libsignal suite |
 | MLS group | MLS `0x0002`, P-256 control and delivery keys | MLS `0x0003`, X25519/ChaCha/Ed25519 throughout Kutup-owned bindings |
 | Account device directory | Chat-only `DeviceManifest` plus global transparency proofs | One account-signed `AccountManifestV1` with complete device set, previous hash, history and durable peer pin |
-| Chat history transfer | Absent; a new browser device starts with an empty local database | `ChatHistoryTransfer*V1` two-device signed ephemeral-X25519 handshake, transcript-bound XChaCha frames and destination-signed completion; imported display history never includes live ratchet state |
+| Chat history backup | Absent; a new browser device starts with an empty local database | **Implemented:** always-on account-local E2EE backup using a master-key-wrapped Chat root, independently derived segment/base/manifest/media keys, signed hash-chained manifests, and server-side base-plus-tail restore; device-to-device transfer is not supported |
 | Broadcast post and grants | Absent | Typed broadcast policy, epoch, account/device grant, history grant and post structures |
 
 `AccountEnvelopeV1` is encoded as magic `KUTPAE1\0`, big-endian suite ID,
@@ -90,14 +90,14 @@ buckets; avatars are limited to 512 KiB. The profile suite code travels beside
 the profile key inside encrypted Direct Chat content, and unknown codes do not
 authorize a profile fetch.
 
-`ChatHistoryTransferRequestV1` and `ChatHistoryTransferAcceptanceV1` use
-domain-separated, big-endian canonical signing encodings and XEdDSA signatures
-from the two exact manifest-bound libsignal identity keys. Their transcript
-hash salts an ephemeral-X25519/HKDF transfer key. Each opaque relay frame uses
-a fresh XChaCha nonce and AAD binding transfer ID, transcript hash, index,
-finality and plaintext size. The destination-signed completion binds the frame
-and record counts plus the ordered plaintext digest. V1 hard-limits a transfer
-to 15 minutes, 1,024 frames, 100,000 records and 256 MiB plaintext.
+Chat backup uses `ChatBackupRootV1`, wrapped with the Chat-backup purpose of
+`AccountEnvelopeV1`. Fixed HKDF-SHA256 labels derive independent message,
+media-ID, media-encryption, manifest-signing and segment keys. Typed headers
+bind every XChaCha20-Poly1305/secretstream object to its suite, account,
+incarnation, protection domain, generation and object purpose. Signed,
+hash-chained manifests select one encrypted base plus an ordered event tail;
+the homeserver stores and quotas opaque objects but cannot inspect Chat
+content. Backup media uses independently derived opaque IDs and outer keys.
 
 Every V1 structure has a numeric typed suite, a fixed domain separator,
 canonical big-endian length-prefixed signing/AAD encoding, deterministic test

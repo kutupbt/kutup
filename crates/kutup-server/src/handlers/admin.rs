@@ -77,6 +77,8 @@ struct UserRow {
     username: String,
     storage_quota_bytes: i64,
     storage_used_bytes: i64,
+    chat_storage_quota_bytes: i64,
+    chat_storage_used_bytes: i64,
     is_admin: bool,
     is_active: bool,
     #[serde(rename = "totpEnabled")]
@@ -105,6 +107,8 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
         String,
         i64,
         i64,
+        i64,
+        i64,
         bool,
         bool,
         bool,
@@ -113,6 +117,7 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     );
     let rows: Vec<Row> = sqlx::query_as(
         r#"SELECT id, email, COALESCE(username, ''), storage_quota_bytes, storage_used_bytes,
+                  chat_storage_quota_bytes, chat_storage_used_bytes,
                   is_admin, is_active, totp_enabled, is_first_login, created_at
            FROM users ORDER BY created_at DESC"#,
     )
@@ -123,7 +128,20 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     let users: Vec<UserRow> = rows
         .into_iter()
         .map(
-            |(id, email, username, quota, used, is_admin, is_active, totp, first, created)| {
+            |(
+                id,
+                email,
+                username,
+                quota,
+                used,
+                chat_quota,
+                chat_used,
+                is_admin,
+                is_active,
+                totp,
+                first,
+                created,
+            )| {
                 let is_protected = is_break_glass(&state, &email);
                 UserRow {
                     id,
@@ -131,6 +149,8 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
                     username,
                     storage_quota_bytes: quota,
                     storage_used_bytes: used,
+                    chat_storage_quota_bytes: chat_quota,
+                    chat_storage_used_bytes: chat_used,
                     is_admin,
                     is_active,
                     totp_enabled: totp,
@@ -151,6 +171,7 @@ pub struct CreateUserRequest {
     username: String,
     temp_password: String,
     storage_quota_bytes: i64,
+    chat_storage_quota_bytes: Option<i64>,
 }
 
 /// `POST /api/admin/users` — mirrors `CreateUser`. Creates a first-login account with a
@@ -182,6 +203,17 @@ pub async fn create_user(
     if req.storage_quota_bytes == 0 {
         req.storage_quota_bytes = 10 * 1024 * 1024 * 1024; // 10 GB default
     }
+    let default_chat_quota: i64 = sqlx::query_scalar(
+        "SELECT value::bigint FROM site_settings WHERE key='default_chat_storage_quota_bytes'",
+    )
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|_| AppError::internal("internal error"))?
+    .unwrap_or(i64::try_from(kutup_chat_proto::DEFAULT_CHAT_STORAGE_QUOTA_BYTES).unwrap());
+    let chat_storage_quota_bytes = req.chat_storage_quota_bytes.unwrap_or(default_chat_quota);
+    if req.storage_quota_bytes <= 0 || chat_storage_quota_bytes <= 0 {
+        return Err(AppError::bad_request("storage quotas must be positive"));
+    }
 
     let hash =
         bcrypt::hash(&req.temp_password, 10).map_err(|_| AppError::internal("internal error"))?;
@@ -195,14 +227,15 @@ pub async fn create_user(
                account_incarnation_id, drive_signing_public_key,
                account_protection_suite, account_protection_salt,
                argon_memory_kib, argon_iterations, argon_parallelism,
-               is_admin, is_first_login, storage_quota_bytes
-           ) VALUES ($1,$2,$3,'','','','','','','','',0,'',0,0,0,false,true,$4)
+               is_admin, is_first_login, storage_quota_bytes, chat_storage_quota_bytes
+           ) VALUES ($1,$2,$3,'','','','','','','','',0,'',0,0,0,false,true,$4,$5)
            RETURNING id"#,
     )
     .bind(&req.email)
     .bind(&req.username)
     .bind(&hash)
     .bind(req.storage_quota_bytes)
+    .bind(chat_storage_quota_bytes)
     .fetch_one(&state.pool)
     .await;
     let new_id = match res {
@@ -218,6 +251,7 @@ pub async fn create_user(
             "email": req.email,
             "username": req.username,
             "storageQuotaBytes": req.storage_quota_bytes,
+            "chatStorageQuotaBytes": chat_storage_quota_bytes,
         }),
     )
     .await;
@@ -232,6 +266,7 @@ pub async fn create_user(
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateUserRequest {
     storage_quota_bytes: Option<i64>,
+    chat_storage_quota_bytes: Option<i64>,
     is_active: Option<bool>,
     is_admin: Option<bool>,
 }
@@ -287,7 +322,21 @@ pub async fn update_user(
     }
 
     if let Some(q) = req.storage_quota_bytes {
+        if q <= 0 {
+            return Err(AppError::bad_request("storage quota must be positive"));
+        }
         sqlx::query("UPDATE users SET storage_quota_bytes = $1 WHERE id = $2")
+            .bind(q)
+            .bind(target)
+            .execute(&state.pool)
+            .await
+            .map_err(|_| AppError::internal("internal error"))?;
+    }
+    if let Some(q) = req.chat_storage_quota_bytes {
+        if q <= 0 {
+            return Err(AppError::bad_request("Chat storage quota must be positive"));
+        }
+        sqlx::query("UPDATE users SET chat_storage_quota_bytes = $1 WHERE id = $2")
             .bind(q)
             .bind(target)
             .execute(&state.pool)
@@ -315,6 +364,9 @@ pub async fn update_user(
     let mut changes = serde_json::Map::new();
     if let Some(q) = req.storage_quota_bytes {
         changes.insert("storageQuotaBytes".into(), json!(q));
+    }
+    if let Some(q) = req.chat_storage_quota_bytes {
+        changes.insert("chatStorageQuotaBytes".into(), json!(q));
     }
     if let Some(a) = req.is_active {
         changes.insert("isActive".into(), json!(a));
@@ -361,6 +413,8 @@ pub async fn delete_user(
     if is_break_glass(&state, &target_email) {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
+
+    super::chat_backup::purge_for_account(&state, target).await?;
 
     let res = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(target)
@@ -480,8 +534,10 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
         total_files: scalar("SELECT COUNT(*) FROM files").await,
         // ::bigint — SUM(bigint) yields NUMERIC, which sqlx cannot decode as i64;
         // without the cast this silently fell back to 0 via unwrap_or.
-        total_storage_used: scalar("SELECT COALESCE(SUM(storage_used_bytes),0)::bigint FROM users")
-            .await,
+        total_storage_used: scalar(
+            "SELECT COALESCE(SUM(storage_used_bytes + chat_storage_used_bytes),0)::bigint FROM users",
+        )
+        .await,
         total_collections: scalar("SELECT COUNT(*) FROM collections").await,
         storage_total_bytes,
         storage_backend_used_bytes,
@@ -495,23 +551,53 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
     path = "/api/admin/settings",
     tag = "admin",
     security(("BearerAuth" = [])),
-    responses((status = 200, description = "Site settings", body = crate::models::SettingsResponse))
+    responses((status = 200, description = "Site settings", body = crate::models::AdminSettingsResponse))
 )]
 pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
-    let val: Option<String> =
-        sqlx::query_scalar("SELECT value FROM site_settings WHERE key='registration_enabled'")
-            .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten();
-    let enabled = val.as_deref() != Some("false");
-    Ok(Json(json!({"registrationEnabled": enabled})).into_response())
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT key, value FROM site_settings WHERE key IN ('registration_enabled', 'default_chat_storage_quota_bytes')",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|_| AppError::internal("internal error"))?;
+    let registration_enabled = rows
+        .iter()
+        .find(|(key, _)| key == "registration_enabled")
+        .map(|(_, value)| value != "false")
+        .unwrap_or(true);
+    let default_chat_storage_quota_bytes = rows
+        .iter()
+        .find(|(key, _)| key == "default_chat_storage_quota_bytes")
+        .and_then(|(_, value)| value.parse::<i64>().ok())
+        .unwrap_or(i64::try_from(kutup_chat_proto::DEFAULT_CHAT_STORAGE_QUOTA_BYTES).unwrap());
+    let chat_mailbox_retention_days = crate::site_settings::chat_delivery_retention_days(
+        &state.pool,
+        crate::site_settings::CHAT_MAILBOX_RETENTION_DAYS,
+        state.config.chat_mailbox_retention_days,
+    )
+    .await?;
+    let chat_media_delivery_retention_days = crate::site_settings::chat_delivery_retention_days(
+        &state.pool,
+        crate::site_settings::CHAT_MEDIA_DELIVERY_RETENTION_DAYS,
+        state.config.chat_media_delivery_retention_days,
+    )
+    .await?;
+    Ok(Json(json!({
+        "registrationEnabled": registration_enabled,
+        "defaultChatStorageQuotaBytes": default_chat_storage_quota_bytes,
+        "chatMailboxRetentionDays": chat_mailbox_retention_days,
+        "chatMediaDeliveryRetentionDays": chat_media_delivery_retention_days,
+    }))
+    .into_response())
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateSettingsRequest {
-    registration_enabled: bool,
+    registration_enabled: Option<bool>,
+    default_chat_storage_quota_bytes: Option<i64>,
+    chat_mailbox_retention_days: Option<i64>,
+    chat_media_delivery_retention_days: Option<i64>,
 }
 
 /// `PUT /api/admin/settings` — mirrors `UpdateSettings`.
@@ -521,35 +607,96 @@ pub struct UpdateSettingsRequest {
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = crate::models::UpdateAdminSettingsRequest,
-    responses((status = 200, description = "Updated site settings", body = crate::models::SettingsResponse))
+    responses((status = 200, description = "Updated site settings", body = crate::models::AdminSettingsResponse))
 )]
 pub async fn update_settings(
     State(state): State<AppState>,
     admin: AdminUser,
     Json(req): Json<UpdateSettingsRequest>,
 ) -> AppResult<Response> {
-    let val = if req.registration_enabled {
-        "true"
-    } else {
-        "false"
-    };
-    sqlx::query(
-        "INSERT INTO site_settings (key, value) VALUES ('registration_enabled', $1) \
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-    )
-    .bind(val)
-    .execute(&state.pool)
-    .await
-    .map_err(|_| AppError::internal("internal error"))?;
+    if req.registration_enabled.is_none()
+        && req.default_chat_storage_quota_bytes.is_none()
+        && req.chat_mailbox_retention_days.is_none()
+        && req.chat_media_delivery_retention_days.is_none()
+    {
+        return Err(AppError::bad_request("at least one setting is required"));
+    }
+    if req
+        .default_chat_storage_quota_bytes
+        .is_some_and(|quota| quota <= 0)
+    {
+        return Err(AppError::bad_request(
+            "default Chat storage quota must be positive",
+        ));
+    }
+    for value in [
+        req.chat_mailbox_retention_days,
+        req.chat_media_delivery_retention_days,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        crate::site_settings::validate_chat_delivery_retention_days(value)
+            .map_err(AppError::bad_request)?;
+    }
+
+    let mut transaction = state.pool.begin().await?;
+    if let Some(enabled) = req.registration_enabled {
+        sqlx::query(
+            "INSERT INTO site_settings (key, value) VALUES ('registration_enabled', $1) \
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        )
+        .bind(if enabled { "true" } else { "false" })
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| AppError::internal("internal error"))?;
+    }
+    if let Some(quota) = req.default_chat_storage_quota_bytes {
+        sqlx::query(
+            "INSERT INTO site_settings (key, value) VALUES ('default_chat_storage_quota_bytes', $1) \
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        )
+        .bind(quota.to_string())
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| AppError::internal("internal error"))?;
+    }
+    for (key, value) in [
+        (
+            crate::site_settings::CHAT_MAILBOX_RETENTION_DAYS,
+            req.chat_mailbox_retention_days,
+        ),
+        (
+            crate::site_settings::CHAT_MEDIA_DELIVERY_RETENTION_DAYS,
+            req.chat_media_delivery_retention_days,
+        ),
+    ] {
+        let Some(value) = value else { continue };
+        sqlx::query(
+            "INSERT INTO site_settings (key, value) VALUES ($1, $2) \
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        )
+        .bind(key)
+        .bind(value.to_string())
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| AppError::internal("internal error"))?;
+    }
+    transaction.commit().await?;
     audit(
         &state.pool,
         &admin.user_id,
         "settings.update",
         None,
-        json!({"registrationEnabled": req.registration_enabled}),
+        json!({
+            "registrationEnabled": req.registration_enabled,
+            "defaultChatStorageQuotaBytes": req.default_chat_storage_quota_bytes,
+            "chatMailboxRetentionDays": req.chat_mailbox_retention_days,
+            "chatMediaDeliveryRetentionDays": req.chat_media_delivery_retention_days,
+        }),
     )
     .await;
-    Ok(Json(json!({"registrationEnabled": req.registration_enabled})).into_response())
+    get_settings(State(state), admin).await
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -1556,6 +1703,52 @@ pub async fn wipe_user(
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
 
+    // The replacement recovery setup must never inherit ciphertext encrypted
+    // under the lost account master key.
+    super::chat_backup::purge_for_account(&state, target).await?;
+    let media_uploads: Vec<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT id,storage_path,s3_upload_id FROM chat_media_uploads WHERE user_id=$1",
+    )
+    .bind(target)
+    .fetch_all(&state.pool)
+    .await?;
+    for (_, path, upload_id) in &media_uploads {
+        state
+            .storage
+            .abort_multipart(path, upload_id)
+            .await
+            .map_err(|_| AppError::internal("failed to abort Chat media upload"))?;
+    }
+    sqlx::query("DELETE FROM chat_media_uploads WHERE user_id=$1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query("DELETE FROM chat_media_references WHERE user_id=$1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    let orphan_media_paths: Vec<String> = sqlx::query_scalar(
+        "DELETE FROM chat_media_objects object
+         WHERE NOT EXISTS (SELECT 1 FROM chat_media_references reference
+                           WHERE reference.attachment_id=object.attachment_id)
+         RETURNING storage_path",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    sqlx::query("DELETE FROM chat_attachment_ledger_entities WHERE user_id=$1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query("DELETE FROM chat_attachment_ledger_operations WHERE user_id=$1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    for path in orphan_media_paths {
+        if let Err(error) = state.storage.delete(&path).await {
+            tracing::warn!(error = %error, "wiped Chat media object requires orphan cleanup");
+        }
+    }
+
     // 1. Purge every owned collection — same machinery as a permanent trash purge
     //    (quota release + S3 GC + FK-cascaded children). Covers trashed items too.
     let colls: Vec<Uuid> =
@@ -1638,6 +1831,7 @@ pub async fn wipe_user(
                argon_iterations = 0, argon_parallelism = 0,
                recovery_key_verifier = '',
                login_key_hash = $1, totp_secret = NULL, totp_enabled = false,
+               chat_storage_used_bytes = 0,
                is_first_login = true, updated_at = NOW()
            WHERE id = $2"#,
     )

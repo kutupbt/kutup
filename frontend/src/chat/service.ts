@@ -8,9 +8,6 @@ import type {
   ChatDevice,
   ChatHistoryEntry,
   ChatExpiryReport,
-  ChatHistoryTransferDownloadResult,
-  ChatHistoryTransferList,
-  ChatHistoryTransferRequest,
   ContactRecord,
   ConversationId,
   InboundAttention,
@@ -36,15 +33,21 @@ import {
   withHomeServer,
 } from './identity'
 import { MlsConversationService } from './mls-service'
-import { deliverChatMediaV1 } from './media'
+import { chatMediaCacheBindingV1, deliverChatMediaV1 } from './media'
+import { privateCiphertextCacheForAccountV1 } from '@/mediaCache'
 import { ChatAttachmentLedger } from './attachment-ledger'
+import {
+  chatDeviceDatabaseName,
+  completeRequestedLocalChatDeviceReset,
+} from './local-store'
+import {
+  ChatBackupCoordinator,
+  type BackupMediaSource,
+  type ChatBackupView,
+} from './backup'
 
 type UpdateListener = () => void
 type TypingListener = (event: ChatTypingEvent) => void
-
-function wasmRecord<T>(value: unknown): T {
-  return (value instanceof Map ? Object.fromEntries(value) : value) as T
-}
 
 export type ChatServiceErrorCode = 'browserUnsupported' | 'serverUnsupported'
 
@@ -57,6 +60,7 @@ export class ChatServiceError extends Error {
 
 export interface ChatServiceOptions {
   userId: string
+  email: string
   username: string
   masterKey: Uint8Array
   capabilities: ChatCapabilities
@@ -94,6 +98,8 @@ export class ChatService {
   private disposed = false
   private reconcilePromise: Promise<ReceiveReport> | null = null
   private readonly mls: MlsConversationService | null
+  private backup: ChatBackupCoordinator | null = null
+  private backupUnsubscribe: (() => void) | null = null
 
   private constructor(
     client: WasmChatClientHandle,
@@ -138,10 +144,11 @@ export class ChatService {
       throw new ChatServiceError('serverUnsupported')
     }
 
-    const scope = await accountScope(options.userId)
+    await completeRequestedLocalChatDeviceReset(options.userId)
+    const databaseName = await chatDeviceDatabaseName(options.userId)
+    const scope = databaseName.slice(databaseName.indexOf(':') + 1)
     const lockName = `kutup-chat-engine:${scope}`
     const channelName = `kutup-chat-updates:${scope}`
-    const databaseName = `kutup-chat-v2:${scope}`
     const wasm = await loadChatWasm()
     const transport = new ApiChatTransport()
     const client = await navigator.locks.request(lockName, { mode: 'exclusive' }, () =>
@@ -174,6 +181,26 @@ export class ChatService {
       attachmentLedger,
     )
     try {
+      if (capabilities.backup?.alwaysEnabled) {
+        service.backup = await ChatBackupCoordinator.open({
+          databaseName,
+          email: options.email,
+          username: options.username,
+          serverName: capabilities.serverName!,
+          masterKey: options.masterKey,
+          deviceId: service.deviceId,
+          history: () => service.liveHistory(),
+          manifestSequence: async () => requireManifestSequence(
+            await service.withLock(() => service.client.syncManifest()),
+          ),
+          mediaSources: () => service.backupMediaSources(),
+          localMediaCiphertext: (descriptor, signal) =>
+            privateCiphertextCacheForAccountV1(options.userId).readVerified(
+              chatMediaCacheBindingV1(descriptor), signal,
+            ),
+        })
+        service.backupUnsubscribe = service.backup.subscribe(() => service.emitUpdate())
+      }
       await service.initializeMls()
       await service.reconcile()
       void service.maintainPrekeys()
@@ -203,6 +230,30 @@ export class ChatService {
   }
 
   async history(): Promise<ChatHistoryEntry[]> {
+    const [live, restored] = await Promise.all([
+      this.liveHistory(),
+      this.backup?.restoredHistoryAsync() ?? Promise.resolve([]),
+    ])
+    const merged = new Map(restored.map(entry => [entry.id, entry]))
+    for (const entry of live) merged.set(entry.id, entry)
+    return Array.from(merged.values()).sort((left, right) =>
+      left.timestampMs - right.timestampMs || left.id.localeCompare(right.id))
+  }
+
+  backupStatus(): ChatBackupView | null {
+    return this.backup?.view() ?? null
+  }
+
+  backupMediaCiphertext(
+    mediaId: string,
+    accessToken: string,
+    signal?: AbortSignal,
+  ): AsyncIterable<Uint8Array> {
+    if (!this.backup) throw new Error('encrypted Chat history is unavailable')
+    return this.backup.fetchMediaCiphertext(mediaId, accessToken, signal)
+  }
+
+  private async liveHistory(): Promise<ChatHistoryEntry[]> {
     const { history, expiry } = await this.withLock(async () => {
       const expiry = await this.client.purgeExpiredMessages(String(Date.now()))
       return { expiry, history: await this.client.history() }
@@ -241,47 +292,13 @@ export class ChatService {
     return this.transport.listDevices()
   }
 
-  historyTransfers(): Promise<ChatHistoryTransferList> {
-    return this.withLock(() => this.client.listHistoryTransfers())
-  }
-
-  async requestHistoryTransfer(): Promise<ChatHistoryTransferRequest> {
-    const request = await this.withLock(() => this.client.requestHistoryTransfer())
-    this.notifyPeers()
-    return request
-  }
-
-  async approveHistoryTransfer(
-    request: ChatHistoryTransferRequest,
-  ): Promise<{ acceptance: unknown; frameCount: number }> {
-    const result = wasmRecord<{ acceptance: unknown; frameCount: number }>(
-      await this.withLock(() => this.client.approveHistoryTransfer(
-        request,
-        100_000,
-        String(256 * 1024 * 1024),
-      )),
-    )
-    this.notifyPeers()
-    return result
-  }
-
-  async downloadHistoryTransfer(
-    transferId: string,
-  ): Promise<ChatHistoryTransferDownloadResult> {
-    const result = wasmRecord<ChatHistoryTransferDownloadResult>(
-      await this.withLock(() => this.client.downloadHistoryTransfer(transferId)),
-    )
-    if (result.ready) this.notifyPeers()
-    return result
-  }
-
   async revokeDevice(deviceId: number): Promise<ChatDevice[]> {
     if (deviceId === this.deviceId) {
       throw new Error('the current Chat device cannot revoke itself')
     }
     await this.withMlsWorkflow(async () => {
       await this.transport.revokeDevice(deviceId)
-      const manifest = await this.withLock(() => this.client.syncManifest())
+      const manifest = await this.withLock(() => this.client.revokeManifestDevice(deviceId))
       if (!this.mls) return
       const sequence = requireManifestSequence(manifest)
       await this.mls.maintainKeyPackages(sequence)
@@ -611,6 +628,7 @@ export class ChatService {
         await this.attachmentLedger!.markCleared(target.entityId, Date.now())
       }
     })
+    this.backup?.schedule()
     return this.chatMediaStorage()
   }
 
@@ -929,6 +947,8 @@ export class ChatService {
     this.typingListeners.clear()
     this.attachmentExpiryListeners.clear()
     this.attachmentLedger?.dispose()
+    this.backupUnsubscribe?.()
+    this.backup?.dispose()
     this.client.free()
   }
 
@@ -1062,6 +1082,14 @@ export class ChatService {
     return this.username
   }
 
+  private backupMediaSources(): BackupMediaSource[] {
+    return (this.attachmentLedger?.activeEntries() ?? []).map(({ entry }) => ({
+      attachmentId: entry.attachmentId,
+      referenceId: entry.storageReferenceId,
+      ciphertextBytes: entry.ciphertextBytes,
+    }))
+  }
+
   private async initializeMls(): Promise<void> {
     await this.withMlsWorkflow(async () => {
       const manifest = await this.withLock(() => this.client.syncManifest())
@@ -1075,6 +1103,7 @@ export class ChatService {
   private notifyPeers(): void {
     this.channel.postMessage({ type: 'updated' })
     this.emitUpdate()
+    this.backup?.schedule()
   }
 
   private async contactAction(
@@ -1099,10 +1128,12 @@ export class ChatService {
   }
 
   private readonly handleOnline = (): void => {
+    this.backup?.online()
     void this.initializeMls().then(() => this.reconcile())
   }
 
   private readonly handleVisibilityChange = (): void => {
+    this.backup?.pageHidden()
     if (document.visibilityState === 'visible') void this.initializeMls().then(() => this.reconcile())
   }
 
@@ -1171,18 +1202,6 @@ function parseTypingBroadcast(value: unknown): ChatTypingEvent | null {
     }
   }
   return null
-}
-
-async function accountScope(userId: string): Promise<string> {
-  const apiBase = await resolveApiBase()
-  const canonicalServer = new URL(apiBase, window.location.href).href
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(`${canonicalServer}\0${userId}`),
-  )
-  return Array.from(new Uint8Array(digest).slice(0, 16), (byte) =>
-    byte.toString(16).padStart(2, '0'),
-  ).join('')
 }
 
 function requireManifestSequence(value: unknown): number {

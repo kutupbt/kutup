@@ -74,6 +74,9 @@ export interface ChatAttachmentDescriptorV1 {
   height?: number
   durationMs?: number
   preview?: ChatMediaPreviewV1
+  backupMediaId?: string
+  /** Account-local authenticated reference used only by continuous backup reconciliation. */
+  backupMediaReferenceId?: string
 }
 
 export type ChatMediaConversationKindV1 = 'direct' | 'mls_group' | 'note_to_self'
@@ -197,36 +200,6 @@ export interface ChatDevice {
   lastSeenAt?: string | null
 }
 
-export interface ChatHistoryTransferRequest {
-  version: number
-  transferId: string
-  account: string
-  requestingDeviceId: number
-  createdAtUnix: number
-  expiresAtUnix: number
-  [key: string]: unknown
-}
-
-export interface ChatHistoryTransferSummary {
-  transferId: string
-  request: ChatHistoryTransferRequest
-  acceptance?: unknown
-  state: 'pending' | 'accepted' | string
-  requestingDeviceId: number
-  respondingDeviceId?: number
-  frameCount: number
-}
-
-export interface ChatHistoryTransferList {
-  transfers: ChatHistoryTransferSummary[]
-}
-
-export interface ChatHistoryTransferDownloadResult {
-  ready: boolean
-  frameCount: number
-  importedCount?: number
-}
-
 export interface InboundAttention {
   id: string
   cursor: string
@@ -258,6 +231,17 @@ export interface ChatCapabilities {
     protocolVersion: number
     suites: number[]
     maximumPlaintextBytes: number
+  }
+  backup?: {
+    protocolVersion: number
+    suites: number[]
+    protectionDomains: number[]
+    defaultStorageQuotaBytes: number
+    maximumSegmentCiphertextBytes: number
+    maximumBaseCiphertextBytes: number
+    segmentPageLimit: number
+    deliveryMediaRetentionDays: number
+    alwaysEnabled: boolean
   }
 }
 
@@ -906,31 +890,6 @@ export interface ChatTransportPort {
     capability: string,
   ): Promise<unknown>
   publishManifest(manifest: unknown): Promise<unknown>
-  createHistoryTransfer(request: unknown): Promise<void>
-  listHistoryTransfers(deviceId: number): Promise<unknown>
-  acceptHistoryTransfer(
-    transferId: string,
-    deviceId: number,
-    acceptance: unknown,
-  ): Promise<void>
-  uploadHistoryTransferFrame(
-    transferId: string,
-    deviceId: number,
-    index: number,
-    frame: unknown,
-  ): Promise<void>
-  drainHistoryTransferFrames(
-    transferId: string,
-    deviceId: number,
-    after: number | null,
-    limit: number,
-  ): Promise<unknown>
-  completeHistoryTransfer(
-    transferId: string,
-    deviceId: number,
-    completion: unknown,
-  ): Promise<void>
-  cancelHistoryTransfer(transferId: string, deviceId: number): Promise<void>
   fetchOwnProfile(): Promise<unknown | null>
   publishProfile(profile: unknown): Promise<unknown>
   fetchProfile(username: string, version: string, accessKey: string): Promise<unknown | null>
@@ -1442,14 +1401,7 @@ export interface WasmChatClientHandle {
   ): Promise<SendSummary>
   mediaDeliveryCapability(peer: string): Promise<string>
   syncManifest(): Promise<unknown>
-  requestHistoryTransfer(): Promise<ChatHistoryTransferRequest>
-  listHistoryTransfers(): Promise<ChatHistoryTransferList>
-  approveHistoryTransfer(
-    request: ChatHistoryTransferRequest,
-    recordLimit: number,
-    plaintextByteLimit: string,
-  ): Promise<{ acceptance: unknown; frameCount: number }>
-  downloadHistoryTransfer(transferId: string): Promise<ChatHistoryTransferDownloadResult>
+  revokeManifestDevice(deviceId: number): Promise<unknown>
   safetyNumber(peer: string): Promise<SafetyNumberV1>
   verifySafetyNumber(peer: string, scannedPayload: string): Promise<SafetyNumberV1>
   free(): void

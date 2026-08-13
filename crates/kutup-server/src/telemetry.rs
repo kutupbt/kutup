@@ -202,6 +202,27 @@ pub fn chat_media_event(stage: &'static str, outcome: &'static str) {
         );
 }
 
+/// Identifier-free continuous Chat-history lifecycle outcomes.
+pub fn chat_backup_event(stage: &'static str, outcome: &'static str) {
+    static COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
+    COUNTER
+        .get_or_init(|| {
+            global::meter(INSTRUMENTATION_SCOPE)
+                .u64_counter("kutup.chat.backup.events")
+                .with_description(
+                    "Opaque Chat-history provision, append, compact, and restore outcomes",
+                )
+                .build()
+        })
+        .add(
+            1,
+            &[
+                KeyValue::new("stage", stage),
+                KeyValue::new("outcome", outcome),
+            ],
+        );
+}
+
 pub fn mls_control_event(operation: &'static str, outcome: &'static str) {
     static COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
     COUNTER

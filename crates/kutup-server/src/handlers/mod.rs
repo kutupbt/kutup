@@ -3,7 +3,7 @@
 pub mod admin;
 pub mod auth;
 pub mod chat;
-pub mod chat_history_transfer;
+pub mod chat_backup;
 pub mod chat_media;
 pub mod collab;
 pub mod collections;
@@ -92,7 +92,11 @@ pub(crate) async fn can_access_file(pool: &PgPool, user_id: Uuid, file_id: Uuid)
 /// Streams an S3 object body to the client as `application/octet-stream`, mirroring the
 /// Go handlers' `c.SendStream(body, size)` (lazy, no full-buffering). `extra` carries the
 /// version-download headers (`X-Kutup-*`). `Content-Length` is set when `size > 0`.
-fn octet_stream_response(body: ByteStream, size: i64, extra: &[(HeaderName, String)]) -> Response {
+pub(crate) fn octet_stream_response(
+    body: ByteStream,
+    size: i64,
+    extra: &[(HeaderName, String)],
+) -> Response {
     let stream = ReaderStream::new(body.into_async_read());
     let mut builder = Response::builder().header(header::CONTENT_TYPE, "application/octet-stream");
     if size > 0 {

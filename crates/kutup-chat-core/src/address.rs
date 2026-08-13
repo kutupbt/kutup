@@ -77,18 +77,18 @@ mod tests {
 
     #[test]
     fn federated_sender_becomes_the_libsignal_account_name() {
-        let address = ChatAddress::from_sender("maya@chat.example", 7).unwrap();
-        assert_eq!(address.user, "maya");
-        assert_eq!(address.domain.as_deref(), Some("chat.example"));
-        assert_eq!(address.name(), "maya@chat.example");
+        let address = ChatAddress::from_sender("user@kutup.dev", 7).unwrap();
+        assert_eq!(address.user, "user");
+        assert_eq!(address.domain.as_deref(), Some("kutup.dev"));
+        assert_eq!(address.name(), "user@kutup.dev");
         assert_eq!(
             address.conversation(),
-            ConversationId::direct(AccountAddress::federated("maya", "chat.example").unwrap())
+            ConversationId::direct(AccountAddress::federated("user", "kutup.dev").unwrap())
         );
     }
 
     #[test]
     fn malformed_federated_sender_fails_closed() {
-        assert!(ChatAddress::from_sender("maya@@chat.example", 1).is_err());
+        assert!(ChatAddress::from_sender("user@@kutup.dev", 1).is_err());
     }
 }

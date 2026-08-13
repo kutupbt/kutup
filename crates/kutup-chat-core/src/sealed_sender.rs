@@ -78,9 +78,7 @@ impl SealedSenderPolicyPin {
     ) -> Result<SenderCertificate> {
         if response.suite != self.policy.suite
             || response.service_policy_sequence != self.sequence
-            || response.expires_at <= now_seconds
-            || response.expires_at
-                > now_seconds + i64::from(self.policy.sender_certificate_lifetime_seconds)
+            || !response_expiry_is_valid(&self.policy, response.expires_at, now_seconds)
         {
             return Err(ChatError::Trust(
                 "sender certificate response suite, policy, or expiry is invalid".into(),
@@ -189,5 +187,55 @@ impl SealedSenderPolicyPin {
         Err(ChatError::Trust(
             "sender certificate is not valid under the authenticated service policy".into(),
         ))
+    }
+}
+
+fn response_expiry_is_valid(
+    policy: &SealedSenderServicePolicyV1,
+    expires_at: i64,
+    now_seconds: i64,
+) -> bool {
+    let latest = now_seconds
+        .checked_add(i64::from(policy.sender_certificate_lifetime_seconds))
+        .and_then(|value| value.checked_add(i64::from(policy.maximum_clock_skew_seconds)));
+    expires_at > now_seconds && latest.is_some_and(|latest| expires_at <= latest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kutup_chat_proto::{DirectChatSuiteId, SealedSenderRootV1, SealedSenderSuiteId};
+
+    fn policy() -> SealedSenderServicePolicyV1 {
+        SealedSenderServicePolicyV1 {
+            policy_version: 1,
+            canonical_domain: "a.test".into(),
+            suite: SealedSenderSuiteId::LibsignalV2DeliveryCapabilityV1,
+            roots: vec![SealedSenderRootV1 {
+                root_id: "root".into(),
+                public_key: "key".into(),
+                activates_at: 0,
+                revokes_at: None,
+            }],
+            server_certificates: vec![],
+            sender_certificate_lifetime_seconds: 86_400,
+            maximum_clock_skew_seconds: 300,
+            direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+        }
+    }
+
+    #[test]
+    fn response_expiry_accepts_authenticated_clock_skew() {
+        let policy = policy();
+        assert!(response_expiry_is_valid(&policy, 186_401, 100_000));
+        assert!(response_expiry_is_valid(&policy, 186_700, 100_000));
+    }
+
+    #[test]
+    fn response_expiry_rejects_expired_excessive_and_overflowing_values() {
+        let policy = policy();
+        assert!(!response_expiry_is_valid(&policy, 100_000, 100_000));
+        assert!(!response_expiry_is_valid(&policy, 186_701, 100_000));
+        assert!(!response_expiry_is_valid(&policy, i64::MAX, i64::MAX - 1));
     }
 }

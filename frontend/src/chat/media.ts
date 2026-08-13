@@ -465,6 +465,7 @@ export async function downloadChatMediaToCacheV1(
   onProgress?: (receivedBytes: number, totalBytes: number) => void,
   signal?: AbortSignal,
   lifecycle: CiphertextCacheLifecycleV1 = {},
+  backupCiphertext?: () => AsyncIterable<Uint8Array>,
 ): Promise<void> {
   const binding = chatMediaCacheBindingV1(descriptor)
   const bindingKey = await cache.bindingKey(binding)
@@ -473,11 +474,10 @@ export async function downloadChatMediaToCacheV1(
     async (sharedSignal, report) => {
       await cache.putVerified(
         binding,
-        fetchChatMediaCiphertextV1(
-          descriptor,
-          accessToken,
-          sharedSignal,
+        fetchLiveOrBackupCiphertext(
+          descriptor, accessToken, sharedSignal,
           (receivedBytes, totalBytes) => report({ receivedBytes, totalBytes }),
+          backupCiphertext,
         ),
         async (chunks, _binding, verifySignal) => {
           for await (const _chunk of decryptChatMediaCiphertextV1(
@@ -494,6 +494,27 @@ export async function downloadChatMediaToCacheV1(
     },
     { signal, onProgress: progress => onProgress?.(progress.receivedBytes, progress.totalBytes) },
   )
+}
+
+async function* fetchLiveOrBackupCiphertext(
+  descriptor: ChatAttachmentDescriptorV1,
+  accessToken: string,
+  signal: AbortSignal,
+  onProgress: (receivedBytes: number, totalBytes: number) => void,
+  backupCiphertext?: () => AsyncIterable<Uint8Array>,
+): AsyncGenerator<Uint8Array, void, void> {
+  try {
+    yield* fetchChatMediaCiphertextV1(descriptor, accessToken, signal, onProgress)
+  } catch (error) {
+    if (!backupCiphertext || !(error instanceof Error)
+        || error.message !== 'Chat-media download HTTP 404') throw error
+    let received = 0
+    for await (const chunk of backupCiphertext()) {
+      received += chunk.length
+      onProgress(received, descriptor.ciphertextBytes)
+      yield chunk
+    }
+  }
 }
 
 export async function clearCachedChatMediaV1(

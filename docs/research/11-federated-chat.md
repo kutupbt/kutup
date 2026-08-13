@@ -110,7 +110,7 @@ Matrix = **replicated state machine**: rooms are DAGs of signed events replicate
 
 ### 4.1 Identity & trust
 
-- Address: `user@server` (e.g. `maya@kutup.example.org`). Multi-device from day one — libsignal's `ProtocolAddress` is (user, device-id), and every kutup user already has an asymmetric keypair (`users.public_key`, used today for wrapping federated collection keys).
+- Address: `user@server` (e.g. `user@kutup.dev`). Multi-device from day one — libsignal's `ProtocolAddress` is (user, device-id), and every Kutup user already has an asymmetric keypair (`users.public_key`, used today for wrapping federated collection keys).
 - Each server holds an **Ed25519 server signing key**, published with its API endpoint at `/.well-known/kutup/federation.json`. Server-to-server requests are signed (Matrix-style, or RFC 9421 HTTP Message Signatures) and verified over TLS.
 - User identity keys: TOFU + safety numbers (libsignal `fingerprint.rs`) at chat-v1; **key transparency** (libsignal `keytrans` as reference) as the follow-up hardening.
 

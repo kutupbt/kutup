@@ -5,6 +5,7 @@ export const ACCOUNT_ENVELOPE_PURPOSE = {
   passwordMasterKey: 1,
   recoveryMasterKey: 2,
   driveHpkePrivateKey: 3,
+  chatBackupRoot: 4,
 } as const
 
 export type AccountEnvelopePurpose =

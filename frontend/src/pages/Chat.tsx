@@ -60,6 +60,7 @@ import { QRCodeSVG } from 'qrcode.react'
 import { useIsMobile } from '@/hooks/useIsMobile'
 import { useAppSelector } from '@/store'
 import { ChatService, ChatServiceError, type ChatMediaStorageView } from '@/chat/service'
+import type { ChatBackupView } from '@/chat/backup'
 import { MlsSendError } from '@/chat/mls-service'
 import { MlsGroupSecurityDetails } from '@/chat/MlsGroupSecurityDetails'
 import { SafetyVerificationDialog } from '@/chat/SafetyVerificationDialog'
@@ -79,6 +80,7 @@ import {
 } from '@/chat/reactions'
 import { mlsGroupInvitationReadiness } from '@/chat/group-readiness'
 import { isSupportedChat, useChatCapabilities } from '@/chat/capabilities'
+import { requestLocalChatDeviceReset } from '@/chat/local-store'
 import {
   conversationKey,
   canonicalAccountAddress,
@@ -92,7 +94,6 @@ import type {
   ChatCapabilities,
   ChatDevice,
   ChatHistoryEntry,
-  ChatHistoryTransferSummary,
   ChatProfile,
   ChatTypingEvent,
   ContactRecord,
@@ -268,12 +269,13 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
   const [groupMaximumPlaintext, setGroupMaximumPlaintext] = useState('')
   const [selectedSafety, setSelectedSafety] = useState<SafetyNumberV1 | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [deviceResetOpen, setDeviceResetOpen] = useState(false)
+  const [deviceResetting, setDeviceResetting] = useState(false)
   const [devicesOpen, setDevicesOpen] = useState(false)
   const [devices, setDevices] = useState<ChatDevice[]>([])
   const [devicesLoading, setDevicesLoading] = useState(false)
   const [deviceRevoking, setDeviceRevoking] = useState<number | null>(null)
-  const [historyTransfers, setHistoryTransfers] = useState<ChatHistoryTransferSummary[]>([])
-  const [historyTransferBusy, setHistoryTransferBusy] = useState<string | null>(null)
+  const [backupStatus, setBackupStatus] = useState<ChatBackupView | null>(null)
   const [mediaStorageOpen, setMediaStorageOpen] = useState(false)
   const [mediaStorage, setMediaStorage] = useState<ChatMediaStorageView | null>(null)
   const [mediaStorageLoading, setMediaStorageLoading] = useState(false)
@@ -363,6 +365,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
           setGroupInvitations(nextInvitations)
           setGroupInvitationFeedback(nextInvitationFeedback)
           setOwnerApprovalRequests(nextOwnerApprovals)
+          setBackupStatus(opened.backupStatus())
           setError(null)
         }
       } catch (cause) {
@@ -372,6 +375,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
 
     ChatService.open({
       userId: auth.userId,
+      email: auth.email!,
       username: auth.username,
       masterKey,
       capabilities,
@@ -459,6 +463,20 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       .sort((left, right) => right.message.timestampMs - left.message.timestampMs)
   }, [contactsByPeer, selfAddress, visibleHistory])
 
+  const restoredHistoryGroups = useMemo(() => {
+    const liveGroupIds = new Set(groups.map(
+      group => group.request.genesis.conversationId,
+    ))
+    const latest = new Map<string, ChatHistoryEntry>()
+    for (const message of visibleHistory) {
+      if (message.conversation.kind !== 'group'
+          || liveGroupIds.has(message.conversation.groupId)) continue
+      latest.set(message.conversation.groupId, message)
+    }
+    return Array.from(latest, ([groupId, message]) => ({ groupId, message }))
+      .sort((left, right) => right.message.timestampMs - left.message.timestampMs)
+  }, [groups, visibleHistory])
+
   const requests = useMemo(
     () =>
       contacts
@@ -486,8 +504,13 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
         kind: 'group',
         groupId: groups[0].request.genesis.conversationId,
       })
+    } else if (!selectedConversation && restoredHistoryGroups[0]) {
+      setSelectedConversation({
+        kind: 'group',
+        groupId: restoredHistoryGroups[0].groupId,
+      })
     }
-  }, [groups, peers, selectedConversation])
+  }, [groups, peers, restoredHistoryGroups, selectedConversation])
 
   const selectedKey = selectedConversation ? conversationKey(selectedConversation) : null
   useEffect(() => {
@@ -505,6 +528,9 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     ? groups.find(group =>
         group.request.genesis.conversationId === selectedConversation.groupId)
     : undefined
+  const selectedRestoredHistoryGroup = selectedConversation?.kind === 'group'
+    && selectedGroup === undefined
+    && restoredHistoryGroups.some(group => group.groupId === selectedConversation.groupId)
   const selectedGroupSelfMember = selectedGroup?.currentRoster.find(member =>
     canonicalAccountAddress(member.address) === selfAddress)
   const selectedGroupClosed = selectedGroup?.status === 'closed'
@@ -602,6 +628,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     selectedConversation
       && !requestSelected
       && !blockedSelected
+      && !selectedRestoredHistoryGroup
       && !selectedGroupClosed
       && selectedGroupCanSend
       && !selectedGroupReadiness.blocksSending,
@@ -835,6 +862,14 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     for (const message of visibleHistory) {
       const messageId = message.content.messageId
       if (message.direction !== 'incoming' || !messageId) continue
+      if (message.conversation.kind === 'direct') {
+        const peer = directAddress(message.conversation)
+        if (!peer) continue
+        const contact = contactsByPeer.get(peer)
+        if (peer !== selfAddress
+            && contact?.state !== 'accepted'
+            && contact?.state !== 'pendingOutgoing') continue
+      }
       if (message.conversation.kind === 'group') {
         const groupId = message.conversation.groupId
         if (!groups.some(group =>
@@ -887,6 +922,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     })()
     return () => { cancelled = true }
   }, [
+    contactsByPeer,
     groups,
     loading,
     ownReceiptStateByMessageId,
@@ -928,11 +964,11 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
     let cancelled = false
     setDevicesLoading(true)
     const load = (showError: boolean) => {
-      void Promise.all([service.devices(), service.historyTransfers()])
-        .then(([nextDevices, nextTransfers]) => {
+      void service.devices()
+        .then((nextDevices) => {
           if (!cancelled) {
             setDevices(nextDevices)
-            setHistoryTransfers(nextTransfers.transfers)
+            setBackupStatus(service.backupStatus())
           }
         })
         .catch(cause => {
@@ -979,63 +1015,6 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
       toast.error(errorMessage(cause, t))
     } finally {
       setDeviceRevoking(null)
-    }
-  }
-
-  async function refreshHistoryTransfers() {
-    if (!service) return
-    setHistoryTransfers((await service.historyTransfers()).transfers)
-  }
-
-  async function requestChatHistory() {
-    if (!service) return
-    setHistoryTransferBusy('request')
-    try {
-      await service.requestHistoryTransfer()
-      await refreshHistoryTransfers()
-      toast.success(t('chat.devices.historyRequested'))
-    } catch (cause) {
-      toast.error(errorMessage(cause, t))
-    } finally {
-      setHistoryTransferBusy(null)
-    }
-  }
-
-  async function approveChatHistory(transfer: ChatHistoryTransferSummary) {
-    if (!service) return
-    setHistoryTransferBusy(transfer.transferId)
-    try {
-      await service.approveHistoryTransfer(transfer.request)
-      await refreshHistoryTransfers()
-      toast.success(t('chat.devices.historyApproved'))
-    } catch (cause) {
-      toast.error(errorMessage(cause, t))
-    } finally {
-      setHistoryTransferBusy(null)
-    }
-  }
-
-  async function restoreChatHistory(transfer: ChatHistoryTransferSummary) {
-    if (!service) return
-    setHistoryTransferBusy(transfer.transferId)
-    try {
-      let result = await service.downloadHistoryTransfer(transfer.transferId)
-      for (let attempt = 0; !result.ready && attempt < 20; attempt += 1) {
-        await new Promise(resolve => window.setTimeout(resolve, 500))
-        result = await service.downloadHistoryTransfer(transfer.transferId)
-      }
-      if (result.ready) {
-        setDevicesOpen(false)
-        toast.success(t('chat.devices.historyRestored', { count: result.importedCount ?? 0 }))
-        window.setTimeout(() => window.location.reload(), 0)
-      } else {
-        await refreshHistoryTransfers()
-        toast.info(t('chat.devices.historyUploading'))
-      }
-    } catch (cause) {
-      toast.error(errorMessage(cause, t))
-    } finally {
-      setHistoryTransferBusy(null)
     }
   }
 
@@ -1731,6 +1710,13 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
 
   const showPeerList = !isMobile || !selectedConversation
 
+  const resetThisBrowserChatDevice = () => {
+    if (!auth.userId || deviceResetting) return
+    setDeviceResetting(true)
+    requestLocalChatDeviceReset(auth.userId)
+    window.location.reload()
+  }
+
   return (
     <div className="fixed inset-0 flex bg-background text-foreground">
       {showPeerList && (
@@ -1868,79 +1854,46 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     })}
                   </div>
                 )}
-                <p className="text-xs text-muted-foreground">
-                  {t('chat.devices.historyWarning')}
-                </p>
-                <div className="grid gap-3 border-t pt-4" data-testid="chat-history-recovery">
-                  <div className="flex items-start justify-between gap-3">
+                <div className="grid gap-2 border-t pt-4" data-testid="chat-history-backup-status">
+                  <div className="flex items-center justify-between gap-3">
                     <div>
-                      <h3 className="text-sm font-medium">{t('chat.devices.historyTitle')}</h3>
+                      <h3 className="text-sm font-medium">{t('chat.backup.title')}</h3>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {t('chat.devices.historyDescription')}
+                        {t('chat.backup.recovery')}
                       </p>
                     </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      disabled={historyTransferBusy !== null || historyTransfers.some(transfer =>
-                        transfer.requestingDeviceId === service?.deviceId)}
-                      onClick={() => void requestChatHistory()}
-                      data-testid="chat-history-request"
-                    >
-                      {historyTransferBusy === 'request'
-                        ? <Loader2 className="h-4 w-4 animate-spin" />
-                        : <Download className="mr-2 h-4 w-4" />}
-                      {t('chat.devices.historyRequest')}
-                    </Button>
+                    <span className={cn(
+                      'rounded-full px-2.5 py-1 text-xs font-medium',
+                      backupStatus?.state === 'needsAttention'
+                        ? 'bg-destructive/10 text-destructive'
+                        : backupStatus?.state === 'offline'
+                          ? 'bg-muted text-muted-foreground'
+                          : 'bg-primary/10 text-primary',
+                    )} data-testid="chat-backup-state"
+                    data-current-cursor={backupStatus?.currentCursor ?? 0}>
+                      {backupStatusLabel(backupStatus, t)}
+                    </span>
                   </div>
-                  {historyTransfers.map(transfer => {
-                    const requestingHere = transfer.requestingDeviceId === service?.deviceId
-                    const busy = historyTransferBusy === transfer.transferId
-                    return (
-                      <div
-                        key={transfer.transferId}
-                        className="flex items-center justify-between gap-3 rounded-lg border p-3"
-                        data-testid={`chat-history-transfer-${transfer.transferId}`}
-                      >
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium">
-                            {requestingHere
-                              ? t('chat.devices.historyThisDevice')
-                              : t('chat.devices.historyOtherDevice', {
-                                  device: transfer.requestingDeviceId,
-                                })}
-                          </p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {transfer.state === 'accepted'
-                              ? t('chat.devices.historyReady', { count: transfer.frameCount })
-                              : t('chat.devices.historyPending')}
-                          </p>
-                        </div>
-                        {requestingHere && transfer.acceptance ? (
-                          <Button
-                            type="button"
-                            size="sm"
-                            disabled={historyTransferBusy !== null}
-                            onClick={() => void restoreChatHistory(transfer)}
-                          >
-                            {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                            {t('chat.devices.historyRestore')}
-                          </Button>
-                        ) : !requestingHere && transfer.state === 'pending' ? (
-                          <Button
-                            type="button"
-                            size="sm"
-                            disabled={historyTransferBusy !== null}
-                            onClick={() => void approveChatHistory(transfer)}
-                          >
-                            {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                            {t('chat.devices.historyApprove')}
-                          </Button>
-                        ) : null}
-                      </div>
-                    )
-                  })}
+                  <p className="text-xs text-muted-foreground" data-testid="chat-backup-latest-protected">
+                    {t('chat.backup.latestProtected', {
+                      time: backupStatus?.latestProtectedAt
+                        ? new Date(backupStatus.latestProtectedAt).toLocaleString()
+                        : t('chat.backup.waiting'),
+                    })}
+                  </p>
+                  {(backupStatus?.pendingEvents ?? 0) > 0 && (
+                    <p className="text-xs text-warning">
+                      {t('chat.backup.pending', {
+                        count: backupStatus!.pendingEvents,
+                        bytes: formatBytes(backupStatus!.pendingBytes),
+                      })}
+                    </p>
+                  )}
+                  {backupStatus?.state === 'needsAttention' && (
+                    <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs">
+                      {t(backupStatus.storageFull ? 'chat.backup.full' : 'chat.backup.attention')}
+                    </div>
+                  )}
                 </div>
               </DialogContent>
             </Dialog>
@@ -1952,7 +1905,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                     size="icon"
                     className="shrink-0"
                     disabled={!service}
-                    aria-label="Chat storage"
+                    aria-label={t('chat.backup.storageAria')}
                     data-testid="chat-storage-button"
                   >
                     <HardDrive className="h-5 w-5" />
@@ -1960,38 +1913,47 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 </DialogTrigger>
                 <DialogContent className="max-w-lg">
                   <DialogHeader>
-                    <DialogTitle>Account storage</DialogTitle>
+                    <DialogTitle>{t('chat.backup.storageTitle')}</DialogTitle>
                     <DialogDescription>
-                      Drive and Chat share one quota. Conversation labels are decrypted and calculated only on this device.
+                      {capabilities.backup?.deliveryMediaRetentionDays === 0
+                        ? t('chat.backup.storageDescriptionUnlimited')
+                        : t('chat.backup.storageDescription', {
+                            days: capabilities.backup?.deliveryMediaRetentionDays ?? 45,
+                          })}
                     </DialogDescription>
                   </DialogHeader>
                   {mediaStorageLoading || !mediaStorage ? (
                     <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" /> Loading encrypted accounting…
+                      <Loader2 className="h-4 w-4 animate-spin" /> {t('chat.backup.loading')}
                     </div>
                   ) : (
                     <div className="grid gap-4" data-testid="chat-storage-summary">
                       <div className="rounded-lg border p-4">
                         <div className="flex justify-between text-sm font-medium">
-                          <span>{formatBytes(mediaStorage.totalUsedBytes)} used</span>
-                          <span>{formatBytes(mediaStorage.totalQuotaBytes)}</span>
+                          <span>{t('chat.backup.used', { bytes: formatBytes(backupStatus?.storage.usedBytes ?? mediaStorage.totalUsedBytes) })}</span>
+                          <span>{formatBytes(backupStatus?.storage.quotaBytes ?? mediaStorage.totalQuotaBytes)}</span>
                         </div>
                         <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
                           <div
                             className="h-full bg-primary"
-                            style={{ width: `${Math.min(100, mediaStorage.totalQuotaBytes > 0
-                              ? mediaStorage.totalUsedBytes * 100 / mediaStorage.totalQuotaBytes
+                            style={{ width: `${Math.min(100, (backupStatus?.storage.quotaBytes ?? mediaStorage.totalQuotaBytes) > 0
+                              ? (backupStatus?.storage.usedBytes ?? mediaStorage.totalUsedBytes) * 100 /
+                                (backupStatus?.storage.quotaBytes ?? mediaStorage.totalQuotaBytes)
                               : 0)}%` }}
                           />
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
                           <div className="rounded bg-muted/50 p-2">
-                            <span className="block text-xs text-muted-foreground">Drive</span>
-                            {formatBytes(mediaStorage.driveBytes)}
+                            <span className="block text-xs text-muted-foreground">{t('chat.backup.messageHistory')}</span>
+                            {formatBytes(backupStatus?.storage.messageBytes ?? 0)}
                           </div>
                           <div className="rounded bg-muted/50 p-2">
-                            <span className="block text-xs text-muted-foreground">Chat media</span>
-                            {formatBytes(mediaStorage.chatMediaBytes)}
+                            <span className="block text-xs text-muted-foreground">{t('chat.backup.deliveryMedia')}</span>
+                            {formatBytes(backupStatus?.storage.deliveryMediaBytes ?? mediaStorage.chatMediaBytes)}
+                          </div>
+                          <div className="rounded bg-muted/50 p-2">
+                            <span className="block text-xs text-muted-foreground">{t('chat.backup.historyMedia')}</span>
+                            {formatBytes(backupStatus?.storage.historyMediaBytes ?? 0)}
                           </div>
                         </div>
                       </div>
@@ -2311,7 +2273,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
             </div>
           )}
 
-          {groups.length > 0 && (
+          {(groups.length > 0 || restoredHistoryGroups.length > 0) && (
             <div className="border-b p-2" data-testid="chat-groups">
               <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 MLS groups
@@ -2353,6 +2315,42 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                               t('chat.mutations.deleted'),
                             )
                           : `${group.currentRoster.length} members · epoch ${group.lastFinalizedEpoch}`}
+                      </span>
+                    </span>
+                  </button>
+                )
+              })}
+              {restoredHistoryGroups.map(({ groupId, message }) => {
+                const conversation: ConversationId = { kind: 'group', groupId }
+                return (
+                  <button
+                    key={`restored:${groupId}`}
+                    type="button"
+                    onClick={() => setSelectedConversation(conversation)}
+                    className={cn(
+                      'flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors',
+                      selectedKey === conversationKey(conversation)
+                        ? 'bg-primary/10'
+                        : 'hover:bg-accent',
+                    )}
+                    data-testid={`chat-group-${groupId}`}
+                  >
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+                      <MessageCircle className="h-5 w-5" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">
+                        Group {groupId.slice(0, 8)} · Protected history
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {replyPreview(
+                          message,
+                          t('chat.newerClient'),
+                          message.content.messageId
+                            ? mutationsByMessageId.get(message.content.messageId)
+                            : undefined,
+                          t('chat.mutations.deleted'),
+                        )}
                       </span>
                     </span>
                   </button>
@@ -2490,7 +2488,7 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                 aria-label="Encrypted identity has not been pinned yet"
               />
             )}
-            {(noteSelected || selectedGroup) && (
+            {(noteSelected || selectedGroup || selectedRestoredHistoryGroup) && (
               <ShieldCheck
                 className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400"
                 aria-label="End-to-end encrypted"
@@ -2912,6 +2910,43 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
             <div className="flex items-center gap-2 border-b border-destructive/20 bg-destructive-faint px-4 py-2 text-sm text-destructive">
               <AlertTriangle className="h-4 w-4 shrink-0" />
               <span className="flex-1">{error}</span>
+              {!service && !loading && (
+                <Dialog open={deviceResetOpen} onOpenChange={setDeviceResetOpen}>
+                  <DialogTrigger asChild>
+                    <Button variant="outline" size="sm" className="shrink-0">
+                      {t('chat.deviceRecovery.action')}
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>{t('chat.deviceRecovery.title')}</DialogTitle>
+                      <DialogDescription>
+                        {t('chat.deviceRecovery.description')}
+                      </DialogDescription>
+                    </DialogHeader>
+                    <p className="text-sm text-destructive">
+                      {t('chat.deviceRecovery.warning')}
+                    </p>
+                    <DialogFooter>
+                      <Button
+                        variant="outline"
+                        onClick={() => setDeviceResetOpen(false)}
+                        disabled={deviceResetting}
+                      >
+                        {t('common.cancel')}
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        onClick={resetThisBrowserChatDevice}
+                        disabled={deviceResetting}
+                      >
+                        {deviceResetting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        {t('chat.deviceRecovery.confirm')}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              )}
             </div>
           )}
           {attention.length > 0 && (
@@ -2961,6 +2996,11 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                   newerClientLabel={t('chat.newerClient')}
                   accessToken={auth.accessToken ?? undefined}
                   mediaCache={mediaCache ?? undefined}
+                  backupMediaCiphertext={service
+                    ? (mediaId, accessToken, signal) => service.backupMediaCiphertext(
+                        mediaId, accessToken, signal,
+                      )
+                    : undefined}
                   attachmentAccepted={!requestSelected && !blockedSelected}
                   repliedMessage={message.content.replyTo
                     ? messagesById.get(message.content.replyTo)
@@ -3203,6 +3243,8 @@ function SupportedChat({ capabilities }: { capabilities: ChatCapabilities }) {
                         ? 'Waiting for invited members to accept'
                       : selectedGroupClosed
                         ? 'This MLS group is closed'
+                      : selectedRestoredHistoryGroup
+                        ? 'Protected MLS history is read-only on this device'
                       : selectedConversation
                     ? t('chat.messagePeer', {
                         peer: selectedTitle,
@@ -3419,6 +3461,7 @@ function MessageBubble({
   newerClientLabel,
   accessToken,
   mediaCache,
+  backupMediaCiphertext,
   attachmentAccepted = true,
   repliedMessage,
   repliedMessageMutation,
@@ -3441,6 +3484,11 @@ function MessageBubble({
   newerClientLabel: string
   accessToken?: string
   mediaCache?: PrivateCiphertextCacheV1
+  backupMediaCiphertext?: (
+    mediaId: string,
+    accessToken: string,
+    signal: AbortSignal,
+  ) => AsyncIterable<Uint8Array>
   attachmentAccepted?: boolean
   repliedMessage?: ChatHistoryEntry
   repliedMessageMutation?: MessageMutationState
@@ -3468,6 +3516,26 @@ function MessageBubble({
   const downloadControllerRef = useRef<AbortController | null>(null)
   const bubbleRef = useRef<HTMLDivElement>(null)
   const attachment = message.content.attachment
+  const attachmentSuite = attachment?.suite
+  const attachmentId = attachment?.attachmentId
+  const attachmentCiphertextBytes = attachment?.ciphertextBytes
+  const attachmentCiphertextSha256 = attachment?.ciphertextSha256
+  const attachmentCacheBinding = useMemo(() => {
+    if (attachmentSuite === undefined || !attachmentId ||
+        attachmentCiphertextBytes === undefined || !attachmentCiphertextSha256) return undefined
+    return {
+      product: 'chat' as const,
+      suite: attachmentSuite,
+      objectId: attachmentId,
+      ciphertextBytes: attachmentCiphertextBytes,
+      ciphertextSha256: attachmentCiphertextSha256,
+    }
+  }, [
+    attachmentCiphertextBytes,
+    attachmentCiphertextSha256,
+    attachmentId,
+    attachmentSuite,
+  ])
   const expiresAtMs = disappearingMessageExpiresAt(message)
   const selectedReaction = reactions.find(reaction => reaction.reactedBySelf)?.emoji
   const viewerKind = attachment ? chatMediaViewerKindV1(attachment) : null
@@ -3493,6 +3561,11 @@ function MessageBubble({
         (received, total) => setDownloadProgress(Math.floor(received / total * 100)),
         controller.signal,
         expiresAtMs === undefined ? {} : { expiresAtMs },
+        attachment.backupMediaId && backupMediaCiphertext
+          ? () => backupMediaCiphertext(
+              attachment.backupMediaId!, accessToken, controller.signal,
+            )
+          : undefined,
       )
       setCacheState('available')
     } catch (cause) {
@@ -3511,28 +3584,28 @@ function MessageBubble({
     let cancelled = false
     downloadControllerRef.current?.abort()
     setDownloadProgress(0)
-    if (!attachment || !mediaCache) {
+    if (!attachmentCacheBinding || !mediaCache) {
       setCacheState('remote')
       return
     }
     setCacheState('checking')
-    void isChatMediaAvailableInKutupV1(mediaCache, attachment)
+    void mediaCache.getVerified(attachmentCacheBinding)
       .then(available => {
-        if (!cancelled) setCacheState(available ? 'available' : 'remote')
+        if (!cancelled) setCacheState(available !== null ? 'available' : 'remote')
       })
       .catch(() => { if (!cancelled) setCacheState('remote') })
     return () => {
       cancelled = true
       downloadControllerRef.current?.abort()
     }
-  }, [attachment, mediaCache])
+  }, [attachmentCacheBinding, mediaCache])
 
   useEffect(() => {
-    if (!attachment || !mediaCache || !mutation?.deleted) return
+    if (!attachmentCacheBinding || !mediaCache || !mutation?.deleted) return
     setViewerOpen(false)
     setCacheState('remote')
-    void clearCachedChatMediaV1(mediaCache, attachment).catch(() => undefined)
-  }, [attachment, mediaCache, mutation?.deleted])
+    void mediaCache.remove(attachmentCacheBinding).catch(() => undefined)
+  }, [attachmentCacheBinding, mediaCache, mutation?.deleted])
 
   useEffect(() => {
     if (attachmentAccepted) return
@@ -3541,12 +3614,12 @@ function MessageBubble({
   }, [attachmentAccepted])
 
   useEffect(() => {
-    if (!attachment || !mediaCache || expiresAtMs === undefined || expiresAtMs > nowMs) return
+    if (!attachmentCacheBinding || !mediaCache || expiresAtMs === undefined || expiresAtMs > nowMs) return
     downloadControllerRef.current?.abort()
     setViewerOpen(false)
     setCacheState('remote')
-    void clearCachedChatMediaV1(mediaCache, attachment).catch(() => undefined)
-  }, [attachment, expiresAtMs, mediaCache, nowMs])
+    void mediaCache.remove(attachmentCacheBinding).catch(() => undefined)
+  }, [attachmentCacheBinding, expiresAtMs, mediaCache, nowMs])
   useEffect(() => {
     const element = bubbleRef.current
     if (!element || !onVisible || typeof IntersectionObserver === 'undefined') return
@@ -3855,6 +3928,7 @@ function MessageReactionRow({
               })}
               data-testid="chat-reaction-aggregate"
               data-emoji={reaction.emoji}
+              data-count={reaction.count}
             >
               <span>{reaction.emoji}</span>
               {reaction.count > 1 && <span className="font-semibold tabular-nums">{reaction.count}</span>}
@@ -4062,6 +4136,17 @@ function formatBytes(bytes: number): string {
     unit += 1
   } while (value >= 1024 && unit < units.length - 1)
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`
+}
+
+function backupStatusLabel(status: ChatBackupView | null, t: TFunction): string {
+  switch (status?.state) {
+    case 'protected': return t('chat.backup.status.protected')
+    case 'backingUp': return t('chat.backup.status.backingUp')
+    case 'offline': return t('chat.backup.status.offline')
+    case 'mediaPending': return t('chat.backup.status.mediaPending')
+    case 'needsAttention': return t('chat.backup.status.needsAttention')
+    default: return t('chat.backup.status.starting')
+  }
 }
 
 const MAX_PROFILE_AVATAR_BYTES = 512 * 1024

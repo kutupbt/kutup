@@ -15,11 +15,12 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ed25519_dalek::{Signer as _, SigningKey};
 use kutup_chat_proto::{
-    chat_history_transfer_transcript_hash, AccountIdentitySuiteId, AccountManifestDeviceV1,
-    AccountManifestDriveKeysV1, AccountManifestPublicationV1, AccountManifestV1,
-    ChatHistoryTransferAcceptanceV1, ChatHistoryTransferCompletionV1, ChatHistoryTransferFrameV1,
-    ChatHistoryTransferRequestV1, DirectChatSuiteId, ProfileEnvelopeContextV1,
-    ProfileEnvelopePurpose, UserPreKeyBundlesResponse,
+    AccountIdentitySuiteId, AccountManifestDeviceV1, AccountManifestDriveKeysV1,
+    AccountManifestPublicationV1, AccountManifestV1, AppendChatBackupSegmentRequestV1,
+    ChatBackupManifestV1, ChatBackupMediaReferenceV1, ChatBackupSignerAuthorizationV1,
+    CommitChatBackupManifestRequestV1, DirectChatSuiteId, ProfileEnvelopeContextV1,
+    ProfileEnvelopePurpose, ProvisionChatBackupRequestV1, ReconcileChatBackupMediaRequestV1,
+    StageChatBackupBaseRequestV1, UploadChatBackupMediaRequestV1, UserPreKeyBundlesResponse,
 };
 use rand::RngCore;
 use reqwest::{blocking::Client, StatusCode};
@@ -60,12 +61,103 @@ fn client() -> Client {
         .unwrap()
 }
 
+fn login_with_password(c: &Client, base: &str, email: &str, password: &str) -> String {
+    let preflight: Value = c
+        .get(format!("{base}/api/auth/login/preflight?email={email}"))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    if preflight["accountProtectionSuite"] == 0 {
+        let bootstrap: Value = c
+            .post(format!("{base}/api/auth/login"))
+            .json(&json!({ "email": email, "loginKey": b64(password.as_bytes()) }))
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        assert_eq!(bootstrap["requiresSetup"], true);
+        let setup_token = bootstrap["setupToken"].as_str().expect("setup token");
+        let mut rng = rand::thread_rng();
+        let mut master_key = [0u8; 32];
+        let mut recovery_entropy = [0u8; 32];
+        let mut salt = [0u8; 16];
+        rng.fill_bytes(&mut master_key);
+        rng.fill_bytes(&mut recovery_entropy);
+        rng.fill_bytes(&mut salt);
+        let parameters = kutup_crypto::kdf::AccountProtectionParameters::V1;
+        let keys =
+            kutup_crypto::kdf::derive_account_protection_keys(password, &salt, parameters).unwrap();
+        let recovery_proof =
+            kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, email).unwrap();
+        let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap();
+        use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+        let setup = json!({
+            "email": email,
+            "username": "backupadmin",
+            "loginKey": b64(keys.login_key.as_slice()),
+            "masterKeyEnvelope": account_envelope::seal_b64(
+                &master_key, keys.key_encryption_key.as_slice(),
+                AccountEnvelopePurpose::PasswordMasterKey, email).unwrap(),
+            "recoveryKeyEnvelope": account_envelope::seal_b64(
+                &master_key, &recovery_entropy,
+                AccountEnvelopePurpose::RecoveryMasterKey, email).unwrap(),
+            "drivePrivateKeyEnvelope": account_envelope::seal_b64(
+                identity.drive_hpke_private_key(), &master_key,
+                AccountEnvelopePurpose::DriveHpkePrivateKey, email).unwrap(),
+            "publicKey": b64(&identity.drive_hpke_public_key()),
+            "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
+            "accountAuthorityKeyId": identity.authority_key_id(),
+            "accountIncarnationId": identity.incarnation_id(),
+            "driveSigningPublicKey": b64(&identity.drive_signing_public_key()),
+            "accountProtectionSuite": 1,
+            "accountProtectionSalt": b64(&salt),
+            "argonMemoryKib": parameters.memory_kib,
+            "argonIterations": parameters.iterations,
+            "argonParallelism": parameters.parallelism,
+            "recoveryProof": b64(recovery_proof.as_slice()),
+        });
+        let completed = c
+            .post(format!("{base}/api/auth/complete-setup"))
+            .bearer_auth(setup_token)
+            .json(&setup)
+            .send()
+            .unwrap();
+        assert_eq!(completed.status(), StatusCode::OK, "test admin setup");
+        return completed.json::<Value>().unwrap()["accessToken"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    }
+    let parameters = kutup_crypto::kdf::AccountProtectionParameters {
+        memory_kib: preflight["argonMemoryKib"].as_u64().unwrap() as u32,
+        iterations: preflight["argonIterations"].as_u64().unwrap() as u32,
+        parallelism: preflight["argonParallelism"].as_u64().unwrap() as u32,
+    };
+    let keys = kutup_crypto::kdf::derive_account_protection_keys_b64(
+        password,
+        preflight["accountProtectionSalt"].as_str().unwrap(),
+        parameters,
+    )
+    .unwrap();
+    let response = c
+        .post(format!("{base}/api/auth/login"))
+        .json(&json!({ "email": email, "loginKey": b64(keys.login_key.as_slice()) }))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "test admin login");
+    response.json::<Value>().unwrap()["accessToken"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
 /// Registers a fresh account and returns `(email, username, access_token)`.
 fn register_and_login(
     c: &Client,
     base: &str,
     tag: &str,
-) -> (String, String, String, String, SigningKey, String) {
+) -> (String, String, String, String, SigningKey, String, [u8; 32]) {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -167,6 +259,7 @@ fn register_and_login(
         b64(&identity.drive_hpke_public_key()),
         authority,
         drive_signing_public_key,
+        master_key,
     )
 }
 
@@ -174,8 +267,16 @@ fn register_and_login(
 fn register_chat_device(c: &Client, base: &str, token: &str) -> (u32, u32, String) {
     let mut rng = rand::thread_rng();
     let reg_id = (rng.next_u32() % 16000) + 1;
-    let seed = rng.next_u32() as u8;
-    let key = |n: u8| b64(&[seed.wrapping_add(n); 33]);
+    let seed = rng.next_u32();
+    let key = |n: u8| {
+        let mut digest = Sha256::new();
+        digest.update(seed.to_be_bytes());
+        digest.update([n]);
+        let mut bytes = [0u8; 33];
+        bytes[0] = n;
+        bytes[1..].copy_from_slice(&digest.finalize());
+        b64(&bytes)
+    };
     let identity_key = key(1);
     let body = json!({
         "suite": 1, "registrationId": reg_id,
@@ -250,29 +351,6 @@ fn register_chat_device(c: &Client, base: &str, token: &str) -> (u32, u32, Strin
     (device_id, reg_id, identity_key)
 }
 
-fn synthetic_history_request(
-    account: &str,
-    device_id: u32,
-    manifest_sequence: u64,
-) -> ChatHistoryTransferRequestV1 {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
-    ChatHistoryTransferRequestV1 {
-        version: 1,
-        transfer_id: Uuid::new_v4().to_string(),
-        account: account.into(),
-        requesting_device_id: device_id,
-        manifest_sequence,
-        ephemeral_public_key: b64(&[31; 32]),
-        request_nonce: b64(&[32; 32]),
-        created_at_unix: now,
-        expires_at_unix: now + 900,
-        device_signature: b64(&[33; 64]),
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn publish_manifest(
     c: &Client,
@@ -328,14 +406,830 @@ fn publish_manifest(
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
     let response = response.expect("manifest publication retry loop returns a response");
+    let response_status = response.status();
+    let response_body = response.text().unwrap();
     assert!(
-        response.status().is_success(),
-        "publish manifest sequence {sequence}: {}",
-        response.status()
+        response_status.is_success(),
+        "publish manifest sequence {sequence}: {response_status}: {response_body}",
     );
-    let published = response.json::<AccountManifestPublicationV1>().unwrap();
+    let published = serde_json::from_str::<AccountManifestPublicationV1>(&response_body).unwrap();
     assert_eq!(published.manifest, manifest);
     manifest
+}
+
+#[allow(clippy::too_many_arguments)]
+fn chat_backup_lifecycle(
+    c: &Client,
+    base: &str,
+    email: &str,
+    owner_token: &str,
+    foreign_token: &str,
+    master_key: &[u8; 32],
+    authority: &SigningKey,
+    device_id: u32,
+    admin_token: Option<&str>,
+) {
+    use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+    use kutup_crypto::chat_backup::{
+        self, ChatBackupContextV1, ChatBackupObjectContextV1, ChatBackupObjectPurposeV1,
+        ChatBackupProtectionDomainV1, ChatBackupSuiteId,
+    };
+    use kutup_crypto::chat_backup_media::{self, ChatBackupMediaContextV1};
+    use kutup_crypto::identity::AccountIdentityKeysV1;
+    use kutup_crypto::stream::{StreamEncryptor, TAG_FINAL};
+
+    let initial: Value = c
+        .get(format!("{base}/api/chat/backup"))
+        .bearer_auth(owner_token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(initial["provisioned"], false);
+    assert_eq!(initial["currentCursor"], 0);
+
+    let identity = AccountIdentityKeysV1::derive(master_key).unwrap();
+    let backup_id = Uuid::new_v4();
+    let backup_root = [0x91; 32];
+    let account_incarnation_id: [u8; 32] = hex::decode(identity.incarnation_id())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let backup_context = ChatBackupContextV1 {
+        account_incarnation_id,
+        backup_incarnation_id: *backup_id.as_bytes(),
+        protection_domain: ChatBackupProtectionDomainV1::StandardChat,
+    };
+    let signer_seed =
+        chat_backup::derive_manifest_signing_seed(&backup_root, backup_context).unwrap();
+    let signer = SigningKey::from_bytes(&signer_seed);
+    let mut authorization = ChatBackupSignerAuthorizationV1 {
+        version: 1,
+        backup_incarnation_id: backup_id.to_string(),
+        account_incarnation_id: identity.incarnation_id(),
+        suite: ChatBackupSuiteId::HkdfSha256XChaCha20Poly1305V1,
+        protection_domain: ChatBackupProtectionDomainV1::StandardChat,
+        manifest_signing_public_key: b64(signer.verifying_key().as_bytes()),
+        account_authority_key_id: identity.authority_key_id(),
+        created_at_unix: time::OffsetDateTime::now_utc().unix_timestamp(),
+        account_authority_signature: String::new(),
+    };
+    authorization.account_authority_signature = b64(&authority
+        .sign(&authorization.signing_bytes().unwrap())
+        .to_bytes());
+    let operation_id = Uuid::new_v4();
+    let provision = ProvisionChatBackupRequestV1 {
+        operation_id: operation_id.to_string(),
+        root_envelope: account_envelope::seal_b64(
+            &backup_root,
+            master_key,
+            AccountEnvelopePurpose::ChatBackupRoot,
+            email,
+        )
+        .unwrap(),
+        signer_authorization: authorization.clone(),
+    };
+    let created = c
+        .post(format!("{base}/api/chat/backup"))
+        .bearer_auth(owner_token)
+        .json(&provision)
+        .send()
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created_body: Value = created.json().unwrap();
+    assert_eq!(created_body["provisioned"], true);
+
+    let exact_retry = c
+        .post(format!("{base}/api/chat/backup"))
+        .bearer_auth(owner_token)
+        .json(&provision)
+        .send()
+        .unwrap();
+    assert_eq!(exact_retry.status(), StatusCode::OK);
+    let mut changed_provision = provision.clone();
+    changed_provision.root_envelope = account_envelope::seal_b64(
+        &[0x92; 32],
+        master_key,
+        AccountEnvelopePurpose::ChatBackupRoot,
+        email,
+    )
+    .unwrap();
+    assert_eq!(
+        c.post(format!("{base}/api/chat/backup"))
+            .bearer_auth(owner_token)
+            .json(&changed_provision)
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+
+    let segment_operation = Uuid::new_v4();
+    let segment_context = ChatBackupObjectContextV1 {
+        backup: backup_context,
+        purpose: ChatBackupObjectPurposeV1::EventSegment,
+        object_id: *segment_operation.as_bytes(),
+        source_device_id: device_id,
+        device_sequence: 1,
+        previous_segment_digest: [0; 32],
+    };
+    let ciphertext =
+        chat_backup::seal_object(b"opaque canonical segment", &backup_root, segment_context)
+            .unwrap();
+    let append = AppendChatBackupSegmentRequestV1 {
+        operation_id: segment_operation.to_string(),
+        backup_incarnation_id: backup_id.to_string(),
+        source_device_id: device_id,
+        device_sequence: 1,
+        previous_segment_digest: "00".repeat(32),
+        account_manifest_sequence: 1,
+        ciphertext_bytes: ciphertext.len() as u32,
+        ciphertext_sha256: hex::encode(Sha256::digest(&ciphertext)),
+        ciphertext: b64(&ciphertext),
+    };
+    let receipt: Value = c
+        .post(format!("{base}/api/chat/backup/segments"))
+        .bearer_auth(owner_token)
+        .json(&append)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(receipt["cursor"], 1);
+    assert_eq!(receipt["alreadyStored"], false);
+    let retry: Value = c
+        .post(format!("{base}/api/chat/backup/segments"))
+        .bearer_auth(owner_token)
+        .json(&append)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(retry["cursor"], receipt["cursor"]);
+    assert_eq!(retry["alreadyStored"], true);
+
+    let mut changed_append = append.clone();
+    changed_append.account_manifest_sequence = 2;
+    assert_eq!(
+        c.post(format!("{base}/api/chat/backup/segments"))
+            .bearer_auth(owner_token)
+            .json(&changed_append)
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+    let mut malformed = append.clone();
+    malformed.ciphertext_sha256 = "00".repeat(32);
+    assert_eq!(
+        c.post(format!("{base}/api/chat/backup/segments"))
+            .bearer_auth(owner_token)
+            .json(&malformed)
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        c.post(format!("{base}/api/chat/backup/segments"))
+            .bearer_auth(foreign_token)
+            .json(&append)
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+
+    let page: Value = c
+        .get(format!("{base}/api/chat/backup/segments?after=0&limit=1"))
+        .bearer_auth(owner_token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(page["segments"].as_array().unwrap().len(), 1);
+    assert_eq!(page["segments"][0]["ciphertext"], append.ciphertext);
+    assert_eq!(page["currentCursor"], 1);
+    assert_eq!(page["more"], false);
+
+    let status: Value = c
+        .get(format!("{base}/api/chat/backup"))
+        .bearer_auth(owner_token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(status["currentCursor"], 1);
+    assert_eq!(status["storage"]["messageBytes"], ciphertext.len());
+    assert_eq!(status["storage"]["usedBytes"], ciphertext.len());
+
+    // Twenty real database races on one device head: both candidates bind the
+    // same predecessor, so row locking must commit exactly one without quota
+    // drift or a forked chain.
+    let mut previous_digest = append.ciphertext_sha256.clone();
+    let mut expected_bytes = ciphertext.len();
+    for sequence in 2..=21_u64 {
+        let candidate = |fill: u8| {
+            let operation = Uuid::new_v4();
+            let previous: [u8; 32] = hex::decode(&previous_digest).unwrap().try_into().unwrap();
+            let context = ChatBackupObjectContextV1 {
+                backup: backup_context,
+                purpose: ChatBackupObjectPurposeV1::EventSegment,
+                object_id: *operation.as_bytes(),
+                source_device_id: device_id,
+                device_sequence: sequence,
+                previous_segment_digest: previous,
+            };
+            let ciphertext = chat_backup::seal_object(&[fill; 32], &backup_root, context).unwrap();
+            AppendChatBackupSegmentRequestV1 {
+                operation_id: operation.to_string(),
+                backup_incarnation_id: backup_id.to_string(),
+                source_device_id: device_id,
+                device_sequence: sequence,
+                previous_segment_digest: previous_digest.clone(),
+                account_manifest_sequence: 1,
+                ciphertext_bytes: ciphertext.len() as u32,
+                ciphertext_sha256: hex::encode(Sha256::digest(&ciphertext)),
+                ciphertext: b64(&ciphertext),
+            }
+        };
+        let left = candidate(0x31);
+        let right = candidate(0x32);
+        let send_candidate = |client: Client, request: AppendChatBackupSegmentRequestV1| {
+            let base = base.to_string();
+            let token = owner_token.to_string();
+            std::thread::spawn(move || {
+                client
+                    .post(format!("{base}/api/chat/backup/segments"))
+                    .bearer_auth(token)
+                    .json(&request)
+                    .send()
+                    .unwrap()
+                    .status()
+            })
+        };
+        let left_task = send_candidate(c.clone(), left.clone());
+        let right_task = send_candidate(c.clone(), right.clone());
+        let left_status = left_task.join().unwrap();
+        let right_status = right_task.join().unwrap();
+        let mut statuses = [left_status.as_u16(), right_status.as_u16()];
+        statuses.sort_unstable();
+        assert_eq!(statuses, [200, 409]);
+        let winner = if left_status.is_success() {
+            left
+        } else {
+            right
+        };
+        previous_digest = winner.ciphertext_sha256;
+        expected_bytes += winner.ciphertext_bytes as usize;
+    }
+    let concurrent_status: Value = c
+        .get(format!("{base}/api/chat/backup"))
+        .bearer_auth(owner_token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(concurrent_status["currentCursor"], 21);
+    assert_eq!(concurrent_status["storage"]["messageBytes"], expected_bytes);
+    assert_eq!(concurrent_status["storage"]["usedBytes"], expected_bytes);
+
+    // Protect a valid locally retained media ciphertext through the direct
+    // upload fallback. This exercises typed framing, deterministic padding,
+    // exact replay, changed-content conflict, lazy download, and isolation.
+    let source_media = b"already encrypted Chat attachment ciphertext";
+    let media_id_bytes: [u8; 32] = Sha256::digest(source_media).into();
+    let media_id = hex::encode(media_id_bytes);
+    let media_reference_id = Uuid::new_v4();
+    let media_header = chat_backup_media::build_media_header(
+        ChatBackupMediaContextV1 {
+            account_incarnation_id,
+            backup_incarnation_id: *backup_id.as_bytes(),
+            protection_domain: ChatBackupProtectionDomainV1::StandardChat,
+            media_id: media_id_bytes,
+        },
+        source_media.len() as u64,
+    )
+    .unwrap();
+    let parsed_media = chat_backup_media::inspect_media_header(&media_header).unwrap();
+    let mut padded_media = vec![0u8; parsed_media.padded_plaintext_bytes as usize];
+    padded_media[..source_media.len()].copy_from_slice(source_media);
+    let (mut media_encryptor, stream_header) =
+        StreamEncryptor::new_with_aad(&[0x42; 32], &media_header).unwrap();
+    let encrypted_media = media_encryptor.push(&padded_media, TAG_FINAL).unwrap();
+    let mut media_ciphertext =
+        Vec::with_capacity(media_header.len() + stream_header.len() + encrypted_media.len());
+    media_ciphertext.extend_from_slice(&media_header);
+    media_ciphertext.extend_from_slice(&stream_header);
+    media_ciphertext.extend_from_slice(&encrypted_media);
+    assert_eq!(
+        media_ciphertext.len() as u64,
+        chat_backup_media::media_object_ciphertext_bytes(parsed_media.padded_plaintext_bytes)
+            .unwrap()
+    );
+    let media_metadata = UploadChatBackupMediaRequestV1 {
+        backup_incarnation_id: backup_id.to_string(),
+        media_id: media_id.clone(),
+        reference_id: media_reference_id.to_string(),
+        source_ciphertext_bytes: source_media.len() as u64,
+        ciphertext_bytes: media_ciphertext.len() as u64,
+        ciphertext_sha256: hex::encode(Sha256::digest(&media_ciphertext)),
+    };
+    let upload_media = |metadata: &UploadChatBackupMediaRequestV1,
+                        ciphertext: Vec<u8>,
+                        token: &str| {
+        let form = reqwest::blocking::multipart::Form::new()
+            .part(
+                "metadata",
+                reqwest::blocking::multipart::Part::text(serde_json::to_string(metadata).unwrap())
+                    .mime_str("application/json")
+                    .unwrap(),
+            )
+            .part(
+                "ciphertext",
+                reqwest::blocking::multipart::Part::bytes(ciphertext)
+                    .file_name("media.bin")
+                    .mime_str("application/octet-stream")
+                    .unwrap(),
+            );
+        c.post(format!("{base}/api/chat/backup/media"))
+            .bearer_auth(token)
+            .multipart(form)
+            .send()
+            .unwrap()
+    };
+    let uploaded: Value = upload_media(&media_metadata, media_ciphertext.clone(), owner_token)
+        .json()
+        .unwrap();
+    assert_eq!(uploaded["mediaId"], media_id);
+    assert_eq!(uploaded["alreadyStored"], false);
+    let upload_retry: Value = upload_media(&media_metadata, media_ciphertext.clone(), owner_token)
+        .json()
+        .unwrap();
+    assert_eq!(upload_retry["alreadyStored"], true);
+    let mut malformed_media = media_metadata.clone();
+    malformed_media.ciphertext_sha256 = "22".repeat(32);
+    assert_eq!(
+        upload_media(&malformed_media, media_ciphertext.clone(), owner_token).status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        upload_media(&media_metadata, media_ciphertext.clone(), foreign_token).status(),
+        StatusCode::CONFLICT
+    );
+    let downloaded_media = c
+        .get(format!("{base}/api/chat/backup/media/{media_id}"))
+        .bearer_auth(owner_token)
+        .send()
+        .unwrap();
+    assert_eq!(downloaded_media.status(), StatusCode::OK);
+    assert_eq!(
+        downloaded_media.bytes().unwrap().as_ref(),
+        media_ciphertext.as_slice()
+    );
+    assert_eq!(
+        c.get(format!("{base}/api/chat/backup/media/{media_id}"))
+            .bearer_auth(foreign_token)
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // Stage a real purpose-bound encrypted base through multipart, including
+    // exact replay and a digest/body mismatch that must not affect quota.
+    let base_object_id = Uuid::new_v4();
+    let base_context = ChatBackupObjectContextV1 {
+        backup: backup_context,
+        purpose: ChatBackupObjectPurposeV1::BaseSnapshot,
+        object_id: *base_object_id.as_bytes(),
+        source_device_id: 0,
+        device_sequence: 0,
+        previous_segment_digest: [0; 32],
+    };
+    let base_ciphertext = chat_backup::seal_object(
+        b"opaque canonical compacted base",
+        &backup_root,
+        base_context,
+    )
+    .unwrap();
+    let base_metadata = StageChatBackupBaseRequestV1 {
+        backup_incarnation_id: backup_id.to_string(),
+        object_id: base_object_id.to_string(),
+        generation: 1,
+        covered_cursor: 21,
+        ciphertext_bytes: base_ciphertext.len() as u64,
+        ciphertext_sha256: hex::encode(Sha256::digest(&base_ciphertext)),
+    };
+    let stage = |metadata: &StageChatBackupBaseRequestV1, ciphertext: Vec<u8>| {
+        let form = reqwest::blocking::multipart::Form::new()
+            .part(
+                "metadata",
+                reqwest::blocking::multipart::Part::text(serde_json::to_string(metadata).unwrap())
+                    .mime_str("application/json")
+                    .unwrap(),
+            )
+            .part(
+                "ciphertext",
+                reqwest::blocking::multipart::Part::bytes(ciphertext)
+                    .file_name("base.bin")
+                    .mime_str("application/octet-stream")
+                    .unwrap(),
+            );
+        c.post(format!("{base}/api/chat/backup/bases"))
+            .bearer_auth(owner_token)
+            .multipart(form)
+            .send()
+            .unwrap()
+    };
+    let staged: Value = stage(&base_metadata, base_ciphertext.clone())
+        .json()
+        .unwrap();
+    assert_eq!(staged["objectId"], base_object_id.to_string());
+    assert_eq!(staged["alreadyStored"], false);
+    let restaged: Value = stage(&base_metadata, base_ciphertext.clone())
+        .json()
+        .unwrap();
+    assert_eq!(restaged["alreadyStored"], true);
+    let mut wrong_binding = base_metadata.clone();
+    wrong_binding.ciphertext_sha256 = "11".repeat(32);
+    assert_eq!(
+        stage(&wrong_binding, base_ciphertext.clone()).status(),
+        StatusCode::BAD_REQUEST
+    );
+    let staged_status: Value = c
+        .get(format!("{base}/api/chat/backup"))
+        .bearer_auth(owner_token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(
+        staged_status["storage"]["usedBytes"],
+        expected_bytes + base_ciphertext.len() + media_ciphertext.len()
+    );
+
+    let media_reference = ChatBackupMediaReferenceV1 {
+        reference_id: media_reference_id.to_string(),
+        media_id: media_id.clone(),
+    };
+    let media_reference_digest = kutup_chat_proto::chat_backup_media_reference_set_digest(
+        std::slice::from_ref(&media_reference),
+    )
+    .expect("media set digest");
+    let authorization_digest = authorization.digest().unwrap();
+    let mut manifest = ChatBackupManifestV1 {
+        version: 1,
+        backup_incarnation_id: backup_id.to_string(),
+        suite: ChatBackupSuiteId::HkdfSha256XChaCha20Poly1305V1,
+        protection_domain: ChatBackupProtectionDomainV1::StandardChat,
+        generation: 1,
+        previous_manifest_digest: "00".repeat(32),
+        base_object_id: base_object_id.to_string(),
+        base_ciphertext_bytes: base_ciphertext.len() as u64,
+        base_ciphertext_sha256: base_metadata.ciphertext_sha256.clone(),
+        covered_cursor: 21,
+        media_reference_set_digest: media_reference_digest.clone(),
+        signer_authorization_digest: authorization_digest,
+        created_at_unix: time::OffsetDateTime::now_utc().unix_timestamp(),
+        signature: String::new(),
+    };
+    manifest.signature = b64(&signer.sign(&manifest.signing_bytes().unwrap()).to_bytes());
+    manifest.verify(&authorization).unwrap();
+    let commit = CommitChatBackupManifestRequestV1 {
+        expected_generation: 0,
+        expected_cursor: 21,
+        expected_manifest_digest: "00".repeat(32),
+        manifest: manifest.clone(),
+    };
+    assert_eq!(
+        c.put(format!("{base}/api/chat/backup/manifest"))
+            .bearer_auth(owner_token)
+            .json(&commit)
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT,
+        "manifest commit must wait for media reconciliation"
+    );
+
+    let reconciliation = ReconcileChatBackupMediaRequestV1 {
+        operation_id: Uuid::new_v4().to_string(),
+        target_generation: 1,
+        reference_set_digest: media_reference_digest,
+        page_index: 0,
+        final_page: true,
+        references: vec![media_reference],
+    };
+    let reconciled: Value = c
+        .post(format!("{base}/api/chat/backup/media/reconciliation"))
+        .bearer_auth(owner_token)
+        .json(&reconciliation)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(reconciled["nextPage"], 1);
+    assert_eq!(reconciled["completed"], true);
+    let reconciled_retry: Value = c
+        .post(format!("{base}/api/chat/backup/media/reconciliation"))
+        .bearer_auth(owner_token)
+        .json(&reconciliation)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(reconciled_retry, reconciled);
+    let mut changed_reconciliation = reconciliation.clone();
+    changed_reconciliation.reference_set_digest = "11".repeat(32);
+    assert_eq!(
+        c.post(format!("{base}/api/chat/backup/media/reconciliation"))
+            .bearer_auth(owner_token)
+            .json(&changed_reconciliation)
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+
+    // Two committers race the exact same restore point. The row-locked CAS
+    // publishes once; the loser observes the new generation and conflicts.
+    let commit_candidate = |client: Client| {
+        let base = base.to_string();
+        let token = owner_token.to_string();
+        let request = commit.clone();
+        std::thread::spawn(move || {
+            client
+                .put(format!("{base}/api/chat/backup/manifest"))
+                .bearer_auth(token)
+                .json(&request)
+                .send()
+                .unwrap()
+                .status()
+        })
+    };
+    let left_task = commit_candidate(c.clone());
+    let right_task = commit_candidate(c.clone());
+    let left = left_task.join().unwrap();
+    let right = right_task.join().unwrap();
+    let mut commit_statuses = [left.as_u16(), right.as_u16()];
+    commit_statuses.sort_unstable();
+    assert_eq!(commit_statuses, [200, 409]);
+
+    let downloaded = c
+        .get(format!("{base}/api/chat/backup/bases/{base_object_id}"))
+        .bearer_auth(owner_token)
+        .send()
+        .unwrap();
+    assert_eq!(downloaded.status(), StatusCode::OK);
+    assert_eq!(
+        downloaded.bytes().unwrap().as_ref(),
+        base_ciphertext.as_slice()
+    );
+    assert_eq!(
+        c.get(format!("{base}/api/chat/backup/bases/{base_object_id}"))
+            .bearer_auth(foreign_token)
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let compacted_page: Value = c
+        .get(format!("{base}/api/chat/backup/segments?after=0&limit=256"))
+        .bearer_auth(owner_token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert!(compacted_page["segments"].as_array().unwrap().is_empty());
+    assert_eq!(compacted_page["currentCursor"], 21);
+    let compacted_status: Value = c
+        .get(format!("{base}/api/chat/backup"))
+        .bearer_auth(owner_token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(compacted_status["manifest"]["generation"], 1);
+    assert_eq!(
+        compacted_status["storage"]["messageBytes"],
+        base_ciphertext.len()
+    );
+    assert_eq!(
+        compacted_status["storage"]["usedBytes"],
+        base_ciphertext.len() + media_ciphertext.len()
+    );
+    assert_eq!(
+        compacted_status["storage"]["historyMediaBytes"],
+        media_ciphertext.len()
+    );
+    if let Some(admin_token) = admin_token {
+        let owner: Value = c
+            .get(format!("{base}/api/user/me"))
+            .bearer_auth(owner_token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        let owner_id = owner["id"].as_str().expect("current user id");
+        let set_quota = |quota: usize| {
+            let response = c
+                .put(format!("{base}/api/admin/users/{owner_id}"))
+                .bearer_auth(admin_token)
+                .json(&json!({ "chatStorageQuotaBytes": quota }))
+                .send()
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        };
+        let protected_bytes = base_ciphertext.len() + media_ciphertext.len();
+        set_quota(protected_bytes);
+        let mut head_digest = previous_digest.clone();
+        let mut accepted_bytes = 0usize;
+        let mut accepted_segments = 0u64;
+        let pending = loop {
+            let operation = Uuid::new_v4();
+            let sequence = 22 + accepted_segments;
+            let prior: [u8; 32] = hex::decode(&head_digest).unwrap().try_into().unwrap();
+            let context = ChatBackupObjectContextV1 {
+                backup: backup_context,
+                purpose: ChatBackupObjectPurposeV1::EventSegment,
+                object_id: *operation.as_bytes(),
+                source_device_id: device_id,
+                device_sequence: sequence,
+                previous_segment_digest: prior,
+            };
+            let ciphertext =
+                chat_backup::seal_object(&vec![0x55; 256 * 1024], &backup_root, context).unwrap();
+            let candidate = AppendChatBackupSegmentRequestV1 {
+                operation_id: operation.to_string(),
+                backup_incarnation_id: backup_id.to_string(),
+                source_device_id: device_id,
+                device_sequence: sequence,
+                previous_segment_digest: head_digest.clone(),
+                account_manifest_sequence: 1,
+                ciphertext_bytes: ciphertext.len() as u32,
+                ciphertext_sha256: hex::encode(Sha256::digest(&ciphertext)),
+                ciphertext: b64(&ciphertext),
+            };
+            let response = c
+                .post(format!("{base}/api/chat/backup/segments"))
+                .bearer_auth(owner_token)
+                .json(&candidate)
+                .send()
+                .unwrap();
+            if response.status() == StatusCode::INSUFFICIENT_STORAGE {
+                break candidate;
+            }
+            assert_eq!(response.status(), StatusCode::OK);
+            accepted_bytes += ciphertext.len();
+            accepted_segments += 1;
+            head_digest = candidate.ciphertext_sha256.clone();
+            assert!(accepted_segments < 8, "message headroom must be bounded");
+        };
+        assert!(
+            accepted_segments > 0,
+            "deletion headroom accepts bounded work"
+        );
+        let full_status: Value = c
+            .get(format!("{base}/api/chat/backup"))
+            .bearer_auth(owner_token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        assert_eq!(full_status["currentCursor"], 21 + accepted_segments);
+        assert_eq!(
+            full_status["storage"]["usedBytes"],
+            protected_bytes + accepted_bytes
+        );
+        set_quota(protected_bytes + pending.ciphertext_bytes as usize);
+        let resumed: Value = c
+            .post(format!("{base}/api/chat/backup/segments"))
+            .bearer_auth(owner_token)
+            .json(&pending)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        assert_eq!(resumed["cursor"], 22 + accepted_segments);
+        assert_eq!(resumed["operationId"], pending.operation_id);
+        let boundary_status: Value = c
+            .get(format!("{base}/api/chat/backup"))
+            .bearer_auth(owner_token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        assert_eq!(
+            boundary_status["storage"]["usedBytes"],
+            protected_bytes + accepted_bytes + pending.ciphertext_bytes as usize
+        );
+
+        // A later logical restore point no longer references the attachment.
+        // Generation 2 must publish atomically, release the media and covered
+        // tail bytes exactly, and make the old media ID unavailable.
+        let cursor = boundary_status["currentCursor"].as_u64().unwrap();
+        let second_base_id = Uuid::new_v4();
+        let second_base = chat_backup::seal_object(
+            b"compacted base after attachment deletion",
+            &backup_root,
+            ChatBackupObjectContextV1 {
+                backup: backup_context,
+                purpose: ChatBackupObjectPurposeV1::BaseSnapshot,
+                object_id: *second_base_id.as_bytes(),
+                source_device_id: 0,
+                device_sequence: 0,
+                previous_segment_digest: [0; 32],
+            },
+        )
+        .unwrap();
+        let second_metadata = StageChatBackupBaseRequestV1 {
+            backup_incarnation_id: backup_id.to_string(),
+            object_id: second_base_id.to_string(),
+            generation: 2,
+            covered_cursor: cursor,
+            ciphertext_bytes: second_base.len() as u64,
+            ciphertext_sha256: hex::encode(Sha256::digest(&second_base)),
+        };
+        assert_eq!(
+            stage(&second_metadata, second_base.clone()).status(),
+            StatusCode::OK
+        );
+        let empty_digest = kutup_chat_proto::chat_backup_media_reference_set_digest(&[]).unwrap();
+        let empty_reconciliation = ReconcileChatBackupMediaRequestV1 {
+            operation_id: Uuid::new_v4().to_string(),
+            target_generation: 2,
+            reference_set_digest: empty_digest.clone(),
+            page_index: 0,
+            final_page: true,
+            references: Vec::new(),
+        };
+        assert_eq!(
+            c.post(format!("{base}/api/chat/backup/media/reconciliation"))
+                .bearer_auth(owner_token)
+                .json(&empty_reconciliation)
+                .send()
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        let first_manifest_digest = manifest.digest().unwrap();
+        let mut second_manifest = ChatBackupManifestV1 {
+            version: 1,
+            backup_incarnation_id: backup_id.to_string(),
+            suite: ChatBackupSuiteId::HkdfSha256XChaCha20Poly1305V1,
+            protection_domain: ChatBackupProtectionDomainV1::StandardChat,
+            generation: 2,
+            previous_manifest_digest: first_manifest_digest.clone(),
+            base_object_id: second_base_id.to_string(),
+            base_ciphertext_bytes: second_base.len() as u64,
+            base_ciphertext_sha256: second_metadata.ciphertext_sha256.clone(),
+            covered_cursor: cursor,
+            media_reference_set_digest: empty_digest,
+            signer_authorization_digest: authorization.digest().unwrap(),
+            created_at_unix: time::OffsetDateTime::now_utc().unix_timestamp(),
+            signature: String::new(),
+        };
+        second_manifest.signature = b64(&signer
+            .sign(&second_manifest.signing_bytes().unwrap())
+            .to_bytes());
+        let second_commit = CommitChatBackupManifestRequestV1 {
+            expected_generation: 1,
+            expected_cursor: cursor,
+            expected_manifest_digest: first_manifest_digest,
+            manifest: second_manifest,
+        };
+        assert_eq!(
+            c.put(format!("{base}/api/chat/backup/manifest"))
+                .bearer_auth(owner_token)
+                .json(&second_commit)
+                .send()
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        let released: Value = c
+            .get(format!("{base}/api/chat/backup"))
+            .bearer_auth(owner_token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        assert_eq!(released["storage"]["historyMediaBytes"], 0);
+        assert_eq!(released["storage"]["messageBytes"], second_base.len());
+        assert_eq!(released["storage"]["usedBytes"], second_base.len());
+        assert_eq!(
+            c.get(format!("{base}/api/chat/backup/media/{media_id}"))
+                .bearer_auth(owner_token)
+                .send()
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    println!(
+        "ok  - continuous backup lifecycle provision/append/base/reconcile/CAS/download/isolation"
+    );
 }
 
 #[test]
@@ -345,6 +1239,13 @@ fn chat_v1_contract() {
         return;
     };
     let c = client();
+    let live_admin = std::env::var("KUTUP_LIVE_ADMIN").ok();
+    let admin_token = live_admin.as_deref().map(|admin| {
+        let (email, password) = admin
+            .split_once(':')
+            .expect("KUTUP_LIVE_ADMIN must be email:password");
+        login_with_password(&c, &base, email, password)
+    });
 
     // Capability block is unauthenticated (§10).
     let settings: Value = c
@@ -368,9 +1269,14 @@ fn chat_v1_contract() {
     assert!(chat["deviceExpiryDays"].is_number());
     println!("ok  - capability block");
 
-    let (_ea, ua, ta, drive_a, authority_a, drive_sign_a) = register_and_login(&c, &base, "a");
-    let (_eb, ub, tb, drive_b, authority_b, drive_sign_b) = register_and_login(&c, &base, "b");
-    let domain = std::env::var("KUTUP_LIVE_SERVER_NAME").unwrap_or_else(|_| "local.test".into());
+    let (email_a, ua, ta, drive_a, authority_a, drive_sign_a, master_a) =
+        register_and_login(&c, &base, "a");
+    let (_eb, ub, tb, drive_b, authority_b, drive_sign_b, _master_b) =
+        register_and_login(&c, &base, "b");
+    let domain = chat["serverName"]
+        .as_str()
+        .expect("Chat capability has a server name")
+        .to_string();
     let account_a = format!("{ua}@{domain}");
     let account_b = format!("{ub}@{domain}");
     println!("ok  - two accounts registered + logged in");
@@ -434,6 +1340,17 @@ fn chat_v1_contract() {
             registration_id: reg_b,
             mls: None,
         }],
+    );
+    chat_backup_lifecycle(
+        &c,
+        &base,
+        &email_a,
+        &ta,
+        &tb,
+        &master_a,
+        &authority_a,
+        dev_a,
+        admin_token.as_deref(),
     );
 
     // Opaque encrypted profiles are owner-writable and bearer-capability
@@ -787,243 +1704,46 @@ fn chat_v1_contract() {
     );
     println!("ok  - ack deletes");
 
+    if let Some(admin_token) = admin_token {
+        let owner: Value = c
+            .get(format!("{base}/api/user/me"))
+            .bearer_auth(&ta)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        let owner_id = owner["id"].as_str().expect("current user id");
+        let deleted = c
+            .delete(format!("{base}/api/admin/users/{owner_id}"))
+            .bearer_auth(&admin_token)
+            .send()
+            .unwrap();
+        assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            c.delete(format!("{base}/api/admin/users/{owner_id}"))
+                .bearer_auth(&admin_token)
+                .send()
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND,
+            "account purge is safe to retry"
+        );
+        println!("ok  - account deletion purges the committed backup and is retry-safe");
+    }
+
     println!("\nALL CHAT v1 CONTRACT CHECKS PASSED");
 }
 
 #[test]
-fn chat_history_transfer_relay_contract() {
+fn chat_history_transfer_route_is_absent() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
-        eprintln!("KUTUP_LIVE_SERVER unset — skipping live history-transfer test");
+        eprintln!("KUTUP_LIVE_SERVER unset — skipping removed-route test");
         return;
     };
-    let c = client();
-    let (_email, username, token, drive, authority, drive_signing) =
-        register_and_login(&c, &base, "history");
-    let domain = std::env::var("KUTUP_LIVE_SERVER_NAME").unwrap_or_else(|_| "local.test".into());
-    let account = format!("{username}@{domain}");
-    let (old_device, old_registration, old_identity) = register_chat_device(&c, &base, &token);
-    let (new_device, new_registration, new_identity) = register_chat_device(&c, &base, &token);
-    publish_manifest(
-        &c,
-        &base,
-        &token,
-        &authority,
-        &account,
-        &drive,
-        &drive_signing,
-        1,
-        None,
-        vec![
-            AccountManifestDeviceV1 {
-                device_id: old_device,
-                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                identity_key: old_identity,
-                registration_id: old_registration,
-                mls: None,
-            },
-            AccountManifestDeviceV1 {
-                device_id: new_device,
-                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                identity_key: new_identity,
-                registration_id: new_registration,
-                mls: None,
-            },
-        ],
-    );
-
-    let request = synthetic_history_request(&account, new_device, 1);
-    let created = c
+    let response = client()
         .post(format!("{base}/api/chat/history-transfers"))
-        .bearer_auth(&token)
-        .json(&request)
+        .json(&json!({}))
         .send()
         .unwrap();
-    assert_eq!(created.status(), StatusCode::CREATED);
-
-    let visible: Value = c
-        .get(format!(
-            "{base}/api/chat/history-transfers?deviceId={old_device}"
-        ))
-        .bearer_auth(&token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    assert_eq!(visible["transfers"].as_array().unwrap().len(), 1);
-
-    let acceptance = ChatHistoryTransferAcceptanceV1 {
-        version: 1,
-        transfer_id: request.transfer_id.clone(),
-        account: account.clone(),
-        requesting_device_id: new_device,
-        responding_device_id: old_device,
-        manifest_sequence: 1,
-        request_hash: hex::encode(request.signed_hash().unwrap()),
-        ephemeral_public_key: b64(&[41; 32]),
-        created_at_unix: request.created_at_unix,
-        expires_at_unix: request.expires_at_unix,
-        record_limit: 100,
-        plaintext_byte_limit: 1024 * 1024,
-        device_signature: b64(&[42; 64]),
-    };
-    let transcript = hex::encode(
-        chat_history_transfer_transcript_hash(&request, &acceptance, request.created_at_unix)
-            .unwrap(),
-    );
-    let accepted = c
-        .put(format!(
-            "{base}/api/chat/history-transfers/{}/acceptance?deviceId={old_device}",
-            request.transfer_id
-        ))
-        .bearer_auth(&token)
-        .json(&acceptance)
-        .send()
-        .unwrap();
-    assert!(
-        accepted.status().is_success(),
-        "accept: {}",
-        accepted.status()
-    );
-
-    let frame = ChatHistoryTransferFrameV1 {
-        version: 1,
-        transfer_id: request.transfer_id.clone(),
-        transcript_hash: transcript.clone(),
-        index: 0,
-        final_frame: true,
-        plaintext_bytes: 4,
-        nonce: b64(&[51; 24]),
-        ciphertext: b64(&[52; 20]),
-    };
-    let mut gap = frame.clone();
-    gap.index = 1;
-    let rejected_gap = c
-        .put(format!(
-            "{base}/api/chat/history-transfers/{}/frames/1?deviceId={old_device}",
-            request.transfer_id
-        ))
-        .bearer_auth(&token)
-        .json(&gap)
-        .send()
-        .unwrap();
-    assert_eq!(rejected_gap.status(), StatusCode::CONFLICT);
-
-    let stored = c
-        .put(format!(
-            "{base}/api/chat/history-transfers/{}/frames/0?deviceId={old_device}",
-            request.transfer_id
-        ))
-        .bearer_auth(&token)
-        .json(&frame)
-        .send()
-        .unwrap();
-    assert!(
-        stored.status().is_success(),
-        "store frame: {}",
-        stored.status()
-    );
-    let page: Value = c
-        .get(format!(
-            "{base}/api/chat/history-transfers/{}/frames?deviceId={new_device}",
-            request.transfer_id
-        ))
-        .bearer_auth(&token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    assert_eq!(page["frames"].as_array().unwrap().len(), 1);
-    assert_eq!(page["frames"][0]["ciphertext"], frame.ciphertext);
-
-    let completion = ChatHistoryTransferCompletionV1 {
-        version: 1,
-        transfer_id: request.transfer_id.clone(),
-        transcript_hash: transcript,
-        destination_device_id: new_device,
-        frame_count: 1,
-        record_count: 1,
-        media_plaintext_bytes: 0,
-        plaintext_digest: "61".repeat(32),
-        completed_at_unix: request.created_at_unix,
-        device_signature: b64(&[62; 64]),
-    };
-    let mut oversized_completion = completion.clone();
-    oversized_completion.record_count = 101;
-    let rejected_completion = c
-        .post(format!(
-            "{base}/api/chat/history-transfers/{}/completion?deviceId={new_device}",
-            request.transfer_id
-        ))
-        .bearer_auth(&token)
-        .json(&oversized_completion)
-        .send()
-        .unwrap();
-    assert_eq!(rejected_completion.status(), StatusCode::BAD_REQUEST);
-    let completed = c
-        .post(format!(
-            "{base}/api/chat/history-transfers/{}/completion?deviceId={new_device}",
-            request.transfer_id
-        ))
-        .bearer_auth(&token)
-        .json(&completion)
-        .send()
-        .unwrap();
-    assert!(
-        completed.status().is_success(),
-        "complete: {}",
-        completed.status()
-    );
-    let completed_retry: Value = c
-        .post(format!(
-            "{base}/api/chat/history-transfers/{}/completion?deviceId={new_device}",
-            request.transfer_id
-        ))
-        .bearer_auth(&token)
-        .json(&completion)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    assert_eq!(completed_retry["deduplicated"], true);
-    let after: Value = c
-        .get(format!(
-            "{base}/api/chat/history-transfers?deviceId={new_device}"
-        ))
-        .bearer_auth(&token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    assert!(after["transfers"].as_array().unwrap().is_empty());
-
-    let cancellation = synthetic_history_request(&account, new_device, 1);
-    assert!(c
-        .post(format!("{base}/api/chat/history-transfers"))
-        .bearer_auth(&token)
-        .json(&cancellation)
-        .send()
-        .unwrap()
-        .status()
-        .is_success());
-    let revoked = c
-        .delete(format!("{base}/api/chat/device/{new_device}"))
-        .bearer_auth(&token)
-        .send()
-        .unwrap();
-    assert_eq!(revoked.status(), StatusCode::NO_CONTENT);
-    let gone: Value = c
-        .get(format!(
-            "{base}/api/chat/history-transfers?deviceId={old_device}"
-        ))
-        .bearer_auth(&token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    assert!(
-        gone["transfers"].as_array().unwrap().is_empty(),
-        "device revocation cascades transfer deletion"
-    );
-
-    println!("ALL CHAT HISTORY TRANSFER RELAY CHECKS PASSED");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

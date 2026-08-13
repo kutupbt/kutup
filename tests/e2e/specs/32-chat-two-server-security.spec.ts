@@ -4,6 +4,15 @@ const SECONDARY = process.env.E2E_SECONDARY_BASE_URL
 const PASSWORD = 'Deneme123*FederatedSecurityPassword'
 const pageErrors = new WeakMap<Page, string[]>()
 
+function sanitizedBrowserDiagnostic(value: string): string {
+  return value
+    .replace(/[\w.+-]+@[\w.-]+/g, '<account>')
+    .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, '<id>')
+    .replace(/\b[A-Za-z0-9_-]{32,}\b/g, '<opaque>')
+    .replace(/\bdevice\s+\d+\b/gi, 'device <n>')
+    .slice(0, 500)
+}
+
 async function captureMnemonic(page: Page): Promise<string> {
   const allText = await page.evaluate(() => document.body.innerText)
   const seen = new Map<number, string>()
@@ -48,6 +57,25 @@ async function openChat(page: Page): Promise<void> {
   const errors: string[] = []
   pageErrors.set(page, errors)
   page.on('pageerror', error => errors.push(error.stack ?? error.message))
+  page.on('console', message => {
+    if (message.type() !== 'error' || !message.text().includes('Secure chat failed to initialize')) {
+      return
+    }
+    void Promise.all(message.args().map(async argument => {
+      try {
+        return await argument.evaluate(value => {
+          if (value instanceof Error) return `${value.name}: ${value.message}`
+          return typeof value === 'string' ? value : ''
+        })
+      } catch {
+        return ''
+      }
+    })).then(parts => {
+      console.error(`CHAT BROWSER INITIALIZATION FAILURE: ${sanitizedBrowserDiagnostic(
+        parts.filter(Boolean).join(' ') || message.text(),
+      )}`)
+    })
+  })
   await page.goto('/chat')
   await expect(page.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
   await expect(page.getByTestId('chat-device-status')).toHaveText(/Device \d+/, { timeout: 90_000 })
@@ -136,6 +164,12 @@ async function reactTo(page: Page, target: string, emoji: string): Promise<void>
   const message = reactionTarget(page, target)
   await message.getByTestId('chat-reaction-button').click()
   await page.getByRole('menuitem', { name: `React with ${emoji}` }).click()
+}
+
+async function removeReaction(page: Page, target: string, emoji: string): Promise<void> {
+  const message = reactionTarget(page, target)
+  await message.getByTestId('chat-reaction-button').click()
+  await page.getByRole('menuitem', { name: `${emoji} Remove` }).click()
 }
 
 async function editMessage(page: Page, target: string, replacement: string): Promise<void> {
@@ -228,10 +262,10 @@ async function syncUntilReaction(
     .locator(`[data-testid="chat-reaction-aggregate"][data-emoji="${emoji}"]`)
   await expect.poll(async () => {
     const chip = aggregate()
-    if (await chip.count() > 0 && await chip.first().textContent() === `${emoji} ${count}`) return true
+    if (await chip.count() > 0 && await chip.first().getAttribute('data-count') === String(count)) return true
     await page.getByRole('button', { name: 'Sync messages' }).click()
     await page.waitForTimeout(500)
-    return await chip.count() > 0 && await chip.first().textContent() === `${emoji} ${count}`
+    return await chip.count() > 0 && await chip.first().getAttribute('data-count') === String(count)
   }, {
     timeout: 45_000,
     intervals: [500, 1_000, 2_000],
@@ -400,7 +434,22 @@ async function downloadAttachment(page: Page, filename: string): Promise<string>
       }),
     })
   })
-  await page.getByRole('button', { name: `Download ${filename}` }).click()
+  const moreActions = page.getByRole('button', { name: `More actions for ${filename}` })
+  const cacheDownload = page.getByRole('button', {
+    name: new RegExp(`^Download ${filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?: into Kutup)?$`),
+    exact: true,
+  })
+  await expect.poll(async () =>
+    await moreActions.isVisible() || await cacheDownload.isVisible(), {
+    timeout: 45_000,
+    message: `attachment ${filename} exposed neither cached nor remote actions`,
+  }).toBe(true)
+  if (!await moreActions.isVisible()) {
+    await cacheDownload.click()
+  }
+  await expect(moreActions).toBeVisible({ timeout: 45_000 })
+  await moreActions.click()
+  await page.getByRole('menuitem', { name: 'Save to device' }).click()
   await expect.poll(
     () => page.evaluate(() => (
       window as Window & { __kutupDownloadComplete?: boolean }
@@ -661,13 +710,9 @@ test.describe('two-server secure chat', () => {
 
     await reactTo(pageB, sealed, '👍')
     await syncUntilReaction(pageA, sealed, '👍', 1)
-    await reactionTarget(pageA, sealed)
-      .getByTestId('chat-reaction-aggregate')
-      .click()
+    await reactTo(pageA, sealed, '👍')
     await syncUntilReaction(pageB, sealed, '👍', 2)
-    await reactionTarget(pageB, sealed)
-      .getByTestId('chat-reaction-aggregate')
-      .click()
+    await removeReaction(pageB, sealed, '👍')
     await syncUntilReaction(pageA, sealed, '👍', 1)
     const editedSealed = `edited-sealed-${tag}`
     await editMessage(pageA, sealed, editedSealed)
@@ -722,18 +767,18 @@ test.describe('two-server secure chat', () => {
 
     await pageB.getByTestId('chat-storage-button').click()
     await expect(pageB.getByTestId('chat-storage-summary')).toBeVisible({ timeout: 45_000 })
-    await expect(pageB.getByText('Chat media', { exact: true })).toBeVisible()
+    await expect(pageB.getByText('Delivery media', { exact: true })).toBeVisible()
+    await expect(pageB.getByText('History media', { exact: true })).toBeVisible()
     pageB.once('dialog', dialog => void dialog.accept())
     await pageB.getByRole('button', { name: /Clear stored Chat media/ }).click()
     await expect(pageB.getByText('No categorized Chat attachments yet.')).toBeVisible({
       timeout: 45_000,
     })
     await pageB.keyboard.press('Escape')
-    await pageB.getByRole('button', { name: `Download ${directAttachment}` }).click()
-    await expect(pageB.locator('[data-sonner-toast][data-type="error"]')).toContainText(
-      'Encrypted attachment download failed',
-      { timeout: 45_000 },
-    )
+    // Clearing temporary delivery storage must not evict the recipient's
+    // already-verified local cache or the independently protected history
+    // copy. The unavailable-media recovery spec covers both sources missing.
+    expect(await downloadAttachment(pageB, directAttachment)).toBe(directAttachmentBody)
 
     const noteAttachment = `note-attachment-${tag}.txt`
     const noteAttachmentBody = `encrypted note to self attachment ${tag}`
@@ -1339,9 +1384,7 @@ test.describe('two-server secure chat', () => {
 
     await reactTo(pageB, fromAlice, '❤️')
     await syncUntilReaction(pageA, fromAlice, '❤️', 1)
-    await reactionTarget(pageA, fromAlice)
-      .getByTestId('chat-reaction-aggregate')
-      .click()
+    await reactTo(pageA, fromAlice, '❤️')
     await syncUntilReaction(pageB, fromAlice, '❤️', 2)
 
     const groupAttachment = `mls-attachment-${tag}.txt`
@@ -1467,7 +1510,6 @@ test.describe('two-server secure chat', () => {
     await expect(bubble(pageA2, toAliceLinked)).toBeVisible({ timeout: 90_000 })
     await pageA2.reload()
     await expect(pageA2.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
-    await pageA2.getByTestId(`chat-group-${conversationId}`).click()
     await expect(bubble(pageA2, fromAliceLinked)).toBeVisible({ timeout: 90_000 })
     await expect(bubble(pageA2, toAliceLinked)).toBeVisible({ timeout: 90_000 })
 
