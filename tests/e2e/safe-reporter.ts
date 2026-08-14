@@ -1,4 +1,5 @@
 import { rmSync } from 'node:fs'
+import { basename } from 'node:path'
 import type {
   FullConfig,
   FullResult,
@@ -19,13 +20,18 @@ export default class SafeReporter implements Reporter {
     console.log('SENSITIVE E2E START artifacts=sanitized')
   }
 
-  onTestEnd(_test: TestCase, result: TestResult): void {
+  onTestEnd(test: TestCase, result: TestResult): void {
     if (result.status === 'passed') this.passed += 1
     else if (result.status === 'skipped') this.skipped += 1
     else this.failed += 1
+    const failureLocation = result.errors.find(error => error.location)?.location
     console.log(
       `SENSITIVE E2E CHECKPOINT completed=${this.passed + this.failed + this.skipped}`
-      + ` passed=${this.passed} failed=${this.failed} skipped=${this.skipped}`,
+      + ` passed=${this.passed} failed=${this.failed} skipped=${this.skipped}`
+      + ` scope=${basename(test.location.file)}:${test.location.line}`
+      + (failureLocation
+        ? ` failure=${basename(failureLocation.file)}:${failureLocation.line}`
+        : ''),
     )
   }
 

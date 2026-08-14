@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
+import { recordSafeCheckpoint } from '../safe-diagnostics'
 
 const SECONDARY = process.env.E2E_SECONDARY_BASE_URL
 const PASSWORD = 'Deneme123*FederatedSecurityPassword'
@@ -910,6 +911,7 @@ test.describe('two-server secure chat', () => {
     await expect(pageA.getByTestId('chat-group-delivery-readiness')).toHaveCount(0, {
       timeout: 90_000,
     })
+    recordSafeCheckpoint('two-server-mls', 'initial-membership-established', { members: 2 })
 
     // The member-visible security panel must show exact group owner
     // credentials and group-pinned authority keys, then independently verify
@@ -1153,6 +1155,7 @@ test.describe('two-server secure chat', () => {
       pageA.getByTestId(`chat-group-member-${dave}@b.test`),
     ).toHaveCount(0, { timeout: 90_000 })
     await pageA.keyboard.press('Escape')
+    recordSafeCheckpoint('two-server-mls', 'membership-governance-completed', { members: 3 })
 
     // Promote Bob while the current owner set is Alice-only (q=1), then prove
     // the resulting two-owner set (q=2) cannot remove Bob until his exact
@@ -1230,6 +1233,7 @@ test.describe('two-server secure chat', () => {
       pageA.getByTestId(`chat-group-member-owner-${bob}@b.test`),
     ).toHaveCount(0, { timeout: 90_000 })
     await closeGroupMembers(pageA)
+    recordSafeCheckpoint('two-server-mls', 'owner-quorum-completed', { owners: 1 })
 
     // The owner changes ordering authorities through one owner-approved MLS
     // Commit and joint old/new quorums. Removing b.test still delivers the
@@ -1270,6 +1274,7 @@ test.describe('two-server secure chat', () => {
     await pageB.getByTestId('chat-group-members').click()
     await expect(pageB.getByTestId('chat-group-authority-b.test')).toBeVisible({ timeout: 90_000 })
     await closeGroupMembers(pageB)
+    recordSafeCheckpoint('two-server-mls', 'authority-rotation-completed', { authorities: 2 })
 
     const destinationMailbox: Array<Record<string, unknown>> = []
     pageB.on('response', (response) => {
@@ -1409,6 +1414,7 @@ test.describe('two-server secure chat', () => {
     })).toBeVisible()
     await pageB.keyboard.press('Escape')
     expect(await downloadAttachment(pageB, groupAttachment)).toBe(groupAttachmentBody)
+    recordSafeCheckpoint('two-server-mls', 'anonymous-media-completed', { media: 1 })
 
     // A fresh Alice install owns independent MLS credentials and leaf secrets.
     // The existing Alice device commits a manifest-bound DeviceSync Welcome;
@@ -1512,6 +1518,7 @@ test.describe('two-server secure chat', () => {
     await expect(pageA2.getByRole('heading', { name: 'Messages' })).toBeVisible({ timeout: 90_000 })
     await expect(bubble(pageA2, fromAliceLinked)).toBeVisible({ timeout: 90_000 })
     await expect(bubble(pageA2, toAliceLinked)).toBeVisible({ timeout: 90_000 })
+    recordSafeCheckpoint('two-server-mls', 'linked-device-completed', { devices: 2 })
 
     // Re-promoting the previously demoted owner reuses the exact durable
     // group-scoped candidate key. The resulting q=2 owner set first proves

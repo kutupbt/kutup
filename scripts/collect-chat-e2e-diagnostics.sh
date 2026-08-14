@@ -14,11 +14,13 @@ case "$mode" in
     compose_file="$root_dir/docker-compose.yml"
     services=(postgres)
     backends=(backend)
+    gateways=(nginx)
     ;;
   federation)
     compose_file="$root_dir/docker-compose.chat-federation.yml"
     services=(postgres-a postgres-b)
     backends=(backend-a backend-b)
+    gateways=(edge-a edge-b)
     ;;
   *)
     echo "usage: $0 single|federation [compose-project]" >&2
@@ -50,6 +52,20 @@ for service in "${services[@]}"; do
     UNION ALL SELECT 'chat_bytes_quota=' || COALESCE(SUM(chat_storage_quota_bytes), 0) FROM users;
   " >"$output_dir/$service-database-counts.txt" 2>/dev/null ||
     printf '%s\n' 'database_counts_unavailable=1' >"$output_dir/$service-database-counts.txt"
+done
+
+for service in "${gateways[@]}"; do
+  # Gateway logs can contain request paths and addresses, so retain only fixed
+  # lifecycle/error counts. This distinguishes a crashed edge from an
+  # unavailable upstream without publishing request data.
+  logs="$("${compose[@]}" logs --no-color "$service" 2>/dev/null || true)"
+  {
+    printf 'emergency_lines=%s\n' "$(grep -Eic '(^|[^a-z])emerg([^a-z]|$)' <<<"$logs" || true)"
+    printf 'fatal_lines=%s\n' "$(grep -Eic '(^|[^a-z])fatal([^a-z]|$)' <<<"$logs" || true)"
+    printf 'connection_refused_lines=%s\n' "$(grep -Eic 'connection refused' <<<"$logs" || true)"
+    printf 'upstream_unavailable_lines=%s\n' "$(grep -Eic 'host not found in upstream|no live upstreams' <<<"$logs" || true)"
+  } >"$output_dir/$service-gateway-counts.txt"
+  unset logs
 done
 
 for service in "${backends[@]}"; do

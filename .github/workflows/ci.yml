@@ -160,6 +160,14 @@ jobs:
         run: npm ci --prefix tests/e2e
       - name: Install Chromium
         run: npx --prefix tests/e2e playwright install --with-deps chromium
+      - name: Generate ephemeral browser-test TLS certificate
+        run: |
+          mkdir -p nginx/certs
+          openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
+            -keyout nginx/certs/privkey.pem \
+            -out nginx/certs/fullchain.pem \
+            -subj /CN=localhost \
+            -addext subjectAltName=DNS:localhost,IP:127.0.0.1
       - name: Start the single-server stack
         run: docker compose up --detach --build --wait
       - name: Wait for the browser application route
