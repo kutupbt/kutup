@@ -4,7 +4,7 @@
 
 # Kutup
 
-**End-to-end encrypted, self-hosted Drive — with real-time collab for notes, office docs, and whiteboards.**
+**End-to-end encrypted, self-hosted Drive and federated Chat — with real-time collaboration.**
 
 ![Rust](https://img.shields.io/badge/Rust-1.91-000000?logo=rust)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.4-3178C6?logo=typescript)
@@ -18,11 +18,11 @@
 
 ## What is Kutup?
 
-Kutup is a privacy-first file storage and live-collaboration platform you run on your own hardware. **The server only ever sees ciphertext** — every file, filename, folder, document edit, and cursor position is encrypted in your browser before it leaves the page. Decryption keys live in your browser memory, derived from your password and a 24-word recovery phrase.
+Kutup is a privacy-first file storage, collaboration, and messaging platform you run on your own hardware. File content and metadata, document edits, Chat messages, attachment metadata, and protected Chat history are encrypted on the client before they leave it. The server retains the routing, account, timing, size, quota, and other operational metadata needed to provide the service, but not the protected plaintext or its keys. A random account master key is wrapped for password login and for the separate 24-word recovery path; unwrapped keys live only on the client.
 
 What makes it different from "encrypted Dropbox" clones is the second word in that sentence: **collaboration**. Notes, code, spreadsheets, slides, and whiteboards all sync in real time between peers without giving up the E2EE invariant. The relay sees a stream of opaque AEAD-encrypted, Ed25519-signed frames — it can route them, persist them, and deliver them to other tabs, but it can't read a single byte of content.
 
-Self-hosted by design. Federation lets you share a folder with someone on a different Kutup server without trusting either backend with plaintext.
+Self-hosted by design. One authenticated federation stack carries encrypted Drive shares and Chat between Kutup servers without giving either backend the protected plaintext.
 
 ---
 
@@ -64,20 +64,42 @@ Every Save creates a versioned snapshot. Open the History sidebar in any editor,
 
 Multi-device with per-device Ed25519 keypairs (revocable individually). 24-word BIP39 recovery phrase that doubles as the second factor for account recovery. Optional TOTP 2FA. A picked presence color follows you across notes and office editors, on every tab.
 
+### Federated E2EE Chat with continuous recovery
+
+Direct Chat and Note to Self use libsignal; private groups use OpenMLS. Replies,
+reactions, author-authenticated edits and deletions, receipts, typing,
+disappearing messages, local search, photos, files, camera capture, and bounded
+voice notes stay end-to-end encrypted. Contacts can compare a safety QR, and
+contacts-only sealed delivery removes the sender identity from destination
+mailbox rows.
+
+Every durable display-history mutation enters an IndexedDB-backed encrypted
+backup outbox. After account recovery, a genuinely empty browser automatically
+verifies and restores the latest server-acknowledged base plus event tail, then
+creates fresh Direct/MLS protocol state for new messages. Eligible protected
+media restores lazily. This account-local backup is always on, has a dedicated
+administrator-controlled quota (2 GiB by default), and does not restore device
+keys, ratchets, MLS epochs, mailbox cursors, receipts, or pending sends.
+Device-to-device history transfer is not supported.
+
 ---
 
 ## Quick Start
 
 ```sh
-git clone https://github.com/kutupbulut/kutup.git
+git clone https://github.com/kutupbt/kutup.git
 cd kutup
 cp .env.example .env
 # Edit .env — set strong values for POSTGRES_PASSWORD, JWT_SECRET,
 # S3_SECRET_KEY, ADMIN_ACCOUNT.
-docker compose up -d --build
+mkdir -p nginx/certs
+openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
+  -keyout nginx/certs/privkey.pem -out nginx/certs/fullchain.pem \
+  -subj /CN=localhost -addext subjectAltName=DNS:localhost,IP:127.0.0.1
+docker compose up -d --build --wait
 ```
 
-Open `http://localhost`, log in with the credentials from `ADMIN_ACCOUNT`, save your generated recovery phrase, and you're in. That bootstrap account is the protected **break-glass admin** — it can't be demoted, disabled, or deleted; promote any further admins from inside the app.
+Open `https://localhost:38443`, accept the local self-signed certificate, log in with the credentials from `ADMIN_ACCOUNT`, save your generated recovery phrase, and you're in. HTTP on port `38080` redirects to HTTPS. The bootstrap account is the protected **break-glass admin** — it can't be demoted, disabled, or deleted; promote any further admins from inside the app. Use a publicly trusted certificate and normal ports for production; see the self-hosting guide.
 
 Optional: `./install-onlyoffice.sh` enables `.docx` / `.xlsx` / `.pptx` editing (otherwise office files are download-only).
 
@@ -92,7 +114,7 @@ Scripting-friendly: every command honors a global `--json` flag (stdout is exact
 **Build from source** (Rust ≥ 1.91.1):
 
 ```sh
-git clone https://github.com/kutupbulut/kutup.git
+git clone https://github.com/kutupbt/kutup.git
 cd kutup
 cargo build --release -p kutup-cli   # → target/release/kutup
 install -m755 target/release/kutup ~/.local/bin/kutup
@@ -171,7 +193,7 @@ The **>2 GB** path is the standout. Browser File API + Web Crypto streaming work
 
 ## Architecture in 30 seconds
 
-Every collab frame is encrypted in the browser, signed with a per-device Ed25519 key, and sent through an opaque WebSocket relay:
+This file-collaboration example shows the common client-encryption boundary. Chat uses its own libsignal/OpenMLS protocols and an account-local encrypted backup rather than this document relay:
 
 ```mermaid
 sequenceDiagram
@@ -202,6 +224,7 @@ For the full picture (key hierarchy, login flow, federation model, storage layer
 | Frontend | React 18, TypeScript 5.4, Vite 8, [Redux Toolkit 2](https://redux-toolkit.js.org/), [TailwindCSS](https://tailwindcss.com/) + [Radix UI](https://www.radix-ui.com/) |
 | Frontend crypto | Canonical Rust via `kutup-crypto-wasm`; a narrow [libsodium-wrappers-sumo](https://github.com/jedisct1/libsodium.js) adapter streams large secretstream blobs and supplies browser CSPRNG bytes |
 | Realtime collab | Yjs 13 + `y-codemirror.next` (notes); OnlyOffice + `x2t` WASM (office); `@excalidraw/excalidraw` (whiteboards); a server relay with per-frame AEAD envelopes |
+| Chat | libsignal Direct/Note to Self, OpenMLS private groups, IndexedDB state, continuous E2EE history/media backup |
 | Storage | [SeaweedFS](https://github.com/seaweedfs/seaweedfs) (S3-compatible) |
 | Infrastructure | Docker Compose, Nginx (TLS termination + static asset serving) |
 | Testing | Playwright (e2e), `cargo test` (Rust unit + crypto vectors), Vitest (frontend unit) |
@@ -214,6 +237,8 @@ For the full picture (key hierarchy, login flow, federation model, storage layer
 |---|---|
 | Self-hosting (TLS, backups, reverse proxies, env vars) | [docs/self-hosting.md](docs/self-hosting.md) |
 | System architecture (key hierarchy, federation, collab wire) | [docs/architecture.md](docs/architecture.md) |
+| Chat protocol, encrypted media, and continuous backup | [docs/chat-protocol.md](docs/chat-protocol.md), [docs/chat-media.md](docs/chat-media.md), [docs/chat-backup.md](docs/chat-backup.md) |
+| Chat threat models | [docs/chat-security-threat-model.md](docs/chat-security-threat-model.md), [docs/chat-media-security-threat-model.md](docs/chat-media-security-threat-model.md), [docs/chat-backup-security-threat-model.md](docs/chat-backup-security-threat-model.md) |
 | OnlyOffice integration & CryptPad-pinned bundle | [docs/onlyoffice.md](docs/onlyoffice.md) |
 | REST API reference | [docs/api.md](docs/api.md) |
 | Local dev setup, code conventions, project structure | [docs/contributing.md](docs/contributing.md) |

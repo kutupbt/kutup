@@ -4,6 +4,8 @@ This document is normative for V1 Direct Chat, Note to Self, private MLS
 groups, signed account manifests, contacts-only sealed delivery, and the common
 identity/delivery foundation used by Chat media. Attachment-specific storage,
 quota and parser threats are defined in `chat-media-security-threat-model.md`.
+Continuous display-history and protected-media backup threats are defined in
+`chat-backup-security-threat-model.md`.
 Calls, group calls, native product UI, million-account broadcast channels,
 anonymity relays, and traffic-shape protection are separate milestones.
 

@@ -122,9 +122,10 @@ Three workable paths during development:
 2. **OS trust store.** Generate the dev cert with `mkcert` (auto-trusts
    on macOS / Windows / Linux when the root CA is installed) and run the
    backend behind that.
-3. **Plain http on localhost.** `http://localhost:38443` is allowed by
-   the server-picker, and the webview accepts it. Skip TLS for local
-   dev — tunnel-or-cert remains the production requirement.
+3. **Native backend over localhost HTTP.** Run `kutup-server` directly on
+   `http://localhost:3000` and point the server picker there. The bundled
+   Compose edge cannot be made plaintext by changing the scheme on port 38443;
+   port 38080 redirects back to its self-signed HTTPS endpoint.
 
 For production deploys the server should serve TLS via a real certificate
 (Let's Encrypt, Cloudflare, etc.) and the desktop app then "just works".

@@ -1,6 +1,10 @@
 # Architecture
 
-Kutup is a zero-knowledge file storage system. The server stores only ciphertext — it never sees plaintext file content, filenames, or cryptographic keys.
+Kutup is an end-to-end encrypted Drive, collaboration, and Chat system. Servers
+store protected content as ciphertext and never receive its plaintext keys.
+They still process the account, routing, timing, size, quota, and federation
+metadata required to operate the service; the individual protocol threat models
+state the exact residual metadata.
 
 Kutup-owned cryptographic protocols follow the purpose-specific suite,
 authenticated-capability, policy-floor, suite-locking, and explicit-migration
@@ -33,6 +37,8 @@ flowchart TD
     MK["master key<br/>(browser memory only)"]
     CK["per-collection key<br/>wrapped by typed DriveEnvelopeV1"]
     DRIVE["account Drive keypair<br/>publicKey + private-key envelope<br/>(for cross-user sharing)"]
+    CBR["random ChatBackupRootV1<br/>typed master-key envelope"]
+    CBO["Chat display history<br/>encrypted base + ordered tail<br/>and outer-encrypted media"]
     FK["per-file key<br/>(random, per file)"]
     BLOB["typed Drive file blob<br/>context-bound XChaCha20 secretstream<br/>5 MB chunks → SeaweedFS"]
 
@@ -48,6 +54,8 @@ flowchart TD
     ERK -->|recovery decrypt with entropy| MK
     MK -->|encrypts| CK
     MK -->|encrypts| DRIVE
+    MK -->|wraps| CBR
+    CBR -->|purpose-separated keys encrypt/sign| CBO
     CK -->|encrypts| FK
     FK -->|encrypts| BLOB
 ```
@@ -279,6 +287,22 @@ flowchart LR
   other devices; a one-device note remains local without creating a fake
   one-member group.
 
+### Continuous display-history backup
+
+Every durable display mutation enters a crash-safe local backup outbox and is
+uploaded to the account homeserver as an opaque ordered segment. Clients
+periodically compact verified history into one encrypted base and atomically
+CAS a signed restore-point manifest. Eligible media is independently
+outer-encrypted and restored lazily. The account homeserver can order, quota,
+retain, and delete these objects but cannot read the archive.
+
+After unified account recovery, a clean browser verifies and restores the
+latest base plus complete tail. It does not restore device keys, libsignal
+ratchets, MLS epochs, mailbox cursors, receipts, or pending outboxes, and it
+does not contact another installation for history. The current contract and
+threat model are [`chat-backup.md`](chat-backup.md) and
+[`chat-backup-security-threat-model.md`](chat-backup-security-threat-model.md).
+
 ### Identity, contacts, and profiles
 
 The stable chat address is `username@server`; no alias namespace exists.
@@ -368,10 +392,11 @@ not create a feature-owned identity, cache, client, or admission path.
 
 The web client supports Direct Chat, linked-device synchronization, Note to
 Self, transport federation, message requests/blocking, encrypted profiles,
-sealed sender and MLS private groups. The V1 identity/format cutover,
-confidential broadcast, attachments/media, receipts, typing, disappearing
-messages, calls, push delivery and native-client integration are tracked in
-[`roadmap.md`](roadmap.md).
+sealed sender, MLS private groups, encrypted attachments, replies, reactions,
+edits/deletions, delivery/read state, typing, disappearing messages, local
+search, camera/voice capture, and continuous encrypted history/media recovery.
+Confidential broadcast, calls, push delivery, and native-client product
+integration remain tracked in [`roadmap.md`](roadmap.md).
 
 ---
 
@@ -382,7 +407,10 @@ Files are stored in **SeaweedFS** accessed via its S3-compatible API. The backen
 - The backend acts as a **streaming proxy** — multipart uploads are spooled to a temp file and streamed to SeaweedFS; the tus.io path uploads ≥5 MiB S3 multipart chunks, so neither buffers the whole file in memory.
 - Each file is stored under its client-generated UUID; the human-readable name exists only in its authenticated metadata envelope, which the server cannot read.
 - The SeaweedFS cluster (master + volume + filer + S3 gateway) runs as Docker services on the same network as the backend. No S3 ports are exposed externally.
-- Storage quotas are enforced by the backend before accepting uploads; the current usage is tracked in PostgreSQL.
+- Drive/general storage and Chat storage have separate administrator-controlled
+  per-account quotas. The dedicated Chat meter (2 GiB default) covers history,
+  ordinary delivery media, and protected history media; current usage is
+  tracked in PostgreSQL.
 
 ---
 
@@ -397,6 +425,9 @@ PostgreSQL 16 is used for all persistent metadata:
 - Federation share tokens and incoming shares
 - Chat devices and public prekey pools
 - Opaque per-device chat mailboxes and idempotent send records
+- Account-local Chat backup authorization, signed manifests, ordered opaque
+  segments, base/media object references, reconciliation/staging state, and
+  dedicated quota accounting
 - Account manifests, complete signed manifest history, and durable peer pins
 - Unified federation local/peer identity history, trust/quarantine evidence,
   replay reservations, and feature-scoped policy
