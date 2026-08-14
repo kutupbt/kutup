@@ -9,6 +9,7 @@ use axum::extract::{Multipart, Path, State};
 use axum::http::{HeaderName, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use kutup_crypto::drive_object::DriveFileBlobContextV1;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use tempfile::NamedTempFile;
@@ -17,6 +18,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+use crate::handlers::files::validate_file_blob_file;
 use crate::handlers::{can_access_file, octet_stream_response, trusted_uuid};
 use crate::middleware::AuthUser;
 use crate::models::UploadResult;
@@ -287,6 +289,18 @@ pub async fn upload_snapshot_blob(
     let Some((tmp_file, size)) = tmp else {
         return Err(AppError::bad_request("missing file"));
     };
+
+    let (collection_id, key_epoch): (Uuid, i32) = sqlx::query_as(
+        "SELECT collection_id, key_epoch FROM files WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(fid)
+    .fetch_one(&state.pool)
+    .await?;
+    let epoch = u32::try_from(key_epoch).map_err(|_| AppError::conflict("invalid epoch"))?;
+    let blob_context =
+        DriveFileBlobContextV1::new(&fid.to_string(), &collection_id.to_string(), epoch)
+            .map_err(|_| AppError::bad_request("invalid Drive file blob"))?;
+    validate_file_blob_file(&tmp_file, blob_context)?;
 
     let storage_path = format!("files/{fid}/snapshot");
     let body = ByteStream::from_path(tmp_file.path())

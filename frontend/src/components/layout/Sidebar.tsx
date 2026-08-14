@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Home, Users, Settings, LogOut, ShieldCheck, Sun, Moon, HardDrive, Trash2 } from 'lucide-react'
+import { Home, Users, Settings, LogOut, ShieldCheck, Sun, Moon, HardDrive, Trash2, MessageCircle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAppSelector, useAppDispatch } from '@/store'
 import { logout } from '@/store/authSlice'
@@ -21,6 +21,7 @@ import {
 import { cn } from '@/lib/utils'
 import { formatBytes } from '@/lib/format'
 import { useTheme } from '@/hooks/useTheme'
+import { isSupportedChat, useChatCapabilities } from '@/chat/capabilities'
 
 interface SidebarProps {
   viewMode: 'myfiles' | 'shared' | 'trash'
@@ -81,6 +82,7 @@ export default function Sidebar({
   const [theme, toggle] = useTheme()
   const [signOutOpen, setSignOutOpen] = useState(false)
   const { t } = useTranslation()
+  const chatCapabilities = useChatCapabilities()
 
   const quotaPercent =
     auth.storageQuotaBytes > 0
@@ -134,6 +136,13 @@ export default function Sidebar({
           badge={trashCount}
           onClick={onGoTrash}
         />
+        {isSupportedChat(chatCapabilities.data) && (
+          <NavRow
+            icon={MessageCircle}
+            label={t('nav.messages')}
+            onClick={() => navigate('/chat')}
+          />
+        )}
       </nav>
 
       {/* Storage card */}

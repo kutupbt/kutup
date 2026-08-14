@@ -67,6 +67,7 @@ export default function MobileAdminUserDetailPage() {
 
   const [editQuotaOpen, setEditQuotaOpen] = useState(false)
   const [quotaGB, setQuotaGB] = useState('')
+  const [chatQuotaGB, setChatQuotaGB] = useState('')
   const [disableConfirmOpen, setDisableConfirmOpen] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [adminConfirmOpen, setAdminConfirmOpen] = useState(false)
@@ -76,7 +77,10 @@ export default function MobileAdminUserDetailPage() {
 
   // Sync quota input when the user changes.
   useEffect(() => {
-    if (user) setQuotaGB(String(Math.round(user.storageQuotaBytes / 1024 / 1024 / 1024)))
+    if (user) {
+      setQuotaGB(String(user.storageQuotaBytes / 1024 / 1024 / 1024))
+      setChatQuotaGB(String(user.chatStorageQuotaBytes / 1024 / 1024 / 1024))
+    }
   }, [user])
 
   if (!isMobile) return null
@@ -112,10 +116,14 @@ export default function MobileAdminUserDetailPage() {
   async function handleSaveQuota() {
     if (!user) return
     const n = parseFloat(quotaGB)
-    if (isNaN(n) || n <= 0) return
+    const chat = parseFloat(chatQuotaGB)
+    if (isNaN(n) || n <= 0 || isNaN(chat) || chat <= 0) return
     await updateUser.mutateAsync({
       id: user.id,
-      body: { storageQuotaBytes: n * 1024 * 1024 * 1024 },
+      body: {
+        storageQuotaBytes: n * 1024 * 1024 * 1024,
+        chatStorageQuotaBytes: chat * 1024 * 1024 * 1024,
+      },
     })
     setEditQuotaOpen(false)
     toast.success(t('mobile.admin.user.quotaSaved', 'Quota updated'))
@@ -217,6 +225,23 @@ export default function MobileAdminUserDetailPage() {
                   over75 ? 'bg-[oklch(0.62_0.16_65)]' : 'bg-primary',
                 )}
                 style={{ width: `${Math.max(pct, 2)}%` }}
+              />
+            </div>
+            <div className="flex justify-between text-[12px] mt-3 mb-1.5">
+              <span className="text-text-secondary font-medium">Chat history and media</span>
+              <span className="text-text-tertiary">
+                {formatBytes(user.chatStorageUsedBytes)} / {formatBytes(user.chatStorageQuotaBytes)}
+              </span>
+            </div>
+            <div className="h-1.5 bg-surface-sunken rounded-[3px] overflow-hidden">
+              <div
+                className="h-full rounded-[3px] bg-primary"
+                style={{ width: `${Math.max(Math.min(
+                  user.chatStorageQuotaBytes > 0
+                    ? user.chatStorageUsedBytes * 100 / user.chatStorageQuotaBytes
+                    : 0,
+                  100,
+                ), 2)}%` }}
               />
             </div>
           </div>
@@ -479,20 +504,26 @@ export default function MobileAdminUserDetailPage() {
             <AlertDialogDescription>
               {t(
                 'mobile.admin.user.editQuotaDesc',
-                'Set the storage quota in gigabytes. Existing files are preserved.',
+                'Set independent Drive and Chat quotas in GiB. Existing data is preserved.',
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <Input
-            type="number"
-            inputMode="decimal"
-            min="0"
-            step="1"
-            value={quotaGB}
-            onChange={(e) => setQuotaGB(e.target.value)}
-            className="my-2"
-            aria-label={t('mobile.admin.user.quotaGB', 'Quota (GB)')}
-          />
+          <div className="my-2 space-y-3">
+            <label className="block text-sm font-medium">
+              Drive (GiB)
+              <Input
+                type="number" inputMode="decimal" min="0.01" step="0.25"
+                value={quotaGB} onChange={(e) => setQuotaGB(e.target.value)} className="mt-1"
+              />
+            </label>
+            <label className="block text-sm font-medium">
+              Chat history and media (GiB)
+              <Input
+                type="number" inputMode="decimal" min="0.01" step="0.25"
+                value={chatQuotaGB} onChange={(e) => setChatQuotaGB(e.target.value)} className="mt-1"
+              />
+            </label>
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
             <AlertDialogAction onClick={handleSaveQuota}>

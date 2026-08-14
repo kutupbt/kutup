@@ -12,6 +12,8 @@ import { setAuth } from '@/store/authSlice'
 import { store } from '@/store'
 import api from '@/api/client'
 import { decryptMasterKey, decryptPrivateKey, toBase64 } from '@/crypto'
+import { deriveAccountProtectionInWorker } from '@/crypto/accountProtectionWorker'
+import type { AccountProtectionConfig } from '@/crypto/kdf'
 import { isTauri } from '@/lib/isTauri'
 import {
   getServerUrl,
@@ -47,25 +49,14 @@ const totpSchema = z.object({
 type CredForm = z.infer<typeof credSchema>
 type TotpForm = z.infer<typeof totpSchema>
 
-function deriveInWorker(
-  password: string,
-  kdfSalt: string,
-  loginKeySalt: string,
-): Promise<{ keyEncryptionKey: Uint8Array; loginKey: Uint8Array }> {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('../workers/kdf.worker.ts', import.meta.url), { type: 'module' })
-    worker.onmessage = (e) => {
-      worker.terminate()
-      if (e.data.type === 'error') reject(new Error(e.data.message))
-      else
-        resolve({
-          keyEncryptionKey: new Uint8Array(Object.values(e.data.keyEncryptionKey)),
-          loginKey: new Uint8Array(Object.values(e.data.loginKey)),
-        })
-    }
-    worker.onerror = (e) => { worker.terminate(); reject(e) }
-    worker.postMessage({ type: 'deriveKeys', password, kdfSalt, loginKeySalt })
-  })
+function accountProtectionFromPreflight(data: any): AccountProtectionConfig {
+  return {
+    suite: data.accountProtectionSuite,
+    salt: data.accountProtectionSalt,
+    memoryKib: data.argonMemoryKib,
+    iterations: data.argonIterations,
+    parallelism: data.argonParallelism,
+  }
 }
 
 export default function Login() {
@@ -108,15 +99,15 @@ export default function Login() {
     setStep('deriving')
     try {
       const preflightRes = await api.get(`/auth/login/preflight?email=${encodeURIComponent(email)}`)
-      const { kdfSalt, loginKeySalt } = preflightRes.data
+      const accountProtection = accountProtectionFromPreflight(preflightRes.data)
 
       let loginKeyB64: string
       let keyEncryptionKey: Uint8Array | null = null
 
-      if (kdfSalt === '') {
+      if (accountProtection.salt === '') {
         loginKeyB64 = toBase64(new TextEncoder().encode(password))
       } else {
-        const derived = await deriveInWorker(password, kdfSalt, loginKeySalt)
+        const derived = await deriveAccountProtectionInWorker(password, accountProtection)
         keyEncryptionKey = derived.keyEncryptionKey
         loginKeyB64 = toBase64(derived.loginKey)
       }
@@ -150,8 +141,11 @@ export default function Login() {
     setStep('decrypting')
     try {
       const preflightRes = await api.get(`/auth/login/preflight?email=${encodeURIComponent(savedEmail)}`)
-      const { kdfSalt, loginKeySalt } = preflightRes.data
-      const { keyEncryptionKey } = await deriveInWorker(savedPassword, kdfSalt, loginKeySalt)
+      const accountProtection = accountProtectionFromPreflight(preflightRes.data)
+      const { keyEncryptionKey } = await deriveAccountProtectionInWorker(
+        savedPassword,
+        accountProtection,
+      )
 
       const res = await api.post('/auth/login/2fa', { preAuthToken, code })
       await finalizeLogin(res.data, keyEncryptionKey)
@@ -163,11 +157,12 @@ export default function Login() {
 
   async function finalizeLogin(data: any, keyEncryptionKey: Uint8Array) {
     setStep('decrypting')
-    const masterKey = await decryptMasterKey(data.encryptedMasterKey, data.masterKeyNonce, keyEncryptionKey)
-    const privateKey = await decryptPrivateKey(data.encryptedPrivateKey, data.privateKeyNonce, masterKey)
+    const loginEmail = savedEmail || credForm.getValues('email')
+    const masterKey = await decryptMasterKey(data.masterKeyEnvelope, keyEncryptionKey, loginEmail)
+    const privateKey = await decryptPrivateKey(data.drivePrivateKeyEnvelope, masterKey, loginEmail)
     dispatch(setAuth({
       userId: data.userId,
-      email: savedEmail || credForm.getValues('email'),
+      email: loginEmail,
       username: data.username,
       accessToken: data.accessToken,
       masterKey,

@@ -9,7 +9,7 @@ use time::OffsetDateTime;
 use crate::api::versions::{PatchVersionRequest, RecordSnapshotRequest};
 use crate::context::require_session;
 use crate::cryptohelpers::find_file_and_key;
-use kutup_crypto::{secretbox, stream};
+use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 
 #[derive(Subcommand)]
 pub enum VersionsCmd {
@@ -100,9 +100,7 @@ fn download(
     let master_key = ctx.session.master_key_bytes()?;
 
     let (row, file_key) = find_file_and_key(&ctx.client, &master_key, file_id)?;
-    let meta_bytes = secretbox::open_b64(&row.encrypted_metadata, &row.metadata_nonce, &file_key)
-        .context("decrypt metadata")?;
-    let meta: crate::api::FileMetadata = serde_json::from_slice(&meta_bytes).unwrap_or_default();
+    let meta = crate::file_crypto::open_metadata(&row, &file_key).context("decrypt metadata")?;
 
     let short = &version_id[..version_id.len().min(8)];
     let dest_path = {
@@ -118,16 +116,18 @@ fn download(
     let stream = ctx.client.download_version_stream(file_id, version_id)?;
     let bar = crate::output::progress_bar(stream.content_length(), &meta.name);
     let mut out = std::fs::File::create(&dest_path).context("open dest")?;
-    let written = match crate::transfer::stream_download(stream, &file_key, &mut out, |n| {
-        bar.set_position(n as u64)
-    }) {
-        Ok(w) => w,
-        Err(e) => {
-            drop(out);
-            let _ = std::fs::remove_file(&dest_path);
-            return Err(e).context("decrypt-write");
-        }
-    };
+    let blob_context = DriveFileBlobContextV1::new(&row.id, &row.collection_id, row.key_epoch)?;
+    let written =
+        match crate::transfer::stream_download(stream, &file_key, blob_context, &mut out, |n| {
+            bar.set_position(n as u64)
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                drop(out);
+                let _ = std::fs::remove_file(&dest_path);
+                return Err(e).context("decrypt-write");
+            }
+        };
     bar.finish_and_clear();
 
     let dest_str = dest_path.to_string_lossy().into_owned();
@@ -144,7 +144,8 @@ fn download(
 fn restore(profile: &str, json: bool, file_id: &str, version_id: &str) -> Result<()> {
     let ctx = require_session(profile)?;
     let master_key = ctx.session.master_key_bytes()?;
-    let (_, file_key) = find_file_and_key(&ctx.client, &master_key, file_id)?;
+    let (row, file_key) = find_file_and_key(&ctx.client, &master_key, file_id)?;
+    let blob_context = DriveFileBlobContextV1::new(&row.id, &row.collection_id, row.key_epoch)?;
 
     // The restored row carries the SOURCE version's collab metadata: those
     // values become the served x-kutup-seq / x-kutup-doc-key-id headers, and
@@ -161,8 +162,10 @@ fn restore(profile: &str, json: bool, file_id: &str, version_id: &str) -> Result
 
     // download chosen version → decrypt → re-encrypt → snapshot-blob → record.
     let encrypted = ctx.client.download_version(file_id, version_id)?;
-    let old = stream::decrypt_stream(&encrypted, &file_key).context("decrypt")?;
-    let re_encrypted = stream::encrypt_stream(&old, &file_key).context("re-encrypt")?;
+    let old =
+        drive_object::decrypt_file_blob(&encrypted, &file_key, blob_context).context("decrypt")?;
+    let re_encrypted =
+        drive_object::encrypt_file_blob(&old, &file_key, blob_context).context("re-encrypt")?;
     let size = re_encrypted.len() as i64;
 
     let blob = ctx.client.upload_snapshot_blob(file_id, re_encrypted)?;

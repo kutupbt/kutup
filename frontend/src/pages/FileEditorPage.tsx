@@ -11,14 +11,16 @@ import api from '@/api/client'
 import { recordSnapshot } from '@/api/collab'
 import { QuotaExceededError } from '@/api/errors'
 import {
-  decrypt,
   decryptStream,
-  encrypt,
   encryptStream,
-  fromBase64,
+  deriveAccountIdentityKeys,
+  openFileRecordV1,
+  openOwnedCollectionKeyV1,
+  openSharedCollectionV1,
+  renameFileRecordV1,
   toBase64,
-  unwrapKeyFromSender,
 } from '@/crypto'
+import type { FileWireV1 } from '@/crypto'
 import EditableFilename from '@/components/EditableFilename'
 import VersionHistoryPanel from '@/components/VersionHistory/VersionHistoryPanel'
 import RestoreConfirmDialog, { type RestoreChoice } from '@/components/RestoreConfirmDialog'
@@ -51,12 +53,6 @@ function ThemeToggleButton() {
   )
 }
 
-interface FileMetadata {
-  name: string
-  mimeType: string
-  size: number
-}
-
 // Decrypted blob lives entirely in tab memory. A 2 GB video would OOM the
 // renderer; cap previews at 100 MB and route the user to the Drive download
 // path for anything larger.
@@ -78,7 +74,7 @@ export default function FileEditorPage() {
   const masterKey = useMemo(() => masterKeyArr ? new Uint8Array(masterKeyArr) : null, [masterKeyArr])
   const privateKey = useMemo(() => privateKeyArr ? new Uint8Array(privateKeyArr) : null, [privateKeyArr])
   const userId = useAppSelector((s) => s.auth.userId)
-  const publicKey = useAppSelector((s) => s.auth.publicKey)
+  const username = useAppSelector((s) => s.auth.username)
   const userColor = useAppSelector((s) => s.auth.color)
   const dispatch = useAppDispatch()
 
@@ -98,6 +94,7 @@ export default function FileEditorPage() {
   // Stash mime + size at load so the rename helper can re-encrypt the
   // full metadata blob ({name, mimeType, size}) without re-fetching.
   const fileMetaRef = useRef<{ mimeType: string; size: number } | null>(null)
+  const fileRecordRef = useRef<FileWireV1 | null>(null)
   const [initialContent, setInitialContent] = useState<string | undefined>(undefined)
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
   // Stable Uint8Array reference for the editor — recreating it would cause
@@ -144,18 +141,21 @@ export default function FileEditorPage() {
 
         let collectionKey: Uint8Array
         if (col.ownerUserId !== userId) {
-          if (!publicKey) throw new Error('Missing public key for shared collection')
-          collectionKey = await unwrapKeyFromSender(
-            fromBase64(col.encryptedKey),
-            fromBase64(publicKey),
+          if (!username || !col.namedShareEnvelope || !col.ownerAccount
+            || !col.ownerIncarnationId || !col.ownerDriveSigningPublicKey
+            || !col.ownerAuthorityPublicKey) throw new Error('Incomplete named share')
+          const [identity, settings] = await Promise.all([
+            deriveAccountIdentityKeys(toBase64(masterKey)),
+            api.get('/auth/settings'),
+          ])
+          collectionKey = (await openSharedCollectionV1(
+            col,
             privateKey,
-          )
+            `${username}@${settings.data.chat.serverName}`,
+            identity.incarnationId,
+          )).collectionKey
         } else {
-          collectionKey = await decrypt(
-            fromBase64(col.encryptedKey),
-            fromBase64(col.encryptedKeyNonce),
-            masterKey,
-          )
+          collectionKey = await openOwnedCollectionKeyV1(col, masterKey)
         }
 
         const filesRes = await api.get(`/collections/${cid}/files`)
@@ -163,18 +163,10 @@ export default function FileEditorPage() {
         const fileRow = filesRes.data.find((f: any) => f.id === fid)
         if (!fileRow) throw new Error('File not found in this collection')
 
-        const fileKey = await decrypt(
-          fromBase64(fileRow.encryptedFileKey),
-          fromBase64(fileRow.fileKeyNonce),
-          collectionKey,
-        )
-        const metaBytes = await decrypt(
-          fromBase64(fileRow.encryptedMetadata),
-          fromBase64(fileRow.metadataNonce),
-          fileKey,
-        )
-        const meta: FileMetadata = JSON.parse(new TextDecoder().decode(metaBytes))
+        const { fileKey, metadata: meta } = await openFileRecordV1(fileRow, collectionKey)
+        const blobContext = { fileId: fid, collectionId: cid, epoch: fileRow.keyEpoch }
         if (cancelled) return
+        fileRecordRef.current = fileRow
         setFilename(meta.name)
         fileMetaRef.current = { mimeType: meta.mimeType, size: meta.size }
         document.title = `${meta.name} — Kutup`
@@ -211,7 +203,7 @@ export default function FileEditorPage() {
                   const latest = versions[0]
                   const vRes = await api.get(`/files/${fid}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
                   if (cancelled) return
-                  plain = await decryptStream(new Uint8Array(vRes.data), fileKey)
+                  plain = await decryptStream(new Uint8Array(vRes.data), fileKey, blobContext)
                 }
               } catch (e) {
                 // Fall through to original blob.
@@ -221,7 +213,7 @@ export default function FileEditorPage() {
             if (!plain) {
               const dlRes = await api.get(`/files/${fid}/download`, { responseType: 'arraybuffer' })
               if (cancelled) return
-              plain = await decryptStream(new Uint8Array(dlRes.data), fileKey)
+              plain = await decryptStream(new Uint8Array(dlRes.data), fileKey, blobContext)
             }
             if (editorTarget) {
               setInitialContent(new TextDecoder().decode(plain))
@@ -256,21 +248,19 @@ export default function FileEditorPage() {
       cancelled = true
       if (createdUrl) URL.revokeObjectURL(createdUrl)
     }
-  }, [cid, fid, masterKey, privateKey, userId, publicKey, navigate])
+  }, [cid, fid, masterKey, privateKey, userId, username, navigate])
 
   async function handleRename(newFullName: string): Promise<boolean> {
-    if (!fid || !fileKeyRef.current || !fileMetaRef.current) return false
+    if (!fid || !fileKeyRef.current || !fileMetaRef.current || !fileRecordRef.current) return false
     try {
       const meta = {
         name: newFullName,
         mimeType: fileMetaRef.current.mimeType,
         size: fileMetaRef.current.size,
       }
-      const enc = await encrypt(new TextEncoder().encode(JSON.stringify(meta)), fileKeyRef.current)
-      await api.put(`/files/${fid}`, {
-        encryptedMetadata: toBase64(enc.ciphertext),
-        metadataNonce: toBase64(enc.nonce),
-      })
+      const update = await renameFileRecordV1(fileRecordRef.current, fileKeyRef.current, meta)
+      await api.put(`/files/${fid}`, update)
+      fileRecordRef.current = { ...fileRecordRef.current, ...update }
       setFilename(newFullName)
       document.title = `${newFullName} — Kutup`
       toast.success('Renamed')
@@ -302,13 +292,17 @@ export default function FileEditorPage() {
     getBytes: () => Promise<Uint8Array>,
     opts: { silent?: boolean; label?: string; keepForever?: boolean } = {},
   ) {
-    if (!fid || !fileKeyRef.current) return
+    if (!fid || !cid || !fileKeyRef.current || !fileRecordRef.current) return
     if (savingOffice) return
     setSavingOffice(true)
     const tid = opts.silent ? undefined : toast.loading('Saving…')
     try {
       const bytes = await getBytes()
-      const encrypted = await encryptStream(bytes, fileKeyRef.current)
+      const encrypted = await encryptStream(bytes, fileKeyRef.current, {
+        fileId: fid,
+        collectionId: cid,
+        epoch: fileRecordRef.current.keyEpoch,
+      })
       const form = new FormData()
       form.append('file', new Blob([encrypted.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'snapshot')
       const blobRes = await api.post(`/files/${fid}/snapshot-blob`, form)
@@ -367,15 +361,20 @@ export default function FileEditorPage() {
     choice: RestoreChoice,
     preSave: () => Promise<unknown>,
   ) {
-    if (!fid || !fileKeyRef.current) return
+    if (!fid || !cid || !fileKeyRef.current || !fileRecordRef.current) return
     const tid = toast.loading('Restoring…')
     try {
       const dl = await api.get(`/files/${fid}/versions/${versionId}/download`, { responseType: 'arraybuffer' })
-      const oldBytes = await decryptStream(new Uint8Array(dl.data), fileKeyRef.current)
+      const blobContext = {
+        fileId: fid,
+        collectionId: cid,
+        epoch: fileRecordRef.current.keyEpoch,
+      }
+      const oldBytes = await decryptStream(new Uint8Array(dl.data), fileKeyRef.current, blobContext)
       if (choice === 'save-and-restore') {
         try { await preSave() } catch { /* ignore */ }
       }
-      const reEncrypted = await encryptStream(oldBytes, fileKeyRef.current)
+      const reEncrypted = await encryptStream(oldBytes, fileKeyRef.current, blobContext)
       const form = new FormData()
       form.append('file', new Blob([reEncrypted.buffer as ArrayBuffer], { type: 'application/octet-stream' }), 'snapshot')
       const blobRes = await api.post(`/files/${fid}/snapshot-blob`, form)
@@ -610,8 +609,11 @@ export default function FileEditorPage() {
             {editorReady && Editor && (
               <Editor
                 fileId={fid!}
+                collectionId={cid!}
                 filename={filename}
                 collectionMaster={collectionMasterRef.current!}
+                fileKey={fileKeyRef.current!}
+                keyEpoch={fileRecordRef.current!.keyEpoch}
                 initialContent={initialContent}
               />
             )}
@@ -619,8 +621,10 @@ export default function FileEditorPage() {
               <Office
                 ref={officeEditorRef}
                 fileId={fid!}
+                collectionId={cid!}
                 filename={filename}
                 collectionMaster={collectionMasterRef.current!}
+                keyEpoch={fileRecordRef.current!.keyEpoch}
                 initialBytes={officeBytes ?? undefined}
                 onSaveShortcut={() => handleOfficeSaveRef.current({}).catch(() => {})}
               />
@@ -629,8 +633,10 @@ export default function FileEditorPage() {
               <Whiteboard
                 ref={whiteboardEditorRef}
                 fileId={fid!}
+                collectionId={cid!}
                 filename={filename}
                 collectionMaster={collectionMasterRef.current!}
+                keyEpoch={fileRecordRef.current!.keyEpoch}
                 initialBytes={officeBytes ?? undefined}
               />
             )}

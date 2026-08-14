@@ -2,6 +2,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Icon, ICONS, type IconName } from '@/components/mobile/Icon'
 import { cn } from '@/lib/utils'
+import { isSupportedChat, useChatCapabilities } from '@/chat/capabilities'
 
 /**
  * MobileBottomNav — 4-tab navigation rail anchored to the bottom of the
@@ -17,7 +18,7 @@ import { cn } from '@/lib/utils'
  */
 
 export interface BottomNavTab {
-  id: 'files' | 'shared' | 'trash' | 'account'
+  id: 'files' | 'shared' | 'chat' | 'trash' | 'account'
   to: string
   icon: IconName
   label: string
@@ -32,10 +33,14 @@ interface MobileBottomNavProps {
 export function MobileBottomNav({ badges }: MobileBottomNavProps) {
   const { t } = useTranslation()
   const { pathname } = useLocation()
+  const chatCapabilities = useChatCapabilities()
 
   const tabs: BottomNavTab[] = [
     { id: 'files', to: '/drive', icon: 'folder', label: t('nav.files', 'Files') },
     { id: 'shared', to: '/drive/shared', icon: 'users', label: t('nav.shared', 'Shared') },
+    ...(isSupportedChat(chatCapabilities.data)
+      ? [{ id: 'chat' as const, to: '/chat', icon: 'message' as const, label: t('nav.messages') }]
+      : []),
     { id: 'trash', to: '/drive/trash', icon: 'trash', label: t('nav.trash', 'Trash') },
     { id: 'account', to: '/drive/account', icon: 'user', label: t('nav.account', 'Account') },
   ]

@@ -251,6 +251,11 @@ impl Client {
 
     // --- Collections ---
 
+    pub fn settings(&self) -> Result<SettingsResponse> {
+        let resp = self.get("/auth/settings")?;
+        decode_json(resp)
+    }
+
     pub fn list_collections(&self) -> Result<Vec<Collection>> {
         let resp = self.get("/collections/")?;
         decode_json(resp)

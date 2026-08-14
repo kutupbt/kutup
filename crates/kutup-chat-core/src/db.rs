@@ -1,0 +1,884 @@
+//! The durable-store port and its unit-of-work.
+//!
+//! [`ChatDb`] is the seam every platform implements: native (Android/iOS/desktop)
+//! over bundled SQLite ([`sqlite::SqliteChatDb`], behind the `sqlite` feature),
+//! the web client over IndexedDB (a separate wasm adapter, `--no-default-features`).
+//! It is an **async, `?Send`** blob store: native SQLite completes calls
+//! immediately, while browser IndexedDB is allowed to yield. This matches
+//! libsignal's async store traits without blocking the browser main thread.
+//!
+//! Reads are typed by domain and return the raw libsignal-serialized record bytes;
+//! all writes for one crypto operation are staged in a [`Pending`] and committed in
+//! a single atomic [`ChatDb::apply`]. Because nothing is durable until `apply`
+//! returns `Ok`, a crash mid-operation leaves the last committed state intact —
+//! the foundation for the decrypt→persist→ack ordering invariant (`docs/chat-protocol.md`).
+
+use std::collections::{HashMap, HashSet};
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+
+use crate::error::Result;
+use kutup_chat_proto::PutChatProfileRequest;
+use kutup_chat_proto::{
+    AccountManifestV1, ChatHistoryTransferAcceptanceV1, ChatHistoryTransferFrameV1,
+    ChatHistoryTransferRequestV1, ContactState, ConversationId,
+};
+
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+pub mod indexed_db;
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
+
+/// The local device's long-term chat identity. Persisted as a single row and
+/// cached in the store for the hot `get_identity_key_pair` path.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LocalIdentity {
+    /// `IdentityKeyPair::serialize()` — the private identity material.
+    pub identity_key_pair: Vec<u8>,
+    /// The libsignal registration id chosen at install (stable run-to-run).
+    pub registration_id: u32,
+    /// Server-assigned libsignal device id. `None` only while the exact durable
+    /// registration request is awaiting its first confirmed response.
+    #[serde(default)]
+    pub device_id: Option<u32>,
+}
+
+/// A decrypted inbound message, persisted atomically with the ratchet advance that
+/// produced it (before the mailbox row is acked). `content` is the raw plaintext
+/// (`serde_json` of a `ChatContent`) — stored even when its `kind` is unknown, so
+/// nothing is ever dropped (the content schema's "render a placeholder" rule).
+#[derive(Clone, Serialize, Deserialize)]
+pub struct InboxMessage {
+    /// Mailbox id (the server's ack handle) — primary key, so redelivery is idempotent.
+    pub id: String,
+    /// Sender username (`user@domain` once federation lands).
+    pub peer: String,
+    pub sender_device_id: u32,
+    /// The mailbox cursor (monotonic order + dedup key).
+    pub cursor: u64,
+    pub content: Vec<u8>,
+    pub received_at: i64,
+}
+
+/// The independently retryable encrypted transcript fan-out for an ordinary
+/// direct message. Its presence means the sender's linked-device leg is still
+/// pending; it is removed once that leg is confirmed.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct OutboxSyncLeg {
+    /// `serde_json` of the [`sentTranscript`](kutup_chat_proto::content::kind::SENT_TRANSCRIPT)
+    /// plaintext, retained only for device-list amendment.
+    pub content: Vec<u8>,
+    /// `serde_json` of the per-linked-device ciphertext envelopes.
+    pub envelopes: Vec<u8>,
+    pub attempts: u32,
+}
+
+/// A pending outbound message, keyed by its logical `sendId`. Because ratchet
+/// advances are irreversible, each retry MUST resend the exact stored
+/// ciphertext. `content`/`envelopes` are the primary leg (recipient delivery,
+/// or own-device delivery for Note to Self); [`sync`](Self::sync) is the
+/// independently retryable sent transcript for an ordinary direct message.
+/// The record is deleted only after every present leg is confirmed.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct OutboxEntry {
+    pub send_id: String,
+    /// Recipient username (`user@domain` once federation lands).
+    pub peer: String,
+    /// `serde_json` of the `ChatContent` plaintext.
+    pub content: Vec<u8>,
+    /// `serde_json` of the per-device `Vec<OutgoingEnvelope>` ciphertexts.
+    pub envelopes: Vec<u8>,
+    /// Primary envelopes are serialized `SealedOutgoingEnvelopeV1` values and
+    /// must only use the anonymous transport. A failure never clears this bit.
+    #[serde(default)]
+    pub sealed_sender: bool,
+    /// Exact contacts-only delivery capability used for this sealed send. It is
+    /// local encrypted-database state and is never included in logs or linked-
+    /// device transcripts. Persisting it keeps retries bound to the original
+    /// idempotency tuple even if a newer peer profile arrives meanwhile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sealed_capability: Option<[u8; 16]>,
+    /// Send attempts so far (bounds the 409 recovery loop).
+    pub attempts: u32,
+    /// Unix-epoch millis the entry was first enqueued.
+    pub created_at: i64,
+    /// The primary recipient leg already completed while linked-device sync is
+    /// still pending. Defaults false when reading pre-sync outbox records.
+    #[serde(default)]
+    pub primary_delivered: bool,
+    /// Pending linked-device transcript leg for an ordinary direct message.
+    #[serde(default)]
+    pub sync: Option<OutboxSyncLeg>,
+}
+
+/// An MLS application message whose secret-tree advance has already been
+/// committed locally. Retries must resend `ciphertext` byte-for-byte; creating
+/// another MLS message for the same logical send would consume a different
+/// generation and could make the original message permanently undecryptable.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsOutboxEntry {
+    /// Application-assigned UUID string, unique within this device store.
+    pub send_id: String,
+    /// Kutup conversation UUID bytes. OpenMLS uses these exact bytes as its
+    /// stable application identifier.
+    pub conversation_id: [u8; 16],
+    /// Append-only Kutup conversation incarnation.
+    pub incarnation: u64,
+    /// Exact MLS `GroupId` from the authenticated conversation genesis.
+    pub mls_group_id: Vec<u8>,
+    /// MLS epoch at which `ciphertext` was generated.
+    pub epoch: u64,
+    /// SHA-256 of the application plaintext, used only to reject accidental
+    /// `sendId` reuse with different content. The plaintext is not retained in
+    /// logs or server state.
+    pub content_digest: [u8; 32],
+    /// Exact canonical [`ChatContent`](kutup_chat_proto::ChatContent) bytes.
+    /// This encrypted local value becomes durable outgoing history only after
+    /// every account delivery leg is confirmed.
+    #[serde(default)]
+    pub content: Vec<u8>,
+    /// Complete TLS-encoded OpenMLS `MlsMessageOut`.
+    pub ciphertext: Vec<u8>,
+    /// Canonical account destinations captured from the MLS-authenticated
+    /// roster at message creation. A later epoch cannot silently change the
+    /// recipients of this already-generated ciphertext.
+    #[serde(default)]
+    pub expected_recipients: Vec<String>,
+    /// Exact anonymous submissions staged before their first network write.
+    /// Retries never re-wrap an MLS generation or consume a different remote
+    /// KeyPackage after this record exists.
+    #[serde(default)]
+    pub deliveries: Vec<MlsOutboxDelivery>,
+    pub created_at: i64,
+    pub attempts: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsOutboxDelivery {
+    pub recipient: String,
+    /// Canonical JSON of `AnonymousMlsSubmissionV1`, including the raw
+    /// capability. The account-private database is encrypted; the value is
+    /// never emitted to metrics or destination logs.
+    pub submission: Vec<u8>,
+    pub attempts: u32,
+    pub delivered: bool,
+}
+
+/// Durable local MLS application history. Inbound rows are inserted in the
+/// same transaction as the consumed OpenMLS secret-tree generation. Outbound
+/// rows are inserted when every immutable delivery leg is confirmed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsHistoryMessage {
+    /// `in:<mailbox UUID>` or `out:<send UUID>`.
+    pub record_id: String,
+    pub message_id: String,
+    pub conversation_id: [u8; 16],
+    pub incarnation: u64,
+    pub mls_group_id: Vec<u8>,
+    pub epoch: u64,
+    pub sender: String,
+    pub sender_device_id: u32,
+    pub outgoing: bool,
+    pub cursor: Option<u64>,
+    /// SHA-256 of the exact HPKE envelope for inbound rows or exact OpenMLS
+    /// ciphertext for outbound rows. Idempotent retries must reproduce it.
+    pub transport_digest: [u8; 32],
+    /// Canonical `ChatContent` bytes.
+    pub content: Vec<u8>,
+    pub timestamp_ms: i64,
+    pub delivered: bool,
+    pub deduplicated: bool,
+}
+
+/// Which independently durable leg of one logical send is being amended or
+/// completed. Kept crate-private; it is not a wire or binding type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OutboxLeg {
+    Primary,
+    Sync,
+}
+
+/// Durable local history for an outbound logical message. The pending outbox
+/// may be deleted after confirmation; this record remains for UI/history and
+/// tracks whether the exact ciphertext is still awaiting delivery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SentMessage {
+    pub send_id: String,
+    pub peer: String,
+    /// `serde_json` of [`ChatContent`](kutup_chat_proto::ChatContent).
+    pub content: Vec<u8>,
+    pub created_at: i64,
+    pub delivered_at: Option<i64>,
+    pub delivered: bool,
+    pub deduplicated: bool,
+}
+
+/// Immutable display-history copied from another authorized installation.
+/// These rows are deliberately separate from live Signal/MLS state: importing
+/// one cannot advance a ratchet, mailbox cursor, receipt, or group epoch.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedHistoryRecordV1 {
+    /// One-time transfer UUID that established this row's provenance.
+    pub transfer_id: String,
+    /// Stable source-local id, unique within `transfer_id`.
+    pub source_record_id: String,
+    pub source_device_id: u32,
+    pub conversation: ConversationId,
+    pub sender: String,
+    pub sender_device_id: u32,
+    pub outgoing: bool,
+    /// Canonical serialized [`kutup_chat_proto::ChatContent`].
+    pub content: Vec<u8>,
+    pub timestamp_ms: i64,
+    pub delivered: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HistoryTransferRoleV1 {
+    Requester,
+    Responder,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HistoryTransferJournalStateV1 {
+    Requested,
+    Accepted,
+    FramesReady,
+    ImportReady,
+    Completed,
+    Cancelled,
+}
+
+/// Account-private restart journal for one short-lived history transfer. The
+/// ephemeral secret is as sensitive as the device identity and never leaves
+/// the encrypted/native or origin-private/browser client database.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HistoryTransferJournalV1 {
+    pub transfer_id: String,
+    pub role: HistoryTransferRoleV1,
+    pub state: HistoryTransferJournalStateV1,
+    pub request: ChatHistoryTransferRequestV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptance: Option<ChatHistoryTransferAcceptanceV1>,
+    pub ephemeral_secret: [u8; 32],
+    pub next_frame_index: u32,
+    pub updated_at_unix: i64,
+}
+
+impl std::fmt::Debug for HistoryTransferJournalV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HistoryTransferJournalV1")
+            .field("transfer_id", &self.transfer_id)
+            .field("role", &self.role)
+            .field("state", &self.state)
+            .field("request", &self.request)
+            .field("acceptance", &self.acceptance)
+            .field("ephemeral_secret", &"[REDACTED]")
+            .field("next_frame_index", &self.next_frame_index)
+            .field("updated_at_unix", &self.updated_at_unix)
+            .finish()
+    }
+}
+
+/// Durable state of a raw inbound mailbox envelope. Ciphertext is journaled
+/// before the fetch cursor advances, so decrypt/session repair can be retried
+/// without depending on the server returning an older page again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InboundState {
+    /// Fetched and waiting for decrypt (or a retry after repair).
+    PendingDecrypt,
+    /// Decrypted and committed locally; safe to retry the idempotent REST ack.
+    PendingAck,
+    /// Explicitly quarantined after a permanent-policy decision. The ciphertext
+    /// remains locally visible until the application resolves it.
+    DeadLetter,
+    /// Explicitly quarantined locally; waiting for the idempotent server ack.
+    DeadLetterPendingAck,
+}
+
+#[cfg(feature = "sqlite")]
+impl InboundState {
+    pub(crate) fn code(self) -> i64 {
+        match self {
+            Self::PendingDecrypt => 0,
+            Self::PendingAck => 1,
+            Self::DeadLetter => 2,
+            Self::DeadLetterPendingAck => 3,
+        }
+    }
+
+    pub(crate) fn from_code(code: i64) -> Result<Self> {
+        match code {
+            0 => Ok(Self::PendingDecrypt),
+            1 => Ok(Self::PendingAck),
+            2 => Ok(Self::DeadLetter),
+            3 => Ok(Self::DeadLetterPendingAck),
+            _ => Err(crate::error::ChatError::Db(format!(
+                "unknown inbound state {code}"
+            ))),
+        }
+    }
+}
+
+/// Stable repair category persisted with a failed inbound envelope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InboundFailureKind {
+    MalformedEnvelope,
+    MalformedCiphertext,
+    MissingKeyMaterial,
+    UntrustedIdentity,
+    UnsupportedSuite,
+    MissingSender,
+    Store,
+    Duplicate,
+    Unknown,
+}
+
+#[cfg(feature = "sqlite")]
+impl InboundFailureKind {
+    pub(crate) fn code(self) -> i64 {
+        match self {
+            Self::MalformedEnvelope => 0,
+            Self::MalformedCiphertext => 1,
+            Self::MissingKeyMaterial => 2,
+            Self::UntrustedIdentity => 3,
+            Self::UnsupportedSuite => 4,
+            Self::MissingSender => 5,
+            Self::Store => 6,
+            Self::Duplicate => 7,
+            Self::Unknown => 8,
+        }
+    }
+
+    pub(crate) fn from_code(code: i64) -> Result<Self> {
+        match code {
+            0 => Ok(Self::MalformedEnvelope),
+            1 => Ok(Self::MalformedCiphertext),
+            2 => Ok(Self::MissingKeyMaterial),
+            3 => Ok(Self::UntrustedIdentity),
+            4 => Ok(Self::UnsupportedSuite),
+            5 => Ok(Self::MissingSender),
+            6 => Ok(Self::Store),
+            7 => Ok(Self::Duplicate),
+            8 => Ok(Self::Unknown),
+            _ => Err(crate::error::ChatError::Db(format!(
+                "unknown inbound failure kind {code}"
+            ))),
+        }
+    }
+}
+
+/// A server envelope retained until decrypt and acknowledgement have both
+/// completed. `envelope` is the JSON-encoded [`DeliveredEnvelope`].
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InboundEnvelope {
+    pub id: String,
+    pub cursor: u64,
+    pub envelope: Vec<u8>,
+    pub state: InboundState,
+    pub attempts: u32,
+    pub failure_kind: Option<InboundFailureKind>,
+    pub last_error: Option<String>,
+    pub received_at: i64,
+}
+
+/// How the user has authenticated a peer account's self-authority key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AuthorityTrust {
+    /// First valid key observed for the account.
+    Tofu,
+    /// The user compared an out-of-band safety number / QR code.
+    Verified,
+    /// A cryptographic contradiction or signed replacement is durably blocked
+    /// until an exact out-of-band comparison explicitly resolves it.
+    Quarantined,
+}
+
+#[cfg(feature = "sqlite")]
+impl AuthorityTrust {
+    pub(crate) fn code(self) -> i64 {
+        match self {
+            Self::Tofu => 0,
+            Self::Verified => 1,
+            Self::Quarantined => 2,
+        }
+    }
+
+    pub(crate) fn from_code(code: i64) -> Result<Self> {
+        match code {
+            0 => Ok(Self::Tofu),
+            1 => Ok(Self::Verified),
+            2 => Ok(Self::Quarantined),
+            _ => Err(crate::error::ChatError::Db(format!(
+                "unknown authority trust state {code}"
+            ))),
+        }
+    }
+}
+
+/// Durable anti-rollback pin for one peer account's signed device directory.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestTrust {
+    /// Request/routing key used by the local application (may be bare for a
+    /// same-origin peer).
+    pub peer: String,
+    /// Canonical account address authenticated inside the manifest.
+    pub account: String,
+    pub incarnation_id: String,
+    pub authority_key_id: String,
+    pub self_authority_key: String,
+    pub drive_hpke_public_key: String,
+    pub drive_share_signing_public_key: String,
+    pub highest_sequence: u64,
+    pub manifest_hash: String,
+    pub trust: AuthorityTrust,
+    /// True if this client first observed a version after v1 or skipped one or
+    /// more signed versions while offline. The latest state is still authentic,
+    /// but the local client cannot prove the complete update chain.
+    pub continuity_gap: bool,
+    /// Stable, identifier-free reason retained for red-shield inspection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quarantine_reason: Option<String>,
+    /// A complete independently signed replacement incarnation. The retained
+    /// pin remains authoritative until the user verifies this candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_reset: Option<Box<PendingAccountIdentityResetV1>>,
+}
+
+/// One complete account-signed manifest. These records are
+/// append-only and are committed in the same client transaction as the latest
+/// trust pin, so a recovered version gap can never be partially accepted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountManifestHistoryRecordV1 {
+    pub peer: String,
+    pub sequence: u64,
+    pub manifest: AccountManifestV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingAccountIdentityResetV1 {
+    pub candidate: ManifestTrust,
+    pub history: Vec<AccountManifestHistoryRecordV1>,
+}
+
+#[cfg(feature = "sqlite")]
+pub(crate) fn contact_state_code(state: ContactState) -> i64 {
+    match state {
+        ContactState::PendingIncoming => 0,
+        ContactState::PendingOutgoing => 1,
+        ContactState::Accepted => 2,
+        ContactState::Rejected => 3,
+        ContactState::Blocked => 4,
+    }
+}
+
+#[cfg(feature = "sqlite")]
+pub(crate) fn contact_state_from_code(code: i64) -> Result<ContactState> {
+    match code {
+        0 => Ok(ContactState::PendingIncoming),
+        1 => Ok(ContactState::PendingOutgoing),
+        2 => Ok(ContactState::Accepted),
+        3 => Ok(ContactState::Rejected),
+        4 => Ok(ContactState::Blocked),
+        _ => Err(crate::error::ChatError::Db(format!(
+            "unknown contact state {code}"
+        ))),
+    }
+}
+
+/// Client-owned relationship state for a canonical account. This record never
+/// leaves the encrypted/native or account-scoped/browser chat store directly;
+/// linked devices receive only its E2EE [`ContactControlBody`](kutup_chat_proto::ContactControlBody).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContactRecord {
+    pub peer: String,
+    pub state: ContactState,
+    /// State restored by unblock. Present only while `state == Blocked`.
+    pub previous_state: Option<ContactState>,
+    pub revision: u64,
+    pub source_device_id: u32,
+    pub updated_at_ms: i64,
+    /// A local explicit transition still needs encrypted linked-device sync.
+    #[serde(default)]
+    pub sync_pending: bool,
+    /// Stable id for crash-safe retries of that linked-device control message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_send_id: Option<String>,
+}
+
+/// The local account's Signal-style profile, including the random key. The
+/// containing browser database / native SQLCipher database is account-private;
+/// only `pending_upload` ever leaves it, and that request contains the key only
+/// encrypted under an account-master-key-derived wrapping key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalProfile {
+    pub key: Vec<u8>,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_content_type: Option<String>,
+    pub revision: u64,
+    pub source_device_id: u32,
+    /// Exact encrypted upload retained for idempotent retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_upload: Option<PutChatProfileRequest>,
+    /// After publication, redistribute the current key to every authorized
+    /// conversation. Cleared only after all durable sends are staged.
+    #[serde(default)]
+    pub broadcast_pending: bool,
+}
+
+/// One peer's harvested profile key and most recently decrypted server profile.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerProfile {
+    pub peer: String,
+    pub key: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_content_type: Option<String>,
+    #[serde(default)]
+    pub revision: u64,
+    #[serde(default)]
+    pub source_device_id: u32,
+}
+
+/// A unit of work. Every mutation libsignal makes during one crypto operation
+/// accumulates here (last-write-wins per key) and is flushed to the [`ChatDb`] in
+/// one atomic `apply`. Reads consult the pending overlay before the durable store,
+/// so an operation sees its own not-yet-committed writes; a failed operation drops
+/// the `Pending` and touches nothing durable.
+///
+/// Fields are crate-private: only the in-crate [`ChatDb`] implementations read
+/// them. (When an out-of-crate store lands, it gets public accessors then.)
+#[derive(Default)]
+pub struct Pending {
+    /// Set only when installing a freshly generated device.
+    pub(crate) local_identity: Option<LocalIdentity>,
+    /// address string (`name.deviceId`) → `Some(SessionRecord::serialize())`
+    /// (upsert) or `None` (archive — a session dropped on a stale/extra device).
+    pub(crate) sessions: HashMap<String, Option<Vec<u8>>>,
+    /// address string → `IdentityKey::serialize()` (a peer's public identity).
+    pub(crate) identities: HashMap<String, Vec<u8>>,
+    /// one-time EC prekey id → `Some(PreKeyRecord::serialize())` (upsert) or
+    /// `None` (remove — libsignal consumes a one-time prekey on receipt).
+    pub(crate) pre_keys: HashMap<u32, Option<Vec<u8>>>,
+    /// signed prekey id → `SignedPreKeyRecord::serialize()`.
+    pub(crate) signed_pre_keys: HashMap<u32, Vec<u8>>,
+    /// kyber prekey id → `KyberPreKeyRecord::serialize()`.
+    pub(crate) kyber_pre_keys: HashMap<u32, Vec<u8>>,
+    /// `(kyberId, ecId, baseKey)` combinations already consumed — libsignal's
+    /// last-resort-prekey replay guard (a repeat is a rejected PreKey message).
+    pub(crate) kyber_seen: Vec<(u32, u32, Vec<u8>)>,
+    /// `(address, distributionId)` → `SenderKeyRecord::serialize()` (groups; reserved).
+    pub(crate) sender_keys: HashMap<(String, String), Vec<u8>>,
+    /// `sendId` → `Some(entry)` (upsert the pending send) or `None` (delivered — delete).
+    pub(crate) outbox: HashMap<String, Option<OutboxEntry>>,
+    /// `sendId` → exact MLS ciphertext retry record.
+    pub(crate) mls_outbox: HashMap<String, Option<MlsOutboxEntry>>,
+    /// Stable record id → immutable/de-duplicated MLS application history.
+    pub(crate) mls_messages: HashMap<String, MlsHistoryMessage>,
+    /// Complete versioned OpenMLS provider snapshot. It contains private key
+    /// material and belongs only in the account-private encrypted client DB.
+    pub(crate) mls_state: Option<Vec<u8>>,
+    /// Decrypted inbound messages to persist (insert-or-ignore by id).
+    pub(crate) messages: Vec<InboxMessage>,
+    /// Outbound history upserts, keyed by `sendId`.
+    pub(crate) sent_messages: HashMap<String, SentMessage>,
+    /// Immutable imported display rows keyed by `(transferId, sourceRecordId)`.
+    pub(crate) imported_history: HashMap<(String, String), ImportedHistoryRecordV1>,
+    /// Transfer id → restart journal update/removal.
+    pub(crate) history_transfer_journals: HashMap<String, Option<HistoryTransferJournalV1>>,
+    /// Exact opaque frame update/removal, retained byte-for-byte across retry.
+    pub(crate) history_transfer_frames: HashMap<(String, u32), Option<ChatHistoryTransferFrameV1>>,
+    /// Raw inbound journal updates keyed by mailbox id. `None` removes an entry
+    /// only after its REST acknowledgement succeeds.
+    pub(crate) inbound: HashMap<String, Option<InboundEnvelope>>,
+    /// Peer username → latest accepted signed-manifest trust record.
+    pub(crate) manifest_trust: HashMap<String, ManifestTrust>,
+    /// `(peer, incarnation, version)` → immutable complete signed manifest.
+    pub(crate) manifest_history: HashMap<(String, String, u64), AccountManifestHistoryRecordV1>,
+    /// Canonical peer → local contact/request state.
+    pub(crate) contacts: HashMap<String, ContactRecord>,
+    /// The local account's profile singleton.
+    pub(crate) local_profile: Option<LocalProfile>,
+    /// Canonical peer → harvested/decrypted profile state.
+    pub(crate) peer_profiles: HashMap<String, PeerProfile>,
+    /// Reject deletes the request plaintext in the same transaction as the
+    /// state change, without touching libsignal session/identity state.
+    pub(crate) delete_messages_for_peers: HashSet<String>,
+    /// Exact local history rows removed by disappearing-message expiry.
+    pub(crate) delete_message_ids: HashSet<String>,
+    pub(crate) delete_sent_message_ids: HashSet<String>,
+    pub(crate) delete_mls_message_ids: HashSet<String>,
+    pub(crate) delete_imported_history_ids: HashSet<(String, String)>,
+    /// Serialized `ReplenishKeysRequest` whose private keys are already durable
+    /// but whose server response has not yet been confirmed.
+    pub(crate) prekey_upload: Option<Option<Vec<u8>>>,
+    /// Serialized `RegisterChatDeviceRequest` durably paired with freshly
+    /// generated private keys until the server-assigned device id is committed.
+    pub(crate) registration_upload: Option<Option<Vec<u8>>>,
+    /// The highest mailbox cursor processed — advanced with each message so a
+    /// re-drain never re-decrypts (which the ratchet couldn't do anyway).
+    pub(crate) last_cursor: Option<u64>,
+    /// Highest locally allocated outbound content sequence. Advanced in the
+    /// same transaction as the ratchet/outbox/history write.
+    pub(crate) last_sent_seq: Option<u64>,
+}
+
+impl Pending {
+    /// Nothing staged — a crypto op that made no writes (e.g. a failed decrypt
+    /// that never reached a store call). Lets `commit` short-circuit.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.local_identity.is_none()
+            && self.sessions.is_empty()
+            && self.identities.is_empty()
+            && self.pre_keys.is_empty()
+            && self.signed_pre_keys.is_empty()
+            && self.kyber_pre_keys.is_empty()
+            && self.kyber_seen.is_empty()
+            && self.sender_keys.is_empty()
+            && self.outbox.is_empty()
+            && self.mls_outbox.is_empty()
+            && self.mls_messages.is_empty()
+            && self.mls_state.is_none()
+            && self.messages.is_empty()
+            && self.sent_messages.is_empty()
+            && self.imported_history.is_empty()
+            && self.history_transfer_journals.is_empty()
+            && self.history_transfer_frames.is_empty()
+            && self.inbound.is_empty()
+            && self.manifest_trust.is_empty()
+            && self.manifest_history.is_empty()
+            && self.contacts.is_empty()
+            && self.local_profile.is_none()
+            && self.peer_profiles.is_empty()
+            && self.delete_messages_for_peers.is_empty()
+            && self.delete_message_ids.is_empty()
+            && self.delete_sent_message_ids.is_empty()
+            && self.delete_mls_message_ids.is_empty()
+            && self.delete_imported_history_ids.is_empty()
+            && self.prekey_upload.is_none()
+            && self.registration_upload.is_none()
+            && self.last_cursor.is_none()
+            && self.last_sent_seq.is_none()
+    }
+
+    pub(crate) fn clear(&mut self) {
+        *self = Pending::default();
+    }
+}
+
+/// The durable client store. Methods are async and implementors may be `!Send`
+/// (the engine drives one session on one thread). Object-safe by design — the
+/// engine holds an `Rc<dyn ChatDb>`.
+#[async_trait(?Send)]
+pub trait ChatDb {
+    /// The installed device's identity, or `None` on a fresh store.
+    async fn load_local_identity(&self) -> Result<Option<LocalIdentity>>;
+
+    /// Serialized `SessionRecord` for `address` (`name.deviceId`).
+    async fn load_session(&self, address: &str) -> Result<Option<Vec<u8>>>;
+    /// Serialized peer `IdentityKey` for `address`.
+    async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>>;
+    /// Serialized one-time `PreKeyRecord` by id.
+    async fn load_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>>;
+    /// Delete EC one-time prekeys that libsignal marked used before the grace
+    /// cutoff. Until then `load_pre_key` still returns them for in-flight
+    /// prekey messages, while the current operation's overlay treats them used.
+    async fn purge_used_pre_keys(&self, used_before_ms: i64) -> Result<u64>;
+    /// Serialized `SignedPreKeyRecord` by id.
+    async fn load_signed_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>>;
+    /// Serialized `KyberPreKeyRecord` by id.
+    async fn load_kyber_pre_key(&self, id: u32) -> Result<Option<Vec<u8>>>;
+    /// Whether this `(kyberId, ecId, baseKey)` combination was already consumed.
+    async fn kyber_base_key_seen(&self, kyber_id: u32, ec_id: u32, base_key: &[u8])
+        -> Result<bool>;
+    /// Serialized `SenderKeyRecord` for `(address, distributionId)`.
+    async fn load_sender_key(
+        &self,
+        address: &str,
+        distribution_id: &str,
+    ) -> Result<Option<Vec<u8>>>;
+
+    /// The pending outbound send for `send_id`, if any.
+    async fn load_outbox(&self, send_id: &str) -> Result<Option<OutboxEntry>>;
+    /// Every pending outbound send (oldest first) — for resend-on-startup.
+    async fn list_outbox(&self) -> Result<Vec<OutboxEntry>>;
+
+    /// One exact pending MLS ciphertext retry record.
+    async fn load_mls_outbox(&self, send_id: &str) -> Result<Option<MlsOutboxEntry>> {
+        let _ = send_id;
+        Ok(None)
+    }
+
+    /// Every pending MLS ciphertext (oldest first) for restart recovery.
+    async fn list_mls_outbox(&self) -> Result<Vec<MlsOutboxEntry>> {
+        Ok(Vec::new())
+    }
+
+    /// One durable MLS application history/receipt record.
+    async fn load_mls_message(&self, record_id: &str) -> Result<Option<MlsHistoryMessage>> {
+        let _ = record_id;
+        Ok(None)
+    }
+
+    /// Complete MLS application history, ordered for presentation.
+    async fn list_mls_messages(&self) -> Result<Vec<MlsHistoryMessage>> {
+        Ok(Vec::new())
+    }
+
+    /// Complete private OpenMLS provider snapshot, or `None` before MLS device
+    /// initialization. Production backends persist this in encrypted storage.
+    async fn load_mls_state(&self) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    /// The highest mailbox cursor processed so far (the drain resume point).
+    async fn load_last_cursor(&self) -> Result<Option<u64>>;
+    /// Highest locally committed outbound content sequence.
+    async fn load_last_sent_seq(&self) -> Result<Option<u64>>;
+    /// Every persisted inbound message (oldest first, by cursor) — the local history.
+    async fn list_messages(&self) -> Result<Vec<InboxMessage>>;
+
+    /// One durable outbound-history record.
+    async fn load_sent_message(&self, send_id: &str) -> Result<Option<SentMessage>>;
+    /// All outbound history, oldest first.
+    async fn list_sent_messages(&self) -> Result<Vec<SentMessage>>;
+
+    /// One immutable imported display-history row.
+    async fn load_imported_history(
+        &self,
+        transfer_id: &str,
+        source_record_id: &str,
+    ) -> Result<Option<ImportedHistoryRecordV1>> {
+        let _ = (transfer_id, source_record_id);
+        Ok(None)
+    }
+
+    /// All imported display-history rows ordered for presentation.
+    async fn list_imported_history(&self) -> Result<Vec<ImportedHistoryRecordV1>> {
+        Ok(Vec::new())
+    }
+
+    async fn load_history_transfer_journal(
+        &self,
+        transfer_id: &str,
+    ) -> Result<Option<HistoryTransferJournalV1>> {
+        let _ = transfer_id;
+        Ok(None)
+    }
+
+    async fn list_history_transfer_frames(
+        &self,
+        transfer_id: &str,
+    ) -> Result<Vec<ChatHistoryTransferFrameV1>> {
+        let _ = transfer_id;
+        Ok(Vec::new())
+    }
+
+    /// Every raw inbound entry, ordered by cursor, including ack retries and
+    /// visible dead letters.
+    async fn list_inbound(&self) -> Result<Vec<InboundEnvelope>>;
+
+    /// Highest accepted manifest and pinned authority for `peer`.
+    async fn load_manifest_trust(&self, peer: &str) -> Result<Option<ManifestTrust>>;
+
+    /// One immutable accepted manifest version, if it has been observed.
+    async fn load_manifest_history(
+        &self,
+        peer: &str,
+        incarnation_id: &str,
+        version: u64,
+    ) -> Result<Option<AccountManifestHistoryRecordV1>>;
+
+    /// Client-owned relationship state for one canonical peer.
+    async fn load_contact(&self, peer: &str) -> Result<Option<ContactRecord>>;
+    /// Every known contact/request state, ordered by canonical peer.
+    async fn list_contacts(&self) -> Result<Vec<ContactRecord>>;
+
+    /// The local account's encrypted-profile source state.
+    async fn load_local_profile(&self) -> Result<Option<LocalProfile>>;
+    /// One peer profile by canonical address.
+    async fn load_peer_profile(&self, peer: &str) -> Result<Option<PeerProfile>>;
+    /// Every peer profile ordered by canonical address.
+    async fn list_peer_profiles(&self) -> Result<Vec<PeerProfile>>;
+
+    /// Durable prekey publication request, if a prior upload is unconfirmed.
+    async fn load_pending_prekey_upload(&self) -> Result<Option<Vec<u8>>>;
+
+    /// Exact device-registration request whose private material is installed,
+    /// but whose server-assigned id is not yet confirmed locally.
+    async fn load_pending_registration(&self) -> Result<Option<Vec<u8>>>;
+
+    /// Commit a whole unit of work atomically. Either every staged write lands or
+    /// none does; a partial apply MUST NOT be observable after a crash.
+    async fn apply(&self, pending: &Pending) -> Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MlsHistoryMessage, MlsOutboxDelivery, MlsOutboxEntry};
+
+    #[test]
+    fn mls_browser_records_use_one_camel_case_contract() {
+        let entry = MlsOutboxEntry {
+            send_id: "33333333-3333-4333-8333-333333333333".into(),
+            conversation_id: [1; 16],
+            incarnation: 1,
+            mls_group_id: vec![2; 16],
+            epoch: 1,
+            content_digest: [3; 32],
+            content: vec![4],
+            ciphertext: vec![5],
+            expected_recipients: vec!["bob@example.test".into()],
+            deliveries: vec![MlsOutboxDelivery {
+                recipient: "bob@example.test".into(),
+                submission: vec![6],
+                attempts: 0,
+                delivered: false,
+            }],
+            created_at: 1_700_000_000_000,
+            attempts: 0,
+        };
+        let encoded = serde_json::to_value(&entry).unwrap();
+        assert!(encoded.get("sendId").is_some());
+        assert!(encoded.get("expectedRecipients").is_some());
+        assert!(encoded.get("send_id").is_none());
+        assert!(encoded["deliveries"][0].get("submission").is_some());
+
+        let history = MlsHistoryMessage {
+            record_id: "out:33333333-3333-4333-8333-333333333333".into(),
+            message_id: "33333333-3333-4333-8333-333333333333".into(),
+            conversation_id: [1; 16],
+            incarnation: 1,
+            mls_group_id: vec![2; 16],
+            epoch: 1,
+            sender: "alice@example.test".into(),
+            sender_device_id: 7,
+            outgoing: true,
+            cursor: None,
+            transport_digest: [8; 32],
+            content: vec![9],
+            timestamp_ms: 1_700_000_000_000,
+            delivered: true,
+            deduplicated: false,
+        };
+        let encoded = serde_json::to_value(&history).unwrap();
+        assert!(encoded.get("recordId").is_some());
+        assert!(encoded.get("senderDeviceId").is_some());
+        assert!(encoded.get("record_id").is_none());
+    }
+}

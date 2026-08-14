@@ -6,8 +6,13 @@
   "type": "module",
   "packageManager": "pnpm@9.1.1",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
+    "dev": "pnpm run build:wasm && vite",
+    "build": "pnpm run build:wasm && pnpm run build:web",
+    "build:web": "tsc && vite build",
+    "build:chat-wasm": "bash ../scripts/build-chat-wasm.sh",
+    "build:crypto-wasm": "bash ../scripts/build-crypto-wasm.sh",
+    "test:crypto-wasm": "node ../scripts/test-crypto-wasm.mjs",
+    "build:wasm": "pnpm run build:crypto-wasm && pnpm run build:chat-wasm",
     "build:tauri": "pnpm build && node -e \"require('fs').rmSync('dist/onlyoffice',{recursive:true,force:true})\"",
     "preview": "vite preview",
     "test": "vitest run"
@@ -109,6 +114,7 @@
     "@types/react-dom": "^18.3.0",
     "@types/zxcvbn": "^4.4.4",
     "@vitejs/plugin-react": "^6.0.1",
+    "fake-indexeddb": "^6.2.5",
     "jsdom": "^25",
     "msw": "^2",
     "typescript": "^5.4.5",

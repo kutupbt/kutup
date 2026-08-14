@@ -17,6 +17,8 @@ export class FsaRequiredError extends Error {
 
 export interface ZipFile {
   id: string
+  collectionId: string
+  keyEpoch: number
   name: string
   size: number
   fileKey: Uint8Array
@@ -61,12 +63,18 @@ async function pumpFileIntoZip(
   signal?: AbortSignal,
 ): Promise<void> {
   const url = f.isRemote
-    ? `${base}/fed-proxy/${f.remoteShareId}/files/${f.id}/download`
+    ? `${base}/drive/federation/shares/${f.remoteShareId}/files/${f.id}/content`
     : `${base}/files/${f.id}/download`
   const entry = new ZipPassThrough(f.name)
   zip.add(entry)
   let pushed = false
-  for await (const { plain, isFinal } of fetchDecryptedChunks(url, f.fileKey, accessToken, signal)) {
+  for await (const { plain, isFinal } of fetchDecryptedChunks(
+    url,
+    f.fileKey,
+    { fileId: f.id, collectionId: f.collectionId, epoch: f.keyEpoch },
+    accessToken,
+    signal,
+  )) {
     signal?.throwIfAborted()
     entry.push(plain, isFinal)
     pushed = true

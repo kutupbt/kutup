@@ -14,10 +14,10 @@ export function useCreateCollection() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body: {
-      encryptedName: string
-      nameNonce: string
-      encryptedKey: string
-      encryptedKeyNonce: string
+      id: string
+      nameEnvelope: string
+      ownerKeyEnvelope: string
+      epochStatement: string
       parentCollectionId: string | null
     }) => api.post<{ id: string }>('/collections/', body).then((r) => r.data),
     onSuccess: () => {
@@ -32,7 +32,7 @@ export function useCreateCollection() {
 export function useUpdateCollection() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, body }: { id: string; body: { encryptedName: string; nameNonce: string } }) =>
+    mutationFn: ({ id, body }: { id: string; body: { nameEnvelope: string; nameRevision: number } }) =>
       api.put(`/collections/${id}`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['collections'] })
@@ -83,7 +83,7 @@ export function useShareCollection() {
       id: string
       body: {
         recipientUserId: string
-        encryptedCollectionKey: string
+        namedShareEnvelope: string
         canUpload: boolean
         canDelete: boolean
         uploadQuotaBytes: number | null
@@ -105,14 +105,14 @@ export function useShareFederated() {
       body: {
         recipientUsername: string
         recipientServer: string
-        encryptedCollectionKey: string
+        namedShareEnvelope: string
         canUpload: boolean
         canDelete: boolean
         uploadQuotaBytes: number | null
       }
     }) =>
       api
-        .post<{ inviteUrl: string }>(`/collections/${id}/share-federated`, body)
+        .post<{ inviteUrl: string }>(`/collections/${id}/federated-shares`, body)
         .then((r) => r.data),
     onError: (err: any) => {
       toast.error(err.response?.data?.error ?? 'Federated share failed')

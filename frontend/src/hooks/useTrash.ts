@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import api from '@/api/client'
 import { useAppSelector } from '@/store'
 import { selectMasterKey } from '@/store/authSlice'
-import { decrypt, fromBase64 } from '@/crypto'
+import { openFileRecordV1, openOwnedCollectionKeyV1, openOwnedCollectionV1 } from '@/crypto'
 
 /**
  * Trash data hook — single source of truth for the Trash UI (desktop table +
@@ -51,10 +51,13 @@ export interface UseTrashResult {
 
 interface TrashApiFolder {
   id: string
-  encryptedName: string
-  nameNonce: string
-  encryptedKey: string
-  encryptedKeyNonce: string
+  ownerUserId: string
+  nameEnvelope: string
+  ownerKeyEnvelope: string
+  keyEpoch: number
+  nameRevision: number
+  epochStatement: string
+  epochStatementHash: string
   color: string | null
   items: number
   deletedAt: string
@@ -63,12 +66,15 @@ interface TrashApiFolder {
 interface TrashApiFile {
   id: string
   collectionId: string
-  encryptedMetadata: string
-  metadataNonce: string
-  encryptedFileKey: string
-  fileKeyNonce: string
-  collectionEncryptedKey: string
-  collectionEncryptedKeyNonce: string
+  metadataEnvelope: string
+  fileKeyEnvelope: string
+  keyEpoch: number
+  metadataRevision: number
+  collectionOwnerUserId: string
+  collectionOwnerKeyEnvelope: string
+  collectionKeyEpoch: number
+  collectionEpochStatement: string
+  collectionEpochStatementHash: string
   deletedAt: string
 }
 
@@ -97,17 +103,8 @@ export function useTrash(onChanged?: () => void): UseTrashResult {
         res.data.folders.map(async (f) => {
           let name = '[encrypted]'
           try {
-            const collectionKey = await decrypt(
-              fromBase64(f.encryptedKey),
-              fromBase64(f.encryptedKeyNonce),
-              masterKey!,
-            )
-            const nameBytes = await decrypt(
-              fromBase64(f.encryptedName),
-              fromBase64(f.nameNonce),
-              collectionKey,
-            )
-            name = new TextDecoder().decode(nameBytes)
+            const opened = await openOwnedCollectionV1(f, masterKey!)
+            name = opened.name
           } catch {
             // keep the placeholder
           }
@@ -128,22 +125,15 @@ export function useTrash(onChanged?: () => void): UseTrashResult {
           let size = 0
           let mime = ''
           try {
-            const collectionKey = await decrypt(
-              fromBase64(f.collectionEncryptedKey),
-              fromBase64(f.collectionEncryptedKeyNonce),
-              masterKey!,
-            )
-            const fileKey = await decrypt(
-              fromBase64(f.encryptedFileKey),
-              fromBase64(f.fileKeyNonce),
-              collectionKey,
-            )
-            const metaBytes = await decrypt(
-              fromBase64(f.encryptedMetadata),
-              fromBase64(f.metadataNonce),
-              fileKey,
-            )
-            const meta = JSON.parse(new TextDecoder().decode(metaBytes))
+            const collectionKey = await openOwnedCollectionKeyV1({
+              id: f.collectionId,
+              ownerUserId: f.collectionOwnerUserId,
+              ownerKeyEnvelope: f.collectionOwnerKeyEnvelope,
+              keyEpoch: f.collectionKeyEpoch,
+              epochStatement: f.collectionEpochStatement,
+              epochStatementHash: f.collectionEpochStatementHash,
+            }, masterKey!)
+            const { metadata: meta } = await openFileRecordV1(f, collectionKey)
             name = meta.name
             size = meta.size ?? 0
             mime = meta.mimeType ?? ''

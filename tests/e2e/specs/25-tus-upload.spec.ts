@@ -51,9 +51,9 @@ test.describe('tus.io streaming upload', () => {
     ).toBeVisible({ timeout: 30_000 })
 
     // Track which upload endpoint(s) get hit. We want the new tus path
-    // (/api/uploads) and explicitly *not* the legacy multipart
-    // (/api/files/upload). The federated /fed-proxy/.../upload still
-    // uses multipart, but we don't trigger that here.
+    // (/api/uploads) and explicitly *not* the bounded-memory fallback
+    // multipart route (/api/files/upload). Federated Drive uses signed
+    // multipart with the same V2 envelopes, but we don't trigger that here.
     const tusPostCount: number[] = []
     const tusPatchCount: number[] = []
     const legacyMultipartCount: number[] = []

@@ -112,6 +112,34 @@ pub static ADMIN: LazyLock<RateLimiter> = LazyLock::new(|| {
         Duration::from_secs(60),
     )
 });
+/// Chat prekey-bundle fetch: 30 / minute / authenticated account
+/// (`RATE_LIMIT_CHAT_KEYS_PER_MIN`). Bundle fetches consume one-time prekeys, so
+/// this is the primary anti-drain budget regardless of source IP.
+pub static CHAT_KEYS_ACCOUNT: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_KEYS_PER_MIN", 30) as usize,
+        Duration::from_secs(60),
+    )
+});
+
+/// Coarse 120 / minute / IP outer wall for chat bundle fetches. This is
+/// deliberately looser than the account budget so unrelated mobile users behind
+/// one CGNAT address do not consume each other's primary allowance.
+pub static CHAT_KEYS_IP: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_KEYS_IP_PER_MIN", 120) as usize,
+        Duration::from_secs(60),
+    )
+});
+
+/// Anonymous sealed-delivery outer wall: 60 attempts/minute/IP. Durable
+/// capability, recipient, and origin counters remain the authoritative layer.
+pub static CHAT_ANONYMOUS_IP: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_ANONYMOUS_IP_PER_MIN", 60) as usize,
+        Duration::from_secs(60),
+    )
+});
 
 // --- per-account login lockout ---
 
@@ -288,6 +316,8 @@ pub fn spawn_cleanup() {
             PREFLIGHT.cleanup();
             REGISTER.cleanup();
             ADMIN.cleanup();
+            CHAT_KEYS_ACCOUNT.cleanup();
+            CHAT_KEYS_IP.cleanup();
             LOGIN_LOCKOUT.cleanup();
             cleanup_totp_tracker();
         }

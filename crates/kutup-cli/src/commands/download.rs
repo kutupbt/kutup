@@ -6,12 +6,11 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use kutup_crypto::drive_object::DriveFileBlobContextV1;
 
-use crate::api::FileMetadata;
 use crate::context::require_session;
 use crate::cryptohelpers::{decrypt_collection_key, decrypt_collections};
 use crate::transfer::stream_download;
-use kutup_crypto::secretbox;
 
 pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Result<()> {
     let dest_dir = dest.unwrap_or(".");
@@ -30,11 +29,8 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
             continue;
         };
 
-        let file_key = secretbox::open_b64(&f.encrypted_file_key, &f.file_key_nonce, &col_key)
-            .context("decrypt file key")?;
-        let meta_bytes = secretbox::open_b64(&f.encrypted_metadata, &f.metadata_nonce, &file_key)
-            .context("decrypt metadata")?;
-        let meta: FileMetadata = serde_json::from_slice(&meta_bytes).unwrap_or_default();
+        let (file_key, meta) =
+            crate::file_crypto::open(f, &col_key).context("decrypt file record")?;
 
         let dest_path = resolve_dest(dest_dir, &meta.name);
 
@@ -46,15 +42,17 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
             crate::output::progress_bar(Some(f.encrypted_size_bytes.max(0) as u64), &meta.name);
 
         let mut out = File::create(&dest_path).context("open dest")?;
-        let mut written =
-            match stream_download(stream, &file_key, &mut out, |n| bar.set_position(n as u64)) {
-                Ok(w) => w,
-                Err(e) => {
-                    drop(out);
-                    let _ = std::fs::remove_file(&dest_path);
-                    return Err(e).context("decrypt-write");
-                }
-            };
+        let blob_context = DriveFileBlobContextV1::new(&f.id, &f.collection_id, f.key_epoch)?;
+        let mut written = match stream_download(stream, &file_key, blob_context, &mut out, |n| {
+            bar.set_position(n as u64)
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                drop(out);
+                let _ = std::fs::remove_file(&dest_path);
+                return Err(e).context("decrypt-write");
+            }
+        };
         bar.finish_and_clear();
 
         // Integrity check (only meaningful for the cold-start blob; snapshot
@@ -71,7 +69,14 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
         // Whiteboards may reference images stored as separate asset blobs;
         // re-inline them so the on-disk file is self-contained. Best-effort.
         if crate::whiteboard::is_excalidraw(&meta.name) {
-            match crate::whiteboard::hydrate(&ctx.client, file_id, &col_key, &dest_path) {
+            match crate::whiteboard::hydrate(
+                &ctx.client,
+                file_id,
+                &f.collection_id,
+                f.key_epoch,
+                &col_key,
+                &dest_path,
+            ) {
                 Ok(Some(new_len)) => written = new_len,
                 Ok(None) => {}
                 Err(e) => eprintln!("warning: asset hydration failed: {e:#}"),

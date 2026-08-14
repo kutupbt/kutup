@@ -7,8 +7,8 @@ import { z } from 'zod'
 import { Loader2 } from 'lucide-react'
 import zxcvbn from 'zxcvbn'
 import api from '@/api/client'
-import { toBase64 } from '@/crypto'
 import type { RegistrationKeys } from '@/crypto'
+import { generateRegistrationInWorker } from '@/crypto/accountProtectionWorker'
 import { KutupLogo } from '@/components/KutupLogo'
 import MnemonicDisplay from '@/components/MnemonicDisplay'
 import { Button } from '@/components/ui/button'
@@ -90,15 +90,9 @@ export default function Register() {
     setUsername(data.username)
     setStep('generating')
 
-    await new Promise<void>((resolve, reject) => {
-      const worker = new Worker(new URL('../workers/kdf.worker.ts', import.meta.url), { type: 'module' })
-      worker.onmessage = (e) => {
-        const d = e.data
-        if (d.type === 'error') { worker.terminate(); reject(new Error(d.message)); return }
-        if (d.type === 'register') { setKeys(d.keys); setStep('mnemonic'); worker.terminate(); resolve() }
-      }
-      worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message)) }
-      worker.postMessage({ type: 'register', password: data.password })
+    await generateRegistrationInWorker(data.password, data.email).then((generated) => {
+      setKeys(generated)
+      setStep('mnemonic')
     }).catch((err) => {
       setError(err.message ?? 'Key generation failed')
       setStep('form')
@@ -121,16 +115,20 @@ export default function Register() {
         email,
         username,
         loginKey: keys.loginKey,
-        encryptedMasterKey: keys.encryptedMasterKey,
-        masterKeyNonce: keys.masterKeyNonce,
-        encryptedRecoveryKey: keys.encryptedRecoveryKey,
-        recoveryKeyNonce: keys.recoveryKeyNonce,
-        encryptedPrivateKey: keys.encryptedPrivateKey,
-        privateKeyNonce: keys.privateKeyNonce,
+        masterKeyEnvelope: keys.masterKeyEnvelope,
+        recoveryKeyEnvelope: keys.recoveryKeyEnvelope,
+        drivePrivateKeyEnvelope: keys.drivePrivateKeyEnvelope,
         publicKey: keys.publicKey,
-        kdfSalt: keys.kdfSalt,
-        loginKeySalt: keys.loginKeySalt,
-        recoveryProof: keys.recoveryKey,
+        accountAuthorityPublicKey: keys.accountAuthorityPublicKey,
+        accountAuthorityKeyId: keys.accountAuthorityKeyId,
+        accountIncarnationId: keys.accountIncarnationId,
+        driveSigningPublicKey: keys.driveSigningPublicKey,
+        accountProtectionSuite: keys.accountProtectionSuite,
+        accountProtectionSalt: keys.accountProtectionSalt,
+        argonMemoryKib: keys.argonMemoryKib,
+        argonIterations: keys.argonIterations,
+        argonParallelism: keys.argonParallelism,
+        recoveryProof: keys.recoveryProof,
       })
       setStep('done')
     } catch (err: any) {

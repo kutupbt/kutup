@@ -22,15 +22,35 @@ import {
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 
+interface ParsedInvite {
+  server: string
+  capability: string
+}
+
+function parseInviteLink(value: string): ParsedInvite | null {
+  try {
+    const url = new URL(value.trim())
+    if (url.pathname.replace(/\/+$/, '') !== '/invite') return null
+    const fragment = new URLSearchParams(url.hash.replace(/^#/, ''))
+    const server = fragment.get('server') ?? ''
+    const capability = fragment.get('capability') ?? ''
+    if (!/^(?=.{3,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(server)) return null
+    if (!/^[A-Za-z0-9._~-]{32,256}$/.test(capability)) return null
+    return { server, capability }
+  } catch {
+    return null
+  }
+}
+
 const schema = z.object({
-  inviteUrl: z.string().url('Must be a valid URL'),
+  inviteUrl: z.string().refine((value) => parseInviteLink(value) !== null, 'Invalid Kutup invite link'),
 })
 type FormData = z.infer<typeof schema>
 
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onConfirm: (inviteUrl: string) => Promise<void>
+  onConfirm: (invite: ParsedInvite) => Promise<void>
 }
 
 export default function AddRemoteShareDialog({ open, onOpenChange, onConfirm }: Props) {
@@ -42,7 +62,9 @@ export default function AddRemoteShareDialog({ open, onOpenChange, onConfirm }: 
   }, [open])
 
   async function onSubmit({ inviteUrl }: FormData) {
-    await onConfirm(inviteUrl.trim())
+    const invite = parseInviteLink(inviteUrl)
+    if (!invite) return
+    await onConfirm(invite)
     onOpenChange(false)
   }
 

@@ -12,10 +12,11 @@ import api from '@/api/client'
 import { KutupLogo } from '@/components/KutupLogo'
 import {
   decodeMnemonic, validateMnemonic,
-  decrypt, encrypt,
-  deriveKeyEncryptionKey, deriveLoginKey, generateKDFSalt,
-  toBase64, fromBase64,
+  ACCOUNT_ENVELOPE_PURPOSE, openAccountEnvelope, sealAccountEnvelope,
+  ACCOUNT_PROTECTION_DEFAULTS, deriveRecoveryAuthProof, generateAccountProtectionSalt,
+  toBase64,
 } from '@/crypto'
+import { deriveAccountProtectionInWorker } from '@/crypto/accountProtectionWorker'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { PasswordInput } from '@/components/ui/password-input'
@@ -80,25 +81,43 @@ export default function Recovery() {
     setStep('deriving')
     try {
       const recoveryDataRes = await api.get(`/auth/recover/preflight?email=${encodeURIComponent(data.email)}`)
-      const { encryptedRecoveryKey, recoveryKeyNonce } = recoveryDataRes.data
+      const { recoveryKeyEnvelope } = recoveryDataRes.data
 
       const recoveryKey = decodeMnemonic(data.mnemonic.trim().toLowerCase())
-      const masterKey = await decrypt(fromBase64(encryptedRecoveryKey), fromBase64(recoveryKeyNonce), recoveryKey)
+      const masterKey = await openAccountEnvelope(
+        recoveryKeyEnvelope,
+        recoveryKey,
+        ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey,
+        data.email,
+      )
 
-      const newKdfSalt = await generateKDFSalt()
-      const newLoginKeySalt = await generateKDFSalt()
-      const newKeyEncKey = await deriveKeyEncryptionKey(data.newPassword, newKdfSalt)
-      const newLoginKey = await deriveLoginKey(data.newPassword, newLoginKeySalt)
-      const newEncMK = await encrypt(masterKey, newKeyEncKey)
+      const accountProtectionSalt = generateAccountProtectionSalt()
+      const accountProtection = {
+        ...ACCOUNT_PROTECTION_DEFAULTS,
+        salt: toBase64(accountProtectionSalt),
+      }
+      const { keyEncryptionKey, loginKey } = await deriveAccountProtectionInWorker(
+        data.newPassword,
+        accountProtection,
+      )
+      const newMasterKeyEnvelope = await sealAccountEnvelope(
+        masterKey,
+        keyEncryptionKey,
+        ACCOUNT_ENVELOPE_PURPOSE.passwordMasterKey,
+        data.email,
+      )
+      const recoveryProof = await deriveRecoveryAuthProof(toBase64(recoveryKey), data.email)
 
       await api.post('/auth/recover', {
         email: data.email,
-        newLoginKey: toBase64(newLoginKey),
-        newEncryptedMasterKey: toBase64(newEncMK.ciphertext),
-        newMasterKeyNonce: toBase64(newEncMK.nonce),
-        newKdfSalt: toBase64(newKdfSalt),
-        newLoginKeySalt: toBase64(newLoginKeySalt),
-        recoveryProof: toBase64(recoveryKey),
+        newLoginKey: toBase64(loginKey),
+        newMasterKeyEnvelope,
+        newAccountProtectionSuite: accountProtection.suite,
+        newAccountProtectionSalt: accountProtection.salt,
+        newArgonMemoryKib: accountProtection.memoryKib,
+        newArgonIterations: accountProtection.iterations,
+        newArgonParallelism: accountProtection.parallelism,
+        recoveryProof,
       })
       setStep('done')
     } catch (err: any) {

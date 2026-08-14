@@ -42,10 +42,10 @@ export interface MobileItemSheetProps {
   onChangeColor?: (folder: Collection, color: string | null) => void
 }
 
-/** Discriminate between Collection and DecryptedFile — kutup's Collection
- *  has `encryptedName` (no `encryptedMetadata`) and File has the reverse. */
+/** Discriminate between Collection and DecryptedFile: only collections carry
+ * the collection-name envelope. */
 function isFolder(item: Collection | DecryptedFile): item is Collection {
-  return 'encryptedName' in item
+  return 'nameEnvelope' in item
 }
 
 export function MobileItemSheet({

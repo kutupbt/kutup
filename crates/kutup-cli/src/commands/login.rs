@@ -6,7 +6,10 @@ use base64::Engine;
 use crate::api::{Client, LoginRequest, TotpRequest};
 use crate::commands::prompt_line;
 use crate::session::{Session, Store};
-use kutup_crypto::{kdf, secretbox};
+use kutup_crypto::{
+    account_envelope::{self, AccountEnvelopePurpose},
+    kdf,
+};
 
 pub fn run(
     profile: &str,
@@ -58,19 +61,29 @@ pub(crate) fn login_with_password(
     let b64 = base64::engine::general_purpose::STANDARD;
     let client = Client::new(server, "");
 
-    // Step 1: preflight — fetch the KDF salts.
+    // Step 1: preflight — fetch the complete account-protection revision.
     eprintln!("Deriving keys…");
     let preflight = client.login_preflight(email).context("preflight")?;
 
-    // Step 2: derive the login key (independent Argon2id over loginKeySalt).
-    let login_key = kdf::derive_login_key_b64(password, &preflight.login_key_salt)
-        .context("derive login key")?;
+    // Step 2: run Argon2id once, then expand the KEK and login key.
+    kdf::AccountProtectionSuiteId::try_from(preflight.account_protection_suite)
+        .context("unsupported account-protection suite")?;
+    let account_keys = kdf::derive_account_protection_keys_b64(
+        password,
+        &preflight.account_protection_salt,
+        kdf::AccountProtectionParameters {
+            memory_kib: preflight.argon_memory_kib,
+            iterations: preflight.argon_iterations,
+            parallelism: preflight.argon_parallelism,
+        },
+    )
+    .context("derive account-protection keys")?;
 
     // Step 3: login.
     let mut resp = client
         .login(&LoginRequest {
             email: email.to_string(),
-            login_key: b64.encode(login_key.as_slice()),
+            login_key: b64.encode(account_keys.login_key.as_slice()),
         })
         .context("login")?;
 
@@ -91,17 +104,18 @@ pub(crate) fn login_with_password(
 
     // Step 5: derive the KEK and decrypt the master + private keys.
     eprintln!("Decrypting vault…");
-    let kek = kdf::derive_kek_b64(password, &preflight.kdf_salt).context("derive KEK")?;
-    let master_key = secretbox::open_b64(
-        &resp.encrypted_master_key,
-        &resp.master_key_nonce,
-        kek.as_slice(),
+    let master_key = account_envelope::open_b64(
+        &resp.master_key_envelope,
+        account_keys.key_encryption_key.as_slice(),
+        AccountEnvelopePurpose::PasswordMasterKey,
+        email,
     )
     .context("decrypt master key")?;
-    let private_key = secretbox::open_b64(
-        &resp.encrypted_private_key,
-        &resp.private_key_nonce,
+    let private_key = account_envelope::open_b64(
+        &resp.drive_private_key_envelope,
         &master_key,
+        AccountEnvelopePurpose::DriveHpkePrivateKey,
+        email,
     )
     .context("decrypt private key")?;
 
@@ -117,10 +131,8 @@ pub(crate) fn login_with_password(
         master_key: b64.encode(&master_key),
         private_key: b64.encode(&private_key),
         public_key: resp.public_key,
-        encrypted_master_key: resp.encrypted_master_key,
-        master_key_nonce: resp.master_key_nonce,
-        encrypted_private_key: resp.encrypted_private_key,
-        private_key_nonce: resp.private_key_nonce,
+        master_key_envelope: resp.master_key_envelope,
+        drive_private_key_envelope: resp.drive_private_key_envelope,
         storage_quota_bytes: resp.storage_quota_bytes,
         storage_used_bytes: resp.storage_used_bytes,
     };

@@ -23,20 +23,18 @@ impl Client {
     pub fn tus_create(
         &self,
         total_bytes: i64,
+        file_id: &str,
         collection_id: &str,
-        encrypted_metadata: &str,
-        metadata_nonce: &str,
-        encrypted_file_key: &str,
-        file_key_nonce: &str,
+        metadata_envelope: &str,
+        file_key_envelope: &str,
     ) -> Result<(String, String)> {
         // Upload-Metadata values are base64 per the tus spec (the metadata
         // strings are themselves already base64 — double-encoded, matching Go).
         let upload_meta = [
+            format!("fileId {}", b64(file_id.as_bytes())),
             format!("collectionId {}", b64(collection_id.as_bytes())),
-            format!("encryptedMetadata {}", b64(encrypted_metadata.as_bytes())),
-            format!("metadataNonce {}", b64(metadata_nonce.as_bytes())),
-            format!("encryptedFileKey {}", b64(encrypted_file_key.as_bytes())),
-            format!("fileKeyNonce {}", b64(file_key_nonce.as_bytes())),
+            format!("metadataEnvelope {}", b64(metadata_envelope.as_bytes())),
+            format!("fileKeyEnvelope {}", b64(file_key_envelope.as_bytes())),
         ]
         .join(",");
 

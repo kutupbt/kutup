@@ -99,6 +99,41 @@ cargo test                                      # all crates
 cargo test -p kutup-crypto                      # crypto byte-parity vectors
 cargo clippy --all-targets -- -D warnings       # lints (gate)
 cargo fmt --check                               # formatting (gate)
+./scripts/audit-unified-federation.sh           # no feature-owned federation stack
+./scripts/test-chat-federation.sh               # isolated two-server federation + outage/restart
+./scripts/dev-chat-federation-up.sh              # leave an MLS-enabled two-server stack running
+```
+
+The federation harness uses its own Compose project, two tmpfs Postgres
+databases, and host ports 39081/39082. Despite its historical filename, it is
+the unified Chat + Drive gate: Drive establishes the first peer pin, Chat must
+reuse that same identity and policy, and the suite checks the shared admin
+evidence/retry/audit control plane. It also covers the Drive share lifecycle,
+Chat delivery and durable retry, the global emergency stop, all four admission
+modes and directional domain rules independently for both features, and
+disabled feature capabilities. It tears the topology down on exit and does not
+touch the ordinary development stack. Set `KUTUP_FEDERATION_SKIP_BUILD=1`
+only when reusing an image already built from the current checkout.
+
+For manual browser testing, use `./scripts/dev-chat-federation-up.sh` instead
+of invoking `docker-compose.chat-federation.yml` directly. The helper starts
+the same real two-server topology, completes the authenticated admin bootstrap,
+and changes both Chat federation policies from their fail-closed allowlist
+default to `open`. It is repeatable while its tmpfs databases remain running.
+The script prints both URLs and the development-only admin credentials. Override
+`KUTUP_FEDERATION_PROJECT`, `KUTUP_FED_A_PORT`, and `KUTUP_FED_B_PORT` to run an
+additional isolated topology.
+
+The intentionally breaking Chat and Drive cutovers have separate up/down
+isolation fixtures. Point `KUTUP_TEST_DB` at a disposable PostgreSQL database;
+each test creates and removes its own randomized schema while proving local
+product rows survive:
+
+```sh
+KUTUP_TEST_DB=postgres://... cargo test -p kutup-server \
+  --test federation_phase_c_migration_live -- --nocapture
+KUTUP_TEST_DB=postgres://... cargo test -p kutup-server \
+  --test federation_phase_d_migration_live -- --nocapture
 ```
 
 ---
@@ -152,12 +187,12 @@ kutup/
 │   ├── kutup-cli/           # The `kutup` CLI (clap)
 │   │   └── src/{commands,api,session,syncengine,transfer}/  # commands, HTTP client, session store, sync
 │   └── kutup-crypto/        # Shared E2EE primitives (dryoc + RustCrypto)
-│       ├── src/{kdf,secretbox,sealedbox,stream,asset,envelope,mnemonic}.rs
+│       ├── src/{kdf,account_envelope,drive_envelope,drive_object,named_share,stream,envelope}.rs
 │       └── tests/vectors/   # Checked-in byte-parity vectors
 ├── frontend/
 │   ├── src/
 │   │   ├── api/client.ts    # Axios instance with auth interceptors
-│   │   ├── crypto/          # All libsodium wrappers (symmetric, asymmetric, KDF, mnemonic)
+│   │   ├── crypto/          # Thin Rust/WASM format adapters + primitive-only stream adapter
 │   │   ├── collab/          # Envelope, transport, AEAD frame helpers (collab WS layer)
 │   │   ├── components/editors/
 │   │   │   ├── TextCollabEditor.tsx       # Notes / code (CodeMirror 6 + Yjs)
@@ -165,7 +200,7 @@ kutup/
 │   │   │   └── whiteboard/WhiteboardEditor.tsx  # .excalidraw (Excalidraw + last-write-wins)
 │   │   ├── pages/           # Route-level components (Drive, FileEditorPage, Settings, Admin, …)
 │   │   ├── store/           # Redux slices (auth state)
-│   │   └── workers/         # Web Worker for Argon2id KDF
+│   │   └── workers/         # Web Worker for Rust/WASM Argon2id KDF
 │   ├── public/onlyoffice/   # CryptPad-pinned OnlyOffice bundle (gitignored; install via script)
 │   └── vite.config.ts       # Dev server proxy config
 │   (CLI commands: register, login, ls, upload, download, sync, share, versions, devices, 2fa, pub, mv, color;

@@ -21,7 +21,8 @@ use serde_json::Value;
 
 use crate::api::versions::RecordSnapshotRequest;
 use crate::api::Client;
-use kutup_crypto::{asset, stream};
+use kutup_crypto::asset;
+use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 
 pub fn is_excalidraw(name: &str) -> bool {
     name.to_lowercase().ends_with(".excalidraw")
@@ -33,6 +34,8 @@ pub fn extract_and_upload(
     client: &Client,
     file_id: &str,
     file_key: &[u8],
+    collection_id: &str,
+    key_epoch: u32,
     collection_key: &[u8],
     local_path: &std::path::Path,
 ) -> Result<()> {
@@ -40,9 +43,15 @@ pub fn extract_and_upload(
     let mut doc: Value = serde_json::from_slice(&raw).context("parse excalidraw json")?;
 
     let uploaded = extract_assets(&mut doc, |asset_id, data_url| {
-        let ciphertext =
-            asset::encrypt_asset(data_url.as_bytes(), file_id, asset_id, collection_key)
-                .with_context(|| format!("encrypt asset {asset_id}"))?;
+        let ciphertext = asset::encrypt_asset(
+            data_url.as_bytes(),
+            file_id,
+            collection_id,
+            asset_id,
+            key_epoch,
+            collection_key,
+        )
+        .with_context(|| format!("encrypt asset {asset_id}"))?;
         client
             .upload_asset(file_id, asset_id, ciphertext)
             .with_context(|| format!("upload asset {asset_id}"))
@@ -54,7 +63,9 @@ pub fn extract_and_upload(
     // Commit the status:"saved" flips as a fresh snapshot — the web reads the
     // newest snapshot on open, so it won't re-upload these assets.
     let out = serde_json::to_vec(&doc).context("re-encode excalidraw json")?;
-    let encrypted = stream::encrypt_stream(&out, file_key).context("encrypt snapshot")?;
+    let blob_context = DriveFileBlobContextV1::new(file_id, collection_id, key_epoch)?;
+    let encrypted = drive_object::encrypt_file_blob(&out, file_key, blob_context)
+        .context("encrypt snapshot")?;
     let size = encrypted.len() as i64;
     let blob = client
         .upload_snapshot_blob(file_id, encrypted)
@@ -82,6 +93,8 @@ pub fn extract_and_upload(
 pub fn hydrate(
     client: &Client,
     file_id: &str,
+    collection_id: &str,
+    key_epoch: u32,
     collection_key: &[u8],
     dest_path: &std::path::Path,
 ) -> Result<Option<i64>> {
@@ -102,7 +115,14 @@ pub fn hydrate(
                 continue;
             }
         };
-        let plain = match asset::decrypt_asset(&blob, file_id, asset_id, collection_key) {
+        let plain = match asset::decrypt_asset(
+            &blob,
+            file_id,
+            collection_id,
+            asset_id,
+            key_epoch,
+            collection_key,
+        ) {
             Ok(p) => p,
             Err(e) => {
                 eprintln!("warning: decrypt asset {asset_id}: {e}");

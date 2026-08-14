@@ -16,20 +16,25 @@ pub struct TrashResponse {
     pub files: Vec<TrashFile>,
 }
 
-/// A trashed folder root. The owner unwraps `encrypted_key` with the master
-/// key, then the name with the collection key.
+/// A trashed folder root with its complete authenticated collection record.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrashFolder {
     pub id: String,
     #[serde(default)]
-    pub encrypted_name: String,
+    pub owner_user_id: String,
     #[serde(default)]
-    pub name_nonce: String,
+    pub name_envelope: String,
     #[serde(default)]
-    pub encrypted_key: String,
+    pub owner_key_envelope: String,
     #[serde(default)]
-    pub encrypted_key_nonce: String,
+    pub key_epoch: u32,
+    #[serde(default)]
+    pub name_revision: u64,
+    #[serde(default)]
+    pub epoch_statement: String,
+    #[serde(default)]
+    pub epoch_statement_hash: String,
     #[serde(default)]
     pub color: Option<String>,
     /// Files trashed together with this folder (its whole subtree).
@@ -49,17 +54,23 @@ pub struct TrashFile {
     #[serde(default)]
     pub collection_id: String,
     #[serde(default)]
-    pub encrypted_metadata: String,
+    pub metadata_envelope: String,
     #[serde(default)]
-    pub metadata_nonce: String,
+    pub file_key_envelope: String,
     #[serde(default)]
-    pub encrypted_file_key: String,
+    pub key_epoch: u32,
     #[serde(default)]
-    pub file_key_nonce: String,
+    pub metadata_revision: u64,
     #[serde(default)]
-    pub collection_encrypted_key: String,
+    pub collection_owner_user_id: String,
     #[serde(default)]
-    pub collection_encrypted_key_nonce: String,
+    pub collection_owner_key_envelope: String,
+    #[serde(default)]
+    pub collection_key_epoch: u32,
+    #[serde(default)]
+    pub collection_epoch_statement: String,
+    #[serde(default)]
+    pub collection_epoch_statement_hash: String,
     #[serde(default)]
     pub deleted_at: String,
 }
@@ -104,24 +115,27 @@ mod tests {
     fn deserializes_server_shape() {
         let body = r##"{
             "folders": [{
-                "id": "f0", "encryptedName": "en", "nameNonce": "nn",
-                "encryptedKey": "ek", "encryptedKeyNonce": "ekn",
+                "id": "f0", "ownerUserId": "u1", "nameEnvelope": "ne",
+                "ownerKeyEnvelope": "oke", "keyEpoch": 1, "nameRevision": 1,
+                "epochStatement": "es", "epochStatementHash": "esh",
                 "color": "#ef4444", "items": 3, "deletedAt": "2026-07-01T10:00:00Z"
             }],
             "files": [{
                 "id": "a1", "collectionId": "c1",
-                "encryptedMetadata": "em", "metadataNonce": "mn",
-                "encryptedFileKey": "efk", "fileKeyNonce": "fkn",
-                "collectionEncryptedKey": "cek", "collectionEncryptedKeyNonce": "cekn",
+                "metadataEnvelope": "me", "fileKeyEnvelope": "fke",
+                "keyEpoch": 1, "metadataRevision": 1,
+                "collectionOwnerUserId": "u1", "collectionOwnerKeyEnvelope": "oke",
+                "collectionKeyEpoch": 1, "collectionEpochStatement": "es",
+                "collectionEpochStatementHash": "esh",
                 "deletedAt": "2026-07-02T11:30:00Z"
             }]
         }"##;
         let parsed: TrashResponse = serde_json::from_str(body).unwrap();
         assert_eq!(parsed.folders.len(), 1);
         assert_eq!(parsed.folders[0].items, 3);
-        assert_eq!(parsed.folders[0].encrypted_key, "ek");
+        assert_eq!(parsed.folders[0].owner_key_envelope, "oke");
         assert_eq!(parsed.files.len(), 1);
-        assert_eq!(parsed.files[0].collection_encrypted_key, "cek");
+        assert_eq!(parsed.files[0].collection_owner_key_envelope, "oke");
         assert_eq!(parsed.files[0].deleted_at, "2026-07-02T11:30:00Z");
     }
 }

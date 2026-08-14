@@ -1,0 +1,4 @@
+# getrandom 0.3 requires the backend to be chosen explicitly on wasm32-unknown-unknown
+# (browser/JS environments). wasm32-wasip1 needs nothing — WASI provides random_get.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

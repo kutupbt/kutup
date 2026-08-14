@@ -1,0 +1,44 @@
+# Phase-1 spike for the federated-chat track (docs/research/11-federated-chat.md §5).
+# Go/no-go question: does libsignal-protocol (PQXDH + Triple Ratchet/SPQR) compile and
+# run on wasm32, so the web client can share `kutup-chat-core` with native clients?
+#
+# Intentionally NOT a member of the root Cargo workspace (like src-tauri): it pulls the
+# whole libsignal dependency tree and must not tax `cargo build`/`cargo test` for the app.
+
+[package]
+name = "libsignal-wasm-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[[bin]]
+name = "roundtrip"
+path = "src/main.rs"
+
+[dependencies]
+# Pinned to the tag studied in docs/research/11-federated-chat.md. Cargo resolves the
+# in-repo `spqr` git dependency (SparsePostQuantumRatchet v1.5.1) transitively.
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0.97.2" }
+# Match libsignal's rand major so `impl Rng + CryptoRng` bounds line up.
+rand = "0.9"
+futures-util = { version = "0.3", default-features = false }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# rand 0.9 → getrandom 0.3: the browser backend is opt-in via this feature PLUS
+# `--cfg getrandom_backend="wasm_js"` (see .cargo/config.toml). On wasm32-wasip1 the
+# WASI backend is built in; the cfg only applies to wasm32-unknown-unknown.
+getrandom = { version = "0.3", features = ["wasm_js"] }
+# The RustCrypto layer under libsignal (aes-gcm-siv → aead/cipher → crypto-common →
+# rand_core 0.6) still sits on getrandom 0.2, which wants the older "js" feature for
+# browser targets. Both getrandom majors coexist; feature-unify each one here.
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+
+[profile.release]
+# Spike also measures deliverable size — mirror what a real web build would use.
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
+[workspace]

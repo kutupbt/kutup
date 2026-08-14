@@ -3,13 +3,28 @@
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsResponse {
+    pub chat: ChatSettings,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatSettings {
+    pub server_name: String,
+}
+
 // --- Auth ---
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreflightResponse {
-    pub kdf_salt: String,
-    pub login_key_salt: String,
+    pub account_protection_suite: u16,
+    pub account_protection_salt: String,
+    pub argon_memory_kib: u32,
+    pub argon_iterations: u32,
+    pub argon_parallelism: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -29,15 +44,19 @@ pub struct RegisterRequest {
     pub email: String,
     pub username: String,
     pub login_key: String,
-    pub encrypted_master_key: String,
-    pub master_key_nonce: String,
-    pub encrypted_recovery_key: String,
-    pub recovery_key_nonce: String,
-    pub encrypted_private_key: String,
-    pub private_key_nonce: String,
+    pub master_key_envelope: String,
+    pub recovery_key_envelope: String,
+    pub drive_private_key_envelope: String,
     pub public_key: String,
-    pub kdf_salt: String,
-    pub login_key_salt: String,
+    pub account_authority_public_key: String,
+    pub account_authority_key_id: String,
+    pub account_incarnation_id: String,
+    pub drive_signing_public_key: String,
+    pub account_protection_suite: u16,
+    pub account_protection_salt: String,
+    pub argon_memory_kib: u32,
+    pub argon_iterations: u32,
+    pub argon_parallelism: u32,
     pub recovery_proof: String,
 }
 
@@ -59,13 +78,9 @@ pub struct LoginResponse {
     #[serde(default)]
     pub storage_used_bytes: i64,
     #[serde(default)]
-    pub encrypted_master_key: String,
+    pub master_key_envelope: String,
     #[serde(default)]
-    pub master_key_nonce: String,
-    #[serde(default)]
-    pub encrypted_private_key: String,
-    #[serde(default)]
-    pub private_key_nonce: String,
+    pub drive_private_key_envelope: String,
     #[serde(default)]
     pub public_key: String,
     #[serde(default)]
@@ -90,26 +105,22 @@ pub struct TotpRequest {
 #[serde(rename_all = "camelCase")]
 pub struct RecoverPreflightResponse {
     #[serde(default)]
-    pub encrypted_recovery_key: String,
-    #[serde(default)]
-    pub recovery_key_nonce: String,
-    #[serde(default)]
-    pub encrypted_private_key: String,
-    #[serde(default)]
-    pub private_key_nonce: String,
+    pub recovery_key_envelope: String,
 }
 
-/// `POST /auth/recover` — rotates the login key, KEK wrap, and both salts.
-/// `recovery_proof` is the base64 raw 32-byte mnemonic entropy.
+/// `POST /auth/recover` — rotates the one-root account-protection revision.
+/// `recovery_proof` is HKDF-derived; raw mnemonic entropy never leaves client.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoverRequest {
     pub email: String,
     pub new_login_key: String,
-    pub new_encrypted_master_key: String,
-    pub new_master_key_nonce: String,
-    pub new_kdf_salt: String,
-    pub new_login_key_salt: String,
+    pub new_master_key_envelope: String,
+    pub new_account_protection_suite: u16,
+    pub new_account_protection_salt: String,
+    pub new_argon_memory_kib: u32,
+    pub new_argon_iterations: u32,
+    pub new_argon_parallelism: u32,
     pub recovery_proof: String,
 }
 
@@ -158,13 +169,27 @@ pub struct Collection {
     #[serde(default)]
     pub owner_user_id: String,
     #[serde(default)]
-    pub encrypted_name: String,
+    pub name_envelope: String,
     #[serde(default)]
-    pub name_nonce: String,
+    pub owner_key_envelope: Option<String>,
     #[serde(default)]
-    pub encrypted_key: String,
+    pub named_share_envelope: Option<String>,
     #[serde(default)]
-    pub encrypted_key_nonce: String,
+    pub key_epoch: u32,
+    #[serde(default)]
+    pub name_revision: u64,
+    #[serde(default)]
+    pub epoch_statement: String,
+    #[serde(default)]
+    pub epoch_statement_hash: String,
+    #[serde(default)]
+    pub owner_account: Option<String>,
+    #[serde(default)]
+    pub owner_incarnation_id: Option<String>,
+    #[serde(default)]
+    pub owner_drive_signing_public_key: Option<String>,
+    #[serde(default)]
+    pub owner_authority_public_key: Option<String>,
     #[serde(default)]
     pub parent_collection_id: Option<String>,
     #[serde(default)]
@@ -187,10 +212,10 @@ pub struct Collection {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateCollectionRequest {
-    pub encrypted_name: String,
-    pub name_nonce: String,
-    pub encrypted_key: String,
-    pub encrypted_key_nonce: String,
+    pub id: String,
+    pub name_envelope: String,
+    pub owner_key_envelope: String,
+    pub epoch_statement: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_collection_id: Option<String>,
 }
@@ -204,8 +229,8 @@ pub struct CreateCollectionResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenameCollectionRequest {
-    pub encrypted_name: String,
-    pub name_nonce: String,
+    pub name_envelope: String,
+    pub name_revision: u64,
 }
 
 // --- Files ---
@@ -217,13 +242,13 @@ pub struct File {
     #[serde(default)]
     pub collection_id: String,
     #[serde(default)]
-    pub encrypted_metadata: String,
+    pub metadata_envelope: String,
     #[serde(default)]
-    pub metadata_nonce: String,
+    pub file_key_envelope: String,
     #[serde(default)]
-    pub encrypted_file_key: String,
+    pub key_epoch: u32,
     #[serde(default)]
-    pub file_key_nonce: String,
+    pub metadata_revision: u64,
     #[serde(default)]
     pub encrypted_size_bytes: i64,
     #[serde(default)]
@@ -231,7 +256,7 @@ pub struct File {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FileMetadata {
     pub name: String,
     #[serde(default)]
@@ -243,8 +268,8 @@ pub struct FileMetadata {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateFileMetadataRequest {
-    pub encrypted_metadata: String,
-    pub metadata_nonce: String,
+    pub metadata_envelope: String,
+    pub metadata_revision: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -258,7 +283,7 @@ pub struct UploadResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ShareRequest {
     pub recipient_user_id: String,
-    pub encrypted_collection_key: String,
+    pub named_share_envelope: String,
     pub can_upload: bool,
     pub can_delete: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -270,7 +295,7 @@ pub struct ShareRequest {
 pub struct FederatedShareRequest {
     pub recipient_username: String,
     pub recipient_server: String,
-    pub encrypted_collection_key: String,
+    pub named_share_envelope: String,
     pub can_upload: bool,
     pub can_delete: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -281,8 +306,6 @@ pub struct FederatedShareRequest {
 #[serde(rename_all = "camelCase")]
 pub struct FederatedShareResponse {
     #[serde(default)]
-    pub invite_token: String,
-    #[serde(default)]
     pub invite_url: String,
 }
 
@@ -291,8 +314,7 @@ pub struct FederatedShareResponse {
 pub struct PublicShareRequest {
     pub share_type: String,
     pub target_id: String,
-    pub encrypted_collection_key: String,
-    pub encrypted_collection_key_nonce: String,
+    pub collection_key_envelope: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_in_hours: Option<i64>,
 }
@@ -312,14 +334,28 @@ pub struct UserByEmail {
     #[serde(default)]
     pub user_id: String,
     #[serde(default)]
-    pub public_key: String,
+    pub account: String,
+    #[serde(default)]
+    pub drive_hpke_public_key: String,
+    #[serde(default)]
+    pub account_incarnation_id: String,
+    #[serde(default)]
+    pub drive_signing_public_key: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FedPubKeyResponse {
     #[serde(default)]
-    pub public_key: String,
+    pub account: String,
+    #[serde(default)]
+    pub drive_hpke_public_key: String,
+    #[serde(default)]
+    pub account_incarnation_id: String,
+    #[serde(default)]
+    pub drive_signing_public_key: String,
+    #[serde(default)]
+    pub account_authority_public_key: String,
 }
 
 #[cfg(test)]
@@ -327,26 +363,30 @@ mod tests {
     use super::RecoverRequest;
 
     // Exact wire keys the server's RecoverRequest deserializes — the guard
-    // for the camelCase mapping (incl. the two easy-to-typo salt fields).
+    // for the camelCase mapping of the complete replacement revision.
     #[test]
     fn recover_request_keys() {
         let req = RecoverRequest {
             email: "a@b.c".into(),
             new_login_key: "lk".into(),
-            new_encrypted_master_key: "emk".into(),
-            new_master_key_nonce: "mkn".into(),
-            new_kdf_salt: "ks".into(),
-            new_login_key_salt: "lks".into(),
+            new_master_key_envelope: "envelope".into(),
+            new_account_protection_suite: 1,
+            new_account_protection_salt: "salt".into(),
+            new_argon_memory_kib: 65_536,
+            new_argon_iterations: 3,
+            new_argon_parallelism: 1,
             recovery_proof: "rp".into(),
         };
         let v: serde_json::Value = serde_json::to_value(&req).unwrap();
         for key in [
             "email",
             "newLoginKey",
-            "newEncryptedMasterKey",
-            "newMasterKeyNonce",
-            "newKdfSalt",
-            "newLoginKeySalt",
+            "newMasterKeyEnvelope",
+            "newAccountProtectionSuite",
+            "newAccountProtectionSalt",
+            "newArgonMemoryKib",
+            "newArgonIterations",
+            "newArgonParallelism",
             "recoveryProof",
         ] {
             assert!(v.get(key).is_some(), "missing key {key}");

@@ -1,0 +1,239 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  format-and-fuzz:
+    name: Formatting and fuzz targets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: security-fuzz
+          workspaces: |
+            . -> target
+            fuzz -> fuzz/target
+      - name: Check formatting
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path crates/kutup-chat-core/Cargo.toml -- --check
+          cargo fmt --manifest-path fuzz/Cargo.toml -- --check
+      - name: Compile all parser fuzz targets
+        run: cargo check --locked --manifest-path fuzz/Cargo.toml --bins
+
+  rust-workspace:
+    name: Rust workspace
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-workspace
+      - name: Run workspace tests
+        run: cargo test --locked --workspace --all-targets
+
+  chat-core:
+    name: Chat core
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: chat-core
+          workspaces: crates/kutup-chat-core -> crates/kutup-chat-core/target
+      - name: Run standalone Chat core tests
+        run: cargo test --locked --manifest-path crates/kutup-chat-core/Cargo.toml --all-targets
+
+  web:
+    name: Web, WASM, and frontend tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Set up Rust and WASM target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: chat-wasm
+          workspaces: crates/kutup-chat-core -> crates/kutup-chat-core/target
+      - name: Install wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install frontend dependencies
+        run: pnpm -C frontend install --frozen-lockfile
+      - name: Build WASM modules
+        run: pnpm -C frontend run build:wasm
+      - name: Run frontend tests
+        run: pnpm -C frontend exec vitest run --reporter=dot
+      - name: Verify generated crypto WASM vectors
+        run: pnpm -C frontend run test:crypto-wasm
+      - name: Build production web app
+        run: pnpm -C frontend run build:web
+
+  chat-backup-integration:
+    name: Chat backup lifecycle (Postgres and SeaweedFS)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: chat-backup-integration
+      - name: Run isolated live backup lifecycle
+        run: scripts/test-chat-backup-integration.sh
+
+  chat-backup-browser:
+    name: Clean-browser Chat backup recovery
+    needs:
+      - rust-workspace
+      - web
+      - chat-backup-integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      KUTUP_E2E_SAFE_ARTIFACTS: "1"
+      KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
+      POSTGRES_PASSWORD: chat-backup-ci-postgres
+      JWT_SECRET: chat-backup-ci-jwt-secret-at-least-32-bytes
+      APP_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/e2e/package-lock.json
+      - name: Install browser test dependencies
+        run: npm ci --prefix tests/e2e
+      - name: Install Chromium
+        run: npx --prefix tests/e2e playwright install --with-deps chromium
+      - name: Generate ephemeral browser-test TLS certificate
+        run: |
+          mkdir -p nginx/certs
+          openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
+            -keyout nginx/certs/privkey.pem \
+            -out nginx/certs/fullchain.pem \
+            -subj /CN=localhost \
+            -addext subjectAltName=DNS:localhost,IP:127.0.0.1
+      - name: Start the single-server stack
+        run: docker compose up --detach --build --wait
+      - name: Wait for the browser application route
+        run: |
+          curl --fail --silent --show-error --insecure \
+            --retry 60 --retry-delay 1 --retry-connrefused --retry-all-errors \
+            https://localhost:38443/api/auth/settings >/dev/null
+      - name: Run clean-browser recovery
+        working-directory: tests/e2e
+        run: npm exec -- playwright test specs/33-chat-history-recovery.spec.ts --project=chromium
+      - name: Collect sanitized backup diagnostics
+        if: failure()
+        run: scripts/collect-chat-e2e-diagnostics.sh single
+      - name: Stop the single-server stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+      - name: Upload clean-browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-backup-browser-results
+          if-no-files-found: ignore
+          retention-days: 14
+          path: tests/e2e/sanitized-results/**
+
+  chat-security-e2e:
+    name: Two-server browser security
+    needs:
+      - format-and-fuzz
+      - rust-workspace
+      - chat-core
+      - web
+      - chat-backup-integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      KUTUP_E2E_SAFE_ARTIFACTS: "1"
+      KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: security-e2e-host
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/e2e/package-lock.json
+      - name: Install browser test dependencies
+        run: npm ci --prefix tests/e2e
+      - name: Install Chromium
+        run: npx --prefix tests/e2e playwright install --with-deps chromium
+      - name: Verify Docker Compose
+        run: docker compose version
+      - name: Run two-server federation and browser gate
+        run: scripts/test-chat-federation.sh
+      - name: Upload browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-security-playwright-results
+          if-no-files-found: ignore
+          retention-days: 14
+          path: tests/e2e/sanitized-results/**

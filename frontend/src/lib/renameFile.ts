@@ -4,7 +4,7 @@
 // caller's job (see splitFilename in ./filename.ts).
 
 import api from '@/api/client'
-import { encrypt, toBase64 } from '@/crypto'
+import { renameFileRecordV1 } from '@/crypto'
 import type { DecryptedFile } from '@/types/drive'
 
 export async function renameFile(
@@ -17,10 +17,8 @@ export async function renameFile(
     mimeType: file.decryptedMimeType ?? '',
     size: file.decryptedSize ?? 0,
   }
-  const plain = new TextEncoder().encode(JSON.stringify(meta))
-  const enc = await encrypt(plain, fileKey)
-  await api.put(`/files/${file.id}`, {
-    encryptedMetadata: toBase64(enc.ciphertext),
-    metadataNonce: toBase64(enc.nonce),
-  })
+  const update = await renameFileRecordV1(file, fileKey, meta)
+  await api.put(`/files/${file.id}`, update)
+  file.metadataEnvelope = update.metadataEnvelope
+  file.metadataRevision = update.metadataRevision
 }

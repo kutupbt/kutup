@@ -35,9 +35,24 @@ S3_ACCESS_KEY=kutup
 S3_SECRET_KEY=<strong-random-secret>
 S3_BUCKET=kutup-files
 
-# Public URL — used to build federation invite links
+# Public URL — published as the federation API base
 # Must be the address users (and remote servers) reach this instance at
 SERVER_URL=https://kutup.example.com
+
+# Unified federation v2 identity used by both Chat and Drive:
+#   openssl rand -base64 32
+# FEDERATION_SERVER_NAME=kutup.example.com
+# FEDERATION_SIGNING_KEY=<base64-32-byte-ed25519-seed>
+
+# Active Chat installations per account. V1 permits 1..=10.
+CHAT_MAX_ACTIVE_DEVICES=10
+CHAT_MEDIA_MAX_PLAINTEXT_BYTES=2147483648
+
+# Optional contacts-only sealed sender. The policy contains public offline roots
+# and root-signed online certificates; the normal server receives only the
+# active online private key.
+# CHAT_SEALED_SENDER_POLICY=<canonical one-line JSON>
+# CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY=<base64-32-byte-libsignal-private-key>
 
 # Break-glass admin bootstrap: a single email:username:password triple.
 # Created on first start; the admin completes setup on first login.
@@ -58,7 +73,15 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # empties when users do it themselves). Default: 30.
 # TRASH_RETENTION_DAYS=30
 
-# Rate limits, per client IP (defaults shown). The backend resolves the
+# Chat mailbox, temporary media-delivery, send-id retention, and inactive-device
+# expiry. The hourly maintenance job enforces these; 0 disables an individual policy.
+# CHAT_MAILBOX_RETENTION_DAYS=30
+# CHAT_SEND_RETENTION_DAYS=30
+# CHAT_MEDIA_DELIVERY_RETENTION_DAYS=45
+# CHAT_DEVICE_EXPIRY_DAYS=90
+
+# Rate limits (defaults shown). Most are per client IP; chat key fetches use a
+# primary per-account budget plus a coarse IP outer wall. The backend resolves the
 # client IP from the proxy-set X-Real-IP header, so keep the backend
 # unreachable except through nginx.
 # RATE_LIMIT_LOGIN_PER_MIN=10
@@ -67,6 +90,16 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # RATE_LIMIT_RECOVERY_PER_HOUR=5
 # RATE_LIMIT_FED_USERS_PER_MIN=60
 # RATE_LIMIT_ADMIN_PER_MIN=120
+# RATE_LIMIT_CHAT_KEYS_PER_MIN=30
+# RATE_LIMIT_CHAT_KEYS_IP_PER_MIN=120
+
+# Optional OTLP/gRPC traces and metrics. Leave all endpoints unset for
+# logs-only operation. Configure one shared endpoint, or both signal-specific
+# endpoints; a partial exporter configuration fails startup.
+# OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.com:4317
+# OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://collector.example.com:4317
+# OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://collector.example.com:4317
+# OTEL_SERVICE_NAME=kutup-server
 
 # Per-account login lockout: this many failed password attempts lock the
 # email out for the cooldown. Locked attempts return 429; the lock clears
@@ -74,6 +107,30 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # LOGIN_LOCKOUT_THRESHOLD=5
 # LOGIN_LOCKOUT_MINUTES=15
 ```
+
+`CHAT_MAILBOX_RETENTION_DAYS` and `CHAT_MEDIA_DELIVERY_RETENTION_DAYS` are startup
+fallbacks. An administrator can change both at runtime under **Admin → Settings →
+Chat storage**; persisted values take precedence without a server restart.
+Mailbox retention covers unread Direct and MLS delivery ciphertext. Media retention
+covers only temporary delivery copies and never deletes protected history-media
+copies.
+
+### OpenTelemetry
+
+The backend can export security-path traces and metrics to an OTLP/gRPC
+collector. Set `OTEL_EXPORTER_OTLP_ENDPOINT` for a shared collector endpoint,
+or set both `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`. If no endpoint is set, the server keeps
+normal structured logs without installing an exporter. Once export is
+configured, an incomplete or invalid exporter setup is a startup error rather
+than a silent fallback.
+
+The Chat security instruments cover authenticated policy lifecycle, monitor
+freshness, proof sizes and outcomes, certificate issuance, sealed-send
+outcomes, and limiter rejection. Their
+attributes are bounded outcome or feature classes; usernames, account/device
+identifiers, send IDs, capabilities and hashes, certificates, ciphertext, and
+sender-recipient correlations are never metric labels or trace fields.
 
 ---
 
@@ -192,11 +249,151 @@ cp /etc/letsencrypt/live/kutup.example.com/privkey.pem nginx/certs/
 SERVER_URL=https://kutup.example.com
 ```
 
-This value is embedded in federation invite links. If it is wrong, cross-server sharing will not work. After changing it, rebuild the backend:
+When chat federation is configured, this value is published as the delegated
+`apiBase`. If it is wrong, cross-server sharing and chat routing will not work.
+
+The unified v2 stack uses `FEDERATION_SERVER_NAME` and
+`FEDERATION_SIGNING_KEY`. The name is the stable suffix in
+`username@server`; no alias namespace is created. The stack persists a
+self-signed genesis document and refuses startup if the configured seed is
+silently changed. Account manifests are signed by clients and need no separate
+server transparency seed. Production
+federation requires public HTTPS and rejects loopback, private, link-local, and
+other non-public resolved addresses; redirects are disabled.
+
+To rotate the federation identity, keep the current seed in
+`FEDERATION_SIGNING_KEY`, set a distinct `FEDERATION_NEXT_SIGNING_KEY`, stop
+other replicas, and run:
+
+```sh
+docker compose run --rm backend federation-identity rotate
+```
+
+The command verifies and dual-signs one transition and is safe to retry. Then
+move the new seed into `FEDERATION_SIGNING_KEY`, remove
+`FEDERATION_NEXT_SIGNING_KEY`, and restart every replica. Losing the current
+seed does not authorize replacement; remote peers will quarantine a competing
+history and require an explicitly confirmed break-glass re-pin.
+
+Federation is unavailable until both generic identity variables are set. Back
+up the signing seed: losing it does not authorize silent replacement, and
+remote servers will quarantine a conflicting history.
+
+After configuring the identity, manage the unified control plane in **Admin →
+Settings → Federation**. It has an emergency global stop and a feature-scoped
+mode (`disabled`, `allowlist`, `blocklist`, or `open`), minimum trust
+(`tofu` or `verified`), and per-domain inbound/outbound action (`inherit`,
+`allow`, or `block`) with an optional trust override. Fresh databases start in
+`allowlist`. `disabled` hides discovery/capability advertisement as well as
+denying both directions. Saved rules survive mode changes, and `open`
+intentionally ignores their admission actions; trust requirements still apply.
+
+Admission policy is applied before outbound discovery/queuing and inbound
+origin discovery. Admitted peers must still pass discovery/history signatures,
+pinned-identity trust, SSRF, request/response signatures, replay, body,
+protocol, and rate-limit checks. First contact creates a TOFU pin only after
+cryptographic verification. The admin UI shows full fingerprints for out-of-
+band verification, discovery failures, rotations, and quarantine; break-glass
+re-pin requires the old and new full fingerprints plus the exact domain and is
+audited. A reverse-proxy IP rule is not an equivalent domain-identity policy.
+
+The same responsive panel shows per-peer Chat delivery and Drive share counts,
+quarantined/failed filters, authenticated discovery timestamps, and the exact
+preserved signed identity documents behind a pin or quarantine. “Retry visible”
+re-resolves up to 100 filtered peers without treating one failure as a batch
+failure. The federation-only audit feed can be filtered to one domain and
+exported as spreadsheet-safe CSV; exported evidence contains public identity
+material and operational errors, never the server signing seed or plaintext
+Drive share capabilities.
+
+After changing these values, rebuild the backend:
 
 ```sh
 docker compose up -d --build backend
 ```
+
+---
+
+## Chat account manifests and device limit
+
+V1 needs no transparency signing key, witness process, auditor service or
+checkpoint monitor. Remove `CHAT_TRANSPARENCY_SIGNING_KEY` from deployment
+configuration. Every account signs its own complete manifest locally; the
+server verifies and distributes the current head and append-only history but
+cannot mark a peer verified.
+
+`CHAT_MAX_ACTIVE_DEVICES` defaults to 10 and accepts values from 1 through 10.
+A lower value is a local resource/product policy. Ten is the V1 protocol hard
+cap and cannot be raised by configuration:
+
+```sh
+CHAT_MAX_ACTIVE_DEVICES=10
+CHAT_MEDIA_MAX_PLAINTEXT_BYTES=2147483648
+```
+
+`CHAT_MEDIA_MAX_PLAINTEXT_BYTES` is the per-attachment plaintext-class ceiling.
+It defaults to the V1 hard cap of 2 GiB; an operator may lower it, but cannot
+raise it without a future typed media-suite/protocol revision. Drive and Chat
+media still share the account's one total quota—this is an individual-object
+admission limit, not a reserved Chat storage budget.
+
+First contact shows a gray shield. Users who require independent identity
+authentication meet face to face and scan the conversation safety QR; an exact
+match produces a green shield on that installation. A rollback, equivocation
+or signed account-incarnation replacement produces a red quarantine and blocks
+new sends. A healthy server response cannot clear it. For a legitimate
+destructive account reset, the user scans the replacement QR; the client keeps
+the old signed incarnation history and atomically promotes the new one.
+
+Back up account recovery material. Recovery with the original phrase restores
+the same master key and account authority. Administrative wipe is termination,
+not recovery: it creates a new authority and requires contacts to re-verify.
+
+## Contacts-only sealed sender
+
+Provision the trust root on a machine that is not the Kutup application server.
+The image contains an offline helper; copying that binary to the offline system
+does not require copying the server configuration or database:
+
+```sh
+kutup-sealed-sender-provision root-generate /secure/kutup-sealed-root.key
+
+kutup-sealed-sender-provision server-issue \
+  --domain kutup.example.com \
+  --root-key /secure/kutup-sealed-root.key \
+  --online-key /secure/kutup-sealed-online.key \
+  --certificate-id 1001 \
+  --activates-at <unix-seconds> \
+  --expires-at <unix-seconds> > sealed-policy.json
+```
+
+Both secret files are created once with mode `0600`; the helper refuses to
+overwrite them or read an overly permissive root file. Keep the root offline.
+Install the canonical policy JSON as `CHAT_SEALED_SENDER_POLICY` and the exact
+contents of `kutup-sealed-online.key` as
+`CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY`. The server validates the root chain,
+certificate window, online public/private match, suite, and domain at startup.
+It advertises sealed sender only after the signed service policy is durable:
+
+```sh
+docker compose run --rm backend feature-policy rotate sealed-sender
+```
+
+The first deployment bootstraps sequence 1 automatically; the explicit command
+is required whenever persisted policy and configured policy differ. For root
+rotation, first publish both roots, activate a new root-signed online
+certificate, wait at least 24 hours plus the configured clock skew, then remove
+the old root in another policy sequence. Never delete an active old root in the
+same policy that introduces its replacement.
+
+Sealed delivery is contacts-only. The 16-byte delivery capability is derived
+from the recipient profile key and only its SHA-256 verifier is stored. Blocking
+publishes a new profile key/verifier before redistributing that key to remaining
+contacts. Anonymous prekey and send routes accept neither cookies nor bearer
+tokens; destination mailboxes and federation transactions contain no sender
+account/device. First-contact requests, Note to Self, and linked-device sync
+remain identified, and an established sealed conversation never silently falls
+back to identified delivery.
 
 ---
 
@@ -273,6 +470,21 @@ kutup.example.com {
     reverse_proxy localhost:8080
 }
 ```
+
+### Browser WASM cache policy
+
+Kutup's generated `/chat-wasm/` and `/crypto-wasm/` JavaScript glue and WASM
+binaries use stable filenames and form one deployment unit with the web bundle
+and API server. They must be revalidated and must never receive an immutable
+cache policy from an outer reverse proxy or CDN. The bundled frontend sends
+`Cache-Control: no-cache, must-revalidate` for both paths. Preserve that header
+when adding a cache layer. Normal Vite `/assets/` filenames are content-hashed
+and may remain immutable.
+
+Serving stale generated WASM with a newer JavaScript bundle can produce a
+fail-closed Chat or Drive initialization error because the Rust and HTTP DTOs
+no longer agree. Deploy the frontend, its generated WASM directories, and the
+backend from the same release.
 
 ---
 

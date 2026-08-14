@@ -3,7 +3,9 @@
 Base URL: `http://localhost` (nginx proxy)
 
 > Note: file content and metadata are E2E-encrypted by the browser client.
-> These curl commands test the API transport layer with dummy base64 payloads.
+> These curl commands test the API transport layer. Account envelopes below
+> are structurally valid V1 values bound to `test@example.com`; their plaintext
+> and keys are deliberately zero test material.
 
 ---
 
@@ -15,17 +17,17 @@ curl -s -X POST http://localhost/api/auth/register \
   -d '{
     "email": "test@example.com",
     "username": "testuser",
-    "loginKey": "dGVzdGhhc2g=",
-    "encryptedMasterKey": "ZW5jbWFzdGVya2V5",
-    "masterKeyNonce": "bm9uY2U=",
-    "encryptedRecoveryKey": "ZW5jcmVj",
-    "recoveryKeyNonce": "cmVjbm9uY2U=",
-    "encryptedPrivateKey": "ZW5jcHJpdg==",
-    "privateKeyNonce": "cHJpdm5vbmNl",
+    "loginKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "masterKeyEnvelope": "S1VUUEFFMQAAAQEAABB0ZXN0QGV4YW1wbGUuY29tJHfwtPzRJ9xNvol1mHoKXyjNjJ25+8qlAAAAMJFcjAe0u9Km+mtjVuVv+zV6d28wIw5oexWbRggZMjQ4Wz0fgvwwBLT1s4ZmSeAtYg==",
+    "recoveryKeyEnvelope": "S1VUUEFFMQAAAQIAABB0ZXN0QGV4YW1wbGUuY29tUF4VvGfWEX+5PwSlg+YDzPwKYZYe+MVpAAAAMH0nCNyq3eXxgQsONFv2wH8ja/djLUC0hOq7uqkUv48u4wXY9WacGyftLHZcQgiOjA==",
+    "drivePrivateKeyEnvelope": "S1VUUEFFMQAAAQMAABB0ZXN0QGV4YW1wbGUuY29tNwFHm9kxpJtOcycqYIydmU7+QorcrCLdAAAAMG6oIs6rNKAk6wV2lPOKuxDnQOE7yiMjj4moaEjMpR5kNUykANhaVK0MRG08hMUE2w==",
     "publicKey": "cHVia2V5",
-    "kdfSalt": "a2Rmc2FsdA==",
-    "loginKeySalt": "bG9naW5zYWx0",
-    "recoveryProof": "cmVjb3Zlcnlwcm9vZg=="
+    "accountProtectionSuite": 1,
+    "accountProtectionSalt": "AAAAAAAAAAAAAAAAAAAAAA==",
+    "argonMemoryKib": 65536,
+    "argonIterations": 3,
+    "argonParallelism": 1,
+    "recoveryProof": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
   }' | jq
 ```
 
@@ -34,7 +36,7 @@ curl -s -X POST http://localhost/api/auth/register \
 ```sh
 TOKEN=$(curl -s -X POST http://localhost/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"test@example.com","loginKey":"dGVzdGhhc2g="}' \
+  -d '{"email":"test@example.com","loginKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}' \
   | jq -r '.accessToken')
 echo "TOKEN=$TOKEN"
 ```
@@ -71,31 +73,35 @@ curl -s -X PATCH http://localhost/api/collections/$COLL_ID/color \
   -d '{"color": "blue"}' -w "\nHTTP %{http_code}\n"
 ```
 
-## 6. Rename folder (re-encrypt name client-side; here dummy values)
+## 6. Rename folder (client-generated authenticated envelope)
+
+Set `NAME_ENVELOPE` to a valid next-revision `DriveEnvelopeV1` produced by a
+Kutup client. Arbitrary base64 is intentionally rejected.
 
 ```sh
 curl -s -X PUT http://localhost/api/collections/$COLL_ID \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{
-    "encryptedName": "bmV3bmFtZQ==",
-    "nameNonce": "bmV3bm9uY2U="
-  }' | jq
+  -d "{\"nameEnvelope\":\"$NAME_ENVELOPE\",\"nameRevision\":2}" | jq
 ```
 
-## 7. Upload file (dummy encrypted blob)
+## 7. Upload file
+
+The file UUID and envelopes must be created together by the Rust/WASM or CLI
+crypto implementation. Set `FILE_ID`, `METADATA_ENVELOPE`, and
+`FILE_KEY_ENVELOPE` from that client output; dummy values cannot pass the
+server's purpose/object/collection/epoch checks.
 
 ```sh
-FILE_ID=$(curl -s -X POST http://localhost/api/files/upload \
+STORED_FILE_ID=$(curl -s -X POST http://localhost/api/files/upload \
   -H "Authorization: Bearer $TOKEN" \
+  -F "fileId=$FILE_ID" \
   -F "collectionId=$COLL_ID" \
-  -F "encryptedMetadata=ZW5jbWV0YQ==" \
-  -F "metadataNonce=bWV0YW5vbmNl" \
-  -F "encryptedFileKey=ZW5jZmlsZWtleQ==" \
-  -F "fileKeyNonce=ZmlsZWtleW5vbmNl" \
+  -F "metadataEnvelope=$METADATA_ENVELOPE" \
+  -F "fileKeyEnvelope=$FILE_KEY_ENVELOPE" \
   -F "file=@/dev/urandom;filename=encrypted;type=application/octet-stream" \
   | jq -r '.id')
-echo "FILE_ID=$FILE_ID"
+test "$STORED_FILE_ID" = "$FILE_ID"
 ```
 
 > For a real test file use a small file: replace `/dev/urandom` with a local path.
@@ -128,4 +134,38 @@ curl -s -X DELETE http://localhost/api/files/$FILE_ID \
 ```sh
 curl -s -X DELETE http://localhost/api/collections/$COLL_ID \
   -H "Authorization: Bearer $TOKEN" -w "\nHTTP %{http_code}\n"
+```
+
+## 12. Inspect the federation control plane (admin)
+
+Set `ADMIN_TOKEN` to an administrator access token. The projection should show
+one shared identity plus Chat/Drive operational counts; it must not contain a
+signing seed or plaintext Drive capability.
+
+```sh
+curl -s http://localhost/api/admin/federation \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  | jq '{serverName, features, operational, peers}'
+```
+
+For a pinned domain, inspect immutable public identity history and retry that
+peer through the common resolver:
+
+```sh
+PEER=friend.example
+curl -s "http://localhost/api/admin/federation/peers/$PEER/evidence" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" | jq
+
+curl -s -X POST http://localhost/api/admin/federation/peers/retry \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{\"domains\":[\"$PEER\"]}" | jq
+```
+
+Export only federation audit events:
+
+```sh
+curl -s 'http://localhost/api/admin/activity/export?actionPrefix=federation.&limit=5000' \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -o /tmp/kutup-federation-audit.csv
 ```

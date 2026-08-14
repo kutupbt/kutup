@@ -1,6 +1,8 @@
 data/
 .env
 frontend/dist/
+frontend/public/chat-wasm/
+frontend/public/crypto-wasm/
 frontend/node_modules/
 frontend/package-lock.json
 nginx/certs/
@@ -12,6 +14,7 @@ docker-compose.override.yml
 frontend/public/onlyoffice/dist/
 frontend/public/onlyoffice/templates/
 test-results/
+tests/e2e/sanitized-results/
 
 # Root package.json (Tauri orchestrator). Rust artifacts live under
 # src-tauri/.gitignore.

@@ -6,7 +6,7 @@ and the reasoning so the constraint doesn't get re-litigated per support ticket.
 ## The constraint
 
 kutup is end-to-end encrypted. A user's password feeds Argon2id (over `kdf_salt`) to
-derive the key-encryption-key that unwraps `encrypted_master_key`; the master key in
+derive the key-encryption-key that opens `master_key_envelope`; the master key in
 turn unwraps every collection/file key. **The server only ever stores ciphertext and a
 bcrypt hash of the *login key*** — it can verify a login, but it cannot decrypt or
 re-encrypt the master key. Therefore an admin can never "reset a password" in the
@@ -42,8 +42,8 @@ For the unrecoverable case. The admin supplies a new temp password; the server:
 1. Purges every collection the user owns (files, versions, assets, S3 blobs, shares —
    the same machinery as a permanent trash purge), including anything they had in the
    trash.
-2. Erases the key bundle (`encrypted_master_key`, `encrypted_recovery_key`,
-   `encrypted_private_key`, `public_key`, `kdf_salt`, `login_key_salt`, nonces) and
+2. Erases the key bundle (`master_key_envelope`, `recovery_key_envelope`,
+   `drive_private_key_envelope`, `public_key`, account-protection salt and parameters) and
    disables TOTP.
 3. Revokes refresh tokens / devices, recomputes `storage_used_bytes` (files the user
    uploaded into *other people's* folders are the folder-owner's data and survive).

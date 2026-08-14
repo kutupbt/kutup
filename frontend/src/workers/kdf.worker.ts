@@ -1,11 +1,11 @@
-// KDF Web Worker — runs Argon2id off the main thread.
-// libsodium-sumo must be initialized separately inside the worker.
+// KDF Web Worker — runs canonical Rust/WASM Argon2id off the main thread.
 import '../polyfills'
-import { generateRegistrationKeys, deriveKeyEncryptionKey, deriveLoginKey, fromBase64 } from '../crypto/index'
+import { generateRegistrationKeys, deriveAccountProtectionKeys } from '../crypto/index'
+import type { AccountProtectionConfig } from '../crypto/kdf'
 
 export type KDFWorkerRequest =
-  | { type: 'register'; password: string }
-  | { type: 'deriveKeys'; password: string; kdfSalt: string; loginKeySalt: string }
+  | { type: 'register'; password: string; loginEmail: string }
+  | { type: 'deriveKeys'; password: string; accountProtection: AccountProtectionConfig }
 
 export type KDFWorkerResponse =
   | { type: 'register'; keys: Awaited<ReturnType<typeof generateRegistrationKeys>> }
@@ -25,15 +25,13 @@ self.onmessage = async (e: MessageEvent<KDFWorkerRequest>) => {
   try {
     const req = e.data
     if (req.type === 'register') {
-      const keys = await generateRegistrationKeys(req.password)
+      const keys = await generateRegistrationKeys(req.password, req.loginEmail)
       self.postMessage({ type: 'register', keys } satisfies KDFWorkerResponse)
     } else if (req.type === 'deriveKeys') {
-      const kdfSaltBytes = fromBase64(req.kdfSalt)
-      const loginKeySaltBytes = fromBase64(req.loginKeySalt)
-      const [keyEncryptionKey, loginKey] = await Promise.all([
-        deriveKeyEncryptionKey(req.password, kdfSaltBytes),
-        deriveLoginKey(req.password, loginKeySaltBytes),
-      ])
+      const { keyEncryptionKey, loginKey } = await deriveAccountProtectionKeys(
+        req.password,
+        req.accountProtection,
+      )
       self.postMessage({ type: 'deriveKeys', keyEncryptionKey, loginKey } satisfies KDFWorkerResponse)
     }
   } catch (err) {

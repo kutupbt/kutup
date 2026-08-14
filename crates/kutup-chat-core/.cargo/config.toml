@@ -1,0 +1,4 @@
+# getrandom 0.3 deliberately requires the browser backend to be selected.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+runner = "wasm-bindgen-test-runner"

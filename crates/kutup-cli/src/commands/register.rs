@@ -12,7 +12,11 @@ use rand::RngCore;
 
 use crate::api::{Client, RegisterRequest};
 use crate::commands::prompt_line;
-use kutup_crypto::{kdf, mnemonic, sealedbox, secretbox};
+use kutup_crypto::{
+    account_envelope::{self, AccountEnvelopePurpose},
+    identity::AccountIdentityKeysV1,
+    kdf, mnemonic,
+};
 
 pub fn run(
     json: bool,
@@ -52,45 +56,69 @@ pub fn run(
     };
 
     eprintln!("Generating keys…");
-    // Mirror generateRegistrationKeys: random master key + recovery entropy, two independent
-    // 16-byte KDF salts, Argon2id KEK + login key, an X25519 keypair, and the three seals.
+    // Mirror generateRegistrationKeys: random master/recovery keys, one
+    // Argon2id root with HKDF-separated KEK/login keys, purpose-separated
+    // account identity keys and three encrypted key envelopes.
     let mut rng = rand::thread_rng();
     let mut master_key = [0u8; 32];
     let mut recovery_entropy = [0u8; 32];
-    let mut kdf_salt = [0u8; 16];
-    let mut login_key_salt = [0u8; 16];
+    let mut account_protection_salt = [0u8; 16];
     rng.fill_bytes(&mut master_key);
     rng.fill_bytes(&mut recovery_entropy);
-    rng.fill_bytes(&mut kdf_salt);
-    rng.fill_bytes(&mut login_key_salt);
+    rng.fill_bytes(&mut account_protection_salt);
 
-    let kek = kdf::derive_kek(&password, &kdf_salt).context("derive KEK")?;
-    let login_key =
-        kdf::derive_login_key(&password, &login_key_salt).context("derive login key")?;
-    let (public_key, secret_key) = sealedbox::generate_keypair();
+    let account_keys = kdf::derive_account_protection_keys(
+        &password,
+        &account_protection_salt,
+        kdf::AccountProtectionParameters::V1,
+    )
+    .context("derive account-protection keys")?;
+    let recovery_proof = kdf::derive_recovery_auth_proof(&recovery_entropy, &email)
+        .context("derive recovery authorization proof")?;
+    let account_identity =
+        AccountIdentityKeysV1::derive(&master_key).context("derive account identity")?;
 
-    let (enc_mk, mk_nonce) =
-        secretbox::seal(&master_key, kek.as_slice()).context("seal master key")?;
-    let (enc_rk, rk_nonce) =
-        secretbox::seal(&master_key, &recovery_entropy).context("seal recovery key")?;
-    let (enc_pk, pk_nonce) =
-        secretbox::seal(&secret_key, &master_key).context("seal private key")?;
+    let master_key_envelope = account_envelope::seal_b64(
+        &master_key,
+        account_keys.key_encryption_key.as_slice(),
+        AccountEnvelopePurpose::PasswordMasterKey,
+        &email,
+    )
+    .context("seal master-key envelope")?;
+    let recovery_key_envelope = account_envelope::seal_b64(
+        &master_key,
+        &recovery_entropy,
+        AccountEnvelopePurpose::RecoveryMasterKey,
+        &email,
+    )
+    .context("seal recovery envelope")?;
+    let drive_private_key_envelope = account_envelope::seal_b64(
+        account_identity.drive_hpke_private_key(),
+        &master_key,
+        AccountEnvelopePurpose::DriveHpkePrivateKey,
+        &email,
+    )
+    .context("seal Drive private-key envelope")?;
     let phrase = mnemonic::encode(&recovery_entropy).context("encode mnemonic")?;
 
     let req = RegisterRequest {
         email: email.clone(),
         username: username.clone(),
-        login_key: b64.encode(login_key.as_slice()),
-        encrypted_master_key: b64.encode(&enc_mk),
-        master_key_nonce: b64.encode(mk_nonce),
-        encrypted_recovery_key: b64.encode(&enc_rk),
-        recovery_key_nonce: b64.encode(rk_nonce),
-        encrypted_private_key: b64.encode(&enc_pk),
-        private_key_nonce: b64.encode(pk_nonce),
-        public_key: b64.encode(public_key),
-        kdf_salt: b64.encode(kdf_salt),
-        login_key_salt: b64.encode(login_key_salt),
-        recovery_proof: b64.encode(recovery_entropy),
+        login_key: b64.encode(account_keys.login_key.as_slice()),
+        master_key_envelope,
+        recovery_key_envelope,
+        drive_private_key_envelope,
+        public_key: b64.encode(account_identity.drive_hpke_public_key()),
+        account_authority_public_key: b64.encode(account_identity.authority_public_key()),
+        account_authority_key_id: account_identity.authority_key_id(),
+        account_incarnation_id: account_identity.incarnation_id(),
+        drive_signing_public_key: b64.encode(account_identity.drive_signing_public_key()),
+        account_protection_suite: kdf::AccountProtectionSuiteId::Argon2idHkdfSha256V1.as_u16(),
+        account_protection_salt: b64.encode(account_protection_salt),
+        argon_memory_kib: kdf::AccountProtectionParameters::V1.memory_kib,
+        argon_iterations: kdf::AccountProtectionParameters::V1.iterations,
+        argon_parallelism: kdf::AccountProtectionParameters::V1.parallelism,
+        recovery_proof: b64.encode(recovery_proof.as_slice()),
     };
 
     let client = Client::new(&server, "");

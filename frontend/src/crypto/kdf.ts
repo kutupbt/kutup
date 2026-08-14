@@ -1,42 +1,53 @@
-// Argon2id KDF — run in Web Worker to avoid blocking the main thread.
-// Parameters match Ente's audited configuration: 64MB memory, 3 iterations, 4 threads.
-import { getSodium } from './sodium'
+// Account-protection KDF bindings. All construction, labels, validation and
+// policy live in the canonical Rust kutup-crypto crate; this module is only a
+// browser transport adapter.
 
-const OPSLIMIT = 3
-const MEMLIMIT = 64 * 1024 * 1024 // 64 MB
-const KEYLEN = 32 // 256-bit
+import { fromBase64 } from './base64'
+import { getCryptoWasm } from './rustWasm'
 
-export async function deriveKeyEncryptionKey(
-  password: string,
-  kdfSalt: Uint8Array,
-): Promise<Uint8Array> {
-  const sodium = await getSodium()
-  return sodium.crypto_pwhash(
-    KEYLEN,
-    password,
-    kdfSalt,
-    OPSLIMIT,
-    MEMLIMIT,
-    sodium.crypto_pwhash_ALG_ARGON2ID13,
-  )
+export const ACCOUNT_PROTECTION_SUITE_V1 = 1
+export const ACCOUNT_PROTECTION_DEFAULTS = Object.freeze({
+  suite: ACCOUNT_PROTECTION_SUITE_V1,
+  memoryKib: 64 * 1024,
+  iterations: 3,
+  parallelism: 1,
+})
+
+export interface AccountProtectionConfig {
+  suite: number
+  salt: string
+  memoryKib: number
+  iterations: number
+  parallelism: number
 }
 
-export async function deriveLoginKey(
+export async function deriveAccountProtectionKeys(
   password: string,
-  loginKeySalt: Uint8Array,
-): Promise<Uint8Array> {
-  const sodium = await getSodium()
-  return sodium.crypto_pwhash(
-    KEYLEN,
+  config: AccountProtectionConfig,
+): Promise<{ keyEncryptionKey: Uint8Array; loginKey: Uint8Array }> {
+  const module = await getCryptoWasm()
+  const keys = module.deriveAccountProtectionKeys(
     password,
-    loginKeySalt,
-    OPSLIMIT,
-    MEMLIMIT,
-    sodium.crypto_pwhash_ALG_ARGON2ID13,
+    config.salt,
+    config.suite,
+    config.memoryKib,
+    config.iterations,
+    config.parallelism,
   )
+  return {
+    keyEncryptionKey: fromBase64(keys.keyEncryptionKey),
+    loginKey: fromBase64(keys.loginKey),
+  }
 }
 
-export async function generateKDFSalt(): Promise<Uint8Array> {
-  const sodium = await getSodium()
-  return sodium.randombytes_buf(sodium.crypto_pwhash_SALTBYTES)
+export async function deriveRecoveryAuthProof(
+  recoveryEntropyBase64: string,
+  loginEmail: string,
+): Promise<string> {
+  const module = await getCryptoWasm()
+  return module.deriveRecoveryAuthProof(recoveryEntropyBase64, loginEmail)
+}
+
+export function generateAccountProtectionSalt(): Uint8Array {
+  return crypto.getRandomValues(new Uint8Array(16))
 }

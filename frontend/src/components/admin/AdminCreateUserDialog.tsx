@@ -103,7 +103,7 @@ export function AdminCreateUserDialog({ open, onOpenChange }: AdminCreateUserDia
                 <FormItem>
                   <FormLabel>{t('admin.createDialog.email', 'Email')}</FormLabel>
                   <FormControl>
-                    <Input type="email" autoComplete="email" placeholder="name@kutup.cloud" {...field} />
+                    <Input type="email" autoComplete="email" placeholder="user@kutup.dev" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

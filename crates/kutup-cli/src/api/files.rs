@@ -13,22 +13,20 @@ impl Client {
     /// Mirrors `UploadFile`.
     pub fn upload_file(
         &self,
+        file_id: &str,
         collection_id: &str,
-        encrypted_metadata: &str,
-        metadata_nonce: &str,
-        encrypted_file_key: &str,
-        file_key_nonce: &str,
+        metadata_envelope: &str,
+        file_key_envelope: &str,
         encrypted_content: Vec<u8>,
     ) -> Result<UploadResponse> {
         let part = Part::bytes(encrypted_content)
             .file_name("blob")
             .mime_str("application/octet-stream")?;
         let form = Form::new()
+            .text("fileId", file_id.to_string())
             .text("collectionId", collection_id.to_string())
-            .text("encryptedMetadata", encrypted_metadata.to_string())
-            .text("metadataNonce", metadata_nonce.to_string())
-            .text("encryptedFileKey", encrypted_file_key.to_string())
-            .text("fileKeyNonce", file_key_nonce.to_string())
+            .text("metadataEnvelope", metadata_envelope.to_string())
+            .text("fileKeyEnvelope", file_key_envelope.to_string())
             .part("file", part);
         let resp = self
             .request(Method::POST, "/files/upload")

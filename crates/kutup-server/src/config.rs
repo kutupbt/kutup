@@ -17,7 +17,7 @@ pub struct Config {
     /// Email of the break-glass admin, derived from `admin_account`. Never demotable/
     /// disableable/deletable via the API/UI. Empty when `ADMIN_ACCOUNT` is unset.
     pub break_glass_admin_email: String,
-    /// e.g. `https://kutup.example.com` — used for federation invite links.
+    /// e.g. `https://kutup.example.com` — published as the federation API base.
     pub server_url: String,
     /// Comma-separated CORS allowlist (`*` allowed in dev only).
     pub allowed_origins: String,
@@ -30,12 +30,100 @@ pub struct Config {
     /// Days a trashed file/folder is kept before the sweeper purges it permanently.
     /// From `TRASH_RETENTION_DAYS`; 0 disables the automatic purge.
     pub trash_retention_days: i64,
+    /// Unacked chat ciphertext retention. `0` disables expiry.
+    pub chat_mailbox_retention_days: i64,
+    /// Send-id idempotency-record retention. `0` disables expiry.
+    pub chat_send_retention_days: i64,
+    /// Chat devices with no authenticated activity for this many days are
+    /// expired with their prekeys/mailbox. `0` disables expiry.
+    pub chat_device_expiry_days: i64,
+    /// Maximum simultaneously active chat devices per account. V1 permits
+    /// 1..=10; device ids retain their independent libsignal wire range.
+    pub chat_max_active_devices: u32,
+    /// Maximum Chat-media plaintext-class bytes accepted per immutable object.
+    /// Administrators may lower, but never raise, the V1 2 GiB protocol cap.
+    pub chat_media_max_plaintext_bytes: u64,
+    /// Days an ordinary Chat-media delivery copy remains available. `0`
+    /// disables expiry. Protected history-media copies are independent.
+    pub chat_media_delivery_retention_days: i64,
+    /// Default per-account quota for all durable Chat history and media.
+    /// The authenticated admin setting may replace this runtime fallback.
+    pub chat_storage_default_quota_bytes: u64,
+    /// Stable canonical DNS suffix used by every local Chat account. This is
+    /// required even when inter-server federation is disabled.
+    pub chat_server_name: String,
+    /// Canonical DNS identity for the unified federation v2 stack.
+    pub federation_server_name: String,
+    /// Base64 raw 32-byte Ed25519 seed for unified federation v2.
+    pub federation_signing_key: String,
+    /// Rotation candidate consumed only by the explicit maintenance command.
+    pub federation_next_signing_key: String,
+    /// Test-only HTTP/private-network escape hatch for the v2 stack.
+    pub federation_test_allow_private: bool,
+    /// Complete authenticated sealed-sender service policy JSON. It contains
+    /// public roots and root-signed online certificates, never an offline root.
+    pub chat_sealed_sender_policy: String,
+    /// Canonical base64 raw libsignal private key for the active online server
+    /// certificate. This purpose-specific key issues only sender certificates.
+    pub chat_sealed_sender_online_private_key: String,
+    /// Complete canonical MLS ordering-service policy JSON. It is authenticated
+    /// through the common federation policy chain before any MLS route opens.
+    pub chat_mls_ordering_policy: String,
+    /// Base64 raw 32-byte Ed25519 seed used only for MLS control-log votes.
+    pub chat_mls_control_signing_key: String,
 }
 
 impl Config {
     /// Loads config from the environment, panicking on missing required vars or
     /// a too-short JWT secret (mirrors the Go `Load`).
     pub fn load() -> Config {
+        let app_env = get_env("APP_ENV", "development");
+        let chat_max_active_devices = get_env_i64("CHAT_MAX_ACTIVE_DEVICES", 10);
+        if !(1..=10).contains(&chat_max_active_devices) {
+            panic!("CHAT_MAX_ACTIVE_DEVICES must be between 1 and 10");
+        }
+        let chat_media_max_plaintext_bytes = get_env_i64(
+            "CHAT_MEDIA_MAX_PLAINTEXT_BYTES",
+            kutup_crypto::chat_media::MAX_CHAT_MEDIA_PLAINTEXT_BYTES as i64,
+        );
+        if !(1..=kutup_crypto::chat_media::MAX_CHAT_MEDIA_PLAINTEXT_BYTES as i64)
+            .contains(&chat_media_max_plaintext_bytes)
+        {
+            panic!("CHAT_MEDIA_MAX_PLAINTEXT_BYTES must be between 1 and 2147483648");
+        }
+        let chat_storage_default_quota_bytes = get_env_i64(
+            "CHAT_STORAGE_DEFAULT_QUOTA_BYTES",
+            kutup_chat_proto::DEFAULT_CHAT_STORAGE_QUOTA_BYTES as i64,
+        );
+        if chat_storage_default_quota_bytes <= 0 {
+            panic!("CHAT_STORAGE_DEFAULT_QUOTA_BYTES must be positive");
+        }
+        let chat_mailbox_retention_days = get_env_i64("CHAT_MAILBOX_RETENTION_DAYS", 30);
+        crate::site_settings::validate_chat_delivery_retention_days(chat_mailbox_retention_days)
+            .unwrap_or_else(|error| panic!("CHAT_MAILBOX_RETENTION_DAYS: {error}"));
+        let chat_media_delivery_retention_days =
+            get_env_i64("CHAT_MEDIA_DELIVERY_RETENTION_DAYS", 45);
+        crate::site_settings::validate_chat_delivery_retention_days(
+            chat_media_delivery_retention_days,
+        )
+        .unwrap_or_else(|error| panic!("CHAT_MEDIA_DELIVERY_RETENTION_DAYS: {error}"));
+        let federation_server_name = get_env("FEDERATION_SERVER_NAME", "");
+        let chat_server_name = get_env(
+            "CHAT_SERVER_NAME",
+            if federation_server_name.is_empty() {
+                "kutup.local"
+            } else {
+                &federation_server_name
+            },
+        );
+        kutup_federation_proto::validate_server_name(&chat_server_name).unwrap_or_else(|error| {
+            panic!("CHAT_SERVER_NAME must be a canonical DNS name: {error}")
+        });
+        if !federation_server_name.is_empty() && chat_server_name != federation_server_name {
+            panic!(
+                "CHAT_SERVER_NAME must match FEDERATION_SERVER_NAME when federation is configured"
+            );
+        }
         let cfg = Config {
             database_url: must_env("DATABASE_URL"),
             jwt_secret: must_env("JWT_SECRET"),
@@ -44,7 +132,7 @@ impl Config {
             s3_secret_key: must_env("S3_SECRET_KEY"),
             s3_bucket: get_env("S3_BUCKET", "kutup-files"),
             s3_region: get_env("S3_REGION", "us-east-1"),
-            app_env: get_env("APP_ENV", "development"),
+            app_env,
             admin_account: get_env("ADMIN_ACCOUNT", ""),
             break_glass_admin_email: break_glass_email(&get_env("ADMIN_ACCOUNT", "")),
             server_url: get_env("SERVER_URL", "http://kutup.local"),
@@ -55,6 +143,25 @@ impl Config {
             storage_total_bytes: get_env_i64("STORAGE_TOTAL_BYTES", 0),
             seaweedfs_master_url: get_env("SEAWEEDFS_MASTER_URL", "http://seaweedfs-master:9333"),
             trash_retention_days: get_env_i64("TRASH_RETENTION_DAYS", 30),
+            chat_mailbox_retention_days,
+            chat_send_retention_days: get_env_i64("CHAT_SEND_RETENTION_DAYS", 30),
+            chat_device_expiry_days: get_env_i64("CHAT_DEVICE_EXPIRY_DAYS", 90),
+            chat_max_active_devices: chat_max_active_devices as u32,
+            chat_media_max_plaintext_bytes: chat_media_max_plaintext_bytes as u64,
+            chat_media_delivery_retention_days,
+            chat_storage_default_quota_bytes: chat_storage_default_quota_bytes as u64,
+            chat_server_name,
+            federation_server_name,
+            federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
+            federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
+            federation_test_allow_private: get_env_bool("FEDERATION_TEST_ALLOW_PRIVATE", false),
+            chat_sealed_sender_policy: get_env("CHAT_SEALED_SENDER_POLICY", ""),
+            chat_sealed_sender_online_private_key: get_env(
+                "CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY",
+                "",
+            ),
+            chat_mls_ordering_policy: get_env("CHAT_MLS_ORDERING_POLICY", ""),
+            chat_mls_control_signing_key: get_env("CHAT_MLS_CONTROL_SIGNING_KEY", ""),
         };
         if cfg.jwt_secret.len() < 32 {
             panic!("JWT_SECRET must be at least 32 characters long");
@@ -91,6 +198,17 @@ fn get_env(key: &str, fallback: &str) -> String {
 fn get_env_i64(key: &str, fallback: i64) -> i64 {
     match std::env::var(key) {
         Ok(v) if !v.is_empty() => v.parse().ok().filter(|&n| n >= 0).unwrap_or(fallback),
+        _ => fallback,
+    }
+}
+
+fn get_env_bool(key: &str, fallback: bool) -> bool {
+    match std::env::var(key) {
+        Ok(value) if !value.is_empty() => match value.to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" => true,
+            "0" | "false" | "no" => false,
+            _ => fallback,
+        },
         _ => fallback,
     }
 }

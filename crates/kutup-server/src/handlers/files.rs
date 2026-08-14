@@ -6,13 +6,17 @@
 //! children atomically, then wipe the S3 prefix.
 
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{Read, Write};
 
 use aws_sdk_s3::primitives::ByteStream;
 use axum::extract::{Multipart, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
+use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
+use kutup_crypto::drive_object::{self, DriveFileBlobContextV1, FILE_BLOB_HEADER_BYTES};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 use utoipa::ToSchema;
@@ -27,8 +31,50 @@ use crate::AppState;
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateFileMetadataRequest {
-    encrypted_metadata: String,
-    metadata_nonce: String,
+    metadata_envelope: String,
+    metadata_revision: i64,
+}
+
+pub(crate) fn canonical_uuid(value: &str) -> AppResult<Uuid> {
+    let parsed = Uuid::parse_str(value).map_err(|_| AppError::bad_request("invalid file id"))?;
+    if parsed.to_string() != value {
+        return Err(AppError::bad_request("invalid file id"));
+    }
+    Ok(parsed)
+}
+
+pub(crate) fn validate_envelope(value: &str, expected: DriveEnvelopeContextV1) -> AppResult<()> {
+    let bytes = STANDARD
+        .decode(value)
+        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?;
+    if STANDARD.encode(&bytes) != value || drive_envelope::validate(&bytes, expected).is_err() {
+        return Err(AppError::bad_request("invalid Drive envelope"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_file_blob_prefix(
+    bytes: &[u8],
+    expected: DriveFileBlobContextV1,
+) -> AppResult<()> {
+    if bytes.len() < FILE_BLOB_HEADER_BYTES
+        || drive_object::validate_file_blob_header(&bytes[..FILE_BLOB_HEADER_BYTES], expected)
+            .is_err()
+    {
+        return Err(AppError::bad_request("invalid Drive file blob"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_file_blob_file(
+    file: &NamedTempFile,
+    expected: DriveFileBlobContextV1,
+) -> AppResult<()> {
+    let mut prefix = [0u8; FILE_BLOB_HEADER_BYTES];
+    std::fs::File::open(file.path())
+        .and_then(|mut source| source.read_exact(&mut prefix))
+        .map_err(|_| AppError::bad_request("invalid Drive file blob"))?;
+    validate_file_blob_prefix(&prefix, expected)
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -63,16 +109,15 @@ pub async fn list_files(
         Uuid,
         String,
         String,
-        String,
-        String,
+        i32,
+        i64,
         i64,
         time::OffsetDateTime,
         time::OffsetDateTime,
     );
     let rows: Vec<Row> = sqlx::query_as(
         r#"SELECT id, collection_id, uploader_user_id,
-                  encrypted_metadata, metadata_nonce,
-                  encrypted_file_key, file_key_nonce,
+                  metadata_envelope, file_key_envelope, key_epoch, metadata_revision,
                   encrypted_size_bytes, created_at, updated_at
            FROM files WHERE collection_id = $1 AND deleted_at IS NULL
            ORDER BY created_at DESC"#,
@@ -84,14 +129,14 @@ pub async fn list_files(
     let out: Vec<FileRow> = rows
         .into_iter()
         .map(
-            |(id, cid, uid, em, mn, efk, fkn, size, created, updated)| FileRow {
+            |(id, cid, uid, metadata, file_key, epoch, revision, size, created, updated)| FileRow {
                 id: id.to_string(),
                 collection_id: cid.to_string(),
                 uploader_user_id: uid.to_string(),
-                encrypted_metadata: em,
-                metadata_nonce: mn,
-                encrypted_file_key: efk,
-                file_key_nonce: fkn,
+                metadata_envelope: metadata,
+                file_key_envelope: file_key,
+                key_epoch: epoch,
+                metadata_revision: revision,
                 encrypted_size_bytes: size,
                 created_at: created,
                 updated_at: updated,
@@ -111,7 +156,7 @@ pub async fn list_files(
     request_body(
         content = Vec<u8>,
         content_type = "multipart/form-data",
-        description = "Fields: collectionId, encryptedMetadata, metadataNonce, encryptedFileKey, fileKeyNonce + the encrypted `file` part"
+        description = "Fields: fileId, collectionId, metadataEnvelope, fileKeyEnvelope + the encrypted `file` part"
     ),
     responses((status = 201, description = "File stored", body = UploadResult))
 )]
@@ -153,27 +198,34 @@ pub async fn upload(
     }
 
     let coll_id_str = fields.get("collectionId").cloned().unwrap_or_default();
-    let enc_metadata = fields.get("encryptedMetadata").cloned().unwrap_or_default();
-    let metadata_nonce = fields.get("metadataNonce").cloned().unwrap_or_default();
-    let enc_file_key = fields.get("encryptedFileKey").cloned().unwrap_or_default();
-    let file_key_nonce = fields.get("fileKeyNonce").cloned().unwrap_or_default();
+    let file_id_str = fields.get("fileId").cloned().unwrap_or_default();
+    let metadata_envelope = fields.get("metadataEnvelope").cloned().unwrap_or_default();
+    let file_key_envelope = fields.get("fileKeyEnvelope").cloned().unwrap_or_default();
 
-    if coll_id_str.is_empty() || enc_metadata.is_empty() || enc_file_key.is_empty() {
+    if coll_id_str.is_empty()
+        || file_id_str.is_empty()
+        || metadata_envelope.is_empty()
+        || file_key_envelope.is_empty()
+    {
         return Err(AppError::bad_request("missing required fields"));
     }
     let Some((tmp_file, file_size)) = tmp else {
         return Err(AppError::bad_request("no file provided"));
     };
     let coll_id = Uuid::parse_str(&coll_id_str).map_err(|_| AppError::forbidden("forbidden"))?;
+    let file_id = canonical_uuid(&file_id_str)?;
 
     // Write access: owner, or share recipient with can_upload.
-    let owner_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM collections WHERE id = $1 AND owner_user_id = $2")
-            .bind(coll_id)
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
-    let is_owner = owner_count > 0;
+    let collection: Option<(Uuid, i32)> = sqlx::query_as(
+        "SELECT owner_user_id, key_epoch FROM collections WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(coll_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((owner_user_id, key_epoch)) = collection else {
+        return Err(AppError::forbidden("forbidden"));
+    };
+    let is_owner = owner_user_id == user_id;
     let mut share_quota: Option<i64> = None;
     if !is_owner {
         let row: Option<(bool, Option<i64>)> = sqlx::query_as(
@@ -189,7 +241,32 @@ pub async fn upload(
         }
     }
 
-    let file_id = Uuid::new_v4();
+    let epoch = u32::try_from(key_epoch).map_err(|_| AppError::conflict("invalid epoch"))?;
+    validate_envelope(
+        &file_key_envelope,
+        DriveEnvelopeContextV1::new(
+            DriveEnvelopePurpose::FileKey,
+            epoch,
+            1,
+            &file_id_str,
+            &coll_id_str,
+        )
+        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+    )?;
+    validate_envelope(
+        &metadata_envelope,
+        DriveEnvelopeContextV1::new(
+            DriveEnvelopePurpose::FileMetadata,
+            epoch,
+            1,
+            &file_id_str,
+            &coll_id_str,
+        )
+        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+    )?;
+    let blob_context = DriveFileBlobContextV1::new(&file_id_str, &coll_id_str, epoch)
+        .map_err(|_| AppError::bad_request("invalid Drive file blob"))?;
+    validate_file_blob_file(&tmp_file, blob_context)?;
     let storage_path = format!("{}/{}/{}", user_id, coll_id, file_id);
 
     // Atomic quota check + reserve under FOR UPDATE.
@@ -239,18 +316,17 @@ pub async fn upload(
 
     let insert = sqlx::query(
         r#"INSERT INTO files (id, collection_id, uploader_user_id,
-                              encrypted_metadata, metadata_nonce,
-                              encrypted_file_key, file_key_nonce,
+                              metadata_envelope, file_key_envelope,
+                              key_epoch, metadata_revision,
                               storage_path, encrypted_size_bytes)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"#,
+           VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8)"#,
     )
     .bind(file_id)
     .bind(coll_id)
     .bind(user_id)
-    .bind(&enc_metadata)
-    .bind(&metadata_nonce)
-    .bind(&enc_file_key)
-    .bind(&file_key_nonce)
+    .bind(&metadata_envelope)
+    .bind(&file_key_envelope)
+    .bind(key_epoch)
     .bind(&storage_path)
     .bind(file_size)
     .execute(&mut *tx)
@@ -343,29 +419,57 @@ pub async fn update_metadata(
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
-    if req.encrypted_metadata.is_empty() || req.metadata_nonce.is_empty() {
+    if req.metadata_envelope.is_empty() || req.metadata_revision <= 1 {
         return Err(AppError::bad_request(
-            "encryptedMetadata and metadataNonce required",
+            "metadataEnvelope and a revision greater than 1 are required",
         ));
     }
 
-    let row: Option<(Uuid, Uuid)> = sqlx::query_as(
-        "SELECT collection_id, uploader_user_id FROM files WHERE id = $1 AND deleted_at IS NULL",
+    let mut tx = state.pool.begin().await?;
+    let row: Option<(Uuid, Uuid, i32, i64)> = sqlx::query_as(
+        r#"SELECT collection_id, uploader_user_id, key_epoch, metadata_revision
+           FROM files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE"#,
     )
     .bind(file_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?;
-    let Some((coll_id, uploader_id)) = row else {
+    let Some((coll_id, uploader_id, key_epoch, current_revision)) = row else {
         return Err(AppError::not_found("not found"));
     };
     require_owner_or_uploader_with_delete(&state, user_id, coll_id, uploader_id).await?;
 
-    sqlx::query("UPDATE files SET encrypted_metadata = $1, metadata_nonce = $2 WHERE id = $3")
-        .bind(&req.encrypted_metadata)
-        .bind(&req.metadata_nonce)
+    let expected_revision = current_revision
+        .checked_add(1)
+        .ok_or_else(|| AppError::conflict("metadata revision exhausted"))?;
+    if req.metadata_revision != expected_revision {
+        return Err(AppError::conflict(
+            "metadata revision must advance exactly once",
+        ));
+    }
+    let epoch = u32::try_from(key_epoch).map_err(|_| AppError::conflict("invalid epoch"))?;
+    let revision = u64::try_from(req.metadata_revision)
+        .map_err(|_| AppError::bad_request("invalid metadata revision"))?;
+    validate_envelope(
+        &req.metadata_envelope,
+        DriveEnvelopeContextV1::new(
+            DriveEnvelopePurpose::FileMetadata,
+            epoch,
+            revision,
+            &file_id.to_string(),
+            &coll_id.to_string(),
+        )
+        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+    )?;
+
+    sqlx::query(
+        "UPDATE files SET metadata_envelope = $1, metadata_revision = $2, updated_at = NOW() WHERE id = $3",
+    )
+        .bind(&req.metadata_envelope)
+        .bind(req.metadata_revision)
         .bind(file_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(Json(MessageResponse {
         message: "updated".to_string(),
     })

@@ -1,9 +1,9 @@
 import type { BrowserContext, Page } from '@playwright/test'
 
-export const ADMIN_EMAIL = 'admin@kutup.local'
-export const BOOTSTRAP_PW = 'adminpass'
+export const ADMIN_EMAIL = process.env.E2E_ADMIN_EMAIL ?? 'admin@kutup.local'
+export const BOOTSTRAP_PW = process.env.E2E_BOOTSTRAP_PASSWORD ?? 'adminpass'
 // Long enough to pass zxcvbn score >= 2 in first-login (the form rejects weak pws).
-export const NEW_PW = 'Deneme123*MyTestPasswordIsLong'
+export const NEW_PW = process.env.E2E_ADMIN_PASSWORD ?? 'Deneme123*MyTestPasswordIsLong'
 
 /**
  * Sign in to a freshly-wiped stack. Drives the full bootstrap → first-login →

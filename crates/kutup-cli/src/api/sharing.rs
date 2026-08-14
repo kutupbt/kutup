@@ -28,7 +28,7 @@ impl Client {
         let resp = self
             .request(
                 Method::POST,
-                &format!("/collections/{collection_id}/share-federated"),
+                &format!("/collections/{collection_id}/federated-shares"),
             )
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .json(req)
@@ -59,10 +59,12 @@ impl Client {
 
     /// Fetches a remote user's federation public key. Mirrors `GetFedPubKey`.
     pub fn get_fed_pubkey(&self, username: &str, server: &str) -> Result<FedPubKeyResponse> {
-        // .query() encodes both values — the server arg is a full URL.
         let resp = self
-            .request(Method::GET, "/collections/fed-pubkey")
-            .query(&[("username", username), ("server", server)])
+            .request(
+                Method::GET,
+                &format!("/drive/federation/users/{}", super::path_segment(username)),
+            )
+            .query(&[("server", server)])
             .send()?;
         super::decode_json(resp)
     }

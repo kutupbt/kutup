@@ -2,20 +2,18 @@
 
 pub mod admin;
 pub mod auth;
+pub mod chat;
+pub mod chat_backup;
+pub mod chat_media;
 pub mod collab;
 pub mod collections;
 pub mod devices;
-pub mod federation;
-pub mod fedproxy;
 pub mod file_assets;
 pub mod file_versions;
 pub mod files;
 pub mod shares;
 pub mod trash;
 pub mod tus;
-
-use std::sync::LazyLock;
-use std::time::Duration;
 
 use aws_sdk_s3::primitives::ByteStream;
 use axum::body::Body;
@@ -26,17 +24,6 @@ use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-
-/// Shared outbound HTTP client for federation calls — mirrors `fedHTTPClient`. Never follows
-/// redirects (so a malicious federation server can't 30x to an internal address and bypass
-/// the SSRF check applied to the original host) and times out at 30 s.
-pub(crate) static FED_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("build federation http client")
-});
 
 /// A random URL-safe token (base64, no padding) — mirrors `utils.RandomToken`.
 pub(crate) fn random_token(byte_len: usize) -> String {
@@ -105,7 +92,11 @@ pub(crate) async fn can_access_file(pool: &PgPool, user_id: Uuid, file_id: Uuid)
 /// Streams an S3 object body to the client as `application/octet-stream`, mirroring the
 /// Go handlers' `c.SendStream(body, size)` (lazy, no full-buffering). `extra` carries the
 /// version-download headers (`X-Kutup-*`). `Content-Length` is set when `size > 0`.
-fn octet_stream_response(body: ByteStream, size: i64, extra: &[(HeaderName, String)]) -> Response {
+pub(crate) fn octet_stream_response(
+    body: ByteStream,
+    size: i64,
+    extra: &[(HeaderName, String)],
+) -> Response {
     let stream = ReaderStream::new(body.into_async_read());
     let mut builder = Response::builder().header(header::CONTENT_TYPE, "application/octet-stream");
     if size > 0 {

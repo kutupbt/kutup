@@ -90,9 +90,26 @@ services:
       STORAGE_TOTAL_BYTES: ${STORAGE_TOTAL_BYTES:-0}
       # Days a trashed item stays restorable before the sweeper purges it. 0 disables the sweep.
       TRASH_RETENTION_DAYS: ${TRASH_RETENTION_DAYS:-30}
-      # Per-IP rate limits + per-account login lockout (blank → server defaults).
+      CHAT_MAILBOX_RETENTION_DAYS: ${CHAT_MAILBOX_RETENTION_DAYS:-30}
+      CHAT_SEND_RETENTION_DAYS: ${CHAT_SEND_RETENTION_DAYS:-30}
+      CHAT_MEDIA_DELIVERY_RETENTION_DAYS: ${CHAT_MEDIA_DELIVERY_RETENTION_DAYS:-45}
+      CHAT_DEVICE_EXPIRY_DAYS: ${CHAT_DEVICE_EXPIRY_DAYS:-90}
+      CHAT_MAX_ACTIVE_DEVICES: ${CHAT_MAX_ACTIVE_DEVICES:-10}
+      CHAT_MEDIA_MAX_PLAINTEXT_BYTES: ${CHAT_MEDIA_MAX_PLAINTEXT_BYTES:-2147483648}
+      CHAT_SERVER_NAME: ${CHAT_SERVER_NAME:-kutup.local}
+      FEDERATION_SERVER_NAME: ${FEDERATION_SERVER_NAME:-}
+      FEDERATION_SIGNING_KEY: ${FEDERATION_SIGNING_KEY:-}
+      FEDERATION_NEXT_SIGNING_KEY: ${FEDERATION_NEXT_SIGNING_KEY:-}
+      FEDERATION_TEST_ALLOW_PRIVATE: ${FEDERATION_TEST_ALLOW_PRIVATE:-false}
+      CHAT_SEALED_SENDER_POLICY: ${CHAT_SEALED_SENDER_POLICY:-}
+      CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY: ${CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY:-}
+      CHAT_MLS_ORDERING_POLICY: ${CHAT_MLS_ORDERING_POLICY:-}
+      CHAT_MLS_CONTROL_SIGNING_KEY: ${CHAT_MLS_CONTROL_SIGNING_KEY:-}
+      # Per-IP/account rate limits + per-account login lockout (blank → server defaults).
       RATE_LIMIT_LOGIN_PER_MIN: ${RATE_LIMIT_LOGIN_PER_MIN:-}
       RATE_LIMIT_PREFLIGHT_PER_MIN: ${RATE_LIMIT_PREFLIGHT_PER_MIN:-}
+      RATE_LIMIT_CHAT_KEYS_PER_MIN: ${RATE_LIMIT_CHAT_KEYS_PER_MIN:-}
+      RATE_LIMIT_CHAT_KEYS_IP_PER_MIN: ${RATE_LIMIT_CHAT_KEYS_IP_PER_MIN:-}
       RATE_LIMIT_REGISTER_PER_HOUR: ${RATE_LIMIT_REGISTER_PER_HOUR:-}
       RATE_LIMIT_RECOVERY_PER_HOUR: ${RATE_LIMIT_RECOVERY_PER_HOUR:-}
       RATE_LIMIT_FED_USERS_PER_MIN: ${RATE_LIMIT_FED_USERS_PER_MIN:-}
@@ -107,8 +124,8 @@ services:
 
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
     restart: unless-stopped
 
   nginx:
@@ -123,6 +140,11 @@ services:
     depends_on:
       - backend
       - frontend
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-check-certificate --quiet --output-document=/dev/null https://127.0.0.1/api/auth/settings"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
 
 volumes:
   postgres_data:

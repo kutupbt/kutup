@@ -1,0 +1,10 @@
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${KUTUP_BACKUP_DB_PORT:-39084}:5432"
+  seaweedfs-s3:
+    ports:
+      - "127.0.0.1:${KUTUP_BACKUP_S3_PORT:-39085}:8333"
+  backend:
+    ports:
+      - "127.0.0.1:${KUTUP_BACKUP_TEST_PORT:-39083}:3000"

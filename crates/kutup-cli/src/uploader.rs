@@ -16,13 +16,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use indicatif::ProgressBar;
-use rand::RngCore;
 
-use crate::api::{ApiError, Client, CreateCollectionRequest, FileMetadata};
+use crate::api::{ApiError, Client, FileMetadata};
+use crate::file_crypto;
 use crate::mimetype::guess_mime;
 use crate::session::{ResumeState, Store};
 use crate::transfer::{chunk_boundary, cipher_size, StreamUploader};
-use kutup_crypto::secretbox;
+use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
+use kutup_crypto::drive_object::DriveFileBlobContextV1;
 use kutup_crypto::stream::HEADER_BYTES;
 
 /// Local resume records older than this are swept (the server reaps its
@@ -35,11 +36,22 @@ pub enum Progress {
     Quiet,
 }
 
+/// Exact collection context and execution policy for one upload.
+pub struct UploadRequest<'a> {
+    pub collection_id: &'a str,
+    pub key_epoch: u32,
+    pub collection_key: &'a [u8],
+    pub resume: bool,
+    pub progress: Progress,
+}
+
 /// A finished upload: the server file id + the file key (the whiteboard
 /// asset step re-uses the key after upload).
 pub struct Uploaded {
     pub file_id: String,
     pub file_key: [u8; 32],
+    pub collection_id: String,
+    pub key_epoch: u32,
 }
 
 pub(crate) fn now_unix() -> i64 {
@@ -66,11 +78,15 @@ pub fn upload_streaming(
     client: &Client,
     store: &Store,
     local_path: &Path,
-    collection_id: &str,
-    collection_key: &[u8],
-    resume: bool,
-    progress: Progress,
+    request: UploadRequest<'_>,
 ) -> Result<Uploaded> {
+    let UploadRequest {
+        collection_id,
+        key_epoch,
+        collection_key,
+        resume,
+        progress,
+    } = request;
     let canonical = std::fs::canonicalize(local_path).unwrap_or_else(|_| local_path.to_path_buf());
     let resume_key = format!("{collection_id}\n{}", canonical.display());
 
@@ -81,7 +97,8 @@ pub fn upload_streaming(
     if let Some(rec) = store.get_resume(&resume_key)? {
         let unchanged = rec.plain_size == plain_size
             && rec.mtime_secs == mtime_secs
-            && rec.mtime_nanos == mtime_nanos;
+            && rec.mtime_nanos == mtime_nanos
+            && rec.key_epoch == key_epoch;
         if resume && unchanged {
             if let Some(done) = try_resume(
                 client,
@@ -104,42 +121,39 @@ pub fn upload_streaming(
     }
 
     // Fresh upload.
-    let mut file_key = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut file_key);
-
     let name = file_name(&local_path.to_string_lossy());
     let meta = FileMetadata {
         name: name.clone(),
         mime_type: guess_mime(local_path),
         size: plain_size,
     };
-    let meta_bytes = serde_json::to_vec(&meta)?;
-    let (enc_meta, meta_nonce) =
-        secretbox::seal(&meta_bytes, &file_key).context("encrypt metadata")?;
-    let (enc_file_key, file_key_nonce) =
-        secretbox::seal(&file_key, collection_key).context("wrap file key")?;
+    let record = file_crypto::create(collection_id, key_epoch, collection_key, &meta)?;
+    debug_assert_eq!(record.metadata_revision, 1);
 
     let cipher_total = cipher_size(plain_size);
     let (upload_id, file_id_hint) = client
         .tus_create(
             cipher_total,
+            &record.id,
             collection_id,
-            &b64().encode(&enc_meta),
-            &b64().encode(meta_nonce),
-            &b64().encode(&enc_file_key),
-            &b64().encode(file_key_nonce),
+            &record.metadata_envelope,
+            &record.file_key_envelope,
         )
         .context("tus create")?;
+    if file_id_hint != record.id {
+        bail!("tus create returned a different file id");
+    }
 
     let file = File::open(local_path)?;
-    let up = StreamUploader::new(file, &file_key, plain_size)?;
+    let blob_context = DriveFileBlobContextV1::new(&record.id, collection_id, record.key_epoch)?;
+    let up = StreamUploader::new(file, &record.file_key, plain_size, blob_context)?;
 
     let now = now_unix();
     let mut rec = ResumeState {
         upload_id,
         file_id: file_id_hint,
-        enc_file_key: b64().encode(&enc_file_key),
-        file_key_nonce: b64().encode(file_key_nonce),
+        file_key_envelope: record.file_key_envelope,
+        key_epoch: record.key_epoch,
         header: b64().encode(up.header_bytes()),
         plain_size,
         cipher_total,
@@ -157,7 +171,12 @@ pub fn upload_streaming(
     let _ = store.delete_resume(&resume_key);
 
     let file_id = pick_file_id(patched_id, &rec)?;
-    Ok(Uploaded { file_id, file_key })
+    Ok(Uploaded {
+        file_id,
+        file_key: record.file_key,
+        collection_id: collection_id.to_string(),
+        key_epoch: record.key_epoch,
+    })
 }
 
 /// Attempts to continue `rec`. `Ok(Some)` = finished (either resumed to the
@@ -182,12 +201,14 @@ fn try_resume(
             if !rec.file_id.is_empty() {
                 if let Ok(files) = client.list_files(collection_id) {
                     if files.iter().any(|f| f.id == rec.file_id) {
-                        let file_key = unwrap_file_key(rec, collection_key)?;
+                        let file_key = unwrap_file_key(rec, collection_id, collection_key)?;
                         let _ = store.delete_resume(resume_key);
                         eprintln!("Previous upload had already completed.");
                         return Ok(Some(Uploaded {
                             file_id: rec.file_id.clone(),
                             file_key,
+                            collection_id: collection_id.to_string(),
+                            key_epoch: rec.key_epoch,
                         }));
                     }
                 }
@@ -205,7 +226,7 @@ fn try_resume(
                 return Ok(None);
             }
 
-            let file_key = match unwrap_file_key(rec, collection_key) {
+            let file_key = match unwrap_file_key(rec, collection_id, collection_key) {
                 Ok(k) => k,
                 Err(_) => {
                     let _ = client.tus_delete(&rec.upload_id);
@@ -227,8 +248,16 @@ fn try_resume(
             };
 
             let file = File::open(local_path)?;
-            let up = match StreamUploader::resume(file, &file_key, rec.plain_size, &header, offset)
-            {
+            let blob_context =
+                DriveFileBlobContextV1::new(&rec.file_id, collection_id, rec.key_epoch)?;
+            let up = match StreamUploader::resume(
+                file,
+                &file_key,
+                rec.plain_size,
+                &header,
+                offset,
+                blob_context,
+            ) {
                 Ok(up) => up,
                 Err(_) => {
                     let _ = client.tus_delete(&rec.upload_id);
@@ -250,7 +279,12 @@ fn try_resume(
             let _ = store.delete_resume(resume_key);
 
             let file_id = pick_file_id(patched_id, &rec)?;
-            Ok(Some(Uploaded { file_id, file_key }))
+            Ok(Some(Uploaded {
+                file_id,
+                file_key,
+                collection_id: collection_id.to_string(),
+                key_epoch: rec.key_epoch,
+            }))
         }
     }
 }
@@ -323,8 +357,19 @@ fn pick_file_id(patched_id: String, rec: &ResumeState) -> Result<String> {
     bail!("tus: upload completed but server returned no file id")
 }
 
-fn unwrap_file_key(rec: &ResumeState, collection_key: &[u8]) -> Result<[u8; 32]> {
-    let key = secretbox::open_b64(&rec.enc_file_key, &rec.file_key_nonce, collection_key)
+fn unwrap_file_key(
+    rec: &ResumeState,
+    collection_id: &str,
+    collection_key: &[u8],
+) -> Result<[u8; 32]> {
+    let context = DriveEnvelopeContextV1::new(
+        DriveEnvelopePurpose::FileKey,
+        rec.key_epoch,
+        1,
+        &rec.file_id,
+        collection_id,
+    )?;
+    let key = drive_envelope::open_b64(&rec.file_key_envelope, collection_key, context)
         .context("unwrap resumed file key")?;
     key.try_into()
         .map_err(|_| anyhow::anyhow!("resumed file key has wrong length"))
@@ -364,20 +409,15 @@ pub fn create_sub_collection(
     client: &Client,
     name: &str,
     parent_id: &str,
+    owner_user_id: &str,
     master_key: &[u8],
 ) -> Result<(String, [u8; 32])> {
-    let mut collection_key = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut collection_key);
-
-    let (enc_key, key_nonce) = secretbox::seal(&collection_key, master_key)?;
-    let (enc_name, name_nonce) = secretbox::seal(name.as_bytes(), &collection_key)?;
-
-    let resp = client.create_collection(&CreateCollectionRequest {
-        encrypted_name: b64().encode(&enc_name),
-        name_nonce: b64().encode(name_nonce),
-        encrypted_key: b64().encode(&enc_key),
-        encrypted_key_nonce: b64().encode(key_nonce),
-        parent_collection_id: Some(parent_id.to_string()),
-    })?;
+    let (request, collection_key) = crate::collection_crypto::create_owned(
+        name,
+        Some(parent_id.to_string()),
+        owner_user_id,
+        master_key,
+    )?;
+    let resp = client.create_collection(&request)?;
     Ok((resp.id, collection_key))
 }

@@ -187,7 +187,7 @@ sequenceDiagram
     B->>B: verify sig, decrypt, apply
 ```
 
-The relay can persist frames (`yjs_update`, `oo_op`, version blobs) but cannot decrypt them. Per-file content keys are derived deterministically from the collection master key — no key wrapping, no plaintext on the wire.
+The relay can persist frames (`yjs_update`, `oo_op`, version blobs) but cannot decrypt them. Each file has a random key wrapped by its collection epoch; purpose-separated collaboration and blob keys are derived from that file/collection state, with no plaintext on the wire.
 
 For the full picture (key hierarchy, login flow, federation model, storage layer, wire envelope spec): [docs/architecture.md](docs/architecture.md).
 
@@ -198,9 +198,9 @@ For the full picture (key hierarchy, login flow, federation model, storage layer
 | Layer | Technology |
 |-------|------------|
 | Backend | Rust, [Axum 0.7](https://github.com/tokio-rs/axum) (HTTP + WebSocket), [sqlx](https://github.com/launchbadge/sqlx) (Postgres), [aws-sdk-s3](https://crates.io/crates/aws-sdk-s3), PostgreSQL 16 |
-| CLI / crypto | Rust — `dryoc` + RustCrypto (Argon2id, XChaCha20-Poly1305 AEAD, Ed25519, NaCl box / secretbox / secretstream); `clap` CLI |
+| CLI / crypto | Rust — `dryoc` + RustCrypto (Argon2id, XChaCha20-Poly1305 AEAD/secretstream, X25519 HPKE, Ed25519); `clap` CLI |
 | Frontend | React 18, TypeScript 5.4, Vite 8, [Redux Toolkit 2](https://redux-toolkit.js.org/), [TailwindCSS](https://tailwindcss.com/) + [Radix UI](https://www.radix-ui.com/) |
-| Frontend crypto | [libsodium-wrappers-sumo](https://github.com/jedisct1/libsodium.js) — Argon2id, XChaCha20-Poly1305 AEAD, Ed25519, NaCl box / secretbox / secretstream |
+| Frontend crypto | Canonical Rust via `kutup-crypto-wasm`; a narrow [libsodium-wrappers-sumo](https://github.com/jedisct1/libsodium.js) adapter streams large secretstream blobs and supplies browser CSPRNG bytes |
 | Realtime collab | Yjs 13 + `y-codemirror.next` (notes); OnlyOffice + `x2t` WASM (office); `@excalidraw/excalidraw` (whiteboards); a server relay with per-frame AEAD envelopes |
 | Storage | [SeaweedFS](https://github.com/seaweedfs/seaweedfs) (S3-compatible) |
 | Infrastructure | Docker Compose, Nginx (TLS termination + static asset serving) |

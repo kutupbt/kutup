@@ -325,24 +325,32 @@ async fn handle_frame(
     let Ok(f) = Frame::unpack(data) else {
         return;
     };
-    if f.sender_device_id != peer.device_id as u64 {
+    if f.sender_device_id != peer.device_id as u64 || f.sequence > i64::MAX as u64 {
         return; // forged sender — drop
     }
     if envelope::verify(data, pub_key).is_err() {
         return;
     }
 
-    // Epoch check: reject frames signed under an older doc_key_id than the file's current.
-    let current_epoch: i64 =
-        match sqlx::query_scalar("SELECT current_doc_key_id FROM files WHERE id = $1")
-            .bind(file_uuid)
-            .fetch_one(&state.pool)
-            .await
-        {
-            Ok(v) => v,
-            Err(_) => return,
-        };
-    if (f.doc_key_id as i64) < current_epoch {
+    // The public authenticated header must name this exact file, collection,
+    // collection-key epoch and current document-key generation. Neither stale
+    // nor future values are accepted.
+    let binding: (i64, Uuid, i32) = match sqlx::query_as(
+        "SELECT f.current_doc_key_id, f.collection_id, f.key_epoch \
+         FROM files f WHERE f.id = $1 AND f.deleted_at IS NULL",
+    )
+    .bind(file_uuid)
+    .fetch_one(&state.pool)
+    .await
+    {
+        Ok(value) => value,
+        Err(_) => return,
+    };
+    if f.file_id != *file_uuid.as_bytes()
+        || f.collection_id != *binding.1.as_bytes()
+        || f.key_epoch as i64 != binding.2 as i64
+        || f.doc_key_id as i64 != binding.0
+    {
         return;
     }
 

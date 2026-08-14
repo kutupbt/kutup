@@ -43,30 +43,45 @@ pub struct MessageResponse {
     pub message: String,
 }
 
-/// Public registration settings — mirrors `handlers.SettingsResponse`.
+/// Public server settings (`GET /api/auth/settings`) — how a client learns what
+/// the server supports before showing UI for it.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsResponse {
     pub registration_enabled: bool,
+    /// Chat feature advertisement (docs/chat-protocol.md §10). A client
+    /// feature-gates chat on this and must not show chat UI when absent/disabled.
+    pub chat: kutup_chat_proto::ChatCapabilities,
+}
+
+/// Authenticated global settings managed by a server administrator.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminSettingsResponse {
+    pub registration_enabled: bool,
+    pub default_chat_storage_quota_bytes: i64,
+    /// Retention for unread Direct and MLS mailbox ciphertext. Zero disables expiry.
+    pub chat_mailbox_retention_days: i64,
+    /// Retention for temporary Chat-media delivery copies. Zero disables expiry.
+    pub chat_media_delivery_retention_days: i64,
 }
 
 /// `GET /api/auth/login/preflight` — mirrors `handlers.PreflightLoginResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PreflightLoginResponse {
-    #[serde(rename = "kdfSalt")]
-    pub kdf_salt: String,
-    pub login_key_salt: String,
+    pub account_protection_suite: u16,
+    pub account_protection_salt: String,
+    pub argon_memory_kib: u32,
+    pub argon_iterations: u32,
+    pub argon_parallelism: u32,
 }
 
 /// `GET /api/auth/recover/preflight` — mirrors `handlers.PreflightRecoverResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PreflightRecoverResponse {
-    pub encrypted_recovery_key: String,
-    pub recovery_key_nonce: String,
-    pub encrypted_private_key: String,
-    pub private_key_nonce: String,
+    pub recovery_key_envelope: String,
 }
 
 /// `POST /api/auth/refresh` — mirrors `handlers.RefreshResponse`.
@@ -87,6 +102,8 @@ pub struct MeResponse {
     pub totp_enabled: bool,
     pub storage_quota_bytes: i64,
     pub storage_used_bytes: i64,
+    pub chat_storage_quota_bytes: i64,
+    pub chat_storage_used_bytes: i64,
     pub is_admin: bool,
     pub color: String,
 }
@@ -117,7 +134,10 @@ pub struct TotpCodeRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UserLookupResponse {
     pub user_id: String,
-    pub public_key: String,
+    pub account: String,
+    pub drive_hpke_public_key: String,
+    pub account_incarnation_id: String,
+    pub drive_signing_public_key: String,
 }
 
 /// Collection list/get row — mirrors `handlers.CollectionRow`.
@@ -126,10 +146,23 @@ pub struct UserLookupResponse {
 pub struct CollectionRow {
     pub id: String,
     pub owner_user_id: String,
-    pub encrypted_name: String,
-    pub name_nonce: String,
-    pub encrypted_key: String,
-    pub encrypted_key_nonce: String,
+    pub name_envelope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_key_envelope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub named_share_envelope: Option<String>,
+    pub key_epoch: i32,
+    pub name_revision: i64,
+    pub epoch_statement: String,
+    pub epoch_statement_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_account: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_incarnation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_drive_signing_public_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_authority_public_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_collection_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -151,10 +184,10 @@ pub struct CollectionRow {
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CreateCollectionRequest {
-    pub encrypted_name: String,
-    pub name_nonce: String,
-    pub encrypted_key: String,
-    pub encrypted_key_nonce: String,
+    pub id: String,
+    pub name_envelope: String,
+    pub owner_key_envelope: String,
+    pub epoch_statement: String,
     pub parent_collection_id: Option<String>,
 }
 
@@ -168,8 +201,8 @@ pub struct CreateCollectionResult {
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateCollectionRequest {
-    pub encrypted_name: String,
-    pub name_nonce: String,
+    pub name_envelope: String,
+    pub name_revision: i64,
 }
 
 /// `PATCH /api/collections/{id}/color` body — mirrors `handlers.UpdateColorRequest`.
@@ -184,37 +217,10 @@ pub struct UpdateColorRequest {
 #[serde(rename_all = "camelCase", default)]
 pub struct ShareCollectionRequest {
     pub recipient_user_id: String,
-    pub encrypted_collection_key: String,
+    pub named_share_envelope: String,
     pub can_upload: bool,
     pub can_delete: bool,
     pub upload_quota_bytes: Option<i64>,
-}
-
-/// `POST /api/collections/{id}/share-federated` body — mirrors `handlers.ShareFederatedRequest`.
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ShareFederatedRequest {
-    pub recipient_username: String,
-    pub recipient_server: String,
-    pub encrypted_collection_key: String,
-    pub can_upload: bool,
-    pub can_delete: bool,
-    pub upload_quota_bytes: Option<i64>,
-}
-
-/// `POST /api/collections/{id}/share-federated` result — mirrors `handlers.ShareFederatedResult`.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ShareFederatedResult {
-    pub invite_token: String,
-    pub invite_url: String,
-}
-
-/// Federation pubkey lookup — mirrors `handlers.PubkeyResponse`.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct PubkeyResponse {
-    pub public_key: String,
 }
 
 /// File listing row — mirrors `handlers.FileRow`.
@@ -224,10 +230,10 @@ pub struct FileRow {
     pub id: String,
     pub collection_id: String,
     pub uploader_user_id: String,
-    pub encrypted_metadata: String,
-    pub metadata_nonce: String,
-    pub encrypted_file_key: String,
-    pub file_key_nonce: String,
+    pub metadata_envelope: String,
+    pub file_key_envelope: String,
+    pub key_epoch: i32,
+    pub metadata_revision: i64,
     pub encrypted_size_bytes: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -241,16 +247,18 @@ pub struct UploadResult {
     pub id: String,
 }
 
-/// A trashed folder (a trash root) — `GET /api/trash`. The owner decrypts
-/// `encrypted_key` with their master key, then the name with the collection key.
+/// A trashed folder (a trash root) — `GET /api/trash`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TrashFolderRow {
     pub id: String,
-    pub encrypted_name: String,
-    pub name_nonce: String,
-    pub encrypted_key: String,
-    pub encrypted_key_nonce: String,
+    pub owner_user_id: String,
+    pub name_envelope: String,
+    pub owner_key_envelope: String,
+    pub key_epoch: i32,
+    pub name_revision: i64,
+    pub epoch_statement: String,
+    pub epoch_statement_hash: String,
     pub color: Option<String>,
     /// Files trashed together with this folder (its whole subtree).
     pub items: i64,
@@ -266,12 +274,15 @@ pub struct TrashFolderRow {
 pub struct TrashFileRow {
     pub id: String,
     pub collection_id: String,
-    pub encrypted_metadata: String,
-    pub metadata_nonce: String,
-    pub encrypted_file_key: String,
-    pub file_key_nonce: String,
-    pub collection_encrypted_key: String,
-    pub collection_encrypted_key_nonce: String,
+    pub metadata_envelope: String,
+    pub file_key_envelope: String,
+    pub key_epoch: i32,
+    pub metadata_revision: i64,
+    pub collection_owner_user_id: String,
+    pub collection_owner_key_envelope: String,
+    pub collection_key_epoch: i32,
+    pub collection_epoch_statement: String,
+    pub collection_epoch_statement_hash: String,
     #[serde(with = "time::serde::rfc3339")]
     pub deleted_at: OffsetDateTime,
 }
@@ -289,8 +300,7 @@ pub struct TrashResponse {
 pub struct CreateShareRequest {
     pub share_type: String,
     pub target_id: String,
-    pub encrypted_collection_key: String,
-    pub encrypted_collection_key_nonce: String,
+    pub collection_key_envelope: String,
     pub expires_in_hours: Option<i32>,
 }
 
@@ -302,36 +312,17 @@ pub struct CreateShareResult {
 }
 
 /// `GET /api/share/{token}` — mirrors `handlers.PublicShareResponse`.
-/// The pointer fields have no `omitempty` in Go, so they serialize as `null`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicShareResponse {
     pub id: String,
     pub share_type: String,
     pub target_id: String,
-    pub encrypted_collection_key: Option<String>,
-    pub encrypted_collection_key_nonce: Option<String>,
+    pub collection_key_envelope: String,
+    pub collection_key_epoch: i32,
+    pub owner_user_id: String,
     #[serde(with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
-}
-
-/// `GET /api/fed/invites/{token}` — mirrors `handlers.FedInviteResponse`.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct FedInviteResponse {
-    pub wrapped_key: String,
-    pub encrypted_name: String,
-    pub name_nonce: String,
-    pub can_upload: bool,
-    pub can_delete: bool,
-    pub upload_quota_bytes: Option<i64>,
-}
-
-/// `POST /api/fed-proxy/incoming` body — mirrors `handlers.AddIncomingShareRequest`.
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct AddIncomingShareRequest {
-    pub invite_url: String,
 }
 
 /// Admin user row — mirrors `handlers.UserRow`.
@@ -343,6 +334,8 @@ pub struct UserRow {
     pub username: String,
     pub storage_quota_bytes: i64,
     pub storage_used_bytes: i64,
+    pub chat_storage_quota_bytes: i64,
+    pub chat_storage_used_bytes: i64,
     pub is_admin: bool,
     pub is_active: bool,
     pub totp_enabled: bool,
@@ -358,6 +351,7 @@ pub struct CreateAdminUserRequest {
     pub username: String,
     pub temp_password: String,
     pub storage_quota_bytes: i64,
+    pub chat_storage_quota_bytes: Option<i64>,
 }
 
 /// `PUT /api/admin/users/{id}` body — mirrors `handlers.UpdateAdminUserRequest`.
@@ -365,6 +359,7 @@ pub struct CreateAdminUserRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAdminUserRequest {
     pub storage_quota_bytes: Option<i64>,
+    pub chat_storage_quota_bytes: Option<i64>,
     pub is_active: Option<bool>,
     pub is_admin: Option<bool>,
 }
@@ -373,7 +368,10 @@ pub struct UpdateAdminUserRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAdminSettingsRequest {
-    pub registration_enabled: bool,
+    pub registration_enabled: Option<bool>,
+    pub default_chat_storage_quota_bytes: Option<i64>,
+    pub chat_mailbox_retention_days: Option<i64>,
+    pub chat_media_delivery_retention_days: Option<i64>,
 }
 
 /// `GET /api/admin/stats` — mirrors `handlers.StatsResponse`.
@@ -422,10 +420,17 @@ mod tests {
         let row = CollectionRow {
             id: "c1".into(),
             owner_user_id: "u1".into(),
-            encrypted_name: "n".into(),
-            name_nonce: "nn".into(),
-            encrypted_key: "k".into(),
-            encrypted_key_nonce: "kn".into(),
+            name_envelope: "n".into(),
+            owner_key_envelope: Some("k".into()),
+            named_share_envelope: None,
+            key_epoch: 1,
+            name_revision: 1,
+            epoch_statement: "statement".into(),
+            epoch_statement_hash: "11".repeat(32),
+            owner_account: None,
+            owner_incarnation_id: None,
+            owner_drive_signing_public_key: None,
+            owner_authority_public_key: None,
             parent_collection_id: None,
             color: None,
             can_upload: None,
@@ -439,22 +444,24 @@ mod tests {
         assert!(!obj.contains_key("parentCollectionId"));
         assert!(!obj.contains_key("color"));
         assert!(!obj.contains_key("isShared"));
-        assert!(obj.contains_key("encryptedKeyNonce"));
+        assert!(obj.contains_key("ownerKeyEnvelope"));
+        assert!(!obj.contains_key("namedShareEnvelope"));
     }
 
     #[test]
-    fn public_share_nulls_serialize() {
-        // Go pointer fields WITHOUT omitempty serialize as JSON null.
+    fn public_share_context_serializes_explicitly() {
         let resp = PublicShareResponse {
             id: "s1".into(),
             share_type: "collection".into(),
             target_id: "c1".into(),
-            encrypted_collection_key: None,
-            encrypted_collection_key_nonce: None,
+            collection_key_envelope: "envelope".into(),
+            collection_key_epoch: 1,
+            owner_user_id: "u1".into(),
             expires_at: None,
         };
         let v: serde_json::Value = serde_json::to_value(&resp).unwrap();
-        assert!(v.get("encryptedCollectionKey").unwrap().is_null());
+        assert_eq!(v.get("collectionKeyEpoch").unwrap(), 1);
+        assert_eq!(v.get("ownerUserId").unwrap(), "u1");
         assert!(v.get("expiresAt").unwrap().is_null());
     }
 }

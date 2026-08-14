@@ -1,0 +1,2 @@
+# Own target dir — this crate is outside the root workspace (root /target/ rule doesn't cover it).
+/target/

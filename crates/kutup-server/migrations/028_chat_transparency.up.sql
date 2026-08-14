@@ -1,0 +1,3 @@
+-- Reserved preproduction migration number. Global key-transparency state was
+-- removed before V1 in favor of account-signed manifest history and explicit
+-- TOFU / QR verification.

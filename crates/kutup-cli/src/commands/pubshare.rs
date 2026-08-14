@@ -10,8 +10,9 @@ use serde::Serialize;
 use url::Url;
 
 use crate::api::public::PublicShare;
-use crate::api::{Client, FileMetadata};
-use kutup_crypto::secretbox;
+use crate::api::Client;
+use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
+use kutup_crypto::drive_object::DriveFileBlobContextV1;
 
 #[derive(Subcommand)]
 pub enum PubCmd {
@@ -77,15 +78,15 @@ fn pub_client(p: &PubUrl) -> Client {
 }
 
 fn unwrap_collection_key(share: &PublicShare, link_key: &[u8]) -> Result<Vec<u8>> {
-    match (
-        &share.encrypted_collection_key,
-        &share.encrypted_collection_key_nonce,
-    ) {
-        (Some(enc), Some(nonce)) => {
-            secretbox::open_b64(enc, nonce, link_key).context("unwrap collection key")
-        }
-        _ => bail!("share has no wrapped collection key"),
-    }
+    let context = DriveEnvelopeContextV1::new(
+        DriveEnvelopePurpose::PublicLinkCollectionKey,
+        share.collection_key_epoch,
+        1,
+        &share.target_id,
+        &share.owner_user_id,
+    )?;
+    drive_envelope::open_b64(&share.collection_key_envelope, link_key, context)
+        .context("unwrap collection key")
 }
 
 fn get(json: bool, url: &str) -> Result<()> {
@@ -122,17 +123,11 @@ fn is_zero(v: &i64) -> bool {
 }
 
 fn decrypt_display(f: &crate::api::File, col_key: &[u8]) -> FileDisplay {
-    let inner = || -> Result<(String, i64)> {
-        let file_key = secretbox::open_b64(&f.encrypted_file_key, &f.file_key_nonce, col_key)?;
-        let meta_bytes = secretbox::open_b64(&f.encrypted_metadata, &f.metadata_nonce, &file_key)?;
-        let meta: FileMetadata = serde_json::from_slice(&meta_bytes)?;
-        Ok((meta.name, meta.size))
-    };
-    match inner() {
-        Ok((name, size)) => FileDisplay {
+    match crate::file_crypto::open(f, col_key) {
+        Ok((_, meta)) => FileDisplay {
             id: f.id.clone(),
-            name,
-            size,
+            name: meta.name,
+            size: meta.size,
         },
         Err(_) => FileDisplay {
             id: f.id.clone(),
@@ -183,16 +178,8 @@ fn download(json: bool, url: &str, file_id: &str, dest: Option<&str>) -> Result<
         crate::errors::NotFound(format!("file {file_id} not found in this public share"))
     })?;
 
-    let file_key =
-        secretbox::open_b64(&target.encrypted_file_key, &target.file_key_nonce, &col_key)
-            .context("decrypt file key")?;
-    let meta_bytes = secretbox::open_b64(
-        &target.encrypted_metadata,
-        &target.metadata_nonce,
-        &file_key,
-    )
-    .context("decrypt metadata")?;
-    let meta: FileMetadata = serde_json::from_slice(&meta_bytes).unwrap_or_default();
+    let (file_key, meta) =
+        crate::file_crypto::open(target, &col_key).context("decrypt file record")?;
 
     let dest_path = {
         let pp = Path::new(dest_dir);
@@ -206,16 +193,19 @@ fn download(json: bool, url: &str, file_id: &str, dest: Option<&str>) -> Result<
     let resp = client.public_share_download_stream(&p.token, file_id)?;
     let bar = crate::output::progress_bar(resp.content_length(), &meta.name);
     let mut out = std::fs::File::create(&dest_path).context("open dest")?;
-    let written = match crate::transfer::stream_download(resp, &file_key, &mut out, |n| {
-        bar.set_position(n as u64)
-    }) {
-        Ok(w) => w,
-        Err(e) => {
-            drop(out);
-            let _ = std::fs::remove_file(&dest_path);
-            return Err(e).context("decrypt-write");
-        }
-    };
+    let blob_context =
+        DriveFileBlobContextV1::new(&target.id, &target.collection_id, target.key_epoch)?;
+    let written =
+        match crate::transfer::stream_download(resp, &file_key, blob_context, &mut out, |n| {
+            bar.set_position(n as u64)
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                drop(out);
+                let _ = std::fs::remove_file(&dest_path);
+                return Err(e).context("decrypt-write");
+            }
+        };
     bar.finish_and_clear();
 
     let dest_str = dest_path.to_string_lossy().into_owned();

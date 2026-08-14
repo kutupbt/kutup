@@ -3,10 +3,17 @@
 export interface CollectionRow {
   id: string
   ownerUserId: string
-  encryptedName: string
-  nameNonce: string
-  encryptedKey: string
-  encryptedKeyNonce: string
+  nameEnvelope: string
+  ownerKeyEnvelope?: string
+  namedShareEnvelope?: string
+  keyEpoch: number
+  nameRevision: number
+  epochStatement: string
+  epochStatementHash: string
+  ownerAccount?: string
+  ownerIncarnationId?: string
+  ownerDriveSigningPublicKey?: string
+  ownerAuthorityPublicKey?: string
   parentCollectionId: string | null
   color: string | null
   canUpload: boolean
@@ -20,10 +27,10 @@ export interface FileRow {
   id: string
   collectionId: string
   uploaderUserId: string
-  encryptedMetadata: string
-  metadataNonce: string
-  encryptedFileKey: string
-  fileKeyNonce: string
+  metadataEnvelope: string
+  fileKeyEnvelope: string
+  keyEpoch: number
+  metadataRevision: number
   encryptedSizeBytes: number
   createdAt: string
   updatedAt: string
@@ -35,6 +42,8 @@ export interface UserRow {
   username: string
   storageQuotaBytes: number
   storageUsedBytes: number
+  chatStorageQuotaBytes: number
+  chatStorageUsedBytes: number
   isAdmin: boolean
   isActive: boolean
   totpEnabled: boolean
@@ -56,10 +65,8 @@ export interface LoginResponse {
   accessToken: string
   userId: string
   username: string
-  encryptedMasterKey: string
-  masterKeyNonce: string
-  encryptedPrivateKey: string
-  privateKeyNonce: string
+  masterKeyEnvelope: string
+  drivePrivateKeyEnvelope: string
   publicKey: string
   isAdmin: boolean
   storageQuotaBytes: number
@@ -69,10 +76,19 @@ export interface LoginResponse {
 
 export interface IncomingShare {
   id: string
-  remoteServer: string
-  encryptedCollectionKey: string
-  encryptedName: string
-  nameNonce: string
+  remoteDomain: string
+  remoteCollectionId: string
+  namedShareEnvelope: string
+  nameEnvelope: string
+  keyEpoch: number
+  nameRevision: number
+  epochStatement: string
+  epochStatementHash: string
+  ownerUserId: string
+  ownerAccount: string
+  ownerIncarnationId: string
+  ownerSigningPublicKey: string
+  ownerAuthorityPublicKey: string
   canUpload: boolean
   canDelete: boolean
   uploadQuotaBytes: number | null
@@ -102,6 +118,107 @@ export interface AdminStats {
 
 export interface AdminSettings {
   registrationEnabled: boolean
+  defaultChatStorageQuotaBytes: number
+  chatMailboxRetentionDays: number
+  chatMediaDeliveryRetentionDays: number
+}
+
+export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'
+export type FederationRuleAction = 'inherit' | 'allow' | 'block'
+export type FederationMinimumTrust = 'tofu' | 'verified'
+export type FederationTrustRequirement = 'inherit' | FederationMinimumTrust
+
+export interface FederationFeaturePolicy {
+  feature: 'chat' | 'drive'
+  mode: FederationMode
+  minimumTrust: FederationMinimumTrust
+}
+
+export interface FederationDomainRule {
+  domain: string
+  feature: 'chat' | 'drive'
+  inbound: FederationRuleAction
+  outbound: FederationRuleAction
+  trustRequirement: FederationTrustRequirement
+  createdAt: string
+  updatedAt: string
+}
+
+export interface FederationPeer {
+  domain: string
+  trust: 'tofu' | 'verified' | 'quarantined'
+  sequence: number
+  fingerprint: string
+  fingerprintDisplay: string
+  apiBase: string | null
+  capabilities: string[]
+  firstSeenAt: string
+  lastSeenAt: string
+  verifiedAt: string | null
+  discoveryExpiresAt: string | null
+  quarantineReason: string | null
+  pendingFingerprint: string | null
+  lastDiscoveryError: string | null
+  diagnostics: {
+    chatPendingTransactions: number
+    chatMismatchTransactions: number
+    driveIncomingShares: number
+    driveOutgoingShares: number
+  }
+}
+
+export interface FederationPeerEvidenceDocument {
+  sequence: number
+  documentHash: string
+  fingerprint: string
+  fingerprintDisplay: string
+  acceptance: 'accepted' | 'quarantined' | 'superseded'
+  document: Record<string, unknown>
+  recordedAt: string
+}
+
+export interface FederationPeerEvidence {
+  domain: string
+  trust: FederationPeer['trust']
+  currentDocumentHash: string
+  pendingDocumentHash: string | null
+  quarantineReason: string | null
+  documents: FederationPeerEvidenceDocument[]
+  truncated: boolean
+}
+
+export interface BulkFederationPeerRetryResponse {
+  results: Array<{
+    domain: string
+    refreshed: boolean
+    error: string | null
+  }>
+}
+
+export interface AdminFederationPolicy {
+  /** False when the server has no persistent FEDERATION_SIGNING_KEY. */
+  configured: boolean
+  serverName: string | null
+  fingerprint: string | null
+  fingerprintDisplay: string | null
+  identitySequence: number | null
+  capabilities: string[]
+  globalEnabled: boolean
+  features: FederationFeaturePolicy[]
+  rules: FederationDomainRule[]
+  peers: FederationPeer[]
+  operational: {
+    peerTotal: number
+    tofuPeers: number
+    verifiedPeers: number
+    quarantinedPeers: number
+    chatPendingTransactions: number
+    chatMismatchTransactions: number
+    oldestChatPendingAt: string | null
+    driveIncomingShares: number
+    driveOutgoingShares: number
+    activeReplayReservations: number
+  }
 }
 
 /**
@@ -111,7 +228,7 @@ export interface AdminSettings {
  */
 export interface AdminActivityEntry {
   id: number
-  /** `user.create` | `user.update` | `user.delete` | `user.2fa_disable` | `settings.update` | future actions */
+  /** User, settings, and `federation.*` mutation action identifiers. */
   action: string
   adminUserId: string
   adminEmail: string | null
@@ -141,16 +258,19 @@ export interface MeResponse {
 
 export interface UserByEmailResponse {
   userId: string
-  username: string
-  publicKey: string
+  account: string
+  driveHpkePublicKey: string
+  accountIncarnationId: string
+  driveSigningPublicKey: string
 }
 
 export interface PublicShareData {
   id: string
   shareType: string
   targetId: string
-  encryptedCollectionKey: string
-  encryptedCollectionKeyNonce: string
+  collectionKeyEnvelope: string
+  collectionKeyEpoch: number
+  ownerUserId: string
   expiresAt?: string
 }
 

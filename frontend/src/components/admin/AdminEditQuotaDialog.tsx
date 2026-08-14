@@ -16,13 +16,12 @@ import { cn } from '@/lib/utils'
 import type { UserRow } from '@/types/api'
 
 /**
- * AdminEditQuotaDialog — small dialog for editing a single user's storage
- * quota. Opens from the per-row ⋯ menu's "Edit quota" action.
+ * AdminEditQuotaDialog edits the independent Drive and Chat storage limits.
  *
  * Layout matches the design's create-user dialog quota presets row: a row
  * of preset chips (1 / 5 / 10 / 50 / 100 GB) above a free-form input. The
  * input is the source of truth; clicking a preset just sets the input.
- * Save calls `useUpdateUser` with `storageQuotaBytes`.
+ * Both values are committed in one idempotent admin update.
  *
  * Note the disabled-state nuance: we keep the button enabled even when
  * `gb === currentGB` (some admins want to nudge by 0 to refresh the row);
@@ -40,23 +39,31 @@ interface AdminEditQuotaDialogProps {
 export function AdminEditQuotaDialog({ user, onClose }: AdminEditQuotaDialogProps) {
   const { t } = useTranslation()
   const updateUser = useUpdateUser()
-  const [gb, setGb] = useState('')
+  const [driveGb, setDriveGb] = useState('')
+  const [chatGb, setChatGb] = useState('')
 
   // Reset the input whenever a new user is targeted
   useEffect(() => {
-    if (user) setGb(String(user.storageQuotaBytes / GB))
+    if (user) {
+      setDriveGb(String(user.storageQuotaBytes / GB))
+      setChatGb(String(user.chatStorageQuotaBytes / GB))
+    }
   }, [user])
 
   if (!user) return null
 
-  const n = parseFloat(gb)
-  const valid = !isNaN(n) && n > 0
+  const drive = parseFloat(driveGb)
+  const chat = parseFloat(chatGb)
+  const valid = Number.isFinite(drive) && drive > 0 && Number.isFinite(chat) && chat > 0
 
   async function save() {
     if (!user || !valid) return
     await updateUser.mutateAsync({
       id: user.id,
-      body: { storageQuotaBytes: Math.round(n * GB) },
+      body: {
+        storageQuotaBytes: Math.round(drive * GB),
+        chatStorageQuotaBytes: Math.round(chat * GB),
+      },
     })
     onClose()
   }
@@ -65,7 +72,7 @@ export function AdminEditQuotaDialog({ user, onClose }: AdminEditQuotaDialogProp
     <Dialog open={user !== null} onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{t('admin.editQuota.title', 'Edit storage quota')}</DialogTitle>
+          <DialogTitle>{t('admin.editQuota.title', 'Edit storage quotas')}</DialogTitle>
           <DialogDescription>
             {t('admin.editQuota.desc', 'For {{email}} — applies immediately.', {
               email: user.email,
@@ -73,39 +80,18 @@ export function AdminEditQuotaDialog({ user, onClose }: AdminEditQuotaDialogProp
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-3">
-          <div className="flex gap-1.5">
-            {PRESETS_GB.map((p) => {
-              const active = parseFloat(gb) === p
-              return (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => setGb(String(p))}
-                  className={cn(
-                    'flex-1 h-9 rounded-lg text-[12.5px] font-medium cursor-pointer border transition-colors',
-                    active
-                      ? 'bg-primary text-white border-primary'
-                      : 'bg-surface text-text-primary border-border hover:bg-surface-raised',
-                  )}
-                >
-                  {p} GB
-                </button>
-              )
-            })}
-          </div>
-          <div className="flex items-center gap-2">
-            <Input
-              type="number"
-              min="1"
-              step="1"
-              value={gb}
-              onChange={(e) => setGb(e.target.value)}
-              placeholder={t('admin.editQuota.placeholder', 'e.g. 25')}
-              autoFocus
-            />
-            <span className="text-sm text-text-tertiary">GB</span>
-          </div>
+        <div className="space-y-4">
+          <QuotaInput
+            label={t('admin.editQuota.drive', 'Drive storage')}
+            value={driveGb}
+            onChange={setDriveGb}
+            autoFocus
+          />
+          <QuotaInput
+            label={t('admin.editQuota.chat', 'Chat history and media')}
+            value={chatGb}
+            onChange={setChatGb}
+          />
         </div>
 
         <DialogFooter>
@@ -123,5 +109,52 @@ export function AdminEditQuotaDialog({ user, onClose }: AdminEditQuotaDialogProp
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function QuotaInput({
+  label,
+  value,
+  onChange,
+  autoFocus = false,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  autoFocus?: boolean
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="text-sm font-medium text-text-primary">{label}</div>
+      <div className="flex gap-1.5">
+        {PRESETS_GB.map((preset) => (
+          <button
+            key={preset}
+            type="button"
+            onClick={() => onChange(String(preset))}
+            className={cn(
+              'flex-1 h-8 rounded-lg text-[12px] font-medium cursor-pointer border transition-colors',
+              parseFloat(value) === preset
+                ? 'bg-primary text-white border-primary'
+                : 'bg-surface text-text-primary border-border hover:bg-surface-raised',
+            )}
+          >
+            {preset} GB
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <Input
+          type="number"
+          min="0.01"
+          step="0.01"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="2"
+          autoFocus={autoFocus}
+        />
+        <span className="text-sm text-text-tertiary">GB</span>
+      </div>
+    </div>
   )
 }
