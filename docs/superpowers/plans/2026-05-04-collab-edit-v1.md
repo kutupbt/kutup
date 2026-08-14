@@ -3454,7 +3454,7 @@ Expected: zero matches after typing "hello" in the editor.
 
 kutup supports real-time, end-to-end-encrypted collaborative editing of text/markdown/code files (`.txt`, `.md`, code formats). Office docs (`.docx/.xlsx/.pptx/.odt/.ods/.odp`) are deferred to a future release.
 
-The architecture is summarised below; the design rationale and pitfalls live in [`docs/superpowers/specs/2026-05-04-collab-edit-design.md`](superpowers/specs/2026-05-04-collab-edit-design.md).
+The architecture is summarised below; the design rationale and pitfalls live in [`docs/superpowers/specs/2026-05-04-collab-edit-design.md`](../specs/2026-05-04-collab-edit-design.md).
 
 ### Sync engine
 Yjs CRDT (`Y.Text`) under CodeMirror 6 with `y-codemirror.next`. Clients exchange opaque binary update frames; the server never instantiates a `Y.Doc`.

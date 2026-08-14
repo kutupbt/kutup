@@ -1,6 +1,7 @@
 # API Reference
 
-Base URL: `http://localhost` (through Nginx proxy) or your configured `SERVER_URL`.
+Base URL: `https://localhost:38443` for the bundled local Compose edge, or your
+configured public `SERVER_URL`. Port `38080` redirects to HTTPS.
 
 All authenticated endpoints require `Authorization: Bearer <accessToken>`.
 
@@ -872,7 +873,13 @@ Returns `410 Gone` if the share has expired, `403` if the file does not belong t
 
 ## Chat (E2EE messaging)
 
-The local slice of the federated chat track ("ileti" — design: `docs/research/11-federated-chat.md`). Clients run the Signal protocol (PQXDH + Triple Ratchet, suite `1`); the server stores **public prekeys and opaque ciphertext only**. All endpoints require a Bearer JWT unless noted. Wire types live in `crates/kutup-chat-proto` and are fully described by the OpenAPI document.
+The current Chat protocol is described in `docs/chat-protocol.md`, media in
+`docs/chat-media.md`, and continuous display-history recovery in
+`docs/chat-backup.md`. Clients run libsignal Direct Chat and OpenMLS private
+groups; servers retain public routing/identity material, operational metadata,
+and opaque ciphertext rather than protected plaintext. All endpoints require a
+Bearer JWT unless noted. Wire types live in `crates/kutup-chat-proto` and are
+fully described by the OpenAPI document.
 
 ### POST /api/chat/device
 
@@ -886,9 +893,9 @@ The caller's chat devices: `{ "devices": [{ "deviceId", "suite", "name", "create
 
 ### DELETE /api/chat/device/{deviceId}
 
-Revoke a chat device — hard delete; prekey pools, mailbox rows, and any history
-delivery rows and live sockets close. It does not delete account-level Chat
-history backup. `204`.
+Revoke a chat device — hard delete; prekey pools and mailbox rows are removed,
+and live sockets close. It does not delete account-level Chat history backup.
+`204`.
 
 ### POST /api/chat/backup
 

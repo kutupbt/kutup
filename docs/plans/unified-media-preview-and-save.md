@@ -1,6 +1,8 @@
 # Unified media preview, in-app open, and save plan
 
-**Status:** proposed
+**Status:** partially implemented; shared preview generation, Chat presentation,
+and private ciphertext cache landed, while Drive sidecars and native export
+hardening remain planned
 
 **Written:** 2026-08-11
 
@@ -9,7 +11,18 @@
 **Primary references:** Signal Desktop, Matrix encrypted thumbnails, Wire asset
 previews, Kutup's existing Chat-media and Drive object formats
 
-## Outcome
+## Implementation record
+
+Commit `fd1948e` landed the common bounded preview/safety modules, worker,
+account-isolated encrypted cache, concurrent request deduplication, Chat image/
+waveform presentation, in-app viewer, download/open/save/clear states, and unit
+coverage. It did not complete this entire plan: Drive preview sidecars, the
+unified Drive viewer integration, Tauri streaming export/quarantine attributes,
+cache settings UI, and the complete cross-browser/two-server matrix remain
+open. The slice lists below are therefore retained as the source for that
+remaining work rather than being marked complete wholesale.
+
+## Target outcome
 
 Kutup will use one user-facing attachment state machine and one shared preview
 policy across Chat and Drive:

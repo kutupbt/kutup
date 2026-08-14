@@ -1,6 +1,7 @@
 # Continuous E2EE Chat history and backup plan
 
-**Status:** implemented; live federation/browser-loss rollout matrix pending
+**Status:** implemented and required-PR-gated; ten-run default-branch rollout
+observation pending
 
 **Written:** 2026-08-11
 
@@ -11,7 +12,26 @@ Tauri; Direct Chat, Note to Self, and private MLS groups
 implementation, adapted to Kutup's web-first, federated architecture and
 unified account recovery
 
-## Outcome
+**Current-state reference:** [`../chat-backup.md`](../chat-backup.md) and
+[`../chat-backup-security-threat-model.md`](../chat-backup-security-threat-model.md)
+
+## Completion record
+
+Implementation merged in PR #41 on 2026-08-14. The required zero-retry PR
+workflow passed the Rust workspace, Chat core, Rust/WASM/frontend, real
+PostgreSQL/SeaweedFS backup lifecycle, single-server clean-browser recovery, and
+complete two-server browser-security/recovery jobs. Local hardening also ran the
+coordinator crash loop 100 times, server concurrency loop 20 times,
+single-server recovery 10 consecutive times, and the two-server matrix 5
+consecutive times.
+
+The live federation/browser-loss matrix is therefore complete. The rollout is
+not marked fully observed until ten consecutive default-branch CI runs pass
+without retry masking, as required by the hardening plan. This file remains the
+original detailed implementation design; use the current-state references above
+for shipped behavior.
+
+## Original design outcome
 
 Kutup will replace snapshot-cadence Chat backup with an always-on, continuous
 encrypted history stream. Each committed, durable Chat display mutation is

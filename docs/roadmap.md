@@ -2,7 +2,10 @@
 
 Kutup is **pre-production**: there is no public release yet (until the first `v*` / `desktop-v*` git tag — see CLAUDE.md). This document is the canonical list of everything between today and "ready to tag v1".
 
-It is the bridge between `docs/` (current state, authoritative) and `docs/research/` (forward-looking design notes that may never ship). Items here are committed work — we know we want them; they're scoped, just not built yet.
+It is the bridge between `docs/` (current state, authoritative) and
+`docs/research/` (forward-looking design notes that may never ship). The blocker
+and follow-up sections are remaining work; the Chat phase table is retained as a
+gate record and explicitly labels completed slices.
 
 **When a feature lands**, move it out of this file and update the appropriate `docs/*.md`. The roadmap should always describe the gap to v1, not the past.
 
@@ -115,16 +118,19 @@ The desktop Admin Overview's System card is hidden today because the backend doe
 | Backend: track process start time, parse cert expiry from TLS config | service-level |
 | Frontend: unhide the System card on `AdminOverviewTab` | `frontend/src/components/admin/AdminOverviewTab.tsx` |
 
-### Admin · Server-driven required-2FA + default-quota + trash-retention settings
+### Admin · Required-2FA + Drive-default-quota + trash-retention settings
 
-`/admin/settings` exposes only `registrationEnabled` today. The admin Settings page on both mobile and desktop hides the Defaults / Security / Danger zone cards because we can't honestly render them.
+`/admin/settings` now exposes registration, the dedicated default Chat quota,
+and mailbox/temporary-media retention on desktop and mobile. Server-driven
+required 2FA, a default Drive/general quota, and runtime trash retention remain
+unimplemented; their cards stay hidden.
 
 | What's needed | Where |
 |---|---|
-| Backend: extend `admin_settings` JSON to include `require_2fa_users`, `require_2fa_admins`, `default_quota_bytes`, `trash_retention_days` | `crates/kutup-server/src/handlers/admin.rs` |
+| Backend: extend `admin_settings` JSON with `require_2fa_users`, `require_2fa_admins`, `default_storage_quota_bytes`, and `trash_retention_days` | `crates/kutup-server/src/handlers/admin.rs` |
 | Backend: enforce `require_2fa_users` on next sign-in (force-set TOTP within N days or block) | `crates/kutup-server/src/handlers/auth.rs` |
-| Backend: apply `default_quota_bytes` when creating new users | `crates/kutup-server/src/handlers/admin.rs` |
-| Frontend: unhide the three cards in `AdminSettingsTab` | `frontend/src/components/admin/AdminSettingsTab.tsx`, mobile equivalent |
+| Backend: apply `default_storage_quota_bytes` when creating new users | `crates/kutup-server/src/handlers/admin.rs` |
+| Frontend: add the remaining controls without disturbing the shipped Chat-storage controls | `frontend/src/components/admin/AdminSettingsTab.tsx`, mobile equivalent |
 
 ### Admin · Danger-zone actions
 
@@ -210,7 +216,12 @@ Self-hosters need an easy way to back up + restore the full encrypted dataset (D
 
 ## V1 major track · Federated E2EE chat ("ileti")
 
-A Signal-class chat feature — 1:1 + group text, media, voice/video — federated between kutup instances, E2EE on the Signal protocol, media stored in the user's existing E2EE drive, everything (client *and* server, including calls) on port 443 only. Chat UI at its own domain (e.g. `ileti.` vs `depo.` for the drive) but the same backend binary and port.
+The shipped web track provides libsignal Direct Chat/Note to Self and OpenMLS
+private groups with encrypted media over the same application edge and
+authenticated federation stack as Drive. Chat objects use the same SeaweedFS
+infrastructure but separate formats, references, keys, and a dedicated quota;
+they are not Drive files. The current UI is part of the main responsive web app,
+not a required second domain. Voice/video calls remain a later phase.
 
 The full architecture is captured in `docs/research/11-federated-chat.md` (libsignal v0.97.2 study, Matrix take-vs-leave, single-443 topology, risks), the wire-contract fixes in `docs/research/12-chat-improvements-for-clients.md`, and — decisively — the adversarially-verified comparative study `docs/research/13-chat-architecture-comparative-research.md` (Signal/Matrix/XMPP + local libsignal/Prosody/ejabberd/Monal code). Direction is committed and validated. **Locked decisions:** libsignal-protocol as a pinned wrapped dependency (AGPL-compatible, never reimplement the ratchet); transport-only federation (signed s2s over 443 + `.well-known`, no Matrix-style replicated room state — the DAG is CVE-confirmed as the mistake); PQ (PQXDH + SPQR) always-on with a versioned suite registry, algorithm agility as a protocol mechanism **not** a user downgrade toggle.
 
@@ -234,7 +245,7 @@ names unambiguous):
 |---|---|---|
 | 1 | **Spike**: `libsignal-protocol` + `spqr` on wasm32 | ✅ **GO** (2026-07-12, `spikes/libsignal-wasm/`) — compiles for the browser target on stable, full PQXDH+Triple-Ratchet round-trip executes in wasm; web client shares `kutup-chat-core` |
 | 2 | Server slice: `kutup-chat-proto` + prekey directory, per-device mailboxes, WSS drain | ✅ landed — `crates/kutup-chat-proto`, migration 021, `handlers/chat.rs`, `chat_hub.rs`, nginx `/api/chat/ws`; full REST + WS contract smoke-verified against the live stack (incl. one-time-prekey consumption, last-resort fallback, the 409 missing/stale/extra device contract, live envelope push). Playwright chat spec lands with phase 2b |
-| 2b | Shared core + minimal 1:1 reference web UI | **Implemented and live-stack verified on `codex/chat-architecture-hardening`.** Includes durable typed inbound journal/quarantine, SQLCipher/IndexedDB stores, crash-safe registration/prekeys, signed manifests, WASM transport, Web Locks, REST+WS reconciliation, history, Note to Self, and ordinary linked-device sent transcripts. Web remains the product client until the messaging milestone is complete; native packaging/integration is not a gate. |
+| 2b | Shared core + minimal 1:1 reference web UI | **Implemented and live-stack verified.** Includes durable typed inbound journal/quarantine, SQLCipher/IndexedDB stores, crash-safe registration/prekeys, signed manifests, WASM transport, Web Locks, REST+WS reconciliation, history, Note to Self, and ordinary linked-device sent transcripts. Web remains the product client until the messaging milestone is complete; native packaging/integration is not a gate. |
 | 3 | Web federation foundation | **Implemented and two-server live verified:** canonical `username@server`, typed conversations, one persistent v2 server identity, signed `.well-known` endpoint/capability discovery, immutable identity history and authenticated rotation, strict RFC 9421/9530 request/response authentication, replay reservation, DNS-rebinding/SSRF-safe resolution, durable per-destination in-order Chat delivery, device-mismatch recovery, terminal rejection, and sequence-gap replay. Drive now uses that same stack for signed account lookup, domain-bound fragment capabilities, invite acceptance, file lists, idempotent upload/delete, persisted ciphertext digests, and verify-before-release streaming downloads. The isolated harness proves the Drive round trip, that Chat reuses a Drive-established pin, and that Chat retry survives an origin restart while the destination is offline. The generic responsive admin control plane provides a global stop, feature-scoped `disabled`/`allowlist`/`blocklist`/`open` admission and trust floors, directional domain rules, shared Chat/Drive diagnostics, peer search/trust filters, retry-one/retry-visible workflows, TOFU verification, exact immutable quarantine/history evidence, break-glass re-pin, and filtered audit presentation/CSV export. A disabled feature is omitted from discovery while the other remains available. Both old feature-specific federation stacks and raw remote URL routes were removed; there is no v1 downgrade. No alias namespace. See `docs/federation-protocol.md`. |
 | 4 | Web contact privacy and trust | **Implemented and two-server verified.** Account-signed complete manifest history, durable gray-TOFU/green-QR/red-quarantine state, explicit account-incarnation replacement, message requests/blocking, contacts-only libsignal sealed sender, offline-root/online-certificate policy, database-backed abuse limits, anonymous local/federated delivery, capability rotation on block, no identified fallback, and the shared typed XChaCha profile envelope are restart- and two-server-browser verified. |
 | 5 | MLS private groups | **V1 binding implemented, activated and two-server verified.** Durable OpenMLS state, manifest-bound devices, private role/control state, quorum-certified multi-authority ordering, owner-approved governance/recovery, destination-private delivery, invitation consent, linked-device sync, restart reconciliation and exact group security inspection use RFC 9420 suite `0x0003` with X25519/ChaCha/Ed25519. The native scale gate operates an actual 256-account × 10-device OpenMLS tree (2,560 independent leaves); the same Rust core builds for WASM, while browser lifecycle, adversarial replay/enumeration, restart/federation and destination-metadata gates pass. Direct and Note to Self remain libsignal. See `docs/chat-mls.md`. |
@@ -270,20 +281,18 @@ destination homeserver has durably accepted it. Each destination homeserver
 stores one opaque ciphertext copy, reference-counted for all of its local group
 members and devices, so a received attachment remains available if the sender
 or sender's server later goes offline. Its logical bytes are reported as Chat
-media and count against the recipient's single total account quota.
+media and count against the recipient's dedicated Chat quota.
 
-V1 uses one administrator-configured total account quota, currently 10 GiB by
-default. Drive and Chat media are usage categories, not reserved allocations or
-independent hard caps: either may consume all remaining account capacity. At
-minimum the user-facing storage view separates Drive and Chat media; a future
+V1 uses an administrator-configured dedicated Chat quota, currently 2 GiB by
+default, separate from the Drive/general quota. The Chat storage view splits
+message history, ordinary delivery media, and protected history media; a future
 Photos product receives its own namespace rather than classifying encrypted
-MIME data. The same view must show Chat-media usage per conversation (for
+MIME data. The same view also shows Chat-media usage per conversation (for
 example, `Family group — 842 MiB`) and let the user review or clear that
 conversation's stored media. Clearing a recipient's copy releases its quota
 and affects that account's linked devices, but never deletes another
-participant's copy. Do not add a user-adjustable Chat-media budget in V1;
-service-specific caps remain an additive future policy only if operational
-evidence requires them.
+participant's copy. The Chat quota is administrator-controlled; there is no
+user-adjustable media sub-budget in V1.
 
 Per-conversation accounting must not weaken sealed-sender metadata privacy.
 The homeserver stores only the recipient, opaque attachment/reference IDs,
@@ -330,9 +339,8 @@ one media-object limit because MIME type remains encrypted; client recording
 and preview code may use smaller type-specific limits.
 
 **Save to Drive** decrypts and re-encrypts the attachment into a visible,
-recipient-owned Drive collection. Promotion transfers the logical quota charge
-instead of permanently charging for both the Chat-media object and the saved
-Drive object. Names, captions, thumbnails, MIME details, capabilities and keys
+recipient-owned Drive collection charged to Drive/general storage. Clearing the
+separate Chat copy releases its Chat charge. Names, captions, thumbnails, MIME details, capabilities and keys
 remain inside the E2EE message; servers handle only bounded opaque ciphertext
 and public size/accounting fields.
 

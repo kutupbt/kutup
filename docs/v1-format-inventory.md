@@ -23,7 +23,7 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 | Direct Chat | `DirectChatSuiteId = 1`, libsignal bytes | Unchanged pinned libsignal suite |
 | MLS group | MLS `0x0002`, P-256 control and delivery keys | MLS `0x0003`, X25519/ChaCha/Ed25519 throughout Kutup-owned bindings |
 | Account device directory | Chat-only `DeviceManifest` plus global transparency proofs | One account-signed `AccountManifestV1` with complete device set, previous hash, history and durable peer pin |
-| Chat history backup | Absent; a new browser device starts with an empty local database | **Implemented:** always-on account-local E2EE backup using a master-key-wrapped Chat root, independently derived segment/base/manifest/media keys, signed hash-chained manifests, and server-side base-plus-tail restore; device-to-device transfer is not supported |
+| Chat history backup | Absent; a new browser device starts with an empty local database | **Implemented:** always-on account-local E2EE backup using a master-key-wrapped Chat root, independently derived segment/base/manifest/media keys, signed hash-chained manifests, and server-side base-plus-tail restore; device-to-device transfer is not supported (current contract: [`chat-backup.md`](chat-backup.md)) |
 | Broadcast post and grants | Absent | Typed broadcast policy, epoch, account/device grant, history grant and post structures |
 
 `AccountEnvelopeV1` is encoded as magic `KUTPAE1\0`, big-endian suite ID,

@@ -6,6 +6,8 @@ This document extends `chat-security-threat-model.md` for immutable attachment
 objects, destination persistence, encrypted attachment ledgers and quota
 accounting. It assumes Direct Chat, MLS, account manifests, sealed delivery and
 unified federation are already valid; it does not replace their verification.
+The independently outer-encrypted history-media lifecycle is covered by
+`chat-backup-security-threat-model.md`.
 
 ## Assets and trust boundaries
 
@@ -32,7 +34,8 @@ unified federation are already valid; it does not replace their verification.
 | Malicious filename/MIME/preview | Encrypted metadata is treated as untrusted presentation input; bounded sanitization and decoder isolation | No path traversal, script execution or unbounded decode. |
 | Client-provided remote URL/SSRF | Descriptor carries a canonical domain and opaque token, never a URL; own homeserver uses unified federation resolution | Arbitrary hosts and rebinding targets are never fetched. |
 | Stolen retrieval token | Recipient, destination, object digest and expiry binding; contacts/group capability; constant-time verifier | Token cannot be moved to another recipient/domain/object. |
-| Anonymous storage exhaustion | No message-request fetch before acceptance, total quota reservation, capability/origin/IP limits and 2 GiB ceiling | Unknown senders cannot allocate media; established abuse is bounded. |
+| Anonymous storage exhaustion | No message-request fetch before acceptance, dedicated Chat-quota reservation, capability/origin/IP limits and 2 GiB object ceiling | Unknown senders cannot allocate media; established abuse is bounded. |
+| Temporary retention removes protected media | Separate ordinary-delivery and history-media references/namespaces | The delivery sweep releases only ordinary copies; committed protected media remains lazily recoverable. |
 | Quota race or crash | Row locks plus one transaction for reservation/ref/quota; stale temporary-object sweep | No overcommit, leak or partial logical ownership. |
 | Retry changes content | Idempotent operation ID bound to suite/UUID/digest/length/recipient/destination | Exact retry succeeds; changed replay conflicts permanently. |
 | Origin disappears after delivery | Destination verifies and durably commits its own copy before acknowledgement | Received media remains available. |

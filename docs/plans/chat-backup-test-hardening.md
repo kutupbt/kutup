@@ -1,6 +1,7 @@
 # Chat backup production test-hardening plan
 
-**Status:** proposed
+**Status:** implemented and required-PR-gated; ten-run default-branch rollout
+observation pending
 
 **Written:** 2026-08-11
 
@@ -10,7 +11,30 @@
 quota and deletion, administrator-configured delivery retention, and federated
 browser-loss recovery
 
-## Outcome
+## Completion record
+
+The hardening implementation merged in PR #41 on 2026-08-14. Its required
+zero-retry workflow passed:
+
+- `Formatting and fuzz targets`;
+- `Rust workspace` and `Chat core`;
+- `Web, WASM, and frontend tests`;
+- `Chat backup lifecycle (Postgres and SeaweedFS)`;
+- `Clean-browser Chat backup recovery`; and
+- `Two-server browser security`.
+
+The suite contains the deterministic coordinator runtime, fake-IndexedDB crash
+tests, named compaction checkpoints, real lifecycle/retention/purge fixtures,
+replacement spec 33, two-server spec 34, adversarial vectors, and sanitized
+failure reporting described below. Local completion evidence includes the
+required 100 coordinator, 20 server-concurrency, 10 single-server, and 5
+two-server repetitions. The only remaining rollout item is observing ten
+consecutive green default-branch runs; it is not an implementation or PR gate.
+
+Current behavior is documented in [`../chat-backup.md`](../chat-backup.md) and
+[`../chat-backup-security-threat-model.md`](../chat-backup-security-threat-model.md).
+
+## Original hardening outcome
 
 Make the implemented continuous E2EE Chat backup safe to treat as Kutup's only
 supported Chat-history restoration path. The work replaces the obsolete
@@ -60,7 +84,7 @@ The completed suite must prove all of the following:
 |---|---|---|
 | Crypto/protocol | `kutup-crypto`, `kutup-chat-proto`, WASM vector script, fuzz targets | typed contexts, bounds, canonical framing, signatures, wrong-purpose/account/suite rejection |
 | Coordinator | new `frontend/src/chat/backup.test.ts` plus `backup-store.test.ts` | durable outbox, retries, restore reduction, pinning, compaction state machine, UI status |
-| Server lifecycle | new `crates/kutup-server/tests/chat_backup_live.rs` | every endpoint, transactions, idempotency, CAS, quota, reconciliation, purge |
+| Server lifecycle | `crates/kutup-server/tests/chat_live.rs` plus live retention tests in `jobs.rs` | every endpoint, transactions, idempotency, CAS, quota, reconciliation, retention, purge |
 | One-server browser | replace spec 33 and add a focused media spec | automatic clean-browser restore, latest-protected UI, lazy media, history-loss UI |
 | Two-server browser | extend the existing federation harness with a backup recovery spec | account-local backup of federated Direct/MLS display history and recovery after both stores are lost |
 
@@ -112,7 +136,7 @@ Create shared integration helpers under `crates/kutup-server/tests/common/` for:
 - paginated object-store listing with eventual-consistency polling bounded by a
   deadline.
 
-Run `chat_backup_live.rs` against an isolated Compose project with Postgres and
+Run the backup lifecycle in `chat_live.rs` against an isolated Compose project with Postgres and
 SeaweedFS. Each test gets a unique account and object prefix. Tests may run in
 parallel only after proving isolation; destructive account-purge cases remain
 serial.
@@ -425,7 +449,7 @@ browser/device presence and in-memory server state.
 2. Coordinator and backup-store tests run in the existing `web` job with fake
    IndexedDB and deterministic runtime adapters.
 3. Add a `chat-backup-integration` job that starts isolated Postgres and
-   SeaweedFS, builds the server once, runs `chat_backup_live.rs`, retention,
+   SeaweedFS, builds the server once, runs the `chat_live.rs` lifecycle, retention,
    quota, purge, and object reconciliation, then always tears the project down.
 4. Replace spec 33 in the one-server browser gate. Sensitive backup jobs disable
    raw traces, screenshots, videos, page snapshots, and raw logs; on failure they

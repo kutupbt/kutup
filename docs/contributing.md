@@ -20,7 +20,7 @@ Contributions are welcome. This guide covers local development setup for both th
 ### 1. Clone and configure
 
 ```sh
-git clone https://github.com/kutupbulut/kutup.git
+git clone https://github.com/kutupbt/kutup.git
 cd kutup
 cp .env.example .env
 # Fill in required values — see README for the configuration table
@@ -88,9 +88,9 @@ are embedded at compile time, **rebuild** the server after adding one.
 ### OpenAPI
 
 The server generates its OpenAPI document with [`utoipa`](https://github.com/juhaku/utoipa)
-and serves the machine-readable JSON at `GET /api-docs/openapi.json`. Per-path operation
-annotations and an interactive Swagger UI are deferred (see `docs/roadmap.md`); the document
-currently carries the info block, the `BearerAuth` security scheme, and the response schemas.
+and serves the machine-readable JSON at `GET /api-docs/openapi.json`. Every HTTP
+operation has a path annotation, and a coverage test keeps the generated route set aligned
+with the Axum router. An interactive Swagger UI is deferred (see `docs/roadmap.md`).
 
 ### Running tests
 
@@ -100,9 +100,15 @@ cargo test -p kutup-crypto                      # crypto byte-parity vectors
 cargo clippy --all-targets -- -D warnings       # lints (gate)
 cargo fmt --check                               # formatting (gate)
 ./scripts/audit-unified-federation.sh           # no feature-owned federation stack
-./scripts/test-chat-federation.sh               # isolated two-server federation + outage/restart
+./scripts/test-chat-backup-integration.sh        # real Postgres/SeaweedFS backup lifecycle
+./scripts/test-chat-federation.sh               # full two-server API + browser security/recovery gate
 ./scripts/dev-chat-federation-up.sh              # leave an MLS-enabled two-server stack running
 ```
+
+The backup integration script owns a disposable Compose project and covers the
+HTTP lifecycle, fixed-cutoff mailbox/media retention, account purge, object
+cleanup, and exact Chat-byte release. It tears down its Postgres and SeaweedFS
+state even on failure.
 
 The federation harness uses its own Compose project, two tmpfs Postgres
 databases, and host ports 39081/39082. Despite its historical filename, it is
@@ -111,9 +117,16 @@ reuse that same identity and policy, and the suite checks the shared admin
 evidence/retry/audit control plane. It also covers the Drive share lifecycle,
 Chat delivery and durable retry, the global emergency stop, all four admission
 modes and directional domain rules independently for both features, and
-disabled feature capabilities. It tears the topology down on exit and does not
-touch the ordinary development stack. Set `KUTUP_FEDERATION_SKIP_BUILD=1`
+disabled feature capabilities. Its Playwright phase also covers Direct and MLS
+security, media, clean two-account browser-loss recovery, lazy protected-media
+restore, and fresh post-restore protocol state. It tears the topology down on
+exit and does not touch the ordinary development stack. Set `KUTUP_FEDERATION_SKIP_BUILD=1`
 only when reusing an image already built from the current checkout.
+
+Run these local gates before requesting or rerunning GitHub CI. CI is final
+confirmation, not the first debugging environment. See
+[`tests/e2e/README.md`](../tests/e2e/README.md) for the single-server recovery
+command, TLS prerequisite, zero-retry policy, and sanitized failure artifacts.
 
 For manual browser testing, use `./scripts/dev-chat-federation-up.sh` instead
 of invoking `docker-compose.chat-federation.yml` directly. The helper starts

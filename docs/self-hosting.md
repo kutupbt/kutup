@@ -10,12 +10,21 @@ This guide covers a production Kutup deployment using Docker Compose.
 - A Linux server with at least 1 GB RAM
 - A domain name (required for HTTPS and for federation to work correctly)
 
+The checked-in single-node Compose topology is convenient for evaluation, but
+its SeaweedFS filer uses the upstream embedded LevelDB store inside the filer
+container. Before treating it as production, move filer metadata to a durable
+mounted directory or an external supported filer store and test a complete
+restore. Until then, never remove/recreate that container without the
+`/filerldb2` backup described below. SeaweedFS documents the embedded-store
+default in its
+[`filer` command source](https://github.com/seaweedfs/seaweedfs/blob/master/weed/command/filer.go).
+
 ---
 
 ## Step 1: Clone and Configure
 
 ```sh
-git clone https://github.com/kutupbulut/kutup.git
+git clone https://github.com/kutupbt/kutup.git
 cd kutup
 cp .env.example .env
 ```
@@ -115,6 +124,13 @@ Mailbox retention covers unread Direct and MLS delivery ciphertext. Media retent
 covers only temporary delivery copies and never deletes protected history-media
 copies.
 
+Chat uses a dedicated quota, separate from Drive/general storage. It defaults
+to 2 GiB for new accounts and covers message-history ciphertext, ordinary
+delivery media, and protected history media. Change the default or an
+individual account under **Admin → Settings → Chat storage**; persisted admin
+settings take precedence without a restart. Lowering a quota below current use
+preserves reads and blocks new charged work rather than evicting history.
+
 ### OpenTelemetry
 
 The backend can export security-path traces and metrics to an OTLP/gRPC
@@ -161,8 +177,23 @@ The file is volume-mounted into the SeaweedFS S3 container at startup.
 
 ## Step 3: Start the Stack
 
+The bundled Nginx already requires TLS. Before the first start, place a
+certificate and key at `nginx/certs/fullchain.pem` and
+`nginx/certs/privkey.pem`. For local evaluation only, generate a self-signed
+localhost certificate:
+
 ```sh
-docker compose up -d --build
+mkdir -p nginx/certs
+openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
+  -keyout nginx/certs/privkey.pem -out nginx/certs/fullchain.pem \
+  -subj /CN=localhost -addext subjectAltName=DNS:localhost,IP:127.0.0.1
+```
+
+Use the public-domain certificate procedure below for production. Then start
+and wait for every health check:
+
+```sh
+docker compose up -d --build --wait
 ```
 
 This builds the backend and frontend images, then starts all services:
@@ -177,7 +208,7 @@ This builds the backend and frontend images, then starts all services:
 | `seaweedfs-init` | One-shot: creates the S3 bucket |
 | `backend` | Rust API server (Axum, internal port 3000) |
 | `frontend` | Compiled React app (served by Nginx) |
-| `nginx` | Reverse proxy — listens on port 80; 443 requires the manual TLS setup below |
+| `nginx` | TLS reverse proxy — host port 38080 redirects to HTTPS on 38443 by default |
 
 ---
 
@@ -189,7 +220,9 @@ Find the admin password confirmation in the backend logs:
 docker compose logs backend | grep -i "admin\|bootstrap"
 ```
 
-Open `http://localhost` (or your domain) and log in. You will be redirected to a first-login setup page where you must:
+Open `https://localhost:38443` for the default local mapping (or your public
+HTTPS domain) and log in. A self-signed local certificate produces a browser
+warning. You will be redirected to a first-login setup page where you must:
 
 1. Generate your **recovery phrase** (BIP39 mnemonic) — write it down and store it safely.
 2. Optionally configure 2FA.
@@ -200,21 +233,9 @@ The recovery phrase is the only way to recover your account if you forget your p
 
 ## TLS / HTTPS
 
-The bundled `nginx/nginx.conf` listens on port 80 only. To add HTTPS, add a second server block to `nginx/nginx.conf`:
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name kutup.example.com;
-
-    ssl_certificate     /etc/nginx/certs/fullchain.pem;
-    ssl_certificate_key /etc/nginx/certs/privkey.pem;
-
-    # copy all location blocks from the port-80 server block here
-}
-```
-
-Place your certificate files in `./nginx/certs/` (volume-mounted into the container):
+The checked-in Nginx configuration already redirects HTTP to HTTPS and serves
+the application only from its TLS server block. Certificate files are mounted
+read-only from:
 
 ```
 nginx/certs/
@@ -222,7 +243,8 @@ nginx/certs/
 └── privkey.pem      # Private key
 ```
 
-Then reload Nginx:
+Nginx cannot become healthy when either file is missing or invalid. After
+renewing or replacing them, reload Nginx:
 
 ```sh
 docker compose exec nginx nginx -s reload
@@ -230,14 +252,25 @@ docker compose exec nginx nginx -s reload
 
 ### Using Certbot (Let's Encrypt)
 
+Obtain the initial certificate before starting the Compose Nginx, or stop it so
+Certbot's standalone listener can own ports 80/443. Copy the live material into
+the mounted directory, restrict the private key, then start/reload the stack:
+
 ```sh
 # On the host (not inside Docker)
 certbot certonly --standalone -d kutup.example.com
 
 # Copy into nginx/certs/
+mkdir -p nginx/certs
 cp /etc/letsencrypt/live/kutup.example.com/fullchain.pem nginx/certs/
 cp /etc/letsencrypt/live/kutup.example.com/privkey.pem nginx/certs/
+chmod 600 nginx/certs/privkey.pem
+docker compose up -d --build --wait
 ```
+
+The Compose file uses development host ports `38080` and `38443`. A production
+deployment can map `80:80` and `443:443`, or keep the loopback mappings and use
+an existing edge proxy as described below.
 
 ---
 
@@ -333,9 +366,9 @@ CHAT_MEDIA_MAX_PLAINTEXT_BYTES=2147483648
 
 `CHAT_MEDIA_MAX_PLAINTEXT_BYTES` is the per-attachment plaintext-class ceiling.
 It defaults to the V1 hard cap of 2 GiB; an operator may lower it, but cannot
-raise it without a future typed media-suite/protocol revision. Drive and Chat
-media still share the account's one total quota—this is an individual-object
-admission limit, not a reserved Chat storage budget.
+raise it without a future typed media-suite/protocol revision. This is an
+individual-object admission limit. All Chat media is charged to the dedicated
+Chat quota; it never consumes the Drive/general quota.
 
 First contact shows a gray shield. Users who require independent identity
 authentication meet face to face and scan the conversation safety QR; an exact
@@ -348,6 +381,23 @@ the old signed incarnation history and atomically promotes the new one.
 Back up account recovery material. Recovery with the original phrase restores
 the same master key and account authority. Administrative wipe is termination,
 not recovery: it creates a new authority and requires contacts to re-verify.
+
+### Continuous Chat history and retention
+
+After unified recovery setup, Chat automatically protects display history and
+eligible media in an account-local E2EE backup. There is no backup-disable or
+device-transfer fallback. A clean browser restores verified history from the
+account homeserver, but creates fresh device, Direct, and MLS protocol state.
+See [`chat-backup.md`](chat-backup.md) for the lifecycle and
+[`chat-backup-security-threat-model.md`](chat-backup-security-threat-model.md)
+for the trust boundary.
+
+The hourly job applies 30-day mailbox retention and 45-day ordinary
+delivery-media retention by default. Runtime admin settings can override both,
+and zero disables that policy. Delivery-media cleanup never deletes separately
+protected history media. Account deletion and administrator loss-recovery wipe
+purge all backup rows, object prefixes, staging/reconciliation state, and
+charged Chat bytes.
 
 ## Contacts-only sealed sender
 
@@ -399,25 +449,44 @@ back to identified delivery.
 
 ## Storage and Backups
 
-All persistent data lives in Docker volumes and bind-mounted directories:
+The complete recovery set spans these locations in the checked-in topology:
 
 | Data | Location |
 |------|----------|
 | PostgreSQL database | `postgres_data` (Docker named volume) |
 | SeaweedFS master metadata | `./data/seaweedfs-master` |
 | SeaweedFS file chunks | `./data/seaweedfs-volume` |
+| SeaweedFS filer/S3 namespace metadata | `/filerldb2` inside the `seaweedfs-filer` container unless you configure a durable filer store |
 
-**To back up:**
+PostgreSQL contains the object references and encrypted key envelopes while
+SeaweedFS contains the corresponding ciphertext. Back them up as one recovery
+set. The simplest consistent operator procedure is a short maintenance window:
 
 ```sh
-# PostgreSQL
-docker compose exec postgres pg_dump -U "${POSTGRES_USER:-kutup}" "${POSTGRES_DB:-kutup}" | gzip > backup-$(date +%F).sql.gz
+# Stop new application writes, then dump PostgreSQL.
+docker compose stop nginx backend
+mkdir -p backups/current
+docker compose exec postgres pg_dump -U "${POSTGRES_USER:-kutup}" "${POSTGRES_DB:-kutup}" | gzip > backups/current/postgres.sql.gz
 
-# SeaweedFS data
-tar -czf seaweedfs-$(date +%F).tar.gz data/
+# Quiesce SeaweedFS, copy its container-local filer metadata, then archive the
+# bind-mounted master and volume state.
+docker compose stop seaweedfs-s3 seaweedfs-filer seaweedfs-volume seaweedfs-master
+docker compose cp seaweedfs-filer:/filerldb2 backups/current/filerldb2
+tar -czf backups/current/seaweedfs-data.tar.gz data/
+
+# Resume and wait for the complete stack.
+docker compose up -d --wait
 ```
 
-Store backups off-site. The SeaweedFS data directories contain ciphertext only — even a full backup is useless without user keys.
+Store the PostgreSQL dump, filer metadata, and master/volume archive together
+off-site and test restoration on an isolated host. They are one logical
+recovery point; restoring only the volume chunks does not restore the S3
+namespace. When using a mounted or external filer store, replace the
+`docker compose cp` step with that store's consistent backup procedure.
+SeaweedFS object payloads are ciphertext, but database and object metadata are
+still operationally sensitive. Protected content remains undecryptable without
+the users' account keys/recovery material; encryption is not a substitute for
+durable operator backups.
 
 ---
 
@@ -425,7 +494,7 @@ Store backups off-site. The SeaweedFS data directories contain ciphertext only �
 
 ```sh
 git pull
-docker compose up -d --build
+docker compose up -d --build --wait
 ```
 
 Database migrations run automatically on backend startup.
@@ -434,15 +503,19 @@ Database migrations run automatically on backend startup.
 
 ## Running Behind an Existing Reverse Proxy
 
-If you already have Nginx or Caddy on the host, set the stack to not bind port 80 directly. Edit `docker-compose.yml` to change the nginx ports:
+If you already have Nginx or Caddy on the host, bind the bundled TLS proxy only
+to loopback. The default development ports can be made explicit as:
 
 ```yaml
 nginx:
   ports:
-    - "127.0.0.1:8080:80"   # bind only locally
+    - "127.0.0.1:38080:80"
+    - "127.0.0.1:38443:443"
 ```
 
-Then proxy from your host Nginx to `http://127.0.0.1:8080`:
+Then proxy from the public edge to the bundled HTTPS listener. Prefer trusting
+the private upstream certificate; `proxy_ssl_verify off` is acceptable only for
+this loopback hop:
 
 ```nginx
 server {
@@ -453,7 +526,8 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/kutup.example.com/privkey.pem;
 
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass https://127.0.0.1:38443;
+        proxy_ssl_verify off;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         # Required for large file uploads:
@@ -467,7 +541,11 @@ For **Caddy**:
 
 ```
 kutup.example.com {
-    reverse_proxy localhost:8080
+    reverse_proxy https://127.0.0.1:38443 {
+        transport http {
+            tls_insecure_skip_verify
+        }
+    }
 }
 ```
 
@@ -494,7 +572,7 @@ backend from the same release.
 - **Firewall:** Only expose ports 80 and 443. All other services (PostgreSQL, SeaweedFS) must not be reachable from the internet.
 - **JWT_SECRET:** Use `openssl rand -hex 64`. A weak secret allows forging authentication tokens.
 - **ADMIN_ACCOUNT:** Keep this set — it defines the protected break-glass admin (never demotable/deletable). Rotate its password after first login, but don't remove the variable, or the break-glass protection lapses.
-- **Quotas:** Set default storage quotas in the admin dashboard to prevent abuse.
+- **Quotas:** Set both Drive/general and dedicated Chat defaults in the admin dashboard to prevent abuse.
 - **Updates:** Keep Docker images and the application updated.
 
 ---

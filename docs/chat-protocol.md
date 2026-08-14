@@ -4,8 +4,9 @@
 
 Kutup Chat provides Direct Chat, Note to Self, private MLS groups, encrypted
 profiles, signed account/device manifests, federated ciphertext delivery and
-contacts-only sealed sender. A capability is advertised only when its complete
-local and federated path is configured.
+contacts-only sealed sender, encrypted media, and continuous account-local
+display-history backup. A capability is advertised only when its complete local
+and federated path is configured.
 
 V1 has no global key-transparency log, witness, auditor or monitor. It uses a
 stable account self-authority, complete hash-linked manifest history, durable
@@ -95,12 +96,15 @@ old per-device libsignal ciphertext decryptable by the replacement.
 
 Clients provide explicit active-installation review, last-seen information and
 revocation. Chat display history is protected separately by the always-on,
-account-local E2EE backup described in
-[`plans/continuous-e2ee-chat-backup.md`](plans/continuous-e2ee-chat-backup.md).
+account-local E2EE backup described in [`chat-backup.md`](chat-backup.md).
 A recovered installation verifies and restores the signed encrypted base plus
 its ordered event tail; it never restores device keys, Direct ratchets, MLS
 epochs, mailbox cursors or outboxes. Device-to-device history transfer and its
 relay are not supported.
+
+The backup-specific trust boundary and residual fresh-device rollback risk are
+normative in
+[`chat-backup-security-threat-model.md`](chat-backup-security-threat-model.md).
 
 `AccountManifestV1` contains:
 

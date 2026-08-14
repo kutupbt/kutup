@@ -3,9 +3,9 @@
 > This draft is retained only as historical design context. Device-to-device
 > Chat history transfer is not supported. The implemented restoration contract
 > is the always-on server-hosted E2EE design in
-> [`../../plans/continuous-e2ee-chat-backup.md`](../../plans/continuous-e2ee-chat-backup.md).
+> [`../../chat-backup.md`](../../chat-backup.md).
 
-Status: implementation contract for the V1 web-device-continuity blocker.
+Status: rejected historical proposal; it is not an implementation contract.
 
 ## Goal and boundary
 
