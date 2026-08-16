@@ -43,7 +43,7 @@ The OnlyOffice client JS is bundled as a static download from `cryptpad/onlyoffi
 4. CryptPad ↔ OnlyOffice communication via `postMessage` over a custom channel (`Channel.create(msgEv, postMsg, ...)`, `inner.js:1733`)
 
 **CryptPad's modifications to upstream OnlyOffice:**
-- Branding hidden with CSS (`inner.js:2027`: `#app-title { display: none !important; }`) — not source-level removal.
+- CryptPad hides selected title chrome with CSS (`inner.js:2027`: `#app-title { display: none !important; }`) rather than removing it from the editor source. Kutup's integration preserves the visible OnlyOffice logo and attribution.
 - Versions are pinned by commit hash in `install-onlyoffice.sh`.
 - No formal upstream-tracking process; drift is managed manually.
 
@@ -205,7 +205,7 @@ OnlyOffice has native cell-range / paragraph locks. CryptPad surfaces them throu
 
 - **OnlyOffice client JS:** AGPL with branding restrictions (per upstream).
 - **CryptPad:** AGPL-3.0-or-later (same family).
-- The bundled OnlyOffice JS is shipped as-is. Branding is hidden with CSS, not stripped at the source level.
+- The bundled OnlyOffice JS is shipped as-is. Kutup hides selected embedded-editor chrome with CSS but preserves the visible OnlyOffice logo and attribution.
 - Distributing AGPL OnlyOffice JS from an AGPL CryptPad server is license-compatible.
 
 **Implication for kutup:** kutup is licensed under AGPL-3.0-only, so bundling AGPL OnlyOffice JS is license-compatible. The integration files (`frontend/public/onlyoffice/`, `frontend/src/components/editors/office/`) carry the upstream's `AGPL-3.0-or-later` SPDX header to stay compatible with the OnlyOffice client they link against. The actual OnlyOffice client JS is downloaded by `./install-onlyoffice.sh` into `frontend/public/onlyoffice/dist/` (gitignored), not vendored in the repo.

@@ -59,7 +59,7 @@ Once Phase 5a/b is unblocked the rest is mechanical (per parent spec):
 - **6a** getLock / releaseLock — wrap in `KindOfficeLock`, broadcast.
 - **6b** offline lock cleanup — Hub Leave → drop locks.
 - **6c** save-lock — single global, 30 s timeout.
-- **7a** CSS branding hides.
+- **7a** CSS cleanup for selected embedded-editor chrome, preserving the visible OnlyOffice logo and attribution.
 - **7b** error / edge cases (TOO_LARGE, x2t failure, mediasData cleanup).
 - **7c** final regression sweep + push.
 

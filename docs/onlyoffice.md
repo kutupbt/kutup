@@ -21,8 +21,9 @@ CryptPad already did option 2. They maintain a fork of OnlyOffice's `web-apps` r
 
 1. **Client-side x2t conversion** — the OOXML ↔ binary converter compiled to WebAssembly, loaded inside an isolated iframe. Replaces server-side conversion entirely.
 2. **postMessage bridge replaces CommandService** — CryptPad's `inner.html` and `inner.js` (~3400 LOC) sit between the OO editor and the host page, brokering operations over `window.postMessage`. The host page (kutup, in our case) wires this bridge to its own transport — for us, our envelope-framed WebSocket relay.
-3. **Stripped server-required features** — spell-check, format-convert, callback URLs, telemetry. CSS hides upstream branding without source patches.
-4. **Hooks for `getDoc` / `setDoc` / `saveChanges`** — entry points the host page uses to feed initial bytes in, get current bytes out, and react to changes.
+3. **Stripped server-required features** — spell-check, format-convert, callback URLs, telemetry.
+4. **Kutup presentation layer** — CSS removes selected stock chrome and unavailable controls without patching the editor source; the visible OnlyOffice logo and attribution are preserved.
+5. **Hooks for `getDoc` / `setDoc` / `saveChanges`** — entry points the host page uses to feed initial bytes in, get current bytes out, and react to changes.
 
 The total surface is **tens of thousands of lines of patches** to OnlyOffice's compiled JS. Building it from scratch on top of upstream OO would mean redoing that work, then re-doing it on every OO release.
 
