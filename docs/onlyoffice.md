@@ -48,12 +48,33 @@ frontend/public/onlyoffice/
 │   │   └── dictionaries/
 │   └── x2t/                    ← OOXML ↔ internal-binary converter (WASM)
 ├── inner.html                  ← postMessage bridge (kutup's host-side hooks)
-└── templates/                  ← empty doc seeds for the New menu
+├── templates/                  ← empty doc seeds for the New menu
+├── LICENSES/                   ← exact third-party license texts
+├── SOURCE.json                 ← immutable source coordinates and hashes
+├── SBOM.spdx.json              ← SPDX 2.3 package inventory
+└── FILES.sha512                ← whole-tree integrity manifest
 ```
 
 **Versioning:** CryptPad numbers their bundles `v1`…`v9` independently of OnlyOffice's upstream version. `v9` corresponds to a specific OO upstream commit pinned in CryptPad's `install-onlyoffice.sh`.
 
 **inner.html** is the kutup-specific glue: it loads the chosen editor app, talks to the OO instance via `postMessage`, and exposes hooks (`window.APP`, `getLock`, `saveChanges`, `oo-self`) that `OfficeEditor.tsx` wires through our envelope WebSocket.
+
+## How the bundle is delivered
+
+`docker compose up -d --build` requires no preparation step. The frontend
+Dockerfile uses the public, static
+[`kutupbt/kutup-office-assets`](https://github.com/kutupbt/kutup-office-assets)
+image as a build-only stage, pinned by OCI digest. It overlays the verified
+assets into `public/onlyoffice/` before Vite runs, and the final Nginx image
+serves the complete editor same-origin. The asset image is not a service and
+does not run in production.
+
+The packaging repository pins immutable upstream commits and artifact hashes,
+rejects unsafe archives, verifies required files and the complete output tree,
+and publishes source metadata, licenses, and an SPDX SBOM. The visible
+OnlyOffice logo and attribution remain present. For local frontend work outside
+Docker, run `./install-onlyoffice.sh`; this is a development fallback, not a
+Compose prerequisite.
 
 ---
 
@@ -71,14 +92,19 @@ This tradeoff is intentional. The alternative — maintaining a parallel patch s
 
 ## When CryptPad ships a new bundle
 
-The procedure (rough; not yet automated):
+The maintainer procedure is:
 
-1. CryptPad publishes `vN+1` in `cryptpad/onlyoffice-builds`.
-2. Pull their `dist/vN+1/` tree into `frontend/public/onlyoffice/dist/vN+1/`.
-3. Update `inner.html` if their bridge contract shifted (rare but happens; check their `www/common/onlyoffice/inner.js` diff).
-4. Update the editor-loader path in `inner.html` to point at `dist/vN+1/`.
-5. Manual smoke test: open a `.docx`, `.xlsx`, `.pptx`, edit + save, two-tab collab, refresh. The Playwright office specs (`08–17`) gate this.
-6. Bump the bundle path constant; commit.
+1. CryptPad publishes and identifies the replacement editor and x2t sources.
+2. Update `assets.lock.json` in `kutupbt/kutup-office-assets` with immutable
+   commits, artifact sizes, hashes, license inputs, and the new package version.
+3. Build and run the independent verifier locally; inspect that the visible
+   OnlyOffice logo and attribution remain present.
+4. Update `inner.html` if the bridge contract shifted and update its editor path
+   if the packaged directory changes.
+5. Smoke-test `.docx`, `.xlsx`, and `.pptx` open/edit/save, two-tab collaboration,
+   refresh, and logo visibility.
+6. Publish an AMD64/ARM64 OCI index, then update Kutup's Dockerfile to its exact
+   digest and repeat the clean-clone Compose test.
 
 We do **not** maintain forks of CryptPad's patches. If kutup ever needs a behavior CryptPad doesn't expose (e.g. PDF editing, custom export filters), the right move is to upstream a feature request to CryptPad rather than fork.
 

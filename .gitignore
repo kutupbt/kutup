@@ -13,6 +13,10 @@ docker-compose.override.yml
 # vendored binary builds, not source we maintain.
 frontend/public/onlyoffice/dist/
 frontend/public/onlyoffice/templates/
+frontend/public/onlyoffice/LICENSES/
+frontend/public/onlyoffice/SOURCE.json
+frontend/public/onlyoffice/SBOM.spdx.json
+frontend/public/onlyoffice/FILES.sha512
 test-results/
 tests/e2e/sanitized-results/
 

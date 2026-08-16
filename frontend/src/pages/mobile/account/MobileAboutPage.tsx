@@ -9,8 +9,8 @@ import { PressableRow } from '@/components/ui/pressable-row'
  * MobileAboutPage — `/drive/account/about`.
  *
  * Static info: version, brand tagline, and links to source / privacy /
- * license. The version string comes from the build-time `VITE_APP_VERSION`
- * env (set by Vite); if missing it falls back to "dev".
+ * license / third-party notices. The version string comes from the build-time
+ * `VITE_APP_VERSION` env (set by Vite); if missing it falls back to "dev".
  */
 export default function MobileAboutPage() {
   const { t } = useTranslation()
@@ -79,7 +79,7 @@ export default function MobileAboutPage() {
               'noopener',
             )
           }
-          last
+          last={false}
           ariaLabel={t('mobile.account.about.license', 'License')}
         >
           <div className="w-8 h-8 rounded-[10px] bg-surface-sunken text-text-secondary flex items-center justify-center shrink-0">
@@ -90,6 +90,24 @@ export default function MobileAboutPage() {
               {t('mobile.account.about.license', 'License')}
             </div>
             <div className="text-[12px] text-text-tertiary mt-0.5">AGPL-3.0</div>
+          </div>
+          <Icon d={ICONS.chevronRight} size={16} color="var(--text-tertiary)" />
+        </PressableRow>
+        <PressableRow
+          onClick={() => window.open('/onlyoffice/LICENSE.md', '_blank', 'noopener')}
+          last
+          ariaLabel={t('mobile.account.about.thirdParty', 'Third-party notices')}
+        >
+          <div className="w-8 h-8 rounded-[10px] bg-surface-sunken text-text-secondary flex items-center justify-center shrink-0">
+            <Icon d={ICONS.file} size={16} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium text-text-primary">
+              {t('mobile.account.about.thirdParty', 'Third-party notices')}
+            </div>
+            <div className="text-[12px] text-text-tertiary mt-0.5">
+              {t('mobile.account.about.thirdPartySub', 'ONLYOFFICE and CryptPad')}
+            </div>
           </div>
           <Icon d={ICONS.chevronRight} size={16} color="var(--text-tertiary)" />
         </PressableRow>

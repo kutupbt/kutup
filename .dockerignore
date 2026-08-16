@@ -11,6 +11,10 @@ frontend/public/chat-wasm/
 frontend/public/crypto-wasm/
 frontend/public/onlyoffice/dist/
 frontend/public/onlyoffice/templates/
+frontend/public/onlyoffice/LICENSES/
+frontend/public/onlyoffice/FILES.sha512
+frontend/public/onlyoffice/SBOM.spdx.json
+frontend/public/onlyoffice/SOURCE.json
 src-tauri/
 backend/
 cmd/

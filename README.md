@@ -101,7 +101,12 @@ docker compose up -d --build --wait
 
 Open `https://localhost:38443`, accept the local self-signed certificate, log in with the credentials from `ADMIN_ACCOUNT`, save your generated recovery phrase, and you're in. HTTP on port `38080` redirects to HTTPS. The bootstrap account is the protected **break-glass admin** — it can't be demoted, disabled, or deleted; promote any further admins from inside the app. Use a publicly trusted certificate and normal ports for production; see the self-hosting guide.
 
-Optional: `./install-onlyoffice.sh` enables `.docx` / `.xlsx` / `.pptx` editing (otherwise office files are download-only).
+Office editing works in the default Compose build. The build pulls an
+immutable, verified client-side asset image from
+[`kutupbt/kutup-office-assets`](https://github.com/kutupbt/kutup-office-assets);
+no OnlyOffice DocumentServer or manual installer is required. The
+`./install-onlyoffice.sh` script remains available for non-Docker frontend
+development and air-gapped image preparation.
 
 ---
 

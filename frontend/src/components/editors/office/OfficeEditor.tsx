@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 kutup contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Part of kutup's optional OnlyOffice integration. This file is licensed
+// Part of kutup's client-side OnlyOffice integration. This file is licensed
 // AGPL-3.0-or-later because it drives the AGPL OnlyOffice bridge. Kutup
 // itself is AGPL-3.0-only; this subtree carries the upstream "or-later"
 // suffix to stay compatible with the OnlyOffice client's license terms.

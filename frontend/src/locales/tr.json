@@ -935,6 +935,8 @@
       "about.source": "Kaynak kod",
       "about.trademark": "Marka politikası",
       "about.license": "Lisans",
+      "about.thirdParty": "Üçüncü taraf bildirimleri",
+      "about.thirdPartySub": "ONLYOFFICE ve CryptPad",
       "security.devicesEmptyHint": "Cihazlar ortak bir düzenleme başlattıklarında burada görünür.",
       "security.totpOffDescription": "Kimlik doğrulama uygulamasıyla ekstra güvenlik katmanı ekleyin"
     },

@@ -214,7 +214,7 @@ kutup/
 │   │   ├── pages/           # Route-level components (Drive, FileEditorPage, Settings, Admin, …)
 │   │   ├── store/           # Redux slices (auth state)
 │   │   └── workers/         # Web Worker for Rust/WASM Argon2id KDF
-│   ├── public/onlyoffice/   # CryptPad-pinned OnlyOffice bundle (gitignored; install via script)
+│   ├── public/onlyoffice/   # Bridge source; verified assets overlay during Docker builds
 │   └── vite.config.ts       # Dev server proxy config
 │   (CLI commands: register, login, ls, upload, download, sync, share, versions, devices, 2fa, pub, mv, color;
 │    redb session store, device key in the OS keyring on macOS/Windows or a chmod-600 file on Linux)
