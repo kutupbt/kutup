@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -43,9 +41,12 @@ services:
   seaweedfs-s3:
     image: chrislusf/seaweedfs:latest
     restart: unless-stopped
-    command: s3 -filer=seaweedfs-filer:8888 -port=8333 -config=/etc/seaweedfs/s3.json
-    volumes:
-      - ./seaweedfs-s3.json:/etc/seaweedfs/s3.json:ro
+    command: s3 -filer=seaweedfs-filer:8888 -port=8333
+    environment:
+      # With no static S3 config file, SeaweedFS treats these as fallback admin
+      # credentials. Keep them identical to the initializer and backend values.
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-kutup}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-kutup_dev_s3_secret}
     depends_on:
       - seaweedfs-filer
     # No ports exposed — only reachable from backend/nginx internally

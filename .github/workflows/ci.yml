@@ -26,6 +26,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Verify Compose S3 credential wiring
+        run: python3 scripts/test-compose-s3-credentials.py
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Set up Rust

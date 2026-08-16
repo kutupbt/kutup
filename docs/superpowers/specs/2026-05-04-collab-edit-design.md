@@ -562,7 +562,7 @@ docker compose -f docker-compose-volume.yml config > /dev/null
 - `frontend/src/store/authSlice.ts` — track current device id.
 
 **Configuration:**
-- `seaweedfs-s3.json` — leave unchanged (per-bucket versioning is separate API call).
+- SeaweedFS S3 credentials remain a deployment concern (per-bucket versioning is a separate API call).
 - `docker-compose.yml` and `docker-compose-volume.yml` — add a one-shot init container that enables versioning on the bucket and applies the lifecycle rule.
 
 ---

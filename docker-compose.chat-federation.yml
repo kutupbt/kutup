@@ -57,9 +57,10 @@ services:
 
   seaweedfs-s3:
     image: chrislusf/seaweedfs:latest
-    command: s3 -filer=seaweedfs-filer:8888 -port=8333 -config=/etc/seaweedfs/s3.json
-    volumes:
-      - ./seaweedfs-s3.json:/etc/seaweedfs/s3.json:ro
+    command: s3 -filer=seaweedfs-filer:8888 -port=8333
+    environment:
+      AWS_ACCESS_KEY_ID: kutup
+      AWS_SECRET_ACCESS_KEY: kutup_dev_s3_secret
     depends_on:
       - seaweedfs-filer
 
