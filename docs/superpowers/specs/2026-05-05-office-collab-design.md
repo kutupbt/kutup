@@ -117,7 +117,7 @@ Plus a sibling iframe:
 | **6a** | getLock / releaseLock plumbing | Catch `getLock` and `releaseLock` postMessages, wrap in a new `KindOfficeLock` envelope, broadcast. On receive: `ooChannel.send({type:'getLock', locks: …})` so OnlyOffice greys out the locked range. Lock state in a per-file Y.Map (or a Postgres `office_locks` table; pick simpler) | **Yes** — two tabs editing same .xlsx, click on a cell in tab A → tab B sees it as locked |
 | **6b** | Offline lock cleanup | `deleteOfflineLocks()` analog: when a peer disconnects (we know via the Hub's `Leave`), drop their locks from the shared state and broadcast `releaseLock` to remaining peers | **Yes** — close tab A → tab B sees its cell locks released |
 | **6c** | Save-lock | Single global save-lock per file (`content.saveLock`) so two tabs don't double-checkpoint. 20-40s timeout if the holder disconnects without releasing | **Yes** — both tabs hit Save simultaneously → only one snapshot lands |
-| **7a** | CSS branding hides | Inject the same `injectCSS` rules CryptPad uses (line ~2002-2024 in their inner.js) — hide title-doc-name, file-info, branding logos, etc. Light/dark theme follows kutup's | **Yes** — open an office doc → no OnlyOffice branding visible |
+| **7a** | Embedded-editor CSS cleanup | Use `injectCSS` to hide selected title, document-information, unavailable-service, and redundant-user controls. Preserve the visible OnlyOffice logo and attribution. Light/dark theme follows kutup's. | **Yes** — open an office doc → selected stock controls are hidden and the OnlyOffice logo remains visible |
 | **7b** | Error / edge cases | TOO_LARGE → "Cannot save — file too large" banner, editor stays read-only (`APP.cantCheckpoint = true` analog). x2t conversion failure → toast + retry button. mediasData cleanup on unmount | **Yes** — manually upload a >10 MB .docx to trip TOO_LARGE; see the banner |
 | **7c** | Final regression | All formats: edit, save, reload, share, restore, federation-deferral notice. Build clean, type-check clean. Push. | **Yes** — full sweep |
 
@@ -322,7 +322,7 @@ These are bounded follow-ups, not protocol gaps:
   - Phase 6c: single global save-lock per file, 30 s timeout — store in a per-fileID `time.Time` map on the Hub.
 
 - **Phase 7 — polish.**
-  - 7a: `injectCSS` rules to hide OnlyOffice branding (mirror CryptPad inner.js:~2002-2024).
+  - 7a: `injectCSS` rules for selected embedded-editor chrome, while preserving the visible OnlyOffice logo and attribution (adapted from CryptPad inner.js:~2002-2024).
   - 7b: TOO_LARGE banner; x2t failure toast + retry; `mediasData` cleanup on unmount.
   - 7c: full regression sweep against §10 verification list.
 

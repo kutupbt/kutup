@@ -43,7 +43,7 @@ The OnlyOffice client JS is bundled as a static download from `cryptpad/onlyoffi
 4. CryptPad ↔ OnlyOffice communication via `postMessage` over a custom channel (`Channel.create(msgEv, postMsg, ...)`, `inner.js:1733`)
 
 **CryptPad's modifications to upstream OnlyOffice:**
-- Branding hidden with CSS (`inner.js:2027`: `#app-title { display: none !important; }`) — not source-level removal.
+- CryptPad hides selected title chrome with CSS (`inner.js:2027`: `#app-title { display: none !important; }`) rather than removing it from the editor source. Kutup's integration preserves the visible OnlyOffice logo and attribution.
 - Versions are pinned by commit hash in `install-onlyoffice.sh`.
 - No formal upstream-tracking process; drift is managed manually.
 
@@ -205,10 +205,17 @@ OnlyOffice has native cell-range / paragraph locks. CryptPad surfaces them throu
 
 - **OnlyOffice client JS:** AGPL with branding restrictions (per upstream).
 - **CryptPad:** AGPL-3.0-or-later (same family).
-- The bundled OnlyOffice JS is shipped as-is. Branding is hidden with CSS, not stripped at the source level.
+- The bundled OnlyOffice JS is shipped as-is. Kutup hides selected embedded-editor chrome with CSS but preserves the visible OnlyOffice logo and attribution.
 - Distributing AGPL OnlyOffice JS from an AGPL CryptPad server is license-compatible.
 
-**Implication for kutup:** kutup is licensed under AGPL-3.0-only, so bundling AGPL OnlyOffice JS is license-compatible. The integration files (`frontend/public/onlyoffice/`, `frontend/src/components/editors/office/`) carry the upstream's `AGPL-3.0-or-later` SPDX header to stay compatible with the OnlyOffice client they link against. The actual OnlyOffice client JS is downloaded by `./install-onlyoffice.sh` into `frontend/public/onlyoffice/dist/` (gitignored), not vendored in the repo.
+**Current Kutup implementation:** kutup is licensed under AGPL-3.0-only, so
+bundling the applicable AGPL OnlyOffice JS is license-compatible. Integration
+files carry `AGPL-3.0-or-later` SPDX headers where they link to the client.
+Generated editor assets are not vendored in Git: normal Docker builds copy a
+verified digest-pinned OCI package from `kutupbt/kutup-office-assets`, while
+`./install-onlyoffice.sh` supplies the same pinned runtime for non-Docker
+development. The package includes exact source coordinates, license copies,
+the file-level Section 7 notice, and CC BY-SA 4.0 legal code.
 
 ---
 
@@ -236,7 +243,10 @@ This integration is **doable but significant**. The cleanest port:
 - Mirror CryptPad's `rtChannel` / `ooChannel` bridge in TypeScript: capture `saveChanges` postMessages, wrap in our libsodium AEAD envelope, send over the same Go WebSocket relay we use for the Yjs path. The relay does not care about payload shape — just routes opaque ciphertext frames by file_id room.
 - Reuse our snapshot model: every N ops (or idle-debounce 30 s), capture `editor.asc_nativeGetFile()`, run x2t to OOXML, encrypt the OOXML, upload as a new file version in S3 (replacing the live blob in S3 versioning). The Postgres delta log captures wrapped OnlyOffice ops.
 - Lock state lives in a shared Yjs `Y.Map` per file (or a parallel "locks" frame kind) — same E2EE wrapper.
-- License path: relicense the office-edit subdirectory to AGPL, **or** ship OnlyOffice as a separately-installable optional package the user pulls themselves. Consult a lawyer.
+- License path (historical design choice): the office integration files use
+  AGPL-compatible terms and the generated third-party assets are distributed
+  as a separate, verified OCI package with their notices and corresponding
+  source coordinates.
 
 The **hardest** parts to get right:
 1. Multi-iframe `postMessage` plumbing.

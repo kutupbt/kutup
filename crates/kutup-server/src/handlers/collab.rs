@@ -366,7 +366,7 @@ async fn handle_frame(
         return;
     }
 
-    // Durable kinds: persist (drop on seq/sender_seq conflict), then broadcast.
+    // Durable kinds: persist (drop only exact sender-sequence replays), then broadcast.
     if persist_frame(state, file_uuid, peer.device_id, &f, data)
         .await
         .is_err()
@@ -377,8 +377,9 @@ async fn handle_frame(
 }
 
 /// Inserts a frame into `file_update_log`, assigning the next per-file seq — mirrors
-/// `persistFrame`. The `(file_id, seq)` PK and `(file_id, sender_device, sender_seq)` UNIQUE
-/// index drop replays/races (the client retransmits on resume).
+/// `persistFrame`. Sequence allocation is serialized per file so simultaneous frames from
+/// different devices cannot both select the same `MAX(seq) + 1`; the
+/// `(file_id, sender_device, sender_seq)` unique index still rejects exact replays.
 async fn persist_frame(
     state: &AppState,
     file_uuid: Uuid,
@@ -386,7 +387,18 @@ async fn persist_frame(
     f: &Frame,
     raw: &[u8],
 ) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar(
+    let mut tx = state.pool.begin().await?;
+
+    // PostgreSQL advisory locks are transaction-scoped and do not require a schema change.
+    // A 64-bit prefix is sufficient as a lock namespace: a collision only serializes two
+    // unrelated files briefly; it cannot mix their rows or weaken database constraints.
+    let lock_key = (file_uuid.as_u128() >> 64) as u64 as i64;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(lock_key)
+        .execute(&mut *tx)
+        .await?;
+
+    let seq = sqlx::query_scalar(
         r#"INSERT INTO file_update_log (file_id, seq, sender_device, sender_seq, doc_key_id, kind, frame)
            VALUES (
              $1,
@@ -401,8 +413,11 @@ async fn persist_frame(
     .bind(f.doc_key_id as i64)
     .bind(f.kind as i16)
     .bind(raw)
-    .fetch_one(&state.pool)
-    .await
+    .fetch_one(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(seq)
 }
 
 /// Streams every frame with `seq > since_seq` to the joining client — mirrors `replayLog`.

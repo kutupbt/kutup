@@ -111,19 +111,22 @@
         }
 
         // CSS injected into the OnlyOffice editor iframe at onAppReady to
-        // hide stock branding + chrome that doesn't fit kutup's surface.
+        // hide selected stock chrome and controls that do not fit kutup's
+        // embedded surface. The OnlyOffice logo and attribution remain
+        // visible and are intentionally not targeted by these rules.
         // Lifted verbatim from CryptPad's `www/common/onlyoffice/inner.js`
         // (~line 2002-2024). v9-compatible — re-check upstream when bumping
         // the OnlyOffice build, since selectors are private API.
-        var KUTUP_HIDE_BRANDING_CSS = [
+        var KUTUP_EDITOR_CHROME_CSS = [
           // Title bar (top centre): document name + user name pill.
           '#title-doc-name { display: none !important; }',
           '#title-user-name { display: none !important; }',
           // Insert tab: equation slot + the trailing separator before it.
           'section[data-tab="ins"] .separator:nth-last-child(2) { display: none !important; }',
           '#slot-btn-insequation { display: none !important; }',
-          // File menu: "Document info" entry + its panel (carries the
-          // OnlyOffice About / build version — primary branding hide).
+          // File menu: document-information entry and panel, which are not
+          // wired into kutup's embedded editing flow. This does not target
+          // the visible OnlyOffice logo or attribution.
           '#fm-btn-info { display: none !important; }',
           '#panel-info { display: none !important; }',
           // Image / textart "from URL": kutup is E2EE, no remote fetch.
@@ -779,14 +782,15 @@
                     events: {
                       onAppReady: function () {
                         setStatus('editor: app ready')
-                        // Hide OnlyOffice's stock branding/chrome. injectCSS
-                        // is OnlyOffice's documented API for landing rules in
-                        // the editor's nested iframe — used for theme switch
-                        // upstream too. No-op if the editor build doesn't
-                        // expose it (older v6/v7 forks); v9 has it.
+                        // Apply kutup's selected editor-chrome rules while
+                        // preserving the visible OnlyOffice logo and
+                        // attribution. injectCSS lands rules in the editor's
+                        // nested iframe and is also used upstream for theme
+                        // switching. No-op if an older build does not expose
+                        // it; the pinned v9 build does.
                         try {
                           if (docEditor && typeof docEditor.injectCSS === 'function') {
-                            docEditor.injectCSS(KUTUP_HIDE_BRANDING_CSS)
+                            docEditor.injectCSS(KUTUP_EDITOR_CHROME_CSS)
                           }
                         } catch (err) {
                           console.warn('[kutup-bridge] injectCSS failed', err)

@@ -9,6 +9,11 @@ Playwright is intentionally configured with `fullyParallel: false`, one worker,
 and `retries: 0`. Specs share or deliberately reset backend state, and a retry
 must never hide a recovery, crypto, or convergence failure.
 
+The Chromium project uses the full browser's headless mode. This remains
+installed by `playwright install chromium` and avoids the standalone legacy
+headless shell, which can SIGTRAP under OnlyOffice's repeated nested
+canvas/worker load.
+
 ## Install
 
 ```sh
