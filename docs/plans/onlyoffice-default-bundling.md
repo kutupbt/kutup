@@ -256,7 +256,16 @@ Completed locally on 2026-08-16 without a hosted CI run:
 - the final Nginx image returned HTTP 200 for the bridge, editor API, preserved
   logo SVG, x2t JavaScript/WASM, three templates, licenses, source manifest,
   SBOM, and whole-tree integrity manifest; and
-- the frontend Vitest suite passed all 55 files and 350 tests.
+- the frontend Vitest suite passed all 55 files and 350 tests;
+- all 21 dedicated office Playwright tests passed locally with one worker and
+  zero retries, covering DOCX/XLSX/PPTX creation and typing, reload, peer
+  cursors, two-way edits, formatting, saves, version history, and restore;
+- the simultaneous XLSX edit regression passed five consecutive zero-retry
+  repetitions after durable per-file sequence allocation was serialized in
+  PostgreSQL; and
+- Playwright now uses full Chromium headless mode. The legacy standalone
+  headless shell produced confirmed SIGTRAP crashes under the repeated nested
+  canvas/worker load; the full 21-test matrix produced no new browser crash.
 
 ## Primary upstream references
 

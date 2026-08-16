@@ -42,7 +42,12 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      // Use Chromium's full-browser headless mode. The legacy standalone
+      // chrome-headless-shell process can SIGTRAP while repeatedly loading
+      // OnlyOffice's nested canvas/worker stack in a long zero-retry run.
+      // `playwright install chromium` provides this binary alongside the
+      // shell, so local and CI installation commands remain unchanged.
+      use: { ...devices['Desktop Chrome'], channel: 'chromium' },
     },
   ],
 })
