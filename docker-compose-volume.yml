@@ -42,22 +42,9 @@ services:
     image: chrislusf/seaweedfs:latest
     restart: unless-stopped
     environment:
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-kutup}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-kutup_dev_s3_secret}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        mkdir -p /etc/seaweedfs
-        cat > /etc/seaweedfs/s3.json <<EOF
-        {
-          "identities": [{
-            "name": "kutup",
-            "credentials": [{"accessKey": "$$S3_ACCESS_KEY", "secretKey": "$$S3_SECRET_KEY"}],
-            "actions": ["Admin", "Read", "Write", "List", "Tagging"]
-          }]
-        }
-        EOF
-        exec weed s3 -filer=seaweedfs-filer:8888 -port=8333 -config=/etc/seaweedfs/s3.json
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-kutup}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-kutup_dev_s3_secret}
+    command: s3 -filer=seaweedfs-filer:8888 -port=8333
     depends_on:
       - seaweedfs-filer
     # No ports exposed — only reachable from backend/nginx internally

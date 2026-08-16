@@ -39,7 +39,7 @@ POSTGRES_PASSWORD=<strong-random-password>
 #   openssl rand -hex 64
 JWT_SECRET=<64-byte-hex-string>
 
-# SeaweedFS S3 credentials — must match seaweedfs-s3.json
+# SeaweedFS S3 credentials — injected into every bundled service by Compose
 S3_ACCESS_KEY=kutup
 S3_SECRET_KEY=<strong-random-secret>
 S3_BUCKET=kutup-files
@@ -150,32 +150,11 @@ sender-recipient correlations are never metric labels or trace fields.
 
 ---
 
-## Step 2: Configure SeaweedFS S3 Credentials
+## Step 2: Start the Stack
 
-`seaweedfs-s3.json` must use the **same** access key and secret you set in `.env`:
-
-```json
-{
-  "identities": [
-    {
-      "name": "kutup",
-      "credentials": [
-        {
-          "accessKey": "kutup",
-          "secretKey": "<same-S3_SECRET_KEY-as-in-.env>"
-        }
-      ],
-      "actions": ["Admin", "Read", "Write"]
-    }
-  ]
-}
-```
-
-The file is volume-mounted into the SeaweedFS S3 container at startup.
-
----
-
-## Step 3: Start the Stack
+Compose injects `S3_ACCESS_KEY` and `S3_SECRET_KEY` from `.env` into SeaweedFS,
+the bucket initializer, and the backend. No second credential file needs to be
+edited or kept in sync.
 
 The bundled Nginx already requires TLS. Before the first start, place a
 certificate and key at `nginx/certs/fullchain.pem` and
@@ -212,7 +191,7 @@ This builds the backend and frontend images, then starts all services:
 
 ---
 
-## Step 4: First Login
+## Step 3: First Login
 
 Find the admin password confirmation in the backend logs:
 

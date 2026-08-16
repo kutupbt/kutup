@@ -265,7 +265,16 @@ Completed locally on 2026-08-16 without a hosted CI run:
   PostgreSQL; and
 - Playwright now uses full Chromium headless mode. The legacy standalone
   headless shell produced confirmed SIGTRAP crashes under the repeated nested
-  canvas/worker load; the full 21-test matrix produced no new browser crash.
+  canvas/worker load; the full 21-test matrix produced no new browser crash;
+- a public `master` clone at merge commit `5601add` built the frontend without
+  running `install-onlyoffice.sh`, resolved the pinned public GHCR digest, and
+  passed the Dockerfile's required-file and version checks; and
+- the clean-clone run exposed and fixed a pre-existing first-start credential
+  mismatch: Compose now injects the configured S3 credentials into SeaweedFS,
+  its initializer, and every backend. Default, named-volume, and dual-bucket
+  federation initialization passed with the static credential file removed,
+  the default stack reached full health, and a real XLSX edit/save browser
+  smoke test passed with zero retries.
 
 ## Primary upstream references
 
