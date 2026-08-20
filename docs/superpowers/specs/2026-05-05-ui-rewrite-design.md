@@ -1,6 +1,9 @@
 # Drive UI Rewrite — Google-Drive-Style Layout (v1)
 
-**Status:** approved 2026-05-05
+**Status:** historical approved design (2026-05-05), substantially implemented.
+Use the running responsive UI and [`../../roadmap.md`](../../roadmap.md) for the
+current shipped/deferred boundary; old “no backend support” statements below
+describe the pre-implementation baseline.
 **Scope:** Frontend-only redesign of the Drive view. No backend changes.
 
 ---

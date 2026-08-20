@@ -1,7 +1,11 @@
 # Research: Mobile strategy — Tauri-mobile shell + native secure-storage plugins (forward-looking)
 
 **Captured:** 2026-05-13
-**Status:** Reasoning + plugin survey. iOS half shipped (`feat/ios-keychain`: `keyring`'s `apple-native` widened to cover iOS). Android half is the open follow-up — this note is the reasoning pinned down before whoever picks it up.
+**Status:** historical Tauri-mobile reasoning and plugin survey. The dedicated
+native iOS and Android apps are now separate work in progress and are not
+release-ready; [`../mobile-build.md`](../mobile-build.md) is the current
+ownership/status reference. The Tauri shell and its mobile entry points remain
+in this repository for experimentation.
 **Scope:** Two intertwined decisions about the mobile app — (a) which native shell layer we use (Tauri-mobile vs React Native vs Capacitor); (b) the Android secure-storage path now that iOS Keychain works.
 
 ---

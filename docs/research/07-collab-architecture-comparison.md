@@ -3,6 +3,13 @@
 **Date:** 2026-05-07
 **Purpose:** Establish a deep, citable understanding of how each system handles realtime collaborative editing — wire format, conflict resolution, persistence, encryption, presence — before we keep iterating on kutup's outstanding xlsx sync issue. No fixes proposed in this document; the goal is shared vocabulary and a clear map of where the three systems diverge.
 
+> **Historical status:** the XLSX second-direction stall described here was
+> subsequently resolved by the CryptPad-shaped lock state machine and
+> save/unlock sequencing (`d0917ad`, `6286891`). Current Office behavior is
+> documented in [`../onlyoffice.md`](../onlyoffice.md) and guarded by specs
+> `03`–`19` under `tests/e2e/specs/`. Paths and “currently” statements below
+> preserve the 2026-05-07 diagnostic baseline.
+
 ---
 
 ## Executive summary

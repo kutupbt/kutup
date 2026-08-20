@@ -1,6 +1,14 @@
 # Collaborative E2EE Editing — v1.0 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical status: implemented, then migrated from Go to Rust.** Current
+> behavior is documented in [`../../architecture.md`](../../architecture.md)
+> and current paths/tests in [`../../contributing.md`](../../contributing.md).
+> The Go/Fiber paths and unchecked task syntax below preserve the original
+> execution plan; they are not outstanding work.
+
+> **Historical execution instruction:** the original plan required a
+> subagent-driven workflow and used checkbox (`- [ ]`) task syntax. It is
+> preserved as part of the record and must not be resumed as current work.
 
 **Goal:** Ship real-time, end-to-end-encrypted collaborative editing of `.txt`/`.md`/code files inside kutup with Drive-style version history. Server stores ciphertext only.
 

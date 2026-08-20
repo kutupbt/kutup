@@ -8,9 +8,9 @@ Contributions are welcome. This guide covers local development setup for both th
 
 | Tool | Version | Install |
 |------|---------|---------|
-| Rust | 1.91+ (stable) | https://rustup.rs/ |
-| Node.js | 20+ | https://nodejs.org/ |
-| pnpm | 9+ | `npm install -g pnpm` |
+| Rust | 1.91.1+ (stable) | https://rustup.rs/ |
+| Node.js | 22 (CI version) | https://nodejs.org/ |
+| pnpm | 10.28.2 (root package and CI) | `corepack enable` |
 | Docker + Compose v2 | latest | https://docs.docker.com/get-docker/ |
 
 ---
@@ -199,31 +199,37 @@ kutup/
 │   │   └── migrations/      # SQL migrations (embedded via sqlx::migrate!())
 │   ├── kutup-cli/           # The `kutup` CLI (clap)
 │   │   └── src/{commands,api,session,syncengine,transfer}/  # commands, HTTP client, session store, sync
-│   └── kutup-crypto/        # Shared E2EE primitives (dryoc + RustCrypto)
-│       ├── src/{kdf,account_envelope,drive_envelope,drive_object,named_share,stream,envelope}.rs
-│       └── tests/vectors/   # Checked-in byte-parity vectors
+│   ├── kutup-crypto/        # Canonical Kutup-owned E2EE formats
+│   │   ├── src/{kdf,account_envelope,drive_envelope,drive_object,named_share,stream,envelope}.rs
+│   │   └── tests/vectors/   # Checked-in byte-parity vectors
+│   ├── kutup-crypto-wasm/   # Browser bindings for canonical crypto
+│   ├── kutup-chat-proto/    # Typed Chat wire DTOs and validation
+│   ├── kutup-federation-proto/ # Shared authenticated federation types
+│   ├── kutup-chat-core/     # Standalone libsignal/OpenMLS engine; native + WASM
+│   └── kutup-client-ffi/    # Standalone UniFFI Swift/Kotlin boundary
 ├── frontend/
 │   ├── src/
 │   │   ├── api/client.ts    # Axios instance with auth interceptors
 │   │   ├── crypto/          # Thin Rust/WASM format adapters + primitive-only stream adapter
-│   │   ├── collab/          # Envelope, transport, AEAD frame helpers (collab WS layer)
+│   │   ├── collab/          # Drive editor envelope and WebSocket layer
+│   │   ├── chat/            # Direct/MLS services, backup, media, IndexedDB state
 │   │   ├── components/editors/
 │   │   │   ├── TextCollabEditor.tsx       # Notes / code (CodeMirror 6 + Yjs)
 │   │   │   ├── office/OfficeEditor.tsx    # .docx/.xlsx/.pptx (OnlyOffice bridge)
 │   │   │   └── whiteboard/WhiteboardEditor.tsx  # .excalidraw (Excalidraw + last-write-wins)
-│   │   ├── pages/           # Route-level components (Drive, FileEditorPage, Settings, Admin, …)
+│   │   ├── pages/           # Drive, Chat, editor, settings, admin, auth routes
 │   │   ├── store/           # Redux slices (auth state)
 │   │   └── workers/         # Web Worker for Rust/WASM Argon2id KDF
 │   ├── public/onlyoffice/   # Bridge source; verified assets overlay during Docker builds
 │   └── vite.config.ts       # Dev server proxy config
-│   (CLI commands: register, login, ls, upload, download, sync, share, versions, devices, 2fa, pub, mv, color;
-│    redb session store, device key in the OS keyring on macOS/Windows or a chmod-600 file on Linux)
-├── src-tauri/                # Tauri 2 shell (desktop + iOS/Android) — see docs/desktop-build.md, docs/mobile-build.md
+├── src-tauri/                # Tauri desktop shell; experimental mobile targets remain available
 │   ├── src/lib.rs           # Plugin setup + OS-keychain vault commands (vault_set/get/delete)
 │   ├── tauri.conf.json      # Bundle id (dev.kutup.client), mainBinaryName (kutup-client), targets, scopes
 │   └── capabilities/        # Tauri permission capabilities (default.json + desktop.json)
 ├── nginx/nginx.conf          # Production Nginx config
-├── docs/                     # Documentation
+├── docs/                     # Start at docs/README.md
+├── tests/e2e/                # Single- and two-server Playwright gates
+├── fuzz/                     # Standalone Chat/security cargo-fuzz package
 └── docker-compose.yml
 ```
 

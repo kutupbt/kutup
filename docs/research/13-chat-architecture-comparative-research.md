@@ -7,14 +7,16 @@ native-client plans (`kutup-android`, `kutup-ios`)
 codebases checked out locally: `libsignal`, Prosody, ejabberd, Monal.  
 **Companion docs:** `11-federated-chat.md` (original design), `12-chat-improvements-for-clients.md` (wire-contract fixes)
 
-> **Implementation status (2026-07-17):** The verdict remains the design
-> rationale. Its signed device manifest, durable in-order federation,
-> authenticated request, mailbox-durability, encrypted-profile, key-
-> transparency recommendations are implemented in the server,
-> shared core, and web client. GV2-pattern private groups, complete sealed
-> sender, richer messaging/media, remote federation-policy distribution, and
-> native integration remain. Current normative behavior lives in
-> [`../chat-protocol.md`](../chat-protocol.md).
+> **Current-state note (2026-08-20):** The verdict remains design rationale.
+> Signed manifests, durable authenticated federation, account trust,
+> contacts-only sealed delivery, OpenMLS private groups, messaging/media, and
+> continuous history recovery are implemented in the web/server/shared-core
+> stack. The eventual MLS design superseded this document's intermediate GV2
+> recommendation. Dedicated native integration remains work in progress and is
+> not release-ready. Current normative behavior lives in
+> [`../chat-protocol.md`](../chat-protocol.md),
+> [`../chat-mls.md`](../chat-mls.md), and
+> [`../chat-backup.md`](../chat-backup.md).
 
 This document answers one question: **is kutup's chat architecture correct,
 and what must change before the wire contract freezes?** The bar is

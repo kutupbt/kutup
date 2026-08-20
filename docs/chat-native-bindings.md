@@ -1,5 +1,8 @@
 # Native chat bindings
 
+**Status:** shared FFI boundary implemented; integration into the dedicated iOS
+and Android apps is work in progress, and those apps are not release-ready.
+
 `kutup-client-ffi` is the stable Swift/Kotlin boundary around
 `kutup-chat-core`. It is a standalone crate so libsignal, UniFFI, and the
 mobile SQLCipher artifact do not become dependencies of the Kutup server or
@@ -118,7 +121,7 @@ This produces Swift source/header/modulemap and Kotlin source from the compiled
 library metadata. Generated files are build artifacts and are not committed to
 this repository.
 
-The next packaging step is to cross-compile the same crate into:
+Remaining packaging work is to cross-compile the same crate into:
 
 - an XCFramework for `aarch64-apple-ios` and `aarch64-apple-ios-sim`, wrapped by
   the `KutupCore` Swift package;

@@ -1,5 +1,11 @@
 # Phase 3 build order
 
+> **Historical status: complete.** This is the original Go-to-Rust build order,
+> not an active plan. All slices were superseded by the current
+> `crates/kutup-server` implementation. Use
+> [`../../contributing.md`](../../contributing.md) and
+> [`../../api.md`](../../api.md) for current work.
+
 Each slice = one commit. Gate per slice = compiles + `cargo clippy -p kutup-server
 --all-targets -- -D warnings` + DB-less unit tests where possible.
 

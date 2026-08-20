@@ -2,11 +2,18 @@
 
 Captured by Phase 6 benchmarks. Hardware: Intel Core Ultra 7 155U (linux/amd64).
 
+> **Historical baseline:** the backend measurement below was captured from the
+> former Go implementation, which has since been removed. It remains useful as
+> a dated comparison point, but its Go command cannot be rerun from the current
+> tree. Current Rust correctness/performance work lives in the Cargo crates;
+> frontend benchmark commands remain applicable only while the referenced
+> benchmark files exist.
+
 Re-run with:
 
 ```sh
-# backend
-cd backend && go test -bench=. -benchmem -benchtime=1s ./services/envelope/
+# Backend command was removed with the Go tree; use this document as the
+# captured result rather than as a runnable current benchmark.
 
 # frontend
 cd frontend && pnpm vitest bench --run

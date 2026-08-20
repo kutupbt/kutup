@@ -1,118 +1,69 @@
-# Kutup — Tauri 2 native shell
+# Kutup Tauri 2 shell
 
-This directory hosts the cross-platform native shell that wraps the Vite
-React app in `../frontend/`. One Rust+web codebase ships to five targets:
-Windows, macOS, Linux, iOS, Android.
+**Status:** desktop shell implemented; retained Tauri-mobile targets are
+experimental. The dedicated native iOS and Android apps are separate work in
+progress and are not release-ready.
 
-Strategy decision and reasoning lives in
-`~/.claude/plans/read-all-docs-it-splendid-widget.md` (the plan doc).
+This directory wraps the React frontend in a Tauri 2 shell. Its supported
+documentation entry point is [`../docs/desktop-build.md`](../docs/desktop-build.md).
+For the mobile ownership boundary and binding workflow, see
+[`../docs/mobile-build.md`](../docs/mobile-build.md) and
+[`../docs/chat-native-bindings.md`](../docs/chat-native-bindings.md).
 
-## Quick prerequisites
+## Desktop development
 
-| Target | What you need |
-|---|---|
-| Linux desktop | `rustup`, `webkit2gtk-4.1`, `gtk-3`, `libsoup-3` headers, `pkg-config` |
-| Windows desktop | `rustup`, Visual Studio C++ Build Tools, WebView2 (auto-installed at runtime) |
-| macOS desktop | `rustup`, Xcode Command Line Tools |
-| Android | Android SDK + NDK + `cmdline-tools` + a `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android` |
-| iOS | macOS host, Xcode, `rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios` |
+Install the root package dependencies, then start the shell:
 
-### Install Rust
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source $HOME/.cargo/env
-rustc --version  # 1.77+
-```
-
-### Install node deps (from repo root)
-
-```bash
+```sh
 pnpm install
-```
-
-That picks up `@tauri-apps/cli` from `package.json` so `pnpm tauri ...`
-works without a global install.
-
-## Desktop dev loop
-
-```bash
 pnpm tauri:dev
 ```
 
-Spins up:
-1. `pnpm -C frontend dev` → Vite on http://localhost:5173
-2. Native Tauri window over that URL
+The command starts Vite on `http://localhost:5173` and opens a native Tauri
+window. Frontend edits hot-reload; Rust shell changes rebuild and restart the
+window.
 
-Hot reload: anything you edit in `frontend/src/` reflects immediately.
-Anything you edit in `src-tauri/src/*.rs` triggers a Rust rebuild +
-window restart (~3–15 s depending on the change).
+Build a host-platform installer with:
 
-## Desktop release build
-
-```bash
+```sh
 pnpm tauri:build
 ```
 
-Outputs platform installers in `target/release/bundle/`:
-
-- `.dmg` / `.app` on macOS
-- `.msi` / `.exe` on Windows
-- `.AppImage` / `.deb` / `.rpm` on Linux
-
-Code-signing identities + the updater pubkey will go in `tauri.conf.json`
-once we're ready to ship.
-
-## Mobile initialization
-
-First time only, per target:
-
-```bash
-pnpm tauri:android:init   # creates gen/android/
-pnpm tauri:ios:init       # creates gen/apple/   (requires macOS)
-```
-
-Then iterate with:
-
-```bash
-pnpm tauri:android:dev    # builds + deploys to a connected device / emulator
-pnpm tauri:ios:dev        # ditto for iOS sim
-```
-
-Release builds:
-
-```bash
-pnpm tauri:android:build  # .apk / .aab
-pnpm tauri:ios:build      # .ipa (requires Apple Developer cert)
-```
-
-`gen/` is in `.gitignore` because it embeds absolute paths and signing
-metadata — each contributor regenerates locally.
+Artifacts are written under `src-tauri/target/release/bundle/`. Builds are
+currently unsigned. The embedded build deliberately strips the multi-gigabyte
+OnlyOffice SDK, so Office documents do not open in the desktop bundle; the web
+deployment remains the complete Office surface.
 
 ## Layout
 
-```
+```text
 src-tauri/
-├── Cargo.toml            # Rust deps + crate metadata
-├── tauri.conf.json       # Tauri 2 config (windows, bundle, plugins)
+├── Cargo.toml            # standalone Rust crate and platform dependencies
+├── tauri.conf.json       # bundle identity, window, build, and target settings
 ├── build.rs              # tauri-build hook
-├── capabilities/
-│   └── default.json      # permission grants per window
-├── icons/                # generate via `pnpm tauri:icon <source.png>`
+├── capabilities/         # scoped plugin permissions
+├── icons/                # generated desktop/mobile icon inputs
 └── src/
-    ├── main.rs           # desktop entry → calls lib::run()
-    └── lib.rs            # shared entry incl. mobile_entry_point
+    ├── main.rs           # desktop entry point
+    └── lib.rs            # plugin setup, vault commands, mobile entry point
 ```
 
-## What's NOT here yet
+The identifier and keychain service are `dev.kutup.client`; the installed
+desktop executable is `kutup-client` so it does not collide with the `kutup`
+CLI.
 
-- Real icons (placeholder is `icons/README.md`). Generate from a logo PNG via `pnpm tauri:icon`.
-- Custom `#[tauri::command]` handlers. The shell is intentionally thin for v1; we'll add streaming-upload + folder-walk commands as they land.
-- Updater public key (auto-update config goes in `tauri.conf.json` `plugins.updater` once we have a signing key).
-- Code-signing config (Apple Developer + Windows EV cert + Linux GPG).
-- App-store metadata.
+## Retained experimental mobile commands
 
-## Reference repos
+The root package still exposes `tauri:ios:*` and `tauri:android:*` scripts.
+They generate gitignored projects under `src-tauri/gen/` and are useful for
+shell experiments, but they do not build the dedicated native apps and must not
+be used as a mobile release-readiness claim. Current status and limitations are
+kept in [`../docs/mobile-build.md`](../docs/mobile-build.md).
 
-- [`spacedrive/apps/tauri`](https://github.com/spacedriveapp/spacedrive) — file-management precedent, lots of Tauri 2 idioms.
-- [`padloc/packages/tauri`](https://github.com/padloc/padloc) — E2EE precedent (Tauri v1, useful for the thin-shell pattern).
+## Remaining desktop release work
+
+- Apple and Windows code-signing/notarization configuration.
+- Updater public key and signed update channel.
+- Loading OnlyOffice assets securely from the selected homeserver instead of
+  embedding them.
+- Tauri session-persistence and installer acceptance coverage.

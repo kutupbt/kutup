@@ -1,62 +1,50 @@
-# kutup-cli (Phase 2 ✅)
+# `kutup` CLI
 
-The `kutup` CLI — Rust rewrite of `cmd/kutup/`. All 16 commands match the Go CLI's
-surface. Built on `reqwest::blocking` (sync), reusing the verified `kutup-crypto` crate.
+**Status:** Go-to-Rust conversion complete. This page now summarizes the
+current Rust CLI while preserving links to the conversion test record.
 
-## Commands
+The `kutup` binary is implemented in `crates/kutup-cli`, uses the canonical
+`kutup-crypto` formats, and communicates with the current Rust server. Run
+`kutup --help` and each subcommand's `--help` for the exact live interface.
 
-`login`, `logout`, `whoami`, `ls` (`--tree`), `mkdir` (`--parent`), `mv`, `rm`
-(`--folder`), `upload` (`-r`), `download`, `sync` (`--watch`), `color`, `devices`
-(`list` | `revoke --yes`), `versions` (`list` | `download` | `restore` |
-`label --keep-forever`), `share` (`folder` | `federated` | `public` | `files` |
-`download` | `upload` | `incoming {list|accept|remove}`), `pub` (`get` | `ls` |
-`download`), `version`.
+## Command groups
 
-Global flags: `--profile <name>` (default `default`), `--json`.
+- Account/session: `register`, `login`, `recover`, `logout`, `whoami`.
+- Drive: `ls`, `mkdir`, `mv`, `rm`, `upload`, `download`, `sync`, `color`.
+- Recovery/lifecycle: `trash`, `versions`, `devices`, `2fa`.
+- Sharing: `share folder`, `share federated`, `share public`, federated-share
+  browse/upload/download/incoming operations, and unauthenticated `pub`
+  consumption.
+- Diagnostics: `version`.
 
-## Module map (Go → Rust)
+Global flags are `--profile <name>` (default `default`) and `--json`.
+Interrupted uploads resume by default; recursive upload, sync watch/poll,
+deletion propagation, and dry-run behavior are documented in the top-level
+[`README.md`](../../../README.md#common-workflows).
 
-| Go | Rust |
-|---|---|
-| `internal/crypto/*` | `kutup-crypto` crate |
-| `internal/session/store.go` | `src/session.rs` |
-| `internal/api/*` | `src/api/*` (`mod, types, tus, versions, files, devices, sharing, federation, public`) |
-| `internal/upload/stream.go` + `download/stream.go` | `src/transfer.rs` |
-| `internal/sync/engine.go` | `src/syncengine.rs` |
-| `cmd/*.go` | `src/commands/*.rs` |
-| `cmd/helpers.go` | `src/cryptohelpers.rs` |
-| `cmd/session.go` | `src/context.rs` |
+## Intentional platform behavior
 
-## Intentional deviations from Go (all defensible)
+- Sessions use `redb`; the CLI device-key service is `kutup-cli` and is
+  separate from the Tauri application's `dev.kutup.client` service.
+- macOS and Windows protect the device key in the OS credential store. Linux
+  uses a mode-0600 file under the profile data directory.
+- Public-share URLs use `/s/<token>#key=...`; the Go-era `/p/` form remains
+  accepted for compatibility.
+- `.excalidraw` upload extracts assets and download re-inlines them. The older
+  conversion-era deferral is complete.
 
-- `reqwest::blocking` instead of `net/http` (synchronous-flow parity).
-- Store is `redb` (`kutup.redb`), not BoltDB → switching binaries requires `kutup login`
-  again (the redb file deliberately doesn't collide with a Go-era `kutup.db`).
-- Linux device key lives in a chmod-600 file (no libdbus); macOS/Windows use the OS
-  keychain (service `kutup-cli/<profile>`, account `device-key`).
-- `envelope::verify` is strict (see `../decisions.md`).
-- `.excalidraw` asset extraction (upload) + hydration (download) are **deferred** — they
-  need the asset/snapshot API; regular files transfer correctly. Tracked in
-  `docs/roadmap.md`.
+## Build and live verification
 
-## Automation / testing env vars
+```sh
+cargo build --release -p kutup-cli
 
-- `KUTUP_INSECURE_TLS=1` — accept the self-signed dev cert.
-- `KUTUP_PASSWORD` + `kutup login --server X --email Y` — non-interactive login.
-- `KUTUP_DEVICE_KEY` (base64, 32 bytes) — device key for Docker / CI.
-- **Live check** (run on a VM with a reachable stack):
+KUTUP_SERVER=https://localhost:38443 \
+KUTUP_EMAIL=you@example.com \
+KUTUP_PASSWORD='your-password' \
+KUTUP_INSECURE_TLS=1 \
+scripts/verify-cli.sh
+```
 
-  ```sh
-  KUTUP_SERVER=https://localhost:38443 \
-  KUTUP_EMAIL=you@example.com \
-  KUTUP_PASSWORD=… \
-  KUTUP_INSECURE_TLS=1 \
-  scripts/verify-cli.sh
-  ```
-
-  It runs login → whoami → mkdir → upload (6 MiB, multi-chunk) → ls → download →
-  sha256 compare → rm → logout.
-
-See **[`testing.md`](testing.md)** for the full VM testing guide — build, getting a test
-account, manual walkthrough, differential testing against the Go CLI, known quirks, and
-troubleshooting.
+See [`testing.md`](testing.md) for the current live-stack walkthrough. The old
+Go differential comparisons are retained only in Git history; the Go binary is
+no longer part of this repository.

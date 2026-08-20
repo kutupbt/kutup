@@ -1,8 +1,12 @@
 # Default client-side OnlyOffice bundling
 
-**Status:** implemented and locally verified
+**Status:** implemented, merged, and clean-clone verified
 
 **Written:** 2026-08-16
+
+**Completed:** 2026-08-16; default bundling merged as `5601add`, and the
+fresh-clone S3 credential correction found during acceptance merged as
+`6db48b8`
 
 **Scope:** make Kutup's existing CryptPad-shaped, client-only OnlyOffice editor
 available in a clean source checkout through the normal Docker Compose build,

@@ -76,7 +76,11 @@ new Drive object.
     accepted.
 12. No server endpoint or database column may branch on a plaintext media kind.
 
-## Current baseline
+## Baseline when this plan was written (historical)
+
+The implementation record above describes what has landed since this baseline.
+The bullets in this section explain the starting gap and must not be read as
+the current Chat attachment UI.
 
 ### Chat
 

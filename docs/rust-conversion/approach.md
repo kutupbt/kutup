@@ -1,5 +1,11 @@
 # Approach & conventions
 
+> **Historical conversion method:** the rewrite is complete, the Go oracle has
+> been removed, and the named conversion branch is no longer a development
+> target. Use [`../contributing.md`](../contributing.md) for current commands and
+> [`README.md`](README.md) for the archive map. The rules below are retained to
+> explain how parity was established.
+
 ## Methodology (from the Bun Zig→Rust port lessons)
 
 - **Oracle-first / behavioral equivalence.** The frontend stays TypeScript and the Go

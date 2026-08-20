@@ -11,9 +11,10 @@ Branch `claude/go-rust-rewrite-G16zO`; `cargo build`/`test`/`clippy`/`fmt` green
   (72 method+paths). Containerized (`Dockerfile.server`), wired into `docker-compose*.yml`.
 - **cutover** ✅ — `backend/` + `cmd/kutup/` deleted; migrations moved to
   `crates/kutup-server/migrations/`; CI release builds the Rust CLI; docs updated.
-- Deferrals (see `docs/roadmap.md`): per-path OpenAPI operations + interactive Swagger UI;
-  `.excalidraw` asset extraction. Federation Go↔Rust cross-server test was intentionally
-  skipped (SSRF blocks loopback/private IPs on one host; handlers are verified single-server).
+- The per-path OpenAPI coverage and `.excalidraw` extraction deferrals were
+  completed after cutover. Interactive Swagger UI remains deferred; the raw
+  document is served at `/api-docs/openapi.json`. The unified federation stack
+  now has an isolated two-server live/browser gate.
 
 Everything below is the historical slice-by-slice record.
 

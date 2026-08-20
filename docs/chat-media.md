@@ -302,7 +302,8 @@ following passed:
   digest/length mismatch, truncation, trailing data, oversized stream and
   storage-full tests;
 - [x] Direct Chat, Note to Self and MLS browser send/download/clear paths;
-- [x] native photo/video capture through the same encrypted attachment path;
+- [x] browser/OS photo-video capture UI through the same encrypted attachment
+  path (this is not a dedicated-native-app readiness claim);
 - [x] bounded voice-note recording, cancel cleanup and two-server encrypted
   exact-byte delivery through that path;
 - [x] two-server offline/retry delivery with origin restart and destination object

@@ -17,9 +17,9 @@ The bar for the first `v*` tag:
 
 1. **No silent stubs in admin-facing UI.** Every clickable action that exists in the UI must work end-to-end. No "wire-up pending" toasts in shipped builds.
 2. **Deletion is recoverable.** ✅ Shipped: owner-scoped trash with restore + permanent delete, and an hourly retention sweeper (`TRASH_RETENTION_DAYS`, default 30). See `docs/api.md` → Trash.
-3. **Self-hosters can recover broken users without SSH.** ✅ Shipped: force-disable 2FA (lost authenticator), re-enable account (accidental disable), rotate temp password (first-login accounts), and the destructive wipe for users who lost both password and recovery phrase — all from the admin UI on desktop + mobile. `docs/research/10-admin-password-reset.md` records why "reset password" is two actions under E2EE.
+3. **Self-hosters can recover broken users without SSH.** ✅ Shipped: force-disable 2FA (lost authenticator), re-enable account (accidental disable), rotate temp password (first-login accounts), and the destructive wipe for users who lost both password and recovery phrase — all from the responsive web admin UI. `docs/research/10-admin-password-reset.md` records why "reset password" is two actions under E2EE.
 4. **Builds are signed.** Unsigned binaries trigger macOS Gatekeeper and Windows SmartScreen warnings that look like malware to non-technical users.
-5. **Admin actions leave an audit trail.** ✅ Shipped: every mutating admin endpoint writes an `admin_audit_log` row; `GET /admin/activity` serves the feed and the Recent-activity cards render it on desktop + mobile Admin Overview. See `docs/api.md` → Admin.
+5. **Admin actions leave an audit trail.** ✅ Shipped: every mutating admin endpoint writes an `admin_audit_log` row; `GET /admin/activity` serves the feed and the Recent-activity cards render it in both responsive web layouts. See `docs/api.md` → Admin.
 6. **Basic abuse protection.** ✅ Shipped: per-IP limits on login/preflight/register/recovery/federation/admin (env-overridable `RATE_LIMIT_*`), per-account login lockout (`LOGIN_LOCKOUT_*`), per-token TOTP blocking, and proxy-aware client-IP resolution (X-Real-IP). See `docs/self-hosting.md`.
 7. **Documentation tracks reality.** ✅ Shipped: full docs sweep against the shipped code (stale Go-stack references scrubbed, env vars + endpoints verified), and every HTTP operation is annotated with `#[utoipa::path]` so `GET /api-docs/openapi.json` lists the complete API (a coverage test in `openapi.rs` keeps it honest). Interactive Swagger UI remains deferred (see below).
 
@@ -83,9 +83,8 @@ CLAUDE.md explicitly notes: **"Builds are currently unsigned."** macOS Gatekeepe
 | Apple Developer ID for macOS signing + notarization | external — requires Apple Developer Program ($99/yr) |
 | Microsoft Authenticode certificate for Windows | external — DigiCert / Sectigo (~$300/yr) |
 | `.github/workflows/release-desktop.yml` — accept signing secrets, run `codesign` (mac) + `signtool` (win) | repo |
-| iOS distribution: TestFlight + App Store Connect setup | external |
-| iOS App Store icon: re-render with a non-transparent background (`pnpm tauri:icon src-tauri/icons/source.png --ios-color <hex>`) — App Store Connect rejects transparent / alpha-channel app icons at submission | `package.json` + `src-tauri/icons/` |
-| Android: Play Store key + Play Console | external |
+| Native iOS signing, TestFlight/App Store Connect, entitlements, and opaque production icons | external + sibling `kutup-ios` repository |
+| Native Android upload key, Play App Signing/Console, and release metadata | external + sibling `kutup-android` repository |
 | Documentation: `docs/release-signing.md` covering how to rotate keys | new doc |
 
 ---
@@ -121,7 +120,8 @@ The desktop Admin Overview's System card is hidden today because the backend doe
 ### Admin · Required-2FA + Drive-default-quota + trash-retention settings
 
 `/admin/settings` now exposes registration, the dedicated default Chat quota,
-and mailbox/temporary-media retention on desktop and mobile. Server-driven
+and mailbox/temporary-media retention in desktop-width and mobile-width web
+layouts. Server-driven
 required 2FA, a default Drive/general quota, and runtime trash retention remain
 unimplemented; their cards stay hidden.
 
@@ -142,20 +142,22 @@ The design has "Re-index search" and "Purge soft-deleted files now" in a Setting
 | Backend: `POST /admin/actions/purge-trash` (forces the trash retention sweeper — `jobs::trash_sweep_once` — to run now) | new |
 | Frontend: unhide the danger zone card | both admin Settings tabs |
 
-### Mobile · Android Keychain
+### Native iOS and Android apps
 
-iOS keychain ships (PR 22). Android still re-logs the user in on every app launch.
+The dedicated `kutup-ios` and `kutup-android` apps are active work in sibling
+repositories and are not release-ready. The implemented `kutup-client-ffi`
+boundary is only one dependency of those products; native UI integration,
+platform lifecycle, secure storage, complete Direct/MLS/media/backup parity,
+packaging, signing, store metadata, and real-device acceptance remain gated in
+their own plans. See [`mobile-build.md`](mobile-build.md) and
+[`chat-native-bindings.md`](chat-native-bindings.md).
 
-| What's needed | Where |
-|---|---|
-| Tauri plugin — `tauri-plugin-keystore` (Android Keystore) | `src-tauri/Cargo.toml`, `src-tauri/src/lib.rs` |
-| Optional: `tauri-plugin-biometric` for biometric unlock | same |
-| Frontend: detect Android in `restoreSession` and route through the keystore plugin | `frontend/src/lib/restoreSession.ts`, `sessionVault.ts` |
-| Test: build + verify session survives app restart on Android | manual |
+The Tauri shell's retained mobile targets are experimental. In that path iOS
+Keychain works, while Android still lacks a keyring backend and re-authenticates
+after restart. Work on that wrapper must not be reported as completion of the
+dedicated native apps.
 
-Survey + recommendation already exists at `docs/research/09-mobile-strategy.md`.
-
-### Mobile · Selection mode (PR 9)
+### Responsive web · mobile selection mode
 
 Per the design + user direction: long-press / "Select" button on mobile turns the page into Google-Drive-style full-screen takeover with checkboxes, top "Cancel · N selected · Select all" bar, bottom action bar (Share / Move / Delete / More).
 
@@ -168,7 +170,7 @@ Desktop selection is **explicitly carved out** — kutup keeps its existing no-l
 | Frontend: replace MobileBottomNav with a selection action bar while active | shell |
 | Frontend: replace MobilePageHeader with the selection top bar while active | shell |
 
-### Mobile · Files chip filters + List⇄Grid + swipe (PR 3)
+### Responsive web · files chip filters + List⇄Grid + swipe
 
 Today the Files tab shows category chips (All / Recent / Photos / Documents / PDFs / Audio) but they're visual-only. Same for the List/Grid toggle.
 
@@ -178,7 +180,7 @@ Today the Files tab shows category chips (All / Recent / Photos / Documents / PD
 | Frontend: List vs Grid toggle with localStorage persistence | same |
 | Frontend: iOS-style swipe-to-share / swipe-to-delete on file rows | new |
 
-### Mobile · Page transitions (PR 4)
+### Responsive web · page transitions
 
 Sub-pages currently appear / disappear instantly. iOS users notice the missing slide-in / slide-out.
 
@@ -186,25 +188,25 @@ Sub-pages currently appear / disappear instantly. iOS users notice the missing s
 |---|---|
 | Frontend: a thin `<RouteTransition />` wrapper that animates push (left → right) and pop (right → left) | `frontend/src/components/mobile/` |
 
-### Mobile · Recently-shared-by-me (PR 5)
+### Responsive web · recently shared by me
 
 The Shared tab has an empty hero for this section. Data is derivable from the shares table; just needs wiring.
 
-### Mobile · Viewer touch tweaks (PR 8)
+### Responsive web · viewer touch tweaks
 
 Excalidraw / photo / PDF viewers work on mobile but some tap targets are desktop-sized + the top status bar overlaps content in places. **Carve-out**: the viewers themselves are NOT redesigned (user said they're "clean and useful"). Just touch + safe-area tweaks.
 
-### Mobile · Push notifications
+### Native mobile · push notifications
 
-iOS notifications for shared-file events ("Alice shared a folder with you"). Not v1.
+Native iOS/Android notifications for shared-file and Chat events. Not v1.
 
 | What's needed | Where |
 |---|---|
 | Apple Push Notification Service setup | external |
 | Backend: APNS sender + per-user device-token registry | new |
-| Tauri: `tauri-plugin-notification` integration | `src-tauri/` |
+| Native clients: APNS/FCM registration, permission, and presentation | sibling iOS/Android repositories |
 
-### Recovery-phrase verification on mobile
+### Responsive/native mobile · recovery-phrase verification
 
 The mobile Encryption Keys page renders the recovery phrase. There's no "verify you wrote it down" word-by-word test like the desktop has during onboarding. Production self-hosters lose users to "I lost my recovery phrase" support tickets.
 
@@ -249,11 +251,11 @@ names unambiguous):
 | 3 | Web federation foundation | **Implemented and two-server live verified:** canonical `username@server`, typed conversations, one persistent v2 server identity, signed `.well-known` endpoint/capability discovery, immutable identity history and authenticated rotation, strict RFC 9421/9530 request/response authentication, replay reservation, DNS-rebinding/SSRF-safe resolution, durable per-destination in-order Chat delivery, device-mismatch recovery, terminal rejection, and sequence-gap replay. Drive now uses that same stack for signed account lookup, domain-bound fragment capabilities, invite acceptance, file lists, idempotent upload/delete, persisted ciphertext digests, and verify-before-release streaming downloads. The isolated harness proves the Drive round trip, that Chat reuses a Drive-established pin, and that Chat retry survives an origin restart while the destination is offline. The generic responsive admin control plane provides a global stop, feature-scoped `disabled`/`allowlist`/`blocklist`/`open` admission and trust floors, directional domain rules, shared Chat/Drive diagnostics, peer search/trust filters, retry-one/retry-visible workflows, TOFU verification, exact immutable quarantine/history evidence, break-glass re-pin, and filtered audit presentation/CSV export. A disabled feature is omitted from discovery while the other remains available. Both old feature-specific federation stacks and raw remote URL routes were removed; there is no v1 downgrade. No alias namespace. See `docs/federation-protocol.md`. |
 | 4 | Web contact privacy and trust | **Implemented and two-server verified.** Account-signed complete manifest history, durable gray-TOFU/green-QR/red-quarantine state, explicit account-incarnation replacement, message requests/blocking, contacts-only libsignal sealed sender, offline-root/online-certificate policy, database-backed abuse limits, anonymous local/federated delivery, capability rotation on block, no identified fallback, and the shared typed XChaCha profile envelope are restart- and two-server-browser verified. |
 | 5 | MLS private groups | **V1 binding implemented, activated and two-server verified.** Durable OpenMLS state, manifest-bound devices, private role/control state, quorum-certified multi-authority ordering, owner-approved governance/recovery, destination-private delivery, invitation consent, linked-device sync, restart reconciliation and exact group security inspection use RFC 9420 suite `0x0003` with X25519/ChaCha/Ed25519. The native scale gate operates an actual 256-account × 10-device OpenMLS tree (2,560 independent leaves); the same Rust core builds for WASM, while browser lifecycle, adversarial replay/enumeration, restart/federation and destination-metadata gates pass. Direct and Note to Self remain libsignal. See `docs/chat-mls.md`. |
-| 6 | Web messaging and media | **The currently scoped Phase 6 messaging/media slices are implemented: Chat-media is advertised and clean two-server verified; encrypted replies, reactions, author-only edits/deletions, delivery/read receipts, ephemeral typing indicators, disappearing messages, private local search, native photo/video capture and voice-note recording are present.** Direct, Note-to-Self and MLS attachments use one immutable Rust/WASM-secretstream object, resumable tus upload, sender-free durable federation copies, a dedicated administrator-controlled Chat quota, manual streaming download, clearable encrypted per-conversation accounting and continuous E2EE history/media backup. Native camera capture uses the browser/OS permission UI and feeds the resulting file into that same encrypted path without a second format, endpoint or plaintext fallback. Voice recording is browser-permission-owned, bounded to 10 minutes and 64 MiB (or the lower server limit), stops every microphone track on all terminal paths, authenticates its duration in the E2EE descriptor and uses the same immutable media path. Replies bind a canonical logical message UUID only inside the shared E2EE content and survive server-hosted backup restore. Reactions are bounded encrypted set/remove operations reduced as one deterministic latest reaction per account without server-visible metadata. Edits use deterministic author-authenticated replacement operations; irreversible deletion tombstones prevent stale-device resurrection. Batched receipt targets and state remain E2EE; read receipts are browser-local opt-in and MLS views aggregate accounts. Typing controls are E2EE, accepted only for established conversations, excluded from product history/transcripts, locally expiring and burst-throttled to limit MLS one-time KeyPackage pressure. Disappearing timers are hidden E2EE controls; every affected text/attachment authenticates its own 30-second-to-30-day duration, senders count from durable creation, and recipients count from first actual view with the earliest absolute start synchronized privately across their linked devices. Durable plaintext and derived controls are atomically purged, unsaved media references are released, and backup restore or browser replacement cannot restart expiry. Local search scans only the decrypted visible browser history, applies edits/deletes/expiry before matching, and never emits a query or plaintext index to a server. The Chat quota defaults to 2 GiB per account and can be increased by administrators. See `docs/chat-media.md` and `docs/chat-protocol.md`. |
+| 6 | Web messaging and media | **The currently scoped Phase 6 messaging/media slices are implemented: Chat-media is advertised and clean two-server verified; encrypted replies, reactions, author-only edits/deletions, delivery/read receipts, ephemeral typing indicators, disappearing messages, private local search, platform photo/video capture and voice-note recording are present.** Direct, Note-to-Self and MLS attachments use one immutable Rust/WASM-secretstream object, resumable tus upload, sender-free durable federation copies, a dedicated administrator-controlled Chat quota, manual streaming download, clearable encrypted per-conversation accounting and continuous E2EE history/media backup. Browser camera capture uses the browser/OS permission UI and feeds the resulting file into that same encrypted path without a second format, endpoint or plaintext fallback. Voice recording is browser-permission-owned, bounded to 10 minutes and 64 MiB (or the lower server limit), stops every microphone track on all terminal paths, authenticates its duration in the E2EE descriptor and uses the same immutable media path. Replies bind a canonical logical message UUID only inside the shared E2EE content and survive server-hosted backup restore. Reactions are bounded encrypted set/remove operations reduced as one deterministic latest reaction per account without server-visible metadata. Edits use deterministic author-authenticated replacement operations; irreversible deletion tombstones prevent stale-device resurrection. Batched receipt targets and state remain E2EE; read receipts are browser-local opt-in and MLS views aggregate accounts. Typing controls are E2EE, accepted only for established conversations, excluded from product history/transcripts, locally expiring and burst-throttled to limit MLS one-time KeyPackage pressure. Disappearing timers are hidden E2EE controls; every affected text/attachment authenticates its own 30-second-to-30-day duration, senders count from durable creation, and recipients count from first actual view with the earliest absolute start synchronized privately across their linked devices. Durable plaintext and derived controls are atomically purged, unsaved media references are released, and backup restore or browser replacement cannot restart expiry. Local search scans only the decrypted visible browser history, applies edits/deletes/expiry before matching, and never emits a query or plaintext index to a server. The Chat quota defaults to 2 GiB per account and can be increased by administrators. See `docs/chat-media.md` and `docs/chat-protocol.md`. |
 | 5b | Confidential broadcast | **V1 blocker scheduled after Phase 6, not an oversized MLS group.** A small MLS owner/admin control group authorizes publishers and the replaceable ordering authorities. A fixed-depth account-leaf LKH serves up to 1,000,000 subscribed accounts; each account access secret is independently wrapped to up to ten manifest devices (10,000,000 grants). Posts are encrypted once and pulled/cached by subscriber homeservers. Removal rekeys before the next post, owner removal performs a restart-safe full rebuild, and history policy is `0..=365` days (default 30) over daily one-way content epochs. See `docs/broadcast-security-threat-model.md`. |
 | 7 | Web PWA completion | Generic content-free Web Push, offline/restart recovery, responsive/accessibility/browser matrix, security/load tests, and protocol freeze. |
 | 8 | Calls | 1:1 WebRTC → SFU group calls; TURN + SNI demux on 443. Separate from the messaging-complete web milestone. |
-| 9 | Native clients | Freeze UniFFI APIs, package XCFramework/AAR, add Keychain/Keystore, then integrate iOS and Android against the proven web protocol. |
+| 9 | Native clients | **Work in progress; not release-ready.** Stabilize the UniFFI APIs, package XCFramework/AAR artifacts, complete Keychain/Keystore and lifecycle integration, reach Direct/MLS/media/backup parity, and pass real-device release gates in the sibling iOS/Android repositories. |
 
 Device-list authenticity (the signed per-account device manifest) is **not** in phase 7 — it is a phase-2b/2 wire-contract requirement per the comparative study.
 
@@ -434,17 +436,18 @@ implemented; these are product-lifecycle improvements above it.
 - Tauri session-persistence — no E2E test today
 - Browser-level Drive federation UI coverage (the isolated two-server server
   harness already covers the complete Drive and Chat transport lifecycle)
-- Mobile flows — Playwright doesn't exercise the mobile shell
+- Responsive mobile layouts and dedicated native-app flows lack complete
+  automated/device coverage
 
 ### Performance baselines
 
 `docs/research/perf-baseline-2026-05-06.md` is a single point. Continuous benchmarking (or even a manual quarterly pass) would catch regressions.
 
-### Mobile · Real OnlyOffice / Office docs
+### Tauri shell · real OnlyOffice / Office docs
 
 Desktop OnlyOffice was stripped from the Tauri build to avoid the OOM on `tauri::generate_context!()` (the ~2.6GB SDK gets embedded as a static byte array). Same applies to mobile. The follow-up sketched in CLAUDE.md is "load the SDK from `${serverUrl}/onlyoffice/…` so the app streams it from the user's server" — that's a real piece of work.
 
-### Mobile · Federation share-with from sheet
+### Responsive web · federation share-with from sheet
 
 The mobile share sheet doesn't yet expose federated share flows (cross-server) — only public link sharing.
 
@@ -504,14 +507,17 @@ offline). Restore it by vendoring the UI bundle (`SWAGGER_UI_OVERWRITE_FOLDER` o
 
 These live in `docs/research/` because the design hasn't been chosen yet:
 
-- **Collaborative E2EE editing** — `docs/research/01-cryptpad-collab-stack.md` through `08-office-cell-formatting-getlock.md`. CryptPad pattern proven; integration into kutup is a multi-PR effort and the design isn't finalized.
-- **Version history** — `docs/research/03-version-history-design.md`. Two-tier checkpoint+delta model recommended; not yet specced.
 - **WebDAV mount** — `docs/research/06-webdav-support.md`. Client-side proxy is the only viable path because server-side WebDAV breaks E2EE. Long-term work.
 - **WebAuthn / passkey support** — not yet captured in `docs/research/`. Would supplement TOTP for second-factor. Useful research before adding.
-- **Chat open questions** — mailbox retention under E2EE, the post-RFC
-  post-quantum MLS suite transition, and the separate 100,000+ recipient
-  announcement-channel fan-out design. MLS V1 and multi-authority ordering are
-  committed in `docs/chat-mls.md`.
+- **Chat open questions** — the post-RFC post-quantum MLS suite transition and
+  advanced traffic-obfuscation profiles. Direct/MLS retention, continuous
+  recovery, and the confidential-broadcast design are already specified or
+  implemented; follow the current Chat documents rather than the July research
+  baselines.
+
+Collaborative text/Office/whiteboard editing and Drive-style version history
+are shipped. Research notes `01`–`08` are retained as the design and debugging
+record; they are not open implementation tracks.
 
 ---
 

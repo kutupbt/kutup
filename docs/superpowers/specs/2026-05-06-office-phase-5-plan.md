@@ -1,6 +1,9 @@
 # Office Phase 5 — Execution plan
 
-**Status:** in-progress 2026-05-06
+**Status:** historical plan, completed. The saveChanges, lock, two-way sync,
+formatting, cursor, persistence, and regression work described here landed;
+current architecture and asset delivery are documented in
+[`../../onlyoffice.md`](../../onlyoffice.md).
 **Parent spec:** `2026-05-05-office-collab-design.md` §11 ("what to try next session")
 **Goal:** unblock real-time multi-tab/multi-user OnlyOffice collab. Phases 5a-c, 6, 7 from the parent spec.
 

@@ -1,12 +1,15 @@
 # Office cell-level formatting (fill color) — getLock investigation
 
-**Status:** open. Typing + cross-tab sync work; cell-level formatting
-(fill color, applying styles to a selected cell) silently no-ops.
-Text-level formatting (bold, font color on selected text inside a cell)
-works and syncs.
+**Status:** resolved after this investigation. Commit `6286891` fixed the
+second-direction stall and cell-level formatting after `d0917ad` implemented
+the shared lock state machine. Cross-tab XLSX formatting regression coverage
+lives in `tests/e2e/specs/14-office-xlsx-formatting.spec.ts`.
 
 **Date:** 2026-05-07. Two failed attempts in the same session
 (commits not landed; reverted to keep baseline working).
+
+> The remainder is the preserved pre-fix investigation. Statements that a
+> behavior is “broken” describe that date, not the current editor.
 
 ## User-reported symptom
 

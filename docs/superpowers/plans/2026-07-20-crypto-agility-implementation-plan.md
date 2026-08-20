@@ -2,7 +2,11 @@
 
 **Date:** 2026-07-20
 
-**Status:** proposed
+**Status:** historical multi-phase plan, partially implemented and superseded
+for current-state decisions by [`../../crypto-agility.md`](../../crypto-agility.md)
+and [`../../v1-format-inventory.md`](../../v1-format-inventory.md). Do not infer
+that stale inventory rows below describe the current Direct, MLS, federation,
+profile, Drive, or collaboration implementations.
 
 **V1 note:** witness/auditor work mentioned in this historical plan was removed
 before V1. The active transparency profile is operator-signed and monitored.

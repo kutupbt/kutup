@@ -4,11 +4,14 @@ Forward-looking research, library surveys, and planning notes that inform — bu
 
 Documents in this directory are **exploratory**: they may be opinionated, contradicted by later research, or describe features that don't yet exist. Once a feature ships, the corresponding `docs/` files (`architecture.md`, `api.md`, `self-hosting.md`) become authoritative; the research note here is preserved for posterity.
 
-## Current research notes
+## Research index
 
-### Collaborative E2EE editing (in progress, May 2026)
+### Collaborative E2EE editing (historical research, May 2026)
 
-A planned major feature: real-time collaborative editing of files inside kutup, end-to-end encrypted, where the editor opens in place when the user clicks a `.txt`/`.md`/code/office file.
+This series led to the shipped real-time text, Office, whiteboard, and version
+history implementation. It is retained as design and debugging history;
+[`../architecture.md`](../architecture.md) and
+[`../onlyoffice.md`](../onlyoffice.md) describe the current system.
 
 | File | Topic |
 |---|---|
@@ -17,18 +20,23 @@ A planned major feature: real-time collaborative editing of files inside kutup, 
 | [`03-version-history-design.md`](./03-version-history-design.md) | Versioning research — Google Drive's actual behavior, CryptPad's checkpoint cadence, SeaweedFS S3 versioning, snapshot+delta patterns from Secsync/Notesnook. Recommends a two-tier model. |
 | [`04-office-collab-engines.md`](./04-office-collab-engines.md) | Comparison of office-doc engines — OnlyOffice DS, Collabora Online, LOOL, WebODF, Etherpad, CryptPad. Conclusion: only the CryptPad pattern preserves E2EE. |
 | [`05-cryptpad-onlyoffice-integration.md`](./05-cryptpad-onlyoffice-integration.md) | Deepest artifact. Code-grounded map of how CryptPad bundles a forked OnlyOffice client + x2t WASM converter, captures OnlyOffice's native OT ops, wraps them in chainpad, persists checkpoints. With footgun list and implications for kutup. |
+| [`07-collab-architecture-comparison.md`](./07-collab-architecture-comparison.md) | Point-in-time comparison used to diagnose the then-open XLSX second-direction synchronization problem; the lock-state implementation later resolved it. |
+| [`08-office-cell-formatting-getlock.md`](./08-office-cell-formatting-getlock.md) | Investigation record for the then-open cell-formatting lock failure; the issue is resolved and guarded by Office Playwright specs. |
 
 ### Other forward-looking notes
 
 | File | Topic |
 |---|---|
 | [`06-webdav-support.md`](./06-webdav-support.md) | Future feature: mount kutup as a native filesystem (Finder / Explorer / KIO). Why server-side WebDAV breaks E2EE; why a client-side proxy in the kutup CLI is the only viable path; references to Cryptomator / Filen / rclone precedents. No spec, no committed scope — captured so the idea isn't lost. |
+| [`10-admin-password-reset.md`](./10-admin-password-reset.md) | Shipped admin recovery/wipe decision under the E2EE boundary. |
+| [`account-protection-wasm-baseline-2026-07-29.md`](./account-protection-wasm-baseline-2026-07-29.md) | Time-stamped Rust/WASM selection measurements for account-protection operations. |
+| [`perf-baseline-2026-05-06.md`](./perf-baseline-2026-05-06.md) | Historical Go/frontend performance snapshot; its Go rerun command no longer applies after the Rust cutover. |
 
-### Mobile (in progress, May 2026)
+### Mobile (work in progress)
 
 | File | Topic |
 |---|---|
-| [`09-mobile-strategy.md`](./09-mobile-strategy.md) | Why we're on Tauri-mobile (not React Native or Capacitor) given the DOM-bound editor stack — with prior-art table (Spacedrive, OneKeePass, Padloc). Survey of Tauri-mobile secure-storage plugins for the Android Keystore follow-up — recommends `tauri-plugin-keystore` + `tauri-plugin-biometric`. iOS half shipped (`feat/ios-keychain`); Android half is the open follow-up. |
+| [`09-mobile-strategy.md`](./09-mobile-strategy.md) | Historical Tauri-mobile strategy and secure-storage survey. The dedicated native `kutup-ios` and `kutup-android` apps are now separate work in progress; they are not release-ready. See [`../mobile-build.md`](../mobile-build.md). |
 
 ### Federated E2EE chat — "ileti" (July 2026)
 

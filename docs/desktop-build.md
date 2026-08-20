@@ -22,14 +22,16 @@ GitHub Actions workflow (`.github/workflows/release-desktop.yml`), which
 builds Linux / macOS / Windows in a matrix and drafts a GitHub Release with
 all the installers.
 
-For the **iOS / Android** apps, see [`mobile-build.md`](mobile-build.md).
+The dedicated **iOS / Android** apps are separate work in progress and are not
+release-ready; see [`mobile-build.md`](mobile-build.md). The mobile crate types
+and scripts retained here are an experimental Tauri wrapper path.
 
 The bundled executable is named **`kutup-client`** (`mainBinaryName` in
 `tauri.conf.json`), not `kutup` — the plain `kutup` name belongs to the CLI
 (`crates/kutup-cli`), and a `.deb` shipping `/usr/bin/kutup` would clash with it.
 The Cargo crate is still `kutup`; only the produced binary is renamed. The
-bundle identifier is **`dev.kutup.client`** — applies to desktop + iOS +
-Android (one ID for the whole product); it's also the OS-keychain service
+bundle identifier is **`dev.kutup.client`** — reserved across the product,
+including the mobile apps under development; it is also the OS-keychain service
 name (`src-tauri/src/lib.rs`) and the suffix of the desktop app-data dir
 (`$APPDATA/dev.kutup.client/`).
 

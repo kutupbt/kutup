@@ -1,24 +1,22 @@
-# kutup-server (Phase 3 🟡 scaffold)
+# `kutup-server` conversion record
 
-Rust rewrite of `backend/` (Go/Fiber, ~10.9k LOC prod + 3.3k tests). Binary
-`kutup-server`, listens on `:3000`. Axum + sqlx.
+**Status:** complete. `crates/kutup-server` is the only backend implementation;
+the former Go/Fiber `backend/` tree was removed.
 
-## Done (the scaffold)
+The Rust server is an Axum/sqlx application, listens on internal port `3000`,
+embeds migrations from `crates/kutup-server/migrations/`, stores encrypted
+objects through the S3 API, and exposes its generated OpenAPI document at
+`GET /api-docs/openapi.json`.
 
-- `src/config.rs` — env loader mirroring `backend/config/config.go` (same vars + defaults,
-  and the `JWT_SECRET` ≥ 32-char guard).
-- `src/db.rs` — sqlx `PgPool` connect + ping, and migrations run via
-  `sqlx::migrate!("../../backend/db/migrations")`. Those files are `NNN_name.up.sql` /
-  `.down.sql` (sqlx's reversible format), so the existing 18 migrations are consumed
-  **unchanged** and validated at compile time. The schema is the E2EE contract — not
-  modified.
-- `src/main.rs` — the Axum app: startup sequence (connect → migrate → serve),
-  `/api/health`, an env-driven CORS allowlist (explicit origins + credentials, never
-  wildcard; includes the tus headers), and `AppState { pool, config }`.
+Use these current references:
 
-## Next
+- [`../../api.md`](../../api.md) for the HTTP contract;
+- [`../../architecture.md`](../../architecture.md) for system boundaries;
+- [`../../contributing.md`](../../contributing.md) for build and test commands;
+- [`../../self-hosting.md`](../../self-hosting.md) for deployment; and
+- `crates/kutup-server/src/main.rs` plus generated OpenAPI for the exact route
+  set.
 
-- Build order: [`plan.md`](plan.md) (8 slices).
-- Endpoint inventory + sqlx/migration gotchas: [`routes.md`](routes.md).
-- The immediate next slice (auth + middleware) is detailed in
-  [`../resume-here.md`](../resume-here.md).
+[`plan.md`](plan.md) and [`routes.md`](routes.md) are historical Go-to-Rust
+inventories. Their deleted Go paths and pre-federation route names must not be
+used as current implementation guidance.

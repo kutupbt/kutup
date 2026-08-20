@@ -1,34 +1,36 @@
-# Go → Rust rewrite
+# Go → Rust rewrite (historical record)
 
-Rewriting kutup's Go (`backend/`, `cmd/kutup/`) into Rust under a root Cargo workspace
-(`crates/`). Order: **crypto → CLI → backend**. The Go code stays the source of truth
-until each Rust piece passes its parity/test gate.
+**Status:** complete. The former `backend/` and `cmd/kutup/` Go trees were
+removed after the Rust cutover. Current development happens in `crates/`.
 
-**Resuming with no prior context? Open [`resume-here.md`](resume-here.md).**
+This directory preserves the conversion methodology, phase plans, parity
+notes, and old route inventory. Old branch names, Go paths, command counts, and
+“next slice” instructions describe the conversion at the time they were
+written; they are not current contribution instructions.
 
-## Status
+## Current replacements
 
-| Phase | Crate | State |
+| Former component | Current implementation | Current documentation |
 |---|---|---|
-| 1 | `kutup-crypto` | ✅ complete, byte-verified vs Go (11 vector tests) |
-| 2 | `kutup-cli` (`kutup`) | ✅ all 16 commands; live VM test pending |
-| 3 | `kutup-server` | 🟡 scaffold only (config + db + `/health`) |
+| Go backend | `crates/kutup-server` | [`../api.md`](../api.md), [`../architecture.md`](../architecture.md) |
+| Go CLI | `crates/kutup-cli` | [`../../README.md`](../../README.md#cli) |
+| Duplicated Go/TypeScript formats | `crates/kutup-crypto` + `kutup-crypto-wasm` | [`../cryptographic-dependencies.md`](../cryptographic-dependencies.md) |
 
-## Map
-
-- [`approach.md`](approach.md) — how we work (mirroring rules, build/test/commit, deferrals, env)
-- [`decisions.md`](decisions.md) — library choices + rationale + critical crypto facts
-- [`crypto/`](crypto/README.md) · [`cli/`](cli/README.md) · [`server/`](server/README.md) — per-component docs
-- [`resume-here.md`](resume-here.md) — start here next session
-
-## One-liners
+The root workspace gate is:
 
 ```sh
-cargo build
-cargo test
-cargo clippy --all-targets -- -D warnings
-cargo fmt
+cargo test --locked --workspace --all-targets
+cargo fmt --all -- --check
 ```
 
-Every commit must be clippy-`-D warnings` + `rustfmt` clean with tests passing.
-Branch: `claude/go-rust-rewrite-G16zO`.
+The standalone Chat core, native FFI, and fuzz workspaces have their own gates
+in [`../contributing.md`](../contributing.md) and the CI workflow.
+
+## Historical index
+
+- [`resume-here.md`](resume-here.md) contains the final cutover record followed
+  by the original slice journal.
+- [`approach.md`](approach.md) and [`decisions.md`](decisions.md) record the
+  parity methodology and dependency choices.
+- [`crypto/`](crypto/README.md), [`cli/`](cli/README.md), and
+  [`server/`](server/README.md) contain component-specific records.

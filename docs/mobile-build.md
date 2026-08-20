@@ -1,50 +1,81 @@
-# Building the Kutup mobile apps (iOS / Android)
+# Kutup mobile development (iOS / Android)
 
-The mobile apps are the same [Tauri 2](https://tauri.app) shell + React frontend as the [desktop app](desktop-build.md), built for iOS and Android. The Rust side is already mobile-ready (`src-tauri/src/lib.rs` has the `tauri::mobile_entry_point`; `[lib] crate-type` includes `staticlib`/`cdylib`). What's left is `init`-ing the platform projects and building.
+**Status:** work in progress; the native mobile apps are not release-ready.
 
-`src-tauri/gen/` (the generated Xcode / Android Studio projects) is **gitignored** — it contains absolute paths + signing config. You regenerate it locally with `tauri ios init` / `tauri android init`; don't commit it.
+Kutup's intended iOS and Android product apps are developed in the sibling
+`kutup-ios` and `kutup-android` repositories. They use native Swift/Kotlin
+presentation and platform security while consuming shared Rust Chat logic from
+this repository through UniFFI. This repository does not build, test, sign, or
+publish complete native mobile applications by itself.
 
-App-icon branding is plumbed automatically: the `tauri:ios:init` / `tauri:android:init` scripts in `package.json` chain `tauri icon src-tauri/icons/source.png` after the init step, so the generated `gen/` project picks up the kutup three-diamond mark instead of Tauri's default droplet. If you need to refresh icons later (e.g. after pulling a new `source.png`), run `pnpm tauri:icon src-tauri/icons/source.png` — that rewrites both the desktop set under `src-tauri/icons/` and the mobile resources under `gen/{apple,android}/…`.
+The Tauri shell under `src-tauri/` still has compilable mobile entry points and
+convenience scripts. Treat those targets as an experimental shared-web-shell
+path, not evidence that the dedicated native apps have reached feature parity
+or release readiness.
 
-## Prerequisites
+## What is ready in this repository
 
-**iOS — needs a Mac.**
-- Xcode + Command Line Tools (`xcode-select --install`), and an iOS Simulator runtime (Xcode → Settings → Components).
-- For a real device or App Store build: an Apple Developer account — the signing team goes into the generated `gen/apple/` project (or you're prompted at `tauri ios init`). Simulator builds don't need it.
+- `crates/kutup-chat-core` owns the shared libsignal/OpenMLS engine used by web
+  WASM and native integrations.
+- `crates/kutup-client-ffi` exposes the current Swift/Kotlin UniFFI boundary.
+- `scripts/generate-native-bindings.sh` generates Swift and Kotlin bindings
+  from the compiled library metadata.
+- The responsive web application includes mobile layouts, but browser mobile
+  UI and dedicated native apps are different delivery surfaces.
+- `src-tauri/` can still initialize experimental iOS/Android wrapper projects.
 
-**Android — works on Linux, macOS, or Windows.**
-- Android Studio (gives you the SDK + an emulator) *or* the command-line SDK tools, plus the **NDK**.
-- Env vars: `ANDROID_HOME` (the SDK root) and `NDK_HOME` (the NDK root, e.g. `$ANDROID_HOME/ndk/<version>`). On macOS Android Studio puts the SDK at `~/Library/Android/sdk`; on Linux `~/Android/Sdk`.
-- An emulator (AVD) or a device with USB debugging enabled.
+The current FFI API is the phase-2b Direct Chat engine boundary documented in
+[`chat-native-bindings.md`](chat-native-bindings.md). Native integration,
+packaging, platform lifecycle, MLS/media/backup parity, store signing, and
+device-level acceptance remain work in progress in the mobile repositories.
 
-Both also need the repo's normal toolchain: `pnpm install` (root, for the `tauri` CLI) and a Rust toolchain.
+## Generate the native Chat bindings
 
-## iOS
+Generation requires Rust 1.91.1 or newer and `protoc`. On Linux or macOS:
 
 ```sh
-pnpm tauri:ios:init     # one-time: creates src-tauri/gen/apple/ (the Xcode project)
-pnpm tauri:ios:dev      # builds + runs in the iOS Simulator, hot-reloads the frontend
-pnpm tauri:ios:build    # release build → .ipa under src-tauri/gen/apple/build/
+scripts/generate-native-bindings.sh /tmp/kutup-native-bindings
 ```
 
-`tauri ios dev --open` opens the project in Xcode if you want to run on a device / tweak signing there.
+The output contains Swift source/header/modulemap files and Kotlin source. It
+is a build artifact and is not committed here. Packaging those artifacts as an
+XCFramework/Swift package or Android AAR is owned by the corresponding mobile
+repository; see [`chat-native-bindings.md`](chat-native-bindings.md) for the
+threading, SQLCipher, Keychain/Keystore, and backup-exclusion requirements.
 
-## Android
+## Experimental Tauri-mobile path
+
+These commands exercise the retained Tauri wrapper, not the dedicated native
+product apps:
 
 ```sh
-pnpm tauri:android:init   # one-time: creates src-tauri/gen/android/ (the Gradle project)
-pnpm tauri:android:dev    # builds + runs in an emulator / connected device
-pnpm tauri:android:build  # release build → .apk / .aab under src-tauri/gen/android/app/build/outputs/
+pnpm install
+pnpm tauri:ios:init       # macOS + Xcode required
+pnpm tauri:ios:dev
+
+pnpm tauri:android:init   # Android SDK + NDK required
+pnpm tauri:android:dev
 ```
 
-## v1 limitations
+`src-tauri/gen/` is gitignored because the generated Xcode/Gradle projects
+contain host paths and signing configuration. The scripts regenerate icons
+from `src-tauri/icons/source.png` after initialization.
 
-- **iOS session persistence works; Android is still a stub.** The OS-keychain vault (`vault_set/get/delete` in `src-tauri/src/lib.rs`) is wired on iOS via `keyring`'s `apple-native` backend (the same Security framework calls macOS uses: `kSecClassGenericPassword` via `SecItemAdd` / `SecItemCopyMatching` / `SecItemDelete`). The Simulator's keychain is permissive enough for dev without an explicit `keychain-access-groups` entitlement; for real-device / TestFlight / App Store builds the entitlement should be added (Tauri can inject one via `tauri.conf.json`'s iOS bundle config — wire up when we ship our first signed real-device build). **Android still has no `keyring` backend**, so the vault commands stub-fail on Android only and the JS side falls back to re-login per launch; a follow-up Tauri plugin wrapping Android Keystore is the path.
-- **Downloads aren't wired for mobile.** The desktop download path uses a native "save as" dialog + filesystem write, which doesn't map to mobile's sandboxed FS / share-sheet model — file downloads will fail (gracefully, with an error toast) on iOS/Android for now. Everything else works: server-picker → login → browse, upload, the notes/code editor, Excalidraw whiteboards, sharing. (Follow-up: route through the iOS share sheet / Android Storage Access Framework.)
-- **No mobile release CI yet.** Mobile builds are local for now; a `release-mobile.yml` (macOS runner + signing/provisioning for iOS, a keystore for Android) is a follow-up like `release-desktop.yml`.
+Known Tauri-mobile limitations include no Android keyring backend, no supported
+mobile plaintext-export/share-sheet flow, no Office editor assets in the
+embedded bundle, and no mobile release CI. These limitations do not define the
+architecture of the dedicated native apps, but they mean the wrapper is not a
+release candidate either.
 
-The bundle identifier is `dev.kutup.client` (shared with desktop — it becomes the iOS bundle ID / Android package name); `productName` is `Kutup`.
+## Server requirement
 
-## Server requirement (same as desktop)
+Every mobile client connects to a Kutup homeserver over HTTPS. A physical
+device must trust the server certificate; the local self-signed Compose
+certificate is not suitable unless its CA is deliberately installed on the
+device. Use a publicly trusted certificate for normal development and all
+release testing.
 
-The app talks to a Kutup server over HTTPS — the server must serve a certificate the device already trusts (a self-signed cert won't work). Plain `http://` is only accepted for `localhost`-class hosts, which isn't useful from a phone — use a real cert or a tunnel.
+The product-wide application identifier is `dev.kutup.client`. Platform
+signing, entitlements, backup exclusions, Keychain/Keystore access,
+notification permissions, and store metadata must be finalized and verified
+in the native repositories before either app is described as ready.

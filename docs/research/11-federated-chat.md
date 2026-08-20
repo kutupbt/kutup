@@ -4,13 +4,15 @@
 **Status:** Original architecture recommendation, approved as the direction and
 code-grounded against a local libsignal checkout at **v0.97.2** (2026).
 
-> **Implementation status (2026-07-17):** This is design rationale, not the
-> current-state contract. The web/WASM shared engine, direct messaging,
-> linked-device sync, Note to Self, transport-only federation, message
-> requests/blocking, encrypted profiles, signed device manifests, key
-> transparency and local checkpoint monitoring are now
-> implemented. See [`../chat-protocol.md`](../chat-protocol.md) for normative
-> behavior and [`../roadmap.md`](../roadmap.md) for the remaining work.
+> **Current-state note (2026-08-20):** This is design rationale, not the
+> current contract. The title's “Matrix-style” wording and the original group,
+> media, domain, and client assumptions were superseded. The web product now
+> ships transport-only federation, Direct/Note-to-Self, OpenMLS groups,
+> messaging/media, and continuous history recovery. The dedicated native apps
+> are separate work in progress and are not release-ready. See
+> [`../chat-protocol.md`](../chat-protocol.md),
+> [`../chat-mls.md`](../chat-mls.md), and
+> [`../chat-backup.md`](../chat-backup.md).
 
 > **Superseded in part by `13-chat-architecture-comparative-research.md` (2026-07-13).**
 > That comparative study (Signal/Matrix/XMPP + local libsignal/Prosody/ejabberd/Monal

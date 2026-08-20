@@ -32,7 +32,9 @@ cp .env.example .env
 Edit `.env` and fill in every value:
 
 ```sh
-# PostgreSQL — use a strong random password
+# PostgreSQL — names have checked-in defaults; use a strong password
+POSTGRES_DB=kutup
+POSTGRES_USER=kutup
 POSTGRES_PASSWORD=<strong-random-password>
 
 # JWT secret — generate with:
@@ -43,15 +45,21 @@ JWT_SECRET=<64-byte-hex-string>
 S3_ACCESS_KEY=kutup
 S3_SECRET_KEY=<strong-random-secret>
 S3_BUCKET=kutup-files
+S3_REGION=us-east-1
 
 # Public URL — published as the federation API base
 # Must be the address users (and remote servers) reach this instance at
 SERVER_URL=https://kutup.example.com
 
+# Stable account-address suffix. Set it once before accounts are created.
+# If federation is enabled, it must match FEDERATION_SERVER_NAME.
+CHAT_SERVER_NAME=kutup.example.com
+
 # Unified federation v2 identity used by both Chat and Drive:
 #   openssl rand -base64 32
 # FEDERATION_SERVER_NAME=kutup.example.com
 # FEDERATION_SIGNING_KEY=<base64-32-byte-ed25519-seed>
+# FEDERATION_NEXT_SIGNING_KEY=<set only during authenticated key rotation>
 
 # Active Chat installations per account. V1 permits 1..=10.
 CHAT_MAX_ACTIVE_DEVICES=10
@@ -62,6 +70,11 @@ CHAT_MEDIA_MAX_PLAINTEXT_BYTES=2147483648
 # active online private key.
 # CHAT_SEALED_SENDER_POLICY=<canonical one-line JSON>
 # CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY=<base64-32-byte-libsignal-private-key>
+
+# Private MLS groups are advertised only when both authenticated values are
+# complete and Chat is enabled by the shared federation policy.
+# CHAT_MLS_ORDERING_POLICY=<canonical authenticated policy JSON>
+# CHAT_MLS_CONTROL_SIGNING_KEY=<base64 signing seed>
 
 # Break-glass admin bootstrap: a single email:username:password triple.
 # Created on first start; the admin completes setup on first login.
@@ -116,6 +129,11 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # LOGIN_LOCKOUT_THRESHOLD=5
 # LOGIN_LOCKOUT_MINUTES=15
 ```
+
+`.env.example` is the complete checked-in variable template. Keep
+`CHAT_SERVER_NAME`, `FEDERATION_SERVER_NAME`, and the public host in
+`SERVER_URL` aligned before creating accounts; changing an established account
+address or federation identity is a protocol migration, not a DNS-only edit.
 
 `CHAT_MAILBOX_RETENTION_DAYS` and `CHAT_MEDIA_DELIVERY_RETENTION_DAYS` are startup
 fallbacks. An administrator can change both at runtime under **Admin → Settings →

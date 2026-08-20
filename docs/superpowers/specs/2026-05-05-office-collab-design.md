@@ -1,6 +1,10 @@
 # Office Collab Edit (.docx / .xlsx / .pptx) — Design
 
-**Status:** approved 2026-05-05
+**Status:** historical approved design (2026-05-05), subsequently implemented.
+The opt-in installer delivery decision in this record was superseded by the
+digest-pinned default asset image documented in
+[`../../onlyoffice.md`](../../onlyoffice.md) and
+[`../../plans/onlyoffice-default-bundling.md`](../../plans/onlyoffice-default-bundling.md).
 **Pattern:** CryptPad's OnlyOffice client-only integration. Server stays content-blind.
 **Research:** `docs/research/05-cryptpad-onlyoffice-integration.md` is the source of truth for everything implementation-shaped; this spec compresses it into our roadmap.
 

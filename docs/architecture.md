@@ -246,9 +246,10 @@ content under an existing ID is rejected.
 
 Chat is a separate cryptographic subsystem from drive encryption and
 collaborative editing. It uses the shared Rust `kutup-chat-core` engine in the
-browser through WebAssembly; Android and iOS will consume the same engine
-through UniFFI after the web protocol and feature set are complete. The
-normative contract is [`chat-protocol.md`](chat-protocol.md).
+browser through WebAssembly; the work-in-progress Android and iOS clients are
+integrating the same engine through UniFFI. Those native apps are not yet
+release-ready. The normative contract is
+[`chat-protocol.md`](chat-protocol.md).
 
 ```mermaid
 flowchart LR
@@ -381,7 +382,7 @@ tightly confirmed, audited break-glass re-pin only for a quarantined competing
 history. Valid old-and-new-key-signed rotations advance automatically;
 rollback, gaps, silent replacement, and downgrade are rejected.
 
-The desktop and mobile admin settings render the same generic operational
+The desktop-width and mobile-width web admin layouts render the same generic operational
 projection: shared peer trust plus feature diagnostics, server/fingerprint
 filters, retry-one/retry-visible workflows, immutable identity evidence, and a
 filtered federation audit feed with CSV export. These are read-only views over

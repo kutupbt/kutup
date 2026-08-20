@@ -6,7 +6,7 @@
 
 **End-to-end encrypted, self-hosted Drive and federated Chat — with real-time collaboration.**
 
-![Rust](https://img.shields.io/badge/Rust-1.91-000000?logo=rust)
+![Rust](https://img.shields.io/badge/Rust-1.91.1-000000?logo=rust)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.4-3178C6?logo=typescript)
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)
@@ -23,6 +23,11 @@ Kutup is a privacy-first file storage, collaboration, and messaging platform you
 What makes it different from "encrypted Dropbox" clones is the second word in that sentence: **collaboration**. Notes, code, spreadsheets, slides, and whiteboards all sync in real time between peers without giving up the E2EE invariant. The relay sees a stream of opaque AEAD-encrypted, Ed25519-signed frames — it can route them, persist them, and deliver them to other tabs, but it can't read a single byte of content.
 
 Self-hosted by design. One authenticated federation stack carries encrypted Drive shares and Chat between Kutup servers without giving either backend the protected plaintext.
+
+> **Release status:** Kutup is pre-production and has not published its first
+> stable `v*` or `desktop-v*` release. The implementation and test gates are
+> production-oriented, but operators should review the remaining release
+> blockers in [`docs/roadmap.md`](docs/roadmap.md) before serving real users.
 
 ---
 
@@ -66,12 +71,20 @@ Multi-device with per-device Ed25519 keypairs (revocable individually). 24-word 
 
 ### Federated E2EE Chat with continuous recovery
 
-Direct Chat and Note to Self use libsignal; private groups use OpenMLS. Replies,
-reactions, author-authenticated edits and deletions, receipts, typing,
-disappearing messages, local search, photos, files, camera capture, and bounded
-voice notes stay end-to-end encrypted. Contacts can compare a safety QR, and
-contacts-only sealed delivery removes the sender identity from destination
-mailbox rows.
+Chat is part of the responsive web app and is available at `/chat` after
+sign-in:
+
+- Direct conversations and Note to Self use pinned libsignal PQXDH, Triple
+  Ratchet, and SPQR state; private groups use RFC 9420 OpenMLS.
+- `username@server` addressing, message requests, blocking, account/device
+  manifests, safety QR comparison, and contacts-only sealed delivery work
+  across Kutup homeservers.
+- Replies, reactions, author-authenticated edits and deletions, delivery/read
+  state, typing, disappearing messages, expiry tombstones, and private local
+  search are supported.
+- Photos, files, camera capture, bounded voice notes, encrypted previews,
+  manual lazy download, and in-app viewing use a dedicated Chat storage quota
+  rather than the Drive quota.
 
 Every durable display-history mutation enters an IndexedDB-backed encrypted
 backup outbox. After account recovery, a genuinely empty browser automatically
@@ -247,7 +260,8 @@ For the full picture (key hierarchy, login flow, federation model, storage layer
 | OnlyOffice integration & CryptPad-pinned bundle | [docs/onlyoffice.md](docs/onlyoffice.md) |
 | REST API reference | [docs/api.md](docs/api.md) |
 | Local dev setup, code conventions, project structure | [docs/contributing.md](docs/contributing.md) |
-| Interactive Swagger UI | `/swagger/index.html` on a running stack |
+| Documentation map and document-status conventions | [docs/README.md](docs/README.md) |
+| Machine-readable OpenAPI document | `/api-docs/openapi.json` on a running stack (interactive Swagger UI is not bundled) |
 
 ---
 

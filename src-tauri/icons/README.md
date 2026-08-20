@@ -4,18 +4,17 @@ Tauri's bundler needs platform-specific icon files at build time
 (`32x32.png`, `128x128.png`, `128x128@2x.png`, `icon.icns`, `icon.ico`
 plus mobile bits).
 
-To generate the full set from a single 1024×1024 source PNG of the
-Kutup logo:
+The checked-in desktop icon set is generated from `source.png` / `source.svg`.
+Regenerate it after an approved brand-artwork change with:
 
 ```bash
-pnpm tauri:icon path/to/source.png
+pnpm tauri:icon src-tauri/icons/source.png
 ```
 
-That writes everything `tauri.conf.json` references plus the
-`gen/android/.../mipmap-*` and iOS `AppIcon.appiconset` assets.
-
-For now the build will fail to bundle release artifacts until the
-real icons land here; `pnpm tauri:dev` works without them.
+That rewrites everything `tauri.conf.json` references. If an experimental
+Tauri mobile project has been initialized under `src-tauri/gen/`, it also
+refreshes its Android and iOS icon catalogs. The dedicated native mobile apps
+are separate work in progress and own their release asset catalogs.
 
 The source artwork (`source.svg` / `source.png`) and all icons
 rendered from it are kutup brand assets — see [`/TRADEMARK.md`](../../TRADEMARK.md)

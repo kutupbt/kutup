@@ -1,6 +1,8 @@
 # Spec: Collaborative E2EE File Editing in kutup
 
-**Status:** Approved design (2026-05-04). Ready to drive an implementation plan.
+**Status:** historical approved design (2026-05-04), subsequently implemented
+and migrated to the Rust backend. Current behavior is documented in
+[`../../architecture.md`](../../architecture.md).
 **Author:** Drafted via the superpowers brainstorming flow on 2026-05-04. User approved the architecture and asked to proceed.
 **Background research:** [`docs/research/01-cryptpad-collab-stack.md`](../../research/01-cryptpad-collab-stack.md) · [`02-modern-collab-stack-2026.md`](../../research/02-modern-collab-stack-2026.md) · [`03-version-history-design.md`](../../research/03-version-history-design.md) · [`04-office-collab-engines.md`](../../research/04-office-collab-engines.md) · [`05-cryptpad-onlyoffice-integration.md`](../../research/05-cryptpad-onlyoffice-integration.md). Read those before changing this spec.
 

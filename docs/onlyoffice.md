@@ -1,5 +1,9 @@
 # OnlyOffice in kutup
 
+**Status:** current. Office editing is included in the normal Compose frontend
+build through a public digest-pinned asset image; the visible OnlyOffice logo
+and attribution are preserved.
+
 kutup uses a **CryptPad-pinned bundle** of OnlyOffice — not the upstream `@onlyoffice/document-server`. This doc explains the why, the layout, and the cost of the choice.
 
 ---

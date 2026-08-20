@@ -1,5 +1,10 @@
 # kutup-crypto (Phase 1 ✅)
 
+> **Status:** conversion phase complete. Current ownership and test policy are
+> documented in [`../../../crates/kutup-crypto/README.md`](../../../crates/kutup-crypto/README.md)
+> and [`../../cryptographic-dependencies.md`](../../cryptographic-dependencies.md).
+> Go paths below are historical parity references.
+
 The canonical shared E2EE implementation used through Rust, WASM and UniFFI.
 It succeeds `cmd/kutup/internal/crypto/` + `backend/services/envelope/`. See also the
 crate's own `crates/kutup-crypto/README.md`, and `../decisions.md` for the param /

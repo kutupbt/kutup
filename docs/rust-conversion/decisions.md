@@ -1,5 +1,11 @@
 # Locked decisions & critical facts
 
+> **Historical conversion record:** library selections that still appear in
+> the current Cargo manifests remain relevant, but references to the former Go
+> mirrors describe the completed cutover. Current format ownership is defined
+> by [`../cryptographic-dependencies.md`](../cryptographic-dependencies.md) and
+> [`../crypto-agility.md`](../crypto-agility.md).
+
 ## Library choices
 
 | Area | Choice | Why |
