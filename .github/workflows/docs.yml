@@ -1,0 +1,64 @@
+name: Documentation
+
+on:
+  pull_request:
+    paths:
+      - "**/*.md"
+      - "**/*.mdx"
+      - "docs/**"
+      - "scripts/check-docs.py"
+      - "scripts/test-check-docs.py"
+      - ".github/workflows/docs.yml"
+  push:
+    branches:
+      - master
+    paths:
+      - "**/*.md"
+      - "**/*.mdx"
+      - "docs/**"
+      - "scripts/check-docs.py"
+      - "scripts/test-check-docs.py"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  documentation:
+    name: Documentation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      POSTGRES_PASSWORD: docs-check-postgres
+      JWT_SECRET: docs-check-jwt-secret-at-least-32-bytes
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Test documentation checker
+        run: python3 scripts/test-check-docs.py
+      - name: Validate documentation links and repository paths
+        run: python3 scripts/check-docs.py
+      - name: Check changed-file whitespace
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            git diff --check "$BASE_SHA" "$HEAD_SHA"
+          elif [[ "$EVENT_NAME" == "push" && ! "$BEFORE_SHA" =~ ^0+$ ]]; then
+            git diff --check "$BEFORE_SHA" "$CURRENT_SHA"
+          else
+            git show --check --format= "$CURRENT_SHA"
+          fi
+      - name: Validate Compose configuration
+        run: docker compose config --quiet

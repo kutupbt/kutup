@@ -80,6 +80,11 @@ wire formats, database schemas, CI policy, quotas, retention, or licensing.
   unresolved Office-stall claims.
 - Ran `docker compose config --quiet` and `git diff --check`.
 
+The follow-up CI optimization added `scripts/check-docs.py` and the lightweight
+`Documentation` workflow. Future Markdown/`docs/**`-only changes no longer
+start the Rust, WASM, frontend, Postgres/SeaweedFS, or browser matrix; mixed
+code-and-documentation changes continue to run the complete matrix.
+
 No application test suite is required for prose-only changes; executable
 configuration validation and documentation consistency checks are the relevant
 gates.

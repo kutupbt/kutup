@@ -99,6 +99,8 @@ cargo test                                      # all crates
 cargo test -p kutup-crypto                      # crypto byte-parity vectors
 cargo clippy --all-targets -- -D warnings       # lints (gate)
 cargo fmt --check                               # formatting (gate)
+python3 scripts/test-check-docs.py               # checker regression tests
+python3 scripts/check-docs.py                    # Markdown links and referenced paths
 ./scripts/audit-unified-federation.sh           # no feature-owned federation stack
 ./scripts/test-chat-backup-integration.sh        # real Postgres/SeaweedFS backup lifecycle
 ./scripts/test-chat-federation.sh               # full two-server API + browser security/recovery gate
@@ -127,6 +129,12 @@ Run these local gates before requesting or rerunning GitHub CI. CI is final
 confirmation, not the first debugging environment. See
 [`tests/e2e/README.md`](../tests/e2e/README.md) for the single-server recovery
 command, TLS prerequisite, zero-retry policy, and sanitized failure artifacts.
+
+Markdown-only and `docs/**`-only pull requests/pushes run the lightweight
+`Documentation` workflow instead of the Rust, WASM, frontend, integration, and
+browser matrix. It validates local links, referenced script/workflow/spec paths,
+changed-file whitespace, and Compose parsing. A mixed documentation-and-code
+change still runs the complete `CI` workflow as well as documentation checks.
 
 For manual browser testing, use `./scripts/dev-chat-federation-up.sh` instead
 of invoking `docker-compose.chat-federation.yml` directly. The helper starts
