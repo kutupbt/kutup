@@ -11,6 +11,7 @@
 import { isAxiosError } from 'axios'
 import { toBase64, fromBase64 } from '@kutup/crypto/base64'
 import { LocalStatePurpose, openLocalState, sealLocalState } from '@kutup/crypto/localState'
+import { getCryptoWasm } from '@kutup/crypto/rustWasm'
 import api, { getClientType, refreshAccessToken } from './client'
 import { decodeKeys, encodeKeys, type SessionKeys } from './keys'
 import { activateSession } from './profile'
@@ -46,46 +47,64 @@ function sessionEnded(error: unknown): boolean {
   return status === 401 || status === 403 || status === 404
 }
 
+function ended(): RestoreResult {
+  clearPersisted()
+  return 'none'
+}
+
 /**
  * Restore the session from this origin's blob: refresh the cookie, fetch the
  * local key, open the blob.
  *
- * Reports `none` (and clears the blob) when there is nothing to restore: no
- * blob, an ended session, a blob from another session or one that does not
- * open. Network and server failures are rethrown with the blob intact, so a
- * flaky connection does not sign anybody out.
+ * The blob is deleted only on a definite answer: the server says the session
+ * is over, the blob belongs to another session, or it does not authenticate
+ * under its key. Anything else — the server unreachable, the WASM runtime
+ * failing to load, the page being navigated away mid-request — is rethrown
+ * with the blob intact, so it never costs anybody their sign-in.
  */
 export async function restoreSession(): Promise<RestoreResult> {
   const persisted = readPersisted()
   if (!persisted) return 'none'
+
+  let refreshed: Awaited<ReturnType<typeof refreshAccessToken>>
   try {
-    const { accessToken, sessionId } = await refreshAccessToken()
-    if (sessionId !== persisted.sessionId) {
-      clearPersisted()
-      return 'none'
-    }
+    refreshed = await refreshAccessToken()
+  } catch (error) {
+    if (sessionEnded(error)) return ended()
+    throw error
+  }
+  const { accessToken, sessionId } = refreshed
+  if (sessionId !== persisted.sessionId) return ended()
+
+  let localKey: Uint8Array
+  try {
     const { data } = await api.get<{ key: string }>('/auth/sessions/current/local-key', {
       headers: { Authorization: `Bearer ${accessToken}` },
     })
-    const localKey = fromBase64(data.key)
-    let plaintext: Uint8Array
-    try {
-      plaintext = await openLocalState(
-        persisted.blob,
-        localKey,
-        LocalStatePurpose.WebSession,
-        profileFor(sessionId),
-      )
-    } finally {
-      localKey.fill(0)
-    }
-    const keys = decodeKeys(plaintext)
-    plaintext.fill(0)
-    await activateSession(keys, accessToken, sessionId)
-    return 'restored'
+    localKey = fromBase64(data.key)
   } catch (error) {
-    if (isAxiosError(error) && !sessionEnded(error)) throw error
-    clearPersisted()
-    return 'none'
+    if (sessionEnded(error)) return ended()
+    throw error
   }
+
+  // Load the runtime first, so a failed load is not mistaken for a bad blob.
+  await getCryptoWasm()
+  let keys: SessionKeys
+  try {
+    const plaintext = await openLocalState(
+      persisted.blob,
+      localKey,
+      LocalStatePurpose.WebSession,
+      profileFor(sessionId),
+    )
+    keys = decodeKeys(plaintext)
+    plaintext.fill(0)
+  } catch {
+    return ended()
+  } finally {
+    localKey.fill(0)
+  }
+
+  await activateSession(keys, accessToken, sessionId)
+  return 'restored'
 }

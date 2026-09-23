@@ -30,6 +30,8 @@ export interface AppShellProps {
   sidebarFooter?: ReactNode
   headerStart?: ReactNode
   headerEnd?: ReactNode
+  /** Content edge to edge (Drive's file list); pages are padded otherwise. */
+  flush?: boolean
   children: ReactNode
 }
 
@@ -69,7 +71,7 @@ export function AppShell(props: AppShellProps) {
 
   return (
     <div className="flex min-h-svh bg-background">
-      <aside className="sticky top-0 hidden h-svh w-64 shrink-0 bg-chrome text-chrome-foreground md:block">
+      <aside className="sticky top-0 hidden h-svh w-64 shrink-0 border-r border-chrome-border bg-chrome text-chrome-foreground md:block">
         <SidebarContent {...props} />
       </aside>
 
@@ -112,7 +114,9 @@ export function AppShell(props: AppShellProps) {
           <div className="min-w-0 flex-1">{props.headerStart}</div>
           <div className="flex shrink-0 items-center gap-1">{props.headerEnd}</div>
         </header>
-        <main className="min-w-0 flex-1">{props.children}</main>
+        <main className={cn('min-w-0 flex-1', !props.flush && 'px-4 py-6 md:px-8 md:py-8')}>
+          {props.children}
+        </main>
       </div>
     </div>
   )

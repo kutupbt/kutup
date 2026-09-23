@@ -1,11 +1,17 @@
 {
   "common": {
+    "back": "Back",
     "breadcrumb": "Breadcrumb",
     "cancel": "Cancel",
     "close": "Close",
+    "continue": "Continue",
+    "copied": "Copied",
+    "copy": "Copy",
+    "hidePassword": "Hide password",
     "loading": "Loading…",
     "retry": "Try again",
     "save": "Save",
+    "showPassword": "Show password",
     "switchLanguage": "Switch language",
     "tryAgain": "Something went wrong. Try again."
   },

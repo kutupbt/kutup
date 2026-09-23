@@ -21,10 +21,16 @@
     "react-dom": "^18.3.1",
     "react-i18next": "^17.0.4",
     "react-router-dom": "^7.1.1",
-    "sonner": "^2.0.7"
+    "sonner": "^2.0.7",
+    "@hookform/resolvers": "^5.2.2",
+    "react-hook-form": "^7.73.1",
+    "zod": "^4.3.6",
+    "zxcvbn": "^4.4.2",
+    "qrcode.react": "^4.2.0"
   },
   "devDependencies": {
     "@kutup/config": "workspace:*",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "@types/zxcvbn": "^4.4.4"
   }
 }

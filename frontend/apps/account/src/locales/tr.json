@@ -5,5 +5,212 @@
   "notFound": {
     "title": "Sayfa bulunamadı",
     "description": "Adres yanlış yazılmış ya da sayfa taşınmış olabilir."
+  },
+  "boot": {
+    "failedTitle": "Kutup'a ulaşılamıyor",
+    "failedDescription": "Sunucu yanıt vermedi. Bağlantınızı kontrol edip yeniden deneyin. Oturumunuz açık kalır."
+  },
+  "nav": {
+    "apps": "Uygulamalar",
+    "settings": "Ayarlar",
+    "account": "Hesap",
+    "security": "Güvenlik",
+    "sessions": "Oturumlar",
+    "devices": "Düzenleme cihazları",
+    "admin": "Yönetim",
+    "users": "Kullanıcılar",
+    "activity": "Etkinlik",
+    "federation": "Federasyon",
+    "serverSettings": "Sunucu ayarları"
+  },
+  "auth": {
+    "fields": {
+      "email": "E-posta",
+      "password": "Parola",
+      "username": "Kullanıcı adı",
+      "newPassword": "Yeni parola",
+      "confirmPassword": "Parolayı tekrarlayın"
+    },
+    "validation": {
+      "emailRequired": "E-posta adresinizi girin.",
+      "emailInvalid": "Geçerli bir e-posta adresi girin.",
+      "passwordRequired": "Bir parola girin.",
+      "passwordsDiffer": "Parolalar eşleşmiyor.",
+      "passwordTooWeak": "Daha güçlü bir parola seçin — daha uzun ve yaygın bir sözcük ya da desen olmayan.",
+      "username": "3–32 karakter: küçük harf, rakam, _ ve -."
+    },
+    "errors": {
+      "locked": "Çok fazla deneme. Birkaç dakika bekleyip yeniden deneyin.",
+      "network": "Sunucuya ulaşılamadı. Bağlantınızı kontrol edip yeniden deneyin.",
+      "signInFailed": "Giriş yapılamadı. E-postanızı ve parolanızı kontrol edin.",
+      "totpFailed": "Kod geçersiz. Doğrulayıcı uygulamanızdaki güncel kodu girin.",
+      "keyGenerationFailed": "Anahtarlarınız bu cihazda oluşturulamadı. Yeniden deneyin.",
+      "generic": "Bir şeyler ters gitti. Yeniden deneyin."
+    },
+    "strength": {
+      "label": "Güç: {{strength}}",
+      "veryWeak": "çok zayıf",
+      "weak": "zayıf",
+      "fair": "orta",
+      "strong": "güçlü",
+      "veryStrong": "çok güçlü"
+    }
+  },
+  "login": {
+    "title": "Kutup'a giriş yapın",
+    "description": "Dosyalarınız ve mesajlarınız bu cihazda açılır.",
+    "submit": "Giriş yap",
+    "unlocking": "Kilit açılıyor…",
+    "forgot": "Parolanızı mı unuttunuz?",
+    "noAccount": "Kutup'ta yeni misiniz?",
+    "register": "Hesap oluşturun",
+    "totpTitle": "İki adımlı doğrulama",
+    "totpDescription": "Doğrulayıcı uygulamanızdaki 6 haneli kodu girin.",
+    "totpCode": "Doğrulama kodu",
+    "verify": "Doğrula",
+    "useAnotherAccount": "Başka bir hesap kullan"
+  },
+  "newKeys": {
+    "continue": "Devam",
+    "generating": "Şifreleme anahtarlarınız oluşturuluyor…",
+    "generatingDescription": "Birkaç saniye sürer ve yalnızca bu cihazda gerçekleşir.",
+    "passwordNotice": "Kutup parolanızı asla görmez. Unutursanız yalnızca kurtarma ifadeniz hesabınıza geri dönmenizi sağlar."
+  },
+  "recoveryPhrase": {
+    "title": "Kurtarma ifadeniz",
+    "description": "Parolanızı unutursanız hesabınızı geri getirebilecek 24 sözcük.",
+    "warningTitle": "Şimdi not alın",
+    "warning": "Bu ifade yalnızca bir kez gösterilir. Bu ifade ya da parolanız olmadan kimse — sunucunuzun yöneticisi bile — dosyalarınızı kurtaramaz.",
+    "download": "Metin olarak indir",
+    "fileHeader": "{{email}} için Kutup kurtarma ifadesi. Gizli ve çevrimdışı saklayın.",
+    "saved": "Kurtarma ifademi kaydettim",
+    "confirmTitle": "Kurtarma ifadenizi doğrulayın",
+    "confirmDescription": "Kaydettiğinizi göstermek için üç sözcüğünü girin.",
+    "confirmHint": "Bu sıralardaki sözcükleri yazın.",
+    "wordNumber": "{{n}}. sözcük",
+    "mismatch": "Bir ya da daha fazla sözcük eşleşmiyor. Kaydettiğiniz ifadeyi kontrol edin.",
+    "confirm": "Doğrula ve devam et"
+  },
+  "register": {
+    "title": "Kutup hesabınızı oluşturun",
+    "description": "Anahtarlarınız bu cihazda oluşturulur ve şifrelenmeden cihazdan çıkmaz.",
+    "usernameHint": "Sohbet'te sizi bu adla bulurlar.",
+    "closedTitle": "Kayıt kapalı",
+    "closedDescription": "Bu sunucu yeni hesap kabul etmiyor. Yöneticisinden bir hesap isteyin.",
+    "backToSignIn": "Girişe dön",
+    "settingsUnavailable": "Sunucunun kayıt ayarları okunamadı; hesap reddedilebilir."
+  },
+  "firstLogin": {
+    "title": "Hesabınızın kurulumunu tamamlayın",
+    "description": "Bir yönetici sizin için {{email}} hesabını oluşturdu. Şifreleme anahtarlarınızı oluşturmak için kendi parolanızı seçin."
+  },
+  "recover": {
+    "title": "Hesabınızı kurtarın",
+    "description": "Yeni bir parola seçmek için 24 sözcüklük kurtarma ifadenizi kullanın.",
+    "phrase": "Kurtarma ifadesi",
+    "phraseHint": "24 sözcük, sırasıyla ve boşlukla ayrılmış. Numaralar yok sayılır.",
+    "phraseInvalid": "Bu geçerli bir kurtarma ifadesi değil — her sözcüğü kontrol edin.",
+    "signsOutEverywhere": "Bu hesapla oturum açmış tüm cihaz ve uygulamaların oturumu kapanır.",
+    "submit": "Yeni parolayı belirle",
+    "failed": "Kurtarma başarısız. E-postayı ve ifadeyi kontrol edin.",
+    "doneTitle": "Parola değiştirildi",
+    "doneDescription": "Yeni parolanızla giriş yapın. Dosyalarınız ve mesajlarınız yerinde.",
+    "signIn": "Giriş yap",
+    "backToSignIn": "Girişe dön"
+  },
+  "authorize": {
+    "title": "{{app}} açılıyor",
+    "opening": "Bu cihazda kilit açılıyor…",
+    "failed": "Uygulama açılamadı. Uygulamanın kendisinden yeniden deneyin.",
+    "invalidTitle": "Bilinmeyen uygulama",
+    "invalidDescription": "Bu bağlantı Kutup'ta olmayan bir uygulamayı istiyor.",
+    "home": "Uygulamalarınıza gidin"
+  },
+  "launcher": {
+    "title": "Hoş geldiniz, {{name}}",
+    "description": "Kaldığınız yerden devam edin.",
+    "drive": "Uçtan uca şifreli dosyalar, notlar, belgeler ve beyaz tahtalar.",
+    "chat": "Kutup sunucuları arasında özel sohbetler ve gruplar."
+  },
+  "settings": {
+    "account": {
+      "title": "Hesap",
+      "description": "Bu sunucuda kim olduğunuz ve ne kadar alan kullandığınız.",
+      "profile": "Profil",
+      "noUsername": "Belirlenmedi",
+      "driveStorage": "Drive depolama",
+      "chatStorage": "Sohbet depolama",
+      "usage": "{{total}} alanın {{used}} kadarı",
+      "colour": "Varlık rengi",
+      "colourDescription": "Başkalarıyla belge düzenlerken imleç ve vurgu renginiz.",
+      "colourAuto": "Otomatik",
+      "colourFailed": "Renk kaydedilemedi."
+    },
+    "security": {
+      "title": "Güvenlik",
+      "description": "Girişinizi koruyun ve geri dönme yolunu bilin.",
+      "twoFactor": "İki adımlı doğrulama",
+      "twoFactorDescription": "Parolayla girişte doğrulayıcı uygulamadan bir kod istensin.",
+      "on": "Açık",
+      "off": "Kapalı",
+      "enable": "İki adımlı doğrulamayı kur",
+      "startFailed": "İki adımlı doğrulama kurulumu başlatılamadı.",
+      "scan": "Bu kodu doğrulayıcı uygulamanızla tarayın.",
+      "manual": "Ya da bu anahtarı elle girin:",
+      "code": "6 haneli kod",
+      "verify": "Doğrula ve aç",
+      "verifyFailed": "Kod geçersiz. Güncel kodu girin.",
+      "enabled": "İki adımlı doğrulama açıldı",
+      "disable": "İki adımlı doğrulamayı kapat",
+      "disableWarning": "Bundan sonra giriş için yalnızca parolanız yeterli olur.",
+      "disableFailed": "İki adımlı doğrulama kapatılamadı.",
+      "disabled": "İki adımlı doğrulama kapatıldı",
+      "recovery": "Kurtarma ifadesi",
+      "recoveryDescription": "Hesabınız oluşturulurken gösterilen 24 sözcük.",
+      "recoveryNote": "Unutulan bir parolayı sıfırlamanın tek yolu kurtarma ifadenizdir. Kutup onu saklamaz ve yeniden gösteremez — kaydettiğiniz kopyayı güvenli ve çevrimdışı bir yerde tutun."
+    },
+    "sessions": {
+      "title": "Oturumlar",
+      "description": "Hesabınızın açık olduğu her yer. Bir girişi buradan sonlandırmak hemen etkili olur.",
+      "thisDevice": "Bu cihaz",
+      "cli": "Komut satırı",
+      "browserOn": "{{os}} üzerinde {{browser}}",
+      "unknownBrowser": "Bilinmeyen tarayıcı",
+      "unknownApp": "Bilinmeyen uygulama",
+      "lastActive": "{{when}} etkin",
+      "signedIn": "{{when}} giriş yapıldı",
+      "end": "Oturumu kapat",
+      "endTitle": "Bu oturum kapatılsın mı?",
+      "endDescription": "Yeniden giriş yapması gerekecek. Yüklediği her şey durur.",
+      "ended": "Oturum kapatıldı",
+      "endFailed": "Oturum sonlandırılamadı.",
+      "endOthers": "Diğer tüm oturumları kapat",
+      "endOthersTitle": "Diğer tüm oturumlar kapatılsın mı?",
+      "endOthersDescription_one": "{{count}} diğer giriş sonlanacak. Bu cihaz açık kalır.",
+      "endOthersDescription_other": "{{count}} diğer giriş sonlanacak. Bu cihaz açık kalır.",
+      "endedOthers": "Diğer tüm oturumlar kapatıldı",
+      "emptyTitle": "Oturum yok",
+      "emptyDescription": "Açık bir giriş yok."
+    },
+    "devices": {
+      "title": "Düzenleme cihazları",
+      "description": "Başkalarıyla belge düzenleyen her tarayıcı değişikliklerini kendi anahtarıyla imzalar. Artık kullanmadığınız cihazı iptal edin.",
+      "unnamed": "Adsız cihaz",
+      "revoked": "İptal edildi",
+      "added": "{{when}} eklendi",
+      "lastSeen": "son görülme {{when}}",
+      "neverSeen": "hiç kullanılmadı",
+      "revoke": "İptal et",
+      "revokeTitle": "Bu cihaz iptal edilsin mi?",
+      "revokeDescription": "{{name}} artık düzenlemeleri imzalayamaz ve açık düzenleme oturumları kapanır.",
+      "revokeFailed": "Cihaz iptal edilemedi.",
+      "revokedToast": "Cihaz iptal edildi",
+      "emptyTitle": "Henüz düzenleme cihazı yok",
+      "emptyDescription": "Bir cihaz ilk kez paylaşılan bir belgeyi açtığında burada görünür."
+    }
+  },
+  "admin": {
+    "forbiddenTitle": "Yalnızca yöneticiler",
+    "forbidden": "Hesabınız yönetim sayfalarını açamaz."
   }
 }

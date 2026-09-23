@@ -6,11 +6,13 @@ import { ThemeProvider } from 'next-themes'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { initI18n } from '@kutup/i18n'
+import { configureClient } from '@kutup/session/client'
 import { App } from './App'
 import en from './locales/en.json'
 import tr from './locales/tr.json'
 
 initI18n({ en, tr })
+configureClient({ clientType: 'web-account' })
 
 const queryClient = new QueryClient({
   defaultOptions: {

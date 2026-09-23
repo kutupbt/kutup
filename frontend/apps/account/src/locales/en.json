@@ -5,5 +5,212 @@
   "notFound": {
     "title": "Page not found",
     "description": "The address may be mistyped, or the page may have moved."
+  },
+  "boot": {
+    "failedTitle": "Kutup is not reachable",
+    "failedDescription": "The server did not answer. Check your connection, then try again. You are still signed in."
+  },
+  "nav": {
+    "apps": "Apps",
+    "settings": "Settings",
+    "account": "Account",
+    "security": "Security",
+    "sessions": "Sessions",
+    "devices": "Editor devices",
+    "admin": "Administration",
+    "users": "Users",
+    "activity": "Activity",
+    "federation": "Federation",
+    "serverSettings": "Server settings"
+  },
+  "auth": {
+    "fields": {
+      "email": "Email",
+      "password": "Password",
+      "username": "Username",
+      "newPassword": "New password",
+      "confirmPassword": "Repeat password"
+    },
+    "validation": {
+      "emailRequired": "Enter your email address.",
+      "emailInvalid": "Enter a valid email address.",
+      "passwordRequired": "Enter a password.",
+      "passwordsDiffer": "The passwords do not match.",
+      "passwordTooWeak": "Choose a stronger password — longer, and not a common word or pattern.",
+      "username": "3–32 characters: lowercase letters, numbers, _ and -."
+    },
+    "errors": {
+      "locked": "Too many attempts. Wait a few minutes, then try again.",
+      "network": "The server could not be reached. Check your connection and try again.",
+      "signInFailed": "Sign-in failed. Check your email and password.",
+      "totpFailed": "That code did not work. Enter the current code from your authenticator app.",
+      "keyGenerationFailed": "Your keys could not be created on this device. Try again.",
+      "generic": "Something went wrong. Try again."
+    },
+    "strength": {
+      "label": "Strength: {{strength}}",
+      "veryWeak": "very weak",
+      "weak": "weak",
+      "fair": "fair",
+      "strong": "strong",
+      "veryStrong": "very strong"
+    }
+  },
+  "login": {
+    "title": "Sign in to Kutup",
+    "description": "Your files and messages are unlocked on this device.",
+    "submit": "Sign in",
+    "unlocking": "Unlocking…",
+    "forgot": "Forgot your password?",
+    "noAccount": "New to Kutup?",
+    "register": "Create an account",
+    "totpTitle": "Two-factor authentication",
+    "totpDescription": "Enter the 6-digit code from your authenticator app.",
+    "totpCode": "Authentication code",
+    "verify": "Verify",
+    "useAnotherAccount": "Use a different account"
+  },
+  "newKeys": {
+    "continue": "Continue",
+    "generating": "Creating your encryption keys…",
+    "generatingDescription": "This takes a few seconds and happens only on this device.",
+    "passwordNotice": "Kutup never sees your password. If you forget it, only your recovery phrase can get you back in."
+  },
+  "recoveryPhrase": {
+    "title": "Your recovery phrase",
+    "description": "24 words that can restore your account if you forget your password.",
+    "warningTitle": "Write it down now",
+    "warning": "This phrase is shown once. Nobody — not even your server's administrator — can recover your files without it or your password.",
+    "download": "Download as text",
+    "fileHeader": "Kutup recovery phrase for {{email}}. Keep this private and offline.",
+    "saved": "I have saved my recovery phrase",
+    "confirmTitle": "Confirm your recovery phrase",
+    "confirmDescription": "Prove you saved it by entering three of its words.",
+    "confirmHint": "Type the words at these positions.",
+    "wordNumber": "Word {{n}}",
+    "mismatch": "One or more words do not match. Check your saved phrase.",
+    "confirm": "Confirm and continue"
+  },
+  "register": {
+    "title": "Create your Kutup account",
+    "description": "Your keys are created on this device and never leave it unencrypted.",
+    "usernameHint": "How people find you in Chat.",
+    "closedTitle": "Registration is closed",
+    "closedDescription": "This server does not accept new accounts. Ask its administrator for one.",
+    "backToSignIn": "Back to sign-in",
+    "settingsUnavailable": "The server's registration settings could not be read; it may refuse the account."
+  },
+  "firstLogin": {
+    "title": "Finish setting up your account",
+    "description": "An administrator created {{email}} for you. Choose your own password to create your encryption keys."
+  },
+  "recover": {
+    "title": "Recover your account",
+    "description": "Use your 24-word recovery phrase to choose a new password.",
+    "phrase": "Recovery phrase",
+    "phraseHint": "The 24 words, in order, separated by spaces. Numbering is ignored.",
+    "phraseInvalid": "That is not a valid recovery phrase — check each word.",
+    "signsOutEverywhere": "Every device and app signed in to this account will be signed out.",
+    "submit": "Set new password",
+    "failed": "Recovery failed. Check the email and the phrase.",
+    "doneTitle": "Password changed",
+    "doneDescription": "Sign in with your new password. Your files and messages are intact.",
+    "signIn": "Sign in",
+    "backToSignIn": "Back to sign-in"
+  },
+  "authorize": {
+    "title": "Opening {{app}}",
+    "opening": "Unlocking on this device…",
+    "failed": "The app could not be opened. Try again from the app.",
+    "invalidTitle": "Unknown app",
+    "invalidDescription": "This link asks for an app Kutup does not have.",
+    "home": "Go to your apps"
+  },
+  "launcher": {
+    "title": "Welcome, {{name}}",
+    "description": "Pick up where you left off.",
+    "drive": "Files, notes, documents and whiteboards, end-to-end encrypted.",
+    "chat": "Private conversations and groups across Kutup servers."
+  },
+  "settings": {
+    "account": {
+      "title": "Account",
+      "description": "Who you are on this server, and how much space you use.",
+      "profile": "Profile",
+      "noUsername": "Not set",
+      "driveStorage": "Drive storage",
+      "chatStorage": "Chat storage",
+      "usage": "{{used}} of {{total}}",
+      "colour": "Presence colour",
+      "colourDescription": "Your cursor and highlight colour when editing documents with others.",
+      "colourAuto": "Automatic",
+      "colourFailed": "The colour could not be saved."
+    },
+    "security": {
+      "title": "Security",
+      "description": "Protect your sign-in and know how to get back in.",
+      "twoFactor": "Two-factor authentication",
+      "twoFactorDescription": "Ask for a code from an authenticator app when signing in with a password.",
+      "on": "On",
+      "off": "Off",
+      "enable": "Set up two-factor authentication",
+      "startFailed": "Two-factor setup could not start.",
+      "scan": "Scan this code with your authenticator app.",
+      "manual": "Or enter this key manually:",
+      "code": "6-digit code",
+      "verify": "Verify and turn on",
+      "verifyFailed": "That code did not work. Enter the current code.",
+      "enabled": "Two-factor authentication turned on",
+      "disable": "Turn off two-factor authentication",
+      "disableWarning": "Your password alone will then be enough to sign in.",
+      "disableFailed": "Two-factor authentication could not be turned off.",
+      "disabled": "Two-factor authentication turned off",
+      "recovery": "Recovery phrase",
+      "recoveryDescription": "The 24 words shown when your account was created.",
+      "recoveryNote": "Your recovery phrase is the only way to reset a forgotten password. Kutup does not store it and cannot show it again — keep your saved copy somewhere safe and offline."
+    },
+    "sessions": {
+      "title": "Sessions",
+      "description": "Every place your account is signed in. Ending a sign-in there takes effect immediately.",
+      "thisDevice": "This device",
+      "cli": "Command line",
+      "browserOn": "{{browser}} on {{os}}",
+      "unknownBrowser": "Unknown browser",
+      "unknownApp": "Unknown app",
+      "lastActive": "Active {{when}}",
+      "signedIn": "signed in {{when}}",
+      "end": "Sign out",
+      "endTitle": "Sign out this session?",
+      "endDescription": "It will need to sign in again. Anything it was uploading stops.",
+      "ended": "Signed out",
+      "endFailed": "The session could not be ended.",
+      "endOthers": "Sign out everywhere else",
+      "endOthersTitle": "Sign out everywhere else?",
+      "endOthersDescription_one": "{{count}} other sign-in will end. This device stays signed in.",
+      "endOthersDescription_other": "{{count}} other sign-ins will end. This device stays signed in.",
+      "endedOthers": "Signed out everywhere else",
+      "emptyTitle": "No sessions",
+      "emptyDescription": "No sign-ins are active."
+    },
+    "devices": {
+      "title": "Editor devices",
+      "description": "Each browser that edits documents with others signs its changes with its own key. Revoke a device you no longer use.",
+      "unnamed": "Unnamed device",
+      "revoked": "Revoked",
+      "added": "Added {{when}}",
+      "lastSeen": "last seen {{when}}",
+      "neverSeen": "never used",
+      "revoke": "Revoke",
+      "revokeTitle": "Revoke this device?",
+      "revokeDescription": "{{name}} will no longer be able to sign edits, and its open editing sessions close.",
+      "revokeFailed": "The device could not be revoked.",
+      "revokedToast": "Device revoked",
+      "emptyTitle": "No editor devices yet",
+      "emptyDescription": "A device appears here the first time it opens a shared document."
+    }
+  },
+  "admin": {
+    "forbiddenTitle": "Administrators only",
+    "forbidden": "Your account cannot open administration pages."
   }
 }

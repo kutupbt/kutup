@@ -1,11 +1,17 @@
 {
   "common": {
+    "back": "Geri",
     "breadcrumb": "Konum",
     "cancel": "Vazgeç",
     "close": "Kapat",
+    "continue": "Devam",
+    "copied": "Kopyalandı",
+    "copy": "Kopyala",
+    "hidePassword": "Parolayı gizle",
     "loading": "Yükleniyor…",
     "retry": "Yeniden dene",
     "save": "Kaydet",
+    "showPassword": "Parolayı göster",
     "switchLanguage": "Dili değiştir",
     "tryAgain": "Bir şeyler ters gitti. Yeniden deneyin."
   },
