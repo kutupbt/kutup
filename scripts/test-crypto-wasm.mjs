@@ -4,10 +4,10 @@ import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const modulePath = new URL(
-  '../frontend/public/crypto-wasm/kutup_crypto_wasm.js',
+  '../frontend/wasm/crypto-wasm/kutup_crypto_wasm.js',
   import.meta.url,
 )
-const wasmPath = `${root}/frontend/public/crypto-wasm/kutup_crypto_wasm_bg.wasm`
+const wasmPath = `${root}/frontend/wasm/crypto-wasm/kutup_crypto_wasm_bg.wasm`
 const crypto = await import(modulePath)
 const wasm = await readFile(wasmPath)
 await crypto.default({ module_or_path: wasm })

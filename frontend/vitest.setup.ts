@@ -14,9 +14,7 @@ afterEach(() => {
 // Provide stub no-ops so components that use them at render time don't crash;
 // individual tests that care about the value can vi.spyOn() these.
 if (typeof URL.createObjectURL !== 'function') {
-  // @ts-expect-error — augmenting a global for the test environment.
-  URL.createObjectURL = () => 'blob:stub'
-  // @ts-expect-error
+  URL.createObjectURL = (() => 'blob:stub') as typeof URL.createObjectURL
   URL.revokeObjectURL = () => undefined
 }
 
@@ -24,7 +22,6 @@ if (typeof URL.createObjectURL !== 'function') {
 // the "no OS preference → light" path) so code that calls it doesn't crash;
 // tests that care can vi.spyOn(window, 'matchMedia').
 if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
-  // @ts-expect-error — augmenting a global for the test environment.
   window.matchMedia = (query: string): MediaQueryList =>
     ({
       matches: false,

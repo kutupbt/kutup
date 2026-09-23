@@ -1,0 +1,21 @@
+{
+  "name": "@kutup/collab",
+  "private": true,
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@kutup/crypto": "workspace:*",
+    "@kutup/session": "workspace:*",
+    "yjs": "^13.6.30",
+    "y-protocols": "^1.0.7",
+    "axios": "^1.18.0",
+    "libsodium-wrappers-sumo": "^0.7.13"
+  },
+  "devDependencies": {
+    "@types/libsodium-wrappers-sumo": "^0.7.8"
+  }
+}

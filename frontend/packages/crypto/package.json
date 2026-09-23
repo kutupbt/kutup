@@ -1,0 +1,20 @@
+{
+  "name": "@kutup/crypto",
+  "private": true,
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "libsodium-wrappers-sumo": "^0.7.13",
+    "bip39": "^3.1.0",
+    "buffer": "^6.0.3"
+  },
+  "devDependencies": {
+    "@types/libsodium-wrappers-sumo": "^0.7.8",
+    "@types/bip39": "^3.0.4"
+  }
+}

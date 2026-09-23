@@ -1,0 +1,20 @@
+{
+  "name": "@kutup/chat-core",
+  "private": true,
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@kutup/crypto": "workspace:*",
+    "@kutup/session": "workspace:*",
+    "@kutup/files": "workspace:*",
+    "axios": "^1.18.0",
+    "tus-js-client": "^4"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.5"
+  }
+}

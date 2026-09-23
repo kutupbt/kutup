@@ -1,0 +1,18 @@
+{
+  "name": "@kutup/files",
+  "private": true,
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    "./mediaCache": "./src/mediaCache/index.ts",
+    "./mediaPreview": "./src/mediaPreview/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@kutup/crypto": "workspace:*",
+    "@kutup/session": "workspace:*",
+    "tus-js-client": "^4",
+    "fflate": "^0.8.2"
+  }
+}
