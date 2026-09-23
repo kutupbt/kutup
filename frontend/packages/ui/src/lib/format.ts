@@ -78,11 +78,13 @@ export function formatFileDate(
   return new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(date)
 }
 
-const BYTE_UNITS = ['byte', 'kilobyte', 'megabyte', 'gigabyte', 'terabyte', 'petabyte'] as const
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'] as const
 
 /**
- * Binary sizes (1 KB = 1024 B, matching what quotas are enforced in), with
- * the unit and decimal separator from the active locale.
+ * Binary sizes (1 KB = 1024 B, matching what quotas are enforced in) with the
+ * decimal separator from the active locale. The unit symbols are the same in
+ * every language Kutup ships, and Intl's own byte units spell the smallest
+ * one out ("0 byte"), so symbols are appended here.
  */
 export function formatBytes(bytes: number, locale: string): string {
   let value = Math.max(0, bytes)
@@ -91,12 +93,10 @@ export function formatBytes(bytes: number, locale: string): string {
     value /= 1024
     unit += 1
   }
-  return new Intl.NumberFormat(locale, {
-    style: 'unit',
-    unit: BYTE_UNITS[unit],
-    unitDisplay: 'short',
+  const number = new Intl.NumberFormat(locale, {
     maximumFractionDigits: unit === 0 ? 0 : unit < 3 ? 1 : 2,
   }).format(value)
+  return `${number} ${BYTE_UNITS[unit]}`
 }
 
 /** Transfer speed, e.g. "4.2 MB/s"; empty when there is no rate yet. */

@@ -1,4 +1,4 @@
-import type { FormEvent, ReactNode } from 'react'
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Alert } from './alert'
 import {
@@ -11,6 +11,8 @@ import {
   AlertDialogTitle,
 } from './alert-dialog'
 import { Button } from './button'
+import { Input } from './input'
+import { Label } from './label'
 import { apiErrorMessage } from '../lib/apiError'
 
 /**
@@ -24,6 +26,8 @@ import { apiErrorMessage } from '../lib/apiError'
  * - The server's own words win: `error` renders through `apiErrorMessage`;
  *   `errorFallback` is only for when the server did not say why.
  * - `blocked` renders the obstacle and disables the submit from one prop.
+ * - `confirmPhrase` (for what cannot be undone: wiping or deleting an
+ *   account) asks for that exact text to be typed before the submit enables.
  *
  * If success unmounts the caller, confirm with `mutateAsync` so the
  * continuation (a redirect, a toast) survives the unmount.
@@ -44,6 +48,8 @@ export interface ConfirmDestructiveProps {
   pending?: boolean
   error?: unknown
   errorFallback: string
+  /** When set, this exact text must be typed to enable the submit. */
+  confirmPhrase?: string
   onConfirm: () => void
 }
 
@@ -59,13 +65,20 @@ export function ConfirmDestructive({
   pending,
   error,
   errorFallback,
+  confirmPhrase,
   onConfirm,
 }: ConfirmDestructiveProps) {
   const { t } = useTranslation()
+  const phraseId = useId()
+  const [typed, setTyped] = useState('')
+  useEffect(() => {
+    if (!open) setTyped('')
+  }, [open])
+  const phraseMissing = confirmPhrase !== undefined && typed.trim() !== confirmPhrase
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault()
-    if (!blocked && !pending) onConfirm()
+    if (!blocked && !pending && !phraseMissing) onConfirm()
   }
 
   return (
@@ -90,9 +103,21 @@ export function ConfirmDestructive({
 
         <form className="space-y-4" onSubmit={handleSubmit}>
           {warning ? <Alert variant={warningVariant}>{warning}</Alert> : null}
+          {confirmPhrase !== undefined ? (
+            <div className="space-y-1.5">
+              <Label htmlFor={phraseId}>{t('common.typeToConfirm', { phrase: confirmPhrase })}</Label>
+              <Input
+                id={phraseId}
+                value={typed}
+                onChange={(e) => setTyped(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </div>
+          ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
-            <Button type="submit" variant="destructive" loading={pending} disabled={!!blocked}>
+            <Button type="submit" variant="destructive" loading={pending} disabled={!!blocked || phraseMissing}>
               {submit}
             </Button>
           </AlertDialogFooter>

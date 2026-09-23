@@ -13,7 +13,8 @@
     "save": "Save",
     "showPassword": "Show password",
     "switchLanguage": "Switch language",
-    "tryAgain": "Something went wrong. Try again."
+    "tryAgain": "Something went wrong. Try again.",
+    "typeToConfirm": "Type {{phrase}} to confirm"
   },
   "shell": {
     "accountMenu": "Account menu",
