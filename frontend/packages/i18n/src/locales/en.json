@@ -1,0 +1,34 @@
+{
+  "common": {
+    "breadcrumb": "Breadcrumb",
+    "cancel": "Cancel",
+    "close": "Close",
+    "loading": "Loading…",
+    "retry": "Try again",
+    "save": "Save",
+    "switchLanguage": "Switch language",
+    "tryAgain": "Something went wrong. Try again."
+  },
+  "shell": {
+    "accountMenu": "Account menu",
+    "accountSettings": "Account settings",
+    "appearance": "Appearance",
+    "apps": "Kutup apps",
+    "language": "Language",
+    "navigation": "Main navigation",
+    "navigationDescription": "Sections of this app",
+    "openNavigation": "Open navigation",
+    "signOut": "Sign out",
+    "switchApp": "Switch app"
+  },
+  "apps": {
+    "account": "Account",
+    "chat": "Chat",
+    "drive": "Drive"
+  },
+  "theme": {
+    "dark": "Dark theme",
+    "light": "Light theme",
+    "system": "Match system theme"
+  }
+}

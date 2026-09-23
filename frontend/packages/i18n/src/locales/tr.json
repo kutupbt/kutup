@@ -1,0 +1,34 @@
+{
+  "common": {
+    "breadcrumb": "Konum",
+    "cancel": "Vazgeç",
+    "close": "Kapat",
+    "loading": "Yükleniyor…",
+    "retry": "Yeniden dene",
+    "save": "Kaydet",
+    "switchLanguage": "Dili değiştir",
+    "tryAgain": "Bir şeyler ters gitti. Yeniden deneyin."
+  },
+  "shell": {
+    "accountMenu": "Hesap menüsü",
+    "accountSettings": "Hesap ayarları",
+    "appearance": "Görünüm",
+    "apps": "Kutup uygulamaları",
+    "language": "Dil",
+    "navigation": "Ana gezinme",
+    "navigationDescription": "Bu uygulamanın bölümleri",
+    "openNavigation": "Gezinmeyi aç",
+    "signOut": "Oturumu kapat",
+    "switchApp": "Uygulama değiştir"
+  },
+  "apps": {
+    "account": "Hesap",
+    "chat": "Sohbet",
+    "drive": "Drive"
+  },
+  "theme": {
+    "dark": "Koyu tema",
+    "light": "Açık tema",
+    "system": "Sistem temasını kullan"
+  }
+}
