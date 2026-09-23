@@ -243,5 +243,134 @@
       "network": "The connection dropped.",
       "other": "The upload failed."
     }
+  },
+  "public": {
+    "title": "Shared files",
+    "decrypting": "Decrypting on this device…",
+    "description_one": "{{count}} file, decrypted in your browser with the key in this link.",
+    "description_other": "{{count}} files, decrypted in your browser with the key in this link.",
+    "emptyTitle": "No files",
+    "emptyDescription": "This folder has no files in it right now.",
+    "footer": "Kutup · end-to-end encrypted. The server never saw these files' contents.",
+    "failure": {
+      "missingKey": {
+        "title": "This link is incomplete",
+        "description": "The part after # holds the key and is missing. Ask for the whole link again."
+      },
+      "notFound": {
+        "title": "This link does not exist",
+        "description": "It may have been mistyped, or the folder was deleted."
+      },
+      "expired": {
+        "title": "This link has expired",
+        "description": "Ask the person who shared it for a new one."
+      },
+      "badKey": {
+        "title": "This link's key does not fit",
+        "description": "The link was changed or copied incompletely. Ask for the whole link again."
+      },
+      "other": {
+        "title": "The files could not be opened",
+        "description": "Check your connection and reload."
+      }
+    }
+  },
+  "editor": {
+    "status": {
+      "connecting": "Connecting…",
+      "ready": "Live",
+      "error": "Offline — reconnecting"
+    },
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Saved",
+    "saveHint": "Save the current state (Ctrl+S)",
+    "saveVersion": "Save version",
+    "saveVersionHint": "Save a named version that is kept forever",
+    "nameVersion": {
+      "title": "Name this version",
+      "description": "Named versions are kept forever and appear at the top of the history.",
+      "label": "Version name"
+    },
+    "history": "History",
+    "historyTitle": "Version history",
+    "closeHistory": "Close history",
+    "shortcutsButton": "Keyboard shortcuts",
+    "cursorColor": "Cursor colour",
+    "useColor": "Use {{color}}",
+    "customColor": "Custom colour…",
+    "colorSaveFailed": "Couldn't save your cursor colour",
+    "restoreFailed": "Couldn't restore this version",
+    "restored": "Version restored",
+    "preRestoreLabel": "Before restore, {{time}}",
+    "restoredLabel": "Restored from {{time}}",
+    "quotaSave": "Storage quota exceeded — couldn't save",
+    "mode": {
+      "label": "View",
+      "edit": "Edit",
+      "split": "Split",
+      "read": "Read"
+    },
+    "statusBar": {
+      "cursor": "Ln {{line}}, Col {{col}}",
+      "words_one": "{{count}} word",
+      "words_other": "{{count}} words",
+      "chars_one": "{{count}} character",
+      "chars_other": "{{count}} characters",
+      "collaborators_one": "{{count}} other person here",
+      "collaborators_other": "{{count}} other people here"
+    },
+    "shortcuts": {
+      "title": "Editor keyboard shortcuts",
+      "description": "Save and search work anywhere on the page; the rest only while the editor has focus.",
+      "save": "Save",
+      "search": "Find in document",
+      "undo": "Undo",
+      "redo": "Redo",
+      "comment": "Toggle line comment",
+      "cycleMode": "Cycle Edit / Split / Read",
+      "cycleModeRev": "Cycle modes backward",
+      "addCursor": "Add a cursor at the click",
+      "rectSelect": "Rectangular selection"
+    },
+    "versions": {
+      "loading": "Loading versions…",
+      "loadFailed": "Couldn't load the version history.",
+      "empty": "No versions yet",
+      "emptyHint": "Versions are saved automatically as you edit, or when you choose Save version.",
+      "kept": "Kept",
+      "today": "Today, {{time}}",
+      "yesterday": "Yesterday, {{time}}",
+      "meta": "{{size}} · key {{key}}",
+      "name": "Name",
+      "namePlaceholder": "Version name",
+      "keep": "Keep forever",
+      "unkeep": "Stop keeping",
+      "restore": "Restore",
+      "updateFailed": "Couldn't update this version"
+    },
+    "restore": {
+      "title": "Restore this version?",
+      "description": "Save the current state as a backup version first, or restore directly without a backup.",
+      "restoreOnly": "Restore only",
+      "saveAndRestore": "Save & restore"
+    },
+    "whiteboard": {
+      "loading": "Loading whiteboard…",
+      "imageQuota": "Storage quota exceeded — image not uploaded"
+    }
+  },
+  "file": {
+    "opening": "Opening…",
+    "failedTitle": "This file can't be opened",
+    "backToDrive": "Back to Drive",
+    "backTo": "Back to {{folder}}",
+    "notFound": "It may have been moved to the trash, or you may no longer have access to its folder.",
+    "undecryptable": "Its keys could not be decrypted with your account. Ask the folder's owner to share it again.",
+    "tooLarge": "At {{size}} it is too large to open in the browser (the limit is {{limit}}). Download it instead.",
+    "loadFailed": "It could not be loaded. Check your connection and try again.",
+    "noPreviewTitle": "No preview for this kind of file",
+    "noPreview": "Download it to open it on your device.",
+    "restoring": "Restoring…"
   }
 }

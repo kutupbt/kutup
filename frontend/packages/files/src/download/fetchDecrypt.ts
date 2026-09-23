@@ -37,7 +37,8 @@ export async function* fetchDecryptedChunks(
   signal?: AbortSignal,
 ): AsyncGenerator<DecryptedChunk, void, void> {
   const resp = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+    // Public-link downloads are anonymous: no token, no header.
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
     signal,
   })
   if (!resp.ok) {

@@ -243,5 +243,134 @@
       "network": "Bağlantı koptu.",
       "other": "Yükleme başarısız oldu."
     }
+  },
+  "public": {
+    "title": "Paylaşılan dosyalar",
+    "decrypting": "Bu cihazda şifre çözülüyor…",
+    "description_one": "{{count}} dosya, bu bağlantıdaki anahtarla tarayıcınızda çözüldü.",
+    "description_other": "{{count}} dosya, bu bağlantıdaki anahtarla tarayıcınızda çözüldü.",
+    "emptyTitle": "Dosya yok",
+    "emptyDescription": "Bu klasörde şu anda dosya yok.",
+    "footer": "Kutup · uçtan uca şifreli. Sunucu bu dosyaların içeriğini hiç görmedi.",
+    "failure": {
+      "missingKey": {
+        "title": "Bu bağlantı eksik",
+        "description": "# işaretinden sonraki kısım anahtarı taşır ve eksik. Bağlantının tamamını yeniden isteyin."
+      },
+      "notFound": {
+        "title": "Bu bağlantı yok",
+        "description": "Yanlış yazılmış olabilir ya da klasör silinmiş."
+      },
+      "expired": {
+        "title": "Bu bağlantının süresi doldu",
+        "description": "Paylaşan kişiden yenisini isteyin."
+      },
+      "badKey": {
+        "title": "Bu bağlantının anahtarı uymuyor",
+        "description": "Bağlantı değiştirilmiş ya da eksik kopyalanmış. Bağlantının tamamını yeniden isteyin."
+      },
+      "other": {
+        "title": "Dosyalar açılamadı",
+        "description": "Bağlantınızı kontrol edip sayfayı yenileyin."
+      }
+    }
+  },
+  "editor": {
+    "status": {
+      "connecting": "Bağlanıyor…",
+      "ready": "Canlı",
+      "error": "Çevrimdışı — yeniden bağlanıyor"
+    },
+    "save": "Kaydet",
+    "saving": "Kaydediliyor…",
+    "saved": "Kaydedildi",
+    "saveHint": "Geçerli durumu kaydet (Ctrl+S)",
+    "saveVersion": "Sürüm kaydet",
+    "saveVersionHint": "Süresiz saklanan adlandırılmış bir sürüm kaydet",
+    "nameVersion": {
+      "title": "Bu sürümü adlandır",
+      "description": "Adlandırılmış sürümler süresiz saklanır ve geçmişin en üstünde görünür.",
+      "label": "Sürüm adı"
+    },
+    "history": "Geçmiş",
+    "historyTitle": "Sürüm geçmişi",
+    "closeHistory": "Geçmişi kapat",
+    "shortcutsButton": "Klavye kısayolları",
+    "cursorColor": "İmleç rengi",
+    "useColor": "{{color}} kullan",
+    "customColor": "Özel renk…",
+    "colorSaveFailed": "İmleç rengin kaydedilemedi",
+    "restoreFailed": "Bu sürüm geri yüklenemedi",
+    "restored": "Sürüm geri yüklendi",
+    "preRestoreLabel": "Geri yüklemeden önce, {{time}}",
+    "restoredLabel": "{{time}} sürümünden geri yüklendi",
+    "quotaSave": "Depolama kotası aşıldı — kaydedilemedi",
+    "mode": {
+      "label": "Görünüm",
+      "edit": "Düzenle",
+      "split": "Böl",
+      "read": "Oku"
+    },
+    "statusBar": {
+      "cursor": "Satır {{line}}, Sütun {{col}}",
+      "words_one": "{{count}} kelime",
+      "words_other": "{{count}} kelime",
+      "chars_one": "{{count}} karakter",
+      "chars_other": "{{count}} karakter",
+      "collaborators_one": "Burada {{count}} kişi daha var",
+      "collaborators_other": "Burada {{count}} kişi daha var"
+    },
+    "shortcuts": {
+      "title": "Düzenleyici klavye kısayolları",
+      "description": "Kaydet ve ara sayfanın her yerinde çalışır; diğerleri yalnızca düzenleyici odaktayken.",
+      "save": "Kaydet",
+      "search": "Belgede bul",
+      "undo": "Geri al",
+      "redo": "Yinele",
+      "comment": "Satır yorumunu aç/kapat",
+      "cycleMode": "Düzenle / Böl / Oku arasında geç",
+      "cycleModeRev": "Modlar arasında geriye geç",
+      "addCursor": "Tıklanan yere imleç ekle",
+      "rectSelect": "Dikdörtgen seçim"
+    },
+    "versions": {
+      "loading": "Sürümler yükleniyor…",
+      "loadFailed": "Sürüm geçmişi yüklenemedi.",
+      "empty": "Henüz sürüm yok",
+      "emptyHint": "Sürümler sen düzenledikçe ya da Sürüm kaydet'i seçtiğinde otomatik kaydedilir.",
+      "kept": "Saklanıyor",
+      "today": "Bugün, {{time}}",
+      "yesterday": "Dün, {{time}}",
+      "meta": "{{size}} · anahtar {{key}}",
+      "name": "Adlandır",
+      "namePlaceholder": "Sürüm adı",
+      "keep": "Süresiz sakla",
+      "unkeep": "Saklamayı bırak",
+      "restore": "Geri yükle",
+      "updateFailed": "Bu sürüm güncellenemedi"
+    },
+    "restore": {
+      "title": "Bu sürüm geri yüklensin mi?",
+      "description": "Önce geçerli durumu yedek sürüm olarak kaydet ya da yedeklemeden doğrudan geri yükle.",
+      "restoreOnly": "Yalnızca geri yükle",
+      "saveAndRestore": "Kaydet ve geri yükle"
+    },
+    "whiteboard": {
+      "loading": "Beyaz tahta yükleniyor…",
+      "imageQuota": "Depolama kotası aşıldı — görsel yüklenmedi"
+    }
+  },
+  "file": {
+    "opening": "Açılıyor…",
+    "failedTitle": "Bu dosya açılamıyor",
+    "backToDrive": "Drive'a dön",
+    "backTo": "{{folder}} klasörüne dön",
+    "notFound": "Çöp kutusuna taşınmış olabilir ya da klasörüne artık erişimin olmayabilir.",
+    "undecryptable": "Anahtarları hesabınla çözülemedi. Klasörün sahibinden yeniden paylaşmasını iste.",
+    "tooLarge": "{{size}} boyutuyla tarayıcıda açılamayacak kadar büyük (sınır {{limit}}). Bunun yerine indir.",
+    "loadFailed": "Yüklenemedi. Bağlantını kontrol edip yeniden dene.",
+    "noPreviewTitle": "Bu dosya türü için önizleme yok",
+    "noPreview": "Cihazında açmak için indir.",
+    "restoring": "Geri yükleniyor…"
   }
 }

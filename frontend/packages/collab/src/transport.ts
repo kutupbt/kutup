@@ -33,9 +33,15 @@ export interface PeersMsg {
 }
 
 export interface CollabTransportOpts {
-  url: string                                       // ws URL with ?token=...&deviceId=...
+  /**
+   * The ws URL (with ?token=…&deviceId=…), or a function producing a current
+   * one. Reconnects can come long after a 15-minute access token expired, so
+   * apps pass `collabSocketUrl`, which is asked again on every connect.
+   */
+  url: string | (() => Promise<string>)
   wsFactory?: (url: string) => WebSocket            // overridable for tests
-  onFrame: (bytes: Uint8Array) => void
+  /** May be async (frames are decrypted); a rejection is reported to onError. */
+  onFrame: (bytes: Uint8Array) => void | Promise<void>
   onHello: (h: HelloMsg) => void
   onError: (e: unknown) => void
   /** Optional — fires when the server pushes an updated peer-list. */
@@ -77,10 +83,25 @@ export class CollabTransport {
 
   private connect(): void {
     if (this.closed) return
+    if (typeof this.opts.url === 'string') {
+      this.open(this.opts.url)
+      return
+    }
+    this.opts.url().then(
+      (url) => this.open(url),
+      (e: unknown) => {
+        this.opts.onError(e)
+        this.scheduleReconnect()
+      },
+    )
+  }
+
+  private open(url: string): void {
+    if (this.closed) return
     const factory = this.opts.wsFactory ?? ((u: string) => new WebSocket(u))
     let ws: WebSocket
     try {
-      ws = factory(this.opts.url)
+      ws = factory(url)
     } catch (e) {
       this.opts.onError(e)
       this.scheduleReconnect()
@@ -111,7 +132,7 @@ export class CollabTransport {
         const arr = ev.data instanceof ArrayBuffer
           ? new Uint8Array(ev.data)
           : new Uint8Array(ev.data as ArrayBufferLike)
-        this.opts.onFrame(arr)
+        Promise.resolve(this.opts.onFrame(arr)).catch((e: unknown) => this.opts.onError(e))
       }
     })
 

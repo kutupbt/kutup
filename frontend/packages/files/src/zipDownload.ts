@@ -23,6 +23,11 @@ export interface ZipFile {
   fileKey: Uint8Array
   isRemote?: boolean
   remoteShareId?: string
+  /** Where the encrypted blob is, under the API base, when it is not the
+   *  file's own upload (an editor's latest saved version). */
+  contentPath?: string
+  /** Content already decrypted by the caller; nothing is fetched. */
+  plain?: Uint8Array
 }
 
 export type ProgressCallback = (done: number, total: number, part: number, parts: number) => void
@@ -61,11 +66,18 @@ async function pumpFileIntoZip(
   flush: () => Promise<void>,
   signal?: AbortSignal,
 ): Promise<void> {
-  const url = f.isRemote
-    ? `${base}/drive/federation/shares/${f.remoteShareId}/files/${f.id}/content`
-    : `${base}/files/${f.id}/download`
   const entry = new ZipPassThrough(f.name)
   zip.add(entry)
+  if (f.plain) {
+    entry.push(f.plain, true)
+    await flush()
+    return
+  }
+  const url = f.contentPath
+    ? `${base}${f.contentPath}`
+    : f.isRemote
+      ? `${base}/drive/federation/shares/${f.remoteShareId}/files/${f.id}/content`
+      : `${base}/files/${f.id}/download`
   let pushed = false
   for await (const { plain, isFinal } of fetchDecryptedChunks(
     url,

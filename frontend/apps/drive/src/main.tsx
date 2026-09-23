@@ -1,6 +1,6 @@
 import '@kutup/crypto/polyfills'
 import '@kutup/ui/styles/fonts'
-import '@kutup/ui/styles/tokens.css'
+import './styles.css'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ThemeProvider } from 'next-themes'
 import { StrictMode } from 'react'

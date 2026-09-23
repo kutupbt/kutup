@@ -8,7 +8,9 @@ import { Boot } from './app/Boot'
 import { DriveShell } from './app/DriveShell'
 import { NewMenu } from './features/create/NewMenu'
 import { CurrentFolderProvider } from './features/drive/currentFolder'
+import { FileEditorPage } from './features/editor/FileEditorPage'
 import { FolderPage } from './features/folder/FolderPage'
+import { PublicSharePage } from './features/public/PublicSharePage'
 import { SharedPage } from './features/shared/SharedPage'
 import { TrashPage } from './features/trash/TrashPage'
 import { UploadPanel } from './features/uploads/UploadPanel'
@@ -22,26 +24,39 @@ function UnauthenticatedHandler() {
   return null
 }
 
+/** Everything behind the session: the Drive shell and its pages. */
+function SignedIn() {
+  return (
+    <Boot>
+      <UnauthenticatedHandler />
+      <CurrentFolderProvider>
+        <Routes>
+          {/* A file opens full screen, outside the Drive frame. */}
+          <Route path="/file/:cid/:fid" element={<FileEditorPage />} />
+          <Route element={<DriveShell primaryAction={<NewMenu />} />}>
+            <Route index element={<FolderPage />} />
+            <Route path="/folders/:id" element={<FolderPage />} />
+            <Route path="/remote/:shareId" element={<FolderPage />} />
+            <Route path="/shared" element={<SharedPage />} />
+            <Route path="/trash" element={<TrashPage />} />
+            <Route path="*" element={<NotFoundPage />} />
+          </Route>
+        </Routes>
+        <UploadPanel />
+      </CurrentFolderProvider>
+    </Boot>
+  )
+}
+
 export function App() {
   return (
     <BrowserRouter>
       <TooltipProvider delayDuration={300}>
-        <UnauthenticatedHandler />
-        <Boot>
-          <CurrentFolderProvider>
-            <Routes>
-              <Route element={<DriveShell primaryAction={<NewMenu />} />}>
-                <Route index element={<FolderPage />} />
-                <Route path="/folders/:id" element={<FolderPage />} />
-                <Route path="/remote/:shareId" element={<FolderPage />} />
-                <Route path="/shared" element={<SharedPage />} />
-                <Route path="/trash" element={<TrashPage />} />
-                <Route path="*" element={<NotFoundPage />} />
-              </Route>
-            </Routes>
-            <UploadPanel />
-          </CurrentFolderProvider>
-        </Boot>
+        <Routes>
+          {/* Public links need no account: they bypass the session boot entirely. */}
+          <Route path="/s/:token" element={<PublicSharePage />} />
+          <Route path="*" element={<SignedIn />} />
+        </Routes>
         {/* Outside the routes so a toast survives the navigation after a save. */}
         <Toaster />
       </TooltipProvider>
