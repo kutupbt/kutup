@@ -1,4 +1,4 @@
-import { Download, ExternalLink, Link2, Palette, Pencil, Trash2, UserPlus, X } from 'lucide-react'
+import { CheckCheck, Copy, Download, ExternalLink, Link2, Palette, Pencil, Trash2, UserPlus, X } from 'lucide-react'
 import { useCallback, useMemo, useState, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -12,19 +12,24 @@ import { Button } from '@kutup/ui/components/button'
 import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
+import { useCreateActions } from '../create/useCreateActions'
 import { ColorDialog } from '../dialogs/ColorDialog'
+import { FolderPickerDialog } from '../dialogs/FolderPickerDialog'
 import { LinkDialog } from '../dialogs/LinkDialog'
 import { NameDialog } from '../dialogs/NameDialog'
 import { ShareDialog } from '../dialogs/ShareDialog'
 import { folderHex } from '../drive/colors'
 import { useDeclareCurrentFolder } from '../drive/currentFolderContext'
-import { downloadFile, downloadFolderZip, FsaRequiredError } from '../drive/downloads'
+import { isWithin } from '../drive/copy'
+import { downloadFile, downloadFolderZip, downloadSelectionZip, FsaRequiredError } from '../drive/downloads'
 import { useFolderFiles } from '../drive/files'
 import { useFolders, type FolderIndex } from '../drive/folders'
 import type { DriveFile, Folder } from '../drive/model'
 import { useCreatePublicLink, useRenameFile, useRenameFolder, useTrashFile, useTrashFolder } from '../drive/mutations'
 import { filePath, folderPath } from '../drive/paths'
+import { useCopy } from '../drive/useCopy'
 import { Explorer, type ExplorerAction } from '../explorer/Explorer'
+import { ExplorerContextMenu, type ContextMenuSpec } from '../explorer/ExplorerContextMenu'
 import { useExplorerPrefs } from '../explorer/prefs'
 import { filterItems, itemKey, sortItems, type ExplorerItem } from '../explorer/sort'
 import { Toolbar } from '../explorer/Toolbar'
@@ -37,6 +42,7 @@ type Dialog =
   | { kind: 'share'; folder: Folder }
   | { kind: 'link'; url: string }
   | { kind: 'invite'; url: string; account: string }
+  | { kind: 'copy'; targets: Target[] }
   | null
 
 function resolveFolder(index: FolderIndex, id: string | undefined, shareId: string | undefined): Folder | undefined {
@@ -87,6 +93,8 @@ export function FolderPage() {
   const trashFolder = useTrashFolder()
   const trashFile = useTrashFile()
   const publicLink = useCreatePublicLink()
+  const copy = useCopy()
+  const create = useCreateActions(folder ?? null)
 
   const children = useMemo(() => {
     if (!folders.data || !folder) return []
@@ -195,15 +203,21 @@ export function FolderPage() {
     [trashFile, trashFolder, t, folders, files],
   )
 
+  /** One file as itself; a folder, or several items, as a ZIP. */
   const download = useCallback(
-    async (target: Target) => {
+    async (targets: Target[]) => {
+      const [only] = targets
+      if (!only) return
       try {
-        if (target.file) {
-          await downloadFile(target.folder, target.file)
+        if (targets.length === 1 && only.file) {
+          await downloadFile(only.folder, only.file)
         } else {
           const id = toast.loading(t('drive.zipping'))
-          const result = await downloadFolderZip(target.folder, (done, total) =>
-            toast.loading(t('drive.zipProgress', { done, total }), { id }),
+          const progress = (done: number, total: number) => toast.loading(t('drive.zipProgress', { done, total }), { id })
+          const archive = folder?.isRoot ? t('nav.myFiles') : (folder?.name ?? 'Kutup')
+          const result = await (targets.length === 1
+            ? downloadFolderZip(only.folder, progress)
+            : downloadSelectionZip(targets, archive, progress)
           ).finally(() => toast.dismiss(id))
           if (result === 'empty') toast.info(t('drive.zipEmpty'))
         }
@@ -212,7 +226,7 @@ export function FolderPage() {
         toast.error(error instanceof FsaRequiredError ? t('drive.zipTooLarge') : t('drive.downloadFailed'))
       }
     },
-    [t],
+    [t, folder],
   )
 
   const actionsFor = useCallback(
@@ -230,7 +244,8 @@ export function FolderPage() {
         if (container.source !== 'remote') {
           actions.push({ id: 'open', label: t('drive.actions.open'), icon: <ExternalLink />, onSelect: () => open(item) })
         }
-        actions.push({ id: 'download', label: t('drive.actions.download'), icon: <Download />, onSelect: () => void download(target) })
+        actions.push({ id: 'download', label: t('drive.actions.download'), icon: <Download />, onSelect: () => void download([target]) })
+        actions.push({ id: 'copy', label: t('drive.actions.copyTo'), icon: <Copy />, onSelect: () => setDialog({ kind: 'copy', targets: [target] }) })
         if (mayChangeFile(container, file) && container.source !== 'remote') {
           actions.push({ id: 'rename', label: t('drive.actions.rename'), icon: <Pencil />, onSelect: () => setDialog({ kind: 'rename', target }), separated: true })
         }
@@ -242,7 +257,8 @@ export function FolderPage() {
       const f = target.folder
       if (!f.key) return f.canManage ? [{ id: 'trash', label: t('drive.actions.trash'), icon: <Trash2 />, onSelect: () => void moveToTrash([target]), destructive: true }] : []
       actions.push({ id: 'open', label: t('drive.actions.open'), icon: <ExternalLink />, onSelect: () => open(item) })
-      actions.push({ id: 'download', label: t('drive.actions.downloadZip'), icon: <Download />, onSelect: () => void download(target) })
+      actions.push({ id: 'download', label: t('drive.actions.downloadZip'), icon: <Download />, onSelect: () => void download([target]) })
+      actions.push({ id: 'copy', label: t('drive.actions.copyTo'), icon: <Copy />, onSelect: () => setDialog({ kind: 'copy', targets: [target] }) })
       if (f.canManage) {
         actions.push(
           { id: 'share', label: t('drive.actions.share'), icon: <UserPlus />, onSelect: () => setDialog({ kind: 'share', folder: f }), separated: true },
@@ -271,6 +287,52 @@ export function FolderPage() {
     return target ? [target] : []
   })
   const selectedTrashable = selectedTargets.filter((s) => (s.file ? mayChangeFile(s.folder, s.file) : s.folder.canManage))
+
+  /** What can be done to several items at once. */
+  const selectionActions = (targets: Target[]): ExplorerAction[] => {
+    const readable = targets.filter((s) => (s.file ? s.file.fileKey : s.folder.key))
+    const trashable = targets.filter((s) => (s.file ? mayChangeFile(s.folder, s.file) : s.folder.canManage))
+    const actions: ExplorerAction[] = []
+    if (readable.length === targets.length) {
+      actions.push(
+        { id: 'download', label: t('drive.actions.downloadZip'), icon: <Download />, onSelect: () => void download(targets) },
+        { id: 'copy', label: t('drive.actions.copyTo'), icon: <Copy />, onSelect: () => setDialog({ kind: 'copy', targets }) },
+      )
+    }
+    if (trashable.length === targets.length) {
+      actions.push({ id: 'trash', label: t('drive.actions.trash'), icon: <Trash2 />, onSelect: () => void moveToTrash(targets), destructive: true, separated: true })
+    }
+    return actions
+  }
+
+  const menuFor = (key: string | null): ContextMenuSpec => {
+    if (key === null) {
+      if (selection.size > 0) setSelection(new Set())
+      const actions = [...create.actions]
+      if (shown.length > 0) {
+        actions.push({
+          id: 'select-all',
+          label: t('explorer.selectAll'),
+          icon: <CheckCheck />,
+          onSelect: () => setSelection(new Set(shown.map(itemKey))),
+          separated: true,
+        })
+      }
+      return { actions }
+    }
+    // Right-clicking outside the selection makes that item the selection.
+    const keys = selection.has(key) ? selection : new Set([key])
+    if (!selection.has(key)) setSelection(keys)
+    if (keys.size > 1) {
+      const targets = [...keys].flatMap((k) => {
+        const target = lookup.get(k)
+        return target ? [target] : []
+      })
+      return { label: t('drive.selection', { count: targets.length }), actions: selectionActions(targets) }
+    }
+    const item = shown.find((i) => itemKey(i) === key)
+    return { actions: item ? actionsFor(item) : [] }
+  }
 
   async function onDrop(event: DragEvent) {
     event.preventDefault()
@@ -306,6 +368,13 @@ export function FolderPage() {
   }
 
   const renaming = dialog?.kind === 'rename' ? dialog.target : null
+  const copying = dialog?.kind === 'copy' ? dialog.targets : null
+  // The selection bar: a lone item gets its own download/copy/trash, several get the bulk ones.
+  const selectedItems = shown.filter((i) => selection.has(itemKey(i)))
+  const barActions = (selectedItems.length === 1 && selectedItems[0] ? actionsFor(selectedItems[0]) : selectionActions(selectedTargets)).filter(
+    (a) => a.id === 'download' || a.id === 'copy' || a.id === 'trash',
+  )
+  const index = folders.data
   const taken = new Set(items.map((i) => i.name.toLocaleLowerCase()))
 
   return (
@@ -328,18 +397,12 @@ export function FolderPage() {
               <X />
             </Button>
             <span className="mr-2 text-sm font-medium">{t('drive.selection', { count: selection.size })}</span>
-            {selectedTargets.length === 1 && selectedTargets[0] ? (
-              <Button variant="ghost" size="sm" onClick={() => void download(selectedTargets[0])}>
-                <Download />
-                {t('drive.actions.download')}
-              </Button>
-            ) : null}
-            {selectedTrashable.length === selectedTargets.length && selectedTargets.length > 0 ? (
-              <Button variant="ghost" size="sm" onClick={() => void moveToTrash(selectedTargets)}>
-                <Trash2 />
-                {t('drive.actions.trash')}
-              </Button>
-            ) : null}
+            {barActions.map((a) => (
+                <Button key={a.id} variant="ghost" size="sm" onClick={a.onSelect}>
+                  {a.icon}
+                  <span className="hidden sm:inline">{a.label}</span>
+                </Button>
+              ))}
           </div>
         ) : (
           <Breadcrumb items={crumbsFor(folders.data, folder, t)} className="min-w-0 flex-1" />
@@ -347,43 +410,45 @@ export function FolderPage() {
         <Toolbar prefs={prefs} update={updatePrefs} />
       </div>
 
-      {files.isError ? (
-        <div className="p-4">
-          <Alert variant="error">{apiErrorMessage(files.error, t('drive.loadFailed'))}</Alert>
-        </div>
-      ) : null}
-      {!folder.key ? (
-        <EmptyState title={t('drive.encryptedFolderTitle')} description={t('drive.encryptedFolder')} />
-      ) : shown.length === 0 ? (
-        <EmptyState
-          title={items.length === 0 ? t('drive.emptyTitle') : t('drive.noMatchTitle')}
-          description={
-            items.length === 0
-              ? folder.canUpload
-                ? t('drive.emptyDescription')
-                : t('drive.emptyReadOnly')
-              : t('drive.noMatchDescription')
-          }
-        />
-      ) : (
-        <Explorer
-          items={shown}
-          view={prefs.view}
-          sort={prefs.sort}
-          onSortField={(field) =>
-            updatePrefs(
-              field === prefs.sort.field
-                ? { dir: prefs.sort.dir === 'asc' ? 'desc' : 'asc' }
-                : { field, dir: field === 'name' || field === 'type' ? 'asc' : 'desc' },
-            )
-          }
-          selection={selection}
-          onSelectionChange={setSelection}
-          onOpen={open}
-          actionsFor={actionsFor}
-          onDeleteKey={() => selectedTrashable.length === selectedTargets.length && void moveToTrash(selectedTargets)}
-        />
-      )}
+      <ExplorerContextMenu menuFor={menuFor}>
+        {files.isError ? (
+          <div className="p-4">
+            <Alert variant="error">{apiErrorMessage(files.error, t('drive.loadFailed'))}</Alert>
+          </div>
+        ) : null}
+        {!folder.key ? (
+          <EmptyState title={t('drive.encryptedFolderTitle')} description={t('drive.encryptedFolder')} />
+        ) : shown.length === 0 ? (
+          <EmptyState
+            title={items.length === 0 ? t('drive.emptyTitle') : t('drive.noMatchTitle')}
+            description={
+              items.length === 0
+                ? folder.canUpload
+                  ? t('drive.emptyDescription')
+                  : t('drive.emptyReadOnly')
+                : t('drive.noMatchDescription')
+            }
+          />
+        ) : (
+          <Explorer
+            items={shown}
+            view={prefs.view}
+            sort={prefs.sort}
+            onSortField={(field) =>
+              updatePrefs(
+                field === prefs.sort.field
+                  ? { dir: prefs.sort.dir === 'asc' ? 'desc' : 'asc' }
+                  : { field, dir: field === 'name' || field === 'type' ? 'asc' : 'desc' },
+              )
+            }
+            selection={selection}
+            onSelectionChange={setSelection}
+            onOpen={open}
+            actionsFor={actionsFor}
+            onDeleteKey={() => selectedTrashable.length === selectedTargets.length && void moveToTrash(selectedTargets)}
+          />
+        )}
+      </ExplorerContextMenu>
 
       {dragging ? (
         <div
@@ -414,6 +479,29 @@ export function FolderPage() {
           const done = { onSuccess: () => setDialog(null) }
           if (renaming.file) renameFile.mutate({ file: renaming.file, name }, done)
           else renameFolder.mutate({ folder: renaming.folder, name }, done)
+        }}
+      />
+      {create.elements}
+      <FolderPickerDialog
+        open={copying !== null}
+        title={t('dialogs.copy.title', { count: copying?.length ?? 0 })}
+        submit={t('dialogs.copy.submit')}
+        index={index}
+        start={folder}
+        refusal={(dest) => {
+          if (!dest.key) return t('dialogs.copy.locked')
+          if (!dest.canUpload) return t('dialogs.copy.readOnly')
+          const folderTargets = (copying ?? []).filter((c) => !c.file)
+          if (folderTargets.length > 0 && !dest.canManage) return t('dialogs.copy.foldersOwnedOnly')
+          if (folderTargets.some((c) => isWithin(index, dest, c.folder))) return t('dialogs.copy.intoItself')
+          return null
+        }}
+        onClose={() => setDialog(null)}
+        onPick={(dest) => {
+          const targets = copying ?? []
+          setDialog(null)
+          setSelection(new Set())
+          copy(index, targets, dest).catch(() => toast.error(t('dialogs.copy.failed')))
         }}
       />
       <ColorDialog folder={dialog?.kind === 'color' ? dialog.folder : null} onClose={() => setDialog(null)} />

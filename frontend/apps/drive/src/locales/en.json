@@ -63,7 +63,8 @@
       "code": "Code",
       "archive": "Archives",
       "other": "Other files"
-    }
+    },
+    "selectAll": "Select all"
   },
   "newMenu": {
     "new": "New",
@@ -112,7 +113,8 @@
       "color": "Colour",
       "share": "Share",
       "publicLink": "Get public link",
-      "trash": "Move to trash"
+      "trash": "Move to trash",
+      "copyTo": "Copy to…"
     },
     "movedToTrash_one": "Moved to trash",
     "movedToTrash_other": "{{count}} items moved to trash",
@@ -177,6 +179,20 @@
       "title": "Invite link",
       "description": "{{account}} is on another Kutup server. Send them this link; they add it under Shared with me.",
       "warning": "The link works once and only for {{account}}'s account. It is not shown again."
+    },
+    "copy": {
+      "title_one": "Copy {{count}} item to…",
+      "title_other": "Copy {{count}} items to…",
+      "submit": "Copy here",
+      "locked": "This folder's key is not available.",
+      "readOnly": "You cannot add files to this folder.",
+      "foldersOwnedOnly": "Folders can only be copied into your own folders.",
+      "intoItself": "A folder cannot be copied into itself.",
+      "failed": "The copy could not be started."
+    },
+    "picker": {
+      "expand": "Expand {{name}}",
+      "collapse": "Collapse {{name}}"
     }
   },
   "shared": {
@@ -242,7 +258,9 @@
       "forbidden": "You cannot add files here.",
       "network": "The connection dropped.",
       "other": "The upload failed."
-    }
+    },
+    "progressFiles_one": "{{sent}} of {{count}} file",
+    "progressFiles_other": "{{sent}} of {{count}} files"
   },
   "public": {
     "title": "Shared files",

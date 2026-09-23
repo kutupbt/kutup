@@ -105,6 +105,7 @@ export function useUploadActions() {
             name,
             folderName: displayName(folder),
             total: entries.length,
+            unit: 'files',
             run: async (signal, progress) => {
               await uploadFolder({
                 entries,

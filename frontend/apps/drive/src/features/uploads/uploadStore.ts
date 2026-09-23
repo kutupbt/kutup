@@ -9,6 +9,8 @@ export interface UploadJob {
   folderName: string
   sent: number
   total: number
+  /** What `sent`/`total` count: bytes (a file) or files (a folder). */
+  unit?: 'bytes' | 'files'
   status: UploadStatus
   failure?: import('./uploadError').UploadFailure
   run: (signal: AbortSignal, progress: (sent: number, total: number) => void) => Promise<void>

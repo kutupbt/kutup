@@ -47,28 +47,67 @@ export async function downloadFile(folder: Folder, file: DriveFile): Promise<voi
 
 export { FsaRequiredError }
 
+/** One ZIP entry: the file's current content (latest edit), at `path` inside the archive. */
+async function zipEntry(folder: Folder, file: DriveFile, path: string): Promise<ZipFile> {
+  const entry: ZipFile = {
+    id: file.id,
+    collectionId: file.collectionId,
+    keyEpoch: file.keyEpoch,
+    name: path,
+    size: file.size,
+    fileKey: file.fileKey!,
+  }
+  const location = folderLocation(folder)
+  if (location.kind === 'remote') return { ...entry, isRemote: true, remoteShareId: location.shareId }
+  const content = await currentContent(file)
+  if (content.kind === 'version') return { ...entry, contentPath: content.path }
+  if (content.kind === 'plain') return { ...entry, plain: content.bytes, size: content.bytes.length }
+  return entry
+}
+
 /** A folder's files (not its subfolders) as one ZIP, split at 2 GiB. */
 export async function downloadFolderZip(folder: Folder, onProgress: (done: number, total: number) => void): Promise<'empty' | 'done'> {
   const files = (await loadFolderFiles(folder)).filter((f) => f.fileKey && f.name)
   if (files.length === 0) return 'empty'
-  const location = folderLocation(folder)
-  const zipFiles: ZipFile[] = await Promise.all(
-    files.map(async (f) => {
-      const entry: ZipFile = {
-        id: f.id,
-        collectionId: f.collectionId,
-        keyEpoch: f.keyEpoch,
-        name: f.name!,
-        size: f.size,
-        fileKey: f.fileKey!,
-      }
-      if (location.kind === 'remote') return { ...entry, isRemote: true, remoteShareId: location.shareId }
-      const content = await currentContent(f)
-      if (content.kind === 'version') return { ...entry, contentPath: content.path }
-      if (content.kind === 'plain') return { ...entry, plain: content.bytes, size: content.bytes.length }
-      return entry
-    }),
-  )
+  const zipFiles = await Promise.all(files.map((f) => zipEntry(folder, f, f.name!)))
   await downloadAsZip(zipFiles, folder.name ?? 'folder', await freshAccessToken(), (done, total) => onProgress(done, total))
+  return 'done'
+}
+
+/**
+ * Several selected items as one ZIP named `archive`: files at the top, each
+ * selected folder's files under the folder's name (its own files, not its
+ * subfolders — the same depth a single folder's ZIP has).
+ */
+export async function downloadSelectionZip(
+  items: ({ folder: Folder; file?: undefined } | { folder: Folder; file: DriveFile })[],
+  archive: string,
+  onProgress: (done: number, total: number) => void,
+): Promise<'empty' | 'done'> {
+  const entries: ZipFile[] = []
+  const used = new Set<string>()
+  const unique = (path: string) => {
+    let candidate = path
+    for (let n = 1; used.has(candidate.toLocaleLowerCase()); n++) {
+      // The number goes before an extension in the last path segment.
+      const dot = path.lastIndexOf('.')
+      candidate = dot > path.lastIndexOf('/') + 1 ? `${path.slice(0, dot)} (${n})${path.slice(dot)}` : `${path} (${n})`
+    }
+    used.add(candidate.toLocaleLowerCase())
+    return candidate
+  }
+  for (const item of items) {
+    if (item.file) {
+      if (item.file.fileKey && item.file.name) entries.push(await zipEntry(item.folder, item.file, unique(item.file.name)))
+      continue
+    }
+    if (!item.folder.key) continue
+    const dir = unique(item.folder.name ?? 'folder')
+    for (const f of await loadFolderFiles(item.folder)) {
+      if (f.fileKey && f.name) entries.push(await zipEntry(item.folder, f, `${dir}/${f.name}`))
+    }
+  }
+  if (entries.length === 0) return 'empty'
+  await downloadAsZip(entries, archive, await freshAccessToken(), (done, total) => onProgress(done, total))
   return 'done'
 }

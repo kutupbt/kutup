@@ -14,6 +14,7 @@ import { formatBytes, formatFileDate, formatInstant } from '@kutup/ui/lib/format
 import { KindIcon } from './KindIcon'
 import type { ViewMode } from './prefs'
 import { itemKey, type ExplorerItem, type SortField, type SortSpec } from './sort'
+import { useMarquee } from './useMarquee'
 
 export interface ExplorerAction {
   id: string
@@ -81,12 +82,29 @@ function RowMenu({ item, actions }: { item: ExplorerItem; actions: ExplorerActio
  * extends, double-click or Enter opens, arrows move, Space toggles, Ctrl+A
  * selects all, Escape clears, Delete hands the selection to the page. A tap
  * on a touch screen opens directly, the way phone file managers do.
+ *
+ * Dragging on empty space draws a selection box (useMarquee); a click there
+ * clears the selection. Items carry `data-item-key` so a surrounding
+ * ExplorerContextMenu knows what was right-clicked.
  */
 export function Explorer(props: ExplorerProps) {
   const { items, selection, onSelectionChange, onOpen, onDeleteKey } = props
   const anchor = useRef<number | null>(null)
   const lastPointer = useRef<string>('mouse')
   const rowRefs = useRef<(HTMLElement | null)[]>([])
+  const surface = useRef<HTMLDivElement>(null)
+  const marquee = useMarquee({
+    surface,
+    items: () => items.map((item, i) => ({ key: itemKey(item), el: rowRefs.current[i] ?? null })),
+    selection: () => selection,
+    onSelect: (keys) => {
+      anchor.current = null
+      onSelectionChange(keys)
+    },
+    onClear: () => {
+      if (selection.size > 0) onSelectionChange(new Set())
+    },
+  })
 
   // Selection only ever holds visible items: a filter or navigation drops the rest.
   useEffect(() => {
@@ -96,6 +114,31 @@ export function Explorer(props: ExplorerProps) {
   }, [items, selection, onSelectionChange])
 
   const focusRow = (index: number) => rowRefs.current[index]?.focus()
+
+  // Ctrl/⌘+A and Escape also work when no item has focus yet (after a
+  // dialog closes, or on arrival), as long as nothing else wants the keys:
+  // not while typing, and not under an open dialog or menu.
+  const itemsRef = useRef(items)
+  itemsRef.current = items
+  const selectionRef = useRef(selection)
+  selectionRef.current = selection
+  useEffect(() => {
+    function onKey(event: globalThis.KeyboardEvent) {
+      const active = document.activeElement
+      const free = !active || active === document.body || (surface.current?.contains(active) ?? false)
+      if (!free || event.defaultPrevented || document.querySelector('[role="dialog"], [role="menu"]')) return
+      // Rows handle their own keys.
+      if (active instanceof HTMLElement && active.closest('[data-item-key]')) return
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
+        event.preventDefault()
+        onSelectionChange(new Set(itemsRef.current.map(itemKey)))
+      } else if (event.key === 'Escape' && selectionRef.current.size > 0) {
+        onSelectionChange(new Set())
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onSelectionChange])
 
   const onRowClick = useCallback(
     (event: MouseEvent, index: number) => {
@@ -202,6 +245,7 @@ export function Explorer(props: ExplorerProps) {
     ref: (el: HTMLElement | null) => {
       rowRefs.current[index] = el
     },
+    'data-item-key': itemKey(items[index]),
     tabIndex: index === 0 || selection.has(itemKey(items[index])) ? 0 : -1,
     'aria-selected': selection.has(itemKey(items[index])),
     onPointerDown: (e: React.PointerEvent) => {
@@ -212,7 +256,20 @@ export function Explorer(props: ExplorerProps) {
     onKeyDown: (e: KeyboardEvent) => onKeyDown(e, index),
   })
 
-  return props.view === 'grid' ? <GridView {...props} rowProps={rowProps} /> : <ListView {...props} rowProps={rowProps} />
+  return (
+    // Fills the rest of the page, so the space below the last item is
+    // somewhere to start a selection box or open the "new" menu.
+    <div ref={surface} className="relative flex-1 pb-16" onPointerDown={marquee.onPointerDown}>
+      {props.view === 'grid' ? <GridView {...props} rowProps={rowProps} /> : <ListView {...props} rowProps={rowProps} />}
+      {marquee.rect ? (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute z-10 rounded-sm border border-primary bg-primary/15"
+          style={{ left: marquee.rect.left, top: marquee.rect.top, width: marquee.rect.width, height: marquee.rect.height }}
+        />
+      ) : null}
+    </div>
+  )
 }
 
 /** Items per row in the grid, from the rendered tiles' positions. */

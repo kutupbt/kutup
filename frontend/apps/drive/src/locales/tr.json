@@ -63,7 +63,8 @@
       "code": "Kod",
       "archive": "Arşivler",
       "other": "Diğer dosyalar"
-    }
+    },
+    "selectAll": "Tümünü seç"
   },
   "newMenu": {
     "new": "Yeni",
@@ -112,7 +113,8 @@
       "color": "Renk",
       "share": "Paylaş",
       "publicLink": "Herkese açık bağlantı al",
-      "trash": "Çöp kutusuna taşı"
+      "trash": "Çöp kutusuna taşı",
+      "copyTo": "Kopyala…"
     },
     "movedToTrash_one": "Çöp kutusuna taşındı",
     "movedToTrash_other": "{{count}} öğe çöp kutusuna taşındı",
@@ -177,6 +179,20 @@
       "title": "Davet bağlantısı",
       "description": "{{account}} başka bir Kutup sunucusunda. Bu bağlantıyı gönderin; Benimle paylaşılanlar altında ekler.",
       "warning": "Bağlantı bir kez ve yalnızca {{account}} hesabı için çalışır. Yeniden gösterilmez."
+    },
+    "copy": {
+      "title_one": "{{count}} öğeyi kopyala…",
+      "title_other": "{{count}} öğeyi kopyala…",
+      "submit": "Buraya kopyala",
+      "locked": "Bu klasörün anahtarı kullanılamıyor.",
+      "readOnly": "Bu klasöre dosya ekleyemezsin.",
+      "foldersOwnedOnly": "Klasörler yalnızca kendi klasörlerine kopyalanabilir.",
+      "intoItself": "Bir klasör kendi içine kopyalanamaz.",
+      "failed": "Kopyalama başlatılamadı."
+    },
+    "picker": {
+      "expand": "{{name}} klasörünü aç",
+      "collapse": "{{name}} klasörünü kapat"
     }
   },
   "shared": {
@@ -242,7 +258,9 @@
       "forbidden": "Buraya dosya ekleyemezsiniz.",
       "network": "Bağlantı koptu.",
       "other": "Yükleme başarısız oldu."
-    }
+    },
+    "progressFiles_one": "{{sent}} / {{count}} dosya",
+    "progressFiles_other": "{{sent}} / {{count}} dosya"
   },
   "public": {
     "title": "Paylaşılan dosyalar",

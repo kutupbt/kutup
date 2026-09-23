@@ -36,7 +36,9 @@ function JobRow({ job }: { job: UploadJob }) {
               ? t('uploads.waiting')
               : job.status === 'done'
                 ? t('uploads.intoFolder', { folder: job.folderName })
-                : t('uploads.progress', { sent: formatBytes(job.sent, i18n.language), total: formatBytes(job.total, i18n.language) })}
+                : job.unit === 'files'
+                  ? t('uploads.progressFiles', { sent: job.sent, count: job.total })
+                  : t('uploads.progress', { sent: formatBytes(job.sent, i18n.language), total: formatBytes(job.total, i18n.language) })}
       </p>
     </li>
   )
