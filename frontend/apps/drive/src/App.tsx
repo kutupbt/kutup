@@ -11,6 +11,7 @@ import { CurrentFolderProvider } from './features/drive/currentFolder'
 import { FileEditorPage } from './features/editor/FileEditorPage'
 import { FolderPage } from './features/folder/FolderPage'
 import { PublicSharePage } from './features/public/PublicSharePage'
+import { SearchPage } from './features/search/SearchPage'
 import { SharedPage } from './features/shared/SharedPage'
 import { TrashPage } from './features/trash/TrashPage'
 import { UploadPanel } from './features/uploads/UploadPanel'
@@ -38,6 +39,7 @@ function SignedIn() {
             <Route path="/folders/:id" element={<FolderPage />} />
             <Route path="/remote/:shareId" element={<FolderPage />} />
             <Route path="/shared" element={<SharedPage />} />
+            <Route path="/search" element={<SearchPage />} />
             <Route path="/trash" element={<TrashPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>

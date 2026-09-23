@@ -114,7 +114,8 @@
       "share": "Share",
       "publicLink": "Get public link",
       "trash": "Move to trash",
-      "copyTo": "Copy to…"
+      "copyTo": "Copy to…",
+      "quickLook": "Quick look"
     },
     "movedToTrash_one": "Moved to trash",
     "movedToTrash_other": "{{count}} items moved to trash",
@@ -146,11 +147,15 @@
       "title": "Folder colour",
       "default": "Default",
       "ice": "Ice",
-      "ocean": "Ocean",
       "teal": "Teal",
       "amber": "Amber",
       "red": "Red",
-      "failed": "The colour could not be saved."
+      "failed": "The colour could not be saved.",
+      "orange": "Orange",
+      "green": "Green",
+      "blue": "Blue",
+      "purple": "Purple",
+      "pink": "Pink"
     },
     "share": {
       "title": "Share “{{name}}”",
@@ -395,5 +400,31 @@
     "noPreviewTitle": "No preview for this kind of file",
     "noPreview": "Download it to open it on your device.",
     "restoring": "Restoring…"
+  },
+  "search": {
+    "label": "Search Drive",
+    "placeholder": "Search in Drive",
+    "clear": "Clear search",
+    "searching": "Searching for “{{query}}”…",
+    "results_one": "{{count}} result for “{{query}}”",
+    "results_other": "{{count}} results for “{{query}}”",
+    "noneTitle": "Nothing found",
+    "none": "No file or folder name contains “{{query}}”.",
+    "showInFolder": "Show in folder"
+  },
+  "quickLook": {
+    "loading": "Decrypting…",
+    "cut": "Only the beginning is shown. Open the file to see all of it.",
+    "previous": "Previous file",
+    "next": "Next file",
+    "openInEditor": "Open in editor",
+    "none": {
+      "type": "There is no preview for this kind of file.",
+      "size": "This file is too large to preview. Open or download it instead.",
+      "failed": "The preview could not be loaded."
+    }
+  },
+  "viewer": {
+    "imageUnreadable": "This browser can't display this image. Download it to open it on your device."
   }
 }

@@ -13,10 +13,12 @@ import { Spine } from './spine'
  * chrome): a dark sidebar that stays dark in both themes, and a content
  * column with a thin header.
  *
- * Sidebar, top to bottom: the app switcher beside the brand lockup, the
- * app's primary action ("New"), its navigation, and a footer slot (the
- * storage meter in Drive). The header carries an optional leading slot
- * (search, a title) and the user menu.
+ * Sidebar, top to bottom: the brand lockup, the app's primary action
+ * ("New"), its navigation, and a footer slot (the storage meter in Drive).
+ * It holds only what is always there, so it can be used without looking.
+ * The header carries the app's search (or a title) on the left and the
+ * account-wide controls on the right: the app switcher, then the user menu,
+ * where Google and Microsoft put them.
  *
  * Below `md` the sidebar becomes a slide-in sheet opened from the header;
  * it closes itself on navigation.
@@ -37,17 +39,15 @@ export interface AppShellProps {
 
 function SidebarContent({
   appName,
-  switcher,
   primaryAction,
   nav,
   sidebarFooter,
-}: Pick<AppShellProps, 'appName' | 'switcher' | 'primaryAction' | 'nav' | 'sidebarFooter'>) {
+}: Pick<AppShellProps, 'appName' | 'primaryAction' | 'nav' | 'sidebarFooter'>) {
   const { t } = useTranslation()
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-14 shrink-0 items-center gap-1 px-3">
-        {switcher}
-        <BrandLockup app={appName} className="px-1" />
+      <div className="flex h-14 shrink-0 items-center px-4">
+        <BrandLockup app={appName} />
       </div>
       {primaryAction ? <div className="px-3 pb-3 pt-1">{primaryAction}</div> : null}
       <nav aria-label={t('shell.navigation')} className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
@@ -112,7 +112,10 @@ export function AppShell(props: AppShellProps) {
             <Menu />
           </Button>
           <div className="min-w-0 flex-1">{props.headerStart}</div>
-          <div className="flex shrink-0 items-center gap-1">{props.headerEnd}</div>
+          <div className="flex shrink-0 items-center gap-1">
+            {props.switcher}
+            {props.headerEnd}
+          </div>
         </header>
         <main className={cn('min-w-0 flex-1', !props.flush && 'px-4 py-6 md:px-8 md:py-8')}>
           {props.children}

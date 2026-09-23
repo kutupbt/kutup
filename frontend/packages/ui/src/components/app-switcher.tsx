@@ -1,11 +1,10 @@
-import { LayoutGrid } from 'lucide-react'
+import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
+import { Grip } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '../lib/cn'
 import { Button } from './button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from './dropdown-menu'
-import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
-import { Spine } from './spine'
 
 export interface SwitcherApp {
   id: string
@@ -16,10 +15,13 @@ export interface SwitcherApp {
 }
 
 /**
- * Proton's AppsDropdown: a grid button beside the logo listing the Kutup
- * apps. The current app is marked (`aria-current`, spine) and stays in this
- * tab; the others open in a new tab, the way Proton and Google do, so the
- * work in this one is not lost. Nothing renders when there is only one app.
+ * The apps menu, top right beside the account menu (Google's "waffle",
+ * Proton's AppsDropdown). With three apps it is a row of large tiles rather
+ * than a sparse grid; it grows into a grid as apps are added.
+ *
+ * The current app is marked (`aria-current`) and stays in this tab; the
+ * others open in a new tab, the way Proton and Google do, so the work in
+ * this one is not lost. Nothing renders when there is only one app.
  */
 export function AppSwitcher({ apps, currentId }: { apps: SwitcherApp[]; currentId: string }) {
   const { t } = useTranslation()
@@ -28,15 +30,13 @@ export function AppSwitcher({ apps, currentId }: { apps: SwitcherApp[]; currentI
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="chrome" size="icon" aria-label={t('shell.switchApp')}>
-          <LayoutGrid />
+        <Button variant="ghost" size="icon" aria-label={t('shell.switchApp')} title={t('shell.apps')}>
+          <Grip />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-64 p-2">
-        <p className="px-2 pb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          {t('shell.apps')}
-        </p>
-        <div className="grid grid-cols-2 gap-1">
+      <DropdownMenuContent align="end" sideOffset={8} className="w-80 rounded-xl p-3">
+        <p className="px-1 pb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t('shell.apps')}</p>
+        <div className="grid grid-cols-3 gap-2">
           {apps.map((app) => {
             const current = app.id === currentId
             return (
@@ -47,14 +47,19 @@ export function AppSwitcher({ apps, currentId }: { apps: SwitcherApp[]; currentI
                   rel="noopener"
                   aria-current={current ? 'page' : undefined}
                   className={cn(
-                    'relative flex flex-col items-center gap-2 rounded-md px-2 py-3 text-sm outline-none transition-colors',
-                    'hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground',
-                    '[&_svg]:size-6',
-                    current && 'bg-accent font-medium text-accent-foreground',
+                    'flex flex-col items-center gap-2 rounded-lg px-2 pb-2.5 pt-3 text-sm outline-none transition-colors',
+                    'hover:bg-accent focus:bg-accent focus-visible:ring-2 focus-visible:ring-ring',
+                    current && 'bg-accent font-medium',
                   )}
                 >
-                  {current ? <Spine tone="brand" /> : null}
-                  {app.icon}
+                  <span
+                    className={cn(
+                      'flex size-12 items-center justify-center rounded-xl [&_svg]:size-6',
+                      current ? 'bg-primary text-primary-foreground' : 'bg-muted text-primary',
+                    )}
+                  >
+                    {app.icon}
+                  </span>
                   <span>{app.name}</span>
                 </a>
               </DropdownMenuPrimitive.Item>

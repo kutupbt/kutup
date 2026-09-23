@@ -76,6 +76,30 @@
   --status-danger-foreground: oklch(0.99 0 0);
   --status-neutral: oklch(0.7 0.02 250);
   --status-neutral-foreground: oklch(0.18 0.02 250);
+
+  /* ── file kinds ───────────────────────────────────────────────────── */
+  /*
+   * A file's type as a colour, in the conventions people already read at a
+   * glance: documents blue, spreadsheets green, presentations orange, PDFs
+   * red. Drawn as a filled tile with a `--kind-glyph` symbol on it (white
+   * here, ink in dark mode, like the primary button). Folders default to
+   * neutral, so any colour on a folder is one its owner chose.
+   * tokens.test.ts holds every pair to 4.5:1.
+   */
+  --kind-glyph: #ffffff;
+  --kind-folder: #5f6b7a;
+  --kind-note: #4f46e5;
+  --kind-document: #2563eb;
+  --kind-spreadsheet: #15803d;
+  --kind-presentation: #c2410c;
+  --kind-whiteboard: #0f766e;
+  --kind-pdf: #dc2626;
+  --kind-image: #9333ea;
+  --kind-video: #be185d;
+  --kind-audio: #0e7490;
+  --kind-code: #475569;
+  --kind-archive: #a16207;
+  --kind-other: #64748b;
 }
 
 .dark {
@@ -109,6 +133,22 @@
   --status-danger-foreground: oklch(0.14 0.01 25);
   --status-neutral: oklch(0.45 0.02 250);
   --status-neutral-foreground: oklch(0.97 0 0);
+
+  /* Brighter tiles with an ink glyph: saturated tiles go muddy on near-black. */
+  --kind-glyph: #0b1220;
+  --kind-folder: #9aa7b8;
+  --kind-note: #818cf8;
+  --kind-document: #60a5fa;
+  --kind-spreadsheet: #4ade80;
+  --kind-presentation: #fb923c;
+  --kind-whiteboard: #2dd4bf;
+  --kind-pdf: #f87171;
+  --kind-image: #c084fc;
+  --kind-video: #f472b6;
+  --kind-audio: #22d3ee;
+  --kind-code: #cbd5e1;
+  --kind-archive: #fbbf24;
+  --kind-other: #94a3b8;
 }
 
 @theme inline {
@@ -156,6 +196,21 @@
   --color-status-danger-foreground: var(--status-danger-foreground);
   --color-status-neutral: var(--status-neutral);
   --color-status-neutral-foreground: var(--status-neutral-foreground);
+
+  --color-kind-glyph: var(--kind-glyph);
+  --color-kind-folder: var(--kind-folder);
+  --color-kind-note: var(--kind-note);
+  --color-kind-document: var(--kind-document);
+  --color-kind-spreadsheet: var(--kind-spreadsheet);
+  --color-kind-presentation: var(--kind-presentation);
+  --color-kind-whiteboard: var(--kind-whiteboard);
+  --color-kind-pdf: var(--kind-pdf);
+  --color-kind-image: var(--kind-image);
+  --color-kind-video: var(--kind-video);
+  --color-kind-audio: var(--kind-audio);
+  --color-kind-code: var(--kind-code);
+  --color-kind-archive: var(--kind-archive);
+  --color-kind-other: var(--kind-other);
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);

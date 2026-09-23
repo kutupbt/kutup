@@ -1,4 +1,4 @@
-import { CheckCheck, Copy, Download, ExternalLink, Link2, Palette, Pencil, Trash2, UserPlus, X } from 'lucide-react'
+import { CheckCheck, Copy, Download, ExternalLink, Eye, Link2, Palette, Pencil, Trash2, UserPlus, X } from 'lucide-react'
 import { useCallback, useMemo, useState, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -33,6 +33,7 @@ import { ExplorerContextMenu, type ContextMenuSpec } from '../explorer/ExplorerC
 import { useExplorerPrefs } from '../explorer/prefs'
 import { filterItems, itemKey, sortItems, type ExplorerItem } from '../explorer/sort'
 import { Toolbar } from '../explorer/Toolbar'
+import { QuickLook, type QuickLookTarget } from '../quicklook/QuickLook'
 import { useUploadActions } from '../uploads/useUploadActions'
 
 type Target = { folder: Folder; file?: undefined } | { folder: Folder; file: DriveFile }
@@ -87,6 +88,7 @@ export function FolderPage() {
   const [selection, setSelection] = useState<Set<string>>(new Set())
   const [dialog, setDialog] = useState<Dialog>(null)
   const [dragging, setDragging] = useState(false)
+  const [looking, setLooking] = useState<QuickLookTarget | null>(null)
   const { uploadFiles, uploadDirectory } = useUploadActions()
   const renameFolder = useRenameFolder()
   const renameFile = useRenameFile()
@@ -244,6 +246,7 @@ export function FolderPage() {
         if (container.source !== 'remote') {
           actions.push({ id: 'open', label: t('drive.actions.open'), icon: <ExternalLink />, onSelect: () => open(item) })
         }
+        actions.push({ id: 'preview', label: t('drive.actions.quickLook'), icon: <Eye />, onSelect: () => setLooking({ folder: container, file }) })
         actions.push({ id: 'download', label: t('drive.actions.download'), icon: <Download />, onSelect: () => void download([target]) })
         actions.push({ id: 'copy', label: t('drive.actions.copyTo'), icon: <Copy />, onSelect: () => setDialog({ kind: 'copy', targets: [target] }) })
         if (mayChangeFile(container, file) && container.source !== 'remote') {
@@ -369,6 +372,11 @@ export function FolderPage() {
 
   const renaming = dialog?.kind === 'rename' ? dialog.target : null
   const copying = dialog?.kind === 'copy' ? dialog.targets : null
+  // Quick Look steps through the files in the order on screen.
+  const lookableFiles = shown.flatMap((item) => {
+    const target = lookup.get(itemKey(item))
+    return target?.file?.fileKey ? [{ folder: target.folder, file: target.file }] : []
+  })
   // The selection bar: a lone item gets its own download/copy/trash, several get the bulk ones.
   const selectedItems = shown.filter((i) => selection.has(itemKey(i)))
   const barActions = (selectedItems.length === 1 && selectedItems[0] ? actionsFor(selectedItems[0]) : selectionActions(selectedTargets)).filter(
@@ -444,6 +452,10 @@ export function FolderPage() {
             selection={selection}
             onSelectionChange={setSelection}
             onOpen={open}
+            onQuickLook={(item) => {
+              const target = lookup.get(itemKey(item))
+              if (target?.file?.fileKey) setLooking({ folder: target.folder, file: target.file })
+            }}
             actionsFor={actionsFor}
             onDeleteKey={() => selectedTrashable.length === selectedTargets.length && void moveToTrash(selectedTargets)}
           />
@@ -482,6 +494,28 @@ export function FolderPage() {
         }}
       />
       {create.elements}
+      <QuickLook
+        target={looking}
+        onClose={() => setLooking(null)}
+        onStep={
+          lookableFiles.length > 1
+            ? (direction) => {
+                if (!looking) return
+                const at = lookableFiles.findIndex((f) => f.file.id === looking.file.id)
+                const next = lookableFiles[(at + direction + lookableFiles.length) % lookableFiles.length]
+                if (next) {
+                  setLooking(next)
+                  setSelection(new Set([itemKey({ type: 'file', id: next.file.id })]))
+                }
+              }
+            : undefined
+        }
+        onOpen={(target) => {
+          setLooking(null)
+          void navigate(filePath(target.folder, target.file.id))
+        }}
+        onDownload={(target) => void download([target])}
+      />
       <FolderPickerDialog
         open={copying !== null}
         title={t('dialogs.copy.title', { count: copying?.length ?? 0 })}

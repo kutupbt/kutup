@@ -257,16 +257,25 @@ the local dev stack):
     bridge bound to one parent origin;
   - right-click menus (item, selection, empty space), box selection,
     Copy to… with a folder picker, ZIP of a selection.
+  - file-type colours as filled icons (tokens, 4.5:1 in both themes);
+    folders neutral by default, colours stored as `#rrggbb` for web and CLI
+    alike; grid cards with a preview area (the kind icon until thumbnails);
+    the app switcher top right; search in the top bar (in the browser,
+    accent- and Turkish-i-insensitive); Quick Look on Space.
 
 **Next, in order**
 
-1. Move (Drive): folder move needs a server endpoint (reparent, owner only,
+1. Thumbnails: client-generated, encrypted with the file key, stored beside
+   the file (Proton's model: 512 px ≤ 60 KB, plus an HD preview). Design
+   note first — format in `kutup-crypto`, server endpoint, quota, backfill;
+   then images, whiteboards and notes; video and PDF; office last.
+2. Move (Drive): folder move needs a server endpoint (reparent, owner only,
    no cycles). File move needs a crypto decision — file content is sealed
    to its collection id, so today a move is a re-encrypting copy. The
    intended fix binds content to the file only and rewraps just the file key
    (a format change across Rust, WASM and CLI, with new vectors).
-2. Phase 4 — the Chat app.
-3. Phase 5 — Traefik compose with the four hosts (nginx and Caddy
+3. Phase 4 — the Chat app.
+4. Phase 5 — Traefik compose with the four hosts (nginx and Caddy
    examples), per-origin CSP including the office sandbox, removing
    `src-tauri/`, the Playwright suite ported, docs.
 

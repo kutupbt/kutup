@@ -1462,8 +1462,8 @@ fn is_valid_username(s: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
-/// `^#[0-9a-fA-F]{6}$` — mirrors `colorHexRegexp`.
-fn is_valid_hex_color(s: &str) -> bool {
+/// `^#[0-9a-fA-F]{6}$` — mirrors `colorHexRegexp`. Shared by user and folder colours.
+pub(crate) fn is_valid_hex_color(s: &str) -> bool {
     let bytes = s.as_bytes();
     bytes.len() == 7 && bytes[0] == b'#' && bytes[1..].iter().all(|b| b.is_ascii_hexdigit())
 }

@@ -595,11 +595,18 @@ pub async fn update_collection_color(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let coll_id = coll_id_or_404(&id)?;
+    // `#rrggbb`, stored lowercase; null or "" clears it. Every client (web,
+    // CLI) writes the same form, so a colour set in one shows in the other.
+    let color = match req.color.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(c) if super::auth::is_valid_hex_color(c) => Some(c.to_ascii_lowercase()),
+        Some(_) => return Err(AppError::bad_request("color must be #rrggbb")),
+    };
 
     let res = sqlx::query(
         "UPDATE collections SET color = $1, updated_at = NOW() WHERE id = $2 AND owner_user_id = $3 AND deleted_at IS NULL",
     )
-    .bind(req.color)
+    .bind(color)
     .bind(coll_id)
     .bind(user_id)
     .execute(&state.pool)

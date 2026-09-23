@@ -114,7 +114,8 @@
       "share": "Paylaş",
       "publicLink": "Herkese açık bağlantı al",
       "trash": "Çöp kutusuna taşı",
-      "copyTo": "Kopyala…"
+      "copyTo": "Kopyala…",
+      "quickLook": "Hızlı bakış"
     },
     "movedToTrash_one": "Çöp kutusuna taşındı",
     "movedToTrash_other": "{{count}} öğe çöp kutusuna taşındı",
@@ -146,11 +147,15 @@
       "title": "Klasör rengi",
       "default": "Varsayılan",
       "ice": "Buz",
-      "ocean": "Okyanus",
-      "teal": "Deniz yeşili",
+      "teal": "Camgöbeği",
       "amber": "Kehribar",
       "red": "Kırmızı",
-      "failed": "Renk kaydedilemedi."
+      "failed": "Renk kaydedilemedi.",
+      "orange": "Turuncu",
+      "green": "Yeşil",
+      "blue": "Mavi",
+      "purple": "Mor",
+      "pink": "Pembe"
     },
     "share": {
       "title": "“{{name}}” paylaş",
@@ -395,5 +400,31 @@
     "noPreviewTitle": "Bu dosya türü için önizleme yok",
     "noPreview": "Cihazında açmak için indir.",
     "restoring": "Geri yükleniyor…"
+  },
+  "search": {
+    "label": "Drive'da ara",
+    "placeholder": "Drive'da ara",
+    "clear": "Aramayı temizle",
+    "searching": "“{{query}}” aranıyor…",
+    "results_one": "“{{query}}” için {{count}} sonuç",
+    "results_other": "“{{query}}” için {{count}} sonuç",
+    "noneTitle": "Bir şey bulunamadı",
+    "none": "Adında “{{query}}” geçen dosya ya da klasör yok.",
+    "showInFolder": "Klasöründe göster"
+  },
+  "quickLook": {
+    "loading": "Şifre çözülüyor…",
+    "cut": "Yalnızca başı gösteriliyor. Tamamı için dosyayı aç.",
+    "previous": "Önceki dosya",
+    "next": "Sonraki dosya",
+    "openInEditor": "Düzenleyicide aç",
+    "none": {
+      "type": "Bu dosya türü için önizleme yok.",
+      "size": "Bu dosya önizleme için çok büyük. Aç ya da indir.",
+      "failed": "Önizleme yüklenemedi."
+    }
+  },
+  "viewer": {
+    "imageUnreadable": "Bu tarayıcı bu görseli gösteremiyor. Cihazında açmak için indir."
   }
 }

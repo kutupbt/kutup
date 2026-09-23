@@ -4,13 +4,14 @@ import { Alert } from '@kutup/ui/components/alert'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
-import { FOLDER_COLORS } from '../drive/colors'
+import { FOLDER_COLORS, folderHex } from '../drive/colors'
 import type { Folder } from '../drive/model'
 import { useSetFolderColor } from '../drive/mutations'
 
 export function ColorDialog({ folder, onClose }: { folder: Folder | null; onClose: () => void }) {
   const { t } = useTranslation()
   const setColor = useSetFolderColor()
+  const current = folder ? folderHex(folder.color) : null
   const choose = (color: string | null) =>
     folder && setColor.mutate({ folder, color }, { onSuccess: onClose })
   return (
@@ -24,24 +25,24 @@ export function ColorDialog({ folder, onClose }: { folder: Folder | null; onClos
           <button
             type="button"
             role="radio"
-            aria-checked={!folder?.color}
+            aria-checked={!current}
             onClick={() => choose(null)}
-            className={cn('h-10 rounded-full border border-border px-4 text-sm hover:bg-accent', !folder?.color && 'border-primary bg-accent')}
+            className={cn('h-10 rounded-full border border-border px-4 text-sm hover:bg-accent', !current && 'border-primary bg-accent')}
           >
             {t('dialogs.color.default')}
           </button>
           {FOLDER_COLORS.map((c) => (
             <button
-              key={c.value}
+              key={c.hex}
               type="button"
               role="radio"
-              aria-checked={folder?.color === c.value}
+              aria-checked={current === c.hex}
               aria-label={t(`dialogs.color.${c.name}`)}
-              onClick={() => choose(c.value)}
+              onClick={() => choose(c.hex)}
               style={{ backgroundColor: c.hex }}
               className="flex size-10 items-center justify-center rounded-full text-white ring-offset-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              {folder?.color === c.value ? <Check className="size-4" /> : null}
+              {current === c.hex ? <Check className="size-4" /> : null}
             </button>
           ))}
         </div>

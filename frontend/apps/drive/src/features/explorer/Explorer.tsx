@@ -36,6 +36,8 @@ export interface ExplorerProps {
   selection: ReadonlySet<string>
   onSelectionChange: (next: Set<string>) => void
   onOpen: (item: ExplorerItem) => void
+  /** Space on a file: a look without opening it (Quick Look). */
+  onQuickLook?: (item: ExplorerItem) => void
   actionsFor: (item: ExplorerItem) => ExplorerAction[]
   /** Delete / Backspace with a selection. */
   onDeleteKey?: (keys: ReadonlySet<string>) => void
@@ -79,7 +81,8 @@ function RowMenu({ item, actions }: { item: ExplorerItem; actions: ExplorerActio
  * The unified Drive list (Dolphin / Google Drive): folders and files in one
  * list, in whatever order the toolbar chose. Selection and keyboard follow
  * desktop file managers — click selects, Ctrl/⌘-click toggles, Shift-click
- * extends, double-click or Enter opens, arrows move, Space toggles, Ctrl+A
+ * extends, double-click or Enter opens, arrows move, Space previews a file
+ * (Quick Look; Ctrl+Space toggles it in the selection instead), Ctrl+A
  * selects all, Escape clears, Delete hands the selection to the page. A tap
  * on a touch screen opens directly, the way phone file managers do.
  *
@@ -213,6 +216,12 @@ export function Explorer(props: ExplorerProps) {
         break
       case ' ': {
         event.preventDefault()
+        if (props.onQuickLook && items[index].type === 'file' && !event.ctrlKey && !event.metaKey) {
+          onSelectionChange(new Set([itemKey(items[index])]))
+          anchor.current = index
+          props.onQuickLook(items[index])
+          break
+        }
         const key = itemKey(items[index])
         const next = new Set(selection)
         if (next.has(key)) next.delete(key)
@@ -383,7 +392,7 @@ function ListView({ items, sort, onSortField, selection, actionsFor, subtitleFor
 function GridView({ items, selection, actionsFor, rowProps }: ExplorerProps & { rowProps: RowProps }) {
   const { i18n } = useTranslation()
   return (
-    <ul className="grid grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-3 p-4" role="grid" aria-multiselectable>
+    <ul className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-3 p-4" role="grid" aria-multiselectable>
       {items.map((item, index) => {
         const selected = selection.has(itemKey(item))
         return (
@@ -391,19 +400,29 @@ function GridView({ items, selection, actionsFor, rowProps }: ExplorerProps & { 
             key={itemKey(item)}
             {...rowProps(index)}
             className={cn(
-              'group relative flex cursor-default select-none flex-col items-center gap-2 rounded-lg border border-border bg-card p-3 text-center outline-none transition-colors',
-              'hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring',
-              selected && 'border-primary bg-accent',
+              'group relative flex cursor-default select-none flex-col overflow-hidden rounded-xl border border-border bg-card outline-none transition-colors',
+              'hover:border-primary/40 hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring',
+              selected && 'border-primary bg-accent hover:bg-accent',
             )}
           >
-            <span className="absolute right-1 top-1">
+            {/* Header: what it is and what it is called, like Google Drive's cards. */}
+            <div className="flex h-11 items-center gap-2 pl-3 pr-1">
+              <KindIcon kind={item.kind} color={item.color} className="size-5" />
+              <p className={cn('min-w-0 flex-1 truncate text-sm', item.type === 'folder' && 'font-medium')} title={item.name}>
+                {item.name}
+              </p>
               <RowMenu item={item} actions={actionsFor(item)} />
-            </span>
-            <KindIcon kind={item.kind} color={item.color} className="mt-3 size-12 stroke-[1.25]" />
-            <p className={cn('line-clamp-2 w-full break-words text-sm', item.type === 'folder' && 'font-medium')} title={item.name}>
-              {item.name}
-            </p>
-            <p className="text-xs text-muted-foreground">{formatFileDate(item.modifiedAt, i18n.language)}</p>
+            </div>
+            {/* The preview area. Until thumbnails exist it shows the kind, large. */}
+            <div
+              className={cn(
+                'mx-2 flex aspect-[4/3] items-center justify-center rounded-lg',
+                selected ? 'bg-background/60' : 'bg-muted/70',
+              )}
+            >
+              <KindIcon kind={item.kind} color={item.color} className="size-14" />
+            </div>
+            <p className="px-3 pb-2 pt-1.5 text-xs text-muted-foreground">{formatFileDate(item.modifiedAt, i18n.language)}</p>
           </li>
         )
       })}

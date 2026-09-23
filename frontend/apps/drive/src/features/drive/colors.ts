@@ -1,16 +1,25 @@
 /**
- * Folder colours. The stored values are the old palette's names (existing
- * folders keep their colour); the hex is how they render. These are data
- * colours a user picked, not theme tokens.
+ * Folder colours. Stored on the server as `#rrggbb` (the CLI's `kutup color`
+ * writes the same), so this list is only what the picker offers: any valid
+ * hex set elsewhere still renders. They are user data, not theme tokens —
+ * mid tones that read on both the light and the dark background. A folder
+ * without one is neutral (`--kind-folder`).
  */
 export const FOLDER_COLORS = [
-  { value: 'purple', hex: '#38bdf8', name: 'ice' },
-  { value: 'blue', hex: '#0284c7', name: 'ocean' },
-  { value: 'green', hex: '#0d9488', name: 'teal' },
-  { value: 'amber', hex: '#f59e0b', name: 'amber' },
-  { value: 'red', hex: '#ef4444', name: 'red' },
+  { hex: '#ef4444', name: 'red' },
+  { hex: '#f97316', name: 'orange' },
+  { hex: '#f59e0b', name: 'amber' },
+  { hex: '#22c55e', name: 'green' },
+  { hex: '#14b8a6', name: 'teal' },
+  { hex: '#38bdf8', name: 'ice' },
+  { hex: '#3b82f6', name: 'blue' },
+  { hex: '#a855f7', name: 'purple' },
+  { hex: '#ec4899', name: 'pink' },
 ] as const
 
+const HEX = /^#[0-9a-f]{6}$/i
+
+/** The colour to draw, or null for the neutral default (and anything malformed). */
 export function folderHex(color: string | null): string | null {
-  return FOLDER_COLORS.find((c) => c.value === color)?.hex ?? null
+  return color && HEX.test(color) ? color.toLowerCase() : null
 }
