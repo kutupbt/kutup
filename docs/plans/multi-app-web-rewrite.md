@@ -233,6 +233,51 @@ Each phase is committed with `tsc`, `vitest`, lint and build passing
    `src-tauri/` + its workflow, docs (`architecture`, `frontend`,
    `self-hosting`, `api`, `roadmap`, `onlyoffice`, `CLAUDE.md`) updated.
 
+## Status (2026-09-23)
+
+**Done** (committed on `feat/frontend-rewrite`, verified in a browser against
+the local dev stack):
+
+- Phases 0–2 complete: workspace and shared packages, server-side sessions
+  with forking and immediate revocation (server, crypto, CLI `kutup
+  sessions`), the account app (sign-in, registration, recovery, settings,
+  sessions, devices, the whole admin area).
+- Phase 3 (Drive) complete:
+  - unified list (folders and files together, last modified first, sort and
+    type filter top right, list/grid, folders-first toggle off by default);
+  - uploads (files, folders, drag and drop), sharing (local and federated),
+    public links and the anonymous `/s/:token` page, trash with undo,
+    folder colours, rename, ZIP downloads;
+  - the file page: notes and code (collaborative text editor), office
+    documents (OnlyOffice), whiteboards (Excalidraw), image/PDF/media
+    viewers, versions, restore;
+  - downloads and copies take an edited file's latest version, not the
+    original upload;
+  - OnlyOffice on its own sandbox origin (`office.<domain>`), with the
+    bridge bound to one parent origin;
+  - right-click menus (item, selection, empty space), box selection,
+    Copy to… with a folder picker, ZIP of a selection.
+
+**Next, in order**
+
+1. Move (Drive): folder move needs a server endpoint (reparent, owner only,
+   no cycles). File move needs a crypto decision — file content is sealed
+   to its collection id, so today a move is a re-encrypting copy. The
+   intended fix binds content to the file only and rewraps just the file key
+   (a format change across Rust, WASM and CLI, with new vectors).
+2. Phase 4 — the Chat app.
+3. Phase 5 — Traefik compose with the four hosts (nginx and Caddy
+   examples), per-origin CSP including the office sandbox, removing
+   `src-tauri/`, the Playwright suite ported, docs.
+
+**Known gaps (to go to `docs/roadmap.md` in phase 5)**
+
+- Public links serve the original upload, not an edited file's latest
+  version (needs a server change).
+- Share listing and link revocation have no server endpoints yet, so there
+  is no UI for them.
+- The upload panel labels copies as uploads.
+
 ## Resolved questions (2026-09-23)
 
 1. `src-tauri/` — removed on this branch.
