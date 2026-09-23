@@ -440,7 +440,14 @@ fn upload_chat_media(
 }
 
 fn client() -> Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    // Sign in as an API client: refresh tokens come back in the body.
+    headers.insert(
+        "x-kutup-client",
+        reqwest::header::HeaderValue::from_static("cli"),
+    );
     Client::builder()
+        .default_headers(headers)
         .timeout(Duration::from_secs(10))
         .build()
         .unwrap()

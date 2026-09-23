@@ -11,6 +11,7 @@ pub mod devices;
 pub mod file_assets;
 pub mod file_versions;
 pub mod files;
+pub mod sessions;
 pub mod shares;
 pub mod trash;
 pub mod tus;

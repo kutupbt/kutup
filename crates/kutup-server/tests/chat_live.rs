@@ -55,7 +55,14 @@ fn opaque_profile_envelope(
 }
 
 fn client() -> Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    // Sign in as an API client: refresh tokens come back in the body.
+    headers.insert(
+        "x-kutup-client",
+        reqwest::header::HeaderValue::from_static("cli"),
+    );
     Client::builder()
+        .default_headers(headers)
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap()

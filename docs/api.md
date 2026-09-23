@@ -11,9 +11,28 @@ All authenticated endpoints require `Authorization: Bearer <accessToken>`.
 
 ## Authentication
 
+Sign-ins are **server-side sessions** (`auth_sessions`). Every session has a
+client type, sent by the client in the `X-Kutup-Client` header:
+
+| Client type | Who | Signs in | Refresh token |
+|---|---|---|---|
+| `web-account` | the account web app (`account.<domain>`) | password (`/login`, `/login/2fa`, `/complete-setup`) | HttpOnly cookie on that origin |
+| `web-drive`, `web-chat` | the Drive and Chat web apps | **forked** from a `web-account` session (`/api/auth/forks`) | HttpOnly cookie on their own origin |
+| `cli` | the `kutup` CLI | password | JSON body |
+
+Access tokens are 15-minute JWTs carrying the session id (`sid`); every
+authenticated request (and each collab / chat WebSocket upgrade) checks that
+the session is still live, so revoking a session takes effect immediately.
+Refresh tokens are opaque 32-byte secrets that **rotate on every refresh**;
+see `/api/auth/refresh`. Resetting the password (`/api/auth/recover`), an admin
+disabling the account and an admin wipe end every session of the account.
+Design: `docs/plans/multi-app-web-rewrite.md`.
+
 ### GET /api/auth/settings
 
-Returns public server settings (e.g. registration enabled/disabled).
+Returns public server settings: whether registration is open, the Chat
+capability advertisement, and where each web app lives (`apps`, from
+`KUTUP_BASE_DOMAIN` / `KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE}_URL`).
 
 **Auth:** None
 
@@ -31,6 +50,12 @@ Returns public server settings (e.g. registration enabled/disabled).
     "federation": true,
     "sealedSender": true,
     "mlsGroups": true
+  },
+  "apps": {
+    "account": "https://account.example.org",
+    "drive": "https://drive.example.org",
+    "chat": "https://chat.example.org",
+    "office": "https://office.example.org"
   }
 }
 ```
@@ -116,7 +141,7 @@ Fetch the complete account-protection suite and parameters before submitting cre
 
 Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RATE_LIMIT_LOGIN_PER_MIN`). On top of the per-IP limit, repeated failed password attempts for one email lock that account out: after 5 failures (`LOGIN_LOCKOUT_THRESHOLD`) further attempts return `429` for 15 minutes (`LOGIN_LOCKOUT_MINUTES`). The lockout applies to unknown emails too, so a `429` does not reveal whether the account exists.
 
-**Auth:** None
+**Auth:** None · **Header:** `X-Kutup-Client: web-account` or `cli` (required; `400` otherwise)
 
 **Request body:**
 ```json
@@ -130,6 +155,7 @@ Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RA
 ```json
 {
   "accessToken": "<jwt>",
+  "sessionId": "<uuid>",
   "userId": "<uuid>",
   "username": "alice",
   "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
@@ -141,7 +167,7 @@ Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RA
 }
 ```
 
-The refresh token is delivered via an HTTP-only cookie named `refresh_token` (scoped to `Path=/api/auth/refresh`) — it is not present in the JSON body.
+For `web-account` the refresh token is an HttpOnly, host-only cookie named `refresh_token` (`Path=/api/auth/refresh`, `SameSite=Lax`, 30-day sliding `Max-Age`, `Secure` outside development) and is **not** in the JSON body. For `cli` it is returned as `"refreshToken"` in the body and no cookie is set.
 
 **Response (2FA enabled):** `200` with `{"requiresTotp": true, "preAuthToken": "<jwt>"}` — proceed to `/api/auth/login/2fa`.
 
@@ -153,7 +179,7 @@ The refresh token is delivered via an HTTP-only cookie named `refresh_token` (sc
 
 Complete login when 2FA is enabled. Locked after 5 failed attempts.
 
-**Auth:** None (uses `preAuthToken` from the login response)
+**Auth:** None (uses `preAuthToken` from the login response) · **Header:** `X-Kutup-Client` as for `/api/auth/login`
 
 **Request body:**
 ```json
@@ -206,27 +232,38 @@ Recover an account using a mnemonic-derived recovery key. The client proves poss
 
 `recoveryProof` is the 32-byte HKDF-derived authorization proof. The server
 bcrypt-compares it to the verifier stored at registration; it never receives
-the recovery entropy used for decryption.
+the recovery entropy used for decryption. A successful recovery **ends every
+session** of the account (web apps and CLIs alike).
 
 ---
 
 ### POST /api/auth/refresh
 
-Exchange a refresh token for a new access token. The refresh token is normally read from the HTTP-only `refresh_token` cookie set at login; for clients that cannot rely on cookies, it may instead be passed in the JSON body.
+Rotate the session's refresh token and get a new access token. Web sessions
+present the token in their `refresh_token` cookie and receive the next one the
+same way; the CLI presents it in the body and receives the next one in the body.
+A token presented the other way is refused (and does not rotate anything).
+
+A just-rotated token is still honoured for 60 seconds (two tabs refreshing with
+the same cookie): it yields an access token but no new refresh token. A rotated
+token presented after that window is treated as stolen and **revokes the
+session** and everything forked from it. A failed web refresh clears the cookie.
 
 **Auth:** None (the refresh token itself is the credential)
 
-**Request body (optional, only if no cookie is sent):**
+**Request body (CLI only):**
 ```json
 {
-  "refreshToken": "<jwt>"
+  "refreshToken": "<43-char base64url>"
 }
 ```
 
 **Response:**
 ```json
 {
-  "accessToken": "<jwt>"
+  "accessToken": "<jwt>",
+  "sessionId": "<uuid>",
+  "refreshToken": "<CLI only, absent within the grace window>"
 }
 ```
 
@@ -236,14 +273,15 @@ Exchange a refresh token for a new access token. The refresh token is normally r
 
 Called after first login by accounts created via `ADMIN_ACCOUNT` that haven't yet generated a recovery phrase. The client derives a full key bundle (mnemonic, master key, recovery entropy, account Drive keys and typed account envelopes) and submits it here.
 
-**Auth:** Bearer `setupToken` (returned by `/api/auth/login` when `requiresSetup` is true)
+**Auth:** Bearer `setupToken` (returned by `/api/auth/login` when `requiresSetup` is true) · **Header:** `X-Kutup-Client` as for `/api/auth/login`
 
 **Request body:** Same shape as `POST /api/auth/register` (encrypted key bundle, salts, public key).
 
-**Response:** issues an access token (JSON) and the refresh token (cookie) — the encrypted key bundle just submitted is **not** echoed back.
+**Response:** creates a session and issues tokens exactly as `/api/auth/login` does (cookie for `web-account`, body for `cli`) — the encrypted key bundle just submitted is **not** echoed back.
 ```json
 {
   "accessToken": "<jwt>",
+  "sessionId": "<uuid>",
   "userId": "<uuid>",
   "username": "alice",
   "isAdmin": false,
@@ -251,6 +289,109 @@ Called after first login by accounts created via `ADMIN_ACCOUNT` that haven't ye
   "storageUsedBytes": 0
 }
 ```
+
+---
+
+## Sessions
+
+### POST /api/auth/logout
+
+End the caller's sign-in: the `web-account` (or `cli`) session **and every
+session forked from it**. Signing out of Drive or Chat therefore signs out of
+all Kutup web apps on that browser; they notice on their next request.
+
+**Auth:** Bearer · **Response:** `{"ok": true}` (web: also clears the cookie)
+
+### GET /api/auth/sessions
+
+The account's live sessions, most recently used first. `current` marks the
+caller's own sign-in (its root and the sessions forked from it).
+
+**Auth:** Bearer
+
+```json
+[
+  {
+    "id": "<uuid>",
+    "clientType": "web-drive",
+    "parentId": "<uuid of the web-account session>",
+    "userAgent": "Mozilla/5.0 …",
+    "createdAt": "2026-09-23T14:07:00Z",
+    "lastUsedAt": "2026-09-23T14:12:00Z",
+    "current": true
+  }
+]
+```
+
+### DELETE /api/auth/sessions/:id
+
+End one session of the caller's account and anything forked from it. `404` for
+an unknown or foreign id. **Auth:** Bearer
+
+### DELETE /api/auth/sessions
+
+Sign out everywhere else: end every session except the caller's own sign-in.
+**Auth:** Bearer
+
+### POST /api/auth/forks
+
+The account app hands a child web app a session (the Proton pattern). The
+payload is a `SessionFork` local-state envelope (`kutup-crypto::local_state`,
+profile = the child client type) sealed under a fresh 32-byte key that travels
+only in the child URL's fragment; the server stores the envelope once, for 60
+seconds, and never sees the key.
+
+**Auth:** Bearer, `web-account` sessions only (`403` otherwise)
+
+**Request body:**
+```json
+{
+  "childClientType": "web-drive",
+  "payload": "<canonical base64, ≤ 16 KiB>"
+}
+```
+
+**Response:**
+```json
+{
+  "selector": "<43-char base64url, single use>",
+  "childOrigin": "https://drive.example.org"
+}
+```
+
+The account app then redirects to
+`<childOrigin>/login#selector=<selector>&sk=<key>&state=<state>`.
+
+### POST /api/auth/forks/consume
+
+The child app, on its own origin, turns a fork into its own session. The
+`X-Kutup-Client` header must be the client type the fork was minted for and the
+request `Origin` must equal that app's configured origin (`403`); the selector
+is single-use and expires after 60 s (`401`). Sets the child's refresh cookie
+on its own origin. Rate-limited with login.
+
+**Request body:** `{"selector": "<selector>"}`
+
+**Response:**
+```json
+{
+  "accessToken": "<jwt>",
+  "sessionId": "<uuid>",
+  "userId": "<uuid>",
+  "payload": "<the SessionFork envelope, canonical base64>"
+}
+```
+
+### PUT / GET /api/auth/sessions/current/local-key
+
+A web session keeps its unlocked keys in the browser as a `WebSession`
+local-state envelope (profile `<client type>:<session id>`); the 32-byte key
+that opens it lives only here, released only to that live session. Neither the
+browser blob nor this key is useful alone, and revoking the session makes the
+blob useless. Web sessions only (`400` for the CLI).
+
+**Auth:** Bearer · **Body / response:** `{"key": "<canonical base64, 32 bytes>"}`
+(`404` from GET when none is stored)
 
 ---
 

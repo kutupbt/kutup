@@ -24,6 +24,7 @@ mod models;
 mod openapi;
 mod ratelimit;
 mod sealed_sender_service;
+mod sessions;
 mod site_settings;
 mod ssrf;
 mod storage;
@@ -401,7 +402,7 @@ fn build_router(state: AppState) -> Router {
 
     use handlers::{
         admin, auth, chat, chat_media, collab, collections, devices, file_assets, file_versions,
-        files, shares, trash, tus,
+        files, sessions as session_routes, shares, trash, tus,
     };
 
     Router::new()
@@ -452,6 +453,25 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/api/auth/refresh", post(auth::refresh))
         .route("/api/auth/complete-setup", post(auth::complete_setup))
+        // --- Sessions: sign-out, the session list, forks, web local keys ---
+        .route("/api/auth/logout", post(session_routes::logout))
+        .route(
+            "/api/auth/sessions",
+            get(session_routes::list_sessions).delete(session_routes::revoke_other_sessions),
+        )
+        .route(
+            "/api/auth/sessions/:id",
+            delete(session_routes::revoke_session),
+        )
+        .route(
+            "/api/auth/sessions/current/local-key",
+            get(session_routes::get_local_key).put(session_routes::put_local_key),
+        )
+        .route("/api/auth/forks", post(session_routes::create_fork))
+        .route(
+            "/api/auth/forks/consume",
+            post(session_routes::consume_fork).route_layer(from_fn(middleware::rate_limit_login)),
+        )
         // --- User routes (authenticated via the AuthUser extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
         .route("/api/user/2fa/setup", post(auth::setup_totp))

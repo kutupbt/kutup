@@ -44,7 +44,7 @@ use crate::chat_hub::ChatWsOut;
 use crate::error::{AppError, AppResult};
 use crate::handlers::{random_token, trusted_uuid};
 use crate::middleware::AuthUser;
-use crate::{jwt, ratelimit, AppState};
+use crate::{ratelimit, AppState};
 
 /// libsignal registration ids are random values in `1..16380`.
 const MAX_REGISTRATION_ID: u32 = 16380;
@@ -2610,8 +2610,10 @@ pub async fn ws(
         .filter(|token| !token.is_empty());
     let (user_uuid, device_id) = match bearer {
         Some(token) => {
-            let (user_id, _is_admin) = jwt::validate_access_token(token, &state.config.jwt_secret)
-                .map_err(|_| AppError::unauthorized("invalid token"))?;
+            let user_id = crate::middleware::authenticate_access_token(&state, token)
+                .await
+                .map_err(|_| AppError::unauthorized("invalid token"))?
+                .user_id;
             let user_uuid =
                 Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("invalid token"))?;
             let device_id: i32 = match q.device_id.as_deref().and_then(|s| s.trim().parse().ok()) {

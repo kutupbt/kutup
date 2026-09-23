@@ -52,6 +52,8 @@ pub struct SettingsResponse {
     /// Chat feature advertisement (docs/chat-protocol.md §10). A client
     /// feature-gates chat on this and must not show chat UI when absent/disabled.
     pub chat: kutup_chat_proto::ChatCapabilities,
+    /// Where each Kutup web app lives (server config; see docs/self-hosting.md).
+    pub apps: crate::config::AppOrigins,
 }
 
 /// Authenticated global settings managed by a server administrator.
@@ -89,6 +91,10 @@ pub struct PreflightRecoverResponse {
 #[serde(rename_all = "camelCase")]
 pub struct RefreshResponse {
     pub access_token: String,
+    pub session_id: String,
+    /// The rotated refresh token, for non-web clients only (web: cookie).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
 }
 
 /// `GET /api/user/me` — mirrors `handlers.MeResponse`.

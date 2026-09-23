@@ -175,6 +175,11 @@ enum Commands {
         #[command(subcommand)]
         command: commands::devices::DevicesCmd,
     },
+    /// List and end your account's sign-ins (web apps, other CLIs).
+    Sessions {
+        #[command(subcommand)]
+        command: commands::sessions::SessionsCmd,
+    },
     /// List, download, restore, and label snapshot versions of a file.
     Versions {
         #[command(subcommand)]
@@ -268,6 +273,7 @@ fn main() {
         Commands::Trash { command } => commands::trash::run(&cli.profile, cli.json, command),
         Commands::Twofa { command } => commands::twofa::run(&cli.profile, cli.json, command),
         Commands::Devices { command } => commands::devices::run(&cli.profile, cli.json, command),
+        Commands::Sessions { command } => commands::sessions::run(&cli.profile, cli.json, command),
         Commands::Versions { command } => commands::versions::run(&cli.profile, cli.json, command),
         Commands::Share { command } => commands::share::run(&cli.profile, cli.json, command),
         Commands::Pub { command } => commands::pubshare::run(cli.json, command),

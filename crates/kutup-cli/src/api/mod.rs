@@ -15,6 +15,7 @@ pub mod devices;
 pub mod federation;
 pub mod files;
 pub mod public;
+pub mod sessions;
 pub mod sharing;
 pub mod trash;
 pub mod tus;
@@ -92,13 +93,22 @@ impl Client {
             std::env::var("KUTUP_INSECURE_TLS").as_deref(),
             Ok("1") | Ok("true")
         );
+        // Every request says it is the CLI: sign-in creates a `cli` session whose
+        // refresh token comes back in the body (web apps use a cookie instead).
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "x-kutup-client",
+            reqwest::header::HeaderValue::from_static("cli"),
+        );
         let http = HttpClient::builder()
+            .default_headers(headers.clone())
             .timeout(Duration::from_secs(60))
             .connect_timeout(Duration::from_secs(30))
             .danger_accept_invalid_certs(insecure)
             .build()
             .expect("build http client");
         let upload = HttpClient::builder()
+            .default_headers(headers)
             .timeout(None) // per-phase only; large bodies must not hit a total deadline
             .connect_timeout(Duration::from_secs(30))
             .danger_accept_invalid_certs(insecure)

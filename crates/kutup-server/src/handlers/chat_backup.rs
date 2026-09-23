@@ -330,13 +330,14 @@ async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupSta
         delivery_media_bytes: u64::try_from(delivery_media_bytes).unwrap_or_default(),
         history_media_bytes: u64::try_from(history_media_bytes).unwrap_or_default(),
     };
-    let backup: Option<(
+    type BackupRow = (
         String,
         serde_json::Value,
         Option<serde_json::Value>,
         i64,
         Option<OffsetDateTime>,
-    )> = sqlx::query_as(
+    );
+    let backup: Option<BackupRow> = sqlx::query_as(
         "SELECT root_envelope,signer_authorization,current_manifest,current_cursor,
                 latest_protected_at FROM chat_backups WHERE user_id=$1",
     )
@@ -615,7 +616,7 @@ pub async fn list_segments(
             .fetch_optional(&state.pool)
             .await?
             .ok_or_else(|| AppError::not_found("Chat history is not provisioned"))?;
-    let rows: Vec<(
+    type SegmentRow = (
         Uuid,
         i64,
         i32,
@@ -625,7 +626,8 @@ pub async fn list_segments(
         String,
         Vec<u8>,
         OffsetDateTime,
-    )> = sqlx::query_as(
+    );
+    let rows: Vec<SegmentRow> = sqlx::query_as(
         "SELECT operation_id,cursor,source_device_id,device_sequence,previous_segment_digest,
                     ciphertext_bytes,ciphertext_sha256,ciphertext,acknowledged_at
              FROM chat_backup_segments WHERE user_id=$1 AND cursor>$2

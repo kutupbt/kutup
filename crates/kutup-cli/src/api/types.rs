@@ -129,6 +129,10 @@ pub struct RecoverRequest {
 pub struct RefreshResponse {
     #[serde(default)]
     pub access_token: String,
+    /// The rotated refresh token. Absent when a concurrent refresh already
+    /// rotated it (the server's grace window); keep the stored one then.
+    #[serde(default)]
+    pub refresh_token: String,
 }
 
 /// `POST /user/2fa/setup` response — `secret` is the base32 form for manual entry, `qr_uri`

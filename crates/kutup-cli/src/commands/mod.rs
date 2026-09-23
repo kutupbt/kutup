@@ -12,6 +12,7 @@ pub mod pubshare;
 pub mod recover;
 pub mod register;
 pub mod rm;
+pub mod sessions;
 pub mod share;
 pub mod sync;
 pub mod trash;

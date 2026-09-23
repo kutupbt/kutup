@@ -2,9 +2,10 @@
 //!
 //! HS256 over `JWT_SECRET`. Claims carry `userId` + `isAdmin` plus the registered
 //! `exp`/`iat`, and a `sub` ("setup" | "pre-auth") that marks special-purpose tokens.
-//! Plain access/refresh tokens have an empty subject; the auth middleware rejects any
-//! token whose subject is set. Lifetimes are identical to Go: access 15m, refresh 7d,
-//! setup 15m, pre-auth 5m.
+//! Access tokens have an empty subject and carry the server-side session id (`sid`);
+//! the auth layer rejects any token whose subject is set and checks that the session
+//! is still live (`sessions::live`). Refresh tokens are not JWTs: they are opaque
+//! rotating secrets owned by `sessions`. Lifetimes: access 15m, setup 15m, pre-auth 5m.
 
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
@@ -22,12 +23,14 @@ pub struct Claims {
     /// for the short-lived special tokens. `omitempty` in Go ⇒ skip when empty here.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub sub: String,
+    /// Server-side session id; set on access tokens only.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sid: String,
     pub exp: i64,
     pub iat: i64,
 }
 
 const ACCESS_TTL_SECS: i64 = 15 * 60;
-const REFRESH_TTL_SECS: i64 = 7 * 24 * 60 * 60;
 const SETUP_TTL_SECS: i64 = 15 * 60;
 const PRE_AUTH_TTL_SECS: i64 = 5 * 60;
 
@@ -45,26 +48,22 @@ fn base_claims(user_id: &str, is_admin: bool, sub: &str, ttl_secs: i64) -> Claim
         user_id: user_id.to_string(),
         is_admin,
         sub: sub.to_string(),
+        sid: String::new(),
         exp: now + ttl_secs,
         iat: now,
     }
 }
 
-/// 15-minute access token — mirrors `GenerateAccessToken`.
+/// 15-minute access token bound to a server-side session.
 pub fn generate_access_token(
     user_id: &str,
     is_admin: bool,
+    session_id: &str,
     secret: &str,
 ) -> Result<String, jsonwebtoken::errors::Error> {
-    sign(&base_claims(user_id, is_admin, "", ACCESS_TTL_SECS), secret)
-}
-
-/// 7-day refresh token — mirrors `GenerateRefreshToken` (isAdmin omitted ⇒ false).
-pub fn generate_refresh_token(
-    user_id: &str,
-    secret: &str,
-) -> Result<String, jsonwebtoken::errors::Error> {
-    sign(&base_claims(user_id, false, "", REFRESH_TTL_SECS), secret)
+    let mut claims = base_claims(user_id, is_admin, "", ACCESS_TTL_SECS);
+    claims.sid = session_id.to_string();
+    sign(&claims, secret)
 }
 
 /// 15-minute first-login setup token — mirrors `GenerateSetupToken`.
@@ -122,14 +121,18 @@ pub fn validate_pre_auth_token(token: &str, secret: &str) -> Result<String, Stri
     Ok(claims.user_id)
 }
 
-/// Validates an access token (header or `?token=`) and returns `(userID, isAdmin)`.
-/// Rejects setup/pre-auth tokens — mirrors `AuthMiddleware.ValidateTokenString`.
-pub fn validate_access_token(token: &str, secret: &str) -> Result<(String, bool), String> {
+/// Validates an access token (header or `?token=`) and returns `(userID, sessionID)`.
+/// Rejects setup/pre-auth tokens and tokens without a session. Whether the session
+/// is still live is the caller's check (`sessions::live`).
+pub fn validate_access_token(token: &str, secret: &str) -> Result<(String, String), String> {
     let claims = validate_token(token, secret).map_err(|e| e.to_string())?;
     if !claims.sub.is_empty() {
         return Err("not an access token".to_string());
     }
-    Ok((claims.user_id, claims.is_admin))
+    if claims.sid.is_empty() {
+        return Err("access token has no session".to_string());
+    }
+    Ok((claims.user_id, claims.sid))
 }
 
 #[cfg(test)]
@@ -140,17 +143,18 @@ mod tests {
 
     #[test]
     fn access_token_roundtrips_with_claims() {
-        let t = generate_access_token("u1", true, SECRET).unwrap();
+        let t = generate_access_token("u1", true, "s1", SECRET).unwrap();
         let c = validate_token(&t, SECRET).unwrap();
         assert_eq!(c.user_id, "u1");
         assert!(c.is_admin);
         assert_eq!(c.sub, "");
+        assert_eq!(c.sid, "s1");
         assert_eq!(c.exp - c.iat, ACCESS_TTL_SECS);
     }
 
     #[test]
     fn wrong_secret_is_rejected() {
-        let t = generate_access_token("u1", false, SECRET).unwrap();
+        let t = generate_access_token("u1", false, "s1", SECRET).unwrap();
         assert!(validate_token(&t, "another-secret-also-32-bytes-long-yeah").is_err());
     }
 
@@ -169,20 +173,26 @@ mod tests {
     fn access_validation_rejects_special_tokens() {
         let setup = generate_setup_token("u4", SECRET).unwrap();
         assert!(validate_access_token(&setup, SECRET).is_err());
-        let access = generate_access_token("u4", false, SECRET).unwrap();
+        let access = generate_access_token("u4", false, "s4", SECRET).unwrap();
         assert_eq!(
             validate_access_token(&access, SECRET).unwrap(),
-            ("u4".to_string(), false)
+            ("u4".to_string(), "s4".to_string())
         );
     }
 
     #[test]
-    fn refresh_token_has_empty_subject_and_7d_ttl() {
-        let t = generate_refresh_token("u5", SECRET).unwrap();
-        let c = validate_token(&t, SECRET).unwrap();
-        assert_eq!(c.sub, "");
-        assert!(!c.is_admin);
-        assert_eq!(c.exp - c.iat, REFRESH_TTL_SECS);
+    fn access_validation_requires_a_session() {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let claims = Claims {
+            user_id: "u5".into(),
+            is_admin: false,
+            sub: String::new(),
+            sid: String::new(),
+            exp: now + 60,
+            iat: now,
+        };
+        let t = sign(&claims, SECRET).unwrap();
+        assert!(validate_access_token(&t, SECRET).is_err());
     }
 
     #[test]
@@ -193,6 +203,7 @@ mod tests {
             user_id: "u6".into(),
             is_admin: false,
             sub: String::new(),
+            sid: String::new(),
             exp: now - 10,
             iat: now - 100,
         };

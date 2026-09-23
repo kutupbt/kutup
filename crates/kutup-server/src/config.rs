@@ -71,6 +71,86 @@ pub struct Config {
     pub chat_mls_ordering_policy: String,
     /// Base64 raw 32-byte Ed25519 seed used only for MLS control-log votes.
     pub chat_mls_control_signing_key: String,
+    /// Where each web app lives. Published by `/api/auth/settings` and enforced
+    /// for session forks (a fork for `web-drive` is only consumable from `drive`).
+    pub apps: AppOrigins,
+}
+
+/// The origins of the Kutup web apps (scheme://host[:port], no path).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub struct AppOrigins {
+    pub account: String,
+    pub drive: String,
+    pub chat: String,
+    /// The keyless OnlyOffice sandbox; embedded by drive, holds no session.
+    pub office: String,
+}
+
+impl AppOrigins {
+    /// The origin a forked child session must be consumed from.
+    pub fn for_client(&self, client: crate::sessions::ClientType) -> Option<&str> {
+        use crate::sessions::ClientType;
+        match client {
+            ClientType::WebAccount => Some(&self.account),
+            ClientType::WebDrive => Some(&self.drive),
+            ClientType::WebChat => Some(&self.chat),
+            ClientType::Cli => None,
+        }
+    }
+}
+
+fn canonical_origin(name: &str, value: &str) -> Result<String, String> {
+    let url = url::Url::parse(value).map_err(|e| format!("{name} is not a URL: {e}"))?;
+    let origin = url.origin();
+    if !origin.is_tuple() || !matches!(url.scheme(), "https" | "http") {
+        return Err(format!("{name} must be an http(s) origin"));
+    }
+    if url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
+        return Err(format!("{name} must be a bare origin without a path"));
+    }
+    Ok(origin.ascii_serialization())
+}
+
+/// KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE}_URL win; otherwise KUTUP_BASE_DOMAIN gives
+/// `https://<app>.<domain>`; otherwise development uses the Vite dev servers
+/// (`http://<app>.localhost:<port>`) and production refuses to start.
+pub fn resolve_app_origins(
+    env: impl Fn(&str) -> Option<String>,
+    app_env: &str,
+) -> Result<AppOrigins, String> {
+    let base = env("KUTUP_BASE_DOMAIN").filter(|v| !v.is_empty());
+    let pick = |app: &str, var: &str, dev_port: u16| -> Result<String, String> {
+        if let Some(explicit) = env(var).filter(|v| !v.is_empty()) {
+            return canonical_origin(var, &explicit);
+        }
+        if let Some(domain) = &base {
+            return canonical_origin("KUTUP_BASE_DOMAIN", &format!("https://{app}.{domain}"));
+        }
+        if app_env != "production" {
+            return Ok(format!("http://{app}.localhost:{dev_port}"));
+        }
+        Err(format!("set KUTUP_BASE_DOMAIN or {var} in production"))
+    };
+    let origins = AppOrigins {
+        account: pick("account", "KUTUP_ACCOUNT_URL", 5173)?,
+        drive: pick("drive", "KUTUP_DRIVE_URL", 5174)?,
+        chat: pick("chat", "KUTUP_CHAT_URL", 5175)?,
+        office: pick("office", "KUTUP_OFFICE_URL", 5176)?,
+    };
+    let all = [
+        &origins.account,
+        &origins.drive,
+        &origins.chat,
+        &origins.office,
+    ];
+    for (i, a) in all.iter().enumerate() {
+        if all[i + 1..].contains(a) {
+            return Err(format!(
+                "each Kutup app needs its own origin; {a} is used twice"
+            ));
+        }
+    }
+    Ok(origins)
 }
 
 impl Config {
@@ -124,6 +204,7 @@ impl Config {
                 "CHAT_SERVER_NAME must match FEDERATION_SERVER_NAME when federation is configured"
             );
         }
+        let app_env_for_apps = app_env.clone();
         let cfg = Config {
             database_url: must_env("DATABASE_URL"),
             jwt_secret: must_env("JWT_SECRET"),
@@ -162,6 +243,8 @@ impl Config {
             ),
             chat_mls_ordering_policy: get_env("CHAT_MLS_ORDERING_POLICY", ""),
             chat_mls_control_signing_key: get_env("CHAT_MLS_CONTROL_SIGNING_KEY", ""),
+            apps: resolve_app_origins(|k| std::env::var(k).ok(), &app_env_for_apps)
+                .unwrap_or_else(|error| panic!("app origins: {error}")),
         };
         if cfg.jwt_secret.len() < 32 {
             panic!("JWT_SECRET must be at least 32 characters long");
@@ -210,5 +293,77 @@ fn get_env_bool(key: &str, fallback: bool) -> bool {
             _ => fallback,
         },
         _ => fallback,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let map: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |k| map.get(k).cloned()
+    }
+
+    #[test]
+    fn base_domain_derives_https_subdomains() {
+        let o = resolve_app_origins(env(&[("KUTUP_BASE_DOMAIN", "example.org")]), "production")
+            .unwrap();
+        assert_eq!(o.account, "https://account.example.org");
+        assert_eq!(o.drive, "https://drive.example.org");
+        assert_eq!(o.chat, "https://chat.example.org");
+        assert_eq!(o.office, "https://office.example.org");
+    }
+
+    #[test]
+    fn explicit_urls_win_and_are_canonicalised() {
+        let o = resolve_app_origins(
+            env(&[
+                ("KUTUP_BASE_DOMAIN", "example.org"),
+                ("KUTUP_DRIVE_URL", "https://Files.Example.org/"),
+            ]),
+            "production",
+        )
+        .unwrap();
+        assert_eq!(o.drive, "https://files.example.org");
+        assert_eq!(o.chat, "https://chat.example.org");
+    }
+
+    #[test]
+    fn development_falls_back_to_the_vite_dev_hosts() {
+        let o = resolve_app_origins(env(&[]), "development").unwrap();
+        assert_eq!(o.account, "http://account.localhost:5173");
+        assert_eq!(o.drive, "http://drive.localhost:5174");
+        assert_eq!(o.chat, "http://chat.localhost:5175");
+        assert_eq!(o.office, "http://office.localhost:5176");
+    }
+
+    #[test]
+    fn production_requires_configuration() {
+        assert!(resolve_app_origins(env(&[]), "production").is_err());
+    }
+
+    #[test]
+    fn paths_and_shared_origins_are_rejected() {
+        assert!(resolve_app_origins(
+            env(&[
+                ("KUTUP_BASE_DOMAIN", "example.org"),
+                ("KUTUP_DRIVE_URL", "https://x.org/drive")
+            ]),
+            "production",
+        )
+        .is_err());
+        assert!(resolve_app_origins(
+            env(&[
+                ("KUTUP_BASE_DOMAIN", "example.org"),
+                ("KUTUP_CHAT_URL", "https://drive.example.org"),
+            ]),
+            "production",
+        )
+        .is_err());
     }
 }

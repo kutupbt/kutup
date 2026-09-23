@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::hub::{self, Hub, WsOut};
-use crate::{jwt, AppState};
+use crate::AppState;
 
 /// Query params on the WS URL. Browsers can't set headers on `new WebSocket(url)`, so the
 /// token + deviceId arrive here (token may also come via `Authorization`).
@@ -103,8 +103,10 @@ pub async fn ws(
         Some(t) if !t.is_empty() => t,
         _ => return Err(AppError::unauthorized("missing token")),
     };
-    let (user_id, _is_admin) = jwt::validate_access_token(&token, &state.config.jwt_secret)
-        .map_err(|_| AppError::unauthorized("invalid token"))?;
+    let user_id = crate::middleware::authenticate_access_token(&state, &token)
+        .await
+        .map_err(|_| AppError::unauthorized("invalid token"))?
+        .user_id;
 
     // Confirm the user can access this file's collection.
     let file_uuid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;

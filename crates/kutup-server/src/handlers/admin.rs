@@ -349,7 +349,10 @@ pub async fn update_user(
             .bind(target)
             .execute(&state.pool)
             .await
-            .map_err(|_| AppError::internal("internal error"))?;
+            .map_err(|_| AppError::internal("internal error"))?; // A disabled account keeps no live sign-in anywhere.
+        if !a {
+            crate::sessions::revoke_all_for_user(&state.pool, target, None).await?;
+        }
     }
     if let Some(a) = req.is_admin {
         sqlx::query("UPDATE users SET is_admin = $1 WHERE id = $2")
@@ -1839,6 +1842,9 @@ pub async fn wipe_user(
     .bind(target)
     .execute(&state.pool)
     .await?;
+
+    // The wiped keys are gone; so is every session that held them.
+    crate::sessions::revoke_all_for_user(&state.pool, target, None).await?;
 
     // 4. Recompute quota: uploads into OTHER people's folders survive (they're the
     //    folder-owner's data view) and still count against this user.
