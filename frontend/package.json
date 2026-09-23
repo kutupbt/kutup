@@ -16,7 +16,8 @@
     "build": "pnpm -r --filter './apps/*' run build",
     "dev:account": "pnpm -C apps/account dev",
     "dev:drive": "pnpm -C apps/drive dev",
-    "dev:chat": "pnpm -C apps/chat dev"
+    "dev:chat": "pnpm -C apps/chat dev",
+    "dev:office": "pnpm -C apps/office dev"
   },
   "devDependencies": {
     "typescript": "^5.4.5",

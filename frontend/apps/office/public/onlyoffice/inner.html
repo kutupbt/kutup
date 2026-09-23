@@ -86,7 +86,30 @@
       (function () {
         'use strict'
 
-        var EXPECTED_ORIGIN = window.location.origin
+        // This page runs on its own origin (office.<domain>), apart from
+        // Drive, so the OnlyOffice code never shares an origin with the
+        // session, the keys or the API. Two kinds of messages reach it:
+        //  - from x2t.html, the converter frame it embeds (same origin);
+        //  - from the Drive page embedding it (PARENT_ORIGIN).
+        // Anything else is dropped.
+        var SELF_ORIGIN = window.location.origin
+        // The embedding page names itself in `?parent=`. The claim is only
+        // taken when this is really framed and, where the browser reports
+        // it (location.ancestorOrigins), the actual parent agrees. The
+        // office host's CSP frame-ancestors decides who may embed it at all.
+        var PARENT_ORIGIN = (function () {
+          if (window.parent === window) return null
+          var claimed = new URLSearchParams(window.location.search).get('parent')
+          if (!claimed || !/^https?:\/\/[^/?#\s]+$/.test(claimed)) return null
+          try {
+            if (new URL(claimed).origin !== claimed) return null
+          } catch (err) {
+            return null
+          }
+          var ancestors = window.location.ancestorOrigins
+          if (ancestors && ancestors.length > 0 && ancestors[0] !== claimed) return null
+          return claimed
+        })()
         var docType = null
         var fileId = null
 
@@ -157,7 +180,7 @@
         }
 
         var send = function (target, msg) {
-          target.postMessage(msg, EXPECTED_ORIGIN)
+          if (PARENT_ORIGIN) target.postMessage(msg, PARENT_ORIGIN)
         }
 
         // ---------- x2t bridge ------------------------------------------------
@@ -193,7 +216,7 @@
               if (extra && extra.images) msg.images = extra.images
               if (extra && extra.mediasSources) msg.mediasSources = extra.mediasSources
               if (extra && extra.mediasData) msg.mediasData = extra.mediasData
-              iframe.contentWindow.postMessage(msg, EXPECTED_ORIGIN)
+              iframe.contentWindow.postMessage(msg, SELF_ORIGIN)
             })
           })
         }
@@ -535,11 +558,11 @@
                   endSaveChanges: obj.endSaveChanges,
                 }
                 console.log('[kutup-bridge] outbound saveChanges raw=' + rawChanges.length + ' wrapped=' + wrapped.length + ' cpIndex=' + cpIndex)
-                if (window.parent && window.parent !== window && rawChanges.length > 0) {
+                if (PARENT_ORIGIN && rawChanges.length > 0) {
                   // Skip empty (heartbeat) saveChanges — peers don't need them.
                   window.parent.postMessage(
                     { type: 'oo-local-op', payload: JSON.stringify(outboundMsg) },
-                    EXPECTED_ORIGIN,
+                    PARENT_ORIGIN,
                   )
                 }
               } catch (err) {
@@ -570,7 +593,7 @@
               // _onCursor → WorkbookView.Update_ForeignCursor decodes the
               // ranges and renders the translucent foreign-selection
               // rectangle in the auto-assigned color for useridoriginal.
-              if (window.parent && window.parent !== window) {
+              if (PARENT_ORIGIN) {
                 var cursorMsg = {
                   type: 'cursor',
                   messages: [{
@@ -583,7 +606,7 @@
                 console.log('[kutup-bridge] outbound cursor type=' + (typeof obj.cursor) + ' len=' + (obj.cursor ? String(obj.cursor).length : 0))
                 window.parent.postMessage(
                   { type: 'oo-local-cursor', payload: JSON.stringify(cursorMsg) },
-                  EXPECTED_ORIGIN,
+                  PARENT_ORIGIN,
                 )
               }
               break
@@ -853,34 +876,40 @@
         setStatus('idle (type=' + docType + ')')
 
         window.addEventListener('message', function (e) {
-          if (e.origin !== EXPECTED_ORIGIN) return
+          var x2tFrame = document.getElementById('x2t-frame')
+          var fromX2t = e.origin === SELF_ORIGIN && !!x2tFrame && e.source === x2tFrame.contentWindow
+          var fromParent = !!PARENT_ORIGIN && e.origin === PARENT_ORIGIN && e.source === window.parent
+          if (!fromX2t && !fromParent) return
           var msg = e.data
           if (!msg || typeof msg !== 'object') return
 
           // ---- x2t iframe → us ----
-          if (msg.type === 'x2t-ready') {
-            x2tReady = true
-            x2tReadyResolvers.splice(0).forEach(function (r) { r() })
-            console.log('[kutup-bridge] x2t ready')
-            return
-          }
-          if (msg.type === 'x2t-error') {
-            console.error('[kutup-bridge] x2t bootstrap error:', msg.error)
-            return
-          }
-          if (msg.type === 'convert-result') {
-            var p = x2tPending[msg.requestId]
-            if (p) {
-              delete x2tPending[msg.requestId]
-              p.resolve({ output: msg.output, images: msg.images || [] })
+          if (fromX2t) {
+            if (msg.type === 'x2t-ready') {
+              x2tReady = true
+              x2tReadyResolvers.splice(0).forEach(function (r) { r() })
+              console.log('[kutup-bridge] x2t ready')
+              return
             }
-            return
-          }
-          if (msg.type === 'convert-error') {
-            var pe = x2tPending[msg.requestId]
-            if (pe) {
-              delete x2tPending[msg.requestId]
-              pe.reject(new Error(msg.error || 'x2t convert failed'))
+            if (msg.type === 'x2t-error') {
+              console.error('[kutup-bridge] x2t bootstrap error:', msg.error)
+              return
+            }
+            if (msg.type === 'convert-result') {
+              var p = x2tPending[msg.requestId]
+              if (p) {
+                delete x2tPending[msg.requestId]
+                p.resolve({ output: msg.output, images: msg.images || [] })
+              }
+              return
+            }
+            if (msg.type === 'convert-error') {
+              var pe = x2tPending[msg.requestId]
+              if (pe) {
+                delete x2tPending[msg.requestId]
+                pe.reject(new Error(msg.error || 'x2t convert failed'))
+              }
+              return
             }
             return
           }
@@ -1096,7 +1125,7 @@
             replyTo.postMessage({
               type: 'save-result', requestId: requestId,
               error: 'editor not ready',
-            }, EXPECTED_ORIGIN)
+            }, PARENT_ORIGIN)
             return
           }
           try {
@@ -1150,26 +1179,26 @@
                       type: 'save-result', requestId: requestId,
                       bytes: res.output,
                       format: outFmt,
-                    }, EXPECTED_ORIGIN)
+                    }, PARENT_ORIGIN)
                   })
                   .catch(function (err) {
                     replyTo.postMessage({
                       type: 'save-result', requestId: requestId,
                       error: 'x2t convert failed: ' + (err && err.message || err),
-                    }, EXPECTED_ORIGIN)
+                    }, PARENT_ORIGIN)
                   })
               } catch (err) {
                 replyTo.postMessage({
                   type: 'save-result', requestId: requestId,
                   error: (err && err.message) || String(err),
-                }, EXPECTED_ORIGIN)
+                }, PARENT_ORIGIN)
               }
             }, 250)
           } catch (err) {
             replyTo.postMessage({
               type: 'save-result', requestId: requestId,
               error: (err && err.message) || String(err),
-            }, EXPECTED_ORIGIN)
+            }, PARENT_ORIGIN)
           }
         }
 
@@ -1185,8 +1214,10 @@
           }
         }, true)
 
-        if (window.parent && window.parent !== window) {
+        if (PARENT_ORIGIN) {
           send(window.parent, { type: 'ready', docType: docType })
+        } else {
+          setStatus('not embedded by Kutup Drive')
         }
       })()
     </script>

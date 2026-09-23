@@ -22,14 +22,16 @@ That populates `dist/v9/` (the editor) and `dist/x2t/` (the converter)
 in this directory. Then rebuild the frontend:
 
 ```sh
-docker compose up -d --build frontend
+pnpm -C frontend dev:office
 ```
 
 Normal Docker builds consume the immutable package produced by the
 [Kutup office-assets repository][kutup-office-assets]. The Kutup app code
 (TypeScript / React) lives in
-`frontend/src/components/editors/office/`; only the third-party static
-assets land here.
+`frontend/apps/drive/src/features/editor/office/`; only the third-party
+static assets land here. They are served from the office sandbox origin
+(`office.<domain>`, `pnpm -C frontend dev:office` in development), which
+holds no session or keys; Drive embeds `inner.html` from there.
 
 [cryptpad/onlyoffice-editor]: https://github.com/cryptpad/onlyoffice-editor
 [cryptpad/onlyoffice-x2t-wasm]: https://github.com/cryptpad/onlyoffice-x2t-wasm

@@ -358,6 +358,11 @@
     "whiteboard": {
       "loading": "Beyaz tahta yükleniyor…",
       "imageQuota": "Depolama kotası aşıldı — görsel yüklenmedi"
+    },
+    "office": {
+      "loading": "Belge düzenleyici yükleniyor…",
+      "unsupported": "Bu tür bir ofis dosyası burada düzenlenemez.",
+      "unavailable": "Belge düzenleyici yüklenemedi. Yeniden dene ya da dosyayı indir."
     }
   },
   "file": {

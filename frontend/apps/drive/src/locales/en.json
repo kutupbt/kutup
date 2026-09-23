@@ -358,6 +358,11 @@
     "whiteboard": {
       "loading": "Loading whiteboard…",
       "imageQuota": "Storage quota exceeded — image not uploaded"
+    },
+    "office": {
+      "loading": "Loading the document editor…",
+      "unsupported": "This kind of office file can't be edited here.",
+      "unavailable": "The document editor could not be loaded. Try again, or download the file."
     }
   },
   "file": {

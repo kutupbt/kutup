@@ -19,7 +19,10 @@ import {
   useEffect, useImperativeHandle, useRef, useState, forwardRef,
   type Ref,
 } from 'react'
+import { useTranslation } from 'react-i18next'
 import { collabSocketUrl } from '@kutup/collab/socketUrl'
+import { appUrl, getAppDirectory } from '@kutup/session/apps'
+import { LoadingPanel } from '@kutup/ui/components/states'
 import { updateSession, useRequiredSession } from '@kutup/session/store'
 import { CollabTransport, type HelloMsg } from '@kutup/collab/transport'
 import { KIND } from '@kutup/collab/envelope'
@@ -50,6 +53,19 @@ interface Props {
 }
 
 type DocType = 'docx' | 'xlsx' | 'pptx'
+
+/**
+ * OnlyOffice runs on its own origin (office.<domain>), which holds no
+ * session, keys or API: the bridge there sees only the document this page
+ * hands it. Every message to it names that origin, and only messages from
+ * it (and from this iframe) are read.
+ */
+function officeOrigin(): string {
+  return getAppDirectory().office
+}
+
+/** How long the bridge may take to say it is ready before we give up. */
+const BRIDGE_TIMEOUT_MS = 30_000
 
 function detectType(filename: string): DocType | null {
   const ext = filename.split('.').pop()?.toLowerCase() ?? ''
@@ -124,6 +140,7 @@ function OfficeEditorBase(
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [bridgeReady, setBridgeReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { t } = useTranslation()
   const docType = detectType(filename)
 
   // Save() imperative handle plumbing.
@@ -169,7 +186,7 @@ function OfficeEditorBase(
         pendingSavesRef.current.set(requestId, { resolve, reject })
         iframe.contentWindow.postMessage(
           { type: 'save-request', requestId } satisfies ToBridge,
-          window.location.origin,
+          officeOrigin(),
         )
       }),
   }), [docType])
@@ -177,14 +194,14 @@ function OfficeEditorBase(
   // ---- bridge handshake (init / init-ack / save-result / oo-local-op) ----
   useEffect(() => {
     if (!docType) {
-      setError(`Unsupported office extension for ${filename}`)
+      setError(t('editor.office.unsupported'))
       return
     }
 
     function send(msg: ToBridge) {
       const iframe = iframeRef.current
       if (!iframe || !iframe.contentWindow) return
-      iframe.contentWindow.postMessage(msg, window.location.origin)
+      iframe.contentWindow.postMessage(msg, officeOrigin())
     }
 
     async function sendLocalOp(payload: string) {
@@ -245,7 +262,7 @@ function OfficeEditorBase(
     }
 
     function onMessage(e: MessageEvent<FromBridge>) {
-      if (e.origin !== window.location.origin) return
+      if (e.origin !== officeOrigin()) return
       const iframe = iframeRef.current
       if (!iframe || e.source !== iframe.contentWindow) return
       const msg = e.data
@@ -331,7 +348,7 @@ function OfficeEditorBase(
     if (!userId) return
     iframe.contentWindow.postMessage(
       { type: 'oo-color-update', userId, color: color ?? null } satisfies ToBridge,
-      window.location.origin,
+      officeOrigin(),
     )
   }, [userId, color])
 
@@ -370,7 +387,7 @@ function OfficeEditorBase(
         if (!iframe || !iframe.contentWindow) return
         iframe.contentWindow.postMessage(
           { type: 'oo-peers', list, ts } satisfies ToBridge,
-          window.location.origin,
+          officeOrigin(),
         )
       }
 
@@ -381,7 +398,7 @@ function OfficeEditorBase(
       if (iframeForSelf && iframeForSelf.contentWindow && did && userId) {
         iframeForSelf.contentWindow.postMessage(
           { type: 'oo-self', deviceId: did, userId } satisfies ToBridge,
-          window.location.origin,
+          officeOrigin(),
         )
       }
 
@@ -421,7 +438,7 @@ function OfficeEditorBase(
                     type: 'oo-remote-op',
                     payload: new TextDecoder().decode(payload),
                   } satisfies ToBridge,
-                  window.location.origin,
+                  officeOrigin(),
                 )
               }
             } else if (f.kind === KIND.OO_CURSOR) {
@@ -434,7 +451,7 @@ function OfficeEditorBase(
                     senderDeviceId: Number(f.senderDeviceId),
                     payload: new TextDecoder().decode(payload),
                   } satisfies ToBridge,
-                  window.location.origin,
+                  officeOrigin(),
                 )
               }
             }
@@ -468,6 +485,12 @@ function OfficeEditorBase(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docType, fileId, collectionMaster])
 
+  useEffect(() => {
+    if (bridgeReady) return
+    const timer = setTimeout(() => setError(t('editor.office.unavailable')), BRIDGE_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }, [bridgeReady, t])
+
   if (error) {
     return (
       <div className="flex h-full w-full items-center justify-center p-6 text-sm text-destructive">
@@ -476,15 +499,31 @@ function OfficeEditorBase(
     )
   }
 
-  void bridgeReady
-
   return (
-    <iframe
-      ref={iframeRef}
-      title={filename}
-      src={`/onlyoffice/inner.html?type=${docType}&fileId=${encodeURIComponent(fileId)}`}
-      className="block h-full w-full border-0"
-    />
+    <div className="relative h-full w-full">
+      <iframe
+        ref={iframeRef}
+        title={filename}
+        src={appUrl(
+          'office',
+          `/onlyoffice/inner.html?${new URLSearchParams({
+            type: docType ?? '',
+            fileId,
+            // The bridge answers only this origin (see inner.html).
+            parent: window.location.origin,
+          }).toString()}`,
+        )}
+        // Its own origin already; the sandbox takes away top navigation.
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+        allow="clipboard-read; clipboard-write"
+        className="block h-full w-full border-0"
+      />
+      {bridgeReady ? null : (
+        <div className="absolute inset-0 flex items-center justify-center bg-background">
+          <LoadingPanel label={t('editor.office.loading')} />
+        </div>
+      )}
+    </div>
   )
 }
 

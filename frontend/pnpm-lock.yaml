@@ -358,6 +358,15 @@ importers:
         specifier: ^8.0.16
         version: 8.0.16(@types/node@25.4.0)(esbuild@0.25.12)(jiti@2.7.0)
 
+  apps/office:
+    devDependencies:
+      '@kutup/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      vite:
+        specifier: ^8.0.16
+        version: 8.0.16(@types/node@25.4.0)(esbuild@0.25.12)(jiti@2.7.0)
+
   packages/chat-core:
     dependencies:
       '@kutup/crypto':

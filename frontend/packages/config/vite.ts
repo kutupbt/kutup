@@ -54,7 +54,7 @@ function kutupWasm(modules: WasmModule[]): Plugin {
 }
 
 /** Dev ports; each app also has its own hostname so cookies stay per app. */
-export const DEV_PORTS: Record<KutupApp, number> = { account: 5173, drive: 5174, chat: 5175 }
+export const DEV_PORTS: Record<KutupApp | 'office', number> = { account: 5173, drive: 5174, chat: 5175, office: 5176 }
 
 /**
  * The Vite config every Kutup web app shares. Each app runs on its own
@@ -85,5 +85,57 @@ export function kutupApp(opts: { app: KutupApp; wasm: WasmModule[] }): UserConfi
         '/api': { target: apiTarget, changeOrigin: false, ws: true, secure: false },
       },
     },
+  }
+}
+
+/**
+ * The OnlyOffice sandbox (office.<domain>): static files only — the bridge
+ * page, x2t and the OnlyOffice client — with no API, no session and no
+ * cookies, embedded by Drive and nothing else.
+ *
+ * The CSP here is the dev server's; in production the reverse proxy sends
+ * the same policy with the configured Drive origin (KUTUP_DRIVE_URL).
+ * OnlyOffice needs eval and inline script, which is exactly why it gets an
+ * origin that holds nothing worth stealing.
+ */
+export function officeSandboxCsp(driveOrigin: string): string {
+  return [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "media-src 'self' blob:",
+    "connect-src 'self' data: blob:",
+    "worker-src 'self' blob:",
+    "frame-src 'self' blob:",
+    // 'self': OnlyOffice nests its own editor frame inside the bridge, and
+    // frame-ancestors is checked against every ancestor, not just the top.
+    `frame-ancestors 'self' ${driveOrigin}`,
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join('; ')
+}
+
+export function kutupOffice(): UserConfig {
+  const drive = process.env.KUTUP_DRIVE_URL ?? `http://drive.localhost:${DEV_PORTS.drive}`
+  const headers = {
+    'Content-Security-Policy': officeSandboxCsp(new URL(drive).origin),
+    'Referrer-Policy': 'no-referrer',
+    'X-Content-Type-Options': 'nosniff',
+  }
+  const server = {
+    host: 'office.localhost',
+    port: DEV_PORTS.office,
+    strictPort: true,
+    allowedHosts: ['office.localhost'],
+    headers,
+  }
+  return {
+    // The bridge pages are plain HTML in public/; nothing is bundled.
+    appType: 'mpa',
+    build: { outDir: 'dist', emptyOutDir: true },
+    server,
+    preview: server,
   }
 }
