@@ -11,7 +11,9 @@ use kutup_crypto::{
     drive_object::{self, DriveFileBlobContextV1},
     envelope,
     identity::AccountIdentityKeysV1,
-    kdf, stream,
+    kdf,
+    local_state::{self, LocalStatePurpose},
+    stream,
 };
 
 fn b64(s: &str) -> Vec<u8> {
@@ -37,6 +39,25 @@ struct CryptoVectors {
     asset: AssetVec,
     #[serde(rename = "collabFrame")]
     collab_frame: CollabFrameVec,
+    #[serde(rename = "localState")]
+    local_state: LocalStateVecs,
+}
+
+#[derive(Deserialize)]
+struct LocalStateVecs {
+    key: String,
+    #[serde(rename = "sessionFork")]
+    session_fork: LocalStateVec,
+    #[serde(rename = "webSession")]
+    web_session: LocalStateVec,
+}
+
+#[derive(Deserialize)]
+struct LocalStateVec {
+    profile: String,
+    nonce: String,
+    plaintext: String,
+    envelope: String,
 }
 
 #[derive(Deserialize)]
@@ -421,4 +442,39 @@ fn collaboration_frame_matches_canonical_vector() {
     let mut tampered = signed;
     tampered[100] ^= 0x01;
     assert!(envelope::verify(&tampered, &b64(&v.signing_public_key)).is_err());
+}
+
+#[test]
+fn local_state_fork_and_web_session_match_canonical_vectors() {
+    let v = load_crypto().local_state;
+    let key = b64(&v.key);
+    for (vec, purpose) in [
+        (&v.session_fork, LocalStatePurpose::SessionFork),
+        (&v.web_session, LocalStatePurpose::WebSession),
+    ] {
+        let nonce: [u8; 24] = b64(&vec.nonce).try_into().expect("24-byte nonce");
+        let sealed =
+            local_state::seal_with_nonce(&b64(&vec.plaintext), &key, purpose, &vec.profile, &nonce)
+                .unwrap();
+        assert_eq!(sealed, b64(&vec.envelope), "{purpose:?} envelope mismatch");
+        let opened = local_state::open(&sealed, &key, purpose, &vec.profile).unwrap();
+        assert_eq!(opened, b64(&vec.plaintext));
+    }
+}
+
+#[test]
+fn local_state_payloads_are_bound_to_purpose_and_profile() {
+    let v = load_crypto().local_state;
+    let key = b64(&v.key);
+    let fork = b64(&v.session_fork.envelope);
+    // A fork payload minted for drive opens neither as chat's nor as a
+    // persisted web session.
+    assert!(local_state::open(&fork, &key, LocalStatePurpose::SessionFork, "web-chat").is_err());
+    assert!(local_state::open(&fork, &key, LocalStatePurpose::WebSession, "web-drive").is_err());
+    let mut tampered = fork.clone();
+    let last = tampered.len() - 1;
+    tampered[last] ^= 1;
+    assert!(
+        local_state::open(&tampered, &key, LocalStatePurpose::SessionFork, "web-drive").is_err()
+    );
 }

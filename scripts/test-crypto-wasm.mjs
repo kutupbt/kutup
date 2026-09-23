@@ -385,4 +385,37 @@ assert.match(backupMedia.mediaId, /^[0-9a-f]{64}$/)
 assert.equal(backupMedia.paddedPlaintextBytes >= 10_000, true)
 assert.equal(Buffer.from(backupMedia.objectHeader, 'base64').length, 107)
 
+// Local-state envelopes: session-fork payloads (2) and persisted web
+// sessions (3) open to the canonical Rust vectors, fail closed on the wrong
+// purpose or profile, and the CLI-only purpose is refused.
+const vectors = JSON.parse(
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/crypto.json`, 'utf8'),
+)
+const localState = vectors.localState
+for (const [vector, purpose] of [
+  [localState.sessionFork, 2],
+  [localState.webSession, 3],
+]) {
+  assert.equal(
+    crypto.openLocalState(vector.envelope, localState.key, purpose, vector.profile),
+    vector.plaintext,
+  )
+  const resealed = crypto.sealLocalState(vector.plaintext, localState.key, purpose, vector.profile)
+  assert.notEqual(resealed, vector.envelope, 'nonce must be random')
+  assert.equal(
+    crypto.openLocalState(resealed, localState.key, purpose, vector.profile),
+    vector.plaintext,
+  )
+}
+assert.throws(() =>
+  crypto.openLocalState(localState.sessionFork.envelope, localState.key, 2, 'web-chat'),
+)
+assert.throws(() =>
+  crypto.openLocalState(localState.sessionFork.envelope, localState.key, 3, 'web-drive'),
+)
+assert.throws(
+  () => crypto.sealLocalState(localState.sessionFork.plaintext, localState.key, 1, 'default'),
+  /not available to web clients/,
+)
+
 console.log('crypto WASM canonical vectors passed')

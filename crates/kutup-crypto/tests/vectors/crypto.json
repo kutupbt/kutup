@@ -15,7 +15,7 @@
       "expectedLoginKey": "qNkq6mdxINkd3KUhY93wx1pmJvyyljLOD15ruEfRxFA="
     },
     {
-      "password": "ünïcödé🔐 pässwörd",
+      "password": "\u00fcn\u00efc\u00f6d\u00e9\ud83d\udd10 p\u00e4ssw\u00f6rd",
       "salt": "c2FsdHktc2FsdC0xNmJ5dA==",
       "expectedRoot": "xx4Zo7GZS5aPs7Pn+XsdpA8/KX6dKkWcVIg9ii2MYxY=",
       "expectedKek": "DUZLG8UDmfLmmCjlZXxJA1nKnY8sqkOIt3ojHA0QALA=",
@@ -109,5 +109,20 @@
     "nonce": "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZm",
     "plaintext": "Y2Fub25pY2FsIGNvbGxhYm9yYXRpb24gdXBkYXRl",
     "frame": "S1VUUENGMQAAAQEAAAAAAwAAAAcRERERERFBEYERERERERERIiIiIiIiQiKCIiIiIiIiIgAAAAAAAAAqAAAAAAAAAAlmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmYAAAAuoKuvW6wpLTH1qDP5joLPs4LEX62ok1NprsXk0AzLr3YXaYrI5Z82Sr0UKdA7P2u97ii7HPqUpSoof0veUpm4JSd30JuvJN8hE+4PeEicNsmFPp643pX6spL6h0LXYCQnpJoemjjioGadbHD8jwc="
+  },
+  "localState": {
+    "key": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+    "sessionFork": {
+      "profile": "web-drive",
+      "nonce": "ISEhISEhISEhISEhISEhISEhISEhISEh",
+      "plaintext": "eyJ2IjoxLCJ1c2VySWQiOiIzMzMzMzMzMy0zMzMzLTQzMzMtODMzMy0zMzMzMzMzMzMzMzMiLCJtYXN0ZXJLZXkiOiJBQUVDQXdRRkJnY0lDUW9MREEwT0R4QVJFaE1VRlJZWEdCa2FHeHdkSGg4PSIsInByaXZhdGVLZXkiOiJIeDRkSEJzYUdSZ1hGaFVVRXhJUkVBOE9EUXdMQ2drSUJ3WUZCQU1DQVFBPSIsInB1YmxpY0tleSI6ImNIVmliR2xqTFd0bGVRPT0ifQ==",
+      "envelope": "S1VUUExTMQAAAQIAAAl3ZWItZHJpdmUhISEhISEhISEhISEhISEhISEhISEhISEAAADdX10ORqt+Bf3850glRXofW+HJNmCwdU/+SZ/DmpyJVco89Ev0CvSMRHZpcQZ6OOqJkG0QLFgN/FZPXbs4/sGA/X0YK+o8P8cqtUw6iqV1hK+PB1Euidr4SJ9E5HLrvuQNZ9p4hD1zit8qwOE4G/4JrPj54OyegPLQC3MOMvhLVaL1HYj6rGKtuMQTQxNziHDZ55xOTV4JKVc6IIITixw8CqPuQUmsGCW21Z+COA82ridIvI6rZGLg6rg7qZ35jvyjwdwntEAaeZqHIsBIAqViJVImWTzkPQo/sI0+Sr8="
+    },
+    "webSession": {
+      "profile": "web-chat:44444444-4444-4444-8444-444444444444",
+      "nonce": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJC",
+      "plaintext": "eyJ2IjoxLCJtYXN0ZXJLZXkiOiJBQUVDQXdRRkJnY0lDUW9MREEwT0R4QVJFaE1VRlJZWEdCa2FHeHdkSGg4PSJ9",
+      "envelope": "S1VUUExTMQAAAQMAAC13ZWItY2hhdDo0NDQ0NDQ0NC00NDQ0LTQ0NDQtODQ0NC00NDQ0NDQ0NDQ0NDRCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkIAAABSpyIVcAkGNFpHjAECUlrRqJ51rEaF0gE7zuxLrXTDDDYc6f9dr596PB7sHEhPSZbmPBWy28ImEdVZyt1ENRYWEfDDD9xMszSmlV9BH2+WxStwXQ=="
+    }
   }
 }

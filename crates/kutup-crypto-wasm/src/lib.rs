@@ -21,6 +21,7 @@ use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePu
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::envelope::{self, CollabFrameContextV1};
 use kutup_crypto::kdf::{self, AccountProtectionParameters, AccountProtectionSuiteId};
+use kutup_crypto::local_state::{self, LocalStatePurpose};
 use serde::Serialize;
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
@@ -124,6 +125,50 @@ fn chat_backup_context(
         backup_incarnation_id: *backup.as_bytes(),
         protection_domain: ChatBackupProtectionDomainV1::StandardChat,
     })
+}
+
+/// The local-state purposes a web page may use. `CliSession` stays CLI-only.
+fn web_local_state_purpose(purpose: u8) -> Result<LocalStatePurpose, JsValue> {
+    match LocalStatePurpose::try_from(purpose).map_err(|error| js_error(&error.to_string()))? {
+        p @ (LocalStatePurpose::SessionFork | LocalStatePurpose::WebSession) => Ok(p),
+        LocalStatePurpose::CliSession => Err(js_error(
+            "local-state purpose is not available to web clients",
+        )),
+    }
+}
+
+/// Seal a session-fork payload (purpose 2) or a persisted web session (3).
+/// Returns the canonical base64 envelope; the nonce is random.
+#[wasm_bindgen(js_name = sealLocalState)]
+pub fn seal_local_state(
+    plaintext_base64: &str,
+    key_base64: &str,
+    purpose: u8,
+    profile: &str,
+) -> Result<String, JsValue> {
+    let purpose = web_local_state_purpose(purpose)?;
+    let plaintext = decode_canonical_base64(plaintext_base64, "local-state plaintext")?;
+    let key = decode_canonical_base64(key_base64, "local-state key")?;
+    let envelope = local_state::seal(&plaintext, &key, purpose, profile)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(envelope))
+}
+
+/// Open an envelope sealed by `sealLocalState` (or the Rust equivalent);
+/// fails closed on a wrong key, purpose or profile.
+#[wasm_bindgen(js_name = openLocalState)]
+pub fn open_local_state(
+    envelope_base64: &str,
+    key_base64: &str,
+    purpose: u8,
+    profile: &str,
+) -> Result<String, JsValue> {
+    let purpose = web_local_state_purpose(purpose)?;
+    let envelope = decode_canonical_base64(envelope_base64, "local-state envelope")?;
+    let key = decode_canonical_base64(key_base64, "local-state key")?;
+    let plaintext = local_state::open(&envelope, &key, purpose, profile)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(plaintext))
 }
 
 #[wasm_bindgen(js_name = createChatBackupSignerAuthorization)]

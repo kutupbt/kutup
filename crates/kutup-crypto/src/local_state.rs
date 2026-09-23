@@ -1,4 +1,15 @@
-//! Typed encryption for client-local state such as the CLI session cache.
+//! Typed encryption for client-local state and short-lived client hand-offs:
+//!
+//! - `CliSession` — the CLI's session cache at rest (profile = CLI profile).
+//! - `SessionFork` — the key payload the account web app hands a child app
+//!   (drive, chat) during a session fork. The 32-byte key travels only in the
+//!   URL fragment; the server stores only this envelope, once, for 60 s.
+//!   Profile = the child client type (`web-drive`, `web-chat`), so a payload
+//!   minted for one app does not open as another's.
+//! - `WebSession` — a web app's persisted session keys in `localStorage`,
+//!   sealed under a per-session key only the server holds. Profile =
+//!   `<client type>:<session id>`, so a blob cannot be replayed into another
+//!   session even on the same origin.
 //!
 //! This is not a federated protocol format, but it still uses the project-wide
 //! XChaCha20-Poly1305 palette and authenticates its suite, purpose, profile and
@@ -47,6 +58,8 @@ impl TryFrom<u16> for LocalStateSuiteId {
 #[repr(u8)]
 pub enum LocalStatePurpose {
     CliSession = 1,
+    SessionFork = 2,
+    WebSession = 3,
 }
 
 impl LocalStatePurpose {
@@ -61,6 +74,8 @@ impl TryFrom<u8> for LocalStatePurpose {
     fn try_from(value: u8) -> Result<Self> {
         match value {
             1 => Ok(Self::CliSession),
+            2 => Ok(Self::SessionFork),
+            3 => Ok(Self::WebSession),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown local-state purpose {value}"
             ))),
