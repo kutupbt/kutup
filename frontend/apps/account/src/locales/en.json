@@ -1,0 +1,9 @@
+{
+  "app": {
+    "title": "Kutup Account"
+  },
+  "notFound": {
+    "title": "Page not found",
+    "description": "The address may be mistyped, or the page may have moved."
+  }
+}

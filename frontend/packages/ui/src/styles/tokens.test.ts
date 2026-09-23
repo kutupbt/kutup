@@ -8,7 +8,7 @@ function block(selector: string): Set<string> {
   const start = css.indexOf(`${selector} {`)
   const end = css.indexOf('\n}', start)
   const body = css.slice(start, end)
-  return new Set([...body.matchAll(/^\s*(--[a-z0-9-]+):/gm)].map((m) => m[1]!))
+  return new Set([...body.matchAll(/^\s*(--[a-z0-9-]+):/gm)].map((m) => m[1]))
 }
 
 // Theme-independent by design: the chrome keeps one palette in both themes,

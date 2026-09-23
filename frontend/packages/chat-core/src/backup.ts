@@ -19,7 +19,6 @@ import {
   replaceRestoredRecords,
 } from './backup-store'
 import type {
-  BackupLocalState as LocalState,
   BackupOutboxEntry as OutboxEntry,
   StoredBackupMedia,
   StoredBackupRecord,

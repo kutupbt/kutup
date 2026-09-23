@@ -10,7 +10,7 @@
     "build:chat-wasm": "bash ../scripts/build-chat-wasm.sh",
     "build:wasm": "pnpm run build:crypto-wasm && pnpm run build:chat-wasm",
     "test:crypto-wasm": "node ../scripts/test-crypto-wasm.mjs",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "lint": "eslint .",
     "build": "pnpm -r --filter './apps/*' run build",
@@ -32,7 +32,13 @@
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "@eslint/js": "^9.17.0",
+    "eslint": "^9.17.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.16",
+    "globals": "^15.14.0",
+    "typescript-eslint": "^8.18.2"
   },
   "pnpm": {
     "overrides": {

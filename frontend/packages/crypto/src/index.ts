@@ -7,7 +7,6 @@ import {
   generateAccountProtectionSalt,
 } from './kdf'
 import { fromBase64, toBase64 } from './base64'
-import { generateKey } from './symmetric'
 import {
   ACCOUNT_ENVELOPE_PURPOSE,
   openAccountEnvelope,

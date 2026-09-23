@@ -1,0 +1,9 @@
+{
+  "app": {
+    "title": "Kutup Sohbet"
+  },
+  "notFound": {
+    "title": "Sayfa bulunamadı",
+    "description": "Adres yanlış yazılmış ya da sayfa taşınmış olabilir."
+  }
+}

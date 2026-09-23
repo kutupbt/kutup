@@ -100,7 +100,7 @@ export function requestSession(timeoutMs = 500): Promise<SessionPayload | null> 
 export function broadcastLogout(): void {
   const ch = getChannel()
   if (!ch) return
-  try { ch.postMessage({ type: 'logout' } satisfies Message) } catch {}
+  try { ch.postMessage({ type: 'logout' } satisfies Message) } catch { /* channel closed; nothing to notify */ }
 }
 
 /** Mount a listener that fires when another tab signals a logout. */
@@ -120,7 +120,7 @@ export function startLogoutListener(onLogout: () => void): () => void {
 export function broadcastColor(color: string | null): void {
   const ch = getChannel()
   if (!ch) return
-  try { ch.postMessage({ type: 'color-update', color } satisfies Message) } catch {}
+  try { ch.postMessage({ type: 'color-update', color } satisfies Message) } catch { /* channel closed; nothing to notify */ }
 }
 
 /** Mount a listener that fires when another tab updates its presence color. */

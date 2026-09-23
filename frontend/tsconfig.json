@@ -15,5 +15,5 @@
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true
   },
-  "include": ["packages/*/src", "apps/*/src", "vitest.setup.ts"]
+  "include": ["packages/*/src", "packages/config", "apps/*/src", "apps/*/vite.config.ts", "vitest.setup.ts", "vitest.config.ts"]
 }

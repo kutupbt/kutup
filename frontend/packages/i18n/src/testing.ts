@@ -48,7 +48,7 @@ export function checkLocales(opts: { en: Messages; tr: Messages; sourceDirs: str
       if (!/\.tsx?$/.test(entry) || /\.test\.tsx?$/.test(entry)) continue
       const source = readFileSync(path, 'utf8')
       for (const match of source.matchAll(/(?:\bt\(|\bkey: |\bi18nKey=\{?)['"]([A-Za-z0-9_.]+)['"]/g)) {
-        const key = match[1]!
+        const key = match[1]
         const found = en.has(key) || en.has(`${key}_one`) || en.has(`${key}_other`)
         if (!found) missing.push(`${entry}: ${key}`)
       }

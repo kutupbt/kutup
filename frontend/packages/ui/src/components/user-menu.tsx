@@ -15,7 +15,7 @@ import { ThemeToggle } from './theme-toggle'
 
 function initials(name: string): string {
   const parts = name.trim().split(/[\s@._-]+/).filter(Boolean)
-  const letters = parts.slice(0, 2).map((p) => p[0]!.toLocaleUpperCase())
+  const letters = parts.slice(0, 2).map((p) => p[0].toLocaleUpperCase())
   return letters.join('') || '?'
 }
 

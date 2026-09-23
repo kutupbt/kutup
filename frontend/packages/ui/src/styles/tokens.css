@@ -23,6 +23,10 @@
 
 @import 'tailwindcss';
 
+/* Scan the shared components too: apps reach this package through
+   node_modules, which Tailwind's automatic detection skips. */
+@source '../';
+
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
