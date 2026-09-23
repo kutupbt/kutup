@@ -185,9 +185,18 @@ importers:
 
   apps/drive:
     dependencies:
+      '@hookform/resolvers':
+        specifier: ^5.2.2
+        version: 5.9.1(@standard-schema/spec@1.1.0)(react-hook-form@7.88.0(react@18.3.1))(zod@4.6.5)
+      '@kutup/collab':
+        specifier: workspace:*
+        version: link:../../packages/collab
       '@kutup/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
+      '@kutup/files':
+        specifier: workspace:*
+        version: link:../../packages/files
       '@kutup/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
@@ -200,6 +209,9 @@ importers:
       '@tanstack/react-query':
         specifier: ^5
         version: 5.103.2(react@18.3.1)
+      axios:
+        specifier: ^1.18.0
+        version: 1.18.0
       lucide-react:
         specifier: ^1.8.0
         version: 1.47.0(react@18.3.1)
@@ -212,6 +224,9 @@ importers:
       react-dom:
         specifier: ^18.3.1
         version: 18.3.1(react@18.3.1)
+      react-hook-form:
+        specifier: ^7.73.1
+        version: 7.88.0(react@18.3.1)
       react-i18next:
         specifier: ^17.0.4
         version: 17.0.15(i18next@26.4.2(typescript@5.9.3))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)
@@ -221,6 +236,9 @@ importers:
       sonner:
         specifier: ^2.0.7
         version: 2.0.8(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      zod:
+        specifier: ^4.3.6
+        version: 4.6.5
     devDependencies:
       '@kutup/config':
         specifier: workspace:*

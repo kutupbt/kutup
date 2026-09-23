@@ -51,6 +51,29 @@ export async function refreshAccessToken(): Promise<RefreshResult> {
   return run()
 }
 
+/** Seconds until a JWT's `exp`; -1 when unreadable. */
+function secondsLeft(token: string): number {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]!.replace(/-/g, '+').replace(/_/g, '/'))) as { exp?: number }
+    return typeof payload.exp === 'number' ? payload.exp - Date.now() / 1000 : -1
+  } catch {
+    return -1
+  }
+}
+
+/**
+ * The access token for a long-running request (an upload, a download, a
+ * WebSocket): the current one, or a freshly rotated one when it has less than
+ * a minute left. Axios requests refresh on 401 by themselves; these do not.
+ */
+export async function freshAccessToken(): Promise<string> {
+  const token = getAccessToken()
+  if (token && secondsLeft(token) > 60) return token
+  const { accessToken } = await refreshAccessToken()
+  setAccessToken(accessToken)
+  return accessToken
+}
+
 // What the app does when the server-side session is gone (refresh failed).
 // account. shows its login page; drive. and chat. request a new session fork
 // from account. Registered once at app boot.

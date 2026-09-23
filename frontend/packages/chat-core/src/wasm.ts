@@ -13,7 +13,7 @@ export function loadChatWasm(): Promise<ChatWasmModule> {
   if (!modulePromise) {
     modulePromise = (async () => {
       const module = (await import(/* @vite-ignore */ MODULE_URL)) as ChatWasmModule
-      await module.default(WASM_URL)
+      await module.default({ module_or_path: WASM_URL })
       return module
     })()
   }

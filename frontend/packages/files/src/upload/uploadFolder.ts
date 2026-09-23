@@ -41,8 +41,8 @@ export interface UploadFolderOptions {
   /** User's master key — needed to wrap new collection keys. */
   masterKey: Uint8Array
   ownerUserId: string
-  /** Bearer JWT for the tus calls. */
-  accessToken: string
+  /** Bearer JWT for the tus calls, or a function returning a current one. */
+  accessToken: string | (() => Promise<string>)
   onProgress?: (filesDone: number, filesTotal: number, currentName: string) => void
   signal?: AbortSignal
 }

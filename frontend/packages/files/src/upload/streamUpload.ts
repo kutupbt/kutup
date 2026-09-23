@@ -34,7 +34,12 @@ import { PLAIN_CHUNK } from '@kutup/crypto/streamEncryptor'
 export interface StreamUploadOptions {
   file: File
   collection: { id: string; keyEpoch: number; collectionKey: Uint8Array }
-  accessToken: string
+  /**
+   * The bearer token, or a function returning a current one. Uploads can
+   * outlive a 15-minute access token, so apps pass a function
+   * (`freshAccessToken`) and every request asks it anew.
+   */
+  accessToken: string | (() => Promise<string>)
   /** Plaintext bytes uploaded so far, plaintext total. */
   onProgress?: (plainSent: number, plainTotal: number) => void
   /** Cancel an in-flight upload. Calls tus DELETE under the hood. */
@@ -129,8 +134,17 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<string> {
       // out-of-scope.
       storeFingerprintForResuming: false,
       removeFingerprintOnSuccess: true,
-      headers: {
-        Authorization: `Bearer ${opts.accessToken}`,
+      async onBeforeRequest(req) {
+        const token = typeof opts.accessToken === 'function' ? await opts.accessToken() : opts.accessToken
+        req.setHeader('Authorization', `Bearer ${token}`)
+      },
+      // An expired token is recoverable: the next attempt's onBeforeRequest
+      // fetches a fresh one. Other client errors are not retried.
+      onShouldRetry(err, _attempt, options) {
+        const status = err.originalResponse?.getStatus() ?? 0
+        if (status === 401) return true
+        if (status >= 400 && status < 500 && status !== 409 && status !== 423) return false
+        return (options.retryDelays?.length ?? 0) > 0
       },
       metadata: {
         fileId:            record.fileId,

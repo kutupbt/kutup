@@ -5,5 +5,243 @@
   "notFound": {
     "title": "Page not found",
     "description": "The address may be mistyped, or the page may have moved."
+  },
+  "boot": {
+    "opening": "Opening your Drive…",
+    "failedTitle": "Drive could not open",
+    "failedDescription": "Kutup could not be reached, or signing in through your account did not finish. Check your connection and try again."
+  },
+  "nav": {
+    "myFiles": "My files",
+    "shared": "Shared with me",
+    "trash": "Trash"
+  },
+  "storage": {
+    "label": "Storage used",
+    "usage": "{{used}} of {{total}} used"
+  },
+  "explorer": {
+    "sortBy": "Sort by",
+    "fields": {
+      "modified": "Modified",
+      "name": "Name",
+      "size": "Size",
+      "type": "Type"
+    },
+    "dir": {
+      "newest": "Newest first",
+      "oldest": "Oldest first",
+      "az": "A to Z",
+      "za": "Z to A",
+      "largest": "Largest first",
+      "smallest": "Smallest first"
+    },
+    "foldersFirst": "Folders first",
+    "filter": "Type",
+    "filterCount_one": "{{count}} type",
+    "filterCount_other": "{{count}} types",
+    "showOnly": "Show only",
+    "clearFilter": "Show everything",
+    "view": "View",
+    "views": {
+      "list": "List",
+      "grid": "Grid"
+    },
+    "actions": "Actions",
+    "actionsFor": "Actions for {{name}}",
+    "kinds": {
+      "folder": "Folders",
+      "note": "Notes",
+      "document": "Documents",
+      "spreadsheet": "Spreadsheets",
+      "presentation": "Presentations",
+      "whiteboard": "Whiteboards",
+      "pdf": "PDFs",
+      "image": "Images",
+      "video": "Videos",
+      "audio": "Audio",
+      "code": "Code",
+      "archive": "Archives",
+      "other": "Other files"
+    }
+  },
+  "newMenu": {
+    "new": "New",
+    "folder": "Folder",
+    "folderTitle": "New folder",
+    "untitledFolder": "Untitled folder",
+    "create": "Create",
+    "uploadFiles": "Upload files",
+    "uploadFolder": "Upload folder",
+    "createFailed": "The document could not be created.",
+    "documents": {
+      "note": "Note",
+      "document": "Document",
+      "spreadsheet": "Spreadsheet",
+      "presentation": "Presentation",
+      "whiteboard": "Whiteboard"
+    },
+    "untitled": {
+      "note": "Untitled note",
+      "document": "Untitled document",
+      "spreadsheet": "Untitled spreadsheet",
+      "presentation": "Untitled presentation",
+      "whiteboard": "Untitled whiteboard"
+    }
+  },
+  "drive": {
+    "encrypted": "Encrypted item",
+    "encryptedFolderTitle": "This folder cannot be opened",
+    "encryptedFolder": "Its key did not verify on this device. It may be damaged, or shared by someone whose keys changed.",
+    "folderMissingTitle": "Folder not found",
+    "folderMissing": "It may have been moved to trash, or you no longer have access.",
+    "loadFailed": "Your files could not be loaded.",
+    "emptyTitle": "This folder is empty",
+    "emptyDescription": "Drop files here, or use New to upload or create something.",
+    "emptyReadOnly": "Nothing has been shared in this folder yet.",
+    "noMatchTitle": "Nothing of that type here",
+    "noMatchDescription": "Change the type filter to see everything.",
+    "selection_one": "{{count}} selected",
+    "selection_other": "{{count}} selected",
+    "clearSelection": "Clear selection",
+    "actions": {
+      "open": "Open",
+      "download": "Download",
+      "downloadZip": "Download as ZIP",
+      "rename": "Rename",
+      "color": "Colour",
+      "share": "Share",
+      "publicLink": "Get public link",
+      "trash": "Move to trash"
+    },
+    "movedToTrash_one": "Moved to trash",
+    "movedToTrash_other": "{{count}} items moved to trash",
+    "undo": "Undo",
+    "undoFailed": "Could not restore; open Trash to try again.",
+    "trashFailed": "Could not move to trash.",
+    "zipping": "Preparing ZIP…",
+    "zipProgress": "Adding files: {{done}} of {{total}}",
+    "zipEmpty": "This folder has no files to download.",
+    "zipTooLarge": "This folder is over 1 GB. Use Chrome or Edge to download it as a ZIP, or download files one by one.",
+    "downloadFailed": "The download failed.",
+    "linkFailed": "The link could not be created.",
+    "dropHere": "Drop to upload into {{name}}"
+  },
+  "dialogs": {
+    "name": {
+      "label": "Name",
+      "required": "Enter a name.",
+      "tooLong": "Use at most {{max}} characters.",
+      "slash": "Names cannot contain / or \\.",
+      "taken": "Something here already has that name.",
+      "failed": "The name could not be saved."
+    },
+    "rename": {
+      "title": "Rename",
+      "submit": "Rename"
+    },
+    "color": {
+      "title": "Folder colour",
+      "default": "Default",
+      "ice": "Ice",
+      "ocean": "Ocean",
+      "teal": "Teal",
+      "amber": "Amber",
+      "red": "Red",
+      "failed": "The colour could not be saved."
+    },
+    "share": {
+      "title": "Share “{{name}}”",
+      "description": "People you share with get their own sealed copy of this folder's key. Subfolders are shared separately.",
+      "recipient": "Email or Kutup address",
+      "recipientHint": "An email for someone on this server, or user@other-server.",
+      "canUpload": "Can add files",
+      "canUploadHint": "New files count against their own storage.",
+      "quota": "Upload limit (GiB)",
+      "quotaHint": "Optional. Leave empty for no limit beyond their storage.",
+      "quotaInvalid": "Enter a size above zero.",
+      "canDelete": "Can delete files they added",
+      "canDeleteHint": "They never delete other people's files.",
+      "note": "Sharing again with the same person changes their permissions.",
+      "submit": "Share",
+      "shared": "Shared with {{account}}",
+      "notFound": "No one with that address. For another Kutup server use user@server.",
+      "failed": "The folder could not be shared."
+    },
+    "publicLink": {
+      "title": "Public link",
+      "description": "Anyone with this link can see and download the files directly in this folder, without signing in.",
+      "warning": "The key is part of the link and Kutup does not keep a copy. Save it now; share it only with people who should see these files."
+    },
+    "invite": {
+      "title": "Invite link",
+      "description": "{{account}} is on another Kutup server. Send them this link; they add it under Shared with me.",
+      "warning": "The link works once and only for {{account}}'s account. It is not shown again."
+    }
+  },
+  "shared": {
+    "emptyTitle": "Nothing shared with you yet",
+    "emptyDescription": "Folders other people share with you appear here, including ones from other Kutup servers.",
+    "from": "From {{account}}",
+    "addInvite": "Add from invite link",
+    "invite": {
+      "title": "Add a shared folder",
+      "description": "Paste the invite link someone on another Kutup server sent you.",
+      "link": "Invite link",
+      "invalid": "That is not a Kutup invite link.",
+      "submit": "Add",
+      "added": "Shared folder added",
+      "notFound": "This invite does not exist or was already used.",
+      "notForYou": "This invite is for a different account.",
+      "failed": "The invite could not be added."
+    },
+    "leave": "Leave",
+    "leaveTitle": "Leave this shared folder?",
+    "leaveDescription": "“{{name}}” from {{account}} disappears from your Drive. They can invite you again.",
+    "leaveFailed": "Could not leave the folder."
+  },
+  "trash": {
+    "empty": "Empty trash",
+    "emptyTitle": "Trash is empty",
+    "emptyDescription": "Things you delete stay here for a while before they are removed for good.",
+    "retention": "Items in trash still count against your storage and are removed permanently after the server's retention period.",
+    "restore": "Restore",
+    "restored": "Restored “{{name}}”",
+    "restoreFailed": "Could not restore.",
+    "restoreParentFirst": "Its folder is also in trash. Restore the folder first.",
+    "deleteForever": "Delete forever",
+    "deleteForeverTitle": "Delete forever?",
+    "deleteForeverDescription": "“{{name}}” and everything in it are removed now.",
+    "cannotUndo": "This cannot be undone.",
+    "deleteFailed": "Could not delete.",
+    "emptyConfirmTitle": "Empty trash?",
+    "emptyConfirmDescription_one": "{{count}} item is removed for good.",
+    "emptyConfirmDescription_other": "{{count}} items are removed for good.",
+    "withFiles_one": "{{count}} file inside",
+    "withFiles_other": "{{count}} files inside"
+  },
+  "uploads": {
+    "title": "Uploads",
+    "uploading_one": "Uploading {{count}} item",
+    "uploading_other": "Uploading {{count}} items",
+    "allDone": "Uploads complete",
+    "someFailed_one": "{{count}} upload failed",
+    "someFailed_other": "{{count}} uploads failed",
+    "waiting": "Waiting…",
+    "progress": "{{sent}} of {{total}}",
+    "intoFolder": "In {{folder}}",
+    "done": "Uploaded",
+    "cancelled": "Cancelled",
+    "cancel": "Cancel {{name}}",
+    "cancelAll": "Cancel all",
+    "collapse": "Collapse",
+    "expand": "Expand",
+    "failure": {
+      "quota": "Your storage is full.",
+      "shareQuota": "This shared folder's upload limit is reached.",
+      "forbidden": "You cannot add files here.",
+      "network": "The connection dropped.",
+      "other": "The upload failed."
+    }
   }
 }

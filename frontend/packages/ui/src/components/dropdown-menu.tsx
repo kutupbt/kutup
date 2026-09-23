@@ -1,4 +1,5 @@
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
+import { Check, Circle } from 'lucide-react'
 import { forwardRef, type ComponentPropsWithoutRef, type ElementRef } from 'react'
 import { cn } from '../lib/cn'
 
@@ -60,3 +61,45 @@ export function DropdownMenuLabel({
     />
   )
 }
+
+export const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup
+export const DropdownMenuGroup = DropdownMenuPrimitive.Group
+
+const itemBase =
+  'relative flex cursor-default select-none items-center gap-2 rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none ' +
+  'focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 ' +
+  '[&_svg]:size-4 [&_svg]:shrink-0'
+
+/** A menu item that toggles (filters, "folders first"); the check says its state. */
+export const DropdownMenuCheckboxItem = forwardRef<
+  ElementRef<typeof DropdownMenuPrimitive.CheckboxItem>,
+  ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.CheckboxItem>
+>(function DropdownMenuCheckboxItem({ className, children, ...props }, ref) {
+  return (
+    <DropdownMenuPrimitive.CheckboxItem ref={ref} className={cn(itemBase, className)} {...props}>
+      <span className="absolute left-2 flex size-4 items-center justify-center">
+        <DropdownMenuPrimitive.ItemIndicator>
+          <Check />
+        </DropdownMenuPrimitive.ItemIndicator>
+      </span>
+      {children}
+    </DropdownMenuPrimitive.CheckboxItem>
+  )
+})
+
+/** One choice of a DropdownMenuRadioGroup (the sort field). */
+export const DropdownMenuRadioItem = forwardRef<
+  ElementRef<typeof DropdownMenuPrimitive.RadioItem>,
+  ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.RadioItem>
+>(function DropdownMenuRadioItem({ className, children, ...props }, ref) {
+  return (
+    <DropdownMenuPrimitive.RadioItem ref={ref} className={cn(itemBase, className)} {...props}>
+      <span className="absolute left-2 flex size-4 items-center justify-center">
+        <DropdownMenuPrimitive.ItemIndicator>
+          <Circle className="size-2 fill-current" />
+        </DropdownMenuPrimitive.ItemIndicator>
+      </span>
+      {children}
+    </DropdownMenuPrimitive.RadioItem>
+  )
+})

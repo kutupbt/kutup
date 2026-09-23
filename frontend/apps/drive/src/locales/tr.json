@@ -5,5 +5,243 @@
   "notFound": {
     "title": "Sayfa bulunamadı",
     "description": "Adres yanlış yazılmış ya da sayfa taşınmış olabilir."
+  },
+  "boot": {
+    "opening": "Drive'ınız açılıyor…",
+    "failedTitle": "Drive açılamadı",
+    "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden giriş tamamlanamadı. Bağlantınızı kontrol edip yeniden deneyin."
+  },
+  "nav": {
+    "myFiles": "Dosyalarım",
+    "shared": "Benimle paylaşılanlar",
+    "trash": "Çöp kutusu"
+  },
+  "storage": {
+    "label": "Kullanılan alan",
+    "usage": "{{total}} alanın {{used}} kadarı kullanılıyor"
+  },
+  "explorer": {
+    "sortBy": "Sırala",
+    "fields": {
+      "modified": "Değiştirilme",
+      "name": "Ad",
+      "size": "Boyut",
+      "type": "Tür"
+    },
+    "dir": {
+      "newest": "En yeni önce",
+      "oldest": "En eski önce",
+      "az": "A'dan Z'ye",
+      "za": "Z'den A'ya",
+      "largest": "En büyük önce",
+      "smallest": "En küçük önce"
+    },
+    "foldersFirst": "Önce klasörler",
+    "filter": "Tür",
+    "filterCount_one": "{{count}} tür",
+    "filterCount_other": "{{count}} tür",
+    "showOnly": "Yalnızca göster",
+    "clearFilter": "Tümünü göster",
+    "view": "Görünüm",
+    "views": {
+      "list": "Liste",
+      "grid": "Izgara"
+    },
+    "actions": "İşlemler",
+    "actionsFor": "{{name}} için işlemler",
+    "kinds": {
+      "folder": "Klasörler",
+      "note": "Notlar",
+      "document": "Belgeler",
+      "spreadsheet": "Tablolar",
+      "presentation": "Sunumlar",
+      "whiteboard": "Beyaz tahtalar",
+      "pdf": "PDF'ler",
+      "image": "Görseller",
+      "video": "Videolar",
+      "audio": "Ses",
+      "code": "Kod",
+      "archive": "Arşivler",
+      "other": "Diğer dosyalar"
+    }
+  },
+  "newMenu": {
+    "new": "Yeni",
+    "folder": "Klasör",
+    "folderTitle": "Yeni klasör",
+    "untitledFolder": "Adsız klasör",
+    "create": "Oluştur",
+    "uploadFiles": "Dosya yükle",
+    "uploadFolder": "Klasör yükle",
+    "createFailed": "Belge oluşturulamadı.",
+    "documents": {
+      "note": "Not",
+      "document": "Belge",
+      "spreadsheet": "Tablo",
+      "presentation": "Sunum",
+      "whiteboard": "Beyaz tahta"
+    },
+    "untitled": {
+      "note": "Adsız not",
+      "document": "Adsız belge",
+      "spreadsheet": "Adsız tablo",
+      "presentation": "Adsız sunum",
+      "whiteboard": "Adsız beyaz tahta"
+    }
+  },
+  "drive": {
+    "encrypted": "Şifreli öğe",
+    "encryptedFolderTitle": "Bu klasör açılamıyor",
+    "encryptedFolder": "Anahtarı bu cihazda doğrulanamadı. Bozulmuş olabilir ya da anahtarları değişmiş biri tarafından paylaşılmış olabilir.",
+    "folderMissingTitle": "Klasör bulunamadı",
+    "folderMissing": "Çöp kutusuna taşınmış olabilir ya da artık erişiminiz yok.",
+    "loadFailed": "Dosyalarınız yüklenemedi.",
+    "emptyTitle": "Bu klasör boş",
+    "emptyDescription": "Dosyaları buraya bırakın ya da yüklemek veya oluşturmak için Yeni'yi kullanın.",
+    "emptyReadOnly": "Bu klasörde henüz bir şey paylaşılmadı.",
+    "noMatchTitle": "Burada bu türde bir şey yok",
+    "noMatchDescription": "Tümünü görmek için tür filtresini değiştirin.",
+    "selection_one": "{{count}} seçili",
+    "selection_other": "{{count}} seçili",
+    "clearSelection": "Seçimi temizle",
+    "actions": {
+      "open": "Aç",
+      "download": "İndir",
+      "downloadZip": "ZIP olarak indir",
+      "rename": "Yeniden adlandır",
+      "color": "Renk",
+      "share": "Paylaş",
+      "publicLink": "Herkese açık bağlantı al",
+      "trash": "Çöp kutusuna taşı"
+    },
+    "movedToTrash_one": "Çöp kutusuna taşındı",
+    "movedToTrash_other": "{{count}} öğe çöp kutusuna taşındı",
+    "undo": "Geri al",
+    "undoFailed": "Geri yüklenemedi; yeniden denemek için Çöp kutusunu açın.",
+    "trashFailed": "Çöp kutusuna taşınamadı.",
+    "zipping": "ZIP hazırlanıyor…",
+    "zipProgress": "Dosyalar ekleniyor: {{total}} dosyadan {{done}}",
+    "zipEmpty": "Bu klasörde indirilecek dosya yok.",
+    "zipTooLarge": "Bu klasör 1 GB'tan büyük. ZIP olarak indirmek için Chrome ya da Edge kullanın ya da dosyaları tek tek indirin.",
+    "downloadFailed": "İndirme başarısız oldu.",
+    "linkFailed": "Bağlantı oluşturulamadı.",
+    "dropHere": "{{name}} klasörüne yüklemek için bırakın"
+  },
+  "dialogs": {
+    "name": {
+      "label": "Ad",
+      "required": "Bir ad girin.",
+      "tooLong": "En fazla {{max}} karakter kullanın.",
+      "slash": "Adlarda / ya da \\ bulunamaz.",
+      "taken": "Burada bu adda bir şey zaten var.",
+      "failed": "Ad kaydedilemedi."
+    },
+    "rename": {
+      "title": "Yeniden adlandır",
+      "submit": "Yeniden adlandır"
+    },
+    "color": {
+      "title": "Klasör rengi",
+      "default": "Varsayılan",
+      "ice": "Buz",
+      "ocean": "Okyanus",
+      "teal": "Deniz yeşili",
+      "amber": "Kehribar",
+      "red": "Kırmızı",
+      "failed": "Renk kaydedilemedi."
+    },
+    "share": {
+      "title": "“{{name}}” paylaş",
+      "description": "Paylaştığınız kişiler bu klasörün anahtarının kendilerine mühürlenmiş bir kopyasını alır. Alt klasörler ayrıca paylaşılır.",
+      "recipient": "E-posta ya da Kutup adresi",
+      "recipientHint": "Bu sunucudaki biri için e-posta, başka sunucudaki biri için kullanici@sunucu.",
+      "canUpload": "Dosya ekleyebilir",
+      "canUploadHint": "Yeni dosyalar kendi depolama alanlarından düşer.",
+      "quota": "Yükleme sınırı (GiB)",
+      "quotaHint": "İsteğe bağlı. Depolama alanları dışında sınır istemiyorsanız boş bırakın.",
+      "quotaInvalid": "Sıfırdan büyük bir boyut girin.",
+      "canDelete": "Eklediği dosyaları silebilir",
+      "canDeleteHint": "Başkalarının dosyalarını asla silemez.",
+      "note": "Aynı kişiyle yeniden paylaşmak izinlerini değiştirir.",
+      "submit": "Paylaş",
+      "shared": "{{account}} ile paylaşıldı",
+      "notFound": "Bu adreste kimse yok. Başka bir Kutup sunucusu için kullanici@sunucu kullanın.",
+      "failed": "Klasör paylaşılamadı."
+    },
+    "publicLink": {
+      "title": "Herkese açık bağlantı",
+      "description": "Bu bağlantıya sahip olan herkes, giriş yapmadan bu klasördeki dosyaları görebilir ve indirebilir.",
+      "warning": "Anahtar bağlantının bir parçasıdır ve Kutup bir kopyasını tutmaz. Şimdi kaydedin; yalnızca bu dosyaları görmesi gereken kişilerle paylaşın."
+    },
+    "invite": {
+      "title": "Davet bağlantısı",
+      "description": "{{account}} başka bir Kutup sunucusunda. Bu bağlantıyı gönderin; Benimle paylaşılanlar altında ekler.",
+      "warning": "Bağlantı bir kez ve yalnızca {{account}} hesabı için çalışır. Yeniden gösterilmez."
+    }
+  },
+  "shared": {
+    "emptyTitle": "Henüz sizinle bir şey paylaşılmadı",
+    "emptyDescription": "Başkalarının sizinle paylaştığı klasörler, diğer Kutup sunucularından gelenler dahil, burada görünür.",
+    "from": "{{account}} tarafından",
+    "addInvite": "Davet bağlantısından ekle",
+    "invite": {
+      "title": "Paylaşılan klasör ekle",
+      "description": "Başka bir Kutup sunucusundaki birinin gönderdiği davet bağlantısını yapıştırın.",
+      "link": "Davet bağlantısı",
+      "invalid": "Bu bir Kutup davet bağlantısı değil.",
+      "submit": "Ekle",
+      "added": "Paylaşılan klasör eklendi",
+      "notFound": "Bu davet yok ya da zaten kullanılmış.",
+      "notForYou": "Bu davet başka bir hesap için.",
+      "failed": "Davet eklenemedi."
+    },
+    "leave": "Ayrıl",
+    "leaveTitle": "Bu paylaşılan klasörden ayrılınsın mı?",
+    "leaveDescription": "{{account}} tarafından paylaşılan “{{name}}” Drive'ınızdan kalkar. Sizi yeniden davet edebilir.",
+    "leaveFailed": "Klasörden ayrılınamadı."
+  },
+  "trash": {
+    "empty": "Çöp kutusunu boşalt",
+    "emptyTitle": "Çöp kutusu boş",
+    "emptyDescription": "Sildiğiniz şeyler kalıcı olarak kaldırılmadan önce bir süre burada durur.",
+    "retention": "Çöp kutusundaki öğeler depolama alanınızdan düşmeye devam eder ve sunucunun saklama süresinden sonra kalıcı olarak kaldırılır.",
+    "restore": "Geri yükle",
+    "restored": "“{{name}}” geri yüklendi",
+    "restoreFailed": "Geri yüklenemedi.",
+    "restoreParentFirst": "Klasörü de çöp kutusunda. Önce klasörü geri yükleyin.",
+    "deleteForever": "Kalıcı olarak sil",
+    "deleteForeverTitle": "Kalıcı olarak silinsin mi?",
+    "deleteForeverDescription": "“{{name}}” ve içindeki her şey şimdi kaldırılır.",
+    "cannotUndo": "Bu geri alınamaz.",
+    "deleteFailed": "Silinemedi.",
+    "emptyConfirmTitle": "Çöp kutusu boşaltılsın mı?",
+    "emptyConfirmDescription_one": "{{count}} öğe kalıcı olarak kaldırılır.",
+    "emptyConfirmDescription_other": "{{count}} öğe kalıcı olarak kaldırılır.",
+    "withFiles_one": "İçinde {{count}} dosya",
+    "withFiles_other": "İçinde {{count}} dosya"
+  },
+  "uploads": {
+    "title": "Yüklemeler",
+    "uploading_one": "{{count}} öğe yükleniyor",
+    "uploading_other": "{{count}} öğe yükleniyor",
+    "allDone": "Yüklemeler tamamlandı",
+    "someFailed_one": "{{count}} yükleme başarısız",
+    "someFailed_other": "{{count}} yükleme başarısız",
+    "waiting": "Bekliyor…",
+    "progress": "{{sent}} / {{total}}",
+    "intoFolder": "{{folder}} içinde",
+    "done": "Yüklendi",
+    "cancelled": "İptal edildi",
+    "cancel": "{{name}} iptal et",
+    "cancelAll": "Tümünü iptal et",
+    "collapse": "Daralt",
+    "expand": "Genişlet",
+    "failure": {
+      "quota": "Depolama alanınız dolu.",
+      "shareQuota": "Bu paylaşılan klasörün yükleme sınırına ulaşıldı.",
+      "forbidden": "Buraya dosya ekleyemezsiniz.",
+      "network": "Bağlantı koptu.",
+      "other": "Yükleme başarısız oldu."
+    }
   }
 }

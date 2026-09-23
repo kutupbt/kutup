@@ -274,7 +274,7 @@ export async function getCryptoWasm(): Promise<CryptoWasmModule> {
   if (!modulePromise) {
     modulePromise = (async () => {
       const module = (await import(/* @vite-ignore */ MODULE_URL)) as CryptoWasmModule
-      await module.default(WASM_URL)
+      await module.default({ module_or_path: WASM_URL })
       return module
     })()
   }
