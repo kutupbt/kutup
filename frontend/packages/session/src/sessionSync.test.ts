@@ -34,3 +34,11 @@ describe('sanitizeNext (open-redirect protection)', () => {
     expect(sanitizeNext('relative/path')).toBeNull()
   })
 })
+
+describe('sanitizeNext — normalisation bypasses', () => {
+  it('rejects backslash and control-character tricks browsers turn into //host', () => {
+    expect(sanitizeNext('/\\evil.com')).toBeNull()
+    expect(sanitizeNext('/\t/evil.com')).toBeNull()
+    expect(sanitizeNext('/\n/evil.com')).toBeNull()
+  })
+})

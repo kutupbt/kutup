@@ -9,6 +9,8 @@
 import { useSyncExternalStore } from 'react'
 
 export interface Session {
+  /** The server-side session (auth_sessions.id) this app origin holds. */
+  sessionId: string
   userId: string
   email: string
   username: string | null

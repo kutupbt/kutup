@@ -10,6 +10,18 @@ const WASM_URL = `/crypto-wasm/kutup_crypto_wasm_bg.wasm?runtime=${RUNTIME_CACHE
 
 export interface CryptoWasmModule {
   default(input?: unknown): Promise<unknown>
+  sealLocalState(
+    plaintextBase64: string,
+    keyBase64: string,
+    purpose: number,
+    profile: string,
+  ): string
+  openLocalState(
+    envelopeBase64: string,
+    keyBase64: string,
+    purpose: number,
+    profile: string,
+  ): string
   deriveAccountProtectionKeys(
     password: string,
     saltBase64: string,

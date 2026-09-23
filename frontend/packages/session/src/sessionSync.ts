@@ -1,33 +1,13 @@
-// Cross-tab session sync via BroadcastChannel.
-// New tabs (e.g. opened via window.open for /file/:cid/:fid) get their own
-// per-tab sessionStorage. To avoid forcing a fresh login in the new tab, an
-// already-authenticated tab broadcasts its sensitive session payload (master
-// key, private key, identity, access token) on the same-origin channel; the
-// new tab requests it on boot and hydrates Redux + sessionStorage.
+// Cross-tab signals within one app origin, via BroadcastChannel: a sign-out
+// in one tab signs out every tab, and a presence-colour change shows up in
+// every open editor without a round-trip.
 //
-// Same-origin only — the master key never leaves the user's browser.
+// Key material never crosses this channel: every tab restores its own keys
+// from the origin's encrypted session blob (see ./persist).
 
 const CHANNEL_NAME = 'kutup-session'
 
-export interface SessionPayload {
-  userId: string
-  email: string | null
-  username: string | null
-  accessToken: string | null
-  isAdmin: boolean
-  storageQuotaBytes: number
-  storageUsedBytes: number
-  totpEnabled: boolean
-  color: string | null
-  currentDeviceId: number | null
-  publicKey: string | null
-  masterKey: number[] | null
-  privateKey: number[] | null
-}
-
 type Message =
-  | { type: 'request-session' }
-  | { type: 'session-share'; payload: SessionPayload }
   | { type: 'logout' }
   | { type: 'color-update'; color: string | null }
 
@@ -37,62 +17,6 @@ function getChannel(): BroadcastChannel | null {
   if (typeof BroadcastChannel === 'undefined') return null
   if (!channel) channel = new BroadcastChannel(CHANNEL_NAME)
   return channel
-}
-
-/** Mount the responder: this tab will reply to any `request-session` with the
- * given snapshot. Returns a cleanup function. */
-export function startSessionResponder(getSnapshot: () => SessionPayload | null): () => void {
-  const ch = getChannel()
-  if (!ch) return () => {}
-  function onMsg(ev: MessageEvent<Message>) {
-    if (ev.data?.type !== 'request-session') return
-    const snap = getSnapshot()
-    if (snap && snap.userId) {
-      ch!.postMessage({ type: 'session-share', payload: snap } satisfies Message)
-    }
-  }
-  ch.addEventListener('message', onMsg)
-  return () => ch.removeEventListener('message', onMsg)
-}
-
-/** Broadcast a fresh snapshot — call after `setAuth` and after token refresh. */
-export function broadcastSession(snapshot: SessionPayload): void {
-  const ch = getChannel()
-  if (!ch) return
-  try {
-    ch.postMessage({ type: 'session-share', payload: snapshot } satisfies Message)
-  } catch {
-    // postMessage can fail if a key happens to be non-cloneable; ignore.
-  }
-}
-
-/** Ask any other tab for its session. Resolves with the payload or null on
- * timeout. */
-export function requestSession(timeoutMs = 500): Promise<SessionPayload | null> {
-  return new Promise((resolve) => {
-    const ch = getChannel()
-    if (!ch) return resolve(null)
-
-    let done = false
-    function onMsg(ev: MessageEvent<Message>) {
-      if (done) return
-      if (ev.data?.type !== 'session-share') return
-      done = true
-      ch!.removeEventListener('message', onMsg)
-      window.clearTimeout(timer)
-      resolve(ev.data.payload)
-    }
-    ch.addEventListener('message', onMsg)
-
-    const timer = window.setTimeout(() => {
-      if (done) return
-      done = true
-      ch.removeEventListener('message', onMsg)
-      resolve(null)
-    }, timeoutMs)
-
-    ch.postMessage({ type: 'request-session' } satisfies Message)
-  })
 }
 
 /** Tell all other tabs of this origin to clear their session — call this at
@@ -139,6 +63,14 @@ export function startColorListener(onColor: (color: string | null) => void): () 
 export function sanitizeNext(next: string | null | undefined): string | null {
   if (!next) return null
   if (!next.startsWith('/')) return null
-  if (next.startsWith('//')) return null   // protocol-relative
+  // Protocol-relative: '//evil.com', and '/\\evil.com', which browsers
+  // normalise to '//evil.com'.
+  if (next.startsWith('//') || next.startsWith('/\\')) return null
+  // Control characters (tabs, newlines) are stripped by URL parsers and can
+  // turn '/\t/evil.com' into '//evil.com'.
+  for (let i = 0; i < next.length; i++) {
+    const code = next.charCodeAt(i)
+    if (code < 0x20 || code === 0x7f) return null
+  }
   return next
 }

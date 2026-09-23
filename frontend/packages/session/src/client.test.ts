@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest'
-import api, { setUnauthenticatedHandler } from './client'
+import api, { configureClient, setUnauthenticatedHandler } from './client'
 import { clearSession, getAccessToken, getSession, setSession } from './store'
 
 // Tests for the axios wrapper at frontend/src/api/client.ts.
@@ -22,6 +22,8 @@ type AdapterCall = { method: string; url: string; headers: Record<string, string
 type AdapterResponse =
   | { status: number; data: unknown }
   | (() => { status: number; data: unknown })
+
+configureClient({ clientType: 'web-account' })
 
 const calls: AdapterCall[] = []
 const responses: Record<string, AdapterResponse[]> = {}
@@ -56,6 +58,7 @@ const seedAuth = (token: string | null) => {
     return
   }
   setSession({
+    sessionId: 's',
     userId: 'u',
     email: 'a@b.c',
     username: null,

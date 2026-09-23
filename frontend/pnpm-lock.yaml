@@ -321,6 +321,9 @@ importers:
 
   packages/session:
     dependencies:
+      '@kutup/crypto':
+        specifier: workspace:*
+        version: link:../crypto
       axios:
         specifier: ^1.18.0
         version: 1.18.0

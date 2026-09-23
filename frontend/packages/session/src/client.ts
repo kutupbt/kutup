@@ -1,7 +1,55 @@
 import axios from 'axios'
 import { broadcastLogout } from './sessionSync'
 import { resolveApiBase } from './apiBase'
+import { clearPersisted } from './persistedStore'
 import { clearSession, getAccessToken, setAccessToken } from './store'
+
+/** The server-side session types a web app can hold (X-Kutup-Client). */
+export type WebClientType = 'web-account' | 'web-drive' | 'web-chat'
+
+let clientType: WebClientType | null = null
+
+/**
+ * Called once at boot: every request (and the raw refresh call) tells the
+ * server which app it is, which decides the session type and that refresh
+ * tokens travel in this origin's HttpOnly cookie.
+ */
+export function configureClient(opts: { clientType: WebClientType }): void {
+  clientType = opts.clientType
+  api.defaults.headers.common['X-Kutup-Client'] = opts.clientType
+}
+
+export function getClientType(): WebClientType {
+  if (!clientType) throw new Error('configureClient() has not run')
+  return clientType
+}
+
+export interface RefreshResult {
+  accessToken: string
+  sessionId: string
+}
+
+/**
+ * Rotate this origin's refresh cookie for a new access token. Serialised
+ * across tabs with a Web Lock: tabs share the cookie, and a second tab
+ * refreshing with a token the first just rotated would only hit the server's
+ * grace window.
+ */
+export async function refreshAccessToken(): Promise<RefreshResult> {
+  const run = async (): Promise<RefreshResult> => {
+    const base = await resolveApiBase()
+    const res = await axios.post<RefreshResult>(
+      `${base}/auth/refresh`,
+      {},
+      { withCredentials: true, headers: { 'X-Kutup-Client': getClientType() } },
+    )
+    return res.data
+  }
+  if (typeof navigator !== 'undefined' && navigator.locks) {
+    return navigator.locks.request('kutup-refresh', run)
+  }
+  return run()
+}
 
 // What the app does when the server-side session is gone (refresh failed).
 // account. shows its login page; drive. and chat. request a new session fork
@@ -67,7 +115,11 @@ api.interceptors.response.use(
       }
     }
 
-    const skipRefresh = originalRequest.url?.match(/\/auth\/(login|register|recover)/)
+    // A 401 from these means "wrong credentials / invalid fork", not an expired
+    // access token.
+    const skipRefresh = originalRequest.url?.match(
+      /\/auth\/(login|register|recover|complete-setup|refresh|forks\/consume)/,
+    )
     if (status === 401 && !originalRequest._retry && !skipRefresh) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
@@ -82,9 +134,7 @@ api.interceptors.response.use(
       isRefreshing = true
 
       try {
-        const base = await resolveApiBase()
-        const res = await axios.post(`${base}/auth/refresh`, {}, { withCredentials: true })
-        const newToken = res.data.accessToken
+        const { accessToken: newToken } = await refreshAccessToken()
         setAccessToken(newToken)
         processQueue(null, newToken)
         originalRequest.headers.Authorization = `Bearer ${newToken}`
@@ -95,6 +145,7 @@ api.interceptors.response.use(
         // this origin to clear local state, then let the app decide where to
         // go (login or a new fork).
         broadcastLogout()
+        clearPersisted()
         clearSession()
         onUnauthenticated()
         return Promise.reject(refreshError)
