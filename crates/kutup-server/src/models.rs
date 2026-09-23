@@ -183,6 +183,15 @@ pub struct CollectionRow {
     pub upload_used_bytes: Option<i64>,
     #[serde(skip_serializing_if = "is_false")]
     pub is_shared: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = DateTime)]
+    pub created_at: time::OffsetDateTime,
+    /// The folder's own last change (rename, colour) or its newest direct child's
+    /// (a file uploaded, renamed or edited; a subfolder created) — what a file
+    /// manager shows as a folder's "modified" time.
+    #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = DateTime)]
+    pub updated_at: time::OffsetDateTime,
 }
 
 /// `POST /api/collections` body — mirrors `handlers.CreateCollectionRequest`.
@@ -444,6 +453,8 @@ mod tests {
             upload_quota_bytes: None,
             upload_used_bytes: None,
             is_shared: false,
+            created_at: time::macros::datetime!(2026-09-01 10:00 UTC),
+            updated_at: time::macros::datetime!(2026-09-23 12:30 UTC),
         };
         let v: serde_json::Value = serde_json::to_value(&row).unwrap();
         let obj = v.as_object().unwrap();
@@ -452,6 +463,8 @@ mod tests {
         assert!(!obj.contains_key("isShared"));
         assert!(obj.contains_key("ownerKeyEnvelope"));
         assert!(!obj.contains_key("namedShareEnvelope"));
+        assert_eq!(obj["createdAt"], "2026-09-01T10:00:00Z");
+        assert_eq!(obj["updatedAt"], "2026-09-23T12:30:00Z");
     }
 
     #[test]

@@ -386,6 +386,12 @@ pub async fn record(
         .execute(&mut *tx)
         .await?;
 
+    // A new version is an edit: the file (and so its folder) was modified now.
+    sqlx::query("UPDATE files SET updated_at = NOW() WHERE id = $1")
+        .bind(fid)
+        .execute(&mut *tx)
+        .await?;
+
     // Truncate the update log in the same tx (best-effort; a failure only leaves replayable
     // log rows behind, so we log and continue rather than abort the snapshot).
     if let Err(e) = sqlx::query("DELETE FROM file_update_log WHERE file_id = $1 AND seq <= $2")

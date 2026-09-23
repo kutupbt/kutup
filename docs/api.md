@@ -522,10 +522,17 @@ envelope is returned in the other row type.
     "canDelete": false,
     "uploadQuotaBytes": null,
     "uploadUsedBytes": null,
-    "isShared": true
+    "isShared": true,
+    "createdAt": "2026-09-01T10:00:00Z",
+    "updatedAt": "2026-09-23T12:30:00Z"
   }
 ]
 ```
+
+`updatedAt` is the folder's "modified" time as a file manager shows it: the
+latest of the folder's own change (rename, colour), its newest direct file
+change (upload, rename, or a new saved version), and its newest direct
+subfolder. `GET /api/collections/:id` returns the same fields.
 
 `canUpload`, `canDelete`, `uploadQuotaBytes`, `uploadUsedBytes`, `isShared`, and
 the owner identity fields are present only on shared collections (the owner has
@@ -1884,6 +1891,10 @@ is no snapshot-specific legacy decoder.
 
 ### POST /api/files/:fileId/versions
 Record a new snapshot. Server inserts the row and truncates `file_update_log` up to `seqAtSnapshot`.
+
+Recording a version also sets the file's `updatedAt` (and so its folder's), so
+edited notes, documents and whiteboards sort as recently modified.
+
 **Body:** `{s3VersionId, storagePath, seqAtSnapshot, docKeyId, sizeBytes, label?, keepForever?}`
 **Response 201:** `{id}` — the version row id.
 

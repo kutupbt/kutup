@@ -38,6 +38,8 @@ struct SharedCollectionDbRow {
     can_upload: bool,
     can_delete: bool,
     upload_quota_bytes: Option<i64>,
+    created_at: time::OffsetDateTime,
+    updated_at: time::OffsetDateTime,
     owner_username: Option<String>,
     owner_incarnation_id: String,
     owner_signing_public_key: String,
@@ -103,13 +105,20 @@ pub async fn list_collections(
         String,
         Option<Uuid>,
         Option<String>,
+        time::OffsetDateTime,
+        time::OffsetDateTime,
     );
     let own: Vec<OwnRow> = sqlx::query_as(
-        r#"SELECT id, owner_user_id, name_envelope, owner_key_envelope,
-                  key_epoch, name_revision, epoch_statement, epoch_statement_hash,
-                  parent_collection_id, color
-           FROM collections WHERE owner_user_id = $1 AND deleted_at IS NULL
-           ORDER BY created_at ASC"#,
+        r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.owner_key_envelope,
+                  c.key_epoch, c.name_revision, c.epoch_statement, c.epoch_statement_hash,
+                  c.parent_collection_id, c.color, c.created_at,
+                  GREATEST(c.updated_at,
+                           COALESCE((SELECT MAX(f.updated_at) FROM files f
+                                     WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
+                           COALESCE((SELECT MAX(sc.created_at) FROM collections sc
+                                     WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at
+           FROM collections c WHERE c.owner_user_id = $1 AND c.deleted_at IS NULL
+           ORDER BY c.created_at ASC"#,
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -129,6 +138,8 @@ pub async fn list_collections(
                 statement_hash,
                 parent,
                 color,
+                created_at,
+                updated_at,
             )| CollectionRow {
                 id: id.to_string(),
                 owner_user_id: owner.to_string(),
@@ -150,6 +161,8 @@ pub async fn list_collections(
                 upload_quota_bytes: None,
                 upload_used_bytes: None,
                 is_shared: false,
+                created_at,
+                updated_at,
             },
         )
         .collect();
@@ -159,6 +172,11 @@ pub async fn list_collections(
                   c.name_revision, c.epoch_statement, c.epoch_statement_hash,
                   c.parent_collection_id, c.color, cs.named_share_envelope,
                   cs.can_upload, cs.can_delete, cs.upload_quota_bytes,
+                  c.created_at, GREATEST(c.updated_at,
+                           COALESCE((SELECT MAX(f.updated_at) FROM files f
+                                     WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
+                           COALESCE((SELECT MAX(sc.created_at) FROM collections sc
+                                     WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
                   owner.username AS owner_username,
                   owner.account_incarnation_id AS owner_incarnation_id,
                   owner.drive_signing_public_key AS owner_signing_public_key,
@@ -218,6 +236,8 @@ pub async fn list_collections(
             upload_quota_bytes: row.upload_quota_bytes,
             upload_used_bytes,
             is_shared: true,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         });
     }
 
@@ -289,7 +309,7 @@ pub async fn create_collection(
     let mut tx = state.pool.begin().await?;
     if let Some(parent_id) = parent {
         let parent_owned: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM collections WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL)",
+            "SELECT EXISTS(SELECT 1 FROM collections c WHERE c.id = $1 AND c.owner_user_id = $2 AND c.deleted_at IS NULL)",
         )
         .bind(parent_id)
         .bind(user_id)
@@ -362,12 +382,19 @@ pub async fn get_collection(
         String,
         Option<Uuid>,
         Option<String>,
+        time::OffsetDateTime,
+        time::OffsetDateTime,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT id, owner_user_id, name_envelope, owner_key_envelope,
-                  key_epoch, name_revision, epoch_statement, epoch_statement_hash,
-                  parent_collection_id, color
-           FROM collections WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL"#,
+        r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.owner_key_envelope,
+                  c.key_epoch, c.name_revision, c.epoch_statement, c.epoch_statement_hash,
+                  c.parent_collection_id, c.color, c.created_at,
+                  GREATEST(c.updated_at,
+                           COALESCE((SELECT MAX(f.updated_at) FROM files f
+                                     WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
+                           COALESCE((SELECT MAX(sc.created_at) FROM collections sc
+                                     WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at
+           FROM collections c WHERE c.id = $1 AND c.owner_user_id = $2 AND c.deleted_at IS NULL"#,
     )
     .bind(coll_id)
     .bind(user_id)
@@ -385,6 +412,8 @@ pub async fn get_collection(
         statement_hash,
         parent,
         color,
+        created_at,
+        updated_at,
     )) = row
     {
         return Ok(Json(CollectionRow {
@@ -408,6 +437,8 @@ pub async fn get_collection(
             upload_quota_bytes: None,
             upload_used_bytes: None,
             is_shared: false,
+            created_at,
+            updated_at,
         })
         .into_response());
     }
@@ -420,6 +451,11 @@ pub async fn get_collection(
         r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.key_epoch, c.name_revision,
                   c.epoch_statement, c.epoch_statement_hash, c.parent_collection_id, c.color,
                   cs.named_share_envelope, cs.can_upload, cs.can_delete, cs.upload_quota_bytes,
+                  c.created_at, GREATEST(c.updated_at,
+                           COALESCE((SELECT MAX(f.updated_at) FROM files f
+                                     WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
+                           COALESCE((SELECT MAX(sc.created_at) FROM collections sc
+                                     WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
                   owner.username AS owner_username,
                   owner.account_incarnation_id AS owner_incarnation_id,
                   owner.drive_signing_public_key AS owner_signing_public_key,
@@ -464,6 +500,8 @@ pub async fn get_collection(
         upload_quota_bytes: row.upload_quota_bytes,
         upload_used_bytes: None,
         is_shared: true,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
     })
     .into_response())
 }
