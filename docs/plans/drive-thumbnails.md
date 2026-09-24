@@ -10,8 +10,10 @@ Office thumbnails (D) are drawn on Save from the document as OnlyOffice lays
 it out, inside the office sandbox: the bridge installs the CryptPad build's
 `APP.printPdf` hook for one request, calls `asc_Print`, and x2t turns the
 print buffer plus the document and its fonts (from the sandbox's own font
-folder) into a PDF; Drive draws page one with PDF.js. Spreadsheets are
-cropped to their used cells, in the card's 4:3 shape. Office files cannot be
+folder) into a PDF; Drive draws page one with PDF.js. Spreadsheets print
+page one only, with gridlines (set in that print request's page options,
+never in the document), and show the grid's top-left corner at a readable
+zoom in the card's 4:3 shape. Office files cannot be
 backfilled (drawing needs a running editor): a document gets its thumbnail
 at its first save.
 

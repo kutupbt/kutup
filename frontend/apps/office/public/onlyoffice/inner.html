@@ -1232,9 +1232,39 @@
               .catch(function (err) { finish(null, 'x2t pdf failed: ' + ((err && err.message) || err)) })
           }
           try {
-            inner.asc_Print({})
+            inner.asc_Print(printOptions(inner))
           } catch (err) {
             finish(null, 'print failed: ' + ((err && err.message) || err))
+          }
+        }
+
+        // For a spreadsheet: page one only, with gridlines, so a sheet looks
+        // like a sheet. The options go in the print request
+        // (asc_CAdjustPrint.pageOptionsMap, per sheet) — the document's own
+        // print settings are not touched, so nobody's file changes.
+        var printOptions = function (inner) {
+          try {
+            var frame = docEditor.getIframe()
+            var Asc = frame && frame.contentWindow && frame.contentWindow.Asc
+            var workbook = inner.wbModel
+            if (docType !== 'xlsx' || !Asc || !workbook || !Asc.asc_CAdjustPrint) return {}
+            var adjust = new Asc.asc_CAdjustPrint()
+            adjust.isOnlyFirstPage = true
+            var map = []
+            for (var i = 0; i < workbook.getWorksheetCount(); i++) {
+              var own = workbook.getWorksheet(i).PagePrintOptions
+              if (!own || typeof own.clone !== 'function') continue
+              var copy = own.clone()
+              copy.gridLines = true
+              map[i] = copy
+            }
+            adjust.asc_setPageOptionsMap(map)
+            var options = new Asc.asc_CDownloadOptions()
+            options.advancedOptions = adjust
+            return options
+          } catch (err) {
+            console.warn('[kutup-bridge] sheet print options unavailable', err)
+            return {}
           }
         }
 

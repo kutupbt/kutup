@@ -16,7 +16,12 @@ export async function renderPdfFirstPageV1(
   bytes: ArrayBuffer,
   maxEdge: number,
   signal?: AbortSignal,
-  options: { trim?: boolean } = {},
+  /**
+   * `content`: crop to what is drawn. `corner`: the top-left of what is
+   * drawn at a readable zoom (a spreadsheet printed with gridlines, where
+   * the lines themselves span the whole used range).
+   */
+  options: { trim?: 'content' | 'corner' } = {},
 ): Promise<Blob | null> {
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_PDF_BYTES) return null
   const pdfjs = await import('pdfjs-dist')
@@ -47,7 +52,7 @@ export async function renderPdfFirstPageV1(
     context.fillStyle = '#ffffff'
     context.fillRect(0, 0, canvas.width, canvas.height)
     await page.render({ canvas, canvasContext: context, viewport, annotationMode: pdfjs.AnnotationMode.ENABLE }).promise
-    const out = options.trim ? trimmed(canvas, context) : canvas
+    const out = options.trim ? trimmed(canvas, context, options.trim) : canvas
     return await new Promise<Blob | null>((resolve) => out.toBlob(resolve, 'image/png'))
   } catch {
     return null
@@ -65,13 +70,15 @@ const PAPER_THRESHOLD = 245
  * whose few used cells would otherwise be a speck on an empty sheet. A blank
  * page is returned whole.
  */
-function trimmed(canvas: HTMLCanvasElement, context: CanvasRenderingContext2D): HTMLCanvasElement {
+function trimmed(canvas: HTMLCanvasElement, context: CanvasRenderingContext2D, mode: 'content' | 'corner'): HTMLCanvasElement {
   const box = contentBox(context.getImageData(0, 0, canvas.width, canvas.height))
   if (!box) return canvas
   const margin = Math.round(Math.max(canvas.width, canvas.height) * 0.02)
-  // At least a quarter of the page wide, so a single cell is not blown up.
-  let width = Math.max(Math.round(canvas.width / 4), box.right - box.left + 1 + margin * 2)
-  let height = box.bottom - box.top + 1 + margin * 2
+  // At least a quarter of the page wide, so a single cell is not blown up;
+  // a corner is at most half of it, so its cells stay readable on a card.
+  const drawnWidth = box.right - box.left + 1 + margin * 2
+  let width = Math.max(Math.round(canvas.width / 4), mode === 'corner' ? Math.min(drawnWidth, Math.round(canvas.width / 2)) : drawnWidth)
+  let height = mode === 'corner' ? Math.round(width / CARD_RATIO) : box.bottom - box.top + 1 + margin * 2
   // The shape of a grid card (4:3), so the card never cuts the content off:
   // grow the short side, into the page where there is page, else paper.
   if (width / height > CARD_RATIO) height = Math.round(width / CARD_RATIO)

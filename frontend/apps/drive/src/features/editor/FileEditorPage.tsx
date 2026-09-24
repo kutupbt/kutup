@@ -580,8 +580,8 @@ function redrawWhiteboard(target: SnapshotTarget, versionId: string, bytes: Uint
 function redrawOffice(target: SnapshotTarget, versionId: string, pdf: () => Promise<Uint8Array>, trim: boolean): void {
   enqueueThumbnail(target.context.fileId, async () => {
     const bytes = await pdf()
-    // A sheet shows its used cells, not a speck on an empty page.
-    const png = await renderPdfFirstPageV1(bytes.slice().buffer, THUMBNAIL_MAX_SIDE.lg, undefined, { trim })
+    // Printed with gridlines: its top-left corner, at a size cells can be read.
+    const png = await renderPdfFirstPageV1(bytes.slice().buffer, THUMBNAIL_MAX_SIDE.lg, undefined, trim ? { trim: 'corner' } : {})
     if (!png) return false
     return storeThumbnails(
       { fileId: target.context.fileId, fileKey: target.fileKey, keyEpoch: target.context.epoch },
