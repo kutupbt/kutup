@@ -38,6 +38,8 @@ struct CryptoVectors {
     stream: Vec<StreamVec>,
     asset: AssetVec,
     thumbnail: ThumbnailVec,
+    #[serde(rename = "collectionKeyring")]
+    collection_keyring: KeyringVec,
     #[serde(rename = "collabFrame")]
     collab_frame: CollabFrameVec,
     #[serde(rename = "localState")]
@@ -170,6 +172,22 @@ struct ThumbnailVec {
     height: u16,
     image: String,
     envelope: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyringVec {
+    collection_id: String,
+    owner_user_id: String,
+    authority_public_key: String,
+    keys: Vec<String>,
+    chain: Vec<KeyringLinkVec>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyringLinkVec {
+    epoch: u32,
+    statement: String,
+    previous_key_envelope: Option<String>,
 }
 #[derive(Deserialize)]
 struct CollabFrameVec {
@@ -527,6 +545,43 @@ fn thumbnail_matches_canonical_vector() {
         &b64(&v.file_key),
         &v.file_id,
         v.epoch
+    )
+    .is_err());
+}
+
+#[test]
+fn collection_keyring_matches_canonical_vector() {
+    use kutup_crypto::collection_keyring::{self, EpochLinkV1};
+    let v = load_crypto().collection_keyring;
+    let chain: Vec<EpochLinkV1> = v
+        .chain
+        .iter()
+        .map(|l| EpochLinkV1 {
+            epoch: l.epoch,
+            statement: l.statement.clone(),
+            previous_key_envelope: l.previous_key_envelope.clone(),
+        })
+        .collect();
+    let current = b64(v.keys.last().unwrap());
+    let keys = collection_keyring::unlock(
+        &current,
+        &v.collection_id,
+        &v.owner_user_id,
+        &b64(&v.authority_public_key),
+        &chain,
+    )
+    .unwrap();
+    assert_eq!(keys.len(), v.keys.len());
+    for (got, want) in keys.iter().zip(&v.keys) {
+        assert_eq!(got.as_slice(), b64(want).as_slice());
+    }
+    // An earlier key (a removed member's) does not unlock the history.
+    assert!(collection_keyring::unlock(
+        &b64(&v.keys[1]),
+        &v.collection_id,
+        &v.owner_user_id,
+        &b64(&v.authority_public_key),
+        &chain,
     )
     .is_err());
 }

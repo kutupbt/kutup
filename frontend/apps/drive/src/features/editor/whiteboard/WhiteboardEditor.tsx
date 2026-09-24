@@ -82,6 +82,8 @@ interface Props {
   initialBytes?: Uint8Array
   /** View-only access: follow edits live, draw nothing. */
   readOnly?: boolean
+  /** The folder key at an older epoch: images stored before a rotation. */
+  keyAt?: (epoch: number) => Promise<Uint8Array>
 }
 
 // Module-level cache of registerDevice promises — same pattern as
@@ -107,7 +109,7 @@ interface CursorPayload {
 }
 
 function WhiteboardEditorBase(
-  { fileId, collectionId, initialBytes, collectionMaster, keyEpoch, readOnly = false }: Props,
+  { fileId, collectionId, initialBytes, collectionMaster, keyEpoch, readOnly = false, keyAt }: Props,
   ref: Ref<WhiteboardEditorHandle>,
 ) {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null)
@@ -532,7 +534,7 @@ function WhiteboardEditorBase(
             collectionId,
             assetId: fid,
             epoch: keyEpoch,
-          }, collectionMaster)
+          }, collectionMaster, keyAt)
           const dataURL = new TextDecoder().decode(plain)
           // Recover mimeType from the dataURL prefix; default to png.
           const match = dataURL.match(/^data:([^;]+);/i)

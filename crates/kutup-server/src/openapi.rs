@@ -80,6 +80,10 @@ All file content and metadata are encrypted client-side; the server stores only 
         // --- file versions ---
         crate::handlers::file_versions::list,
         crate::handlers::file_versions::create,
+        crate::handlers::folder_access::epochs,
+        crate::handlers::folder_access::access,
+        crate::handlers::folder_access::rotate,
+        crate::handlers::folder_access::rekey,
         crate::handlers::file_versions::download,
         crate::handlers::file_versions::patch,
         // --- file assets ---
@@ -94,11 +98,15 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::shares::create_public_share,
         crate::handlers::shares::get_public_share,
         crate::handlers::shares::list_public_share_files,
+        crate::handlers::shares::public_share_epochs,
         crate::handlers::shares::download_public_share_file,
         // --- Drive federation (shared signed stack + per-share capability) ---
         crate::drive_federation::get_user,
         crate::drive_federation::get_invite,
         crate::drive_federation::list_files,
+        crate::drive_federation::list_epochs,
+        crate::drive_federation::proxy_list_epochs,
+        crate::drive_federation::refresh_incoming_share,
         crate::drive_federation::upload_file,
         crate::drive_federation::download_file,
         crate::drive_federation::delete_file,

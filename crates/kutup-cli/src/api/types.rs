@@ -257,6 +257,41 @@ pub struct File {
     pub encrypted_size_bytes: i64,
     #[serde(default)]
     pub created_at: String,
+    /// The epoch of what `/files/{id}/download` serves
+    /// (docs/plans/drive-share-revocation.md); 0 from an older server.
+    #[serde(default)]
+    pub content_key_epoch: u32,
+    /// File keys a re-key left behind, one per epoch.
+    #[serde(default)]
+    pub key_history: Vec<FileKeyHistoryEntry>,
+}
+
+impl File {
+    /// The epoch the served content was sealed at.
+    pub fn content_epoch(&self) -> u32 {
+        if self.content_key_epoch == 0 {
+            self.key_epoch
+        } else {
+            self.content_key_epoch
+        }
+    }
+}
+
+/// `POST /files/{id}/rekey`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RekeyRequest {
+    pub from_epoch: u32,
+    pub file_key_envelope: String,
+    pub metadata_envelope: String,
+}
+
+/// A file key a re-key left behind.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileKeyHistoryEntry {
+    pub epoch: u32,
+    pub file_key_envelope: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -316,11 +351,17 @@ pub struct FederatedShareResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicShareRequest {
+    /// The link's id, chosen here (bound into the owner's copy of its key).
+    pub id: String,
     pub share_type: String,
     pub target_id: String,
     pub collection_key_envelope: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_in_hours: Option<i64>,
+    /// The link key sealed for the owner under their master key (purpose 9),
+    /// so the owner can list, copy and keep the link across a folder-key
+    /// rotation (docs/plans/drive-share-revocation.md).
+    pub owner_link_key_envelope: String,
 }
 
 #[derive(Debug, Deserialize)]

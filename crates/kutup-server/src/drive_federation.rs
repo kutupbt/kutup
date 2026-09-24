@@ -14,7 +14,6 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use futures_util::stream;
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::DriveFileBlobContextV1;
@@ -153,6 +152,14 @@ pub struct FederatedDriveFile {
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
+    /// The epoch the uploaded content was sealed at.
+    pub original_key_epoch: i32,
+    /// The epoch of the content `…/content` serves.
+    pub content_key_epoch: i32,
+    /// File keys left behind by re-keys (docs/plans/drive-share-revocation.md).
+    #[serde(default)]
+    #[sqlx(json)]
+    pub key_history: Vec<crate::models::FileKeyHistoryEntry>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -590,85 +597,14 @@ pub async fn accept_incoming_share(
     .await?;
     let (local_username, local_incarnation) =
         local_identity.ok_or_else(|| AppError::unauthorized("unauthorized"))?;
-    let response = federation
-        .send(
-            server,
-            drive_spec(
-                Method::GET,
-                "/api/fed/drive/invite".into(),
-                JSON_CONTENT_TYPE.into(),
-                Vec::new(),
-                Some(&request.capability),
-                MAX_DIRECTORY_RESPONSE_BYTES,
-            )?,
-        )
-        .await
-        .map_err(gateway_error)?;
-    if response.status != StatusCode::OK {
-        return Err(AppError::new(
-            if response.status == StatusCode::NOT_FOUND {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::BAD_GATEWAY
-            },
-            "federated Drive invite is unavailable",
-        ));
-    }
-    let invite: DriveInviteResponse = serde_json::from_slice(&response.body)
-        .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid Drive invite"))?;
-    if invite.source_server != server || invite.recipient_username != local_username {
-        return Err(AppError::forbidden(
-            "federated Drive invite is intended for another account or server",
-        ));
-    }
-    if !invite.owner_account.ends_with(&format!("@{server}")) {
-        return Err(AppError::forbidden(
-            "federated Drive owner identity is invalid",
-        ));
-    }
-    validate_name_envelope(&invite)?;
-    let named_share = NamedShareEnvelopeV1::decode_b64(&invite.named_share_envelope)
-        .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid named share envelope"))?;
-    named_share
-        .verify_binding_and_signature(
-            &invite.collection_id.to_string(),
-            u32::try_from(invite.key_epoch)
-                .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid Drive epoch"))?,
-            &invite.owner_account,
-            &invite.owner_incarnation_id,
-            &canonical_public_key(&invite.owner_signing_public_key)?,
-            &format!("{}@{}", local_username, federation.server_name()),
-            &local_incarnation,
-        )
-        .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid named share envelope"))?;
-    let epoch_statement =
-        CollectionEpochStatementV1::decode_b64(&invite.epoch_statement).map_err(|_| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "invalid collection epoch statement",
-            )
-        })?;
-    epoch_statement
-        .verify_authority(&canonical_public_key(&invite.owner_authority_public_key)?)
-        .and_then(|_| {
-            epoch_statement.verify_current_binding(
-                &invite.collection_id.to_string(),
-                &invite.owner_user_id.to_string(),
-                u32::try_from(invite.key_epoch).unwrap_or(0),
-            )
-        })
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "invalid collection epoch statement",
-            )
-        })?;
-    if epoch_statement.statement_hash() != invite.epoch_statement_hash {
-        return Err(AppError::new(
-            StatusCode::BAD_GATEWAY,
-            "collection epoch statement hash mismatch",
-        ));
-    }
+    let invite = fetch_verified_invite(
+        federation,
+        server,
+        &request.capability,
+        &local_username,
+        &local_incarnation,
+    )
+    .await?;
     let hash = capability_hash(&request.capability);
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO federated_incoming_shares
@@ -740,6 +676,290 @@ pub async fn accept_incoming_share(
             upload_quota_bytes: invite.upload_quota_bytes,
             created_at: OffsetDateTime::now_utc(),
         }),
+    )
+        .into_response())
+}
+
+/// The owner server's current invite for a capability, checked end to end:
+/// meant for this account, sealed to it by the named owner at the stated
+/// epoch, with an owner-signed statement for that epoch.
+async fn fetch_verified_invite(
+    federation: &FederationStack,
+    server: &str,
+    capability: &str,
+    local_username: &str,
+    local_incarnation: &str,
+) -> AppResult<DriveInviteResponse> {
+    let response = federation
+        .send(
+            server,
+            drive_spec(
+                Method::GET,
+                "/api/fed/drive/invite".into(),
+                JSON_CONTENT_TYPE.into(),
+                Vec::new(),
+                Some(capability),
+                MAX_DIRECTORY_RESPONSE_BYTES,
+            )?,
+        )
+        .await
+        .map_err(gateway_error)?;
+    if response.status != StatusCode::OK {
+        return Err(AppError::new(
+            if response.status == StatusCode::NOT_FOUND {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_GATEWAY
+            },
+            "federated Drive invite is unavailable",
+        ));
+    }
+    let invite: DriveInviteResponse = serde_json::from_slice(&response.body)
+        .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid Drive invite"))?;
+    if invite.source_server != server || invite.recipient_username != local_username {
+        return Err(AppError::forbidden(
+            "federated Drive invite is intended for another account or server",
+        ));
+    }
+    if !invite.owner_account.ends_with(&format!("@{server}")) {
+        return Err(AppError::forbidden(
+            "federated Drive owner identity is invalid",
+        ));
+    }
+    validate_name_envelope(&invite)?;
+    let named_share = NamedShareEnvelopeV1::decode_b64(&invite.named_share_envelope)
+        .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid named share envelope"))?;
+    named_share
+        .verify_binding_and_signature(
+            &invite.collection_id.to_string(),
+            u32::try_from(invite.key_epoch)
+                .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid Drive epoch"))?,
+            &invite.owner_account,
+            &invite.owner_incarnation_id,
+            &canonical_public_key(&invite.owner_signing_public_key)?,
+            &format!("{}@{}", local_username, federation.server_name()),
+            local_incarnation,
+        )
+        .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid named share envelope"))?;
+    let epoch_statement =
+        CollectionEpochStatementV1::decode_b64(&invite.epoch_statement).map_err(|_| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "invalid collection epoch statement",
+            )
+        })?;
+    epoch_statement
+        .verify_authority(&canonical_public_key(&invite.owner_authority_public_key)?)
+        .and_then(|_| {
+            epoch_statement.verify_current_binding(
+                &invite.collection_id.to_string(),
+                &invite.owner_user_id.to_string(),
+                u32::try_from(invite.key_epoch).unwrap_or(0),
+            )
+        })
+        .map_err(|_| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "invalid collection epoch statement",
+            )
+        })?;
+    if epoch_statement.statement_hash() != invite.epoch_statement_hash {
+        return Err(AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "collection epoch statement hash mismatch",
+        ));
+    }
+    Ok(invite)
+}
+
+/// `POST /api/drive/federation/shares/{shareId}/refresh` — bring a share's
+/// stored copy up to the owner's current folder key after a rotation
+/// (docs/plans/drive-share-revocation.md). The new epoch is accepted only
+/// from the same owner and folder, never older, and only if its signed
+/// history descends from the epoch stored here. A share the owner revoked
+/// answers `403`/`404` from the owner's server.
+#[utoipa::path(
+    post,
+    path = "/api/drive/federation/shares/{shareId}/refresh",
+    tag = "drive federation",
+    security(("BearerAuth" = [])),
+    params(("shareId" = String, Path)),
+    responses((status = 200, description = "The share, current", body = IncomingDriveShare))
+)]
+pub async fn refresh_incoming_share(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(share_id): Path<String>,
+) -> AppResult<Response> {
+    let federation = configured_stack(&state)?;
+    let user_id = trusted_uuid(&user.user_id)?;
+    let share_uuid =
+        Uuid::parse_str(&share_id).map_err(|_| AppError::not_found("share not found"))?;
+    type Stored = (String, String, Uuid, i32, String, Uuid, String);
+    let stored: Stored = sqlx::query_as(
+        "SELECT remote_domain, remote_capability, remote_collection_id, key_epoch,
+                epoch_statement_hash, owner_user_id, owner_authority_public_key
+         FROM federated_incoming_shares WHERE id = $1 AND user_id = $2",
+    )
+    .bind(share_uuid)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("share not found"))?;
+    let (server, capability, collection_id, epoch, statement_hash, owner_id, authority) = stored;
+    let local_identity: (String, String) = sqlx::query_as(
+        "SELECT username, account_incarnation_id FROM users WHERE id = $1 AND is_active = true",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::unauthorized("unauthorized"))?;
+    let invite = fetch_verified_invite(
+        federation,
+        &server,
+        &capability,
+        &local_identity.0,
+        &local_identity.1,
+    )
+    .await?;
+    if invite.collection_id != collection_id
+        || invite.owner_user_id != owner_id
+        || invite.owner_authority_public_key != authority
+    {
+        return Err(AppError::conflict(
+            "the shared folder's owner identity changed; accept the share again",
+        ));
+    }
+    if invite.key_epoch < epoch
+        || (invite.key_epoch == epoch && invite.epoch_statement_hash != statement_hash)
+    {
+        return Err(AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "the owner's server offered an older or forked folder key",
+        ));
+    }
+    if invite.key_epoch > epoch {
+        // The new epoch must descend from the one this server pinned.
+        let response = federation
+            .send(
+                &server,
+                drive_spec(
+                    Method::GET,
+                    "/api/fed/drive/epochs".into(),
+                    JSON_CONTENT_TYPE.into(),
+                    Vec::new(),
+                    Some(&capability),
+                    MAX_LIST_RESPONSE_BYTES,
+                )?,
+            )
+            .await
+            .map_err(gateway_error)?;
+        if response.status != StatusCode::OK {
+            return Err(AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "folder key history is unavailable",
+            ));
+        }
+        let chain: Vec<crate::handlers::folder_access::EpochLink> =
+            serde_json::from_slice(&response.body).map_err(|_| {
+                AppError::new(StatusCode::BAD_GATEWAY, "invalid folder key history")
+            })?;
+        let links: Vec<kutup_crypto::collection_keyring::EpochLinkV1> = chain
+            .into_iter()
+            .map(|link| kutup_crypto::collection_keyring::EpochLinkV1 {
+                epoch: u32::try_from(link.epoch).unwrap_or(0),
+                statement: link.epoch_statement,
+                previous_key_envelope: link.previous_key_envelope,
+            })
+            .collect();
+        let hashes = kutup_crypto::collection_keyring::verify_history(
+            &collection_id.to_string(),
+            &owner_id.to_string(),
+            &canonical_public_key(&authority)?,
+            &links,
+        )
+        .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid folder key history"))?;
+        let pinned = usize::try_from(epoch - 1).ok().and_then(|i| hashes.get(i));
+        let current = usize::try_from(invite.key_epoch - 1)
+            .ok()
+            .and_then(|i| hashes.get(i));
+        if pinned != Some(&statement_hash)
+            || current != Some(&invite.epoch_statement_hash)
+            || hashes.len() != usize::try_from(invite.key_epoch).unwrap_or(0)
+        {
+            return Err(AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "folder key history does not continue the stored one",
+            ));
+        }
+    }
+    let refreshed: IncomingDriveShare = sqlx::query_as(
+        "UPDATE federated_incoming_shares SET
+            named_share_envelope = $3, name_envelope = $4, key_epoch = $5, name_revision = $6,
+            epoch_statement = $7, epoch_statement_hash = $8, owner_account = $9,
+            owner_incarnation_id = $10, owner_signing_public_key = $11,
+            can_upload = $12, can_delete = $13, upload_quota_bytes = $14
+         WHERE id = $1 AND user_id = $2
+         RETURNING id, remote_domain, remote_collection_id, named_share_envelope,
+                   name_envelope, key_epoch, name_revision, epoch_statement,
+                   epoch_statement_hash, owner_user_id, owner_account,
+                   owner_incarnation_id, owner_signing_public_key,
+                   owner_authority_public_key, can_upload, can_delete,
+                   upload_quota_bytes, created_at",
+    )
+    .bind(share_uuid)
+    .bind(user_id)
+    .bind(&invite.named_share_envelope)
+    .bind(&invite.name_envelope)
+    .bind(invite.key_epoch)
+    .bind(invite.name_revision)
+    .bind(&invite.epoch_statement)
+    .bind(&invite.epoch_statement_hash)
+    .bind(&invite.owner_account)
+    .bind(&invite.owner_incarnation_id)
+    .bind(&invite.owner_signing_public_key)
+    .bind(invite.can_upload)
+    .bind(invite.can_delete)
+    .bind(invite.upload_quota_bytes)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Json(refreshed).into_response())
+}
+
+/// `GET /api/drive/federation/shares/{shareId}/epochs` — the remote folder's
+/// key history, relayed from its owner's server.
+#[utoipa::path(
+    get,
+    path = "/api/drive/federation/shares/{shareId}/epochs",
+    tag = "drive federation",
+    security(("BearerAuth" = [])),
+    params(("shareId" = String, Path)),
+    responses((status = 200, description = "Key history, oldest first", body = Vec<crate::handlers::folder_access::EpochLink>))
+)]
+pub async fn proxy_list_epochs(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(share_id): Path<String>,
+) -> AppResult<Response> {
+    let share = incoming_share(&state, &user, &share_id).await?;
+    let response = configured_stack(&state)?
+        .send(
+            &share.remote_domain,
+            drive_spec(
+                Method::GET,
+                "/api/fed/drive/epochs".into(),
+                JSON_CONTENT_TYPE.into(),
+                Vec::new(),
+                Some(&share.remote_capability),
+                MAX_LIST_RESPONSE_BYTES,
+            )?,
+        )
+        .await
+        .map_err(gateway_error)?;
+    Ok((
+        response.status,
+        [(header::CONTENT_TYPE, JSON_CONTENT_TYPE)],
+        response.body,
     )
         .into_response())
 }
@@ -905,7 +1125,7 @@ pub async fn proxy_upload(
     user: AuthUser,
     Path(share_id): Path<String>,
     headers: HeaderMap,
-    body: Bytes,
+    body: axum::body::Body,
 ) -> AppResult<Response> {
     let share = incoming_share(&state, &user, &share_id).await?;
     let content_type = headers
@@ -917,21 +1137,34 @@ pub async fn proxy_upload(
         return Err(AppError::bad_request("multipart content type required"));
     }
     let content_type = canonical_multipart_content_type(&content_type)?;
+    // Held on disk, never in memory, and streamed on with its digest signed.
+    let spooled = spool_body(body, MAX_FEDERATED_UPLOAD_BYTES).await?;
     let request_id = stable_mutation_request_id(
         "upload",
-        &[user.user_id.as_bytes(), share_id.as_bytes(), &body],
+        &[
+            user.user_id.as_bytes(),
+            share_id.as_bytes(),
+            spooled.content_digest.as_bytes(),
+        ],
     );
     let mut spec = drive_spec(
         Method::POST,
         "/api/fed/drive/files".into(),
         content_type,
-        body.to_vec(),
+        Vec::new(),
         Some(&share.remote_capability),
         MAX_DIRECTORY_RESPONSE_BYTES,
     )?;
     spec.request_id = request_id;
+    let (length, digest) = (spooled.length, spooled.content_digest.clone());
     let response = configured_stack(&state)?
-        .send(&share.remote_domain, spec)
+        .send_file(
+            &share.remote_domain,
+            spec,
+            spooled.into_file().await?,
+            length,
+            digest,
+        )
         .await
         .map_err(gateway_error)?;
     Ok((
@@ -1145,17 +1378,56 @@ pub async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> Ap
             Ok(share) => share,
             Err(error) => return signed_app_error(federation, &authenticated, error),
         };
-        let files: Vec<FederatedDriveFile> = sqlx::query_as(
-            "SELECT id, collection_id, uploader_user_id, metadata_envelope,
-                file_key_envelope, key_epoch, metadata_revision,
-                encrypted_size_bytes, created_at, updated_at
-         FROM files WHERE collection_id = $1 AND deleted_at IS NULL
-         ORDER BY created_at DESC",
-        )
+        let files: Vec<FederatedDriveFile> = sqlx::query_as(&format!(
+            "SELECT f.id, f.collection_id, f.uploader_user_id, f.metadata_envelope,
+                f.file_key_envelope, f.key_epoch, f.metadata_revision,
+                f.encrypted_size_bytes, f.created_at, f.updated_at, f.original_key_epoch,
+                {} AS key_history, {} AS content_key_epoch
+         FROM files f WHERE f.collection_id = $1 AND f.deleted_at IS NULL
+         ORDER BY f.created_at DESC",
+            crate::models::FILE_KEY_HISTORY_SQL,
+            crate::models::CONTENT_KEY_EPOCH_SQL
+        ))
         .bind(share.collection_id)
         .fetch_all(&state.pool)
         .await?;
         signed_json(federation, &authenticated, StatusCode::OK, &files)
+    }
+    .await;
+    match result {
+        Ok(response) => Ok(response),
+        Err(error) => signed_app_error(federation, &authenticated, error),
+    }
+}
+
+/// `GET /api/fed/drive/epochs` — the shared folder's key history, for the
+/// recipient's server and clients (docs/plans/drive-share-revocation.md).
+#[utoipa::path(
+    get,
+    path = "/api/fed/drive/epochs",
+    tag = "drive federation",
+    responses((status = 200, description = "Signed capability-authorized key history", body = Vec<crate::handlers::folder_access::EpochLink>))
+)]
+pub async fn list_epochs(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
+    let federation = configured_stack(&state)?;
+    let authenticated = federation
+        .authenticate_inbound(
+            &headers,
+            "GET",
+            "/api/fed/drive/epochs",
+            None,
+            &[],
+            FederationFeature::DriveV1,
+        )
+        .await?;
+    let result: AppResult<Response> = async {
+        let share = match outgoing_share(&state, &authenticated, &headers, false).await {
+            Ok(share) => share,
+            Err(error) => return signed_app_error(federation, &authenticated, error),
+        };
+        let chain =
+            crate::handlers::folder_access::epoch_chain(&state.pool, share.collection_id).await?;
+        signed_json(federation, &authenticated, StatusCode::OK, &chain)
     }
     .await;
     match result {
@@ -1286,16 +1558,17 @@ pub async fn download_file(
 pub async fn upload_file(
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: Bytes,
+    body: axum::body::Body,
 ) -> AppResult<Response> {
     let federation = configured_stack(&state)?;
+    // Signed over the body's digest: verified before the body is read, the
+    // body hashed as it is parsed, and nothing acted on until they match.
     let authenticated = federation
-        .authenticate_inbound(
+        .authenticate_inbound_streamed(
             &headers,
             "POST",
             "/api/fed/drive/files",
             None,
-            &body,
             FederationFeature::DriveV1,
         )
         .await?;
@@ -1324,7 +1597,14 @@ pub async fn upload_file(
                 )
             }
         };
-        let parsed = match parse_upload(content_type, body).await {
+        // Spooled and hashed whole before anything is parsed: no byte the
+        // peer did not sign is looked at.
+        let spooled = match spool_body(body, MAX_FEDERATED_UPLOAD_BYTES).await {
+            Ok(spooled) => spooled,
+            Err(error) => return signed_app_error(federation, &authenticated, error),
+        };
+        authenticated.confirm_streamed_body(&spooled.content_digest)?;
+        let parsed = match parse_upload(content_type, spooled.into_stream().await?).await {
             Ok(parsed) => parsed,
             Err(error) => return signed_app_error(federation, &authenticated, error),
         };
@@ -1436,8 +1716,9 @@ pub async fn upload_file(
                 "INSERT INTO files
                 (id, collection_id, uploader_user_id, metadata_envelope,
                  file_key_envelope, key_epoch, metadata_revision,
-                 storage_path, encrypted_size_bytes, ciphertext_sha256, fed_share_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+                 storage_path, encrypted_size_bytes, ciphertext_sha256, fed_share_id,
+                 original_key_epoch)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$6)",
             )
             .bind(file_id)
             .bind(share.collection_id)
@@ -1631,11 +1912,13 @@ async fn outgoing_share(
     .ok_or_else(|| AppError::not_found("Drive share not found"))
 }
 
-async fn parse_upload(content_type: &str, body: Bytes) -> AppResult<ParsedUpload> {
+async fn parse_upload<S>(content_type: &str, body: S) -> AppResult<ParsedUpload>
+where
+    S: futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+{
     let boundary = multer::parse_boundary(content_type)
         .map_err(|_| AppError::bad_request("invalid multipart form"))?;
-    let body_stream = stream::once(async move { Ok::<Bytes, std::io::Error>(body) });
-    let mut multipart = multer::Multipart::new(body_stream, boundary);
+    let mut multipart = multer::Multipart::new(body, boundary);
     let mut file_id = None;
     let mut metadata_envelope = None;
     let mut file_key_envelope = None;
@@ -1708,19 +1991,90 @@ async fn parse_upload(content_type: &str, body: Bytes) -> AppResult<ParsedUpload
     })
 }
 
-async fn limited_field_text(field: multer::Field<'_>) -> AppResult<String> {
-    let bytes = field
-        .bytes()
+async fn limited_field_text(mut field: multer::Field<'_>) -> AppResult<String> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = field
+        .chunk()
         .await
-        .map_err(|_| AppError::bad_request("invalid multipart field"))?;
-    if bytes.len() > MAX_MULTIPART_FIELD_BYTES {
-        return Err(AppError::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "multipart metadata field too large",
-        ));
+        .map_err(|_| AppError::bad_request("invalid multipart field"))?
+    {
+        if bytes.len() + chunk.len() > MAX_MULTIPART_FIELD_BYTES {
+            return Err(AppError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "multipart metadata field too large",
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
     }
-    String::from_utf8(bytes.to_vec())
-        .map_err(|_| AppError::bad_request("multipart metadata must be UTF-8"))
+    String::from_utf8(bytes).map_err(|_| AppError::bad_request("multipart metadata must be UTF-8"))
+}
+
+/// The largest federated Drive upload body: one file blob (the same bound as
+/// a download) plus its multipart framing and envelopes.
+const MAX_FEDERATED_UPLOAD_BYTES: u64 = MAX_DRIVE_OBJECT_BYTES as u64 + 16 * 1024 * 1024;
+
+/// A request body written to an unnamed temporary file, with its length and
+/// RFC 9530 SHA-256 digest.
+pub(crate) struct SpooledBody {
+    file: tokio::fs::File,
+    pub length: u64,
+    pub content_digest: String,
+}
+
+/// Writes `body` to a temporary file, hashing it, refusing more than `limit`
+/// bytes (`413`).
+pub(crate) async fn spool_body(body: axum::body::Body, limit: u64) -> AppResult<SpooledBody> {
+    use futures_util::StreamExt as _;
+    use tokio::io::AsyncWriteExt as _;
+    let std_file =
+        tempfile::tempfile().map_err(|error| AppError::internal(format!("temp file: {error}")))?;
+    let mut file = tokio::fs::File::from_std(std_file);
+    let mut stream = body.into_data_stream();
+    let mut digest = Sha256::new();
+    let mut length = 0_u64;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| AppError::bad_request("request body interrupted"))?;
+        length = length.saturating_add(chunk.len() as u64);
+        if length > limit {
+            return Err(AppError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "request body too large",
+            ));
+        }
+        digest.update(&chunk);
+        file.write_all(&chunk)
+            .await
+            .map_err(|error| AppError::internal(format!("spool body: {error}")))?;
+    }
+    file.flush()
+        .await
+        .map_err(|error| AppError::internal(format!("spool body: {error}")))?;
+    let digest: [u8; 32] = digest.finalize().into();
+    Ok(SpooledBody {
+        file,
+        length,
+        content_digest: kutup_federation_proto::content_digest_sha256_from_digest(&digest),
+    })
+}
+
+impl SpooledBody {
+    /// The file, from its start.
+    pub(crate) async fn into_file(mut self) -> AppResult<tokio::fs::File> {
+        use tokio::io::AsyncSeekExt as _;
+        self.file
+            .rewind()
+            .await
+            .map_err(|error| AppError::internal(format!("spool body: {error}")))?;
+        Ok(self.file)
+    }
+
+    /// The bytes again, as a stream from the file.
+    async fn into_stream(self) -> AppResult<tokio_util::io::ReaderStream<tokio::fs::File>> {
+        Ok(tokio_util::io::ReaderStream::with_capacity(
+            self.into_file().await?,
+            1024 * 1024,
+        ))
+    }
 }
 
 /// A version's ciphertext digest, computed once and cached on its row.
@@ -2035,7 +2389,7 @@ mod tests {
 
         let upload = parse_upload(
             &format!("multipart/form-data; boundary={boundary}"),
-            Bytes::from(body),
+            futures_util::stream::once(async move { Ok::<_, std::io::Error>(Bytes::from(body)) }),
         )
         .await
         .unwrap();

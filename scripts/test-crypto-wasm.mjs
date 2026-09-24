@@ -442,11 +442,42 @@ assert.throws(
   () => crypto.sealThumbnail(Buffer.from('<svg/>').toString('base64'), 3, 10, 10, 'sm', thumb.fileKey, thumb.fileId, 1),
   /format/,
 )
-for (const purpose of [6, 7]) {
+for (const purpose of [6, 7, 8]) {
   assert.throws(
     () => crypto.sealDriveEnvelope(thumb.image, thumb.fileKey, purpose, 1, 1n, thumb.fileId, thumb.fileId),
     /typed export/,
   )
 }
+
+// A rotated folder's keyring: the current key unlocks every older one
+// through the signed chain; an older key (a removed member's) does not.
+const ring = vectors.collectionKeyring
+const ringChain = ring.chain.map((link) => ({
+  epoch: link.epoch,
+  epochStatement: link.statement,
+  previousKeyEnvelope: link.previousKeyEnvelope ?? undefined,
+}))
+assert.deepEqual(
+  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, ringChain),
+  ring.keys,
+)
+assert.throws(() =>
+  crypto.unlockCollectionKeyring(ring.keys[1], ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, ringChain),
+)
+assert.throws(() =>
+  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, [
+    ringChain[0],
+    ringChain[2],
+  ]),
+)
+const resealedPrevious = crypto.sealPreviousCollectionKey(ring.keys[1], ring.keys[2], ring.collectionId, ring.ownerUserId, 3)
+assert.deepEqual(
+  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, [
+    ringChain[0],
+    ringChain[1],
+    { ...ringChain[2], previousKeyEnvelope: resealedPrevious },
+  ]),
+  ring.keys,
+)
 
 console.log('crypto WASM canonical vectors passed')

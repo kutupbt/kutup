@@ -1,5 +1,5 @@
 import { useQueries } from '@tanstack/react-query'
-import { filesKey, loadFolderFiles } from '../drive/files'
+import { folderFilesKey, loadFolderFiles } from '../drive/files'
 import { useFolders } from '../drive/folders'
 import type { DriveFile, Folder } from '../drive/model'
 
@@ -19,7 +19,7 @@ export function useDriveIndex(enabled: boolean) {
   const readable = enabled ? (folders.data?.all ?? []).filter((f) => f.key) : []
   const lists = useQueries({
     queries: readable.map((folder) => ({
-      queryKey: filesKey(folder.remoteShareId ?? folder.id),
+      queryKey: folderFilesKey(folder),
       queryFn: () => loadFolderFiles(folder),
     })),
   })

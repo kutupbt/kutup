@@ -35,13 +35,15 @@ export async function uploadAsset(
 export async function fetchAsset(
   context: WhiteboardAssetContextV1,
   collectionKey: Uint8Array,
+  /** The folder key at an older epoch: an asset stored before a rotation. */
+  keyAt?: (epoch: number) => Promise<Uint8Array>,
 ): Promise<Uint8Array> {
   const res = await api.get(`/files/${context.fileId}/assets/${context.assetId}`, {
     responseType: 'arraybuffer',
   })
-  return openWhiteboardAssetV1(
-    new Uint8Array(res.data as ArrayBuffer),
-    collectionKey,
-    context,
-  )
+  // Sealed at the epoch the server records for it; opening checks it.
+  const stored = Number(res.headers['x-kutup-key-epoch'] ?? context.epoch)
+  const epoch = Number.isSafeInteger(stored) && stored >= 1 && stored <= context.epoch ? stored : context.epoch
+  const key = epoch === context.epoch || !keyAt ? collectionKey : await keyAt(epoch)
+  return openWhiteboardAssetV1(new Uint8Array(res.data as ArrayBuffer), key, { ...context, epoch })
 }

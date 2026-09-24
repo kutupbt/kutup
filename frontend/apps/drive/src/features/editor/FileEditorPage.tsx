@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, BookmarkPlus, Check, Download, Eye, History, Save, X } from 'lucide-react'
 import { Suspense, useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -14,7 +15,9 @@ import { ThemeToggle } from '@kutup/ui/components/theme-toggle'
 import { formatBytes } from '@kutup/ui/lib/format'
 import { NameDialog } from '../dialogs/NameDialog'
 import { downloadFile, FsaRequiredError } from '../drive/downloads'
-import { useFolderFiles } from '../drive/files'
+import { filesKey, useFolderFiles } from '../drive/files'
+import { fileKeyAt, folderKeyAt, sealedAt } from '../drive/keyring'
+import { rekeyFile } from '../drive/rekey'
 import { useFolders } from '../drive/folders'
 import { useRenameFile } from '../drive/mutations'
 import type { DriveFile, Folder } from '../drive/model'
@@ -24,7 +27,7 @@ import CursorColorPicker from './CursorColorPicker'
 import { OfficeEditor, TextCollabEditor, WhiteboardEditor } from './dispatch'
 import { editorKindFor, extensionOf, type EditorKind } from './editorKind'
 import type { OfficeEditorHandle } from './office/OfficeEditor'
-import { patchVersion } from '@kutup/collab/api'
+import { listVersions, patchVersion } from '@kutup/collab/api'
 import { loadVersionBytes, saveSnapshot, type SnapshotTarget } from './snapshots'
 import { renderPdfFirstPageV1 } from '@kutup/files/mediaPreview'
 import { THUMBNAIL_MAX_SIDE } from '@kutup/crypto/thumbnail'
@@ -53,7 +56,11 @@ type Opened =
 type Failure = 'notFound' | 'undecryptable' | 'tooLarge' | 'loadFailed'
 
 interface Keys {
+  /** The folder key at the file's epoch (what its collaboration frames use). */
   collectionKey: Uint8Array
+  /** The folder key at any epoch: older log frames and assets. */
+  keyAt: (epoch: number) => Promise<Uint8Array>
+  /** Where new saves go: the file's current key and epoch. */
   target: SnapshotTarget
 }
 
@@ -80,6 +87,7 @@ function OpenFile({ cid, fid }: { cid: string; fid: string }) {
   // what the editors hold: a rename refetches the list, which decrypts fresh
   // key copies, and handing those over would tear the editors' sessions down
   // for nothing. Names and permissions are read live below.
+  const queryClient = useQueryClient()
   const [picked, setPicked] = useState<{ folder: Folder; file: DriveFile } | null>(null)
   const [opened, setOpened] = useState<Opened | null>(null)
   const [keys, setKeys] = useState<Keys | null>(null)
@@ -104,20 +112,39 @@ function OpenFile({ cid, fid }: { cid: string; fid: string }) {
       setFailure('undecryptable')
       return
     }
-    const collectionKey = container.key
     const name = f.name
     const target: SnapshotTarget = {
       fileKey: f.fileKey,
       context: { fileId: f.id, collectionId: f.collectionId, epoch: f.keyEpoch },
     }
+    const keyAt = (epoch: number) => folderKeyAt(container, epoch)
 
     let cancelled = false
     let blobUrl: string | null = null
     void (async () => {
       const editor = container.source === 'remote' ? null : editorKindFor(name)
       const viewer = container.source === 'remote' ? null : chooseViewer(name)
+      // An editor writes only under the folder's current key: a file the
+      // folder rotated past moves to it first (docs/plans/drive-share-revocation.md).
+      if (editor && container.canUpload && f.keyEpoch < container.keyEpoch) {
+        try {
+          const rekeyed = await rekeyFile(container, f)
+          void queryClient.invalidateQueries({ queryKey: filesKey(container.id) })
+          if (!cancelled) setPicked({ folder: container, file: rekeyed })
+        } catch {
+          if (!cancelled) setFailure('loadFailed')
+        }
+        return
+      }
+      let collectionKey: Uint8Array
+      try {
+        collectionKey = await keyAt(f.keyEpoch)
+      } catch {
+        if (!cancelled) setFailure('undecryptable')
+        return
+      }
       if (!editor && !viewer) {
-        setKeys({ collectionKey, target })
+        setKeys({ collectionKey, keyAt, target })
         setOpened({ kind: 'none' })
         return
       }
@@ -127,20 +154,21 @@ function OpenFile({ cid, fid }: { cid: string; fid: string }) {
       }
       try {
         let bytes: Uint8Array
+        // Each stored thing opens with the key of the epoch it was sealed at.
         if (editor === 'office' || editor === 'whiteboard') {
           // Reopen what was last saved, not the upload.
-          const content = await currentContent(f)
+          const content = await currentContent(container, f)
           bytes =
             content.kind === 'version'
-              ? await loadVersionBytes(target, content.path)
-              : await loadOriginal(f, target)
+              ? await loadVersionBytes(await sealedAt(container, f, content.keyEpoch), content.path)
+              : await loadOriginal(f, await sealedAt(container, f, f.contentKeyEpoch))
         } else {
           // Notes pick their latest version up themselves; the upload only
           // seeds a note that has never been edited.
-          bytes = await loadOriginal(f, target)
+          bytes = await loadOriginal(f, await sealedAt(container, f, f.contentKeyEpoch))
         }
         if (cancelled) return
-        setKeys({ collectionKey, target })
+        setKeys({ collectionKey, keyAt, target })
         if (editor === 'text') {
           setOpened({ kind: 'text', initialText: new TextDecoder().decode(bytes) })
         } else if (editor) {
@@ -157,7 +185,7 @@ function OpenFile({ cid, fid }: { cid: string; fid: string }) {
       cancelled = true
       if (blobUrl) URL.revokeObjectURL(blobUrl)
     }
-  }, [picked])
+  }, [picked, queryClient])
 
   // Live: the current name and permissions (a rename shows at once).
   const liveFolder = folder ?? picked?.folder
@@ -293,6 +321,7 @@ function Workspace({
       filename: name,
       collectionMaster: keys.collectionKey,
       keyEpoch: keys.target.context.epoch,
+      keyAt: keys.keyAt,
     }
     switch (opened.kind) {
       case 'text':
@@ -300,6 +329,7 @@ function Workspace({
           <TextCollabEditor
             {...common}
             fileKey={keys.target.fileKey}
+            fileKeyAt={(epoch) => fileKeyAt(folder, file, epoch)}
             initialContent={opened.initialText}
             readOnly={readOnly}
           />
@@ -351,6 +381,15 @@ function Workspace({
             <ViewOnlyActions fileId={file.id} />
           ) : wholeFile ? (
             <WholeFileActions
+              openVersion={async (versionId) => {
+                // A version opens with the key of the epoch it was saved at.
+                const version = (await listVersions(file.id)).find((v) => v.id === versionId)
+                if (!version) throw new Error('version not found')
+                return loadVersionBytes(
+                  await sealedAt(folder, file, version.keyEpoch),
+                  `/files/${file.id}/versions/${versionId}/download`,
+                )
+              }}
               kind={wholeFile}
               keys={keys}
               saveShortcut={saveShortcut}
@@ -393,7 +432,7 @@ function Workspace({
         pending={rename.isPending}
         error={rename.error}
         onClose={() => (setRenaming(false), rename.reset())}
-        onSubmit={(next) => rename.mutate({ file, name: next }, { onSuccess: () => setRenaming(false) })}
+        onSubmit={(next) => rename.mutate({ folder, file, name: next }, { onSuccess: () => setRenaming(false) })}
       />
     </div>
   )
@@ -419,6 +458,7 @@ function NoPreview({ onDownload }: { onDownload: () => void }) {
  * (The text editor carries its own, driven by its Yjs snapshots.)
  */
 function WholeFileActions({
+  openVersion,
   kind,
   keys,
   saveShortcut,
@@ -427,6 +467,8 @@ function WholeFileActions({
   isSpreadsheet = false,
   onRestored,
 }: {
+  /** A stored version's plaintext. */
+  openVersion: (versionId: string) => Promise<Uint8Array>
   kind: EditorKind
   keys: Keys
   saveShortcut: MutableRefObject<(() => void) | null>
@@ -514,7 +556,7 @@ function WholeFileActions({
   async function restore(versionId: string, choice: RestoreChoice) {
     const id = toast.loading(t('file.restoring'))
     try {
-      const old = await loadVersionBytes(keys.target, `/files/${keys.target.context.fileId}/versions/${versionId}/download`)
+      const old = await openVersion(versionId)
       const time = new Date().toLocaleString()
       if (choice === 'save-and-restore') {
         await save({ label: t('editor.preRestoreLabel', { time }), quiet: true })

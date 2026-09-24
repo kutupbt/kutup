@@ -29,21 +29,26 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
             continue;
         };
 
-        let (file_key, meta) =
-            crate::file_crypto::open(f, &col_key).context("decrypt file record")?;
+        let keys = crate::keyring::Keyring::load(&ctx.client, col, &col_key, &master_key)?;
+        let (file_key, meta) = crate::file_crypto::open(f, &keys).context("decrypt file record")?;
 
         let dest_path = resolve_dest(dest_dir, &meta.name);
 
-        // Prefer the newest version snapshot (collab-edited files carry their
-        // post-load state there), else the main blob.
-        let (stream, from_version) = ctx.client.latest_encrypted_stream(file_id)?;
+        // What the file holds now: the server serves its latest whole-file
+        // version, else the upload, sealed at `content_epoch()`.
+        let (content_key, content_epoch) = crate::file_crypto::content_key(f, &file_key, &keys)?;
+        let stream = ctx.client.download_file_stream(file_id)?;
+        let from_version = ctx
+            .client
+            .list_versions(file_id)
+            .is_ok_and(|versions| versions.iter().any(|v| v.kind == "file"));
 
         let bar =
             crate::output::progress_bar(Some(f.encrypted_size_bytes.max(0) as u64), &meta.name);
 
         let mut out = File::create(&dest_path).context("open dest")?;
-        let blob_context = DriveFileBlobContextV1::new(&f.id, &f.collection_id, f.key_epoch)?;
-        let mut written = match stream_download(stream, &file_key, blob_context, &mut out, |n| {
+        let blob_context = DriveFileBlobContextV1::new(&f.id, &f.collection_id, content_epoch)?;
+        let mut written = match stream_download(stream, &content_key, blob_context, &mut out, |n| {
             bar.set_position(n as u64)
         }) {
             Ok(w) => w,
@@ -74,7 +79,7 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
                 file_id,
                 &f.collection_id,
                 f.key_epoch,
-                &col_key,
+                &keys,
                 &dest_path,
             ) {
                 Ok(Some(new_len)) => written = new_len,

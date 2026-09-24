@@ -26,6 +26,9 @@ function backfill(folder: Folder, file: DriveFile, userId: string): void {
   if (file.thumbnails.sm && !file.thumbnailStale) return
   if (thumbnailInHand(file.id)) return
   if (!file.fileKey || !file.name || folder.source === 'remote') return
+  // New pictures are sealed only under the folder's current key; a file the
+  // folder rotated past gets its picture when an editor re-keys it.
+  if (file.keyEpoch !== folder.keyEpoch) return
   if (!(folder.canManage || file.uploaderUserId === userId)) return
   const source = thumbnailSourceFor(file.name, file.mimeType)
   if (!source || ((source === 'image' || source === 'pdf') && file.size > BACKFILL_MAX_IMAGE_BYTES)) return
@@ -39,7 +42,7 @@ function backfill(folder: Folder, file: DriveFile, userId: string): void {
   const fileKey = file.fileKey
   const name = file.name
   enqueueThumbnail(file.id, async () => {
-    const content = await currentContent(file)
+    const content = await currentContent(folder, file)
     const blob = await readFile(folder, file)
     const made = await thumbnailsOfFile(new File([blob], name, { type: file.mimeType }))
     return storeThumbnails(
@@ -82,7 +85,7 @@ export function FileThumbnail({ folder, file }: { folder: Folder; file: DriveFil
     if (!visible) return
     let alive = true
     setUrl(null)
-    void thumbnailUrl(file, 'sm').then((u) => alive && setUrl(u))
+    void thumbnailUrl(folder, file, 'sm').then((u) => alive && setUrl(u))
     backfill(folder, file, session.userId)
     return () => {
       alive = false

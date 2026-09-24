@@ -179,7 +179,7 @@
     "publicLink": {
       "title": "Public link",
       "description": "Anyone with this link can see and download the files directly in this folder, without signing in.",
-      "warning": "The key is part of the link and Kutup does not keep a copy. Save it now; share it only with people who should see these files."
+      "warning": "Anyone who has this link can open these files. You can copy it again, or remove it, from the folder's Share dialog."
     },
     "invite": {
       "title": "Invite link",
@@ -199,6 +199,31 @@
     "picker": {
       "expand": "Expand {{name}}",
       "collapse": "Collapse {{name}}"
+    },
+    "access": {
+      "title": "Who has access",
+      "loading": "Loading who has access…",
+      "loadFailed": "Could not load who has access.",
+      "empty": "Only you can open this folder.",
+      "canEdit": "Can add and edit",
+      "canView": "Can view",
+      "otherServer": "on another server",
+      "link": "Public link",
+      "linkCreated": "Created {{created}}",
+      "linkExpires": "Created {{created}} · expires {{expires}}",
+      "legacyLinks_one": "{{count}} link was made before links could be copied again. Removing anyone also removes it; make a new link afterwards.",
+      "legacyLinks_other": "{{count}} links were made before links could be copied again. Removing anyone also removes them; make new links afterwards.",
+      "copy": "Copy link",
+      "copied": "Link copied",
+      "remove": "Remove",
+      "removeNamed": "Remove {{name}}",
+      "removeLink": "Remove this link",
+      "confirmTitle": "Remove {{name}}?",
+      "confirmBody": "They lose access now, and the folder moves to a new key they never get: nothing added or changed from now on is readable to them. What they already opened or downloaded stays with them.",
+      "removed": "Access removed",
+      "changed": "Who has access changed meanwhile. Check the list and try again.",
+      "recipientChanged": "{{account}} has reset their account. Remove them, then share again if you want to.",
+      "failed": "Access could not be removed. Try again."
     }
   },
   "shared": {
@@ -262,7 +287,6 @@
       "quota": "Your storage is full.",
       "shareQuota": "This shared folder's upload limit is reached.",
       "forbidden": "You cannot add files here.",
-      "remoteTooLarge": "Files over 255 MB can't be added to a folder on another server yet.",
       "network": "The connection dropped.",
       "other": "The upload failed."
     },

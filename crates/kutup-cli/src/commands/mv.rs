@@ -4,7 +4,7 @@
 
 use crate::api::FileMetadata;
 use crate::context::require_session;
-use crate::cryptohelpers::{decrypt_collection_key, find_file_and_key};
+use crate::cryptohelpers::{decrypt_collection_key, find_file_and_key, rekey_if_behind};
 use crate::errors::NotFound;
 use anyhow::{bail, Context, Result};
 
@@ -18,7 +18,12 @@ pub fn run(profile: &str, json: bool, id: &str, new_name: &str, folder: bool) ->
 
     // Locate the file and unwrap its key, then merge the new name into the
     // existing {name, mimeType, size} metadata and re-encrypt.
-    let (row, file_key) = find_file_and_key(&ctx.client, &master_key, id)?;
+    // A new name is new content: never under a key the folder has left.
+    let found = rekey_if_behind(
+        &ctx.client,
+        find_file_and_key(&ctx.client, &master_key, id)?,
+    )?;
+    let (row, file_key) = (found.file, found.file_key);
 
     let mut meta: FileMetadata =
         crate::file_crypto::open_metadata(&row, &file_key).context("decrypt existing metadata")?;

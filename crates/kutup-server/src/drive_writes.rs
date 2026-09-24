@@ -177,3 +177,34 @@ impl Room {
         }
     }
 }
+
+/// Holds the file at `expected_epoch` until the transaction ends, and
+/// requires that to be its folder's current epoch: new content is sealed
+/// only under keys no removed member holds
+/// (docs/plans/drive-share-revocation.md). `409 file key changed` if a
+/// re-key moved the file on meanwhile; `409 file needs a re-key` if the
+/// folder rotated since the file was last keyed. A re-key or rotation waits
+/// for the transaction.
+pub async fn lock_file_epoch(
+    tx: &mut Transaction<'_, Postgres>,
+    file_id: Uuid,
+    expected_epoch: i32,
+) -> crate::error::AppResult<()> {
+    let epochs: Option<(i32, i32)> = sqlx::query_as(
+        "SELECT f.key_epoch, c.key_epoch FROM files f JOIN collections c ON c.id = f.collection_id
+         WHERE f.id = $1 AND f.deleted_at IS NULL FOR SHARE",
+    )
+    .bind(file_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    match epochs {
+        Some((file, _)) if file != expected_epoch => {
+            Err(crate::error::AppError::conflict("file key changed"))
+        }
+        Some((file, folder)) if file != folder => {
+            Err(crate::error::AppError::conflict("file needs a re-key"))
+        }
+        Some(_) => Ok(()),
+        None => Err(crate::error::AppError::not_found("not found")),
+    }
+}

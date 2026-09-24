@@ -23,6 +23,12 @@ export interface CollectionRow {
   isShared: boolean
 }
 
+/** A file key a re-key left behind: what was sealed at `epoch` opens with it. */
+export interface FileKeyHistoryEntry {
+  epoch: number
+  fileKeyEnvelope: string
+}
+
 export interface FileRow {
   id: string
   collectionId: string
@@ -34,10 +40,16 @@ export interface FileRow {
   encryptedSizeBytes: number
   createdAt: string
   updatedAt: string
-  /** When each thumbnail variant was stored (docs/plans/drive-thumbnails.md). */
-  thumbnails?: { sm?: string; lg?: string }
+  /** When each thumbnail variant was stored (docs/plans/drive-thumbnails.md), and the epoch it was sealed at. */
+  thumbnails?: { sm?: string; lg?: string; smKeyEpoch?: number; lgKeyEpoch?: number }
   /** A thumbnail exists but was drawn from other than the latest version. */
   thumbnailStale?: boolean
+  /** The epoch the upload was sealed at (docs/plans/drive-share-revocation.md). */
+  originalKeyEpoch: number
+  /** The epoch of what a download serves (latest whole-file version, else the upload). */
+  contentKeyEpoch: number
+  /** File keys a re-key left behind, one per epoch. */
+  keyHistory?: FileKeyHistoryEntry[]
 }
 
 export interface UserRow {

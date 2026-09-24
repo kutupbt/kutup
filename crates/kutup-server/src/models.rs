@@ -261,7 +261,32 @@ pub struct FileRow {
     /// A thumbnail exists but was drawn from something other than the
     /// latest version (docs/plans/drive-thumbnails.md): redraw it.
     pub thumbnail_stale: bool,
+    /// The epoch the uploaded content was sealed at (the file's own until it
+    /// is first re-keyed).
+    pub original_key_epoch: i32,
+    /// The epoch of the content a download serves (its latest whole-file
+    /// version, else the upload).
+    pub content_key_epoch: i32,
+    /// The file keys the file has left behind at a re-key, one per epoch
+    /// (docs/plans/drive-share-revocation.md). Empty for most files.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub key_history: Vec<FileKeyHistoryEntry>,
 }
+
+/// A file key a re-key left behind: what was sealed at `epoch` opens with it.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct FileKeyHistoryEntry {
+    pub epoch: i32,
+    pub file_key_envelope: String,
+}
+
+/// The epoch of what `GET /files/{id}/download` serves (`file_content`):
+/// the latest whole-file version's, else the original's; for `files f`.
+pub const CONTENT_KEY_EPOCH_SQL: &str = "COALESCE((SELECT v.key_epoch FROM file_versions v WHERE v.file_id = f.id AND v.kind = 'file' ORDER BY v.created_at DESC LIMIT 1), f.original_key_epoch)";
+
+/// The `key_history` column for a query over `files f`.
+pub const FILE_KEY_HISTORY_SQL: &str = "COALESCE((SELECT json_agg(json_build_object('epoch', h.epoch, 'fileKeyEnvelope', h.file_key_envelope) ORDER BY h.epoch) FROM file_key_history h WHERE h.file_id = f.id), '[]'::json)";
 
 #[derive(Debug, Default, Serialize, ToSchema)]
 pub struct FileThumbnails {
@@ -275,6 +300,11 @@ pub struct FileThumbnails {
         skip_serializing_if = "Option::is_none"
     )]
     pub lg: Option<OffsetDateTime>,
+    /// The epoch each variant was sealed at.
+    #[serde(rename = "smKeyEpoch", skip_serializing_if = "Option::is_none")]
+    pub sm_key_epoch: Option<i32>,
+    #[serde(rename = "lgKeyEpoch", skip_serializing_if = "Option::is_none")]
+    pub lg_key_epoch: Option<i32>,
 }
 
 /// File upload result — mirrors `handlers.UploadResult`.

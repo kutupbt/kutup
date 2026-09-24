@@ -33,6 +33,7 @@ pub mod chat_backup;
 pub mod chat_backup_media;
 pub mod chat_media;
 pub mod collection_epoch;
+pub mod collection_keyring;
 pub mod drive_envelope;
 pub mod drive_object;
 pub mod envelope;

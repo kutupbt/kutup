@@ -1,42 +1,53 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { createFileRecordV1, encryptStream } from '@kutup/crypto'
+import { createFileRecordV1 } from '@kutup/crypto'
+import { newFileBlobStreamEncryptorV1 } from '@kutup/crypto/fileBlob'
+import { PLAIN_CHUNK } from '@kutup/crypto/streamEncryptor'
 import { streamUpload, type UploadedFile } from '@kutup/files/upload/streamUpload'
 import { uploadFolder, type FolderEntry } from '@kutup/files/upload/uploadFolder'
 import api, { freshAccessToken } from '@kutup/session/client'
 import { updateSession } from '@kutup/session/store'
 import { filesKey } from '../drive/files'
-import { foldersKey } from '../drive/folders'
+import { foldersKey, type FolderIndex } from '../drive/folders'
 import { useDriveIdentity } from '../drive/identity'
 import { folderLocation, type Folder } from '../drive/model'
 import { thumbnailAfterUpload } from '../thumbnails/schedule'
-import { classifyUploadError, MAX_REMOTE_UPLOAD_BYTES, RemoteUploadTooLargeError } from './uploadError'
+import { classifyUploadError, isFolderKeyChanged } from './uploadError'
 import { uploads } from './uploadStore'
 
 /**
  * A file into a federated folder: the other server takes one multipart body,
- * so it is encrypted whole in memory and proxied by our server.
+ * which our server spools to disk and streams on. It is encrypted a chunk at
+ * a time into a Blob (which the browser may keep on disk), never whole in
+ * memory.
  */
 async function uploadRemote(folder: Folder, shareId: string, file: File, signal: AbortSignal, progress: (s: number, t: number) => void) {
   if (!folder.key) throw new Error('folder is not open')
-  if (file.size > MAX_REMOTE_UPLOAD_BYTES) throw new RemoteUploadTooLargeError()
-  const bytes = new Uint8Array(await file.arrayBuffer())
   const record = await createFileRecordV1(folder.id, folder.keyEpoch, folder.key, {
     name: file.name,
     mimeType: file.type || 'application/octet-stream',
     size: file.size,
   })
-  const encrypted = await encryptStream(bytes, record.fileKey, {
+  const enc = await newFileBlobStreamEncryptorV1(record.fileKey, {
     fileId: record.fileId,
     collectionId: folder.id,
     epoch: folder.keyEpoch,
   })
+  const parts: BlobPart[] = [enc.prefix as BlobPart]
+  if (file.size === 0) parts.push(enc.push(new Uint8Array(0), true) as BlobPart)
+  for (let pos = 0; pos < file.size; ) {
+    if (signal.aborted) throw new DOMException('Upload cancelled', 'AbortError')
+    const end = Math.min(pos + PLAIN_CHUNK, file.size)
+    const plain = new Uint8Array(await file.slice(pos, end).arrayBuffer())
+    parts.push(enc.push(plain, end === file.size) as BlobPart)
+    pos = end
+  }
   const form = new FormData()
   form.append('fileId', record.fileId)
   form.append('metadataEnvelope', record.metadataEnvelope)
   form.append('fileKeyEnvelope', record.fileKeyEnvelope)
-  form.append('file', new Blob([encrypted.slice()], { type: 'application/octet-stream' }), 'encrypted')
+  form.append('file', new Blob(parts, { type: 'application/octet-stream' }), 'encrypted')
   await api.post(`/drive/federation/shares/${shareId}/files`, form, {
     signal,
     onUploadProgress: (e) => progress(Math.round((e.progress ?? 0) * file.size), file.size),
@@ -83,6 +94,19 @@ export function useUploadActions() {
       .catch(() => {})
   }, [queryClient])
 
+  /** The folder as the server has it now (after its key rotated). */
+  const reloadFolder = useCallback(
+    async (folder: Folder): Promise<Folder> => {
+      // A folder on another server: bring its stored share up to the new key.
+      if (folder.remoteShareId) await api.post(`/drive/federation/shares/${folder.remoteShareId}/refresh`)
+      await queryClient.invalidateQueries({ queryKey: foldersKey })
+      const fresh = queryClient.getQueryData<FolderIndex>(foldersKey)?.byId.get(folder.id)
+      if (!fresh?.key) throw new Error('the folder is no longer available')
+      return fresh
+    },
+    [queryClient],
+  )
+
   const uploadFiles = useCallback(
     (folder: Folder, files: File[]) => {
       uploads.add(
@@ -91,14 +115,20 @@ export function useUploadActions() {
           folderName: displayName(folder),
           total: file.size,
           run: async (signal, progress) => {
-            await uploadOne(folder, file, signal, progress)
+            try {
+              await uploadOne(folder, file, signal, progress)
+            } catch (error) {
+              // Its owner removed someone meanwhile: once more, under the new key.
+              if (!isFolderKeyChanged(error)) throw error
+              await uploadOne(await reloadFolder(folder), file, signal, progress)
+            }
           },
         })),
         settled,
         classifyUploadError,
       )
     },
-    [settled, displayName],
+    [settled, displayName, reloadFolder],
   )
 
   /** A dropped or picked directory: its tree becomes folders, one queue entry. */

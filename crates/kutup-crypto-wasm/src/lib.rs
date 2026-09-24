@@ -630,7 +630,9 @@ pub fn open_account_envelope(
 /// their bindings cannot be bypassed.
 fn generic_drive_purpose(value: u8) -> Result<DriveEnvelopePurpose, JsValue> {
     match DriveEnvelopePurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
-        DriveEnvelopePurpose::WhiteboardAsset | DriveEnvelopePurpose::Thumbnail => Err(js_error(
+        DriveEnvelopePurpose::WhiteboardAsset
+        | DriveEnvelopePurpose::Thumbnail
+        | DriveEnvelopePurpose::PreviousCollectionKey => Err(js_error(
             "this Drive envelope purpose has its own typed export",
         )),
         purpose => Ok(purpose),
@@ -1061,6 +1063,17 @@ pub fn open_collab_frame(
     .map_err(|error| js_error(&format!("encode collaboration frame: {error}")))
 }
 
+/// The collection-key epoch a frame names in its public header, so a
+/// client replaying older log frames can pick that epoch's key. Opening
+/// still checks it (`openCollabFrame` with the same epoch).
+#[wasm_bindgen(js_name = collabFrameKeyEpoch)]
+pub fn collab_frame_key_epoch(frame_base64: &str) -> Result<u32, JsValue> {
+    let frame = decode_canonical_base64(frame_base64, "collaboration frame")?;
+    envelope::Frame::unpack(&frame)
+        .map(|parsed| parsed.key_epoch)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
 #[wasm_bindgen(js_name = createCollectionEpochStatement)]
 #[allow(clippy::too_many_arguments)]
 pub fn create_collection_epoch_statement(
@@ -1128,6 +1141,78 @@ pub fn verify_collection_epoch_statement(
         .and_then(|()| statement.verify_collection_key(&collection_key))
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(statement.statement_hash())
+}
+
+/// The previous epoch's folder key sealed under this epoch's, for the
+/// rotation record (docs/plans/drive-share-revocation.md).
+#[wasm_bindgen(js_name = sealPreviousCollectionKey)]
+pub fn seal_previous_collection_key(
+    previous_key_base64: &str,
+    key_base64: &str,
+    collection_id: &str,
+    owner_user_id: &str,
+    epoch: u32,
+) -> Result<String, JsValue> {
+    let previous = decode_canonical_base64(previous_key_base64, "previous collection key")?;
+    let key = decode_canonical_base64(key_base64, "collection key")?;
+    kutup_crypto::collection_keyring::seal_previous_key(
+        &previous,
+        &key,
+        collection_id,
+        owner_user_id,
+        epoch,
+    )
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EpochLinkJson {
+    epoch: u32,
+    epoch_statement: String,
+    previous_key_envelope: Option<String>,
+}
+
+/// Every key of a folder, oldest first, as an array of base64 strings, from
+/// its current key and complete signed history (`chain`: the
+/// `GET /api/collections/{id}/epochs` array). Fails unless every statement
+/// is the owner's, chained, and every key matches its commitment.
+#[wasm_bindgen(js_name = unlockCollectionKeyring)]
+pub fn unlock_collection_keyring(
+    current_key_base64: &str,
+    collection_id: &str,
+    owner_user_id: &str,
+    owner_authority_public_key_base64: &str,
+    chain: JsValue,
+) -> Result<JsValue, JsValue> {
+    let current = decode_canonical_base64(current_key_base64, "collection key")?;
+    let authority =
+        decode_canonical_base64(owner_authority_public_key_base64, "authority public key")?;
+    let links: Vec<EpochLinkJson> = serde_wasm_bindgen::from_value(chain)
+        .map_err(|error| js_error(&format!("collection key history: {error}")))?;
+    let chain: Vec<kutup_crypto::collection_keyring::EpochLinkV1> = links
+        .into_iter()
+        .map(|link| kutup_crypto::collection_keyring::EpochLinkV1 {
+            epoch: link.epoch,
+            statement: link.epoch_statement,
+            previous_key_envelope: link.previous_key_envelope,
+        })
+        .collect();
+    let keys = kutup_crypto::collection_keyring::unlock(
+        &current,
+        collection_id,
+        owner_user_id,
+        &authority,
+        &chain,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(
+        &keys
+            .iter()
+            .map(|key| STANDARD.encode(key.as_slice()))
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|error| js_error(&error.to_string()))
 }
 
 #[wasm_bindgen(js_name = sealNamedShareEnvelope)]

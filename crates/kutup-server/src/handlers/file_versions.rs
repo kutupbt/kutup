@@ -40,6 +40,8 @@ pub struct VersionRow {
     created_at: OffsetDateTime,
     /// `file`: the whole file (office, whiteboard, restored); `yjs`: a note's state.
     kind: String,
+    /// The epoch it was sealed at: open it with that epoch's file key.
+    key_epoch: i32,
 }
 
 type VersionTuple = (
@@ -54,10 +56,11 @@ type VersionTuple = (
     bool,
     OffsetDateTime,
     String,
+    i32,
 );
 
 fn to_version_row(t: VersionTuple) -> VersionRow {
-    let (id, s3v, path, seq, dk, author, size, label, keep, created, kind) = t;
+    let (id, s3v, path, seq, dk, author, size, label, keep, created, kind, key_epoch) = t;
     VersionRow {
         id: id.to_string(),
         s3_version_id: s3v,
@@ -70,11 +73,12 @@ fn to_version_row(t: VersionTuple) -> VersionRow {
         keep_forever: keep,
         created_at: created,
         kind,
+        key_epoch,
     }
 }
 
 const VERSION_SELECT: &str = r#"SELECT id, s3_version_id, storage_path, seq_at_snapshot,
-       doc_key_id, author_user_id, size_bytes, label, keep_forever, created_at, kind
+       doc_key_id, author_user_id, size_bytes, label, keep_forever, created_at, kind, key_epoch
 FROM file_versions"#;
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -359,16 +363,20 @@ pub async fn create(
     let storage_path = version_storage_path(fid, version_id);
 
     let mut tx = state.pool.begin().await?;
+    // Sealed at the file's epoch as read above; a re-key since would put new
+    // content under a key the folder has left.
+    crate::drive_writes::lock_file_epoch(&mut tx, fid, key_epoch).await?;
     // The measured size, never a client's claim.
     crate::drive_writes::check_room(&mut tx, user_id, collection_id, size, None)
         .await?
         .into_result()?;
     let created: VersionTuple = sqlx::query_as(
         r#"INSERT INTO file_versions (id, file_id, s3_version_id, storage_path, seq_at_snapshot,
-                                      doc_key_id, author_user_id, size_bytes, label, keep_forever, kind)
-           VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, $10)
+                                      doc_key_id, author_user_id, size_bytes, label, keep_forever, kind,
+                                      key_epoch)
+           VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, $10, $11)
            RETURNING id, s3_version_id, storage_path, seq_at_snapshot, doc_key_id,
-                     author_user_id, size_bytes, label, keep_forever, created_at, kind"#,
+                     author_user_id, size_bytes, label, keep_forever, created_at, kind, key_epoch"#,
     )
     .bind(version_id)
     .bind(fid)
@@ -380,6 +388,7 @@ pub async fn create(
     .bind(&label)
     .bind(keep_forever)
     .bind(kind)
+    .bind(key_epoch)
     .fetch_one(&mut *tx)
     .await?;
     sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2")

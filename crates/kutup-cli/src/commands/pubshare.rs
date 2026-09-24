@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use crate::keyring::Keyring;
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
 use clap::Subcommand;
@@ -89,6 +90,22 @@ fn unwrap_collection_key(share: &PublicShare, link_key: &[u8]) -> Result<Vec<u8>
         .context("unwrap collection key")
 }
 
+/// The shared folder's keys: the link's, and older ones through the
+/// folder's owner-signed history (docs/plans/drive-share-revocation.md).
+fn link_keyring(client: &Client, p: &PubUrl, share: &PublicShare) -> Result<Keyring> {
+    let col_key = unwrap_collection_key(share, &p.link_key)?;
+    Keyring::load_from(
+        client,
+        &format!("/share/{}/epochs", p.token),
+        &share.target_id,
+        &share.owner_user_id,
+        share.collection_key_epoch,
+        None,
+        &col_key,
+        || crate::keyring::decode_key(&share.owner_authority_public_key),
+    )
+}
+
 fn get(json: bool, url: &str) -> Result<()> {
     let p = parse_pub_url(url)?;
     let client = pub_client(&p);
@@ -122,8 +139,8 @@ fn is_zero(v: &i64) -> bool {
     *v == 0
 }
 
-fn decrypt_display(f: &crate::api::File, col_key: &[u8]) -> FileDisplay {
-    match crate::file_crypto::open(f, col_key) {
+fn decrypt_display(f: &crate::api::File, keys: &Keyring) -> FileDisplay {
+    match crate::file_crypto::open(f, keys) {
         Ok((_, meta)) => FileDisplay {
             id: f.id.clone(),
             name: meta.name,
@@ -144,9 +161,9 @@ fn ls(json: bool, url: &str) -> Result<()> {
     if share.share_type != "collection" {
         bail!("not a collection share (type={})", share.share_type);
     }
-    let col_key = unwrap_collection_key(&share, &p.link_key)?;
+    let keys = link_keyring(&client, &p, &share)?;
     let files = client.list_public_share_files(&p.token)?;
-    let out: Vec<FileDisplay> = files.iter().map(|f| decrypt_display(f, &col_key)).collect();
+    let out: Vec<FileDisplay> = files.iter().map(|f| decrypt_display(f, &keys)).collect();
 
     if json {
         crate::output::print_json(&out)?;
@@ -171,7 +188,7 @@ fn download(json: bool, url: &str, file_id: &str, dest: Option<&str>) -> Result<
     let p = parse_pub_url(url)?;
     let client = pub_client(&p);
     let share = client.get_public_share(&p.token)?;
-    let col_key = unwrap_collection_key(&share, &p.link_key)?;
+    let keys = link_keyring(&client, &p, &share)?;
 
     let files = client.list_public_share_files(&p.token)?;
     let target = files.iter().find(|f| f.id == file_id).ok_or_else(|| {
@@ -179,7 +196,9 @@ fn download(json: bool, url: &str, file_id: &str, dest: Option<&str>) -> Result<
     })?;
 
     let (file_key, meta) =
-        crate::file_crypto::open(target, &col_key).context("decrypt file record")?;
+        crate::file_crypto::open(target, &keys).context("decrypt file record")?;
+    // What the link serves: the file's current content, at its own epoch.
+    let (content_key, content_epoch) = crate::file_crypto::content_key(target, &file_key, &keys)?;
 
     let dest_path = {
         let pp = Path::new(dest_dir);
@@ -194,9 +213,9 @@ fn download(json: bool, url: &str, file_id: &str, dest: Option<&str>) -> Result<
     let bar = crate::output::progress_bar(resp.content_length(), &meta.name);
     let mut out = std::fs::File::create(&dest_path).context("open dest")?;
     let blob_context =
-        DriveFileBlobContextV1::new(&target.id, &target.collection_id, target.key_epoch)?;
+        DriveFileBlobContextV1::new(&target.id, &target.collection_id, content_epoch)?;
     let written =
-        match crate::transfer::stream_download(resp, &file_key, blob_context, &mut out, |n| {
+        match crate::transfer::stream_download(resp, &content_key, blob_context, &mut out, |n| {
             bar.set_position(n as u64)
         }) {
             Ok(w) => w,

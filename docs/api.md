@@ -10,7 +10,7 @@ All authenticated endpoints require `Authorization: Bearer <accessToken>`.
 **Request bodies** are capped at 4 MiB unless a route says otherwise; the
 upload routes raise it (whole-file upload 10 GiB, a version 2 GiB, a tus
 chunk 64 MiB, a whiteboard asset one envelope, a federated Drive upload
-256 MiB). A larger body gets `413`.
+10 GiB, streamed to disk). A larger body gets `413`.
 
 ---
 
@@ -868,6 +868,72 @@ Move a file to the trash (soft delete). The file disappears from every normal en
 
 ---
 
+## Folder access and keys
+
+Who can open a folder and taking that access away
+(docs/plans/drive-share-revocation.md). A folder's keys form a chain of
+epochs; every removal rotates to the next.
+
+### GET /api/collections/:id/epochs
+
+The folder's key history, oldest first:
+`[{ epoch, epochStatement, epochStatementHash, previousKeyEnvelope? }]`.
+`previousKeyEnvelope` (absent for epoch 1) is the previous epoch's key sealed
+under this epoch's (purpose 8). Clients unlock older keys from the current one
+with `collection_keyring::unlock`, which verifies the owner-signed chain and
+every key commitment. **Auth:** owner (also for a trashed folder) or member.
+Public links: `GET /api/share/:token/epochs` (anonymous); federated
+recipients: `GET /api/drive/federation/shares/:shareId/epochs`.
+
+### GET /api/collections/:id/access
+
+Owner only. `{ keyEpoch, epochStatementHash, members: [{ userId, account,
+accountIncarnationId, drivePublicKey, canUpload, canDelete, uploadQuotaBytes,
+createdAt }], publicLinks: [{ id, token, ownerLinkKeyEnvelope?, expiresAt?,
+createdAt }], federatedShares: [{ id, recipientUsername, recipientServer,
+recipientIncarnationId, canUpload, canDelete, uploadQuotaBytes, createdAt }] }`.
+A link without `ownerLinkKeyEnvelope` predates owner copies and cannot be kept
+through a rotation.
+
+### POST /api/collections/:id/rotate
+
+Owner only; all or nothing. **Body:** `{ fromEpoch, epochStatement,
+ownerKeyEnvelope, previousKeyEnvelope, nameEnvelope, members: [{ userId,
+namedShareEnvelope }], publicLinks: [{ id, collectionKeyEnvelope }],
+federatedShares: [{ id, namedShareEnvelope }], removed: { members: [userId],
+publicLinks: [id], federatedShares: [id] } }`. The statement must chain from
+the current one under the owner's authority; the owner key, previous-key and
+name (next name revision) envelopes must be at `fromEpoch + 1`; every kept
+member's named share must be sealed at the new epoch to that exact account
+(federated: the same account incarnation as before), every kept link
+re-wrapped. Kept plus removed must be exactly the current access, else `409`
+(also when `fromEpoch` is stale). **Response:** `{ keyEpoch,
+epochStatementHash }`.
+
+### POST /api/files/:id/rekey
+
+Move a file to its folder's current key before writing to it. **Body:**
+`{ fromEpoch, fileKeyEnvelope, metadataEnvelope }` — a new file key sealed at
+the folder's current epoch and the metadata (same revision) sealed under it.
+The key left behind is kept in the file's history. `409` if the file already
+moved (another editor) or is already current. **Auth:** write access.
+Open collaboration sockets on the file are closed so peers reconnect under the
+new key.
+
+**New content only under the current key.** Versions, assets, thumbnails,
+renames and collaborative edits of a file whose epoch is behind its folder's
+are refused (`409 file needs a re-key`). An upload sealed at an older folder
+epoch gets `409 folder key changed` (reload the folder and retry).
+
+**Listing fields.** File rows carry `originalKeyEpoch` (the upload's epoch),
+`contentKeyEpoch` (the epoch of what `/download` serves), `keyHistory`
+(`[{ epoch, fileKeyEnvelope }]`, file keys left behind by re-keys) and
+`thumbnails.{sm,lg}KeyEpoch`; version rows carry `keyEpoch`; an asset
+download carries `X-Kutup-Key-Epoch`. Each object opens with the file key of
+its own epoch.
+
+---
+
 ## Trash
 
 Trash is **owner-scoped**: an item lives in the trash of the user who owns the collection it belongs to (a share recipient's delete lands in the owner's trash — the Google Drive model). Every entry is a *trash root*: a deleted file, or a deleted folder carrying its whole subtree. A background sweeper purges roots older than `TRASH_RETENTION_DAYS` (default 30; `0` disables the sweeper). Federated Drive deletes (`DELETE /api/fed/drive/files/:fileId`) remain permanent — there is no cross-server trash.
@@ -950,7 +1016,11 @@ Empty the caller's whole trash. Irreversible.
 
 ### POST /api/share/
 
-Create a public share link for one collection. The link key used to open the
+Create a public share link for one collection. **Body** also carries the
+link's client-chosen `id` (canonical UUID) and `ownerLinkKeyEnvelope`: the
+link key sealed for the owner under their master key (`DriveEnvelopeV1`
+purpose 9, object = link id, parent = owner, epoch 1), so the owner can list
+and copy the link and keep it working across folder-key rotations. The link key used to open the
 typed collection-key envelope lives only in the URL fragment; the server never
 sees it.
 
@@ -1408,9 +1478,18 @@ then releases the verified stream to the browser.
 
 Upload encrypted multipart fields (`fileId`, `metadataEnvelope`,
 `fileKeyEnvelope`, and `file`). Exact retries are idempotent
-and return the same `201 { "id": "<uuid>" }` result. The whole body is signed
-and held in memory, so it is capped at 256 MiB (`413`); streamed federated
-uploads are on the roadmap.
+and return the same `201 { "id": "<uuid>" }` result. The body is spooled to
+disk and streamed on to the owner's server with its signed content digest;
+it is never held in memory.
+
+### POST /api/drive/federation/shares/:shareId/refresh
+
+Bring a share's stored copy up to the owner's current folder key after a
+rotation. The recipient's server fetches the invite again and accepts it only
+from the same owner, folder and authority, never at an older epoch, and only
+if the owner's signed history (`GET /api/fed/drive/epochs`) descends from the
+stored epoch. A revoked share fails from the owner's server. **Response:** the
+refreshed share.
 
 ### DELETE /api/drive/federation/shares/:shareId/files/:fileId
 
@@ -1440,6 +1519,10 @@ grants for the capability-authorized share.
 
 List ciphertext file metadata for the capability-authorized collection.
 
+### GET /api/fed/drive/epochs
+
+The capability-authorized folder's key history, signed.
+
 ### GET /api/fed/drive/files/:fileId/content
 
 Stream ciphertext with its precomputed signed content digest and exact length.
@@ -1451,7 +1534,9 @@ is spooled and the digest is persisted with the file row. A stable request ID
 plus authenticated request hash provides persistent idempotency. The folder
 owner pays: the upload must fit their quota (less their open uploads) and the
 share's `uploadQuotaBytes`, measured from the files the share uploaded. A
-`fileId` already in use is `409`. Body cap 256 MiB.
+`fileId` already in use is `409`. The request is signed over its content
+digest: the server verifies the signature first, spools and hashes the body,
+and parses nothing until the digest matches. Body cap 10 GiB.
 
 ### DELETE /api/fed/drive/files/:fileId
 

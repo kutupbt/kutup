@@ -132,12 +132,15 @@ pub async fn upload(
     // concurrent first upload of the same id waits on the row and then finds
     // it taken.
     let mut tx = state.pool.begin().await?;
+    // Sealed at the file's epoch as read above; a re-key since would put new
+    // content under a key the folder has left.
+    crate::drive_writes::lock_file_epoch(&mut tx, fid, key_epoch).await?;
     crate::drive_writes::check_room(&mut tx, user_id, collection_id, size, None)
         .await?
         .into_result()?;
     let inserted: Option<i64> = sqlx::query_scalar(
-        r#"INSERT INTO file_assets (file_id, asset_id, size_bytes, uploader_user_id)
-           VALUES ($1, $2, $3, $4)
+        r#"INSERT INTO file_assets (file_id, asset_id, size_bytes, uploader_user_id, key_epoch)
+           VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (file_id, asset_id) DO NOTHING
            RETURNING size_bytes"#,
     )
@@ -145,6 +148,7 @@ pub async fn upload(
     .bind(&asset_id)
     .bind(size)
     .bind(user_id)
+    .bind(key_epoch)
     .fetch_optional(&mut *tx)
     .await?;
     // Already stored: assets are content-addressed and immutable, so a re-PUT
@@ -205,12 +209,29 @@ pub async fn download(
         return Err(AppError::forbidden("forbidden"));
     }
 
+    // The epoch it was sealed at: the folder key that opens it
+    // (docs/plans/drive-share-revocation.md).
+    let key_epoch: i32 = sqlx::query_scalar(
+        "SELECT key_epoch FROM file_assets WHERE file_id = $1 AND asset_id = $2",
+    )
+    .bind(fid)
+    .bind(&asset_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("not found"))?;
     let (body, size) = state
         .storage
         .get_object(&asset_storage_path(fid, &asset_id))
         .await
         .map_err(|_| AppError::not_found("not found"))?;
-    Ok(octet_stream_response(body, size, &[]))
+    Ok(octet_stream_response(
+        body,
+        size,
+        &[(
+            axum::http::HeaderName::from_static("x-kutup-key-epoch"),
+            key_epoch.to_string(),
+        )],
+    ))
 }
 
 #[cfg(test)]

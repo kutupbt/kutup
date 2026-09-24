@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::api::Collection;
 use crate::context::require_session;
 use crate::cryptohelpers::{
-    decrypt_collection_key, decrypt_collections, decrypt_file_meta, find_collection,
+    decrypt_collections, decrypt_file_meta, find_collection, folder_keyring,
 };
 use crate::output::{format_bytes, format_time};
 
@@ -69,10 +69,10 @@ pub fn run(profile: &str, json: bool, tree: bool, folder_id: Option<&str>) -> Re
 
     if let Some(parent) = &filter_parent {
         if let Some(col) = find_collection(&cols, parent) {
-            if let Ok(col_key) = decrypt_collection_key(col, &master_key, &ctx.session) {
+            if let Ok(keys) = folder_keyring(&ctx.client, col, &master_key, &ctx.session) {
                 let files = ctx.client.list_files(&col.id).unwrap_or_default();
                 for f in &files {
-                    let (name, size) = decrypt_file_meta(f, &col_key);
+                    let (name, size) = decrypt_file_meta(f, &keys);
                     entries.push(LsEntry {
                         id: f.id.clone(),
                         entry_type: "file".into(),

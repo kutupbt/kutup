@@ -18,6 +18,11 @@ export interface Folder {
   name: string | null
   key: Uint8Array | null
   keyEpoch: number
+  /** Who owns it and whose authority signs its key history. */
+  ownerUserId: string
+  ownerAuthorityPublicKey: string
+  /** The current epoch's statement hash: a new one means a new keyring. */
+  epochStatementHash: string
   /** Needed to rename (the next revision is current + 1). */
   nameRevision: number
   color: string | null
@@ -43,18 +48,25 @@ export interface DriveFile {
   mimeType: string
   /** Plaintext bytes. */
   size: number
+  /** The file key at `keyEpoch`, the file's current epoch. */
   fileKey: Uint8Array | null
+  /** The epoch the upload was sealed at. */
+  originalKeyEpoch: number
+  /** The epoch of what a download serves. */
+  contentKeyEpoch: number
+  /** File keys left behind by re-keys (docs/plans/drive-share-revocation.md). */
+  keyHistory: { epoch: number; fileKeyEnvelope: string }[]
   kind: FileKind
   createdAt: string
   updatedAt: string
-  /** When each thumbnail was stored; the value versions its URL. */
-  thumbnails: { sm?: string; lg?: string }
+  /** When each thumbnail was stored (the value versions its URL), and its epoch. */
+  thumbnails: { sm?: string; lg?: string; smKeyEpoch?: number; lgKeyEpoch?: number }
   /** Drawn from something other than the latest content: redraw. */
   thumbnailStale: boolean
 }
 
 /** Where a folder's files come from and go to. */
-export function folderLocation(folder: Folder): { kind: 'local'; collectionId: string } | { kind: 'remote'; shareId: string } {
+export function folderLocation(folder: Pick<Folder, 'id' | 'source' | 'remoteShareId'>): { kind: 'local'; collectionId: string } | { kind: 'remote'; shareId: string } {
   return folder.source === 'remote' && folder.remoteShareId
     ? { kind: 'remote', shareId: folder.remoteShareId }
     : { kind: 'local', collectionId: folder.id }

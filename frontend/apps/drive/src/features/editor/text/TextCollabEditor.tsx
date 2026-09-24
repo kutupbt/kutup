@@ -21,7 +21,7 @@ import { useResolvedTheme } from '../useResolvedTheme'
 import { langForExtension } from './lang'
 import { CollabTransport, type HelloMsg } from '@kutup/collab/transport'
 import { KIND } from '@kutup/collab/envelope'
-import { encryptCollabFrameV1, openCollabFrameV1 } from '@kutup/collab/cryptoFrame'
+import { encryptCollabFrameV1, openCollabFrameAtEpochV1 } from '@kutup/collab/cryptoFrame'
 import { decryptFileBlobV1, encryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import { SnapshotTrigger } from '@kutup/collab/snapshot'
 import { generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64 } from '@kutup/collab/devices'
@@ -85,6 +85,11 @@ interface Props {
   /** View-only access: follow edits live, change nothing (no typing, no
    *  saving, no restoring). */
   readOnly?: boolean
+  /** Keys at older epochs, for what was stored before the folder's last
+   *  rotation (docs/plans/drive-share-revocation.md): the folder key (log
+   *  frames) and the file key (saved states). */
+  keyAt?: (epoch: number) => Promise<Uint8Array>
+  fileKeyAt?: (epoch: number) => Promise<Uint8Array>
 }
 
 /**
@@ -114,6 +119,8 @@ export default function TextCollabEditor({
   keyEpoch,
   initialContent,
   readOnly = false,
+  keyAt,
+  fileKeyAt,
 }: Props) {
   const { t } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
@@ -245,6 +252,16 @@ export default function TextCollabEditor({
       })
       let lastSeenSeq = 0
       let docKeyId = 1
+      // The file key a saved state sealed at `epoch` opens with.
+      const savedStateKey = async (epoch: number): Promise<Uint8Array> => {
+        if (epoch === keyEpoch) return fileKey
+        if (!fileKeyAt) throw new Error('no key for an older epoch')
+        return fileKeyAt(epoch)
+      }
+      const folderKeyAt = async (epoch: number): Promise<Uint8Array> => {
+        if (!keyAt) throw new Error('no key for an older epoch')
+        return keyAt(epoch)
+      }
       // Per-tab sender_seq partition: see randomSenderSeqPrefix in
       // ../../collab/identity. Two tabs of the same user share a
       // sender_device row, so without a high random tabPrefix in the upper
@@ -295,10 +312,11 @@ export default function TextCollabEditor({
             responseType: 'arraybuffer',
           })
           const blob = new Uint8Array(r.data as ArrayBuffer)
-          const stateBytes = await decryptFileBlobV1(blob, fileKey, {
+          const epoch = (await listVersions(fileId)).find((v) => v.id === versionId)?.keyEpoch ?? keyEpoch
+          const stateBytes = await decryptFileBlobV1(blob, await savedStateKey(epoch), {
             fileId,
             collectionId,
-            epoch: keyEpoch,
+            epoch,
           })
           // Materialize the old state in a throwaway doc, extract the plaintext.
           const oldDoc = new Y.Doc()
@@ -410,10 +428,10 @@ export default function TextCollabEditor({
           })
           const blob = new Uint8Array(r.data as ArrayBuffer)
           if (blob.length > 0) {
-            const stateBytes = await decryptFileBlobV1(blob, fileKey, {
+            const stateBytes = await decryptFileBlobV1(blob, await savedStateKey(latest.keyEpoch), {
               fileId,
               collectionId,
-              epoch: keyEpoch,
+              epoch: latest.keyEpoch,
             })
             Y.applyUpdateV2(ydoc, stateBytes, 'remote')
             lastSeenSeq = latest.seqAtSnapshot
@@ -479,11 +497,12 @@ export default function TextCollabEditor({
         },
         onFrame: async (bs) => {
           try {
-            const f = await openCollabFrameV1(bs, collectionMaster, {
-              fileId,
-              collectionId,
-              keyEpoch,
-            })
+            // A frame replayed from before a rotation opens with its epoch's key.
+            const f = await openCollabFrameAtEpochV1(
+              bs,
+              (epoch) => (epoch === keyEpoch ? Promise.resolve(collectionMaster) : folderKeyAt(epoch)),
+              { fileId, collectionId, keyEpoch },
+            )
             if (f.kind === KIND.YJS_UPDATE) {
               Y.applyUpdate(ydoc!, f.plaintext, 'remote')
             } else if (f.kind === KIND.YJS_AWARENESS) {

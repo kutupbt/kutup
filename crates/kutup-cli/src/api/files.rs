@@ -35,6 +35,17 @@ impl Client {
         super::decode_json(resp)
     }
 
+    /// Moves a file to its folder's current key (docs/plans/drive-share-revocation.md).
+    /// `Ok(false)`: another editor moved it first; list it again.
+    pub fn rekey_file(&self, file_id: &str, req: &super::RekeyRequest) -> Result<bool> {
+        let resp = self.post_json(&format!("/files/{file_id}/rekey"), req)?;
+        if resp.status().as_u16() == 409 {
+            return Ok(false);
+        }
+        super::check_ok(resp)?;
+        Ok(true)
+    }
+
     /// Reads the latest encrypted content fully into memory (snapshot-preferred).
     /// Mirrors `LatestEncryptedBytes`. The bool is true iff a snapshot won.
     pub fn latest_encrypted_bytes(&self, file_id: &str) -> Result<(Vec<u8>, bool)> {

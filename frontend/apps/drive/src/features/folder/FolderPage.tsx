@@ -498,7 +498,7 @@ export function FolderPage() {
         onSubmit={(name) => {
           if (!renaming) return
           const done = { onSuccess: () => setDialog(null) }
-          if (renaming.file) renameFile.mutate({ file: renaming.file, name }, done)
+          if (renaming.file) renameFile.mutate({ folder: renaming.folder, file: renaming.file, name }, done)
           else renameFolder.mutate({ folder: renaming.folder, name }, done)
         }}
       />

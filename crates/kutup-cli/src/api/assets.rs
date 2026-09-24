@@ -23,13 +23,20 @@ impl Client {
     }
 
     /// Downloads an encrypted asset blob.
-    pub fn download_asset(&self, file_id: &str, asset_id: &str) -> Result<Vec<u8>> {
+    /// The asset envelope and the epoch it was sealed at (absent from an
+    /// older server).
+    pub fn download_asset(&self, file_id: &str, asset_id: &str) -> Result<(Vec<u8>, Option<u32>)> {
         let resp = self
             .request(Method::GET, &format!("/files/{file_id}/assets/{asset_id}"))
             .send()?;
         if resp.status().as_u16() >= 400 {
             return Err(super::api_error(resp));
         }
-        Ok(resp.bytes()?.to_vec())
+        let epoch = resp
+            .headers()
+            .get("x-kutup-key-epoch")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok());
+        Ok((resp.bytes()?.to_vec(), epoch))
     }
 }

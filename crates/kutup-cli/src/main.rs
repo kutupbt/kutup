@@ -11,6 +11,7 @@ mod context;
 mod cryptohelpers;
 mod errors;
 mod file_crypto;
+mod keyring;
 mod mimetype;
 mod output;
 mod session;

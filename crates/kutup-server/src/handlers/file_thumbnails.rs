@@ -104,6 +104,9 @@ pub async fn upload(
     let size = body.len() as i64;
 
     let mut tx = state.pool.begin().await?;
+    // Sealed at the file's epoch as read above; a re-key since would put new
+    // content under a key the folder has left.
+    crate::drive_writes::lock_file_epoch(&mut tx, fid, key_epoch).await?;
     // One writer per slot, including the first (when there is no row to lock
     // yet): two concurrent uploads would otherwise both be charged.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
@@ -157,10 +160,11 @@ pub async fn upload(
         .await
         .map_err(|_| AppError::internal("storage error"))?;
     sqlx::query(
-        r#"INSERT INTO file_thumbnails (file_id, variant, size_bytes, s3_version_id, source_version, uploader_user_id, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        r#"INSERT INTO file_thumbnails (file_id, variant, size_bytes, s3_version_id, source_version, uploader_user_id, key_epoch, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
            ON CONFLICT (file_id, variant) DO UPDATE SET
              size_bytes = EXCLUDED.size_bytes,
+             key_epoch = EXCLUDED.key_epoch,
              s3_version_id = EXCLUDED.s3_version_id,
              source_version = EXCLUDED.source_version,
              uploader_user_id = EXCLUDED.uploader_user_id,
@@ -172,6 +176,7 @@ pub async fn upload(
     .bind(&version_id)
     .bind(source_version)
     .bind(user_id)
+    .bind(key_epoch)
     .execute(&mut *tx)
     .await?;
     if tx.commit().await.is_err() {

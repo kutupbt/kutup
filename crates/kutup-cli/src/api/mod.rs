@@ -149,11 +149,11 @@ impl Client {
         self.auth(self.upload.request(method, self.url(path)))
     }
 
-    fn get(&self, path: &str) -> Result<Response> {
+    pub(crate) fn get(&self, path: &str) -> Result<Response> {
         Ok(self.request(Method::GET, path).send()?)
     }
 
-    fn post_json<B: Serialize>(&self, path: &str, body: &B) -> Result<Response> {
+    pub(crate) fn post_json<B: Serialize>(&self, path: &str, body: &B) -> Result<Response> {
         Ok(self
             .request(Method::POST, path)
             .header(CONTENT_TYPE, "application/json")
@@ -322,7 +322,7 @@ impl Client {
 }
 
 /// Decodes a JSON response, surfacing HTTP >= 400 as an [`ApiError`].
-fn decode_json<T: DeserializeOwned>(resp: Response) -> Result<T> {
+pub(crate) fn decode_json<T: DeserializeOwned>(resp: Response) -> Result<T> {
     if resp.status().as_u16() >= 400 {
         return Err(api_error(resp));
     }
@@ -330,7 +330,7 @@ fn decode_json<T: DeserializeOwned>(resp: Response) -> Result<T> {
 }
 
 /// Checks a no-body response for HTTP >= 400.
-fn check_ok(resp: Response) -> Result<()> {
+pub(crate) fn check_ok(resp: Response) -> Result<()> {
     if resp.status().as_u16() >= 400 {
         return Err(api_error(resp));
     }

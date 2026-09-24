@@ -67,3 +67,20 @@ export async function openCollabFrameV1(
     plaintext: fromBase64(opened.plaintext),
   }
 }
+
+/**
+ * Open a frame sealed at any epoch up to the file's current one — a frame
+ * replayed from the log may predate the folder's last rotation. The epoch
+ * named in the frame's public header picks the key; opening still checks
+ * the whole binding under it.
+ */
+export async function openCollabFrameAtEpochV1(
+  packed: Uint8Array,
+  keyAt: (epoch: number) => Promise<Uint8Array>,
+  expected: CollabFrameBindingV1,
+): Promise<OpenedCollabFrameV1> {
+  const module = await getCryptoWasm()
+  const epoch = module.collabFrameKeyEpoch(toBase64(packed))
+  if (epoch < 1 || epoch > expected.keyEpoch) throw new Error('collaboration frame from an unknown epoch')
+  return openCollabFrameV1(packed, await keyAt(epoch), { ...expected, keyEpoch: epoch })
+}

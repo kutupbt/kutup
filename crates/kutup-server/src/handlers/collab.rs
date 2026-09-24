@@ -427,9 +427,10 @@ async fn handle_frame(
     // The public authenticated header must name this exact file, collection,
     // collection-key epoch and current document-key generation. Neither stale
     // nor future values are accepted.
-    let binding: (i64, Uuid, i32) = match sqlx::query_as(
-        "SELECT f.current_doc_key_id, f.collection_id, f.key_epoch \
-         FROM files f WHERE f.id = $1 AND f.deleted_at IS NULL",
+    let binding: (i64, Uuid, i32, i32) = match sqlx::query_as(
+        "SELECT f.current_doc_key_id, f.collection_id, f.key_epoch, c.key_epoch \
+         FROM files f JOIN collections c ON c.id = f.collection_id \
+         WHERE f.id = $1 AND f.deleted_at IS NULL",
     )
     .bind(file_uuid)
     .fetch_one(&state.pool)
@@ -463,6 +464,12 @@ async fn handle_frame(
         Some(Access::Write) => {}
         Some(Access::Read) => return true,
         _ => return false,
+    }
+    // Edits only under the folder's current key: a file the folder has
+    // rotated past is re-keyed before anyone writes to it
+    // (docs/plans/drive-share-revocation.md).
+    if binding.2 != binding.3 {
+        return true;
     }
     if !budget.take(data.len()) {
         tracing::warn!(file = %file_uuid, device = peer.device_id, "collab frame budget exceeded");

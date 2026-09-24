@@ -12,6 +12,7 @@ pub mod file_assets;
 pub mod file_thumbnails;
 pub mod file_versions;
 pub mod files;
+pub mod folder_access;
 pub mod sessions;
 pub mod shares;
 pub mod trash;

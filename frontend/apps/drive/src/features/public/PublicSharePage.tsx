@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next'
 import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { fromBase64, openFileRecordV1, openPublicLinkCollectionKeyV1 } from '@kutup/crypto'
+import { unlockCollectionKeyring, type EpochLinkV1 } from '@kutup/crypto/collectionKeyring'
+import { DRIVE_ENVELOPE_PURPOSE, openDriveEnvelope } from '@kutup/crypto/driveEnvelope'
 import { streamDownload } from '@kutup/files/download/streamDownload'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import api from '@kutup/session/client'
@@ -25,6 +27,8 @@ interface ShareInfo {
   collectionKeyEnvelope: string
   collectionKeyEpoch: number
   ownerUserId: string
+  /** Signs the folder's key history. */
+  ownerAuthorityPublicKey: string
   expiresAt?: string | null
 }
 
@@ -36,10 +40,14 @@ interface PublicFileRow {
   keyEpoch: number
   metadataRevision: number
   createdAt: string
+  /** The epoch of what a download serves (docs/plans/drive-share-revocation.md). */
+  contentKeyEpoch: number
+  keyHistory?: { epoch: number; fileKeyEnvelope: string }[]
 }
 
 interface PublicFile {
   row: PublicFileRow
+  /** The key the downloaded content opens with (at `row.contentKeyEpoch`). */
   fileKey: Uint8Array | null
   name: string | null
   mimeType: string
@@ -80,13 +88,50 @@ async function loadShare(token: string): Promise<PublicFile[]> {
   } catch {
     throw new PublicLinkError('badKey')
   }
+  // Older folder keys, for files stored before the folder's last rotation:
+  // unlocked through its owner-signed history, fetched only if needed.
+  let keyring: Promise<Uint8Array[]> | null = null
+  const keyAt = (epoch: number): Promise<Uint8Array> => {
+    if (epoch === share.collectionKeyEpoch) return Promise.resolve(collectionKey)
+    keyring ??= api
+      .get<EpochLinkV1[]>(`/share/${encodeURIComponent(token)}/epochs`)
+      .then(({ data: chain }) => {
+        if (chain.length !== share.collectionKeyEpoch) throw new Error('incomplete folder key history')
+        return unlockCollectionKeyring(collectionKey, share.targetId, share.ownerUserId, share.ownerAuthorityPublicKey, chain)
+      })
+    return keyring.then((keys) => {
+      const key = keys[epoch - 1]
+      if (!key) throw new Error('no such folder key epoch')
+      return key
+    })
+  }
   const { data } = await api.get<PublicFileRow[]>(`/share/${encodeURIComponent(token)}/files`)
   return Promise.all(
     data.map(async (row) => {
-      const opened = await openFileRecordV1(row, collectionKey).catch(() => null)
+      const opened = await keyAt(row.keyEpoch)
+        .then((key) => openFileRecordV1(row, key))
+        .catch(() => null)
+      // What a download serves may be sealed under a key the file left behind.
+      const history = (row.keyHistory ?? []).find((h) => h.epoch === row.contentKeyEpoch)
+      const contentKey =
+        !opened || row.contentKeyEpoch === row.keyEpoch
+          ? (opened?.fileKey ?? null)
+          : history
+            ? await keyAt(history.epoch)
+                .then((key) =>
+                  openDriveEnvelope(history.fileKeyEnvelope, key, {
+                    purpose: DRIVE_ENVELOPE_PURPOSE.fileKey,
+                    epoch: history.epoch,
+                    revision: 1n,
+                    objectId: row.id,
+                    parentId: row.collectionId,
+                  }),
+                )
+                .catch(() => null)
+            : null
       return {
         row,
-        fileKey: opened?.fileKey ?? null,
+        fileKey: contentKey,
         name: opened?.metadata.name ?? null,
         mimeType: opened?.metadata.mimeType ?? 'application/octet-stream',
         size: opened?.metadata.size ?? 0,
@@ -130,7 +175,7 @@ export function PublicSharePage() {
       await streamDownload({
         url: `${await resolveApiBase()}/share/${encodeURIComponent(token)}/download/${file.row.id}`,
         fileKey: file.fileKey,
-        context: { fileId: file.row.id, collectionId: file.row.collectionId, epoch: file.row.keyEpoch },
+        context: { fileId: file.row.id, collectionId: file.row.collectionId, epoch: file.row.contentKeyEpoch },
         filename: file.name,
         mimeType: file.mimeType,
         expectedPlainSize: file.size,

@@ -37,3 +37,40 @@ export function openPublicLinkCollectionKeyV1(
 ): Promise<Uint8Array> {
   return openDriveEnvelope(envelope, linkKey, envelopeContext(expected))
 }
+
+export interface OwnerLinkKeyContextV1 {
+  /** The link's id (client-chosen, the server's `public_shares.id`). */
+  linkId: string
+  ownerUserId: string
+}
+
+function ownerContext(context: OwnerLinkKeyContextV1) {
+  return {
+    purpose: DRIVE_ENVELOPE_PURPOSE.publicLinkKey,
+    epoch: 1,
+    revision: 1n,
+    objectId: context.linkId,
+    parentId: context.ownerUserId,
+  } as const
+}
+
+/**
+ * The link key sealed for the folder owner under their master key, so the
+ * owner can list and copy the link later and keep it working when the
+ * folder key rotates (docs/plans/drive-share-revocation.md).
+ */
+export function sealOwnerLinkKeyV1(
+  linkKey: Uint8Array,
+  masterKey: Uint8Array,
+  context: OwnerLinkKeyContextV1,
+): Promise<string> {
+  return sealDriveEnvelope(linkKey, masterKey, ownerContext(context))
+}
+
+export function openOwnerLinkKeyV1(
+  envelope: string,
+  masterKey: Uint8Array,
+  context: OwnerLinkKeyContextV1,
+): Promise<Uint8Array> {
+  return openDriveEnvelope(envelope, masterKey, ownerContext(context))
+}

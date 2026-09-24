@@ -137,6 +137,22 @@ impl Hub {
         }
     }
 
+    /// Closes every connection in a file's room — after a re-key, so peers
+    /// reconnect and continue under the new key.
+    pub fn close_room(&self, file_id: &str) {
+        let victims: Vec<Arc<Peer>> = {
+            let rooms = self.rooms.lock().unwrap();
+            rooms
+                .get(file_id)
+                .map(|room| room.peers.values().cloned().collect())
+                .unwrap_or_default()
+        };
+        for v in victims {
+            v.close.notify_waiters();
+            let _ = v.tx.try_send(WsOut::Close);
+        }
+    }
+
     /// Forces every connection from a device to close, across all rooms — mirrors
     /// `CloseDevice` (device revocation). The connections' own read loops call `leave` as
     /// they exit, so this only signals; it doesn't mutate room state.

@@ -70,9 +70,9 @@ const DRIVE_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024 * 1024;
 const DRIVE_VERSION_LIMIT_BYTES: usize = 2 * 1024 * 1024 * 1024;
 /// One tus PATCH is one encryption chunk (5 MiB plus overhead); room to spare.
 const TUS_PATCH_LIMIT_BYTES: usize = 64 * 1024 * 1024;
-/// A federated Drive upload is signed over its whole body, so it is held in
-/// memory while checked (the browser's `MAX_REMOTE_UPLOAD_BYTES` matches).
-const FEDERATED_DRIVE_UPLOAD_LIMIT_BYTES: usize = 256 * 1024 * 1024;
+/// A federated Drive upload (streamed to disk, its signed digest checked
+/// there): one file blob of the same bound as an upload, plus framing.
+const FEDERATED_DRIVE_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024 * 1024 + 16 * 1024 * 1024;
 const FED_CHAT_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Shared application state.
@@ -416,7 +416,7 @@ fn build_router(state: AppState) -> Router {
 
     use handlers::{
         admin, auth, chat, chat_media, collab, collections, devices, file_assets, file_thumbnails,
-        file_versions, files, sessions as session_routes, shares, trash, tus,
+        file_versions, files, folder_access, sessions as session_routes, shares, trash, tus,
     };
 
     Router::new()
@@ -523,6 +523,14 @@ fn build_router(state: AppState) -> Router {
             post(drive_federation::create_federated_share),
         )
         .route("/api/collections/:id/files", get(files::list_files))
+        // --- Folder access: key history, who has access, rotation. ---
+        .route("/api/collections/:id/epochs", get(folder_access::epochs))
+        .route("/api/collections/:id/access", get(folder_access::access))
+        .route(
+            "/api/collections/:id/rotate",
+            post(folder_access::rotate).route_layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+        )
+        .route("/api/files/:id/rekey", post(folder_access::rekey))
         // --- Devices (authenticated) ---
         .route("/api/devices", post(devices::register).get(devices::list))
         .route("/api/devices/:id", delete(devices::revoke))
@@ -817,6 +825,7 @@ fn build_router(state: AppState) -> Router {
             "/api/share/:token/files",
             get(shares::list_public_share_files),
         )
+        .route("/api/share/:token/epochs", get(shares::public_share_epochs))
         .route(
             "/api/share/:token/download/:fileId",
             get(shares::download_public_share_file),
@@ -955,6 +964,11 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
+            "/api/fed/drive/epochs",
+            get(drive_federation::list_epochs)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
             "/api/fed/drive/files/:fileId/content",
             get(drive_federation::download_file)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
@@ -980,6 +994,14 @@ fn build_router(state: AppState) -> Router {
             get(drive_federation::proxy_list_files)
                 .post(drive_federation::proxy_upload)
                 .route_layer(DefaultBodyLimit::max(FEDERATED_DRIVE_UPLOAD_LIMIT_BYTES)),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/refresh",
+            post(drive_federation::refresh_incoming_share),
+        )
+        .route(
+            "/api/drive/federation/shares/:shareId/epochs",
+            get(drive_federation::proxy_list_epochs),
         )
         .route(
             "/api/drive/federation/shares/:shareId/files/:fileId/content",
@@ -1235,6 +1257,7 @@ fn build_cors(allowed_origins: &str) -> CorsLayer {
             HeaderName::from_static("tus-resumable"),
             HeaderName::from_static("upload-offset"),
             HeaderName::from_static("upload-length"),
+            HeaderName::from_static("x-kutup-key-epoch"),
             axum::http::header::LOCATION,
         ])
 }

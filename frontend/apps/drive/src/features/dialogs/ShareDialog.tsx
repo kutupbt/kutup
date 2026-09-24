@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -10,6 +11,8 @@ import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { apiErrorCode, apiErrorMessage } from '@kutup/ui/lib/apiError'
 import type { Folder } from '../drive/model'
+import { AccessList } from './AccessList'
+import { accessKey } from '../drive/access'
 import { RecipientNotFound, useShareFolder } from '../drive/mutations'
 
 const GIB = 1024 ** 3
@@ -30,6 +33,7 @@ export function ShareDialog({
 }) {
   const { t } = useTranslation()
   const share = useShareFolder()
+  const queryClient = useQueryClient()
   const [recipient, setRecipient] = useState('')
   const [canUpload, setCanUpload] = useState(false)
   const [canDelete, setCanDelete] = useState(false)
@@ -63,6 +67,7 @@ export function ShareDialog({
       {
         onSuccess: (result) => {
           onClose()
+          void queryClient.invalidateQueries({ queryKey: accessKey(folder.id) })
           if (result.kind === 'federated') onInvite(result.inviteUrl, result.account)
           else toast.success(t('dialogs.share.shared', { account: result.account }))
         },
@@ -120,6 +125,11 @@ export function ShareDialog({
             </Button>
           </DialogFooter>
         </form>
+        {folder?.canManage ? (
+          <div className="border-t border-border pt-4">
+            <AccessList folder={folder} />
+          </div>
+        ) : null}
       </DialogContent>
     </Dialog>
   )

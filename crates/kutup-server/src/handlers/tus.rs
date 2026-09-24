@@ -269,10 +269,18 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         Ok(context) => context,
         Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid Drive envelope"),
     };
-    if validate_envelope(file_key_envelope, file_key_context).is_err()
-        || validate_envelope(metadata_envelope, metadata_context).is_err()
+    if let Err(error) = validate_envelope(file_key_envelope, file_key_context)
+        .and_then(|()| validate_envelope(metadata_envelope, metadata_context))
     {
-        return tus_text(StatusCode::BAD_REQUEST, "invalid Drive envelope");
+        // 409 when the folder key rotated since the client read it.
+        return tus_text(
+            error.status,
+            if error.status == StatusCode::CONFLICT {
+                "folder key changed"
+            } else {
+                "invalid Drive envelope"
+            },
+        );
     }
 
     // The id, then room: the user's quota less what their open uploads have
@@ -682,8 +690,8 @@ pub async fn patch(
         "INSERT INTO files \
             (id, collection_id, uploader_user_id, \
              metadata_envelope, file_key_envelope, key_epoch, metadata_revision, \
-             storage_path, encrypted_size_bytes) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+             storage_path, encrypted_size_bytes, original_key_epoch) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$6)",
     )
     .bind(file_id)
     .bind(coll_id)

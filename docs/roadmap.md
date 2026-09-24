@@ -467,19 +467,11 @@ The `.excalidraw` whiteboard asset extraction/hydration deferral is **done**
 (`crates/kutup-cli/src/whiteboard.rs` — upload extracts + re-snapshots,
 download re-inlines; Go-CLI parity reached). What remains around the CLI:
 
-- **Streamed federated Drive uploads.** A federated upload is signed over
-  its whole body, so the server holds it in memory and caps it at 256 MiB
-  (the browser refuses larger files up front). Streaming needs a
-  content-digest header signed in place of the body, verified as the body is
-  spooled.
-- **Share lifecycle management (needs server slices first).** There is no
-  endpoint to list a collection's outgoing user shares, revoke one, or
-  list/delete public links (the web UI can't either — only recipient-side
-  `DELETE /api/drive/federation/shares/:shareId` exists). Server work:
-  `GET /api/collections/:id/shares`, `DELETE /api/collections/:id/share/:userId`,
-  `GET`/`DELETE /api/user/shares` (public links, owner-scoped via
-  `public_shares.created_by`); then `kutup share ls / revoke / unlink` and
-  matching web UI. Until then the CLI ships no affordance (no stubs).
+- **Share lifecycle management — done** (docs/plans/drive-share-revocation.md):
+  owners list who has access and remove members, federated recipients and
+  public links in the web app and with `kutup share access` / `kutup share
+  remove`; every removal rotates the folder key. Federated uploads stream
+  (signed content digest, spooled and checked before parsing).
 - **Server improvements that unlock better CLI behavior** (noted per the
   "do when we touch the server" decision):
   - `latestVersionId` on the `GET /collections/:id/files` rows (one

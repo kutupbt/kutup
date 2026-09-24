@@ -23,7 +23,7 @@
 | Server substitutes a share recipient key | Recipient key must be in the pinned or explicitly TOFU-accepted account manifest. A mismatch blocks sharing. |
 | Server moves ciphertext between objects or revisions | Suite, purpose, canonical identifiers, epoch and revision are authenticated as AAD. Decryption fails without returning partial plaintext. |
 | Server rolls back a collection after a member was removed | Owner-signed epoch chain and durable client pin reject rollback. Clients never write under an unverified pending epoch. |
-| Removed member reads new content | Removal completes only after a new random collection key is distributed to remaining accounts and the signed epoch is committed. Previously learned plaintext/ciphertext cannot be revoked. |
+| Removed member reads new content | Removal completes only after a new random collection key is distributed to remaining accounts and the signed epoch is committed, in one transaction; new content is accepted only under the current key (files re-keyed first). Previously learned plaintext/ciphertext cannot be revoked. |
 | Offline writer uses a stale key | Upload and collaborative mutation carry the exact epoch; server and clients reject stale writes. There is no automatic legacy-key retry. |
 | Named share is forged or redirected | HPKE ciphertext is signed by the sender's manifest-bound Drive signer and binds exact canonical sender, recipient, collection, epoch and suite. |
 | Federation peer or network is unavailable | Retain established pins and readable cached data; block state-changing operations that require fresh identity/epoch evidence. |
@@ -73,9 +73,25 @@ shared module (`crates/kutup-server/src/drive_writes.rs`).
 | Deleting an account deletes others' data or leaks bytes | Account deletion purges the account's own Drive (objects included, open uploads aborted) and hands what it added to other people's folders to each folder's owner, charges included. |
 | Resource exhaustion | Request bodies are capped per route (4 MiB default); collab messages at one frame, with a per-connection rate; office edit frames kept a day; user lookup by email rate-limited. |
 
-Not yet covered: revoking a user share, a public link or an outgoing
-federated share (no endpoint; `docs/roadmap.md`), and key rotation on
-member removal.
+## Revocation
+
+Removing a member here, a member on another server or a public link is one
+rotation (docs/plans/drive-share-revocation.md): the owner's client makes the
+next epoch's key, seals it to everyone who stays (and re-wraps kept links from
+the owner's copy of their keys), and the server applies all of it or nothing,
+refusing unless the request names exactly the folder's current access. The
+removed party keeps old keys and whatever it already read; it never gets the
+new key. Older keys stay reachable for those who remain through the
+owner-signed history (verified end to end by `collection_keyring::unlock`).
+Files move to the new key before anything new is written to them: the server
+refuses new versions, assets, thumbnails, names and collaborative edits for a
+file behind its folder's epoch. A federated recipient's server accepts a new
+epoch only from the same owner and folder, never older, and only when its
+signed history descends from the epoch it pinned. Open sockets of a removed
+member close within 15 s.
+
+Not covered: forward secrecy for content a removed party could already read,
+and re-encryption of old content (lazy rotation, as in KBFS).
 
 ## Metadata not hidden in V1
 

@@ -50,8 +50,24 @@ pub(crate) fn validate_envelope(value: &str, expected: DriveEnvelopeContextV1) -
     let bytes = STANDARD
         .decode(value)
         .map_err(|_| AppError::bad_request("invalid Drive envelope"))?;
-    if STANDARD.encode(&bytes) != value || drive_envelope::validate(&bytes, expected).is_err() {
+    if STANDARD.encode(&bytes) != value {
         return Err(AppError::bad_request("invalid Drive envelope"));
+    }
+    if drive_envelope::validate(&bytes, expected).is_err() {
+        // Well-formed but sealed at an older epoch: the folder's key rotated
+        // since the client read it (docs/plans/drive-share-revocation.md).
+        // Reload and retry, rather than a malformed request.
+        let stale = drive_envelope::inspect(&bytes).is_ok_and(|header| {
+            let mut context = header.context;
+            let sealed_epoch = context.epoch;
+            context.epoch = expected.epoch;
+            sealed_epoch < expected.epoch && context == expected
+        });
+        return Err(if stale {
+            AppError::conflict("folder key changed")
+        } else {
+            AppError::bad_request("invalid Drive envelope")
+        });
     }
     Ok(())
 }
@@ -120,13 +136,20 @@ pub async fn list_files(
         updated_at: time::OffsetDateTime,
         thumb_sm: Option<time::OffsetDateTime>,
         thumb_lg: Option<time::OffsetDateTime>,
+        thumb_sm_epoch: Option<i32>,
+        thumb_lg_epoch: Option<i32>,
         thumb_stale: bool,
+        original_key_epoch: i32,
+        content_key_epoch: i32,
+        key_history: sqlx::types::Json<Vec<crate::models::FileKeyHistoryEntry>>,
     }
-    let rows: Vec<Row> = sqlx::query_as(
+    let rows: Vec<Row> = sqlx::query_as(&format!(
         r#"SELECT f.id, f.collection_id, f.uploader_user_id,
                   f.metadata_envelope, f.file_key_envelope, f.key_epoch, f.metadata_revision,
-                  f.encrypted_size_bytes, f.created_at, f.updated_at,
+                  f.encrypted_size_bytes, f.created_at, f.updated_at, f.original_key_epoch,
+                  {} AS key_history, {} AS content_key_epoch,
                   sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
+                  sm.key_epoch AS thumb_sm_epoch, lg.key_epoch AS thumb_lg_epoch,
                   -- Drawn from something other than the latest version (or,
                   -- with no versions, from a version at all).
                   EXISTS (
@@ -141,7 +164,9 @@ pub async fn list_files(
            LEFT JOIN file_thumbnails lg ON lg.file_id = f.id AND lg.variant = 'lg'
            WHERE f.collection_id = $1 AND f.deleted_at IS NULL
            ORDER BY f.created_at DESC"#,
-    )
+        crate::models::FILE_KEY_HISTORY_SQL,
+        crate::models::CONTENT_KEY_EPOCH_SQL
+    ))
     .bind(coll_id)
     .fetch_all(&state.pool)
     .await?;
@@ -162,8 +187,13 @@ pub async fn list_files(
             thumbnails: FileThumbnails {
                 sm: r.thumb_sm,
                 lg: r.thumb_lg,
+                sm_key_epoch: r.thumb_sm_epoch,
+                lg_key_epoch: r.thumb_lg_epoch,
             },
             thumbnail_stale: r.thumb_stale,
+            original_key_epoch: r.original_key_epoch,
+            content_key_epoch: r.content_key_epoch,
+            key_history: r.key_history.0,
         })
         .collect();
     Ok(Json(out).into_response())
@@ -341,8 +371,8 @@ pub async fn upload(
         r#"INSERT INTO files (id, collection_id, uploader_user_id,
                               metadata_envelope, file_key_envelope,
                               key_epoch, metadata_revision,
-                              storage_path, encrypted_size_bytes)
-           VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8)"#,
+                              storage_path, encrypted_size_bytes, original_key_epoch)
+           VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$6)"#,
     )
     .bind(file_id)
     .bind(coll_id)
@@ -463,6 +493,8 @@ pub async fn update_metadata(
     };
     require_owner_or_uploader_with_delete(&state, user_id, coll_id, uploader_id).await?;
 
+    // A new name is new content: never under a key the folder has left.
+    crate::drive_writes::lock_file_epoch(&mut tx, file_id, key_epoch).await?;
     let expected_revision = current_revision
         .checked_add(1)
         .ok_or_else(|| AppError::conflict("metadata revision exhausted"))?;

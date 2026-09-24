@@ -122,6 +122,18 @@ impl AuthenticatedFederationRequest {
             .replay_metadata()
             .map_err(|error| AppError::unauthorized(error.to_string()))
     }
+
+    /// For a request authenticated with
+    /// [`FederationStack::authenticate_inbound_streamed`]: whether the body
+    /// read since is the one that was signed. Nothing read may be acted on
+    /// before this succeeds.
+    pub fn confirm_streamed_body(&self, actual_content_digest: &str) -> AppResult<()> {
+        self.verified
+            .confirm_streamed_body(actual_content_digest)
+            .map_err(|_| {
+                AppError::unauthorized("federation request body does not match its signature")
+            })
+    }
 }
 
 impl FederationStack {
@@ -247,7 +259,7 @@ impl FederationStack {
                 Method::GET,
                 discovery_url,
                 HeaderMap::new(),
-                Vec::new(),
+                reqwest::Body::from(Vec::new()),
                 MAX_DISCOVERY_BYTES,
             )
             .await?;
@@ -280,7 +292,7 @@ impl FederationStack {
                     Method::GET,
                     url,
                     HeaderMap::new(),
-                    Vec::new(),
+                    reqwest::Body::from(Vec::new()),
                     MAX_IDENTITY_DOCUMENT_BYTES,
                 )
                 .await?;
@@ -324,6 +336,42 @@ impl FederationStack {
         destination: &str,
         spec: FederationRequestSpec,
     ) -> anyhow::Result<AuthenticatedFederationResponse> {
+        self.send_body(destination, spec, None).await
+    }
+
+    /// [`Self::send`] with the request body streamed from a file rather than
+    /// held in memory: `spec.body` must be empty; the signature covers
+    /// `content_digest`, the SHA-256 of the file's `length` bytes, which the
+    /// receiver checks as it reads them.
+    pub(crate) async fn send_file(
+        &self,
+        destination: &str,
+        spec: FederationRequestSpec,
+        file: tokio::fs::File,
+        length: u64,
+        content_digest: String,
+    ) -> anyhow::Result<AuthenticatedFederationResponse> {
+        if !spec.body.is_empty() {
+            anyhow::bail!("a streamed federation request carries its body in the file");
+        }
+        self.send_body(
+            destination,
+            spec,
+            Some(StreamedBody {
+                file,
+                length,
+                content_digest,
+            }),
+        )
+        .await
+    }
+
+    async fn send_body(
+        &self,
+        destination: &str,
+        spec: FederationRequestSpec,
+        streamed: Option<StreamedBody>,
+    ) -> anyhow::Result<AuthenticatedFederationResponse> {
         validate_request_spec(&spec)?;
         let now = OffsetDateTime::now_utc();
         let peer = self
@@ -354,13 +402,23 @@ impl FederationStack {
             destination: destination.to_owned(),
         };
         let created = now.unix_timestamp();
-        let signed = FederationSignedRequest::sign(
-            request,
-            spec.request_id,
-            created,
-            created + MAX_SIGNATURE_LIFETIME_SECONDS,
-            self.local_identity.signing_key(),
-        )?;
+        let signed = match &streamed {
+            None => FederationSignedRequest::sign(
+                request,
+                spec.request_id,
+                created,
+                created + MAX_SIGNATURE_LIFETIME_SECONDS,
+                self.local_identity.signing_key(),
+            )?,
+            Some(streamed) => FederationSignedRequest::sign_with_content_digest(
+                request,
+                &streamed.content_digest,
+                spec.request_id,
+                created,
+                created + MAX_SIGNATURE_LIFETIME_SECONDS,
+                self.local_identity.signing_key(),
+            )?,
+        };
         let mut headers = signature_request_headers(&signed.headers, &signed.request)?;
         for (name, value) in spec.extra_headers {
             if headers.contains_key(&name) {
@@ -370,8 +428,18 @@ impl FederationStack {
             }
             headers.insert(name, value);
         }
+        let body = match streamed {
+            None => reqwest::Body::from(spec.body),
+            Some(streamed) => {
+                headers.insert(header::CONTENT_LENGTH, HeaderValue::from(streamed.length));
+                reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::with_capacity(
+                    streamed.file,
+                    1024 * 1024,
+                ))
+            }
+        };
         let response = self
-            .bounded_request(spec.method, target, headers, spec.body, spec.response_limit)
+            .bounded_request(spec.method, target, headers, body, spec.response_limit)
             .await?;
         let response_headers = parse_signature_headers(&response.headers)?;
         require_metadata_headers(
@@ -548,6 +616,36 @@ impl FederationStack {
         body: &[u8],
         feature: FederationFeature,
     ) -> AppResult<AuthenticatedFederationRequest> {
+        self.authenticate(headers, method, path, query, Some(body), feature)
+            .await
+    }
+
+    /// Authenticate a request before reading its body: the signature over
+    /// the claimed content digest is checked (and the request reserved
+    /// against replay) now; the handler hashes the body as it reads it and
+    /// calls [`AuthenticatedFederationRequest::confirm_streamed_body`]
+    /// before acting on it.
+    pub(crate) async fn authenticate_inbound_streamed(
+        &self,
+        headers: &HeaderMap,
+        method: &str,
+        path: &str,
+        query: Option<&str>,
+        feature: FederationFeature,
+    ) -> AppResult<AuthenticatedFederationRequest> {
+        self.authenticate(headers, method, path, query, None, feature)
+            .await
+    }
+
+    async fn authenticate(
+        &self,
+        headers: &HeaderMap,
+        method: &str,
+        path: &str,
+        query: Option<&str>,
+        body: Option<&[u8]>,
+        feature: FederationFeature,
+    ) -> AppResult<AuthenticatedFederationRequest> {
         require_metadata_headers(
             headers,
             feature,
@@ -596,7 +694,7 @@ impl FederationStack {
                 .map(|value| format!("?{value}"))
                 .unwrap_or_else(|| "?".into()),
             content_type: header_value(headers, header::CONTENT_TYPE.as_str())?.to_owned(),
-            body: body.to_vec(),
+            body: body.map(<[u8]>::to_vec).unwrap_or_default(),
             federation_version: FederationProtocolVersion::V2,
             feature,
             origin: origin.to_owned(),
@@ -604,12 +702,18 @@ impl FederationStack {
         };
         let signature_headers = parse_signature_headers(headers)
             .map_err(|error| AppError::unauthorized(error.to_string()))?;
-        let verified = FederationVerifiedRequest::verify(
-            request,
-            signature_headers,
-            &peer.public_key,
-            OffsetDateTime::now_utc().unix_timestamp(),
-        )
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let verified = match body {
+            Some(_) => {
+                FederationVerifiedRequest::verify(request, signature_headers, &peer.public_key, now)
+            }
+            None => FederationVerifiedRequest::verify_streamed(
+                request,
+                signature_headers,
+                &peer.public_key,
+                now,
+            ),
+        }
         .map_err(|error| AppError::unauthorized(error.to_string()))?;
         let replay = self
             .replay
@@ -734,7 +838,7 @@ impl FederationStack {
         method: Method,
         url: Url,
         headers: HeaderMap,
-        body: Vec<u8>,
+        body: reqwest::Body,
         limit: usize,
     ) -> anyhow::Result<BoundedHttpResponse> {
         let client = bound_client(&url, self.config.allow_private_test_network).await?;
@@ -767,6 +871,13 @@ impl FederationStack {
             body: bytes,
         })
     }
+}
+
+/// A request body read from a file as it is sent.
+struct StreamedBody {
+    file: tokio::fs::File,
+    length: u64,
+    content_digest: String,
 }
 
 struct BoundedHttpResponse {

@@ -5,6 +5,7 @@ import { updateSession } from '@kutup/session/store'
 import { fileKind, type ItemKind } from '../explorer/kinds'
 import { foldersKey } from '../drive/folders'
 import { useDriveIdentity } from '../drive/identity'
+import { folderKeyAt } from '../drive/keyring'
 
 interface TrashFolderRow {
   id: string
@@ -55,7 +56,8 @@ export function useTrash() {
     queryKey: trashKey,
     enabled: identity.isSuccess,
     queryFn: async (): Promise<TrashEntry[]> => {
-      const masterKey = identity.data!.masterKey
+      const me = identity.data!
+      const masterKey = me.masterKey
       const { data } = await api.get<{ folders: TrashFolderRow[]; files: TrashFileRow[] }>('/trash')
       const folders = await Promise.all(
         data.folders.map(async (row): Promise<TrashEntry> => {
@@ -76,6 +78,23 @@ export function useTrash() {
             },
             masterKey,
           )
+            // A file not re-keyed since its folder rotated is under an older key.
+            .then((key) =>
+              row.keyEpoch === row.collectionKeyEpoch
+                ? key
+                : folderKeyAt(
+                    {
+                      id: row.collectionId,
+                      source: 'owned',
+                      key,
+                      keyEpoch: row.collectionKeyEpoch,
+                      ownerUserId: row.collectionOwnerUserId,
+                      ownerAuthorityPublicKey: me.authorityPublicKey,
+                      epochStatementHash: row.collectionEpochStatementHash,
+                    },
+                    row.keyEpoch,
+                  ),
+            )
             .then((key) => openFileRecordV1(row, key))
             .then((r) => r.metadata, () => null)
           return {

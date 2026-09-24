@@ -5,6 +5,7 @@ import api from '@kutup/session/client'
 import { freshAccessToken } from '@kutup/session/client'
 import { currentContent } from '../editor/content'
 import { uploadOne } from '../uploads/useUploadActions'
+import { sealedAt } from './keyring'
 import { loadFolderFiles } from './files'
 import type { FolderIndex } from './folders'
 import type { DriveIdentity } from './identity'
@@ -44,7 +45,7 @@ export function isWithin(index: FolderIndex, candidate: Folder, folder: Folder):
 export async function readFile(folder: Folder, file: DriveFile, signal?: AbortSignal): Promise<Blob> {
   if (!file.fileKey) throw new Error('file is not open')
   const location = folderLocation(folder)
-  const content = location.kind === 'local' ? await currentContent(file) : { kind: 'original' as const }
+  const content = location.kind === 'local' ? await currentContent(folder, file) : { kind: 'original' as const }
   if (content.kind === 'plain') return new Blob([content.bytes as BlobPart], { type: file.mimeType })
   const base = await resolveApiBase()
   const url =
@@ -54,8 +55,8 @@ export async function readFile(folder: Folder, file: DriveFile, signal?: AbortSi
         ? `${base}/files/${file.id}/download`
         : `${base}/drive/federation/shares/${location.shareId}/files/${file.id}/content`
   const parts: BlobPart[] = []
-  const context = { fileId: file.id, collectionId: file.collectionId, epoch: file.keyEpoch }
-  for await (const { plain } of fetchDecryptedChunks(url, file.fileKey, context, await freshAccessToken(), signal)) {
+  const sealed = await sealedAt(folder, file, content.kind === 'version' ? content.keyEpoch : file.contentKeyEpoch)
+  for await (const { plain } of fetchDecryptedChunks(url, sealed.fileKey, sealed.context, await freshAccessToken(), signal)) {
     // Blobs, not one growing buffer: the browser may keep large ones on disk.
     parts.push(new Blob([plain as BlobPart]))
   }
@@ -115,6 +116,9 @@ export async function copyFolder(
     name,
     key: created.collectionKey,
     keyEpoch: 1,
+    ownerUserId: me.userId,
+    ownerAuthorityPublicKey: me.authorityPublicKey,
+    epochStatementHash: created.epochStatementHash,
     nameRevision: 1,
     color: null,
     ownerAccount: null,

@@ -91,7 +91,7 @@ pub fn hydrate(
     file_id: &str,
     collection_id: &str,
     key_epoch: u32,
-    collection_key: &[u8],
+    keys: &crate::keyring::Keyring,
     dest_path: &std::path::Path,
 ) -> Result<Option<i64>> {
     let raw = std::fs::read(dest_path).context("re-read excalidraw")?;
@@ -104,10 +104,20 @@ pub fn hydrate(
 
     let mut inlined = 0usize;
     for asset_id in &missing {
-        let blob = match client.download_asset(file_id, asset_id) {
+        let (blob, asset_epoch) = match client.download_asset(file_id, asset_id) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("warning: skip asset {asset_id}: {e:#}");
+                continue;
+            }
+        };
+        // Sealed at its own epoch: an image stored before the folder rotated
+        // opens with that epoch's key.
+        let asset_epoch = asset_epoch.unwrap_or(key_epoch);
+        let collection_key = match keys.at(asset_epoch) {
+            Ok(key) => key,
+            Err(e) => {
+                eprintln!("warning: asset {asset_id}: {e}");
                 continue;
             }
         };
@@ -116,7 +126,7 @@ pub fn hydrate(
             file_id,
             collection_id,
             asset_id,
-            key_epoch,
+            asset_epoch,
             collection_key,
         ) {
             Ok(p) => p,

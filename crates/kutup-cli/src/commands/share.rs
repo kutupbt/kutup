@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use crate::keyring::Keyring;
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
 use clap::Subcommand;
@@ -53,6 +54,17 @@ pub enum ShareCmd {
     },
     /// Upload a file to a federated share you've accepted.
     Upload { share_id: String, path: String },
+    /// Who can open a folder you own: members, people on other servers, links.
+    Access { collection_id: String },
+    /// Remove someone's access to a folder you own (a member's account,
+    /// `user@other-server`, or a public link's id). The folder moves to a new
+    /// key they never get.
+    Remove {
+        collection_id: String,
+        who: String,
+        #[arg(long)]
+        yes: bool,
+    },
     /// List, accept, or remove federated shares received from other servers.
     Incoming {
         #[command(subcommand)]
@@ -96,6 +108,14 @@ pub fn run(profile: &str, json: bool, cmd: &ShareCmd) -> Result<()> {
             dest,
         } => share_download(profile, json, share_id, file_id, dest.as_deref()),
         ShareCmd::Upload { share_id, path } => share_upload(profile, json, share_id, path),
+        ShareCmd::Access { collection_id } => {
+            crate::commands::access::list(profile, json, collection_id)
+        }
+        ShareCmd::Remove {
+            collection_id,
+            who,
+            yes,
+        } => crate::commands::access::remove(profile, json, collection_id, who, *yes),
         ShareCmd::Incoming { command } => match command {
             IncomingCmd::List => incoming_list(profile, json),
             IncomingCmd::Accept { invite_url } => incoming_accept(profile, json, invite_url),
@@ -274,14 +294,28 @@ fn share_public(profile: &str, json: bool, collection_id: &str) -> Result<()> {
     )?;
     let collection_key_envelope =
         drive_envelope::seal_b64(&collection_key, &link_key, envelope_context)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let owner_link_key_envelope = drive_envelope::seal_b64(
+        &link_key,
+        &ctx.session.master_key_bytes()?,
+        DriveEnvelopeContextV1::new(
+            DriveEnvelopePurpose::PublicLinkKey,
+            1,
+            1,
+            &id,
+            &ctx.session.user_id,
+        )?,
+    )?;
 
     let resp = ctx
         .client
         .create_public_share(&PublicShareRequest {
+            id,
             share_type: "collection".into(),
             target_id: collection_id.to_string(),
             collection_key_envelope,
             expires_in_hours: None,
+            owner_link_key_envelope,
         })
         .context("create public share")?;
 
@@ -340,6 +374,21 @@ fn unwrap_shared_collection_key(s: &IncomingShare, sess: &Session) -> Result<Vec
     crate::collection_crypto::open_key(&collection, &sess.master_key_bytes()?, sess)
 }
 
+/// A federated share's folder keys: the current one, and older ones through
+/// its owner-signed history, relayed by our server.
+fn shared_keyring(ctx: &Ctx, share: &IncomingShare, key: &[u8]) -> Result<Keyring> {
+    Keyring::load_from(
+        &ctx.client,
+        &format!("/drive/federation/shares/{}/epochs", share.id),
+        &share.remote_collection_id,
+        &share.owner_user_id,
+        share.key_epoch,
+        Some(&share.epoch_statement_hash),
+        key,
+        || crate::keyring::decode_key(&share.owner_authority_public_key),
+    )
+}
+
 fn resolve_shared_collection_key(ctx: &Ctx, share_id: &str) -> Result<(IncomingShare, Vec<u8>)> {
     let shares = ctx.client.list_incoming_shares()?;
     let share = shares
@@ -354,8 +403,8 @@ fn resolve_shared_collection_key(ctx: &Ctx, share_id: &str) -> Result<(IncomingS
     Ok((share, key))
 }
 
-fn decrypt_file_display(f: &crate::api::File, col_key: &[u8]) -> FileDisplay {
-    match crate::file_crypto::open(f, col_key) {
+fn decrypt_file_display(f: &crate::api::File, keys: &Keyring) -> FileDisplay {
+    match crate::file_crypto::open(f, keys) {
         Ok((_, meta)) => FileDisplay {
             id: f.id.clone(),
             name: meta.name,
@@ -390,11 +439,12 @@ fn print_file_table(out: &[FileDisplay], json: bool) -> Result<()> {
 
 fn share_files(profile: &str, json: bool, share_id: &str) -> Result<()> {
     let ctx = require_session(profile)?;
-    let (_, col_key) = resolve_shared_collection_key(&ctx, share_id)?;
+    let (share, col_key) = resolve_shared_collection_key(&ctx, share_id)?;
+    let keys = shared_keyring(&ctx, &share, &col_key)?;
     let files = ctx.client.proxy_list_files(share_id)?;
     let out: Vec<FileDisplay> = files
         .iter()
-        .map(|f| decrypt_file_display(f, &col_key))
+        .map(|f| decrypt_file_display(f, &keys))
         .collect();
     print_file_table(&out, json)
 }
@@ -408,7 +458,8 @@ fn share_download(
 ) -> Result<()> {
     let dest_dir = dest.unwrap_or(".");
     let ctx = require_session(profile)?;
-    let (_, col_key) = resolve_shared_collection_key(&ctx, share_id)?;
+    let (share, col_key) = resolve_shared_collection_key(&ctx, share_id)?;
+    let keys = shared_keyring(&ctx, &share, &col_key)?;
 
     let files = ctx.client.proxy_list_files(share_id)?;
     let target = files
@@ -417,16 +468,17 @@ fn share_download(
         .ok_or_else(|| NotFound(format!("file {file_id} not found in share {share_id}")))?;
 
     let (file_key, meta) =
-        crate::file_crypto::open(target, &col_key).context("decrypt file record")?;
+        crate::file_crypto::open(target, &keys).context("decrypt file record")?;
+    let (content_key, content_epoch) = crate::file_crypto::content_key(target, &file_key, &keys)?;
 
     let dest_path = resolve_dest(dest_dir, &meta.name);
     let resp = ctx.client.proxy_download_stream(share_id, file_id)?;
     let bar = crate::output::progress_bar(resp.content_length(), &meta.name);
     let mut out = std::fs::File::create(&dest_path).context("open dest")?;
     let blob_context =
-        DriveFileBlobContextV1::new(&target.id, &target.collection_id, target.key_epoch)?;
+        DriveFileBlobContextV1::new(&target.id, &target.collection_id, content_epoch)?;
     let written =
-        match crate::transfer::stream_download(resp, &file_key, blob_context, &mut out, |n| {
+        match crate::transfer::stream_download(resp, &content_key, blob_context, &mut out, |n| {
             bar.set_position(n as u64)
         }) {
             Ok(w) => w,

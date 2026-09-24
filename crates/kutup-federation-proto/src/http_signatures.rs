@@ -172,11 +172,35 @@ impl FederationSignedRequest {
         expires: i64,
         signing_key: &SigningKey,
     ) -> Result<Self, FederationProtocolError> {
+        let content_digest = content_digest_sha256(&request.body);
+        Self::sign_with_content_digest(
+            request,
+            &content_digest,
+            nonce,
+            created,
+            expires,
+            signing_key,
+        )
+    }
+
+    /// Sign a request whose body is sent as a stream (`request.body` empty):
+    /// `content_digest` is the RFC 9530 digest of the exact bytes that will
+    /// follow. The wire form is identical to [`Self::sign`]; the receiver
+    /// checks the digest as it reads the body.
+    pub fn sign_with_content_digest(
+        request: FederationHttpRequest,
+        content_digest: &str,
+        nonce: impl Into<String>,
+        created: i64,
+        expires: i64,
+        signing_key: &SigningKey,
+    ) -> Result<Self, FederationProtocolError> {
         validate_request(&request)?;
+        validate_content_digest(content_digest)?;
         let nonce = nonce.into();
         validate_nonce(&nonce)?;
         validate_signed_window(created, expires, created)?;
-        let content_digest = content_digest_sha256(&request.body);
+        let content_digest = content_digest.to_owned();
         let parameters = signature_parameters(
             REQUEST_COMPONENTS,
             created,
@@ -254,11 +278,52 @@ impl FederationVerifiedRequest {
         pinned_public_key: &[u8; 32],
         now: i64,
     ) -> Result<Self, FederationProtocolError> {
-        validate_request(&request)?;
         let expected_digest = content_digest_sha256(&request.body);
         if headers.content_digest != expected_digest {
             return Err(FederationProtocolError::ContentDigestMismatch);
         }
+        Self::verify_signed_digest(request, headers, pinned_public_key, now)
+    }
+
+    /// Verify a request whose body has not been read yet (`request.body`
+    /// empty): the signature over the claimed `content-digest` is checked
+    /// now; the caller must hash the body as it reads it and call
+    /// [`Self::confirm_streamed_body`] before acting on any of it.
+    pub fn verify_streamed(
+        request: FederationHttpRequest,
+        headers: FederationSignatureHeaders,
+        pinned_public_key: &[u8; 32],
+        now: i64,
+    ) -> Result<Self, FederationProtocolError> {
+        if !request.body.is_empty() {
+            return Err(crate::error::invalid_field(
+                "body",
+                "a streamed request is verified before its body is read",
+            ));
+        }
+        validate_content_digest(&headers.content_digest)?;
+        Self::verify_signed_digest(request, headers, pinned_public_key, now)
+    }
+
+    /// Whether the bytes read after [`Self::verify_streamed`] are the signed ones.
+    pub fn confirm_streamed_body(
+        &self,
+        actual_content_digest: &str,
+    ) -> Result<(), FederationProtocolError> {
+        if actual_content_digest != self.context.request_content_digest {
+            return Err(FederationProtocolError::ContentDigestMismatch);
+        }
+        Ok(())
+    }
+
+    fn verify_signed_digest(
+        request: FederationHttpRequest,
+        headers: FederationSignatureHeaders,
+        pinned_public_key: &[u8; 32],
+        now: i64,
+    ) -> Result<Self, FederationProtocolError> {
+        validate_request(&request)?;
+        let expected_digest = headers.content_digest.clone();
         let parsed = parse_signature_input(&headers.signature_input, REQUEST_COMPONENTS)?;
         validate_signed_window(parsed.created, parsed.expires, now)?;
         if parsed.key_id != federation_key_id(pinned_public_key) {
@@ -395,14 +460,14 @@ pub fn content_digest_sha256_from_digest(digest: &[u8; 32]) -> String {
     )
 }
 
+/// Over the signed digest, which verification already tied to the body (or,
+/// streamed, will tie before the body is used).
 fn request_replay_hash(
     request: &FederationHttpRequest,
     content_digest: &str,
 ) -> Result<String, FederationProtocolError> {
     validate_request(request)?;
-    if content_digest != content_digest_sha256(&request.body) {
-        return Err(FederationProtocolError::ContentDigestMismatch);
-    }
+    validate_content_digest(content_digest)?;
     let mut bytes = Vec::with_capacity(512);
     bytes.extend_from_slice(REPLAY_HASH_DOMAIN);
     push_string(&mut bytes, "@method", &request.method)?;
@@ -884,6 +949,76 @@ mod tests {
                 1_700_000_150,
             )
             .unwrap();
+    }
+
+    #[test]
+    fn streamed_request_is_verified_before_and_confirmed_after_its_body() {
+        let client = key(1);
+        let full = request(FederationFeature::DriveV1);
+        let digest = content_digest_sha256(&full.body);
+        let mut headless = full.clone();
+        headless.body.clear();
+        // Signed around the digest, the same wire form as a buffered request.
+        let streamed = FederationSignedRequest::sign_with_content_digest(
+            headless.clone(),
+            &digest,
+            "request-9",
+            1_700_000_000,
+            1_700_000_300,
+            &client,
+        )
+        .unwrap();
+        let buffered = FederationSignedRequest::sign(
+            full.clone(),
+            "request-9",
+            1_700_000_000,
+            1_700_000_300,
+            &client,
+        )
+        .unwrap();
+        assert_eq!(streamed.headers, buffered.headers);
+
+        let verified = FederationVerifiedRequest::verify_streamed(
+            headless.clone(),
+            streamed.headers.clone(),
+            &client.verifying_key().to_bytes(),
+            1_700_000_100,
+        )
+        .unwrap();
+        verified.confirm_streamed_body(&digest).unwrap();
+        assert_eq!(
+            verified.confirm_streamed_body(&content_digest_sha256(b"other bytes")),
+            Err(FederationProtocolError::ContentDigestMismatch)
+        );
+        // Its replay identity is the buffered request's.
+        let buffered_verified = FederationVerifiedRequest::verify(
+            full,
+            buffered.headers,
+            &client.verifying_key().to_bytes(),
+            1_700_000_100,
+        )
+        .unwrap();
+        assert_eq!(
+            verified.replay_metadata().unwrap().request_hash(),
+            buffered_verified.replay_metadata().unwrap().request_hash()
+        );
+        // A forged digest fails the signature; a body passed in is refused.
+        let mut forged = streamed.headers.clone();
+        forged.content_digest = content_digest_sha256(b"swapped");
+        assert!(FederationVerifiedRequest::verify_streamed(
+            headless,
+            forged,
+            &client.verifying_key().to_bytes(),
+            1_700_000_100,
+        )
+        .is_err());
+        assert!(FederationVerifiedRequest::verify_streamed(
+            request(FederationFeature::DriveV1),
+            streamed.headers,
+            &client.verifying_key().to_bytes(),
+            1_700_000_100,
+        )
+        .is_err());
     }
 
     #[test]

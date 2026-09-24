@@ -145,3 +145,35 @@ export async function renameFileRecordV1(
   })
   return { metadataEnvelope, metadataRevision }
 }
+
+/**
+ * Move a file to its folder's current key (docs/plans/drive-share-revocation.md):
+ * a fresh file key sealed at `keyEpoch` under the folder's current key, and
+ * the same metadata (same revision) sealed under it. What was stored before
+ * stays under the old key, which the server keeps in the file's history.
+ */
+export async function rekeyFileRecordV1(
+  row: Pick<FileWireV1, 'id' | 'collectionId' | 'metadataRevision'>,
+  keyEpoch: number,
+  collectionKey: Uint8Array,
+  metadata: FileMetadataV1,
+): Promise<{ fileKey: Uint8Array; fileKeyEnvelope: string; metadataEnvelope: string }> {
+  validateEpoch(keyEpoch)
+  validateRevision(row.metadataRevision)
+  const fileKey = await generateKey()
+  const fileKeyEnvelope = await sealDriveEnvelope(fileKey, collectionKey, {
+    purpose: DRIVE_ENVELOPE_PURPOSE.fileKey,
+    epoch: keyEpoch,
+    revision: 1n,
+    objectId: row.id,
+    parentId: row.collectionId,
+  })
+  const metadataEnvelope = await sealDriveEnvelope(encodeMetadata(metadata), fileKey, {
+    purpose: DRIVE_ENVELOPE_PURPOSE.fileMetadata,
+    epoch: keyEpoch,
+    revision: BigInt(row.metadataRevision),
+    objectId: row.id,
+    parentId: row.collectionId,
+  })
+  return { fileKey, fileKeyEnvelope, metadataEnvelope }
+}

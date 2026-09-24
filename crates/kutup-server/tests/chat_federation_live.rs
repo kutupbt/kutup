@@ -1000,13 +1000,28 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
     .unwrap();
     let public_link_envelope =
         drive_envelope::seal_b64(&collection_key, &link_key, public_link_context).unwrap();
+    let public_link_id = uuid::Uuid::new_v4().to_string();
     let public_link = json_response(
         c.post(format!("{a}/api/share/"))
             .bearer_auth(alice_token)
             .json(&json!({
+                "id": public_link_id,
                 "shareType": "collection",
                 "targetId": collection_id,
                 "collectionKeyEnvelope": public_link_envelope,
+                "ownerLinkKeyEnvelope": drive_envelope::seal_b64(
+                    &link_key,
+                    &alice_master,
+                    DriveEnvelopeContextV1::new(
+                        DriveEnvelopePurpose::PublicLinkKey,
+                        1,
+                        1,
+                        &public_link_id,
+                        owner_user_id,
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
             }))
             .send()
             .unwrap(),
@@ -1388,6 +1403,203 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
     assert_eq!(delete().status().as_u16(), 204);
     assert_eq!(delete().status().as_u16(), 204);
 
+    // --- Rotation (docs/plans/drive-share-revocation.md): the owner moves
+    // the folder to a new key and keeps Bob; Bob's server follows it only
+    // along the signed history. Then the owner removes Bob. ---
+    let rotation_ctx = |purpose, epoch, revision| {
+        DriveEnvelopeContextV1::new(purpose, epoch, revision, &collection_id, owner_user_id)
+            .unwrap()
+    };
+    let access = json_response(
+        c.get(format!("{a}/api/collections/{collection_id}/access"))
+            .bearer_auth(alice_token)
+            .send()
+            .unwrap(),
+        "folder access",
+    );
+    let fed_share = &access["federatedShares"][0];
+    let fed_share_id = fed_share["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        fed_share["recipientIncarnationId"],
+        bob_identity.incarnation_id()
+    );
+    let name_revision = json_response(
+        c.get(format!("{a}/api/collections/{collection_id}"))
+            .bearer_auth(alice_token)
+            .send()
+            .unwrap(),
+        "read folder",
+    )["nameRevision"]
+        .as_u64()
+        .unwrap();
+    let bob_share_at = |key: &[u8; 32], epoch: u32| {
+        NamedShareEnvelopeV1::seal(
+            key,
+            &collection_id,
+            epoch,
+            "alicefed@a.test",
+            &alice_identity.incarnation_id(),
+            alice_identity.drive_signing_key(),
+            "bobfed@b.test",
+            &bob_identity.incarnation_id(),
+            &bob_identity.drive_hpke_public_key(),
+        )
+        .unwrap()
+        .encode_b64()
+        .unwrap()
+    };
+    let rotation = |epoch: u32,
+                    previous_key: &[u8; 32],
+                    key: &[u8; 32],
+                    previous_hash: &str,
+                    revision: u64,
+                    keep_bob: bool|
+     -> (CollectionEpochStatementV1, u16) {
+        let statement = CollectionEpochStatementV1::create(
+            &collection_id,
+            owner_user_id,
+            epoch,
+            Some(previous_hash),
+            key,
+            alice_identity.authority_signing_key(),
+        )
+        .unwrap();
+        let status = c
+            .post(format!("{a}/api/collections/{collection_id}/rotate"))
+            .bearer_auth(alice_token)
+            .json(&json!({
+                "fromEpoch": epoch - 1,
+                "epochStatement": statement.encode_b64(),
+                "ownerKeyEnvelope": drive_envelope::seal_b64(key, &alice_master,
+                    rotation_ctx(DriveEnvelopePurpose::CollectionKey, epoch, 1)).unwrap(),
+                "previousKeyEnvelope": kutup_crypto::collection_keyring::seal_previous_key(
+                    previous_key, key, &collection_id, owner_user_id, epoch).unwrap(),
+                "nameEnvelope": drive_envelope::seal_b64(b"Federated V2 collection", key,
+                    rotation_ctx(DriveEnvelopePurpose::CollectionName, epoch, revision)).unwrap(),
+                "publicLinks": [{
+                    "id": public_link_id,
+                    "collectionKeyEnvelope": drive_envelope::seal_b64(key, &link_key,
+                        rotation_ctx(DriveEnvelopePurpose::PublicLinkCollectionKey, epoch, 1)).unwrap(),
+                }],
+                "federatedShares": if keep_bob {
+                    json!([{ "id": fed_share_id, "namedShareEnvelope": bob_share_at(key, epoch) }])
+                } else {
+                    json!([])
+                },
+                "removed": { "federatedShares": if keep_bob { json!([]) } else { json!([fed_share_id]) } },
+            }))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16();
+        (statement, status)
+    };
+    let key2 = [0x52; 32];
+    let (statement2, status) = rotation(
+        2,
+        &collection_key,
+        &key2,
+        &epoch_statement_hash,
+        name_revision + 1,
+        true,
+    );
+    assert_eq!(status, 200, "rotate keeping the federated recipient");
+
+    // Bob's server follows: the refreshed share opens to the new key.
+    let refreshed = json_response(
+        c.post(format!(
+            "{b}/api/drive/federation/shares/{incoming_id}/refresh"
+        ))
+        .bearer_auth(bob_token)
+        .send()
+        .unwrap(),
+        "refresh federated share",
+    );
+    assert_eq!(refreshed["keyEpoch"], 2);
+    assert_eq!(refreshed["epochStatementHash"], statement2.statement_hash());
+    let opened =
+        NamedShareEnvelopeV1::decode_b64(refreshed["namedShareEnvelope"].as_str().unwrap())
+            .unwrap()
+            .open(
+                &collection_id,
+                2,
+                "alicefed@a.test",
+                &alice_identity.incarnation_id(),
+                &alice_identity.drive_signing_public_key(),
+                "bobfed@b.test",
+                &bob_identity.incarnation_id(),
+                bob_identity.drive_hpke_private_key(),
+            )
+            .unwrap();
+    assert_eq!(opened.as_slice(), key2.as_slice());
+    // And its history, relayed from the owner's server, unlocks the old key.
+    let chain = json_response(
+        c.get(format!(
+            "{b}/api/drive/federation/shares/{incoming_id}/epochs"
+        ))
+        .bearer_auth(bob_token)
+        .send()
+        .unwrap(),
+        "federated folder key history",
+    );
+    let links: Vec<kutup_crypto::collection_keyring::EpochLinkV1> = chain
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| kutup_crypto::collection_keyring::EpochLinkV1 {
+            epoch: l["epoch"].as_u64().unwrap() as u32,
+            statement: l["epochStatement"].as_str().unwrap().to_string(),
+            previous_key_envelope: l["previousKeyEnvelope"].as_str().map(str::to_string),
+        })
+        .collect();
+    let keys = kutup_crypto::collection_keyring::unlock(
+        &key2,
+        &collection_id,
+        owner_user_id,
+        &alice_identity.authority_public_key(),
+        &links,
+    )
+    .unwrap();
+    assert_eq!(keys[0].as_slice(), collection_key.as_slice());
+
+    // The owner removes Bob: his server can no longer follow or list.
+    let key3 = [0x53; 32];
+    let (_, status) = rotation(
+        3,
+        &key2,
+        &key3,
+        &statement2.statement_hash(),
+        name_revision + 2,
+        false,
+    );
+    assert_eq!(status, 200, "rotate removing the federated recipient");
+    let refresh_after = c
+        .post(format!(
+            "{b}/api/drive/federation/shares/{incoming_id}/refresh"
+        ))
+        .bearer_auth(bob_token)
+        .send()
+        .unwrap()
+        .status()
+        .as_u16();
+    assert!(
+        refresh_after >= 400,
+        "a removed recipient cannot refresh ({refresh_after})"
+    );
+    let list_after = c
+        .get(format!(
+            "{b}/api/drive/federation/shares/{incoming_id}/files"
+        ))
+        .bearer_auth(bob_token)
+        .send()
+        .unwrap()
+        .status()
+        .as_u16();
+    assert!(
+        list_after >= 400,
+        "a removed recipient cannot list ({list_after})"
+    );
+
     let raw_url_share = c
         .post(format!(
             "{a}/api/collections/{collection_id}/federated-shares"
@@ -1515,10 +1727,11 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     // shared identity pin before Chat uses the same federation stack.
     let after_drive = federation_control_plane(c, a, &admin_a, "control plane after Drive");
     assert_eq!(after_drive["operational"]["peerTotal"], 1);
-    assert_eq!(after_drive["operational"]["driveOutgoingShares"], 1);
+    // The round trip ends by removing Bob: no outgoing Drive share remains.
+    assert_eq!(after_drive["operational"]["driveOutgoingShares"], 0);
     let drive_peer = federation_peer(&after_drive, "b.test");
     assert_eq!(drive_peer["trust"], "tofu");
-    assert_eq!(drive_peer["diagnostics"]["driveOutgoingShares"], 1);
+    assert_eq!(drive_peer["diagnostics"]["driveOutgoingShares"], 0);
     let shared_fingerprint = drive_peer["fingerprint"].as_str().unwrap().to_owned();
     let shared_first_seen = drive_peer["firstSeenAt"].as_str().unwrap().to_owned();
     let drive_evidence = json_response(

@@ -179,7 +179,7 @@
     "publicLink": {
       "title": "Herkese açık bağlantı",
       "description": "Bu bağlantıya sahip olan herkes, giriş yapmadan bu klasördeki dosyaları görebilir ve indirebilir.",
-      "warning": "Anahtar bağlantının bir parçasıdır ve Kutup bir kopyasını tutmaz. Şimdi kaydedin; yalnızca bu dosyaları görmesi gereken kişilerle paylaşın."
+      "warning": "Bu bağlantıya sahip olan herkes bu dosyaları açabilir. Bağlantıyı klasörün Paylaş penceresinden yeniden kopyalayabilir ya da kaldırabilirsiniz."
     },
     "invite": {
       "title": "Davet bağlantısı",
@@ -199,6 +199,31 @@
     "picker": {
       "expand": "{{name}} klasörünü aç",
       "collapse": "{{name}} klasörünü kapat"
+    },
+    "access": {
+      "title": "Erişimi olanlar",
+      "loading": "Erişimi olanlar yükleniyor…",
+      "loadFailed": "Erişimi olanlar yüklenemedi.",
+      "empty": "Bu klasörü yalnızca siz açabilirsiniz.",
+      "canEdit": "Ekleyebilir ve düzenleyebilir",
+      "canView": "Görüntüleyebilir",
+      "otherServer": "başka bir sunucuda",
+      "link": "Herkese açık bağlantı",
+      "linkCreated": "Oluşturulma: {{created}}",
+      "linkExpires": "Oluşturulma: {{created}} · bitiş: {{expires}}",
+      "legacyLinks_one": "{{count}} bağlantı, bağlantılar yeniden kopyalanabilir olmadan önce oluşturuldu. Birini çıkarmak onu da kaldırır; ardından yeni bir bağlantı oluşturun.",
+      "legacyLinks_other": "{{count}} bağlantı, bağlantılar yeniden kopyalanabilir olmadan önce oluşturuldu. Birini çıkarmak bunları da kaldırır; ardından yeni bağlantılar oluşturun.",
+      "copy": "Bağlantıyı kopyala",
+      "copied": "Bağlantı kopyalandı",
+      "remove": "Çıkar",
+      "removeNamed": "{{name}} kişisini çıkar",
+      "removeLink": "Bu bağlantıyı kaldır",
+      "confirmTitle": "{{name}} çıkarılsın mı?",
+      "confirmBody": "Erişimi hemen kalkar ve klasör, kendisine hiç verilmeyecek yeni bir anahtara geçer: bundan sonra eklenen ya da değiştirilen hiçbir şeyi okuyamaz. Daha önce açtıkları ya da indirdikleri onlarda kalır.",
+      "removed": "Erişim kaldırıldı",
+      "changed": "Bu arada erişim değişti. Listeyi kontrol edip yeniden deneyin.",
+      "recipientChanged": "{{account}} hesabını sıfırladı. Onu çıkarın, isterseniz sonra yeniden paylaşın.",
+      "failed": "Erişim kaldırılamadı. Yeniden deneyin."
     }
   },
   "shared": {
@@ -262,7 +287,6 @@
       "quota": "Depolama alanınız dolu.",
       "shareQuota": "Bu paylaşılan klasörün yükleme sınırına ulaşıldı.",
       "forbidden": "Buraya dosya ekleyemezsiniz.",
-      "remoteTooLarge": "255 MB'tan büyük dosyalar henüz başka bir sunucudaki klasöre eklenemiyor.",
       "network": "Bağlantı koptu.",
       "other": "Yükleme başarısız oldu."
     },

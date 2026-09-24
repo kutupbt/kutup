@@ -244,6 +244,21 @@ export interface CryptoWasmModule {
     sequence: string
     plaintext: string
   }
+  collabFrameKeyEpoch(frameBase64: string): number
+  sealPreviousCollectionKey(
+    previousKeyBase64: string,
+    keyBase64: string,
+    collectionId: string,
+    ownerUserId: string,
+    epoch: number,
+  ): string
+  unlockCollectionKeyring(
+    currentKeyBase64: string,
+    collectionId: string,
+    ownerUserId: string,
+    ownerAuthorityPublicKeyBase64: string,
+    chain: { epoch: number; epochStatement: string; previousKeyEnvelope?: string }[],
+  ): string[]
   createCollectionEpochStatement(
     masterKeyBase64: string,
     collectionKeyBase64: string,

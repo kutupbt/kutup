@@ -47,6 +47,15 @@ pub enum DriveEnvelopePurpose {
     WhiteboardAsset = 6,
     /// A file's preview picture (`crate::thumbnail`), under the file key.
     Thumbnail = 7,
+    /// The key of epoch `e − 1` sealed under the key of epoch `e` (the
+    /// context's epoch): object = collection, parent = owner. Holders of
+    /// the current key walk down to every older one
+    /// (docs/plans/drive-share-revocation.md).
+    PreviousCollectionKey = 8,
+    /// A public link's key, sealed for the folder owner under their master
+    /// key: object = link id, parent = owner, epoch 1. Lets the owner list,
+    /// copy and re-wrap the link.
+    PublicLinkKey = 9,
 }
 
 impl DriveEnvelopePurpose {
@@ -56,7 +65,11 @@ impl DriveEnvelopePurpose {
 
     fn validate_plaintext_len(self, len: usize) -> Result<()> {
         let valid = match self {
-            Self::CollectionKey | Self::FileKey | Self::PublicLinkCollectionKey => len == KEY_LEN,
+            Self::CollectionKey
+            | Self::FileKey
+            | Self::PublicLinkCollectionKey
+            | Self::PreviousCollectionKey
+            | Self::PublicLinkKey => len == KEY_LEN,
             Self::CollectionName => (1..=1024).contains(&len),
             Self::FileMetadata => (1..=65_536).contains(&len),
             Self::WhiteboardAsset => (1..=MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES).contains(&len),
@@ -85,6 +98,8 @@ impl TryFrom<u8> for DriveEnvelopePurpose {
             5 => Ok(Self::PublicLinkCollectionKey),
             6 => Ok(Self::WhiteboardAsset),
             7 => Ok(Self::Thumbnail),
+            8 => Ok(Self::PreviousCollectionKey),
+            9 => Ok(Self::PublicLinkKey),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown Drive envelope purpose {value}"
             ))),

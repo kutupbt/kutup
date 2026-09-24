@@ -5,6 +5,7 @@ import { resolveApiBase } from '@kutup/session/apiBase'
 import { freshAccessToken } from '@kutup/session/client'
 import { currentContent } from '../editor/content'
 import { loadFolderFiles } from './files'
+import { sealedAt } from './keyring'
 import { folderLocation, type DriveFile, type Folder } from './model'
 
 /**
@@ -22,7 +23,7 @@ export async function downloadFile(folder: Folder, file: DriveFile): Promise<voi
   try {
     const base = await resolveApiBase()
     const location = folderLocation(folder)
-    const content = location.kind === 'local' ? await currentContent(file) : { kind: 'original' as const }
+    const content = location.kind === 'local' ? await currentContent(folder, file) : { kind: 'original' as const }
     if (content.kind === 'plain') {
       await sink.write(content.bytes)
     } else {
@@ -32,9 +33,10 @@ export async function downloadFile(folder: Folder, file: DriveFile): Promise<voi
           : location.kind === 'local'
             ? `${base}/files/${file.id}/download`
             : `${base}/drive/federation/shares/${location.shareId}/files/${file.id}/content`
-      // The epoch the blob was sealed with is the file row's own.
-      const context = { fileId: file.id, collectionId: file.collectionId, epoch: file.keyEpoch }
-      for await (const { plain } of fetchDecryptedChunks(url, file.fileKey, context, await freshAccessToken())) {
+      // Sealed at the epoch of the content served (a file re-keyed since
+      // keeps older content under its older key).
+      const sealed = await sealedAt(folder, file, content.kind === 'version' ? content.keyEpoch : file.contentKeyEpoch)
+      for await (const { plain } of fetchDecryptedChunks(url, sealed.fileKey, sealed.context, await freshAccessToken())) {
         await sink.write(plain)
       }
     }
@@ -49,17 +51,18 @@ export { FsaRequiredError }
 
 /** One ZIP entry: the file's current content (latest edit), at `path` inside the archive. */
 async function zipEntry(folder: Folder, file: DriveFile, path: string): Promise<ZipFile> {
+  const location = folderLocation(folder)
+  const content = location.kind === 'local' ? await currentContent(folder, file) : { kind: 'original' as const }
+  const sealed = await sealedAt(folder, file, content.kind === 'version' ? content.keyEpoch : file.contentKeyEpoch)
   const entry: ZipFile = {
     id: file.id,
     collectionId: file.collectionId,
-    keyEpoch: file.keyEpoch,
+    keyEpoch: sealed.context.epoch,
     name: path,
     size: file.size,
-    fileKey: file.fileKey!,
+    fileKey: sealed.fileKey,
   }
-  const location = folderLocation(folder)
   if (location.kind === 'remote') return { ...entry, isRemote: true, remoteShareId: location.shareId }
-  const content = await currentContent(file)
   if (content.kind === 'version') return { ...entry, contentPath: content.path }
   if (content.kind === 'plain') return { ...entry, plain: content.bytes, size: content.bytes.length }
   return entry

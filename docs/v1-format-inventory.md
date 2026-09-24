@@ -20,6 +20,8 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 | Collaborative frame | XChaCha frame with `doc_key_id`, device and sequence | **Implemented end to end:** canonical Rust `CollabFrameSuiteId = 1`, 96-byte authenticated context header, purpose-derived XChaCha key and Ed25519 signature; browser uses the Rust parser/KDF/AEAD through WASM |
 | Whiteboard asset | XChaCha with asset AAD | **Implemented end to end:** `DriveEnvelopeV1` whiteboard-asset purpose bound to file, collection, epoch and asset ID across browser, CLI and server ingestion |
 | File thumbnail | — (new) | **Format and server implemented:** `DriveEnvelopeV1` purpose 7 under the file key, bound to file, variant and epoch; padded `KTH1` container |
+| Folder key history | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 8 seals epoch *e − 1*'s key under epoch *e*'s; `collection_keyring::unlock` verifies the whole owner-signed statement chain and every key commitment (docs/plans/drive-share-revocation.md) |
+| Public-link owner copy | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 9 seals a link's key under the owner's master key (object = link id), so links can be listed, copied and re-wrapped on rotation |
 | Encrypted profile | AES-256-GCM nonce/ciphertext | **Implemented end to end:** `ProfileSuiteId = 1` plus account/revision/device/purpose-bound XChaCha `ProfileEnvelopeV1`; suite code accompanies every E2EE profile-key capability |
 | Direct Chat | `DirectChatSuiteId = 1`, libsignal bytes | Unchanged pinned libsignal suite |
 | MLS group | MLS `0x0002`, P-256 control and delivery keys | MLS `0x0003`, X25519/ChaCha/Ed25519 throughout Kutup-owned bindings |
@@ -58,6 +60,22 @@ previous hash; later epochs require an exact predecessor. Its record hash
 covers the original signed statement unchanged. The server verifies identity,
 signature and continuity; a client also verifies the key commitment before it
 uses a collection key.
+
+Rotating a folder (on every removal of access) appends epoch *e*: a new random
+key, its statement chained to *e − 1*, and a purpose-8 envelope sealing the key
+of *e − 1* under the key of *e* (object = collection, parent = owner, epoch =
+*e*). `collection_keyring::unlock(current key, collection, owner, authority,
+history)` requires the complete history from epoch 1, checks every statement's
+authority, binding and predecessor hash, opens each older key from the next
+and checks it against its statement's commitment; the current key must match
+the last. A key of an earlier epoch therefore unlocks nothing. Keyless parties
+(a federated recipient's server) use `verify_history` to check that a new
+epoch descends from the one they pinned. Vector: `collectionKeyring`.
+
+Files keep the epoch their content was sealed at. A re-key moves a file's key
+and metadata to the folder's current epoch and keeps the key it leaves (per
+epoch) so older content still opens; the server accepts new content only at
+the folder's current epoch.
 
 `NamedShareEnvelopeV1` uses the fixed RFC 9180
 DHKEM(X25519)/HKDF-SHA256/ChaCha20-Poly1305 suite. Its AAD and Ed25519 signature

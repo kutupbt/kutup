@@ -30,6 +30,12 @@ pub struct CreateShareRequest {
     target_id: String,
     collection_key_envelope: String,
     expires_in_hours: Option<i64>,
+    /// The link's id, chosen by the client (it is bound into the owner's copy).
+    id: String,
+    /// The link key sealed for the owner under their master key (purpose 9),
+    /// so the owner can list and copy the link and keep it working across a
+    /// rotation (docs/plans/drive-share-revocation.md).
+    owner_link_key_envelope: String,
 }
 
 /// `POST /api/share` — mirrors `CreatePublicShare`. The link key is never sent here.
@@ -75,6 +81,18 @@ pub async fn create_public_share(
     )
     .map_err(|_| AppError::bad_request("invalid Drive envelope"))?;
     validate_envelope(&req.collection_key_envelope, envelope_context)?;
+    let link_id = canonical_uuid(&req.id)?;
+    validate_envelope(
+        &req.owner_link_key_envelope,
+        DriveEnvelopeContextV1::new(
+            DriveEnvelopePurpose::PublicLinkKey,
+            1,
+            1,
+            &req.id,
+            &user_id.to_string(),
+        )
+        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+    )?;
 
     let token = random_token(32);
     // An hour to ten years; anything else is a mistake (and a large value
@@ -88,10 +106,10 @@ pub async fn create_public_share(
     };
 
     let id: Uuid = sqlx::query_scalar(
-        r#"INSERT INTO public_shares (share_type, target_id, token,
+        r#"INSERT INTO public_shares (id, share_type, target_id, token,
                                       collection_key_envelope, collection_key_epoch,
-                                      owner_user_id, expires_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)
+                                      owner_user_id, expires_at, owner_link_key_envelope)
+           VALUES ($9,$1,$2,$3,$4,$5,$6,$7,$8)
            RETURNING id"#,
     )
     .bind(&req.share_type)
@@ -101,6 +119,8 @@ pub async fn create_public_share(
     .bind(key_epoch)
     .bind(user_id)
     .bind(expires_at)
+    .bind(&req.owner_link_key_envelope)
+    .bind(link_id)
     .fetch_one(&state.pool)
     .await
     .map_err(|_| AppError::internal("internal error"))?;
@@ -133,6 +153,8 @@ struct PublicShareResponse {
     collection_key_envelope: String,
     collection_key_epoch: i32,
     owner_user_id: Uuid,
+    /// The owner's account authority, which signs the folder's key history.
+    owner_authority_public_key: String,
     #[serde(with = "time::serde::rfc3339::option")]
     expires_at: Option<OffsetDateTime>,
 }
@@ -157,18 +179,22 @@ pub async fn get_public_share(
         i32,
         Uuid,
         Option<OffsetDateTime>,
+        String,
     );
     let row: Option<ShareRow> = sqlx::query_as(
-        r#"SELECT id, share_type, target_id,
-                  collection_key_envelope, collection_key_epoch, owner_user_id, expires_at
-           FROM public_shares WHERE token = $1"#,
+        r#"SELECT p.id, p.share_type, p.target_id,
+                  p.collection_key_envelope, p.collection_key_epoch, p.owner_user_id, p.expires_at,
+                  u.account_authority_public_key
+           FROM public_shares p JOIN users u ON u.id = p.owner_user_id WHERE p.token = $1"#,
     )
     .bind(&token)
     .fetch_optional(&state.pool)
     .await
     .ok()
     .flatten();
-    let Some((id, share_type, target_id, envelope, epoch, owner_user_id, expires_at)) = row else {
+    let Some((id, share_type, target_id, envelope, epoch, owner_user_id, expires_at, authority)) =
+        row
+    else {
         return Err(AppError::not_found("not found"));
     };
     if let Some(exp) = expires_at {
@@ -187,9 +213,44 @@ pub async fn get_public_share(
         collection_key_envelope: envelope,
         collection_key_epoch: epoch,
         owner_user_id,
+        owner_authority_public_key: authority,
         expires_at,
     })
     .into_response())
+}
+
+/// `GET /api/share/{token}/epochs` — the shared folder's key history, so a
+/// link holder can open files sealed before the folder's last rotation.
+/// Anonymous.
+#[utoipa::path(
+    get,
+    path = "/api/share/{token}/epochs",
+    tag = "shares",
+    params(("token" = String, Path, description = "Share token (the capability)")),
+    responses((status = 200, description = "Key history, oldest first", body = Vec<crate::handlers::folder_access::EpochLink>))
+)]
+pub async fn public_share_epochs(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+) -> AppResult<Response> {
+    let meta: Option<(Uuid, Option<OffsetDateTime>)> =
+        sqlx::query_as("SELECT target_id, expires_at FROM public_shares WHERE token = $1")
+            .bind(&token)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some((target_id, expires_at)) = meta else {
+        return Err(AppError::not_found("not found"));
+    };
+    if expires_at.is_some_and(|exp| OffsetDateTime::now_utc() > exp) {
+        return Err(AppError::new(StatusCode::GONE, "link expired"));
+    }
+    if !collection_live(&state, target_id).await {
+        return Err(AppError::not_found("not found"));
+    }
+    Ok(
+        Json(crate::handlers::folder_access::epoch_chain(&state.pool, target_id).await?)
+            .into_response(),
+    )
 }
 
 /// One file in a public-collection share. Field order mirrors the Go struct; `created_at`
@@ -206,6 +267,10 @@ struct PublicFileRow {
     encrypted_size_bytes: i64,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+    original_key_epoch: i32,
+    content_key_epoch: i32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    key_history: Vec<crate::models::FileKeyHistoryEntry>,
 }
 
 /// `GET /api/share/{token}/files` — mirrors `ListPublicShareFiles`. Anonymous.
@@ -244,13 +309,28 @@ pub async fn list_public_share_files(
         return Err(AppError::not_found("not found"));
     }
 
-    type PubFileTuple = (Uuid, Uuid, String, String, i32, i64, i64, OffsetDateTime);
-    let rows: Vec<PubFileTuple> = sqlx::query_as(
-        r#"SELECT id, collection_id, metadata_envelope, file_key_envelope,
-                  key_epoch, metadata_revision, encrypted_size_bytes, created_at
-           FROM files WHERE collection_id = $1 AND deleted_at IS NULL
-           ORDER BY created_at DESC"#,
-    )
+    type PubFileTuple = (
+        Uuid,
+        Uuid,
+        String,
+        String,
+        i32,
+        i64,
+        i64,
+        OffsetDateTime,
+        i32,
+        i32,
+        sqlx::types::Json<Vec<crate::models::FileKeyHistoryEntry>>,
+    );
+    let rows: Vec<PubFileTuple> = sqlx::query_as(&format!(
+        r#"SELECT f.id, f.collection_id, f.metadata_envelope, f.file_key_envelope,
+                  f.key_epoch, f.metadata_revision, f.encrypted_size_bytes, f.created_at,
+                  f.original_key_epoch, {}, {}
+           FROM files f WHERE f.collection_id = $1 AND f.deleted_at IS NULL
+           ORDER BY f.created_at DESC"#,
+        crate::models::CONTENT_KEY_EPOCH_SQL,
+        crate::models::FILE_KEY_HISTORY_SQL
+    ))
     .bind(target_id)
     .fetch_all(&state.pool)
     .await
@@ -259,7 +339,19 @@ pub async fn list_public_share_files(
     let files: Vec<PublicFileRow> = rows
         .into_iter()
         .map(
-            |(id, collection_id, metadata, file_key, epoch, revision, size, created_at)| {
+            |(
+                id,
+                collection_id,
+                metadata,
+                file_key,
+                epoch,
+                revision,
+                size,
+                created_at,
+                original_key_epoch,
+                content_key_epoch,
+                key_history,
+            )| {
                 PublicFileRow {
                     id,
                     collection_id,
@@ -269,6 +361,9 @@ pub async fn list_public_share_files(
                     metadata_revision: revision,
                     encrypted_size_bytes: size,
                     created_at,
+                    original_key_epoch,
+                    content_key_epoch,
+                    key_history: key_history.0,
                 }
             },
         )

@@ -58,8 +58,10 @@ pub fn create(
     })
 }
 
-pub fn open(file: &File, collection_key: &[u8]) -> Result<([u8; 32], FileMetadata)> {
-    let file_key = open_key(file, collection_key)?;
+/// A file's key and metadata, with its folder key for the file's epoch (an
+/// older one when the folder rotated since the file was last keyed).
+pub fn open(file: &File, keys: &crate::keyring::Keyring) -> Result<([u8; 32], FileMetadata)> {
+    let file_key = open_key(file, keys)?;
     let metadata = open_metadata(file, &file_key)?;
     Ok((file_key, metadata))
 }
@@ -81,10 +83,10 @@ pub fn open_metadata(file: &File, file_key: &[u8]) -> Result<FileMetadata> {
     Ok(metadata)
 }
 
-pub fn open_key(file: &File, collection_key: &[u8]) -> Result<[u8; 32]> {
+pub fn open_key(file: &File, keys: &crate::keyring::Keyring) -> Result<[u8; 32]> {
     drive_envelope::open_b64(
         &file.file_key_envelope,
-        collection_key,
+        keys.at(file.key_epoch)?,
         context(
             DriveEnvelopePurpose::FileKey,
             file.key_epoch,
@@ -142,6 +144,59 @@ fn context(
         .context("invalid file envelope context")
 }
 
+/// The file key and epoch what `/files/{id}/download` serves was sealed at.
+pub fn content_key(
+    file: &File,
+    file_key: &[u8; 32],
+    keys: &crate::keyring::Keyring,
+) -> Result<([u8; 32], u32)> {
+    let epoch = file.content_epoch();
+    Ok((keys.file_key_at(file, file_key, epoch)?, epoch))
+}
+
+/// A new file key at the folder's current epoch and the metadata re-sealed
+/// under it (docs/plans/drive-share-revocation.md): the request that moves a
+/// file to its folder's current key before anything new is written to it.
+pub fn rekey_request(
+    file: &File,
+    metadata: &FileMetadata,
+    keys: &crate::keyring::Keyring,
+    folder_epoch: u32,
+) -> Result<(crate::api::RekeyRequest, [u8; 32])> {
+    let mut file_key = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut file_key);
+    let file_key_envelope = drive_envelope::seal_b64(
+        &file_key,
+        keys.current(),
+        context(
+            DriveEnvelopePurpose::FileKey,
+            folder_epoch,
+            1,
+            &file.id,
+            &file.collection_id,
+        )?,
+    )?;
+    let metadata_envelope = drive_envelope::seal_b64(
+        &serde_json::to_vec(metadata)?,
+        &file_key,
+        context(
+            DriveEnvelopePurpose::FileMetadata,
+            folder_epoch,
+            file.metadata_revision,
+            &file.id,
+            &file.collection_id,
+        )?,
+    )?;
+    Ok((
+        crate::api::RekeyRequest {
+            from_epoch: file.key_epoch,
+            file_key_envelope,
+            metadata_envelope,
+        },
+        file_key,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,13 +220,47 @@ mod tests {
             metadata_revision: created.metadata_revision,
             encrypted_size_bytes: 0,
             created_at: String::new(),
+            content_key_epoch: 1,
+            key_history: Vec::new(),
         };
-        let (opened_key, opened_metadata) = open(&file, &collection_key).unwrap();
+        let keys = crate::keyring::Keyring::current_only(&collection_key, 1);
+        let (opened_key, opened_metadata) = open(&file, &keys).unwrap();
         assert_eq!(opened_key, created.file_key);
         assert_eq!(opened_metadata.name, metadata.name);
 
-        let mut relocated = file;
+        let mut relocated = file.clone();
         relocated.collection_id = "22222222-2222-4222-8222-222222222222".into();
-        assert!(open(&relocated, &collection_key).is_err());
+        assert!(open(&relocated, &keys).is_err());
+
+        // A re-key at epoch 2 seals a fresh key and the same metadata there;
+        // the old key opens only through the file's history.
+        let new_folder_key = [9u8; 32];
+        let (request, new_key) = rekey_request(
+            &file,
+            &opened_metadata,
+            &crate::keyring::Keyring::current_only(&new_folder_key, 2),
+            2,
+        )
+        .unwrap();
+        assert_ne!(new_key, created.file_key);
+        let rekeyed = File {
+            file_key_envelope: request.file_key_envelope,
+            metadata_envelope: request.metadata_envelope,
+            key_epoch: 2,
+            key_history: vec![crate::api::FileKeyHistoryEntry {
+                epoch: 1,
+                file_key_envelope: file.file_key_envelope.clone(),
+            }],
+            ..file
+        };
+        let keys_both =
+            crate::keyring::tests_support::keyring(&[(1, collection_key), (2, new_folder_key)], 2);
+        let (key_now, metadata_now) = open(&rekeyed, &keys_both).unwrap();
+        assert_eq!(key_now, new_key);
+        assert_eq!(metadata_now.name, metadata.name);
+        assert_eq!(
+            keys_both.file_key_at(&rekeyed, &key_now, 1).unwrap(),
+            created.file_key
+        );
     }
 }

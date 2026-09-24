@@ -10,6 +10,8 @@ export interface DriveIdentity {
   incarnationId: string
   masterKey: Uint8Array
   privateKey: Uint8Array
+  /** This account's authority, which signs its folders' key histories. */
+  authorityPublicKey: string
 }
 
 /**
@@ -36,6 +38,7 @@ export function useDriveIdentity() {
         incarnationId: identity.incarnationId,
         masterKey: session.masterKey,
         privateKey: session.privateKey,
+        authorityPublicKey: identity.authorityPublicKey,
       }
     },
   })

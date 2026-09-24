@@ -19,10 +19,15 @@ RUN apt-get update \
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
-# Build the server and offline sealed-sender provisioner.
+# Build the server and offline sealed-sender provisioner. The workspace
+# sources are touched first: Cargo decides what to rebuild by file time, and
+# copied sources can look older than the artifacts in the cached target
+# directory, which would silently reuse a stale workspace crate. Dependencies
+# (registry crates) stay cached.
 RUN --mount=type=cache,id=kutup-server-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=kutup-server-release-target,target=/build/target,sharing=locked \
-    cargo build --release -p kutup-server \
+    find crates -type f -exec touch {} + \
+    && cargo build --release -p kutup-server \
         --bin kutup-server --bin kutup-sealed-sender-provision \
     && cp target/release/kutup-server /kutup-server \
     && cp target/release/kutup-sealed-sender-provision /kutup-sealed-sender-provision

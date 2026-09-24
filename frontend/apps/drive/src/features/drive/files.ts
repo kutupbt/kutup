@@ -1,11 +1,20 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { openFileRecordV1 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import type { FileRow } from '@kutup/session/api-types'
 import { fileKind } from '../explorer/kinds'
+import { foldersKey } from './folders'
+import { folderKeyAt } from './keyring'
 import { folderLocation, type DriveFile, type Folder } from './model'
 
 export const filesKey = (folderId: string) => ['files', folderId] as const
+
+/**
+ * One folder's file list query. Keyed by the folder's epoch too: after a
+ * rotation the files open with the new key.
+ */
+export const folderFilesKey = (folder: Pick<Folder, 'id' | 'remoteShareId' | 'keyEpoch'>) =>
+  [...filesKey(folder.remoteShareId ?? folder.id), folder.keyEpoch] as const
 
 type FileRowLike = Omit<FileRow, 'uploaderUserId' | 'updatedAt'> & {
   uploaderUserId?: string
@@ -14,11 +23,14 @@ type FileRowLike = Omit<FileRow, 'uploaderUserId' | 'updatedAt'> & {
 
 const opened = new Map<string, Promise<Awaited<ReturnType<typeof openFileRecordV1>> | null>>()
 
-async function openRow(row: FileRowLike, collectionKey: Uint8Array): Promise<DriveFile> {
+async function openRow(row: FileRowLike, folder: Folder): Promise<DriveFile> {
   const cacheKey = `${row.id}:${row.fileKeyEnvelope}:${row.metadataEnvelope}`
   let pending = opened.get(cacheKey)
   if (!pending) {
-    pending = openFileRecordV1(row, collectionKey).catch(() => null)
+    // A file not re-keyed since the folder rotated is under an older key.
+    pending = folderKeyAt(folder, row.keyEpoch)
+      .then((collectionKey) => openFileRecordV1(row, collectionKey))
+      .catch(() => null)
     opened.set(cacheKey, pending)
   }
   const result = await pending
@@ -33,6 +45,9 @@ async function openRow(row: FileRowLike, collectionKey: Uint8Array): Promise<Dri
     mimeType: result?.metadata.mimeType ?? 'application/octet-stream',
     size: result?.metadata.size ?? 0,
     fileKey: result?.fileKey ?? null,
+    originalKeyEpoch: row.originalKeyEpoch ?? row.keyEpoch,
+    contentKeyEpoch: row.contentKeyEpoch ?? row.keyEpoch,
+    keyHistory: row.keyHistory ?? [],
     kind: name ? fileKind(name, result?.metadata.mimeType) : 'other',
     createdAt: row.createdAt,
     // Federated listings carry no updatedAt; creation is the best they know.
@@ -50,15 +65,26 @@ export async function loadFolderFiles(folder: Folder): Promise<DriveFile[]> {
       ? `/collections/${location.collectionId}/files`
       : `/drive/federation/shares/${location.shareId}/files`,
   )
-  const key = folder.key
-  return Promise.all(data.map((row) => openRow(row, key)))
+  return Promise.all(data.map((row) => openRow(row, folder)))
 }
 
 /** The files directly in a folder, decrypted. */
 export function useFolderFiles(folder: Folder | undefined) {
+  const queryClient = useQueryClient()
   return useQuery({
-    queryKey: filesKey(folder?.remoteShareId ?? folder?.id ?? ''),
+    queryKey: folder ? folderFilesKey(folder) : filesKey(''),
     enabled: Boolean(folder?.key),
-    queryFn: () => loadFolderFiles(folder!),
+    queryFn: async () => {
+      const files = await loadFolderFiles(folder!)
+      // A folder on another server whose owner moved it to a new key: bring
+      // the stored share up to date (docs/plans/drive-share-revocation.md).
+      if (folder!.remoteShareId && files.some((f) => f.keyEpoch > folder!.keyEpoch)) {
+        await api
+          .post(`/drive/federation/shares/${folder!.remoteShareId}/refresh`)
+          .then(() => queryClient.invalidateQueries({ queryKey: foldersKey }))
+          .catch(() => {})
+      }
+      return files
+    },
   })
 }

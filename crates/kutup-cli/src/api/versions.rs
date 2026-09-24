@@ -57,6 +57,9 @@ pub struct VersionRow {
     pub keep_forever: bool,
     #[serde(default)]
     pub created_at: String,
+    /// The epoch it was sealed at; 0 from an older server.
+    #[serde(default)]
+    pub key_epoch: u32,
 }
 
 fn ok_stream(resp: Response, what: &'static str) -> Result<Response> {

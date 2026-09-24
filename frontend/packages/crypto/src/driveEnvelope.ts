@@ -2,9 +2,10 @@ import { fromBase64, toBase64 } from './base64'
 import { getCryptoWasm } from './rustWasm'
 
 /**
- * The purposes whose context is two plain UUIDs. Whiteboard assets (6) and
- * thumbnails (7) bind a derived id and have their own typed wrappers
- * (whiteboardAsset.ts, thumbnail.ts); the generic WASM export refuses them.
+ * The purposes whose context is two plain UUIDs. Whiteboard assets (6),
+ * thumbnails (7) and previous folder keys (8) have their own typed wrappers
+ * (whiteboardAsset.ts, thumbnail.ts, collectionKeyring.ts); the generic WASM
+ * export refuses them.
  */
 export const DRIVE_ENVELOPE_PURPOSE = {
   collectionKey: 1,
@@ -12,6 +13,8 @@ export const DRIVE_ENVELOPE_PURPOSE = {
   fileKey: 3,
   fileMetadata: 4,
   publicLinkCollectionKey: 5,
+  /** A public link's key, sealed for the folder owner (object = link id). */
+  publicLinkKey: 9,
 } as const
 
 export type DriveEnvelopePurpose =

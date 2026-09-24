@@ -8,14 +8,16 @@ import {
   sealPublicLinkCollectionKeyV1,
   toBase64,
 } from '@kutup/crypto'
+import { sealOwnerLinkKeyV1 } from '@kutup/crypto/publicLink'
 import { appUrl } from '@kutup/session/apps'
 import api from '@kutup/session/client'
 import { foldersKey } from './folders'
 import { useDriveIdentity, type DriveIdentity } from './identity'
 import { folderLocation, type DriveFile, type Folder } from './model'
+import { rekeyFile } from './rekey'
 
 /** Every Drive mutation refreshes folders (names, timestamps) and the files it touched. */
-function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) => Promise<R>) {
+export function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) => Promise<R>) {
   const queryClient = useQueryClient()
   const identity = useDriveIdentity()
   return useMutation({
@@ -27,6 +29,7 @@ function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) => Prom
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: foldersKey }),
         queryClient.invalidateQueries({ queryKey: ['files'] }),
+        queryClient.invalidateQueries({ queryKey: ['folder-access'] }),
       ])
     },
   })
@@ -54,7 +57,9 @@ export function useRenameFolder() {
 }
 
 export function useRenameFile() {
-  return useDriveMutation(async ({ file, name }: { file: DriveFile; name: string }) => {
+  return useDriveMutation(async ({ folder, file: listed, name }: { folder: Folder; file: DriveFile; name: string }) => {
+    // A new name is new content: never under a key the folder has left.
+    const file = await rekeyFile(folder, listed)
     if (!file.fileKey) throw new Error('file is not open')
     const next = await renameFileRecordV1(
       { id: file.id, collectionId: file.collectionId, keyEpoch: file.keyEpoch, metadataRevision: file.metadataRevision },
@@ -97,26 +102,38 @@ export function useLeaveRemoteShare() {
   })
 }
 
+/** A public link's address: the token for the server, the key in the fragment. */
+export function publicLinkUrl(token: string, linkKey: Uint8Array): string {
+  return appUrl('drive', `/s/${token}#key=${encodeURIComponent(toBase64(linkKey))}`)
+}
+
 /**
  * A read-only link to a folder's files. The link key never reaches the
- * server: it is sealed around the folder key there, and travels only in the
- * URL fragment. Every call makes a new link; old ones keep working.
+ * server in the clear: it is sealed around the folder key there (and, for
+ * the owner, under their master key), and travels only in the URL fragment.
+ * Every call makes a new link; old ones keep working.
  */
 export function useCreatePublicLink() {
   return useDriveMutation(async (folder: Folder, me) => {
     if (!folder.key) throw new Error('folder is not open')
     const linkKey = await generateKey()
+    const id = crypto.randomUUID().toLowerCase()
     const collectionKeyEnvelope = await sealPublicLinkCollectionKeyV1(folder.key, linkKey, {
       collectionId: folder.id,
       ownerUserId: me.userId,
       epoch: folder.keyEpoch,
     })
+    // A copy of the link key for the owner: to list and copy the link later,
+    // and to keep it working when the folder key rotates.
+    const ownerLinkKeyEnvelope = await sealOwnerLinkKeyV1(linkKey, me.masterKey, { linkId: id, ownerUserId: me.userId })
     const { data } = await api.post<{ token: string }>('/share', {
+      id,
       shareType: 'collection',
       targetId: folder.id,
       collectionKeyEnvelope,
+      ownerLinkKeyEnvelope,
     })
-    return appUrl('drive', `/s/${data.token}#key=${encodeURIComponent(toBase64(linkKey))}`)
+    return publicLinkUrl(data.token, linkKey)
   })
 }
 
