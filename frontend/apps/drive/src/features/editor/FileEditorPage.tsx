@@ -22,10 +22,12 @@ import { folderPath } from '../drive/paths'
 import { currentContent } from './content'
 import CursorColorPicker from './CursorColorPicker'
 import { OfficeEditor, TextCollabEditor, WhiteboardEditor } from './dispatch'
-import { editorKindFor, type EditorKind } from './editorKind'
+import { editorKindFor, extensionOf, type EditorKind } from './editorKind'
 import type { OfficeEditorHandle } from './office/OfficeEditor'
 import { loadVersionBytes, saveSnapshot, type SnapshotTarget } from './snapshots'
-import { exportScene, thumbnailsOfDrawing } from '../thumbnails/make'
+import { renderPdfFirstPageV1 } from '@kutup/files/mediaPreview'
+import { THUMBNAIL_MAX_SIDE } from '@kutup/crypto/thumbnail'
+import { exportScene, thumbnailsOfDrawing, thumbnailsOfPicture } from '../thumbnails/make'
 import { enqueueThumbnail } from '../thumbnails/queue'
 import { storeThumbnails } from '../thumbnails/store'
 import RestoreConfirmDialog, { type RestoreChoice } from './versions/RestoreConfirmDialog'
@@ -340,6 +342,12 @@ function Workspace({
                   ? (await officeRef.current!.save()).bytes
                   : (await whiteboardRef.current!.save()).bytes
               }
+              officePdf={
+                wholeFile === 'office'
+                  ? () => officeRef.current?.thumbnailPdf() ?? Promise.reject(new Error('editor closed'))
+                  : undefined
+              }
+              isSpreadsheet={extensionOf(name) === 'xlsx'}
               onRestored={onRestored}
             />
           ) : null}
@@ -398,12 +406,18 @@ function WholeFileActions({
   keys,
   saveShortcut,
   getBytes,
+  officePdf,
+  isSpreadsheet = false,
   onRestored,
 }: {
   kind: EditorKind
   keys: Keys
   saveShortcut: MutableRefObject<(() => void) | null>
   getBytes: () => Promise<Uint8Array>
+  /** Office only: the document laid out as a PDF, for its thumbnail. */
+  officePdf?: () => Promise<Uint8Array>
+  /** Its thumbnail is cropped to the used cells. */
+  isSpreadsheet?: boolean
   onRestored: (bytes: Uint8Array) => void
 }) {
   const { t } = useTranslation()
@@ -423,6 +437,7 @@ function WholeFileActions({
         const bytes = await getBytes()
         const versionId = await saveSnapshot(keys.target, bytes, opts)
         if (kind === 'whiteboard') redrawWhiteboard(keys.target, versionId, bytes)
+        if (kind === 'office' && officePdf) redrawOffice(keys.target, versionId, officePdf, isSpreadsheet)
         if (!opts.quiet) {
           setJustSaved(true)
           setTimeout(() => setJustSaved(false), 1500)
@@ -436,7 +451,7 @@ function WholeFileActions({
         setSaving(false)
       }
     },
-    [getBytes, keys.target, kind, t],
+    [getBytes, keys.target, kind, officePdf, isSpreadsheet, t],
   )
 
   // Ctrl/Cmd+S anywhere on the page. OnlyOffice runs in a frame and forwards
@@ -553,6 +568,24 @@ function redrawWhiteboard(target: SnapshotTarget, versionId: string, bytes: Uint
     return storeThumbnails(
       { fileId: target.context.fileId, fileKey: target.fileKey, keyEpoch: target.context.epoch },
       await thumbnailsOfDrawing(png),
+      versionId,
+    )
+  })
+}
+
+/**
+ * A saved office document's thumbnail: OnlyOffice lays it out as a PDF in
+ * its sandbox (print → x2t), and page one is drawn here with PDF.js.
+ */
+function redrawOffice(target: SnapshotTarget, versionId: string, pdf: () => Promise<Uint8Array>, trim: boolean): void {
+  enqueueThumbnail(target.context.fileId, async () => {
+    const bytes = await pdf()
+    // A sheet shows its used cells, not a speck on an empty page.
+    const png = await renderPdfFirstPageV1(bytes.slice().buffer, THUMBNAIL_MAX_SIDE.lg, undefined, { trim })
+    if (!png) return false
+    return storeThumbnails(
+      { fileId: target.context.fileId, fileKey: target.fileKey, keyEpoch: target.context.epoch },
+      await thumbnailsOfPicture(png, true),
       versionId,
     )
   })

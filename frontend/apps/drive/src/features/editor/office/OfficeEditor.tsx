@@ -38,6 +38,8 @@ export interface OfficeEditorHandle {
    *  return the bytes. Resolves with the converted bytes + format
    *  ('docx'|'xlsx'|'pptx') so callers know what extension to encode. */
   save: () => Promise<{ bytes: Uint8Array; format: 'docx' | 'xlsx' | 'pptx' }>
+  /** The document as OnlyOffice lays it out, as a PDF (for its thumbnail). */
+  thumbnailPdf: () => Promise<Uint8Array>
 }
 
 interface Props {
@@ -81,6 +83,7 @@ type FromBridge =
   | { type: 'pong' }
   | { type: 'init-ack' }
   | { type: 'save-result'; requestId: number; bytes?: Uint8Array; format?: DocType; error?: string }
+  | { type: 'thumbnail-result'; requestId: number; bytes?: Uint8Array; error?: string }
   | { type: 'oo-local-op'; payload: string }
   | { type: 'oo-local-cursor'; payload: string }
   | { type: 'oo-save-shortcut' }
@@ -88,6 +91,7 @@ type ToBridge =
   | { type: 'ping' }
   | { type: 'init'; payload: InitPayload }
   | { type: 'save-request'; requestId: number }
+  | { type: 'thumbnail-request'; requestId: number }
   | { type: 'oo-remote-op'; payload: string }
   | { type: 'oo-remote-cursor'; senderDeviceId: number; payload: string }
   | { type: 'oo-peers'; list: { deviceId: number; userId: string; username?: string; color?: string }[]; ts: number }
@@ -149,6 +153,7 @@ function OfficeEditorBase(
     reject: (e: Error) => void
   }>>(new Map())
   const nextSaveIdRef = useRef(1)
+  const pendingThumbnailsRef = useRef<Map<number, { resolve: (pdf: Uint8Array) => void; reject: (e: Error) => void }>>(new Map())
 
   // Collab WS state — held in refs so message handlers (which are stable)
   // see the latest values without re-binding.
@@ -188,6 +193,17 @@ function OfficeEditorBase(
           { type: 'save-request', requestId } satisfies ToBridge,
           officeOrigin(),
         )
+      }),
+    thumbnailPdf: () =>
+      new Promise((resolve, reject) => {
+        const target = iframeRef.current?.contentWindow
+        if (!target) {
+          reject(new Error('editor iframe not mounted'))
+          return
+        }
+        const requestId = nextSaveIdRef.current++
+        pendingThumbnailsRef.current.set(requestId, { resolve, reject })
+        target.postMessage({ type: 'thumbnail-request', requestId } satisfies ToBridge, officeOrigin())
       }),
   }), [docType])
 
@@ -311,6 +327,14 @@ function OfficeEditorBase(
           } else {
             pending.reject(new Error('save returned no bytes'))
           }
+          return
+        }
+        case 'thumbnail-result': {
+          const pending = pendingThumbnailsRef.current.get(msg.requestId)
+          if (!pending) return
+          pendingThumbnailsRef.current.delete(msg.requestId)
+          if (msg.bytes) pending.resolve(msg.bytes instanceof Uint8Array ? msg.bytes : new Uint8Array(msg.bytes))
+          else pending.reject(new Error(msg.error ?? 'no thumbnail'))
           return
         }
         case 'oo-local-op':

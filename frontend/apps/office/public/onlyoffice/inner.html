@@ -216,6 +216,10 @@
               if (extra && extra.images) msg.images = extra.images
               if (extra && extra.mediasSources) msg.mediasSources = extra.mediasSources
               if (extra && extra.mediasData) msg.mediasData = extra.mediasData
+              // PDF output: OnlyOffice's print buffer beside the document,
+              // and the font files the layout used.
+              if (extra && extra.pdfBuffer) msg.pdfBuffer = extra.pdfBuffer
+              if (extra && extra.fonts) msg.fonts = extra.fonts
               iframe.contentWindow.postMessage(msg, SELF_ORIGIN)
             })
           })
@@ -929,6 +933,9 @@
             case 'save-request':
               handleSaveRequest(e.source, msg.requestId)
               return
+            case 'thumbnail-request':
+              handleThumbnailRequest(e.source, msg.requestId)
+              return
             case 'oo-remote-op':
               // A saveChanges payload from another peer. Re-emit it to
               // OnlyOffice via sendMessageToOO so the editor applies it,
@@ -1118,6 +1125,117 @@
           if (!ifr || !ifr.contentWindow) return null
           var w = ifr.contentWindow
           return w.editor || w.editorCell || w.editorDoc || w.editorSlide || null
+        }
+
+        // ---------- thumbnails (docs/plans/drive-thumbnails.md, phase D) ------
+        // The document as OnlyOffice lays it out: print it (the CryptPad build
+        // hands print output to window.parent.APP.printPdf — this page — only
+        // while that hook exists), turn the print buffer into a PDF with x2t,
+        // and hand the PDF to Drive, which draws page one. The hook is
+        // installed for one request at a time, so the editor's own Print
+        // behaves as always.
+        var FONTS_BASE = new URL('dist/v9/fonts/', window.location.href)
+        var fontCache = Object.create(null)
+
+        var fetchFont = function (id) {
+          if (!fontCache[id]) {
+            // Ids look like "/fonts/calibri.ttf", relative to the font base;
+            // anything resolving outside it is refused.
+            var url = new URL(String(id).replace(/^\/+/, ''), FONTS_BASE)
+            if (url.origin !== FONTS_BASE.origin || url.pathname.indexOf(FONTS_BASE.pathname) !== 0) {
+              return Promise.reject(new Error('font id outside the font folder: ' + id))
+            }
+            fontCache[id] = fetch(url)
+              .then(function (r) {
+                if (!r.ok) throw new Error('font ' + id + ': ' + r.status)
+                return r.arrayBuffer()
+              })
+              .catch(function (err) {
+                delete fontCache[id]
+                throw err
+              })
+          }
+          return fontCache[id]
+        }
+
+        // The fonts the document uses, by the file names x2t expects
+        // (CryptPad's fetchFonts): regular, bold, italic, bold italic.
+        var collectFonts = function (inner) {
+          var loader = inner && inner.FontLoader
+          var infos = (loader && loader.fontInfos) || []
+          var files = (loader && loader.fontFiles) || []
+          var suffixes = { indexR: '', indexB: '_Bold', indexI: '_Italic', indexBI: '_Bold_Italic' }
+          var wanted = []
+          infos.forEach(function (font) {
+            if (!font || !font.NeedStyles) return
+            Object.keys(suffixes).forEach(function (k) {
+              var index = font[k]
+              if (typeof index !== 'number' || index === -1 || !files[index]) return
+              wanted.push({ name: font.Name + suffixes[k] + '.ttf', id: files[index].Id })
+            })
+          })
+          return Promise.all(wanted.map(function (w) {
+            return fetchFont(w.id)
+              .then(function (data) { return { name: w.name, data: new Uint8Array(data) } })
+              .catch(function (err) {
+                console.warn('[kutup-bridge] thumbnail font unavailable', err)
+                return null
+              })
+          })).then(function (all) { return all.filter(Boolean) })
+        }
+
+        var thumbnailBusy = false
+        var handleThumbnailRequest = function (replyTo, requestId) {
+          var reply = function (message) {
+            message.type = 'thumbnail-result'
+            message.requestId = requestId
+            replyTo.postMessage(message, PARENT_ORIGIN)
+          }
+          var inner = getInnerEditor()
+          if (!docEditor || !inner || typeof inner.asc_Print !== 'function' ||
+              typeof inner.asc_nativeGetFile !== 'function') {
+            reply({ error: 'print is not available' })
+            return
+          }
+          if (thumbnailBusy) {
+            reply({ error: 'a thumbnail is already being drawn' })
+            return
+          }
+          thumbnailBusy = true
+          var settled = false
+          var timer = null
+          var finish = function (pdf, error) {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
+            thumbnailBusy = false
+            delete window.APP.printPdf
+            reply(pdf ? { bytes: pdf } : { error: error || 'thumbnail failed' })
+          }
+          timer = setTimeout(function () { finish(null, 'print timed out') }, 30000)
+          window.APP.printPdf = function (dataContainer, done) {
+            // End OnlyOffice's print action: nothing is downloaded or shown.
+            try { if (typeof done === 'function') done() } catch (e) { /* ignore */ }
+            var buffer = dataContainer && dataContainer.data
+            if (!buffer) return finish(null, 'no print output')
+            var bin
+            try {
+              bin = inner.asc_nativeGetFile()
+            } catch (err) {
+              return finish(null, 'could not read the document')
+            }
+            collectFonts(inner)
+              .then(function (fonts) {
+                return x2tConvert(bin, 'thumbnail.bin', 'pdf', { pdfBuffer: buffer, fonts: fonts })
+              })
+              .then(function (res) { finish(res.output) })
+              .catch(function (err) { finish(null, 'x2t pdf failed: ' + ((err && err.message) || err)) })
+          }
+          try {
+            inner.asc_Print({})
+          } catch (err) {
+            finish(null, 'print failed: ' + ((err && err.message) || err))
+          }
         }
 
         var handleSaveRequest = function (replyTo, requestId) {

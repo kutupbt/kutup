@@ -2,9 +2,18 @@
 
 **Status:** agreed 2026-09-24, branch `feat/frontend-rewrite`. Phases A
 (format, server), B (images, notes/code, whiteboards; display, editor
-redraws, backfill, Quick Look) and C (video frames; PDF first pages through
-PDF.js 6.3.289, pinned, no scripting or XFA, worker-parsed) are implemented;
-D (office) remains.
+redraws, backfill, Quick Look), C (video frames; PDF first pages through
+PDF.js 6.3.289, pinned, no scripting or XFA, worker-parsed) and D (office)
+are implemented.
+
+Office thumbnails (D) are drawn on Save from the document as OnlyOffice lays
+it out, inside the office sandbox: the bridge installs the CryptPad build's
+`APP.printPdf` hook for one request, calls `asc_Print`, and x2t turns the
+print buffer plus the document and its fonts (from the sandbox's own font
+folder) into a PDF; Drive draws page one with PDF.js. Spreadsheets are
+cropped to their used cells, in the card's 4:3 shape. Office files cannot be
+backfilled (drawing needs a running editor): a document gets its thumbnail
+at its first save.
 
 Generation reuses the shared preview worker Chat already used
 (`packages/files/src/mediaPreview`: safety classification, header-bounded

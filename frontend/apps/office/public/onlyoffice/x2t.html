@@ -99,6 +99,20 @@
           // Write input.
           Mod.FS.writeFile('/working/' + fileName, msg.input)
 
+          // PDF from OnlyOffice's print output (CryptPad's x2t.js): the
+          // print buffer at a fixed name, and the fonts the layout used.
+          var pdfParams = ''
+          if (outputFormat === 'pdf') {
+            if (!msg.pdfBuffer) throw new Error('pdf output needs the print buffer')
+            Mod.FS.writeFile('/working/pdf.bin', msg.pdfBuffer)
+            try { Mod.FS.mkdir('/working/fonts') } catch (e) { /* exists */ }
+            ;(msg.fonts || []).forEach(function (font) {
+              if (!font || typeof font.name !== 'string') return
+              Mod.FS.writeFile('/working/fonts/' + safeName(font.name), font.data)
+            })
+            pdfParams = '<m_sFontDir>/working/fonts/</m_sFontDir>'
+          }
+
           // Write images (themes + media) if provided.
           var images = msg.images || {}
           var mediasSources = msg.mediasSources || {}
@@ -135,6 +149,7 @@
               '<m_sFileFrom>/working/' + fileName + '</m_sFileFrom>' +
               '<m_sThemeDir>/working/themes</m_sThemeDir>' +
               '<m_sFileTo>/working/' + fileName + '.' + outputFormat + '</m_sFileTo>' +
+              pdfParams +
               '<m_bIsNoBase64>false</m_bIsNoBase64>' +
             '</TaskQueueDataConvert>'
 
