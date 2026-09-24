@@ -10,6 +10,7 @@ import type { DriveFile, Folder } from '../drive/model'
 import { editorKindFor, extensionOf } from '../editor/editorKind'
 import { chooseViewer } from '../editor/viewers/dispatch'
 import { KindIcon } from '../explorer/KindIcon'
+import { thumbnailUrl } from '../thumbnails/store'
 
 const MarkdownPreview = lazy(() => import('../editor/text/markdown/MarkdownPreview'))
 
@@ -26,6 +27,8 @@ export interface QuickLookTarget {
 type Loaded =
   | { kind: 'viewer'; url: string; mimeType: string }
   | { kind: 'text'; text: string; markdown: boolean; cut: boolean }
+  /** The file's large thumbnail, where there is no viewer or the file is too big. */
+  | { kind: 'picture'; url: string; reason: 'type' | 'size' }
   | { kind: 'none'; reason: 'type' | 'size' | 'failed' }
 
 /**
@@ -62,13 +65,23 @@ export function QuickLook({
     const name = f.name ?? ''
     const viewer = chooseViewer(name)
     const text = editorKindFor(name) === 'text'
+    // No viewer, or too large to decrypt whole: its large thumbnail if it
+    // has one (cached blob: URLs are owned by the thumbnail store).
+    const fallback = (reason: 'type' | 'size') =>
+      void thumbnailUrl(f, 'lg').then((picture) => {
+        if (!cancelled) setLoaded(picture ? { kind: 'picture', url: picture, reason } : { kind: 'none', reason })
+      })
     if (!viewer && !text) {
-      setLoaded({ kind: 'none', reason: 'type' })
-      return
+      fallback('type')
+      return () => {
+        cancelled = true
+      }
     }
     if (f.size > MAX_PREVIEW_BYTES) {
-      setLoaded({ kind: 'none', reason: 'size' })
-      return
+      fallback('size')
+      return () => {
+        cancelled = true
+      }
     }
     const controller = new AbortController()
     readFile(folder, f, controller.signal)
@@ -162,6 +175,11 @@ export function QuickLook({
                 </div>
               ) : loaded.kind === 'viewer' && viewer ? (
                 <viewer.Component filename={file.name ?? ''} blobUrl={loaded.url} mimeType={loaded.mimeType} />
+              ) : loaded.kind === 'picture' ? (
+                <div className="flex h-full flex-col items-center justify-center gap-3 p-4">
+                  <img src={loaded.url} alt={file.name ?? ''} className="min-h-0 max-w-full flex-1 object-contain shadow-sm" draggable={false} />
+                  <p className="text-xs text-muted-foreground">{t(`quickLook.picture.${loaded.reason}`)}</p>
+                </div>
               ) : loaded.kind === 'text' ? (
                 <div className="flex h-full flex-col">
                   {loaded.markdown ? (

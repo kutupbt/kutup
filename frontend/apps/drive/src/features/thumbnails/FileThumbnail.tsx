@@ -1,0 +1,111 @@
+import { useEffect, useRef, useState } from 'react'
+import { useRequiredSession } from '@kutup/session/store'
+import { cn } from '@kutup/ui/lib/cn'
+import { readFile } from '../drive/copy'
+import type { DriveFile, Folder } from '../drive/model'
+import { currentContent } from '../editor/content'
+import { KindIcon } from '../explorer/KindIcon'
+import { thumbnailsOfFile, thumbnailSourceFor } from './make'
+import { enqueueThumbnail } from './queue'
+import { storeThumbnails, thumbnailUrl } from './store'
+
+/** Backfill only what is cheap to draw. */
+const BACKFILL_MAX_IMAGE_BYTES = 20 * 1024 * 1024
+/** Each file's current content is tried once per tab. */
+const tried = new Set<string>()
+
+/**
+ * Older files and stale thumbnails get redrawn in the background while they
+ * are on screen — by someone who may write to the file (readers of shared
+ * folders do not: it would charge their quota for the owner's files), never
+ * on a data-saving connection, one at a time (docs/plans/drive-thumbnails.md).
+ */
+function backfill(folder: Folder, file: DriveFile, userId: string): void {
+  if (file.thumbnails.sm && !file.thumbnailStale) return
+  if (!file.fileKey || !file.name || folder.source === 'remote') return
+  if (!(folder.canManage || file.uploaderUserId === userId)) return
+  const source = thumbnailSourceFor(file.name, file.mimeType)
+  if (!source || (source === 'image' && file.size > BACKFILL_MAX_IMAGE_BYTES)) return
+  const saveData = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData
+  if (saveData) return
+  const attempt = `${file.id}:${file.updatedAt}`
+  if (tried.has(attempt)) return
+  tried.add(attempt)
+  const fileKey = file.fileKey
+  const name = file.name
+  enqueueThumbnail(file.id, async () => {
+    const content = await currentContent(file)
+    const blob = await readFile(folder, file)
+    const made = await thumbnailsOfFile(new File([blob], name, { type: file.mimeType }))
+    return storeThumbnails(
+      { fileId: file.id, fileKey, keyEpoch: file.keyEpoch },
+      made,
+      content.kind === 'original' ? 'original' : content.versionId,
+    )
+  })
+}
+
+/**
+ * A grid card's picture: the file's thumbnail once it is on screen, its kind
+ * icon until then (and whenever there is none). Documents show from the top
+ * of the page; pictures fill the frame.
+ */
+export function FileThumbnail({ folder, file }: { folder: Folder; file: DriveFile }) {
+  const session = useRequiredSession()
+  const box = useRef<HTMLDivElement>(null)
+  const [visible, setVisible] = useState(false)
+  const [url, setUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    const el = box.current
+    if (!el || visible) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setVisible(true)
+          observer.disconnect()
+        }
+      },
+      { rootMargin: '200px' },
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [visible])
+
+  const stamp = file.thumbnails.sm
+  useEffect(() => {
+    if (!visible) return
+    let alive = true
+    setUrl(null)
+    void thumbnailUrl(file, 'sm').then((u) => alive && setUrl(u))
+    backfill(folder, file, session.userId)
+    return () => {
+      alive = false
+    }
+    // The stored version (stamp) and staleness decide; the objects churn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, file.id, stamp, file.thumbnailStale])
+
+  // Photos fill the frame; pages show from the top; drawings show whole.
+  const fit =
+    file.kind === 'image'
+      ? 'object-cover'
+      : file.kind === 'whiteboard'
+        ? 'bg-white object-contain p-1'
+        : 'bg-white object-cover object-top'
+  return (
+    <div ref={box} className="absolute inset-0 flex items-center justify-center overflow-hidden rounded-lg">
+      {url ? (
+        <img
+          src={url}
+          alt=""
+          draggable={false}
+          onError={() => setUrl(null)}
+          className={cn('size-full', fit)}
+        />
+      ) : (
+        <KindIcon kind={file.kind} className="size-14" />
+      )}
+    </div>
+  )
+}

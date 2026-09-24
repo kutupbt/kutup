@@ -1,6 +1,17 @@
 # Drive thumbnails — design
 
-**Status:** agreed 2026-09-24, branch `feat/frontend-rewrite`
+**Status:** agreed 2026-09-24, branch `feat/frontend-rewrite`. Phases A
+(format, server) and B (images, notes/code, whiteboards; display, editor
+redraws, backfill, Quick Look) are implemented; C (video, PDF) and D (office)
+remain.
+
+Generation reuses the shared preview worker Chat already used
+(`packages/files/src/mediaPreview`: safety classification, header-bounded
+decoding, re-encoding that strips metadata, byte/pixel/time budgets, never
+SVG), extended with a text-page renderer and a JPEG fallback for browsers
+that cannot encode WebP. Chat keeps its own transport on purpose: its
+preview is sealed inside the (immutable) message, as in the Chat media plan;
+Drive files change, so their previews live in a replaceable slot.
 **Scope:** encrypted previews for the Drive grid and Quick Look.
 Pre-tag: formats and schema change directly; no compatibility shims.
 

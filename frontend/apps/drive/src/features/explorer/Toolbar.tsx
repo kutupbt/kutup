@@ -1,4 +1,4 @@
-import { ArrowDownUp, LayoutGrid, List, ListFilter } from 'lucide-react'
+import { ArrowDownUp, Image, ImageOff, LayoutGrid, List, ListFilter } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@kutup/ui/components/button'
 import {
@@ -145,6 +145,22 @@ export function Toolbar({ prefs, update }: { prefs: ExplorerPrefs; update: Updat
             <Icon />
           </button>
         ))}
+        {view === 'grid' ? (
+          <button
+            type="button"
+            aria-pressed={prefs.showPreviews}
+            aria-label={t('explorer.showPreviews')}
+            title={t('explorer.showPreviews')}
+            onClick={() => update({ showPreviews: !prefs.showPreviews })}
+            className={cn(
+              'ml-0.5 rounded border-l border-border p-1.5 text-muted-foreground transition-colors hover:text-foreground',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-4',
+              prefs.showPreviews && 'text-foreground',
+            )}
+          >
+            {prefs.showPreviews ? <Image /> : <ImageOff />}
+          </button>
+        ) : null}
       </div>
     </div>
   )

@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { setUnauthenticatedHandler } from '@kutup/session/client'
@@ -15,7 +16,18 @@ import { SearchPage } from './features/search/SearchPage'
 import { SharedPage } from './features/shared/SharedPage'
 import { TrashPage } from './features/trash/TrashPage'
 import { UploadPanel } from './features/uploads/UploadPanel'
+import { setThumbnailStoredListener } from './features/thumbnails/queue'
 import { NotFoundPage } from './NotFoundPage'
+
+/** Thumbnails stored in the background show up without a reload. */
+function ThumbnailRefresh() {
+  const queryClient = useQueryClient()
+  useEffect(() => {
+    setThumbnailStoredListener(() => void queryClient.invalidateQueries({ queryKey: ['files'] }))
+    return () => setThumbnailStoredListener(null)
+  }, [queryClient])
+  return null
+}
 
 /** When the sign-in ends (signed out elsewhere, expired), ask the account app again. */
 function UnauthenticatedHandler() {
@@ -30,6 +42,7 @@ function SignedIn() {
   return (
     <Boot>
       <UnauthenticatedHandler />
+      <ThumbnailRefresh />
       <CurrentFolderProvider>
         <Routes>
           {/* A file opens full screen, outside the Drive frame. */}

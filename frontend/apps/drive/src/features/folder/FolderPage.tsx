@@ -34,6 +34,7 @@ import { useExplorerPrefs } from '../explorer/prefs'
 import { filterItems, itemKey, sortItems, type ExplorerItem } from '../explorer/sort'
 import { Toolbar } from '../explorer/Toolbar'
 import { QuickLook, type QuickLookTarget } from '../quicklook/QuickLook'
+import { FileThumbnail } from '../thumbnails/FileThumbnail'
 import { useUploadActions } from '../uploads/useUploadActions'
 
 type Target = { folder: Folder; file?: undefined } | { folder: Folder; file: DriveFile }
@@ -457,6 +458,14 @@ export function FolderPage() {
               if (target?.file?.fileKey) setLooking({ folder: target.folder, file: target.file })
             }}
             actionsFor={actionsFor}
+            renderPreview={
+              prefs.showPreviews
+                ? (item) => {
+                    const target = lookup.get(itemKey(item))
+                    return target?.file ? <FileThumbnail folder={target.folder} file={target.file} /> : null
+                  }
+                : undefined
+            }
             onDeleteKey={() => selectedTrashable.length === selectedTargets.length && void moveToTrash(selectedTargets)}
           />
         )}

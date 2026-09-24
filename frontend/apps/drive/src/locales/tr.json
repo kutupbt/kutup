@@ -64,7 +64,8 @@
       "archive": "Arşivler",
       "other": "Diğer dosyalar"
     },
-    "selectAll": "Tümünü seç"
+    "selectAll": "Tümünü seç",
+    "showPreviews": "Önizlemeleri göster"
   },
   "newMenu": {
     "new": "Yeni",
@@ -422,6 +423,10 @@
       "type": "Bu dosya türü için önizleme yok.",
       "size": "Bu dosya önizleme için çok büyük. Aç ya da indir.",
       "failed": "Önizleme yüklenemedi."
+    },
+    "picture": {
+      "type": "Önizleme görseli. Tamamını görmek ve düzenlemek için dosyayı aç.",
+      "size": "Önizleme görseli: dosya burada gösterilemeyecek kadar büyük. Aç ya da indir."
     }
   },
   "viewer": {

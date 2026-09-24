@@ -34,6 +34,10 @@ export interface FileRow {
   encryptedSizeBytes: number
   createdAt: string
   updatedAt: string
+  /** When each thumbnail variant was stored (docs/plans/drive-thumbnails.md). */
+  thumbnails?: { sm?: string; lg?: string }
+  /** A thumbnail exists but was drawn from other than the latest version. */
+  thumbnailStale?: boolean
 }
 
 export interface UserRow {

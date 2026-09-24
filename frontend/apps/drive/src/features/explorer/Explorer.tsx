@@ -43,6 +43,8 @@ export interface ExplorerProps {
   onDeleteKey?: (keys: ReadonlySet<string>) => void
   /** Extra line under a name (e.g. who shared it). */
   subtitleFor?: (item: ExplorerItem) => ReactNode
+  /** A grid card's picture (a thumbnail); null or absent shows the kind icon. */
+  renderPreview?: (item: ExplorerItem) => ReactNode
 }
 
 function RowMenu({ item, actions }: { item: ExplorerItem; actions: ExplorerAction[] }) {
@@ -389,7 +391,7 @@ function ListView({ items, sort, onSortField, selection, actionsFor, subtitleFor
   )
 }
 
-function GridView({ items, selection, actionsFor, rowProps }: ExplorerProps & { rowProps: RowProps }) {
+function GridView({ items, selection, actionsFor, renderPreview, rowProps }: ExplorerProps & { rowProps: RowProps }) {
   const { i18n } = useTranslation()
   return (
     <ul className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-3 p-4" role="grid" aria-multiselectable>
@@ -416,11 +418,12 @@ function GridView({ items, selection, actionsFor, rowProps }: ExplorerProps & { 
             {/* The preview area. Until thumbnails exist it shows the kind, large. */}
             <div
               className={cn(
-                'mx-2 flex aspect-[4/3] items-center justify-center rounded-lg',
+                // Clipped: a tall page must not stretch the card past 4:3.
+                'relative mx-2 flex aspect-[4/3] items-center justify-center overflow-hidden rounded-lg',
                 selected ? 'bg-background/60' : 'bg-muted/70',
               )}
             >
-              <KindIcon kind={item.kind} color={item.color} className="size-14" />
+              {renderPreview?.(item) ?? <KindIcon kind={item.kind} color={item.color} className="size-14" />}
             </div>
             <p className="px-3 pb-2 pt-1.5 text-xs text-muted-foreground">{formatFileDate(item.modifiedAt, i18n.language)}</p>
           </li>

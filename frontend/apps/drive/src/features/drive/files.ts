@@ -37,6 +37,8 @@ async function openRow(row: FileRowLike, collectionKey: Uint8Array): Promise<Dri
     createdAt: row.createdAt,
     // Federated listings carry no updatedAt; creation is the best they know.
     updatedAt: row.updatedAt ?? row.createdAt,
+    thumbnails: row.thumbnails ?? {},
+    thumbnailStale: row.thumbnailStale ?? false,
   }
 }
 

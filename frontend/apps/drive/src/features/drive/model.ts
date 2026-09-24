@@ -47,6 +47,10 @@ export interface DriveFile {
   kind: FileKind
   createdAt: string
   updatedAt: string
+  /** When each thumbnail was stored; the value versions its URL. */
+  thumbnails: { sm?: string; lg?: string }
+  /** Drawn from something other than the latest content: redraw. */
+  thumbnailStale: boolean
 }
 
 /** Where a folder's files come from and go to. */

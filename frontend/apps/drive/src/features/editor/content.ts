@@ -13,9 +13,9 @@ import { editorKindFor } from './editorKind'
 export type FileContent =
   | { kind: 'original' }
   /** The latest version's encrypted blob, under the API base. */
-  | { kind: 'version'; path: string }
-  /** A note's current text. */
-  | { kind: 'plain'; bytes: Uint8Array }
+  | { kind: 'version'; path: string; versionId: string }
+  /** A note's current text, from the version `versionId`. */
+  | { kind: 'plain'; bytes: Uint8Array; versionId: string }
 
 export async function currentContent(file: DriveFile): Promise<FileContent> {
   const kind = file.name ? editorKindFor(file.name) : null
@@ -25,7 +25,7 @@ export async function currentContent(file: DriveFile): Promise<FileContent> {
   const latest = versions[0]
   if (!latest || latest.sizeBytes === 0) return { kind: 'original' }
   const path = `/files/${file.id}/versions/${latest.id}/download`
-  if (kind !== 'text') return { kind: 'version', path }
+  if (kind !== 'text') return { kind: 'version', path, versionId: latest.id }
 
   const { data } = await api.get<ArrayBuffer>(path, { responseType: 'arraybuffer' })
   const state = await decryptFileBlobV1(new Uint8Array(data), file.fileKey, {
@@ -37,7 +37,7 @@ export async function currentContent(file: DriveFile): Promise<FileContent> {
   const doc = new Y.Doc()
   try {
     Y.applyUpdateV2(doc, state)
-    return { kind: 'plain', bytes: new TextEncoder().encode(doc.getText('content').toJSON()) }
+    return { kind: 'plain', bytes: new TextEncoder().encode(doc.getText('content').toJSON()), versionId: latest.id }
   } finally {
     doc.destroy()
   }

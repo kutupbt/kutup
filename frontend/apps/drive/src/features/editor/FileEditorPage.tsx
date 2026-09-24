@@ -25,6 +25,9 @@ import { OfficeEditor, TextCollabEditor, WhiteboardEditor } from './dispatch'
 import { editorKindFor, type EditorKind } from './editorKind'
 import type { OfficeEditorHandle } from './office/OfficeEditor'
 import { loadVersionBytes, saveSnapshot, type SnapshotTarget } from './snapshots'
+import { exportScene, thumbnailsOfDrawing } from '../thumbnails/make'
+import { enqueueThumbnail } from '../thumbnails/queue'
+import { storeThumbnails } from '../thumbnails/store'
 import RestoreConfirmDialog, { type RestoreChoice } from './versions/RestoreConfirmDialog'
 import VersionHistoryPanel from './versions/VersionHistoryPanel'
 import { chooseViewer } from './viewers/dispatch'
@@ -417,7 +420,9 @@ function WholeFileActions({
       savingRef.current = true
       setSaving(true)
       try {
-        await saveSnapshot(keys.target, await getBytes(), opts)
+        const bytes = await getBytes()
+        const versionId = await saveSnapshot(keys.target, bytes, opts)
+        if (kind === 'whiteboard') redrawWhiteboard(keys.target, versionId, bytes)
         if (!opts.quiet) {
           setJustSaved(true)
           setTimeout(() => setJustSaved(false), 1500)
@@ -431,7 +436,7 @@ function WholeFileActions({
         setSaving(false)
       }
     },
-    [getBytes, keys.target, t],
+    [getBytes, keys.target, kind, t],
   )
 
   // Ctrl/Cmd+S anywhere on the page. OnlyOffice runs in a frame and forwards
@@ -537,6 +542,20 @@ function WholeFileActions({
       />
     </>
   )
+}
+
+/** A saved whiteboard's thumbnail, drawn from the scene that was saved. */
+function redrawWhiteboard(target: SnapshotTarget, versionId: string, bytes: Uint8Array): void {
+  const json = new TextDecoder().decode(bytes)
+  enqueueThumbnail(target.context.fileId, async () => {
+    const png = await exportScene(json)
+    if (!png) return false
+    return storeThumbnails(
+      { fileId: target.context.fileId, fileKey: target.fileKey, keyEpoch: target.context.epoch },
+      await thumbnailsOfDrawing(png),
+      versionId,
+    )
+  })
 }
 
 /** The version list, over the editor's right edge below the header. */

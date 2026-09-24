@@ -10,7 +10,8 @@ import {
 import { inspectOoxmlContainerV1 } from './ooxml'
 import { normalizeAudioWaveform } from './waveform'
 import type {
-  RasterPreviewWorkerRequestV1,
+  PreviewWorkerRequestV1,
+  RasterOutputType,
   RasterPreviewWorkerResponseV1,
 } from './workerProtocol'
 
@@ -60,7 +61,7 @@ export interface PreviewGenerationResultV1 {
 export interface RasterPreviewWorkerLike {
   onmessage: ((event: MessageEvent<RasterPreviewWorkerResponseV1>) => void) | null
   onerror: ((event: ErrorEvent) => void) | null
-  postMessage(message: RasterPreviewWorkerRequestV1, transfer: Transferable[]): void
+  postMessage(message: PreviewWorkerRequestV1, transfer: Transferable[]): void
   terminate(): void
 }
 
@@ -194,6 +195,106 @@ export async function generatePreviewPayloadV1(
   }
 }
 
+/** How big a raster may be, and in which encodings (best first). */
+export interface RasterBudgetV1 {
+  maxEdge: number
+  maxOutputBytes: number
+  outputTypes: RasterOutputType[]
+}
+
+export interface RasterResultV1 {
+  contentType: RasterOutputType
+  width: number
+  height: number
+  raster: Uint8Array
+  sourceWidth: number
+  sourceHeight: number
+}
+
+/**
+ * A bounded raster of an image file (Drive thumbnails), through the same
+ * safety classification, header-bounded decode and worker as Chat
+ * previews. Null when the file is not a previewable image or does not fit
+ * the limits; a preview is optional and its failure is never an error for
+ * the upload that asked for it.
+ */
+export async function rasterizeImageFileV1(
+  file: File,
+  budget: RasterBudgetV1,
+  limits: PreviewGenerationLimitsV1,
+  signal?: AbortSignal,
+  dependencies: PreviewGenerationDependenciesV1 = {},
+): Promise<RasterResultV1 | null> {
+  validateGenerationLimits(limits)
+  throwIfAborted(signal)
+  const header = new Uint8Array(await readBlob(file.slice(0, 4096)))
+  const safety = classifyFileForKutup({ filename: file.name, mimeType: file.type, bytes: header })
+  if (safety.classification !== 'previewable' || !safety.detectedMimeType?.startsWith('image/')) return null
+  if (file.size > limits.maxImageInputBytes) return null
+  const bytes = await readBlob(file)
+  throwIfAborted(signal)
+  try {
+    const response = await runWithDeadline(
+      (deadlineSignal) =>
+        runRasterWorker(
+          {
+            type: 'raster-image-v1',
+            filename: file.name,
+            mimeType: safety.detectedMimeType!,
+            bytes,
+            maxInputPixels: limits.maxImageInputPixels,
+            maxEdge: budget.maxEdge,
+            maxOutputBytes: budget.maxOutputBytes,
+            outputTypes: budget.outputTypes,
+          },
+          deadlineSignal,
+          dependencies.rasterWorkerFactory,
+        ),
+      limits.timeoutMs,
+      signal,
+    )
+    return { ...response, raster: new Uint8Array(response.raster) }
+  } catch (error) {
+    if (isAbortError(error)) throw error
+    return null
+  }
+}
+
+/** The start of a text file drawn as a page (Drive thumbnails of notes and code). */
+export async function renderTextPageV1(
+  text: string,
+  mode: 'prose' | 'code',
+  budget: RasterBudgetV1,
+  limits: PreviewGenerationLimitsV1,
+  signal?: AbortSignal,
+  dependencies: PreviewGenerationDependenciesV1 = {},
+): Promise<RasterResultV1 | null> {
+  validateGenerationLimits(limits)
+  try {
+    const response = await runWithDeadline(
+      (deadlineSignal) =>
+        runRasterWorker(
+          {
+            type: 'text-page-v1',
+            text: text.slice(0, 8192),
+            mode,
+            maxEdge: budget.maxEdge,
+            maxOutputBytes: budget.maxOutputBytes,
+            outputTypes: budget.outputTypes,
+          },
+          deadlineSignal,
+          dependencies.rasterWorkerFactory,
+        ),
+      limits.timeoutMs,
+      signal,
+    )
+    return { ...response, raster: new Uint8Array(response.raster) }
+  } catch (error) {
+    if (isAbortError(error)) throw error
+    return null
+  }
+}
+
 export function bindPreviewPayloadV1(
   payload: GeneratedPreviewPayloadV1,
   source: PreviewSourceV1,
@@ -203,7 +304,7 @@ export function bindPreviewPayloadV1(
 }
 
 async function runRasterWorker(
-  request: RasterPreviewWorkerRequestV1,
+  request: PreviewWorkerRequestV1,
   signal?: AbortSignal,
   factory: RasterWorkerFactory = defaultRasterWorkerFactory,
 ): Promise<Extract<RasterPreviewWorkerResponseV1, { type: 'raster-image-result-v1' }>> {
@@ -227,7 +328,7 @@ async function runRasterWorker(
       else finish(() => reject(new Error('preview worker returned an unexpected response')))
     }
     worker.onerror = event => finish(() => reject(new Error(event.message || 'preview worker failed')))
-    worker.postMessage(request, [request.bytes])
+    worker.postMessage(request, request.type === 'raster-image-v1' ? [request.bytes] : [])
   })
 }
 

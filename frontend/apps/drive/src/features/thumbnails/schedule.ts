@@ -1,0 +1,16 @@
+import type { UploadedFile } from '@kutup/files/upload/streamUpload'
+import { thumbnailsOfFile, thumbnailSourceFor } from './make'
+import { enqueueThumbnail } from './queue'
+import { storeThumbnails } from './store'
+
+/** After an upload: draw its thumbnail from the plaintext still in hand. */
+export function thumbnailAfterUpload(uploaded: UploadedFile, file: File): void {
+  if (!thumbnailSourceFor(file.name, file.type)) return
+  enqueueThumbnail(uploaded.fileId, async () =>
+    storeThumbnails(
+      { fileId: uploaded.fileId, fileKey: uploaded.fileKey, keyEpoch: uploaded.keyEpoch },
+      await thumbnailsOfFile(file),
+      'original',
+    ),
+  )
+}

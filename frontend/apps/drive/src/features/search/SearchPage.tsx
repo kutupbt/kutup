@@ -13,6 +13,7 @@ import { Explorer, type ExplorerAction } from '../explorer/Explorer'
 import { useExplorerPrefs } from '../explorer/prefs'
 import { filterItems, itemKey, sortItems, type ExplorerItem } from '../explorer/sort'
 import { Toolbar } from '../explorer/Toolbar'
+import { FileThumbnail } from '../thumbnails/FileThumbnail'
 import { matches, terms } from './match'
 import { useDriveIndex } from './useDriveIndex'
 
@@ -163,6 +164,14 @@ export function SearchPage() {
           onSelectionChange={setSelection}
           onOpen={open}
           actionsFor={actionsFor}
+          renderPreview={
+            prefs.showPreviews
+              ? (item) => {
+                  const hit = hits.get(itemKey(item))
+                  return hit?.file ? <FileThumbnail folder={hit.folder} file={hit.file} /> : null
+                }
+              : undefined
+          }
           subtitleFor={(item) => {
             const hit = hits.get(itemKey(item))
             const where = hit && index ? containerOf(hit) : undefined

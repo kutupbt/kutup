@@ -9,6 +9,8 @@ export interface ExplorerPrefs {
   sort: SortSpec
   kinds: ReadonlySet<ItemKind>
   view: ViewMode
+  /** Thumbnails in grid cards; off shows only kind icons. */
+  showPreviews: boolean
 }
 
 const STORAGE_KEY = 'kutup-drive-view'
@@ -19,6 +21,7 @@ interface Stored {
   dir?: SortDir
   foldersFirst?: boolean
   view?: ViewMode
+  showPreviews?: boolean
 }
 
 function readStored(): Stored {
@@ -59,7 +62,12 @@ export function useExplorerPrefs(): [ExplorerPrefs, (patch: Partial<Stored> & { 
     const kinds = new Set(
       (params.get('kind') ?? '').split(',').filter((k): k is ItemKind => ALL_KINDS.includes(k as ItemKind)),
     )
-    return { sort: { field, dir, foldersFirst: stored.foldersFirst ?? DEFAULT_SORT.foldersFirst }, kinds, view }
+    return {
+      sort: { field, dir, foldersFirst: stored.foldersFirst ?? DEFAULT_SORT.foldersFirst },
+      kinds,
+      view,
+      showPreviews: stored.showPreviews ?? true,
+    }
   }, [params, stored])
 
   const update = useCallback(

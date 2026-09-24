@@ -19,7 +19,7 @@ export async function saveSnapshot(
   target: SnapshotTarget,
   bytes: Uint8Array,
   opts: { label?: string; keepForever?: boolean } = {},
-): Promise<void> {
+): Promise<string> {
   const fileId = target.context.fileId
   const sealed = await encryptFileBlobV1(bytes, target.fileKey, target.context)
   const form = new FormData()
@@ -28,7 +28,7 @@ export async function saveSnapshot(
     `/files/${fileId}/snapshot-blob`,
     form,
   )
-  await recordSnapshot(fileId, {
+  const recorded = await recordSnapshot(fileId, {
     s3VersionId: data.s3VersionId,
     storagePath: data.storagePath,
     // Whole-file editors have no update log to resume from.
@@ -38,6 +38,7 @@ export async function saveSnapshot(
     label: opts.label ?? null,
     keepForever: Boolean(opts.keepForever),
   })
+  return recorded.id
 }
 
 /** A version's plaintext. */

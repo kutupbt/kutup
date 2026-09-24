@@ -23,7 +23,7 @@
 
 import api from '@kutup/session/client'
 import { createOwnedCollectionV1 } from '@kutup/crypto'
-import { streamUpload } from './streamUpload'
+import { streamUpload, type UploadedFile } from './streamUpload'
 
 /** One file + the directory path it lives in, relative to the drop root. */
 export interface FolderEntry {
@@ -44,6 +44,8 @@ export interface UploadFolderOptions {
   /** Bearer JWT for the tus calls, or a function returning a current one. */
   accessToken: string | (() => Promise<string>)
   onProgress?: (filesDone: number, filesTotal: number, currentName: string) => void
+  /** Each file once it is stored, with the plaintext it came from. */
+  onFileUploaded?: (uploaded: UploadedFile, file: File) => void
   signal?: AbortSignal
 }
 
@@ -114,12 +116,13 @@ export async function uploadFolder(opts: UploadFolderOptions): Promise<void> {
     const target = collMap.get(dirKey) ?? opts.parentCollection
     opts.onProgress?.(done, total, entry.file.name)
     try {
-      await streamUpload({
+      const uploaded = await streamUpload({
         file: entry.file,
         collection: target,
         accessToken: opts.accessToken,
         signal: opts.signal,
       })
+      opts.onFileUploaded?.(uploaded, entry.file)
     } catch (err) {
       console.error('[uploadFolder] streamUpload failed for', entry.file.name, 'in', dirKey, err)
       throw err

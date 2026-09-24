@@ -46,14 +46,23 @@ export interface StreamUploadOptions {
   signal?: AbortSignal
 }
 
+/** What an upload made: enough to seal things beside it (a thumbnail). */
+export interface UploadedFile {
+  fileId: string
+  fileKey: Uint8Array
+  keyEpoch: number
+  collectionId: string
+}
+
 /**
  * streamUpload encrypts and uploads a File via the tus endpoint.
- * Resolves with the server-allocated fileId (a UUID string). Rejects
+ * Resolves with the new file's id and key (the id is client-generated and
+ * confirmed by the server). Rejects
  * with the underlying error on failure; tus-js-client handles
  * transient retries internally (default 5 retries with exponential
  * backoff).
  */
-export async function streamUpload(opts: StreamUploadOptions): Promise<string> {
+export async function streamUpload(opts: StreamUploadOptions): Promise<UploadedFile> {
   const meta = {
     name: opts.file.name,
     mimeType: opts.file.type || 'application/octet-stream',
@@ -109,7 +118,7 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<string> {
   // Resolve the tus endpoint against the API base (same-origin `/api`).
   const uploadsEndpoint = `${await resolveApiBase()}/uploads/`
 
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<UploadedFile>((resolve, reject) => {
     let resolvedFileId = ''
     let lastPlainSent = 0
 
@@ -201,7 +210,12 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<string> {
         // the end of its progress bar even when the final PATCH is
         // smaller than the per-chunk increment.
         opts.onProgress?.(opts.file.size, opts.file.size)
-        resolve(resolvedFileId)
+        resolve({
+          fileId: resolvedFileId,
+          fileKey: record.fileKey,
+          keyEpoch: opts.collection.keyEpoch,
+          collectionId: opts.collection.id,
+        })
       },
     })
 

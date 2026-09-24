@@ -54,9 +54,9 @@ export function useCreateActions(target: Folder | null): {
     try {
       const existing = await loadFolderFiles(folder)
       const file = newDocumentFile(type, t(`newMenu.untitled.${type}`), existing.flatMap((f) => (f.name ? [f.name] : [])))
-      const id = await uploadOne(folder, file)
+      const uploaded = await uploadOne(folder, file)
       settled()
-      if (id) void navigate(filePath(folder, id))
+      if (uploaded) void navigate(filePath(folder, uploaded.fileId))
     } catch {
       toast.error(t('newMenu.createFailed'))
     } finally {

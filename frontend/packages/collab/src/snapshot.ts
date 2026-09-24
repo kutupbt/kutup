@@ -42,6 +42,10 @@ export interface SnapshotOpts {
    *  to surface a toast. QuotaExceededError additionally disarms the
    *  trigger (see disarmed flag). */
   onError?: (err: unknown) => void
+  /** After a version is recorded: its id, and whether someone asked for it
+   *  (Save / Save version) rather than autosave. Drive redraws the
+   *  thumbnail from here. */
+  onSnapshot?: (versionId: string, explicit: boolean) => void
 }
 
 export class SnapshotTrigger {
@@ -68,7 +72,7 @@ export class SnapshotTrigger {
 
   /** User-initiated "Save version" button. Always snapshots. */
   forceSave(label?: string, keepForever = false): Promise<void> {
-    return this.snapshot(label, keepForever)
+    return this.snapshot(label, keepForever, true)
   }
 
   private onUpdate = () => {
@@ -81,7 +85,7 @@ export class SnapshotTrigger {
     }
   }
 
-  private async snapshot(label?: string, keepForever = false): Promise<void> {
+  private async snapshot(label?: string, keepForever = false, explicit = false): Promise<void> {
     if (this.inflight) return
     if (this.disarmed && !label) return // explicit forceSave can still try; autosave can't.
     if (this.updatesSince === 0 && !label) return  // nothing to do (unless explicit label)
@@ -99,7 +103,7 @@ export class SnapshotTrigger {
       // 2. Announce snapshot — server records file_versions row + truncates log.
       // recordSnapshot converts axios 413 → QuotaExceededError so the catch
       // below can disarm autosave + surface a localized toast.
-      await recordSnapshot(this.opts.fileId, {
+      const recorded = await recordSnapshot(this.opts.fileId, {
         s3VersionId,
         storagePath,
         seqAtSnapshot: this.opts.getSeq(),
@@ -110,6 +114,7 @@ export class SnapshotTrigger {
       })
 
       this.updatesSince = 0
+      this.opts.onSnapshot?.(recorded.id, explicit)
     } catch (err) {
       if (err instanceof QuotaExceededError) {
         this.disarmed = true

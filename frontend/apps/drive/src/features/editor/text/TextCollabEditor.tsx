@@ -40,6 +40,7 @@ import { NameDialog } from '../../dialogs/NameDialog'
 import EditorShortcutsDialog from '../EditorShortcutsDialog'
 import CursorColorPicker from '../CursorColorPicker'
 import { useCursorColor } from '../useCursorColor'
+import { noteThumbnailScheduler } from '../../thumbnails/noteScheduler'
 import MarkdownPreview from './markdown/MarkdownPreview'
 import ModeToggle from './markdown/ModeToggle'
 import StatusBar from './markdown/StatusBar'
@@ -229,8 +230,11 @@ export default function TextCollabEditor({
       // sender_seq) UNIQUE — the relay would silently drop one frame.
       let outboundSeq = randomSenderSeqPrefix()
 
-      // 2.5 Snapshot trigger.
+      // 2.5 Snapshot trigger. Each saved version also redraws the file's
+      // thumbnail (throttled; see noteThumbnailScheduler).
+      const thumbnails = noteThumbnailScheduler({ fileId, fileKey, keyEpoch }, filename)
       const trig = new SnapshotTrigger({
+        onSnapshot: (versionId, explicit) => thumbnails.saved(versionId, explicit, ytext.toJSON()),
         fileId,
         ydoc,
         getSeq: () => Number(outboundSeq),
@@ -576,6 +580,7 @@ export default function TextCollabEditor({
 
       // 8. Cleanup on unmount.
       cleanup = () => {
+        thumbnails.flush()
         trig.destroy()
         ydoc?.off('update', onLocalUpdate)
         awareness?.off('change', onAwarenessChange)

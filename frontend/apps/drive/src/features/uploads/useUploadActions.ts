@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createFileRecordV1, encryptStream } from '@kutup/crypto'
-import { streamUpload } from '@kutup/files/upload/streamUpload'
+import { streamUpload, type UploadedFile } from '@kutup/files/upload/streamUpload'
 import { uploadFolder, type FolderEntry } from '@kutup/files/upload/uploadFolder'
 import api, { freshAccessToken } from '@kutup/session/client'
 import { updateSession } from '@kutup/session/store'
@@ -10,6 +10,7 @@ import { filesKey } from '../drive/files'
 import { foldersKey } from '../drive/folders'
 import { useDriveIdentity } from '../drive/identity'
 import { folderLocation, type Folder } from '../drive/model'
+import { thumbnailAfterUpload } from '../thumbnails/schedule'
 import { classifyUploadError } from './uploadError'
 import { uploads } from './uploadStore'
 
@@ -41,21 +42,27 @@ async function uploadRemote(folder: Folder, shareId: string, file: File, signal:
   })
 }
 
-/** Put files into `folder`, returning the new file id (used by "create document"). */
-export async function uploadOne(folder: Folder, file: File, signal?: AbortSignal, progress?: (s: number, t: number) => void): Promise<string | null> {
+/**
+ * Put a file into `folder`, returning what was made (null for a folder on
+ * another server, whose files this server does not hold). Its thumbnail is
+ * queued from the plaintext still in hand.
+ */
+export async function uploadOne(folder: Folder, file: File, signal?: AbortSignal, progress?: (s: number, t: number) => void): Promise<UploadedFile | null> {
   if (!folder.key) throw new Error('folder is not open')
   const location = folderLocation(folder)
   if (location.kind === 'remote') {
     await uploadRemote(folder, location.shareId, file, signal ?? new AbortController().signal, progress ?? (() => {}))
     return null
   }
-  return streamUpload({
+  const uploaded = await streamUpload({
     file,
     collection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: folder.key },
     accessToken: freshAccessToken,
     onProgress: progress,
     signal,
   })
+  thumbnailAfterUpload(uploaded, file)
+  return uploaded
 }
 
 export function useUploadActions() {
@@ -115,6 +122,7 @@ export function useUploadActions() {
                 accessToken: freshAccessToken,
                 signal,
                 onProgress: (done, total) => progress(done, total),
+                onFileUploaded: thumbnailAfterUpload,
               })
             },
           },

@@ -64,7 +64,8 @@
       "archive": "Archives",
       "other": "Other files"
     },
-    "selectAll": "Select all"
+    "selectAll": "Select all",
+    "showPreviews": "Show previews"
   },
   "newMenu": {
     "new": "New",
@@ -422,6 +423,10 @@
       "type": "There is no preview for this kind of file.",
       "size": "This file is too large to preview. Open or download it instead.",
       "failed": "The preview could not be loaded."
+    },
+    "picture": {
+      "type": "A preview picture. Open the file to see and edit all of it.",
+      "size": "A preview picture: the file is too large to show here. Open or download it."
     }
   },
   "viewer": {

@@ -43,6 +43,7 @@ describe('preview generation orchestration', () => {
     const { worker, terminate } = respondingWorker({
       type: 'raster-image-result-v1',
       raster: webp(),
+      contentType: 'image/webp',
       width: 320,
       height: 180,
       sourceWidth: 1920,
