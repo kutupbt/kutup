@@ -134,7 +134,7 @@ falls back to JPEG where the browser cannot encode WebP; quality steps down
 | Kind | Source | When |
 |---|---|---|
 | Image | `createImageBitmap` (EXIF orientation honoured); skipped above 50 MP or 100 MiB; HEIC only where the browser decodes it | upload |
-| Whiteboard | Excalidraw `exportToBlob` of the scene, light theme, padded | every explicit save; autosave at most once a minute |
+| Whiteboard | Excalidraw `exportToBlob` of the scene, light theme, padded | every save (Save / Ctrl+S) |
 | Note / text / code | the first ~40 lines drawn on a white page (monospace for code, the body font for notes; Markdown headings bold) — a paper look, the same in both themes, like Google's document cards | upload; text editor snapshot, at most once a minute |
 | Video | a `<video>` frame at 10% (max 5 s in) | upload |
 | PDF | first page via PDF.js, loaded only when needed | upload (phase C) |
