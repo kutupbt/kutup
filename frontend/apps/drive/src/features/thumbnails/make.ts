@@ -5,8 +5,11 @@ import {
   type ThumbnailVariant,
 } from '@kutup/crypto/thumbnail'
 import {
+  captureVideoFrameV1,
   DRIVE_PREVIEW_GENERATION_LIMITS_V1,
+  MAX_PDF_BYTES,
   rasterizeImageFileV1,
+  renderPdfFirstPageV1,
   renderTextPageV1,
   type RasterBudgetV1,
   type RasterResultV1,
@@ -18,7 +21,7 @@ import { fileKind } from '../explorer/kinds'
 export type MadeThumbnails = Partial<Record<ThumbnailVariant, ThumbnailImage>>
 
 /** What a thumbnail is drawn from, or null when nothing can be. */
-export type ThumbnailSource = 'image' | 'prose' | 'code' | 'whiteboard'
+export type ThumbnailSource = 'image' | 'prose' | 'code' | 'whiteboard' | 'video' | 'pdf'
 
 /** Images larger than this also get a large preview, for Quick Look. */
 const LARGE_IMAGE_BYTES = 20 * 1024 * 1024
@@ -48,6 +51,8 @@ export function thumbnailSourceFor(name: string, mimeType?: string): ThumbnailSo
   const kind = fileKind(name, mimeType)
   if (kind === 'image') return 'image'
   if (kind === 'whiteboard') return 'whiteboard'
+  if (kind === 'video') return 'video'
+  if (kind === 'pdf') return 'pdf'
   if (kind === 'note') return 'prose'
   if (kind === 'code' || editorKindFor(name) === 'text') return 'code'
   return null
@@ -66,13 +71,22 @@ export async function thumbnailsOfText(text: string, mode: 'prose' | 'code', sig
   return sm ? { sm } : {}
 }
 
-/** A whiteboard, already exported as a picture (PNG) by Excalidraw. */
-export async function thumbnailsOfDrawing(png: Blob, signal?: AbortSignal): Promise<MadeThumbnails> {
-  const file = new File([png], 'whiteboard.png', { type: 'image/png' })
+/**
+ * A picture drawn from a file (a whiteboard scene, a PDF page, a video
+ * frame), as PNG, through the same bounded worker as photos. `large` also
+ * makes the Quick Look size.
+ */
+export async function thumbnailsOfPicture(png: Blob, large: boolean, signal?: AbortSignal): Promise<MadeThumbnails> {
+  const file = new File([png], 'preview.png', { type: 'image/png' })
   const limits = DRIVE_PREVIEW_GENERATION_LIMITS_V1
   const sm = toImage(await rasterizeImageFileV1(file, budget('sm'), limits, signal))
-  const lg = toImage(await rasterizeImageFileV1(file, budget('lg'), limits, signal))
+  const lg = large ? toImage(await rasterizeImageFileV1(file, budget('lg'), limits, signal)) : undefined
   return { ...(sm ? { sm } : {}), ...(lg ? { lg } : {}) }
+}
+
+/** A whiteboard, already exported as a picture (PNG) by Excalidraw. */
+export function thumbnailsOfDrawing(png: Blob, signal?: AbortSignal): Promise<MadeThumbnails> {
+  return thumbnailsOfPicture(png, true, signal)
 }
 
 type ExportToBlob = (options: {
@@ -117,6 +131,17 @@ export async function thumbnailsOfFile(file: File, signal?: AbortSignal): Promis
     case 'whiteboard': {
       const png = await exportScene(await file.text())
       return png ? thumbnailsOfDrawing(png, signal) : {}
+    }
+    case 'pdf': {
+      // Page one, large enough for Quick Look; the card scales it down.
+      if (file.size > MAX_PDF_BYTES) return {}
+      const png = await renderPdfFirstPageV1(await file.arrayBuffer(), THUMBNAIL_MAX_SIDE.lg, signal)
+      return png ? thumbnailsOfPicture(png, true, signal) : {}
+    }
+    case 'video': {
+      // A frame; the large size only where Quick Look will not play it whole.
+      const png = await captureVideoFrameV1(file, THUMBNAIL_MAX_SIDE.lg)
+      return png ? thumbnailsOfPicture(png, file.size > LARGE_IMAGE_BYTES, signal) : {}
     }
     default:
       return {}

@@ -1,9 +1,10 @@
 # Drive thumbnails — design
 
 **Status:** agreed 2026-09-24, branch `feat/frontend-rewrite`. Phases A
-(format, server) and B (images, notes/code, whiteboards; display, editor
-redraws, backfill, Quick Look) are implemented; C (video, PDF) and D (office)
-remain.
+(format, server), B (images, notes/code, whiteboards; display, editor
+redraws, backfill, Quick Look) and C (video frames; PDF first pages through
+PDF.js 6.3.289, pinned, no scripting or XFA, worker-parsed) are implemented;
+D (office) remains.
 
 Generation reuses the shared preview worker Chat already used
 (`packages/files/src/mediaPreview`: safety classification, header-bounded

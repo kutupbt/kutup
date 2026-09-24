@@ -1,3 +1,4 @@
+import { Play } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useRequiredSession } from '@kutup/session/store'
 import { cn } from '@kutup/ui/lib/cn'
@@ -6,11 +7,12 @@ import type { DriveFile, Folder } from '../drive/model'
 import { currentContent } from '../editor/content'
 import { KindIcon } from '../explorer/KindIcon'
 import { thumbnailsOfFile, thumbnailSourceFor } from './make'
-import { enqueueThumbnail } from './queue'
+import { enqueueThumbnail, thumbnailInHand } from './queue'
 import { storeThumbnails, thumbnailUrl } from './store'
 
 /** Backfill only what is cheap to draw. */
 const BACKFILL_MAX_IMAGE_BYTES = 20 * 1024 * 1024
+const BACKFILL_MAX_VIDEO_BYTES = 50 * 1024 * 1024
 /** Each file's current content is tried once per tab. */
 const tried = new Set<string>()
 
@@ -22,10 +24,13 @@ const tried = new Set<string>()
  */
 function backfill(folder: Folder, file: DriveFile, userId: string): void {
   if (file.thumbnails.sm && !file.thumbnailStale) return
+  if (thumbnailInHand(file.id)) return
   if (!file.fileKey || !file.name || folder.source === 'remote') return
   if (!(folder.canManage || file.uploaderUserId === userId)) return
   const source = thumbnailSourceFor(file.name, file.mimeType)
-  if (!source || (source === 'image' && file.size > BACKFILL_MAX_IMAGE_BYTES)) return
+  if (!source || ((source === 'image' || source === 'pdf') && file.size > BACKFILL_MAX_IMAGE_BYTES)) return
+  // A video has to be downloaded whole to draw a frame: only small ones.
+  if (source === 'video' && file.size > BACKFILL_MAX_VIDEO_BYTES) return
   const saveData = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData
   if (saveData) return
   const attempt = `${file.id}:${file.updatedAt}`
@@ -88,13 +93,19 @@ export function FileThumbnail({ folder, file }: { folder: Folder; file: DriveFil
 
   // Photos fill the frame; pages show from the top; drawings show whole.
   const fit =
-    file.kind === 'image'
+    file.kind === 'image' || file.kind === 'video'
       ? 'object-cover'
       : file.kind === 'whiteboard'
         ? 'bg-white object-contain p-1'
         : 'bg-white object-cover object-top'
   return (
     <div ref={box} className="absolute inset-0 flex items-center justify-center overflow-hidden rounded-lg">
+      {url && file.kind === 'video' ? (
+        // A frame alone reads as a photo; the badge says it plays.
+        <span className="absolute z-10 flex size-10 items-center justify-center rounded-full bg-black/55 text-white shadow-sm">
+          <Play className="size-5 translate-x-px fill-current" aria-hidden />
+        </span>
+      ) : null}
       {url ? (
         <img
           src={url}

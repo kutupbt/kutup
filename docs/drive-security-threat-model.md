@@ -48,6 +48,12 @@ Previews are made by clients and sealed under the file key
   are the intended fix.
 - **Parsing:** the `KTH1` container parser is bounded and strict; images are
   decoded only by the browser, from JPEG/WebP/PNG, never SVG.
+- **Drawing someone else's file:** backfill means a folder owner's browser
+  can decode a file a collaborator uploaded into it. Images go through the
+  bounded preview worker; PDFs through pinned PDF.js in its worker with no
+  scripting, no XFA and no external fetches (64 MiB cap, 16 MP images);
+  videos through the browser's own decoder, one frame under a deadline.
+  This is the same exposure as opening the file, done without the click.
 
 ## Metadata not hidden in V1
 

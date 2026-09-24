@@ -12,7 +12,8 @@
   "dependencies": {
     "@kutup/crypto": "workspace:*",
     "@kutup/session": "workspace:*",
-    "tus-js-client": "^4",
-    "fflate": "^0.8.2"
+    "fflate": "^0.8.2",
+    "pdfjs-dist": "6.3.289",
+    "tus-js-client": "^4"
   }
 }
