@@ -411,8 +411,7 @@ function ListView({ items, sort, onSortField, selection, actionsFor, subtitleFor
 function GridView({ items, selection, actionsFor, renderPreview, rowProps }: ExplorerProps & { rowProps: RowProps }) {
   const { i18n } = useTranslation()
   return (
-    // items-start: a folder chip keeps its own height beside the taller file cards.
-    <ul className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] items-start gap-3 p-4" role="grid" aria-multiselectable>
+    <ul className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-3 p-4" role="grid" aria-multiselectable>
       {items.map((item, index) => {
         const selected = selection.has(itemKey(item))
         const tile = cn(
@@ -421,14 +420,19 @@ function GridView({ items, selection, actionsFor, renderPreview, rowProps }: Exp
           selected && 'border-primary bg-accent hover:bg-accent',
         )
         if (item.type === 'folder') {
-          // A folder has no preview: a chip, as Google Drive shows them.
+          // A folder has no preview: the same card as a file, with a large
+          // folder icon where the picture would be.
           return (
-            <li key={itemKey(item)} {...rowProps(index)} className={cn(tile, 'flex h-12 items-center gap-2 pl-3 pr-1')}>
-              <KindIcon kind={item.kind} color={item.color} className="size-5 shrink-0" />
-              <p className="min-w-0 flex-1 truncate text-sm font-medium" title={item.name}>
-                {item.name}
-              </p>
-              <RowMenu item={item} actions={actionsFor(item)} />
+            <li key={itemKey(item)} {...rowProps(index)} className={cn(tile, 'flex flex-col overflow-hidden')}>
+              <div className="flex h-11 items-center gap-2 pl-3 pr-1">
+                <KindIcon kind={item.kind} color={item.color} className="size-5" />
+                <p className="min-w-0 flex-1 truncate text-sm" title={item.name}>{item.name}</p>
+                <RowMenu item={item} actions={actionsFor(item)} />
+              </div>
+              <div className="mx-2 flex aspect-[4/3] items-center justify-center">
+                <KindIcon kind={item.kind} color={item.color} className="size-20" />
+              </div>
+              <p className="px-3 pb-2 pt-1.5 text-xs text-muted-foreground">{formatFileDate(item.modifiedAt, i18n.language)}</p>
             </li>
           )
         }
