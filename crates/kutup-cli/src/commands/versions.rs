@@ -6,7 +6,7 @@ use clap::Subcommand;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::api::versions::{PatchVersionRequest, NewVersion};
+use crate::api::versions::{NewVersion, PatchVersionRequest};
 use crate::context::require_session;
 use crate::cryptohelpers::find_file_and_key;
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
@@ -174,7 +174,11 @@ fn restore(profile: &str, json: bool, file_id: &str, version_id: &str) -> Result
         re_encrypted,
         &NewVersion {
             // The same kind as the source: a note's state stays a note's state.
-            kind: if src.kind.is_empty() { "yjs".into() } else { src.kind.clone() },
+            kind: if src.kind.is_empty() {
+                "yjs".into()
+            } else {
+                src.kind.clone()
+            },
             seq_at_snapshot: src.seq_at_snapshot,
             doc_key_id: src.doc_key_id,
             label: format!("Restored from {now}"),
