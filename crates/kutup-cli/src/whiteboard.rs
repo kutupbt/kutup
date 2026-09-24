@@ -19,7 +19,7 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::api::versions::RecordSnapshotRequest;
+use crate::api::versions::NewVersion;
 use crate::api::Client;
 use kutup_crypto::asset;
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
@@ -66,23 +66,19 @@ pub fn extract_and_upload(
     let blob_context = DriveFileBlobContextV1::new(file_id, collection_id, key_epoch)?;
     let encrypted = drive_object::encrypt_file_blob(&out, file_key, blob_context)
         .context("encrypt snapshot")?;
-    let size = encrypted.len() as i64;
-    let blob = client
-        .upload_snapshot_blob(file_id, encrypted)
-        .context("upload snapshot blob")?;
     client
-        .record_snapshot(
+        .create_version(
             file_id,
-            &RecordSnapshotRequest {
-                s3_version_id: blob.s3_version_id,
-                storage_path: blob.storage_path,
+            encrypted,
+            &NewVersion {
+                // The whole scene: a whiteboard version is the file itself.
+                kind: "file".into(),
                 seq_at_snapshot: 0,
                 doc_key_id: 1,
-                size_bytes: size,
                 ..Default::default()
             },
         )
-        .context("record snapshot")?;
+        .context("store version")?;
     eprintln!("  + uploaded {uploaded} image asset(s) and re-snapshotted");
     Ok(())
 }

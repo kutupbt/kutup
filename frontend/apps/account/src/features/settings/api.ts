@@ -18,7 +18,12 @@ export interface Me {
   chatStorageUsedBytes: number
   isAdmin: boolean
   color: string
+  /** How long file versions are kept, in days (docs/plans/drive-versions-v2.md). */
+  versionRetentionDays: number
 }
+
+/** The retention periods the server accepts. */
+export const VERSION_RETENTION_DAYS = [7, 30, 90, 180, 365, 3650] as const
 
 export function useMe() {
   return useQuery({
@@ -40,6 +45,16 @@ export function useUpdateColor() {
       broadcastColor(color)
       await queryClient.invalidateQueries({ queryKey: meKey })
     },
+  })
+}
+
+export function useUpdateVersionRetention() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (days: number) => {
+      await api.patch('/user/me', { versionRetentionDays: days })
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: meKey }),
   })
 }
 

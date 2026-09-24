@@ -79,8 +79,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::trash::restore,
         // --- file versions ---
         crate::handlers::file_versions::list,
-        crate::handlers::file_versions::record,
-        crate::handlers::file_versions::upload_snapshot_blob,
+        crate::handlers::file_versions::create,
         crate::handlers::file_versions::download,
         crate::handlers::file_versions::patch,
         // --- file assets ---

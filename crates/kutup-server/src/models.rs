@@ -112,6 +112,8 @@ pub struct MeResponse {
     pub chat_storage_used_bytes: i64,
     pub is_admin: bool,
     pub color: String,
+    /// How long this account's file versions are kept (days).
+    pub version_retention_days: i32,
 }
 
 /// Generic success — mirrors `handlers.OkResponse`.

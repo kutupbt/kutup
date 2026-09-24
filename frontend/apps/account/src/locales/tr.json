@@ -144,7 +144,19 @@
       "colour": "Varlık rengi",
       "colourDescription": "Başkalarıyla belge düzenlerken imleç ve vurgu renginiz.",
       "colourAuto": "Otomatik",
-      "colourFailed": "Renk kaydedilemedi."
+      "colourFailed": "Renk kaydedilemedi.",
+      "versions": "Dosya sürümleri",
+      "versionsDescription": "Bir belgenin her kaydı geri yükleyebileceğin bir sürüm tutar. Son gün tamamen, son hafta saatte bir, daha eskileri günde bir sürüm olarak saklanır. Adlandırdığın sürümler süresiz saklanır. Sürümler depolama alanına sayılır.",
+      "versionsKeep": "Sürümleri şu süre sakla",
+      "versionsFailed": "Ayar kaydedilemedi.",
+      "retention": {
+        "d7": "1 hafta",
+        "d30": "30 gün",
+        "d90": "90 gün",
+        "d180": "6 ay",
+        "d365": "1 yıl",
+        "d3650": "10 yıl"
+      }
     },
     "security": {
       "title": "Güvenlik",

@@ -9,35 +9,16 @@ use serde::{Deserialize, Serialize};
 
 use super::Client;
 
-/// Response of `POST /files/:id/snapshot-blob`.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SnapshotBlobResponse {
-    #[serde(default)]
-    pub storage_path: String,
-    #[serde(default)]
-    pub s3_version_id: String,
-}
-
-/// Body for `POST /files/:id/versions` (record a snapshot).
-#[derive(Debug, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecordSnapshotRequest {
-    pub s3_version_id: String,
-    pub storage_path: String,
+/// A version to store with `POST /files/:id/versions` (multipart, one request:
+/// the server measures and charges the body; docs/plans/drive-versions-v2.md).
+#[derive(Debug, Default)]
+pub struct NewVersion {
+    /// `file` (the whole file) or `yjs` (a note's collaboration state).
+    pub kind: String,
     pub seq_at_snapshot: i64,
     pub doc_key_id: i64,
-    pub size_bytes: i64,
-    #[serde(skip_serializing_if = "String::is_empty")]
     pub label: String,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub keep_forever: bool,
-}
-
-/// Response of `POST /files/:id/versions`.
-#[derive(Debug, Deserialize)]
-pub struct RecordSnapshotResponse {
-    pub id: String,
 }
 
 /// Body for `PATCH /files/:id/versions/:vid`. Absent fields are untouched.
@@ -57,6 +38,9 @@ pub struct VersionRow {
     pub id: String,
     #[serde(default)]
     pub s3_version_id: String,
+    /// `file` or `yjs`.
+    #[serde(default)]
+    pub kind: String,
     #[serde(default)]
     pub storage_path: String,
     #[serde(default)]
@@ -133,33 +117,27 @@ impl Client {
         Ok(resp.bytes()?.to_vec())
     }
 
-    /// Multipart-POSTs an encrypted snapshot blob. Mirrors `UploadSnapshotBlob`.
-    pub fn upload_snapshot_blob(
+    /// Stores a sealed version in one request; returns its row.
+    pub fn create_version(
         &self,
         file_id: &str,
         encrypted_content: Vec<u8>,
-    ) -> Result<SnapshotBlobResponse> {
+        version: &NewVersion,
+    ) -> Result<VersionRow> {
         let part = Part::bytes(encrypted_content)
-            .file_name("snapshot")
+            .file_name("version")
             .mime_str("application/octet-stream")?;
-        let form = Form::new().part("file", part);
-        let resp = self
-            .request(Method::POST, &format!("/files/{file_id}/snapshot-blob"))
-            .multipart(form)
-            .send()?;
-        super::decode_json(resp)
-    }
-
-    /// Records a snapshot row (gated on quota server-side). Mirrors `RecordSnapshot`.
-    pub fn record_snapshot(
-        &self,
-        file_id: &str,
-        body: &RecordSnapshotRequest,
-    ) -> Result<RecordSnapshotResponse> {
+        let mut form = Form::new()
+            .text("kind", version.kind.clone())
+            .text("seqAtSnapshot", version.seq_at_snapshot.to_string())
+            .text("docKeyId", version.doc_key_id.to_string())
+            .text("keepForever", version.keep_forever.to_string());
+        if !version.label.is_empty() {
+            form = form.text("label", version.label.clone());
+        }
         let resp = self
             .request(Method::POST, &format!("/files/{file_id}/versions"))
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(body)
+            .multipart(form.part("file", part))
             .send()?;
         super::decode_json(resp)
     }

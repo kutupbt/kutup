@@ -263,6 +263,12 @@ the local dev stack):
     the app switcher top right; search in the top bar (in the browser,
     accent- and Turkish-i-insensitive); Quick Look on Space.
 
+- Versions v2 (docs/plans/drive-versions-v2.md): one-request versions
+    charged by measured size, one object per version, real deletes,
+    thinning retention with a per-account setting, unchanged saves skipped
+    and named in place, the original retired as version zero; downloads,
+    public links and federation serve the latest edited version.
+
 **Next, in order**
 
 1. Thumbnails: client-generated, encrypted with the file key, stored beside
@@ -281,8 +287,6 @@ the local dev stack):
 
 **Known gaps (to go to `docs/roadmap.md` in phase 5)**
 
-- Public links serve the original upload, not an edited file's latest
-  version (needs a server change).
 - Share listing and link revocation have no server endpoints yet, so there
   is no UI for them.
 - The upload panel labels copies as uploads.

@@ -3,14 +3,15 @@ import * as Y from 'yjs'
 import { SnapshotTrigger } from './snapshot'
 import { QuotaExceededError } from '@kutup/session/errors'
 
-// Mock the api client. We can't unit-test the real network calls.
-vi.mock('@kutup/session/client', () => ({ default: { post: vi.fn().mockResolvedValue({ data: { storagePath: 'p', s3VersionId: 'v' } }) } }))
-
-// Mock recordSnapshot — the typed wrapper used by SnapshotTrigger.
-// Default: resolve with a record id (success). Tests override per-case.
+// Mock the version API — the typed wrappers SnapshotTrigger uses.
+// Default: storing succeeds; the file has no versions yet. Tests override per-case.
 const recordSnapshotMock = vi.fn().mockResolvedValue({ id: 'v1' })
+const listVersionsMock = vi.fn().mockResolvedValue([])
+const patchVersionMock = vi.fn().mockResolvedValue({})
 vi.mock('./api', () => ({
-  recordSnapshot: (...args: unknown[]) => recordSnapshotMock(...args),
+  createVersion: (...args: unknown[]) => recordSnapshotMock(...args),
+  listVersions: (...args: unknown[]) => listVersionsMock(...args),
+  patchVersion: (...args: unknown[]) => patchVersionMock(...args),
 }))
 
 describe('SnapshotTrigger', () => {
@@ -108,6 +109,34 @@ describe('SnapshotTrigger', () => {
     })
     await expect(t.forceSave('checkpoint-1', false)).rejects.toThrow('boom')
     expect(onError).toHaveBeenCalledTimes(1)
+    t.destroy()
+  })
+
+  it('naming unchanged content names the latest version instead of storing a copy', async () => {
+    const ydoc = new Y.Doc()
+    const encrypt = vi.fn()
+    const onSnapshot = vi.fn()
+    listVersionsMock.mockResolvedValueOnce([{ id: 'latest' }, { id: 'older' }])
+    patchVersionMock.mockClear()
+    const t = new SnapshotTrigger({ fileId: 'f1', ydoc, encryptSnapshot: encrypt, getSeq: () => 0, onSnapshot })
+    await t.forceSave('Milestone', true)
+    expect(encrypt).not.toHaveBeenCalled()
+    expect(patchVersionMock).toHaveBeenCalledWith('f1', 'latest', { label: 'Milestone', keepForever: true })
+    expect(onSnapshot).toHaveBeenCalledWith('latest', true)
+    t.destroy()
+  })
+
+  it('stores each version with its kind and sequence in one request', async () => {
+    const ydoc = new Y.Doc()
+    const encrypt = vi.fn().mockResolvedValue({ ciphertext: new Uint8Array([9]), storageHints: { docKeyId: 4, sizeBytes: 1 } })
+    recordSnapshotMock.mockReset()
+    recordSnapshotMock.mockResolvedValue({ id: 'v9' })
+    const t = new SnapshotTrigger({ fileId: 'f1', ydoc, encryptSnapshot: encrypt, getSeq: () => 12 })
+    ydoc.getText('content').insert(0, 'hello')
+    await t.forceSave()
+    expect(recordSnapshotMock).toHaveBeenCalledWith('f1', new Uint8Array([9]), {
+      kind: 'yjs', seqAtSnapshot: 12, docKeyId: 4, label: null, keepForever: false,
+    })
     t.destroy()
   })
 })

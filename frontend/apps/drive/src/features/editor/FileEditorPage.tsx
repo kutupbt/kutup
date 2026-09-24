@@ -24,6 +24,7 @@ import CursorColorPicker from './CursorColorPicker'
 import { OfficeEditor, TextCollabEditor, WhiteboardEditor } from './dispatch'
 import { editorKindFor, extensionOf, type EditorKind } from './editorKind'
 import type { OfficeEditorHandle } from './office/OfficeEditor'
+import { patchVersion } from '@kutup/collab/api'
 import { loadVersionBytes, saveSnapshot, type SnapshotTarget } from './snapshots'
 import { renderPdfFirstPageV1 } from '@kutup/files/mediaPreview'
 import { THUMBNAIL_MAX_SIDE } from '@kutup/crypto/thumbnail'
@@ -427,6 +428,9 @@ function WholeFileActions({
   const [historyOpen, setHistoryOpen] = useState(false)
   const [restoring, setRestoring] = useState<string | null>(null)
   const savingRef = useRef(false)
+  // What the last save stored, so saving unchanged content stores nothing
+  // (and naming it names that version, as CryptPad's snapshots do).
+  const lastSaved = useRef<{ digest: string; versionId: string } | null>(null)
 
   const save = useCallback(
     async (opts: { label?: string; keepForever?: boolean; quiet?: boolean } = {}) => {
@@ -435,7 +439,23 @@ function WholeFileActions({
       setSaving(true)
       try {
         const bytes = await getBytes()
+        const digest = await sha256(bytes)
+        const previous = lastSaved.current
+        if (previous && previous.digest === digest) {
+          if (opts.label) {
+            await patchVersion(keys.target.context.fileId, previous.versionId, {
+              label: opts.label,
+              keepForever: Boolean(opts.keepForever),
+            })
+          }
+          if (!opts.quiet) {
+            setJustSaved(true)
+            setTimeout(() => setJustSaved(false), 1500)
+          }
+          return true
+        }
         const versionId = await saveSnapshot(keys.target, bytes, opts)
+        lastSaved.current = { digest, versionId }
         if (kind === 'whiteboard') redrawWhiteboard(keys.target, versionId, bytes)
         if (kind === 'office' && officePdf) redrawOffice(keys.target, versionId, officePdf, isSpreadsheet)
         if (!opts.quiet) {
@@ -557,6 +577,11 @@ function WholeFileActions({
       />
     </>
   )
+}
+
+async function sha256(bytes: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as BufferSource))
+  return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 /** A saved whiteboard's thumbnail, drawn from the scene that was saved. */

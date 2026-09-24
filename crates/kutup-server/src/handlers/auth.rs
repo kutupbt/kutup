@@ -132,6 +132,8 @@ pub struct RefreshRequest {
 pub struct UpdateMeRequest {
     /// Hex color like `#ef4444`; empty string clears it; absent leaves it unchanged.
     color: Option<String>,
+    /// How long file versions are kept: 7, 30, 90, 180, 365 or 3650 days.
+    version_retention_days: Option<i32>,
 }
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -949,12 +951,13 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         i64,
         bool,
         String,
+        i32,
     );
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT id, email, COALESCE(username, ''), public_key, totp_enabled,
                   storage_quota_bytes, storage_used_bytes,
                   chat_storage_quota_bytes, chat_storage_used_bytes,
-                  is_admin, COALESCE(color, '')
+                  is_admin, COALESCE(color, ''), version_retention_days
            FROM users WHERE id = $1"#,
     )
     .bind(parse_uuid(&user.user_id)?)
@@ -973,6 +976,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         chat_used,
         is_admin,
         color,
+        version_retention_days,
     )) = row
     else {
         return Err(AppError::not_found("user not found"));
@@ -989,6 +993,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         chat_storage_used_bytes: chat_used,
         is_admin,
         color,
+        version_retention_days,
     })
     .into_response())
 }
@@ -1020,6 +1025,20 @@ pub async fn update_me(
             .execute(&state.pool)
             .await
             .map_err(|_| AppError::internal("failed to update color"))?;
+    }
+
+    if let Some(days) = req.version_retention_days {
+        if !crate::version_retention::RETENTION_DAYS.contains(&days) {
+            return Err(AppError::bad_request(
+                "versionRetentionDays must be 7, 30, 90, 180, 365 or 3650",
+            ));
+        }
+        sqlx::query("UPDATE users SET version_retention_days = $1 WHERE id = $2")
+            .bind(days)
+            .bind(parse_uuid(&user.user_id)?)
+            .execute(&state.pool)
+            .await
+            .map_err(|_| AppError::internal("failed to update version retention"))?;
     }
 
     Ok(Json(OkResponse { ok: true }).into_response())

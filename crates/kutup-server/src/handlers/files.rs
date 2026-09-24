@@ -399,22 +399,24 @@ pub async fn download(
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
-    let row: Option<(Uuid, String, Uuid)> = sqlx::query_as(
-        "SELECT collection_id, storage_path, uploader_user_id FROM files WHERE id = $1 AND deleted_at IS NULL",
-    )
-    .bind(file_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some((coll_id, storage_path, _uploader)) = row else {
+    let coll_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT collection_id FROM files WHERE id = $1 AND deleted_at IS NULL")
+            .bind(file_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some(coll_id) = coll_id else {
         return Err(AppError::not_found("not found"));
     };
     if !can_access_collection(&state.pool, user_id, coll_id).await {
         return Err(AppError::forbidden("forbidden"));
     }
 
-    let (body, size) = state
-        .storage
-        .get_object(&storage_path)
+    // What the file holds now: its latest whole-file version, else the upload.
+    let content = crate::file_content::current_content(&state.pool, file_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("not found"))?;
+    let (body, size) = content
+        .open(&state.storage)
         .await
         .map_err(|_| AppError::internal("storage"))?;
     Ok(octet_stream_response(body, size, &[]))

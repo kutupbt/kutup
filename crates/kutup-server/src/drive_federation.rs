@@ -1203,24 +1203,41 @@ pub async fn download_file(
                 )
             }
         };
-        let file: Option<(String, i64, Option<String>)> = sqlx::query_as(
-            "SELECT storage_path, encrypted_size_bytes, ciphertext_sha256
+        let file: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT ciphertext_sha256
          FROM files WHERE id = $1 AND collection_id = $2 AND deleted_at IS NULL",
         )
         .bind(file_id)
         .bind(share.collection_id)
         .fetch_optional(&state.pool)
         .await?;
-        let Some((storage_path, size, stored_digest)) = file else {
+        let Some(stored_digest) = file else {
             return signed_app_error(
                 federation,
                 &authenticated,
                 AppError::not_found("file not found"),
             );
         };
-        let digest = match stored_digest {
-            Some(digest) => digest,
-            None => match ensure_ciphertext_digest(&state, file_id, &storage_path).await {
+        // The file as it is now (its latest whole-file version, else the upload).
+        let Some(content) = crate::file_content::current_content(&state.pool, file_id).await?
+        else {
+            return signed_app_error(
+                federation,
+                &authenticated,
+                AppError::not_found("file not found"),
+            );
+        };
+        let size = content.size;
+        let storage_path = content.path.clone();
+        let digest = match content.version {
+            None => match stored_digest {
+                Some(digest) => digest,
+                None => match ensure_ciphertext_digest(&state, file_id, &storage_path).await {
+                    Ok(digest) => digest,
+                    Err(error) => return signed_app_error(federation, &authenticated, error),
+                },
+            },
+            Some(version) => match ensure_version_digest(&state, version, &content).await {
                 Ok(digest) => digest,
                 Err(error) => return signed_app_error(federation, &authenticated, error),
             },
@@ -1231,9 +1248,8 @@ pub async fn download_file(
             .try_into()
             .map_err(|_| AppError::internal("invalid stored digest"))?;
         let content_digest = content_digest_sha256_from_digest(&digest);
-        let (object, object_size) = state
-            .storage
-            .get_object(&storage_path)
+        let (object, object_size) = content
+            .open(&state.storage)
             .await
             .map_err(|error| AppError::internal(format!("read Drive object: {error}")))?;
         if object_size != size {
@@ -1703,6 +1719,50 @@ async fn limited_field_text(field: multer::Field<'_>) -> AppResult<String> {
     }
     String::from_utf8(bytes.to_vec())
         .map_err(|_| AppError::bad_request("multipart metadata must be UTF-8"))
+}
+
+/// A version's ciphertext digest, computed once and cached on its row.
+async fn ensure_version_digest(
+    state: &AppState,
+    version: Uuid,
+    content: &crate::file_content::CurrentContent,
+) -> AppResult<String> {
+    let cached: Option<Option<String>> =
+        sqlx::query_scalar("SELECT ciphertext_sha256 FROM file_versions WHERE id = $1")
+            .bind(version)
+            .fetch_optional(&state.pool)
+            .await?;
+    if let Some(Some(digest)) = cached {
+        return Ok(digest);
+    }
+    let (object, _) = content
+        .open(&state.storage)
+        .await
+        .map_err(|error| AppError::internal(format!("read Drive version for digest: {error}")))?;
+    let digest = sha256_hex(object).await?;
+    sqlx::query("UPDATE file_versions SET ciphertext_sha256 = $2 WHERE id = $1 AND ciphertext_sha256 IS NULL")
+        .bind(version)
+        .bind(&digest)
+        .execute(&state.pool)
+        .await?;
+    Ok(digest)
+}
+
+async fn sha256_hex(object: aws_sdk_s3::primitives::ByteStream) -> AppResult<String> {
+    let mut reader = object.into_async_read();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    let mut digest = Sha256::new();
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .await
+            .map_err(|error| AppError::internal(format!("hash Drive object: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(hex::encode(digest.finalize()))
 }
 
 async fn ensure_ciphertext_digest(

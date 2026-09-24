@@ -299,15 +299,14 @@ pub async fn download_public_share_file(
     }
 
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
-    let file: Option<(String, Uuid)> = sqlx::query_as(
-        "SELECT storage_path, collection_id FROM files WHERE id = $1 AND deleted_at IS NULL",
-    )
-    .bind(fid)
-    .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten();
-    let Some((storage_path, coll_id)) = file else {
+    let coll_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT collection_id FROM files WHERE id = $1 AND deleted_at IS NULL")
+            .bind(fid)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten();
+    let Some(coll_id) = coll_id else {
         return Err(AppError::not_found("not found"));
     };
 
@@ -318,9 +317,12 @@ pub async fn download_public_share_file(
         return Err(AppError::forbidden("forbidden"));
     }
 
-    let (body, size) = state
-        .storage
-        .get_object(&storage_path)
+    // A public link shows the file as it is now, edits included.
+    let content = crate::file_content::current_content(&state.pool, fid)
+        .await?
+        .ok_or_else(|| AppError::not_found("not found"))?;
+    let (body, size) = content
+        .open(&state.storage)
         .await
         .map_err(|_| AppError::internal("storage"))?;
     Ok(octet_stream_response(body, size, &[]))

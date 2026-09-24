@@ -1,13 +1,11 @@
 {
   "Rules": [
     {
-      "ID": "kutup-version-retention",
+      "ID": "kutup-noncurrent-safety-net",
       "Status": "Enabled",
-      "Filter": { "Prefix": "files/" },
-      "NoncurrentVersionExpiration": {
-        "NoncurrentDays": 30,
-        "NewerNoncurrentVersions": 50
-      }
+      "Filter": { "Prefix": "" },
+      "NoncurrentVersionExpiration": { "NoncurrentDays": 1 },
+      "Expiration": { "ExpiredObjectDeleteMarker": true }
     }
   ]
 }

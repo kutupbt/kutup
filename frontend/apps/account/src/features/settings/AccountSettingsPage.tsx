@@ -9,7 +9,8 @@ import { Skeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { formatBytes } from '@kutup/ui/lib/format'
-import { useMe, useUpdateColor } from './api'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
+import { useMe, useUpdateColor, useUpdateVersionRetention, VERSION_RETENTION_DAYS } from './api'
 
 /**
  * Presence colours for collaborative editing: saturated enough to read as a
@@ -34,6 +35,7 @@ export function AccountSettingsPage() {
   const session = useRequiredSession()
   const me = useMe()
   const colour = useUpdateColor()
+  const retention = useUpdateVersionRetention()
 
   return (
     <PageBody width="prose">
@@ -111,6 +113,37 @@ export function AccountSettingsPage() {
         </div>
         {colour.isError ? (
           <Alert variant="error">{apiErrorMessage(colour.error, t('settings.account.colourFailed'))}</Alert>
+        ) : null}
+      </Section>
+
+      <Section title={t('settings.account.versions')} description={t('settings.account.versionsDescription')}>
+        <div className="flex flex-wrap items-center gap-3">
+          <span id="version-retention" className="text-sm">
+            {t('settings.account.versionsKeep')}
+          </span>
+          {me.data ? (
+            <Select
+              value={String(me.data.versionRetentionDays)}
+              onValueChange={(v) => retention.mutate(Number(v))}
+              disabled={retention.isPending}
+            >
+              <SelectTrigger aria-labelledby="version-retention" className="w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {VERSION_RETENTION_DAYS.map((days) => (
+                  <SelectItem key={days} value={String(days)}>
+                    {t(`settings.account.retention.d${days}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <Skeleton className="h-9 w-44" />
+          )}
+        </div>
+        {retention.isError ? (
+          <Alert variant="error">{apiErrorMessage(retention.error, t('settings.account.versionsFailed'))}</Alert>
         ) : null}
       </Section>
     </PageBody>

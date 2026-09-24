@@ -833,7 +833,10 @@ Download the encrypted content of a file.
 
 **Auth:** Bearer JWT
 
-**Response:** Raw binary (`application/octet-stream`) — the encrypted file bytes.
+**Response:** Raw binary (`application/octet-stream`) — the encrypted file
+bytes as the file is now: its latest `kind = file` version when it has one
+(the same sealed format as the upload), otherwise the original upload.
+Public links and federated reads serve the same.
 
 ---
 
@@ -1924,18 +1927,21 @@ is no snapshot-specific legacy decoder.
 **Response:** updated version row.
 
 ### POST /api/files/:fileId/versions
-Record a new snapshot. Server inserts the row and truncates `file_update_log` up to `seqAtSnapshot`.
+Store a version in one request (docs/plans/drive-versions-v2.md). Multipart:
+`file` — a complete typed Drive file blob, validated against the exact file,
+collection and current epoch; `kind` — `file` (the whole file: office
+documents, whiteboards, restored copies) or `yjs` (a note's collaboration
+state); `seqAtSnapshot`, `docKeyId`; optional `label`, `keepForever`.
 
-Recording a version also sets the file's `updatedAt` (and so its folder's), so
-edited notes, documents and whiteboards sort as recently modified.
+The server measures the body and charges **that** size to the author's
+quota (a client's size claim is not read), stores it as an object of its own
+(`files/{id}/versions/{versionId}`), records the row, truncates
+`file_update_log` up to `seqAtSnapshot` and sets the file's `updatedAt` (and
+so its folder's) — one transaction; the object is removed again if the
+commit fails.
 
-**Body:** `{s3VersionId, storagePath, seqAtSnapshot, docKeyId, sizeBytes, label?, keepForever?}`
-**Response 201:** `{id}` — the version row id.
+**Response 201:** the version row, including `kind`. `413` over quota.
 
-### POST /api/files/:fileId/snapshot-blob
-Multipart `file` upload of a complete typed Drive file blob. Companion to POST
-/versions; validates its exact file, collection and current epoch binding,
-uploads the opaque bytes to S3 with versioning enabled, then returns the S3
-metadata for the client to hand to /versions. Text, office and whiteboard
-snapshots use this one format.
-**Response:** `{storagePath, s3VersionId}`.
+Versions are kept by the file owner's `versionRetentionDays` (see
+`PATCH /api/user/me`): the last day whole, the last week one per hour, then
+one per day; the newest version and `keepForever` ones always.

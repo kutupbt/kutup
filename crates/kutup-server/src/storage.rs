@@ -192,15 +192,113 @@ impl StorageService {
         Ok((out.body, size))
     }
 
-    /// Removes an object — mirrors `Delete`.
+    /// Removes an object for good: every stored version of it and any delete
+    /// markers. On a versioned bucket a plain DELETE only hides the bytes behind
+    /// a marker, so "delete" would not delete (docs/plans/drive-versions-v2.md).
     pub async fn delete(&self, path: &str) -> Result<()> {
+        match self.list_object_versions(path).await {
+            Ok(versions) => {
+                let exact: Vec<(String, String)> = versions
+                    .into_iter()
+                    .filter(|(key, _)| key == path)
+                    .collect();
+                if exact.is_empty() {
+                    return Ok(());
+                }
+                self.delete_versions(&exact).await
+            }
+            // A store without version listing: an unversioned bucket, where a
+            // plain delete is final.
+            Err(_) => {
+                self.client
+                    .delete_object()
+                    .bucket(&self.bucket)
+                    .key(path)
+                    .send()
+                    .await
+                    .context("s3 delete")?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Copies one stored version of `source` to `destination` (a new plain
+    /// object), server-side.
+    pub async fn copy_object_version(
+        &self,
+        source: &str,
+        version_id: &str,
+        destination: &str,
+    ) -> Result<()> {
         self.client
-            .delete_object()
+            .copy_object()
             .bucket(&self.bucket)
-            .key(path)
+            .copy_source(format!(
+                "{}/{}?versionId={}",
+                self.bucket, source, version_id
+            ))
+            .key(destination)
             .send()
             .await
-            .context("s3 delete")?;
+            .context("s3 copy version")?;
+        Ok(())
+    }
+
+    /// Every stored version and delete marker under `prefix`, as (key, version id).
+    async fn list_object_versions(&self, prefix: &str) -> Result<Vec<(String, String)>> {
+        let mut out = Vec::new();
+        let mut key_marker: Option<String> = None;
+        let mut version_marker: Option<String> = None;
+        loop {
+            let page = self
+                .client
+                .list_object_versions()
+                .bucket(&self.bucket)
+                .prefix(prefix)
+                .set_key_marker(key_marker.clone())
+                .set_version_id_marker(version_marker.clone())
+                .send()
+                .await
+                .context("s3 list versions")?;
+            for v in page.versions() {
+                if let (Some(key), Some(id)) = (v.key(), v.version_id()) {
+                    out.push((key.to_string(), id.to_string()));
+                }
+            }
+            for m in page.delete_markers() {
+                if let (Some(key), Some(id)) = (m.key(), m.version_id()) {
+                    out.push((key.to_string(), id.to_string()));
+                }
+            }
+            if page.is_truncated() != Some(true) {
+                return Ok(out);
+            }
+            key_marker = page.next_key_marker().map(String::from);
+            version_marker = page.next_version_id_marker().map(String::from);
+        }
+    }
+
+    /// Deletes exact object versions, 1000 per request.
+    async fn delete_versions(&self, versions: &[(String, String)]) -> Result<()> {
+        for chunk in versions.chunks(1000) {
+            let objects: Vec<ObjectIdentifier> = chunk
+                .iter()
+                .map(|(key, id)| ObjectIdentifier::builder().key(key).version_id(id).build())
+                .collect::<Result<_, _>>()
+                .context("build delete identifiers")?;
+            let delete = Delete::builder()
+                .set_objects(Some(objects))
+                .quiet(true)
+                .build()
+                .context("build delete")?;
+            self.client
+                .delete_objects()
+                .bucket(&self.bucket)
+                .delete(delete)
+                .send()
+                .await
+                .context("s3 delete versions")?;
+        }
         Ok(())
     }
 
@@ -233,6 +331,11 @@ impl StorageService {
     /// Best-effort: callers have already removed the DB rows, so a partial failure only
     /// leaks orphan blobs (recoverable by the admin orphan sweep).
     pub async fn delete_prefix(&self, prefix: &str) -> Result<()> {
+        // Every version under the prefix, where the store can list them; the
+        // plain key listing below is the fallback for one that cannot.
+        if let Ok(versions) = self.list_object_versions(prefix).await {
+            return self.delete_versions(&versions).await;
+        }
         let mut continuation: Option<String> = None;
         loop {
             let out = self

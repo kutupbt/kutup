@@ -407,12 +407,16 @@ fn thumbnails_contract() {
         DriveFileBlobContextV1::new(&file_id, &collection_id, 1).unwrap(),
     )
     .unwrap();
-    let form = reqwest::blocking::multipart::Form::new().part(
-        "file",
-        reqwest::blocking::multipart::Part::bytes(snap.clone()).file_name("snapshot"),
-    );
-    let stored: Value = bearer(
-        c.post(format!("{base}/api/files/{file_id}/snapshot-blob")),
+    let form = reqwest::blocking::multipart::Form::new()
+        .text("kind", "file")
+        .text("seqAtSnapshot", "0")
+        .text("docKeyId", "1")
+        .part(
+            "file",
+            reqwest::blocking::multipart::Part::bytes(snap.clone()).file_name("version"),
+        );
+    let version: Value = bearer(
+        c.post(format!("{base}/api/files/{file_id}/versions")),
         &token,
     )
     .multipart(form)
@@ -420,15 +424,6 @@ fn thumbnails_contract() {
     .unwrap()
     .json()
     .unwrap();
-    let version: Value = bearer(c.post(format!("{base}/api/files/{file_id}/versions")), &token)
-        .json(&json!({
-            "s3VersionId": stored["s3VersionId"], "storagePath": stored["storagePath"],
-            "seqAtSnapshot": 0, "docKeyId": 1, "sizeBytes": snap.len(), "label": null, "keepForever": false,
-        }))
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
     let version_id = version["id"].as_str().unwrap().to_string();
     assert_eq!(
         listed(&c, &base, &token, &collection_id, &file_id)["thumbnailStale"],

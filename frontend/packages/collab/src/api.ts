@@ -44,6 +44,8 @@ export interface VersionRow {
   label: string | null
   keepForever: boolean
   createdAt: string
+  /** `file`: the whole file; `yjs`: a note's collaboration state. */
+  kind: 'file' | 'yjs'
 }
 
 export async function listVersions(fileId: string): Promise<VersionRow[]> {
@@ -81,30 +83,32 @@ export async function claimSeed(fileId: string): Promise<{ committed: boolean }>
   return r.data
 }
 
-export interface RecordSnapshotBody {
-  s3VersionId: string
-  storagePath: string
+export interface NewVersion {
+  /** `file`: the whole file (office, whiteboard, restored copy); `yjs`: a note's state. */
+  kind: 'file' | 'yjs'
   seqAtSnapshot: number
   docKeyId: number
-  sizeBytes: number
-  label: string | null
-  keepForever: boolean
+  label?: string | null
+  keepForever?: boolean
 }
 
 /**
- * POST /files/:fileId/versions — record a snapshot version.
- *
- * Wraps the bare api.post so 413 (storage quota exceeded) becomes a typed
- * {@link QuotaExceededError}. Callers handle it specifically: notes
- * autosave disarms itself, explicit save / restore show a localized
- * toast.
+ * POST /files/:fileId/versions — store a sealed version in one request
+ * (docs/plans/drive-versions-v2.md). The server measures and charges what
+ * arrives. A 413 (storage quota exceeded) becomes a typed
+ * {@link QuotaExceededError}: notes' autosave disarms itself, explicit saves
+ * and restores show a localized toast.
  */
-export async function recordSnapshot(
-  fileId: string,
-  body: RecordSnapshotBody,
-): Promise<{ id: string }> {
+export async function createVersion(fileId: string, sealed: Uint8Array, version: NewVersion): Promise<VersionRow> {
+  const form = new FormData()
+  form.append('kind', version.kind)
+  form.append('seqAtSnapshot', String(version.seqAtSnapshot))
+  form.append('docKeyId', String(version.docKeyId))
+  form.append('keepForever', String(Boolean(version.keepForever)))
+  if (version.label) form.append('label', version.label)
+  form.append('file', new Blob([sealed as BlobPart], { type: 'application/octet-stream' }), 'version')
   try {
-    const r = await api.post<{ id: string }>(`/files/${fileId}/versions`, body)
+    const r = await api.post<VersionRow>(`/files/${fileId}/versions`, form)
     return r.data
   } catch (err) {
     if (axios.isAxiosError(err) && err.response?.status === 413) {

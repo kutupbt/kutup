@@ -16,8 +16,6 @@ use crate::storage::StorageService;
 
 // --- intervals / retention policy (mirror the Go defaults) ---
 const VERSION_CLEANUP_INTERVAL: Duration = Duration::from_secs(3600);
-const VERSION_KEEP_DAYS: i32 = 30;
-const VERSION_KEEP_N: i32 = 50;
 const QUOTA_RECONCILE_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 const UPLOADS_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 const UPLOADS_STALE_AFTER_SECS: i64 = 24 * 3600;
@@ -44,10 +42,11 @@ pub fn spawn_all(
 ) {
     let (p1, s1) = (pool.clone(), storage.clone());
     tokio::spawn(async move {
+        migrate_legacy_versions(&p1, &s1).await;
         let mut tick = tokio::time::interval(VERSION_CLEANUP_INTERVAL);
         loop {
             tick.tick().await;
-            version_cleanup_tick(&p1, &s1).await;
+            version_retention_tick(&p1, &s1).await;
         }
     });
     let p2 = pool.clone();
@@ -232,63 +231,192 @@ pub async fn sweep_chat_mailboxes_before(
     Ok((direct, mls))
 }
 
-/// Prunes file_versions rows that are BOTH older than KEEP_DAYS AND beyond KEEP_N per file
-/// (keep_forever exempt), deleting their S3 noncurrent objects and releasing the author's
-/// quota — mirrors `VersionCleanup.tick`. Returns the number pruned.
-pub async fn version_cleanup_tick(pool: &PgPool, storage: &StorageService) -> usize {
-    let doomed: Vec<(Uuid, String, String, Uuid, i64)> = match sqlx::query_as(
-        r#"WITH ranked AS (
-             SELECT id, file_id, storage_path, s3_version_id, author_user_id, size_bytes,
-                    created_at, keep_forever,
-                    ROW_NUMBER() OVER (PARTITION BY file_id ORDER BY created_at DESC) AS rn
-             FROM file_versions
-           )
-           SELECT id, storage_path, s3_version_id, author_user_id, size_bytes
-           FROM ranked
-           WHERE keep_forever = false
-             AND rn > $1
-             AND created_at < now() - make_interval(days => $2)"#,
+/// Applies version retention (docs/plans/drive-versions-v2.md,
+/// `crate::version_retention`) to files with versions older than a day, using
+/// each file owner's `version_retention_days`, then retires originals that a
+/// whole-file version has superseded and that have aged out. Deletes the
+/// objects for good and releases their bytes. Returns what was removed.
+pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> usize {
+    let now = OffsetDateTime::now_utc();
+    type Row = (
+        Uuid,
+        Uuid,
+        OffsetDateTime,
+        bool,
+        String,
+        String,
+        Uuid,
+        i64,
+        i32,
+    );
+    let rows: Vec<Row> = match sqlx::query_as(
+        r#"SELECT v.id, v.file_id, v.created_at, v.keep_forever, v.storage_path, v.s3_version_id,
+                  v.author_user_id, v.size_bytes, u.version_retention_days
+           FROM file_versions v
+           JOIN files f ON f.id = v.file_id
+           JOIN collections c ON c.id = f.collection_id
+           JOIN users u ON u.id = c.owner_user_id
+           WHERE v.file_id IN (
+             SELECT DISTINCT file_id FROM file_versions
+             WHERE NOT keep_forever AND created_at < now() - interval '1 day'
+             LIMIT 500)
+           ORDER BY v.file_id, v.created_at DESC"#,
     )
-    .bind(VERSION_KEEP_N)
-    .bind(VERSION_KEEP_DAYS)
     .fetch_all(pool)
     .await
     {
-        Ok(r) => r,
+        Ok(rows) => rows,
         Err(e) => {
-            tracing::warn!("version cleanup: query failed: {e}");
+            tracing::warn!("version retention: query failed: {e}");
             return 0;
         }
     };
 
-    let mut pruned = 0;
-    for (id, path, vid, author, size) in &doomed {
-        if let Err(e) = storage.delete_object_version(path, vid).await {
-            tracing::warn!("version cleanup: delete {path}@{vid} failed: {e}");
-            continue;
-        }
-        if sqlx::query("DELETE FROM file_versions WHERE id = $1")
-            .bind(id)
+    let mut removed = 0;
+    for file in rows.chunk_by(|a, b| a.1 == b.1) {
+        let retention = i64::from(file[0].8);
+        let candidates: Vec<crate::version_retention::Candidate> = file
+            .iter()
+            .map(|r| crate::version_retention::Candidate {
+                id: r.0,
+                created_at: r.2,
+                keep_forever: r.3,
+            })
+            .collect();
+        let doomed = crate::version_retention::doomed(&candidates, now, retention);
+        for row in file.iter().filter(|r| doomed.contains(&r.0)) {
+            let (id, _, _, _, path, s3_version, author, size, _) = row;
+            let deleted = if s3_version.is_empty() {
+                storage.delete(path).await
+            } else {
+                storage.delete_object_version(path, s3_version).await
+            };
+            if let Err(e) = deleted {
+                tracing::warn!("version retention: delete {path} failed: {e}");
+                continue;
+            }
+            if sqlx::query("DELETE FROM file_versions WHERE id = $1")
+                .bind(id)
+                .execute(pool)
+                .await
+                .is_err()
+            {
+                continue;
+            }
+            // Quota release; best-effort (reconcile heals any miss).
+            let _ = sqlx::query(
+                "UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1) WHERE id = $2",
+            )
+            .bind(size)
+            .bind(author)
             .execute(pool)
-            .await
-            .is_err()
-        {
+            .await;
+            removed += 1;
+        }
+    }
+
+    // The original is version zero: superseded by a whole-file version and
+    // older than the owner's retention, it goes like any other old version.
+    let originals: Vec<(Uuid, String, i64, Uuid)> = sqlx::query_as(
+        r#"SELECT f.id, f.storage_path, f.encrypted_size_bytes, f.uploader_user_id
+           FROM files f
+           JOIN collections c ON c.id = f.collection_id
+           JOIN users u ON u.id = c.owner_user_id
+           WHERE NOT f.original_pruned AND f.deleted_at IS NULL
+             AND f.created_at < now() - make_interval(days => u.version_retention_days)
+             AND EXISTS (SELECT 1 FROM file_versions v WHERE v.file_id = f.id AND v.kind = 'file')
+           LIMIT 200"#,
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for (file_id, path, size, uploader) in originals {
+        // Marked first: once marked nothing serves the blob, so deleting it
+        // after cannot break a reader.
+        let marked = sqlx::query(
+            "UPDATE files SET original_pruned = true WHERE id = $1 AND NOT original_pruned",
+        )
+        .bind(file_id)
+        .execute(pool)
+        .await
+        .map(|r| r.rows_affected() == 1)
+        .unwrap_or(false);
+        if !marked {
             continue;
         }
-        // Quota release; best-effort (reconcile heals any miss).
         let _ = sqlx::query(
             "UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1) WHERE id = $2",
         )
         .bind(size)
-        .bind(author)
+        .bind(uploader)
         .execute(pool)
         .await;
-        pruned += 1;
+        if let Err(e) = storage.delete(&path).await {
+            tracing::warn!("version retention: delete original {path} failed: {e}");
+        }
+        removed += 1;
     }
-    if pruned > 0 {
-        tracing::info!("version cleanup: pruned {pruned} versions");
+    if removed > 0 {
+        tracing::info!("version retention: removed {removed} old versions and originals");
     }
-    pruned
+    removed
+}
+
+/// Moves versions stored before v2 — S3 object versions of one key per file
+/// (`files/{id}/snapshot`), exposed to the bucket lifecycle — onto keys of
+/// their own, like every new version. Idempotent; runs in batches until none
+/// are left.
+pub async fn migrate_legacy_versions(pool: &PgPool, storage: &StorageService) -> usize {
+    let mut moved = 0;
+    loop {
+        let rows: Vec<(Uuid, Uuid, String, String)> = match sqlx::query_as(
+            "SELECT id, file_id, storage_path, s3_version_id FROM file_versions
+             WHERE s3_version_id <> '' ORDER BY created_at LIMIT 100",
+        )
+        .fetch_all(pool)
+        .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!("legacy versions: query failed: {e}");
+                return moved;
+            }
+        };
+        if rows.is_empty() {
+            break;
+        }
+        let mut progressed = false;
+        for (id, file_id, path, s3_version) in rows {
+            let destination = crate::handlers::file_versions::version_storage_path(file_id, id);
+            if let Err(e) = storage
+                .copy_object_version(&path, &s3_version, &destination)
+                .await
+            {
+                tracing::warn!("legacy versions: copy {path}@{s3_version} failed: {e}");
+                continue;
+            }
+            let updated = sqlx::query(
+                "UPDATE file_versions SET storage_path = $2, s3_version_id = '' WHERE id = $1 AND s3_version_id = $3",
+            )
+            .bind(id)
+            .bind(&destination)
+            .bind(&s3_version)
+            .execute(pool)
+            .await;
+            if updated.is_ok() {
+                let _ = storage.delete_object_version(&path, &s3_version).await;
+                moved += 1;
+                progressed = true;
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+    if moved > 0 {
+        tracing::info!("legacy versions: moved {moved} onto their own keys");
+    }
+    moved
 }
 
 /// Rewrites the independent Drive/general and Chat usage counters from their
@@ -296,7 +424,7 @@ pub async fn version_cleanup_tick(pool: &PgPool, storage: &StorageService) -> us
 pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
     let rows: Vec<(Uuid, i64, i64)> = match sqlx::query_as(
         r#"WITH drive_child_bytes AS (
-             SELECT uploader_user_id AS user_id, encrypted_size_bytes AS bytes FROM files
+             SELECT uploader_user_id AS user_id, (CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END) AS bytes FROM files
              UNION ALL
              SELECT uploader_user_id,            size_bytes              FROM file_assets
              UNION ALL
@@ -655,7 +783,8 @@ pub async fn purge_file_root(
     file_id: Uuid,
 ) -> anyhow::Result<()> {
     let row: Option<(String, i64, Uuid)> = sqlx::query_as(
-        "SELECT storage_path, encrypted_size_bytes, uploader_user_id FROM files WHERE id = $1",
+        // A pruned original was released already.
+        "SELECT storage_path, (CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END), uploader_user_id FROM files WHERE id = $1",
     )
     .bind(file_id)
     .fetch_optional(pool)

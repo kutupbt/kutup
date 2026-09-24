@@ -6,7 +6,7 @@ use clap::Subcommand;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::api::versions::{PatchVersionRequest, RecordSnapshotRequest};
+use crate::api::versions::{PatchVersionRequest, NewVersion};
 use crate::context::require_session;
 use crate::cryptohelpers::find_file_and_key;
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
@@ -160,26 +160,23 @@ fn restore(profile: &str, json: bool, file_id: &str, version_id: &str) -> Result
             crate::errors::NotFound(format!("version {version_id} not found for file {file_id}"))
         })?;
 
-    // download chosen version → decrypt → re-encrypt → snapshot-blob → record.
+    // download chosen version → decrypt → re-encrypt → store as the newest.
     let encrypted = ctx.client.download_version(file_id, version_id)?;
     let old =
         drive_object::decrypt_file_blob(&encrypted, &file_key, blob_context).context("decrypt")?;
     let re_encrypted =
         drive_object::encrypt_file_blob(&old, &file_key, blob_context).context("re-encrypt")?;
-    let size = re_encrypted.len() as i64;
-
-    let blob = ctx.client.upload_snapshot_blob(file_id, re_encrypted)?;
     let now = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_default();
-    let res = ctx.client.record_snapshot(
+    let res = ctx.client.create_version(
         file_id,
-        &RecordSnapshotRequest {
-            s3_version_id: blob.s3_version_id,
-            storage_path: blob.storage_path,
+        re_encrypted,
+        &NewVersion {
+            // The same kind as the source: a note's state stays a note's state.
+            kind: if src.kind.is_empty() { "yjs".into() } else { src.kind.clone() },
             seq_at_snapshot: src.seq_at_snapshot,
             doc_key_id: src.doc_key_id,
-            size_bytes: size,
             label: format!("Restored from {now}"),
             keep_forever: false,
         },

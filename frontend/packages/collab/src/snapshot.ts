@@ -9,16 +9,14 @@
 //   1. Encode current Yjs state via Y.encodeStateAsUpdateV2.
 //   2. Call encryptSnapshot() (provided by caller — the V1 browser uses the
 //      same typed, context-bound Drive file-blob format as other snapshots).
-//   3. PUT the encrypted bytes to /api/files/:fileId/snapshot-blob, get a
-//      {storagePath, s3VersionId} back.
-//   4. POST /api/files/:fileId/versions with the snapshot metadata + caller's
-//      current seqAtSnapshot. Server records the row and truncates the log.
+//   3. POST it to /api/files/:fileId/versions (one request: stored, charged
+//      by its measured size, recorded, update log truncated to the seq).
+//   A named version of unchanged content labels the latest version instead.
 //
 // See docs/superpowers/specs/2026-05-04-collab-edit-design.md §9.
 
 import * as Y from 'yjs'
-import api from '@kutup/session/client'
-import { recordSnapshot } from './api'
+import { createVersion, listVersions, patchVersion } from './api'
 import { QuotaExceededError } from '@kutup/session/errors'
 
 const IDLE_MS = 30_000
@@ -56,6 +54,8 @@ export class SnapshotTrigger {
   // only destroy() (page reload / navigation) clears it. Prevents the
   // "toast every IDLE_MS" UX a quota-exceeded user would otherwise hit.
   private disarmed = false
+  /** The newest version this tab knows of (named in place when unchanged). */
+  private latestVersionId: string | null = null
 
   constructor(private readonly opts: SnapshotOpts) {
     opts.ydoc.on('update', this.onUpdate)
@@ -91,27 +91,30 @@ export class SnapshotTrigger {
     if (this.updatesSince === 0 && !label) return  // nothing to do (unless explicit label)
     this.inflight = true
     try {
+      // Naming unchanged content names the version that already holds it
+      // (a pointer, as CryptPad's snapshots are) rather than storing a copy.
+      if (this.updatesSince === 0 && label) {
+        const latest = this.latestVersionId ?? (await listVersions(this.opts.fileId))[0]?.id
+        if (latest) {
+          await patchVersion(this.opts.fileId, latest, { label, keepForever })
+          this.opts.onSnapshot?.(latest, explicit)
+          return
+        }
+      }
       const stateUpdate = Y.encodeStateAsUpdateV2(this.opts.ydoc)
       const { ciphertext, storageHints } = await this.opts.encryptSnapshot(stateUpdate)
 
-      // 1. Upload encrypted snapshot blob to S3.
-      const fd = new FormData()
-      fd.append('file', new Blob([ciphertext.buffer as ArrayBuffer], { type: 'application/octet-stream' }))
-      const upRes = await api.post(`/files/${this.opts.fileId}/snapshot-blob`, fd)
-      const { storagePath, s3VersionId } = upRes.data as { storagePath: string; s3VersionId: string }
-
-      // 2. Announce snapshot — server records file_versions row + truncates log.
-      // recordSnapshot converts axios 413 → QuotaExceededError so the catch
-      // below can disarm autosave + surface a localized toast.
-      const recorded = await recordSnapshot(this.opts.fileId, {
-        s3VersionId,
-        storagePath,
+      // One request: the server stores it, charges its measured size,
+      // records the row and truncates the update log. createVersion turns a
+      // 413 into QuotaExceededError so the catch below can disarm autosave.
+      const recorded = await createVersion(this.opts.fileId, ciphertext, {
+        kind: 'yjs',
         seqAtSnapshot: this.opts.getSeq(),
         docKeyId: storageHints.docKeyId,
-        sizeBytes: storageHints.sizeBytes,
         label: label ?? null,
         keepForever,
       })
+      this.latestVersionId = recorded.id
 
       this.updatesSince = 0
       this.opts.onSnapshot?.(recorded.id, explicit)

@@ -15,6 +15,7 @@ mod db;
 mod drive_federation;
 mod error;
 mod federation;
+mod file_content;
 mod handlers;
 mod hub;
 mod jobs;
@@ -31,6 +32,7 @@ mod storage;
 mod storage_probe;
 mod telemetry;
 mod totp;
+mod version_retention;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -750,11 +752,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/trash/:id/restore", post(trash::restore))
         .route(
             "/api/files/:fileId/versions",
-            get(file_versions::list).post(file_versions::record),
-        )
-        .route(
-            "/api/files/:fileId/snapshot-blob",
-            post(file_versions::upload_snapshot_blob),
+            get(file_versions::list).post(file_versions::create),
         )
         .route(
             "/api/files/:fileId/versions/:vid/download",

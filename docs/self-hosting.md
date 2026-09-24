@@ -585,19 +585,23 @@ backend from the same release.
 
 ---
 
-## SeaweedFS Bucket Versioning (required for collaborative editing)
+## SeaweedFS bucket versioning and lifecycle
 
-The collaborative-edit feature uses S3 object versioning to store file snapshots. The `seaweedfs-init` Compose service enables versioning and applies a lifecycle policy automatically on stack startup.
+Kutup does not depend on S3 object versioning: every file version is an
+object of its own (`files/{id}/versions/{versionId}`), and version retention
+is Kutup's job (`docs/plans/drive-versions-v2.md` — the last day whole, then
+hourly for a week, then daily up to each account's setting, 7 days to 10
+years). Deletes remove every stored version of an object, so they are final
+whether or not the bucket is versioned.
 
-The compose stack has been updated to:
-1. Mount `seaweedfs-init.sh` and `lifecycle.json` into the init container.
-2. The script waits for SeaweedFS S3, creates the bucket (idempotent), enables versioning, applies the lifecycle.
-
-**Lifecycle defaults:** 30-day or 50-version retention for noncurrent versions, whichever yields more. Named (`keep_forever=true`) versions are kept indefinitely (the kutup backend's cleanup job filters them out — they don't rely on the SeaweedFS lifecycle alone).
-
-To customize retention, edit `lifecycle.json` and re-run the init container:
+The `seaweedfs-init` Compose service still creates the bucket and applies
+`lifecycle.json`, now only a safety net: anything overwritten or deleted
+outside Kutup's own deletes (noncurrent versions, expired delete markers)
+goes after a day. Re-run it after upgrading:
 ```sh
 docker compose run --rm seaweedfs-init
 ```
 
-If you migrate an existing pre-collab-edit deployment, run `seaweedfs-init.sh` once after upgrading. The script is idempotent.
+Versions stored by earlier builds as S3 object versions of
+`files/{id}/snapshot` are moved onto their own keys automatically when the
+server starts.

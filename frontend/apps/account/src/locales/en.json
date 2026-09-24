@@ -144,7 +144,19 @@
       "colour": "Presence colour",
       "colourDescription": "Your cursor and highlight colour when editing documents with others.",
       "colourAuto": "Automatic",
-      "colourFailed": "The colour could not be saved."
+      "colourFailed": "The colour could not be saved.",
+      "versions": "File versions",
+      "versionsDescription": "Every save of a document keeps a version you can restore. The last day is kept whole, the last week one per hour, and older versions one per day. Versions you name are kept forever. Versions count towards your storage.",
+      "versionsKeep": "Keep versions for",
+      "versionsFailed": "The setting could not be saved.",
+      "retention": {
+        "d7": "1 week",
+        "d30": "30 days",
+        "d90": "90 days",
+        "d180": "6 months",
+        "d365": "1 year",
+        "d3650": "10 years"
+      }
     },
     "security": {
       "title": "Security",
