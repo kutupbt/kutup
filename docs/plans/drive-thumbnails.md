@@ -1,6 +1,6 @@
 # Drive thumbnails — design
 
-**Status:** proposal for review (2026-09-24), branch `feat/frontend-rewrite`
+**Status:** agreed 2026-09-24, branch `feat/frontend-rewrite`
 **Scope:** encrypted previews for the Drive grid and Quick Look.
 Pre-tag: formats and schema change directly; no compatibility shims.
 
@@ -83,6 +83,9 @@ CREATE TABLE file_thumbnails (
   file_id          UUID        NOT NULL REFERENCES files(id) ON DELETE CASCADE,
   variant          TEXT        NOT NULL CHECK (variant IN ('sm', 'lg')),
   size_bytes       BIGINT      NOT NULL CHECK (size_bytes > 0),
+  -- The content it was drawn from: a file_versions id, or NULL for the
+  -- original upload. Lets clients see a thumbnail has gone stale.
+  source_version   UUID        REFERENCES file_versions(id) ON DELETE SET NULL,
   uploader_user_id UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (file_id, variant)
@@ -94,7 +97,8 @@ Objects at `files/{fileId}/thumbnails/{variant}`, so the existing
 
 Endpoints:
 
-- `PUT /api/files/{fileId}/thumbnails/{variant}` — raw body (the envelope),
+- `PUT /api/files/{fileId}/thumbnails/{variant}?source={versionId|original}`
+  — raw body (the envelope),
   size-checked against the variant cap before reading further; the server
   validates the envelope header (`drive_envelope::validate`: purpose 7, file
   id, variant id, epoch = the file's) without decrypting. Replaces any
@@ -109,7 +113,10 @@ Endpoints:
   content changes into something that has no preview.
 - File listings (`/collections/{id}/files`, search's per-folder lists) gain
   `thumbnails: { sm?: string, lg?: string }` — the `updatedAt` of each that
-  exists — so a folder view makes no requests for files without one.
+  exists — and `thumbnailStale: boolean` (its `source_version` is not the
+  file's latest version), so a folder view makes no requests for files
+  without one and knows which to redraw. The server can only claim
+  staleness; the worst it can do with that is make a client redraw.
 
 Quota: `file_thumbnails` joins `files`, `file_versions` and `file_assets` in
 every usage sum (the four call sites: `chat_media.rs`, `admin.rs`, and the two
@@ -136,8 +143,28 @@ falls back to JPEG where the browser cannot encode WebP; quality steps down
 Uploads already hold the plaintext `File`, so thumbnails cost no extra
 download there. Copies go through the upload path and get them for free.
 
-**Older files (backfill).** When the grid shows a file that could have a
-thumbnail but has none, and the viewer may write to it, the file joins a
+**When a file changes.** A thumbnail is redrawn whenever a new version is
+saved, by the browser that saved it, from the content it already holds:
+
+- Office documents and whiteboards save when someone presses Save or
+  Ctrl+S (decided 2026-09-24: no autosave for these). Each such save redraws
+  `sm` and `lg`.
+- Notes and code keep their autosave (30 s idle or 200 changes); their
+  thumbnail is redrawn at most once a minute, and always on Save / Save
+  version and when the editor closes with a newer snapshot than the last
+  thumbnail.
+- Restoring a version saves a version, so it redraws too.
+- With several people editing, whoever saves redraws; they hold the same
+  content.
+
+Anything that changes a file without an editor (a CLI upload, a save cut
+off before its thumbnail went up) leaves the thumbnail marked stale in the
+listing: the grid keeps showing the old picture and the backfill queue
+redraws it for someone who may write to the file.
+
+**Older files and stale ones (backfill).** When the grid shows a file that
+could have a thumbnail but has none or a stale one, and the viewer may write
+to it, the file joins a
 low-priority background queue: download, decrypt, generate, upload.
 Only kinds that are cheap to render (images ≤ 20 MiB, notes, code,
 whiteboards), one at a time, only while the tab is visible, skipped under
@@ -204,11 +231,34 @@ so they ship together.
   design), thumbnails follow the same binding; they already avoid the
   collection id.
 
-## Open questions for review
+## Compared with Proton Drive
 
-1. Charge thumbnails to the uploader (as whiteboard assets are) or to the
-   file's owner? Uploader keeps it consistent; the amounts are small
-   (≤ ~1.1 MiB per file, usually ≤ 64 KiB).
-2. Backfill by readers of shared folders: off (as proposed), or on and charged
-   to the folder owner?
-3. "Show previews" default: on (as proposed).
+Same model — made in the browser, encrypted with the file's key, the same
+size targets, quality stepped down to fit, ciphertext-only caching. The
+differences (from `kutup-references/WebClients/packages/drive-store/store`):
+
+- Proton encrypts thumbnails with the revision's content session key and
+  **signs** them with the uploader's address key, and their block hashes are
+  part of the revision's **signed manifest**: a thumbnail is authenticated as
+  belonging to one immutable revision, by a known author. Kutup has no signed
+  file revisions yet, so a thumbnail is a replaceable per-file slot and the
+  server could serve an older one (see Security notes).
+- Proton makes them at upload only; Kutup documents change after upload, so
+  they are redrawn on every save, and stale ones are backfilled.
+- Proton covers images (with HEIC and RAW converters), video and SVG; Kutup
+  adds notes, code, whiteboards, PDFs and office documents. HEIC is worth
+  borrowing: a decoder library, loaded only for HEIC files (phase B).
+- Kutup pads thumbnails to size buckets; Proton's sizes are exact.
+
+The follow-up this points to: **signed file revisions** (content, metadata
+and thumbnails in one signed record per save), which closes the rollback
+limit for files and thumbnails together. It belongs with the file-format
+rework Move needs, not in this change.
+
+## Decisions (2026-09-24)
+
+1. Thumbnails count against the quota of whoever uploaded them, as
+   whiteboard assets do (≤ ~1.1 MiB per file, usually ≤ 64 KiB).
+2. Readers of shared folders do not backfill.
+3. "Show previews" is on by default.
+4. Office documents and whiteboards redraw on explicit save only.
