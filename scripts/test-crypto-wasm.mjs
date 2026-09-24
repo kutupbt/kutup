@@ -418,4 +418,35 @@ assert.throws(
   /not available to web clients/,
 )
 
+// Thumbnails: the canonical envelope opens to the vector's picture, only as
+// its own variant, file and epoch; a fresh seal round-trips; the generic
+// envelope export refuses the thumbnail and whiteboard-asset purposes.
+const thumb = vectors.thumbnail
+assert.deepEqual(
+  crypto.openThumbnail(thumb.envelope, thumb.variant, thumb.fileKey, thumb.fileId, thumb.epoch),
+  { format: 1, width: thumb.width, height: thumb.height, image: thumb.image },
+)
+assert.throws(() => crypto.openThumbnail(thumb.envelope, 'lg', thumb.fileKey, thumb.fileId, thumb.epoch))
+assert.throws(() =>
+  crypto.openThumbnail(thumb.envelope, thumb.variant, thumb.fileKey, '33333333-3333-4333-8333-333333333333', thumb.epoch),
+)
+const resealedThumb = crypto.sealThumbnail(
+  thumb.image, 1, thumb.width, thumb.height, thumb.variant, thumb.fileKey, thumb.fileId, thumb.epoch,
+)
+assert.notEqual(resealedThumb, thumb.envelope, 'nonce must be random')
+assert.equal(
+  crypto.openThumbnail(resealedThumb, thumb.variant, thumb.fileKey, thumb.fileId, thumb.epoch).image,
+  thumb.image,
+)
+assert.throws(
+  () => crypto.sealThumbnail(Buffer.from('<svg/>').toString('base64'), 3, 10, 10, 'sm', thumb.fileKey, thumb.fileId, 1),
+  /format/,
+)
+for (const purpose of [6, 7]) {
+  assert.throws(
+    () => crypto.sealDriveEnvelope(thumb.image, thumb.fileKey, purpose, 1, 1n, thumb.fileId, thumb.fileId),
+    /typed export/,
+  )
+}
+
 console.log('crypto WASM canonical vectors passed')

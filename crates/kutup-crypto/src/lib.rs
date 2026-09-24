@@ -44,5 +44,6 @@ pub mod local_state;
 pub mod mnemonic;
 pub mod named_share;
 pub mod stream;
+pub mod thumbnail;
 
 pub use error::{CryptoError, Result};

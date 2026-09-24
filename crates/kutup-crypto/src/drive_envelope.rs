@@ -16,6 +16,7 @@ use zeroize::Zeroizing;
 
 use crate::drive_object::{parse_canonical_uuid, DriveObjectSuiteId};
 use crate::error::{CryptoError, Result};
+use crate::thumbnail::{ThumbnailVariant, MAX_THUMBNAIL_PLAINTEXT_BYTES};
 
 const MAGIC: &[u8; 8] = b"KUTPDE1\0";
 const HEADER_LEN: usize = 8 + 2 + 1 + 1 + 4 + 8 + 16 + 16 + 24 + 4;
@@ -24,9 +25,16 @@ const TAG_LEN: usize = 16;
 const KEY_LEN: usize = 32;
 const KEY_DERIVATION_SALT: &[u8] = b"kutup/drive-envelope/key/v1\0";
 const WHITEBOARD_ASSET_BINDING_LABEL: &[u8] = b"kutup/drive-envelope/whiteboard-asset/v1\0";
+const THUMBNAIL_BINDING_LABEL: &[u8] = b"kutup/drive-envelope/thumbnail/v1\0";
 pub const MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES: usize = 25 * 1024 * 1024;
 pub const MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES: usize =
     HEADER_LEN + MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES + TAG_LEN;
+
+/// The complete envelope for a thumbnail of `variant`: what the server
+/// accepts on upload, checked before it reads the body.
+pub const fn max_thumbnail_envelope_bytes(variant: ThumbnailVariant) -> usize {
+    HEADER_LEN + variant.max_plaintext_bytes() + TAG_LEN
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -37,6 +45,8 @@ pub enum DriveEnvelopePurpose {
     FileMetadata = 4,
     PublicLinkCollectionKey = 5,
     WhiteboardAsset = 6,
+    /// A file's preview picture (`crate::thumbnail`), under the file key.
+    Thumbnail = 7,
 }
 
 impl DriveEnvelopePurpose {
@@ -50,6 +60,8 @@ impl DriveEnvelopePurpose {
             Self::CollectionName => (1..=1024).contains(&len),
             Self::FileMetadata => (1..=65_536).contains(&len),
             Self::WhiteboardAsset => (1..=MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES).contains(&len),
+            // The per-variant cap is the container's to enforce; this is the largest.
+            Self::Thumbnail => (1..=MAX_THUMBNAIL_PLAINTEXT_BYTES).contains(&len),
         };
         if !valid {
             return Err(CryptoError::InvalidInput(format!(
@@ -72,6 +84,7 @@ impl TryFrom<u8> for DriveEnvelopePurpose {
             4 => Ok(Self::FileMetadata),
             5 => Ok(Self::PublicLinkCollectionKey),
             6 => Ok(Self::WhiteboardAsset),
+            7 => Ok(Self::Thumbnail),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown Drive envelope purpose {value}"
             ))),
@@ -141,6 +154,33 @@ impl DriveEnvelopeContextV1 {
         let digest = digest.finalize();
         Ok(Self {
             purpose: DriveEnvelopePurpose::WhiteboardAsset,
+            epoch,
+            revision: 1,
+            object_id: file_id,
+            parent_id: digest[..16].try_into().expect("sixteen-byte digest prefix"),
+        })
+    }
+}
+
+impl DriveEnvelopeContextV1 {
+    /// A file's thumbnail. Bound to the file and its key epoch; the variant
+    /// takes the parent slot as a derived id (as whiteboard assets do), so a
+    /// small preview never opens as a large one. The revision is fixed at 1:
+    /// without signed file revisions it could not protect freshness anyway
+    /// (docs/plans/drive-thumbnails.md, "Security notes").
+    pub fn thumbnail(file_id: &str, variant: ThumbnailVariant, epoch: u32) -> Result<Self> {
+        if epoch == 0 {
+            return Err(CryptoError::InvalidInput(
+                "Drive thumbnail epoch must be non-zero".into(),
+            ));
+        }
+        let file_id = parse_canonical_uuid(file_id, "thumbnail file")?;
+        let mut digest = Sha256::new();
+        digest.update(THUMBNAIL_BINDING_LABEL);
+        digest.update(variant.as_str().as_bytes());
+        let digest = digest.finalize();
+        Ok(Self {
+            purpose: DriveEnvelopePurpose::Thumbnail,
             epoch,
             revision: 1,
             object_id: file_id,

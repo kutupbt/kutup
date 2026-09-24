@@ -25,7 +25,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_collection, octet_stream_response, trusted_uuid};
 use crate::middleware::AuthUser;
-use crate::models::{FileRow, MessageResponse, UploadResult};
+use crate::models::{FileRow, FileThumbnails, MessageResponse, UploadResult};
 use crate::AppState;
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -103,24 +103,41 @@ pub async fn list_files(
         return Err(AppError::forbidden("forbidden"));
     }
 
-    type Row = (
-        Uuid,
-        Uuid,
-        Uuid,
-        String,
-        String,
-        i32,
-        i64,
-        i64,
-        time::OffsetDateTime,
-        time::OffsetDateTime,
-    );
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        id: Uuid,
+        collection_id: Uuid,
+        uploader_user_id: Uuid,
+        metadata_envelope: String,
+        file_key_envelope: String,
+        key_epoch: i32,
+        metadata_revision: i64,
+        encrypted_size_bytes: i64,
+        created_at: time::OffsetDateTime,
+        updated_at: time::OffsetDateTime,
+        thumb_sm: Option<time::OffsetDateTime>,
+        thumb_lg: Option<time::OffsetDateTime>,
+        thumb_stale: bool,
+    }
     let rows: Vec<Row> = sqlx::query_as(
-        r#"SELECT id, collection_id, uploader_user_id,
-                  metadata_envelope, file_key_envelope, key_epoch, metadata_revision,
-                  encrypted_size_bytes, created_at, updated_at
-           FROM files WHERE collection_id = $1 AND deleted_at IS NULL
-           ORDER BY created_at DESC"#,
+        r#"SELECT f.id, f.collection_id, f.uploader_user_id,
+                  f.metadata_envelope, f.file_key_envelope, f.key_epoch, f.metadata_revision,
+                  f.encrypted_size_bytes, f.created_at, f.updated_at,
+                  sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
+                  -- Drawn from something other than the latest version (or,
+                  -- with no versions, from a version at all).
+                  EXISTS (
+                    SELECT 1 FROM file_thumbnails t
+                    WHERE t.file_id = f.id
+                      AND t.source_version IS DISTINCT FROM (
+                        SELECT v.id FROM file_versions v WHERE v.file_id = f.id
+                        ORDER BY v.created_at DESC LIMIT 1)
+                  ) AS thumb_stale
+           FROM files f
+           LEFT JOIN file_thumbnails sm ON sm.file_id = f.id AND sm.variant = 'sm'
+           LEFT JOIN file_thumbnails lg ON lg.file_id = f.id AND lg.variant = 'lg'
+           WHERE f.collection_id = $1 AND f.deleted_at IS NULL
+           ORDER BY f.created_at DESC"#,
     )
     .bind(coll_id)
     .fetch_all(&state.pool)
@@ -128,20 +145,23 @@ pub async fn list_files(
 
     let out: Vec<FileRow> = rows
         .into_iter()
-        .map(
-            |(id, cid, uid, metadata, file_key, epoch, revision, size, created, updated)| FileRow {
-                id: id.to_string(),
-                collection_id: cid.to_string(),
-                uploader_user_id: uid.to_string(),
-                metadata_envelope: metadata,
-                file_key_envelope: file_key,
-                key_epoch: epoch,
-                metadata_revision: revision,
-                encrypted_size_bytes: size,
-                created_at: created,
-                updated_at: updated,
+        .map(|r| FileRow {
+            id: r.id.to_string(),
+            collection_id: r.collection_id.to_string(),
+            uploader_user_id: r.uploader_user_id.to_string(),
+            metadata_envelope: r.metadata_envelope,
+            file_key_envelope: r.file_key_envelope,
+            key_epoch: r.key_epoch,
+            metadata_revision: r.metadata_revision,
+            encrypted_size_bytes: r.encrypted_size_bytes,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+            thumbnails: FileThumbnails {
+                sm: r.thumb_sm,
+                lg: r.thumb_lg,
             },
-        )
+            thumbnail_stale: r.thumb_stale,
+        })
         .collect();
     Ok(Json(out).into_response())
 }

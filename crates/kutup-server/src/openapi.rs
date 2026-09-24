@@ -86,6 +86,9 @@ All file content and metadata are encrypted client-side; the server stores only 
         // --- file assets ---
         crate::handlers::file_assets::upload,
         crate::handlers::file_assets::download,
+        crate::handlers::file_thumbnails::upload,
+        crate::handlers::file_thumbnails::download,
+        crate::handlers::file_thumbnails::delete,
         // --- collab WebSocket ---
         crate::handlers::collab::ws,
         // --- public shares ---
@@ -255,6 +258,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         models::UpdateColorRequest,
         models::ShareCollectionRequest,
         models::FileRow,
+        models::FileThumbnails,
         models::UploadResult,
         models::TrashFolderRow,
         models::TrashFileRow,

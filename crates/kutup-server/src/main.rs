@@ -401,8 +401,8 @@ fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
 
     use handlers::{
-        admin, auth, chat, chat_media, collab, collections, devices, file_assets, file_versions,
-        files, sessions as session_routes, shares, trash, tus,
+        admin, auth, chat, chat_media, collab, collections, devices, file_assets, file_thumbnails,
+        file_versions, files, sessions as session_routes, shares, trash, tus,
     };
 
     Router::new()
@@ -767,6 +767,17 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/files/:fileId/assets/:assetId",
             put(file_assets::upload).get(file_assets::download),
+        )
+        .route(
+            "/api/files/:fileId/thumbnails/:variant",
+            put(file_thumbnails::upload)
+                .get(file_thumbnails::download)
+                // A large thumbnail envelope, whole, and no more.
+                .route_layer(DefaultBodyLimit::max(1100 * 1024)),
+        )
+        .route(
+            "/api/files/:fileId/thumbnails",
+            delete(file_thumbnails::delete),
         )
         // --- Collab-edit WebSocket. Auth (token + file access + device) happens inside the
         // handler before the upgrade (mirrors Go's PreUpgrade — browsers can't set headers

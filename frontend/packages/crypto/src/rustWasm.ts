@@ -151,6 +151,23 @@ export interface CryptoWasmModule {
     expectedAssetId: string,
     expectedEpoch: number,
   ): string
+  sealThumbnail(
+    imageBase64: string,
+    format: number,
+    width: number,
+    height: number,
+    variant: string,
+    fileKeyBase64: string,
+    fileId: string,
+    epoch: number,
+  ): string
+  openThumbnail(
+    envelopeBase64: string,
+    variant: string,
+    fileKeyBase64: string,
+    expectedFileId: string,
+    expectedEpoch: number,
+  ): { format: number; width: number; height: number; image: string }
   prepareDriveFileBlob(
     fileKeyBase64: string,
     fileId: string,

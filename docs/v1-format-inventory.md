@@ -19,6 +19,7 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 | Public-link collection wrap | Secretbox under link key plus separate nonce | **Implemented end to end:** public-link purpose `DriveEnvelopeV1` bound to collection, owner and epoch; the independent link capability remains only in the URL fragment |
 | Collaborative frame | XChaCha frame with `doc_key_id`, device and sequence | **Implemented end to end:** canonical Rust `CollabFrameSuiteId = 1`, 96-byte authenticated context header, purpose-derived XChaCha key and Ed25519 signature; browser uses the Rust parser/KDF/AEAD through WASM |
 | Whiteboard asset | XChaCha with asset AAD | **Implemented end to end:** `DriveEnvelopeV1` whiteboard-asset purpose bound to file, collection, epoch and asset ID across browser, CLI and server ingestion |
+| File thumbnail | — (new) | **Format and server implemented:** `DriveEnvelopeV1` purpose 7 under the file key, bound to file, variant and epoch; padded `KTH1` container |
 | Encrypted profile | AES-256-GCM nonce/ciphertext | **Implemented end to end:** `ProfileSuiteId = 1` plus account/revision/device/purpose-bound XChaCha `ProfileEnvelopeV1`; suite code accompanies every E2EE profile-key capability |
 | Direct Chat | `DirectChatSuiteId = 1`, libsignal bytes | Unchanged pinned libsignal suite |
 | MLS group | MLS `0x0002`, P-256 control and delivery keys | MLS `0x0003`, X25519/ChaCha/Ed25519 throughout Kutup-owned bindings |
@@ -79,6 +80,20 @@ UUID; the parent binding is a fixed-label SHA-256 commitment to the collection
 UUID and canonical asset ID. Epoch and revision 1 are authenticated in the
 normal Drive envelope header. Plaintext is limited to 25 MiB and the server
 validates the complete public envelope before quota or object-storage mutation.
+
+Thumbnails use `DriveEnvelopeV1` purpose 7 with the **file key** as root key.
+The object UUID is the file UUID; the parent binding is a fixed-label
+SHA-256 commitment to the variant id (`sm` or `lg`), so one variant never
+opens as the other. Epoch is the file row's key epoch; revision is fixed at 1
+because V1 has no signed file revision chain to make freshness meaningful.
+The plaintext is a `KTH1` container: magic, format (1 JPEG, 2 WebP, 3 PNG —
+never SVG), u16 width and height (≤ 512 or ≤ 1920), u32 image length, the
+image, then zero padding to whole 4 KiB (`sm`, cap 64 KiB) or 16 KiB (`lg`,
+cap 1 MiB) blocks. Decoding rejects any other magic, format, size, a leading
+image signature that does not match the declared format, or non-zero
+padding. The generic `sealDriveEnvelope`/`openDriveEnvelope` WASM exports
+refuse purposes 6 and 7; each has its typed export. Vector:
+`crypto.json` → `thumbnail`. Design: `docs/plans/drive-thumbnails.md`.
 
 `ProfileEnvelopeV1` uses magic `KUTPPE1\0`, `ProfileSuiteId`, a closed purpose
 (display name, avatar or wrapped profile key), revision, source device,

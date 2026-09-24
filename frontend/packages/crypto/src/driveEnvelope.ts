@@ -1,13 +1,17 @@
 import { fromBase64, toBase64 } from './base64'
 import { getCryptoWasm } from './rustWasm'
 
+/**
+ * The purposes whose context is two plain UUIDs. Whiteboard assets (6) and
+ * thumbnails (7) bind a derived id and have their own typed wrappers
+ * (whiteboardAsset.ts, thumbnail.ts); the generic WASM export refuses them.
+ */
 export const DRIVE_ENVELOPE_PURPOSE = {
   collectionKey: 1,
   collectionName: 2,
   fileKey: 3,
   fileMetadata: 4,
   publicLinkCollectionKey: 5,
-  whiteboardAsset: 6,
 } as const
 
 export type DriveEnvelopePurpose =

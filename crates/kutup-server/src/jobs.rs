@@ -300,6 +300,8 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
              UNION ALL
              SELECT uploader_user_id,            size_bytes              FROM file_assets
              UNION ALL
+             SELECT uploader_user_id,            size_bytes              FROM file_thumbnails
+             UNION ALL
              SELECT author_user_id,              size_bytes              FROM file_versions
            ),
            chat_child_bytes AS (
@@ -663,10 +665,15 @@ pub async fn purge_file_root(
     };
 
     let mut tx = pool.begin().await?;
+    // Thumbnails and assets are charged to whoever uploaded them; release
+    // both before the cascade removes their rows.
     sqlx::query(
         r#"WITH per_uploader AS (
               SELECT uploader_user_id, COALESCE(SUM(size_bytes), 0) AS total
-              FROM file_assets WHERE file_id = $1 GROUP BY uploader_user_id)
+              FROM (SELECT uploader_user_id, size_bytes FROM file_assets WHERE file_id = $1
+                    UNION ALL
+                    SELECT uploader_user_id, size_bytes FROM file_thumbnails WHERE file_id = $1) AS charged
+              GROUP BY uploader_user_id)
            UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - per_uploader.total)
            FROM per_uploader WHERE users.id = per_uploader.uploader_user_id"#,
     )

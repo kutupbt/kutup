@@ -37,6 +37,7 @@ struct CryptoVectors {
     drive_file_blob: DriveFileBlobVec,
     stream: Vec<StreamVec>,
     asset: AssetVec,
+    thumbnail: ThumbnailVec,
     #[serde(rename = "collabFrame")]
     collab_frame: CollabFrameVec,
     #[serde(rename = "localState")]
@@ -153,6 +154,21 @@ struct AssetVec {
     epoch: u32,
     nonce: String,
     plaintext: String,
+    envelope: String,
+}
+#[derive(Deserialize)]
+struct ThumbnailVec {
+    #[serde(rename = "fileKey")]
+    file_key: String,
+    #[serde(rename = "fileId")]
+    file_id: String,
+    epoch: u32,
+    variant: String,
+    nonce: String,
+    format: String,
+    width: u16,
+    height: u16,
+    image: String,
     envelope: String,
 }
 #[derive(Deserialize)]
@@ -477,4 +493,40 @@ fn local_state_payloads_are_bound_to_purpose_and_profile() {
     assert!(
         local_state::open(&tampered, &key, LocalStatePurpose::SessionFork, "web-drive").is_err()
     );
+}
+
+#[test]
+fn thumbnail_matches_canonical_vector() {
+    use kutup_crypto::thumbnail::{self, Thumbnail, ThumbnailFormat, ThumbnailVariant};
+    let v = load_crypto().thumbnail;
+    let variant = ThumbnailVariant::try_from(v.variant.as_str()).unwrap();
+    assert_eq!(v.format, "jpeg");
+    let expected = Thumbnail {
+        format: ThumbnailFormat::Jpeg,
+        width: v.width,
+        height: v.height,
+        image: b64(&v.image),
+    };
+    let envelope = thumbnail::seal_with_nonce(
+        &expected,
+        variant,
+        &b64(&v.file_key),
+        &v.file_id,
+        v.epoch,
+        &b64(&v.nonce),
+    )
+    .unwrap();
+    assert_eq!(envelope, b64(&v.envelope));
+    thumbnail::validate(&envelope, variant, &v.file_id, v.epoch).unwrap();
+    let opened =
+        thumbnail::open(&envelope, variant, &b64(&v.file_key), &v.file_id, v.epoch).unwrap();
+    assert_eq!(opened, expected);
+    assert!(thumbnail::open(
+        &envelope,
+        ThumbnailVariant::Large,
+        &b64(&v.file_key),
+        &v.file_id,
+        v.epoch
+    )
+    .is_err());
 }

@@ -1852,6 +1852,7 @@ pub async fn wipe_user(
         r#"UPDATE users SET storage_used_bytes = (
                SELECT COALESCE((SELECT SUM(encrypted_size_bytes) FROM files WHERE uploader_user_id = $1), 0)
                     + COALESCE((SELECT SUM(size_bytes) FROM file_assets WHERE uploader_user_id = $1), 0)
+                    + COALESCE((SELECT SUM(size_bytes) FROM file_thumbnails WHERE uploader_user_id = $1), 0)
                     + COALESCE((SELECT SUM(size_bytes) FROM file_versions WHERE author_user_id = $1), 0)
            ) WHERE id = $1"#,
     )

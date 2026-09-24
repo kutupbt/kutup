@@ -32,10 +32,29 @@
 | Malformed or oversized ciphertext | Bounded strict parsers reject before allocation/decryption; fuzzing covers every public V1 structure. |
 | Crash during epoch/share mutation | Manifest, epoch, member wraps, current state and audit event commit atomically; restart resumes an idempotent operation or retains the prior epoch. |
 
+## Thumbnails
+
+Previews are made by clients and sealed under the file key
+(`docs/plans/drive-thumbnails.md`), so the server never sees one.
+
+- **Who can set one:** anyone who can change the file. They hold the file key
+  and could change the content itself, so a misleading picture is no new
+  power.
+- **Relocation:** the envelope binds file, variant and epoch; the server
+  cannot move a thumbnail to another file or variant.
+- **Freshness:** the server can serve an older thumbnail of the same file —
+  the same rollback limit file content has in V1, which has no signed file
+  revision chain. Signed revisions covering content and thumbnails together
+  are the intended fix.
+- **Parsing:** the `KTH1` container parser is bounded and strict; images are
+  decoded only by the browser, from JPEG/WebP/PNG, never SVG.
+
 ## Metadata not hidden in V1
 
 Servers see accounts, collection/file relationships, ciphertext lengths,
-access timing, storage size, federation domains and share membership. V1 does
+access timing, storage size, federation domains and share membership, and
+for thumbnails whether one exists, its padded size bucket and when it
+changed. V1 does
 not claim traffic-shape protection, ORAM, anonymous Drive sharing or
 subscriber privacy from a user's own homeserver. The advanced fixed-cell
 transport profile remains post-V1 work.

@@ -793,10 +793,17 @@ List files in a collection.
     "metadataRevision": 1,
     "encryptedSizeBytes": 4096,
     "createdAt": "2026-03-14T12:00:00Z",
-    "updatedAt": "2026-03-14T12:00:00Z"
+    "updatedAt": "2026-03-14T12:00:00Z",
+    "thumbnails": { "sm": "2026-03-14T12:00:05Z" },
+    "thumbnailStale": false
   }
 ]
 ```
+
+`thumbnails` has the store time of each thumbnail variant that exists (`sm`,
+`lg`; absent keys mean none). `thumbnailStale` is true when a stored thumbnail
+was drawn from something other than the file's latest version, so a client
+with write access should redraw it (see "Thumbnails" below).
 
 `encryptedSizeBytes` is the size of the ciphertext blob on disk: a 48-byte
 typed Drive header, a 24-byte secretstream header, and at least one frame with
@@ -1869,6 +1876,33 @@ Return the stored opaque asset envelope as `application/octet-stream`. The
 client opens it with the current collection key and the same exact context;
 key, file, collection, epoch, asset-ID relocation and tampering fail closed.
 **Auth:** Bearer JWT and file access.
+
+### PUT /api/files/:fileId/thumbnails/:variant
+
+Store the file's `sm` (≤ 512 px) or `lg` (≤ 1920 px) thumbnail, replacing any
+previous one of that variant. **Body:** the raw `DriveEnvelopeV1` purpose-7
+thumbnail envelope (`application/octet-stream`), sealed under the file key
+by the client; the server checks its public header against the exact file,
+variant and current key epoch and its size against the variant cap
+(64 KiB / 1 MiB plaintext) before any quota or storage change.
+**Query:** `source` — the version id it was drawn from, or `original`
+(default); a version of another file is refused. The size is charged to the
+uploader; replacing your own thumbnail charges only the difference.
+**Auth:** Bearer JWT and file access. **Response:** `204`; `400` invalid
+envelope or source; `404` unknown variant; `413` too large or over quota.
+
+### GET /api/files/:fileId/thumbnails/:variant
+
+The stored envelope as `application/octet-stream`, with
+`Cache-Control: private, max-age=31536000, immutable` — clients add
+`?v={thumbnails.<variant>}` from the listing, so a URL never changes meaning
+and caches hold only ciphertext. **Auth:** Bearer JWT and file access.
+**Response:** `200`; `404` when there is none.
+
+### DELETE /api/files/:fileId/thumbnails
+
+Remove both variants and release their bytes to whoever was charged.
+**Auth:** Bearer JWT and file access. **Response:** `204`.
 
 ---
 

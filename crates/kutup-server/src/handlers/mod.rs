@@ -9,6 +9,7 @@ pub mod collab;
 pub mod collections;
 pub mod devices;
 pub mod file_assets;
+pub mod file_thumbnails;
 pub mod file_versions;
 pub mod files;
 pub mod sessions;

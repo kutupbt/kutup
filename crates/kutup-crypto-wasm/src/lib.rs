@@ -22,6 +22,7 @@ use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::envelope::{self, CollabFrameContextV1};
 use kutup_crypto::kdf::{self, AccountProtectionParameters, AccountProtectionSuiteId};
 use kutup_crypto::local_state::{self, LocalStatePurpose};
+use kutup_crypto::thumbnail::{self, Thumbnail, ThumbnailFormat, ThumbnailVariant};
 use serde::Serialize;
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
@@ -623,6 +624,19 @@ pub fn open_account_envelope(
     Ok(STANDARD.encode(plaintext))
 }
 
+/// The purposes whose context is two plain UUIDs. Whiteboard assets and
+/// thumbnails derive their parent id and have typed exports
+/// (`sealWhiteboardAsset`, `sealThumbnail`); the generic path refuses them so
+/// their bindings cannot be bypassed.
+fn generic_drive_purpose(value: u8) -> Result<DriveEnvelopePurpose, JsValue> {
+    match DriveEnvelopePurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
+        DriveEnvelopePurpose::WhiteboardAsset | DriveEnvelopePurpose::Thumbnail => Err(js_error(
+            "this Drive envelope purpose has its own typed export",
+        )),
+        purpose => Ok(purpose),
+    }
+}
+
 #[wasm_bindgen(js_name = sealDriveEnvelope)]
 #[allow(clippy::too_many_arguments)]
 pub fn seal_drive_envelope(
@@ -637,7 +651,7 @@ pub fn seal_drive_envelope(
     let plaintext = decode_canonical_base64(plaintext_base64, "plaintext")?;
     let root_key = decode_canonical_base64(root_key_base64, "root key")?;
     let context = DriveEnvelopeContextV1::new(
-        DriveEnvelopePurpose::try_from(purpose).map_err(|error| js_error(&error.to_string()))?,
+        generic_drive_purpose(purpose)?,
         epoch,
         revision,
         object_id,
@@ -661,8 +675,7 @@ pub fn open_drive_envelope(
 ) -> Result<String, JsValue> {
     let root_key = decode_canonical_base64(root_key_base64, "root key")?;
     let context = DriveEnvelopeContextV1::new(
-        DriveEnvelopePurpose::try_from(expected_purpose)
-            .map_err(|error| js_error(&error.to_string()))?,
+        generic_drive_purpose(expected_purpose)?,
         expected_epoch,
         expected_revision,
         expected_object_id,
@@ -711,6 +724,79 @@ pub fn open_whiteboard_asset(
     let plaintext = drive_envelope::open_b64(envelope_base64, &collection_key, context)
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(plaintext))
+}
+
+/// A thumbnail as JavaScript sees it; `image` is canonical base64.
+#[derive(Serialize)]
+struct ThumbnailView {
+    format: u8,
+    width: u16,
+    height: u16,
+    image: String,
+}
+
+fn thumbnail_variant(value: &str) -> Result<ThumbnailVariant, JsValue> {
+    ThumbnailVariant::try_from(value).map_err(|error| js_error(&error.to_string()))
+}
+
+/// Frame, pad and seal a thumbnail under the file key
+/// (docs/plans/drive-thumbnails.md). `format`: 1 JPEG, 2 WebP, 3 PNG.
+#[wasm_bindgen(js_name = sealThumbnail)]
+#[allow(clippy::too_many_arguments)]
+pub fn seal_thumbnail(
+    image_base64: &str,
+    format: u8,
+    width: u16,
+    height: u16,
+    variant: &str,
+    file_key_base64: &str,
+    file_id: &str,
+    epoch: u32,
+) -> Result<String, JsValue> {
+    let thumbnail = Thumbnail {
+        format: ThumbnailFormat::try_from(format).map_err(|error| js_error(&error.to_string()))?,
+        width,
+        height,
+        image: decode_canonical_base64(image_base64, "thumbnail image")?,
+    };
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
+    let envelope = thumbnail::seal(
+        &thumbnail,
+        thumbnail_variant(variant)?,
+        &file_key,
+        file_id,
+        epoch,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(envelope))
+}
+
+/// Open a thumbnail of exactly this file, variant and epoch.
+#[wasm_bindgen(js_name = openThumbnail)]
+pub fn open_thumbnail(
+    envelope_base64: &str,
+    variant: &str,
+    file_key_base64: &str,
+    expected_file_id: &str,
+    expected_epoch: u32,
+) -> Result<JsValue, JsValue> {
+    let envelope = decode_canonical_base64(envelope_base64, "thumbnail envelope")?;
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
+    let opened = thumbnail::open(
+        &envelope,
+        thumbnail_variant(variant)?,
+        &file_key,
+        expected_file_id,
+        expected_epoch,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&ThumbnailView {
+        format: opened.format as u8,
+        width: opened.width,
+        height: opened.height,
+        image: STANDARD.encode(opened.image),
+    })
+    .map_err(|error| js_error(&error.to_string()))
 }
 
 #[wasm_bindgen(js_name = prepareDriveFileBlob)]

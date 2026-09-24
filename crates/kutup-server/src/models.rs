@@ -254,6 +254,25 @@ pub struct FileRow {
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
+    /// When each thumbnail variant was stored; absent when there is none.
+    pub thumbnails: FileThumbnails,
+    /// A thumbnail exists but was drawn from something other than the
+    /// latest version (docs/plans/drive-thumbnails.md): redraw it.
+    pub thumbnail_stale: bool,
+}
+
+#[derive(Debug, Default, Serialize, ToSchema)]
+pub struct FileThumbnails {
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sm: Option<OffsetDateTime>,
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub lg: Option<OffsetDateTime>,
 }
 
 /// File upload result — mirrors `handlers.UploadResult`.
