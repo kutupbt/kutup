@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowUp, MoreHorizontal } from 'lucide-react'
-import { Fragment, useCallback, useEffect, useMemo, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@kutup/ui/components/button'
 import {
@@ -92,15 +92,8 @@ function RowMenu({ item, actions }: { item: ExplorerItem; actions: ExplorerActio
  * clears the selection. Items carry `data-item-key` so a surrounding
  * ExplorerContextMenu knows what was right-clicked.
  */
-export function Explorer(given: ExplorerProps) {
-  // The grid shows folders as a row of chips above the file cards (they
-  // have no preview), so its keyboard and range order is folders, then files.
-  const items = useMemo(
-    () => (given.view === 'grid' ? [...given.items.filter((i) => i.type === 'folder'), ...given.items.filter((i) => i.type !== 'folder')] : given.items),
-    [given.view, given.items],
-  )
-  const props = { ...given, items }
-  const { selection, onSelectionChange, onOpen, onDeleteKey } = props
+export function Explorer(props: ExplorerProps) {
+  const { items, selection, onSelectionChange, onOpen, onDeleteKey } = props
   const anchor = useRef<number | null>(null)
   const lastPointer = useRef<string>('mouse')
   const rowRefs = useRef<(HTMLElement | null)[]>([])
@@ -416,67 +409,39 @@ function ListView({ items, sort, onSortField, selection, actionsFor, subtitleFor
 }
 
 function GridView({ items, selection, actionsFor, renderPreview, rowProps }: ExplorerProps & { rowProps: RowProps }) {
-  const { t, i18n } = useTranslation()
-  // Items arrive folders first (see Explorer); indexes are shared with them.
-  const folderCount = items.findIndex((i) => i.type !== 'folder')
-  const folders = folderCount === -1 ? items.length : folderCount
-  const heading = 'px-5 pt-4 text-xs font-medium uppercase tracking-wide text-muted-foreground'
+  const { i18n } = useTranslation()
   return (
-    <div role="grid" aria-multiselectable>
-      {folders > 0 ? (
-        <>
-          {folders < items.length ? <h3 className={heading}>{t('explorer.sections.folders')}</h3> : null}
-          <ul className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-3 p-4" role="rowgroup">
-            {items.slice(0, folders).map((item, index) => {
-              const selected = selection.has(itemKey(item))
-              return (
-                // A folder has no preview: a chip, as Google Drive shows them.
-                <li
-                  key={itemKey(item)}
-                  {...rowProps(index)}
-                  className={cn(
-                    'group relative flex h-12 cursor-default select-none items-center gap-2 rounded-xl border border-border bg-card pl-3 pr-1 outline-none transition-colors',
-                    'hover:border-primary/40 hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring',
-                    selected && 'border-primary bg-accent hover:bg-accent',
-                  )}
-                >
-                  <KindIcon kind={item.kind} color={item.color} className="size-5 shrink-0" />
-                  <p className="min-w-0 flex-1 truncate text-sm font-medium" title={item.name}>
-                    {item.name}
-                  </p>
-                  <RowMenu item={item} actions={actionsFor(item)} />
-                </li>
-              )
-            })}
-          </ul>
-        </>
-      ) : null}
-      {folders < items.length ? (
-        <>
-          {folders > 0 ? <h3 className={heading}>{t('explorer.sections.files')}</h3> : null}
-          <ul className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-3 p-4" role="rowgroup">
-      {items.slice(folders).map((item, fileIndex) => {
-        const index = folders + fileIndex
+    // items-start: a folder chip keeps its own height beside the taller file cards.
+    <ul className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] items-start gap-3 p-4" role="grid" aria-multiselectable>
+      {items.map((item, index) => {
         const selected = selection.has(itemKey(item))
+        const tile = cn(
+          'group relative cursor-default select-none rounded-xl border border-border bg-card outline-none transition-colors',
+          'hover:border-primary/40 hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring',
+          selected && 'border-primary bg-accent hover:bg-accent',
+        )
+        if (item.type === 'folder') {
+          // A folder has no preview: a chip, as Google Drive shows them.
+          return (
+            <li key={itemKey(item)} {...rowProps(index)} className={cn(tile, 'flex h-12 items-center gap-2 pl-3 pr-1')}>
+              <KindIcon kind={item.kind} color={item.color} className="size-5 shrink-0" />
+              <p className="min-w-0 flex-1 truncate text-sm font-medium" title={item.name}>
+                {item.name}
+              </p>
+              <RowMenu item={item} actions={actionsFor(item)} />
+            </li>
+          )
+        }
         return (
-          <li
-            key={itemKey(item)}
-            {...rowProps(index)}
-            className={cn(
-              'group relative flex cursor-default select-none flex-col overflow-hidden rounded-xl border border-border bg-card outline-none transition-colors',
-              'hover:border-primary/40 hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring',
-              selected && 'border-primary bg-accent hover:bg-accent',
-            )}
-          >
+          <li key={itemKey(item)} {...rowProps(index)} className={cn(tile, 'flex flex-col overflow-hidden')}>
             {/* Header: what it is and what it is called, like Google Drive's cards. */}
             <div className="flex h-11 items-center gap-2 pl-3 pr-1">
               <KindIcon kind={item.kind} color={item.color} className="size-5" />
-              <p className={cn('min-w-0 flex-1 truncate text-sm', item.type === 'folder' && 'font-medium')} title={item.name}>
+              <p className="min-w-0 flex-1 truncate text-sm" title={item.name}>
                 {item.name}
               </p>
               <RowMenu item={item} actions={actionsFor(item)} />
             </div>
-            {/* The preview area. Until thumbnails exist it shows the kind, large. */}
             <div
               className={cn(
                 // Clipped: a tall page must not stretch the card past 4:3.
@@ -490,9 +455,6 @@ function GridView({ items, selection, actionsFor, renderPreview, rowProps }: Exp
           </li>
         )
       })}
-          </ul>
-        </>
-      ) : null}
-    </div>
+    </ul>
   )
 }
