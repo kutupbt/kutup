@@ -58,10 +58,9 @@
   "driveFileBlob": {
     "fileKey": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
     "fileId": "11111111-1111-4111-8111-111111111111",
-    "collectionId": "22222222-2222-4222-8222-222222222222",
-    "epoch": 7,
-    "objectHeader": "S1VUUERCMQAAAQEAAAAABxEREREREUERgREREREREREiIiIiIiJCIoIiIiIiIiIi",
-    "derivedStreamKey": "oh2pAz4XSGfBLgZy6N0Nrhys73xJjj+eh4RTpAqjttg="
+    "generation": 7,
+    "objectHeader": "S1VUUERCMgAAAQEAAAAABxEREREREUERgRERERERERE=",
+    "derivedStreamKey": "YdgkIz2vThfXkMgveOIvnkafhQo1QSuJPsvFwdxSiH8="
   },
   "stream": [
     {
@@ -86,29 +85,27 @@
     }
   ],
   "asset": {
-    "collectionKey": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=",
+    "fileKey": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=",
     "fileId": "11111111-1111-4111-8111-111111111111",
-    "collectionId": "22222222-2222-4222-8222-222222222222",
     "assetId": "asset-abc",
-    "epoch": 3,
+    "generation": 3,
     "nonce": "RERERERERERERERERERERERERERERERE",
     "plaintext": "ZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvPQ==",
-    "envelope": "S1VUUERFMQAAAQYAAAAAAwAAAAAAAAABERERERERQRGBEREREREREcoIOkpEIvraOD6U0Ql0e7lEREREREREREREREREREREREREREREREQAAAAyje/nJQQ+Y94kNYjL3HiF01hqgiLk03SuYSbEMiwBL25XLy7z5m5H5+iPeODrKbjtWg8="
+    "envelope": "S1VUUERFMQAAAQYAAAAAAwAAAAAAAAABERERERERQRGBEREREREREd03nFJ8I10XdfkBZRpzqeNEREREREREREREREREREREREREREREREQAAAAyzzVmQIw//U24lXTcJyhIUgPAVcYq0TmLzsYXiQ1blvNPkyt8tEZVr5dhMl1nPSHAwrU="
   },
   "collabFrame": {
-    "collectionKey": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=",
+    "fileKey": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=",
     "signingSeed": "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=",
     "signingPublicKey": "xoImN8fTEOxXYnvgC6JZ0lN0n0qvZERwz/vlOjX3MkI=",
     "kind": 1,
-    "keyEpoch": 3,
+    "keyGeneration": 3,
     "docKeyId": 7,
     "fileId": "11111111-1111-4111-8111-111111111111",
-    "collectionId": "22222222-2222-4222-8222-222222222222",
     "senderDeviceId": 42,
     "sequence": 9,
     "nonce": "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZm",
     "plaintext": "Y2Fub25pY2FsIGNvbGxhYm9yYXRpb24gdXBkYXRl",
-    "frame": "S1VUUENGMQAAAQEAAAAAAwAAAAcRERERERFBEYERERERERERIiIiIiIiQiKCIiIiIiIiIgAAAAAAAAAqAAAAAAAAAAlmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmYAAAAuoKuvW6wpLTH1qDP5joLPs4LEX62ok1NprsXk0AzLr3YXaYrI5Z82Sr0UKdA7P2u97ii7HPqUpSoof0veUpm4JSd30JuvJN8hE+4PeEicNsmFPp643pX6spL6h0LXYCQnpJoemjjioGadbHD8jwc="
+    "frame": "S1VUUENGMgAAAQEAAAAAAwAAAAcRERERERFBEYERERERERERAAAAAAAAACoAAAAAAAAACWZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZgAAAC5bFeRhL2CpY27h1tS+t0emOApKq0ZfNIBnOOu2X34gdmYh5+d63mcOVfvrIyiyhkkpjV9Ym4eWyVqPtaSKWh742/SL8fpnr3RUWuGbzlBTvGgakc1PtMai99WJJfCYKrVEuuQm+tT4llCUpXX+Bw=="
   },
   "localState": {
     "key": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
@@ -128,7 +125,7 @@
   "thumbnail": {
     "fileKey": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=",
     "fileId": "11111111-1111-4111-8111-111111111111",
-    "epoch": 3,
+    "generation": 3,
     "variant": "sm",
     "nonce": "RERERERERERERERERERERERERERERERE",
     "format": "jpeg",
@@ -161,6 +158,24 @@
         "epoch": 3,
         "statement": "S1VUUENFMQAAAQAAERERERERQRGBERERERERESIiIiIiIkIigiIiIiIiIiIAAAADOpJTVso8dBFD7TpNEIYOVzu24rZGeFwmmYc4cvMv0PkAwYEOoiEMaA6VKetZtP1dz9fFphpcKvqpGzH0hBfmXnkJAbgqif5QW1+Y4re/KOOnT5pA8aVhydNT+F9hzDai3I2W5HnYlFTSfVmFTo9HwDHdcDXQyYBFASv7CJvO40AfB8BL2xZbqWfelsZt0OIDAQliF2u1PU0AeS3NXftZAw==",
         "previousKeyEnvelope": "S1VUUERFMQAAAQgAAAAAAwAAAAAAAAABERERERERQRGBERERERERESIiIiIiIkIigiIiIiIiIiJHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0cAAAAwc551OWbjNfv0vTQ/jxfyO0PTo6vrgDv+ExnlTm94+VgTxz0zWcIfIiay8YItfRHS"
+      }
+    ]
+  },
+  "fileKeyring": {
+    "fileId": "11111111-1111-4111-8111-111111111111",
+    "keys": [
+      "cXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXE=",
+      "cnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnI=",
+      "c3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3M="
+    ],
+    "chain": [
+      {
+        "generation": 2,
+        "previousKeyEnvelope": "S1VUUERFMQAAAQoAAAAAAgAAAAAAAAABERERERERQRGBEREREREREREREREREUERgRERERERERFSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlIAAAAwOb4d9Hrt4yM/iQKZofw3SIbXAohuQ7mc+liVdJEyCuhq5ErRZS2OFNq5V73U1uky"
+      },
+      {
+        "generation": 3,
+        "previousKeyEnvelope": "S1VUUERFMQAAAQoAAAAAAwAAAAAAAAABERERERERQRGBEREREREREREREREREUERgRERERERERFTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1MAAAAwK7NGZ1w7LVoOg4m517K6yAtQ7nJdzqN/yI4R1lSCNvWZcafRRm9/ODAdkri5t2Tl"
       }
     ]
   }

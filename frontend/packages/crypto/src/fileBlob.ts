@@ -13,15 +13,19 @@ import {
 } from './streamEncryptor'
 import { newStreamDecryptor, type StreamDecryptor } from './streamDecryptor'
 
-export const DRIVE_FILE_BLOB_HEADER_BYTES = 48
+export const DRIVE_FILE_BLOB_HEADER_BYTES = 32
 export const DRIVE_FILE_BLOB_PREFIX_BYTES =
   DRIVE_FILE_BLOB_HEADER_BYTES + SECRETSTREAM_HEADER_BYTES
 export const DRIVE_FILE_BLOB_CIPHER_CHUNK = PLAIN_CHUNK + ABYTES
 
+/**
+ * What a file blob is bound to: the file and the generation of the file key
+ * that sealed it — not the folder, so a file moves without re-encryption
+ * (docs/plans/drive-move.md).
+ */
 export interface FileBlobContextV1 {
   fileId: string
-  collectionId: string
-  epoch: number
+  generation: number
 }
 
 export interface FileBlobStreamEncryptorV1 {
@@ -43,8 +47,7 @@ async function prepare(
   const prepared = module.prepareDriveFileBlob(
     toBase64(fileKey),
     context.fileId,
-    context.collectionId,
-    context.epoch,
+    context.generation,
   )
   const objectHeader = fromBase64(prepared.objectHeader)
   const streamKey = fromBase64(prepared.streamKey)
@@ -81,8 +84,7 @@ export async function openFileBlobStreamV1(
     toBase64(objectHeader),
     toBase64(fileKey),
     expected.fileId,
-    expected.collectionId,
-    expected.epoch,
+    expected.generation,
   ))
   return newStreamDecryptor(streamKey, streamHeader, objectHeader)
 }

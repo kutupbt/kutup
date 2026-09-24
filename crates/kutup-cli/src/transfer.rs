@@ -278,12 +278,7 @@ mod tests {
     use super::*;
 
     fn context() -> DriveFileBlobContextV1 {
-        DriveFileBlobContextV1::new(
-            "11111111-1111-4111-8111-111111111111",
-            "22222222-2222-4222-8222-222222222222",
-            3,
-        )
-        .unwrap()
+        DriveFileBlobContextV1::new("11111111-1111-4111-8111-111111111111", 3).unwrap()
     }
 
     #[test]

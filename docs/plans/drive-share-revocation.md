@@ -77,28 +77,33 @@ reload the folder and retry.
 
 ### Files are re-keyed before they are written again
 
-A file keeps the epoch it was uploaded at. Readers open its file key with
-the keyring key for that epoch. Everything written *after* a rotation must
-not be readable with an old key, so an editor who opens a file older than
-the folder re-keys it first:
+A file keeps the key it was uploaded with. Readers open it through the folder
+key of the epoch its wrap is sealed at. Everything written *after* a rotation
+must not be readable with an old key, so an editor who opens a file whose key
+is wrapped at an older epoch than the folder's re-keys it first:
 
-`POST /api/files/{id}/rekey` carries a new random file key sealed at the
-current epoch, the metadata re-sealed under it, and the epoch being left.
-The server records the old `(epoch, fileKeyEnvelope)` in
-`file_key_history`, moves the file to the current epoch (compare-and-swap:
-`409` if another editor got there first; that editor's key is then used).
-The collaboration log is kept: frames carry their epoch, and clients open
-older ones with the keyring. The relay accepts new frames only at the file's
-current epoch.
+`POST /api/files/{id}/rekey` carries a new random file key of the next
+*generation*, wrapped at the current epoch, the metadata re-sealed under it,
+and the key it leaves sealed under it (`PreviousFileKey = 10`). The server
+stores that record in `file_key_history` and moves the file on
+(compare-and-swap on the generation: `409` if another editor got there first;
+that editor's key is then used). The collaboration log is kept: frames carry
+their key generation, and clients open older ones through the file's key
+chain. The relay accepts new frames only at the file's current generation.
 
-Everything already stored keeps the epoch it was sealed at, and clients
-open it with that epoch's key. `files.original_key_epoch`,
-`file_versions.key_epoch`, `file_assets.key_epoch` and
-`file_thumbnails.key_epoch` record it. New versions, assets, thumbnails and
-collaboration frames must use the file's current epoch.
+*Superseded detail (2026-09-24):* the first version of this design kept each
+left-behind file key sealed under the folder key of its epoch and sealed
+content to the folder too. docs/plans/drive-move.md replaced that with the
+file's own key chain, so a file's history moves with it between folders.
+
+Everything already stored keeps the generation it was sealed under, and
+clients open it with that generation's key. `files.original_key_generation`,
+`file_versions.key_generation`, `file_assets.key_generation` and
+`file_thumbnails.key_generation` record it. New versions, assets, thumbnails
+and collaboration frames must use the file's current generation.
 
 Only the owner and editors re-key. A viewer never writes, so a viewer never
-needs to.
+needs to. A file is also re-keyed before it moves out of a rotated folder.
 
 ### Public links
 

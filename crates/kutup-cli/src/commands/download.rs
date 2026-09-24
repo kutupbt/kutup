@@ -35,8 +35,8 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
         let dest_path = resolve_dest(dest_dir, &meta.name);
 
         // What the file holds now: the server serves its latest whole-file
-        // version, else the upload, sealed at `content_epoch()`.
-        let (content_key, content_epoch) = crate::file_crypto::content_key(f, &file_key, &keys)?;
+        // version, else the upload, sealed at `contentKeyGeneration`.
+        let (content_key, content_generation) = crate::file_crypto::content_key(f, &file_key)?;
         let stream = ctx.client.download_file_stream(file_id)?;
         let from_version = ctx
             .client
@@ -47,7 +47,7 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
             crate::output::progress_bar(Some(f.encrypted_size_bytes.max(0) as u64), &meta.name);
 
         let mut out = File::create(&dest_path).context("open dest")?;
-        let blob_context = DriveFileBlobContextV1::new(&f.id, &f.collection_id, content_epoch)?;
+        let blob_context = DriveFileBlobContextV1::new(&f.id, content_generation)?;
         let mut written = match stream_download(stream, &content_key, blob_context, &mut out, |n| {
             bar.set_position(n as u64)
         }) {
@@ -74,14 +74,7 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
         // Whiteboards may reference images stored as separate asset blobs;
         // re-inline them so the on-disk file is self-contained. Best-effort.
         if crate::whiteboard::is_excalidraw(&meta.name) {
-            match crate::whiteboard::hydrate(
-                &ctx.client,
-                file_id,
-                &f.collection_id,
-                f.key_epoch,
-                &keys,
-                &dest_path,
-            ) {
+            match crate::whiteboard::hydrate(&ctx.client, f, &file_key, &dest_path) {
                 Ok(Some(new_len)) => written = new_len,
                 Ok(None) => {}
                 Err(e) => eprintln!("warning: asset hydration failed: {e:#}"),

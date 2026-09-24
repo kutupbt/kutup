@@ -27,7 +27,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
-use kutup_crypto::drive_envelope::{DriveEnvelopeContextV1, DriveEnvelopePurpose};
+use kutup_crypto::drive_envelope::DriveEnvelopeContextV1;
 use kutup_crypto::drive_object::{DriveFileBlobContextV1, FILE_BLOB_PREFIX_BYTES};
 use uuid::Uuid;
 
@@ -249,23 +249,12 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         Ok(epoch) => epoch,
         Err(_) => return tus_text(StatusCode::CONFLICT, "invalid collection epoch"),
     };
-    let file_key_context = match DriveEnvelopeContextV1::new(
-        DriveEnvelopePurpose::FileKey,
-        epoch,
-        1,
-        file_id_text,
-        coll_id,
-    ) {
+    // A new file's key is generation 1, wrapped at the folder's epoch.
+    let file_key_context = match DriveEnvelopeContextV1::file_key(file_id_text, coll_id, epoch, 1) {
         Ok(context) => context,
         Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid Drive envelope"),
     };
-    let metadata_context = match DriveEnvelopeContextV1::new(
-        DriveEnvelopePurpose::FileMetadata,
-        epoch,
-        1,
-        file_id_text,
-        coll_id,
-    ) {
+    let metadata_context = match DriveEnvelopeContextV1::file_metadata(file_id_text, 1, 1) {
         Ok(context) => context,
         Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid Drive envelope"),
     };
@@ -557,15 +546,10 @@ pub async fn patch(
         return tus_text(StatusCode::PAYLOAD_TOO_LARGE, "chunk exceeds Upload-Length");
     }
     if received_bytes == 0 {
-        let epoch = match u32::try_from(key_epoch) {
-            Ok(epoch) => epoch,
-            Err(_) => return tus_text(StatusCode::CONFLICT, "invalid collection epoch"),
+        let context = match DriveFileBlobContextV1::new(&file_id.to_string(), 1) {
+            Ok(context) => context,
+            Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid Drive file blob"),
         };
-        let context =
-            match DriveFileBlobContextV1::new(&file_id.to_string(), &coll_id.to_string(), epoch) {
-                Ok(context) => context,
-                Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid Drive file blob"),
-            };
         if validate_file_blob_prefix(&body, context).is_err() {
             return tus_text(StatusCode::BAD_REQUEST, "invalid Drive file blob");
         }
@@ -689,9 +673,9 @@ pub async fn patch(
     if sqlx::query(
         "INSERT INTO files \
             (id, collection_id, uploader_user_id, \
-             metadata_envelope, file_key_envelope, key_epoch, metadata_revision, \
-             storage_path, encrypted_size_bytes, original_key_epoch) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$6)",
+             metadata_envelope, file_key_envelope, key_epoch, key_generation, \
+             metadata_revision, storage_path, encrypted_size_bytes, original_key_generation) \
+         VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,1)",
     )
     .bind(file_id)
     .bind(coll_id)

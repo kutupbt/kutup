@@ -1235,34 +1235,20 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
     let file_key_envelope = drive_envelope::seal_b64(
         &file_key,
         &collection_key,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::FileKey,
-            1,
-            1,
-            &proposed_file_id,
-            &collection_id,
-        )
-        .unwrap(),
+        DriveEnvelopeContextV1::file_key(&proposed_file_id, &collection_id, 1, 1).unwrap(),
     )
     .unwrap();
     let metadata_plaintext = br#"{"name":"federated.txt","mimeType":"text/plain","size":31}"#;
     let metadata_envelope = drive_envelope::seal_b64(
         metadata_plaintext,
         &file_key,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::FileMetadata,
-            1,
-            1,
-            &proposed_file_id,
-            &collection_id,
-        )
-        .unwrap(),
+        DriveEnvelopeContextV1::file_metadata(&proposed_file_id, 1, 1).unwrap(),
     )
     .unwrap();
     let ciphertext = drive_object::encrypt_file_blob(
         plaintext,
         &file_key,
-        DriveFileBlobContextV1::new(&proposed_file_id, &collection_id, 1).unwrap(),
+        DriveFileBlobContextV1::new(&proposed_file_id, 1).unwrap(),
     )
     .unwrap();
     let upload_body = drive_upload_body(
@@ -1297,27 +1283,13 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
     let blob_relocation_file_key = drive_envelope::seal_b64(
         &file_key,
         &collection_key,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::FileKey,
-            1,
-            1,
-            &blob_relocation_id,
-            &collection_id,
-        )
-        .unwrap(),
+        DriveEnvelopeContextV1::file_key(&blob_relocation_id, &collection_id, 1, 1).unwrap(),
     )
     .unwrap();
     let blob_relocation_metadata = drive_envelope::seal_b64(
         metadata_plaintext,
         &file_key,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::FileMetadata,
-            1,
-            1,
-            &blob_relocation_id,
-            &collection_id,
-        )
-        .unwrap(),
+        DriveEnvelopeContextV1::file_metadata(&blob_relocation_id, 1, 1).unwrap(),
     )
     .unwrap();
     let relocated_blob = drive_upload_body(
@@ -1353,14 +1325,7 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         drive_envelope::open_b64(
             files[0]["fileKeyEnvelope"].as_str().unwrap(),
             &collection_key,
-            DriveEnvelopeContextV1::new(
-                DriveEnvelopePurpose::FileKey,
-                1,
-                1,
-                file_id,
-                &collection_id,
-            )
-            .unwrap(),
+            DriveEnvelopeContextV1::file_key(file_id, &collection_id, 1, 1).unwrap(),
         )
         .unwrap(),
         file_key,
@@ -1369,14 +1334,7 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         drive_envelope::open_b64(
             files[0]["metadataEnvelope"].as_str().unwrap(),
             &file_key,
-            DriveEnvelopeContextV1::new(
-                DriveEnvelopePurpose::FileMetadata,
-                1,
-                1,
-                file_id,
-                &collection_id,
-            )
-            .unwrap(),
+            DriveEnvelopeContextV1::file_metadata(file_id, 1, 1).unwrap(),
         )
         .unwrap(),
         metadata_plaintext,

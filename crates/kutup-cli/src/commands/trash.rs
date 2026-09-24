@@ -135,10 +135,12 @@ fn file_meta(
             metadata_envelope: f.metadata_envelope.clone(),
             file_key_envelope: f.file_key_envelope.clone(),
             key_epoch: f.key_epoch,
+            key_generation: f.key_generation,
             metadata_revision: f.metadata_revision,
             encrypted_size_bytes: 0,
             created_at: String::new(),
-            content_key_epoch: 0,
+            // Only the name is read here: no content, no older keys.
+            content_key_generation: f.key_generation,
             key_history: Vec::new(),
         };
         // Older keys only if the file predates the folder's last rotation.

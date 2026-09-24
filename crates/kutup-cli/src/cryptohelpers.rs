@@ -105,10 +105,45 @@ pub fn find_file_and_key(client: &Client, master_key: &[u8], file_id: &str) -> R
     .into())
 }
 
-/// Moves `found` to its folder's current key if the folder rotated since the
-/// file was last keyed (docs/plans/drive-share-revocation.md), so what is
-/// written next is not readable with a key a removed member holds. Returns
-/// the file as it now is.
+/// Locates a file in any folder in `cols` the account can open — its own
+/// and those shared with it — with its key and its folder's keys.
+pub fn locate_file(
+    client: &Client,
+    master_key: &[u8],
+    sess: &Session,
+    cols: &[Collection],
+    file_id: &str,
+) -> Result<FoundFile> {
+    for col in cols {
+        let Ok(col_key) = decrypt_collection_key(col, master_key, sess) else {
+            continue;
+        };
+        let Ok(files) = client.list_files(&col.id) else {
+            continue;
+        };
+        let Some(f) = files.into_iter().find(|f| f.id == file_id) else {
+            continue;
+        };
+        let keys = Keyring::load(client, col, &col_key, master_key)?;
+        let file_key = crate::file_crypto::open_key(&f, &keys)?;
+        return Ok(FoundFile {
+            file: f,
+            file_key,
+            keys,
+            collection: col.clone(),
+        });
+    }
+    Err(crate::errors::NotFound(format!(
+        "file {file_id} not found in any accessible collection"
+    ))
+    .into())
+}
+
+/// Gives `found` a new key generation wrapped at its folder's current epoch
+/// if the folder rotated since the file was last keyed
+/// (docs/plans/drive-share-revocation.md), so what is written next — or
+/// where the file moves (docs/plans/drive-move.md) — is not readable with a
+/// key a removed member holds. Returns the file as it now is.
 pub fn rekey_if_behind(client: &Client, found: FoundFile) -> Result<FoundFile> {
     if found.file.key_epoch >= found.collection.key_epoch {
         return Ok(found);
@@ -116,10 +151,12 @@ pub fn rekey_if_behind(client: &Client, found: FoundFile) -> Result<FoundFile> {
     let metadata = crate::file_crypto::open_metadata(&found.file, &found.file_key)?;
     let (request, _) = crate::file_crypto::rekey_request(
         &found.file,
+        &found.file_key,
         &metadata,
-        &found.keys,
+        found.keys.current(),
         found.collection.key_epoch,
     )?;
+    // `false`: another editor re-keyed it first; the listing below has it.
     client.rekey_file(&found.file.id, &request)?;
     // Whoever moved it, list it again for its current key and history.
     let file = client

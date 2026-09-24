@@ -263,12 +263,13 @@ struct PublicFileRow {
     metadata_envelope: String,
     file_key_envelope: String,
     key_epoch: i32,
+    key_generation: i32,
     metadata_revision: i64,
     encrypted_size_bytes: i64,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
-    original_key_epoch: i32,
-    content_key_epoch: i32,
+    original_key_generation: i32,
+    content_key_generation: i32,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     key_history: Vec<crate::models::FileKeyHistoryEntry>,
 }
@@ -315,6 +316,7 @@ pub async fn list_public_share_files(
         String,
         String,
         i32,
+        i32,
         i64,
         i64,
         OffsetDateTime,
@@ -324,11 +326,11 @@ pub async fn list_public_share_files(
     );
     let rows: Vec<PubFileTuple> = sqlx::query_as(&format!(
         r#"SELECT f.id, f.collection_id, f.metadata_envelope, f.file_key_envelope,
-                  f.key_epoch, f.metadata_revision, f.encrypted_size_bytes, f.created_at,
-                  f.original_key_epoch, {}, {}
+                  f.key_epoch, f.key_generation, f.metadata_revision, f.encrypted_size_bytes,
+                  f.created_at, f.original_key_generation, {}, {}
            FROM files f WHERE f.collection_id = $1 AND f.deleted_at IS NULL
            ORDER BY f.created_at DESC"#,
-        crate::models::CONTENT_KEY_EPOCH_SQL,
+        crate::models::CONTENT_KEY_GENERATION_SQL,
         crate::models::FILE_KEY_HISTORY_SQL
     ))
     .bind(target_id)
@@ -345,11 +347,12 @@ pub async fn list_public_share_files(
                 metadata,
                 file_key,
                 epoch,
+                generation,
                 revision,
                 size,
                 created_at,
-                original_key_epoch,
-                content_key_epoch,
+                original_key_generation,
+                content_key_generation,
                 key_history,
             )| {
                 PublicFileRow {
@@ -358,11 +361,12 @@ pub async fn list_public_share_files(
                     metadata_envelope: metadata,
                     file_key_envelope: file_key,
                     key_epoch: epoch,
+                    key_generation: generation,
                     metadata_revision: revision,
                     encrypted_size_bytes: size,
                     created_at,
-                    original_key_epoch,
-                    content_key_epoch,
+                    original_key_generation,
+                    content_key_generation,
                     key_history: key_history.0,
                 }
             },

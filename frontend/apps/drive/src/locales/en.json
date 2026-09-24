@@ -116,6 +116,7 @@
       "publicLink": "Get public link",
       "trash": "Move to trash",
       "copyTo": "Copy to…",
+      "moveTo": "Move to…",
       "quickLook": "Quick look"
     },
     "movedToTrash_one": "Moved to trash",
@@ -195,6 +196,29 @@
       "foldersOwnedOnly": "Folders can only be copied into your own folders.",
       "intoItself": "A folder cannot be copied into itself.",
       "failed": "The copy could not be started."
+    },
+    "move": {
+      "title_one": "Move {{count}} item to…",
+      "title_other": "Move {{count}} items to…",
+      "description": "Nothing is uploaded again. Whoever can open the new folder can open what you move there.",
+      "submit": "Move here",
+      "locked": "This folder's key is not available.",
+      "readOnly": "You can only move between folders you can edit.",
+      "otherOwner": "Only between folders of the same owner. Copy it there instead.",
+      "remote": "Folders on another server take copies, not moves.",
+      "notOwner": "Only the folder's owner can move it.",
+      "intoItself": "A folder cannot move into itself or a folder inside it.",
+      "alreadyThere": "Already in this folder.",
+      "done_one": "Moved to {{folder}}",
+      "done_other": "{{count}} items moved to {{folder}}",
+      "nameTaken": "“{{name}}” is already in {{folder}}; it was not moved.",
+      "namesTaken_one": "{{count}} item has a name already in {{folder}}; it was not moved.",
+      "namesTaken_other": "{{count}} items have names already in {{folder}}; they were not moved.",
+      "changed_one": "{{count}} item changed meanwhile and was not moved. Try again.",
+      "changed_other": "{{count}} items changed meanwhile and were not moved. Try again.",
+      "failed_one": "{{count}} item could not be moved.",
+      "failed_other": "{{count}} items could not be moved.",
+      "undoFailed": "Could not move everything back. Check both folders."
     },
     "picker": {
       "expand": "Expand {{name}}",

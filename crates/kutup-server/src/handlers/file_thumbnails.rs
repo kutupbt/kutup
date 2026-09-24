@@ -1,7 +1,7 @@
 //! File thumbnails (docs/plans/drive-thumbnails.md): a client-made preview
 //! of a file, sealed under the file key. The server stores the envelope at
 //! `files/{fileId}/thumbnails/{variant}`, checks its public header (purpose,
-//! file, variant, epoch) without any key, and charges its size to the
+//! file, variant, key generation) without any key, and charges its size to the
 //! uploader. An upload replaces the previous one of that variant.
 
 use axum::body::Bytes;
@@ -71,16 +71,16 @@ pub async fn upload(
     if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
         return Err(AppError::forbidden("forbidden"));
     }
-    let (collection_id, key_epoch): (Uuid, i32) = sqlx::query_as(
-        "SELECT collection_id, key_epoch FROM files WHERE id = $1 AND deleted_at IS NULL",
+    let (collection_id, key_generation): (Uuid, i32) = sqlx::query_as(
+        "SELECT collection_id, key_generation FROM files WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(fid)
     .fetch_optional(&state.pool)
     .await?
     .ok_or_else(|| AppError::not_found("not found"))?;
-    let epoch =
-        u32::try_from(key_epoch).map_err(|_| AppError::bad_request("invalid file epoch"))?;
-    thumbnail::validate(&body, variant, &fid.to_string(), epoch)
+    let generation = u32::try_from(key_generation)
+        .map_err(|_| AppError::bad_request("invalid file key generation"))?;
+    thumbnail::validate(&body, variant, &fid.to_string(), generation)
         .map_err(|_| AppError::bad_request("invalid thumbnail envelope"))?;
 
     let source_version = match query.source.as_deref() {
@@ -104,9 +104,9 @@ pub async fn upload(
     let size = body.len() as i64;
 
     let mut tx = state.pool.begin().await?;
-    // Sealed at the file's epoch as read above; a re-key since would put new
+    // Sealed under the file key read above; a re-key since would put new
     // content under a key the folder has left.
-    crate::drive_writes::lock_file_epoch(&mut tx, fid, key_epoch).await?;
+    crate::drive_writes::lock_file_key(&mut tx, fid, key_generation).await?;
     // One writer per slot, including the first (when there is no row to lock
     // yet): two concurrent uploads would otherwise both be charged.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
@@ -160,11 +160,11 @@ pub async fn upload(
         .await
         .map_err(|_| AppError::internal("storage error"))?;
     sqlx::query(
-        r#"INSERT INTO file_thumbnails (file_id, variant, size_bytes, s3_version_id, source_version, uploader_user_id, key_epoch, updated_at)
+        r#"INSERT INTO file_thumbnails (file_id, variant, size_bytes, s3_version_id, source_version, uploader_user_id, key_generation, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
            ON CONFLICT (file_id, variant) DO UPDATE SET
              size_bytes = EXCLUDED.size_bytes,
-             key_epoch = EXCLUDED.key_epoch,
+             key_generation = EXCLUDED.key_generation,
              s3_version_id = EXCLUDED.s3_version_id,
              source_version = EXCLUDED.source_version,
              uploader_user_id = EXCLUDED.uploader_user_id,
@@ -176,7 +176,7 @@ pub async fn upload(
     .bind(&version_id)
     .bind(source_version)
     .bind(user_id)
-    .bind(key_epoch)
+    .bind(key_generation)
     .execute(&mut *tx)
     .await?;
     if tx.commit().await.is_err() {

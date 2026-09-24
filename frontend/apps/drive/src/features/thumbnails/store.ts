@@ -6,14 +6,14 @@ import {
 } from '@kutup/crypto/thumbnail'
 import api from '@kutup/session/client'
 import { fileKeyAt } from '../drive/keyring'
-import type { DriveFile, Folder } from '../drive/model'
+import type { DriveFile } from '../drive/model'
 import type { MadeThumbnails } from './make'
 
-/** What a thumbnail is sealed to: the file and its key. */
+/** What a thumbnail is sealed to: the file and its current key. */
 export interface ThumbnailTarget {
   fileId: string
   fileKey: Uint8Array
-  keyEpoch: number
+  keyGeneration: number
 }
 
 /**
@@ -32,7 +32,7 @@ export async function storeThumbnails(
     if (!image) continue
     const envelope = await sealThumbnailV1(image, target.fileKey, {
       fileId: target.fileId,
-      epoch: target.keyEpoch,
+      generation: target.keyGeneration,
       variant,
     })
     await api.put(
@@ -61,7 +61,7 @@ function remember(key: string, value: Promise<string | null>): void {
 }
 
 /** The file's thumbnail as a displayable URL, or null (none, or unreadable). */
-export function thumbnailUrl(folder: Folder, file: DriveFile, variant: ThumbnailVariant): Promise<string | null> {
+export function thumbnailUrl(file: DriveFile, variant: ThumbnailVariant): Promise<string | null> {
   const stamp = file.thumbnails[variant]
   if (!stamp || !file.fileKey) return Promise.resolve(null)
   const key = `${file.id}:${variant}:${stamp}`
@@ -72,18 +72,19 @@ export function thumbnailUrl(folder: Folder, file: DriveFile, variant: Thumbnail
     cache.set(key, hit)
     return hit
   }
-  // Sealed at the epoch it was drawn at (a file re-keyed since keeps it).
-  const epoch = (variant === 'sm' ? file.thumbnails.smKeyEpoch : file.thumbnails.lgKeyEpoch) ?? file.keyEpoch
+  // Sealed under the key generation it was drawn at (a file re-keyed since keeps it).
+  const generation =
+    (variant === 'sm' ? file.thumbnails.smKeyGeneration : file.thumbnails.lgKeyGeneration) ?? file.keyGeneration
   const loading = (async () => {
     try {
-      const fileKey = await fileKeyAt(folder, file, epoch)
+      const fileKey = await fileKeyAt(file, generation)
       const { data } = await api.get<ArrayBuffer>(
         `/files/${file.id}/thumbnails/${variant}?${new URLSearchParams({ v: stamp }).toString()}`,
         { responseType: 'arraybuffer' },
       )
       const opened = await openThumbnailV1(new Uint8Array(data), fileKey, {
         fileId: file.id,
-        epoch,
+        generation,
         variant,
       })
       return URL.createObjectURL(new Blob([opened.image as BlobPart], { type: thumbnailMimeType(opened.format) }))

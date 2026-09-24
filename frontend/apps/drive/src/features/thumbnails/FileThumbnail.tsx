@@ -46,7 +46,7 @@ function backfill(folder: Folder, file: DriveFile, userId: string): void {
     const blob = await readFile(folder, file)
     const made = await thumbnailsOfFile(new File([blob], name, { type: file.mimeType }))
     return storeThumbnails(
-      { fileId: file.id, fileKey, keyEpoch: file.keyEpoch },
+      { fileId: file.id, fileKey, keyGeneration: file.keyGeneration },
       made,
       content.kind === 'original' ? 'original' : content.versionId,
     )
@@ -85,7 +85,7 @@ export function FileThumbnail({ folder, file }: { folder: Folder; file: DriveFil
     if (!visible) return
     let alive = true
     setUrl(null)
-    void thumbnailUrl(folder, file, 'sm').then((u) => alive && setUrl(u))
+    void thumbnailUrl(file, 'sm').then((u) => alive && setUrl(u))
     backfill(folder, file, session.userId)
     return () => {
       alive = false

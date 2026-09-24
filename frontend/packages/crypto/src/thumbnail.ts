@@ -36,8 +36,8 @@ export interface ThumbnailImage {
 
 export interface ThumbnailContext {
   fileId: string
-  /** The file row's key epoch. */
-  epoch: number
+  /** The generation of the file key it is sealed under. */
+  generation: number
   variant: ThumbnailVariant
 }
 
@@ -60,7 +60,7 @@ export async function sealThumbnailV1(
       context.variant,
       toBase64(fileKey),
       context.fileId,
-      context.epoch,
+      context.generation,
     ),
   )
 }
@@ -76,7 +76,7 @@ export async function openThumbnailV1(
     expected.variant,
     toBase64(fileKey),
     expected.fileId,
-    expected.epoch,
+    expected.generation,
   )
   const format = (Object.keys(THUMBNAIL_FORMAT) as ThumbnailFormat[]).find(
     (name) => THUMBNAIL_FORMAT[name] === opened.format,

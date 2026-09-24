@@ -233,7 +233,7 @@ Each phase is committed with `tsc`, `vitest`, lint and build passing
    `src-tauri/` + its workflow, docs (`architecture`, `frontend`,
    `self-hosting`, `api`, `roadmap`, `onlyoffice`, `CLAUDE.md`) updated.
 
-## Status (2026-09-23)
+## Status (2026-09-24)
 
 **Done** (committed on `feat/frontend-rewrite`, verified in a browser against
 the local dev stack):
@@ -269,26 +269,26 @@ the local dev stack):
     and named in place, the original retired as version zero; downloads,
     public links and federation serve the latest edited version.
 
+- Thumbnails (docs/plans/drive-thumbnails.md): made in the browser and
+  encrypted with the file key; images, video, PDF, office documents,
+  whiteboards and notes.
+- Share revocation (docs/plans/drive-share-revocation.md): the access list,
+  removing members, federated recipients and public links, each removal a
+  folder-key rotation; files re-keyed before they are written again.
+- Move (docs/plans/drive-move.md): files and folders, by menu, drag and drop
+  and in the CLI, with undo; nothing is re-encrypted because everything under
+  a file key is bound to the file, not its folder.
+
 **Next, in order**
 
-1. Thumbnails: client-generated, encrypted with the file key, stored beside
-   the file (Proton's model: 512 px ≤ 60 KB, plus an HD preview). Design
-   note first — format in `kutup-crypto`, server endpoint, quota, backfill;
-   then images, whiteboards and notes; video and PDF; office last.
-2. Move (Drive): folder move needs a server endpoint (reparent, owner only,
-   no cycles). File move needs a crypto decision — file content is sealed
-   to its collection id, so today a move is a re-encrypting copy. The
-   intended fix binds content to the file only and rewraps just the file key
-   (a format change across Rust, WASM and CLI, with new vectors).
-3. Phase 4 — the Chat app.
-4. Phase 5 — Traefik compose with the four hosts (nginx and Caddy
+1. Phase 4 — the Chat app.
+2. Phase 5 — Traefik compose with the four hosts (nginx and Caddy
    examples), per-origin CSP including the office sandbox, removing
-   `src-tauri/`, the Playwright suite ported, docs.
+   `src-tauri/`, the Playwright suite ported, docs, and a rebuilt frontend
+   image (the browser half of the federation gate needs it).
 
 **Known gaps (to go to `docs/roadmap.md` in phase 5)**
 
-- Share listing and link revocation have no server endpoints yet, so there
-  is no UI for them.
 - The upload panel labels copies as uploads.
 
 ## Resolved questions (2026-09-23)

@@ -31,8 +31,7 @@ async function uploadRemote(folder: Folder, shareId: string, file: File, signal:
   })
   const enc = await newFileBlobStreamEncryptorV1(record.fileKey, {
     fileId: record.fileId,
-    collectionId: folder.id,
-    epoch: folder.keyEpoch,
+    generation: record.keyGeneration,
   })
   const parts: BlobPart[] = [enc.prefix as BlobPart]
   if (file.size === 0) parts.push(enc.push(new Uint8Array(0), true) as BlobPart)

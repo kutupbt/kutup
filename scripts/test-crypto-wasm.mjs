@@ -11,6 +11,9 @@ const wasmPath = `${root}/frontend/wasm/crypto-wasm/kutup_crypto_wasm_bg.wasm`
 const crypto = await import(modulePath)
 const wasm = await readFile(wasmPath)
 await crypto.default({ module_or_path: wasm })
+const vectors = JSON.parse(
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/crypto.json`, 'utf8'),
+)
 
 const keys = crypto.deriveAccountProtectionKeys(
   'correct horse battery staple',
@@ -106,36 +109,31 @@ assert.throws(
   /authentication failed/,
 )
 
-const driveFileBlob = crypto.prepareDriveFileBlob(
-  Buffer.alloc(32, 0x42).toString('base64'),
-  '11111111-1111-4111-8111-111111111111',
-  '22222222-2222-4222-8222-222222222222',
-  7,
-)
+// File blobs are bound to the file and the file key's generation, not a folder.
+const blobVector = vectors.driveFileBlob
+const driveFileBlob = crypto.prepareDriveFileBlob(blobVector.fileKey, blobVector.fileId, blobVector.generation)
 assert.deepEqual(driveFileBlob, {
-  objectHeader: 'S1VUUERCMQAAAQEAAAAABxEREREREUERgREREREREREiIiIiIiJCIoIiIiIiIiIi',
-  streamKey: 'oh2pAz4XSGfBLgZy6N0Nrhys73xJjj+eh4RTpAqjttg=',
+  objectHeader: blobVector.objectHeader,
+  streamKey: blobVector.derivedStreamKey,
 })
 assert.equal(
   crypto.openDriveFileBlobHeader(
     driveFileBlob.objectHeader,
-    Buffer.alloc(32, 0x42).toString('base64'),
-    '11111111-1111-4111-8111-111111111111',
-    '22222222-2222-4222-8222-222222222222',
-    7,
+    blobVector.fileKey,
+    blobVector.fileId,
+    blobVector.generation,
   ),
   driveFileBlob.streamKey,
 )
-assert.throws(
-  () => crypto.openDriveFileBlobHeader(
-    driveFileBlob.objectHeader,
-    Buffer.alloc(32, 0x42).toString('base64'),
-    '33333333-3333-4333-8333-333333333333',
-    '22222222-2222-4222-8222-222222222222',
-    7,
-  ),
-  /context does not match/,
-)
+for (const [fileId, generation] of [
+  ['33333333-3333-4333-8333-333333333333', blobVector.generation],
+  [blobVector.fileId, blobVector.generation + 1],
+]) {
+  assert.throws(
+    () => crypto.openDriveFileBlobHeader(driveFileBlob.objectHeader, blobVector.fileKey, fileId, generation),
+    /context does not match/,
+  )
+}
 
 const identityMaster = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
 const collectionKey = Buffer.alloc(32, 0x33).toString('base64')
@@ -388,9 +386,6 @@ assert.equal(Buffer.from(backupMedia.objectHeader, 'base64').length, 107)
 // Local-state envelopes: session-fork payloads (2) and persisted web
 // sessions (3) open to the canonical Rust vectors, fail closed on the wrong
 // purpose or profile, and the CLI-only purpose is refused.
-const vectors = JSON.parse(
-  await readFile(`${root}/crates/kutup-crypto/tests/vectors/crypto.json`, 'utf8'),
-)
 const localState = vectors.localState
 for (const [vector, purpose] of [
   [localState.sessionFork, 2],
@@ -419,30 +414,30 @@ assert.throws(
 )
 
 // Thumbnails: the canonical envelope opens to the vector's picture, only as
-// its own variant, file and epoch; a fresh seal round-trips; the generic
-// envelope export refuses the thumbnail and whiteboard-asset purposes.
+// its own variant, file and key generation; a fresh seal round-trips; the
+// generic envelope export refuses the purposes that have typed exports.
 const thumb = vectors.thumbnail
 assert.deepEqual(
-  crypto.openThumbnail(thumb.envelope, thumb.variant, thumb.fileKey, thumb.fileId, thumb.epoch),
+  crypto.openThumbnail(thumb.envelope, thumb.variant, thumb.fileKey, thumb.fileId, thumb.generation),
   { format: 1, width: thumb.width, height: thumb.height, image: thumb.image },
 )
-assert.throws(() => crypto.openThumbnail(thumb.envelope, 'lg', thumb.fileKey, thumb.fileId, thumb.epoch))
+assert.throws(() => crypto.openThumbnail(thumb.envelope, 'lg', thumb.fileKey, thumb.fileId, thumb.generation))
 assert.throws(() =>
-  crypto.openThumbnail(thumb.envelope, thumb.variant, thumb.fileKey, '33333333-3333-4333-8333-333333333333', thumb.epoch),
+  crypto.openThumbnail(thumb.envelope, thumb.variant, thumb.fileKey, '33333333-3333-4333-8333-333333333333', thumb.generation),
 )
 const resealedThumb = crypto.sealThumbnail(
-  thumb.image, 1, thumb.width, thumb.height, thumb.variant, thumb.fileKey, thumb.fileId, thumb.epoch,
+  thumb.image, 1, thumb.width, thumb.height, thumb.variant, thumb.fileKey, thumb.fileId, thumb.generation,
 )
 assert.notEqual(resealedThumb, thumb.envelope, 'nonce must be random')
 assert.equal(
-  crypto.openThumbnail(resealedThumb, thumb.variant, thumb.fileKey, thumb.fileId, thumb.epoch).image,
+  crypto.openThumbnail(resealedThumb, thumb.variant, thumb.fileKey, thumb.fileId, thumb.generation).image,
   thumb.image,
 )
 assert.throws(
   () => crypto.sealThumbnail(Buffer.from('<svg/>').toString('base64'), 3, 10, 10, 'sm', thumb.fileKey, thumb.fileId, 1),
   /format/,
 )
-for (const purpose of [6, 7, 8]) {
+for (const purpose of [6, 7, 8, 10]) {
   assert.throws(
     () => crypto.sealDriveEnvelope(thumb.image, thumb.fileKey, purpose, 1, 1n, thumb.fileId, thumb.fileId),
     /typed export/,
@@ -478,6 +473,45 @@ assert.deepEqual(
     { ...ringChain[2], previousKeyEnvelope: resealedPrevious },
   ]),
   ring.keys,
+)
+
+// A file's key chain: the current key reaches every older generation; an
+// older key (a removed member's) opens nothing newer.
+const fileRing = vectors.fileKeyring
+const fileGeneration = fileRing.keys.length
+fileRing.keys.forEach((key, index) => {
+  assert.equal(
+    crypto.fileKeyAt(fileRing.keys.at(-1), fileRing.fileId, fileGeneration, fileRing.chain, index + 1),
+    key,
+  )
+})
+assert.throws(() => crypto.fileKeyAt(fileRing.keys[1], fileRing.fileId, fileGeneration, fileRing.chain, 1))
+assert.throws(() => crypto.fileKeyAt(fileRing.keys.at(-1), fileRing.fileId, fileGeneration, fileRing.chain.slice(1), 2))
+const resealedFileKey = crypto.sealPreviousFileKey(fileRing.keys[1], fileRing.keys[2], fileRing.fileId, 3)
+assert.equal(
+  crypto.fileKeyAt(fileRing.keys.at(-1), fileRing.fileId, fileGeneration, [
+    fileRing.chain[0],
+    { ...fileRing.chain[1], previousKeyEnvelope: resealedFileKey },
+  ], 1),
+  fileRing.keys[0],
+)
+
+// Whiteboard assets and collaboration frames sit under the file key.
+const assetVector = vectors.asset
+assert.equal(
+  crypto.openWhiteboardAsset(assetVector.envelope, assetVector.fileKey, assetVector.fileId, assetVector.assetId, assetVector.generation),
+  assetVector.plaintext,
+)
+assert.throws(() =>
+  crypto.openWhiteboardAsset(assetVector.envelope, assetVector.fileKey, assetVector.fileId, assetVector.assetId, assetVector.generation + 1),
+)
+const frameVector = vectors.collabFrame
+const openedFrame = crypto.openCollabFrame(frameVector.frame, frameVector.fileKey, frameVector.fileId, frameVector.keyGeneration)
+assert.equal(openedFrame.plaintext, frameVector.plaintext)
+assert.equal(openedFrame.keyGeneration, frameVector.keyGeneration)
+assert.equal(crypto.collabFrameKeyGeneration(frameVector.frame), frameVector.keyGeneration)
+assert.throws(() =>
+  crypto.openCollabFrame(frameVector.frame, frameVector.fileKey, frameVector.fileId, frameVector.keyGeneration + 1),
 )
 
 console.log('crypto WASM canonical vectors passed')

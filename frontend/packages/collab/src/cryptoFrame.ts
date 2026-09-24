@@ -7,10 +7,14 @@ import { getCryptoWasm } from '@kutup/crypto/rustWasm'
 import { ed25519Sign } from './sign'
 import type { OpenedCollabFrameV1 } from './envelope'
 
+/**
+ * What a frame is bound to: the file and the generation of the file key it
+ * is sealed under — never the folder, so a document's log survives a move
+ * (docs/plans/drive-move.md).
+ */
 export interface CollabFrameBindingV1 {
   fileId: string
-  collectionId: string
-  keyEpoch: number
+  keyGeneration: number
 }
 
 export interface OutboundCollabFrameV1 extends CollabFrameBindingV1 {
@@ -23,18 +27,17 @@ export async function encryptCollabFrameV1(
   plaintext: Uint8Array,
   kind: number,
   context: OutboundCollabFrameV1,
-  collectionKey: Uint8Array,
+  fileKey: Uint8Array,
   signingPrivateKey: Uint8Array,
 ): Promise<Uint8Array> {
   const module = await getCryptoWasm()
   const unsigned = module.sealCollabFrame(
     toBase64(plaintext),
-    toBase64(collectionKey),
+    toBase64(fileKey),
     kind,
-    context.keyEpoch,
+    context.keyGeneration,
     context.docKeyId,
     context.fileId,
-    context.collectionId,
     context.deviceId.toString(),
     context.sequence.toString(),
   )
@@ -47,20 +50,19 @@ export async function encryptCollabFrameV1(
 
 export async function openCollabFrameV1(
   packed: Uint8Array,
-  collectionKey: Uint8Array,
+  fileKey: Uint8Array,
   expected: CollabFrameBindingV1,
 ): Promise<OpenedCollabFrameV1> {
   const module = await getCryptoWasm()
   const opened = module.openCollabFrame(
     toBase64(packed),
-    toBase64(collectionKey),
+    toBase64(fileKey),
     expected.fileId,
-    expected.collectionId,
-    expected.keyEpoch,
+    expected.keyGeneration,
   )
   return {
     kind: opened.kind,
-    keyEpoch: opened.keyEpoch,
+    keyGeneration: opened.keyGeneration,
     docKeyId: opened.docKeyId,
     senderDeviceId: BigInt(opened.senderDeviceId),
     sequence: BigInt(opened.sequence),
@@ -69,18 +71,20 @@ export async function openCollabFrameV1(
 }
 
 /**
- * Open a frame sealed at any epoch up to the file's current one — a frame
- * replayed from the log may predate the folder's last rotation. The epoch
- * named in the frame's public header picks the key; opening still checks
- * the whole binding under it.
+ * Open a frame sealed under any generation of the file key up to the
+ * current one — a frame replayed from the log may predate a re-key. The
+ * generation named in the frame's public header picks the key; opening still
+ * checks the whole binding under it.
  */
-export async function openCollabFrameAtEpochV1(
+export async function openCollabFrameAtGenerationV1(
   packed: Uint8Array,
-  keyAt: (epoch: number) => Promise<Uint8Array>,
+  keyAt: (generation: number) => Promise<Uint8Array>,
   expected: CollabFrameBindingV1,
 ): Promise<OpenedCollabFrameV1> {
   const module = await getCryptoWasm()
-  const epoch = module.collabFrameKeyEpoch(toBase64(packed))
-  if (epoch < 1 || epoch > expected.keyEpoch) throw new Error('collaboration frame from an unknown epoch')
-  return openCollabFrameV1(packed, await keyAt(epoch), { ...expected, keyEpoch: epoch })
+  const generation = module.collabFrameKeyGeneration(toBase64(packed))
+  if (generation < 1 || generation > expected.keyGeneration) {
+    throw new Error('collaboration frame from an unknown key generation')
+  }
+  return openCollabFrameV1(packed, await keyAt(generation), { ...expected, keyGeneration: generation })
 }

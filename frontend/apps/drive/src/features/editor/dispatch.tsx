@@ -16,12 +16,12 @@ export const WhiteboardEditor = lazy(() => import('./whiteboard/WhiteboardEditor
 
 export interface OfficeEditorProps {
   fileId: string
-  collectionId: string
   filename: string
-  collectionMaster: Uint8Array
-  keyEpoch: number
-  /** The folder key at an older epoch (frames and assets sealed before a rotation). */
-  keyAt?: (epoch: number) => Promise<Uint8Array>
+  /** The file's current key and its generation (docs/plans/drive-move.md). */
+  fileKey: Uint8Array
+  keyGeneration: number
+  /** The file key of an older generation. */
+  fileKeyAt?: (generation: number) => Promise<Uint8Array>
   /** Decrypted file bytes (the OOXML blob). */
   initialBytes?: Uint8Array
   /** Fires when inner.html intercepts Cmd/Ctrl+S inside the OO iframe. */
@@ -32,12 +32,12 @@ export interface OfficeEditorProps {
 
 export interface WhiteboardEditorProps {
   fileId: string
-  collectionId: string
   filename: string
-  collectionMaster: Uint8Array
-  keyEpoch: number
-  /** The folder key at an older epoch (assets sealed before a rotation). */
-  keyAt?: (epoch: number) => Promise<Uint8Array>
+  /** The file's current key and its generation (docs/plans/drive-move.md). */
+  fileKey: Uint8Array
+  keyGeneration: number
+  /** The file key of an older generation: images stored before a re-key. */
+  fileKeyAt?: (generation: number) => Promise<Uint8Array>
   /** Decrypted .excalidraw JSON bytes if the file already exists. */
   initialBytes?: Uint8Array
   /** View-only access. */

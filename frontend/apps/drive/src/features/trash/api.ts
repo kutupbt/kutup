@@ -27,6 +27,7 @@ interface TrashFileRow {
   metadataEnvelope: string
   fileKeyEnvelope: string
   keyEpoch: number
+  keyGeneration: number
   metadataRevision: number
   collectionOwnerUserId: string
   collectionOwnerKeyEnvelope: string
@@ -78,7 +79,7 @@ export function useTrash() {
             },
             masterKey,
           )
-            // A file not re-keyed since its folder rotated is under an older key.
+            // A file not re-keyed since its folder rotated is wrapped under an older key.
             .then((key) =>
               row.keyEpoch === row.collectionKeyEpoch
                 ? key

@@ -116,6 +116,7 @@
       "publicLink": "Herkese açık bağlantı al",
       "trash": "Çöp kutusuna taşı",
       "copyTo": "Kopyala…",
+      "moveTo": "Taşı…",
       "quickLook": "Hızlı bakış"
     },
     "movedToTrash_one": "Çöp kutusuna taşındı",
@@ -195,6 +196,29 @@
       "foldersOwnedOnly": "Klasörler yalnızca kendi klasörlerine kopyalanabilir.",
       "intoItself": "Bir klasör kendi içine kopyalanamaz.",
       "failed": "Kopyalama başlatılamadı."
+    },
+    "move": {
+      "title_one": "{{count}} öğeyi taşı…",
+      "title_other": "{{count}} öğeyi taşı…",
+      "description": "Hiçbir şey yeniden yüklenmez. Yeni klasörü açabilen herkes oraya taşıdıklarını açabilir.",
+      "submit": "Buraya taşı",
+      "locked": "Bu klasörün anahtarı kullanılamıyor.",
+      "readOnly": "Yalnızca düzenleyebildiğin klasörler arasında taşıyabilirsin.",
+      "otherOwner": "Yalnızca aynı kişiye ait klasörler arasında. Bunun yerine oraya kopyala.",
+      "remote": "Başka bir sunucudaki klasörlere taşınamaz, kopyalanabilir.",
+      "notOwner": "Klasörü yalnızca sahibi taşıyabilir.",
+      "intoItself": "Bir klasör kendi içine ya da içindeki bir klasöre taşınamaz.",
+      "alreadyThere": "Zaten bu klasörde.",
+      "done_one": "{{folder}} klasörüne taşındı",
+      "done_other": "{{count}} öğe {{folder}} klasörüne taşındı",
+      "nameTaken": "“{{name}}” zaten {{folder}} klasöründe var; taşınmadı.",
+      "namesTaken_one": "{{count}} öğenin adı {{folder}} klasöründe zaten var; taşınmadı.",
+      "namesTaken_other": "{{count}} öğenin adı {{folder}} klasöründe zaten var; taşınmadılar.",
+      "changed_one": "{{count}} öğe bu arada değişti ve taşınmadı. Yeniden dene.",
+      "changed_other": "{{count}} öğe bu arada değişti ve taşınmadı. Yeniden dene.",
+      "failed_one": "{{count}} öğe taşınamadı.",
+      "failed_other": "{{count}} öğe taşınamadı.",
+      "undoFailed": "Her şey geri taşınamadı. İki klasörü de kontrol et."
     },
     "picker": {
       "expand": "{{name}} klasörünü aç",

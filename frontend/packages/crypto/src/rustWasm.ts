@@ -137,19 +137,17 @@ export interface CryptoWasmModule {
   ): string
   sealWhiteboardAsset(
     plaintextBase64: string,
-    collectionKeyBase64: string,
+    fileKeyBase64: string,
     fileId: string,
-    collectionId: string,
     assetId: string,
-    epoch: number,
+    generation: number,
   ): string
   openWhiteboardAsset(
     envelopeBase64: string,
-    collectionKeyBase64: string,
+    fileKeyBase64: string,
     expectedFileId: string,
-    expectedCollectionId: string,
     expectedAssetId: string,
-    expectedEpoch: number,
+    expectedGeneration: number,
   ): string
   sealThumbnail(
     imageBase64: string,
@@ -159,27 +157,25 @@ export interface CryptoWasmModule {
     variant: string,
     fileKeyBase64: string,
     fileId: string,
-    epoch: number,
+    generation: number,
   ): string
   openThumbnail(
     envelopeBase64: string,
     variant: string,
     fileKeyBase64: string,
     expectedFileId: string,
-    expectedEpoch: number,
+    expectedGeneration: number,
   ): { format: number; width: number; height: number; image: string }
   prepareDriveFileBlob(
     fileKeyBase64: string,
     fileId: string,
-    collectionId: string,
-    epoch: number,
+    generation: number,
   ): { objectHeader: string; streamKey: string }
   openDriveFileBlobHeader(
     objectHeaderBase64: string,
     fileKeyBase64: string,
     expectedFileId: string,
-    expectedCollectionId: string,
-    expectedEpoch: number,
+    expectedGeneration: number,
   ): string
   prepareChatMediaObject(
     attachmentKeyBase64: string,
@@ -219,12 +215,11 @@ export interface CryptoWasmModule {
   decodeChatAttachmentLedgerEntry(entryBase64: string): unknown
   sealCollabFrame(
     plaintextBase64: string,
-    collectionKeyBase64: string,
+    fileKeyBase64: string,
     kind: number,
-    keyEpoch: number,
+    keyGeneration: number,
     docKeyId: number,
     fileId: string,
-    collectionId: string,
     senderDeviceId: string,
     sequence: string,
   ): string
@@ -232,19 +227,31 @@ export interface CryptoWasmModule {
   attachCollabFrameSignature(frameBase64: string, signatureBase64: string): string
   openCollabFrame(
     frameBase64: string,
-    collectionKeyBase64: string,
+    fileKeyBase64: string,
     expectedFileId: string,
-    expectedCollectionId: string,
-    expectedKeyEpoch: number,
+    expectedKeyGeneration: number,
   ): {
     kind: number
-    keyEpoch: number
+    keyGeneration: number
     docKeyId: number
     senderDeviceId: string
     sequence: string
     plaintext: string
   }
-  collabFrameKeyEpoch(frameBase64: string): number
+  collabFrameKeyGeneration(frameBase64: string): number
+  sealPreviousFileKey(
+    previousKeyBase64: string,
+    keyBase64: string,
+    fileId: string,
+    generation: number,
+  ): string
+  fileKeyAt(
+    currentKeyBase64: string,
+    fileId: string,
+    generation: number,
+    chain: { generation: number; previousKeyEnvelope: string }[],
+    wanted: number,
+  ): string
   sealPreviousCollectionKey(
     previousKeyBase64: string,
     keyBase64: string,

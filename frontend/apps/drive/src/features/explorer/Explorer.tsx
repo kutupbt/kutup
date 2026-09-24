@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowUp, MoreHorizontal } from 'lucide-react'
-import { Fragment, useCallback, useEffect, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@kutup/ui/components/button'
 import {
@@ -11,6 +11,7 @@ import {
 } from '@kutup/ui/components/dropdown-menu'
 import { cn } from '@kutup/ui/lib/cn'
 import { formatBytes, formatFileDate, formatInstant } from '@kutup/ui/lib/format'
+import { draggedItems, endItemDrag, startItemDrag } from './dragItems'
 import { KindIcon } from './KindIcon'
 import type { ViewMode } from './prefs'
 import { itemKey, type ExplorerItem, type SortField, type SortSpec } from './sort'
@@ -45,6 +46,13 @@ export interface ExplorerProps {
   subtitleFor?: (item: ExplorerItem) => ReactNode
   /** A grid card's picture (a thumbnail); null or absent shows the kind icon. */
   renderPreview?: (item: ExplorerItem) => ReactNode
+  /** Whether an item can be picked up and dropped on a folder (to move it). */
+  canDrag?: (item: ExplorerItem) => boolean
+  /** Whether the dragged items (their keys) may be dropped on the folder `target`. */
+  canDrop?: (dragged: string[], target: ExplorerItem) => boolean
+  onDropItems?: (dragged: string[], target: ExplorerItem) => void
+  /** An item drag started (true) or ended (false): drop targets outside the list can show. */
+  onItemDrag?: (active: boolean) => void
 }
 
 function RowMenu({ item, actions }: { item: ExplorerItem; actions: ExplorerAction[] }) {
@@ -89,8 +97,10 @@ function RowMenu({ item, actions }: { item: ExplorerItem; actions: ExplorerActio
  * on a touch screen opens directly, the way phone file managers do.
  *
  * Dragging on empty space draws a selection box (useMarquee); a click there
- * clears the selection. Items carry `data-item-key` so a surrounding
- * ExplorerContextMenu knows what was right-clicked.
+ * clears the selection. Dragging an item (with the rest of the selection, if
+ * it is selected) onto a folder hands them to `onDropItems`. Items carry
+ * `data-item-key` so a surrounding ExplorerContextMenu knows what was
+ * right-clicked.
  */
 export function Explorer(props: ExplorerProps) {
   const { items, selection, onSelectionChange, onOpen, onDeleteKey } = props
@@ -98,6 +108,7 @@ export function Explorer(props: ExplorerProps) {
   const lastPointer = useRef<string>('mouse')
   const rowRefs = useRef<(HTMLElement | null)[]>([])
   const surface = useRef<HTMLDivElement>(null)
+  const [dropKey, setDropKey] = useState<string | null>(null)
   const marquee = useMarquee({
     surface,
     items: () => items.map((item, i) => ({ key: itemKey(item), el: rowRefs.current[i] ?? null })),
@@ -251,7 +262,50 @@ export function Explorer(props: ExplorerProps) {
     }
   }
 
+  /** The drag-and-drop half of a row: a source, and for a folder, a target. */
+  const dragProps = (item: ExplorerItem) => {
+    const key = itemKey(item)
+    const accepts = (dragged: string[] | null): dragged is string[] =>
+      dragged !== null && item.type === 'folder' && !dragged.includes(key) && (props.canDrop?.(dragged, item) ?? false)
+    return {
+      draggable: Boolean(props.onDropItems && props.canDrag?.(item)),
+      'data-drop-target': dropKey === key ? 'true' : undefined,
+      onDragStart: (e: DragEvent) => {
+        // The selection goes along when the item is part of it.
+        const keys = selection.has(key) ? [...selection] : [key]
+        if (!selection.has(key)) onSelectionChange(new Set([key]))
+        startItemDrag(keys, e)
+        props.onItemDrag?.(true)
+      },
+      onDragEnd: () => {
+        endItemDrag()
+        setDropKey(null)
+        props.onItemDrag?.(false)
+      },
+      onDragOver: (e: DragEvent) => {
+        if (!accepts(draggedItems())) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        if (dropKey !== key) setDropKey(key)
+      },
+      onDragLeave: (e: DragEvent) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+        setDropKey((current) => (current === key ? null : current))
+      },
+      onDrop: (e: DragEvent) => {
+        const dragged = draggedItems()
+        setDropKey(null)
+        if (!accepts(dragged)) return
+        e.preventDefault()
+        e.stopPropagation()
+        endItemDrag()
+        props.onDropItems?.(dragged, item)
+      },
+    }
+  }
+
   const rowProps = (index: number) => ({
+    ...dragProps(items[index]),
     ref: (el: HTMLElement | null) => {
       rowRefs.current[index] = el
     },
@@ -376,6 +430,7 @@ function ListView({ items, sort, onSortField, selection, actionsFor, subtitleFor
                   'group relative cursor-default select-none border-b border-border/60 outline-none transition-colors',
                   'hover:bg-muted/50 focus-visible:bg-muted/70 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
                   selected && 'bg-accent hover:bg-accent',
+                  'data-[drop-target=true]:bg-primary/10 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-inset data-[drop-target=true]:ring-primary',
                 )}
               >
                 <td className="px-3 py-2">
@@ -418,6 +473,7 @@ function GridView({ items, selection, actionsFor, renderPreview, rowProps }: Exp
           'group relative cursor-default select-none rounded-xl border border-border bg-card outline-none transition-colors',
           'hover:border-primary/40 hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring',
           selected && 'border-primary bg-accent hover:bg-accent',
+          'data-[drop-target=true]:border-primary data-[drop-target=true]:bg-primary/10 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary',
         )
         if (item.type === 'folder') {
           // A folder has no preview: the same card as a file, with a large

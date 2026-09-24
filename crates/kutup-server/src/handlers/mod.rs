@@ -8,6 +8,7 @@ pub mod chat_media;
 pub mod collab;
 pub mod collections;
 pub mod devices;
+pub mod drive_move;
 pub mod file_assets;
 pub mod file_thumbnails;
 pub mod file_versions;

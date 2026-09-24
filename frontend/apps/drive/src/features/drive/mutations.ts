@@ -62,7 +62,7 @@ export function useRenameFile() {
     const file = await rekeyFile(folder, listed)
     if (!file.fileKey) throw new Error('file is not open')
     const next = await renameFileRecordV1(
-      { id: file.id, collectionId: file.collectionId, keyEpoch: file.keyEpoch, metadataRevision: file.metadataRevision },
+      { id: file.id, keyGeneration: file.keyGeneration, metadataRevision: file.metadataRevision },
       file.fileKey,
       { name: name.trim(), mimeType: file.mimeType, size: file.size },
     )

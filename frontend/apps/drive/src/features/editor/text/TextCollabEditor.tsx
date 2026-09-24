@@ -21,7 +21,7 @@ import { useResolvedTheme } from '../useResolvedTheme'
 import { langForExtension } from './lang'
 import { CollabTransport, type HelloMsg } from '@kutup/collab/transport'
 import { KIND } from '@kutup/collab/envelope'
-import { encryptCollabFrameV1, openCollabFrameAtEpochV1 } from '@kutup/collab/cryptoFrame'
+import { encryptCollabFrameV1, openCollabFrameAtGenerationV1 } from '@kutup/collab/cryptoFrame'
 import { decryptFileBlobV1, encryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import { SnapshotTrigger } from '@kutup/collab/snapshot'
 import { generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64 } from '@kutup/collab/devices'
@@ -67,16 +67,14 @@ function ensureRegistered(pubKeyB64: string, label: string): Promise<number> {
 
 interface Props {
   fileId: string
-  collectionId: string
   filename: string
-  /** Collection master key (32 bytes). MUST be referentially stable across renders —
-   *  otherwise the editor tears down and reconnects every parent re-render. The G1
-   *  caller is responsible for memoizing or pulling from a stable Redux selector. */
-  collectionMaster: Uint8Array
-  /** Stable purpose-specific file key for persistent snapshot blobs. */
+  /** The file's current key (32 bytes): collaboration frames and saved
+   *  states are sealed under it. MUST be referentially stable across
+   *  renders — otherwise the editor tears down and reconnects every parent
+   *  re-render. */
   fileKey: Uint8Array
-  /** Authenticated collection epoch bound into every persistent snapshot. */
-  keyEpoch: number
+  /** The generation of `fileKey`, bound into every frame and saved state. */
+  keyGeneration: number
   /** Plaintext content of the original encrypted file blob (kutup's existing per-file
    *  encryption flow). Used as the initial Y.Text content when no Yjs snapshot exists
    *  yet — i.e. on the very first time a freshly-uploaded file is opened in the editor.
@@ -85,11 +83,9 @@ interface Props {
   /** View-only access: follow edits live, change nothing (no typing, no
    *  saving, no restoring). */
   readOnly?: boolean
-  /** Keys at older epochs, for what was stored before the folder's last
-   *  rotation (docs/plans/drive-share-revocation.md): the folder key (log
-   *  frames) and the file key (saved states). */
-  keyAt?: (epoch: number) => Promise<Uint8Array>
-  fileKeyAt?: (epoch: number) => Promise<Uint8Array>
+  /** The file key of an older generation, for what was stored before the
+   *  file's last re-key (log frames, saved states; docs/plans/drive-move.md). */
+  fileKeyAt?: (generation: number) => Promise<Uint8Array>
 }
 
 /**
@@ -112,14 +108,11 @@ function seedUpdate(fileId: string, text: string): Uint8Array {
 
 export default function TextCollabEditor({
   fileId,
-  collectionId,
   filename,
-  collectionMaster,
   fileKey,
-  keyEpoch,
+  keyGeneration,
   initialContent,
   readOnly = false,
-  keyAt,
   fileKeyAt,
 }: Props) {
   const { t } = useTranslation()
@@ -252,15 +245,12 @@ export default function TextCollabEditor({
       })
       let lastSeenSeq = 0
       let docKeyId = 1
-      // The file key a saved state sealed at `epoch` opens with.
-      const savedStateKey = async (epoch: number): Promise<Uint8Array> => {
-        if (epoch === keyEpoch) return fileKey
-        if (!fileKeyAt) throw new Error('no key for an older epoch')
-        return fileKeyAt(epoch)
-      }
-      const folderKeyAt = async (epoch: number): Promise<Uint8Array> => {
-        if (!keyAt) throw new Error('no key for an older epoch')
-        return keyAt(epoch)
+      // The file key of `generation`: saved states and log frames stored
+      // before a re-key open with the key they were sealed under.
+      const keyOf = async (generation: number): Promise<Uint8Array> => {
+        if (generation === keyGeneration) return fileKey
+        if (!fileKeyAt) throw new Error('no key for an older generation')
+        return fileKeyAt(generation)
       }
       // Per-tab sender_seq partition: see randomSenderSeqPrefix in
       // ../../collab/identity. Two tabs of the same user share a
@@ -272,18 +262,14 @@ export default function TextCollabEditor({
       // 2.5 Snapshot trigger. Each saved version also redraws the file's
       // thumbnail (throttled; see noteThumbnailScheduler).
       // Only editors save; a viewer's copy follows theirs.
-      const thumbnails = readOnly ? null : noteThumbnailScheduler({ fileId, fileKey, keyEpoch }, filename)
+      const thumbnails = readOnly ? null : noteThumbnailScheduler({ fileId, fileKey, keyGeneration }, filename)
       const trig = thumbnails && new SnapshotTrigger({
         onSnapshot: (versionId, explicit) => thumbnails.saved(versionId, explicit, ytext.toJSON()),
         fileId,
         ydoc,
         getSeq: () => Number(outboundSeq),
         encryptSnapshot: async (bytes: Uint8Array) => {
-          const out = await encryptFileBlobV1(bytes, fileKey, {
-            fileId,
-            collectionId,
-            epoch: keyEpoch,
-          })
+          const out = await encryptFileBlobV1(bytes, fileKey, { fileId, generation: keyGeneration })
           return { ciphertext: out, storageHints: { docKeyId, sizeBytes: out.length } }
         },
         // Surface 413 quota errors as a localized toast. Other errors are
@@ -312,12 +298,9 @@ export default function TextCollabEditor({
             responseType: 'arraybuffer',
           })
           const blob = new Uint8Array(r.data as ArrayBuffer)
-          const epoch = (await listVersions(fileId)).find((v) => v.id === versionId)?.keyEpoch ?? keyEpoch
-          const stateBytes = await decryptFileBlobV1(blob, await savedStateKey(epoch), {
-            fileId,
-            collectionId,
-            epoch,
-          })
+          const generation =
+            (await listVersions(fileId)).find((v) => v.id === versionId)?.keyGeneration ?? keyGeneration
+          const stateBytes = await decryptFileBlobV1(blob, await keyOf(generation), { fileId, generation })
           // Materialize the old state in a throwaway doc, extract the plaintext.
           const oldDoc = new Y.Doc()
           Y.applyUpdateV2(oldDoc, stateBytes)
@@ -353,12 +336,11 @@ export default function TextCollabEditor({
           outboundSeq++
           const frame = await encryptCollabFrameV1(update, KIND.YJS_UPDATE, {
             fileId,
-            collectionId,
-            keyEpoch,
+            keyGeneration,
             docKeyId,
             deviceId: BigInt(deviceId),
             sequence: outboundSeq,
-          }, collectionMaster, kp.privateKey)
+          }, fileKey, kp.privateKey)
           transport?.send(frame)
         })()
       }
@@ -377,12 +359,11 @@ export default function TextCollabEditor({
           outboundSeq++
           const frame = await encryptCollabFrameV1(upd, KIND.YJS_AWARENESS, {
             fileId,
-            collectionId,
-            keyEpoch,
+            keyGeneration,
             docKeyId,
             deviceId: BigInt(deviceId),
             sequence: outboundSeq,
-          }, collectionMaster, kp.privateKey)
+          }, fileKey, kp.privateKey)
           transport?.send(frame)
         })()
       }
@@ -428,10 +409,9 @@ export default function TextCollabEditor({
           })
           const blob = new Uint8Array(r.data as ArrayBuffer)
           if (blob.length > 0) {
-            const stateBytes = await decryptFileBlobV1(blob, await savedStateKey(latest.keyEpoch), {
+            const stateBytes = await decryptFileBlobV1(blob, await keyOf(latest.keyGeneration), {
               fileId,
-              collectionId,
-              epoch: latest.keyEpoch,
+              generation: latest.keyGeneration,
             })
             Y.applyUpdateV2(ydoc, stateBytes, 'remote')
             lastSeenSeq = latest.seqAtSnapshot
@@ -497,12 +477,8 @@ export default function TextCollabEditor({
         },
         onFrame: async (bs) => {
           try {
-            // A frame replayed from before a rotation opens with its epoch's key.
-            const f = await openCollabFrameAtEpochV1(
-              bs,
-              (epoch) => (epoch === keyEpoch ? Promise.resolve(collectionMaster) : folderKeyAt(epoch)),
-              { fileId, collectionId, keyEpoch },
-            )
+            // A frame replayed from before a re-key opens with its generation's key.
+            const f = await openCollabFrameAtGenerationV1(bs, keyOf, { fileId, keyGeneration })
             if (f.kind === KIND.YJS_UPDATE) {
               Y.applyUpdate(ydoc!, f.plaintext, 'remote')
             } else if (f.kind === KIND.YJS_AWARENESS) {
@@ -652,7 +628,7 @@ export default function TextCollabEditor({
     // and on second mount the claimSeed call would lose, leaving the seed
     // un-inserted. Same pattern as OfficeEditor.tsx.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileId, filename, collectionMaster, username])
+  }, [fileId, filename, fileKey, username])
 
   // Page-level Cmd/Ctrl+S — catches the case when CodeMirror doesn't
   // have focus (filename input, color picker, history sidebar, etc.).

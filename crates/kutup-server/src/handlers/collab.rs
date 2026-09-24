@@ -424,11 +424,11 @@ async fn handle_frame(
     }
     let file_uuid = conn.file_uuid;
 
-    // The public authenticated header must name this exact file, collection,
-    // collection-key epoch and current document-key generation. Neither stale
-    // nor future values are accepted.
-    let binding: (i64, Uuid, i32, i32) = match sqlx::query_as(
-        "SELECT f.current_doc_key_id, f.collection_id, f.key_epoch, c.key_epoch \
+    // The public authenticated header must name this exact file, its current
+    // file-key generation and current document key. Neither stale nor future
+    // values are accepted.
+    let binding: (i64, i32, i32, i32) = match sqlx::query_as(
+        "SELECT f.current_doc_key_id, f.key_generation, f.key_epoch, c.key_epoch \
          FROM files f JOIN collections c ON c.id = f.collection_id \
          WHERE f.id = $1 AND f.deleted_at IS NULL",
     )
@@ -440,8 +440,7 @@ async fn handle_frame(
         Err(_) => return true,
     };
     if f.file_id != *file_uuid.as_bytes()
-        || f.collection_id != *binding.1.as_bytes()
-        || f.key_epoch as i64 != binding.2 as i64
+        || f.key_generation as i64 != binding.1 as i64
         || f.doc_key_id as i64 != binding.0
     {
         return true;
@@ -465,8 +464,8 @@ async fn handle_frame(
         Some(Access::Read) => return true,
         _ => return false,
     }
-    // Edits only under the folder's current key: a file the folder has
-    // rotated past is re-keyed before anyone writes to it
+    // Edits only under a file key wrapped at the folder's current epoch: a
+    // file the folder has rotated past is re-keyed before anyone writes to it
     // (docs/plans/drive-share-revocation.md).
     if binding.2 != binding.3 {
         return true;

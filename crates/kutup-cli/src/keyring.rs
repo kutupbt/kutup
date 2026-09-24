@@ -4,14 +4,18 @@
 //! stored before stays under older keys, which the current key unlocks
 //! through the folder's owner-signed history. Most folders have one epoch and
 //! never fetch anything here.
+//!
+//! A file's own older keys are not here: they hang off the file's current
+//! key (`file_crypto::key_at`), whichever folder the file is in
+//! (docs/plans/drive-move.md). A folder's older keys are needed only to open
+//! a file-key wrap sealed at an older epoch.
 
 use anyhow::{anyhow, bail, Context, Result};
 use kutup_crypto::collection_keyring::{self, EpochLinkV1};
-use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use serde::Deserialize;
 
-use crate::api::{Client, Collection, File};
+use crate::api::{Client, Collection};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -132,32 +136,6 @@ impl Keyring {
     /// The folder's current key.
     pub fn current(&self) -> &[u8] {
         &self.keys[&self.current]
-    }
-
-    /// The file key content of `file` sealed at `epoch` opens with: the
-    /// file's own at its current epoch, else one a re-key left behind.
-    pub fn file_key_at(&self, file: &File, file_key: &[u8; 32], epoch: u32) -> Result<[u8; 32]> {
-        if epoch == file.key_epoch {
-            return Ok(*file_key);
-        }
-        let entry = file
-            .key_history
-            .iter()
-            .find(|entry| entry.epoch == epoch)
-            .ok_or_else(|| anyhow!("no file key for epoch {epoch}"))?;
-        drive_envelope::open_b64(
-            &entry.file_key_envelope,
-            self.at(epoch)?,
-            DriveEnvelopeContextV1::new(
-                DriveEnvelopePurpose::FileKey,
-                epoch,
-                1,
-                &file.id,
-                &file.collection_id,
-            )?,
-        )?
-        .try_into()
-        .map_err(|_| anyhow!("file key has wrong length"))
     }
 }
 

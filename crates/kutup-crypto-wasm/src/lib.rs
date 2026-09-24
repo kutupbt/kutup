@@ -97,7 +97,7 @@ struct ChatAttachmentLedgerHeaderView {
 #[serde(rename_all = "camelCase")]
 struct OpenedCollabFrameView {
     kind: u8,
-    key_epoch: u32,
+    key_generation: u32,
     doc_key_id: u32,
     sender_device_id: String,
     sequence: String,
@@ -632,7 +632,8 @@ fn generic_drive_purpose(value: u8) -> Result<DriveEnvelopePurpose, JsValue> {
     match DriveEnvelopePurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
         DriveEnvelopePurpose::WhiteboardAsset
         | DriveEnvelopePurpose::Thumbnail
-        | DriveEnvelopePurpose::PreviousCollectionKey => Err(js_error(
+        | DriveEnvelopePurpose::PreviousCollectionKey
+        | DriveEnvelopePurpose::PreviousFileKey => Err(js_error(
             "this Drive envelope purpose has its own typed export",
         )),
         purpose => Ok(purpose),
@@ -692,38 +693,35 @@ pub fn open_drive_envelope(
 #[wasm_bindgen(js_name = sealWhiteboardAsset)]
 pub fn seal_whiteboard_asset(
     plaintext_base64: &str,
-    collection_key_base64: &str,
+    file_key_base64: &str,
     file_id: &str,
-    collection_id: &str,
     asset_id: &str,
-    epoch: u32,
+    generation: u32,
 ) -> Result<String, JsValue> {
     let plaintext = decode_canonical_base64(plaintext_base64, "whiteboard asset")?;
-    let collection_key = decode_canonical_base64(collection_key_base64, "collection key")?;
-    let context = DriveEnvelopeContextV1::whiteboard_asset(file_id, collection_id, asset_id, epoch)
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
+    let context = DriveEnvelopeContextV1::whiteboard_asset(file_id, asset_id, generation)
         .map_err(|error| js_error(&error.to_string()))?;
-    drive_envelope::seal_b64(&plaintext, &collection_key, context)
+    drive_envelope::seal_b64(&plaintext, &file_key, context)
         .map_err(|error| js_error(&error.to_string()))
 }
 
 #[wasm_bindgen(js_name = openWhiteboardAsset)]
 pub fn open_whiteboard_asset(
     envelope_base64: &str,
-    collection_key_base64: &str,
+    file_key_base64: &str,
     expected_file_id: &str,
-    expected_collection_id: &str,
     expected_asset_id: &str,
-    expected_epoch: u32,
+    expected_generation: u32,
 ) -> Result<String, JsValue> {
-    let collection_key = decode_canonical_base64(collection_key_base64, "collection key")?;
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
     let context = DriveEnvelopeContextV1::whiteboard_asset(
         expected_file_id,
-        expected_collection_id,
         expected_asset_id,
-        expected_epoch,
+        expected_generation,
     )
     .map_err(|error| js_error(&error.to_string()))?;
-    let plaintext = drive_envelope::open_b64(envelope_base64, &collection_key, context)
+    let plaintext = drive_envelope::open_b64(envelope_base64, &file_key, context)
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(plaintext))
 }
@@ -753,7 +751,7 @@ pub fn seal_thumbnail(
     variant: &str,
     file_key_base64: &str,
     file_id: &str,
-    epoch: u32,
+    generation: u32,
 ) -> Result<String, JsValue> {
     let thumbnail = Thumbnail {
         format: ThumbnailFormat::try_from(format).map_err(|error| js_error(&error.to_string()))?,
@@ -767,20 +765,20 @@ pub fn seal_thumbnail(
         thumbnail_variant(variant)?,
         &file_key,
         file_id,
-        epoch,
+        generation,
     )
     .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(envelope))
 }
 
-/// Open a thumbnail of exactly this file, variant and epoch.
+/// Open a thumbnail of exactly this file, variant and key generation.
 #[wasm_bindgen(js_name = openThumbnail)]
 pub fn open_thumbnail(
     envelope_base64: &str,
     variant: &str,
     file_key_base64: &str,
     expected_file_id: &str,
-    expected_epoch: u32,
+    expected_generation: u32,
 ) -> Result<JsValue, JsValue> {
     let envelope = decode_canonical_base64(envelope_base64, "thumbnail envelope")?;
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
@@ -789,7 +787,7 @@ pub fn open_thumbnail(
         thumbnail_variant(variant)?,
         &file_key,
         expected_file_id,
-        expected_epoch,
+        expected_generation,
     )
     .map_err(|error| js_error(&error.to_string()))?;
     serde_wasm_bindgen::to_value(&ThumbnailView {
@@ -805,11 +803,10 @@ pub fn open_thumbnail(
 pub fn prepare_drive_file_blob(
     file_key_base64: &str,
     file_id: &str,
-    collection_id: &str,
-    epoch: u32,
+    generation: u32,
 ) -> Result<JsValue, JsValue> {
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let context = DriveFileBlobContextV1::new(file_id, collection_id, epoch)
+    let context = DriveFileBlobContextV1::new(file_id, generation)
         .map_err(|error| js_error(&error.to_string()))?;
     let object_header = drive_object::file_blob_header(context);
     let stream_key = drive_object::derive_file_blob_key(&file_key, context)
@@ -826,14 +823,12 @@ pub fn open_drive_file_blob_header(
     object_header_base64: &str,
     file_key_base64: &str,
     expected_file_id: &str,
-    expected_collection_id: &str,
-    expected_epoch: u32,
+    expected_generation: u32,
 ) -> Result<String, JsValue> {
     let object_header = decode_canonical_base64(object_header_base64, "object header")?;
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let expected =
-        DriveFileBlobContextV1::new(expected_file_id, expected_collection_id, expected_epoch)
-            .map_err(|error| js_error(&error.to_string()))?;
+    let expected = DriveFileBlobContextV1::new(expected_file_id, expected_generation)
+        .map_err(|error| js_error(&error.to_string()))?;
     drive_object::validate_file_blob_header(&object_header, expected)
         .map_err(|error| js_error(&error.to_string()))?;
     let stream_key = drive_object::derive_file_blob_key(&file_key, expected)
@@ -982,17 +977,16 @@ pub fn decode_chat_attachment_ledger_entry(entry_base64: &str) -> Result<JsValue
 #[allow(clippy::too_many_arguments)]
 pub fn seal_collab_frame(
     plaintext_base64: &str,
-    collection_key_base64: &str,
+    file_key_base64: &str,
     kind: u8,
-    key_epoch: u32,
+    key_generation: u32,
     doc_key_id: u32,
     file_id: &str,
-    collection_id: &str,
     sender_device_id: &str,
     sequence: &str,
 ) -> Result<String, JsValue> {
     let plaintext = decode_canonical_base64(plaintext_base64, "collaboration plaintext")?;
-    let collection_key = decode_canonical_base64(collection_key_base64, "collection key")?;
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
     let sender_device_id = sender_device_id
         .parse::<u64>()
         .map_err(|_| js_error("sender device id must be canonical u64"))?;
@@ -1001,15 +995,14 @@ pub fn seal_collab_frame(
         .map_err(|_| js_error("sequence must be canonical u64"))?;
     let context = CollabFrameContextV1::new(
         kind,
-        key_epoch,
+        key_generation,
         doc_key_id,
         file_id,
-        collection_id,
         sender_device_id,
         sequence,
     )
     .map_err(|error| js_error(&error.to_string()))?;
-    envelope::seal_unsigned(&plaintext, &collection_key, context)
+    envelope::seal_unsigned(&plaintext, &file_key, context)
         .map(|packed| STANDARD.encode(packed))
         .map_err(|error| js_error(&error.to_string()))
 }
@@ -1037,24 +1030,18 @@ pub fn attach_collab_frame_signature(
 #[wasm_bindgen(js_name = openCollabFrame)]
 pub fn open_collab_frame(
     frame_base64: &str,
-    collection_key_base64: &str,
+    file_key_base64: &str,
     expected_file_id: &str,
-    expected_collection_id: &str,
-    expected_key_epoch: u32,
+    expected_key_generation: u32,
 ) -> Result<JsValue, JsValue> {
     let frame = decode_canonical_base64(frame_base64, "collaboration frame")?;
-    let collection_key = decode_canonical_base64(collection_key_base64, "collection key")?;
-    let (parsed, plaintext) = envelope::open(
-        &frame,
-        &collection_key,
-        expected_file_id,
-        expected_collection_id,
-        expected_key_epoch,
-    )
-    .map_err(|error| js_error(&error.to_string()))?;
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
+    let (parsed, plaintext) =
+        envelope::open(&frame, &file_key, expected_file_id, expected_key_generation)
+            .map_err(|error| js_error(&error.to_string()))?;
     serde_wasm_bindgen::to_value(&OpenedCollabFrameView {
         kind: parsed.kind,
-        key_epoch: parsed.key_epoch,
+        key_generation: parsed.key_generation,
         doc_key_id: parsed.doc_key_id,
         sender_device_id: parsed.sender_device_id.to_string(),
         sequence: parsed.sequence.to_string(),
@@ -1063,14 +1050,14 @@ pub fn open_collab_frame(
     .map_err(|error| js_error(&format!("encode collaboration frame: {error}")))
 }
 
-/// The collection-key epoch a frame names in its public header, so a
-/// client replaying older log frames can pick that epoch's key. Opening
-/// still checks it (`openCollabFrame` with the same epoch).
-#[wasm_bindgen(js_name = collabFrameKeyEpoch)]
-pub fn collab_frame_key_epoch(frame_base64: &str) -> Result<u32, JsValue> {
+/// The file-key generation a frame names in its public header, so a
+/// client replaying older log frames can pick that generation's key.
+/// Opening still checks it (`openCollabFrame` with the same generation).
+#[wasm_bindgen(js_name = collabFrameKeyGeneration)]
+pub fn collab_frame_key_generation(frame_base64: &str) -> Result<u32, JsValue> {
     let frame = decode_canonical_base64(frame_base64, "collaboration frame")?;
     envelope::Frame::unpack(&frame)
-        .map(|parsed| parsed.key_epoch)
+        .map(|parsed| parsed.key_generation)
         .map_err(|error| js_error(&error.to_string()))
 }
 
@@ -1213,6 +1200,54 @@ pub fn unlock_collection_keyring(
             .collect::<Vec<_>>(),
     )
     .map_err(|error| js_error(&error.to_string()))
+}
+
+/// The file key of `generation − 1` sealed under that of `generation`, for a
+/// re-key (docs/plans/drive-move.md).
+#[wasm_bindgen(js_name = sealPreviousFileKey)]
+pub fn seal_previous_file_key(
+    previous_key_base64: &str,
+    key_base64: &str,
+    file_id: &str,
+    generation: u32,
+) -> Result<String, JsValue> {
+    let previous = decode_canonical_base64(previous_key_base64, "previous file key")?;
+    let key = decode_canonical_base64(key_base64, "file key")?;
+    kutup_crypto::file_keyring::seal_previous_key(&previous, &key, file_id, generation)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileKeyLinkJson {
+    generation: u32,
+    previous_key_envelope: String,
+}
+
+/// The file key of generation `wanted`, base64, from the current key of
+/// `generation` and the file's history (`chain`: the listing's
+/// `keyHistory`, generations 2 to `generation` in order).
+#[wasm_bindgen(js_name = fileKeyAt)]
+pub fn file_key_at(
+    current_key_base64: &str,
+    file_id: &str,
+    generation: u32,
+    chain: JsValue,
+    wanted: u32,
+) -> Result<String, JsValue> {
+    let current = decode_canonical_base64(current_key_base64, "file key")?;
+    let links: Vec<FileKeyLinkJson> = serde_wasm_bindgen::from_value(chain)
+        .map_err(|error| js_error(&format!("file key history: {error}")))?;
+    let chain: Vec<kutup_crypto::file_keyring::FileKeyLinkV1> = links
+        .into_iter()
+        .map(|link| kutup_crypto::file_keyring::FileKeyLinkV1 {
+            generation: link.generation,
+            previous_key_envelope: link.previous_key_envelope,
+        })
+        .collect();
+    kutup_crypto::file_keyring::key_at(&current, file_id, generation, &chain, wanted)
+        .map(|key| STANDARD.encode(key.as_slice()))
+        .map_err(|error| js_error(&error.to_string()))
 }
 
 #[wasm_bindgen(js_name = sealNamedShareEnvelope)]

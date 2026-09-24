@@ -24,7 +24,7 @@ const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
 const KEY_LEN: usize = 32;
 const KEY_DERIVATION_SALT: &[u8] = b"kutup/drive-envelope/key/v1\0";
-const WHITEBOARD_ASSET_BINDING_LABEL: &[u8] = b"kutup/drive-envelope/whiteboard-asset/v1\0";
+const WHITEBOARD_ASSET_BINDING_LABEL: &[u8] = b"kutup/drive-envelope/whiteboard-asset/v2\0";
 const THUMBNAIL_BINDING_LABEL: &[u8] = b"kutup/drive-envelope/thumbnail/v1\0";
 pub const MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES: usize = 25 * 1024 * 1024;
 pub const MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES: usize =
@@ -56,6 +56,11 @@ pub enum DriveEnvelopePurpose {
     /// key: object = link id, parent = owner, epoch 1. Lets the owner list,
     /// copy and re-wrap the link.
     PublicLinkKey = 9,
+    /// A file key of generation `g − 1` sealed under the key of generation
+    /// `g` (the context's epoch): object = parent = file. Holders of the
+    /// current file key walk down to every older one, in whichever folder
+    /// the file is (docs/plans/drive-move.md).
+    PreviousFileKey = 10,
 }
 
 impl DriveEnvelopePurpose {
@@ -69,7 +74,8 @@ impl DriveEnvelopePurpose {
             | Self::FileKey
             | Self::PublicLinkCollectionKey
             | Self::PreviousCollectionKey
-            | Self::PublicLinkKey => len == KEY_LEN,
+            | Self::PublicLinkKey
+            | Self::PreviousFileKey => len == KEY_LEN,
             Self::CollectionName => (1..=1024).contains(&len),
             Self::FileMetadata => (1..=65_536).contains(&len),
             Self::WhiteboardAsset => (1..=MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES).contains(&len),
@@ -100,6 +106,7 @@ impl TryFrom<u8> for DriveEnvelopePurpose {
             7 => Ok(Self::Thumbnail),
             8 => Ok(Self::PreviousCollectionKey),
             9 => Ok(Self::PublicLinkKey),
+            10 => Ok(Self::PreviousFileKey),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown Drive envelope purpose {value}"
             ))),
@@ -138,15 +145,58 @@ impl DriveEnvelopeContextV1 {
         })
     }
 
-    pub fn whiteboard_asset(
+    /// A file's key, sealed under its folder's key at `folder_epoch`. The
+    /// only file object that names the folder: a move re-seals this alone.
+    /// The revision carries the file key's generation.
+    pub fn file_key(
         file_id: &str,
         collection_id: &str,
-        asset_id: &str,
-        epoch: u32,
+        folder_epoch: u32,
+        generation: u32,
     ) -> Result<Self> {
-        if epoch == 0 {
+        Self::new(
+            DriveEnvelopePurpose::FileKey,
+            folder_epoch,
+            u64::from(generation),
+            file_id,
+            collection_id,
+        )
+    }
+
+    /// A file's metadata, under the file key of `generation`. Bound to the
+    /// file alone (object = parent = file).
+    pub fn file_metadata(file_id: &str, generation: u32, revision: u64) -> Result<Self> {
+        Self::new(
+            DriveEnvelopePurpose::FileMetadata,
+            generation,
+            revision,
+            file_id,
+            file_id,
+        )
+    }
+
+    /// The file key of `generation − 1`, sealed under that of `generation`.
+    pub fn previous_file_key(file_id: &str, generation: u32) -> Result<Self> {
+        if generation < 2 {
             return Err(CryptoError::InvalidInput(
-                "Drive whiteboard asset epoch must be non-zero".into(),
+                "file key generation 1 has no previous key".into(),
+            ));
+        }
+        Self::new(
+            DriveEnvelopePurpose::PreviousFileKey,
+            generation,
+            1,
+            file_id,
+            file_id,
+        )
+    }
+
+    /// A whiteboard's embedded file, under the file key of `generation`.
+    /// The asset id takes the parent slot as a derived id.
+    pub fn whiteboard_asset(file_id: &str, asset_id: &str, generation: u32) -> Result<Self> {
+        if generation == 0 {
+            return Err(CryptoError::InvalidInput(
+                "Drive whiteboard asset key generation must be non-zero".into(),
             ));
         }
         if asset_id.is_empty()
@@ -160,16 +210,14 @@ impl DriveEnvelopeContextV1 {
             ));
         }
         let file_id = parse_canonical_uuid(file_id, "whiteboard file")?;
-        let collection_id = parse_canonical_uuid(collection_id, "whiteboard collection")?;
         let mut digest = Sha256::new();
         digest.update(WHITEBOARD_ASSET_BINDING_LABEL);
-        digest.update(collection_id);
         digest.update((asset_id.len() as u16).to_be_bytes());
         digest.update(asset_id.as_bytes());
         let digest = digest.finalize();
         Ok(Self {
             purpose: DriveEnvelopePurpose::WhiteboardAsset,
-            epoch,
+            epoch: generation,
             revision: 1,
             object_id: file_id,
             parent_id: digest[..16].try_into().expect("sixteen-byte digest prefix"),
@@ -178,15 +226,15 @@ impl DriveEnvelopeContextV1 {
 }
 
 impl DriveEnvelopeContextV1 {
-    /// A file's thumbnail. Bound to the file and its key epoch; the variant
+    /// A file's thumbnail. Bound to the file and its key generation; the variant
     /// takes the parent slot as a derived id (as whiteboard assets do), so a
     /// small preview never opens as a large one. The revision is fixed at 1:
     /// without signed file revisions it could not protect freshness anyway
     /// (docs/plans/drive-thumbnails.md, "Security notes").
-    pub fn thumbnail(file_id: &str, variant: ThumbnailVariant, epoch: u32) -> Result<Self> {
-        if epoch == 0 {
+    pub fn thumbnail(file_id: &str, variant: ThumbnailVariant, generation: u32) -> Result<Self> {
+        if generation == 0 {
             return Err(CryptoError::InvalidInput(
-                "Drive thumbnail epoch must be non-zero".into(),
+                "Drive thumbnail key generation must be non-zero".into(),
             ));
         }
         let file_id = parse_canonical_uuid(file_id, "thumbnail file")?;
@@ -196,7 +244,7 @@ impl DriveEnvelopeContextV1 {
         let digest = digest.finalize();
         Ok(Self {
             purpose: DriveEnvelopePurpose::Thumbnail,
-            epoch,
+            epoch: generation,
             revision: 1,
             object_id: file_id,
             parent_id: digest[..16].try_into().expect("sixteen-byte digest prefix"),

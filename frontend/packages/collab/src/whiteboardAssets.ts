@@ -17,9 +17,9 @@ export type { WhiteboardAssetContextV1 } from '@kutup/crypto/whiteboardAsset'
 export async function uploadAsset(
   context: WhiteboardAssetContextV1,
   plaintext: Uint8Array,
-  collectionKey: Uint8Array,
+  fileKey: Uint8Array,
 ): Promise<void> {
-  const envelope = await sealWhiteboardAssetV1(plaintext, collectionKey, context)
+  const envelope = await sealWhiteboardAssetV1(plaintext, fileKey, context)
   const fd = new FormData()
   fd.append('file', new Blob([envelope.buffer as ArrayBuffer], { type: 'application/octet-stream' }))
   try {
@@ -34,16 +34,18 @@ export async function uploadAsset(
 
 export async function fetchAsset(
   context: WhiteboardAssetContextV1,
-  collectionKey: Uint8Array,
-  /** The folder key at an older epoch: an asset stored before a rotation. */
-  keyAt?: (epoch: number) => Promise<Uint8Array>,
+  fileKey: Uint8Array,
+  /** The file key of an older generation: an asset stored before a re-key. */
+  keyAt?: (generation: number) => Promise<Uint8Array>,
 ): Promise<Uint8Array> {
   const res = await api.get(`/files/${context.fileId}/assets/${context.assetId}`, {
     responseType: 'arraybuffer',
   })
-  // Sealed at the epoch the server records for it; opening checks it.
-  const stored = Number(res.headers['x-kutup-key-epoch'] ?? context.epoch)
-  const epoch = Number.isSafeInteger(stored) && stored >= 1 && stored <= context.epoch ? stored : context.epoch
-  const key = epoch === context.epoch || !keyAt ? collectionKey : await keyAt(epoch)
-  return openWhiteboardAssetV1(new Uint8Array(res.data as ArrayBuffer), key, { ...context, epoch })
+  // Sealed under the generation the server records for it; opening checks it.
+  const stored = Number(res.headers['x-kutup-key-generation'] ?? context.generation)
+  const generation = Number.isSafeInteger(stored) && stored >= 1 && stored <= context.generation
+    ? stored
+    : context.generation
+  const key = generation === context.generation || !keyAt ? fileKey : await keyAt(generation)
+  return openWhiteboardAssetV1(new Uint8Array(res.data as ArrayBuffer), key, { ...context, generation })
 }

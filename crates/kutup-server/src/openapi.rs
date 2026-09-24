@@ -84,6 +84,8 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::folder_access::access,
         crate::handlers::folder_access::rotate,
         crate::handlers::folder_access::rekey,
+        crate::handlers::drive_move::move_file,
+        crate::handlers::drive_move::move_collection,
         crate::handlers::file_versions::download,
         crate::handlers::file_versions::patch,
         // --- file assets ---

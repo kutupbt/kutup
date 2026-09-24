@@ -23,20 +23,21 @@ impl Client {
     }
 
     /// Downloads an encrypted asset blob.
-    /// The asset envelope and the epoch it was sealed at (absent from an
-    /// older server).
-    pub fn download_asset(&self, file_id: &str, asset_id: &str) -> Result<(Vec<u8>, Option<u32>)> {
+    /// The asset envelope and the file key generation it was sealed at.
+    pub fn download_asset(&self, file_id: &str, asset_id: &str) -> Result<(Vec<u8>, u32)> {
         let resp = self
             .request(Method::GET, &format!("/files/{file_id}/assets/{asset_id}"))
             .send()?;
         if resp.status().as_u16() >= 400 {
             return Err(super::api_error(resp));
         }
-        let epoch = resp
+        let generation = resp
             .headers()
-            .get("x-kutup-key-epoch")
+            .get("x-kutup-key-generation")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok());
-        Ok((resp.bytes()?.to_vec(), epoch))
+            .and_then(|v| v.parse().ok())
+            .filter(|g: &u32| *g >= 1)
+            .ok_or_else(|| anyhow::anyhow!("asset {asset_id}: missing key generation"))?;
+        Ok((resp.bytes()?.to_vec(), generation))
     }
 }

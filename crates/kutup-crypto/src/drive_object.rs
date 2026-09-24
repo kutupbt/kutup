@@ -1,9 +1,11 @@
 //! Typed persistent Drive-object framing shared by every Kutup client.
 //!
-//! A V1 file blob is:
-//! `[48-byte Drive header][24-byte secretstream header][secretstream frames]`.
+//! A file blob is:
+//! `[32-byte Drive header][24-byte secretstream header][secretstream frames]`.
 //! The Drive header is canonical, is authenticated as associated data on every
-//! frame, and binds the ciphertext to one file, collection, and key epoch.
+//! frame, and binds the ciphertext to one file and the generation of the file
+//! key that sealed it. It names no folder: a file moves between folders
+//! without re-encryption (docs/plans/drive-move.md).
 
 use hkdf::Hkdf;
 use sha2::Sha256;
@@ -15,7 +17,7 @@ use crate::stream::{
     TAG_FINAL, TAG_MESSAGE,
 };
 
-const FILE_BLOB_MAGIC: &[u8; 8] = b"KUTPDB1\0";
+const FILE_BLOB_MAGIC: &[u8; 8] = b"KUTPDB2\0";
 const FILE_BLOB_KEY_SALT: &[u8] = b"kutup/drive-object/file-blob-key/v1\0";
 const KEY_LEN: usize = 32;
 
@@ -72,28 +74,27 @@ impl TryFrom<u8> for DriveObjectPurpose {
 }
 
 /// Canonical file-blob header length: magic(8) + suite(2) + purpose(1) +
-/// reserved(1) + epoch(4) + file UUID(16) + collection UUID(16).
-pub const FILE_BLOB_HEADER_BYTES: usize = 48;
+/// reserved(1) + file-key generation(4) + file UUID(16).
+pub const FILE_BLOB_HEADER_BYTES: usize = 32;
 pub const FILE_BLOB_PREFIX_BYTES: usize = FILE_BLOB_HEADER_BYTES + STREAM_HEADER_BYTES;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DriveFileBlobContextV1 {
-    pub epoch: u32,
+    /// The generation of the file key that sealed the blob.
+    pub generation: u32,
     pub file_id: [u8; 16],
-    pub collection_id: [u8; 16],
 }
 
 impl DriveFileBlobContextV1 {
-    pub fn new(file_id: &str, collection_id: &str, epoch: u32) -> Result<Self> {
-        if epoch == 0 {
+    pub fn new(file_id: &str, generation: u32) -> Result<Self> {
+        if generation == 0 {
             return Err(CryptoError::InvalidInput(
-                "Drive file-blob epoch must be non-zero".into(),
+                "Drive file-blob key generation must be non-zero".into(),
             ));
         }
         Ok(Self {
-            epoch,
+            generation,
             file_id: parse_canonical_uuid(file_id, "file")?,
-            collection_id: parse_canonical_uuid(collection_id, "collection")?,
         })
     }
 }
@@ -153,9 +154,8 @@ pub fn file_blob_header(context: DriveFileBlobContextV1) -> [u8; FILE_BLOB_HEADE
     header[..8].copy_from_slice(FILE_BLOB_MAGIC);
     header[8..10].copy_from_slice(&DriveObjectSuiteId::KutupDriveV1.as_u16().to_be_bytes());
     header[10] = DriveObjectPurpose::FileBlob.as_u8();
-    header[12..16].copy_from_slice(&context.epoch.to_be_bytes());
+    header[12..16].copy_from_slice(&context.generation.to_be_bytes());
     header[16..32].copy_from_slice(&context.file_id);
-    header[32..48].copy_from_slice(&context.collection_id);
     header
 }
 
@@ -170,19 +170,18 @@ pub fn inspect_file_blob_header(header: &[u8]) -> Result<DriveFileBlobHeaderV1> 
             "Drive file-blob reserved byte is non-zero".into(),
         ));
     }
-    let epoch = u32::from_be_bytes(header[12..16].try_into().expect("four-byte slice"));
-    if epoch == 0 {
+    let generation = u32::from_be_bytes(header[12..16].try_into().expect("four-byte slice"));
+    if generation == 0 {
         return Err(CryptoError::InvalidInput(
-            "Drive file-blob epoch must be non-zero".into(),
+            "Drive file-blob key generation must be non-zero".into(),
         ));
     }
     Ok(DriveFileBlobHeaderV1 {
         suite,
         purpose,
         context: DriveFileBlobContextV1 {
-            epoch,
+            generation,
             file_id: header[16..32].try_into().expect("sixteen-byte slice"),
-            collection_id: header[32..48].try_into().expect("sixteen-byte slice"),
         },
     })
 }
@@ -301,12 +300,7 @@ mod tests {
     use super::*;
 
     fn context() -> DriveFileBlobContextV1 {
-        DriveFileBlobContextV1::new(
-            "11111111-1111-4111-8111-111111111111",
-            "22222222-2222-4222-8222-222222222222",
-            7,
-        )
-        .unwrap()
+        DriveFileBlobContextV1::new("11111111-1111-4111-8111-111111111111", 7).unwrap()
     }
 
     #[test]
@@ -327,13 +321,12 @@ mod tests {
     fn relocation_and_truncation_fail_closed() {
         let key = [7u8; 32];
         let ciphertext = encrypt_file_blob(b"payload", &key, context()).unwrap();
-        let relocated = DriveFileBlobContextV1::new(
-            "33333333-3333-4333-8333-333333333333",
-            "22222222-2222-4222-8222-222222222222",
-            7,
-        )
-        .unwrap();
+        let relocated =
+            DriveFileBlobContextV1::new("33333333-3333-4333-8333-333333333333", 7).unwrap();
         assert!(decrypt_file_blob(&ciphertext, &key, relocated).is_err());
+        let other_generation =
+            DriveFileBlobContextV1::new("11111111-1111-4111-8111-111111111111", 8).unwrap();
+        assert!(decrypt_file_blob(&ciphertext, &key, other_generation).is_err());
         assert!(decrypt_file_blob(&ciphertext[..ciphertext.len() - 1], &key, context()).is_err());
     }
 }

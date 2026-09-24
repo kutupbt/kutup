@@ -102,21 +102,17 @@ fn download(
     let found = find_file_and_key(&ctx.client, &master_key, file_id)?;
     let (row, file_key) = (&found.file, &found.file_key);
     let meta = crate::file_crypto::open_metadata(row, file_key).context("decrypt metadata")?;
-    // A version opens with the key of the epoch it was saved at.
-    let epoch = ctx
+    // A version opens with the file key of the generation it was saved at.
+    let generation = ctx
         .client
         .list_versions(file_id)?
         .into_iter()
         .find(|v| v.id == version_id)
-        .map(|v| {
-            if v.key_epoch == 0 {
-                row.key_epoch
-            } else {
-                v.key_epoch
-            }
-        })
-        .unwrap_or(row.key_epoch);
-    let version_key = found.keys.file_key_at(row, file_key, epoch)?;
+        .map(|v| v.key_generation)
+        .ok_or_else(|| {
+            crate::errors::NotFound(format!("version {version_id} not found for file {file_id}"))
+        })?;
+    let version_key = crate::file_crypto::key_at(row, file_key, generation)?;
 
     let short = &version_id[..version_id.len().min(8)];
     let dest_path = {
@@ -132,7 +128,7 @@ fn download(
     let stream = ctx.client.download_version_stream(file_id, version_id)?;
     let bar = crate::output::progress_bar(stream.content_length(), &meta.name);
     let mut out = std::fs::File::create(&dest_path).context("open dest")?;
-    let blob_context = DriveFileBlobContextV1::new(&row.id, &row.collection_id, epoch)?;
+    let blob_context = DriveFileBlobContextV1::new(&row.id, generation)?;
     let written =
         match crate::transfer::stream_download(stream, &version_key, blob_context, &mut out, |n| {
             bar.set_position(n as u64)
@@ -160,13 +156,14 @@ fn download(
 fn restore(profile: &str, json: bool, file_id: &str, version_id: &str) -> Result<()> {
     let ctx = require_session(profile)?;
     let master_key = ctx.session.master_key_bytes()?;
-    // The restored copy is new content: under the folder's current key.
+    // The restored copy is new content: under a file key the folder's
+    // current members alone hold.
     let found = rekey_if_behind(
         &ctx.client,
         find_file_and_key(&ctx.client, &master_key, file_id)?,
     )?;
     let (row, file_key) = (&found.file, &found.file_key);
-    let blob_context = DriveFileBlobContextV1::new(&row.id, &row.collection_id, row.key_epoch)?;
+    let blob_context = DriveFileBlobContextV1::new(&row.id, row.key_generation)?;
 
     // The restored row carries the SOURCE version's collab metadata: those
     // values become the served x-kutup-seq / x-kutup-doc-key-id headers, and
@@ -183,16 +180,11 @@ fn restore(profile: &str, json: bool, file_id: &str, version_id: &str) -> Result
 
     // download chosen version → decrypt → re-encrypt → store as the newest.
     let encrypted = ctx.client.download_version(file_id, version_id)?;
-    // The source opens with the key of the epoch it was saved at.
-    let src_epoch = if src.key_epoch == 0 {
-        row.key_epoch
-    } else {
-        src.key_epoch
-    };
+    // The source opens with the file key of the generation it was saved at.
     let old = drive_object::decrypt_file_blob(
         &encrypted,
-        &found.keys.file_key_at(row, file_key, src_epoch)?,
-        DriveFileBlobContextV1::new(&row.id, &row.collection_id, src_epoch)?,
+        &crate::file_crypto::key_at(row, file_key, src.key_generation)?,
+        DriveFileBlobContextV1::new(&row.id, src.key_generation)?,
     )
     .context("decrypt")?;
     let re_encrypted =

@@ -15,6 +15,7 @@ use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::collection_keyring::{self, EpochLinkV1};
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
+use kutup_crypto::file_keyring::{self, FileKeyLinkV1};
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
 use rand::RngCore;
 use reqwest::blocking::Client;
@@ -272,7 +273,7 @@ fn share_revocation_contract() {
         drive_object::encrypt_file_blob(
             plain,
             &file.key,
-            DriveFileBlobContextV1::new(&file.id, &folder.id, 1).unwrap(),
+            DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
         )
         .unwrap()
     };
@@ -292,17 +293,18 @@ fn share_revocation_contract() {
         StatusCode::CONFLICT
     );
 
-    // Re-key the file to epoch 2.
+    // Re-key the file: generation 2, wrapped at epoch 2, sealing generation 1.
     let mut file_key2 = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut file_key2);
     let rekey = |from: i32| {
         bearer(c.post(format!("{base}/api/files/{}/rekey", file.id)), &alice.token)
             .json(&json!({
-                "fromEpoch": from,
+                "fromGeneration": from,
                 "fileKeyEnvelope": drive_envelope::seal_b64(&file_key2, &key2,
-                    ctx_at(DriveEnvelopePurpose::FileKey, 2, 1, &file.id, &folder.id)).unwrap(),
+                    DriveEnvelopeContextV1::file_key(&file.id, &folder.id, 2, 2).unwrap()).unwrap(),
                 "metadataEnvelope": drive_envelope::seal_b64(br#"{"name":"a.txt","mimeType":"text/plain","size":1}"#, &file_key2,
-                    ctx_at(DriveEnvelopePurpose::FileMetadata, 2, 1, &file.id, &folder.id)).unwrap(),
+                    DriveEnvelopeContextV1::file_metadata(&file.id, 2, 1).unwrap()).unwrap(),
+                "previousKeyEnvelope": file_keyring::seal_previous_key(&file.key, &file_key2, &file.id, 2).unwrap(),
             }))
             .send()
             .unwrap()
@@ -313,14 +315,19 @@ fn share_revocation_contract() {
             c.post(format!("{base}/api/files/{}/rekey", file.id)),
             &bob.token
         )
-        .json(&json!({ "fromEpoch": 1, "fileKeyEnvelope": "", "metadataEnvelope": "" }))
+        .json(&json!({
+            "fromGeneration": 1,
+            "fileKeyEnvelope": "",
+            "metadataEnvelope": "",
+            "previousKeyEnvelope": "",
+        }))
         .send()
         .unwrap()
         .status(),
         StatusCode::FORBIDDEN
     );
     assert_eq!(rekey(1), StatusCode::OK);
-    assert_eq!(rekey(1), StatusCode::CONFLICT, "already moved");
+    assert_eq!(rekey(1), StatusCode::CONFLICT, "already re-keyed");
     let rows: Vec<Value> = bearer(
         c.get(format!("{base}/api/collections/{}/files", folder.id)),
         &alice.token,
@@ -331,23 +338,27 @@ fn share_revocation_contract() {
     .unwrap();
     let row = rows.iter().find(|r| r["id"] == file.id.as_str()).unwrap();
     assert_eq!(row["keyEpoch"], 2);
-    assert_eq!(row["originalKeyEpoch"], 1);
-    assert_eq!(row["contentKeyEpoch"], 1);
-    let history = row["keyHistory"].as_array().unwrap();
+    assert_eq!(row["keyGeneration"], 2);
+    assert_eq!(row["originalKeyGeneration"], 1);
+    assert_eq!(row["contentKeyGeneration"], 1);
+    let history: Vec<FileKeyLinkV1> = row["keyHistory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|link| FileKeyLinkV1 {
+            generation: link["generation"].as_u64().unwrap() as u32,
+            previous_key_envelope: link["previousKeyEnvelope"].as_str().unwrap().to_string(),
+        })
+        .collect();
     assert_eq!(history.len(), 1);
-    // The upload still opens: the old file key through the history, under the old folder key.
-    let old_key = drive_envelope::open_b64(
-        history[0]["fileKeyEnvelope"].as_str().unwrap(),
-        &keys[0],
-        ctx_at(DriveEnvelopePurpose::FileKey, 1, 1, &file.id, &folder.id),
-    )
-    .unwrap();
+    // The upload still opens: the old file key through the file's own chain.
+    let old_key = file_keyring::key_at(&file_key2, &file.id, 2, &history, 1).unwrap();
     let (_, served) = download(&c, &base, &alice.token, &file.id);
     assert_eq!(
         drive_object::decrypt_file_blob(
             &served,
             &old_key,
-            DriveFileBlobContextV1::new(&file.id, &folder.id, 1).unwrap()
+            DriveFileBlobContextV1::new(&file.id, 1).unwrap()
         )
         .unwrap(),
         b"written at epoch 1"
@@ -357,12 +368,12 @@ fn share_revocation_contract() {
     let new_blob = drive_object::encrypt_file_blob(
         b"written at epoch 2",
         &file_key2,
-        DriveFileBlobContextV1::new(&file.id, &folder.id, 2).unwrap(),
+        DriveFileBlobContextV1::new(&file.id, 2).unwrap(),
     )
     .unwrap();
     let r = post_version(&c, &base, &alice.token, &file.id, new_blob.clone());
     assert_eq!(r.status(), StatusCode::CREATED);
-    assert_eq!(r.json::<Value>().unwrap()["keyEpoch"], 2);
+    assert_eq!(r.json::<Value>().unwrap()["keyGeneration"], 2);
     let rows: Vec<Value> = bearer(
         c.get(format!("{base}/api/collections/{}/files", folder.id)),
         &alice.token,
@@ -372,7 +383,7 @@ fn share_revocation_contract() {
     .json()
     .unwrap();
     assert_eq!(
-        rows.iter().find(|r| r["id"] == file.id.as_str()).unwrap()["contentKeyEpoch"],
+        rows.iter().find(|r| r["id"] == file.id.as_str()).unwrap()["contentKeyGeneration"],
         2
     );
     assert_eq!(download(&c, &base, &alice.token, &file.id).1, new_blob);

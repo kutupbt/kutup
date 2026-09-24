@@ -13,8 +13,8 @@ import { editorKindFor } from './editorKind'
  */
 export type FileContent =
   | { kind: 'original' }
-  /** The latest version's encrypted blob, under the API base, sealed at `keyEpoch`. */
-  | { kind: 'version'; path: string; versionId: string; keyEpoch: number }
+  /** The latest version's encrypted blob, under the API base, sealed under `keyGeneration`. */
+  | { kind: 'version'; path: string; versionId: string; keyGeneration: number }
   /** A note's current text, from the version `versionId`. */
   | { kind: 'plain'; bytes: Uint8Array; versionId: string }
 
@@ -26,10 +26,10 @@ export async function currentContent(folder: Folder, file: DriveFile): Promise<F
   const latest = versions[0]
   if (!latest || latest.sizeBytes === 0) return { kind: 'original' }
   const path = `/files/${file.id}/versions/${latest.id}/download`
-  if (kind !== 'text') return { kind: 'version', path, versionId: latest.id, keyEpoch: latest.keyEpoch }
+  if (kind !== 'text') return { kind: 'version', path, versionId: latest.id, keyGeneration: latest.keyGeneration }
 
   const { data } = await api.get<ArrayBuffer>(path, { responseType: 'arraybuffer' })
-  const sealed = await sealedAt(folder, file, latest.keyEpoch)
+  const sealed = await sealedAt(file, latest.keyGeneration)
   const state = await decryptFileBlobV1(new Uint8Array(data), sealed.fileKey, sealed.context)
   const Y = await import('yjs')
   const doc = new Y.Doc()

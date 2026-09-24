@@ -223,7 +223,7 @@ fn thumbnails_contract() {
     let blob = drive_object::encrypt_file_blob(
         b"hello thumbnails",
         &file_key,
-        DriveFileBlobContextV1::new(&file_id, &collection_id, 1).unwrap(),
+        DriveFileBlobContextV1::new(&file_id, 1).unwrap(),
     )
     .unwrap();
     let form = reqwest::blocking::multipart::Form::new()
@@ -234,7 +234,7 @@ fn thumbnails_contract() {
             drive_envelope::seal_b64(
                 &file_key,
                 &collection_key,
-                ctx(DriveEnvelopePurpose::FileKey, &file_id, &collection_id),
+                DriveEnvelopeContextV1::file_key(&file_id, &collection_id, 1, 1).unwrap(),
             )
             .unwrap(),
         )
@@ -243,7 +243,7 @@ fn thumbnails_contract() {
             drive_envelope::seal_b64(
                 br#"{"name":"a.txt","mimeType":"text/plain","size":16}"#,
                 &file_key,
-                ctx(DriveEnvelopePurpose::FileMetadata, &file_id, &collection_id),
+                DriveEnvelopeContextV1::file_metadata(&file_id, 1, 1).unwrap(),
             )
             .unwrap(),
         )
@@ -404,7 +404,7 @@ fn thumbnails_contract() {
     let snap = drive_object::encrypt_file_blob(
         b"edited",
         &file_key,
-        DriveFileBlobContextV1::new(&file_id, &collection_id, 1).unwrap(),
+        DriveFileBlobContextV1::new(&file_id, 1).unwrap(),
     )
     .unwrap();
     let form = reqwest::blocking::multipart::Form::new()

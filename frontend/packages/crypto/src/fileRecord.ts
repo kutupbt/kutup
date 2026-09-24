@@ -1,5 +1,19 @@
-import { DRIVE_ENVELOPE_PURPOSE, openDriveEnvelope, sealDriveEnvelope } from './driveEnvelope'
+import {
+  DRIVE_ENVELOPE_PURPOSE,
+  openDriveEnvelope,
+  sealDriveEnvelope,
+  type DriveEnvelopeContextV1,
+} from './driveEnvelope'
+import { sealPreviousFileKeyV1 } from './fileKeyring'
 import { generateKey } from './symmetric'
+
+/**
+ * A file record (docs/plans/drive-move.md): a random file key, wrapped under
+ * its folder's key — the one envelope that names the folder — and the
+ * metadata sealed under the file key, bound to the file alone. `keyEpoch` is
+ * the folder epoch the wrap is sealed at; `keyGeneration` counts the file's
+ * own keys (a re-key adds one).
+ */
 
 export interface FileMetadataV1 {
   name: string
@@ -13,6 +27,7 @@ export interface FileWireV1 {
   metadataEnvelope: string
   fileKeyEnvelope: string
   keyEpoch: number
+  keyGeneration: number
   metadataRevision: number
 }
 
@@ -22,12 +37,13 @@ export interface CreatedFileRecordV1 {
   metadataEnvelope: string
   fileKeyEnvelope: string
   keyEpoch: number
+  keyGeneration: 1
   metadataRevision: 1
 }
 
-function validateEpoch(value: number): void {
+function validateCounter(value: number, what: string): void {
   if (!Number.isSafeInteger(value) || value < 1 || value > 0xffff_ffff) {
-    throw new Error('invalid file key epoch')
+    throw new Error(`invalid ${what}`)
   }
 }
 
@@ -69,111 +85,160 @@ function decodeMetadata(bytes: Uint8Array): FileMetadataV1 {
   }
 }
 
-/** Construct both object-bound envelopes before any upload reaches the server. */
+/** The file key's wrap under its folder's key at `keyEpoch`. */
+function fileKeyContext(
+  fileId: string,
+  collectionId: string,
+  keyEpoch: number,
+  keyGeneration: number,
+): DriveEnvelopeContextV1 {
+  validateCounter(keyEpoch, 'folder key epoch')
+  validateCounter(keyGeneration, 'file key generation')
+  return {
+    purpose: DRIVE_ENVELOPE_PURPOSE.fileKey,
+    epoch: keyEpoch,
+    revision: BigInt(keyGeneration),
+    objectId: fileId,
+    parentId: collectionId,
+  }
+}
+
+/** The metadata under the file key of `keyGeneration`: the file's alone. */
+function metadataContext(
+  fileId: string,
+  keyGeneration: number,
+  revision: number,
+): DriveEnvelopeContextV1 {
+  validateCounter(keyGeneration, 'file key generation')
+  validateRevision(revision)
+  return {
+    purpose: DRIVE_ENVELOPE_PURPOSE.fileMetadata,
+    epoch: keyGeneration,
+    revision: BigInt(revision),
+    objectId: fileId,
+    parentId: fileId,
+  }
+}
+
+/** Construct both envelopes before any upload reaches the server. */
 export async function createFileRecordV1(
   collectionId: string,
   keyEpoch: number,
   collectionKey: Uint8Array,
   metadata: FileMetadataV1,
 ): Promise<CreatedFileRecordV1> {
-  validateEpoch(keyEpoch)
   const fileId = crypto.randomUUID().toLowerCase()
   const fileKey = await generateKey()
-  const fileKeyEnvelope = await sealDriveEnvelope(fileKey, collectionKey, {
-    purpose: DRIVE_ENVELOPE_PURPOSE.fileKey,
-    epoch: keyEpoch,
-    revision: 1n,
-    objectId: fileId,
-    parentId: collectionId,
-  })
-  const metadataEnvelope = await sealDriveEnvelope(encodeMetadata(metadata), fileKey, {
-    purpose: DRIVE_ENVELOPE_PURPOSE.fileMetadata,
-    epoch: keyEpoch,
-    revision: 1n,
-    objectId: fileId,
-    parentId: collectionId,
-  })
+  const fileKeyEnvelope = await sealDriveEnvelope(
+    fileKey,
+    collectionKey,
+    fileKeyContext(fileId, collectionId, keyEpoch, 1),
+  )
+  const metadataEnvelope = await sealDriveEnvelope(
+    encodeMetadata(metadata),
+    fileKey,
+    metadataContext(fileId, 1, 1),
+  )
   return {
     fileId,
     fileKey,
     metadataEnvelope,
     fileKeyEnvelope,
     keyEpoch,
+    keyGeneration: 1,
     metadataRevision: 1,
   }
 }
 
-/** Open a file only under its exact collection, epoch, id, and revision. */
+/** Open a file's key (under `collectionKey`, the folder key at the row's
+ * `keyEpoch`) and its metadata, each only in its exact context. */
 export async function openFileRecordV1(
   row: FileWireV1,
   collectionKey: Uint8Array,
 ): Promise<{ fileKey: Uint8Array; metadata: FileMetadataV1 }> {
-  validateEpoch(row.keyEpoch)
-  validateRevision(row.metadataRevision)
-  const fileKey = await openDriveEnvelope(row.fileKeyEnvelope, collectionKey, {
-    purpose: DRIVE_ENVELOPE_PURPOSE.fileKey,
-    epoch: row.keyEpoch,
-    revision: 1n,
-    objectId: row.id,
-    parentId: row.collectionId,
-  })
-  const metadataBytes = await openDriveEnvelope(row.metadataEnvelope, fileKey, {
-    purpose: DRIVE_ENVELOPE_PURPOSE.fileMetadata,
-    epoch: row.keyEpoch,
-    revision: BigInt(row.metadataRevision),
-    objectId: row.id,
-    parentId: row.collectionId,
-  })
+  const fileKey = await openDriveEnvelope(
+    row.fileKeyEnvelope,
+    collectionKey,
+    fileKeyContext(row.id, row.collectionId, row.keyEpoch, row.keyGeneration),
+  )
+  const metadataBytes = await openDriveEnvelope(
+    row.metadataEnvelope,
+    fileKey,
+    metadataContext(row.id, row.keyGeneration, row.metadataRevision),
+  )
   return { fileKey, metadata: decodeMetadata(metadataBytes) }
 }
 
 export async function renameFileRecordV1(
-  row: Pick<FileWireV1, 'id' | 'collectionId' | 'keyEpoch' | 'metadataRevision'>,
+  row: Pick<FileWireV1, 'id' | 'keyGeneration' | 'metadataRevision'>,
   fileKey: Uint8Array,
   metadata: FileMetadataV1,
 ): Promise<{ metadataEnvelope: string; metadataRevision: number }> {
-  validateEpoch(row.keyEpoch)
   validateRevision(row.metadataRevision)
   const metadataRevision = row.metadataRevision + 1
-  validateRevision(metadataRevision)
-  const metadataEnvelope = await sealDriveEnvelope(encodeMetadata(metadata), fileKey, {
-    purpose: DRIVE_ENVELOPE_PURPOSE.fileMetadata,
-    epoch: row.keyEpoch,
-    revision: BigInt(metadataRevision),
-    objectId: row.id,
-    parentId: row.collectionId,
-  })
+  const metadataEnvelope = await sealDriveEnvelope(
+    encodeMetadata(metadata),
+    fileKey,
+    metadataContext(row.id, row.keyGeneration, metadataRevision),
+  )
   return { metadataEnvelope, metadataRevision }
 }
 
 /**
- * Move a file to its folder's current key (docs/plans/drive-share-revocation.md):
- * a fresh file key sealed at `keyEpoch` under the folder's current key, and
- * the same metadata (same revision) sealed under it. What was stored before
- * stays under the old key, which the server keeps in the file's history.
+ * A new file key for a file its folder has rotated past
+ * (docs/plans/drive-share-revocation.md): the next generation, wrapped at the
+ * folder's current `keyEpoch`, the same metadata (same revision) sealed under
+ * it, and the key it leaves sealed under it too, so everything stored before
+ * stays readable wherever the file goes (docs/plans/drive-move.md).
  */
 export async function rekeyFileRecordV1(
-  row: Pick<FileWireV1, 'id' | 'collectionId' | 'metadataRevision'>,
+  row: Pick<FileWireV1, 'id' | 'collectionId' | 'keyGeneration' | 'metadataRevision'>,
+  currentFileKey: Uint8Array,
   keyEpoch: number,
   collectionKey: Uint8Array,
   metadata: FileMetadataV1,
-): Promise<{ fileKey: Uint8Array; fileKeyEnvelope: string; metadataEnvelope: string }> {
-  validateEpoch(keyEpoch)
-  validateRevision(row.metadataRevision)
+): Promise<{
+  fileKey: Uint8Array
+  keyGeneration: number
+  fileKeyEnvelope: string
+  metadataEnvelope: string
+  previousKeyEnvelope: string
+}> {
+  const keyGeneration = row.keyGeneration + 1
   const fileKey = await generateKey()
-  const fileKeyEnvelope = await sealDriveEnvelope(fileKey, collectionKey, {
-    purpose: DRIVE_ENVELOPE_PURPOSE.fileKey,
-    epoch: keyEpoch,
-    revision: 1n,
-    objectId: row.id,
-    parentId: row.collectionId,
-  })
-  const metadataEnvelope = await sealDriveEnvelope(encodeMetadata(metadata), fileKey, {
-    purpose: DRIVE_ENVELOPE_PURPOSE.fileMetadata,
-    epoch: keyEpoch,
-    revision: BigInt(row.metadataRevision),
-    objectId: row.id,
-    parentId: row.collectionId,
-  })
-  return { fileKey, fileKeyEnvelope, metadataEnvelope }
+  const fileKeyEnvelope = await sealDriveEnvelope(
+    fileKey,
+    collectionKey,
+    fileKeyContext(row.id, row.collectionId, keyEpoch, keyGeneration),
+  )
+  const metadataEnvelope = await sealDriveEnvelope(
+    encodeMetadata(metadata),
+    fileKey,
+    metadataContext(row.id, keyGeneration, row.metadataRevision),
+  )
+  const previousKeyEnvelope = await sealPreviousFileKeyV1(
+    currentFileKey,
+    fileKey,
+    row.id,
+    keyGeneration,
+  )
+  return { fileKey, keyGeneration, fileKeyEnvelope, metadataEnvelope, previousKeyEnvelope }
+}
+
+/**
+ * The file's current key wrapped for another folder, at that folder's
+ * current epoch: everything a move sends (docs/plans/drive-move.md).
+ */
+export async function wrapFileKeyForV1(
+  file: Pick<FileWireV1, 'id' | 'keyGeneration'>,
+  fileKey: Uint8Array,
+  collectionId: string,
+  keyEpoch: number,
+  collectionKey: Uint8Array,
+): Promise<string> {
+  return sealDriveEnvelope(
+    fileKey,
+    collectionKey,
+    fileKeyContext(file.id, collectionId, keyEpoch, file.keyGeneration),
+  )
 }

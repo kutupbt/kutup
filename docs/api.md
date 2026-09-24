@@ -771,14 +771,15 @@ Upload an encrypted file to a collection. Multipart form.
 |-------|------|-------------|
 | `fileId` | string (canonical UUID) | Client-generated before envelope construction |
 | `collectionId` | string (UUID) | Target collection |
-| `metadataEnvelope` | string (canonical base64) | `DriveEnvelopeV1` metadata record bound to file, collection, epoch, and revision 1 |
-| `fileKeyEnvelope` | string (canonical base64) | `DriveEnvelopeV1` file-key record bound to file, collection, epoch, and revision 1 |
-| `file` | binary | Complete typed V1 Drive file blob (`application/octet-stream`) |
+| `metadataEnvelope` | string (canonical base64) | `DriveEnvelopeV1` metadata record under the file key, bound to the file (object = parent = file), key generation 1 and revision 1 |
+| `fileKeyEnvelope` | string (canonical base64) | `DriveEnvelopeV1` file-key record under the collection key, bound to file, collection, the collection's current epoch and key generation 1 (the revision slot) |
+| `file` | binary | Complete typed Drive file blob (`application/octet-stream`) |
 
 The server obtains the current collection epoch itself and rejects malformed,
 noncanonical, relocated, stale-epoch, wrong-purpose, or wrong-revision
 envelopes. It also validates that the blob's authenticated-format header binds
-the same file, collection and epoch before storage. It never accepts a
+the same file and key generation 1 before storage (the blob names no folder:
+docs/plans/drive-move.md). It never accepts a
 server-generated replacement for `fileId`. A `fileId` already used by a
 stored file or an open upload is refused with `409` and nothing is written —
 a retry cannot overwrite what an earlier attempt stored.
@@ -808,22 +809,28 @@ List files in a collection.
     "metadataEnvelope": "<DriveEnvelopeV1 base64>",
     "fileKeyEnvelope": "<DriveEnvelopeV1 base64>",
     "keyEpoch": 1,
+    "keyGeneration": 1,
     "metadataRevision": 1,
     "encryptedSizeBytes": 4096,
     "createdAt": "2026-03-14T12:00:00Z",
     "updatedAt": "2026-03-14T12:00:00Z",
-    "thumbnails": { "sm": "2026-03-14T12:00:05Z" },
-    "thumbnailStale": false
+    "thumbnails": { "sm": "2026-03-14T12:00:05Z", "smKeyGeneration": 1 },
+    "thumbnailStale": false,
+    "originalKeyGeneration": 1,
+    "contentKeyGeneration": 1
   }
 ]
 ```
+
+`keyEpoch` is the collection epoch the file key is wrapped at; `keyGeneration`
+counts the file's own keys (see "Moving" and `rekey` below).
 
 `thumbnails` has the store time of each thumbnail variant that exists (`sm`,
 `lg`; absent keys mean none). `thumbnailStale` is true when a stored thumbnail
 was drawn from something other than the file's latest version, so a client
 with write access should redraw it (see "Thumbnails" below).
 
-`encryptedSizeBytes` is the size of the ciphertext blob on disk: a 48-byte
+`encryptedSizeBytes` is the size of the ciphertext blob on disk: a 32-byte
 typed Drive header, a 24-byte secretstream header, and at least one frame with
 a 17-byte authentication/tag overhead.
 
@@ -831,10 +838,10 @@ a 17-byte authentication/tag overhead.
 
 ### PUT /api/files/:id
 
-Replace only the authenticated metadata envelope. The request must advance the
-stored revision by exactly one; gaps, rollback, replay, a wrong file or
-collection binding, and a stale epoch return `409` or `400` without changing
-the row.
+Replace only the authenticated metadata envelope, sealed at the file's current
+key generation. The request must advance the stored revision by exactly one;
+gaps, rollback, replay, a wrong file binding, and a stale key generation
+return `409` or `400` without changing the row.
 
 ```json
 {
@@ -912,25 +919,54 @@ epochStatementHash }`.
 
 ### POST /api/files/:id/rekey
 
-Move a file to its folder's current key before writing to it. **Body:**
-`{ fromEpoch, fileKeyEnvelope, metadataEnvelope }` — a new file key sealed at
-the folder's current epoch and the metadata (same revision) sealed under it.
-The key left behind is kept in the file's history. `409` if the file already
-moved (another editor) or is already current. **Auth:** write access.
-Open collaboration sockets on the file are closed so peers reconnect under the
-new key.
+Give a file a new key before writing to it (or moving it) when its folder has
+rotated past it. **Body:** `{ fromGeneration, fileKeyEnvelope,
+metadataEnvelope, previousKeyEnvelope }` — a new random file key of generation
+`fromGeneration + 1` wrapped at the folder's current epoch, the metadata (same
+revision) sealed under it, and the key being left sealed under it
+(`PreviousFileKey`, purpose 10). **Response:** `{ keyEpoch, keyGeneration }`.
+`409` if another editor re-keyed first or the file is already current.
+**Auth:** write access. Open collaboration sockets on the file are closed so
+peers reconnect under the new key.
 
 **New content only under the current key.** Versions, assets, thumbnails,
-renames and collaborative edits of a file whose epoch is behind its folder's
-are refused (`409 file needs a re-key`). An upload sealed at an older folder
-epoch gets `409 folder key changed` (reload the folder and retry).
+renames and collaborative edits must be sealed at the file's current key
+generation (`409 file key changed` otherwise), and are refused for a file
+whose key is wrapped at an older epoch than its folder's (`409 file needs a
+re-key`). An upload sealed at an older folder epoch gets `409 folder key
+changed` (reload the folder and retry).
 
-**Listing fields.** File rows carry `originalKeyEpoch` (the upload's epoch),
-`contentKeyEpoch` (the epoch of what `/download` serves), `keyHistory`
-(`[{ epoch, fileKeyEnvelope }]`, file keys left behind by re-keys) and
-`thumbnails.{sm,lg}KeyEpoch`; version rows carry `keyEpoch`; an asset
-download carries `X-Kutup-Key-Epoch`. Each object opens with the file key of
-its own epoch.
+**Listing fields.** File rows carry `keyGeneration`, `originalKeyGeneration`
+(the upload's), `contentKeyGeneration` (that of what `/download` serves),
+`keyHistory` (`[{ generation, previousKeyEnvelope }]`, generations 2 to
+`keyGeneration` in order, each sealing the one before) and
+`thumbnails.{sm,lg}KeyGeneration`; version rows carry `keyGeneration`; an
+asset download carries `X-Kutup-Key-Generation`. Each object opens with the
+file key of its own generation, reached from the current key through
+`keyHistory` wherever the file is.
+
+### POST /api/files/:id/move
+
+Move a file to another folder of the same owner (docs/plans/drive-move.md).
+**Body:** `{ fromCollectionId, toCollectionId, toKeyEpoch, fileKeyEnvelope }`
+— the file's current key sealed under the destination's key at its current
+epoch `toKeyEpoch`, with the file's key generation. Nothing else changes: the
+content, metadata, versions, thumbnails and assets are bound to the file, not
+the folder. **Response:** `{ collectionId, keyEpoch }`. **Auth:** write access
+to both folders. `400` same folder, another owner's folder (copy instead) or
+an invalid envelope; `403` no write access; `409 the file moved`
+(`fromCollectionId` is stale), `409 file needs a re-key` (re-key it in its
+folder first, so no one removed from that folder can follow it), `409 folder
+key changed` (the destination rotated; reload). Open collaboration sockets on
+the file are closed.
+
+### POST /api/collections/:id/move
+
+Put a folder under another of the owner's folders, or at the top level.
+**Body:** `{ parentCollectionId: string | null }`. A folder's key is sealed to
+its owner, not its parent, so nothing encrypted changes. **Response:** `204`.
+**Auth:** owner (`404` otherwise). `400` into itself or a folder inside it, or
+under a folder the caller does not own.
 
 ---
 
@@ -1096,9 +1132,12 @@ List files in a public share.
     "metadataEnvelope": "<DriveEnvelopeV1 base64>",
     "fileKeyEnvelope": "<DriveEnvelopeV1 base64>",
     "keyEpoch": 1,
+    "keyGeneration": 1,
     "metadataRevision": 1,
     "encryptedSizeBytes": 4096,
-    "createdAt": "2026-03-14T12:00:00Z"
+    "createdAt": "2026-03-14T12:00:00Z",
+    "originalKeyGeneration": 1,
+    "contentKeyGeneration": 1
   }
 ]
 ```

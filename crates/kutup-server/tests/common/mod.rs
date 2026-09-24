@@ -131,6 +131,10 @@ pub struct Folder {
 }
 
 pub fn create_folder(c: &Client, base: &str, owner: &User) -> Folder {
+    create_folder_in(c, base, owner, None)
+}
+
+pub fn create_folder_in(c: &Client, base: &str, owner: &User, parent: Option<&str>) -> Folder {
     let id = uuid();
     let mut key = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut key);
@@ -140,7 +144,7 @@ pub fn create_folder(c: &Client, base: &str, owner: &User) -> Folder {
             "ownerKeyEnvelope": drive_envelope::seal_b64(&key, &owner.master_key, ctx(DriveEnvelopePurpose::CollectionKey, &id, &owner.id)).unwrap(),
             "nameEnvelope": drive_envelope::seal_b64(b"Integrity", &key, ctx(DriveEnvelopePurpose::CollectionName, &id, &owner.id)).unwrap(),
             "epochStatement": CollectionEpochStatementV1::create(&id, &owner.id, 1, None, &key, owner.identity.authority_signing_key()).unwrap().encode_b64(),
-            "parentCollectionId": null,
+            "parentCollectionId": parent,
         }))
         .send()
         .unwrap();
@@ -197,19 +201,19 @@ pub fn seal_file(folder: &Folder, id: &str, plain: &[u8]) -> Sealed {
         blob: drive_object::encrypt_file_blob(
             plain,
             &key,
-            DriveFileBlobContextV1::new(id, &folder.id, 1).unwrap(),
+            DriveFileBlobContextV1::new(id, 1).unwrap(),
         )
         .unwrap(),
         metadata_envelope: drive_envelope::seal_b64(
             br#"{"name":"a.txt","mimeType":"text/plain","size":1}"#,
             &key,
-            ctx(DriveEnvelopePurpose::FileMetadata, id, &folder.id),
+            DriveEnvelopeContextV1::file_metadata(id, 1, 1).unwrap(),
         )
         .unwrap(),
         file_key_envelope: drive_envelope::seal_b64(
             &key,
             &folder.key,
-            ctx(DriveEnvelopePurpose::FileKey, id, &folder.id),
+            DriveEnvelopeContextV1::file_key(id, &folder.id, 1, 1).unwrap(),
         )
         .unwrap(),
     }
@@ -257,7 +261,6 @@ pub fn put_asset(
     c: &Client,
     base: &str,
     token: &str,
-    folder: &Folder,
     file: &Sealed,
     asset_id: &str,
     plain: &[u8],
@@ -267,8 +270,7 @@ pub fn put_asset(
             drive_envelope::seal_b64(
                 plain,
                 &file.key,
-                DriveEnvelopeContextV1::whiteboard_asset(&file.id, &folder.id, asset_id, 1)
-                    .unwrap(),
+                DriveEnvelopeContextV1::whiteboard_asset(&file.id, asset_id, 1).unwrap(),
             )
             .unwrap(),
         )

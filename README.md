@@ -205,9 +205,16 @@ kutup trash ls
 kutup trash restore <id>
 kutup trash empty --yes
 
-# Rename a file or a folder (names are E2EE metadata; content untouched).
+# Rename or move a file or a folder (names are E2EE metadata; content is
+# never re-uploaded). Moving a file re-seals only its key for the destination
+# (a file whose folder removed someone gets a new key first); moving a folder
+# changes nothing encrypted. Moves stay among one owner's folders on this
+# server — across owners or servers, download and upload instead.
 kutup mv <file-id> "new name.txt"
+kutup mv <file-id> --to <folder-id>
 kutup mv <folder-id> "New folder name" --folder
+kutup mv <folder-id> --folder --to <parent-folder-id>
+kutup mv <folder-id> --folder --root
 
 # List versions. Restore is currently safe for CLI/sync-created files;
 # live-collaboration snapshots need the web client's derived content-key path.

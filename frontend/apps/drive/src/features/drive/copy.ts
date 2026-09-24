@@ -55,7 +55,7 @@ export async function readFile(folder: Folder, file: DriveFile, signal?: AbortSi
         ? `${base}/files/${file.id}/download`
         : `${base}/drive/federation/shares/${location.shareId}/files/${file.id}/content`
   const parts: BlobPart[] = []
-  const sealed = await sealedAt(folder, file, content.kind === 'version' ? content.keyEpoch : file.contentKeyEpoch)
+  const sealed = await sealedAt(file, content.kind === 'version' ? content.keyGeneration : file.contentKeyGeneration)
   for await (const { plain } of fetchDecryptedChunks(url, sealed.fileKey, sealed.context, await freshAccessToken(), signal)) {
     // Blobs, not one growing buffer: the browser may keep large ones on disk.
     parts.push(new Blob([plain as BlobPart]))

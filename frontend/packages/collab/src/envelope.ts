@@ -17,7 +17,7 @@ export type Kind = typeof KIND[keyof typeof KIND]
 
 export interface OpenedCollabFrameV1 {
   kind: number
-  keyEpoch: number
+  keyGeneration: number
   docKeyId: number
   senderDeviceId: bigint
   sequence: bigint

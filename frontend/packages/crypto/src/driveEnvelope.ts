@@ -3,9 +3,10 @@ import { getCryptoWasm } from './rustWasm'
 
 /**
  * The purposes whose context is two plain UUIDs. Whiteboard assets (6),
- * thumbnails (7) and previous folder keys (8) have their own typed wrappers
- * (whiteboardAsset.ts, thumbnail.ts, collectionKeyring.ts); the generic WASM
- * export refuses them.
+ * thumbnails (7), previous folder keys (8) and previous file keys (10) have
+ * their own typed wrappers (whiteboardAsset.ts, thumbnail.ts,
+ * collectionKeyring.ts, fileKeyring.ts); the generic WASM export refuses them.
+ * File keys (3) and metadata (4) are built only in fileRecord.ts.
  */
 export const DRIVE_ENVELOPE_PURPOSE = {
   collectionKey: 1,

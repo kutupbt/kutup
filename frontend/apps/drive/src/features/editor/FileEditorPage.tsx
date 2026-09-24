@@ -16,7 +16,7 @@ import { formatBytes } from '@kutup/ui/lib/format'
 import { NameDialog } from '../dialogs/NameDialog'
 import { downloadFile, FsaRequiredError } from '../drive/downloads'
 import { filesKey, useFolderFiles } from '../drive/files'
-import { fileKeyAt, folderKeyAt, sealedAt } from '../drive/keyring'
+import { fileKeyAt, sealedAt } from '../drive/keyring'
 import { rekeyFile } from '../drive/rekey'
 import { useFolders } from '../drive/folders'
 import { useRenameFile } from '../drive/mutations'
@@ -56,12 +56,10 @@ type Opened =
 type Failure = 'notFound' | 'undecryptable' | 'tooLarge' | 'loadFailed'
 
 interface Keys {
-  /** The folder key at the file's epoch (what its collaboration frames use). */
-  collectionKey: Uint8Array
-  /** The folder key at any epoch: older log frames and assets. */
-  keyAt: (epoch: number) => Promise<Uint8Array>
-  /** Where new saves go: the file's current key and epoch. */
+  /** Where new saves and frames go: the file's current key and generation. */
   target: SnapshotTarget
+  /** The file key of any generation: older log frames, versions and assets. */
+  fileKeyAt: (generation: number) => Promise<Uint8Array>
 }
 
 /**
@@ -115,9 +113,9 @@ function OpenFile({ cid, fid }: { cid: string; fid: string }) {
     const name = f.name
     const target: SnapshotTarget = {
       fileKey: f.fileKey,
-      context: { fileId: f.id, collectionId: f.collectionId, epoch: f.keyEpoch },
+      context: { fileId: f.id, generation: f.keyGeneration },
     }
-    const keyAt = (epoch: number) => folderKeyAt(container, epoch)
+    const keyOf = (generation: number) => fileKeyAt(f, generation)
 
     let cancelled = false
     let blobUrl: string | null = null
@@ -136,15 +134,8 @@ function OpenFile({ cid, fid }: { cid: string; fid: string }) {
         }
         return
       }
-      let collectionKey: Uint8Array
-      try {
-        collectionKey = await keyAt(f.keyEpoch)
-      } catch {
-        if (!cancelled) setFailure('undecryptable')
-        return
-      }
       if (!editor && !viewer) {
-        setKeys({ collectionKey, keyAt, target })
+        setKeys({ target, fileKeyAt: keyOf })
         setOpened({ kind: 'none' })
         return
       }
@@ -154,21 +145,21 @@ function OpenFile({ cid, fid }: { cid: string; fid: string }) {
       }
       try {
         let bytes: Uint8Array
-        // Each stored thing opens with the key of the epoch it was sealed at.
+        // Each stored thing opens with the key generation it was sealed under.
         if (editor === 'office' || editor === 'whiteboard') {
           // Reopen what was last saved, not the upload.
           const content = await currentContent(container, f)
           bytes =
             content.kind === 'version'
-              ? await loadVersionBytes(await sealedAt(container, f, content.keyEpoch), content.path)
-              : await loadOriginal(f, await sealedAt(container, f, f.contentKeyEpoch))
+              ? await loadVersionBytes(await sealedAt(f, content.keyGeneration), content.path)
+              : await loadOriginal(f, await sealedAt(f, f.contentKeyGeneration))
         } else {
           // Notes pick their latest version up themselves; the upload only
           // seeds a note that has never been edited.
-          bytes = await loadOriginal(f, await sealedAt(container, f, f.contentKeyEpoch))
+          bytes = await loadOriginal(f, await sealedAt(f, f.contentKeyGeneration))
         }
         if (cancelled) return
-        setKeys({ collectionKey, keyAt, target })
+        setKeys({ target, fileKeyAt: keyOf })
         if (editor === 'text') {
           setOpened({ kind: 'text', initialText: new TextDecoder().decode(bytes) })
         } else if (editor) {
@@ -317,19 +308,16 @@ function Workspace({
   const editor = (() => {
     const common = {
       fileId: file.id,
-      collectionId: file.collectionId,
       filename: name,
-      collectionMaster: keys.collectionKey,
-      keyEpoch: keys.target.context.epoch,
-      keyAt: keys.keyAt,
+      fileKey: keys.target.fileKey,
+      keyGeneration: keys.target.context.generation,
+      fileKeyAt: keys.fileKeyAt,
     }
     switch (opened.kind) {
       case 'text':
         return (
           <TextCollabEditor
             {...common}
-            fileKey={keys.target.fileKey}
-            fileKeyAt={(epoch) => fileKeyAt(folder, file, epoch)}
             initialContent={opened.initialText}
             readOnly={readOnly}
           />
@@ -382,11 +370,11 @@ function Workspace({
           ) : wholeFile ? (
             <WholeFileActions
               openVersion={async (versionId) => {
-                // A version opens with the key of the epoch it was saved at.
+                // A version opens with the key generation it was saved under.
                 const version = (await listVersions(file.id)).find((v) => v.id === versionId)
                 if (!version) throw new Error('version not found')
                 return loadVersionBytes(
-                  await sealedAt(folder, file, version.keyEpoch),
+                  await sealedAt(file, version.keyGeneration),
                   `/files/${file.id}/versions/${versionId}/download`,
                 )
               }}
@@ -649,7 +637,7 @@ function redrawWhiteboard(target: SnapshotTarget, versionId: string, bytes: Uint
     const png = await exportScene(json)
     if (!png) return false
     return storeThumbnails(
-      { fileId: target.context.fileId, fileKey: target.fileKey, keyEpoch: target.context.epoch },
+      { fileId: target.context.fileId, fileKey: target.fileKey, keyGeneration: target.context.generation },
       await thumbnailsOfDrawing(png),
       versionId,
     )
@@ -667,7 +655,7 @@ function redrawOffice(target: SnapshotTarget, versionId: string, pdf: () => Prom
     const png = await renderPdfFirstPageV1(bytes.slice().buffer, THUMBNAIL_MAX_SIDE.lg, undefined, trim ? { trim: 'corner' } : {})
     if (!png) return false
     return storeThumbnails(
-      { fileId: target.context.fileId, fileKey: target.fileKey, keyEpoch: target.context.epoch },
+      { fileId: target.context.fileId, fileKey: target.fileKey, keyGeneration: target.context.generation },
       await thumbnailsOfPicture(png, true),
       versionId,
     )

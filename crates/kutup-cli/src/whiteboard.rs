@@ -3,8 +3,8 @@
 //! and the removed Go CLI's implementation.
 //!
 //! Upload side: every image element with an inline `dataURL` gets its binary
-//! encrypted as an asset blob (AEAD under the per-file content key derived
-//! from the COLLECTION key — see `kutup_crypto::asset`), uploaded, and the
+//! encrypted as an asset blob (sealed under the FILE key and bound to the file,
+//! the key generation and the asset id — see `kutup_crypto::asset`), uploaded, and the
 //! element flipped to `status:"saved"`; the modified scene is committed as a
 //! fresh snapshot so web/collab clients see the flip.
 //!
@@ -34,24 +34,16 @@ pub fn extract_and_upload(
     client: &Client,
     file_id: &str,
     file_key: &[u8],
-    collection_id: &str,
-    key_epoch: u32,
-    collection_key: &[u8],
+    generation: u32,
     local_path: &std::path::Path,
 ) -> Result<()> {
     let raw = std::fs::read(local_path).context("re-read excalidraw")?;
     let mut doc: Value = serde_json::from_slice(&raw).context("parse excalidraw json")?;
 
     let uploaded = extract_assets(&mut doc, |asset_id, data_url| {
-        let ciphertext = asset::encrypt_asset(
-            data_url.as_bytes(),
-            file_id,
-            collection_id,
-            asset_id,
-            key_epoch,
-            collection_key,
-        )
-        .with_context(|| format!("encrypt asset {asset_id}"))?;
+        let ciphertext =
+            asset::encrypt_asset(data_url.as_bytes(), file_id, asset_id, generation, file_key)
+                .with_context(|| format!("encrypt asset {asset_id}"))?;
         client
             .upload_asset(file_id, asset_id, ciphertext)
             .with_context(|| format!("upload asset {asset_id}"))
@@ -63,7 +55,7 @@ pub fn extract_and_upload(
     // Commit the status:"saved" flips as a fresh snapshot — the web reads the
     // newest snapshot on open, so it won't re-upload these assets.
     let out = serde_json::to_vec(&doc).context("re-encode excalidraw json")?;
-    let blob_context = DriveFileBlobContextV1::new(file_id, collection_id, key_epoch)?;
+    let blob_context = DriveFileBlobContextV1::new(file_id, generation)?;
     let encrypted = drive_object::encrypt_file_blob(&out, file_key, blob_context)
         .context("encrypt snapshot")?;
     client
@@ -88,10 +80,8 @@ pub fn extract_and_upload(
 /// was rewritten, `None` when the scene was already self-contained.
 pub fn hydrate(
     client: &Client,
-    file_id: &str,
-    collection_id: &str,
-    key_epoch: u32,
-    keys: &crate::keyring::Keyring,
+    file: &crate::api::File,
+    file_key: &[u8; 32],
     dest_path: &std::path::Path,
 ) -> Result<Option<i64>> {
     let raw = std::fs::read(dest_path).context("re-read excalidraw")?;
@@ -102,39 +92,33 @@ pub fn hydrate(
         return Ok(None);
     }
 
+    let file_id = file.id.as_str();
     let mut inlined = 0usize;
     for asset_id in &missing {
-        let (blob, asset_epoch) = match client.download_asset(file_id, asset_id) {
+        let (blob, asset_generation) = match client.download_asset(file_id, asset_id) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("warning: skip asset {asset_id}: {e:#}");
                 continue;
             }
         };
-        // Sealed at its own epoch: an image stored before the folder rotated
-        // opens with that epoch's key.
-        let asset_epoch = asset_epoch.unwrap_or(key_epoch);
-        let collection_key = match keys.at(asset_epoch) {
+        // Sealed at its own generation: an image stored before the file was
+        // re-keyed opens with that generation's key.
+        let asset_key = match crate::file_crypto::key_at(file, file_key, asset_generation) {
             Ok(key) => key,
             Err(e) => {
-                eprintln!("warning: asset {asset_id}: {e}");
+                eprintln!("warning: asset {asset_id}: {e:#}");
                 continue;
             }
         };
-        let plain = match asset::decrypt_asset(
-            &blob,
-            file_id,
-            collection_id,
-            asset_id,
-            asset_epoch,
-            collection_key,
-        ) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("warning: decrypt asset {asset_id}: {e}");
-                continue;
-            }
-        };
+        let plain =
+            match asset::decrypt_asset(&blob, file_id, asset_id, asset_generation, &asset_key) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("warning: decrypt asset {asset_id}: {e}");
+                    continue;
+                }
+            };
         let data_url = String::from_utf8_lossy(&plain).into_owned();
         inline_asset(&mut doc, asset_id, &data_url);
         inlined += 1;

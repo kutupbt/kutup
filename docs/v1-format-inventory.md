@@ -13,13 +13,14 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 | Master-key recovery wrap | XSalsa20 secretbox under random recovery entropy | **Implemented:** `AccountEnvelopeV1` with recovery purpose, canonical account context and XChaCha |
 | Account sharing private key | XSalsa20 secretbox; public X25519 key stored separately | **Implemented:** account-scoped Drive keys in `AccountManifestV1`; private material wrapped by the Drive-private-key purpose of `AccountEnvelopeV1` |
 | Collection name/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated collection UUID, `DriveEnvelopeV1` owner-key/name records, immutable `CollectionEpochStatementV1` history and exact revision/epoch binding |
-| File metadata/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated file UUID plus `DriveEnvelopeV1` records bound to file, collection, exact revision and authenticated collection epoch across multipart, tus, trash, public-link and signed-federation paths |
-| File blob and version snapshot | Raw secretstream header/chunks, or nonce-prefixed snapshot AEAD | **Implemented end to end:** one `DriveObjectSuiteId` file-blob format for originals and text/office/whiteboard snapshots, with 5 MiB secretstream framing bound to file, collection and epoch |
+| File metadata/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated file UUID; the file key's wrap is bound to file, folder, the folder epoch it is sealed at and the key's generation, and the metadata to the file alone (generation and revision), across multipart, tus, trash, public-link and signed-federation paths (docs/plans/drive-move.md) |
+| File blob and version snapshot | Raw secretstream header/chunks, or nonce-prefixed snapshot AEAD | **Implemented end to end:** one `DriveObjectSuiteId` file-blob format for originals and text/office/whiteboard snapshots, with 5 MiB secretstream framing bound to the file and its key generation, never the folder |
 | Local/federated named share | Anonymous `crypto_box_seal` bytes | **Implemented end to end:** one `NamedShareEnvelopeV1` format for local and signed-federation routes, X25519 HPKE plus account-manifest-bound Ed25519 sender signature |
 | Public-link collection wrap | Secretbox under link key plus separate nonce | **Implemented end to end:** public-link purpose `DriveEnvelopeV1` bound to collection, owner and epoch; the independent link capability remains only in the URL fragment |
-| Collaborative frame | XChaCha frame with `doc_key_id`, device and sequence | **Implemented end to end:** canonical Rust `CollabFrameSuiteId = 1`, 96-byte authenticated context header, purpose-derived XChaCha key and Ed25519 signature; browser uses the Rust parser/KDF/AEAD through WASM |
-| Whiteboard asset | XChaCha with asset AAD | **Implemented end to end:** `DriveEnvelopeV1` whiteboard-asset purpose bound to file, collection, epoch and asset ID across browser, CLI and server ingestion |
-| File thumbnail | — (new) | **Format and server implemented:** `DriveEnvelopeV1` purpose 7 under the file key, bound to file, variant and epoch; padded `KTH1` container |
+| Collaborative frame | XChaCha frame with `doc_key_id`, device and sequence | **Implemented end to end:** canonical Rust `CollabFrameSuiteId = 1`, 80-byte authenticated context header, XChaCha key derived from the file key and Ed25519 signature; browser uses the Rust parser/KDF/AEAD through WASM |
+| Whiteboard asset | XChaCha with asset AAD | **Implemented end to end:** `DriveEnvelopeV1` whiteboard-asset purpose under the file key, bound to file, key generation and asset ID across browser, CLI and server ingestion |
+| File thumbnail | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 7 under the file key, bound to file, variant and key generation; padded `KTH1` container |
+| File key history | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 10 seals generation *g − 1*'s file key under generation *g*'s; `file_keyring::key_at` walks the chain, so a file's history travels with it between folders (docs/plans/drive-move.md) |
 | Folder key history | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 8 seals epoch *e − 1*'s key under epoch *e*'s; `collection_keyring::unlock` verifies the whole owner-signed statement chain and every key commitment (docs/plans/drive-share-revocation.md) |
 | Public-link owner copy | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 9 seals a link's key under the owner's master key (object = link id), so links can be listed, copied and re-wrapped on rotation |
 | Encrypted profile | AES-256-GCM nonce/ciphertext | **Implemented end to end:** `ProfileSuiteId = 1` plus account/revision/device/purpose-bound XChaCha `ProfileEnvelopeV1`; suite code accompanies every E2EE profile-key capability |
@@ -43,15 +44,25 @@ ciphertext/tag. The fixed header is AAD. Its stable scope also feeds
 HKDF-SHA256, so raw master/collection/file/link roots are never AEAD keys and
 each purpose, object, parent, epoch and revision has a distinct derived key.
 
-A V1 file blob is `[DriveFileBlobHeaderV1][secretstream header][frames]`.
-The 48-byte Drive header is magic `KUTPDB1\0`, big-endian
-`DriveObjectSuiteId`, file-blob purpose, zero reserved byte, non-zero epoch,
-file UUID and collection UUID. HKDF-SHA256 derives a purpose key from the
-random file key using the fixed header as info. The same header is associated
-data for every 5 MiB secretstream frame. Every blob, including an empty file,
-contains an authenticated `TAG_FINAL` frame; truncation, trailing frames and
-file/collection/epoch relocation fail closed. Multipart, tus, snapshot and
+A file blob is `[DriveFileBlobHeaderV1][secretstream header][frames]`.
+The 32-byte Drive header is magic `KUTPDB2\0`, big-endian
+`DriveObjectSuiteId`, file-blob purpose, zero reserved byte, the non-zero
+generation of the file key that sealed it, and the file UUID. It names no
+folder, so a file moves without re-encryption (docs/plans/drive-move.md; the
+48-byte `KUTPDB1` layout, which also named the folder, was replaced before the
+first tag). HKDF-SHA256 derives a purpose key from the random file key using
+the fixed header as info. The same header is associated data for every 5 MiB
+secretstream frame. Every blob, including an empty file, contains an
+authenticated `TAG_FINAL` frame; truncation, trailing frames and
+file/generation relocation fail closed. Multipart, tus, snapshot and
 signed-federation ingestion validate the exact public header before storage.
+
+A file's key is wrapped under its folder's key as a purpose-3 envelope: object
+= file, parent = folder, epoch = the folder epoch it is sealed at, revision =
+the file key's generation. It is the only file object that names the folder;
+moving a file re-seals it alone. The metadata (purpose 4) is sealed under the
+file key with object = parent = file, epoch = key generation and revision =
+metadata revision.
 
 `CollectionEpochStatementV1` is a fixed-width account-authority-signed record
 over suite, collection UUID, owner UUID, non-zero epoch, exact previous-record
@@ -72,10 +83,15 @@ the last. A key of an earlier epoch therefore unlocks nothing. Keyless parties
 (a federated recipient's server) use `verify_history` to check that a new
 epoch descends from the one they pinned. Vector: `collectionKeyring`.
 
-Files keep the epoch their content was sealed at. A re-key moves a file's key
-and metadata to the folder's current epoch and keeps the key it leaves (per
-epoch) so older content still opens; the server accepts new content only at
-the folder's current epoch.
+A file whose key is wrapped at an older folder epoch is re-keyed before new
+content is written to it or it moves: a new random key of the next
+generation, wrapped at the folder's current epoch, with the metadata re-sealed
+under it and the key it leaves sealed under it as a purpose-10 envelope
+(object = parent = file, epoch = the new generation). Everything already
+stored records the generation it was sealed under and opens through
+`file_keyring::key_at`, whichever folder the file is in. The chain carries no
+signature: an envelope under a key the server does not hold cannot be forged,
+and each is bound to its file and generation. Vector: `fileKeyring`.
 
 `NamedShareEnvelopeV1` uses the fixed RFC 9180
 DHKEM(X25519)/HKDF-SHA256/ChaCha20-Poly1305 suite. Its AAD and Ed25519 signature
@@ -84,25 +100,27 @@ both account incarnation IDs. The sender key is the manifest-bound Drive share
 signer; the recipient key is the manifest-bound Drive HPKE key. V1 intentionally
 provides no anonymous Drive sharing.
 
-`CollabFrameSuiteId = 1` uses magic `KUTPCF1\0` and a fixed 96-byte
-big-endian header containing suite, kind, collection-key epoch, document-key
-generation, file UUID, collection UUID, sender device, sequence, nonce and
-exact ciphertext length. The header is AEAD associated data. HKDF-SHA256 binds
-the same suite, kind, epoch, document generation and UUIDs into a distinct
-XChaCha20-Poly1305 key. Ed25519 signs the header and ciphertext; the trailing
-signature is not self-covered. The server accepts only the exact current
-file/collection/epoch/document binding and a registered sender device.
+`CollabFrameSuiteId = 1` uses magic `KUTPCF2\0` and a fixed 80-byte
+big-endian header containing suite, kind, file-key generation, document-key
+generation, file UUID, sender device, sequence, nonce and exact ciphertext
+length. The header is AEAD associated data. HKDF-SHA256 derives from the file
+key a distinct XChaCha20-Poly1305 key bound to the same suite, kind, key
+generation, document generation and file UUID (the 96-byte `KUTPCF1` layout,
+under the folder key, was replaced before the first tag). Ed25519 signs the
+header and ciphertext; the trailing signature is not self-covered. The server
+accepts only the exact current file/key-generation/document binding and a
+registered sender device.
 
-Whiteboard assets use `DriveEnvelopeV1` purpose 6. The object UUID is the file
-UUID; the parent binding is a fixed-label SHA-256 commitment to the collection
-UUID and canonical asset ID. Epoch and revision 1 are authenticated in the
-normal Drive envelope header. Plaintext is limited to 25 MiB and the server
+Whiteboard assets use `DriveEnvelopeV1` purpose 6 under the **file key**. The
+object UUID is the file UUID; the parent binding is a fixed-label
+(`whiteboard-asset/v2`) SHA-256 commitment to the canonical asset ID. The
+epoch slot carries the file key's generation; revision is 1. Plaintext is limited to 25 MiB and the server
 validates the complete public envelope before quota or object-storage mutation.
 
 Thumbnails use `DriveEnvelopeV1` purpose 7 with the **file key** as root key.
 The object UUID is the file UUID; the parent binding is a fixed-label
 SHA-256 commitment to the variant id (`sm` or `lg`), so one variant never
-opens as the other. Epoch is the file row's key epoch; revision is fixed at 1
+opens as the other. The epoch slot carries the file key's generation; revision is fixed at 1
 because V1 has no signed file revision chain to make freshness meaningful.
 The plaintext is a `KTH1` container: magic, format (1 JPEG, 2 WebP, 3 PNG —
 never SVG), u16 width and height (≤ 512 or ≤ 1920), u32 image length, the

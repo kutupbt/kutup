@@ -6,9 +6,10 @@ import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { fromBase64, openFileRecordV1, openPublicLinkCollectionKeyV1 } from '@kutup/crypto'
 import { unlockCollectionKeyring, type EpochLinkV1 } from '@kutup/crypto/collectionKeyring'
-import { DRIVE_ENVELOPE_PURPOSE, openDriveEnvelope } from '@kutup/crypto/driveEnvelope'
+import { fileKeyAtV1 } from '@kutup/crypto/fileKeyring'
 import { streamDownload } from '@kutup/files/download/streamDownload'
 import { resolveApiBase } from '@kutup/session/apiBase'
+import type { FileKeyHistoryEntry } from '@kutup/session/api-types'
 import api from '@kutup/session/client'
 import { Alert } from '@kutup/ui/components/alert'
 import { KutupLogo } from '@kutup/ui/components/brand'
@@ -38,16 +39,17 @@ interface PublicFileRow {
   metadataEnvelope: string
   fileKeyEnvelope: string
   keyEpoch: number
+  keyGeneration: number
   metadataRevision: number
   createdAt: string
-  /** The epoch of what a download serves (docs/plans/drive-share-revocation.md). */
-  contentKeyEpoch: number
-  keyHistory?: { epoch: number; fileKeyEnvelope: string }[]
+  /** The key generation of what a download serves (docs/plans/drive-move.md). */
+  contentKeyGeneration: number
+  keyHistory?: FileKeyHistoryEntry[]
 }
 
 interface PublicFile {
   row: PublicFileRow
-  /** The key the downloaded content opens with (at `row.contentKeyEpoch`). */
+  /** The key the downloaded content opens with (of `row.contentKeyGeneration`). */
   fileKey: Uint8Array | null
   name: string | null
   mimeType: string
@@ -111,24 +113,12 @@ async function loadShare(token: string): Promise<PublicFile[]> {
       const opened = await keyAt(row.keyEpoch)
         .then((key) => openFileRecordV1(row, key))
         .catch(() => null)
-      // What a download serves may be sealed under a key the file left behind.
-      const history = (row.keyHistory ?? []).find((h) => h.epoch === row.contentKeyEpoch)
-      const contentKey =
-        !opened || row.contentKeyEpoch === row.keyEpoch
-          ? (opened?.fileKey ?? null)
-          : history
-            ? await keyAt(history.epoch)
-                .then((key) =>
-                  openDriveEnvelope(history.fileKeyEnvelope, key, {
-                    purpose: DRIVE_ENVELOPE_PURPOSE.fileKey,
-                    epoch: history.epoch,
-                    revision: 1n,
-                    objectId: row.id,
-                    parentId: row.collectionId,
-                  }),
-                )
-                .catch(() => null)
-            : null
+      // What a download serves may be sealed under a key the file left
+      // behind at a re-key; the file's own chain reaches it.
+      const contentKey = opened
+        ? await fileKeyAtV1(opened.fileKey, row.id, row.keyGeneration, row.keyHistory ?? [], row.contentKeyGeneration)
+            .catch(() => null)
+        : null
       return {
         row,
         fileKey: contentKey,
@@ -175,7 +165,7 @@ export function PublicSharePage() {
       await streamDownload({
         url: `${await resolveApiBase()}/share/${encodeURIComponent(token)}/download/${file.row.id}`,
         fileKey: file.fileKey,
-        context: { fileId: file.row.id, collectionId: file.row.collectionId, epoch: file.row.contentKeyEpoch },
+        context: { fileId: file.row.id, generation: file.row.contentKeyGeneration },
         filename: file.name,
         mimeType: file.mimeType,
         expectedPlainSize: file.size,

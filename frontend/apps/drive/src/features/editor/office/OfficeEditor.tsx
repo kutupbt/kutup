@@ -44,10 +44,10 @@ export interface OfficeEditorHandle {
 
 interface Props {
   fileId: string
-  collectionId: string
   filename: string
-  collectionMaster: Uint8Array
-  keyEpoch: number
+  /** The file key collaboration frames are sealed under, and its generation. */
+  fileKey: Uint8Array
+  keyGeneration: number
   initialBytes?: Uint8Array
   /** Fires when inner.html intercepts Cmd/Ctrl+S inside the OO iframe.
    *  Parent should call its save handler. */
@@ -132,11 +132,10 @@ function ensureRegistered(pubKeyB64: string, label: string): Promise<number> {
 function OfficeEditorBase(
   {
     fileId,
-    collectionId,
     filename,
     initialBytes,
-    collectionMaster,
-    keyEpoch,
+    fileKey,
+    keyGeneration,
     onSaveShortcut,
     readOnly = false,
   }: Props,
@@ -240,13 +239,12 @@ function OfficeEditorBase(
           KIND.OO_OP,
           {
             fileId,
-            collectionId,
-            keyEpoch,
+            keyGeneration,
             docKeyId: docKeyIdRef.current,
             deviceId: BigInt(did),
             sequence: outboundSeqRef.current,
           },
-          collectionMaster,
+          fileKey,
           kp.privateKey,
         )
         transport.send(packed)
@@ -267,13 +265,12 @@ function OfficeEditorBase(
           KIND.OO_CURSOR,
           {
             fileId,
-            collectionId,
-            keyEpoch,
+            keyGeneration,
             docKeyId: docKeyIdRef.current,
             deviceId: BigInt(did),
             sequence: outboundSeqRef.current,
           },
-          collectionMaster,
+          fileKey,
           kp.privateKey,
         )
         transport.send(packed)
@@ -367,7 +364,7 @@ function OfficeEditorBase(
     // gated by 'ready', which fires once); a separate effect below pushes
     // them live.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docType, filename, fileId, initialBytes, collectionMaster, readOnly])
+  }, [docType, filename, fileId, initialBytes, fileKey, readOnly])
 
   // Push live color updates to the iframe so the picker's effect is
   // visible without a reload. The bridge updates userColors[selfUserId]
@@ -455,10 +452,9 @@ function OfficeEditorBase(
         },
         onFrame: async (bs: Uint8Array) => {
           try {
-            const f = await openCollabFrameV1(bs, collectionMaster, {
+            const f = await openCollabFrameV1(bs, fileKey, {
               fileId,
-              collectionId,
-              keyEpoch,
+              keyGeneration,
             })
             if (f.kind === KIND.OO_OP) {
               const payload = f.plaintext
@@ -514,7 +510,7 @@ function OfficeEditorBase(
     // lifetime; if the relay needs to re-auth, it'll
     // close the connection and the existing reconnect-with-backoff handles it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docType, fileId, collectionMaster])
+  }, [docType, fileId, fileKey])
 
   useEffect(() => {
     if (bridgeReady) return

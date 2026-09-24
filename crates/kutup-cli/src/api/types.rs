@@ -249,49 +249,68 @@ pub struct File {
     pub metadata_envelope: String,
     #[serde(default)]
     pub file_key_envelope: String,
+    /// The folder epoch the file key is wrapped at; below the folder's own
+    /// epoch, the file is re-keyed before it is written to or moved.
     #[serde(default)]
     pub key_epoch: u32,
+    /// The generation of the file's current key (docs/plans/drive-move.md).
+    pub key_generation: u32,
     #[serde(default)]
     pub metadata_revision: u64,
     #[serde(default)]
     pub encrypted_size_bytes: i64,
     #[serde(default)]
     pub created_at: String,
-    /// The epoch of what `/files/{id}/download` serves
-    /// (docs/plans/drive-share-revocation.md); 0 from an older server.
-    #[serde(default)]
-    pub content_key_epoch: u32,
-    /// File keys a re-key left behind, one per epoch.
+    /// The key generation of what `/files/{id}/download` serves (its latest
+    /// whole-file version, else the upload).
+    pub content_key_generation: u32,
+    /// The file's older keys, each sealed under the next (generations 2 to
+    /// `key_generation`, in order); absent for most files.
     #[serde(default)]
     pub key_history: Vec<FileKeyHistoryEntry>,
-}
-
-impl File {
-    /// The epoch the served content was sealed at.
-    pub fn content_epoch(&self) -> u32 {
-        if self.content_key_epoch == 0 {
-            self.key_epoch
-        } else {
-            self.content_key_epoch
-        }
-    }
 }
 
 /// `POST /files/{id}/rekey`.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RekeyRequest {
-    pub from_epoch: u32,
+    /// The generation the file is leaving (compare-and-swap).
+    pub from_generation: u32,
+    /// The new key, sealed under the folder's current key.
     pub file_key_envelope: String,
+    /// The metadata, re-sealed under the new key.
     pub metadata_envelope: String,
+    /// The key being left, sealed under the new one (`PreviousFileKey`).
+    pub previous_key_envelope: String,
 }
 
-/// A file key a re-key left behind.
+/// `POST /files/{id}/move`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveFileRequest {
+    /// The folder the file is in now (compare-and-swap).
+    pub from_collection_id: String,
+    pub to_collection_id: String,
+    /// The destination's current epoch, which the envelope is sealed at.
+    pub to_key_epoch: u32,
+    /// The file's current key sealed under the destination's key.
+    pub file_key_envelope: String,
+}
+
+/// `POST /collections/{id}/move`; `None` moves the folder to the top level.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveCollectionRequest {
+    pub parent_collection_id: Option<String>,
+}
+
+/// One generation of a file's key history: the key of `generation − 1`
+/// sealed under the key of `generation`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileKeyHistoryEntry {
-    pub epoch: u32,
-    pub file_key_envelope: String,
+    pub generation: u32,
+    pub previous_key_envelope: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

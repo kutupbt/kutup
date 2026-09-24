@@ -22,16 +22,15 @@ const dec = new TextDecoder()
 describe('symmetric — encryptStream/decryptStream (XChaCha20-Poly1305 secretstream)', () => {
   const context = {
     fileId: '11111111-1111-4111-8111-111111111111',
-    collectionId: '22222222-2222-4222-8222-222222222222',
-    epoch: 1,
+    generation: 1,
   }
 
   it('round-trips a small payload (single chunk)', async () => {
     const key = await generateKey()
     const plaintext = enc.encode('a small file')
     const blob = await encryptStream(plaintext, key, context)
-    // Drive header (48) + secretstream header (24) + frame overhead (17).
-    expect(blob.length).toBe(48 + 24 + 17 + plaintext.length)
+    // Drive header (32) + secretstream header (24) + frame overhead (17).
+    expect(blob.length).toBe(32 + 24 + 17 + plaintext.length)
     const out = await decryptStream(blob, key, context)
     expect(dec.decode(out)).toBe('a small file')
   })
@@ -54,7 +53,7 @@ describe('symmetric — encryptStream/decryptStream (XChaCha20-Poly1305 secretst
   it('round-trips empty bytes', async () => {
     const key = await generateKey()
     const blob = await encryptStream(new Uint8Array(0), key, context)
-    expect(blob.length).toBe(48 + 24 + 17)
+    expect(blob.length).toBe(32 + 24 + 17)
     const out = await decryptStream(blob, key, context)
     expect(out.length).toBe(0)
   })
@@ -74,18 +73,14 @@ describe('symmetric — encryptStream/decryptStream (XChaCha20-Poly1305 secretst
     await expect(decryptStream(blob, key, context)).rejects.toThrow()
   })
 
-  it('rejects relocation to another file, collection, or epoch', async () => {
+  it('rejects relocation to another file or key generation', async () => {
     const key = await generateKey()
     const blob = await encryptStream(enc.encode('bound payload'), key, context)
     await expect(decryptStream(blob, key, {
       ...context,
       fileId: '33333333-3333-4333-8333-333333333333',
     })).rejects.toThrow()
-    await expect(decryptStream(blob, key, {
-      ...context,
-      collectionId: '44444444-4444-4444-8444-444444444444',
-    })).rejects.toThrow()
-    await expect(decryptStream(blob, key, { ...context, epoch: 2 })).rejects.toThrow()
+    await expect(decryptStream(blob, key, { ...context, generation: 2 })).rejects.toThrow()
   })
 })
 

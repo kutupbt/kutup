@@ -14,7 +14,7 @@ vi.mock('./rustWasm', async () => {
 import { openThumbnailV1, sealThumbnailV1, type ThumbnailImage } from './thumbnail'
 
 const key = new Uint8Array(32).fill(0x41)
-const context = { fileId: '11111111-1111-4111-8111-111111111111', epoch: 3, variant: 'sm' as const }
+const context = { fileId: '11111111-1111-4111-8111-111111111111', generation: 3, variant: 'sm' as const }
 const picture: ThumbnailImage = {
   format: 'jpeg',
   width: 320,
@@ -29,10 +29,10 @@ describe('thumbnail envelope', () => {
     expect(await openThumbnailV1(envelope, key, context)).toEqual(picture)
   })
 
-  it('opens only as its own file, variant, epoch and key', async () => {
+  it('opens only as its own file, variant, key generation and key', async () => {
     const envelope = await sealThumbnailV1(picture, key, context)
     await expect(openThumbnailV1(envelope, key, { ...context, variant: 'lg' })).rejects.toThrow()
-    await expect(openThumbnailV1(envelope, key, { ...context, epoch: 4 })).rejects.toThrow()
+    await expect(openThumbnailV1(envelope, key, { ...context, generation: 4 })).rejects.toThrow()
     await expect(
       openThumbnailV1(envelope, key, { ...context, fileId: '33333333-3333-4333-8333-333333333333' }),
     ).rejects.toThrow()

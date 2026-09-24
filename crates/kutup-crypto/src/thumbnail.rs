@@ -217,9 +217,9 @@ pub fn seal(
     variant: ThumbnailVariant,
     file_key: &[u8],
     file_id: &str,
-    epoch: u32,
+    generation: u32,
 ) -> Result<Vec<u8>> {
-    let context = DriveEnvelopeContextV1::thumbnail(file_id, variant, epoch)?;
+    let context = DriveEnvelopeContextV1::thumbnail(file_id, variant, generation)?;
     drive_envelope::seal(&encode(thumbnail, variant)?, file_key, context)
 }
 
@@ -229,22 +229,22 @@ pub fn seal_with_nonce(
     variant: ThumbnailVariant,
     file_key: &[u8],
     file_id: &str,
-    epoch: u32,
+    generation: u32,
     nonce: &[u8],
 ) -> Result<Vec<u8>> {
-    let context = DriveEnvelopeContextV1::thumbnail(file_id, variant, epoch)?;
+    let context = DriveEnvelopeContextV1::thumbnail(file_id, variant, generation)?;
     drive_envelope::seal_with_nonce(&encode(thumbnail, variant)?, file_key, context, nonce)
 }
 
-/// Open and parse a thumbnail of exactly this file, variant and epoch.
+/// Open and parse a thumbnail of exactly this file, variant and key generation.
 pub fn open(
     envelope: &[u8],
     variant: ThumbnailVariant,
     file_key: &[u8],
     file_id: &str,
-    epoch: u32,
+    generation: u32,
 ) -> Result<Thumbnail> {
-    let context = DriveEnvelopeContextV1::thumbnail(file_id, variant, epoch)?;
+    let context = DriveEnvelopeContextV1::thumbnail(file_id, variant, generation)?;
     decode(&drive_envelope::open(envelope, file_key, context)?, variant)
 }
 
@@ -254,14 +254,14 @@ pub fn validate(
     envelope: &[u8],
     variant: ThumbnailVariant,
     file_id: &str,
-    epoch: u32,
+    generation: u32,
 ) -> Result<()> {
     if envelope.len() > drive_envelope::max_thumbnail_envelope_bytes(variant) {
         return Err(CryptoError::InvalidInput(
             "thumbnail envelope too large".into(),
         ));
     }
-    let context = DriveEnvelopeContextV1::thumbnail(file_id, variant, epoch)?;
+    let context = DriveEnvelopeContextV1::thumbnail(file_id, variant, generation)?;
     drive_envelope::validate(envelope, context)
 }
 

@@ -1,15 +1,18 @@
-import { openDriveEnvelope, DRIVE_ENVELOPE_PURPOSE } from '@kutup/crypto/driveEnvelope'
 import { unlockCollectionKeyring, type EpochLinkV1 } from '@kutup/crypto/collectionKeyring'
+import { fileKeyAtV1 } from '@kutup/crypto/fileKeyring'
 import type { FileBlobContextV1 } from '@kutup/crypto/fileBlob'
 import api from '@kutup/session/client'
 import { folderLocation, type DriveFile, type Folder } from './model'
 
 /**
  * Keys across a folder's epochs (docs/plans/drive-share-revocation.md). A
- * folder whose owner removed someone has moved to a new key; what was stored
- * before stays sealed under older keys, which the current key unlocks
- * through the folder's signed history. Most folders have one epoch and never
- * reach the network here.
+ * folder whose owner removed someone has moved to a new key; a file whose key
+ * is still wrapped at an older epoch opens with that epoch's key, which the
+ * current key unlocks through the folder's signed history. Most folders have
+ * one epoch and never reach the network here.
+ *
+ * A file's own older keys (from re-keys) come from the file's chain instead
+ * (`fileKeyAt`), independent of any folder (docs/plans/drive-move.md).
  */
 
 /** What finding a folder's keys needs: its current key and where its history is. */
@@ -61,40 +64,35 @@ export async function folderKeyAt(folder: KeyringFolder, epoch: number): Promise
 
 const fileKeys = new Map<string, Promise<Uint8Array>>()
 
-/** The file key something of `file` sealed at `epoch` opens with. */
-export async function fileKeyAt(folder: Folder, file: DriveFile, epoch: number): Promise<Uint8Array> {
-  if (epoch === file.keyEpoch) {
-    if (!file.fileKey) throw new Error('file is not open')
-    return file.fileKey
+/**
+ * The file key of `generation`: the current one, or an older one through the
+ * file's own chain (docs/plans/drive-move.md) — no folder key involved, so it
+ * works wherever the file has moved.
+ */
+export async function fileKeyAt(file: DriveFile, generation: number): Promise<Uint8Array> {
+  if (!file.fileKey) throw new Error('file is not open')
+  if (generation === file.keyGeneration) return file.fileKey
+  if (!Number.isSafeInteger(generation) || generation < 1 || generation > file.keyGeneration) {
+    throw new Error('no such file key generation')
   }
-  const entry = file.keyHistory.find((e) => e.epoch === epoch)
-  if (!entry) throw new Error('no file key for that epoch')
-  const cacheKey = `${file.id}:${epoch}:${entry.fileKeyEnvelope}`
+  const newest = file.keyHistory.at(-1)?.previousKeyEnvelope ?? ''
+  const cacheKey = `${file.id}:${file.keyGeneration}:${generation}:${newest}`
   let pending = fileKeys.get(cacheKey)
   if (!pending) {
-    pending = folderKeyAt(folder, epoch).then((collectionKey) =>
-      openDriveEnvelope(entry.fileKeyEnvelope, collectionKey, {
-        purpose: DRIVE_ENVELOPE_PURPOSE.fileKey,
-        epoch,
-        revision: 1n,
-        objectId: file.id,
-        parentId: file.collectionId,
-      }),
-    )
+    pending = fileKeyAtV1(file.fileKey, file.id, file.keyGeneration, file.keyHistory, generation)
     pending.catch(() => fileKeys.delete(cacheKey))
     fileKeys.set(cacheKey, pending)
   }
   return pending
 }
 
-/** A key and the binding context for a blob of `file` sealed at `epoch`. */
+/** A key and the binding context for a blob of `file` sealed under `generation`. */
 export async function sealedAt(
-  folder: Folder,
   file: DriveFile,
-  epoch: number,
+  generation: number,
 ): Promise<{ fileKey: Uint8Array; context: FileBlobContextV1 }> {
   return {
-    fileKey: await fileKeyAt(folder, file, epoch),
-    context: { fileId: file.id, collectionId: file.collectionId, epoch },
+    fileKey: await fileKeyAt(file, generation),
+    context: { fileId: file.id, generation },
   }
 }

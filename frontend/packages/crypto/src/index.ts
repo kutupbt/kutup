@@ -83,8 +83,12 @@ export type { CreateOwnedCollectionV1, OwnedCollectionWireV1 } from './ownedColl
 export {
   createFileRecordV1,
   openFileRecordV1,
+  rekeyFileRecordV1,
   renameFileRecordV1,
+  wrapFileKeyForV1,
 } from './fileRecord'
+export { fileKeyAtV1, sealPreviousFileKeyV1 } from './fileKeyring'
+export type { FileKeyLinkV1 } from './fileKeyring'
 export type {
   CreatedFileRecordV1,
   FileMetadataV1,

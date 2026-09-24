@@ -5,7 +5,11 @@
 //! AEAD framing.
 //!
 //! Wire layout (big-endian):
-//! `[96-byte header][ciphertext+tag][64-byte Ed25519 signature]`.
+//! `[80-byte header][ciphertext+tag][64-byte Ed25519 signature]`.
+//!
+//! Frames are sealed under the file key and bound to the file and the key's
+//! generation; they name no folder, so a document's log survives a move
+//! (docs/plans/drive-move.md).
 //! The complete fixed header is AEAD associated data. The signature covers the
 //! header and ciphertext, but not its own trailing bytes.
 
@@ -20,12 +24,12 @@ use zeroize::Zeroizing;
 use crate::drive_object::parse_canonical_uuid;
 use crate::error::{CryptoError, Result};
 
-const MAGIC: &[u8; 8] = b"KUTPCF1\0";
+const MAGIC: &[u8; 8] = b"KUTPCF2\0";
 const KEY_DERIVATION_SALT: &[u8] = b"kutup/collab-frame/key/v1\0";
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
-pub const HEADER_SIZE: usize = 96;
+pub const HEADER_SIZE: usize = 80;
 pub const SIGNATURE_SIZE: usize = 64;
 pub const MIN_PACKED: usize = HEADER_SIZE + TAG_LEN + SIGNATURE_SIZE;
 pub const MAX_PLAINTEXT_BYTES: usize = 1024 * 1024;
@@ -75,10 +79,9 @@ pub mod kind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CollabFrameContextV1 {
     pub kind: u8,
-    pub key_epoch: u32,
+    pub key_generation: u32,
     pub doc_key_id: u32,
     pub file_id: [u8; 16],
-    pub collection_id: [u8; 16],
     pub sender_device_id: u64,
     pub sequence: u64,
 }
@@ -87,10 +90,9 @@ impl CollabFrameContextV1 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         kind: u8,
-        key_epoch: u32,
+        key_generation: u32,
         doc_key_id: u32,
         file_id: &str,
-        collection_id: &str,
         sender_device_id: u64,
         sequence: u64,
     ) -> Result<Self> {
@@ -99,17 +101,16 @@ impl CollabFrameContextV1 {
                 "unsupported collaboration frame kind {kind}"
             )));
         }
-        if key_epoch == 0 || doc_key_id == 0 || sender_device_id == 0 || sequence == 0 {
+        if key_generation == 0 || doc_key_id == 0 || sender_device_id == 0 || sequence == 0 {
             return Err(CryptoError::InvalidInput(
                 "collaboration frame counters and identifiers must be non-zero".into(),
             ));
         }
         Ok(Self {
             kind,
-            key_epoch,
+            key_generation,
             doc_key_id,
             file_id: parse_canonical_uuid(file_id, "collaboration file")?,
-            collection_id: parse_canonical_uuid(collection_id, "collaboration collection")?,
             sender_device_id,
             sequence,
         })
@@ -120,10 +121,9 @@ impl CollabFrameContextV1 {
 pub struct Frame {
     pub suite: CollabFrameSuiteId,
     pub kind: u8,
-    pub key_epoch: u32,
+    pub key_generation: u32,
     pub doc_key_id: u32,
     pub file_id: [u8; 16],
-    pub collection_id: [u8; 16],
     pub sender_device_id: u64,
     pub sequence: u64,
     pub nonce: [u8; NONCE_LEN],
@@ -135,10 +135,9 @@ impl Frame {
     pub fn context(&self) -> CollabFrameContextV1 {
         CollabFrameContextV1 {
             kind: self.kind,
-            key_epoch: self.key_epoch,
+            key_generation: self.key_generation,
             doc_key_id: self.doc_key_id,
             file_id: self.file_id,
-            collection_id: self.collection_id,
             sender_device_id: self.sender_device_id,
             sequence: self.sequence,
         }
@@ -150,14 +149,13 @@ impl Frame {
         out[8..10].copy_from_slice(&self.suite.as_u16().to_be_bytes());
         out[10] = self.kind;
         // byte 11 is reserved and remains zero.
-        out[12..16].copy_from_slice(&self.key_epoch.to_be_bytes());
+        out[12..16].copy_from_slice(&self.key_generation.to_be_bytes());
         out[16..20].copy_from_slice(&self.doc_key_id.to_be_bytes());
         out[20..36].copy_from_slice(&self.file_id);
-        out[36..52].copy_from_slice(&self.collection_id);
-        out[52..60].copy_from_slice(&self.sender_device_id.to_be_bytes());
-        out[60..68].copy_from_slice(&self.sequence.to_be_bytes());
-        out[68..92].copy_from_slice(&self.nonce);
-        out[92..96].copy_from_slice(&(self.ciphertext.len() as u32).to_be_bytes());
+        out[36..44].copy_from_slice(&self.sender_device_id.to_be_bytes());
+        out[44..52].copy_from_slice(&self.sequence.to_be_bytes());
+        out[52..76].copy_from_slice(&self.nonce);
+        out[76..80].copy_from_slice(&(self.ciphertext.len() as u32).to_be_bytes());
         out
     }
 
@@ -180,18 +178,18 @@ impl Frame {
                 "invalid collaboration frame kind or reserved byte".into(),
             ));
         }
-        let key_epoch = u32::from_be_bytes(bytes[12..16].try_into().expect("four-byte slice"));
+        let key_generation = u32::from_be_bytes(bytes[12..16].try_into().expect("four-byte slice"));
         let doc_key_id = u32::from_be_bytes(bytes[16..20].try_into().expect("four-byte slice"));
         let sender_device_id =
-            u64::from_be_bytes(bytes[52..60].try_into().expect("eight-byte slice"));
-        let sequence = u64::from_be_bytes(bytes[60..68].try_into().expect("eight-byte slice"));
-        if key_epoch == 0 || doc_key_id == 0 || sender_device_id == 0 || sequence == 0 {
+            u64::from_be_bytes(bytes[36..44].try_into().expect("eight-byte slice"));
+        let sequence = u64::from_be_bytes(bytes[44..52].try_into().expect("eight-byte slice"));
+        if key_generation == 0 || doc_key_id == 0 || sender_device_id == 0 || sequence == 0 {
             return Err(CryptoError::InvalidInput(
                 "collaboration frame identifiers must be non-zero".into(),
             ));
         }
         let ciphertext_len =
-            u32::from_be_bytes(bytes[92..96].try_into().expect("four-byte slice")) as usize;
+            u32::from_be_bytes(bytes[76..80].try_into().expect("four-byte slice")) as usize;
         if !(TAG_LEN..=MAX_PLAINTEXT_BYTES + TAG_LEN).contains(&ciphertext_len)
             || HEADER_SIZE
                 .checked_add(ciphertext_len)
@@ -207,41 +205,36 @@ impl Frame {
         Ok(Self {
             suite,
             kind: frame_kind,
-            key_epoch,
+            key_generation,
             doc_key_id,
             file_id: bytes[20..36].try_into().expect("sixteen-byte slice"),
-            collection_id: bytes[36..52].try_into().expect("sixteen-byte slice"),
             sender_device_id,
             sequence,
-            nonce: bytes[68..92].try_into().expect("twenty-four-byte slice"),
+            nonce: bytes[52..76].try_into().expect("twenty-four-byte slice"),
             ciphertext: bytes[HEADER_SIZE..HEADER_SIZE + ciphertext_len].to_vec(),
             signature,
         })
     }
 }
 
-fn derive_key(
-    collection_key: &[u8],
-    context: CollabFrameContextV1,
-) -> Result<Zeroizing<[u8; KEY_LEN]>> {
-    if collection_key.len() != KEY_LEN {
+fn derive_key(file_key: &[u8], context: CollabFrameContextV1) -> Result<Zeroizing<[u8; KEY_LEN]>> {
+    if file_key.len() != KEY_LEN {
         return Err(CryptoError::InvalidLength {
             expected: KEY_LEN,
-            got: collection_key.len(),
+            got: file_key.len(),
         });
     }
-    let mut info = Vec::with_capacity(2 + 1 + 4 + 4 + 16 + 16);
+    let mut info = Vec::with_capacity(2 + 1 + 4 + 4 + 16);
     info.extend_from_slice(
         &CollabFrameSuiteId::XChaCha20Poly1305Ed25519V1
             .as_u16()
             .to_be_bytes(),
     );
     info.push(context.kind);
-    info.extend_from_slice(&context.key_epoch.to_be_bytes());
+    info.extend_from_slice(&context.key_generation.to_be_bytes());
     info.extend_from_slice(&context.doc_key_id.to_be_bytes());
     info.extend_from_slice(&context.file_id);
-    info.extend_from_slice(&context.collection_id);
-    let hkdf = Hkdf::<Sha256>::new(Some(KEY_DERIVATION_SALT), collection_key);
+    let hkdf = Hkdf::<Sha256>::new(Some(KEY_DERIVATION_SALT), file_key);
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
     hkdf.expand(&info, key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("collaboration frame HKDF expand".into()))?;
@@ -250,18 +243,18 @@ fn derive_key(
 
 pub fn seal_unsigned(
     plaintext: &[u8],
-    collection_key: &[u8],
+    file_key: &[u8],
     context: CollabFrameContextV1,
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
     copy_randombytes(&mut nonce);
-    seal_unsigned_with_nonce(plaintext, collection_key, context, &nonce)
+    seal_unsigned_with_nonce(plaintext, file_key, context, &nonce)
 }
 
 /// Deterministic nonce entry point for checked-in vectors only.
 pub fn seal_unsigned_with_nonce(
     plaintext: &[u8],
-    collection_key: &[u8],
+    file_key: &[u8],
     context: CollabFrameContextV1,
     nonce: &[u8],
 ) -> Result<Vec<u8>> {
@@ -277,10 +270,9 @@ pub fn seal_unsigned_with_nonce(
     let mut frame = Frame {
         suite: CollabFrameSuiteId::XChaCha20Poly1305Ed25519V1,
         kind: context.kind,
-        key_epoch: context.key_epoch,
+        key_generation: context.key_generation,
         doc_key_id: context.doc_key_id,
         file_id: context.file_id,
-        collection_id: context.collection_id,
         sender_device_id: context.sender_device_id,
         sequence: context.sequence,
         nonce,
@@ -288,7 +280,7 @@ pub fn seal_unsigned_with_nonce(
         signature: [0u8; SIGNATURE_SIZE],
     };
     let aad = frame.header();
-    let key = derive_key(collection_key, context)?;
+    let key = derive_key(file_key, context)?;
     let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
         .map_err(|_| CryptoError::Backend("collaboration frame AEAD init".into()))?;
     frame.ciphertext = cipher
@@ -353,24 +345,18 @@ pub fn verify(packed: &[u8], public_key: &[u8]) -> Result<()> {
 
 pub fn open(
     packed: &[u8],
-    collection_key: &[u8],
+    file_key: &[u8],
     expected_file_id: &str,
-    expected_collection_id: &str,
-    expected_key_epoch: u32,
+    expected_key_generation: u32,
 ) -> Result<(Frame, Vec<u8>)> {
     let frame = Frame::unpack(packed)?;
     let expected_file_id = parse_canonical_uuid(expected_file_id, "collaboration file")?;
-    let expected_collection_id =
-        parse_canonical_uuid(expected_collection_id, "collaboration collection")?;
-    if frame.file_id != expected_file_id
-        || frame.collection_id != expected_collection_id
-        || frame.key_epoch != expected_key_epoch
-    {
+    if frame.file_id != expected_file_id || frame.key_generation != expected_key_generation {
         return Err(CryptoError::InvalidInput(
             "collaboration frame context does not match".into(),
         ));
     }
-    let key = derive_key(collection_key, frame.context())?;
+    let key = derive_key(file_key, frame.context())?;
     let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
         .map_err(|_| CryptoError::Backend("collaboration frame AEAD init".into()))?;
     let plaintext = cipher
@@ -395,7 +381,6 @@ mod tests {
             7,
             3,
             "11111111-1111-4111-8111-111111111111",
-            "22222222-2222-4222-8222-222222222222",
             9,
             11,
         )
@@ -404,9 +389,9 @@ mod tests {
 
     #[test]
     fn encrypted_signed_round_trip_is_context_bound() {
-        let collection_key = [0x41; 32];
+        let file_key = [0x41; 32];
         let seed = [0x51; 32];
-        let unsigned = seal_unsigned(b"collaboration", &collection_key, context()).unwrap();
+        let unsigned = seal_unsigned(b"collaboration", &file_key, context()).unwrap();
         let frame = Frame::unpack(&unsigned).unwrap();
         let signed = sign(&frame, &seed).unwrap();
         let public = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
@@ -414,9 +399,8 @@ mod tests {
         assert_eq!(
             open(
                 &signed,
-                &collection_key,
+                &file_key,
                 "11111111-1111-4111-8111-111111111111",
-                "22222222-2222-4222-8222-222222222222",
                 7,
             )
             .unwrap()
@@ -427,8 +411,8 @@ mod tests {
 
     #[test]
     fn unknown_tampered_relocated_and_oversized_frames_fail_closed() {
-        let collection_key = [0x41; 32];
-        let unsigned = seal_unsigned(b"frame", &collection_key, context()).unwrap();
+        let file_key = [0x41; 32];
+        let unsigned = seal_unsigned(b"frame", &file_key, context()).unwrap();
         let mut unknown = unsigned.clone();
         unknown[8..10].copy_from_slice(&99u16.to_be_bytes());
         assert!(Frame::unpack(&unknown).is_err());
@@ -436,25 +420,26 @@ mod tests {
         tampered[HEADER_SIZE] ^= 1;
         assert!(open(
             &tampered,
-            &collection_key,
+            &file_key,
             "11111111-1111-4111-8111-111111111111",
-            "22222222-2222-4222-8222-222222222222",
             7,
         )
         .is_err());
         assert!(open(
             &unsigned,
-            &collection_key,
+            &file_key,
             "33333333-3333-4333-8333-333333333333",
-            "22222222-2222-4222-8222-222222222222",
             7,
         )
         .is_err());
-        assert!(seal_unsigned(
-            &vec![0u8; MAX_PLAINTEXT_BYTES + 1],
-            &collection_key,
-            context(),
+        // Another generation of the same file's key is another binding.
+        assert!(open(
+            &unsigned,
+            &file_key,
+            "11111111-1111-4111-8111-111111111111",
+            8
         )
         .is_err());
+        assert!(seal_unsigned(&vec![0u8; MAX_PLAINTEXT_BYTES + 1], &file_key, context(),).is_err());
     }
 }

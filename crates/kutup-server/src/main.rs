@@ -415,8 +415,9 @@ fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
 
     use handlers::{
-        admin, auth, chat, chat_media, collab, collections, devices, file_assets, file_thumbnails,
-        file_versions, files, folder_access, sessions as session_routes, shares, trash, tus,
+        admin, auth, chat, chat_media, collab, collections, devices, drive_move, file_assets,
+        file_thumbnails, file_versions, files, folder_access, sessions as session_routes, shares,
+        trash, tus,
     };
 
     Router::new()
@@ -531,6 +532,12 @@ fn build_router(state: AppState) -> Router {
             post(folder_access::rotate).route_layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
         )
         .route("/api/files/:id/rekey", post(folder_access::rekey))
+        // --- Moving files and folders (docs/plans/drive-move.md). ---
+        .route("/api/files/:id/move", post(drive_move::move_file))
+        .route(
+            "/api/collections/:id/move",
+            post(drive_move::move_collection),
+        )
         // --- Devices (authenticated) ---
         .route("/api/devices", post(devices::register).get(devices::list))
         .route("/api/devices/:id", delete(devices::revoke))
@@ -1257,7 +1264,7 @@ fn build_cors(allowed_origins: &str) -> CorsLayer {
             HeaderName::from_static("tus-resumable"),
             HeaderName::from_static("upload-offset"),
             HeaderName::from_static("upload-length"),
-            HeaderName::from_static("x-kutup-key-epoch"),
+            HeaderName::from_static("x-kutup-key-generation"),
             axum::http::header::LOCATION,
         ])
 }

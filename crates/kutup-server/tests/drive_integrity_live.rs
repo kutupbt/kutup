@@ -46,7 +46,7 @@ fn drive_integrity_contract() {
         drive_object::encrypt_file_blob(
             plain,
             &file.key,
-            DriveFileBlobContextV1::new(&file.id, &folder.id, 1).unwrap(),
+            DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
         )
         .unwrap()
     };
@@ -72,7 +72,7 @@ fn drive_integrity_contract() {
         "a viewer saves no version"
     );
     assert_eq!(
-        put_asset(&c, &base, &viewer.token, &folder, &file, "img-1", b"x").status(),
+        put_asset(&c, &base, &viewer.token, &file, "img-1", b"x").status(),
         StatusCode::FORBIDDEN,
         "a viewer stores no asset"
     );
@@ -226,19 +226,11 @@ fn drive_integrity_contract() {
 
     // --- An asset re-PUT changes nothing. ---
     let before = used(&c, &base, &owner.token);
-    let r = put_asset(&c, &base, &owner.token, &folder, &file, "img-1", b"small");
+    let r = put_asset(&c, &base, &owner.token, &file, "img-1", b"small");
     assert_eq!(r.status(), StatusCode::NO_CONTENT);
     let charged = used(&c, &base, &owner.token) - before;
     assert!(charged > 0);
-    let r = put_asset(
-        &c,
-        &base,
-        &editor.token,
-        &folder,
-        &file,
-        "img-1",
-        &[9u8; 200_000],
-    );
+    let r = put_asset(&c, &base, &editor.token, &file, "img-1", &[9u8; 200_000]);
     assert_eq!(r.status(), StatusCode::NO_CONTENT, "idempotent");
     assert_eq!(used(&c, &base, &owner.token) - before, charged);
     let stored = bearer(
@@ -344,7 +336,7 @@ fn admin_delete_user_hands_contributions_over() {
     let edit = drive_object::encrypt_file_blob(
         &[5u8; 30_000],
         &file.key,
-        DriveFileBlobContextV1::new(&file.id, &folder.id, 1).unwrap(),
+        DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
     )
     .unwrap();
     assert_eq!(

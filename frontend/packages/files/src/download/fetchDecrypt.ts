@@ -3,7 +3,7 @@
 // (streamDownload.ts) and folder-as-ZIP downloads (lib/zipDownload.ts).
 //
 // Persistent wire format (matches fileBlob.ts / the CLI / the backend):
-//   [ 48-byte typed Drive header ][ 24-byte secretstream header ][ frames ]
+//   [ 32-byte typed Drive header ][ 24-byte secretstream header ][ frames ]
 // where every frame except the last is exactly CIPHER_CHUNK (5 MiB + 17 B)
 // and the last frame carries TAG_FINAL. The last frame may be shorter.
 //

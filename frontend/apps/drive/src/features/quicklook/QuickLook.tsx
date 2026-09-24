@@ -68,7 +68,7 @@ export function QuickLook({
     // No viewer, or too large to decrypt whole: its large thumbnail if it
     // has one (cached blob: URLs are owned by the thumbnail store).
     const fallback = (reason: 'type' | 'size') =>
-      void thumbnailUrl(folder, f, 'lg').then((picture) => {
+      void thumbnailUrl(f, 'lg').then((picture) => {
         if (!cancelled) setLoaded(picture ? { kind: 'picture', url: picture, reason } : { kind: 'none', reason })
       })
     if (!viewer && !text) {

@@ -751,11 +751,11 @@ fn download_decrypt(
     let f = &entry.file;
     let file_key = crate::file_crypto::open_key(f, dir_keys).context("decrypt file key")?;
     // What the file holds now (its latest whole-file version, else the
-    // upload), sealed at its own epoch.
-    let (content_key, content_epoch) = crate::file_crypto::content_key(f, &file_key, dir_keys)?;
+    // upload), sealed at its own key generation.
+    let (content_key, content_generation) = crate::file_crypto::content_key(f, &file_key)?;
     let stream = client.download_file_stream(&f.id)?;
     let mut out = std::fs::File::create(tmp).context("create temp file")?;
-    let blob_context = DriveFileBlobContextV1::new(&f.id, &f.collection_id, content_epoch)?;
+    let blob_context = DriveFileBlobContextV1::new(&f.id, content_generation)?;
     match stream_download(stream, &content_key, blob_context, &mut out, |_| {}) {
         Ok(_) => Ok(()),
         Err(e) => {

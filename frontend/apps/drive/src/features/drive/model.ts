@@ -1,3 +1,4 @@
+import type { FileKeyHistoryEntry } from '@kutup/session/api-types'
 import type { FileKind } from '../explorer/kinds'
 
 /** The name the root collection is created with; it is found by this name. */
@@ -41,26 +42,29 @@ export interface DriveFile {
   id: string
   collectionId: string
   uploaderUserId: string | null
+  /** The folder epoch the file key is wrapped at; below the folder's, the file is re-keyed before it is written to or moved. */
   keyEpoch: number
+  /** The generation of the file's current key (docs/plans/drive-move.md). */
+  keyGeneration: number
   metadataRevision: number
   /** Null when it could not be decrypted. */
   name: string | null
   mimeType: string
   /** Plaintext bytes. */
   size: number
-  /** The file key at `keyEpoch`, the file's current epoch. */
+  /** The file key of `keyGeneration`. */
   fileKey: Uint8Array | null
-  /** The epoch the upload was sealed at. */
-  originalKeyEpoch: number
-  /** The epoch of what a download serves. */
-  contentKeyEpoch: number
-  /** File keys left behind by re-keys (docs/plans/drive-share-revocation.md). */
-  keyHistory: { epoch: number; fileKeyEnvelope: string }[]
+  /** The key generation the upload was sealed under. */
+  originalKeyGeneration: number
+  /** The key generation of what a download serves. */
+  contentKeyGeneration: number
+  /** The file's older keys, each sealed under the next. */
+  keyHistory: FileKeyHistoryEntry[]
   kind: FileKind
   createdAt: string
   updatedAt: string
-  /** When each thumbnail was stored (the value versions its URL), and its epoch. */
-  thumbnails: { sm?: string; lg?: string; smKeyEpoch?: number; lgKeyEpoch?: number }
+  /** When each thumbnail was stored (the value versions its URL), and its key generation. */
+  thumbnails: { sm?: string; lg?: string; smKeyGeneration?: number; lgKeyGeneration?: number }
   /** Drawn from something other than the latest content: redraw. */
   thumbnailStale: boolean
 }

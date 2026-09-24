@@ -50,7 +50,8 @@ export interface StreamUploadOptions {
 export interface UploadedFile {
   fileId: string
   fileKey: Uint8Array
-  keyEpoch: number
+  /** A new file's key is generation 1. */
+  keyGeneration: 1
   collectionId: string
 }
 
@@ -74,11 +75,7 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<UploadedF
     opts.collection.collectionKey,
     meta,
   )
-  const blobContext = {
-    fileId: record.fileId,
-    collectionId: opts.collection.id,
-    epoch: opts.collection.keyEpoch,
-  }
+  const blobContext = { fileId: record.fileId, generation: record.keyGeneration }
   const enc = await newFileBlobStreamEncryptorV1(record.fileKey, blobContext)
   const cipherTotal = fileBlobCipherSize(opts.file.size)
 
@@ -213,7 +210,7 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<UploadedF
         resolve({
           fileId: resolvedFileId,
           fileKey: record.fileKey,
-          keyEpoch: opts.collection.keyEpoch,
+          keyGeneration: record.keyGeneration,
           collectionId: opts.collection.id,
         })
       },

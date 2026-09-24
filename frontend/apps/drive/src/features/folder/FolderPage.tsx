@@ -1,4 +1,4 @@
-import { CheckCheck, Copy, Download, ExternalLink, Eye, Link2, Palette, Pencil, Trash2, UserPlus, X } from 'lucide-react'
+import { CheckCheck, Copy, Download, ExternalLink, Eye, FolderInput, Link2, Palette, Pencil, Trash2, UserPlus, X } from 'lucide-react'
 import { useCallback, useMemo, useState, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -27,7 +27,10 @@ import { useFolders, type FolderIndex } from '../drive/folders'
 import type { DriveFile, Folder } from '../drive/model'
 import { useCreatePublicLink, useRenameFile, useRenameFolder, useTrashFile, useTrashFolder } from '../drive/mutations'
 import { filePath, folderPath } from '../drive/paths'
+import { moveRefusal, type MoveRefusal } from '../drive/move'
 import { useCopy } from '../drive/useCopy'
+import { useMove } from '../drive/useMove'
+import { draggedItems, endItemDrag } from '../explorer/dragItems'
 import { Explorer, type ExplorerAction } from '../explorer/Explorer'
 import { ExplorerContextMenu, type ContextMenuSpec } from '../explorer/ExplorerContextMenu'
 import { useExplorerPrefs } from '../explorer/prefs'
@@ -45,7 +48,27 @@ type Dialog =
   | { kind: 'link'; url: string }
   | { kind: 'invite'; url: string; account: string }
   | { kind: 'copy'; targets: Target[] }
+  | { kind: 'move'; targets: Target[] }
   | null
+
+/**
+ * Whether an item can be moved at all (docs/plans/drive-move.md): a file by
+ * whoever can edit its folder, a folder by its owner. Where it may go is
+ * `moveRefusal`'s to say.
+ */
+function mayMove(target: Target): boolean {
+  if (target.file) return target.folder.source !== 'remote' && target.folder.canUpload && Boolean(target.file.fileKey)
+  return target.folder.source === 'owned' && target.folder.canManage && !target.folder.isRoot && Boolean(target.folder.key)
+}
+
+/** Why none of `targets` can go into `dest`, or null when they can. */
+function refusalFor(index: FolderIndex, targets: Target[], dest: Folder): MoveRefusal | null {
+  const reasons = targets.map((target) => moveRefusal(index, target, dest))
+  const blocking = reasons.find((r) => r !== null && r !== 'alreadyThere')
+  if (blocking) return blocking
+  // Some already there and some not: the rest move.
+  return reasons.every((r) => r === 'alreadyThere') ? 'alreadyThere' : null
+}
 
 function resolveFolder(index: FolderIndex, id: string | undefined, shareId: string | undefined): Folder | undefined {
   if (shareId) return index.sharedWithMe.find((f) => f.remoteShareId === shareId)
@@ -53,17 +76,22 @@ function resolveFolder(index: FolderIndex, id: string | undefined, shareId: stri
   return index.byId.get(id)
 }
 
-function crumbsFor(index: FolderIndex, folder: Folder, t: (k: string) => string): Crumb[] {
+function crumbsFor(
+  index: FolderIndex,
+  folder: Folder,
+  t: (k: string) => string,
+  dropOn: (dest: Folder) => Crumb['drop'],
+): Crumb[] {
   if (folder.source !== 'owned') {
     return [{ label: t('nav.shared'), to: '/shared' }, { label: folder.name ?? t('drive.encrypted') }]
   }
   const trail: Crumb[] = []
   let at: Folder | undefined = folder
   while (at && !at.isRoot) {
-    trail.unshift({ label: at.name ?? t('drive.encrypted'), to: folderPath(at) })
+    trail.unshift({ label: at.name ?? t('drive.encrypted'), to: folderPath(at), drop: dropOn(at) })
     at = at.parentId ? index.byId.get(at.parentId) : undefined
   }
-  trail.unshift({ label: t('nav.myFiles'), to: '/' })
+  trail.unshift({ label: t('nav.myFiles'), to: '/', drop: dropOn(index.root) })
   // The last crumb is where you are: not a link.
   const last = trail[trail.length - 1]
   if (last) delete last.to
@@ -89,6 +117,8 @@ export function FolderPage() {
   const [selection, setSelection] = useState<Set<string>>(new Set())
   const [dialog, setDialog] = useState<Dialog>(null)
   const [dragging, setDragging] = useState(false)
+  // An item is being dragged: the path stays on screen as a drop target.
+  const [itemDrag, setItemDrag] = useState(false)
   const [looking, setLooking] = useState<QuickLookTarget | null>(null)
   const { uploadFiles, uploadDirectory } = useUploadActions()
   const renameFolder = useRenameFolder()
@@ -97,6 +127,7 @@ export function FolderPage() {
   const trashFile = useTrashFile()
   const publicLink = useCreatePublicLink()
   const copy = useCopy()
+  const move = useMove()
   const create = useCreateActions(folder ?? null)
 
   const children = useMemo(() => {
@@ -250,6 +281,9 @@ export function FolderPage() {
         actions.push({ id: 'preview', label: t('drive.actions.quickLook'), icon: <Eye />, onSelect: () => setLooking({ folder: container, file }) })
         actions.push({ id: 'download', label: t('drive.actions.download'), icon: <Download />, onSelect: () => void download([target]) })
         actions.push({ id: 'copy', label: t('drive.actions.copyTo'), icon: <Copy />, onSelect: () => setDialog({ kind: 'copy', targets: [target] }) })
+        if (mayMove(target)) {
+          actions.push({ id: 'move', label: t('drive.actions.moveTo'), icon: <FolderInput />, onSelect: () => setDialog({ kind: 'move', targets: [target] }) })
+        }
         if (mayChangeFile(container, file) && container.source !== 'remote') {
           actions.push({ id: 'rename', label: t('drive.actions.rename'), icon: <Pencil />, onSelect: () => setDialog({ kind: 'rename', target }), separated: true })
         }
@@ -263,6 +297,9 @@ export function FolderPage() {
       actions.push({ id: 'open', label: t('drive.actions.open'), icon: <ExternalLink />, onSelect: () => open(item) })
       actions.push({ id: 'download', label: t('drive.actions.downloadZip'), icon: <Download />, onSelect: () => void download([target]) })
       actions.push({ id: 'copy', label: t('drive.actions.copyTo'), icon: <Copy />, onSelect: () => setDialog({ kind: 'copy', targets: [target] }) })
+      if (mayMove(target)) {
+        actions.push({ id: 'move', label: t('drive.actions.moveTo'), icon: <FolderInput />, onSelect: () => setDialog({ kind: 'move', targets: [target] }) })
+      }
       if (f.canManage) {
         actions.push(
           { id: 'share', label: t('drive.actions.share'), icon: <UserPlus />, onSelect: () => setDialog({ kind: 'share', folder: f }), separated: true },
@@ -302,6 +339,9 @@ export function FolderPage() {
         { id: 'download', label: t('drive.actions.downloadZip'), icon: <Download />, onSelect: () => void download(targets) },
         { id: 'copy', label: t('drive.actions.copyTo'), icon: <Copy />, onSelect: () => setDialog({ kind: 'copy', targets }) },
       )
+    }
+    if (targets.every(mayMove)) {
+      actions.push({ id: 'move', label: t('drive.actions.moveTo'), icon: <FolderInput />, onSelect: () => setDialog({ kind: 'move', targets }) })
     }
     if (trashable.length === targets.length) {
       actions.push({ id: 'trash', label: t('drive.actions.trash'), icon: <Trash2 />, onSelect: () => void moveToTrash(targets), destructive: true, separated: true })
@@ -373,6 +413,7 @@ export function FolderPage() {
 
   const renaming = dialog?.kind === 'rename' ? dialog.target : null
   const copying = dialog?.kind === 'copy' ? dialog.targets : null
+  const moving = dialog?.kind === 'move' ? dialog.targets : null
   // Quick Look steps through the files in the order on screen.
   const lookableFiles = shown.flatMap((item) => {
     const target = lookup.get(itemKey(item))
@@ -381,9 +422,41 @@ export function FolderPage() {
   // The selection bar: a lone item gets its own download/copy/trash, several get the bulk ones.
   const selectedItems = shown.filter((i) => selection.has(itemKey(i)))
   const barActions = (selectedItems.length === 1 && selectedItems[0] ? actionsFor(selectedItems[0]) : selectionActions(selectedTargets)).filter(
-    (a) => a.id === 'download' || a.id === 'copy' || a.id === 'trash',
+    (a) => a.id === 'download' || a.id === 'copy' || a.id === 'move' || a.id === 'trash',
   )
   const index = folders.data
+  /** The items behind dragged keys, or null unless every one of them can move. */
+  const draggedTargets = (keys: string[]): Target[] | null => {
+    const targets = keys.flatMap((k) => {
+      const target = lookup.get(k)
+      return target ? [target] : []
+    })
+    return targets.length === keys.length && targets.every(mayMove) ? targets : null
+  }
+  const dropOn = (dest: Folder): Crumb['drop'] => ({
+    accepts: () => {
+      const keys = draggedItems()
+      const targets = keys && draggedTargets(keys)
+      return Boolean(targets && refusalFor(index, targets, dest) === null)
+    },
+    onDrop: () => {
+      const keys = draggedItems()
+      const targets = keys && draggedTargets(keys)
+      endItemDrag()
+      if (!targets) return
+      setSelection(new Set())
+      void move(index, targets, dest)
+    },
+  })
+  const refusalText: Record<MoveRefusal, string> = {
+    locked: t('dialogs.move.locked'),
+    readOnly: t('dialogs.move.readOnly'),
+    otherOwner: t('dialogs.move.otherOwner'),
+    remote: t('dialogs.move.remote'),
+    notOwner: t('dialogs.move.notOwner'),
+    intoItself: t('dialogs.move.intoItself'),
+    alreadyThere: t('dialogs.move.alreadyThere'),
+  }
   const taken = new Set(items.map((i) => i.name.toLocaleLowerCase()))
 
   return (
@@ -400,7 +473,7 @@ export function FolderPage() {
       onDrop={(e) => void onDrop(e)}
     >
       <div className="sticky top-14 z-20 flex min-h-12 flex-wrap items-center gap-2 border-b border-border bg-background/95 px-3 py-1.5 backdrop-blur-sm md:px-6">
-        {selection.size > 0 ? (
+        {selection.size > 0 && !itemDrag ? (
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1" role="toolbar" aria-label={t('drive.selection', { count: selection.size })}>
             <Button variant="ghost" size="icon" aria-label={t('drive.clearSelection')} onClick={() => setSelection(new Set())}>
               <X />
@@ -414,7 +487,7 @@ export function FolderPage() {
               ))}
           </div>
         ) : (
-          <Breadcrumb items={crumbsFor(folders.data, folder, t)} className="min-w-0 flex-1" />
+          <Breadcrumb items={crumbsFor(folders.data, folder, t, dropOn)} className="min-w-0 flex-1" />
         )}
         <Toolbar prefs={prefs} update={updatePrefs} />
       </div>
@@ -467,6 +540,23 @@ export function FolderPage() {
                 : undefined
             }
             onDeleteKey={() => selectedTrashable.length === selectedTargets.length && void moveToTrash(selectedTargets)}
+            canDrag={(item) => {
+              const target = lookup.get(itemKey(item))
+              return Boolean(target && mayMove(target))
+            }}
+            canDrop={(keys, item) => {
+              const dest = lookup.get(itemKey(item))
+              const targets = draggedTargets(keys)
+              return Boolean(dest && !dest.file && targets && refusalFor(index, targets, dest.folder) === null)
+            }}
+            onItemDrag={setItemDrag}
+            onDropItems={(keys, item) => {
+              const dest = lookup.get(itemKey(item))
+              const targets = draggedTargets(keys)
+              if (!dest || dest.file || !targets) return
+              setSelection(new Set())
+              void move(index, targets, dest.folder)
+            }}
           />
         )}
       </ExplorerContextMenu>
@@ -545,6 +635,25 @@ export function FolderPage() {
           setDialog(null)
           setSelection(new Set())
           copy(index, targets, dest).catch(() => toast.error(t('dialogs.copy.failed')))
+        }}
+      />
+      <FolderPickerDialog
+        open={moving !== null}
+        title={t('dialogs.move.title', { count: moving?.length ?? 0 })}
+        description={t('dialogs.move.description')}
+        submit={t('dialogs.move.submit')}
+        index={index}
+        start={folder}
+        refusal={(dest) => {
+          const reason = refusalFor(index, moving ?? [], dest)
+          return reason ? refusalText[reason] : null
+        }}
+        onClose={() => setDialog(null)}
+        onPick={(dest) => {
+          const targets = moving ?? []
+          setDialog(null)
+          setSelection(new Set())
+          void move(index, targets, dest)
         }}
       />
       <ColorDialog folder={dialog?.kind === 'color' ? dialog.folder : null} onClose={() => setDialog(null)} />

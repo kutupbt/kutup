@@ -27,7 +27,7 @@ async function openRow(row: FileRowLike, folder: Folder): Promise<DriveFile> {
   const cacheKey = `${row.id}:${row.fileKeyEnvelope}:${row.metadataEnvelope}`
   let pending = opened.get(cacheKey)
   if (!pending) {
-    // A file not re-keyed since the folder rotated is under an older key.
+    // A file not re-keyed since the folder rotated is wrapped under an older key.
     pending = folderKeyAt(folder, row.keyEpoch)
       .then((collectionKey) => openFileRecordV1(row, collectionKey))
       .catch(() => null)
@@ -40,13 +40,14 @@ async function openRow(row: FileRowLike, folder: Folder): Promise<DriveFile> {
     collectionId: row.collectionId,
     uploaderUserId: row.uploaderUserId ?? null,
     keyEpoch: row.keyEpoch,
+    keyGeneration: row.keyGeneration,
     metadataRevision: row.metadataRevision,
     name,
     mimeType: result?.metadata.mimeType ?? 'application/octet-stream',
     size: result?.metadata.size ?? 0,
     fileKey: result?.fileKey ?? null,
-    originalKeyEpoch: row.originalKeyEpoch ?? row.keyEpoch,
-    contentKeyEpoch: row.contentKeyEpoch ?? row.keyEpoch,
+    originalKeyGeneration: row.originalKeyGeneration,
+    contentKeyGeneration: row.contentKeyGeneration,
     keyHistory: row.keyHistory ?? [],
     kind: name ? fileKind(name, result?.metadata.mimeType) : 'other',
     createdAt: row.createdAt,

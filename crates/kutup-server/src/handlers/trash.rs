@@ -65,6 +65,7 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
         String,
         String,
         i32,
+        i32,
         i64,
         Uuid,
         String,
@@ -75,7 +76,7 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
     );
     let files: Vec<FileTuple> = sqlx::query_as(
         r#"SELECT f.id, f.collection_id, f.metadata_envelope, f.file_key_envelope,
-                  f.key_epoch, f.metadata_revision,
+                  f.key_epoch, f.key_generation, f.metadata_revision,
                   c.owner_user_id, c.owner_key_envelope, c.key_epoch,
                   c.epoch_statement, c.epoch_statement_hash, f.deleted_at
            FROM files f JOIN collections c ON c.id = f.collection_id
@@ -126,6 +127,7 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
                     metadata,
                     file_key,
                     key_epoch,
+                    key_generation,
                     metadata_revision,
                     owner,
                     owner_key,
@@ -139,6 +141,7 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
                     metadata_envelope: metadata,
                     file_key_envelope: file_key,
                     key_epoch,
+                    key_generation,
                     metadata_revision,
                     collection_owner_user_id: owner.to_string(),
                     collection_owner_key_envelope: owner_key,

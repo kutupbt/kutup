@@ -40,8 +40,9 @@ pub struct VersionRow {
     created_at: OffsetDateTime,
     /// `file`: the whole file (office, whiteboard, restored); `yjs`: a note's state.
     kind: String,
-    /// The epoch it was sealed at: open it with that epoch's file key.
-    key_epoch: i32,
+    /// The key generation it was sealed at: open it with that generation's
+    /// file key.
+    key_generation: i32,
 }
 
 type VersionTuple = (
@@ -60,7 +61,7 @@ type VersionTuple = (
 );
 
 fn to_version_row(t: VersionTuple) -> VersionRow {
-    let (id, s3v, path, seq, dk, author, size, label, keep, created, kind, key_epoch) = t;
+    let (id, s3v, path, seq, dk, author, size, label, keep, created, kind, key_generation) = t;
     VersionRow {
         id: id.to_string(),
         s3_version_id: s3v,
@@ -73,12 +74,12 @@ fn to_version_row(t: VersionTuple) -> VersionRow {
         keep_forever: keep,
         created_at: created,
         kind,
-        key_epoch,
+        key_generation,
     }
 }
 
 const VERSION_SELECT: &str = r#"SELECT id, s3_version_id, storage_path, seq_at_snapshot,
-       doc_key_id, author_user_id, size_bytes, label, keep_forever, created_at, kind, key_epoch
+       doc_key_id, author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation
 FROM file_versions"#;
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -346,26 +347,26 @@ pub async fn create(
 
     // The same typed, file-bound blob as an upload; the server checks only its
     // public header.
-    let (collection_id, key_epoch): (Uuid, i32) = sqlx::query_as(
-        "SELECT collection_id, key_epoch FROM files WHERE id = $1 AND deleted_at IS NULL",
+    let (collection_id, key_generation): (Uuid, i32) = sqlx::query_as(
+        "SELECT collection_id, key_generation FROM files WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(fid)
     .fetch_optional(&state.pool)
     .await?
     .ok_or_else(|| AppError::not_found("not found"))?;
-    let epoch = u32::try_from(key_epoch).map_err(|_| AppError::conflict("invalid epoch"))?;
-    let blob_context =
-        DriveFileBlobContextV1::new(&fid.to_string(), &collection_id.to_string(), epoch)
-            .map_err(|_| AppError::bad_request("invalid Drive file blob"))?;
+    let generation =
+        u32::try_from(key_generation).map_err(|_| AppError::conflict("invalid key generation"))?;
+    let blob_context = DriveFileBlobContextV1::new(&fid.to_string(), generation)
+        .map_err(|_| AppError::bad_request("invalid Drive file blob"))?;
     validate_file_blob_file(&tmp_file, blob_context)?;
 
     let version_id = Uuid::new_v4();
     let storage_path = version_storage_path(fid, version_id);
 
     let mut tx = state.pool.begin().await?;
-    // Sealed at the file's epoch as read above; a re-key since would put new
+    // Sealed under the file key read above; a re-key since would put new
     // content under a key the folder has left.
-    crate::drive_writes::lock_file_epoch(&mut tx, fid, key_epoch).await?;
+    crate::drive_writes::lock_file_key(&mut tx, fid, key_generation).await?;
     // The measured size, never a client's claim.
     crate::drive_writes::check_room(&mut tx, user_id, collection_id, size, None)
         .await?
@@ -373,10 +374,10 @@ pub async fn create(
     let created: VersionTuple = sqlx::query_as(
         r#"INSERT INTO file_versions (id, file_id, s3_version_id, storage_path, seq_at_snapshot,
                                       doc_key_id, author_user_id, size_bytes, label, keep_forever, kind,
-                                      key_epoch)
+                                      key_generation)
            VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, $10, $11)
            RETURNING id, s3_version_id, storage_path, seq_at_snapshot, doc_key_id,
-                     author_user_id, size_bytes, label, keep_forever, created_at, kind, key_epoch"#,
+                     author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation"#,
     )
     .bind(version_id)
     .bind(fid)
@@ -388,7 +389,7 @@ pub async fn create(
     .bind(&label)
     .bind(keep_forever)
     .bind(kind)
-    .bind(key_epoch)
+    .bind(key_generation)
     .fetch_one(&mut *tx)
     .await?;
     sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2")

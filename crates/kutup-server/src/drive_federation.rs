@@ -146,17 +146,19 @@ pub struct FederatedDriveFile {
     pub metadata_envelope: String,
     pub file_key_envelope: String,
     pub key_epoch: i32,
+    /// The generation of the file's current key (docs/plans/drive-move.md).
+    pub key_generation: i32,
     pub metadata_revision: i64,
     pub encrypted_size_bytes: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
-    /// The epoch the uploaded content was sealed at.
-    pub original_key_epoch: i32,
-    /// The epoch of the content `…/content` serves.
-    pub content_key_epoch: i32,
-    /// File keys left behind by re-keys (docs/plans/drive-share-revocation.md).
+    /// The key generation the uploaded content was sealed at.
+    pub original_key_generation: i32,
+    /// The key generation of the content `…/content` serves.
+    pub content_key_generation: i32,
+    /// The file's older keys, each sealed under the next.
     #[serde(default)]
     #[sqlx(json)]
     pub key_history: Vec<crate::models::FileKeyHistoryEntry>,
@@ -1380,13 +1382,13 @@ pub async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> Ap
         };
         let files: Vec<FederatedDriveFile> = sqlx::query_as(&format!(
             "SELECT f.id, f.collection_id, f.uploader_user_id, f.metadata_envelope,
-                f.file_key_envelope, f.key_epoch, f.metadata_revision,
-                f.encrypted_size_bytes, f.created_at, f.updated_at, f.original_key_epoch,
-                {} AS key_history, {} AS content_key_epoch
+                f.file_key_envelope, f.key_epoch, f.key_generation, f.metadata_revision,
+                f.encrypted_size_bytes, f.created_at, f.updated_at, f.original_key_generation,
+                {} AS key_history, {} AS content_key_generation
          FROM files f WHERE f.collection_id = $1 AND f.deleted_at IS NULL
          ORDER BY f.created_at DESC",
             crate::models::FILE_KEY_HISTORY_SQL,
-            crate::models::CONTENT_KEY_EPOCH_SQL
+            crate::models::CONTENT_KEY_GENERATION_SQL
         ))
         .bind(share.collection_id)
         .fetch_all(&state.pool)
@@ -1612,25 +1614,15 @@ pub async fn upload_file(
             .map_err(|_| AppError::conflict("invalid collection epoch"))?;
         let file_id_text = parsed.file_id.to_string();
         let collection_id_text = share.collection_id.to_string();
-        let file_key_context = DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::FileKey,
-            epoch,
-            1,
-            &file_id_text,
-            &collection_id_text,
-        )
-        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?;
-        let metadata_context = DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::FileMetadata,
-            epoch,
-            1,
-            &file_id_text,
-            &collection_id_text,
-        )
-        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?;
+        // A new file's key is generation 1, wrapped at the folder's epoch.
+        let file_key_context =
+            DriveEnvelopeContextV1::file_key(&file_id_text, &collection_id_text, epoch, 1)
+                .map_err(|_| AppError::bad_request("invalid Drive envelope"))?;
+        let metadata_context = DriveEnvelopeContextV1::file_metadata(&file_id_text, 1, 1)
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?;
         validate_envelope(&parsed.file_key_envelope, file_key_context)?;
         validate_envelope(&parsed.metadata_envelope, metadata_context)?;
-        let blob_context = DriveFileBlobContextV1::new(&file_id_text, &collection_id_text, epoch)
+        let blob_context = DriveFileBlobContextV1::new(&file_id_text, 1)
             .map_err(|_| AppError::bad_request("invalid Drive file blob"))?;
         validate_file_blob_file(&parsed.file, blob_context)?;
         let metadata = authenticated.replay_metadata()?;
@@ -1715,10 +1707,10 @@ pub async fn upload_file(
             sqlx::query(
                 "INSERT INTO files
                 (id, collection_id, uploader_user_id, metadata_envelope,
-                 file_key_envelope, key_epoch, metadata_revision,
+                 file_key_envelope, key_epoch, key_generation, metadata_revision,
                  storage_path, encrypted_size_bytes, ciphertext_sha256, fed_share_id,
-                 original_key_epoch)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$6)",
+                 original_key_generation)
+             VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,$10,$11,1)",
             )
             .bind(file_id)
             .bind(share.collection_id)

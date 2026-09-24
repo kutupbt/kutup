@@ -75,15 +75,15 @@ export interface WhiteboardEditorHandle {
 
 interface Props {
   fileId: string
-  collectionId: string
   filename: string
-  collectionMaster: Uint8Array
-  keyEpoch: number
+  /** The file key frames and images are sealed under, and its generation. */
+  fileKey: Uint8Array
+  keyGeneration: number
   initialBytes?: Uint8Array
   /** View-only access: follow edits live, draw nothing. */
   readOnly?: boolean
-  /** The folder key at an older epoch: images stored before a rotation. */
-  keyAt?: (epoch: number) => Promise<Uint8Array>
+  /** The file key of an older generation: images stored before a re-key. */
+  fileKeyAt?: (generation: number) => Promise<Uint8Array>
 }
 
 // Module-level cache of registerDevice promises — same pattern as
@@ -109,7 +109,7 @@ interface CursorPayload {
 }
 
 function WhiteboardEditorBase(
-  { fileId, collectionId, initialBytes, collectionMaster, keyEpoch, readOnly = false, keyAt }: Props,
+  { fileId, initialBytes, fileKey, keyGeneration, readOnly = false, fileKeyAt }: Props,
   ref: Ref<WhiteboardEditorHandle>,
 ) {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null)
@@ -285,10 +285,9 @@ function WhiteboardEditorBase(
         },
         onFrame: async (bs: Uint8Array) => {
           try {
-            const f = await openCollabFrameV1(bs, collectionMaster, {
+            const f = await openCollabFrameV1(bs, fileKey, {
               fileId,
-              collectionId,
-              keyEpoch,
+              keyGeneration,
             })
             const api = apiRef.current
             if (!api) return
@@ -391,7 +390,7 @@ function WhiteboardEditorBase(
     // handled by transport reconnect, NOT by re-mounting the WS (would lose
     // in-flight broadcasts).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileId, collectionMaster])
+  }, [fileId, fileKey])
 
   // Trailing-edge throttle for cursor + selection presence.
   function schedulePresence() {
@@ -418,12 +417,11 @@ function WhiteboardEditorBase(
         const bytes = new TextEncoder().encode(JSON.stringify(payload))
         const packed = await encryptCollabFrameV1(bytes, KIND.EXCALIDRAW_CURSOR, {
           fileId,
-          collectionId,
-          keyEpoch,
+          keyGeneration,
           docKeyId: docKeyIdRef.current,
           deviceId: BigInt(did),
           sequence: outboundSeqRef.current,
-        }, collectionMaster, kp.privateKey)
+        }, fileKey, kp.privateKey)
         transport.send(packed)
       } catch (e) {
         console.warn('whiteboard: cursor send failed', e)
@@ -487,10 +485,9 @@ function WhiteboardEditorBase(
           const plain = new TextEncoder().encode(data.dataURL)
           await uploadAsset({
             fileId,
-            collectionId,
             assetId: fid,
-            epoch: keyEpoch,
-          }, plain, collectionMaster)
+            generation: keyGeneration,
+          }, plain, fileKey)
           assetSavedRef.current.add(fid)
           flipImageStatus(elemId, 'saved')
         } catch (e) {
@@ -531,10 +528,9 @@ function WhiteboardEditorBase(
         try {
           const plain = await fetchAsset({
             fileId,
-            collectionId,
             assetId: fid,
-            epoch: keyEpoch,
-          }, collectionMaster, keyAt)
+            generation: keyGeneration,
+          }, fileKey, fileKeyAt)
           const dataURL = new TextDecoder().decode(plain)
           // Recover mimeType from the dataURL prefix; default to png.
           const match = dataURL.match(/^data:([^;]+);/i)
@@ -587,12 +583,11 @@ function WhiteboardEditorBase(
         const payload = new TextEncoder().encode(JSON.stringify(changed))
         const packed = await encryptCollabFrameV1(payload, KIND.EXCALIDRAW_OP, {
           fileId,
-          collectionId,
-          keyEpoch,
+          keyGeneration,
           docKeyId: docKeyIdRef.current,
           deviceId: BigInt(did),
           sequence: outboundSeqRef.current,
-        }, collectionMaster, kp.privateKey)
+        }, fileKey, kp.privateKey)
         transport.send(packed)
         for (const el of changed) {
           last.set(el.id, el.version ?? 0)

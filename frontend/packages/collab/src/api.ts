@@ -46,8 +46,8 @@ export interface VersionRow {
   createdAt: string
   /** `file`: the whole file; `yjs`: a note's collaboration state. */
   kind: 'file' | 'yjs'
-  /** The epoch it was sealed at (docs/plans/drive-share-revocation.md). */
-  keyEpoch: number
+  /** The generation of the file key it was sealed under (docs/plans/drive-move.md). */
+  keyGeneration: number
 }
 
 export async function listVersions(fileId: string): Promise<VersionRow[]> {

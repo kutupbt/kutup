@@ -469,14 +469,13 @@ fn share_download(
 
     let (file_key, meta) =
         crate::file_crypto::open(target, &keys).context("decrypt file record")?;
-    let (content_key, content_epoch) = crate::file_crypto::content_key(target, &file_key, &keys)?;
+    let (content_key, content_generation) = crate::file_crypto::content_key(target, &file_key)?;
 
     let dest_path = resolve_dest(dest_dir, &meta.name);
     let resp = ctx.client.proxy_download_stream(share_id, file_id)?;
     let bar = crate::output::progress_bar(resp.content_length(), &meta.name);
     let mut out = std::fs::File::create(&dest_path).context("open dest")?;
-    let blob_context =
-        DriveFileBlobContextV1::new(&target.id, &target.collection_id, content_epoch)?;
+    let blob_context = DriveFileBlobContextV1::new(&target.id, content_generation)?;
     let written =
         match crate::transfer::stream_download(resp, &content_key, blob_context, &mut out, |n| {
             bar.set_position(n as u64)
@@ -529,8 +528,7 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
         &col_key,
         &meta,
     )?;
-    let blob_context =
-        DriveFileBlobContextV1::new(&record.id, &share.remote_collection_id, record.key_epoch)?;
+    let blob_context = DriveFileBlobContextV1::new(&record.id, record.key_generation)?;
     let encrypted = drive_object::encrypt_file_blob(&data, &record.file_key, blob_context)
         .context("encrypt content")?;
     let resp = ctx

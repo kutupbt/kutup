@@ -23,10 +23,13 @@ export interface CollectionRow {
   isShared: boolean
 }
 
-/** A file key a re-key left behind: what was sealed at `epoch` opens with it. */
+/**
+ * One generation of a file's key history (docs/plans/drive-move.md): the key
+ * of `generation − 1`, sealed under the key of `generation`.
+ */
 export interface FileKeyHistoryEntry {
-  epoch: number
-  fileKeyEnvelope: string
+  generation: number
+  previousKeyEnvelope: string
 }
 
 export interface FileRow {
@@ -35,20 +38,23 @@ export interface FileRow {
   uploaderUserId: string
   metadataEnvelope: string
   fileKeyEnvelope: string
+  /** The folder epoch the file key is wrapped at. */
   keyEpoch: number
+  /** The generation of the file's current key. */
+  keyGeneration: number
   metadataRevision: number
   encryptedSizeBytes: number
   createdAt: string
   updatedAt: string
-  /** When each thumbnail variant was stored (docs/plans/drive-thumbnails.md), and the epoch it was sealed at. */
-  thumbnails?: { sm?: string; lg?: string; smKeyEpoch?: number; lgKeyEpoch?: number }
+  /** When each thumbnail variant was stored (docs/plans/drive-thumbnails.md), and the key generation it was sealed under. */
+  thumbnails?: { sm?: string; lg?: string; smKeyGeneration?: number; lgKeyGeneration?: number }
   /** A thumbnail exists but was drawn from other than the latest version. */
   thumbnailStale?: boolean
-  /** The epoch the upload was sealed at (docs/plans/drive-share-revocation.md). */
-  originalKeyEpoch: number
-  /** The epoch of what a download serves (latest whole-file version, else the upload). */
-  contentKeyEpoch: number
-  /** File keys a re-key left behind, one per epoch. */
+  /** The key generation the upload was sealed under. */
+  originalKeyGeneration: number
+  /** The key generation of what a download serves (latest whole-file version, else the upload). */
+  contentKeyGeneration: number
+  /** The file's older keys, generations 2 to `keyGeneration` in order. */
   keyHistory?: FileKeyHistoryEntry[]
 }
 

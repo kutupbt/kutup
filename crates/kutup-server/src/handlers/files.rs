@@ -15,7 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
+use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1, FILE_BLOB_HEADER_BYTES};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
@@ -130,26 +130,29 @@ pub async fn list_files(
         metadata_envelope: String,
         file_key_envelope: String,
         key_epoch: i32,
+        key_generation: i32,
         metadata_revision: i64,
         encrypted_size_bytes: i64,
         created_at: time::OffsetDateTime,
         updated_at: time::OffsetDateTime,
         thumb_sm: Option<time::OffsetDateTime>,
         thumb_lg: Option<time::OffsetDateTime>,
-        thumb_sm_epoch: Option<i32>,
-        thumb_lg_epoch: Option<i32>,
+        thumb_sm_generation: Option<i32>,
+        thumb_lg_generation: Option<i32>,
         thumb_stale: bool,
-        original_key_epoch: i32,
-        content_key_epoch: i32,
+        original_key_generation: i32,
+        content_key_generation: i32,
         key_history: sqlx::types::Json<Vec<crate::models::FileKeyHistoryEntry>>,
     }
     let rows: Vec<Row> = sqlx::query_as(&format!(
         r#"SELECT f.id, f.collection_id, f.uploader_user_id,
-                  f.metadata_envelope, f.file_key_envelope, f.key_epoch, f.metadata_revision,
-                  f.encrypted_size_bytes, f.created_at, f.updated_at, f.original_key_epoch,
-                  {} AS key_history, {} AS content_key_epoch,
+                  f.metadata_envelope, f.file_key_envelope, f.key_epoch, f.key_generation,
+                  f.metadata_revision, f.encrypted_size_bytes, f.created_at, f.updated_at,
+                  f.original_key_generation,
+                  {} AS key_history, {} AS content_key_generation,
                   sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
-                  sm.key_epoch AS thumb_sm_epoch, lg.key_epoch AS thumb_lg_epoch,
+                  sm.key_generation AS thumb_sm_generation,
+                  lg.key_generation AS thumb_lg_generation,
                   -- Drawn from something other than the latest version (or,
                   -- with no versions, from a version at all).
                   EXISTS (
@@ -165,7 +168,7 @@ pub async fn list_files(
            WHERE f.collection_id = $1 AND f.deleted_at IS NULL
            ORDER BY f.created_at DESC"#,
         crate::models::FILE_KEY_HISTORY_SQL,
-        crate::models::CONTENT_KEY_EPOCH_SQL
+        crate::models::CONTENT_KEY_GENERATION_SQL
     ))
     .bind(coll_id)
     .fetch_all(&state.pool)
@@ -180,6 +183,7 @@ pub async fn list_files(
             metadata_envelope: r.metadata_envelope,
             file_key_envelope: r.file_key_envelope,
             key_epoch: r.key_epoch,
+            key_generation: r.key_generation,
             metadata_revision: r.metadata_revision,
             encrypted_size_bytes: r.encrypted_size_bytes,
             created_at: r.created_at,
@@ -187,12 +191,12 @@ pub async fn list_files(
             thumbnails: FileThumbnails {
                 sm: r.thumb_sm,
                 lg: r.thumb_lg,
-                sm_key_epoch: r.thumb_sm_epoch,
-                lg_key_epoch: r.thumb_lg_epoch,
+                sm_key_generation: r.thumb_sm_generation,
+                lg_key_generation: r.thumb_lg_generation,
             },
             thumbnail_stale: r.thumb_stale,
-            original_key_epoch: r.original_key_epoch,
-            content_key_epoch: r.content_key_epoch,
+            original_key_generation: r.original_key_generation,
+            content_key_generation: r.content_key_generation,
             key_history: r.key_history.0,
         })
         .collect();
@@ -306,29 +310,18 @@ pub async fn upload(
     }
 
     let epoch = u32::try_from(key_epoch).map_err(|_| AppError::conflict("invalid epoch"))?;
+    // A new file's key is generation 1, wrapped at the folder's epoch.
     validate_envelope(
         &file_key_envelope,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::FileKey,
-            epoch,
-            1,
-            &file_id_str,
-            &coll_id_str,
-        )
-        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+        DriveEnvelopeContextV1::file_key(&file_id_str, &coll_id_str, epoch, 1)
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
     validate_envelope(
         &metadata_envelope,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::FileMetadata,
-            epoch,
-            1,
-            &file_id_str,
-            &coll_id_str,
-        )
-        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+        DriveEnvelopeContextV1::file_metadata(&file_id_str, 1, 1)
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
-    let blob_context = DriveFileBlobContextV1::new(&file_id_str, &coll_id_str, epoch)
+    let blob_context = DriveFileBlobContextV1::new(&file_id_str, 1)
         .map_err(|_| AppError::bad_request("invalid Drive file blob"))?;
     validate_file_blob_file(&tmp_file, blob_context)?;
     let storage_path = format!("{}/{}/{}", user_id, coll_id, file_id);
@@ -370,9 +363,9 @@ pub async fn upload(
     let insert = sqlx::query(
         r#"INSERT INTO files (id, collection_id, uploader_user_id,
                               metadata_envelope, file_key_envelope,
-                              key_epoch, metadata_revision,
-                              storage_path, encrypted_size_bytes, original_key_epoch)
-           VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$6)"#,
+                              key_epoch, key_generation, metadata_revision,
+                              storage_path, encrypted_size_bytes, original_key_generation)
+           VALUES ($1,$2,$3,$4,$5,$6,1,1,$7,$8,1)"#,
     )
     .bind(file_id)
     .bind(coll_id)
@@ -482,19 +475,19 @@ pub async fn update_metadata(
 
     let mut tx = state.pool.begin().await?;
     let row: Option<(Uuid, Uuid, i32, i64)> = sqlx::query_as(
-        r#"SELECT collection_id, uploader_user_id, key_epoch, metadata_revision
+        r#"SELECT collection_id, uploader_user_id, key_generation, metadata_revision
            FROM files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE"#,
     )
     .bind(file_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((coll_id, uploader_id, key_epoch, current_revision)) = row else {
+    let Some((coll_id, uploader_id, key_generation, current_revision)) = row else {
         return Err(AppError::not_found("not found"));
     };
     require_owner_or_uploader_with_delete(&state, user_id, coll_id, uploader_id).await?;
 
     // A new name is new content: never under a key the folder has left.
-    crate::drive_writes::lock_file_epoch(&mut tx, file_id, key_epoch).await?;
+    crate::drive_writes::lock_file_key(&mut tx, file_id, key_generation).await?;
     let expected_revision = current_revision
         .checked_add(1)
         .ok_or_else(|| AppError::conflict("metadata revision exhausted"))?;
@@ -503,19 +496,14 @@ pub async fn update_metadata(
             "metadata revision must advance exactly once",
         ));
     }
-    let epoch = u32::try_from(key_epoch).map_err(|_| AppError::conflict("invalid epoch"))?;
+    let generation =
+        u32::try_from(key_generation).map_err(|_| AppError::conflict("invalid key generation"))?;
     let revision = u64::try_from(req.metadata_revision)
         .map_err(|_| AppError::bad_request("invalid metadata revision"))?;
     validate_envelope(
         &req.metadata_envelope,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::FileMetadata,
-            epoch,
-            revision,
-            &file_id.to_string(),
-            &coll_id.to_string(),
-        )
-        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+        DriveEnvelopeContextV1::file_metadata(&file_id.to_string(), generation, revision)
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
 
     sqlx::query(

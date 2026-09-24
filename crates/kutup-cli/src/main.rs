@@ -92,15 +92,34 @@ enum Commands {
         #[arg(long)]
         parent: Option<String>,
     },
-    /// Rename a file or folder (re-encrypts the name; content untouched).
+    /// Rename and/or move a file or folder.
+    ///
+    /// Renaming re-encrypts the name; moving a file re-seals only its key for
+    /// the destination folder, and moving a folder changes nothing encrypted.
+    /// Content is never re-uploaded. Moves stay among one owner's folders on
+    /// this server (across owners or servers: download and upload instead).
+    ///
+    /// Examples:
+    ///   kutup mv <file-id> report.pdf              rename a file
+    ///   kutup mv <file-id> --to <folder-id>        move a file into a folder
+    ///   kutup mv --folder <id> "New name"          rename a folder
+    ///   kutup mv --folder <id> --to <folder-id>    move a folder under another
+    ///   kutup mv --folder <id> --root              move a folder to the top level
+    #[command(verbatim_doc_comment)]
     Mv {
         /// File or folder id.
         id: String,
-        /// New name.
-        new_name: String,
-        /// Rename a folder (collection) instead of a file.
+        /// New name (omit to only move).
+        new_name: Option<String>,
+        /// The id names a folder (collection), not a file.
         #[arg(long)]
         folder: bool,
+        /// Move into this folder.
+        #[arg(long, value_name = "FOLDER_ID", conflicts_with = "root")]
+        to: Option<String>,
+        /// Move the folder to the top level (folders only).
+        #[arg(long, requires = "folder")]
+        root: bool,
     },
     /// Move a file or folder to the trash.
     Rm {
@@ -231,7 +250,19 @@ fn main() {
             id,
             new_name,
             folder,
-        } => commands::mv::run(&cli.profile, cli.json, id, new_name, *folder),
+            to,
+            root,
+        } => commands::mv::run(
+            &cli.profile,
+            cli.json,
+            commands::mv::MvArgs {
+                id,
+                new_name: new_name.as_deref(),
+                folder: *folder,
+                to: to.as_deref(),
+                root: *root,
+            },
+        ),
         Commands::Rm { id, folder, yes } => {
             commands::rm::run(&cli.profile, cli.json, id, *folder, *yes)
         }

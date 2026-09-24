@@ -106,10 +106,10 @@ pub async fn upload(
     };
 
     // A stored asset must be the canonical purpose-specific envelope for this
-    // exact live file, collection, epoch and content-addressed asset id. The
+    // exact live file, key generation and content-addressed asset id. The
     // server authenticates only public framing; it never receives the key.
-    let (collection_id, key_epoch): (Uuid, i32) = sqlx::query_as(
-        "SELECT collection_id, key_epoch FROM files WHERE id = $1 AND deleted_at IS NULL",
+    let (collection_id, key_generation): (Uuid, i32) = sqlx::query_as(
+        "SELECT collection_id, key_generation FROM files WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(fid)
     .fetch_optional(&state.pool)
@@ -117,9 +117,9 @@ pub async fn upload(
     .ok_or_else(|| AppError::not_found("not found"))?;
     let context = DriveEnvelopeContextV1::whiteboard_asset(
         &fid.to_string(),
-        &collection_id.to_string(),
         &asset_id,
-        u32::try_from(key_epoch).map_err(|_| AppError::bad_request("invalid asset epoch"))?,
+        u32::try_from(key_generation)
+            .map_err(|_| AppError::bad_request("invalid asset key generation"))?,
     )
     .map_err(|_| AppError::bad_request("invalid asset envelope"))?;
     let encoded = tokio::fs::read(tmp_file.path())
@@ -132,14 +132,14 @@ pub async fn upload(
     // concurrent first upload of the same id waits on the row and then finds
     // it taken.
     let mut tx = state.pool.begin().await?;
-    // Sealed at the file's epoch as read above; a re-key since would put new
+    // Sealed under the file key read above; a re-key since would put new
     // content under a key the folder has left.
-    crate::drive_writes::lock_file_epoch(&mut tx, fid, key_epoch).await?;
+    crate::drive_writes::lock_file_key(&mut tx, fid, key_generation).await?;
     crate::drive_writes::check_room(&mut tx, user_id, collection_id, size, None)
         .await?
         .into_result()?;
     let inserted: Option<i64> = sqlx::query_scalar(
-        r#"INSERT INTO file_assets (file_id, asset_id, size_bytes, uploader_user_id, key_epoch)
+        r#"INSERT INTO file_assets (file_id, asset_id, size_bytes, uploader_user_id, key_generation)
            VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (file_id, asset_id) DO NOTHING
            RETURNING size_bytes"#,
@@ -148,7 +148,7 @@ pub async fn upload(
     .bind(&asset_id)
     .bind(size)
     .bind(user_id)
-    .bind(key_epoch)
+    .bind(key_generation)
     .fetch_optional(&mut *tx)
     .await?;
     // Already stored: assets are content-addressed and immutable, so a re-PUT
@@ -209,10 +209,10 @@ pub async fn download(
         return Err(AppError::forbidden("forbidden"));
     }
 
-    // The epoch it was sealed at: the folder key that opens it
-    // (docs/plans/drive-share-revocation.md).
-    let key_epoch: i32 = sqlx::query_scalar(
-        "SELECT key_epoch FROM file_assets WHERE file_id = $1 AND asset_id = $2",
+    // The key generation it was sealed at: the file key that opens it
+    // (docs/plans/drive-move.md).
+    let key_generation: i32 = sqlx::query_scalar(
+        "SELECT key_generation FROM file_assets WHERE file_id = $1 AND asset_id = $2",
     )
     .bind(fid)
     .bind(&asset_id)
@@ -228,8 +228,8 @@ pub async fn download(
         body,
         size,
         &[(
-            axum::http::HeaderName::from_static("x-kutup-key-epoch"),
-            key_epoch.to_string(),
+            axum::http::HeaderName::from_static("x-kutup-key-generation"),
+            key_generation.to_string(),
         )],
     ))
 }

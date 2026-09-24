@@ -724,21 +724,28 @@ pub async fn rotate(
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RekeyRequest {
-    /// The epoch the file is leaving (compare-and-swap).
-    pub from_epoch: i32,
+    /// The key generation the file is leaving (compare-and-swap).
+    pub from_generation: i32,
+    /// The new key, sealed under the folder's current key.
     pub file_key_envelope: String,
+    /// The metadata, re-sealed under the new key.
     pub metadata_envelope: String,
+    /// The key being left, sealed under the new one (`PreviousFileKey`).
+    pub previous_key_envelope: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RekeyResult {
     pub key_epoch: i32,
+    pub key_generation: i32,
 }
 
-/// `POST /api/files/{id}/rekey` — move a file to its folder's current key
-/// before writing to it. The key it leaves stays in its history, so what was
-/// stored under it stays readable. Editors only.
+/// `POST /api/files/{id}/rekey` — give a file a new key, wrapped at its
+/// folder's current epoch, before writing to it: a file the folder has
+/// rotated past (docs/plans/drive-share-revocation.md). The key it leaves is
+/// sealed under the new one, so what was stored under it stays readable in
+/// any folder (docs/plans/drive-move.md). Editors only.
 #[utoipa::path(
     post,
     path = "/api/files/{id}/rekey",
@@ -748,7 +755,7 @@ pub struct RekeyResult {
     request_body = RekeyRequest,
     responses(
         (status = 200, description = "Re-keyed", body = RekeyResult),
-        (status = 409, description = "Already moved (by another editor), or already current")
+        (status = 409, description = "Already re-keyed (by another editor), or already current")
     )
 )]
 pub async fn rekey(
@@ -763,14 +770,14 @@ pub async fn rekey(
         return Err(AppError::forbidden("forbidden"));
     }
     let mut tx = state.pool.begin().await?;
-    let file: Option<(Uuid, i32, String, i64)> = sqlx::query_as(
-        "SELECT collection_id, key_epoch, file_key_envelope, metadata_revision
+    let file: Option<(Uuid, i32, i32, i64)> = sqlx::query_as(
+        "SELECT collection_id, key_epoch, key_generation, metadata_revision
          FROM files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
     )
     .bind(file_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((collection_id, epoch, file_key_envelope, metadata_revision)) = file else {
+    let Some((collection_id, wrapped_at, generation, metadata_revision)) = file else {
         return Err(AppError::not_found("not found"));
     };
     // The folder's epoch, held until commit (a rotation waits).
@@ -779,46 +786,53 @@ pub async fn rekey(
             .bind(collection_id)
             .fetch_one(&mut *tx)
             .await?;
-    if epoch != req.from_epoch {
+    if generation != req.from_generation {
         return Err(AppError::conflict("file key changed"));
     }
-    if epoch >= folder_epoch {
+    if wrapped_at >= folder_epoch {
         return Err(AppError::conflict("file key is already current"));
     }
+    let next = generation
+        .checked_add(1)
+        .ok_or_else(|| AppError::conflict("file key generations exhausted"))?;
+    let (file_text, next_u32) = (file_id.to_string(), next as u32);
     validate_envelope(
         &req.file_key_envelope,
-        context(
-            DriveEnvelopePurpose::FileKey,
-            folder_epoch,
-            1,
-            file_id,
-            collection_id,
-        )?,
+        DriveEnvelopeContextV1::file_key(
+            &file_text,
+            &collection_id.to_string(),
+            folder_epoch as u32,
+            next_u32,
+        )
+        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
     validate_envelope(
         &req.metadata_envelope,
-        context(
-            DriveEnvelopePurpose::FileMetadata,
-            folder_epoch,
-            metadata_revision,
-            file_id,
-            collection_id,
-        )?,
+        DriveEnvelopeContextV1::file_metadata(&file_text, next_u32, metadata_revision as u64)
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+    )?;
+    validate_envelope(
+        &req.previous_key_envelope,
+        DriveEnvelopeContextV1::previous_file_key(&file_text, next_u32)
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
     sqlx::query(
-        "INSERT INTO file_key_history (file_id, epoch, file_key_envelope) VALUES ($1, $2, $3)",
+        "INSERT INTO file_key_history (file_id, generation, previous_key_envelope)
+         VALUES ($1, $2, $3)",
     )
     .bind(file_id)
-    .bind(epoch)
-    .bind(&file_key_envelope)
+    .bind(next)
+    .bind(&req.previous_key_envelope)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "UPDATE files SET key_epoch = $2, file_key_envelope = $3, metadata_envelope = $4
+        "UPDATE files SET key_epoch = $2, key_generation = $3, file_key_envelope = $4,
+                metadata_envelope = $5
          WHERE id = $1",
     )
     .bind(file_id)
     .bind(folder_epoch)
+    .bind(next)
     .bind(&req.file_key_envelope)
     .bind(&req.metadata_envelope)
     .execute(&mut *tx)
@@ -830,6 +844,7 @@ pub async fn rekey(
         StatusCode::OK,
         Json(RekeyResult {
             key_epoch: folder_epoch,
+            key_generation: next,
         }),
     )
         .into_response())

@@ -33,9 +33,9 @@ export async function downloadFile(folder: Folder, file: DriveFile): Promise<voi
           : location.kind === 'local'
             ? `${base}/files/${file.id}/download`
             : `${base}/drive/federation/shares/${location.shareId}/files/${file.id}/content`
-      // Sealed at the epoch of the content served (a file re-keyed since
-      // keeps older content under its older key).
-      const sealed = await sealedAt(folder, file, content.kind === 'version' ? content.keyEpoch : file.contentKeyEpoch)
+      // Sealed under the key generation of the content served (a file
+      // re-keyed since keeps older content under its older key).
+      const sealed = await sealedAt(file, content.kind === 'version' ? content.keyGeneration : file.contentKeyGeneration)
       for await (const { plain } of fetchDecryptedChunks(url, sealed.fileKey, sealed.context, await freshAccessToken())) {
         await sink.write(plain)
       }
@@ -53,11 +53,10 @@ export { FsaRequiredError }
 async function zipEntry(folder: Folder, file: DriveFile, path: string): Promise<ZipFile> {
   const location = folderLocation(folder)
   const content = location.kind === 'local' ? await currentContent(folder, file) : { kind: 'original' as const }
-  const sealed = await sealedAt(folder, file, content.kind === 'version' ? content.keyEpoch : file.contentKeyEpoch)
+  const sealed = await sealedAt(file, content.kind === 'version' ? content.keyGeneration : file.contentKeyGeneration)
   const entry: ZipFile = {
     id: file.id,
-    collectionId: file.collectionId,
-    keyEpoch: sealed.context.epoch,
+    keyGeneration: sealed.context.generation,
     name: path,
     size: file.size,
     fileKey: sealed.fileKey,

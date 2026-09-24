@@ -16,8 +16,8 @@ export class FsaRequiredError extends Error {
 
 export interface ZipFile {
   id: string
-  collectionId: string
-  keyEpoch: number
+  /** The generation of the file key its content is sealed under. */
+  keyGeneration: number
   name: string
   size: number
   fileKey: Uint8Array
@@ -82,7 +82,7 @@ async function pumpFileIntoZip(
   for await (const { plain, isFinal } of fetchDecryptedChunks(
     url,
     f.fileKey,
-    { fileId: f.id, collectionId: f.collectionId, epoch: f.keyEpoch },
+    { fileId: f.id, generation: f.keyGeneration },
     accessToken,
     signal,
   )) {
