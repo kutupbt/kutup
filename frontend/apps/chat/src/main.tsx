@@ -1,16 +1,18 @@
 import '@kutup/crypto/polyfills'
 import '@kutup/ui/styles/fonts'
-import '@kutup/ui/styles/tokens.css'
+import './styles.css'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ThemeProvider } from 'next-themes'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { initI18n } from '@kutup/i18n'
+import { configureClient } from '@kutup/session/client'
 import { App } from './App'
 import en from './locales/en.json'
 import tr from './locales/tr.json'
 
 initI18n({ en, tr })
+configureClient({ clientType: 'web-chat' })
 
 const queryClient = new QueryClient({
   defaultOptions: {

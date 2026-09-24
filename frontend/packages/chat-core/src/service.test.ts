@@ -88,6 +88,43 @@ describe('ChatService MLS workflow coordination', () => {
       name === 'kutup-chat-engine:test:mls-workflow')).toHaveLength(2)
   })
 
+  it('drains once more when a hint arrives during a drain', async () => {
+    installQueuedWebLocks()
+    const firstDrain = deferred()
+    const client = {
+      purgeExpiredMessages: vi.fn().mockResolvedValue({ expiredMessages: 0, expiredAttachmentIds: [] }),
+      reconcile: vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          await firstDrain.promise
+          return { messages: [] }
+        })
+        .mockResolvedValue({ messages: [] }),
+    }
+    const service = Object.create(ChatService.prototype) as ChatService
+    Object.assign(service, {
+      client,
+      lockName: 'kutup-chat-engine:test',
+      mlsWorkflowLockName: 'kutup-chat-engine:test:mls-workflow',
+      mls: null,
+      channel: { postMessage: vi.fn() },
+      listeners: new Set(),
+      typingListeners: new Set(),
+      reconcilePromise: null,
+      reconcileAgain: false,
+      disposed: false,
+      attachmentLedger: null,
+    })
+
+    const first = service.reconcile()
+    // A socket hint for a message that lands after the drain read the mailbox.
+    const coalesced = service.reconcile()
+    expect(coalesced).toBe(first)
+    firstDrain.resolve()
+    await first
+    await vi.waitFor(() => expect(client.reconcile).toHaveBeenCalledTimes(2))
+  })
+
   it('refuses to revoke the current browser device', async () => {
     const transport = {
       revokeDevice: vi.fn(),

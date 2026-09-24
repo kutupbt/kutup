@@ -423,6 +423,20 @@ traffic is enabled.
 
 ## Polish / smaller items (future)
 
+### Chat app (web) follow-ups
+
+The rebuilt Chat app (docs/plans/chat-app.md) shows only what `chat-core`
+provides. Not built, because the protocol layer has no support yet:
+
+- **Group names and pictures** — groups show as "Group" and the start of
+  their id; MLS group metadata has no name field.
+- **Leaving a group** — there is no leave operation (an owner can close a
+  group; an administrator can remove members).
+- **Connection state** — the service keeps its socket private, so the app
+  cannot say "reconnecting"; messages still arrive on reconnection.
+- **Read position across devices** — unread counts and the unread marker use
+  a per-device read mark; read receipts are separate and optional.
+
 ### Files workspace follow-up
 
 The Polar Workspace redesign now provides the responsive Files header,

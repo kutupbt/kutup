@@ -97,6 +97,7 @@ export class ChatService {
   private retryAttempt = 0
   private disposed = false
   private reconcilePromise: Promise<ReceiveReport> | null = null
+  private reconcileAgain = false
   private readonly mls: MlsConversationService | null
   private backup: ChatBackupCoordinator | null = null
   private backupUnsubscribe: (() => void) | null = null
@@ -690,8 +691,17 @@ export class ChatService {
     })
   }
 
+  /**
+   * Drain the mailbox. A request while a drain runs (a socket hint for a
+   * message that landed after that drain read the mailbox) is not folded
+   * into it: one more drain follows, so the message shows without waiting
+   * for the next hint.
+   */
   reconcile(): Promise<ReceiveReport> {
-    if (this.reconcilePromise) return this.reconcilePromise
+    if (this.reconcilePromise) {
+      this.reconcileAgain = true
+      return this.reconcilePromise
+    }
     this.reconcilePromise = this.withLock(async () => {
       const expiry = await this.client.purgeExpiredMessages(String(Date.now()))
       return { expiry, report: await this.client.reconcile() }
@@ -722,6 +732,10 @@ export class ChatService {
       })
       .finally(() => {
         this.reconcilePromise = null
+        if (this.reconcileAgain && !this.disposed) {
+          this.reconcileAgain = false
+          void this.reconcile()
+        }
       })
     return this.reconcilePromise
   }

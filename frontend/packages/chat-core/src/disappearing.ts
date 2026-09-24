@@ -1,4 +1,5 @@
 import { conversationKey } from './identity'
+import { compareContentOperations } from './ordering'
 import type { ChatHistoryEntry } from './types'
 
 export interface ActiveDisappearingTimer {
@@ -41,21 +42,4 @@ export function formatRemainingTime(milliseconds: number): string {
   const hours = Math.ceil(minutes / 60)
   if (hours < 24) return `${hours}h`
   return `${Math.ceil(hours / 24)}d`
-}
-
-function compareContentOperations(left: ChatHistoryEntry, right: ChatHistoryEntry): number {
-  if (left.timestampMs !== right.timestampMs) return left.timestampMs - right.timestampMs
-  const sequence = compareDecimalStrings(left.content.seq, right.content.seq)
-  if (sequence !== 0) return sequence
-  const device = (left.senderDeviceId ?? 0) - (right.senderDeviceId ?? 0)
-  return device !== 0 ? device : left.id.localeCompare(right.id)
-}
-
-function compareDecimalStrings(left: string, right: string): number {
-  const normalizedLeft = left.replace(/^0+(?=\d)/u, '')
-  const normalizedRight = right.replace(/^0+(?=\d)/u, '')
-  if (normalizedLeft.length !== normalizedRight.length) {
-    return normalizedLeft.length - normalizedRight.length
-  }
-  return normalizedLeft.localeCompare(normalizedRight)
 }

@@ -5,5 +5,486 @@
   "notFound": {
     "title": "Sayfa bulunamadı",
     "description": "Adres yanlış yazılmış ya da sayfa taşınmış olabilir."
+  },
+  "chat": {
+    "attachments": {
+      "downloadInto": "{{filename}} dosyasını Kutup'a indir",
+      "cancelDownload": "{{filename}} indirmesini iptal et",
+      "open": "{{filename}} dosyasını aç",
+      "availableInKutup": "{{filename}} Kutup'ta mevcut",
+      "preparing": "{{filename}} hazırlanıyor",
+      "waveformLabel": "{{filename}} için ses dalga formu",
+      "previewAlt": "{{filename}} önizlemesi",
+      "viewer": {
+        "description": "Kutup'un şifreli önbelleğinden yerel olarak doğrulandı. Kapattığında geçici görünüm silinir.",
+        "opening": "Ek açılıyor",
+        "openFailed": "Bu ek güvenli bir şekilde açılamadı."
+      },
+      "capture": "Fotoğraf veya video çek",
+      "attach": "Dosya ekle",
+      "tooLarge": "Bu dosya, sunucunun {{limit}} sınırından büyük.",
+      "downloadFailed": "Şifreli ek indirilemedi.",
+      "saveFailed": "Ek bu cihaza kaydedilemedi.",
+      "clearFailed": "Yerel kopya temizlenemedi.",
+      "moreActions": "{{filename}} için diğer işlemler",
+      "saveToDevice": "Cihaza kaydet",
+      "clearLocal": "Yerel kopyayı temizle",
+      "inKutup": "Kutup’ta hazır",
+      "encrypted": "şifreli",
+      "progress": "%{{percent}} indirildi"
+    },
+    "voice": {
+      "download": "{{filename}} dosyasını indir",
+      "play": "{{filename}} dosyasını oynat",
+      "pause": "{{filename}} dosyasını duraklat",
+      "seek": "{{filename}} içinde konuma git",
+      "preparing": "Hazırlanıyor…",
+      "voiceMessage": "Sesli mesaj",
+      "progress": "%{{percent}}",
+      "playbackSpeed": "Oynatma hızı {{rate}} kat",
+      "changePlaybackSpeed": "Oynatma hızını değiştir",
+      "cancel": "Sesli notu iptal et",
+      "stop": "Sesli notu durdur ve gönder",
+      "unsupported": "Bu tarayıcı ses kaydını desteklemiyor.",
+      "empty": "Ses kaydı boştu.",
+      "failed": "Ses kaydı başarısız oldu.",
+      "maximumReached": "Azami sesli not süresine ulaşıldı; kayıt gönderiliyor.",
+      "permissionFailed": "Mikrofon erişimi reddedildi veya başlatılamadı.",
+      "tooLarge": "Sesli not {{limit}} kayıt sınırını aşıyor.",
+      "record": "Sesli mesaj kaydet",
+      "recording": "Kaydediliyor {{time}}",
+      "sending": "Gönderiliyor…",
+      "playFailed": "Sesli mesaj oynatılamadı."
+    },
+    "safety": {
+      "triggerVerify": "{{peer}} kişisini doğrula",
+      "triggerVerified": "{{peer}} doğrulandı",
+      "triggerWarning": "{{peer}} için güvenlik uyarısı",
+      "title": "{{peer}} kişisini doğrula",
+      "description": "Yüz yüze buluş ve karşındakinin cihazında görünen QR kodunu tara. İki cihazda da aynı tam güvenlik numarası görünmeli.",
+      "stateBlocked": "Sabitlenen kimlik değişti ya da geçmişiyle çelişiyor. Bu yeni kimliği birebir doğrulayana kadar mesaj gönderemezsin.",
+      "stateVerified": "Bu cihazda yüz yüze doğrulandı.",
+      "stateUnverified": "Geçerli, sabitlenmiş bir kimlikle şifreli; ama yüz yüze doğrulanmadı.",
+      "qrLabel": "Doğrulama QR kodun",
+      "numberLabel": "Tam güvenlik numarası",
+      "copied": "Güvenlik numarası kopyalandı",
+      "copyFailed": "Güvenlik numarası kopyalanamadı.",
+      "retainedAuthority": "Saklanan otorite parmak izi",
+      "candidateAuthority": "Aday otorite parmak izi",
+      "scan": "QR kodunu tara",
+      "scanning": "Taranıyor…",
+      "pasteLabel": "Ya da QR değerini yapıştır",
+      "verify": "Birebir eşleşmeyi doğrula",
+      "verifiedToast": "{{peer}} artık bu cihazda doğrulandı",
+      "mismatch": "Bu QR kodu bu sohbetle eşleşmiyor. Hiçbir şey doğrulanmadı.",
+      "scanUnsupported": "Bu tarayıcı QR kodu tarayamıyor. Onun yerine QR değerini yapıştır.",
+      "cameraUnavailable": "Kameraya erişilemedi. Onun yerine QR değerini yapıştır.",
+      "section": "Güvenlik numarası",
+      "view": "Güvenlik numarasını göster",
+      "verifiedStatus": "Bu güvenlik numarasını doğruladın.",
+      "changedStatus": "Güvenlik numarası değişti. Hassas bir şey paylaşmadan önce yeniden doğrula.",
+      "unverifiedStatus": "Arada kimse olmadığından emin olmak için güvenlik numarasını {{name}} ile yüz yüze ya da bir aramada karşılaştır."
+    },
+    "groupSecurity": {
+      "ownerTitle": "Sahip yetkilendirmesi",
+      "setSummary": "Sıra {{sequence}} · yeter sayı {{required}}/{{total}}",
+      "unmappedOwner": "Eşlenmemiş grup kimlik bilgisi",
+      "ownerFingerprint": "Sahip kimlik bilgisinin SHA-256 parmak izi",
+      "ownerPublicKey": "Sahibin Ed25519 açık anahtarı",
+      "authorityTitle": "Sıralama otoritesi politikası",
+      "authoritySetSummary": "Grup otorite kümesi sırası {{sequence}} · yeter sayı {{required}}/{{total}}",
+      "authorityExplainer": "Canlı politika geçmişleri bu istemci tarafından bağımsız olarak doğrulanır. Grup, sahiplerin onayladığı bir MLS geçişine kadar sabitlenmiş kontrol anahtarını birebir korur.",
+      "verifyingPolicies": "Otorite politika geçmişleri doğrulanıyor…",
+      "unavailable": "Doğrulama kullanılamıyor",
+      "matchesPin": "Doğrulandı; grup sabitlemesiyle eşleşiyor",
+      "differsFromPin": "Doğrulanan güncel politika grup sabitlemesinden farklı",
+      "pinFingerprint": "Grupta sabitlenen kontrol anahtarının SHA-256 parmak izi",
+      "pinPublicKey": "Grupta sabitlenen Ed25519 kontrol açık anahtarı",
+      "unavailableExplainer": "Doğrulanmış güncel politika kanıtı şu an alınamıyor. Yukarıdaki grup sabitlemesi birebir geçerli kalır; anahtar değişimi ya da yedeğe geçiş yok.",
+      "exactPolicy": "Doğrulanmış hizmet politikasının tamamı",
+      "policySequence": "Politika sırası",
+      "historyLength": "Geçmiş uzunluğu",
+      "issued": "Yayımlanma",
+      "identityGeneration": "Kimlik kuşağı",
+      "policyHash": "Doğrulanmış politika özeti",
+      "payloadDigest": "Kanonik yük özeti",
+      "identityFingerprint": "Federasyon kimliğinin SHA-256 parmak izi",
+      "identityPublicKey": "Federasyon kimliğinin Ed25519 açık anahtarı",
+      "controlFingerprint": "Güncel kontrol anahtarının SHA-256 parmak izi",
+      "controlPublicKey": "Güncel Ed25519 kontrol açık anahtarı",
+      "fullHistory": "Doğrulanmış politika geçmişinin tamamı",
+      "historyEntry": "Sıra {{sequence}} · {{issued}} · kimlik kuşağı {{generation}}",
+      "historyPolicyHash": "Politika özeti",
+      "historyPayloadDigest": "Yük özeti",
+      "historyIdentityFingerprint": "Federasyon kimliği parmak izi",
+      "historyControlFingerprint": "Kontrol anahtarı parmak izi",
+      "yes": "evet",
+      "no": "hayır",
+      "policy": {
+        "policyVersion": "Politika sürümü",
+        "canonicalDomain": "Kanonik alan adı",
+        "suite": "MLS şifre takımı",
+        "anonymousDeliverySuite": "Anonim teslim takımı",
+        "acceptsGroupOrdering": "Grup sıralamasını kabul ediyor",
+        "maximumGroupMembers": "En fazla grup üyesi",
+        "maximumAuthorities": "En fazla otorite",
+        "maximumControlPayloadBytes": "En fazla kontrol yükü (bayt)",
+        "pendingMessages": "Bekleyen istek mesajları",
+        "pendingCiphertextBytes": "Bekleyen istek şifreli metni (bayt)",
+        "pendingExpirySeconds": "Bekleyen istek süresi (saniye)",
+        "anonymousAttemptsPerIpMinute": "Anonim deneme/IP/dakika",
+        "capabilityBundlesPerMinute": "Yetenek paketi/dakika",
+        "sealedSendsPerCapabilityMinute": "Mühürlü gönderim/yetenek/dakika",
+        "sealedSendsPerCapabilityDay": "Mühürlü gönderim/yetenek/gün",
+        "federatedSealedSendsPerOriginMinute": "Federe mühürlü gönderim/kaynak/dakika",
+        "maximumEnvelopesPerRequest": "En fazla zarf/istek",
+        "maximumRequestBytes": "En fazla istek boyutu (bayt)"
+      }
+    },
+    "username": "Kullanıcı adı",
+    "start": "Sohbet başlat",
+    "send": "Gönder",
+    "noteToSelf": "Kendime Not",
+    "noteToSelfDescription": "Bağlı cihazlarınızla eşitlenen özel notlar",
+    "preparing": "Güvenli sohbet hazırlanıyor…",
+    "empty": "Şifreli bir konuşma başlatın veya özel bir not kaydedin.",
+    "newerClient": "Daha yeni bir istemciden gelen mesaj",
+    "chooseConversation": "Bir konuşma seçin veya başlatın.",
+    "timeline": "Konuşma zaman çizelgesi",
+    "jumpToLatest": "En yeniye git",
+    "safetyNumberChanged": "Bir alıcı cihazın kimliği değişti. Güvenlik numarasını doğrulayın.",
+    "device": "Cihaz {{device}}",
+    "backup": {
+      "title": "Şifreli sohbet geçmişi",
+      "recovery": "Drive ile aynı kurtarma ifadesi kullanılarak otomatik geri yüklenir.",
+      "latestProtected": "Son koruma: {{time}}",
+      "waiting": "İlk sunucu onayı bekleniyor",
+      "pending": "{{count}} mesaj değişikliği ({{bytes}}) hâlâ yalnızca bu cihazda saklanıyor.",
+      "full": "Sohbet depolama alanı dolu. Mesaj veya medya silin ya da sunucu yöneticinizden kotayı artırmasını isteyin. Depolama alanı açılıp sunucu onaylayana kadar yeni yerel değişiklikler korunmaz.",
+      "attention": "Sohbet geçmişi koruması ilgilenmenizi gerektiriyor. Kutup yeniden denemeye devam edecek; sunucu onaylayana kadar yerel değişiklikler korunmaz.",
+      "storageTitle": "Sohbet depolama alanı",
+      "storageDescription": "Sohbet geçmişi ve medya, sunucu yöneticisinin belirlediği ayrı bir kota kullanır; Drive ayrıdır. Teslimat kopyaları {{days}} gün sonra silinir, korunan geçmiş kopyaları kalır.",
+      "storageDescriptionUnlimited": "Sohbet geçmişi ve medya, sunucu yöneticisinin belirlediği ayrı bir kota kullanır; Drive ayrıdır. Teslimat kopyalarının süresi dolmaz; korunan geçmiş kopyaları bağımsız olarak saklanır.",
+      "loading": "Şifreli kullanım bilgileri yükleniyor…",
+      "used": "{{bytes}} kullanılıyor",
+      "messageHistory": "Mesaj geçmişi",
+      "deliveryMedia": "Teslimat medyası",
+      "historyMedia": "Geçmiş medyası",
+      "status": {
+        "protected": "Korunuyor",
+        "backingUp": "Yedekleniyor",
+        "offline": "Çevrimdışı",
+        "mediaPending": "Medya bekliyor",
+        "needsAttention": "Yedekleme için işlem gerekiyor",
+        "starting": "Başlatılıyor"
+      },
+      "stateLabel": "Durum"
+    },
+    "contact": {
+      "title": "Sohbet adresiniz",
+      "description": "Bu kalıcı kullanıcı@sunucu adresini paylaşın veya QR kodunu taratın.",
+      "copy": "Adresi kopyala",
+      "copied": "Sohbet adresi kopyalandı",
+      "qr": "Sohbet adresinin QR kodu"
+    },
+    "deviceRecovery": {
+      "action": "Bu tarayıcıyı onar",
+      "title": "Bu tarayıcının Sohbet cihazı sıfırlansın mı?",
+      "description": "Kutup bu tarayıcıdaki geçersiz şifreleme cihazı durumunu kaldıracak, yeni bir cihaz kaydedecek ve sunucunun onayladığı şifreli geçmişi geri yükleyecek. Hesabınız ve sunucu yedeğiniz silinmez.",
+      "warning": "Yalnızca bu tarayıcıda bulunan ve sunucu tarafından hiç onaylanmamış Sohbet değişiklikleri kaybolabilir. Devam etmeden önce diğer Kutup sekmelerini kapatın.",
+      "confirm": "Sıfırla ve geri yükle",
+      "failed": "Bu tarayıcının Sohbet cihazı sıfırlanamadı."
+    },
+    "devices": {
+      "title": "Etkin Sohbet kurulumları",
+      "description": "Her tarayıcı profili, gizli pencere veya temizlenmiş site verisi ayrı bir uçtan uca şifreli kurulumdur. Adlar hesabınıza özeldir ve şifreleme anahtarlarını değiştirmez.",
+      "loading": "Sohbet cihazları yükleniyor…",
+      "current": "Bu cihaz",
+      "id": "Cihaz kimliği {{device}}",
+      "name": "Cihaz adı",
+      "rename": "Cihazı yeniden adlandır",
+      "renamed": "Cihaz yeniden adlandırıldı",
+      "created": "Eklendi: {{time}}",
+      "lastSeen": "Son etkinlik: {{time}}",
+      "neverSeen": "Henüz etkinlik yok",
+      "revoke": "İptal et",
+      "confirm": "{{device}} iptal edilsin mi? Gelecekteki mesajları artık almayacak.",
+      "revoked": "Sohbet cihazı iptal edildi",
+      "historyWarning": "İptal etmek gelecekteki teslimatı durdurur. Cihazın yerel mesaj geçmişini kopyalamaz.",
+      "thisOne": "Bu tarayıcı {{device}} numaralı sohbet cihazı.",
+      "revokeTitle": "Bu cihazın erişimi kaldırılsın mı?"
+    },
+    "disappearing": {
+      "setting": "Kaybolan mesajlar",
+      "off": "Kaybolan mesajlar kapalı",
+      "active": "Yeni mesajlar {{duration}} sonra kaybolur",
+      "expires": "{{time}} sonra kaybolur",
+      "presets": {
+        "off": "Kapalı",
+        "thirtySeconds": "30 saniye",
+        "oneHour": "1 saat",
+        "oneDay": "1 gün",
+        "oneWeek": "1 hafta",
+        "thirtyDays": "30 gün"
+      },
+      "explanation": "Buradaki yeni mesajlar, seçtiğin süreden sonra sohbetteki herkes için tüm cihazlardan kaybolur.",
+      "noticeOn": "{{name}}, kaybolan mesajları {{duration}} olarak ayarladı",
+      "noticeOff": "{{name}}, kaybolan mesajları kapattı"
+    },
+    "errors": {
+      "browserUnsupported": "Bu tarayıcı, şifreli sohbeti sekmeler arasında güvenli biçimde koordine edemiyor.",
+      "serverUnsupported": "Bu sunucu gereken güvenli sohbet protokolünü desteklemiyor.",
+      "capabilities": "Kutup bu sunucunun güvenli sohbet desteğini kontrol edemedi.",
+      "unavailable": "Güvenli sohbet geçici olarak kullanılamıyor.",
+      "invalidAddress": "Geçerli bir kullanıcı adı veya kullanıcı@sunucu adresi girin.",
+      "groupSend": "Mesaj gruba gönderilemedi. Yeniden dene."
+    },
+    "mutations": {
+      "edit": "Mesajı düzenle",
+      "delete": "Mesajı sil",
+      "editing": "Mesaj düzenleniyor",
+      "cancelEdit": "Düzenlemeyi iptal et",
+      "edited": "düzenlendi",
+      "confirmDelete": "Bu mesaj herkes için silinsin mi? Bu işlem geri alınamaz.",
+      "save": "Düzenlemeyi kaydet",
+      "youDeleted": "Bu mesajı sildin",
+      "deleted": "Bu mesaj silindi",
+      "deleteTitle": "Herkes için silinsin mi?"
+    },
+    "profile": {
+      "title": "Sohbet profili",
+      "description": "Adınız ve avatarınız bu cihazdan ayrılmadan önce şifrelenir.",
+      "displayName": "Görünen ad",
+      "changeAvatar": "Fotoğraf seç",
+      "removeAvatar": "Kaldır",
+      "avatarHint": "PNG, JPEG veya WebP. Görsel bu cihazda kırpılır ve yeniden boyutlandırılır.",
+      "visibility": "Signal'da olduğu gibi Kutup da bu profili yalnızca mesaj gönderdiğiniz veya kabul ettiğiniz kişilerle paylaşır. Birini engellemek, gelecekteki değişiklikleri alamaması için profil anahtarınızı yeniler.",
+      "saved": "Şifreli sohbet profili güncellendi",
+      "avatarError": "Bu görsel profil fotoğrafı olarak kullanılamadı."
+    },
+    "reactions": {
+      "add": "Tepki ekle",
+      "addEmoji": "{{emoji}} ile tepki ver",
+      "details": "{{emoji}} ile tepki verenleri göster, {{count}} tepki",
+      "reactedWith": "Tepkiler",
+      "you": "Sen",
+      "removeMine": "Kaldır"
+    },
+    "receipts": {
+      "sent": "Gönderildi",
+      "setting": "Okundu bilgisi gönder",
+      "deliveredTo_one": "İletildi",
+      "deliveredTo_other": "{{count}} kişiye iletildi",
+      "readBy_one": "Okundu",
+      "readBy_other": "{{count}} kişi okudu",
+      "settingDescription": "Açıkken, sohbet ettiğin kişiler mesajlarını ne zaman okuduğunu görebilir. Birebir sohbetlerde iletim bildirimleri her zaman şifreli olarak gönderilir."
+    },
+    "replies": {
+      "reply": "Mesajı yanıtla",
+      "cancel": "Yanıtı iptal et",
+      "unavailable": "Özgün mesaj kullanılamıyor",
+      "replyingTo": "{{name}} yanıtlanıyor"
+    },
+    "requests": {
+      "incoming": "{{peer}} size mesaj göndermek istiyor",
+      "description": "Yanıtlamak için kabul edin, mesajları kaldırmak için reddedin veya gelecekteki mesajları engelleyin.",
+      "accept": "Kabul et",
+      "reject": "Reddet",
+      "block": "Engelle",
+      "unblock": "Engeli kaldır",
+      "blocked": "{{peer}} engellendi. Yeni mesajlar bu cihazda güvenli biçimde silinir."
+    },
+    "typing": {
+      "one": "{{name}} yazıyor…",
+      "many": "{{count}} kişi yazıyor…",
+      "short": "yazıyor…"
+    },
+    "you": "Sen",
+    "backToList": "Sohbetlere dön",
+    "encryptedIntro": "Buradaki mesajlar ve dosyalar uçtan uca şifrelidir: yalnızca sohbetteki kişiler okuyabilir.",
+    "nav": {
+      "chats": "Sohbetler",
+      "settings": "Ayarlar"
+    },
+    "newChat": {
+      "action": "Yeni sohbet",
+      "title": "Yeni sohbet",
+      "description": "{{server}} üzerindeki bir kullanıcı adını ya da başka bir sunucudaki biri için kullanıcıadı@sunucu yaz.",
+      "address": "Kullanıcı adı ya da adres"
+    },
+    "failed": {
+      "title": "Sohbet açılamadı",
+      "toDrive": "Drive’a git"
+    },
+    "list": {
+      "label": "Sohbetler",
+      "blocked": "Engellendi",
+      "request": "Mesaj isteği",
+      "newGroup": "Yeni grup",
+      "byAuthor": "{{author}}: {{text}}",
+      "unread_one": "{{count}} okunmamış mesaj",
+      "unread_other": "{{count}} okunmamış mesaj"
+    },
+    "preview": {
+      "photo": "Fotoğraf",
+      "video": "Video",
+      "voice": "Sesli mesaj",
+      "timer": "Kaybolan mesajlar değişti"
+    },
+    "time": {
+      "now": "şimdi",
+      "minutes": "{{count}} dk",
+      "today": "Bugün",
+      "yesterday": "Dün"
+    },
+    "thread": {
+      "empty": "Henüz mesaj yok. Gönderdiğin mesajlar uçtan uca şifrelenir.",
+      "notFound": "Bu sohbet adresi geçerli değil.",
+      "unread_one": "{{count}} okunmamış mesaj",
+      "unread_other": "{{count}} okunmamış mesaj"
+    },
+    "search": {
+      "label": "Sohbetlerde ve mesajlarda ara",
+      "placeholder": "Ara",
+      "clear": "Aramayı temizle",
+      "conversations": "Sohbetler",
+      "messages": "Mesajlar",
+      "noResults": "Bu cihazda “{{query}}” ile eşleşen bir şey yok."
+    },
+    "composer": {
+      "label": "Mesaj",
+      "placeholder": "Mesaj",
+      "tooLong": "Bu, grubun izin verdiğinden uzun. Göndermek için kısalt."
+    },
+    "message": {
+      "more": "Diğer işlemler",
+      "copy": "Metni kopyala",
+      "copied": "Kopyalandı",
+      "copyFailed": "Kopyalanamadı. Metni seçip kopyala."
+    },
+    "readOnly": {
+      "history": "Bu cihazda bu grubun yalnızca geçmişi kaldı. Salt okunur.",
+      "closed": "Bu grup kapatıldı. Geçmişi duruyor, ama yeni bir şey gönderilemez.",
+      "adminsOnly": "Bu grupta yalnızca yöneticiler mesaj gönderebilir.",
+      "pendingInvitations_one": "Mesaj gönderilebilmesi için davet edilen {{count}} üyenin kabul etmesi bekleniyor.",
+      "pendingInvitations_other": "Mesaj gönderilebilmesi için davet edilen {{count}} üyenin kabul etmesi bekleniyor."
+    },
+    "details": {
+      "open": "Sohbet ayrıntıları",
+      "title": "Sohbet ayrıntıları",
+      "groupTitle": "Grup ayrıntıları",
+      "close": "Geri",
+      "block": "{{name}} kişisini engelle"
+    },
+    "group": {
+      "untitled": "Grup {{id}}",
+      "members_one": "{{count}} üye",
+      "members_other": "{{count}} üye",
+      "membersTitle_one": "{{count}} üye",
+      "membersTitle_other": "{{count}} üye",
+      "rolesExplanation": "Yöneticiler üye ekler ve çıkarır. Sahipler grubun kurallarındaki değişiklikleri birlikte onaylar.",
+      "new": "Yeni grup",
+      "newTitle": "Yeni grup",
+      "newDescription": "Bir kişiyle özel, uçtan uca şifreli bir grup başlat; diğerlerini grubun ayrıntılarından ekle.",
+      "firstMember": "İlk üye",
+      "create": "Grubu oluştur",
+      "created": "Şifreli grup oluşturuldu",
+      "addMember": "Üye ekle",
+      "addMemberDescription": "Kabul etmesi için şifreli bir davet alır.",
+      "memberAddress": "Grup üyesinin adresi",
+      "invite": "Üyeyi davet et",
+      "memberInvited": "Üye davet edildi",
+      "memberRemoved": "Üye çıkarıldı",
+      "admin": "Yönetici",
+      "owner": "Sahip",
+      "adminAdded": "Yönetici eklendi",
+      "adminRemoved": "Yönetici kaldırıldı",
+      "ownerUpdated": "Sahipler güncellendi",
+      "approvalRequested": "Onay için diğer sahiplere gönderildi",
+      "makeAdmin": "{{name}} kişisini yönetici yap",
+      "removeAdmin": "{{name}} kişisinin yöneticiliğini kaldır",
+      "makeOwner": "{{name}} kişisini sahip yap",
+      "removeOwner": "{{name}} kişisinin sahipliğini kaldır",
+      "remove": "{{name}} kişisini gruptan çıkar",
+      "feedback": {
+        "accepted": "Daveti kabul etti",
+        "rejected": "Daveti reddetti — yeniden gönderebilmek için çıkar",
+        "expired": "Davetin süresi doldu — yeniden gönderebilmek için çıkar"
+      },
+      "policyTitle": "Grup kuralları",
+      "whoSends": "Kimler mesaj gönderebilir",
+      "senders": {
+        "members": "Tüm üyeler",
+        "administrators": "Yalnızca yöneticiler"
+      },
+      "maxBytes": "En büyük mesaj (bayt)",
+      "maxBytesHint": "Yalnızca düşürülebilir.",
+      "tighten": "Düşür",
+      "policyUpdated": "Grup kuralları güncellendi",
+      "securityTitle": "Güvenlik",
+      "authorities": "Sıralama sunucuları",
+      "update": "Güncelle",
+      "authoritiesUpdated": "Sıralama sunucuları güncellendi",
+      "recover": "Grubu kurtar",
+      "recoverTitle": "Bu grup kurtarılsın mı?",
+      "recoverDescription": "Bunu yalnızca grubun sıralama sunucuları ilerleyemediğinde kullan. Grup aynı üyeler ve sahiplerle yeni bir başlangıca taşınır; diğer sahiplerin onaylaması gerekebilir.",
+      "recovered": "Grup kurtarıldı",
+      "close": "Grubu kapat",
+      "closeTitle": "Bu grup kapatılsın mı?",
+      "closeDescription": "Kapatmak kalıcıdır: geçmişi kalır, ama kimse bir şey gönderemez ya da değiştiremez. Diğer sahiplerin onaylaması gerekebilir.",
+      "closed": "Grup kapatıldı",
+      "closedNotice": "Bu grup kapalı. Geçmişi duruyor, ama yeni mesaj ya da değişiklik mümkün değil.",
+      "readiness": "Davetler: {{pending}} bekliyor, {{refused}} reddedildi.",
+      "approval": {
+        "approve": "Onayla",
+        "reject": "Reddet",
+        "approved": "Onaylandı",
+        "rejected": "Bu cihazda reddedildi",
+        "owners": {
+          "title": "Yeni sahipler onaylansın mı?",
+          "description": "{{requester}} şu sahipleri öneriyor: {{detail}}."
+        },
+        "close": {
+          "title": "Bu grubun kapatılması onaylansın mı?",
+          "description": "{{requester}} grubu kalıcı olarak kapatmayı öneriyor."
+        },
+        "recovery": {
+          "title": "Bu grubun kurtarılması onaylansın mı?",
+          "description": "{{requester}} grubu aynı üyeler ve sahiplerle yeni bir başlangıca taşımayı öneriyor."
+        },
+        "policy": {
+          "title": "Kimlerin gönderebileceği onaylansın mı?",
+          "description": "{{requester}} şunu öneriyor: {{detail}}."
+        },
+        "cryptography": {
+          "title": "Daha küçük bir mesaj sınırı onaylansın mı?",
+          "description": "{{requester}} en fazla {{detail}} baytlık mesajlar öneriyor."
+        }
+      }
+    },
+    "groupInvitations": {
+      "title_one": "{{count}} grup daveti",
+      "title_other": "{{count}} grup daveti"
+    },
+    "settings": {
+      "title": "Sohbet ayarları",
+      "profile": "Profil",
+      "privacy": "Gizlilik",
+      "devices": "Cihazlar",
+      "backup": "Geçmiş yedeği",
+      "storage": "Depolama"
+    },
+    "storage": {
+      "clear": "Temizle",
+      "clearFor": "{{name}} için saklanan sohbet medyasını temizle",
+      "clearTitle": "{{name}} için saklanan medya temizlensin mi?",
+      "clearDescription": "Mesajlar kalır, ama başka yere kaydedilmemiş dosyalar artık açılmayabilir.",
+      "empty": "Henüz saklanan sohbet eki yok."
+    }
+  },
+  "boot": {
+    "opening": "Sohbet açılıyor…",
+    "failedTitle": "Sohbet açılamadı",
+    "failedDescription": "Kutup’a ulaşılamadı ya da hesabınla oturum açma tamamlanmadı. Bağlantını kontrol edip yeniden dene."
   }
 }

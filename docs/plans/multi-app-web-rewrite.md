@@ -279,10 +279,15 @@ the local dev stack):
   and in the CLI, with undo; nothing is re-encrypted because everything under
   a file key is bound to the file, not its folder.
 
+- Chat (phase 4, docs/plans/chat-app.md): its own app on `chat.`, Signal
+  Desktop's layout in the Kutup frame — conversation list, thread, details
+  panel; requests, replies, reactions, edits, deletes, receipts, typing,
+  disappearing messages, search, attachments and voice notes, MLS groups
+  with their governance, profile, devices, backup and storage.
+
 **Next, in order**
 
-1. Phase 4 — the Chat app.
-2. Phase 5 — Traefik compose with the four hosts (nginx and Caddy
+1. Phase 5 — Traefik compose with the four hosts (nginx and Caddy
    examples), per-origin CSP including the office sandbox, removing
    `src-tauri/`, the Playwright suite ported, docs, and a rebuilt frontend
    image (the browser half of the federation gate needs it).

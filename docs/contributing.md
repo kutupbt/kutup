@@ -69,6 +69,29 @@ blobs.
 
 > You need to expose the SeaweedFS S3 port to the host. Add `ports: ["8333:8333"]` to the `seaweedfs-s3` service in `docker-compose.yml` temporarily for local dev.
 
+**Full Chat locally.** Without further configuration the server advertises
+Chat without sealed sender, federation or MLS groups: direct messages work,
+but attachments to other people (delivered by sealed sender) and groups do
+not, and the web app hides them. To test everything on one machine:
+
+- federation identity: `FEDERATION_SERVER_NAME` equal to `CHAT_SERVER_NAME`
+  (e.g. `kutup.localhost`), `FEDERATION_SIGNING_KEY=$(openssl rand -base64 32)`,
+  `SERVER_URL=http://kutup.localhost`, and, because the name is private,
+  `FEDERATION_TEST_ALLOW_PRIVATE=true` with `APP_ENV=test`;
+- sealed sender: generate a throw-away root and policy for that name with
+  `cargo run -p kutup-server --bin kutup-sealed-sender-provision -- root-generate root.key`
+  and `… server-issue --domain kutup.localhost --root-key root.key
+  --online-key online.key --certificate-id 1001 --activates-at 0
+  --expires-at 4102444800 > policy.json`, then set
+  `CHAT_SEALED_SENDER_POLICY` to the compact JSON and
+  `CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY` to the contents of `online.key`;
+- MLS groups: `CHAT_MLS_CONTROL_SIGNING_KEY` and `CHAT_MLS_ORDERING_POLICY`,
+  e.g. the test pair in `docker-compose.chat-federation.yml` with
+  `canonicalDomain` changed to your name.
+
+JSON values need single quotes when the file is sourced by a shell.
+`GET /api/auth/settings` → `chat` shows what is advertised.
+
 ### Database migrations
 
 Migrations live in `crates/kutup-server/migrations/` (`<N>_<name>.up.sql` / `.down.sql` —

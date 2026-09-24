@@ -139,9 +139,15 @@ importers:
 
   apps/chat:
     dependencies:
+      '@kutup/chat-core':
+        specifier: workspace:*
+        version: link:../../packages/chat-core
       '@kutup/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
+      '@kutup/files':
+        specifier: workspace:*
+        version: link:../../packages/files
       '@kutup/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
@@ -154,12 +160,18 @@ importers:
       '@tanstack/react-query':
         specifier: ^5
         version: 5.103.2(react@18.3.1)
+      i18next:
+        specifier: ^26.0.6
+        version: 26.4.2(typescript@5.9.3)
       lucide-react:
         specifier: ^1.8.0
         version: 1.47.0(react@18.3.1)
       next-themes:
         specifier: ^0.4.6
         version: 0.4.6(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      qrcode.react:
+        specifier: ^4.2.0
+        version: 4.2.0(react@18.3.1)
       react:
         specifier: ^18.3.1
         version: 18.3.1
