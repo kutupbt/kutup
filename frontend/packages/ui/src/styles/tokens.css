@@ -81,20 +81,21 @@
   /*
    * A file's type as a colour, in the conventions people already read at a
    * glance: documents blue, spreadsheets green, presentations orange, PDFs
-   * red. Drawn as a filled tile with a `--kind-glyph` symbol on it (white
+   * red; whiteboards in Excalidraw's own purple (#6965db, #a8a5ff dark).
+   * Drawn as a filled tile with a `--kind-glyph` symbol on it (white
    * here, ink in dark mode, like the primary button). Folders default to
    * neutral, so any colour on a folder is one its owner chose.
    * tokens.test.ts holds every pair to 4.5:1.
    */
   --kind-glyph: #ffffff;
   --kind-folder: #5f6b7a;
-  --kind-note: #4f46e5;
+  --kind-note: #0f766e;
   --kind-document: #2563eb;
   --kind-spreadsheet: #15803d;
   --kind-presentation: #c2410c;
-  --kind-whiteboard: #0f766e;
+  --kind-whiteboard: #6965db;
   --kind-pdf: #dc2626;
-  --kind-image: #9333ea;
+  --kind-image: #a21caf;
   --kind-video: #be185d;
   --kind-audio: #0e7490;
   --kind-code: #475569;
@@ -137,13 +138,13 @@
   /* Brighter tiles with an ink glyph: saturated tiles go muddy on near-black. */
   --kind-glyph: #0b1220;
   --kind-folder: #9aa7b8;
-  --kind-note: #818cf8;
+  --kind-note: #2dd4bf;
   --kind-document: #60a5fa;
   --kind-spreadsheet: #4ade80;
   --kind-presentation: #fb923c;
-  --kind-whiteboard: #2dd4bf;
+  --kind-whiteboard: #a8a5ff;
   --kind-pdf: #f87171;
-  --kind-image: #c084fc;
+  --kind-image: #e879f9;
   --kind-video: #f472b6;
   --kind-audio: #22d3ee;
   --kind-code: #cbd5e1;
