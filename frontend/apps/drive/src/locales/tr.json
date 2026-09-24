@@ -65,7 +65,11 @@
       "other": "Diğer dosyalar"
     },
     "selectAll": "Tümünü seç",
-    "showPreviews": "Önizlemeleri göster"
+    "showPreviews": "Önizlemeleri göster",
+    "sections": {
+      "folders": "Klasörler",
+      "files": "Dosyalar"
+    }
   },
   "newMenu": {
     "new": "Yeni",

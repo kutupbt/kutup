@@ -65,7 +65,11 @@
       "other": "Other files"
     },
     "selectAll": "Select all",
-    "showPreviews": "Show previews"
+    "showPreviews": "Show previews",
+    "sections": {
+      "folders": "Folders",
+      "files": "Files"
+    }
   },
   "newMenu": {
     "new": "New",

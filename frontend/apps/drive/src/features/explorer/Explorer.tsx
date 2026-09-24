@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowUp, MoreHorizontal } from 'lucide-react'
-import { Fragment, useCallback, useEffect, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@kutup/ui/components/button'
 import {
@@ -92,8 +92,15 @@ function RowMenu({ item, actions }: { item: ExplorerItem; actions: ExplorerActio
  * clears the selection. Items carry `data-item-key` so a surrounding
  * ExplorerContextMenu knows what was right-clicked.
  */
-export function Explorer(props: ExplorerProps) {
-  const { items, selection, onSelectionChange, onOpen, onDeleteKey } = props
+export function Explorer(given: ExplorerProps) {
+  // The grid shows folders as a row of chips above the file cards (they
+  // have no preview), so its keyboard and range order is folders, then files.
+  const items = useMemo(
+    () => (given.view === 'grid' ? [...given.items.filter((i) => i.type === 'folder'), ...given.items.filter((i) => i.type !== 'folder')] : given.items),
+    [given.view, given.items],
+  )
+  const props = { ...given, items }
+  const { selection, onSelectionChange, onOpen, onDeleteKey } = props
   const anchor = useRef<number | null>(null)
   const lastPointer = useRef<string>('mouse')
   const rowRefs = useRef<(HTMLElement | null)[]>([])
@@ -182,15 +189,14 @@ export function Explorer(props: ExplorerProps) {
         anchor.current = target
       }
     }
-    const columns = props.view === 'grid' ? gridColumns(rowRefs.current) : 1
     switch (event.key) {
       case 'ArrowDown':
         event.preventDefault()
-        move(index + columns)
+        move(props.view === 'grid' ? verticalNeighbour(rowRefs.current, index, 1) : index + 1)
         break
       case 'ArrowUp':
         event.preventDefault()
-        move(index - columns)
+        move(props.view === 'grid' ? verticalNeighbour(rowRefs.current, index, -1) : index - 1)
         break
       case 'ArrowRight':
         if (props.view === 'grid') {
@@ -283,12 +289,30 @@ export function Explorer(props: ExplorerProps) {
   )
 }
 
-/** Items per row in the grid, from the rendered tiles' positions. */
-function gridColumns(tiles: (HTMLElement | null)[]): number {
-  const first = tiles[0]?.getBoundingClientRect().top
-  if (first === undefined) return 1
-  const perRow = tiles.findIndex((t) => t !== null && t.getBoundingClientRect().top !== first)
-  return perRow > 0 ? perRow : tiles.length || 1
+/**
+ * The grid tile on the next row up or down, nearest in column — by the
+ * rendered positions, since folder chips and file cards differ in height.
+ */
+function verticalNeighbour(tiles: (HTMLElement | null)[], index: number, direction: 1 | -1): number {
+  const from = tiles[index]?.getBoundingClientRect()
+  if (!from) return index
+  const centre = from.left + from.width / 2
+  let best = index
+  let bestRow = Infinity
+  let bestColumn = Infinity
+  tiles.forEach((tile, i) => {
+    if (!tile || i === index) return
+    const r = tile.getBoundingClientRect()
+    const row = direction === 1 ? r.top - from.top : from.top - r.top
+    if (row <= 1) return
+    const column = Math.abs(r.left + r.width / 2 - centre)
+    if (row < bestRow - 1 || (Math.abs(row - bestRow) <= 1 && column < bestColumn)) {
+      best = i
+      bestRow = row
+      bestColumn = column
+    }
+  })
+  return best
 }
 
 type RowProps = (index: number) => Record<string, unknown>
@@ -392,10 +416,47 @@ function ListView({ items, sort, onSortField, selection, actionsFor, subtitleFor
 }
 
 function GridView({ items, selection, actionsFor, renderPreview, rowProps }: ExplorerProps & { rowProps: RowProps }) {
-  const { i18n } = useTranslation()
+  const { t, i18n } = useTranslation()
+  // Items arrive folders first (see Explorer); indexes are shared with them.
+  const folderCount = items.findIndex((i) => i.type !== 'folder')
+  const folders = folderCount === -1 ? items.length : folderCount
+  const heading = 'px-5 pt-4 text-xs font-medium uppercase tracking-wide text-muted-foreground'
   return (
-    <ul className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-3 p-4" role="grid" aria-multiselectable>
-      {items.map((item, index) => {
+    <div role="grid" aria-multiselectable>
+      {folders > 0 ? (
+        <>
+          {folders < items.length ? <h3 className={heading}>{t('explorer.sections.folders')}</h3> : null}
+          <ul className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-3 p-4" role="rowgroup">
+            {items.slice(0, folders).map((item, index) => {
+              const selected = selection.has(itemKey(item))
+              return (
+                // A folder has no preview: a chip, as Google Drive shows them.
+                <li
+                  key={itemKey(item)}
+                  {...rowProps(index)}
+                  className={cn(
+                    'group relative flex h-12 cursor-default select-none items-center gap-2 rounded-xl border border-border bg-card pl-3 pr-1 outline-none transition-colors',
+                    'hover:border-primary/40 hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring',
+                    selected && 'border-primary bg-accent hover:bg-accent',
+                  )}
+                >
+                  <KindIcon kind={item.kind} color={item.color} className="size-5 shrink-0" />
+                  <p className="min-w-0 flex-1 truncate text-sm font-medium" title={item.name}>
+                    {item.name}
+                  </p>
+                  <RowMenu item={item} actions={actionsFor(item)} />
+                </li>
+              )
+            })}
+          </ul>
+        </>
+      ) : null}
+      {folders < items.length ? (
+        <>
+          {folders > 0 ? <h3 className={heading}>{t('explorer.sections.files')}</h3> : null}
+          <ul className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-3 p-4" role="rowgroup">
+      {items.slice(folders).map((item, fileIndex) => {
+        const index = folders + fileIndex
         const selected = selection.has(itemKey(item))
         return (
           <li
@@ -429,6 +490,9 @@ function GridView({ items, selection, actionsFor, renderPreview, rowProps }: Exp
           </li>
         )
       })}
-    </ul>
+          </ul>
+        </>
+      ) : null}
+    </div>
   )
 }
