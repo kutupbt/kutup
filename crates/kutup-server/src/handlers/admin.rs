@@ -417,7 +417,13 @@ pub async fn delete_user(
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
 
+    // Everything the account holds goes with it, bytes included (a bare
+    // row delete would cascade the rows and leave every object in the
+    // bucket), while what it added to other people's folders stays theirs.
     super::chat_backup::purge_for_account(&state, target).await?;
+    purge_chat_media(&state, target).await?;
+    purge_owned_drive(&state, target).await?;
+    hand_over_contributions(&state.pool, target).await?;
 
     let res = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(target)
@@ -440,6 +446,160 @@ pub async fn delete_user(
         }
         _ => Err(AppError::not_found("not found")),
     }
+}
+
+/// Removes a user's Chat media: aborts their open uploads, drops their
+/// references and deletes every object no one else references.
+async fn purge_chat_media(state: &AppState, target: Uuid) -> AppResult<()> {
+    let media_uploads: Vec<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT id,storage_path,s3_upload_id FROM chat_media_uploads WHERE user_id=$1",
+    )
+    .bind(target)
+    .fetch_all(&state.pool)
+    .await?;
+    for (_, path, upload_id) in &media_uploads {
+        state
+            .storage
+            .abort_multipart(path, upload_id)
+            .await
+            .map_err(|_| AppError::internal("failed to abort Chat media upload"))?;
+    }
+    sqlx::query("DELETE FROM chat_media_uploads WHERE user_id=$1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query("DELETE FROM chat_media_references WHERE user_id=$1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    let orphan_media_paths: Vec<String> = sqlx::query_scalar(
+        "DELETE FROM chat_media_objects object
+         WHERE NOT EXISTS (SELECT 1 FROM chat_media_references reference
+                           WHERE reference.attachment_id=object.attachment_id)
+         RETURNING storage_path",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    sqlx::query("DELETE FROM chat_attachment_ledger_entities WHERE user_id=$1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query("DELETE FROM chat_attachment_ledger_operations WHERE user_id=$1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    for path in orphan_media_paths {
+        if let Err(error) = state.storage.delete(&path).await {
+            tracing::warn!(error = %error, "wiped Chat media object requires orphan cleanup");
+        }
+    }
+    Ok(())
+}
+
+/// Permanently removes everything in a user's own Drive — every folder they
+/// own, trashed or not, with each file's blobs, versions, assets and
+/// thumbnails and the charges they hold (whoever pays them) — plus the
+/// uploads in flight into it and the public links onto it.
+async fn purge_owned_drive(state: &AppState, target: Uuid) -> AppResult<()> {
+    // Open uploads by the user anywhere, or by anyone into the user's
+    // folders: their multipart parts would otherwise stay in the bucket.
+    let open_uploads: Vec<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT u.id, u.storage_path, u.s3_upload_id FROM uploads u
+         WHERE u.user_id = $1
+            OR u.collection_id IN (SELECT id FROM collections WHERE owner_user_id = $1)",
+    )
+    .bind(target)
+    .fetch_all(&state.pool)
+    .await?;
+    for (id, path, upload_id) in open_uploads {
+        if let Err(error) = state.storage.abort_multipart(&path, &upload_id).await {
+            tracing::warn!(%error, "purge {target}: abort upload {id}");
+        }
+        sqlx::query("DELETE FROM uploads WHERE id = $1")
+            .bind(id)
+            .execute(&state.pool)
+            .await?;
+    }
+    let colls: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM collections WHERE owner_user_id = $1")
+            .bind(target)
+            .fetch_all(&state.pool)
+            .await?;
+    if colls.is_empty() {
+        return Ok(());
+    }
+    let files: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM files WHERE collection_id = ANY($1)")
+        .bind(&colls)
+        .fetch_all(&state.pool)
+        .await?;
+    for fid in files {
+        jobs::purge_file_root(&state.pool, &state.storage, fid, jobs::PurgeGuard::Any)
+            .await
+            .map_err(|e| {
+                tracing::error!("purge {target}: file {fid}: {e:#}");
+                AppError::internal("internal error")
+            })?;
+    }
+    // Public share links pointing at the purged tree (no FK ties them down).
+    sqlx::query("DELETE FROM public_shares WHERE target_id = ANY($1)")
+        .bind(&colls)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query("DELETE FROM collections WHERE id = ANY($1)")
+        .bind(&colls)
+        .execute(&state.pool)
+        .await?;
+    Ok(())
+}
+
+/// Hands what a departing user added to other people's folders — files,
+/// versions, assets, thumbnails — to each folder's owner, charges and all,
+/// so deleting the account neither deletes their data nor leaves bytes that
+/// no one pays for. (A folder may go over its owner's quota; they can store
+/// nothing more until they free space, as after any quota cut.)
+async fn hand_over_contributions(pool: &PgPool, target: Uuid) -> AppResult<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r#"WITH moved AS (
+              SELECT c.owner_user_id AS owner, SUM(x.bytes) AS total FROM (
+                  SELECT f.collection_id, (CASE WHEN f.original_pruned THEN 0 ELSE f.encrypted_size_bytes END) AS bytes
+                    FROM files f WHERE f.uploader_user_id = $1
+                  UNION ALL
+                  SELECT f.collection_id, v.size_bytes FROM file_versions v JOIN files f ON f.id = v.file_id
+                   WHERE v.author_user_id = $1
+                  UNION ALL
+                  SELECT f.collection_id, a.size_bytes FROM file_assets a JOIN files f ON f.id = a.file_id
+                   WHERE a.uploader_user_id = $1
+                  UNION ALL
+                  SELECT f.collection_id, t.size_bytes FROM file_thumbnails t JOIN files f ON f.id = t.file_id
+                   WHERE t.uploader_user_id = $1) x
+              JOIN collections c ON c.id = x.collection_id
+              WHERE c.owner_user_id <> $1
+              GROUP BY c.owner_user_id)
+           UPDATE users u SET storage_used_bytes = u.storage_used_bytes + moved.total
+           FROM moved WHERE u.id = moved.owner"#,
+    )
+    .bind(target)
+    .execute(&mut *tx)
+    .await?;
+    for (table, column) in [
+        ("files", "uploader_user_id"),
+        ("file_versions", "author_user_id"),
+        ("file_assets", "uploader_user_id"),
+        ("file_thumbnails", "uploader_user_id"),
+    ] {
+        let file_column = if table == "files" { "id" } else { "file_id" };
+        sqlx::query(&format!(
+            "UPDATE {table} t SET {column} = c.owner_user_id
+             FROM files f JOIN collections c ON c.id = f.collection_id
+             WHERE t.{file_column} = f.id AND t.{column} = $1 AND c.owner_user_id <> $1"
+        ))
+        .bind(target)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 /// `DELETE /api/admin/users/{id}/2fa` — mirrors `ForceDisable2FA`. Clears the target's TOTP
@@ -1709,80 +1869,10 @@ pub async fn wipe_user(
     // The replacement recovery setup must never inherit ciphertext encrypted
     // under the lost account master key.
     super::chat_backup::purge_for_account(&state, target).await?;
-    let media_uploads: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT id,storage_path,s3_upload_id FROM chat_media_uploads WHERE user_id=$1",
-    )
-    .bind(target)
-    .fetch_all(&state.pool)
-    .await?;
-    for (_, path, upload_id) in &media_uploads {
-        state
-            .storage
-            .abort_multipart(path, upload_id)
-            .await
-            .map_err(|_| AppError::internal("failed to abort Chat media upload"))?;
-    }
-    sqlx::query("DELETE FROM chat_media_uploads WHERE user_id=$1")
-        .bind(target)
-        .execute(&state.pool)
-        .await?;
-    sqlx::query("DELETE FROM chat_media_references WHERE user_id=$1")
-        .bind(target)
-        .execute(&state.pool)
-        .await?;
-    let orphan_media_paths: Vec<String> = sqlx::query_scalar(
-        "DELETE FROM chat_media_objects object
-         WHERE NOT EXISTS (SELECT 1 FROM chat_media_references reference
-                           WHERE reference.attachment_id=object.attachment_id)
-         RETURNING storage_path",
-    )
-    .fetch_all(&state.pool)
-    .await?;
-    sqlx::query("DELETE FROM chat_attachment_ledger_entities WHERE user_id=$1")
-        .bind(target)
-        .execute(&state.pool)
-        .await?;
-    sqlx::query("DELETE FROM chat_attachment_ledger_operations WHERE user_id=$1")
-        .bind(target)
-        .execute(&state.pool)
-        .await?;
-    for path in orphan_media_paths {
-        if let Err(error) = state.storage.delete(&path).await {
-            tracing::warn!(error = %error, "wiped Chat media object requires orphan cleanup");
-        }
-    }
+    purge_chat_media(&state, target).await?;
 
-    // 1. Purge every owned collection — same machinery as a permanent trash purge
-    //    (quota release + S3 GC + FK-cascaded children). Covers trashed items too.
-    let colls: Vec<Uuid> =
-        sqlx::query_scalar("SELECT id FROM collections WHERE owner_user_id = $1")
-            .bind(target)
-            .fetch_all(&state.pool)
-            .await?;
-    if !colls.is_empty() {
-        let files: Vec<Uuid> =
-            sqlx::query_scalar("SELECT id FROM files WHERE collection_id = ANY($1)")
-                .bind(&colls)
-                .fetch_all(&state.pool)
-                .await?;
-        for fid in files {
-            jobs::purge_file_root(&state.pool, &state.storage, fid)
-                .await
-                .map_err(|e| {
-                    tracing::error!("wipe {target}: purge file {fid}: {e:#}");
-                    AppError::internal("internal error")
-                })?;
-        }
-        // Public share links pointing at the purged tree (no FK ties them down).
-        sqlx::query("DELETE FROM public_shares WHERE target_id = ANY($1)")
-            .bind(&colls)
-            .execute(&state.pool)
-            .await?;
-        sqlx::query("DELETE FROM collections WHERE id = ANY($1)")
-            .bind(&colls)
-            .execute(&state.pool)
-            .await?;
-    }
+    // 1. Purge every owned folder and file, trashed ones too.
+    purge_owned_drive(&state, target).await?;
 
     // 2. Everything keyed to the lost key material: collab signing devices, incoming
     //    federated shares (their wrapped keys are unreachable), local shares received.

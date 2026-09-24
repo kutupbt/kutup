@@ -188,11 +188,19 @@ pub async fn patch(
 ) -> AppResult<Response> {
     let (user_id, fid) = ids(&user.user_id, &file_id)?;
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
-    if !can_access_file(&state.pool, user_id, fid).await {
+    // Naming or pinning a version changes what retention keeps: an editor's call.
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
         return Err(AppError::forbidden("forbidden"));
     }
+    let label = req.label.map(|l| l.trim().to_string());
+    if label
+        .as_ref()
+        .is_some_and(|l| l.chars().count() > MAX_LABEL_CHARS)
+    {
+        return Err(AppError::bad_request("label is too long"));
+    }
 
-    if let Some(label) = req.label {
+    if let Some(label) = label {
         sqlx::query(
             "UPDATE file_versions SET label = NULLIF($1, '') WHERE id = $2 AND file_id = $3",
         )
@@ -222,6 +230,9 @@ pub async fn patch(
     };
     Ok(Json(to_version_row(t)).into_response())
 }
+
+/// The longest version name, in characters.
+const MAX_LABEL_CHARS: usize = 200;
 
 /// Where a version's object lives: its own key, never an S3 object version.
 pub(crate) fn version_storage_path(file_id: Uuid, version_id: Uuid) -> String {
@@ -253,7 +264,7 @@ pub async fn create(
     mut multipart: Multipart,
 ) -> AppResult<Response> {
     let (user_id, fid) = ids(&user.user_id, &file_id)?;
-    if !can_access_file(&state.pool, user_id, fid).await {
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
         return Err(AppError::forbidden("forbidden"));
     }
 
@@ -279,10 +290,20 @@ pub async fn create(
             }
             tmp = Some((file, size));
         } else if !name.is_empty() {
-            let value = field
-                .text()
+            // Small scalar fields only.
+            let mut value = Vec::new();
+            while let Some(chunk) = field
+                .chunk()
                 .await
-                .map_err(|_| AppError::bad_request("invalid form"))?;
+                .map_err(|_| AppError::bad_request("invalid form"))?
+            {
+                if value.len() + chunk.len() > 4096 || fields.len() >= 8 {
+                    return Err(AppError::bad_request("form field too large"));
+                }
+                value.extend_from_slice(&chunk);
+            }
+            let value =
+                String::from_utf8(value).map_err(|_| AppError::bad_request("invalid form"))?;
             fields.insert(name, value);
         }
     }
@@ -311,7 +332,10 @@ pub async fn create(
         .get("label")
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty());
-    if label.as_ref().is_some_and(|l| l.chars().count() > 200) {
+    if label
+        .as_ref()
+        .is_some_and(|l| l.chars().count() > MAX_LABEL_CHARS)
+    {
         return Err(AppError::bad_request("label is too long"));
     }
     let keep_forever = fields.get("keepForever").is_some_and(|v| v == "true");
@@ -335,19 +359,10 @@ pub async fn create(
     let storage_path = version_storage_path(fid, version_id);
 
     let mut tx = state.pool.begin().await?;
-    let (quota, used): (i64, i64) = sqlx::query_as(
-        "SELECT storage_quota_bytes, storage_used_bytes FROM users WHERE id = $1 FOR UPDATE",
-    )
-    .bind(user_id)
-    .fetch_one(&mut *tx)
-    .await?;
     // The measured size, never a client's claim.
-    if used + size > quota {
-        return Err(AppError::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "storage quota exceeded",
-        ));
-    }
+    crate::drive_writes::check_room(&mut tx, user_id, collection_id, size, None)
+        .await?
+        .into_result()?;
     let created: VersionTuple = sqlx::query_as(
         r#"INSERT INTO file_versions (id, file_id, s3_version_id, storage_path, seq_at_snapshot,
                                       doc_key_id, author_user_id, size_bytes, label, keep_forever, kind)
@@ -378,11 +393,25 @@ pub async fn create(
         .execute(&mut *tx)
         .await?;
     // Everything up to this point of the collaboration log is in the version.
-    sqlx::query("DELETE FROM file_update_log WHERE file_id = $1 AND seq <= $2")
+    // Under the relay's own per-file lock, so no frame lands in between; never
+    // past the log's head, and only for the document key the log is under (a
+    // stale or made-up position must not wipe edits the version lacks).
+    if seq_at_snapshot > 0 {
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(super::collab::log_lock_key(fid))
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "DELETE FROM file_update_log l USING files f
+             WHERE l.file_id = $1 AND f.id = $1 AND f.current_doc_key_id = $3
+               AND l.seq <= LEAST($2, (SELECT MAX(seq) FROM file_update_log WHERE file_id = $1))",
+        )
         .bind(fid)
         .bind(seq_at_snapshot)
+        .bind(doc_key_id)
         .execute(&mut *tx)
         .await?;
+    }
 
     // Stored with the transaction open: if the store fails nothing is
     // recorded; if the commit fails the object is removed again.

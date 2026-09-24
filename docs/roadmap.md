@@ -467,6 +467,11 @@ The `.excalidraw` whiteboard asset extraction/hydration deferral is **done**
 (`crates/kutup-cli/src/whiteboard.rs` — upload extracts + re-snapshots,
 download re-inlines; Go-CLI parity reached). What remains around the CLI:
 
+- **Streamed federated Drive uploads.** A federated upload is signed over
+  its whole body, so the server holds it in memory and caps it at 256 MiB
+  (the browser refuses larger files up front). Streaming needs a
+  content-digest header signed in place of the body, verified as the body is
+  spooled.
 - **Share lifecycle management (needs server slices first).** There is no
   endpoint to list a collection's outgoing user shares, revoke one, or
   list/delete public links (the web UI can't either — only recipient-side

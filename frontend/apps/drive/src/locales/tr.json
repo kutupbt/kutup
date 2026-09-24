@@ -163,8 +163,8 @@
       "description": "Paylaştığınız kişiler bu klasörün anahtarının kendilerine mühürlenmiş bir kopyasını alır. Alt klasörler ayrıca paylaşılır.",
       "recipient": "E-posta ya da Kutup adresi",
       "recipientHint": "Bu sunucudaki biri için e-posta, başka sunucudaki biri için kullanici@sunucu.",
-      "canUpload": "Dosya ekleyebilir",
-      "canUploadHint": "Yeni dosyalar kendi depolama alanlarından düşer.",
+      "canUpload": "Dosya ekleyebilir ve düzenleyebilir",
+      "canUploadHint": "Bu olmadan yalnızca görüntüleyebilirler. Ekledikleri kendi depolama alanlarından düşer.",
       "quota": "Yükleme sınırı (GiB)",
       "quotaHint": "İsteğe bağlı. Depolama alanları dışında sınır istemiyorsanız boş bırakın.",
       "quotaInvalid": "Sıfırdan büyük bir boyut girin.",
@@ -262,6 +262,7 @@
       "quota": "Depolama alanınız dolu.",
       "shareQuota": "Bu paylaşılan klasörün yükleme sınırına ulaşıldı.",
       "forbidden": "Buraya dosya ekleyemezsiniz.",
+      "remoteTooLarge": "255 MB'tan büyük dosyalar henüz başka bir sunucudaki klasöre eklenemiyor.",
       "network": "Bağlantı koptu.",
       "other": "Yükleme başarısız oldu."
     },
@@ -387,7 +388,8 @@
       "loading": "Belge düzenleyici yükleniyor…",
       "unsupported": "Bu tür bir ofis dosyası burada düzenlenemez.",
       "unavailable": "Belge düzenleyici yüklenemedi. Yeniden dene ya da dosyayı indir."
-    }
+    },
+    "viewOnly": "Yalnızca görüntüleme"
   },
   "file": {
     "opening": "Açılıyor…",

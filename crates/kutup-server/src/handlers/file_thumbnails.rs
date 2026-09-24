@@ -68,15 +68,16 @@ pub async fn upload(
     }
     // The same right as saving a version: whoever may change the content
     // may change its picture.
-    if !can_access_file(&state.pool, user_id, fid).await {
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
         return Err(AppError::forbidden("forbidden"));
     }
-    let key_epoch: i32 =
-        sqlx::query_scalar("SELECT key_epoch FROM files WHERE id = $1 AND deleted_at IS NULL")
-            .bind(fid)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or_else(|| AppError::not_found("not found"))?;
+    let (collection_id, key_epoch): (Uuid, i32) = sqlx::query_as(
+        "SELECT collection_id, key_epoch FROM files WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(fid)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("not found"))?;
     let epoch =
         u32::try_from(key_epoch).map_err(|_| AppError::bad_request("invalid file epoch"))?;
     thumbnail::validate(&body, variant, &fid.to_string(), epoch)
@@ -117,24 +118,15 @@ pub async fn upload(
     .bind(variant.as_str())
     .fetch_optional(&mut *tx)
     .await?;
-    let (quota, used): (i64, i64) = sqlx::query_as(
-        "SELECT storage_quota_bytes, storage_used_bytes FROM users WHERE id = $1 FOR UPDATE",
-    )
-    .bind(user_id)
-    .fetch_one(&mut *tx)
-    .await?;
     // Replacing your own thumbnail frees its bytes first; someone else's
     // goes back to them.
     let own_previous = previous
         .as_ref()
         .filter(|(_, uploader, _)| *uploader == user_id)
         .map_or(0, |(bytes, _, _)| *bytes);
-    if size > own_previous && used - own_previous + size > quota {
-        return Err(AppError::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "storage quota exceeded",
-        ));
-    }
+    crate::drive_writes::check_room(&mut tx, user_id, collection_id, size - own_previous, None)
+        .await?
+        .into_result()?;
     sqlx::query("UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1 + $2) WHERE id = $3")
         .bind(own_previous)
         .bind(size)
@@ -272,7 +264,7 @@ pub async fn delete(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
-    if !can_access_file(&state.pool, user_id, fid).await {
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
         return Err(AppError::forbidden("forbidden"));
     }
     let mut tx = state.pool.begin().await?;

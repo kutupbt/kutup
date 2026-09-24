@@ -11,7 +11,7 @@ import { foldersKey } from '../drive/folders'
 import { useDriveIdentity } from '../drive/identity'
 import { folderLocation, type Folder } from '../drive/model'
 import { thumbnailAfterUpload } from '../thumbnails/schedule'
-import { classifyUploadError } from './uploadError'
+import { classifyUploadError, MAX_REMOTE_UPLOAD_BYTES, RemoteUploadTooLargeError } from './uploadError'
 import { uploads } from './uploadStore'
 
 /**
@@ -20,6 +20,7 @@ import { uploads } from './uploadStore'
  */
 async function uploadRemote(folder: Folder, shareId: string, file: File, signal: AbortSignal, progress: (s: number, t: number) => void) {
   if (!folder.key) throw new Error('folder is not open')
+  if (file.size > MAX_REMOTE_UPLOAD_BYTES) throw new RemoteUploadTooLargeError()
   const bytes = new Uint8Array(await file.arrayBuffer())
   const record = await createFileRecordV1(folder.id, folder.keyEpoch, folder.key, {
     name: file.name,

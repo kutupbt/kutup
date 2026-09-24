@@ -1012,7 +1012,16 @@ pub async fn update_me(
     user: AuthUser,
     body: Result<Json<UpdateMeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
-    let Json(req) = body.map_err(|_| AppError::bad_request("invalid request body"))?;
+    let Json(req) = body.map_err(|rejection| {
+        if rejection.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
+            AppError::new(
+                axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                "request body too large",
+            )
+        } else {
+            AppError::bad_request("invalid request body")
+        }
+    })?;
 
     if let Some(color) = req.color {
         if !color.is_empty() && !is_valid_hex_color(&color) {

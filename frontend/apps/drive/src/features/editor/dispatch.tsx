@@ -24,6 +24,8 @@ export interface OfficeEditorProps {
   initialBytes?: Uint8Array
   /** Fires when inner.html intercepts Cmd/Ctrl+S inside the OO iframe. */
   onSaveShortcut?: () => void
+  /** View-only access. */
+  readOnly?: boolean
 }
 
 export interface WhiteboardEditorProps {
@@ -34,4 +36,6 @@ export interface WhiteboardEditorProps {
   keyEpoch: number
   /** Decrypted .excalidraw JSON bytes if the file already exists. */
   initialBytes?: Uint8Array
+  /** View-only access. */
+  readOnly?: boolean
 }

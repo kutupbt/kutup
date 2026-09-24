@@ -7,6 +7,11 @@ All authenticated endpoints require `Authorization: Bearer <accessToken>`.
 
 > **Note:** File content and metadata are end-to-end encrypted by the client. Account secrets use one canonical, suite-bearing envelope per value; the server validates only its public framing and never sees the plaintext or key.
 
+**Request bodies** are capped at 4 MiB unless a route says otherwise; the
+upload routes raise it (whole-file upload 10 GiB, a version 2 GiB, a tus
+chunk 64 MiB, a whiteboard asset one envelope, a federated Drive upload
+256 MiB). A larger body gets `413`.
+
 ---
 
 ## Authentication
@@ -471,7 +476,7 @@ Disable TOTP for the current user. Requires a valid TOTP code to prevent a stole
 
 Look up another local user's registered Drive identity (used when sharing a collection).
 
-**Auth:** Bearer JWT
+**Auth:** Bearer JWT; 30 lookups per minute per IP (`RATE_LIMIT_USER_LOOKUP_PER_MIN`), then `429`
 **Param:** `:email` — URL-encoded email address
 
 **Response:**
@@ -743,6 +748,17 @@ share row.
 
 ## Files
 
+**Write rights.** Reading a file needs the folder's owner or any share on it.
+Changing it — uploading into the folder, saving a version, naming or keeping
+one, storing a whiteboard asset or thumbnail, claiming a note's seed, or
+sending edits over the collab socket — needs the owner or a share with
+`canUpload` ("can add and edit"). Everything a recipient stores is charged to
+them and counts against the share's `uploadQuotaBytes`.
+
+**Quota.** Every writer checks the same headroom: quota − stored − the full
+declared length of the user's open tus uploads (an upload reserves its whole
+length until it is finalised).
+
 ### POST /api/files/upload
 
 Upload an encrypted file to a collection. Multipart form.
@@ -763,7 +779,9 @@ The server obtains the current collection epoch itself and rejects malformed,
 noncanonical, relocated, stale-epoch, wrong-purpose, or wrong-revision
 envelopes. It also validates that the blob's authenticated-format header binds
 the same file, collection and epoch before storage. It never accepts a
-server-generated replacement for `fileId`.
+server-generated replacement for `fileId`. A `fileId` already used by a
+stored file or an open upload is refused with `409` and nothing is written —
+a retry cannot overwrite what an earlier attempt stored.
 
 **Response:** `201 Created`
 ```json
@@ -949,7 +967,9 @@ sees it.
 ```
 
 V1 accepts only `shareType: "collection"`. `expiresInHours` is optional; omit
-or send `null` for no expiry. `collectionKeyEnvelope` uses the public-link
+or send `null` for no expiry; otherwise 1 to 87,840 (ten years), else `400`.
+A link's folder in the trash makes the link answer `404` until it is
+restored. `collectionKeyEnvelope` uses the public-link
 purpose and binds the target collection, owner and current collection epoch.
 Malformed, relocated, stale-epoch or wrong-purpose envelopes are rejected
 before storage.
@@ -1388,12 +1408,14 @@ then releases the verified stream to the browser.
 
 Upload encrypted multipart fields (`fileId`, `metadataEnvelope`,
 `fileKeyEnvelope`, and `file`). Exact retries are idempotent
-and return the same `201 { "id": "<uuid>" }` result.
+and return the same `201 { "id": "<uuid>" }` result. The whole body is signed
+and held in memory, so it is capped at 256 MiB (`413`); streamed federated
+uploads are on the roadmap.
 
 ### DELETE /api/drive/federation/shares/:shareId/files/:fileId
 
-Delete a remote ciphertext object when `canDelete` permits it. Exact retries
-are idempotent and return `204`.
+Move a file this share uploaded to the owner's trash, when `canDelete`
+permits it. Exact retries are idempotent and return `204`.
 
 ---
 
@@ -1426,11 +1448,16 @@ Stream ciphertext with its precomputed signed content digest and exact length.
 
 Store one encrypted multipart upload. The exact ciphertext is hashed while it
 is spooled and the digest is persisted with the file row. A stable request ID
-plus authenticated request hash provides persistent idempotency.
+plus authenticated request hash provides persistent idempotency. The folder
+owner pays: the upload must fit their quota (less their open uploads) and the
+share's `uploadQuotaBytes`, measured from the files the share uploaded. A
+`fileId` already in use is `409`. Body cap 256 MiB.
 
 ### DELETE /api/fed/drive/files/:fileId
 
-Delete one ciphertext file under a persistent idempotent mutation result.
+Move one file **this share uploaded** to the owner's trash (restorable, and
+purged with its versions, assets, thumbnails and charges by the trash's own
+path), under a persistent idempotent mutation result. Other files are `404`.
 
 The removed `/api/fed/users`, `/api/fed/invites/*`, `/api/fed/shares/*`,
 `/api/fed-proxy/*`, `/api/collections/:id/share-federated`, and
@@ -1861,6 +1888,16 @@ WebSocket upgrade. Auth via `Authorization: Bearer ...` header **or** `?token=..
 
 PreUpgrade validates: JWT (rejects setup/pre-auth tokens), file access (owner OR collection-share recipient), device registration (must belong to user, must be active). Failures return HTTP 401/403/404 BEFORE the WS handshake completes.
 
+A view-only recipient joins to follow edits: the server relays its presence
+frames (awareness and cursors) and drops everything else it sends. Edits are
+checked against the sender's rights frame by frame, and every open socket
+re-checks its session and file access every 15 s, closing when either is
+gone (share narrowed or removed, file or folder trashed, session signed out).
+A message is at most one frame (1 MiB of plaintext plus framing); a client
+sending edits faster than 50 frames/s or 1 MiB/s sustained (bursts of 500
+frames / 16 MiB) is disconnected. Office edit frames stay in the log for a
+day, as a buffer for peers resuming after a dropped connection.
+
 On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{deviceId, userId}]}`. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then enters bidirectional binary mode. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF1\0` format documented in `docs/v1-format-inventory.md`; the server rejects an unknown suite, malformed length, invalid device signature, or any file/collection/epoch/document-generation mismatch.
 
 ### PUT /api/files/:fileId/assets/:assetId
@@ -1870,8 +1907,9 @@ complete `DriveEnvelopeV1` purpose-6 asset envelope for the exact live file,
 collection, current collection-key epoch and path `assetId`. Asset IDs are
 1–128 bytes and may not contain slash, backslash or `..`. Plaintext is capped
 at 25 MiB; oversized or invalid public envelopes are rejected before quota or
-object-storage mutation. **Auth:** Bearer JWT and file access. **Response:**
-`204` (content-addressed re-upload is idempotent).
+object-storage mutation. **Auth:** Bearer JWT and write access. **Response:**
+`204`. Assets are content-addressed and immutable: once an id is stored a
+re-upload changes nothing (neither bytes nor charge) and returns `204`.
 
 ### GET /api/files/:fileId/assets/:assetId
 
@@ -1891,7 +1929,7 @@ variant and current key epoch and its size against the variant cap
 **Query:** `source` — the version id it was drawn from, or `original`
 (default); a version of another file is refused. The size is charged to the
 uploader; replacing your own thumbnail charges only the difference.
-**Auth:** Bearer JWT and file access. **Response:** `204`; `400` invalid
+**Auth:** Bearer JWT and write access. **Response:** `204`; `400` invalid
 envelope or source; `404` unknown variant; `413` too large or over quota.
 
 ### GET /api/files/:fileId/thumbnails/:variant
@@ -1905,7 +1943,7 @@ and caches hold only ciphertext. **Auth:** Bearer JWT and file access.
 ### DELETE /api/files/:fileId/thumbnails
 
 Remove both variants and release their bytes to whoever was charged.
-**Auth:** Bearer JWT and file access. **Response:** `204`.
+**Auth:** Bearer JWT and write access. **Response:** `204`.
 
 ---
 
@@ -1923,8 +1961,9 @@ file/collection/epoch-bound Drive file-blob format as an original file. There
 is no snapshot-specific legacy decoder.
 
 ### PATCH /api/files/:fileId/versions/:vid
-**Body:** `{label?: string, keepForever?: boolean}` — set or unset.
-**Response:** updated version row.
+**Body:** `{label?: string, keepForever?: boolean}` — set or unset; a label
+is at most 200 characters. **Auth:** write access (it changes what retention
+keeps). **Response:** updated version row.
 
 ### POST /api/files/:fileId/versions
 Store a version in one request (docs/plans/drive-versions-v2.md). Multipart:
@@ -1938,7 +1977,9 @@ quota (a client's size claim is not read), stores it as an object of its own
 (`files/{id}/versions/{versionId}`), records the row, truncates
 `file_update_log` up to `seqAtSnapshot` and sets the file's `updatedAt` (and
 so its folder's) — one transaction; the object is removed again if the
-commit fails.
+commit fails. Truncation takes the relay's per-file lock, never goes past the
+log's head, and happens only when `docKeyId` is the file's current document
+key. **Auth:** write access (`403` for a view-only recipient).
 
 **Response 201:** the version row, including `kind`. `413` over quota.
 

@@ -770,7 +770,8 @@
                       title: payload.filename || ('Untitled.' + t.fileType),
                       url: url,
                       permissions: {
-                        edit: true,        // explicit
+                        // A viewer (read-only share) gets OnlyOffice's viewer.
+                        edit: !payload.readOnly,
                         comment: false,
                         review: false,
                         download: true,
@@ -803,7 +804,7 @@
                         firstname: withTabSuffix(selfUsername || 'You', selfDeviceId),
                         name: withTabSuffix(selfUsername || 'You', selfDeviceId),
                       },
-                      mode: 'edit',  // mockServer is wired in 2c — full edit mode.
+                      mode: payload.readOnly ? 'view' : 'edit',
                       lang: (navigator.language || 'en').slice(0, 2),
                     },
                     events: {

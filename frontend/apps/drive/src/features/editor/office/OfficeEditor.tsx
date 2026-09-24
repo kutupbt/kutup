@@ -52,6 +52,8 @@ interface Props {
   /** Fires when inner.html intercepts Cmd/Ctrl+S inside the OO iframe.
    *  Parent should call its save handler. */
   onSaveShortcut?: () => void
+  /** View-only access: OnlyOffice opens in its viewer; nothing is sent. */
+  readOnly?: boolean
 }
 
 type DocType = 'docx' | 'xlsx' | 'pptx'
@@ -111,6 +113,8 @@ interface InitPayload {
    *  the bridge so window.APP.getUserColor returns it for self's foreign-
    *  selection rectangle. Null falls back to OO's deterministic palette. */
   color?: string | null
+  /** Open in OnlyOffice's viewer. */
+  readOnly?: boolean
 }
 
 // Module-level cache: dedupes concurrent registerDevice() calls within the
@@ -134,6 +138,7 @@ function OfficeEditorBase(
     collectionMaster,
     keyEpoch,
     onSaveShortcut,
+    readOnly = false,
   }: Props,
   ref: Ref<OfficeEditorHandle>,
 ) {
@@ -310,6 +315,7 @@ function OfficeEditorBase(
               initialBytes,
               username: username ?? undefined,
               color: color ?? null,
+              readOnly,
             },
           })
           return
@@ -338,8 +344,9 @@ function OfficeEditorBase(
           return
         }
         case 'oo-local-op':
-          // OnlyOffice fired saveChanges → relay through WS.
-          void sendLocalOp(msg.payload)
+          // OnlyOffice fired saveChanges → relay through WS (never from a
+          // viewer, whose edits the server would drop anyway).
+          if (!readOnly) void sendLocalOp(msg.payload)
           return
         case 'oo-local-cursor':
           // OnlyOffice fired a cursor/selection event → broadcast as ephemeral.
@@ -360,7 +367,7 @@ function OfficeEditorBase(
     // gated by 'ready', which fires once); a separate effect below pushes
     // them live.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docType, filename, fileId, initialBytes, collectionMaster])
+  }, [docType, filename, fileId, initialBytes, collectionMaster, readOnly])
 
   // Push live color updates to the iframe so the picker's effect is
   // visible without a reload. The bridge updates userColors[selfUserId]

@@ -103,32 +103,20 @@ pub async fn ws(
         Some(t) if !t.is_empty() => t,
         _ => return Err(AppError::unauthorized("missing token")),
     };
-    let user_id = crate::middleware::authenticate_access_token(&state, &token)
+    let auth = crate::middleware::authenticate_access_token(&state, &token)
         .await
-        .map_err(|_| AppError::unauthorized("invalid token"))?
-        .user_id;
+        .map_err(|_| AppError::unauthorized("invalid token"))?;
+    let user_id = auth.user_id;
+    let session_id = auth.session.session_id;
 
-    // Confirm the user can access this file's collection.
+    // Anyone who may read the file joins; only editors' edits are kept.
     let file_uuid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
     let user_uuid =
         Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("invalid token"))?;
-    let access: Option<(String, String, bool)> = sqlx::query_as(
-        r#"SELECT c.owner_user_id::text, c.id::text,
-                  EXISTS(SELECT 1 FROM collection_shares cs
-                         WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2)
-           FROM files f JOIN collections c ON c.id = f.collection_id
-           WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL"#,
-    )
-    .bind(file_uuid)
-    .bind(user_uuid)
-    .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten();
-    let Some((owner_id, _coll_id, shared_with)) = access else {
-        return Err(AppError::not_found("file not found"));
-    };
-    if owner_id != user_id && !shared_with {
+    let access = file_access(&state.pool, user_uuid, file_uuid)
+        .await
+        .ok_or_else(|| AppError::not_found("file not found"))?;
+    if access == Access::None {
         return Err(AppError::forbidden("forbidden"));
     }
 
@@ -150,26 +138,113 @@ pub async fn ws(
         _ => return Err(AppError::unauthorized("device not registered or revoked")),
     };
 
-    Ok(upgrade.on_upgrade(move |socket| async move {
-        handle_connection(
-            state, socket, file_id, file_uuid, user_id, device_id, pub_key,
-        )
-        .await;
-    }))
+    let conn = Conn {
+        file_id,
+        file_uuid,
+        user_uuid,
+        session_id,
+        device_id,
+        pub_key,
+    };
+    // One frame carries at most one envelope's plaintext.
+    let max_frame = envelope::MAX_PLAINTEXT_BYTES + envelope::MIN_PACKED;
+    Ok(upgrade
+        .max_message_size(max_frame)
+        .max_frame_size(max_frame)
+        .on_upgrade(move |socket| async move {
+            handle_connection(state, socket, conn, user_id).await;
+        }))
+}
+
+/// What a user may do with a file's live session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Access {
+    None,
+    /// Receives edits and shares their cursor; sends no edits.
+    Read,
+    Write,
+}
+
+/// `None` when the file (or its folder) is gone.
+async fn file_access(pool: &sqlx::PgPool, user_id: Uuid, file_id: Uuid) -> Option<Access> {
+    let row: Option<(bool, Option<bool>)> = sqlx::query_as(
+        r#"SELECT c.owner_user_id = $2,
+                  (SELECT cs.can_upload FROM collection_shares cs
+                   WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2)
+           FROM files f JOIN collections c ON c.id = f.collection_id
+           WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL"#,
+    )
+    .bind(file_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    row.map(|(owner, share)| match (owner, share) {
+        (true, _) | (_, Some(true)) => Access::Write,
+        (_, Some(false)) => Access::Read,
+        _ => Access::None,
+    })
+}
+
+/// A connection's fixed identity, resolved before the upgrade.
+struct Conn {
+    file_id: String,
+    file_uuid: Uuid,
+    user_uuid: Uuid,
+    session_id: Uuid,
+    device_id: i64,
+    pub_key: Vec<u8>,
+}
+
+/// How often an open connection re-checks its session and file access, so
+/// revoking a share, trashing the file or signing the session out also
+/// ends live sessions.
+const ACCESS_RECHECK: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Per-connection budget for kept (durable) frames: a sustained rate with a
+/// burst, in frames and bytes. Typing and office edits stay far below it; a
+/// client flooding the log is cut off.
+struct FrameBudget {
+    frames: f64,
+    bytes: f64,
+    last: std::time::Instant,
+}
+
+impl FrameBudget {
+    const FRAMES_PER_SEC: f64 = 50.0;
+    const FRAME_BURST: f64 = 500.0;
+    const BYTES_PER_SEC: f64 = 1024.0 * 1024.0;
+    const BYTE_BURST: f64 = 16.0 * 1024.0 * 1024.0;
+
+    fn new() -> Self {
+        FrameBudget {
+            frames: Self::FRAME_BURST,
+            bytes: Self::BYTE_BURST,
+            last: std::time::Instant::now(),
+        }
+    }
+
+    /// Takes one frame of `len` bytes from the budget, if it has room.
+    fn take(&mut self, len: usize) -> bool {
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(self.last).as_secs_f64();
+        self.last = now;
+        self.frames = (self.frames + elapsed * Self::FRAMES_PER_SEC).min(Self::FRAME_BURST);
+        self.bytes = (self.bytes + elapsed * Self::BYTES_PER_SEC).min(Self::BYTE_BURST);
+        if self.frames < 1.0 || self.bytes < len as f64 {
+            return false;
+        }
+        self.frames -= 1.0;
+        self.bytes -= len as f64;
+        true
+    }
 }
 
 /// Per-connection coroutine — mirrors `HandleConnection`.
-#[allow(clippy::too_many_arguments)]
-async fn handle_connection(
-    state: AppState,
-    socket: WebSocket,
-    file_id: String,
-    file_uuid: Uuid,
-    user_id: String,
-    device_id: i64,
-    pub_key: Vec<u8>,
-) {
+async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn, user_id: String) {
     let hub = state.hub.clone();
+    let (file_id, file_uuid, device_id) = (conn.file_id.clone(), conn.file_uuid, conn.device_id);
 
     // Username + color for the peer-list (best-effort). `id` is a uuid column, so bind a
     // Uuid (a text bind would fail the comparison and silently yield empty fields).
@@ -245,12 +320,25 @@ async fn handle_connection(
     broadcast_peers(&hub, &file_id).await;
 
     // Read loop.
+    let mut budget = FrameBudget::new();
+    let mut recheck = tokio::time::interval(ACCESS_RECHECK);
+    recheck.tick().await;
     loop {
         tokio::select! {
             _ = peer.close.notified() => break,
+            _ = recheck.tick() => {
+                let session_live =
+                    crate::sessions::live(&state.pool, conn.session_id, conn.user_uuid).await.is_ok();
+                let access = file_access(&state.pool, conn.user_uuid, file_uuid).await;
+                if !session_live || matches!(access, None | Some(Access::None)) {
+                    break;
+                }
+            }
             msg = stream.next() => match msg {
                 Some(Ok(Message::Binary(b))) => {
-                    handle_frame(&state, &peer, &file_id, file_uuid, &pub_key, &b).await;
+                    if !handle_frame(&state, &peer, &conn, &mut budget, &b).await {
+                        break;
+                    }
                 }
                 Some(Ok(Message::Text(t))) => {
                     handle_control(&state, &peer, file_uuid, t.as_bytes()).await;
@@ -316,23 +404,25 @@ async fn handle_control(state: &AppState, peer: &hub::Peer, file_uuid: Uuid, dat
 }
 
 /// Validates + persists a binary collab frame, then broadcasts it — mirrors `handleFrame`.
+/// Returns `false` when the connection should close (access lost, or the
+/// client exceeded its frame budget).
 async fn handle_frame(
     state: &AppState,
     peer: &hub::Peer,
-    file_id: &str,
-    file_uuid: Uuid,
-    pub_key: &[u8],
+    conn: &Conn,
+    budget: &mut FrameBudget,
     data: &[u8],
-) {
+) -> bool {
     let Ok(f) = Frame::unpack(data) else {
-        return;
+        return true;
     };
     if f.sender_device_id != peer.device_id as u64 || f.sequence > i64::MAX as u64 {
-        return; // forged sender — drop
+        return true; // forged sender — drop
     }
-    if envelope::verify(data, pub_key).is_err() {
-        return;
+    if envelope::verify(data, &conn.pub_key).is_err() {
+        return true;
     }
+    let file_uuid = conn.file_uuid;
 
     // The public authenticated header must name this exact file, collection,
     // collection-key epoch and current document-key generation. Neither stale
@@ -346,26 +436,43 @@ async fn handle_frame(
     .await
     {
         Ok(value) => value,
-        Err(_) => return,
+        Err(_) => return true,
     };
     if f.file_id != *file_uuid.as_bytes()
         || f.collection_id != *binding.1.as_bytes()
         || f.key_epoch as i64 != binding.2 as i64
         || f.doc_key_id as i64 != binding.0
     {
-        return;
+        return true;
     }
 
-    // Ephemeral, broadcast-only kinds (no file_update_log entry).
+    // Presence only: cursors and awareness, which any reader may share.
     if matches!(
         f.kind,
         envelope::kind::YJS_AWARENESS
             | envelope::kind::OO_CURSOR
-            | envelope::kind::EXCALIDRAW_OP
             | envelope::kind::EXCALIDRAW_CURSOR
     ) {
-        state.hub.broadcast(file_id, peer.conn_id, data).await;
-        return;
+        state.hub.broadcast(&conn.file_id, peer.conn_id, data).await;
+        return true;
+    }
+
+    // Everything else changes the document: editors only, checked per frame
+    // (a share can be narrowed while the socket is open).
+    match file_access(&state.pool, conn.user_uuid, file_uuid).await {
+        Some(Access::Write) => {}
+        Some(Access::Read) => return true,
+        _ => return false,
+    }
+    if !budget.take(data.len()) {
+        tracing::warn!(file = %file_uuid, device = peer.device_id, "collab frame budget exceeded");
+        return false;
+    }
+
+    // Scene edits are relayed, not kept.
+    if f.kind == envelope::kind::EXCALIDRAW_OP {
+        state.hub.broadcast(&conn.file_id, peer.conn_id, data).await;
+        return true;
     }
 
     // Durable kinds: persist (drop only exact sender-sequence replays), then broadcast.
@@ -373,9 +480,16 @@ async fn handle_frame(
         .await
         .is_err()
     {
-        return;
+        return true;
     }
-    state.hub.broadcast(file_id, peer.conn_id, data).await;
+    state.hub.broadcast(&conn.file_id, peer.conn_id, data).await;
+    true
+}
+
+/// The advisory lock that serialises a file's update log: appends here and
+/// truncation when a version is saved.
+pub(crate) fn log_lock_key(file_uuid: Uuid) -> i64 {
+    (file_uuid.as_u128() >> 64) as u64 as i64
 }
 
 /// Inserts a frame into `file_update_log`, assigning the next per-file seq — mirrors
@@ -394,9 +508,8 @@ async fn persist_frame(
     // PostgreSQL advisory locks are transaction-scoped and do not require a schema change.
     // A 64-bit prefix is sufficient as a lock namespace: a collision only serializes two
     // unrelated files briefly; it cannot mix their rows or weaken database constraints.
-    let lock_key = (file_uuid.as_u128() >> 64) as u64 as i64;
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(lock_key)
+        .bind(log_lock_key(file_uuid))
         .execute(&mut *tx)
         .await?;
 

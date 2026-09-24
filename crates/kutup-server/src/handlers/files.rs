@@ -28,6 +28,9 @@ use crate::middleware::AuthUser;
 use crate::models::{FileRow, FileThumbnails, MessageResponse, UploadResult};
 use crate::AppState;
 
+/// The largest non-file form field: ids and sealed metadata / key envelopes.
+pub(crate) const MAX_TEXT_FIELD_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateFileMetadataRequest {
@@ -212,7 +215,20 @@ pub async fn upload(
             }
             tmp = Some((file, size));
         } else {
-            let val = field.text().await.unwrap_or_default();
+            // The other fields are ids and small envelopes.
+            let mut val = Vec::new();
+            while let Some(chunk) = field
+                .chunk()
+                .await
+                .map_err(|_| AppError::bad_request("invalid multipart form"))?
+            {
+                if val.len() + chunk.len() > MAX_TEXT_FIELD_BYTES || fields.len() >= 8 {
+                    return Err(AppError::bad_request("form field too large"));
+                }
+                val.extend_from_slice(&chunk);
+            }
+            let val = String::from_utf8(val)
+                .map_err(|_| AppError::bad_request("invalid multipart form"))?;
             fields.insert(name, val);
         }
     }
@@ -246,18 +262,16 @@ pub async fn upload(
         return Err(AppError::forbidden("forbidden"));
     };
     let is_owner = owner_user_id == user_id;
-    let mut share_quota: Option<i64> = None;
     if !is_owner {
-        let row: Option<(bool, Option<i64>)> = sqlx::query_as(
-            "SELECT can_upload, upload_quota_bytes FROM collection_shares WHERE collection_id = $1 AND recipient_user_id = $2",
+        let can_upload: Option<bool> = sqlx::query_scalar(
+            "SELECT can_upload FROM collection_shares WHERE collection_id = $1 AND recipient_user_id = $2",
         )
         .bind(coll_id)
         .bind(user_id)
         .fetch_optional(&state.pool)
         .await?;
-        match row {
-            Some((true, quota)) => share_quota = quota,
-            _ => return Err(AppError::forbidden("forbidden")),
+        if can_upload != Some(true) {
+            return Err(AppError::forbidden("forbidden"));
         }
     }
 
@@ -289,37 +303,26 @@ pub async fn upload(
     validate_file_blob_file(&tmp_file, blob_context)?;
     let storage_path = format!("{}/{}/{}", user_id, coll_id, file_id);
 
-    // Atomic quota check + reserve under FOR UPDATE.
+    // Claim the id, then check room — both held until commit, so neither a
+    // retry with the same id nor a concurrent write can slip past.
     let mut tx = state.pool.begin().await?;
-    let (quota, used): (i64, i64) = sqlx::query_as(
-        "SELECT storage_quota_bytes, storage_used_bytes FROM users WHERE id = $1 FOR UPDATE",
+    if !crate::drive_writes::claim_file_id(&mut tx, file_id, None).await? {
+        return Err(AppError::conflict("file id already in use"));
+    }
+    // The folder must still be live, at the epoch the envelopes were bound
+    // to, until the file row is in (a key rotation updates this row).
+    let live_epoch: Option<i32> = sqlx::query_scalar(
+        "SELECT key_epoch FROM collections WHERE id = $1 AND deleted_at IS NULL FOR SHARE",
     )
-    .bind(user_id)
-    .fetch_one(&mut *tx)
+    .bind(coll_id)
+    .fetch_optional(&mut *tx)
     .await?;
-    if used + file_size > quota {
-        return Err(AppError::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "storage quota exceeded",
-        ));
+    if live_epoch != Some(key_epoch) {
+        return Err(AppError::conflict("folder changed during upload"));
     }
-    if !is_owner {
-        if let Some(limit) = share_quota {
-            let used_share: i64 = sqlx::query_scalar(
-                "SELECT COALESCE(SUM(encrypted_size_bytes), 0)::bigint FROM files WHERE collection_id = $1 AND uploader_user_id = $2",
-            )
-            .bind(coll_id)
-            .bind(user_id)
-            .fetch_one(&mut *tx)
-            .await?;
-            if used_share + file_size > limit {
-                return Err(AppError::new(
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    "share upload quota exceeded",
-                ));
-            }
-        }
-    }
+    crate::drive_writes::check_room(&mut tx, user_id, coll_id, file_size, None)
+        .await?
+        .into_result()?;
 
     // Stream the temp file to S3 (still holding the row lock, like Go).
     let body = ByteStream::from_path(tmp_file.path())
@@ -555,16 +558,8 @@ pub async fn claim_seed(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
-
-    let coll_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT collection_id FROM files WHERE id = $1 AND deleted_at IS NULL")
-            .bind(fid)
-            .fetch_optional(&state.pool)
-            .await?;
-    let Some(coll_id) = coll_id else {
-        return Err(AppError::not_found("not found"));
-    };
-    if !can_access_collection(&state.pool, user_id, coll_id).await {
+    // Seeding writes the document's first state: an editor's job.
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
         return Err(AppError::forbidden("forbidden"));
     }
 

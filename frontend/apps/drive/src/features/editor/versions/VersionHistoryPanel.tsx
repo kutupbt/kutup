@@ -9,9 +9,11 @@ interface Props {
   /** Optional callback when the user clicks "Restore" on a version. The editor
    *  is responsible for actually restoring; the panel just emits the click. */
   onRestore?: (versionId: string) => void
+  /** View-only access: no naming, keeping or restoring. */
+  readOnly?: boolean
 }
 
-export default function VersionHistoryPanel({ fileId, onRestore }: Props) {
+export default function VersionHistoryPanel({ fileId, onRestore, readOnly = false }: Props) {
   const { t } = useTranslation()
   const [versions, setVersions] = useState<VR[]>([])
   const [loading, setLoading] = useState(true)
@@ -60,7 +62,8 @@ export default function VersionHistoryPanel({ fileId, onRestore }: Props) {
           fileId={fileId}
           v={v}
           onChange={(updated) => setVersions((arr) => arr.map((x) => (x.id === v.id ? updated : x)))}
-          onRestore={onRestore}
+          onRestore={readOnly ? undefined : onRestore}
+          readOnly={readOnly}
         />
       ))}
     </div>

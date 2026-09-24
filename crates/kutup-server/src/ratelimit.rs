@@ -96,6 +96,14 @@ pub static PREFLIGHT: LazyLock<RateLimiter> = LazyLock::new(|| {
         Duration::from_secs(60),
     )
 });
+/// Looking a user up by email: 30 / minute / IP (`RATE_LIMIT_USER_LOOKUP_PER_MIN`).
+/// Sharing needs a handful; a higher rate is someone enumerating accounts.
+pub static USER_LOOKUP: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_USER_LOOKUP_PER_MIN", 30) as usize,
+        Duration::from_secs(60),
+    )
+});
 /// Register: 10 / hour / IP (`RATE_LIMIT_REGISTER_PER_HOUR`). Registration is rare
 /// per-human; this mostly stops scripted account spam on open-registration servers.
 pub static REGISTER: LazyLock<RateLimiter> = LazyLock::new(|| {
@@ -314,6 +322,7 @@ pub fn spawn_cleanup() {
             FED_USERS.cleanup();
             LOGIN.cleanup();
             PREFLIGHT.cleanup();
+            USER_LOOKUP.cleanup();
             REGISTER.cleanup();
             ADMIN.cleanup();
             CHAT_KEYS_ACCOUNT.cleanup();

@@ -35,7 +35,7 @@ import { updateSession, useRequiredSession } from '@kutup/session/store'
 import VersionHistoryPanel from '../versions/VersionHistoryPanel'
 import RestoreConfirmDialog from '../versions/RestoreConfirmDialog'
 import { Button } from '@kutup/ui/components/button'
-import { Save, BookmarkPlus, History, X, Check, Keyboard } from 'lucide-react'
+import { Save, BookmarkPlus, History, X, Check, Keyboard, Eye } from 'lucide-react'
 import { NameDialog } from '../../dialogs/NameDialog'
 import EditorShortcutsDialog from '../EditorShortcutsDialog'
 import CursorColorPicker from '../CursorColorPicker'
@@ -82,6 +82,27 @@ interface Props {
    *  yet — i.e. on the very first time a freshly-uploaded file is opened in the editor.
    *  After the first Save Version, snapshots become canonical and this is ignored. */
   initialContent?: string
+  /** View-only access: follow edits live, change nothing (no typing, no
+   *  saving, no restoring). */
+  readOnly?: boolean
+}
+
+/**
+ * The first content of a note no one has edited yet: the uploaded text as
+ * one Yjs insert by a client id derived from the file. Every tab builds the
+ * same bytes, so an editor's seed and a viewer's local copy are the same
+ * Yjs item and merge instead of doubling.
+ */
+function seedUpdate(fileId: string, text: string): Uint8Array {
+  const doc = new Y.Doc()
+  // FNV-1a over the id: a stable uint32, as Yjs client ids are.
+  let id = 0x811c9dc5
+  for (let i = 0; i < fileId.length; i++) id = Math.imul(id ^ fileId.charCodeAt(i), 0x01000193) >>> 0
+  doc.clientID = id
+  doc.getText('content').insert(0, text)
+  const update = Y.encodeStateAsUpdate(doc)
+  doc.destroy()
+  return update
 }
 
 export default function TextCollabEditor({
@@ -92,6 +113,7 @@ export default function TextCollabEditor({
   fileKey,
   keyEpoch,
   initialContent,
+  readOnly = false,
 }: Props) {
   const { t } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
@@ -232,8 +254,9 @@ export default function TextCollabEditor({
 
       // 2.5 Snapshot trigger. Each saved version also redraws the file's
       // thumbnail (throttled; see noteThumbnailScheduler).
-      const thumbnails = noteThumbnailScheduler({ fileId, fileKey, keyEpoch }, filename)
-      const trig = new SnapshotTrigger({
+      // Only editors save; a viewer's copy follows theirs.
+      const thumbnails = readOnly ? null : noteThumbnailScheduler({ fileId, fileKey, keyEpoch }, filename)
+      const trig = thumbnails && new SnapshotTrigger({
         onSnapshot: (versionId, explicit) => thumbnails.saved(versionId, explicit, ytext.toJSON()),
         fileId,
         ydoc,
@@ -265,7 +288,7 @@ export default function TextCollabEditor({
       // via the staged-versionId pattern in render. The `choice` arg comes
       // from the dialog: 'save-and-restore' pre-snapshots first;
       // 'restore-only' skips the backup snapshot.
-      const handleRestore = async (versionId: string, choice: 'save-and-restore' | 'restore-only') => {
+      const handleRestore = trig && (async (versionId: string, choice: 'save-and-restore' | 'restore-only') => {
         try {
           // axios `api` instance has baseURL='/api'; do NOT include /api/ here.
           const r = await api.get(`/files/${fileId}/versions/${versionId}/download`, {
@@ -297,8 +320,8 @@ export default function TextCollabEditor({
           console.error('restore failed', e)
           toast.error(t('editor.restoreFailed'))
         }
-      }
-      if (alive) setRestoreHandler(() => handleRestore)
+      })
+      if (alive && handleRestore) setRestoreHandler(() => handleRestore)
 
       // 4. Local Yjs update -> canonical Rust frame + device signature.
       const onLocalUpdate = (update: Uint8Array, origin: unknown) => {
@@ -376,8 +399,10 @@ export default function TextCollabEditor({
       // server-arbitrated `claim-seed` endpoint runs an atomic UPDATE
       // false→true so exactly one tab ever wins.
       let mayInitialSeed = false
+      let neverSaved = false
       try {
         const versions = await listVersions(fileId)
+        neverSaved = versions.length === 0
         if (versions.length > 0) {
           const latest = versions[0]
           const r = await api.get(`/files/${fileId}/versions/${latest.id}/download`, {
@@ -393,7 +418,7 @@ export default function TextCollabEditor({
             Y.applyUpdateV2(ydoc, stateBytes, 'remote')
             lastSeenSeq = latest.seqAtSnapshot
           }
-        } else if (initialContent && initialContent.length > 0) {
+        } else if (initialContent && initialContent.length > 0 && !readOnly) {
           // Race-safe seed claim. The losing tab simply skips the insert
           // and waits for WS replay to populate Y.Text from the winner's
           // frame. Failures fall through to "don't seed" — the editor
@@ -441,8 +466,14 @@ export default function TextCollabEditor({
           // WS replay alone — server's atomic claim guarantees exactly one
           // local insert per file.
           if (mayInitialSeed && ytext.length === 0 && initialContent) {
-            ytext.insert(0, initialContent)
+            Y.applyUpdate(ydoc!, seedUpdate(fileId, initialContent), 'seed')
             mayInitialSeed = false  // single-shot
+          }
+          // A viewer of a note no editor has opened yet shows the upload
+          // locally (not sent); an editor's seed, when it comes, is the
+          // same item.
+          if (readOnly && neverSaved && h.headSeq === 0 && ytext.length === 0 && initialContent) {
+            Y.applyUpdate(ydoc!, seedUpdate(fileId, initialContent), 'remote')
           }
           setStatus('ready')
         },
@@ -476,7 +507,7 @@ export default function TextCollabEditor({
       // Cmd/Ctrl+S → force-save snapshot. Wires to the same `trig.forceSave()`
       // the Save button calls; `triggerRef.current` lets the closure see the
       // latest trigger instance even though it's captured at editor build time.
-      const saveKeymap = keymap.of([{
+      const saveKeymap = keymap.of(trig ? [{
         key: 'Mod-s',
         preventDefault: true,
         run: () => {
@@ -489,7 +520,7 @@ export default function TextCollabEditor({
           })()
           return true
         },
-      }])
+      }] : [])
       const exts: Extension[] = [
         // Note: saveKeymap and the user keymap come BEFORE search keymap
         // so Cmd+S still saves (search wires Cmd+F + a few others).
@@ -512,6 +543,7 @@ export default function TextCollabEditor({
         // Wrapped in a Compartment so the useEffect below can reconfigure
         // on theme change without rebuilding the EditorView.
         themeCompartment.of(theme === 'dark' ? oneDark : []),
+        ...(readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
         // Click-anywhere fallback. CodeMirror's own posAtCoords handles
         // clicks within .cm-content correctly (snapping past line-end to
         // the line's end). For clicks BELOW the last line the wrapper
@@ -580,8 +612,8 @@ export default function TextCollabEditor({
 
       // 8. Cleanup on unmount.
       cleanup = () => {
-        thumbnails.flush()
-        trig.destroy()
+        thumbnails?.flush()
+        trig?.destroy()
         ydoc?.off('update', onLocalUpdate)
         awareness?.off('change', onAwarenessChange)
         awareness?.off('update', updateCollabCount)
@@ -686,6 +718,11 @@ export default function TextCollabEditor({
         <div className="ml-auto flex items-center gap-2">
           {isMarkdown && <ModeToggle mode={mdMode} onChange={setMdMode} />}
           <CursorColorPicker color={cursorColor} onChange={changeCursorColor} />
+          {readOnly ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
+              <Eye className="h-3.5 w-3.5" aria-hidden /> {t('editor.viewOnly')}
+            </span>
+          ) : (<>
           <Button
             type="button"
             size="sm"
@@ -722,6 +759,7 @@ export default function TextCollabEditor({
             <BookmarkPlus className="h-4 w-4" />
             {savingVersion ? t('editor.saving') : t('editor.saveVersion')}
           </Button>
+          </>)}
           <Button
             type="button"
             size="sm"
@@ -777,7 +815,7 @@ export default function TextCollabEditor({
             source={docText}
             scrollPercent={mdMode === 'split' ? scrollPercent : undefined}
             onScrollPercent={mdMode === 'split' ? setScrollPercent : undefined}
-            onToggleTaskList={handleToggleTaskList}
+            onToggleTaskList={readOnly ? undefined : handleToggleTaskList}
             className={mdMode === 'split' ? 'flex-1 min-w-0' : 'flex-1'}
           />
         )}
@@ -801,6 +839,7 @@ export default function TextCollabEditor({
               <VersionHistoryPanel
                 fileId={fileId}
                 onRestore={(vid) => setPendingRestoreVersionId(vid)}
+                readOnly={readOnly}
               />
             </div>
           </aside>

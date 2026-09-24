@@ -80,6 +80,8 @@ interface Props {
   collectionMaster: Uint8Array
   keyEpoch: number
   initialBytes?: Uint8Array
+  /** View-only access: follow edits live, draw nothing. */
+  readOnly?: boolean
 }
 
 // Module-level cache of registerDevice promises — same pattern as
@@ -105,7 +107,7 @@ interface CursorPayload {
 }
 
 function WhiteboardEditorBase(
-  { fileId, collectionId, initialBytes, collectionMaster, keyEpoch }: Props,
+  { fileId, collectionId, initialBytes, collectionMaster, keyEpoch, readOnly = false }: Props,
   ref: Ref<WhiteboardEditorHandle>,
 ) {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null)
@@ -607,6 +609,7 @@ function WhiteboardEditorBase(
         <Excalidraw
           theme={theme}
           initialData={initialData ?? undefined}
+          viewModeEnabled={readOnly}
           excalidrawAPI={(api) => {
             apiRef.current = api
             // Expose for e2e probing (spec 21). Cheap; no security
@@ -616,12 +619,16 @@ function WhiteboardEditorBase(
           }}
           onChange={(_elements, appState) => {
             if (applyingRemoteRef.current) return
-            scheduleBroadcast()
-            // Image binaries: scan for newly-pasted images whose status
-            // is still "pending" and upload them. The status flip after
-            // upload re-enters this onChange — assetSavedRef short-
-            // circuits the second pass.
-            maybeUploadDirtyAssets()
+            // A viewer's scene changes only by others' edits (and its own
+            // view state); it sends none and stores no images.
+            if (!readOnly) {
+              scheduleBroadcast()
+              maybeUploadDirtyAssets()
+            }
+            // (Image binaries: maybeUploadDirtyAssets above scans for
+            // newly-pasted images still "pending" and uploads them; the
+            // status flip re-enters onChange and assetSavedRef
+            // short-circuits the second pass.)
             // Selection changes also drive presence so peers see the
             // translucent rectangle around the elements you've selected.
             // selectedElementIds is a small object — JSON.stringify is fine.

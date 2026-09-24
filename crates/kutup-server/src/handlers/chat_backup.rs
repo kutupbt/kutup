@@ -59,8 +59,12 @@ fn base_storage_path(
     format!("chat-backup/{user_id}/{backup_id}/bases/{object_id}/{ciphertext_digest}")
 }
 
-fn media_storage_path(user_id: Uuid, backup_id: Uuid, media_id: &str, operation: Uuid) -> String {
-    format!("chat-backup/{user_id}/{backup_id}/media/{media_id}/{operation}")
+/// Where one upload attempt of a backup media object is stored: a key of
+/// its own per attempt, so concurrent retries never share one — the attempt
+/// that loses (the row already exists) deletes only its own bytes.
+fn media_storage_path(user_id: Uuid, backup_id: Uuid, media_id: &str) -> String {
+    let attempt = Uuid::new_v4();
+    format!("chat-backup/{user_id}/{backup_id}/media/{media_id}/{attempt}")
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1370,7 +1374,7 @@ pub async fn copy_media(
     if measured_outer_bytes != expected_outer_bytes {
         return Err(AppError::internal("backup media framing length mismatch"));
     }
-    let path = media_storage_path(user_id, backup_id, &request.media_id, operation_id);
+    let path = media_storage_path(user_id, backup_id, &request.media_id);
     let body = ByteStream::from_path(output.path())
         .await
         .map_err(|_| AppError::internal("read backup media temp file"))?;
@@ -1669,10 +1673,7 @@ pub async fn upload_media(
         }));
     }
 
-    let path = format!(
-        "chat-backup/{user_id}/{backup_id}/media/{}/direct-{reference_id}",
-        metadata.media_id
-    );
+    let path = media_storage_path(user_id, backup_id, &metadata.media_id);
     let body = ByteStream::from_path(file.path())
         .await
         .map_err(|_| AppError::internal("read backup media temp file"))?;

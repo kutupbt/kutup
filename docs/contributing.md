@@ -259,7 +259,7 @@ kutup/
 
 ### Orphan-blob sweep
 
-Periodic admin task that walks SeaweedFS for blobs whose containing `files.id` row no longer exists (PUT-then-crash leftovers, residual snapshot blobs from before quota tracking, etc.) and deletes them.
+Periodic admin task that walks the bucket for Drive objects no row references any more and deletes every stored version of each: a crash between storing and committing (an upload, a completed tus multipart, a version), a purge or retention pass whose object delete failed, a pruned original or retired version left behind. It recognises every key shape Drive writes — `{user}/{folder}/{file}` (uploads), `fed/{share}/{folder}/{file}` (federated uploads) and `files/{file}/…` (versions, assets, thumbnails) — and never touches anything else (Chat's keys included).
 
 Subcommand on the existing `kutup-server` binary — same Docker image, same env vars, same DB pool.
 
@@ -283,7 +283,7 @@ docker compose exec backend ./kutup-server orphan-sweep --delete
 | `--delete` | `false` | Without this, the command is a dry-run. |
 | `--age-floor` | `24h` | Skip blobs younger than this. The 24h default absorbs in-flight uploads; lower it only for testing. |
 | `--page-sleep` | `200ms` | Sleep between S3 LIST pages. |
-| `--prefix` | `files/` | S3 key prefix to walk. |
+| `--prefix` | *(whole bucket)* | Limit the walk to one key prefix, e.g. `files/`. |
 
 **Reading the summary log:**
 
@@ -292,7 +292,7 @@ orphan-sweep summary: pages=N keys=N orphans=N skipped-age=N skipped-shape=N del
 ```
 
 - `skipped-age` should be > 0 on a healthy bucket (the in-flight upload window). If it's 0 every run, the age floor isn't engaging — investigate before relying on the result.
-- `skipped-shape` counts keys outside the `files/<UUID>/...` shape; the sweep never deletes these.
+- `skipped-shape` counts keys that are not Drive's (Chat media and backups, anything foreign); the sweep never deletes these.
 - `bytes-reclaimed` is the projected (dry-run) or actual (`--delete`) byte savings.
 
 The sweep does **not** persist progress — a crash mid-run means rerunning from scratch. Acceptable at current scale; revisit if the bucket grows past ~500K objects.

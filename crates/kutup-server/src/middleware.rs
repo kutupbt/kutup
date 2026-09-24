@@ -208,6 +208,15 @@ pub async fn rate_limit_fed_users(
     .await
 }
 
+/// 30/min/IP — `/api/users/by-email/{email}`.
+pub async fn rate_limit_user_lookup(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    limit(addr, &ratelimit::USER_LOOKUP, None, req, next).await
+}
+
 /// 10/hr/IP — `/api/auth/register`.
 pub async fn rate_limit_register(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,

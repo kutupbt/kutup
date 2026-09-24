@@ -66,7 +66,7 @@ pub async fn upload(
     if !valid_asset_id(&asset_id) {
         return Err(AppError::bad_request("invalid assetId"));
     }
-    if !can_access_file(&state.pool, user_id, fid).await {
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
         return Err(AppError::forbidden("forbidden"));
     }
 
@@ -128,17 +128,13 @@ pub async fn upload(
     drive_envelope::validate(&encoded, context)
         .map_err(|_| AppError::bad_request("invalid asset envelope"))?;
 
-    // Pre-flight under FOR UPDATE: lock user, idempotent INSERT, quota gate, counter bump.
+    // Room first (locking the user's row), then the idempotent INSERT: a
+    // concurrent first upload of the same id waits on the row and then finds
+    // it taken.
     let mut tx = state.pool.begin().await?;
-    let (quota, used): (i64, i64) = sqlx::query_as(
-        "SELECT storage_quota_bytes, storage_used_bytes FROM users WHERE id = $1 FOR UPDATE",
-    )
-    .bind(user_id)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    // ON CONFLICT DO NOTHING ⇒ a re-PUT of an existing content-addressed asset returns no
-    // row, so we skip the quota charge (storage already paid for).
+    crate::drive_writes::check_room(&mut tx, user_id, collection_id, size, None)
+        .await?
+        .into_result()?;
     let inserted: Option<i64> = sqlx::query_scalar(
         r#"INSERT INTO file_assets (file_id, asset_id, size_bytes, uploader_user_id)
            VALUES ($1, $2, $3, $4)
@@ -151,23 +147,21 @@ pub async fn upload(
     .bind(user_id)
     .fetch_optional(&mut *tx)
     .await?;
-
-    if inserted.is_some() {
-        if used + size > quota {
-            return Err(AppError::new(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "storage quota exceeded",
-            ));
-        }
-        sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2")
-            .bind(size)
-            .bind(user_id)
-            .execute(&mut *tx)
-            .await?;
+    // Already stored: assets are content-addressed and immutable, so a re-PUT
+    // changes nothing — neither the bytes (which would go uncharged, and
+    // could replace someone else's) nor the accounting.
+    if inserted.is_none() {
+        return Ok(StatusCode::NO_CONTENT.into_response());
     }
+    sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2")
+        .bind(size)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
 
-    // S3 PUT after the DB increment but before commit (lock still held). A PUT failure
-    // rolls back the whole pre-flight, keeping DB + S3 convergent.
+    // Stored before commit with the row lock held: a PUT failure rolls the
+    // row back; a commit failure removes the object again (it is new, so
+    // nobody else's).
     let path = asset_storage_path(fid, &asset_id);
     let body = ByteStream::from_path(tmp_file.path())
         .await

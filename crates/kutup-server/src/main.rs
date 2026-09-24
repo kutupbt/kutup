@@ -13,6 +13,7 @@ mod chat_mls;
 mod config;
 mod db;
 mod drive_federation;
+mod drive_writes;
 mod error;
 mod federation;
 mod file_content;
@@ -58,9 +59,20 @@ use models::HealthResponse;
 /// in Go (injected via `-ldflags` in release builds; `"dev"` otherwise).
 const BUILD_VERSION: &str = "dev";
 
-/// Max request body — mirrors the Fiber `BodyLimit: 10 GB`. Streaming upload routes
-/// (tus) disable this per-route once they land (`DefaultBodyLimit::disable()`).
-const BODY_LIMIT_BYTES: usize = 10 * 1024 * 1024 * 1024;
+/// Default request-body cap. Handlers that buffer (JSON, `Bytes`) hold the
+/// whole body in memory, so the default is small; the upload routes that
+/// need more raise it on their own route (and stream to disk).
+const BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+/// A whole-file multipart upload, streamed to a temp file.
+const DRIVE_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024 * 1024;
+/// A saved version (streamed to a temp file): an office document or
+/// whiteboard, or a restored copy of one.
+const DRIVE_VERSION_LIMIT_BYTES: usize = 2 * 1024 * 1024 * 1024;
+/// One tus PATCH is one encryption chunk (5 MiB plus overhead); room to spare.
+const TUS_PATCH_LIMIT_BYTES: usize = 64 * 1024 * 1024;
+/// A federated Drive upload is signed over its whole body, so it is held in
+/// memory while checked (the browser's `MAX_REMOTE_UPLOAD_BYTES` matches).
+const FEDERATED_DRIVE_UPLOAD_LIMIT_BYTES: usize = 256 * 1024 * 1024;
 const FED_CHAT_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Shared application state.
@@ -479,7 +491,10 @@ fn build_router(state: AppState) -> Router {
         .route("/api/user/2fa/setup", post(auth::setup_totp))
         .route("/api/user/2fa/verify", post(auth::verify_totp))
         .route("/api/user/2fa", delete(auth::disable_totp))
-        .route("/api/users/by-email/:email", get(auth::get_user_by_email))
+        .route(
+            "/api/users/by-email/:email",
+            get(auth::get_user_by_email).route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
         // --- Collections (authenticated). ---
         .route(
             "/api/collections",
@@ -736,10 +751,16 @@ fn build_router(state: AppState) -> Router {
         .route("/api/uploads", post(tus::create))
         .route(
             "/api/uploads/:id",
-            patch(tus::patch).head(tus::head).delete(tus::delete),
+            patch(tus::patch)
+                .head(tus::head)
+                .delete(tus::delete)
+                .route_layer(DefaultBodyLimit::max(TUS_PATCH_LIMIT_BYTES)),
         )
         // --- Files (authenticated) ---
-        .route("/api/files/upload", post(files::upload))
+        .route(
+            "/api/files/upload",
+            post(files::upload).route_layer(DefaultBodyLimit::max(DRIVE_UPLOAD_LIMIT_BYTES)),
+        )
         .route("/api/files/:id/download", get(files::download))
         .route(
             "/api/files/:id",
@@ -752,7 +773,9 @@ fn build_router(state: AppState) -> Router {
         .route("/api/trash/:id/restore", post(trash::restore))
         .route(
             "/api/files/:fileId/versions",
-            get(file_versions::list).post(file_versions::create),
+            get(file_versions::list)
+                .post(file_versions::create)
+                .route_layer(DefaultBodyLimit::max(DRIVE_VERSION_LIMIT_BYTES)),
         )
         .route(
             "/api/files/:fileId/versions/:vid/download",
@@ -764,7 +787,12 @@ fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/files/:fileId/assets/:assetId",
-            put(file_assets::upload).get(file_assets::download),
+            put(file_assets::upload)
+                .get(file_assets::download)
+                // One asset envelope plus the multipart framing.
+                .route_layer(DefaultBodyLimit::max(
+                    kutup_crypto::drive_envelope::MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES + 64 * 1024,
+                )),
         )
         .route(
             "/api/files/:fileId/thumbnails/:variant",
@@ -923,6 +951,7 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/drive/files",
             get(drive_federation::list_files)
                 .post(drive_federation::upload_file)
+                .route_layer(DefaultBodyLimit::max(FEDERATED_DRIVE_UPLOAD_LIMIT_BYTES))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
@@ -948,7 +977,9 @@ fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/drive/federation/shares/:shareId/files",
-            get(drive_federation::proxy_list_files).post(drive_federation::proxy_upload),
+            get(drive_federation::proxy_list_files)
+                .post(drive_federation::proxy_upload)
+                .route_layer(DefaultBodyLimit::max(FEDERATED_DRIVE_UPLOAD_LIMIT_BYTES)),
         )
         .route(
             "/api/drive/federation/shares/:shareId/files/:fileId/content",
@@ -1070,7 +1101,8 @@ async fn run_orphan_sweep_cmd(
     let mut delete = false;
     let mut age_floor = std::time::Duration::from_secs(24 * 3600);
     let mut page_sleep = std::time::Duration::from_millis(200);
-    let mut prefix = "files/".to_string();
+    // The whole bucket: the sweep recognises Drive's key shapes itself.
+    let mut prefix = String::new();
     for a in args {
         if a == "--delete" {
             delete = true;

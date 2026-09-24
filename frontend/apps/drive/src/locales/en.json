@@ -163,8 +163,8 @@
       "description": "People you share with get their own sealed copy of this folder's key. Subfolders are shared separately.",
       "recipient": "Email or Kutup address",
       "recipientHint": "An email for someone on this server, or user@other-server.",
-      "canUpload": "Can add files",
-      "canUploadHint": "New files count against their own storage.",
+      "canUpload": "Can add and edit files",
+      "canUploadHint": "Without this they can only view. What they add counts against their own storage.",
       "quota": "Upload limit (GiB)",
       "quotaHint": "Optional. Leave empty for no limit beyond their storage.",
       "quotaInvalid": "Enter a size above zero.",
@@ -262,6 +262,7 @@
       "quota": "Your storage is full.",
       "shareQuota": "This shared folder's upload limit is reached.",
       "forbidden": "You cannot add files here.",
+      "remoteTooLarge": "Files over 255 MB can't be added to a folder on another server yet.",
       "network": "The connection dropped.",
       "other": "The upload failed."
     },
@@ -387,7 +388,8 @@
       "loading": "Loading the document editor…",
       "unsupported": "This kind of office file can't be edited here.",
       "unavailable": "The document editor could not be loaded. Try again, or download the file."
-    }
+    },
+    "viewOnly": "View only"
   },
   "file": {
     "opening": "Opening…",

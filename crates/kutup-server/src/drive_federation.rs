@@ -1374,8 +1374,35 @@ pub async fn upload_file(
                 response.1,
             );
         }
+        // The id is ours until commit; a retry or a clash cannot overwrite
+        // a stored file's bytes.
+        if !crate::drive_writes::claim_file_id(&mut tx, parsed.file_id, None).await? {
+            tx.rollback().await?;
+            return signed_app_error(
+                federation,
+                &authenticated,
+                AppError::conflict("file id already in use"),
+            );
+        }
+        // The folder owner pays for what peers add: their quota (and open
+        // uploads) first, then the share's own limit, measured from its files.
+        let owner_room =
+            crate::drive_writes::lock_headroom(&mut tx, share.sharer_user_id, None).await?;
+        if parsed.size > owner_room {
+            tx.rollback().await?;
+            return signed_app_error(
+                federation,
+                &authenticated,
+                AppError::new(StatusCode::PAYLOAD_TOO_LARGE, "storage quota exceeded"),
+            );
+        }
+        sqlx::query("SELECT 1 FROM federated_outgoing_shares WHERE id = $1 FOR UPDATE")
+            .bind(share.id)
+            .execute(&mut *tx)
+            .await?;
         let used: i64 = sqlx::query_scalar(
-            "SELECT upload_used_bytes FROM federated_outgoing_shares WHERE id = $1 FOR UPDATE",
+            "SELECT COALESCE(SUM(CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END), 0)::bigint
+             FROM files WHERE fed_share_id = $1",
         )
         .bind(share.id)
         .fetch_one(&mut *tx)
@@ -1409,8 +1436,8 @@ pub async fn upload_file(
                 "INSERT INTO files
                 (id, collection_id, uploader_user_id, metadata_envelope,
                  file_key_envelope, key_epoch, metadata_revision,
-                 storage_path, encrypted_size_bytes, ciphertext_sha256)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+                 storage_path, encrypted_size_bytes, ciphertext_sha256, fed_share_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
             )
             .bind(file_id)
             .bind(share.collection_id)
@@ -1422,13 +1449,6 @@ pub async fn upload_file(
             .bind(&storage_path)
             .bind(parsed.size)
             .bind(&parsed.digest)
-            .execute(&mut *tx)
-            .await?;
-            sqlx::query(
-                "UPDATE federated_outgoing_shares
-             SET upload_used_bytes = upload_used_bytes + $1 WHERE id = $2",
-            )
-            .bind(parsed.size)
             .bind(share.id)
             .execute(&mut *tx)
             .await?;
@@ -1497,104 +1517,86 @@ pub async fn delete_file(
         )
         .await?;
     let result: AppResult<Response> = async {
-    let share = match outgoing_share(&state, &authenticated, &headers, true).await {
-        Ok(share) => share,
-        Err(error) => return signed_app_error(federation, &authenticated, error),
-    };
-    if !share.can_delete {
-        return signed_app_error(
-            federation,
-            &authenticated,
-            AppError::forbidden("delete not permitted"),
-        );
-    }
-    let file_id = match Uuid::parse_str(&file_id) {
-        Ok(file_id) => file_id,
-        Err(_) => {
+        let share = match outgoing_share(&state, &authenticated, &headers, true).await {
+            Ok(share) => share,
+            Err(error) => return signed_app_error(federation, &authenticated, error),
+        };
+        if !share.can_delete {
+            return signed_app_error(
+                federation,
+                &authenticated,
+                AppError::forbidden("delete not permitted"),
+            );
+        }
+        let file_id = match Uuid::parse_str(&file_id) {
+            Ok(file_id) => file_id,
+            Err(_) => {
+                return signed_app_error(
+                    federation,
+                    &authenticated,
+                    AppError::not_found("file not found"),
+                )
+            }
+        };
+        let metadata = authenticated.replay_metadata()?;
+        let operation = "delete";
+        let mut tx = state.pool.begin().await?;
+        lock_drive_mutation(&mut tx, metadata.origin(), metadata.request_id()).await?;
+        if let Some(response) = prior_mutation(
+            &mut tx,
+            metadata.origin(),
+            metadata.request_id(),
+            metadata.request_hash(),
+            operation,
+        )
+        .await?
+        {
+            tx.rollback().await?;
+            return federation.signed_response(
+                &authenticated,
+                response.0,
+                JSON_CONTENT_TYPE,
+                response.1,
+            );
+        }
+        // Like a local recipient with delete rights: only what this share
+        // uploaded, and into the owner's trash (restorable; purged, with every
+        // derived object and charge, by the trash's own path).
+        let trashed = sqlx::query(
+            "UPDATE files SET deleted_at = NOW(), trash_root_id = id
+         WHERE id = $1 AND collection_id = $2 AND fed_share_id = $3 AND deleted_at IS NULL",
+        )
+        .bind(file_id)
+        .bind(share.collection_id)
+        .bind(share.id)
+        .execute(&mut *tx)
+        .await?;
+        if trashed.rows_affected() == 0 {
+            tx.rollback().await?;
             return signed_app_error(
                 federation,
                 &authenticated,
                 AppError::not_found("file not found"),
-            )
+            );
         }
-    };
-    let metadata = authenticated.replay_metadata()?;
-    let operation = "delete";
-    let mut tx = state.pool.begin().await?;
-    lock_drive_mutation(&mut tx, metadata.origin(), metadata.request_id()).await?;
-    if let Some(response) = prior_mutation(
-        &mut tx,
-        metadata.origin(),
-        metadata.request_id(),
-        metadata.request_hash(),
-        operation,
-    )
-    .await?
-    {
-        tx.rollback().await?;
-        return federation.signed_response(
-            &authenticated,
-            response.0,
-            JSON_CONTENT_TYPE,
-            response.1,
-        );
-    }
-    let file: Option<(String, i64)> = sqlx::query_as(
-        "SELECT storage_path, encrypted_size_bytes FROM files
-         WHERE id = $1 AND collection_id = $2 AND deleted_at IS NULL FOR UPDATE",
-    )
-    .bind(file_id)
-    .bind(share.collection_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let Some((storage_path, size)) = file else {
-        tx.rollback().await?;
-        return signed_app_error(
-            federation,
-            &authenticated,
-            AppError::not_found("file not found"),
-        );
-    };
-    sqlx::query("DELETE FROM files WHERE id = $1")
-        .bind(file_id)
-        .execute(&mut *tx)
+        record_mutation(
+            &mut tx,
+            metadata.origin(),
+            metadata.request_id(),
+            metadata.request_hash(),
+            share.id,
+            operation,
+            StatusCode::NO_CONTENT,
+            &[],
+        )
         .await?;
-    sqlx::query(
-        "UPDATE federated_outgoing_shares
-         SET upload_used_bytes = GREATEST(0, upload_used_bytes - $1) WHERE id = $2",
-    )
-    .bind(size)
-    .bind(share.id)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(
-        "UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1) WHERE id = $2",
-    )
-    .bind(size)
-    .bind(share.sharer_user_id)
-    .execute(&mut *tx)
-    .await?;
-    record_mutation(
-        &mut tx,
-        metadata.origin(),
-        metadata.request_id(),
-        metadata.request_hash(),
-        share.id,
-        operation,
-        StatusCode::NO_CONTENT,
-        &[],
-    )
-    .await?;
-    tx.commit().await?;
-    if let Err(error) = state.storage.delete(&storage_path).await {
-        tracing::warn!(%error, %storage_path, "deleted federated Drive row but object cleanup failed");
-    }
-    federation.signed_response(
-        &authenticated,
-        StatusCode::NO_CONTENT,
-        JSON_CONTENT_TYPE,
-        Vec::new(),
-    )
+        tx.commit().await?;
+        federation.signed_response(
+            &authenticated,
+            StatusCode::NO_CONTENT,
+            JSON_CONTENT_TYPE,
+            Vec::new(),
+        )
     }
     .await;
     match result {
@@ -1810,7 +1812,7 @@ pub fn spawn_digest_backfill(state: AppState) {
             tick.tick().await;
             let rows: Result<Vec<(Uuid, String)>, sqlx::Error> = sqlx::query_as(
                 "SELECT id, storage_path FROM files
-                 WHERE ciphertext_sha256 IS NULL AND deleted_at IS NULL
+                 WHERE ciphertext_sha256 IS NULL AND deleted_at IS NULL AND NOT original_pruned
                  ORDER BY created_at, id LIMIT 10",
             )
             .fetch_all(&state.pool)

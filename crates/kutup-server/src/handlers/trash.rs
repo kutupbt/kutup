@@ -282,12 +282,17 @@ pub async fn destroy(
     .fetch_one(&state.pool)
     .await?;
     if is_file_root > 0 {
-        jobs::purge_file_root(&state.pool, &state.storage, root_id)
-            .await
-            .map_err(|e| {
-                tracing::error!("trash purge file {root_id}: {e:#}");
-                AppError::internal("internal error")
-            })?;
+        jobs::purge_file_root(
+            &state.pool,
+            &state.storage,
+            root_id,
+            jobs::PurgeGuard::TrashedFile,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!("trash purge file {root_id}: {e:#}");
+            AppError::internal("internal error")
+        })?;
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
 
@@ -342,7 +347,14 @@ pub async fn empty(State(state): State<AppState>, user: AuthUser) -> AppResult<R
     .fetch_all(&state.pool)
     .await?;
     for root in file_roots {
-        if let Err(e) = jobs::purge_file_root(&state.pool, &state.storage, root).await {
+        if let Err(e) = jobs::purge_file_root(
+            &state.pool,
+            &state.storage,
+            root,
+            jobs::PurgeGuard::TrashedFile,
+        )
+        .await
+        {
             tracing::error!("empty trash: purge file {root}: {e:#}");
         }
     }

@@ -13,9 +13,11 @@ interface Props {
   v: VR
   onChange: (updated: VR) => void
   onRestore?: (versionId: string) => void
+  /** View-only access: the history is shown, not changed. */
+  readOnly?: boolean
 }
 
-export default function VersionRow({ fileId, v, onChange, onRestore }: Props) {
+export default function VersionRow({ fileId, v, onChange, onRestore, readOnly = false }: Props) {
   const { t, i18n } = useTranslation()
   const [naming, setNaming] = useState(false)
   const [name, setName] = useState(v.label ?? '')
@@ -93,7 +95,7 @@ export default function VersionRow({ fileId, v, onChange, onRestore }: Props) {
             {t('editor.versions.meta', { size: formatBytes(v.sizeBytes, i18n.language), key: v.docKeyId })}
           </div>
 
-          {naming ? (
+          {readOnly ? null : naming ? (
             <div className="mt-2 flex items-center gap-2">
               <Input
                 value={name}

@@ -1,4 +1,4 @@
-import { ArrowLeft, BookmarkPlus, Check, Download, History, Save, X } from 'lucide-react'
+import { ArrowLeft, BookmarkPlus, Check, Download, Eye, History, Save, X } from 'lucide-react'
 import { Suspense, useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useParams } from 'react-router-dom'
@@ -190,6 +190,9 @@ function OpenFile({ cid, fid }: { cid: string; fid: string }) {
       name={name}
       opened={opened}
       keys={keys}
+      // As the file opened: an editor stays one for the session (the server
+      // drops a narrowed share's edits and closes its socket).
+      readOnly={!(picked?.folder ?? liveFolder).canUpload}
       mayRename={liveFolder.canManage || (liveFolder.canDelete && liveFile.uploaderUserId === session.userId)}
       onRestored={(bytes) => {
         if (opened.kind === 'office' || opened.kind === 'whiteboard') {
@@ -257,6 +260,7 @@ function Workspace({
   name,
   opened,
   keys,
+  readOnly,
   mayRename,
   onRestored,
 }: {
@@ -265,6 +269,8 @@ function Workspace({
   name: string
   opened: Opened
   keys: Keys
+  /** A view-only share: editors open read-only, nothing is saved. */
+  readOnly: boolean
   mayRename: boolean
   onRestored: (bytes: Uint8Array) => void
 }) {
@@ -290,7 +296,14 @@ function Workspace({
     }
     switch (opened.kind) {
       case 'text':
-        return <TextCollabEditor {...common} fileKey={keys.target.fileKey} initialContent={opened.initialText} />
+        return (
+          <TextCollabEditor
+            {...common}
+            fileKey={keys.target.fileKey}
+            initialContent={opened.initialText}
+            readOnly={readOnly}
+          />
+        )
       case 'office':
         return (
           <OfficeEditor
@@ -298,10 +311,11 @@ function Workspace({
             {...common}
             initialBytes={opened.bytes}
             onSaveShortcut={() => saveShortcut.current?.()}
+            readOnly={readOnly}
           />
         )
       case 'whiteboard':
-        return <WhiteboardEditor ref={whiteboardRef} {...common} initialBytes={opened.bytes} />
+        return <WhiteboardEditor ref={whiteboardRef} {...common} initialBytes={opened.bytes} readOnly={readOnly} />
       case 'viewer': {
         const viewer = chooseViewer(name)
         return viewer ? <viewer.Component filename={name} blobUrl={opened.blobUrl} mimeType={opened.mimeType} /> : null
@@ -333,7 +347,9 @@ function Workspace({
           <span className="min-w-0 truncate px-1.5 text-sm font-medium">{name}</span>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          {wholeFile ? (
+          {wholeFile && readOnly ? (
+            <ViewOnlyActions fileId={file.id} />
+          ) : wholeFile ? (
             <WholeFileActions
               kind={wholeFile}
               keys={keys}
@@ -614,6 +630,37 @@ function redrawOffice(target: SnapshotTarget, versionId: string, pdf: () => Prom
       versionId,
     )
   })
+}
+
+/**
+ * What a viewer gets instead of Save: a note that the file is view-only,
+ * and the history to look through.
+ */
+function ViewOnlyActions({ fileId }: { fileId: string }) {
+  const { t } = useTranslation()
+  const [historyOpen, setHistoryOpen] = useState(false)
+  return (
+    <>
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
+        <Eye className="size-3.5" aria-hidden /> {t('editor.viewOnly')}
+      </span>
+      <Button
+        size="sm"
+        variant={historyOpen ? 'default' : 'outline'}
+        onClick={() => setHistoryOpen((v) => !v)}
+        aria-pressed={historyOpen}
+        title={t('editor.historyTitle')}
+      >
+        <History />
+        <span className="hidden md:inline">{t('editor.history')}</span>
+      </Button>
+      {historyOpen ? (
+        <HistoryDrawer onClose={() => setHistoryOpen(false)}>
+          <VersionHistoryPanel fileId={fileId} readOnly />
+        </HistoryDrawer>
+      ) : null}
+    </>
+  )
 }
 
 /** The version list, over the editor's right edge below the header. */

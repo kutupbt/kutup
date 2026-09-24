@@ -1,6 +1,21 @@
 import { isAxiosError } from 'axios'
 
-export type UploadFailure = 'quota' | 'shareQuota' | 'forbidden' | 'network' | 'other'
+export type UploadFailure = 'quota' | 'shareQuota' | 'forbidden' | 'remoteTooLarge' | 'network' | 'other'
+
+/**
+ * A federated folder's server takes each file as one signed request, which
+ * it holds in memory while checking it: the largest it accepts
+ * (`FEDERATED_DRIVE_UPLOAD_LIMIT_BYTES` on the server, less room for the
+ * envelopes and the encryption overhead).
+ */
+export const MAX_REMOTE_UPLOAD_BYTES = 255 * 1024 * 1024
+
+export class RemoteUploadTooLargeError extends Error {
+  constructor() {
+    super('file too large for a federated folder')
+    this.name = 'RemoteUploadTooLargeError'
+  }
+}
 
 interface TusLikeError {
   originalResponse?: { getStatus(): number; getBody(): string } | null
@@ -12,6 +27,7 @@ interface TusLikeError {
  * axios. The server says which quota a 413 hit.
  */
 export function classifyUploadError(error: unknown): UploadFailure {
+  if (error instanceof RemoteUploadTooLargeError) return 'remoteTooLarge'
   let status: number | undefined
   let body = ''
   const tus = (error as TusLikeError | null)?.originalResponse

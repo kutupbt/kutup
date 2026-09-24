@@ -77,9 +77,15 @@ pub async fn create_public_share(
     validate_envelope(&req.collection_key_envelope, envelope_context)?;
 
     let token = random_token(32);
-    let expires_at: Option<OffsetDateTime> = req
-        .expires_in_hours
-        .map(|h| OffsetDateTime::now_utc() + time::Duration::hours(h));
+    // An hour to ten years; anything else is a mistake (and a large value
+    // would overflow the date arithmetic).
+    let expires_at: Option<OffsetDateTime> = match req.expires_in_hours {
+        None => None,
+        Some(h) if (1..=MAX_LINK_HOURS).contains(&h) => {
+            Some(OffsetDateTime::now_utc() + time::Duration::hours(h))
+        }
+        Some(_) => return Err(AppError::bad_request("expiresInHours out of range")),
+    };
 
     let id: Uuid = sqlx::query_scalar(
         r#"INSERT INTO public_shares (share_type, target_id, token,
@@ -100,6 +106,20 @@ pub async fn create_public_share(
     .map_err(|_| AppError::internal("internal error"))?;
 
     Ok((StatusCode::CREATED, Json(json!({"id": id, "token": token}))).into_response())
+}
+
+/// The longest a public link may live: ten years, in hours.
+const MAX_LINK_HOURS: i64 = 10 * 366 * 24;
+
+/// Whether a shared folder is live (not trashed, not gone).
+async fn collection_live(state: &AppState, collection_id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM collections WHERE id = $1 AND deleted_at IS NULL)",
+    )
+    .bind(collection_id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(false)
 }
 
 /// Authenticated public context plus the opaque key envelope. The fragment key
@@ -155,6 +175,10 @@ pub async fn get_public_share(
         if OffsetDateTime::now_utc() > exp {
             return Err(AppError::new(StatusCode::GONE, "link expired"));
         }
+    }
+    // Dark while its folder is in the trash, like the listing and downloads.
+    if share_type != "collection" || !collection_live(&state, target_id).await {
+        return Err(AppError::not_found("not found"));
     }
     Ok(Json(PublicShareResponse {
         id,
@@ -216,14 +240,7 @@ pub async fn list_public_share_files(
         return Err(AppError::bad_request("not a collection share"));
     }
     // A trashed collection's share links go dark until it is restored.
-    let live: Option<i64> =
-        sqlx::query_scalar("SELECT COUNT(*) FROM collections WHERE id = $1 AND deleted_at IS NULL")
-            .bind(target_id)
-            .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten();
-    if live.unwrap_or(0) == 0 {
+    if !collection_live(&state, target_id).await {
         return Err(AppError::not_found("not found"));
     }
 
@@ -310,11 +327,12 @@ pub async fn download_public_share_file(
         return Err(AppError::not_found("not found"));
     };
 
-    if share_type == "collection" && coll_id != target_id {
+    // Folder links are the only kind: anything else grants nothing.
+    if share_type != "collection" || coll_id != target_id {
         return Err(AppError::forbidden("forbidden"));
     }
-    if share_type == "file" && fid != target_id {
-        return Err(AppError::forbidden("forbidden"));
+    if !collection_live(&state, target_id).await {
+        return Err(AppError::not_found("not found"));
     }
 
     // A public link shows the file as it is now, edits included.
