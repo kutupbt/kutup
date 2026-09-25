@@ -24,6 +24,7 @@ mod history_transfer;
 mod identity;
 mod media;
 mod mls;
+mod polls;
 mod profile;
 mod sealed_sender;
 mod security_policy;
@@ -109,6 +110,10 @@ pub use mls::{
     MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519, MLS_GROUP_AUTHORIZATION_POLICY_VERSION,
     MLS_GROUP_CRYPTOGRAPHIC_POLICY_VERSION, MLS_INVITATION_FEEDBACK_VERSION,
     MLS_ORDERING_SERVICE_POLICY_VERSION, MLS_PRIVATE_CONTROL_EXTENSION_TYPE, MLS_PROTOCOL_VERSION,
+};
+pub use polls::{
+    PollBody, PollTerminateBody, PollVoteBody, MAX_POLL_OPTIONS, MAX_POLL_OPTION_CHARS,
+    MAX_POLL_QUESTION_CHARS, MIN_POLL_OPTIONS,
 };
 pub use profile::{
     decode_profile_envelope, encode_profile_envelope_header, ChatProfileResponse,

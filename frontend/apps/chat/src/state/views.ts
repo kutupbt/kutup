@@ -14,6 +14,7 @@ import {
 } from '@kutup/chat-core/reactions'
 import type {
   ChatGroupUpdate,
+  ChatPollV1,
   ChatViewOnceOpenedV1,
   ChatHistoryEntry,
   ContactRecord,
@@ -307,6 +308,68 @@ export interface MessageView {
   groupUpdate: ChatGroupUpdate | null
   /** A view-once photo or video already opened: only "Viewed" is left. */
   viewedOnce: { video: boolean } | null
+  /** A poll and its votes so far. */
+  poll: PollState | null
+  /** A notice: the author ended a poll. */
+  pollEnded: { question: string } | null
+}
+
+export interface PollState {
+  poll: ChatPollV1
+  /** Each voter's current choice (canonical address → option indexes). */
+  votes: Map<string, number[]>
+  /** Ended by its author. */
+  ended: boolean
+}
+
+/**
+ * Polls in `history` with their votes: each voter's latest vote counts
+ * (an empty one takes it back); a vote naming a missing option, or several
+ * in a single-choice poll, is ignored; only the author ends a poll, and
+ * votes after that do not count.
+ */
+export function foldPolls(history: readonly ChatHistoryEntry[], selfAddress: string): Map<string, PollState> {
+  const polls = new Map<string, { entry: ChatHistoryEntry; poll: ChatPollV1; endedAt: number | null }>()
+  for (const message of history) {
+    if (message.content.poll && message.content.messageId) {
+      polls.set(message.content.messageId, { entry: message, poll: message.content.poll, endedAt: null })
+    }
+  }
+  const sameAuthorAndConversation = (message: ChatHistoryEntry, target: ChatHistoryEntry) =>
+    conversationKey(message.conversation) === conversationKey(target.conversation) &&
+    messageActor(message, selfAddress) === messageActor(target, selfAddress)
+  for (const message of history) {
+    const end = message.content.pollTerminate
+    const target = end ? polls.get(end.targetMessageId) : undefined
+    if (target && sameAuthorAndConversation(message, target.entry)) {
+      target.endedAt = Math.min(target.endedAt ?? Infinity, message.timestampMs)
+    }
+  }
+  const latest = new Map<string, Map<string, ChatHistoryEntry>>()
+  for (const message of history) {
+    const vote = message.content.pollVote
+    const target = vote ? polls.get(vote.targetMessageId) : undefined
+    if (!vote || !target || conversationKey(message.conversation) !== conversationKey(target.entry.conversation)) continue
+    if (target.endedAt !== null && message.timestampMs > target.endedAt) continue
+    if (vote.options.some((index) => index >= target.poll.options.length)) continue
+    if (!target.poll.allowMultiple && vote.options.length > 1) continue
+    const voter = messageActor(message, selfAddress)
+    if (!voter) continue
+    const byVoter = latest.get(vote.targetMessageId) ?? new Map<string, ChatHistoryEntry>()
+    const previous = byVoter.get(voter)
+    if (!previous || compareContentOperations(previous, message) < 0) byVoter.set(voter, message)
+    latest.set(vote.targetMessageId, byVoter)
+  }
+  const result = new Map<string, PollState>()
+  for (const [id, { poll, endedAt }] of polls) {
+    const votes = new Map<string, number[]>()
+    for (const [voter, message] of latest.get(id) ?? []) {
+      const options = message.content.pollVote!.options
+      if (options.length > 0) votes.set(voter, options)
+    }
+    result.set(id, { poll, votes, ended: endedAt !== null })
+  }
+  return result
 }
 
 /** A group change notice: only the engine writes these, into group history. */
@@ -336,9 +399,22 @@ export function threadView(
       opened.set(body.messageId, body)
     }
   }
+  const polls = foldPolls(inThread, selfAddress)
+  // "Alice ended the poll": the author's own end, once, as a notice.
+  const endNotices = new Set<ChatHistoryEntry>()
+  const noticed = new Set<string>()
+  for (const message of inThread) {
+    const end = message.content.pollTerminate
+    if (!end || noticed.has(end.targetMessageId) || !polls.get(end.targetMessageId)?.ended) continue
+    const target = inThread.find((m) => m.content.messageId === end.targetMessageId)
+    if (target && messageActor(target, selfAddress) === messageActor(message, selfAddress)) {
+      endNotices.add(message)
+      noticed.add(end.targetMessageId)
+    }
+  }
   const shown = inThread.filter(
     (m) =>
-      (m.content.disappearingTimer || isGroupNotice(m) || isVisibleChatMessage(m, nowMs)) &&
+      (m.content.disappearingTimer || isGroupNotice(m) || endNotices.has(m) || isVisibleChatMessage(m, nowMs)) &&
       !(m.content.messageId && opened.has(m.content.messageId)),
   )
   const byId = new Map(shown.map((m) => [messageIdOf(m), m]))
@@ -362,6 +438,10 @@ export function threadView(
       timerChange: entry.content.disappearingTimer ? { seconds: entry.content.disappearingTimer.durationSeconds } : null,
       groupUpdate: isGroupNotice(entry) ? entry.content.groupUpdate! : null,
       viewedOnce: null,
+      poll: entry.content.poll ? (polls.get(id) ?? null) : null,
+      pollEnded: endNotices.has(entry)
+        ? { question: polls.get(entry.content.pollTerminate!.targetMessageId)!.poll.question }
+        : null,
     }
   })
   if (opened.size === 0) return views
@@ -389,6 +469,8 @@ export function threadView(
       timerChange: null,
       groupUpdate: null,
       viewedOnce: { video: body.video },
+      poll: null,
+      pollEnded: null,
     }
   })
   return [...views, ...placeholders].sort((a, b) => a.entry.timestampMs - b.entry.timestampMs)

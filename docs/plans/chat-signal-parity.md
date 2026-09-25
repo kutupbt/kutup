@@ -41,9 +41,9 @@ Done:
 
 Next, in order:
 
-6. **Message features.** Mentions, link previews (fetched by the sender),
-   view-once media, forwarding, quoting attachments, stickers, profile
-   "about", polls.
+6. **Message features.** Done: mentions, forwarding, profile "about", link
+   previews (fetched by the sender's server), view-once media, polls.
+   Remaining: stickers.
 7. **Invite links.** A join capability carried in the link fragment,
    optional administrator approval.
 8. **Notifications.** In-tab notifications with per-chat and global

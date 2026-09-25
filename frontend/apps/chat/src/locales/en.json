@@ -361,7 +361,8 @@
       "photo": "Photo",
       "video": "Video",
       "voice": "Voice message",
-      "timer": "Disappearing messages changed"
+      "timer": "Disappearing messages changed",
+      "poll": "Poll: {{question}}"
     },
     "time": {
       "now": "now",
@@ -619,6 +620,27 @@
       "sentVideo": "View-once video",
       "viewedPhoto": "Viewed photo",
       "viewedVideo": "Viewed video"
+    },
+    "polls": {
+      "create": "Poll",
+      "newTitle": "New poll",
+      "newDescription": "Everyone in the chat can vote; you can end the poll.",
+      "question": "Question",
+      "options": "Options",
+      "option": "Option {{number}}",
+      "removeOption": "Remove option {{number}}",
+      "addOption": "Add option",
+      "allowMultiple": "Allow more than one answer",
+      "duplicate": "Each option must be different.",
+      "send": "Send poll",
+      "chooseOne": "Choose one",
+      "chooseMany": "Choose one or more",
+      "ended": "Poll ended",
+      "voters_one": "{{count}} vote",
+      "voters_other": "{{count}} votes",
+      "end": "End poll",
+      "endedNotice": "{{name}} ended the poll “{{question}}”",
+      "endedNotice_you": "You ended the poll “{{question}}”"
     }
   },
   "boot": {

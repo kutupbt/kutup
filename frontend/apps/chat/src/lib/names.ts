@@ -59,5 +59,6 @@ export function messagePreview(
     return attachment.filename
   }
   if (entry.content.disappearingTimer) return t('chat.preview.timer')
+  if (entry.content.poll) return t('chat.preview.poll', { question: entry.content.poll.question })
   return t('chat.newerClient')
 }

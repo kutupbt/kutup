@@ -2,7 +2,7 @@ import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import type { ChatReactionEmoji } from '@kutup/chat-core/reactions'
-import type { ChatMessageExtras, ConversationId, SendSummary } from '@kutup/chat-core/types'
+import type { ChatMessageExtras, ChatPollV1, ConversationId, SendSummary } from '@kutup/chat-core/types'
 import { formatBytes } from '@kutup/ui/lib/format'
 import { refreshChat, useChat } from '../../app/chatStore'
 import { chatErrorMessage } from '../../lib/errors'
@@ -103,5 +103,20 @@ export function useConversationActions(conversation: ConversationId, timerSecond
     [run, after, service, capabilities, conversation, timerSeconds, t, i18n.language],
   )
 
-  return { send, edit, remove, deleteForMe, react, setTimer, sendFile }
+  const sendPoll = useCallback(
+    (poll: ChatPollV1) => run(async () => after(await service!.sendPoll(conversation, poll, timerSeconds))),
+    [run, after, service, conversation, timerSeconds],
+  )
+
+  const votePoll = useCallback(
+    (pollId: string, options: number[]) => run(async () => after(await service!.votePoll(conversation, pollId, options))),
+    [run, after, service, conversation],
+  )
+
+  const endPoll = useCallback(
+    (pollId: string) => run(async () => after(await service!.endPoll(conversation, pollId))),
+    [run, after, service, conversation],
+  )
+
+  return { send, edit, remove, deleteForMe, react, setTimer, sendFile, sendPoll, votePoll, endPoll }
 }

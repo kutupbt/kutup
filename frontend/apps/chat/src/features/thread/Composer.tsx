@@ -1,4 +1,4 @@
-import { Camera, Check, Loader2, Mic, Paperclip, Pencil, Reply, SendHorizontal, Square, Trash2, X } from 'lucide-react'
+import { BarChart3, Camera, Check, Loader2, Mic, Paperclip, Pencil, Reply, SendHorizontal, Square, Trash2, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatVoiceNoteElapsed } from '@kutup/chat-core/voice-note'
@@ -41,6 +41,8 @@ export interface ComposerProps {
   members?: readonly MentionCandidate[]
   /** Build previews of links in the text (server offers it, setting on). */
   linkPreviews?: boolean
+  /** Open "New poll". */
+  onCreatePoll?: () => void
   edit: (messageId: string, text: string) => Promise<void>
   /** Absent when files cannot be sent here. */
   sendFile?: (
@@ -398,6 +400,21 @@ export function Composer(props: ComposerProps) {
               <ViewOnceIcon />
             </Button>
           </>
+        ) : null}
+        {props.onCreatePoll && !editing ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-9 shrink-0 rounded-full"
+            disabled={busy}
+            onClick={props.onCreatePoll}
+            aria-label={t('chat.polls.create')}
+            title={t('chat.polls.create')}
+            data-testid="chat-poll-button"
+          >
+            <BarChart3 />
+          </Button>
         ) : null}
         <label className="min-w-0 flex-1">
           <span className="sr-only">{t('chat.composer.label')}</span>

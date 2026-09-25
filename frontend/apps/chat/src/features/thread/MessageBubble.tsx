@@ -167,7 +167,7 @@ export function MessageBubble({
             <p className="italic" data-testid="chat-message-deleted">
               {outgoing ? t('chat.mutations.youDeleted') : t('chat.mutations.deleted')}
             </p>
-          ) : entry.content.attachment || view.viewedOnce ? (
+          ) : entry.content.attachment || view.viewedOnce || view.poll ? (
             attachment
           ) : (
             <>

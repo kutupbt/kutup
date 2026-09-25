@@ -1542,7 +1542,14 @@ impl Session {
         let mut profile_control = false;
         let mut profile_key_updated: Option<String> = None;
         let mut suppressed = false;
-        if let Some(Err(error)) = transcript.as_ref().map(|body| body.content.extras()) {
+        if let Some(Err(error)) = transcript.as_ref().map(|body| {
+            body.content
+                .extras()
+                .and_then(|_| match body.content.poll_content_is_valid() {
+                    Some(false) => Err(format!("invalid Chat {}", body.content.kind)),
+                    _ => Ok(()),
+                })
+        }) {
             self.store.discard();
             return Err(ChatError::Content(error));
         }
@@ -1640,6 +1647,10 @@ impl Session {
                 if let Err(error) = content
                     .disappearing_after_seconds()
                     .and_then(|_| content.extras())
+                    .and_then(|_| match content.poll_content_is_valid() {
+                        Some(false) => Err(format!("invalid Chat {}", content.kind)),
+                        _ => Ok(()),
+                    })
                 {
                     self.store.discard();
                     return Err(ChatError::Content(error));
@@ -3502,6 +3513,12 @@ fn content_targets_any(
         || content
             .as_message_mutation()
             .is_some_and(|mutation| message_ids.contains(&mutation.target_message_id))
+        || content
+            .as_poll_vote()
+            .is_some_and(|vote| message_ids.contains(&vote.target_message_id))
+        || content
+            .as_poll_terminate()
+            .is_some_and(|end| message_ids.contains(&end.target_message_id))
         || content.as_receipt().is_some_and(|receipt| {
             receipt
                 .message_ids

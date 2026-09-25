@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, Info, Loader2, MoreVertical, Timer, Users } from 'lucide-react'
+import { ArrowLeft, BarChart3, Check, Info, Loader2, MoreVertical, Timer, Users } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -33,6 +33,8 @@ import { DROPDOWN_PARTS } from '../list/menuParts'
 import { useListActions } from '../list/useListActions'
 import { AttachmentBody } from '../media/AttachmentBody'
 import { ViewedOnce, ViewOnceBody } from '../media/ViewOnceBody'
+import { NewPollDialog } from '../polls/NewPollDialog'
+import { PollBody } from '../polls/PollBody'
 import { Composer } from './Composer'
 import { DeleteMessageDialog } from './DeleteMessageDialog'
 import { ForwardDialog } from './ForwardDialog'
@@ -65,6 +67,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
   const [timerBusy, setTimerBusy] = useState(false)
   const [deletingChat, setDeletingChat] = useState(false)
   const [forwarding, setForwarding] = useState<MessageView | null>(null)
+  const [newPoll, setNewPoll] = useState(false)
   const linkPreviewsOn = useLinkPreviews()
   const listActions = useListActions()
   const navigate = useNavigate()
@@ -262,6 +265,16 @@ export function ConversationView({ conversation }: { conversation: ConversationI
               </div>
             )
           }
+          if (row.kind === 'notice' && row.view.pollEnded) {
+            return (
+              <p key={row.key} className="mx-auto flex max-w-sm items-center justify-center gap-1.5 px-4 py-2.5 text-center text-xs text-muted-foreground" data-testid="chat-poll-ended">
+                <BarChart3 className="size-4 shrink-0" aria-hidden />
+                {row.view.outgoing
+                  ? t('chat.polls.endedNotice_you', { question: row.view.pollEnded.question })
+                  : t('chat.polls.endedNotice', { name: nameOf(row.view), question: row.view.pollEnded.question })}
+              </p>
+            )
+          }
           if (row.kind === 'notice' && row.view.groupUpdate) {
             return (
               <div key={row.key} className="mx-auto flex max-w-md flex-col items-center gap-0.5 px-4 py-2.5 text-center text-xs text-muted-foreground" data-testid="chat-group-notice">
@@ -302,7 +315,17 @@ export function ConversationView({ conversation }: { conversation: ConversationI
               selfName={chat.snapshot.profile?.displayName}
               onVisible={() => startExpiry(view)}
               attachment={
-                view.viewedOnce ? (
+                view.poll ? (
+                  <PollBody
+                    state={view.poll}
+                    selfAddress={self.address}
+                    outgoing={own}
+                    canVote={writable && !view.mutation?.deleted}
+                    nameOf={(address) => personName(address, profiles, self.address, t)}
+                    onVote={(options) => void actions.votePoll(view.id, options).catch(() => undefined)}
+                    onEnd={own && writable ? () => void actions.endPoll(view.id).catch(() => undefined) : undefined}
+                  />
+                ) : view.viewedOnce ? (
                   <ViewedOnce video={view.viewedOnce.video} />
                 ) : view.entry.content.attachment && view.entry.content.viewOnce ? (
                   <ViewOnceBody
@@ -393,6 +416,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
           send={actions.send}
           members={conversation.kind === 'group' ? members : undefined}
           linkPreviews={linkPreviewsOn && chat.capabilities?.linkPreviews === true}
+          onCreatePoll={model.note ? undefined : () => setNewPoll(true)}
           edit={actions.edit}
           sendFile={
             // Media to another person travels by sealed delivery (its key
@@ -414,6 +438,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
       <DetailsPanel open={details} onClose={() => setDetails(false)} model={model} />
 
       <ForwardDialog view={forwarding} onOpenChange={(open) => !open && setForwarding(null)} />
+      <NewPollDialog open={newPoll} onOpenChange={setNewPoll} send={actions.sendPoll} />
 
       <DeleteMessageDialog
         open={deleting !== null}

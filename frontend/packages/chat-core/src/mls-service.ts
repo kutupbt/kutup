@@ -1154,6 +1154,34 @@ export class MlsConversationService {
     }
   }
 
+  /** A poll, a vote in one, or its end, in this group. */
+  async sendPollContent(
+    conversationId: string,
+    kind: 'poll' | 'pollVote' | 'pollTerminate',
+    body: unknown,
+    expiresAfterSeconds?: number,
+  ): Promise<{ delivered: boolean; deduplicated: boolean; attempts: number }> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const groupId = decodeCanonicalBase64(conversation.request.genesis.mlsGroupId, 16, 255)
+    const sendId = requireBrowserCrypto().randomUUID()
+    const entry = await this.withCryptoLock(() => this.client.createMlsPollContent(
+      sendId,
+      conversationId,
+      String(conversation.request.genesis.incarnation),
+      groupId,
+      new Date().toISOString(),
+      kind,
+      body,
+      String(Date.now()),
+      expiresAfterSeconds,
+    )).catch(cause => { throw new MlsSendError('encryption', cause) })
+    await this.deliverApplicationEntry(entry).catch(cause => {
+      if (cause instanceof MlsSendError) throw cause
+      throw new MlsSendError('envelope_staging', cause)
+    })
+    return { delivered: true, deduplicated: entry.attempts > 0, attempts: Math.max(1, entry.expectedRecipients.length) }
+  }
+
   async sendReaction(
     conversationId: string,
     targetMessageId: string,

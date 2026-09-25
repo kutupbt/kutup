@@ -59,6 +59,12 @@ pub mod kind {
     pub const VIEW_ONCE_OPENED: &str = "viewOnceOpened";
     /// Set/remove one bounded emoji reaction per account on a stable logical message. [IMPL]
     pub const REACTION: &str = "reaction";
+    /// A poll: question and options (visible). [IMPL]
+    pub const POLL: &str = "poll";
+    /// One member's current choice in a poll. [IMPL]
+    pub const POLL_VOTE: &str = "pollVote";
+    /// The poll's author ends it. [IMPL]
+    pub const POLL_TERMINATE: &str = "pollTerminate";
     /// Edit or irreversibly tombstone one stable logical message. [IMPL]
     pub const MESSAGE_MUTATION: &str = "messageMutation";
     /// Attachment descriptor for the immutable encrypted Chat-media object;
@@ -399,7 +405,10 @@ impl ChatContent {
     /// Authenticates one visible message's expiry duration independently of
     /// whatever timer controls arrive before or after it.
     pub fn with_disappearing_after(mut self, seconds: u32) -> Result<Self, String> {
-        if !matches!(self.kind.as_str(), kind::TEXT | kind::ATTACHMENT) {
+        if !matches!(
+            self.kind.as_str(),
+            kind::TEXT | kind::ATTACHMENT | kind::POLL
+        ) {
             return Err("only visible Chat messages may disappear".into());
         }
         validate_disappearing_seconds(seconds)?;
@@ -417,7 +426,10 @@ impl ChatContent {
         let Some(value) = self.extra.get(Self::DISAPPEARING_AFTER_FIELD) else {
             return Ok(None);
         };
-        if !matches!(self.kind.as_str(), kind::TEXT | kind::ATTACHMENT) {
+        if !matches!(
+            self.kind.as_str(),
+            kind::TEXT | kind::ATTACHMENT | kind::POLL
+        ) {
             return Err("only visible Chat messages may carry an expiry".into());
         }
         let seconds = value
@@ -733,6 +745,9 @@ impl ChatContent {
                     | kind::DELETE_FOR_ME
                     | kind::VIEW_ONCE_OPENED
                     | kind::REACTION
+                    | kind::POLL
+                    | kind::POLL_VOTE
+                    | kind::POLL_TERMINATE
                     | kind::MESSAGE_MUTATION
                     | kind::ATTACHMENT
                     | kind::GROUP_CONTROL

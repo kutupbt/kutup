@@ -22,6 +22,8 @@ function view(id: string, at: number, author: string, extra: Partial<MessageView
     timerChange: null,
     groupUpdate: null,
     viewedOnce: null,
+    poll: null,
+    pollEnded: null,
     ...extra,
   }
 }

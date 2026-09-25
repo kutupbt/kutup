@@ -90,6 +90,9 @@ export interface KutupChatContentView {
   deleteForMe?: unknown;
   viewOnceOpened?: unknown;
   groupUpdate?: unknown;
+  poll?: unknown;
+  pollVote?: unknown;
+  pollTerminate?: unknown;
   mentions?: unknown;
   linkPreview?: unknown;
   forwarded?: boolean;
@@ -1934,6 +1937,41 @@ impl WasmChatClient {
         to_output(&entry)
     }
 
+    /// A poll, a vote in one, or its end, in a group.
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = createMlsPollContent)]
+    pub async fn create_mls_poll_content(
+        &self,
+        send_id: String,
+        conversation_id: String,
+        incarnation: String,
+        mls_group_id: Vec<u8>,
+        sent_at: String,
+        kind: String,
+        body: JsValue,
+        created_at_ms: String,
+        expires_after_seconds: Option<u32>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let conversation_id = uuid::Uuid::parse_str(&conversation_id)
+            .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
+        let body: serde_json::Value = from_transport(body).map_err(chat_error)?;
+        let entry = self
+            .mls_client()
+            .create_structured_application_message(
+                &send_id,
+                conversation_id,
+                parse_u64_string("MLS incarnation", &incarnation)?,
+                &mls_group_id,
+                parse_i64_string("MLS message clock", &created_at_ms)?,
+                |seq| {
+                    build_poll_content(&kind, &send_id, &sent_at, seq, &body, expires_after_seconds)
+                },
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&entry)
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = createMlsReactionMessage)]
     pub async fn create_mls_reaction_message(
@@ -2402,6 +2440,37 @@ impl WasmChatClient {
                 .with_disappearing_after(seconds)
                 .map_err(|error| js_error(&error))?;
         }
+        let summary = self
+            .engine
+            .send(&send_id, &peer, &content, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&SendSummaryView::from(summary))
+    }
+
+    /// A poll, a vote in one, or its end (`kind` = `poll` | `pollVote` |
+    /// `pollTerminate`), in a Direct chat or Note to Self.
+    #[wasm_bindgen(js_name = sendPollContent)]
+    pub async fn send_poll_content(
+        &mut self,
+        send_id: String,
+        peer: String,
+        sent_at: String,
+        kind: String,
+        body: JsValue,
+        expires_after_seconds: Option<u32>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let body: serde_json::Value = from_transport(body).map_err(chat_error)?;
+        let mut rng = OsRng.unwrap_err();
+        let seq = self
+            .engine
+            .session()
+            .next_sent_seq()
+            .await
+            .map_err(chat_error)?;
+        let content =
+            build_poll_content(&kind, &send_id, &sent_at, seq, &body, expires_after_seconds)
+                .map_err(|error| js_error(&error))?;
         let summary = self
             .engine
             .send(&send_id, &peer, &content, &mut rng)
@@ -3163,6 +3232,12 @@ struct ContentView {
     view_once_opened: Option<kutup_chat_proto::ViewOnceOpenedBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     group_update: Option<kutup_chat_proto::GroupUpdateBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    poll: Option<kutup_chat_proto::PollBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    poll_vote: Option<kutup_chat_proto::PollVoteBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    poll_terminate: Option<kutup_chat_proto::PollTerminateBody>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     mentions: Vec<kutup_chat_proto::MentionV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3192,6 +3267,9 @@ impl From<ChatContent> for ContentView {
         let view_once_opened = content.as_view_once_opened();
         let group_update = content.as_group_update();
         let extras = content.extras().unwrap_or_default();
+        let poll = content.as_poll();
+        let poll_vote = content.as_poll_vote();
+        let poll_terminate = content.as_poll_terminate();
         let expires_after_seconds = content.disappearing_after_seconds().ok().flatten();
         Self {
             version: content.v,
@@ -3213,6 +3291,9 @@ impl From<ChatContent> for ContentView {
             delete_for_me,
             view_once_opened,
             group_update,
+            poll,
+            poll_vote,
+            poll_terminate,
             mentions: extras.mentions,
             link_preview: extras.link_preview,
             forwarded: extras.forwarded,
@@ -3462,6 +3543,46 @@ fn parse_i64_string(label: &str, value: &str) -> std::result::Result<i64, JsValu
         )));
     }
     Ok(parsed)
+}
+
+/// Builds poll content from its JSON body by kind; only a poll itself may
+/// disappear.
+fn build_poll_content(
+    kind: &str,
+    send_id: &str,
+    sent_at: &str,
+    seq: u64,
+    body: &serde_json::Value,
+    expires_after_seconds: Option<u32>,
+) -> std::result::Result<ChatContent, String> {
+    let decode = |what: &str| format!("Chat {what} body is malformed");
+    let content = match kind {
+        kutup_chat_proto::content::kind::POLL => ChatContent::poll_with_id(
+            send_id,
+            sent_at,
+            seq,
+            &serde_json::from_value(body.clone()).map_err(|_| decode("poll"))?,
+        )?,
+        kutup_chat_proto::content::kind::POLL_VOTE => ChatContent::poll_vote_with_id(
+            send_id,
+            sent_at,
+            seq,
+            &serde_json::from_value(body.clone()).map_err(|_| decode("poll vote"))?,
+        )?,
+        kutup_chat_proto::content::kind::POLL_TERMINATE => ChatContent::poll_terminate_with_id(
+            send_id,
+            sent_at,
+            seq,
+            &serde_json::from_value(body.clone()).map_err(|_| decode("poll end"))?,
+        )?,
+        _ => return Err("unknown Chat poll content".into()),
+    };
+    match expires_after_seconds {
+        Some(seconds) if kind == kutup_chat_proto::content::kind::POLL => {
+            content.with_disappearing_after(seconds)
+        }
+        _ => Ok(content),
+    }
 }
 
 /// Optional extras of a visible message; absent means none.

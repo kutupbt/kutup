@@ -15,6 +15,7 @@ import type {
   ChatTypingEvent,
   ChatAccountControl,
   ChatMessageExtras,
+  ChatPollV1,
   ChatViewOnceOpenedV1,
   ChatConversationStateV1,
   PeerChatProfile,
@@ -500,6 +501,42 @@ export class ChatService {
         expiresAfterSeconds,
         ...(extras ? [extras] : []),
       ),
+    )
+    this.notifyPeers()
+    return summary
+  }
+
+  /** A new poll (with the chat's disappearing timer). */
+  sendPoll(conversation: ConversationId, poll: ChatPollV1, expiresAfterSeconds?: number): Promise<SendSummary> {
+    return this.sendPollContent(conversation, 'poll', poll, expiresAfterSeconds)
+  }
+
+  /** This account's choice in a poll; an empty list takes the vote back. */
+  votePoll(conversation: ConversationId, targetMessageId: string, options: number[]): Promise<SendSummary> {
+    return this.sendPollContent(conversation, 'pollVote', { targetMessageId, options: [...options].sort((a, b) => a - b) })
+  }
+
+  /** End a poll this account made. */
+  endPoll(conversation: ConversationId, targetMessageId: string): Promise<SendSummary> {
+    return this.sendPollContent(conversation, 'pollTerminate', { targetMessageId })
+  }
+
+  private async sendPollContent(
+    conversation: ConversationId,
+    kind: 'poll' | 'pollVote' | 'pollTerminate',
+    body: unknown,
+    expiresAfterSeconds?: number,
+  ): Promise<SendSummary> {
+    if (conversation.kind === 'group') {
+      const summary = await this.withMlsWorkflow(() =>
+        this.requireMls().sendPollContent(conversation.groupId, kind, body, expiresAfterSeconds),
+      )
+      this.notifyPeers()
+      return { ...summary, safetyNumberChanges: [] }
+    }
+    const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
+    const summary = await this.withLock(() =>
+      this.client.sendPollContent(crypto.randomUUID(), peer, new Date().toISOString(), kind, body, expiresAfterSeconds),
     )
     this.notifyPeers()
     return summary

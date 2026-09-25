@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatContentView, ChatHistoryEntry, ContactRecord, ConversationId } from '@kutup/chat-core/types'
-import { conversationList, foldMutations, foldReceipts, messageRequests, threadView, unreadCounts, type ChatData } from './views'
+import { conversationList, foldMutations, foldPolls, foldReceipts, messageRequests, threadView, unreadCounts, type ChatData } from './views'
 
 const SELF = 'me@a.test'
 const bob: ConversationId = { kind: 'direct', address: { username: 'bob', server: 'a.test' } }
@@ -137,3 +137,35 @@ describe('unreadCounts', () => {
     expect(unreadCounts(history, {}, 100).get('direct:bob@a.test')).toBe(2)
   })
 })
+
+describe('foldPolls', () => {
+  const poll = { question: 'Lunch?', options: ['Pizza', 'Kebab', 'Sushi'] }
+  it("counts each voter's latest valid vote until the author ends it", () => {
+    const history = [
+      entry(group, 'outgoing', 10, { kind: 'poll', messageId: 'p1', poll }),
+      entry(group, 'incoming', 20, { kind: 'pollVote', seq: '1', pollVote: { targetMessageId: 'p1', options: [0] } }, 'bob@a.test'),
+      entry(group, 'incoming', 30, { kind: 'pollVote', seq: '2', pollVote: { targetMessageId: 'p1', options: [2] } }, 'bob@a.test'),
+      // Two answers in a single-choice poll, or a missing option: ignored.
+      entry(group, 'incoming', 31, { kind: 'pollVote', pollVote: { targetMessageId: 'p1', options: [0, 1] } }, 'carol@b.test'),
+      entry(group, 'incoming', 32, { kind: 'pollVote', pollVote: { targetMessageId: 'p1', options: [7] } }, 'dan@a.test'),
+      entry(group, 'outgoing', 40, { kind: 'pollVote', pollVote: { targetMessageId: 'p1', options: [2] } }),
+      // Someone else cannot end it; its author can.
+      entry(group, 'incoming', 45, { kind: 'pollTerminate', pollTerminate: { targetMessageId: 'p1' } }, 'bob@a.test'),
+      entry(group, 'outgoing', 50, { kind: 'pollTerminate', pollTerminate: { targetMessageId: 'p1' } }),
+      entry(group, 'incoming', 60, { kind: 'pollVote', seq: '3', pollVote: { targetMessageId: 'p1', options: [1] } }, 'bob@a.test'),
+    ]
+    const state = foldPolls(history, SELF).get('p1')!
+    expect(state.ended).toBe(true)
+    expect(Object.fromEntries(state.votes)).toEqual({ 'bob@a.test': [2], [SELF]: [2] })
+  })
+
+  it('takes a vote back with an empty choice', () => {
+    const history = [
+      entry(group, 'outgoing', 10, { kind: 'poll', messageId: 'p2', poll: { ...poll, allowMultiple: true } }),
+      entry(group, 'incoming', 20, { kind: 'pollVote', seq: '1', pollVote: { targetMessageId: 'p2', options: [0, 1] } }, 'bob@a.test'),
+      entry(group, 'incoming', 30, { kind: 'pollVote', seq: '2', pollVote: { targetMessageId: 'p2', options: [] } }, 'bob@a.test'),
+    ]
+    expect(foldPolls(history, SELF).get('p2')!.votes.size).toBe(0)
+  })
+})
+

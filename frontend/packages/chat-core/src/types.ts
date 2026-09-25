@@ -19,6 +19,9 @@ export interface ChatContentView {
   readPosition?: ChatReadPositionV1
   deleteForMe?: ChatDeleteForMeV1
   viewOnceOpened?: ChatViewOnceOpenedV1
+  poll?: ChatPollV1
+  pollVote?: ChatPollVoteV1
+  pollTerminate?: { targetMessageId: string }
   /** A group change, written by this device's engine from an applied Commit. */
   groupUpdate?: ChatGroupUpdate
   mentions?: ChatMentionV1[]
@@ -99,6 +102,21 @@ export interface ChatGroupUpdate {
   actor: string
   changes: ChatGroupUpdateChange[]
 }
+
+/** A poll: 2–10 distinct options of up to 100 characters, a question of up to 200. */
+export interface ChatPollV1 {
+  question: string
+  options: string[]
+  allowMultiple?: boolean
+}
+
+/** A member's current choice (ascending option indexes; empty takes it back). */
+export interface ChatPollVoteV1 {
+  targetMessageId: string
+  options: number[]
+}
+
+export const POLL_LIMITS = { question: 200, option: 100, minOptions: 2, maxOptions: 10 } as const
 
 /** A view-once photo or video was opened on one of this account's devices. */
 export interface ChatViewOnceOpenedV1 {
@@ -1352,6 +1370,17 @@ export interface WasmChatClientHandle {
     expiresAfterSeconds?: number,
     extras?: ChatMessageExtras | null,
   ): Promise<MlsOutboxEntry>
+  createMlsPollContent(
+    sendId: string,
+    conversationId: string,
+    incarnation: string,
+    mlsGroupId: Uint8Array,
+    sentAt: string,
+    kind: 'poll' | 'pollVote' | 'pollTerminate',
+    body: unknown,
+    createdAtMs: string,
+    expiresAfterSeconds?: number,
+  ): Promise<MlsOutboxEntry>
   createMlsDisappearingTimer(
     sendId: string,
     conversationId: string,
@@ -1502,6 +1531,14 @@ export interface WasmChatClientHandle {
     descriptor: ChatAttachmentDescriptorV1,
     expiresAfterSeconds?: number,
     extras?: ChatMessageExtras | null,
+  ): Promise<SendSummary>
+  sendPollContent(
+    sendId: string,
+    peer: string,
+    sentAt: string,
+    kind: 'poll' | 'pollVote' | 'pollTerminate',
+    body: unknown,
+    expiresAfterSeconds?: number,
   ): Promise<SendSummary>
   sendReaction(
     sendId: string,

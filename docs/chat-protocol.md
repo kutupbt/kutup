@@ -314,6 +314,23 @@ receive path (Direct, sync transcript, MLS):
 | `forwarded` | text, attachment | `true` or absent. A forwarded attachment is a new upload, since the original is on its sender's server. |
 | `viewOnce` | photo or video attachment | `true` or absent. Sent without a thumbnail; never enters the backup; the recipient opens it once, and closing the viewer sends `viewOnceOpened` to their own devices. Like Signal's, this is a courtesy against casual re-viewing, not protection from a screenshot or a modified client. |
 
+### Polls
+
+Three content kinds, in Direct chats and groups alike:
+
+- `poll` (visible): `{question, options, allowMultiple?}`, a question of
+  1–200 and 2–10 distinct options of 1–100 characters, on one line each. It
+  may carry `expiresAfterSeconds` like a text.
+- `pollVote`: `{targetMessageId, options}`, the voter's current choice as
+  ascending distinct indexes; empty takes the vote back. Each voter's latest
+  vote (sender order) counts; a vote naming a missing option, or several in
+  a single-choice poll, is ignored.
+- `pollTerminate`: `{targetMessageId}`; only the poll's author ends it, and
+  votes after that do not count. It shows as "Alice ended the poll".
+
+A receiver refuses a poll-kind message whose body does not validate; votes
+and ends are purged with their poll.
+
 ### Account state across devices
 
 Signal keeps pinned, archived and muted chats in a storage service and syncs

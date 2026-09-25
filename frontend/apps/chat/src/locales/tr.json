@@ -361,7 +361,8 @@
       "photo": "Fotoğraf",
       "video": "Video",
       "voice": "Sesli mesaj",
-      "timer": "Kaybolan mesajlar değişti"
+      "timer": "Kaybolan mesajlar değişti",
+      "poll": "Anket: {{question}}"
     },
     "time": {
       "now": "şimdi",
@@ -619,6 +620,27 @@
       "sentVideo": "Bir kez görüntülenecek video",
       "viewedPhoto": "Görüntülenen fotoğraf",
       "viewedVideo": "Görüntülenen video"
+    },
+    "polls": {
+      "create": "Anket",
+      "newTitle": "Yeni anket",
+      "newDescription": "Sohbetteki herkes oy verebilir; anketi siz bitirebilirsiniz.",
+      "question": "Soru",
+      "options": "Seçenekler",
+      "option": "Seçenek {{number}}",
+      "removeOption": "{{number}}. seçeneği kaldır",
+      "addOption": "Seçenek ekle",
+      "allowMultiple": "Birden fazla yanıta izin ver",
+      "duplicate": "Her seçenek farklı olmalı.",
+      "send": "Anketi gönder",
+      "chooseOne": "Birini seçin",
+      "chooseMany": "Bir veya daha fazlasını seçin",
+      "ended": "Anket bitti",
+      "voters_one": "{{count}} oy",
+      "voters_other": "{{count}} oy",
+      "end": "Anketi bitir",
+      "endedNotice": "{{name}} “{{question}}” anketini bitirdi",
+      "endedNotice_you": "“{{question}}” anketini bitirdiniz"
     }
   },
   "boot": {
