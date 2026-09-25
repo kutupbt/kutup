@@ -75,6 +75,9 @@ type TypingListener = (event: ChatTypingEvent) => void
  * `connecting` covers both the first connection and reconnecting after a
  * drop; `offline` is the browser saying it has no network.
  */
+/** How often a tab checks for newly linked devices to add to its groups. */
+const LINKED_DEVICE_CHECK_MS = 2 * 60_000
+
 export type ChatConnectionStatus = 'connected' | 'connecting' | 'offline'
 
 /** The protocol's limit on messages per delete-for-me control. */
@@ -141,6 +144,7 @@ export class ChatService {
   private readonly mls: MlsConversationService | null
   private readonly invites: InviteLinkService | null
   private inviteTimer: ReturnType<typeof setInterval> | null = null
+  private linkedDeviceTimer: ReturnType<typeof setInterval> | null = null
   private backup: ChatBackupCoordinator | null = null
   private backupUnsubscribe: (() => void) | null = null
 
@@ -263,6 +267,7 @@ export class ChatService {
       void service.maintainPrekeys()
       void service.connectSocket()
       service.startInviteLinks()
+      service.startLinkedDeviceChecks()
       return service
     } catch (error) {
       service.dispose()
@@ -1234,6 +1239,19 @@ export class ChatService {
     this.notifyPeers()
   }
 
+  /**
+   * Bring this account's newly linked devices into its groups without
+   * waiting for this tab to be reopened (the manifest check is one request).
+   */
+  private startLinkedDeviceChecks(): void {
+    if (!this.mls || this.linkedDeviceTimer) return
+    this.linkedDeviceTimer = setInterval(() => {
+      if (this.disposed) return
+      void this.initializeMls().catch((error: unknown) =>
+        console.warn('chat: linked device check failed', error))
+    }, LINKED_DEVICE_CHECK_MS)
+  }
+
   private startInviteLinks(): void {
     if (!this.invites || this.inviteTimer) return
     void this.reconcileInviteLinks()
@@ -1335,6 +1353,7 @@ export class ChatService {
     this.disposed = true
     if (this.socketRetry) clearTimeout(this.socketRetry)
     if (this.inviteTimer) clearInterval(this.inviteTimer)
+    if (this.linkedDeviceTimer) clearInterval(this.linkedDeviceTimer)
     this.stopHeartbeat()
     this.socket?.close()
     window.removeEventListener('online', this.handleOnline)

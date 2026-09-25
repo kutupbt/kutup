@@ -72,6 +72,7 @@ export class GroupCallController {
   private keyTimer: ReturnType<typeof setInterval> | null = null
   private clearTimer: ReturnType<typeof setTimeout> | null = null
   private releaseInCall: (() => void) | null = null
+  /** SFU tag prefix → member address, for the roster as last seen. */
   private tags = new Map<string, string>()
 
   constructor(
@@ -214,10 +215,23 @@ export class GroupCallController {
     if (epoch === this.keyEpoch) return
     this.keyEpoch = epoch
     await keys.setEpochKey(key, epoch)
+    console.debug('chat: group call key for epoch', epoch)
+    if (state.phase !== 'active') return
     // New members since the call began can be named too.
-    if (state.phase === 'active') {
-      this.tags = await memberTags(await hmacKey(state.call.secret), this.roster(state.groupId))
-      this.refreshParticipants()
+    const roster = this.roster(state.groupId)
+    const known = new Set(this.tags.values())
+    const added = roster.some((address) => !known.has(address))
+    this.tags = await memberTags(await hmacKey(state.call.secret), roster)
+    this.refreshParticipants()
+    // They never saw the start: one participant (the lowest identity)
+    // tells the group again, so they can join.
+    const room = this.room
+    if (added && room) {
+      const identities = [room.localParticipant.identity, ...room.remoteParticipants.keys()].sort()
+      if (identities[0] === room.localParticipant.identity) {
+        await this.service.sendGroupCall(state.groupId, state.call).catch((error: unknown) =>
+          console.warn('chat: could not announce the call to new members', error))
+      }
     }
   }
 

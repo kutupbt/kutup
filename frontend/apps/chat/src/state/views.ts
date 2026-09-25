@@ -420,10 +420,20 @@ export function threadView(
       noticed.add(end.targetMessageId)
     }
   }
+  // A call re-announced to new members shows once, where it started.
+  const announced = new Set<string>()
+  const repeatedStart = (m: ChatHistoryEntry) => {
+    const call = m.content.groupCall
+    if (call?.event !== 'started') return false
+    if (announced.has(call.callId)) return true
+    announced.add(call.callId)
+    return false
+  }
   const shown = inThread.filter(
     (m) =>
       (m.content.disappearingTimer || isGroupNotice(m) || m.content.callLog || m.content.groupCall?.event === 'started' || endNotices.has(m) || isVisibleChatMessage(m, nowMs)) &&
-      !(m.content.messageId && opened.has(m.content.messageId)),
+      !(m.content.messageId && opened.has(m.content.messageId)) &&
+      !repeatedStart(m),
   )
   const byId = new Map(shown.map((m) => [messageIdOf(m), m]))
   const mutations = foldMutations(inThread, selfAddress)

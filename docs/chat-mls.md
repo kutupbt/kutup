@@ -525,7 +525,9 @@ OpenMLS provider snapshot, group secret, or leaf private key into a newly
 linked installation. The new installation independently creates its MLS
 credential and KeyPackage, publishes their binding in the next signed device
 manifest, and waits for an already-enrolled device to author one ordered
-`DeviceSync` transition.
+`DeviceSync` transition. An enrolled browser checks the signed manifest when it opens,
+reconnects or regains focus, and every two minutes while open, so a new
+device joins the account's groups within minutes.
 
 `DeviceSync` is a typed membership action that may be initiated by any active
 member only for that member's own canonical account. Its private transition

@@ -22,6 +22,7 @@ use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
 use rand::RngCore;
 use reqwest::blocking::{Client, Response};
+use reqwest::StatusCode;
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
@@ -2285,6 +2286,153 @@ fn browser_setup_phase(c: &Client, a: &str, b: &str) {
     update_federation_mode(c, b, &admin_b, "open");
 }
 
+/// Group call tokens and group invite links across servers: an account of B
+/// reaches a call and a link mailbox hosted on A through its own server.
+fn calls_phase(c: &Client, a: &str, b: &str) {
+    let admin_a = setup_admin(c, a, ADMIN_A_EMAIL, "admina");
+    let admin_b = setup_admin(c, b, ADMIN_B_EMAIL, "adminb");
+    update_federation_mode(c, a, &admin_a, "open");
+    update_federation_mode(c, b, &admin_b, "open");
+    update_feature_mode(c, a, &admin_a, "chat", "open");
+    update_feature_mode(c, b, &admin_b, "chat", "open");
+    let settings_a = json_response(
+        c.get(format!("{a}/api/auth/settings")).send().unwrap(),
+        "A settings",
+    );
+    let settings_b = json_response(
+        c.get(format!("{b}/api/auth/settings")).send().unwrap(),
+        "B settings",
+    );
+    assert_eq!(
+        settings_a["chat"]["groupCalls"], true,
+        "A hosts group calls"
+    );
+    assert_eq!(settings_b["chat"]["groupCalls"], false, "B has no SFU");
+    let (cara, _) = register_account(c, a, "calls-cara@example.test", "callscara");
+    let (dora, _) = register_account(c, b, "calls-dora@example.test", "callsdora");
+
+    // A call hosted on A, joined by an account of B: B forwards, A mints.
+    let room = "0123456789abcdef0123456789abcdef";
+    let tag = "fedcba9876543210fedcba9876543210";
+    let token_request = |base: &str, token: &str, host: &str, room: &str| {
+        c.post(format!("{base}/api/chat/group-calls/token"))
+            .bearer_auth(token)
+            .json(&json!({"host": host, "roomId": room, "participantId": tag}))
+            .send()
+            .unwrap()
+    };
+    let answer = json_response(
+        token_request(b, &dora, "a.test", room),
+        "federated call token",
+    );
+    assert_eq!(answer["url"], "ws://sfu.a.test");
+    let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+    validation.required_spec_claims.clear();
+    let claims = jsonwebtoken::decode::<Value>(
+        answer["token"].as_str().unwrap(),
+        &jsonwebtoken::DecodingKey::from_secret(b"federation-sfu-secret-at-least-32-characters"),
+        &validation,
+    )
+    .unwrap()
+    .claims;
+    assert_eq!(claims["iss"], "federation-sfu-key");
+    assert_eq!(claims["sub"], tag);
+    assert_eq!(claims["video"]["room"], room);
+    assert_eq!(claims["video"]["roomJoin"], true);
+    // The host's own account gets one directly.
+    assert_eq!(
+        json_response(token_request(a, &cara, "a.test", room), "local call token")["url"],
+        "ws://sfu.a.test"
+    );
+    // B hosts no calls, whoever asks; a malformed room is refused.
+    assert_eq!(
+        token_request(b, &dora, "b.test", room).status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        token_request(a, &cara, "b.test", room).status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        token_request(b, &dora, "a.test", "NOT-A-ROOM").status(),
+        StatusCode::BAD_REQUEST
+    );
+    println!("GROUP CALL TOKENS ACROSS SERVERS VERIFIED");
+
+    // A group link hosted on A, used from B.
+    let token32 = |byte: u8| b64(&[byte; 32]);
+    let link_id = token32(11);
+    let manage = token32(12);
+    let sealed = |byte: u8, len: usize| b64(&vec![byte; len]);
+    let call = |base: &str, token: &str, operation: Value| {
+        c.post(format!("{base}/api/chat/invite-links"))
+            .bearer_auth(token)
+            .json(&json!({"host": "a.test", "operation": operation}))
+            .send()
+            .unwrap()
+    };
+    json_response(
+        call(
+            a,
+            &cara,
+            json!({"op": "put", "linkId": link_id, "manageToken": manage, "preview": sealed(1, 4136)}),
+        ),
+        "put link mailbox on A",
+    );
+    let preview = json_response(
+        call(b, &dora, json!({"op": "preview", "linkId": link_id})),
+        "preview through B",
+    );
+    assert_eq!(preview["preview"], sealed(1, 4136));
+    let requested = json_response(
+        call(
+            b,
+            &dora,
+            json!({"op": "request", "linkId": link_id, "request": sealed(2, 296), "statusToken": token32(13)}),
+        ),
+        "request through B",
+    );
+    let request_id = requested["requestId"].as_str().unwrap().to_owned();
+    let requests = json_response(
+        call(
+            a,
+            &cara,
+            json!({"op": "requests", "linkId": link_id, "manageToken": manage}),
+        ),
+        "requests on A",
+    );
+    assert_eq!(requests["requests"][0]["originDomain"], "b.test");
+    assert_eq!(requests["requests"][0]["requestId"], request_id);
+    // A wrong manage token reads nothing.
+    assert_eq!(
+        call(
+            b,
+            &dora,
+            json!({"op": "requests", "linkId": link_id, "manageToken": token32(99)})
+        )
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    json_response(
+        call(
+            a,
+            &cara,
+            json!({"op": "decide", "linkId": link_id, "manageToken": manage, "requestId": request_id, "approve": true}),
+        ),
+        "approve on A",
+    );
+    let status = json_response(
+        call(
+            b,
+            &dora,
+            json!({"op": "status", "linkId": link_id, "requestId": request_id, "statusToken": token32(13)}),
+        ),
+        "status through B",
+    );
+    assert_eq!(status["status"], "approved");
+    println!("GROUP LINKS ACROSS SERVERS VERIFIED");
+}
+
 fn queue_phase(c: &Client, a: &str) {
     let alice_token = login(c, a, ALICE_EMAIL);
     let response = send(
@@ -2420,6 +2568,7 @@ fn chat_federation_live() {
         "browser-setup" => browser_setup_phase(&c, &a, &b),
         "queue" => queue_phase(&c, &a),
         "verify-retry" => verify_retry_phase(&c, &a, &b),
+        "calls" => calls_phase(&c, &a, &b),
         _ => panic!("unknown KUTUP_FEDERATION_PHASE: {phase}"),
     }
 }

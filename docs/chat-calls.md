@@ -131,6 +131,16 @@ hours. `groupCall` is refused as Direct content.
 - Members compute the tags of the group's roster to name the tiles. The SFU
   cannot, without the secret.
 
+**Ringing:** in groups of up to 16 members, a start less than 45 s old rings
+the other members, with Join, Join with video and Decline, a ringtone, and
+a notification when the tab is hidden. One tab per account rings (the call
+desk). Larger groups only show the notice, as in Signal.
+
+**Members added during a call:** they never received the start. When a
+participant's key refresh finds new members in the roster, the participant
+with the lowest SFU identity (exactly one) re-sends the same `started`
+message. The timeline shows each call's start once.
+
 **Group calls in the timeline:** the start notice, and the list preview
 ("Group call started" / "Group call ended").
 

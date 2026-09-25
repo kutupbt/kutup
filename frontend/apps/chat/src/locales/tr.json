@@ -834,7 +834,8 @@
       "inCall_one": "Aramada {{count}} kişi",
       "inCall_other": "Aramada {{count}} kişi",
       "groupScreen": "{{name}} grup araması",
-      "leave": "Aramadan ayrıl"
+      "leave": "Aramadan ayrıl",
+      "groupRinging": "{{name}} grubu arıyor"
     }
   },
   "boot": {

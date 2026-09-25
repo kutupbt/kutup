@@ -14,6 +14,7 @@ import { getAlwaysRelayCalls, getNotifications } from '../../state/prefs'
 import { CallController, type CallState } from './callController'
 import { callController, setCallController, setGroupCallController, useCall } from './callStore'
 import { GroupCallController } from './groupCallController'
+import { GroupCallRinger } from './GroupCallRinger'
 import { GroupCallScreen } from './GroupCallScreen'
 
 /**
@@ -41,6 +42,7 @@ export function CallHost() {
     <>
       {call ? <CallScreen call={call} /> : null}
       <GroupCallScreen />
+      <GroupCallRinger />
     </>
   )
 }

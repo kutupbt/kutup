@@ -107,6 +107,10 @@ services:
       S3_REGION: us-east-1
       APP_ENV: test
       SERVER_URL: http://a.test
+      # Group calls hosted on A (no SFU runs: the live test checks tokens).
+      CHAT_SFU_URL: ws://sfu.a.test
+      CHAT_SFU_API_KEY: federation-sfu-key
+      CHAT_SFU_API_SECRET: federation-sfu-secret-at-least-32-characters
       ALLOWED_ORIGINS: http://127.0.0.1:39081
       ADMIN_ACCOUNT: federation-admin-a@example.test:admina:federation-admin-temp
       SEAWEEDFS_MASTER_URL: ""

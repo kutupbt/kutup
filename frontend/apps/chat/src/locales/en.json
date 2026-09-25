@@ -834,7 +834,8 @@
       "inCall_one": "{{count}} in the call",
       "inCall_other": "{{count}} in the call",
       "groupScreen": "Group call in {{name}}",
-      "leave": "Leave call"
+      "leave": "Leave call",
+      "groupRinging": "{{name}} is calling the group"
     }
   },
   "boot": {

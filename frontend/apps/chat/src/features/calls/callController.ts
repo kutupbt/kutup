@@ -100,6 +100,11 @@ export class CallController {
     return this.state
   }
 
+  /** This tab rings for incoming calls (one tab per account does). */
+  get ringsHere(): boolean {
+    return this.isDesk
+  }
+
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
