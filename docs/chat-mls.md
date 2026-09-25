@@ -142,7 +142,10 @@ Every incarnation begins with two canonical, sequence-one policies carried
 only in the mandatory MLS GroupContext extension:
 
 - `MlsGroupAuthorizationPolicyV1` selects whether all members or only
-  administrators may send user-visible application messages.
+  administrators may send user-visible application messages, and whether all
+  members or only administrators may change the group information
+  (`groupInfoEditors`; omitted while it is the default, administrators, so
+  earlier policies keep their canonical bytes).
 - `MlsGroupCryptographicPolicyV1` fixes suite `0x0003`, private-control
   extension `0xff4b`, anonymous delivery, 1024-byte padding, two retained past
   epochs, and a maximum canonical user-application plaintext size. Typed MLS
@@ -158,7 +161,8 @@ only the action class, ciphertext digest, delivery commitment, and
 pseudonymous owner certificate.
 
 V1 authorization policy may switch between all-member and
-administrator-only sending. Group-control approval messages remain permitted
+administrator-only sending or group-information editing; a change must alter
+at least one of them. Group-control approval messages remain permitted
 so governance cannot deadlock. The shared Rust engine enforces the sender role
 on encryption and after authenticating an inbound MLS sender leaf. The
 cryptographic policy may only lower the user-application plaintext maximum
@@ -173,6 +177,25 @@ the exact pending operation. Public history replay counts each typed policy
 action and requires the private policy sequences to match, while recipients
 independently verify that only the selected policy changed and that a
 cryptographic change tightened the previous pin.
+
+### Group information
+
+The group's name (1–32 characters, no surrounding spaces), optional
+description (≤ 480 characters) and optional picture (JPEG, PNG or WebP,
+≤ 48 KiB; clients re-encode to 256×256 WebP) live in `groupInfo` of the
+private control state, as Signal keeps them in its encrypted group state. It
+may be set at genesis (sequence one) and is otherwise changed only by a
+`GroupInfoChange` (action 11): one unchanged-roster Commit that carries the
+next information with the next sequence and must change its content. Every
+other action must leave it byte-for-byte unchanged, and recovery carries it
+into the new incarnation with its sequence reset to one.
+
+Administrators may always send it; members may when the authorization policy
+says so. Because the policy is private, the ordering server accepts action 11
+from any active member and every member's engine enforces the role when it
+applies the ordered Commit (the sender leaf is authenticated first). Ordering
+authorities see that a group-information change happened, when, and from
+which pseudonymous proposer, never its content.
 
 ### Conversation closure
 

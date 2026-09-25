@@ -51,6 +51,7 @@ impl MlsClient {
             MlsControlActionTypeV1::MembershipChange
                 | MlsControlActionTypeV1::RoutineAdmin
                 | MlsControlActionTypeV1::DeviceSync
+                | MlsControlActionTypeV1::GroupInfoChange
                 | MlsControlActionTypeV1::AuthoritySetChange
                 | MlsControlActionTypeV1::OwnerSetChange
                 | MlsControlActionTypeV1::AuthorizationPolicyChange
@@ -269,6 +270,10 @@ impl MlsClient {
                 .as_deref()
                 .is_some_and(|owner_id| conversation.current_owner_set.owner(owner_id).is_some()),
             MlsControlActionTypeV1::DeviceSync => true,
+            // The group's own (private) policy decides; the server cannot.
+            MlsControlActionTypeV1::GroupInfoChange => conversation
+                .current_authorization_policy
+                .may_edit_group_info(sender_member.is_admin),
             _ => sender_member.is_admin,
         };
         if !sender_authorized {
@@ -330,10 +335,9 @@ impl MlsClient {
                         .sequence
                         .checked_add(1)
                         == Some(private_control.authorization_policy.sequence)
-                    && private_control.authorization_policy.application_senders
-                        != conversation
-                            .current_authorization_policy
-                            .application_senders => {}
+                    && !private_control
+                        .authorization_policy
+                        .same_rules(&conversation.current_authorization_policy) => {}
             MlsControlActionTypeV1::CryptographicPolicyChange
                 if private_control.authorization_policy
                     == conversation.current_authorization_policy
@@ -361,6 +365,33 @@ impl MlsClient {
             {
                 return Err(ChatError::Trust(
                     "unrelated MLS control action changed private policy".into(),
+                ))
+            }
+            _ => {}
+        }
+        match block.proposal.action_type {
+            MlsControlActionTypeV1::GroupInfoChange => {
+                let next = private_control.group_info.as_ref().ok_or_else(|| {
+                    ChatError::Trust("MLS group information change removed the information".into())
+                })?;
+                let expected_sequence = conversation
+                    .current_group_info
+                    .as_ref()
+                    .map_or(1, |current| current.sequence.saturating_add(1));
+                if next.sequence != expected_sequence
+                    || conversation
+                        .current_group_info
+                        .as_ref()
+                        .is_some_and(|current| current.same_content(next))
+                {
+                    return Err(ChatError::Trust(
+                        "inbound MLS group information is not the next contiguous change".into(),
+                    ));
+                }
+            }
+            _ if private_control.group_info != conversation.current_group_info => {
+                return Err(ChatError::Trust(
+                    "unrelated MLS control action changed the group information".into(),
                 ))
             }
             _ => {}
@@ -425,6 +456,7 @@ impl MlsClient {
         conversation.current_owner_set = private_control.owner_set;
         conversation.current_authorization_policy = private_control.authorization_policy;
         conversation.current_cryptographic_policy = private_control.cryptographic_policy;
+        conversation.current_group_info = private_control.group_info;
         if block.proposal.action_type == MlsControlActionTypeV1::CloseConversation {
             conversation.status = LocalMlsConversationStatus::Closed;
         }

@@ -163,6 +163,29 @@ export function GroupDetails({ model, group }: { model: ConversationModel; group
             )
           })}
         </div>
+        <p className="mb-2 mt-4 text-sm">{t('chat.group.whoEdits')}</p>
+        <div className="flex gap-2">
+          {(['members', 'administrators'] as const).map((who) => {
+            const active = (group.currentAuthorizationPolicy.groupInfoEditors ?? 2) === (who === 'members' ? 1 : 2)
+            return (
+              <Button
+                key={who}
+                size="sm"
+                variant={active ? 'default' : 'outline'}
+                disabled={busy || !isOwner || active}
+                onClick={() =>
+                  void run(
+                    () => service!.setGroupInfoEditors(groupId, who),
+                    t('chat.group.policyUpdated'),
+                    t('chat.group.approvalRequested'),
+                  )}
+                data-testid={`chat-group-editors-${who}`}
+              >
+                {t(`chat.group.senders.${who}`)}
+              </Button>
+            )
+          })}
+        </div>
         <form
           className="mt-4 flex items-end gap-2"
           onSubmit={(event: FormEvent) => {

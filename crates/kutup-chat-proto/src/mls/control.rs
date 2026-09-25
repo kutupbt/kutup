@@ -20,6 +20,11 @@ pub enum MlsControlActionTypeV1 {
     /// the group. The account roster, roles, routing, and policies remain
     /// byte-for-byte unchanged.
     DeviceSync = 10,
+    /// Change the group's name, description or picture. The account roster,
+    /// roles, routing and policies remain byte-for-byte unchanged; who may
+    /// send it is the group-private authorization policy's business, which
+    /// only members can check.
+    GroupInfoChange = 11,
 }
 
 impl MlsControlActionTypeV1 {
@@ -58,6 +63,7 @@ impl TryFrom<u16> for MlsControlActionTypeV1 {
             8 => Ok(Self::ProtocolUpgrade),
             9 => Ok(Self::RecoverIncarnation),
             10 => Ok(Self::DeviceSync),
+            11 => Ok(Self::GroupInfoChange),
             _ => Err(format!("unknown MLS control action {value}")),
         }
     }
@@ -844,6 +850,7 @@ impl MlsControlBlockV1 {
         match self.proposal.action_type {
             MlsControlActionTypeV1::MembershipChange
             | MlsControlActionTypeV1::DeviceSync
+            | MlsControlActionTypeV1::GroupInfoChange
             | MlsControlActionTypeV1::AuthoritySetChange
             | MlsControlActionTypeV1::OwnerSetChange
             | MlsControlActionTypeV1::AuthorizationPolicyChange
@@ -970,6 +977,7 @@ impl CommitMlsControlBlockV1 {
             MlsControlActionTypeV1::MembershipChange
             | MlsControlActionTypeV1::RoutineAdmin
             | MlsControlActionTypeV1::DeviceSync
+            | MlsControlActionTypeV1::GroupInfoChange
                 if self.membership_transition.is_some() =>
             {
                 let transition = self
@@ -1020,11 +1028,28 @@ impl CommitMlsControlBlockV1 {
                                 .into(),
                         )
                     }
+                    MlsControlActionTypeV1::GroupInfoChange
+                        if transition.previous_member_count != transition.next_member_count
+                            || transition.previous_participant_domains
+                                != transition.next_participant_domains
+                            || transition.previous_roster_commitment
+                                != transition.next_roster_commitment =>
+                    {
+                        return Err(
+                            "group information change must preserve the exact account roster and routing"
+                                .into(),
+                        )
+                    }
                     _ => {}
                 }
             }
-            MlsControlActionTypeV1::MembershipChange | MlsControlActionTypeV1::DeviceSync => {
-                return Err("membership or device change requires its public transition".into())
+            MlsControlActionTypeV1::MembershipChange
+            | MlsControlActionTypeV1::DeviceSync
+            | MlsControlActionTypeV1::GroupInfoChange => {
+                return Err(
+                    "membership, device or group information change requires its public transition"
+                        .into(),
+                )
             }
             MlsControlActionTypeV1::AuthoritySetChange => {
                 if self.authority_change.is_none()

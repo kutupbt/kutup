@@ -127,6 +127,9 @@ pub(crate) async fn collect_ordering_votes(
     .await?;
     let (is_admin, is_owner) =
         local_member.ok_or_else(|| AppError::forbidden("not an active local MLS member"))?;
+    // GroupInfoChange is left to any active member on purpose: whether
+    // members may edit the group's information is the group's private
+    // policy, which only members can read and enforce.
     if matches!(
         request.block.proposal.action_type,
         MlsControlActionTypeV1::RoutineAdmin

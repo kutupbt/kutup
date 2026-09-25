@@ -154,7 +154,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
           onClick={() => setDetails(true)}
           className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-1 py-1 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <Avatar name={model.title} image={model.profile?.avatar} contentType={model.profile?.avatarContentType} group={conversation.kind === 'group'} size={32} />
+          <Avatar name={model.title} image={model.group?.currentGroupInfo?.avatar?.data ?? model.profile?.avatar} contentType={model.group?.currentGroupInfo?.avatar?.contentType ?? model.profile?.avatarContentType} group={conversation.kind === 'group'} size={32} />
           <span className="min-w-0">
             <span className="block truncate text-sm font-semibold">{model.title}</span>
             {subtitle ? (

@@ -1382,6 +1382,7 @@ fn private_control_and_client_history_have_stable_canonical_vectors() {
         owner_set: owners.clone(),
         authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),
         cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
+        group_info: None,
     };
     let private_bytes = private.canonical_bytes().unwrap();
     assert_eq!(
@@ -1628,6 +1629,7 @@ fn client_control_history_replays_exactly_across_page_boundaries() {
         owner_set: owners,
         authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),
         cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
+        group_info: None,
     };
     let first = MlsClientControlHistoryPageV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
@@ -1663,4 +1665,99 @@ fn client_control_history_replays_exactly_across_page_boundaries() {
         &second.canonical_bytes().unwrap()
     )
     .is_ok());
+}
+
+#[test]
+fn group_info_editors_default_keeps_existing_policy_bytes() {
+    let policy = MlsGroupAuthorizationPolicyV1::members_default();
+    assert_eq!(
+        policy.canonical_bytes().unwrap(),
+        br#"{"policyVersion":1,"sequence":1,"applicationSenders":1}"#.to_vec()
+    );
+    let open = MlsGroupAuthorizationPolicyV1 {
+        group_info_editors: MlsGroupInfoEditorsV1::Members,
+        ..policy.clone()
+    };
+    let bytes = open.canonical_bytes().unwrap();
+    assert_eq!(
+        bytes,
+        br#"{"policyVersion":1,"sequence":1,"applicationSenders":1,"groupInfoEditors":1}"#.to_vec()
+    );
+    assert_eq!(
+        MlsGroupAuthorizationPolicyV1::from_canonical_bytes(&bytes).unwrap(),
+        open
+    );
+    assert!(!open.same_rules(&policy));
+    assert!(open.may_edit_group_info(false));
+    assert!(!policy.may_edit_group_info(false));
+    assert!(policy.may_edit_group_info(true));
+    // The default must not be spelled out: it would not be canonical.
+    assert!(MlsGroupAuthorizationPolicyV1::from_canonical_bytes(
+        br#"{"policyVersion":1,"sequence":1,"applicationSenders":1,"groupInfoEditors":2}"#
+    )
+    .is_err());
+}
+
+#[test]
+fn group_info_enforces_signal_limits() {
+    use base64::Engine as _;
+    let valid = MlsGroupInfoV1 {
+        sequence: 1,
+        name: "Ağaç evi 🌲".into(),
+        description: "line one\nline two".into(),
+        avatar: Some(MlsGroupAvatarV1 {
+            content_type: "image/webp".into(),
+            data: base64::engine::general_purpose::STANDARD.encode([7u8; 100]),
+        }),
+    };
+    valid.validate().unwrap();
+    let too_big =
+        base64::engine::general_purpose::STANDARD
+            .encode(vec![0u8; MlsGroupInfoV1::MAX_AVATAR_BYTES + 1]);
+    for invalid in [
+        MlsGroupInfoV1 {
+            sequence: 0,
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            name: String::new(),
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            name: " padded".into(),
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            name: "x".repeat(33),
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            name: "tab\there".into(),
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            description: "d".repeat(481),
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            avatar: Some(MlsGroupAvatarV1 {
+                content_type: "image/gif".into(),
+                data: "AAAA".into(),
+            }),
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            avatar: Some(MlsGroupAvatarV1 {
+                content_type: "image/png".into(),
+                data: too_big.clone(),
+            }),
+            ..valid.clone()
+        },
+    ] {
+        assert!(invalid.validate().is_err(), "{invalid:?}");
+    }
+    assert!(valid.same_content(&MlsGroupInfoV1 {
+        sequence: 5,
+        ..valid.clone()
+    }));
 }

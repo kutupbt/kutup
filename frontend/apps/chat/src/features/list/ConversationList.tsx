@@ -96,7 +96,7 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
                 state={state}
                 muted={isMuted(state, now)}
                 selected={item.key === selectedKey}
-                title={conversationTitle(item.conversation, item.address, item.profile, self.address, t)}
+                title={conversationTitle(item.conversation, item.address, item.profile, self.address, t, item.groupInfo)}
                 snippet={snippet(item)}
                 time={item.last || item.activityMs ? formatShortTime(item.last?.timestampMs ?? item.activityMs, now, i18n.language, t) : ''}
                 unread={count}
@@ -210,8 +210,8 @@ function ConversationRow({
           >
             <Avatar
               name={title}
-              image={item.profile?.avatar}
-              contentType={item.profile?.avatarContentType}
+              image={item.groupInfo?.avatar?.data ?? item.profile?.avatar}
+              contentType={item.groupInfo?.avatar?.contentType ?? item.profile?.avatarContentType}
               group={item.conversation.kind === 'group'}
             />
             <span className="min-w-0 flex-1">

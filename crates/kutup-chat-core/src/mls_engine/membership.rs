@@ -429,6 +429,7 @@ pub(super) struct PendingMembershipChangeInput<'a> {
     pub pending: &'a PendingMlsCommit,
     pub action_type: MlsControlActionTypeV1,
     pub created_at_seconds: i64,
+    pub next_group_info: Option<MlsGroupInfoV1>,
 }
 
 pub(super) fn build_pending_membership_change(
@@ -446,6 +447,7 @@ pub(super) fn build_pending_membership_change(
         pending,
         action_type,
         created_at_seconds,
+        next_group_info,
     } = input;
     let next_addresses = next_roster
         .iter()
@@ -651,6 +653,7 @@ pub(super) fn build_pending_membership_change(
         vote_request,
         commit_hash: pending.commit_hash.clone(),
         final_request: None,
+        next_group_info,
     };
     validate_pending_membership_change(&control)?;
     Ok(control)

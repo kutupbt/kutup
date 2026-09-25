@@ -17,6 +17,7 @@ import type {
   ContactRecord,
   ConversationId,
   LocalMlsConversationRecord,
+  MlsGroupInfo,
   PeerChatProfile,
 } from '@kutup/chat-core/types'
 
@@ -156,6 +157,8 @@ export interface ConversationSummary {
   activityMs: number
   contact: ContactRecord | null
   profile: PeerChatProfile | null
+  /** A live group's name, description and picture. */
+  groupInfo: MlsGroupInfo | null
 }
 
 /** When a group was made, in milliseconds (genesis records seconds or ms). */
@@ -201,9 +204,20 @@ export function conversationList(data: ChatData, selfAddress: string, nowMs: num
         activityMs: message.timestampMs,
         contact,
         profile: profiles.get(address) ?? null,
+        groupInfo: null,
       })
     } else if (!liveGroups.has(conversation.groupId)) {
-      items.set(key, { key, conversation, kind: 'history', address: null, last: message, activityMs: message.timestampMs, contact: null, profile: null })
+      items.set(key, {
+        key,
+        conversation,
+        kind: 'history',
+        address: null,
+        last: message,
+        activityMs: message.timestampMs,
+        contact: null,
+        profile: null,
+        groupInfo: null,
+      })
     }
   }
   // A request whose messages are not here (yet) still shows.
@@ -223,6 +237,7 @@ export function conversationList(data: ChatData, selfAddress: string, nowMs: num
       activityMs: contact.updatedAtMs,
       contact,
       profile: profiles.get(contact.peer) ?? null,
+      groupInfo: null,
     })
   }
   for (const group of data.groups) {
@@ -238,6 +253,7 @@ export function conversationList(data: ChatData, selfAddress: string, nowMs: num
       activityMs: last?.timestampMs ?? groupCreatedMs(group),
       contact: null,
       profile: null,
+      groupInfo: group.currentGroupInfo ?? null,
     })
   }
   return [...items.values()].sort((a, b) => (b.activityMs || 0) - (a.activityMs || 0))

@@ -20,6 +20,7 @@ import type {
   MlsConversationDevice,
   MlsConversationMember,
   MlsGroupAuthorizationPolicy,
+  MlsGroupInfo,
   MlsGroupCryptographicPolicy,
   MlsIncarnationRecovery,
   MlsInvitationFeedback,
@@ -129,6 +130,7 @@ export class MlsConversationService {
   async createGroup(
     creator: AccountAddress,
     authorityDomains: string[],
+    name?: string,
   ): Promise<PreparedMlsGroupGenesis> {
     const domains = requireAuthorityDomains(authorityDomains)
     const policies: unknown[] = []
@@ -149,6 +151,7 @@ export class MlsConversationService {
         creator,
         policies,
         String(Math.floor(Date.now() / 1000)),
+        name?.trim() ? { sequence: 1, name: name.trim() } : null,
       ),
     )
     validatePreparedGenesis(prepared, conversationId, groupId)
@@ -612,7 +615,7 @@ export class MlsConversationService {
       255,
     )
     const nextPolicy: MlsGroupAuthorizationPolicy = {
-      policyVersion: 1,
+      ...conversation.currentAuthorizationPolicy,
       sequence: conversation.currentAuthorizationPolicy.sequence + 1,
       applicationSenders: applicationSenders === 'members' ? 1 : 2,
     }
@@ -629,6 +632,75 @@ export class MlsConversationService {
       return null
     }
     return this.publishPendingPolicyChange(prepared.control)
+  }
+
+  /**
+   * Who may change the group's name, description and picture (owners
+   * decide, like the other group rules).
+   */
+  async setGroupInfoEditors(
+    conversationId: string,
+    editors: 'members' | 'administrators',
+  ): Promise<FinalizedMlsPolicyChange | null> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const { groupInfoEditors: _current, ...rest } = conversation.currentAuthorizationPolicy
+    const nextPolicy: MlsGroupAuthorizationPolicy = {
+      ...rest,
+      sequence: conversation.currentAuthorizationPolicy.sequence + 1,
+      // Administrators is the default and is left out of the policy.
+      ...(editors === 'members' ? { groupInfoEditors: 1 as const } : {}),
+    }
+    const prepared = await this.withCryptoLock(() =>
+      this.client.prepareMlsAuthorizationPolicyChange(
+        groupId,
+        requireBrowserCrypto().randomUUID(),
+        nextPolicy,
+        String(Math.floor(Date.now() / 1000)),
+      ))
+    validatePendingPolicyChange(prepared.control, groupId)
+    if (!await this.withCryptoLock(() => this.client.mlsPolicyChangeHasOwnerQuorum(groupId))) {
+      await this.publishOwnerApprovalRequest(groupId)
+      return null
+    }
+    return this.publishPendingPolicyChange(prepared.control)
+  }
+
+  /**
+   * Change the group's name, description or picture: one roster-unchanged
+   * Commit through the same ordering pipeline as a membership change.
+   */
+  async setGroupInfo(
+    conversationId: string,
+    info: Omit<MlsGroupInfo, 'sequence'>,
+  ): Promise<FinalizedMlsMembershipChange> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const groupId = decodeCanonicalBase64(
+      conversation.request.genesis.mlsGroupId,
+      16,
+      255,
+    )
+    const next: MlsGroupInfo = {
+      sequence: (conversation.currentGroupInfo?.sequence ?? 0) + 1,
+      name: info.name.trim(),
+      ...(info.description?.trim() ? { description: info.description.trim() } : {}),
+      ...(info.avatar ? { avatar: info.avatar } : {}),
+    }
+    const prepared = await this.withCryptoLock(() =>
+      this.client.prepareMlsGroupInfoChange(
+        groupId,
+        requireBrowserCrypto().randomUUID(),
+        next,
+        String(Math.floor(Date.now() / 1000)),
+      ))
+    validatePendingMembershipChange(prepared.control, groupId)
+    const finalized = await this.publishPendingMembershipChange(prepared.control)
+    await this.publishCurrentDeliveryCapability(finalized.conversation)
+    return finalized
   }
 
   async tightenMaximumApplicationPlaintext(

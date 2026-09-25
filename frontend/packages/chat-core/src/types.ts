@@ -433,7 +433,25 @@ export interface LocalMlsConversationRecord {
   genesisCryptographicPolicy: MlsGroupCryptographicPolicy
   currentAuthorizationPolicy: MlsGroupAuthorizationPolicy
   currentCryptographicPolicy: MlsGroupCryptographicPolicy
+  /** The group's name, description and picture, once it has them. */
+  currentGroupInfo?: MlsGroupInfo
 }
+
+/** Encrypted in the group state; only members see it. */
+export interface MlsGroupInfo {
+  /** One more with every change, starting at one. */
+  sequence: number
+  /** 1 to 32 characters, no surrounding spaces. */
+  name: string
+  /** Up to 480 characters. */
+  description?: string
+  /** JPEG, PNG or WebP, at most 48 KiB, as standard base64. */
+  avatar?: { contentType: 'image/jpeg' | 'image/png' | 'image/webp'; data: string }
+}
+
+export const MLS_GROUP_NAME_MAX_CHARS = 32
+export const MLS_GROUP_DESCRIPTION_MAX_CHARS = 480
+export const MLS_GROUP_AVATAR_MAX_BYTES = 48 * 1024
 
 export interface PreparedMlsGroupGenesis {
   group: LocalMlsGroupState
@@ -517,6 +535,8 @@ export interface MlsGroupAuthorizationPolicy {
   policyVersion: 1
   sequence: number
   applicationSenders: 1 | 2
+  /** Who may change the group's information: 1 members, 2 (or absent) administrators. */
+  groupInfoEditors?: 1 | 2
 }
 
 export interface MlsGroupCryptographicPolicy {
@@ -1006,6 +1026,7 @@ export interface WasmChatClientHandle {
     creator: AccountAddress,
     authorityPolicies: unknown[],
     createdAtSeconds: string,
+    groupInfo: MlsGroupInfo | null,
   ): Promise<PreparedMlsGroupGenesis>
   localMlsConversations(): Promise<LocalMlsConversationRecord[]>
   markMlsGroupGenesisPublished(
@@ -1020,6 +1041,12 @@ export interface WasmChatClientHandle {
     proposalId: string,
     nextRoster: MlsConversationMember[],
     additions: unknown,
+    nowSeconds: string,
+  ): Promise<PreparedMlsMembershipChange>
+  prepareMlsGroupInfoChange(
+    mlsGroupId: Uint8Array,
+    proposalId: string,
+    groupInfo: MlsGroupInfo,
     nowSeconds: string,
   ): Promise<PreparedMlsMembershipChange>
   prepareMlsDeviceSync(

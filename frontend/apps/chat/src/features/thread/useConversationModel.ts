@@ -36,6 +36,7 @@ export interface ConversationModel {
   canSendMedia: boolean
   canSetTimer: boolean
   canSendTyping: boolean
+  canEditGroupInfo: boolean
 }
 
 const noReadiness: MlsGroupInvitationReadiness = { pending: [], refused: [], blocksSending: false }
@@ -71,7 +72,7 @@ export function useConversationModel(conversation: ConversationId, now: number):
     return {
       key,
       conversation,
-      title: conversationTitle(conversation, address, profile, selfAddress, t),
+      title: conversationTitle(conversation, address, profile, selfAddress, t, group?.currentGroupInfo),
       address,
       note,
       profile,
@@ -85,6 +86,11 @@ export function useConversationModel(conversation: ConversationId, now: number):
       readOnly,
       canSendMedia: !readOnly && established,
       canSetTimer: !readOnly && established,
+      // Rename the group, change its picture or description (Signal's "Edit group").
+      canEditGroupInfo:
+        group !== null &&
+        group.status === 'active' &&
+        (isAdmin || group.currentAuthorizationPolicy.groupInfoEditors === 1),
       canSendTyping:
         !readOnly && !note && (conversation.kind === 'group' || contact?.state === 'accepted' || contact?.state === 'pendingOutgoing'),
     }

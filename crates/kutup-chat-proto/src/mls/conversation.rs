@@ -91,10 +91,48 @@ impl TryFrom<u16> for MlsApplicationSenderPolicyV1 {
     }
 }
 
+/// Who may change the group's name, description and picture (Signal's
+/// "Edit group info"). Administrators always may.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(into = "u16", try_from = "u16")]
+#[repr(u16)]
+pub enum MlsGroupInfoEditorsV1 {
+    Members = 1,
+    #[default]
+    Administrators = 2,
+}
+
+impl MlsGroupInfoEditorsV1 {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+impl From<MlsGroupInfoEditorsV1> for u16 {
+    fn from(value: MlsGroupInfoEditorsV1) -> Self {
+        value as u16
+    }
+}
+
+impl TryFrom<u16> for MlsGroupInfoEditorsV1 {
+    type Error = String;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Members),
+            2 => Ok(Self::Administrators),
+            _ => Err(format!(
+                "unknown MLS group information editor policy {value}"
+            )),
+        }
+    }
+}
+
 /// Group-private authorization policy. Administrators always retain ordinary
 /// roster-management authority; this policy controls only user-visible
-/// application messages and deliberately does not suppress owner-governance
-/// control messages.
+/// application messages and group information, and deliberately does not
+/// suppress owner-governance control messages.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -102,6 +140,10 @@ pub struct MlsGroupAuthorizationPolicyV1 {
     pub policy_version: u16,
     pub sequence: u64,
     pub application_senders: MlsApplicationSenderPolicyV1,
+    /// Omitted while it is the default (administrators), so policies written
+    /// before it existed keep their canonical bytes.
+    #[serde(default, skip_serializing_if = "MlsGroupInfoEditorsV1::is_default")]
+    pub group_info_editors: MlsGroupInfoEditorsV1,
 }
 
 impl MlsGroupAuthorizationPolicyV1 {
@@ -110,7 +152,20 @@ impl MlsGroupAuthorizationPolicyV1 {
             policy_version: MLS_GROUP_AUTHORIZATION_POLICY_VERSION,
             sequence: 1,
             application_senders: MlsApplicationSenderPolicyV1::Members,
+            group_info_editors: MlsGroupInfoEditorsV1::Administrators,
         }
+    }
+
+    /// Same rules, whatever the sequence: a policy change must change one.
+    pub fn same_rules(&self, other: &Self) -> bool {
+        self.application_senders == other.application_senders
+            && self.group_info_editors == other.group_info_editors
+    }
+
+    /// Whether a member with or without the administrator role may change
+    /// the group's information.
+    pub fn may_edit_group_info(&self, is_admin: bool) -> bool {
+        is_admin || self.group_info_editors == MlsGroupInfoEditorsV1::Members
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -637,6 +692,78 @@ impl MlsConversationDeviceV1 {
     }
 }
 
+/// A group picture: small enough to travel inside the GroupContext with
+/// every Commit and Welcome (clients resize it before setting it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsGroupAvatarV1 {
+    pub content_type: String,
+    /// Standard base64 of the image bytes.
+    pub data: String,
+}
+
+/// The group's name, description and picture, as Signal shows them. Only
+/// members see it: it lives in the MLS-encrypted private control state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsGroupInfoV1 {
+    /// One more with every change, starting at one.
+    pub sequence: u64,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<MlsGroupAvatarV1>,
+}
+
+impl MlsGroupInfoV1 {
+    /// Signal's limits, in characters.
+    pub const MAX_NAME_CHARS: usize = 32;
+    pub const MAX_DESCRIPTION_CHARS: usize = 480;
+    pub const MAX_AVATAR_BYTES: usize = 48 * 1024;
+    pub const AVATAR_CONTENT_TYPES: [&'static str; 3] = ["image/jpeg", "image/png", "image/webp"];
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.sequence == 0 {
+            return Err("MLS group information sequence must be positive".into());
+        }
+        let name = self.name.trim();
+        if name.is_empty()
+            || name != self.name
+            || self.name.chars().count() > Self::MAX_NAME_CHARS
+            || self.name.chars().any(char::is_control)
+        {
+            return Err(
+                "MLS group name must be 1 to 32 characters without surrounding spaces".into(),
+            );
+        }
+        if self.description.chars().count() > Self::MAX_DESCRIPTION_CHARS
+            || self
+                .description
+                .chars()
+                .any(|character| character.is_control() && character != '\n')
+        {
+            return Err("MLS group description must be at most 480 characters".into());
+        }
+        if let Some(avatar) = &self.avatar {
+            if !Self::AVATAR_CONTENT_TYPES.contains(&avatar.content_type.as_str()) {
+                return Err("MLS group picture must be JPEG, PNG or WebP".into());
+            }
+            decode_canonical_base64("groupAvatar", &avatar.data, 1, Self::MAX_AVATAR_BYTES)?;
+        }
+        Ok(())
+    }
+
+    /// Everything but the sequence differs from `other`.
+    pub fn same_content(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.description == other.description
+            && self.avatar == other.avatar
+    }
+}
+
 /// Complete group-private authorization state authenticated by the MLS
 /// GroupContext. Ordering servers see only the public roster commitment and
 /// pseudonymous authority/owner keys; members receive this exact structure in
@@ -676,6 +803,10 @@ pub struct MlsPrivateControlStateV1 {
     pub owner_set: MlsOwnerSetV1,
     pub authorization_policy: MlsGroupAuthorizationPolicyV1,
     pub cryptographic_policy: MlsGroupCryptographicPolicyV1,
+    /// Absent until someone names the group; changed only by
+    /// [`MlsControlActionTypeV1::GroupInfoChange`] (or set at genesis).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_info: Option<MlsGroupInfoV1>,
 }
 
 impl MlsPrivateControlStateV1 {
@@ -716,6 +847,14 @@ impl MlsPrivateControlStateV1 {
         self.owner_set.validate()?;
         self.authorization_policy.validate()?;
         self.cryptographic_policy.validate()?;
+        if let Some(info) = &self.group_info {
+            info.validate()?;
+            if info.sequence > self.height.saturating_add(1) {
+                return Err(
+                    "MLS group information sequence is inconsistent with control history".into(),
+                );
+            }
+        }
         if self.genesis_authorization_policy.sequence != 1
             || self.genesis_cryptographic_policy.sequence != 1
             || self.authorization_policy.sequence > self.height.saturating_add(1)

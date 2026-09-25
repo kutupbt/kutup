@@ -623,10 +623,7 @@ pub(super) fn record_owner_approval_request(
                         .sequence
                         .checked_add(1)
                         != Some(next.sequence)
-                        || conversation
-                            .current_authorization_policy
-                            .application_senders
-                            == next.application_senders
+                        || conversation.current_authorization_policy.same_rules(next)
                     {
                         return Err(ChatError::Trust(
                             "MLS authorization approval is not a contiguous change".into(),

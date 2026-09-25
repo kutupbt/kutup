@@ -489,6 +489,22 @@
           "title": "Approve a smaller message limit?",
           "description": "{{requester}} proposes messages of at most {{detail}} bytes."
         }
+      },
+      "whoEdits": "Who can edit this group's name, picture and description",
+      "info": {
+        "edit": "Edit group",
+        "title": "Edit group",
+        "description": "Only the members of this group can see its name, picture and description.",
+        "name": "Group name",
+        "about": "Description",
+        "counter": "{{count}}/{{max}}",
+        "nameTooLong": "At most {{count}} characters.",
+        "aboutTooLong": "At most {{count}} characters.",
+        "addPicture": "Add picture",
+        "changePicture": "Change picture",
+        "removePicture": "Remove picture",
+        "pictureUnreadable": "That picture can't be used. Try a JPEG, PNG or WebP image.",
+        "saved": "Group updated"
       }
     },
     "groupInvitations": {

@@ -70,14 +70,14 @@ use kutup_chat_proto::{
     MlsClientControlHistoryPageV1, MlsControlActionTypeV1, MlsControlBlockV1, MlsControlProposalV1,
     MlsConversationDeviceV1, MlsConversationGenesisV1, MlsConversationKindV1,
     MlsConversationMemberV1, MlsFinalizedControlBlockV1, MlsGroupAuthorizationPolicyV1,
-    MlsGroupControlBodyV1, MlsGroupCryptographicPolicyV1, MlsKeyPackageV1, MlsManifestDeviceV1,
-    MlsMembershipDeliveryCommitmentV1, MlsMembershipDeliveryV1, MlsMembershipEnvelopeKindV1,
-    MlsMembershipEnvelopeV1, MlsMembershipTransitionV1, MlsOrderingQuorumCertificateV1,
-    MlsOrderingServicePolicyV1, MlsOwnerCandidateV1, MlsOwnerSetV1, MlsOwnerV1,
-    MlsPrivateControlStateV1, RecoverMlsConversationRequestV1, RecoverMlsConversationResponseV1,
-    MAX_MLS_DEVICES_PER_ACCOUNT, MAX_MLS_GROUP_ACCOUNTS, MAX_MLS_GROUP_LEAVES,
-    MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519, MLS_PRIVATE_CONTROL_EXTENSION_TYPE,
-    MLS_PROTOCOL_VERSION,
+    MlsGroupControlBodyV1, MlsGroupCryptographicPolicyV1, MlsGroupInfoV1, MlsKeyPackageV1,
+    MlsManifestDeviceV1, MlsMembershipDeliveryCommitmentV1, MlsMembershipDeliveryV1,
+    MlsMembershipEnvelopeKindV1, MlsMembershipEnvelopeV1, MlsMembershipTransitionV1,
+    MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1, MlsOwnerCandidateV1, MlsOwnerSetV1,
+    MlsOwnerV1, MlsPrivateControlStateV1, RecoverMlsConversationRequestV1,
+    RecoverMlsConversationResponseV1, MAX_MLS_DEVICES_PER_ACCOUNT, MAX_MLS_GROUP_ACCOUNTS,
+    MAX_MLS_GROUP_LEAVES, MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519,
+    MLS_PRIVATE_CONTROL_EXTENSION_TYPE, MLS_PROTOCOL_VERSION,
 };
 
 // Pre-v1 clean break: the X25519/Ed25519/ChaCha suite and 10-device roster
@@ -182,6 +182,9 @@ pub struct LocalMlsConversationRecord {
     pub genesis_cryptographic_policy: MlsGroupCryptographicPolicyV1,
     pub current_authorization_policy: MlsGroupAuthorizationPolicyV1,
     pub current_cryptographic_policy: MlsGroupCryptographicPolicyV1,
+    /// The group's name, description and picture, when it has them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_group_info: Option<MlsGroupInfoV1>,
 }
 
 /// Atomic result of preparing an epoch-zero group and its exact server
@@ -301,6 +304,9 @@ pub struct PendingMlsMembershipChange {
     pub commit_hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub final_request: Option<CommitMlsControlBlockV1>,
+    /// The group information a `GroupInfoChange` sets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_group_info: Option<MlsGroupInfoV1>,
 }
 
 /// Atomic result of staging the OpenMLS Commit and its complete control-plane
@@ -583,6 +589,7 @@ fn genesis_private_control_state(
         owner_set: record.current_owner_set.clone(),
         authorization_policy: record.current_authorization_policy.clone(),
         cryptographic_policy: record.current_cryptographic_policy.clone(),
+        group_info: record.current_group_info.clone(),
     };
     state.validate().map_err(ChatError::Db)?;
     Ok(state)
@@ -607,6 +614,7 @@ fn ensure_private_control_matches_record(
         || state.owner_set != record.current_owner_set
         || state.authorization_policy != record.current_authorization_policy
         || state.cryptographic_policy != record.current_cryptographic_policy
+        || state.group_info != record.current_group_info
         || (state.height == 0
             && (state.proposal_id.is_some() || state.previous_block_hash.is_some()))
         || (state.height == 1 && state.previous_block_hash.is_some())
@@ -984,6 +992,8 @@ fn group_control_credential(
     })
 }
 
+#[cfg(all(test, feature = "sqlite"))]
+mod group_info_tests;
 #[cfg(all(test, feature = "sqlite"))]
 mod policy_tests;
 #[cfg(all(test, feature = "sqlite"))]

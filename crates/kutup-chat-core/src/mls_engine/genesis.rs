@@ -15,10 +15,41 @@ impl MlsClient {
         authority_policies: &[MlsOrderingServicePolicyV1],
         created_at_seconds: i64,
     ) -> Result<PreparedMlsGroupGenesis> {
+        self.prepare_group_genesis_with_info(
+            conversation_id,
+            mls_group_id,
+            creator,
+            authority_policies,
+            created_at_seconds,
+            None,
+        )
+        .await
+    }
+
+    /// [`Self::prepare_group_genesis`] for a group named from the start. The
+    /// information is part of the epoch-zero private state (sequence one), so
+    /// every invited member receives it in their Welcome.
+    pub async fn prepare_group_genesis_with_info(
+        &self,
+        conversation_id: Uuid,
+        mls_group_id: &[u8],
+        creator: AccountAddress,
+        authority_policies: &[MlsOrderingServicePolicyV1],
+        created_at_seconds: i64,
+        group_info: Option<MlsGroupInfoV1>,
+    ) -> Result<PreparedMlsGroupGenesis> {
         if conversation_id.is_nil() || created_at_seconds < 0 {
             return Err(ChatError::Invalid(
                 "MLS group genesis requires a conversation id and valid clock".into(),
             ));
+        }
+        if let Some(info) = &group_info {
+            info.validate().map_err(ChatError::Invalid)?;
+            if info.sequence != 1 {
+                return Err(ChatError::Invalid(
+                    "a new MLS group's information starts at sequence one".into(),
+                ));
+            }
         }
         validate_group_id(mls_group_id)?;
         let authority_set = authority_set_from_policies(authority_policies)?;
@@ -38,6 +69,7 @@ impl MlsClient {
             ensure_group_owner_key(&metadata, mls_group_id)?;
             ensure_private_control_matches_record(group.extensions(), existing)?;
             if existing.request.genesis.mls_group_id != group_key
+                || existing.current_group_info != group_info
                 || existing.request.genesis.created_at != created_at_seconds
                 || existing.request.genesis.authority_set != authority_set
                 || existing.request.members.len() != 1
@@ -133,6 +165,7 @@ impl MlsClient {
             genesis_cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
             current_authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),
             current_cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
+            current_group_info: group_info,
             request,
             status: LocalMlsConversationStatus::PendingGenesis,
             server_genesis_hash: None,
@@ -333,6 +366,7 @@ impl MlsClient {
             },
             authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),
             cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
+            group_info: None,
         };
         private_control.validate().map_err(ChatError::Protocol)?;
         let signer = metadata.read_signer(&provider)?;

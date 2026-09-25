@@ -704,20 +704,55 @@ impl WasmChatClient {
         creator: JsValue,
         authority_policies: JsValue,
         created_at_seconds: String,
+        group_info: JsValue,
     ) -> std::result::Result<JsValue, JsValue> {
         let conversation_id = uuid::Uuid::parse_str(&conversation_id)
             .map_err(|_| js_error("invalid MLS conversation id"))?;
         let creator: AccountAddress = from_transport(creator).map_err(chat_error)?;
         let authority_policies: Vec<kutup_chat_proto::MlsOrderingServicePolicyV1> =
             from_transport(authority_policies).map_err(chat_error)?;
+        let group_info: Option<kutup_chat_proto::MlsGroupInfoV1> =
+            if group_info.is_null() || group_info.is_undefined() {
+                None
+            } else {
+                Some(from_transport(group_info).map_err(chat_error)?)
+            };
         let prepared = self
             .mls_client()
-            .prepare_group_genesis(
+            .prepare_group_genesis_with_info(
                 conversation_id,
                 &mls_group_id,
                 creator,
                 &authority_policies,
                 parse_i64_string("MLS genesis clock", &created_at_seconds)?,
+                group_info,
+            )
+            .await
+            .map_err(chat_error)?;
+        to_output(&prepared)
+    }
+
+    /// Stage a change of the group's name, description or picture; it is
+    /// then published like a membership change.
+    #[wasm_bindgen(js_name = prepareMlsGroupInfoChange)]
+    pub async fn prepare_mls_group_info_change(
+        &self,
+        mls_group_id: Vec<u8>,
+        proposal_id: String,
+        group_info: JsValue,
+        now_seconds: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let proposal_id =
+            uuid::Uuid::parse_str(&proposal_id).map_err(|_| js_error("invalid MLS proposal id"))?;
+        let group_info: kutup_chat_proto::MlsGroupInfoV1 =
+            from_transport(group_info).map_err(chat_error)?;
+        let prepared = self
+            .mls_client()
+            .prepare_group_info_change(
+                &mls_group_id,
+                proposal_id,
+                group_info,
+                parse_i64_string("MLS control clock", &now_seconds)?,
             )
             .await
             .map_err(chat_error)?;

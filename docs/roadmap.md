@@ -428,8 +428,6 @@ traffic is enabled.
 The rebuilt Chat app (docs/plans/chat-app.md) shows only what `chat-core`
 provides. Not built, because the protocol layer has no support yet:
 
-- **Group names and pictures** — groups show as "Group" and the start of
-  their id; MLS group metadata has no name field.
 - **Leaving a group** — there is no leave operation (an owner can close a
   group; an administrator can remove members).
 

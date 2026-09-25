@@ -19,6 +19,7 @@ import type {
   ReceiveReport,
   SendSummary,
   LocalMlsConversationRecord,
+  MlsGroupInfo,
   MlsInvitationFeedback,
   MlsAuthorityPolicyInspection,
   PendingMlsOwnerApprovalRequest,
@@ -849,7 +850,8 @@ export class ChatService {
     return this.requireMls().invitationFeedback()
   }
 
-  async createGroup(initialMember?: AccountAddress): Promise<LocalMlsConversationRecord> {
+  /** A new group, named from the start when `name` is given (Signal asks for one). */
+  async createGroup(initialMember?: AccountAddress, name?: string): Promise<LocalMlsConversationRecord> {
     const result = await this.withMlsWorkflow(async () => {
       const mls = this.requireMls()
       const self: AccountAddress = {
@@ -863,7 +865,7 @@ export class ChatService {
         authorities.add(member.server)
         initialMember = member
       }
-      const created = await mls.createGroup(self, [...authorities].sort())
+      const created = await mls.createGroup(self, [...authorities].sort(), name)
       return initialMember
         ? await mls.addMember(created.conversation.request.genesis.conversationId, initialMember)
         : created
@@ -982,6 +984,24 @@ export class ChatService {
   ): Promise<boolean> {
     const finalized = await this.withMlsWorkflow(() =>
       this.requireMls().setApplicationSenderPolicy(conversationId, applicationSenders),
+    )
+    this.notifyPeers()
+    return finalized !== null
+  }
+
+  /** Rename the group, or change its description or picture. */
+  async setGroupInfo(conversationId: string, info: Omit<MlsGroupInfo, 'sequence'>): Promise<void> {
+    await this.withMlsWorkflow(() => this.requireMls().setGroupInfo(conversationId, info))
+    this.notifyPeers()
+  }
+
+  /** Who may change the group's information; false when it waits for other owners. */
+  async setGroupInfoEditors(
+    conversationId: string,
+    editors: 'members' | 'administrators',
+  ): Promise<boolean> {
+    const finalized = await this.withMlsWorkflow(() =>
+      this.requireMls().setGroupInfoEditors(conversationId, editors),
     )
     this.notifyPeers()
     return finalized !== null

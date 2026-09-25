@@ -489,6 +489,22 @@
           "title": "Daha küçük bir mesaj sınırı onaylansın mı?",
           "description": "{{requester}} en fazla {{detail}} baytlık mesajlar öneriyor."
         }
+      },
+      "whoEdits": "Bu grubun adını, resmini ve açıklamasını kimler değiştirebilir",
+      "info": {
+        "edit": "Grubu düzenle",
+        "title": "Grubu düzenle",
+        "description": "Bu grubun adını, resmini ve açıklamasını yalnızca grup üyeleri görebilir.",
+        "name": "Grup adı",
+        "about": "Açıklama",
+        "counter": "{{count}}/{{max}}",
+        "nameTooLong": "En fazla {{count}} karakter.",
+        "aboutTooLong": "En fazla {{count}} karakter.",
+        "addPicture": "Resim ekle",
+        "changePicture": "Resmi değiştir",
+        "removePicture": "Resmi kaldır",
+        "pictureUnreadable": "Bu resim kullanılamıyor. JPEG, PNG veya WebP deneyin.",
+        "saved": "Grup güncellendi"
       }
     },
     "groupInvitations": {

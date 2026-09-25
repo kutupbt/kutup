@@ -227,6 +227,7 @@ impl MlsClient {
             owner_set: conversation.current_owner_set.clone(),
             authorization_policy: conversation.current_authorization_policy.clone(),
             cryptographic_policy: conversation.current_cryptographic_policy.clone(),
+            group_info: conversation.current_group_info.clone(),
         };
         next_private_control
             .validate()

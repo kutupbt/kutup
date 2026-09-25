@@ -1,10 +1,10 @@
 import type { TFunction } from 'i18next'
-import type { ChatHistoryEntry, ConversationId, PeerChatProfile } from '@kutup/chat-core/types'
+import type { ChatHistoryEntry, ConversationId, MlsGroupInfo, PeerChatProfile } from '@kutup/chat-core/types'
 import type { MessageMutationState } from '../state/views'
 
-/** A group has no name of its own yet: "Group" and the start of its id. */
-export function groupTitle(groupId: string, t: TFunction): string {
-  return t('chat.group.untitled', { id: groupId.slice(0, 8) })
+/** A group's name; one never named shows "Group" and the start of its id. */
+export function groupTitle(groupId: string, t: TFunction, info?: MlsGroupInfo | null): string {
+  return info?.name || t('chat.group.untitled', { id: groupId.slice(0, 8) })
 }
 
 /** What to call a person: "You", their profile name, else their address. */
@@ -25,8 +25,9 @@ export function conversationTitle(
   profile: PeerChatProfile | null,
   selfAddress: string,
   t: TFunction,
+  groupInfo?: MlsGroupInfo | null,
 ): string {
-  if (conversation.kind === 'group') return groupTitle(conversation.groupId, t)
+  if (conversation.kind === 'group') return groupTitle(conversation.groupId, t, groupInfo)
   if (address === selfAddress) return t('chat.noteToSelf')
   return profile?.displayName || address || ''
 }

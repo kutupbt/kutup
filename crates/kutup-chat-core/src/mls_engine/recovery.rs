@@ -226,6 +226,7 @@ impl MlsClient {
             || private.authority_set != recovery.plan.new_genesis.authority_set
             || private.genesis_owner_set != previous.current_owner_set
             || private.owner_set != previous.current_owner_set
+            || private.group_info != recovered_group_info(&previous.current_group_info)
         {
             return Err(ChatError::Trust(
                 "MLS recovery Welcome private state differs from the signed plan".into(),
@@ -299,6 +300,7 @@ impl MlsClient {
             genesis_cryptographic_policy: private.genesis_cryptographic_policy,
             current_authorization_policy: private.authorization_policy,
             current_cryptographic_policy: private.cryptographic_policy,
+            current_group_info: private.group_info.clone(),
         };
         metadata
             .conversations
@@ -546,6 +548,7 @@ impl MlsClient {
             owner_set: conversation.current_owner_set.clone(),
             authorization_policy,
             cryptographic_policy,
+            group_info: recovered_group_info(&conversation.current_group_info),
         };
         private_control.validate().map_err(ChatError::Invalid)?;
         let signer = metadata.read_signer(&provider)?;
@@ -877,6 +880,9 @@ impl MlsClient {
             || private_control.authorization_policy.sequence != 1
             || private_control.authorization_policy.application_senders
                 != current.current_authorization_policy.application_senders
+            || private_control.authorization_policy.group_info_editors
+                != current.current_authorization_policy.group_info_editors
+            || private_control.group_info != recovered_group_info(&current.current_group_info)
             || private_control.cryptographic_policy.sequence != 1
             || private_control
                 .cryptographic_policy
@@ -937,6 +943,7 @@ impl MlsClient {
             genesis_cryptographic_policy: private_control.genesis_cryptographic_policy.clone(),
             current_authorization_policy: private_control.authorization_policy,
             current_cryptographic_policy: private_control.cryptographic_policy,
+            current_group_info: private_control.group_info.clone(),
         };
         metadata
             .conversations
@@ -1002,4 +1009,13 @@ pub(super) fn validate_pending_recovery(
             &previous.current_owner_set,
         )
         .map_err(ChatError::Trust)
+}
+
+/// A recovered incarnation keeps the group's information, its sequence
+/// starting again with the new control history.
+fn recovered_group_info(info: &Option<MlsGroupInfoV1>) -> Option<MlsGroupInfoV1> {
+    info.clone().map(|info| MlsGroupInfoV1 {
+        sequence: 1,
+        ..info
+    })
 }

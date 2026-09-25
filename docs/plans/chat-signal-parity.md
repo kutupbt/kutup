@@ -28,24 +28,26 @@ Done:
    message unless muted), mute (Signal's durations), mark unread, delete for
    me (a message or a whole chat), all synced through hidden Note-to-Self
    controls and kept in the backup.
+3. **Group info** (docs/chat-mls.md "Group information"). Name at creation,
+   description and picture in the MLS private control state, changed by a
+   `GroupInfoChange` Commit; the owners' "who can edit" rule.
 
 Next, in order:
 
-3. **Group info.** Name, description and picture in the MLS private control
-   state (a new `GroupInfoChange` action, not owner-quorum); the edit-info
-   policy bit; timeline notices for changes ("Alice changed the group name").
-4. **Leave group.** A `leaveRequest` group control that an administrator's
+4. **Group timeline notices.** "Alice changed the group name", "Alice added
+   Bob", "Bob left": recorded locally from each applied Commit.
+5. **Leave group.** A `leaveRequest` group control that an administrator's
    client commits as a removal; the leaver's local state becomes "left"; an
    owner or last administrator must hand over first.
-5. **Message features.** Mentions, link previews (fetched by the sender),
+6. **Message features.** Mentions, link previews (fetched by the sender),
    view-once media, forwarding, quoting attachments, stickers, profile
    "about", polls.
-6. **Invite links.** A join capability carried in the link fragment,
+7. **Invite links.** A join capability carried in the link fragment,
    optional administrator approval.
-7. **Notifications.** In-tab notifications with per-chat and global
+8. **Notifications.** In-tab notifications with per-chat and global
    settings, then Web Push with a service worker.
-8. **Calls.** 1:1 voice and video over WebRTC with TURN, then group calls
+9. **Calls.** 1:1 voice and video over WebRTC with TURN, then group calls
    through an SFU; end-to-end encrypted media frames.
-9. **Smaller things.** Persistent drafts, failed-send retry, typing-indicator
-   setting, default disappearing timer for new chats, keyboard shortcuts,
-   chat export.
+10. **Smaller things.** Persistent drafts, failed-send retry,
+    typing-indicator setting, default disappearing timer for new chats,
+    keyboard shortcuts, chat export.

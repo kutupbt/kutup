@@ -243,10 +243,7 @@ impl MlsClient {
                     .sequence
                     .checked_add(1)
                     != Some(next.sequence)
-                    || next.application_senders
-                        == conversation
-                            .current_authorization_policy
-                            .application_senders =>
+                    || next.same_rules(&conversation.current_authorization_policy) =>
             {
                 return Err(ChatError::Invalid(
                     "MLS authorization policy must be a contiguous actual change".into(),
@@ -346,6 +343,7 @@ impl MlsClient {
             cryptographic_policy: next_cryptographic_policy
                 .clone()
                 .unwrap_or_else(|| conversation.current_cryptographic_policy.clone()),
+            group_info: conversation.current_group_info.clone(),
         };
         next_private_control
             .validate()
@@ -694,10 +692,7 @@ pub(super) fn validate_pending_policy_change(
                 .sequence
                 .checked_add(1)
                 == Some(next.sequence)
-                && conversation
-                    .current_authorization_policy
-                    .application_senders
-                    != next.application_senders => {}
+                && !conversation.current_authorization_policy.same_rules(next) => {}
         (None, Some(next))
             if conversation
                 .current_cryptographic_policy

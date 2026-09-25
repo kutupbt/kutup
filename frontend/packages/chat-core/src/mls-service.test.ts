@@ -601,6 +601,16 @@ function harness(
       },
       control: pendingMembership(),
     }),
+    prepareMlsGroupInfoChange: vi.fn().mockResolvedValue({
+      pending: {
+        mlsGroupId: [...genesisGroupBytes],
+        epochBefore: 0,
+        epochAfter: 1,
+        commitHash: 'cd'.repeat(32),
+        commit: [1, 2, 3],
+      },
+      control: pendingMembership(),
+    }),
     mlsGroupDevices: vi.fn().mockResolvedValue([
       {
         address: { username: 'alice', server: 'alpha.example' },
@@ -1102,6 +1112,7 @@ describe('MlsConversationService', () => {
         { canonicalDomain: 'beta.example' },
       ],
       expect.stringMatching(/^[0-9]+$/),
+      null,
     )
     expect(transport.createMlsConversation).toHaveBeenCalledWith(
       pendingGenesis().request,
@@ -1213,6 +1224,44 @@ describe('MlsConversationService', () => {
       ],
       [],
       expect.stringMatching(/^[0-9]+$/),
+    )
+  })
+
+  it('stages the next group information through the membership pipeline', async () => {
+    vi.stubGlobal('crypto', {
+      randomUUID: () => proposalId,
+      getRandomValues: (value: Uint8Array) => value,
+    })
+    const named = {
+      ...finalizedMembership().conversation,
+      currentGroupInfo: { sequence: 3, name: 'Old name' },
+    }
+    const { client, transport, service } = harness(null, [named])
+    await expect(service.setGroupInfo(conversationId, {
+      name: '  Trail crew ',
+      description: '  ',
+    })).resolves.toEqual(finalizedMembership())
+    expect(client.prepareMlsGroupInfoChange).toHaveBeenCalledWith(
+      genesisGroupBytes,
+      proposalId,
+      { sequence: 4, name: 'Trail crew' },
+      expect.stringMatching(/^[0-9]+$/),
+    )
+    expect(transport.collectMlsOrderingVotes).toHaveBeenCalledWith(pendingMembership().voteRequest)
+    expect(client.finalizeMlsMembershipChange).toHaveBeenCalled()
+  })
+
+  it('names a new group from the start', async () => {
+    const { client, service } = harness(null, [])
+    await service.createGroup({ username: 'alice', server: 'alpha.example' }, ['alpha.example'], ' Trail crew ')
+      .catch(() => undefined)
+    expect(client.prepareMlsGroupGenesis).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Uint8Array),
+      { username: 'alice', server: 'alpha.example' },
+      expect.any(Array),
+      expect.stringMatching(/^[0-9]+$/),
+      { sequence: 1, name: 'Trail crew' },
     )
   })
 

@@ -15,6 +15,55 @@ impl MlsClient {
         additions: &[VerifiedMlsKeyPackage],
         created_at_seconds: i64,
     ) -> Result<PreparedMlsMembershipChange> {
+        self.prepare_roster_control(
+            mls_group_id,
+            proposal_id,
+            next_roster,
+            additions,
+            created_at_seconds,
+            None,
+        )
+        .await
+    }
+
+    /// Stage a change of the group's name, description or picture: a
+    /// roster-unchanged Commit whose private control state carries the next
+    /// information. Administrators may always; members when the group's
+    /// private policy lets them. It rides the membership-control pipeline
+    /// (votes, finalization, restart replay) like an administrator change.
+    pub async fn prepare_group_info_change(
+        &self,
+        mls_group_id: &[u8],
+        proposal_id: Uuid,
+        next_group_info: MlsGroupInfoV1,
+        created_at_seconds: i64,
+    ) -> Result<PreparedMlsMembershipChange> {
+        next_group_info.validate().map_err(ChatError::Invalid)?;
+        let (_, metadata) = self.load_provider().await?;
+        let roster = active_conversation_for_group(&metadata, mls_group_id)?
+            .current_roster
+            .clone();
+        drop(metadata);
+        self.prepare_roster_control(
+            mls_group_id,
+            proposal_id,
+            &roster,
+            &[],
+            created_at_seconds,
+            Some(next_group_info),
+        )
+        .await
+    }
+
+    async fn prepare_roster_control(
+        &self,
+        mls_group_id: &[u8],
+        proposal_id: Uuid,
+        next_roster: &[MlsConversationMemberV1],
+        additions: &[VerifiedMlsKeyPackage],
+        created_at_seconds: i64,
+        next_group_info: Option<MlsGroupInfoV1>,
+    ) -> Result<PreparedMlsMembershipChange> {
         validate_group_id(mls_group_id)?;
         if proposal_id.is_nil() || created_at_seconds < 0 {
             return Err(ChatError::Invalid(
@@ -25,7 +74,9 @@ impl MlsClient {
         let group_key = BASE64.encode(mls_group_id);
         let (provider, mut metadata) = self.load_provider().await?;
         if let Some(existing) = metadata.pending_membership_changes.get(&group_key) {
-            if existing.transition.proposal_id == proposal_id && existing.next_roster == next_roster
+            if existing.transition.proposal_id == proposal_id
+                && existing.next_roster == next_roster
+                && existing.next_group_info == next_group_info
             {
                 let pending = metadata
                     .pending_commits
@@ -93,10 +144,33 @@ impl MlsClient {
         let current_by_address = roster_by_address(&conversation.current_roster)?;
         let next_by_address = roster_by_address(next_roster)?;
         let (local_address, _) = parse_device_credential_identity(&metadata.credential_identity)?;
-        if !current_by_address
-            .get(&local_address)
-            .is_some_and(|member| member.is_admin)
-        {
+        let local_member = current_by_address.get(&local_address);
+        if let Some(info) = &next_group_info {
+            if !local_member.is_some_and(|member| {
+                conversation
+                    .current_authorization_policy
+                    .may_edit_group_info(member.is_admin)
+            }) {
+                return Err(ChatError::Trust(
+                    "this group lets only administrators change its information".into(),
+                ));
+            }
+            let expected_sequence = conversation
+                .current_group_info
+                .as_ref()
+                .map_or(1, |current| current.sequence.saturating_add(1));
+            if info.sequence != expected_sequence
+                || next_roster != conversation.current_roster
+                || conversation
+                    .current_group_info
+                    .as_ref()
+                    .is_some_and(|current| current.same_content(info))
+            {
+                return Err(ChatError::Invalid(
+                    "MLS group information change must be the next actual change".into(),
+                ));
+            }
+        } else if !local_member.is_some_and(|member| member.is_admin) {
             return Err(ChatError::Trust(
                 "MLS roster control requires a current group administrator".into(),
             ));
@@ -112,7 +186,9 @@ impl MlsClient {
             .cloned()
             .collect::<Vec<_>>();
         let administrator_only = added_accounts.is_empty() && removed_accounts.is_empty();
-        let action_type = if administrator_only {
+        let action_type = if next_group_info.is_some() {
+            MlsControlActionTypeV1::GroupInfoChange
+        } else if administrator_only {
             MlsControlActionTypeV1::RoutineAdmin
         } else {
             MlsControlActionTypeV1::MembershipChange
@@ -143,6 +219,9 @@ impl MlsClient {
             owner_set: conversation.current_owner_set.clone(),
             authorization_policy: conversation.current_authorization_policy.clone(),
             cryptographic_policy: conversation.current_cryptographic_policy.clone(),
+            group_info: next_group_info
+                .clone()
+                .or_else(|| conversation.current_group_info.clone()),
         };
         next_private_control
             .validate()
@@ -228,6 +307,7 @@ impl MlsClient {
                 pending: &pending,
                 action_type,
                 created_at_seconds,
+                next_group_info,
             })?;
         metadata
             .pending_membership_changes
@@ -401,6 +481,8 @@ impl MlsClient {
             || private_control.roster != control.next_roster
             || private_control.authority_set != control.vote_request.authority_set
             || private_control.owner_set != expected_owner_set
+            || (control.next_group_info.is_some()
+                && private_control.group_info != control.next_group_info)
         {
             return Err(ChatError::Trust(
                 "merged MLS private control extension differs from the finalized block".into(),
@@ -425,6 +507,9 @@ impl MlsClient {
         conversation.last_block_hash = Some(expected_hash);
         advance_member_readiness(conversation, &control.next_roster, block.epoch_after);
         conversation.current_roster = control.next_roster;
+        if control.next_group_info.is_some() {
+            conversation.current_group_info = control.next_group_info;
+        }
         let conversation = conversation.clone();
         ownership::prune_owner_candidates_for_roster(
             &mut metadata,

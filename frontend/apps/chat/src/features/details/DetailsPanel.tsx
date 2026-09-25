@@ -1,4 +1,4 @@
-import { ArrowLeft, Ban, Check, ShieldCheck, Timer } from 'lucide-react'
+import { ArrowLeft, Ban, Check, Pencil, ShieldCheck, Timer } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -10,6 +10,7 @@ import { Avatar } from '../../components/Avatar'
 import { DISAPPEARING_PRESETS } from '../../lib/disappearing'
 import { chatErrorMessage } from '../../lib/errors'
 import type { ConversationModel } from '../thread/useConversationModel'
+import { EditGroupInfoDialog } from './EditGroupInfoDialog'
 import { GroupDetails } from './GroupDetails'
 import { SafetyVerificationDialog } from './SafetyVerificationDialog'
 
@@ -70,16 +71,28 @@ export function DetailsPanel({ open, onClose, model }: { open: boolean; onClose:
 
 function DetailsBody({ model }: { model: ConversationModel }) {
   const { t } = useTranslation()
+  const [editing, setEditing] = useState(false)
+  const info = model.group?.currentGroupInfo
   return (
     <div className="pb-8">
       <div className="flex flex-col items-center gap-2 px-6 pb-6 pt-8 text-center">
-        <Avatar name={model.title} image={model.profile?.avatar} contentType={model.profile?.avatarContentType} group={model.conversation.kind === 'group'} size={80} />
+        <Avatar name={model.title} image={model.group?.currentGroupInfo?.avatar?.data ?? model.profile?.avatar} contentType={model.group?.currentGroupInfo?.avatar?.contentType ?? model.profile?.avatarContentType} group={model.conversation.kind === 'group'} size={80} />
         <h3 className="mt-2 text-lg font-semibold">{model.title}</h3>
         {model.address && !model.note && model.profile?.displayName ? (
           <p className="break-all text-sm text-muted-foreground">{model.address}</p>
         ) : null}
         {model.note ? <p className="text-sm text-muted-foreground">{t('chat.noteToSelfDescription')}</p> : null}
         {model.group ? <p className="text-sm text-muted-foreground">{t('chat.group.members', { count: model.group.currentRoster.length })}</p> : null}
+        {info?.description ? (
+          <p className="max-w-full whitespace-pre-line break-words text-sm" data-testid="chat-group-about">{info.description}</p>
+        ) : null}
+        {model.group && model.canEditGroupInfo ? (
+          <Button variant="outline" size="sm" className="mt-2" onClick={() => setEditing(true)} data-testid="chat-group-info-edit">
+            <Pencil />
+            {t('chat.group.info.edit')}
+          </Button>
+        ) : null}
+        {model.group ? <EditGroupInfoDialog group={model.group} open={editing} onOpenChange={setEditing} /> : null}
         {model.historyOnly ? <p className="text-sm text-muted-foreground">{t('chat.readOnly.history')}</p> : null}
       </div>
 
