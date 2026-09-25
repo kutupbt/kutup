@@ -315,6 +315,15 @@ receive path (Direct, sync transcript, MLS):
 | `viewOnce` | photo or video attachment | `true` or absent. Sent without a thumbnail; never enters the backup; the recipient opens it once, and closing the viewer sends `viewOnceOpened` to their own devices. Like Signal's, this is a courtesy against casual re-viewing, not protection from a screenshot or a modified client. |
 | `sticker` | photo attachment | `{emoji?}`: the attachment is a WebP or PNG of at most 512 KiB, not view-once. Readers draw it without a bubble and may save it to their own stickers. |
 
+### Calls
+
+`call` carries one 1:1 call signal (`CallSignalV1`: offer, answer, ICE
+batch, hang-up, busy) and is ephemeral like `typing`: never history, never
+a linked-device transcript, dropped from the outbox after 60 s, suppressed
+from people not accepted, refused in Note to Self and in MLS. `callLog` is a
+local-only record of a finished call, like `groupUpdate`. See
+[`chat-calls.md`](chat-calls.md).
+
 ### Polls
 
 Three content kinds, in Direct chats and groups alike:

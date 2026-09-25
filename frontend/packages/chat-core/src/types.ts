@@ -13,6 +13,10 @@ export interface ChatContentView {
   mutation?: ChatMessageMutationV1
   receipt?: ChatReceiptV1
   typing?: ChatTypingV1
+  /** A 1:1 call's signaling; live only, never in history. */
+  call?: ChatCallSignal
+  /** A call in the timeline, written by this device. */
+  callLog?: ChatCallLog
   disappearingTimer?: ChatDisappearingTimerV1
   /** Same-account controls: only ever in Note to Self, from this account. */
   conversationState?: ChatConversationStateV1
@@ -297,6 +301,67 @@ export interface ReceivedChatMessage {
   senderDeviceId: number
   cursor: string
   content: ChatContentView
+}
+
+export type ChatCallMedia = 'audio' | 'video'
+
+export interface ChatIceCandidate {
+  candidate: string
+  sdpMid?: string
+  sdpMLineIndex?: number
+}
+
+export type ChatHangupReason =
+  | 'normal'
+  | 'declined'
+  | 'answeredElsewhere'
+  | 'declinedElsewhere'
+  | 'unanswered'
+  | 'failed'
+
+export type ChatCallSignalKind =
+  | { type: 'offer'; media: ChatCallMedia; sdp: string }
+  | { type: 'answer'; sdp: string }
+  | { type: 'ice'; candidates: ChatIceCandidate[] }
+  | { type: 'hangup'; reason: ChatHangupReason }
+  | { type: 'busy' }
+
+/** One call signal (docs/chat-calls.md). */
+export interface ChatCallSignal {
+  callId: string
+  /** The device that placed the call; replies go only to it. */
+  callerDeviceId: number
+  /** The callee device that answered, once one has. */
+  calleeDeviceId?: number
+  signal: ChatCallSignalKind
+}
+
+export type ChatCallOutcome = 'answered' | 'missed' | 'declined' | 'unanswered' | 'busy' | 'failed'
+
+export interface ChatCallLog {
+  callId: string
+  incoming: boolean
+  media: ChatCallMedia
+  outcome: ChatCallOutcome
+  startedAtMs: number
+  /** For an answered call. */
+  durationSeconds?: number
+}
+
+/** A call signal received from `peer`'s device `senderDeviceId`. */
+export interface ChatCallEvent {
+  /** Canonical address of the other person. */
+  peer: string
+  senderDeviceId: number
+  sentAt: string
+  call: ChatCallSignal
+}
+
+export interface ChatCallServers {
+  iceServers: RTCIceServer[]
+  /** A TURN relay is available. */
+  relay: boolean
+  expiresAt?: number
 }
 
 export interface ChatTypingEvent {
@@ -1681,6 +1746,8 @@ export interface WasmChatClientHandle {
     sentAt: string,
     active: boolean,
   ): Promise<SendSummary>
+  sendCallSignal(sendId: string, peer: string, sentAt: string, signal: ChatCallSignal): Promise<SendSummary>
+  recordCallLog(peer: string, body: ChatCallLog): Promise<void>
   sendDisappearingTimer(
     sendId: string,
     peer: string,

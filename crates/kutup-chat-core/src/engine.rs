@@ -1253,10 +1253,14 @@ impl Engine {
         content: &ChatContent,
         rng: &mut R,
     ) -> Result<SendSummary> {
-        let is_typing = content.as_typing().is_some();
-        if is_typing && peer_user == self.session.user() {
+        if content.kind == kutup_chat_proto::content::kind::CALL && content.as_call().is_none() {
+            return Err(ChatError::Invalid("invalid call signal".into()));
+        }
+        // Typing and call signals: delivered live, never history or a transcript.
+        let ephemeral = content.is_ephemeral();
+        if ephemeral && peer_user == self.session.user() {
             return Err(ChatError::Invalid(
-                "Note to Self does not emit typing indicators".into(),
+                "Note to Self does not take typing indicators or calls".into(),
             ));
         }
         if content.as_disappearing_timer().is_some()
@@ -1345,7 +1349,7 @@ impl Engine {
             )));
         }
         let mut content = content.clone();
-        if !is_typing && peer_user != self.session.user() && content.profile_key.is_none() {
+        if !ephemeral && peer_user != self.session.user() && content.profile_key.is_none() {
             if let Some(profile) = self.session.local_profile().await? {
                 // Signal uploads a rotated profile before allowing the new key
                 // into messages. A pending first upload/edit/rotation is not a
@@ -1388,7 +1392,7 @@ impl Engine {
                     .await?;
                 let certificate = self.issue_verified_sender_certificate().await?;
                 let user = self.session.user().to_string();
-                let sync_bundles = if is_typing {
+                let sync_bundles = if ephemeral {
                     Vec::new()
                 } else {
                     self.fetch_verified_bundles(&user).await?
@@ -1411,7 +1415,7 @@ impl Engine {
             } else {
                 let recipient_bundles = self.fetch_verified_bundles(peer_user).await?;
                 let user = self.session.user().to_string();
-                let sync_bundles = if is_typing {
+                let sync_bundles = if ephemeral {
                     Vec::new()
                 } else {
                     self.fetch_verified_bundles(&user).await?
@@ -1482,8 +1486,18 @@ impl Engine {
             let is_typing = content
                 .as_ref()
                 .is_some_and(|content| content.as_typing().is_some());
-            if is_typing && unix_millis().saturating_sub(entry.created_at) > 10_000 {
-                self.session.discard_typing_outbox(&entry.send_id).await?;
+            let is_call = content
+                .as_ref()
+                .is_some_and(|content| content.as_call().is_some());
+            // Late typing is wrong, and a late call signal rings for a call
+            // long over: drop them instead of delivering.
+            let expired_after = if is_typing { 10_000 } else { 60_000 };
+            if (is_typing || is_call)
+                && unix_millis().saturating_sub(entry.created_at) > expired_after
+            {
+                self.session
+                    .discard_ephemeral_outbox(&entry.send_id)
+                    .await?;
                 continue;
             }
             match self
@@ -1491,7 +1505,7 @@ impl Engine {
                 .await
             {
                 Ok(summary) => summaries.push(summary),
-                Err(_) if is_receipt || is_typing => {}
+                Err(_) if is_receipt || is_typing || is_call => {}
                 Err(error) => return Err(error),
             }
         }

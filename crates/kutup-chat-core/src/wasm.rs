@@ -2600,6 +2600,52 @@ impl WasmChatClient {
         to_output(&SendSummaryView::from(summary))
     }
 
+    /// Send one call signal (offer, answer, ICE, hang-up, busy) to `peer`'s
+    /// devices; like typing it is never history nor a transcript.
+    #[wasm_bindgen(js_name = sendCallSignal)]
+    pub async fn send_call_signal(
+        &mut self,
+        send_id: String,
+        peer: String,
+        sent_at: String,
+        signal: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let signal: kutup_chat_proto::CallSignalV1 = from_transport(signal).map_err(chat_error)?;
+        let seq = self
+            .engine
+            .session()
+            .next_sent_seq()
+            .await
+            .map_err(chat_error)?;
+        let content = ChatContent::call_with_id(&send_id, sent_at, seq, &signal)
+            .map_err(|error| js_error(&error))?;
+        let summary = self
+            .engine
+            .send(&send_id, &peer, &content, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&SendSummaryView::from(summary))
+    }
+
+    /// Put a call into `peer`'s timeline on this device (writing it again
+    /// for the same call replaces it).
+    #[wasm_bindgen(js_name = recordCallLog)]
+    pub async fn record_call_log(
+        &mut self,
+        peer: String,
+        body: JsValue,
+    ) -> std::result::Result<(), JsValue> {
+        let body: kutup_chat_proto::CallLogBody = from_transport(body).map_err(chat_error)?;
+        let content = ChatContent::call_log_with_id(body.call_id.to_string(), now_rfc3339(), &body)
+            .map_err(|error| js_error(&error))?;
+        self.engine
+            .session_mut()
+            .record_local_notice(&peer, &content)
+            .await
+            .map_err(chat_error)
+    }
+
     #[wasm_bindgen(js_name = sendDisappearingTimer)]
     pub async fn send_disappearing_timer(
         &mut self,
@@ -3238,6 +3284,10 @@ struct ContentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     typing: Option<kutup_chat_proto::TypingBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    call: Option<kutup_chat_proto::CallSignalV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    call_log: Option<kutup_chat_proto::CallLogBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     disappearing_timer: Option<kutup_chat_proto::DisappearingTimerBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     conversation_state: Option<kutup_chat_proto::ConversationStateBody>,
@@ -3283,6 +3333,8 @@ impl From<ChatContent> for ContentView {
         let mutation = content.as_message_mutation();
         let receipt = content.as_receipt();
         let typing = content.as_typing();
+        let call = content.as_call();
+        let call_log = content.as_call_log();
         let disappearing_timer = content.as_disappearing_timer();
         let conversation_state = content.as_conversation_state();
         let read_position = content.as_read_position();
@@ -3310,6 +3362,8 @@ impl From<ChatContent> for ContentView {
             mutation,
             receipt,
             typing,
+            call,
+            call_log,
             disappearing_timer,
             conversation_state,
             read_position,
@@ -3501,6 +3555,7 @@ fn is_contact_control(bytes: &[u8]) -> Result<bool> {
         kutup_chat_proto::content::kind::CONTACT_CONTROL
             | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
             | kutup_chat_proto::content::kind::TYPING
+            | kutup_chat_proto::content::kind::CALL
             | kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
     ))
 }
@@ -3514,6 +3569,7 @@ fn is_invisible_control(bytes: &[u8]) -> Result<bool> {
             | kutup_chat_proto::content::kind::CONTACT_CONTROL
             | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
             | kutup_chat_proto::content::kind::TYPING
+            | kutup_chat_proto::content::kind::CALL
             | kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
     ))
 }

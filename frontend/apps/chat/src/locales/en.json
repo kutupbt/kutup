@@ -779,6 +779,49 @@
       "pushDescription": "Your browser's push service (from Google, Mozilla or Apple) wakes this browser when something arrives. It only learns when; the notification can't say who or what, since the server can't read your messages.",
       "pushBody": "You may have new messages.",
       "pushFailed": "This browser couldn't subscribe to push notifications."
+    },
+    "calls": {
+      "voice": "Voice call",
+      "video": "Video call",
+      "voiceCall": "voice call",
+      "videoCall": "video call",
+      "incomingVoice": "Incoming voice call",
+      "incomingVideo": "Incoming video call",
+      "screen": "Call with {{name}}",
+      "decline": "Decline",
+      "acceptVoice": "Answer",
+      "acceptVideo": "Answer with video",
+      "mute": "Mute",
+      "unmute": "Unmute",
+      "cameraOn": "Turn camera on",
+      "cameraOff": "Turn camera off",
+      "hangUp": "End call",
+      "ringing": "Ringing…",
+      "connecting": "Connecting…",
+      "ended": {
+        "hungUp": "Call ended",
+        "declined": "Call declined",
+        "busy": "Busy",
+        "unanswered": "No answer",
+        "failed": "Call failed",
+        "missed": "Missed call",
+        "elsewhere": "Answered on another device"
+      },
+      "log": {
+        "answeredIn": "Incoming {{call}}",
+        "answeredOut": "Outgoing {{call}}",
+        "missed": "Missed {{call}}",
+        "declinedIn": "Declined {{call}}",
+        "declinedOut": "Declined {{call}}",
+        "unanswered": "Unanswered {{call}}",
+        "busy": "Unanswered {{call}} (busy)",
+        "failed": "Failed {{call}}"
+      },
+      "callBack": "Call back",
+      "noDevices": "Kutup can't use your microphone or camera. Allow them in the browser to call.",
+      "startFailed": "The call couldn't start.",
+      "alwaysRelay": "Always relay calls",
+      "alwaysRelayDescription": "Send call audio and video through your server's relay, so the other person can't see your IP address. Calls may sound a little worse."
     }
   },
   "boot": {

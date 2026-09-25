@@ -78,6 +78,16 @@ CHAT_WEB_PUSH=true
 # CHAT_WEB_PUSH_HOSTS=fcm.googleapis.com,updates.push.services.mozilla.com,.push.apple.com,.notify.windows.com
 # CHAT_WEB_PUSH_SUBJECT=mailto:admin@example.com
 
+# Calls: media flows browser to browser (DTLS-SRTP). STUN finds public
+# addresses; a TURN relay (coturn with use-auth-secret) carries calls that
+# can't connect directly and hides addresses for "Always relay calls".
+# The server hands out 12-hour credentials made with CHAT_TURN_SECRET.
+# `docker compose --profile turn up` starts coturn with the same secret.
+# CHAT_STUN_URLS=stun:turn.example.com:3478
+# CHAT_TURN_URLS=turn:turn.example.com:3478?transport=udp,turn:turn.example.com:3478?transport=tcp
+# CHAT_TURN_SECRET=<long random string>
+# CHAT_TURN_REALM=turn.example.com
+
 # Optional contacts-only sealed sender. The policy contains public offline roots
 # and root-signed online certificates; the normal server receives only the
 # active online private key.

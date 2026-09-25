@@ -965,6 +965,85 @@ fn typing_is_delivered_without_history_or_linked_device_transcript() {
 }
 
 #[test]
+fn call_signals_are_delivered_without_history_or_linked_device_transcript() {
+    let mut rng = test_rng();
+    let mut bob = device("bob", 1, &mut rng);
+    let bundle = bundle_of(&bob, 1);
+    let server = Rc::new(MockServer::default());
+    server.script(vec![vec![bundle]]);
+    server.set_active(vec![(1, reg_id(&bob))]);
+    let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
+    let send_id = "55555555-5555-4555-8555-555555555555";
+    let signal = kutup_chat_proto::CallSignalV1 {
+        call_id: uuid::Uuid::from_u128(9),
+        caller_device_id: 1,
+        callee_device_id: None,
+        signal: kutup_chat_proto::CallSignalKindV1::Offer {
+            media: kutup_chat_proto::CallMediaV1::Audio,
+            sdp: "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n".into(),
+        },
+    };
+    let offer = ChatContent::call_with_id(send_id, "2026-09-25T00:00:00Z", 1, &signal).unwrap();
+
+    let summary = block_on(alice.send(send_id, "bob", &offer, &mut rng)).unwrap();
+    assert!(summary.delivered);
+    assert!(block_on(alice.session().sent_history()).unwrap().is_empty());
+    assert!(server.synced.borrow().is_empty());
+    assert_eq!(
+        decrypt_for(
+            &mut bob,
+            &ChatAddress::local("alice", 1),
+            &server.last_delivered(),
+            1,
+            &mut rng,
+        )
+        .as_call(),
+        Some(signal)
+    );
+
+    // Calls are not for Note to Self.
+    assert!(block_on(alice.send(send_id, "alice", &offer, &mut rng)).is_err());
+}
+
+#[test]
+fn a_call_record_is_local_history_that_replaces_itself() {
+    let mut rng = test_rng();
+    let mut alice = device("alice", 1, &mut rng);
+    let record = |outcome, duration_seconds| {
+        ChatContent::call_log_with_id(
+            "00000000-0000-4000-8000-000000000009",
+            "",
+            &kutup_chat_proto::CallLogBody {
+                call_id: uuid::Uuid::from_u128(9),
+                incoming: true,
+                media: kutup_chat_proto::CallMediaV1::Video,
+                outcome,
+                started_at_ms: 1,
+                duration_seconds,
+            },
+        )
+        .unwrap()
+    };
+    block_on(alice.record_local_notice(
+        "bob",
+        &record(kutup_chat_proto::CallOutcomeV1::Missed, None),
+    ))
+    .unwrap();
+    block_on(alice.record_local_notice(
+        "bob",
+        &record(kutup_chat_proto::CallOutcomeV1::Answered, Some(30)),
+    ))
+    .unwrap();
+    let history = block_on(alice.sent_history()).unwrap();
+    assert_eq!(history.len(), 1);
+    let content: ChatContent = serde_json::from_slice(&history[0].content).unwrap();
+    assert_eq!(content.as_call_log().unwrap().duration_seconds, Some(30));
+    // Only local-only records are written this way.
+    let text = ChatContent::text_with_id("x", "", 1, "hi");
+    assert!(block_on(alice.record_local_notice("bob", &text)).is_err());
+}
+
+#[test]
 fn direct_recipient_and_linked_transcript_retry_independently_across_restart() {
     let mut rng = test_rng();
     let alice_db = Rc::new(SqliteChatDb::open_in_memory().unwrap());

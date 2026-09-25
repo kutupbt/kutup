@@ -1606,7 +1606,9 @@ impl Session {
                 // profile and therefore must not mutate the peer cache.
                 profile_control = true;
                 None
-            } else if transcript.content.kind == kutup_chat_proto::content::kind::TYPING {
+            } else if transcript.content.kind == kutup_chat_proto::content::kind::TYPING
+                || transcript.content.kind == kutup_chat_proto::content::kind::CALL
+            {
                 // Ephemeral controls are never linked-device history. Current
                 // clients do not sync them, but older/malicious local devices
                 // cannot force one into the durable transcript either.
@@ -1637,6 +1639,9 @@ impl Session {
             let is_typing = parsed
                 .as_ref()
                 .is_some_and(|content| content.as_typing().is_some());
+            let is_call = parsed
+                .as_ref()
+                .is_some_and(|content| content.as_call().is_some());
             let is_disappearing_timer = parsed
                 .as_ref()
                 .is_some_and(|content| content.as_disappearing_timer().is_some());
@@ -1665,6 +1670,14 @@ impl Session {
                 return Err(ChatError::Content(
                     "invalid encrypted typing control".into(),
                 ));
+            }
+            if parsed
+                .as_ref()
+                .is_some_and(|content| content.kind == kutup_chat_proto::content::kind::CALL)
+                && !is_call
+            {
+                self.store.discard();
+                return Err(ChatError::Content("invalid encrypted call signal".into()));
             }
             if parsed.as_ref().is_some_and(|content| {
                 content.kind == kutup_chat_proto::content::kind::DISAPPEARING_TIMER
@@ -1704,9 +1717,10 @@ impl Session {
                         }
                     }
                 }
-            } else if is_typing {
-                // Typing cannot create/reopen a message request and is never
-                // durable plaintext history. The ratchet mutation and mailbox
+            } else if is_typing || is_call {
+                // Typing and calls cannot create/reopen a message request and
+                // are never durable plaintext history (a call from someone
+                // not yet accepted does not ring, as in Signal). The ratchet mutation and mailbox
                 // receipt still commit atomically before the live event emits.
                 suppressed = !prior_contact.as_ref().is_some_and(|contact| {
                     matches!(
@@ -2488,7 +2502,7 @@ impl Session {
                 "a sent transcript cannot contain another sent transcript".into(),
             ));
         }
-        let ephemeral = content.as_typing().is_some();
+        let ephemeral = content.is_ephemeral();
         let result = async {
             let plaintext =
                 serde_json::to_vec(content).map_err(|e| ChatError::Content(e.to_string()))?;
@@ -2577,7 +2591,7 @@ impl Session {
             sender_certificate,
             capability,
         } = send;
-        let ephemeral = content.as_typing().is_some();
+        let ephemeral = content.is_ephemeral();
         let result = async {
             let plaintext =
                 serde_json::to_vec(content).map_err(|e| ChatError::Content(e.to_string()))?;
@@ -2848,7 +2862,7 @@ impl Session {
             OutboxLeg::Primary => {
                 let ephemeral = serde_json::from_slice::<ChatContent>(&entry.content)
                     .ok()
-                    .is_some_and(|content| content.as_typing().is_some());
+                    .is_some_and(|content| content.is_ephemeral());
                 if !ephemeral {
                     let mut message = self
                         .store
@@ -2895,19 +2909,58 @@ impl Session {
         self.store.db().list_outbox().await
     }
 
-    pub(crate) async fn discard_typing_outbox(&mut self, send_id: &str) -> Result<()> {
+    /// Write a local-only record (a call in the timeline) into `peer`'s
+    /// conversation as this device's own row. It is never sent; the same
+    /// message id replaces the earlier record.
+    pub async fn record_local_notice(
+        &mut self,
+        peer_user: &str,
+        content: &ChatContent,
+    ) -> Result<()> {
+        if !ChatContent::is_local_only_kind(&content.kind) {
+            return Err(ChatError::Invalid(
+                "only a local-only record can be written without sending".into(),
+            ));
+        }
+        let send_id = content
+            .message_id
+            .clone()
+            .ok_or_else(|| ChatError::Invalid("a local record needs an id".into()))?;
+        let now = now_millis();
+        let result = async {
+            self.store.stage_sent_message(SentMessage {
+                send_id,
+                peer: peer_user.to_string(),
+                sender_device_id: self.device_id(),
+                content: serde_json::to_vec(content)
+                    .map_err(|e| ChatError::Content(e.to_string()))?,
+                created_at: now,
+                delivered_at: Some(now),
+                delivered: true,
+                deduplicated: false,
+            });
+            self.store.commit().await
+        }
+        .await;
+        if result.is_err() {
+            self.store.discard();
+        }
+        result
+    }
+
+    pub(crate) async fn discard_ephemeral_outbox(&mut self, send_id: &str) -> Result<()> {
         let entry = self
             .store
             .db()
             .load_outbox(send_id)
             .await?
             .ok_or_else(|| ChatError::Db(format!("send {send_id} has no outbox record")))?;
-        let is_typing = serde_json::from_slice::<ChatContent>(&entry.content)
+        let ephemeral = serde_json::from_slice::<ChatContent>(&entry.content)
             .ok()
-            .is_some_and(|content| content.as_typing().is_some());
-        if !is_typing {
+            .is_some_and(|content| content.is_ephemeral());
+        if !ephemeral {
             return Err(ChatError::Invalid(
-                "only an encrypted typing outbox may expire".into(),
+                "only a typing or call outbox may expire".into(),
             ));
         }
         self.store.delete_outbox(send_id);

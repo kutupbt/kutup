@@ -55,8 +55,10 @@ Next, in order:
    chats only for mentions; unread count in the title), and opt-in Web Push
    wake-ups for closed browsers. Pushes are empty, since the server cannot
    read messages, so they say only that something may be new.
-9. **Calls.** 1:1 voice and video over WebRTC with TURN, then group calls
-   through an SFU; end-to-end encrypted media frames.
+9. **Calls.** 1:1 voice and video (done, [`chat-calls.md`](../chat-calls.md)):
+   WebRTC with signals over the Direct session, coturn shared-secret TURN,
+   "always relay", call history, ringing across devices and tabs. Group
+   calls through an SFU with end-to-end encrypted frames remain.
 10. **Smaller things.** Persistent drafts, failed-send retry,
     typing-indicator setting, default disappearing timer for new chats,
     keyboard shortcuts, chat export.

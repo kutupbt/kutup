@@ -9,6 +9,7 @@ import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { Button } from '@kutup/ui/components/button'
 import { UserMenu } from '@kutup/ui/components/user-menu'
+import { CallHost } from '../features/calls/CallScreen'
 import { JoinGroupHost } from '../features/groupLink/JoinGroupDialog'
 import { NewChatDialog } from '../features/list/NewChatDialog'
 import { ChatSearchBox } from '../features/list/ChatSearchBox'
@@ -107,6 +108,7 @@ export function ChatShell() {
       <NewChatDialog open={newChat} onOpenChange={setNewChat} />
       <JoinGroupHost />
       <ChatNotifier unread={unread} />
+      <CallHost />
     </AppShell>
   )
 }

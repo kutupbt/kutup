@@ -1,6 +1,7 @@
 import type { TFunction } from 'i18next'
 import type { ChatHistoryEntry, ConversationId, MlsGroupInfo, PeerChatProfile } from '@kutup/chat-core/types'
 import type { MessageMutationState } from '../state/views'
+import { callLogText } from './callText'
 import { groupUpdateSentences } from './groupUpdate'
 
 /** A group's name; one never named shows "Group" and the start of its id. */
@@ -46,6 +47,7 @@ export function messagePreview(
   if (entry.content.groupUpdate && entry.conversation.kind === 'group' && notice) {
     return groupUpdateSentences(entry.content.groupUpdate, notice.self, notice.nameOf, t)[0] ?? ''
   }
+  if (entry.content.callLog) return callLogText(entry.content.callLog, t)
   if (mutation?.deleted) {
     return entry.direction === 'outgoing' ? t('chat.mutations.youDeleted') : t('chat.mutations.deleted')
   }

@@ -33,6 +33,7 @@ mod storage;
 mod storage_probe;
 mod telemetry;
 mod totp;
+mod calls;
 mod version_retention;
 mod web_push;
 
@@ -757,6 +758,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/chat/messages/ack", post(chat::ack_messages))
         .route("/api/chat/ws-ticket", post(chat::create_ws_ticket))
         .route("/api/chat/link-preview", post(chat_link_preview::fetch))
+        .route("/api/chat/call-servers", get(calls::call_servers))
         .route(
             "/api/chat/push-subscription",
             put(web_push::put_subscription)

@@ -135,6 +135,8 @@ impl MlsClient {
         }
         if ChatContent::is_account_control_kind(&content.kind)
             || ChatContent::is_local_only_kind(&content.kind)
+            // Group calls have their own path; 1:1 signals never ride MLS.
+            || content.kind == kutup_chat_proto::content::kind::CALL
         {
             return Err(ChatError::Content(format!(
                 "{} is not an MLS application",

@@ -779,6 +779,49 @@
       "pushDescription": "Tarayıcınızın bildirim hizmeti (Google, Mozilla ya da Apple'ın) yeni bir şey geldiğinde bu tarayıcıyı uyandırır. Yalnızca ne zaman olduğunu öğrenir; sunucu mesajlarınızı okuyamadığı için bildirim kimden ya da ne geldiğini söyleyemez.",
       "pushBody": "Yeni mesajlarınız olabilir.",
       "pushFailed": "Bu tarayıcı anlık bildirimlere abone olamadı."
+    },
+    "calls": {
+      "voice": "Sesli arama",
+      "video": "Görüntülü arama",
+      "voiceCall": "sesli arama",
+      "videoCall": "görüntülü arama",
+      "incomingVoice": "Gelen sesli arama",
+      "incomingVideo": "Gelen görüntülü arama",
+      "screen": "{{name}} ile arama",
+      "decline": "Reddet",
+      "acceptVoice": "Yanıtla",
+      "acceptVideo": "Görüntülü yanıtla",
+      "mute": "Sesi kapat",
+      "unmute": "Sesi aç",
+      "cameraOn": "Kamerayı aç",
+      "cameraOff": "Kamerayı kapat",
+      "hangUp": "Aramayı bitir",
+      "ringing": "Çalıyor…",
+      "connecting": "Bağlanıyor…",
+      "ended": {
+        "hungUp": "Arama bitti",
+        "declined": "Arama reddedildi",
+        "busy": "Meşgul",
+        "unanswered": "Yanıt yok",
+        "failed": "Arama başarısız",
+        "missed": "Cevapsız arama",
+        "elsewhere": "Başka bir cihazda yanıtlandı"
+      },
+      "log": {
+        "answeredIn": "Gelen {{call}}",
+        "answeredOut": "Giden {{call}}",
+        "missed": "Cevapsız {{call}}",
+        "declinedIn": "Reddedilen {{call}}",
+        "declinedOut": "Reddedilen {{call}}",
+        "unanswered": "Yanıtlanmayan {{call}}",
+        "busy": "Yanıtlanmayan {{call}} (meşgul)",
+        "failed": "Başarısız {{call}}"
+      },
+      "callBack": "Geri ara",
+      "noDevices": "Kutup mikrofonunuzu ya da kameranızı kullanamıyor. Arama yapmak için tarayıcıda izin verin.",
+      "startFailed": "Arama başlatılamadı.",
+      "alwaysRelay": "Aramaları her zaman aktar",
+      "alwaysRelayDescription": "Arama sesini ve görüntüsünü sunucunuzun aktarıcısı üzerinden gönderin; böylece karşı taraf IP adresinizi göremez. Arama kalitesi biraz düşebilir."
     }
   },
   "boot": {

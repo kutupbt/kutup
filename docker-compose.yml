@@ -106,6 +106,12 @@ services:
       CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY: ${CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY:-}
       CHAT_MLS_ORDERING_POLICY: ${CHAT_MLS_ORDERING_POLICY:-}
       CHAT_MLS_CONTROL_SIGNING_KEY: ${CHAT_MLS_CONTROL_SIGNING_KEY:-}
+      CHAT_WEB_PUSH: ${CHAT_WEB_PUSH:-true}
+      CHAT_WEB_PUSH_HOSTS: ${CHAT_WEB_PUSH_HOSTS:-}
+      CHAT_WEB_PUSH_SUBJECT: ${CHAT_WEB_PUSH_SUBJECT:-}
+      CHAT_STUN_URLS: ${CHAT_STUN_URLS:-}
+      CHAT_TURN_URLS: ${CHAT_TURN_URLS:-}
+      CHAT_TURN_SECRET: ${CHAT_TURN_SECRET:-}
       # Per-IP/account rate limits + per-account login lockout (blank → server defaults).
       RATE_LIMIT_LOGIN_PER_MIN: ${RATE_LIMIT_LOGIN_PER_MIN:-}
       RATE_LIMIT_PREFLIGHT_PER_MIN: ${RATE_LIMIT_PREFLIGHT_PER_MIN:-}
@@ -146,6 +152,31 @@ services:
       interval: 2s
       timeout: 5s
       retries: 30
+
+  # TURN relay for Chat calls (optional: `docker compose --profile turn up`).
+  # It relays only DTLS-SRTP packets it cannot read; credentials come from the
+  # backend (CHAT_TURN_SECRET). Host networking keeps the relay port range
+  # reachable without publishing thousands of ports.
+  coturn:
+    image: coturn/coturn:4.6
+    profiles: ["turn"]
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TURN_SECRET: ${CHAT_TURN_SECRET:-}
+      TURN_REALM: ${CHAT_TURN_REALM:-kutup}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        [ -n "$$TURN_SECRET" ] || { echo 'set CHAT_TURN_SECRET for the TURN relay' >&2; exit 1; };
+        exec turnserver --use-auth-secret --static-auth-secret="$$TURN_SECRET"
+        --realm="$$TURN_REALM" --listening-port=3478 --min-port=49160 --max-port=49200
+        --no-cli --no-multicast-peers --fingerprint --log-file=stdout
+        --denied-peer-ip=10.0.0.0-10.255.255.255
+        --denied-peer-ip=172.16.0.0-172.31.255.255
+        --denied-peer-ip=192.168.0.0-192.168.255.255
+        --denied-peer-ip=127.0.0.0-127.255.255.255
+        --denied-peer-ip=169.254.0.0-169.254.255.255
 
 volumes:
   postgres_data:

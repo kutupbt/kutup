@@ -13,6 +13,7 @@ import {
   type ReactionOperation,
 } from '@kutup/chat-core/reactions'
 import type {
+  ChatCallLog,
   ChatGroupUpdate,
   ChatPollV1,
   ChatViewOnceOpenedV1,
@@ -306,6 +307,8 @@ export interface MessageView {
   timerChange: { seconds?: number } | null
   /** A group change (renamed, member added…) shown as a notice. */
   groupUpdate: ChatGroupUpdate | null
+  /** A call in the timeline. */
+  callLog: ChatCallLog | null
   /** A view-once photo or video already opened: only "Viewed" is left. */
   viewedOnce: { video: boolean } | null
   /** A poll and its votes so far. */
@@ -414,7 +417,7 @@ export function threadView(
   }
   const shown = inThread.filter(
     (m) =>
-      (m.content.disappearingTimer || isGroupNotice(m) || endNotices.has(m) || isVisibleChatMessage(m, nowMs)) &&
+      (m.content.disappearingTimer || isGroupNotice(m) || m.content.callLog || endNotices.has(m) || isVisibleChatMessage(m, nowMs)) &&
       !(m.content.messageId && opened.has(m.content.messageId)),
   )
   const byId = new Map(shown.map((m) => [messageIdOf(m), m]))
@@ -437,6 +440,7 @@ export function threadView(
       receipt: receipts.get(id) ?? null,
       timerChange: entry.content.disappearingTimer ? { seconds: entry.content.disappearingTimer.durationSeconds } : null,
       groupUpdate: isGroupNotice(entry) ? entry.content.groupUpdate! : null,
+      callLog: entry.content.callLog ?? null,
       viewedOnce: null,
       poll: entry.content.poll ? (polls.get(id) ?? null) : null,
       pollEnded: endNotices.has(entry)
@@ -468,6 +472,7 @@ export function threadView(
       receipt: null,
       timerChange: null,
       groupUpdate: null,
+      callLog: null,
       viewedOnce: { video: body.video },
       poll: null,
       pollEnded: null,

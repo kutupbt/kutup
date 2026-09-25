@@ -37,6 +37,7 @@ export interface ConversationModel {
   canSendMedia: boolean
   canSetTimer: boolean
   canSendTyping: boolean
+  canCall: boolean
   canEditGroupInfo: boolean
 }
 
@@ -96,6 +97,8 @@ export function useConversationModel(conversation: ConversationId, now: number):
         (isAdmin || group.currentAuthorizationPolicy.groupInfoEditors === 1),
       canSendTyping:
         !readOnly && !note && (conversation.kind === 'group' || contact?.state === 'accepted' || contact?.state === 'pendingOutgoing'),
+      // Signal rings only for accepted contacts; group calls come later.
+      canCall: !readOnly && !note && conversation.kind === 'direct' && contact?.state === 'accepted',
     }
   }, [conversation, snapshot, selfAddress, now, t])
 }

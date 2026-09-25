@@ -1,11 +1,11 @@
-import { ArrowLeft, BarChart3, Check, Info, Loader2, MoreVertical, Timer, UserPlus, Users } from 'lucide-react'
+import { ArrowLeft, BarChart3, Check, Info, Loader2, MoreVertical, Phone, Timer, UserPlus, Users, Video } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { canonicalAccountAddress } from '@kutup/chat-core/identity'
+import { canonicalAccountAddress, withHomeServer } from '@kutup/chat-core/identity'
 import { downloadChatMediaToCacheV1, openCachedChatMediaV1 } from '@kutup/chat-core/media'
-import type { ChatAttachmentDescriptorV1, ConversationId } from '@kutup/chat-core/types'
+import type { ChatAttachmentDescriptorV1, ChatCallMedia, ConversationId } from '@kutup/chat-core/types'
 import { freshAccessToken } from '@kutup/session/client'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
@@ -22,7 +22,9 @@ import { refreshChat, useChat } from '../../app/chatStore'
 import { Avatar } from '../../components/Avatar'
 import { DISAPPEARING_PRESETS, disappearingLabel } from '../../lib/disappearing'
 import { chatErrorMessage } from '../../lib/errors'
+import { callLogText } from '../../lib/callText'
 import { groupUpdateSentences } from '../../lib/groupUpdate'
+import { callController, useCall } from '../calls/callStore'
 import { personName } from '../../lib/names'
 import { formatDayHeader } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
@@ -67,6 +69,19 @@ export function ConversationView({ conversation }: { conversation: ConversationI
   const focus = params.get('focus')
   const [highlight, setHighlight] = useState<string | null>(focus)
   const [details, setDetails] = useState(false)
+  const call = useCall()
+  async function placeCall(media: ChatCallMedia) {
+    const controller = callController()
+    const peer = conversation.kind === 'direct' ? conversation.address : null
+    if (!controller || !peer) return
+    try {
+      await controller.start(withHomeServer(peer, chat.capabilities?.serverName), media)
+    } catch (error) {
+      toast.error(error instanceof DOMException && error.name === 'NotAllowedError'
+        ? t('chat.calls.noDevices')
+        : t('chat.calls.startFailed'))
+    }
+  }
   const joinRequests = model.group
     ? chat.snapshot.joinRequests.filter((request) => request.conversationId === model.group!.request.genesis.conversationId).length
     : 0
@@ -235,6 +250,16 @@ export function ConversationView({ conversation }: { conversation: ConversationI
             </DropdownMenuContent>
           </DropdownMenu>
         ) : null}
+        {model.canCall ? (
+          <>
+            <Button variant="ghost" size="icon" onClick={() => void placeCall('audio')} disabled={call !== null} aria-label={t('chat.calls.voice')} title={t('chat.calls.voice')} data-testid="chat-call-voice">
+              <Phone />
+            </Button>
+            <Button variant="ghost" size="icon" onClick={() => void placeCall('video')} disabled={call !== null} aria-label={t('chat.calls.video')} title={t('chat.calls.video')} data-testid="chat-call-video">
+              <Video />
+            </Button>
+          </>
+        ) : null}
         <Button variant="ghost" size="icon" onClick={() => setDetails(true)} aria-label={t('chat.details.open')} data-testid={model.group ? 'chat-group-members' : undefined}>
           <Info />
         </Button>
@@ -307,6 +332,21 @@ export function ConversationView({ conversation }: { conversation: ConversationI
                   ? t('chat.polls.endedNotice_you', { question: row.view.pollEnded.question })
                   : t('chat.polls.endedNotice', { name: nameOf(row.view), question: row.view.pollEnded.question })}
               </p>
+            )
+          }
+          if (row.kind === 'notice' && row.view.callLog) {
+            const log = row.view.callLog
+            const missed = log.outcome === 'missed'
+            return (
+              <div key={row.key} className="mx-auto flex max-w-sm items-center justify-center gap-2 px-4 py-2.5 text-center text-xs text-muted-foreground" data-testid="chat-call-notice">
+                {log.media === 'video' ? <Video className={cn('size-4 shrink-0', missed && 'text-destructive')} aria-hidden /> : <Phone className={cn('size-4 shrink-0', missed && 'text-destructive')} aria-hidden />}
+                <span className={cn(missed && 'text-destructive')}>{callLogText(log, t)}</span>
+                {model.canCall ? (
+                  <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => void placeCall(log.media)}>
+                    {t('chat.calls.callBack')}
+                  </Button>
+                ) : null}
+              </div>
             )
           }
           if (row.kind === 'notice' && row.view.groupUpdate) {

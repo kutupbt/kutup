@@ -17,6 +17,7 @@
 use serde::{Deserialize, Serialize};
 
 mod backup;
+mod calls;
 pub mod content;
 mod extras;
 pub mod federation;
@@ -43,6 +44,10 @@ pub use backup::{
     CHAT_DELIVERY_MEDIA_RETENTION_DAYS, DEFAULT_CHAT_STORAGE_QUOTA_BYTES,
     MAX_CHAT_BACKUP_BASE_CIPHERTEXT_BYTES, MAX_CHAT_BACKUP_MEDIA_REFERENCES_PER_PAGE,
     MAX_CHAT_BACKUP_PAGE_SEGMENTS, MAX_CHAT_BACKUP_SEGMENT_CIPHERTEXT_BYTES,
+};
+pub use calls::{
+    CallLogBody, CallMediaV1, CallOutcomeV1, CallSignalKindV1, CallSignalV1, HangupReasonV1,
+    IceCandidateV1, MAX_CALL_ICE_CANDIDATES, MAX_CALL_SDP_BYTES,
 };
 pub use content::{
     ChatContent, ContactControlBody, ContactState, ConversationStateBody, DeleteForMeBody,

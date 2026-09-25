@@ -74,6 +74,13 @@ pub struct Config {
     /// The VAPID contact (`CHAT_WEB_PUSH_SUBJECT`): a `mailto:` or `https:`
     /// URL push services may use to reach the operator.
     pub chat_web_push_subject: String,
+    /// STUN servers for Chat calls (`CHAT_STUN_URLS`, comma list).
+    pub chat_stun_urls: String,
+    /// TURN relays for Chat calls (`CHAT_TURN_URLS`, comma list of
+    /// `turn:`/`turns:` URLs) and their coturn `static-auth-secret`
+    /// (`CHAT_TURN_SECRET`). Without both, calls connect only directly.
+    pub chat_turn_urls: String,
+    pub chat_turn_secret: String,
     /// Complete authenticated sealed-sender service policy JSON. It contains
     /// public roots and root-signed online certificates, never an offline root.
     pub chat_sealed_sender_policy: String,
@@ -257,6 +264,9 @@ impl Config {
                 crate::web_push::DEFAULT_PUSH_HOSTS,
             ),
             chat_web_push_subject: get_env("CHAT_WEB_PUSH_SUBJECT", ""),
+            chat_stun_urls: get_env("CHAT_STUN_URLS", ""),
+            chat_turn_urls: get_env("CHAT_TURN_URLS", ""),
+            chat_turn_secret: get_env("CHAT_TURN_SECRET", ""),
             chat_sealed_sender_policy: get_env("CHAT_SEALED_SENDER_POLICY", ""),
             chat_sealed_sender_online_private_key: get_env(
                 "CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY",

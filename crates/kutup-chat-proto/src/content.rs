@@ -81,6 +81,12 @@ pub mod kind {
     /// group"). Written only by the local engine from an authenticated,
     /// ordered MLS Commit; never sent, and refused if it ever arrives. [IMPL]
     pub const GROUP_UPDATE: &str = "groupUpdate";
+    /// A 1:1 call's signaling (offer, answer, ICE, hang-up, busy);
+    /// ephemeral like typing: never history, never a transcript. [IMPL]
+    pub const CALL: &str = "call";
+    /// A call in the timeline ("Missed voice call"), written by each device
+    /// for itself; never sent, and refused if it ever arrives. [IMPL]
+    pub const CALL_LOG: &str = "callLog";
     /// Session-control notice (e.g. explicit reset). [RSV]
     pub const SESSION_CONTROL: &str = "sessionControl";
 }
@@ -399,6 +405,57 @@ impl ChatContent {
         }
     }
 
+    /// Builds one ephemeral call signal (see [`crate::CallSignalV1`]).
+    pub fn call_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        signal: &crate::CallSignalV1,
+    ) -> Result<Self, String> {
+        signal.validate()?;
+        Ok(ChatContent {
+            v: Self::VERSION,
+            kind: kind::CALL.to_string(),
+            sent_at: sent_at.into(),
+            seq,
+            message_id: Some(message_id.into()),
+            reply_to: None,
+            profile_key: None,
+            profile_suite: None,
+            body: serde_json::to_value(signal).map_err(|error| error.to_string())?,
+            extra: serde_json::Map::new(),
+        })
+    }
+
+    pub fn as_call(&self) -> Option<crate::CallSignalV1> {
+        if self.kind != kind::CALL || self.v != Self::VERSION || self.message_id.is_none() {
+            return None;
+        }
+        let signal: crate::CallSignalV1 = serde_json::from_value(self.body.clone()).ok()?;
+        signal.validate().ok()?;
+        Some(signal)
+    }
+
+    /// Content that is delivered live and never kept: typing and call signals.
+    pub fn is_ephemeral(&self) -> bool {
+        self.as_typing().is_some() || self.as_call().is_some()
+    }
+
+    pub fn call_log_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        body: &crate::CallLogBody,
+    ) -> Result<Self, String> {
+        body.validate()?;
+        Self::account_control(kind::CALL_LOG, message_id, sent_at, 0, body)
+    }
+
+    pub fn as_call_log(&self) -> Option<crate::CallLogBody> {
+        let body: crate::CallLogBody = self.as_account_control(kind::CALL_LOG)?;
+        body.validate().ok()?;
+        Some(body)
+    }
+
     pub fn as_typing(&self) -> Option<TypingBody> {
         if self.kind != kind::TYPING || self.v != Self::VERSION || self.message_id.is_none() {
             return None;
@@ -681,7 +738,7 @@ impl ChatContent {
 
     /// Kinds only this device's engine writes; they never travel.
     pub fn is_local_only_kind(kind: &str) -> bool {
-        kind == kind::GROUP_UPDATE
+        kind == kind::GROUP_UPDATE || kind == kind::CALL_LOG
     }
 
     pub fn group_update_with_id(

@@ -23,6 +23,10 @@ import type {
   ReceiveReport,
   SendSummary,
   LocalMlsConversationRecord,
+  ChatCallEvent,
+  ChatCallLog,
+  ChatCallServers,
+  ChatCallSignal,
   GroupJoinRequest,
   InviteLinkCrypto,
   MlsGroupInfo,
@@ -128,6 +132,8 @@ export class ChatService {
   private pongDeadline: ReturnType<typeof setTimeout> | null = null
   private connection: ChatConnectionStatus = 'connecting'
   private readonly connectionListeners = new Set<(status: ChatConnectionStatus) => void>()
+  private readonly callListeners = new Set<(event: ChatCallEvent) => void>()
+  private cachedCallServers: ChatCallServers | null = null
   private disposed = false
   private reconcilePromise: Promise<ReceiveReport> | null = null
   private reconcileAgain = false
@@ -173,7 +179,9 @@ export class ChatService {
     this.channel = new BroadcastChannel(channelName)
     this.channel.onmessage = (message: MessageEvent<unknown>) => {
       const event = parseTypingBroadcast(message.data)
+      const call = parseCallBroadcast(message.data)
       if (event) this.emitTyping(event, false)
+      else if (call) this.emitCall(call, false)
       else this.emitUpdate()
     }
     window.addEventListener('online', this.handleOnline)
@@ -671,6 +679,43 @@ export class ChatService {
     ))
   }
 
+  /** Send one call signal to `peer` (its devices; see docs/chat-calls.md). */
+  async sendCallSignal(peer: AccountAddress, call: ChatCallSignal): Promise<void> {
+    const address = toCoreAccountAddress(peer, this.capabilities.serverName)
+    await this.withLock(() => this.client.sendCallSignal(
+      crypto.randomUUID(),
+      address,
+      new Date().toISOString(),
+      call,
+    ))
+  }
+
+  /** Put a finished call into `peer`'s timeline on this device. */
+  async recordCallLog(peer: AccountAddress, body: ChatCallLog): Promise<void> {
+    const address = toCoreAccountAddress(peer, this.capabilities.serverName)
+    await this.withLock(() => this.client.recordCallLog(address, body))
+    this.notifyPeers()
+  }
+
+  /** ICE servers for a call: STUN, and TURN with fresh credentials when the server has a relay. */
+  async callServers(): Promise<ChatCallServers> {
+    const cached = this.cachedCallServers
+    if (cached && (!cached.expiresAt || cached.expiresAt * 1000 - Date.now() > 60 * 60 * 1000)) return cached
+    const response = await api.get<ChatCallServers>('/chat/call-servers')
+    this.cachedCallServers = response.data
+    return response.data
+  }
+
+  subscribeCalls(listener: (event: ChatCallEvent) => void): () => void {
+    this.callListeners.add(listener)
+    return () => this.callListeners.delete(listener)
+  }
+
+  private emitCall(event: ChatCallEvent, broadcast: boolean): void {
+    if (broadcast) this.channel.postMessage({ type: 'call', event })
+    for (const listener of this.callListeners) listener(event)
+  }
+
   async sendDisappearingTimer(
     conversation: ConversationId,
     durationSeconds?: number,
@@ -893,8 +938,17 @@ export class ChatService {
         const mlsTyping = await this.withMlsWorkflow(async () => {
           return await this.mls?.reconcile() ?? []
         })
+        for (const message of report.messages ?? []) {
+          if (message.conversation.kind !== 'direct' || !message.content.call) continue
+          this.emitCall({
+            peer: canonicalAccountAddress(withHomeServer(message.conversation.address, this.capabilities.serverName)),
+            senderDeviceId: message.senderDeviceId,
+            sentAt: message.content.sentAt,
+            call: message.content.call,
+          }, true)
+        }
         const directTyping = (report.messages ?? []).flatMap((message): ChatTypingEvent[] => {
-          if (message.conversation.kind !== 'direct') return []
+          if (message.conversation.kind !== 'direct' || message.content.call) return []
           const address = withHomeServer(
             message.conversation.address,
             this.capabilities.serverName,
@@ -1646,4 +1700,21 @@ function localStorageOrNull(): Storage | null {
   } catch {
     return null
   }
+}
+
+function parseCallBroadcast(value: unknown): ChatCallEvent | null {
+  if (!value || typeof value !== 'object') return null
+  const message = value as { type?: unknown; event?: unknown }
+  if (message.type !== 'call' || !message.event || typeof message.event !== 'object') return null
+  const event = message.event as Partial<ChatCallEvent>
+  if (
+    typeof event.peer !== 'string'
+    || typeof event.senderDeviceId !== 'number'
+    || typeof event.sentAt !== 'string'
+    || !event.call
+    || typeof event.call.callId !== 'string'
+  ) {
+    return null
+  }
+  return event as ChatCallEvent
 }

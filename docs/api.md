@@ -1379,6 +1379,15 @@ non-public or non-https URL, `422` when the site gives nothing usable. The
 browser parses the page (`DOMParser`) and resizes the image; the preview then
 travels end-to-end encrypted in the message.
 
+### GET /api/chat/call-servers
+
+ICE servers for a call ([`chat-calls.md`](chat-calls.md)):
+`{ "iceServers": [{ "urls": [...], "username"?, "credential"? }], "relay": bool, "expiresAt"? }`.
+With `CHAT_TURN_URLS` and `CHAT_TURN_SECRET` set, the TURN entry carries a
+12-hour coturn shared-secret credential (username `<expiry>:<pseudonym>`,
+password `base64(HMAC-SHA1(secret, username))`); `relay` is then true. 60
+per minute per account.
+
 ### PUT /api/chat/push-subscription
 
 `{ "deviceId": N, "endpoint": "https://…" }` → `204`: wake this chat device

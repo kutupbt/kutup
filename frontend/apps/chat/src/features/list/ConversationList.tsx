@@ -168,7 +168,7 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
       self: self.address,
       nameOf,
     })
-    if (item.last.content.groupUpdate) return { text: preview }
+    if (item.last.content.groupUpdate || item.last.content.callLog) return { text: preview }
     if (item.conversation.kind === 'group') {
       const author = item.last.direction === 'outgoing' ? self.address : item.last.peer
       return { text: t('chat.list.byAuthor', { author: personName(author, profiles, self.address, t), text: preview }) }

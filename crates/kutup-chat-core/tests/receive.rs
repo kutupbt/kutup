@@ -431,6 +431,38 @@ fn typing_is_live_only_for_accepted_contacts_and_never_creates_history() {
 }
 
 #[test]
+fn a_call_from_someone_not_accepted_does_not_ring() {
+    let mut rng = test_rng();
+    let bob_addr = ChatAddress::local("bob", 1);
+    let bob_session = in_memory("bob", 1, &mut rng);
+    let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
+    let mut alice = in_memory("alice", 1, &mut rng);
+    block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
+    let offer = ChatContent::call_with_id(
+        "66666666-6666-4666-8666-666666666666",
+        "2026-09-25T12:00:00Z",
+        1,
+        &kutup_chat_proto::CallSignalV1 {
+            call_id: uuid::Uuid::from_u128(3),
+            caller_device_id: 1,
+            callee_device_id: None,
+            signal: kutup_chat_proto::CallSignalKindV1::Busy,
+        },
+    )
+    .unwrap();
+    let encrypted =
+        block_on(alice.encrypt(&bob_addr, bundle.registration_id, &offer, &mut rng)).unwrap();
+    let server = Rc::new(Mailbox::default());
+    let mut bob = Engine::new(bob_session, server.clone());
+    server.deposit(vec![deliver(&encrypted, "alice", "call-1", 1)]);
+    let report = block_on(bob.receive(&mut rng)).unwrap();
+    assert!(report.messages.is_empty());
+    assert_eq!(report.suppressed, vec!["call-1"]);
+    assert!(block_on(bob.session().history()).unwrap().is_empty());
+    assert!(block_on(bob.contacts()).unwrap().is_empty());
+}
+
+#[test]
 fn disappearing_timer_is_durable_only_for_established_conversations() {
     let mut rng = test_rng();
     let bob_addr = ChatAddress::local("bob", 1);

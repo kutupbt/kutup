@@ -87,3 +87,9 @@ const webPush = booleanPref('kutup:chat:web-push', false)
 export const getWebPush = webPush.get
 export const setWebPush = webPush.set
 export const useWebPush = webPush.use
+
+/** Send call media only through the server's TURN relay, hiding this browser's address. */
+const alwaysRelayCalls = booleanPref('kutup:chat:always-relay-calls', false)
+export const getAlwaysRelayCalls = alwaysRelayCalls.get
+export const setAlwaysRelayCalls = alwaysRelayCalls.set
+export const useAlwaysRelayCalls = alwaysRelayCalls.use
