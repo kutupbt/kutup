@@ -10,13 +10,14 @@ import { ComposerLinkPreview } from '../linkPreview/LinkPreviewCard'
 import { buildLinkPreview, firstPreviewableLink } from '../../lib/linkPreview'
 import { useVoiceRecorder } from '../media/useVoiceRecorder'
 import { ViewOnceIcon } from '../media/ViewOnceBody'
+import { useChat } from '../../app/chatStore'
 import { Avatar } from '../../components/Avatar'
+import { getDraft, setDraft } from '../../lib/drafts'
 import { insertMention, mentionQuery, resolveMentions, type MentionPick } from '../../lib/mentions'
 import { messagePreview } from '../../lib/names'
 import type { MessageView } from '../../state/views'
 
 /** Drafts survive switching conversations (not reloads), as in Signal. */
-const drafts = new Map<string, { text: string; picks: MentionPick[] }>()
 
 /** Someone a group message can mention. */
 export interface MentionCandidate {
@@ -67,8 +68,9 @@ export interface ComposerProps {
 export function Composer(props: ComposerProps) {
   const { t } = useTranslation()
   const { conversationKey, replyingTo, editing, sendFile } = props
-  const [text, setText] = useState(() => drafts.get(conversationKey)?.text ?? '')
-  const [picks, setPicks] = useState<MentionPick[]>(() => drafts.get(conversationKey)?.picks ?? [])
+  const account = useChat().self?.address ?? ''
+  const [text, setText] = useState(() => getDraft(account, conversationKey)?.text ?? '')
+  const [picks, setPicks] = useState<MentionPick[]>(() => getDraft(account, conversationKey)?.picks ?? [])
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null)
   const [highlighted, setHighlighted] = useState(0)
   const [preview, setPreview] = useState<
@@ -89,9 +91,10 @@ export function Composer(props: ComposerProps) {
     },
   })
 
+  // An edit in progress is not a draft of a new message.
   useEffect(() => {
-    drafts.set(conversationKey, { text, picks })
-  }, [conversationKey, text, picks])
+    if (!editing && account) setDraft(account, conversationKey, { text, picks })
+  }, [account, conversationKey, text, picks, editing])
 
   const matches =
     mention && props.members

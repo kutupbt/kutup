@@ -9,6 +9,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@kutup/u
 import { cn } from '@kutup/ui/lib/cn'
 import { useChat } from '../../app/chatStore'
 import { Avatar } from '../../components/Avatar'
+import { useDrafts } from '../../lib/drafts'
+import { useTypingIndicators } from '../../state/prefs'
 import { conversationTitle, messagePreview, personName } from '../../lib/names'
 import { formatShortTime } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
@@ -40,6 +42,8 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
   const actions = useListActions()
   const [deleting, setDeleting] = useState<ConversationSummary | null>(null)
   const self = chat.self!
+  const drafts = useDrafts(self.address)
+  const typingIndicators = useTypingIndicators()
   const { snapshot } = chat
 
   const items = useMemo(() => conversationList(snapshot, self.address, now), [snapshot, self.address, now])
@@ -89,7 +93,7 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
           <h2 className="text-sm font-semibold">{t('chat.list.archived')}</h2>
         </div>
       ) : null}
-      <ul className="space-y-0.5 px-2 py-2" aria-label={pane === 'archived' ? t('chat.list.archived') : t('chat.list.label')}>
+      <ul className="space-y-0.5 px-2 py-2" data-testid="chat-conversation-list" aria-label={pane === 'archived' ? t('chat.list.archived') : t('chat.list.label')}>
         {shown.map((item) => {
           const count = item.key === selectedKey ? 0 : (unread.get(item.key) ?? 0)
           const state = lists.get(item.key)
@@ -105,7 +109,7 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
                 time={item.last || item.activityMs ? formatShortTime(item.last?.timestampMs ?? item.activityMs, now, i18n.language, t) : ''}
                 unread={count}
                 mentioned={count > 0 && mentioned.has(item.key)}
-                typing={(chat.typing.get(item.key)?.size ?? 0) > 0}
+                typing={typingIndicators && (chat.typing.get(item.key)?.size ?? 0) > 0}
                 menu={(parts) => (
                   <ConversationMenuItems
                     parts={parts}
@@ -157,8 +161,11 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
     </>
   )
 
-  function snippet(item: ConversationSummary): { text: string; tone?: 'request' | 'blocked' } {
+  function snippet(item: ConversationSummary): { text: string; tone?: 'request' | 'blocked' | 'draft' } {
     if (item.contact?.state === 'blocked') return { text: t('chat.list.blocked'), tone: 'blocked' }
+    // Signal shows an unsent draft in place of the last message.
+    const draft = item.key !== selectedKey ? drafts[item.key]?.text.trim() : undefined
+    if (draft) return { text: draft, tone: 'draft' }
     if (item.contact?.state === 'pendingIncoming') return { text: t('chat.list.request'), tone: 'request' }
     if (!item.last) {
       return { text: item.kind === 'group' ? t('chat.list.newGroup') : '' }
@@ -195,7 +202,7 @@ function ConversationRow({
   muted: boolean
   selected: boolean
   title: string
-  snippet: { text: string; tone?: 'request' | 'blocked' }
+  snippet: { text: string; tone?: 'request' | 'blocked' | 'draft' }
   time: string
   unread: number
   /** An unread message mentions you (Signal's "@"). */
@@ -254,6 +261,11 @@ function ConversationRow({
                 >
                   {typing ? (
                     <span className="italic">{t('chat.typing.short')}</span>
+                  ) : snippet.tone === 'draft' ? (
+                    <>
+                      <span className="font-medium text-destructive">{t('chat.list.draft')} </span>
+                      {snippet.text}
+                    </>
                   ) : snippet.tone === 'blocked' ? (
                     <span className="inline-flex items-center gap-1">
                       <Ban className="size-3.5" aria-hidden />

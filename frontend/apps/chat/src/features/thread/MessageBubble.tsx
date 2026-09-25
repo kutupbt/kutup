@@ -1,5 +1,5 @@
-import { Check, CheckCheck, Copy, Forward, MoreHorizontal, Pencil, Reply, SmilePlus, Sticker as StickerIcon, Timer, Trash2 } from 'lucide-react'
-import { useEffect, useRef, type ReactNode } from 'react'
+import { AlertCircle, Check, CheckCheck, Clock, Copy, Forward, Loader2, MoreHorizontal, Pencil, Reply, SmilePlus, Sticker as StickerIcon, Timer, Trash2 } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { formatRemainingTime } from '@kutup/chat-core/disappearing'
@@ -12,7 +12,9 @@ import {
   DropdownMenuTrigger,
 } from '@kutup/ui/components/dropdown-menu'
 import { cn } from '@kutup/ui/lib/cn'
+import { refreshChat, useChat } from '../../app/chatStore'
 import { Avatar } from '../../components/Avatar'
+import { chatErrorMessage } from '../../lib/errors'
 import { messagePreview } from '../../lib/names'
 import { formatClock } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
@@ -259,7 +261,57 @@ function DeliveryStatus({ view }: { view: MessageView }) {
       </span>
     )
   }
-  return null
+  return <PendingStatus sentAtMs={entry.timestampMs} />
+}
+
+/** How long a message may wait to go out before it shows as not sent. */
+const SEND_GRACE_MS = 30_000
+
+/** Not delivered yet: sending, then (after a while) not sent, with a retry. */
+function PendingStatus({ sentAtMs }: { sentAtMs: number }) {
+  const { t } = useTranslation()
+  const { service } = useChat()
+  const [late, setLate] = useState(() => Date.now() - sentAtMs > SEND_GRACE_MS)
+  const [retrying, setRetrying] = useState(false)
+  useEffect(() => {
+    if (late) return
+    const timer = setTimeout(() => setLate(true), Math.max(0, sentAtMs + SEND_GRACE_MS - Date.now()))
+    return () => clearTimeout(timer)
+  }, [late, sentAtMs])
+  if (!late) {
+    return (
+      <span className="flex items-center opacity-80" title={t('chat.receipts.sending')} aria-label={t('chat.receipts.sending')} data-testid="chat-receipt-sending">
+        <Clock className="size-3.5" />
+      </span>
+    )
+  }
+  async function retry() {
+    if (!service || retrying) return
+    setRetrying(true)
+    try {
+      await service.retrySends()
+      await refreshChat()
+    } catch (error) {
+      toast.error(chatErrorMessage(error, t))
+    } finally {
+      setRetrying(false)
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation()
+        void retry()
+      }}
+      className="flex items-center gap-1 rounded-full bg-destructive px-1.5 py-px font-medium text-destructive-foreground hover:bg-destructive/90"
+      title={t('chat.receipts.retryHint')}
+      data-testid="chat-send-retry"
+    >
+      {retrying ? <Loader2 className="size-3.5 animate-spin" /> : <AlertCircle className="size-3.5" />}
+      {t('chat.receipts.notSent')}
+    </button>
+  )
 }
 
 function Reactions({

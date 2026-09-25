@@ -1,4 +1,4 @@
-import { Bell, Eye, HardDrive, MonitorSmartphone, ShieldCheck, UserRound } from 'lucide-react'
+import { Bell, Eye, HardDrive, Keyboard, MonitorSmartphone, ShieldCheck, UserRound } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { NavLink, Navigate, useParams } from 'react-router-dom'
 import { cn } from '@kutup/ui/lib/cn'
@@ -51,6 +51,15 @@ export function SettingsPage() {
             </li>
           ))}
         </ul>
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new Event('kutup-chat-show-shortcuts'))}
+          className="mt-4 hidden w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm text-muted-foreground hover:bg-muted md:flex [&_svg]:size-4"
+          data-testid="chat-show-shortcuts"
+        >
+          <Keyboard />
+          {t('chat.shortcuts.title')}
+        </button>
       </nav>
       <div className="min-w-0 flex-1">
         {section === 'profile' ? <ProfileSettings /> : null}

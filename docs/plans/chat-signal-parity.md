@@ -61,6 +61,21 @@ Next, in order:
    calls (done) through the starter's LiveKit SFU, frames encrypted with an
    MLS-epoch exporter key, participants known to the SFU only by HMAC tags,
    tokens across servers over federation.
-10. **Smaller things.** Persistent drafts, failed-send retry,
-    typing-indicator setting, default disappearing timer for new chats,
-    keyboard shortcuts, chat export.
+10. **Smaller things** (done):
+    - **Drafts:** they persist per conversation in the browser, show as
+      "Draft:" in the list, and are cleared on sign-out.
+    - **Sending:** a message still going out shows a clock, then "Not sent"
+      with Retry. Group messages already encrypted into the MLS outbox count
+      as queued, not failed, so the composer is not refilled (resending it
+      would duplicate the message), and they show in the thread until
+      delivered.
+    - **Offline:** reloading keeps showing local history.
+    - **Typing indicators:** a switch that stops both sending and showing
+      them.
+    - **Default timer for new chats:** a new direct chat is a message request
+      until accepted, so its messages carry the timer meanwhile and the
+      conversation timer is set on acceptance.
+    - **Keyboard shortcuts:** Ctrl/⌘K search, Alt+N new chat, Alt+↑/↓
+      between chats, and Ctrl/⌘/ or ? for the list.
+    - **Export:** a conversation as a plain-text transcript, after a warning
+      that the file is not encrypted.

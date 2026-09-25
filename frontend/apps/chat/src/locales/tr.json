@@ -229,7 +229,9 @@
       },
       "explanation": "Buradaki yeni mesajlar, seçtiğin süreden sonra sohbetteki herkes için tüm cihazlardan kaybolur.",
       "noticeOn": "{{name}}, kaybolan mesajları {{duration}} olarak ayarladı",
-      "noticeOff": "{{name}}, kaybolan mesajları kapattı"
+      "noticeOff": "{{name}}, kaybolan mesajları kapattı",
+      "defaultTitle": "Yeni sohbetler için varsayılan süre",
+      "defaultDescription": "Yeni sohbetler ve gruplar, ilk mesaj gönderildiğinde bu kaybolan mesaj süresiyle başlar. Var olan sohbetlerinizi değiştirmez."
     },
     "errors": {
       "browserUnsupported": "Bu tarayıcı, şifreli sohbeti sekmeler arasında güvenli biçimde koordine edemiyor.",
@@ -284,7 +286,10 @@
       "deliveredTo_other": "{{count}} kişiye iletildi",
       "readBy_one": "Okundu",
       "readBy_other": "{{count}} kişi okudu",
-      "settingDescription": "Açıkken, sohbet ettiğin kişiler mesajlarını ne zaman okuduğunu görebilir. Birebir sohbetlerde iletim bildirimleri her zaman şifreli olarak gönderilir."
+      "settingDescription": "Açıkken, sohbet ettiğin kişiler mesajlarını ne zaman okuduğunu görebilir. Birebir sohbetlerde iletim bildirimleri her zaman şifreli olarak gönderilir.",
+      "sending": "Gönderiliyor…",
+      "notSent": "Gönderilemedi",
+      "retryHint": "Şimdi yeniden göndermeyi dene"
     },
     "replies": {
       "reply": "Mesajı yanıtla",
@@ -304,7 +309,9 @@
     "typing": {
       "one": "{{name}} yazıyor…",
       "many": "{{count}} kişi yazıyor…",
-      "short": "yazıyor…"
+      "short": "yazıyor…",
+      "setting": "Yazıyor göstergeleri",
+      "settingDescription": "Yazarken bunu gösterin ve başkaları yazarken görün. Kapalıyken ne gönderirsiniz ne de görürsünüz."
     },
     "you": "Sen",
     "backToList": "Sohbetlere dön",
@@ -355,7 +362,8 @@
       "delete": "Sil",
       "deleteTitle": "Bu sohbet silinsin mi?",
       "deleteDescription": "Mesajları tüm cihazlarınızdan silinecek. Sohbetteki diğer kişilerin kopyaları kalır.",
-      "actions": "{{name}} için sohbet seçenekleri"
+      "actions": "{{name}} için sohbet seçenekleri",
+      "draft": "Taslak:"
     },
     "preview": {
       "photo": "Fotoğraf",
@@ -836,6 +844,29 @@
       "groupScreen": "{{name}} grup araması",
       "leave": "Aramadan ayrıl",
       "groupRinging": "{{name}} grubu arıyor"
+    },
+    "shortcuts": {
+      "title": "Klavye kısayolları",
+      "description": "Sohbette fare olmadan gezinmenin yolları.",
+      "search": "Ara",
+      "newChat": "Yeni sohbet",
+      "previousChat": "Önceki sohbet",
+      "nextChat": "Sonraki sohbet",
+      "send": "Mesajı gönder",
+      "newLine": "Yeni satır",
+      "editLast": "Son mesajınızı düzenleyin (kutu boşken)",
+      "cancel": "Yanıtı ya da düzenlemeyi iptal et; paneli kapat",
+      "help": "Bu kısayolları göster"
+    },
+    "export": {
+      "action": "Sohbeti dışa aktar",
+      "title": "Bu sohbet dışa aktarılsın mı?",
+      "description": "Bu sohbeti bir metin dosyası olarak indirir: her mesaj ve bildirim, zamanı ve göndereniyle. Ekler yalnızca adlarıyla yer alır.",
+      "warning": "Dosya şifreli değildir. Onu açabilen herkes sohbetin tamamını okuyabilir.",
+      "submit": "Dışa aktar",
+      "header": "Kutup Sohbet: {{title}}",
+      "exportedAt": "Dışa aktarma: {{date}}.",
+      "edited": "(düzenlendi)"
     }
   },
   "boot": {

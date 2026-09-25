@@ -229,7 +229,9 @@
       },
       "explanation": "New messages here disappear from every device after the time you choose, for everyone in the chat.",
       "noticeOn": "{{name}} set disappearing messages to {{duration}}",
-      "noticeOff": "{{name}} turned off disappearing messages"
+      "noticeOff": "{{name}} turned off disappearing messages",
+      "defaultTitle": "Default timer for new chats",
+      "defaultDescription": "New chats and groups start with this disappearing-message timer when the first message is sent. It doesn't change chats you already have."
     },
     "errors": {
       "browserUnsupported": "This browser cannot safely coordinate encrypted chat across tabs.",
@@ -284,7 +286,10 @@
       "deliveredTo_other": "Delivered to {{count}} people",
       "readBy_one": "Read",
       "readBy_other": "Read by {{count}} people",
-      "settingDescription": "When this is on, people you chat with can see when you have read their messages. Delivery receipts in direct chats are always sent, encrypted."
+      "settingDescription": "When this is on, people you chat with can see when you have read their messages. Delivery receipts in direct chats are always sent, encrypted.",
+      "sending": "Sending…",
+      "notSent": "Not sent",
+      "retryHint": "Try sending again now"
     },
     "replies": {
       "reply": "Reply to message",
@@ -304,7 +309,9 @@
     "typing": {
       "one": "{{name}} is typing…",
       "many": "{{count}} people are typing…",
-      "short": "typing…"
+      "short": "typing…",
+      "setting": "Typing indicators",
+      "settingDescription": "Show when you're typing, and see when others are. Turned off, you neither send nor see them."
     },
     "you": "You",
     "backToList": "Back to conversations",
@@ -355,7 +362,8 @@
       "delete": "Delete",
       "deleteTitle": "Delete this chat?",
       "deleteDescription": "Its messages will be deleted from all your devices. The other people in it keep their copies.",
-      "actions": "Chat options for {{name}}"
+      "actions": "Chat options for {{name}}",
+      "draft": "Draft:"
     },
     "preview": {
       "photo": "Photo",
@@ -836,6 +844,29 @@
       "groupScreen": "Group call in {{name}}",
       "leave": "Leave call",
       "groupRinging": "{{name}} is calling the group"
+    },
+    "shortcuts": {
+      "title": "Keyboard shortcuts",
+      "description": "Ways around the chat without the mouse.",
+      "search": "Search",
+      "newChat": "New chat",
+      "previousChat": "Previous chat",
+      "nextChat": "Next chat",
+      "send": "Send the message",
+      "newLine": "New line",
+      "editLast": "Edit your last message (empty box)",
+      "cancel": "Cancel a reply or edit; close a panel",
+      "help": "Show these shortcuts"
+    },
+    "export": {
+      "action": "Export chat",
+      "title": "Export this chat?",
+      "description": "Downloads this conversation as a text file: every message and notice with its time and sender. Attachments appear by name only.",
+      "warning": "The file is not encrypted. Anyone who can open it can read the whole conversation.",
+      "submit": "Export",
+      "header": "Kutup Chat: {{title}}",
+      "exportedAt": "Exported {{date}}.",
+      "edited": "(edited)"
     }
   },
   "boot": {

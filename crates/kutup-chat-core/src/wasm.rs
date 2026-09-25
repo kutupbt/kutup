@@ -2911,6 +2911,26 @@ impl WasmChatClient {
             entry.apply_disappearing_deadline(&expiry_starts);
             history.push(entry);
         }
+        // Group messages still going out show as sent-but-undelivered, with
+        // the id their delivered row will have.
+        let delivered_ids: std::collections::HashSet<String> =
+            history.iter().map(|entry| entry.id.clone()).collect();
+        for entry in self
+            .mls_client()
+            .pending_application_messages()
+            .await
+            .map_err(chat_error)?
+        {
+            if entry.content.is_empty()
+                || delivered_ids.contains(&entry.send_id)
+                || is_invisible_control(&entry.content).map_err(chat_error)?
+            {
+                continue;
+            }
+            let mut pending = HistoryEntry::mls_pending(entry).map_err(chat_error)?;
+            pending.apply_disappearing_deadline(&expiry_starts);
+            history.push(pending);
+        }
         for message in imported {
             if is_invisible_control(&message.content).map_err(chat_error)? {
                 continue;
@@ -3507,6 +3527,27 @@ impl HistoryEntry {
             timestamp_ms: message.created_at,
             delivered: message.delivered,
             deduplicated: message.deduplicated,
+            content: content.into(),
+        })
+    }
+
+    /// A group message this device is still delivering.
+    fn mls_pending(entry: crate::MlsOutboxEntry) -> Result<Self> {
+        let content = serde_json::from_slice::<ChatContent>(&entry.content)
+            .map_err(|error| ChatError::Content(error.to_string()))?;
+        let group_id = uuid::Uuid::from_bytes(entry.conversation_id).to_string();
+        Ok(Self {
+            id: entry.send_id,
+            conversation: ConversationId::Group {
+                group_id: group_id.clone(),
+            },
+            peer: group_id,
+            direction: "outgoing",
+            sender_device_id: None,
+            cursor: None,
+            timestamp_ms: entry.created_at,
+            delivered: false,
+            deduplicated: false,
             content: content.into(),
         })
     }

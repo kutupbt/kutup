@@ -1,4 +1,4 @@
-import { ArrowLeft, BarChart3, Check, Info, Loader2, MoreVertical, Phone, Timer, UserPlus, Users, Video } from 'lucide-react'
+import { ArrowLeft, BarChart3, Check, Download, Info, Loader2, MoreVertical, Phone, Timer, UserPlus, Users, Video } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -23,13 +23,15 @@ import { Avatar } from '../../components/Avatar'
 import { DISAPPEARING_PRESETS, disappearingLabel } from '../../lib/disappearing'
 import { chatErrorMessage } from '../../lib/errors'
 import { callLogText } from '../../lib/callText'
+import { chatTranscript, downloadText, transcriptFileName } from '../../lib/exportChat'
+import { pendingDefaultTimer, settlePendingDefaultTimer } from '../../lib/pendingTimers'
 import { groupUpdateSentences } from '../../lib/groupUpdate'
 import { callController, groupCallController, useCall, useGroupCall } from '../calls/callStore'
 import { personName } from '../../lib/names'
 import { formatDayHeader } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
 import { setOpenConversation } from '../../state/openConversation'
-import { useLinkPreviews } from '../../state/prefs'
+import { useLinkPreviews, useTypingIndicators } from '../../state/prefs'
 import { useReadThrough } from '../../state/useAccountState'
 import { timelineRows } from '../../state/timeline'
 import type { MessageView } from '../../state/views'
@@ -64,7 +66,29 @@ export function ConversationView({ conversation }: { conversation: ConversationI
   const self = chat.self!
   const now = useNow(15_000)
   const model = useConversationModel(conversation, now)
-  const actions = useConversationActions(conversation, model.timerSeconds)
+  const established = conversation.kind === 'group' || model.contact?.state === 'accepted'
+  const actions = useConversationActions(conversation, model.timerSeconds, {
+    fresh: !model.note && model.views.every((view) => view.groupUpdate !== null),
+    established,
+  })
+  // An owed default timer is set once the chat is accepted.
+  const owedTimer = pendingDefaultTimer(self.address, model.key)
+  const settlingTimer = useRef(false)
+  const setTimerAction = actions.setTimer
+  useEffect(() => {
+    if (owedTimer === undefined || !established || settlingTimer.current) return
+    if (model.timerSeconds !== undefined) {
+      settlePendingDefaultTimer(self.address, model.key)
+      return
+    }
+    settlingTimer.current = true
+    void setTimerAction(owedTimer)
+      .then(() => settlePendingDefaultTimer(self.address, model.key))
+      .catch(() => undefined)
+      .finally(() => {
+        settlingTimer.current = false
+      })
+  }, [owedTimer, established, model.timerSeconds, model.key, self.address, setTimerAction])
   const [params, setParams] = useSearchParams()
   const focus = params.get('focus')
   const [highlight, setHighlight] = useState<string | null>(focus)
@@ -115,6 +139,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
   const [deleting, setDeleting] = useState<MessageView | null>(null)
   const [timerBusy, setTimerBusy] = useState(false)
   const [deletingChat, setDeletingChat] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [forwarding, setForwarding] = useState<MessageView | null>(null)
   const [newPoll, setNewPoll] = useState(false)
 
@@ -168,7 +193,10 @@ export function ConversationView({ conversation }: { conversation: ConversationI
     () => [...model.views].reverse().find((v) => v.outgoing && !v.mutation?.deleted && v.entry.content.text && !v.entry.content.attachment) ?? null,
     [model.views],
   )
-  const typing = [...(chat.typing.get(model.key)?.keys() ?? [])].filter((sender) => sender !== self.address)
+  const typingIndicators = useTypingIndicators()
+  const typing = typingIndicators
+    ? [...(chat.typing.get(model.key)?.keys() ?? [])].filter((sender) => sender !== self.address)
+    : []
   const members = useMemo(
     () =>
       (model.group?.currentRoster ?? [])
@@ -318,6 +346,11 @@ export function ConversationView({ conversation }: { conversation: ConversationI
               onDelete={() => setDeletingChat(true)}
               onMarkUnread={() => void navigate('/')}
             />
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => setExporting(true)} data-testid="chat-export">
+              <Download />
+              {t('chat.export.action')}
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </header>
@@ -581,7 +614,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
           mediaLimit={chat.capabilities?.media?.maximumPlaintextBytes ?? 0}
           maxTextBytes={model.group?.currentCryptographicPolicy.maximumApplicationPlaintextBytes}
           onTyping={
-            model.canSendTyping
+            model.canSendTyping && typingIndicators
               ? () => void service.sendTyping(conversation, true).catch((error: unknown) => console.warn('chat: typing not sent', error))
               : undefined
           }
@@ -614,6 +647,27 @@ export function ConversationView({ conversation }: { conversation: ConversationI
         }}
       />
 
+      <ConfirmDestructive
+        open={exporting}
+        onOpenChange={setExporting}
+        title={t('chat.export.title')}
+        description={t('chat.export.description')}
+        warning={t('chat.export.warning')}
+        warningVariant="warn"
+        submit={t('chat.export.submit')}
+        errorFallback={t('chat.errors.unavailable')}
+        onConfirm={() => {
+          setExporting(false)
+          const now = new Date()
+          const text = chatTranscript(model.title, model.views, {
+            self: self.address,
+            nameOf: (address) => personName(address, profiles, self.address, t),
+            t,
+            exportedAt: now,
+          })
+          downloadText(transcriptFileName(model.title, now), text)
+        }}
+      />
       <ConfirmDestructive
         open={deletingChat}
         onOpenChange={setDeletingChat}

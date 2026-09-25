@@ -48,7 +48,7 @@ import {
   toCoreAccountAddress,
   withHomeServer,
 } from './identity'
-import { MlsConversationService } from './mls-service'
+import { MlsConversationService, MlsSendError } from './mls-service'
 import {
   INVITE_LINK_POLL_MS,
   InviteLinkService,
@@ -457,7 +457,7 @@ export class ChatService {
     extras?: ChatMessageExtras,
   ): Promise<SendSummary> {
     if (conversation.kind === 'group') {
-      const summary = await this.withMlsWorkflow(() =>
+      return this.groupSend(() =>
         this.requireMls().sendText(
           conversation.groupId,
           text,
@@ -466,8 +466,6 @@ export class ChatService {
           extras,
         ),
       )
-      this.notifyPeers()
-      return { ...summary, safetyNumberChanges: [] }
     }
     const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
     const sendId = crypto.randomUUID()
@@ -504,7 +502,7 @@ export class ChatService {
       storageReferenceId,
     )
     if (conversation.kind === 'group') {
-      const summary = await this.withMlsWorkflow(() =>
+      return this.groupSend(() =>
         this.requireMls().sendAttachment(
           conversation.groupId,
           sendId,
@@ -513,8 +511,6 @@ export class ChatService {
           extras,
         ),
       )
-      this.notifyPeers()
-      return { ...summary, safetyNumberChanges: [] }
     }
     const address = withHomeServer(conversation.address, this.capabilities.serverName)
     const peer = toCoreAccountAddress(address, this.capabilities.serverName)
@@ -567,11 +563,9 @@ export class ChatService {
     expiresAfterSeconds?: number,
   ): Promise<SendSummary> {
     if (conversation.kind === 'group') {
-      const summary = await this.withMlsWorkflow(() =>
+      return this.groupSend(() =>
         this.requireMls().sendPollContent(conversation.groupId, kind, body, expiresAfterSeconds),
       )
-      this.notifyPeers()
-      return { ...summary, safetyNumberChanges: [] }
     }
     const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
     const summary = await this.withLock(() =>
@@ -588,7 +582,7 @@ export class ChatService {
     active: boolean,
   ): Promise<SendSummary> {
     if (conversation.kind === 'group') {
-      const summary = await this.withMlsWorkflow(() =>
+      return this.groupSend(() =>
         this.requireMls().sendReaction(
           conversation.groupId,
           targetMessageId,
@@ -596,8 +590,6 @@ export class ChatService {
           active,
         ),
       )
-      this.notifyPeers()
-      return { ...summary, safetyNumberChanges: [] }
     }
     const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
     const summary = await this.withLock(() => this.client.sendReaction(
@@ -683,6 +675,38 @@ export class ChatService {
       new Date().toISOString(),
       active,
     ))
+  }
+
+  /**
+   * Send what is still waiting now, instead of at the next reconnect (the
+   * outboxes survive reloads and are retried by every reconcile).
+   */
+  async retrySends(): Promise<void> {
+    await this.reconcile()
+  }
+
+  /**
+   * A group send. Once the message is encrypted into the durable MLS outbox
+   * it will go out (every reconcile retries it), so a failure after that is
+   * "not delivered yet", not "not sent": the message shows as pending with a
+   * retry instead of coming back to the composer, where sending it again
+   * would duplicate it.
+   */
+  private async groupSend(
+    work: () => Promise<{ delivered: boolean; deduplicated: boolean; attempts: number }>,
+  ): Promise<SendSummary> {
+    try {
+      const summary = await this.withMlsWorkflow(work)
+      return { ...summary, safetyNumberChanges: [] }
+    } catch (error) {
+      if (error instanceof MlsSendError && error.stage !== 'conversation' && error.stage !== 'encryption') {
+        console.warn('chat: group message queued; delivery failed at', error.stage, error.cause)
+        return { delivered: false, deduplicated: false, attempts: 0, safetyNumberChanges: [] }
+      }
+      throw error
+    } finally {
+      this.notifyPeers()
+    }
   }
 
   /** Send one call signal to `peer` (its devices; see docs/chat-calls.md). */

@@ -7,6 +7,9 @@ import { formatBytes } from '@kutup/ui/lib/format'
 import { refreshChat, useChat } from '../../app/chatStore'
 import { chatErrorMessage } from '../../lib/errors'
 import { uploadAndSend } from '../../lib/sendMedia'
+import { getDefaultTimerSeconds } from '../../state/prefs'
+import { owePendingDefaultTimer, pendingDefaultTimer } from '../../lib/pendingTimers'
+import { conversationKey } from '@kutup/chat-core/identity'
 
 /**
  * What can be done in one conversation, each followed by a reload so the
@@ -14,9 +17,38 @@ import { uploadAndSend } from '../../lib/sendMedia'
  * warns about it (verify the safety number). Failures say what happened
  * and are rethrown for the caller to keep the draft.
  */
-export function useConversationActions(conversation: ConversationId, timerSeconds: number | undefined) {
+export function useConversationActions(
+  conversation: ConversationId,
+  timerSeconds: number | undefined,
+  options: {
+    /** Nothing was said here yet: the default timer for new chats applies. */
+    fresh?: boolean
+    /** A timer can be set now (a group, or an accepted direct chat). */
+    established?: boolean
+  } = {},
+) {
   const { t, i18n } = useTranslation()
-  const { service, capabilities } = useChat()
+  const { service, capabilities, self } = useChat()
+  const { fresh = false, established = true } = options
+
+  /**
+   * The timer for the next message. A fresh chat takes the default: set at
+   * once where it can be, otherwise owed until the chat is accepted (the
+   * messages carry it meanwhile).
+   */
+  const timerFor = useCallback(async (): Promise<number | undefined> => {
+    if (timerSeconds !== undefined) return timerSeconds
+    const account = self?.address ?? ''
+    const key = conversationKey(conversation)
+    const owed = pendingDefaultTimer(account, key)
+    if (owed !== undefined) return owed
+    if (!fresh) return undefined
+    const seconds = getDefaultTimerSeconds()
+    if (!seconds) return undefined
+    if (established) await service!.sendDisappearingTimer(conversation, seconds)
+    else owePendingDefaultTimer(account, key, seconds)
+    return seconds
+  }, [fresh, established, timerSeconds, service, conversation, self])
 
   const after = useCallback(
     async (summary: SendSummary) => {
@@ -40,8 +72,8 @@ export function useConversationActions(conversation: ConversationId, timerSecond
 
   const send = useCallback(
     (text: string, replyTo?: string, extras?: ChatMessageExtras) =>
-      run(async () => after(await service!.send(conversation, text, replyTo, timerSeconds, extras))),
-    [run, after, service, conversation, timerSeconds],
+      run(async () => after(await service!.send(conversation, text, replyTo, await timerFor(), extras))),
+    [run, after, service, conversation, timerFor],
   )
 
   const edit = useCallback(
@@ -97,15 +129,15 @@ export function useConversationActions(conversation: ConversationId, timerSecond
       }
       return run(async () => {
         if (!capabilities) throw new Error('media is not available')
-        await after(await uploadAndSend(service!, capabilities, conversation, file, { ...options, timerSeconds }))
+        await after(await uploadAndSend(service!, capabilities, conversation, file, { ...options, timerSeconds: await timerFor() }))
       })
     },
-    [run, after, service, capabilities, conversation, timerSeconds, t, i18n.language],
+    [run, after, service, capabilities, conversation, timerFor, t, i18n.language],
   )
 
   const sendPoll = useCallback(
-    (poll: ChatPollV1) => run(async () => after(await service!.sendPoll(conversation, poll, timerSeconds))),
-    [run, after, service, conversation, timerSeconds],
+    (poll: ChatPollV1) => run(async () => after(await service!.sendPoll(conversation, poll, await timerFor()))),
+    [run, after, service, conversation, timerFor],
   )
 
   const votePoll = useCallback(

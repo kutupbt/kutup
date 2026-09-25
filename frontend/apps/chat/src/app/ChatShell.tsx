@@ -1,5 +1,5 @@
 import { HardDrive, MessageSquare, MessagesSquare, Settings, SquarePen, UserRound } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet } from 'react-router-dom'
 import { appUrl } from '@kutup/session/apps'
@@ -15,11 +15,13 @@ import { NewChatDialog } from '../features/list/NewChatDialog'
 import { ChatSearchBox } from '../features/list/ChatSearchBox'
 import { BackupIndicator } from '../features/settings/BackupIndicator'
 import { useNow } from '../lib/useNow'
+import { clearDrafts } from '../lib/drafts'
 import { disableWebPush } from '../lib/webPush'
 import { isMuted } from '../state/accountState'
 import { useAccountState, useReadThrough } from '../state/useAccountState'
 import { unreadCounts } from '../state/views'
 import { ChatNotifier } from './ChatNotifier'
+import { Shortcuts } from './Shortcuts'
 import { closeChat, useChat } from './chatStore'
 
 /**
@@ -35,6 +37,7 @@ export function ChatShell() {
   const { lists } = useAccountState()
   const now = useNow(60_000)
   const [newChat, setNewChat] = useState(false)
+  const openNewChat = useCallback(() => setNewChat(true), [])
   // Muted chats stay out of the count; a chat marked unread counts one.
   const unread = useMemo(() => {
     const counts = unreadCounts(chat.snapshot.history, readThrough, now)
@@ -93,6 +96,7 @@ export function ChatShell() {
           settingsHref={appUrl('account', '/settings/account')}
           onSignOut={() => {
             // A signed-out browser is not woken for this account any more.
+            if (chat.self) clearDrafts(chat.self.address)
             void disableWebPush(chat.service)
               .catch(() => undefined)
               .then(() => {
@@ -109,6 +113,7 @@ export function ChatShell() {
       <JoinGroupHost />
       <ChatNotifier unread={unread} />
       <CallHost />
+      <Shortcuts onNewChat={openNewChat} />
     </AppShell>
   )
 }

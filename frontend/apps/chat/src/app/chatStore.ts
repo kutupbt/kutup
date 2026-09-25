@@ -132,17 +132,25 @@ export function useChatService(): ChatService {
 async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
   const mine = ++generation
   try {
+    // What needs the server keeps its last value while offline, so the local
+    // history (a message queued offline, say) still shows.
+    const previous = state.snapshot
+    const orPrevious = <T,>(work: Promise<T>, fallback: T): Promise<T> =>
+      work.catch((error: unknown) => {
+        console.warn('chat: part of the reload kept its last value', error)
+        return fallback
+      })
     const [history, attention, contacts, profile, profiles, groups, invitations, invitationFeedback, ownerApprovals] =
       await Promise.all([
         service.history(),
-        service.inboundAttention(),
+        orPrevious(service.inboundAttention(), previous.attention),
         service.contacts(),
-        service.profile(),
-        service.profiles(),
+        orPrevious(service.profile(), previous.profile),
+        orPrevious(service.profiles(), previous.profiles),
         mlsGroups ? service.groups() : Promise.resolve([]),
-        mlsGroups ? service.groupInvitations() : Promise.resolve([]),
-        mlsGroups ? service.groupInvitationFeedback() : Promise.resolve([]),
-        mlsGroups ? service.pendingGroupOwnerApprovals() : Promise.resolve([]),
+        mlsGroups ? orPrevious(service.groupInvitations(), previous.invitations) : Promise.resolve([]),
+        mlsGroups ? orPrevious(service.groupInvitationFeedback(), previous.invitationFeedback) : Promise.resolve([]),
+        mlsGroups ? orPrevious(service.pendingGroupOwnerApprovals(), previous.ownerApprovals) : Promise.resolve([]),
       ])
     if (mine !== generation || state.service !== service) return
     set({

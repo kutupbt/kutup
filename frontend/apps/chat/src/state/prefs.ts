@@ -93,3 +93,14 @@ const alwaysRelayCalls = booleanPref('kutup:chat:always-relay-calls', false)
 export const getAlwaysRelayCalls = alwaysRelayCalls.get
 export const setAlwaysRelayCalls = alwaysRelayCalls.set
 export const useAlwaysRelayCalls = alwaysRelayCalls.use
+
+/** Send and show typing indicators (Signal's switch covers both ways). */
+const typingIndicators = booleanPref('kutup:chat:typing-indicators', true)
+export const setTypingIndicators = typingIndicators.set
+export const useTypingIndicators = typingIndicators.use
+
+/** The disappearing-message timer new chats start with, in seconds; 0 is off. */
+const defaultTimer = pref<string>('kutup:chat:default-timer', '0', ['0', '30', '3600', '86400', '604800', '2592000'])
+export const getDefaultTimerSeconds = (): number => Number(defaultTimer.get())
+export const setDefaultTimerSeconds = (seconds: number): void => defaultTimer.set(String(seconds))
+export const useDefaultTimerSeconds = (): number => Number(defaultTimer.use())
