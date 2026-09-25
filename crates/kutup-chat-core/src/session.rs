@@ -1542,6 +1542,10 @@ impl Session {
         let mut profile_control = false;
         let mut profile_key_updated: Option<String> = None;
         let mut suppressed = false;
+        if let Some(Err(error)) = transcript.as_ref().map(|body| body.content.extras()) {
+            self.store.discard();
+            return Err(ChatError::Content(error));
+        }
         let synced_message = if let Some(transcript) = transcript {
             if ChatContent::is_account_control_kind(&transcript.content.kind)
                 && (transcript.peer != self.user()
@@ -1633,7 +1637,10 @@ impl Session {
                 .as_ref()
                 .is_some_and(|content| ChatContent::is_account_control_kind(&content.kind));
             if let Some(content) = parsed.as_ref() {
-                if let Err(error) = content.disappearing_after_seconds() {
+                if let Err(error) = content
+                    .disappearing_after_seconds()
+                    .and_then(|_| content.extras())
+                {
                     self.store.discard();
                     return Err(ChatError::Content(error));
                 }

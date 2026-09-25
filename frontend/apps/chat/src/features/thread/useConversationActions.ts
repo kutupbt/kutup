@@ -1,13 +1,12 @@
 import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { uploadChatMediaV1 } from '@kutup/chat-core/media'
 import type { ChatReactionEmoji } from '@kutup/chat-core/reactions'
-import type { ConversationId, SendSummary } from '@kutup/chat-core/types'
-import { freshAccessToken } from '@kutup/session/client'
+import type { ChatMessageExtras, ConversationId, SendSummary } from '@kutup/chat-core/types'
 import { formatBytes } from '@kutup/ui/lib/format'
 import { refreshChat, useChat } from '../../app/chatStore'
 import { chatErrorMessage } from '../../lib/errors'
+import { uploadAndSend } from '../../lib/sendMedia'
 
 /**
  * What can be done in one conversation, each followed by a reload so the
@@ -40,8 +39,8 @@ export function useConversationActions(conversation: ConversationId, timerSecond
   )
 
   const send = useCallback(
-    (text: string, replyTo?: string) =>
-      run(async () => after(await service!.send(conversation, text, replyTo, timerSeconds))),
+    (text: string, replyTo?: string, extras?: ChatMessageExtras) =>
+      run(async () => after(await service!.send(conversation, text, replyTo, timerSeconds, extras))),
     [run, after, service, conversation, timerSeconds],
   )
 
@@ -80,7 +79,15 @@ export function useConversationActions(conversation: ConversationId, timerSecond
 
   /** Encrypt, upload and send one file (a voice note carries its length). */
   const sendFile = useCallback(
-    async (file: File, options: { durationMs?: number; onProgress?: (sent: number, total: number) => void; signal?: AbortSignal } = {}) => {
+    async (
+      file: File,
+      options: {
+        durationMs?: number
+        extras?: ChatMessageExtras
+        onProgress?: (sent: number, total: number) => void
+        signal?: AbortSignal
+      } = {},
+    ) => {
       const media = capabilities?.media
       if (media && file.size > media.maximumPlaintextBytes) {
         const message = t('chat.attachments.tooLarge', { limit: formatBytes(media.maximumPlaintextBytes, i18n.language) })
@@ -88,14 +95,8 @@ export function useConversationActions(conversation: ConversationId, timerSecond
         throw new Error(message)
       }
       return run(async () => {
-        if (!media || !capabilities?.serverName) throw new Error('media is not available')
-        const uploaded = await uploadChatMediaV1({
-          file,
-          originDomain: capabilities.serverName,
-          accessToken: await freshAccessToken(),
-          ...options,
-        })
-        await after(await service!.sendAttachment(conversation, uploaded.descriptor, uploaded.storageReferenceId, timerSeconds))
+        if (!capabilities) throw new Error('media is not available')
+        await after(await uploadAndSend(service!, capabilities, conversation, file, { ...options, timerSeconds }))
       })
     },
     [run, after, service, capabilities, conversation, timerSeconds, t, i18n.language],

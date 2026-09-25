@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 mod backup;
 pub mod content;
+mod extras;
 pub mod federation;
 mod history_transfer;
 mod identity;
@@ -47,6 +48,7 @@ pub use content::{
     MessageMutationBody, MessageMutationOperation, ReactionBody, ReadPositionBody, ReceiptBody,
     ReceiptState, SentTranscriptBody, TextBody, TypingBody, MAX_SAFE_CLOCK_MS,
 };
+pub use extras::{LinkPreviewImageV1, LinkPreviewV1, MentionV1, VisibleMessageExtrasV1};
 pub use federation::{
     FederatedChatTransaction, FederationDeliveryError, FederationDeliveryRejection,
     FederationDeliveryResponse, FEDERATED_CHAT_FEATURE,

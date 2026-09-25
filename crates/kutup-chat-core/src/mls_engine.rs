@@ -78,9 +78,10 @@ use kutup_chat_proto::{
     MlsMembershipEnvelopeKindV1, MlsMembershipEnvelopeV1, MlsMembershipTransitionV1,
     MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1, MlsOwnerCandidateV1, MlsOwnerSetV1,
     MlsOwnerV1, MlsPrivateControlStateV1, RecoverMlsConversationRequestV1,
-    RecoverMlsConversationResponseV1, MAX_MLS_DEVICES_PER_ACCOUNT, MAX_MLS_GROUP_ACCOUNTS,
-    MAX_MLS_GROUP_LEAVES, MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519,
-    MLS_PRIVATE_CONTROL_EXTENSION_TYPE, MLS_PROTOCOL_VERSION,
+    RecoverMlsConversationResponseV1, VisibleMessageExtrasV1, MAX_MLS_DEVICES_PER_ACCOUNT,
+    MAX_MLS_GROUP_ACCOUNTS, MAX_MLS_GROUP_LEAVES,
+    MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519, MLS_PRIVATE_CONTROL_EXTENSION_TYPE,
+    MLS_PROTOCOL_VERSION,
 };
 
 // Pre-v1 clean break: the X25519/Ed25519/ChaCha suite and 10-device roster

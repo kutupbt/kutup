@@ -14,6 +14,7 @@ import type {
   ChatProfile,
   ChatTypingEvent,
   ChatAccountControl,
+  ChatMessageExtras,
   ChatConversationStateV1,
   PeerChatProfile,
   ReceiveReport,
@@ -411,6 +412,7 @@ export class ChatService {
     text: string,
     replyTo?: string,
     expiresAfterSeconds?: number,
+    extras?: ChatMessageExtras,
   ): Promise<SendSummary> {
     if (conversation.kind === 'group') {
       const summary = await this.withMlsWorkflow(() =>
@@ -419,6 +421,7 @@ export class ChatService {
           text,
           replyTo,
           expiresAfterSeconds,
+          extras,
         ),
       )
       this.notifyPeers()
@@ -434,6 +437,7 @@ export class ChatService {
         text,
         replyTo,
         expiresAfterSeconds,
+        ...(extras ? [extras] : []),
       ),
     )
     this.notifyPeers()
@@ -445,6 +449,7 @@ export class ChatService {
     descriptor: ChatAttachmentDescriptorV1,
     storageReferenceId: string,
     expiresAfterSeconds?: number,
+    extras?: ChatMessageExtras,
   ): Promise<SendSummary> {
     if (descriptor.originDomain !== this.capabilities.serverName) {
       throw new Error('attachment origin differs from the active homeserver')
@@ -463,6 +468,7 @@ export class ChatService {
           sendId,
           descriptor,
           expiresAfterSeconds,
+          extras,
         ),
       )
       this.notifyPeers()
@@ -490,6 +496,7 @@ export class ChatService {
         new Date().toISOString(),
         descriptor,
         expiresAfterSeconds,
+        ...(extras ? [extras] : []),
       ),
     )
     this.notifyPeers()

@@ -15,7 +15,7 @@ import { useNow } from '../../lib/useNow'
 import { isArchived, isMuted, type ListState } from '../../state/accountState'
 import { setListPane, useListPane } from '../../state/listPane'
 import { useAccountState, useReadThrough } from '../../state/useAccountState'
-import { conversationList, foldMutations, unreadCounts, type ConversationSummary } from '../../state/views'
+import { conversationList, foldMutations, unreadCounts, unreadMentions, type ConversationSummary } from '../../state/views'
 import { ConversationMenuItems } from './ConversationMenu'
 import { CONTEXT_PARTS, DROPDOWN_PARTS } from './menuParts'
 import { conversationPath } from './paths'
@@ -45,6 +45,10 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
   const items = useMemo(() => conversationList(snapshot, self.address, now), [snapshot, self.address, now])
   const mutations = useMemo(() => foldMutations(snapshot.history, self.address), [snapshot.history, self.address])
   const unread = useMemo(() => unreadCounts(snapshot.history, readThrough, now), [snapshot.history, readThrough, now])
+  const mentioned = useMemo(
+    () => unreadMentions(snapshot.history, readThrough, self.address, now),
+    [snapshot.history, readThrough, self.address, now],
+  )
   const profiles = useMemo(() => new Map(snapshot.profiles.map((p) => [p.peer, p])), [snapshot.profiles])
 
   const { inbox, archived } = useMemo(() => {
@@ -100,6 +104,7 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
                 snippet={snippet(item)}
                 time={item.last || item.activityMs ? formatShortTime(item.last?.timestampMs ?? item.activityMs, now, i18n.language, t) : ''}
                 unread={count}
+                mentioned={count > 0 && mentioned.has(item.key)}
                 typing={(chat.typing.get(item.key)?.size ?? 0) > 0}
                 menu={(parts) => (
                   <ConversationMenuItems
@@ -181,6 +186,7 @@ function ConversationRow({
   snippet,
   time,
   unread,
+  mentioned,
   typing,
   menu,
 }: {
@@ -192,6 +198,8 @@ function ConversationRow({
   snippet: { text: string; tone?: 'request' | 'blocked' }
   time: string
   unread: number
+  /** An unread message mentions you (Signal's "@"). */
+  mentioned: boolean
   typing: boolean
   menu: (parts: typeof DROPDOWN_PARTS) => ReactNode
 }) {
@@ -255,6 +263,15 @@ function ConversationRow({
                     snippet.text
                   )}
                 </span>
+                {mentioned ? (
+                  <span
+                    className="mt-0.5 inline-flex size-[1.125rem] shrink-0 items-center justify-center rounded-full bg-primary text-[0.6875rem] font-bold text-primary-foreground"
+                    aria-label={t('chat.mentions.unread')}
+                    data-testid="chat-mentioned"
+                  >
+                    @
+                  </span>
+                ) : null}
                 {unread > 0 ? (
                   <span
                     className={cn(

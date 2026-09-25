@@ -367,3 +367,21 @@ export function unreadCounts(
   }
   return counts
 }
+
+/** Conversations with an unread incoming message that mentions `selfAddress`. */
+export function unreadMentions(
+  history: readonly ChatHistoryEntry[],
+  readUpTo: Readonly<Record<string, number>>,
+  selfAddress: string,
+  nowMs: number,
+): Set<string> {
+  const keys = new Set<string>()
+  for (const message of history) {
+    if (message.direction !== 'incoming' || !message.content.mentions?.length) continue
+    if (!message.content.mentions.some((mention) => mention.member === selfAddress)) continue
+    if (!isVisibleChatMessage(message, nowMs)) continue
+    const key = conversationKey(message.conversation)
+    if (message.timestampMs > (readUpTo[key] ?? 0)) keys.add(key)
+  }
+  return keys
+}

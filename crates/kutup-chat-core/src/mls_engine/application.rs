@@ -122,6 +122,7 @@ impl MlsClient {
         let expires_after_seconds = content
             .disappearing_after_seconds()
             .map_err(ChatError::Content)?;
+        content.extras().map_err(ChatError::Content)?;
         if content.kind == kutup_chat_proto::content::kind::DISAPPEARING_TIMER
             && content.as_disappearing_timer().is_none()
         {
@@ -649,6 +650,7 @@ impl MlsClient {
             text,
             reply_to,
             None,
+            &VisibleMessageExtrasV1::default(),
             created_at_ms,
         )
         .await
@@ -665,6 +667,7 @@ impl MlsClient {
         text: &str,
         reply_to: Option<&str>,
         expires_after_seconds: Option<u32>,
+        extras: &VisibleMessageExtrasV1,
         created_at_ms: i64,
     ) -> Result<MlsOutboxEntry> {
         let parsed_send_id = Uuid::parse_str(send_id)
@@ -694,6 +697,7 @@ impl MlsClient {
                     .disappearing_after_seconds()
                     .map_err(ChatError::Content)?
                     != expires_after_seconds
+                || &content.extras().map_err(ChatError::Content)? != extras
             {
                 return Err(ChatError::Trust(
                     "MLS send id is already bound to different text or conversation".into(),
@@ -732,6 +736,8 @@ impl MlsClient {
             .ok_or_else(|| ChatError::Invalid("MLS sender sequence overflow".into()))?;
         let mut content = ChatContent::text_with_id(send_id, sent_at, seq, text)
             .with_reply_to(reply_to)
+            .map_err(ChatError::Invalid)?
+            .with_extras(extras)
             .map_err(ChatError::Invalid)?;
         if let Some(seconds) = expires_after_seconds {
             content = content
@@ -1227,6 +1233,7 @@ impl MlsClient {
             sent_at,
             descriptor,
             None,
+            &VisibleMessageExtrasV1::default(),
             created_at_ms,
         )
         .await
@@ -1242,6 +1249,7 @@ impl MlsClient {
         sent_at: &str,
         descriptor: ChatAttachmentDescriptorV1,
         expires_after_seconds: Option<u32>,
+        extras: &VisibleMessageExtrasV1,
         created_at_ms: i64,
     ) -> Result<MlsOutboxEntry> {
         let parsed_send_id = Uuid::parse_str(send_id)
@@ -1264,11 +1272,12 @@ impl MlsClient {
                 || existing.mls_group_id != mls_group_id
                 || content.message_id.as_deref() != Some(send_id)
                 || content.sent_at != sent_at
-                || content.as_attachment() != Some(descriptor)
+                || content.as_attachment().as_ref() != Some(&descriptor)
                 || content
                     .disappearing_after_seconds()
                     .map_err(ChatError::Content)?
                     != expires_after_seconds
+                || &content.extras().map_err(ChatError::Content)? != extras
             {
                 return Err(ChatError::Trust(
                     "MLS send id is already bound to a different attachment or conversation".into(),
@@ -1306,7 +1315,9 @@ impl MlsClient {
             .checked_add(1)
             .ok_or_else(|| ChatError::Invalid("MLS sender sequence overflow".into()))?;
         let mut content = ChatContent::attachment_with_id(send_id, sent_at, seq, descriptor)
-            .map_err(ChatError::Content)?;
+            .map_err(ChatError::Content)?
+            .with_extras(extras)
+            .map_err(ChatError::Invalid)?;
         if let Some(seconds) = expires_after_seconds {
             content = content
                 .with_disappearing_after(seconds)

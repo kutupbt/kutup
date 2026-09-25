@@ -20,6 +20,10 @@ export interface ChatContentView {
   deleteForMe?: ChatDeleteForMeV1
   /** A group change, written by this device's engine from an applied Commit. */
   groupUpdate?: ChatGroupUpdate
+  mentions?: ChatMentionV1[]
+  linkPreview?: ChatLinkPreviewV1
+  forwarded?: boolean
+  viewOnce?: boolean
   expiresAfterSeconds?: number
   expiresAtMs?: number
 }
@@ -51,6 +55,33 @@ export interface ChatReadPositionV1 {
   throughMessageId: string
   readThroughMs: number
 }
+
+/** `length` UTF-16 units from `start` of the text stand for `member` (canonical address). */
+export interface ChatMentionV1 {
+  start: number
+  length: number
+  member: string
+}
+
+/** A preview of an https link in the text, made by the sender. */
+export interface ChatLinkPreviewV1 {
+  url: string
+  title: string
+  description?: string
+  /** JPEG, PNG or WebP, at most 24 KiB, standard base64. */
+  image?: { contentType: 'image/jpeg' | 'image/png' | 'image/webp'; data: string }
+}
+
+/** What a visible message may carry beside its body. */
+export interface ChatMessageExtras {
+  mentions?: ChatMentionV1[]
+  linkPreview?: ChatLinkPreviewV1
+  forwarded?: boolean
+  /** Attachments (photo or video) only. */
+  viewOnce?: boolean
+}
+
+export const LINK_PREVIEW_IMAGE_MAX_BYTES = 24 * 1024
 
 /** One visible change of an applied group Commit (members are canonical addresses). */
 export type ChatGroupUpdateChange =
@@ -1290,6 +1321,7 @@ export interface WasmChatClientHandle {
     createdAtMs: string,
     replyTo?: string,
     expiresAfterSeconds?: number,
+    extras?: ChatMessageExtras | null,
   ): Promise<MlsOutboxEntry>
   createMlsAttachmentMessage(
     sendId: string,
@@ -1300,6 +1332,7 @@ export interface WasmChatClientHandle {
     descriptor: ChatAttachmentDescriptorV1,
     createdAtMs: string,
     expiresAfterSeconds?: number,
+    extras?: ChatMessageExtras | null,
   ): Promise<MlsOutboxEntry>
   createMlsDisappearingTimer(
     sendId: string,
@@ -1441,6 +1474,7 @@ export interface WasmChatClientHandle {
     text: string,
     replyTo?: string,
     expiresAfterSeconds?: number,
+    extras?: ChatMessageExtras | null,
   ): Promise<SendSummary>
   sendAttachment(
     sendId: string,
@@ -1448,6 +1482,7 @@ export interface WasmChatClientHandle {
     sentAt: string,
     descriptor: ChatAttachmentDescriptorV1,
     expiresAfterSeconds?: number,
+    extras?: ChatMessageExtras | null,
   ): Promise<SendSummary>
   sendReaction(
     sendId: string,

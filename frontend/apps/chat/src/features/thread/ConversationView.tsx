@@ -2,6 +2,7 @@ import { ArrowLeft, Check, Info, Loader2, MoreVertical, Timer, Users } from 'luc
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { canonicalAccountAddress } from '@kutup/chat-core/identity'
 import type { ConversationId } from '@kutup/chat-core/types'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
@@ -32,6 +33,7 @@ import { useListActions } from '../list/useListActions'
 import { AttachmentBody } from '../media/AttachmentBody'
 import { Composer } from './Composer'
 import { DeleteMessageDialog } from './DeleteMessageDialog'
+import { ForwardDialog } from './ForwardDialog'
 import { ConversationBar } from './ConversationBar'
 import { MessageBubble } from './MessageBubble'
 import { MessageScroller } from './MessageScroller'
@@ -60,6 +62,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
   const [deleting, setDeleting] = useState<MessageView | null>(null)
   const [timerBusy, setTimerBusy] = useState(false)
   const [deletingChat, setDeletingChat] = useState(false)
+  const [forwarding, setForwarding] = useState<MessageView | null>(null)
   const listActions = useListActions()
   const navigate = useNavigate()
   // The read mark as it was on opening: where "unread messages" goes.
@@ -97,6 +100,14 @@ export function ConversationView({ conversation }: { conversation: ConversationI
     [model.views],
   )
   const typing = [...(chat.typing.get(model.key)?.keys() ?? [])].filter((sender) => sender !== self.address)
+  const members = useMemo(
+    () =>
+      (model.group?.currentRoster ?? [])
+        .map((member) => canonicalAccountAddress(member.address))
+        .filter((address) => address !== self.address)
+        .map((address) => ({ address, name: personName(address, profiles, self.address, t) })),
+    [model.group, profiles, self.address, t],
+  )
   const writable = !model.readOnly
 
   const jump = useCallback((messageId: string) => {
@@ -285,6 +296,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
               highlighted={highlight === view.id}
               profiles={profiles}
               selfAddress={self.address}
+              selfName={chat.snapshot.profile?.displayName}
               onVisible={() => startExpiry(view)}
               attachment={
                 view.entry.content.attachment ? (
@@ -309,6 +321,14 @@ export function ConversationView({ conversation }: { conversation: ConversationI
                     ? () => { setReplyingTo(null); setEditing(view) }
                     : undefined,
                 onDelete: view.entry.content.messageId ? () => setDeleting(view) : undefined,
+                // Voice notes and view-once media stay where they were sent.
+                onForward:
+                  !view.mutation?.deleted &&
+                  !view.entry.content.viewOnce &&
+                  (view.entry.content.text ||
+                    (view.entry.content.attachment && view.entry.content.attachment.durationMs === undefined))
+                    ? () => setForwarding(view)
+                    : undefined,
               }}
             />
           )
@@ -346,6 +366,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
             setEditing(view)
           }}
           send={actions.send}
+          members={conversation.kind === 'group' ? members : undefined}
           edit={actions.edit}
           sendFile={
             // Media to another person travels by sealed delivery (its key
@@ -365,6 +386,8 @@ export function ConversationView({ conversation }: { conversation: ConversationI
       )}
 
       <DetailsPanel open={details} onClose={() => setDetails(false)} model={model} />
+
+      <ForwardDialog view={forwarding} onOpenChange={(open) => !open && setForwarding(null)} />
 
       <DeleteMessageDialog
         open={deleting !== null}

@@ -580,6 +580,24 @@
       "allMembers": "all members",
       "closed": "{{actor}} closed the group.",
       "closed_you": "You closed the group."
+    },
+    "mentions": {
+      "list": "People in this group",
+      "unread": "You were mentioned"
+    },
+    "forward": {
+      "action": "Forward",
+      "label": "Forwarded",
+      "title": "Forward message",
+      "description": "Choose up to {{count}} chats.",
+      "search": "Search chats",
+      "chats": "Chats",
+      "none": "No chats to forward to.",
+      "send_one": "Send to {{count}} chat",
+      "send_other": "Send to {{count}} chats",
+      "sent_one": "Forwarded to {{count}} chat",
+      "sent_other": "Forwarded to {{count}} chats",
+      "partial": "Forwarded to {{sent}} of {{total}} chats; the rest failed."
     }
   },
   "boot": {

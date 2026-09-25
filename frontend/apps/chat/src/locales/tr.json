@@ -580,6 +580,24 @@
       "allMembers": "tüm üyeler",
       "closed": "{{actor}} grubu kapattı.",
       "closed_you": "Grubu kapattınız."
+    },
+    "mentions": {
+      "list": "Bu gruptaki kişiler",
+      "unread": "Sizden bahsedildi"
+    },
+    "forward": {
+      "action": "İlet",
+      "label": "İletildi",
+      "title": "Mesajı ilet",
+      "description": "En fazla {{count}} sohbet seçin.",
+      "search": "Sohbet ara",
+      "chats": "Sohbetler",
+      "none": "İletilebilecek sohbet yok.",
+      "send_one": "{{count}} sohbete gönder",
+      "send_other": "{{count}} sohbete gönder",
+      "sent_one": "{{count}} sohbete iletildi",
+      "sent_other": "{{count}} sohbete iletildi",
+      "partial": "{{total}} sohbetten {{sent}} tanesine iletildi; kalanlar başarısız oldu."
     }
   },
   "boot": {

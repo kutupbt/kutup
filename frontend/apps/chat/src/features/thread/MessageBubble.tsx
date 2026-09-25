@@ -1,4 +1,4 @@
-import { Check, CheckCheck, Copy, MoreHorizontal, Pencil, Reply, SmilePlus, Timer, Trash2 } from 'lucide-react'
+import { Check, CheckCheck, Copy, Forward, MoreHorizontal, Pencil, Reply, SmilePlus, Timer, Trash2 } from 'lucide-react'
 import { useEffect, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -24,6 +24,7 @@ export interface BubbleActions {
   onReact?: (emoji: ChatReactionEmoji, active: boolean) => void
   onEdit?: () => void
   onDelete?: () => void
+  onForward?: () => void
   /** Scroll to the message a reply quotes. */
   onJump?: (messageId: string) => void
 }
@@ -46,6 +47,7 @@ export function MessageBubble({
   highlighted,
   profiles,
   selfAddress,
+  selfName,
   actions,
   attachment,
   onVisible,
@@ -60,6 +62,8 @@ export function MessageBubble({
   highlighted: boolean
   profiles: ReadonlyMap<string, { displayName: string }>
   selfAddress: string
+  /** This account's profile name, for mentions of you. */
+  selfName?: string
   actions: BubbleActions
   /** The attachment's body, drawn by the media feature. */
   attachment?: ReactNode
@@ -152,6 +156,12 @@ export function MessageBubble({
             </button>
           ) : null}
 
+          {entry.content.forwarded && !deleted ? (
+            <p className="mb-0.5 flex items-center gap-1 text-xs italic opacity-80" data-testid="chat-message-forwarded">
+              <Forward className="size-3" aria-hidden />
+              {t('chat.forward.label')}
+            </p>
+          ) : null}
           {deleted ? (
             <p className="italic" data-testid="chat-message-deleted">
               {outgoing ? t('chat.mutations.youDeleted') : t('chat.mutations.deleted')}
@@ -159,7 +169,14 @@ export function MessageBubble({
           ) : entry.content.attachment ? (
             attachment
           ) : (
-            <MessageText text={text ?? t('chat.newerClient')} outgoing={outgoing} />
+            <MessageText
+              text={text ?? t('chat.newerClient')}
+              outgoing={outgoing}
+              // An edit replaces the text its mentions were ranges of.
+              mentions={edited ? undefined : entry.content.mentions}
+              nameOf={(address) => (address === selfAddress ? selfName : profiles.get(address)?.displayName) || address}
+              selfAddress={selfAddress}
+            />
           )}
 
           {showMeta ? (
@@ -305,7 +322,7 @@ function HoverActions({ view, text, actions }: { view: MessageView; text: string
   const { t } = useTranslation()
   const mine = view.reactions.find((r) => r.reactedBySelf)?.emoji
   const reveal = 'opacity-70 md:opacity-0 md:transition-opacity md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100 data-[state=open]:opacity-100'
-  const hasMore = Boolean(actions.onEdit || actions.onDelete || text)
+  const hasMore = Boolean(actions.onEdit || actions.onDelete || actions.onForward || text)
   if (!actions.onReact && !actions.onReply && !hasMore) return null
   return (
     <div className="flex shrink-0 items-center gap-0.5 self-center">
@@ -358,6 +375,12 @@ function HoverActions({ view, text, actions }: { view: MessageView; text: string
               >
                 <Copy />
                 {t('chat.message.copy')}
+              </DropdownMenuItem>
+            ) : null}
+            {actions.onForward ? (
+              <DropdownMenuItem onSelect={actions.onForward} data-testid="chat-forward-button">
+                <Forward />
+                {t('chat.forward.action')}
               </DropdownMenuItem>
             ) : null}
             {actions.onEdit ? (

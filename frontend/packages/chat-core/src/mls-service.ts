@@ -4,6 +4,7 @@ import type {
   AppliedInboundMlsCommit,
   AppliedInboundMlsApplication,
   ChatAttachmentDescriptorV1,
+  ChatMessageExtras,
   ChatTypingEvent,
   ChatTransportPort,
   DerivedMlsDeliveryCapability,
@@ -1008,6 +1009,7 @@ export class MlsConversationService {
     text: string,
     replyTo?: string,
     expiresAfterSeconds?: number,
+    extras?: ChatMessageExtras,
   ): Promise<{
     delivered: boolean
     deduplicated: boolean
@@ -1039,6 +1041,7 @@ export class MlsConversationService {
         String(Date.now()),
         replyTo,
         expiresAfterSeconds,
+        ...(extras ? [extras] : []),
       ))
       .catch(cause => { throw new MlsSendError('encryption', cause) })
     await this.deliverApplicationEntry(entry).catch(cause => {
@@ -1057,6 +1060,7 @@ export class MlsConversationService {
     sendId: string,
     descriptor: ChatAttachmentDescriptorV1,
     expiresAfterSeconds?: number,
+    extras?: ChatMessageExtras,
   ): Promise<{ delivered: boolean; deduplicated: boolean; attempts: number }> {
     const conversation = await this.requireActiveConversation(conversationId)
     const groupId = decodeCanonicalBase64(
@@ -1074,6 +1078,7 @@ export class MlsConversationService {
         descriptor,
         String(Date.now()),
         expiresAfterSeconds,
+        ...(extras ? [extras] : []),
       ),
     ).catch(cause => { throw new MlsSendError('encryption', cause) })
 

@@ -4,12 +4,21 @@ import { useTranslation } from 'react-i18next'
 import { formatVoiceNoteElapsed } from '@kutup/chat-core/voice-note'
 import { Button } from '@kutup/ui/components/button'
 import { cn } from '@kutup/ui/lib/cn'
+import type { ChatMessageExtras } from '@kutup/chat-core/types'
 import { useVoiceRecorder } from '../media/useVoiceRecorder'
+import { Avatar } from '../../components/Avatar'
+import { insertMention, mentionQuery, resolveMentions, type MentionPick } from '../../lib/mentions'
 import { messagePreview } from '../../lib/names'
 import type { MessageView } from '../../state/views'
 
 /** Drafts survive switching conversations (not reloads), as in Signal. */
-const drafts = new Map<string, string>()
+const drafts = new Map<string, { text: string; picks: MentionPick[] }>()
+
+/** Someone a group message can mention. */
+export interface MentionCandidate {
+  address: string
+  name: string
+}
 
 const TYPING_EVERY_MS = 4_000
 
@@ -24,7 +33,9 @@ export interface ComposerProps {
   /** The newest own text message (Arrow Up edits it). */
   lastOwnText: MessageView | null
   onEdit: (view: MessageView) => void
-  send: (text: string, replyTo?: string) => Promise<void>
+  send: (text: string, replyTo?: string, extras?: ChatMessageExtras) => Promise<void>
+  /** A group's other members, for @mentions. */
+  members?: readonly MentionCandidate[]
   edit: (messageId: string, text: string) => Promise<void>
   /** Absent when files cannot be sent here. */
   sendFile?: (file: File, options?: { durationMs?: number }) => Promise<void>
@@ -43,7 +54,10 @@ export interface ComposerProps {
 export function Composer(props: ComposerProps) {
   const { t } = useTranslation()
   const { conversationKey, replyingTo, editing, sendFile } = props
-  const [text, setText] = useState(() => drafts.get(conversationKey) ?? '')
+  const [text, setText] = useState(() => drafts.get(conversationKey)?.text ?? '')
+  const [picks, setPicks] = useState<MentionPick[]>(() => drafts.get(conversationKey)?.picks ?? [])
+  const [mention, setMention] = useState<{ start: number; query: string } | null>(null)
+  const [highlighted, setHighlighted] = useState(0)
   const [busy, setBusy] = useState(false)
   const box = useRef<HTMLTextAreaElement>(null)
   const files = useRef<HTMLInputElement>(null)
@@ -57,8 +71,41 @@ export function Composer(props: ComposerProps) {
   })
 
   useEffect(() => {
-    drafts.set(conversationKey, text)
-  }, [conversationKey, text])
+    drafts.set(conversationKey, { text, picks })
+  }, [conversationKey, text, picks])
+
+  const matches =
+    mention && props.members
+      ? props.members
+          .filter((member) => {
+            const query = mention.query.toLocaleLowerCase()
+            return member.name.toLocaleLowerCase().includes(query) || member.address.toLocaleLowerCase().startsWith(query)
+          })
+          .slice(0, 6)
+      : []
+
+  function choose(member: MentionCandidate) {
+    const element = box.current
+    if (!mention || !element) return
+    const label = `@${member.name}`
+    const next = insertMention(text, mention.start, element.selectionStart, label)
+    pendingCaret.current = next.caret
+    setText(next.text)
+    setPicks((current) => [...current, { label, member: member.address }])
+    setMention(null)
+  }
+
+  // Put the caret after an inserted mention before the next keystroke can
+  // land (a frame later would be too late for fast typing).
+  const pendingCaret = useRef<number | null>(null)
+  useLayoutEffect(() => {
+    const caret = pendingCaret.current
+    const element = box.current
+    if (caret === null || !element) return
+    pendingCaret.current = null
+    element.focus()
+    element.setSelectionRange(caret, caret)
+  }, [text])
 
   // Editing puts the message's text in the box; leaving the edit empties it.
   useEffect(() => {
@@ -91,12 +138,15 @@ export function Composer(props: ComposerProps) {
         props.onCancelEdit()
         setText('')
       } else {
+        const mentions = resolveMentions(trimmed, picks)
         setText('')
+        setPicks([])
         try {
-          await props.send(trimmed, replyingTo?.id)
+          await props.send(trimmed, replyingTo?.id, mentions.length > 0 ? { mentions } : undefined)
           props.onCancelReply()
         } catch (error) {
           setText(trimmed)
+          setPicks(picks)
           throw error
         }
       }
@@ -109,6 +159,24 @@ export function Composer(props: ComposerProps) {
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (matches.length > 0) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        const step = event.key === 'ArrowDown' ? 1 : -1
+        setHighlighted((index) => (index + step + matches.length) % matches.length)
+        return
+      }
+      if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey && !event.nativeEvent.isComposing) {
+        event.preventDefault()
+        choose(matches[Math.min(highlighted, matches.length - 1)])
+        return
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setMention(null)
+        return
+      }
+    }
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault()
       void submit()
@@ -124,8 +192,13 @@ export function Composer(props: ComposerProps) {
     }
   }
 
-  function typed(value: string) {
+  function typed(value: string, caret: number) {
     setText(value)
+    if (props.members?.length) {
+      const next = mentionQuery(value, caret)
+      setMention(next)
+      if (next?.query !== mention?.query) setHighlighted(0)
+    }
     const now = Date.now()
     if (value.trim() && props.onTyping && now - typingSent.current >= TYPING_EVERY_MS) {
       typingSent.current = now
@@ -204,6 +277,39 @@ export function Composer(props: ComposerProps) {
         </div>
       ) : null}
 
+      {matches.length > 0 ? (
+        <ul
+          id="chat-mention-list"
+          role="listbox"
+          aria-label={t('chat.mentions.list')}
+          className="mb-2 max-h-60 overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-md"
+          data-testid="chat-mention-list"
+        >
+          {matches.map((member, index) => (
+            <li
+              key={member.address}
+              id={`chat-mention-${index}`}
+              role="option"
+              aria-selected={index === highlighted}
+              // Keep the text box focused: choose on mouse down.
+              onMouseDown={(event) => {
+                event.preventDefault()
+                choose(member)
+              }}
+              onMouseEnter={() => setHighlighted(index)}
+              className={cn(
+                'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm',
+                index === highlighted && 'bg-accent text-accent-foreground',
+              )}
+            >
+              <Avatar name={member.name} size={28} />
+              <span className="min-w-0 flex-1 truncate">{member.name}</span>
+              {member.name !== member.address ? <span className="truncate text-xs text-muted-foreground">{member.address}</span> : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
       <div className="flex items-end gap-1.5">
         {sendFile && !editing ? (
           <>
@@ -223,7 +329,11 @@ export function Composer(props: ComposerProps) {
             ref={box}
             rows={1}
             value={text}
-            onChange={(e) => typed(e.target.value)}
+            onChange={(e) => typed(e.target.value, e.target.selectionStart)}
+            onBlur={() => setMention(null)}
+            aria-autocomplete={props.members?.length ? 'list' : undefined}
+            aria-controls={matches.length > 0 ? 'chat-mention-list' : undefined}
+            aria-activedescendant={matches.length > 0 ? `chat-mention-${highlighted}` : undefined}
             onKeyDown={onKeyDown}
             placeholder={t('chat.composer.placeholder')}
             aria-invalid={tooLong}

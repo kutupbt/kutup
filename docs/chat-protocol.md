@@ -299,6 +299,21 @@ external backups or a user copying plaintext before expiry, and the UI must not
 claim otherwise. Saved-to-Drive copies are new recipient-owned objects and do
 not expire with the Chat message.
 
+### Message extras
+
+A visible message (text or attachment) may carry, beside its body, Signal's
+DataMessage extras as authenticated top-level content fields — the same way
+as `expiresAfterSeconds`, so an older reader keeps the message and ignores
+them, while a present but malformed field rejects the whole message on every
+receive path (Direct, sync transcript, MLS):
+
+| Field | On | Rule |
+| --- | --- | --- |
+| `mentions` | text | 1–64 ordered, non-overlapping `{start, length, member}` ranges in UTF-16 units of the text; `member` a canonical address. Readers show "@" and the member's current name. |
+| `linkPreview` | text | `{url, title, description?, image?}`: an `https://` URL that appears in the text, title ≤ 300 and description ≤ 1000 characters, an optional JPEG/PNG/WebP image ≤ 24 KiB inline. Made by the sender; recipients never contact the site. |
+| `forwarded` | text, attachment | `true` or absent. A forwarded attachment is a new upload, since the original is on its sender's server. |
+| `viewOnce` | photo or video attachment | `true` or absent. |
+
 ### Account state across devices
 
 Signal keeps pinned, archived and muted chats in a storage service and syncs

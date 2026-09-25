@@ -89,6 +89,10 @@ export interface KutupChatContentView {
   readPosition?: unknown;
   deleteForMe?: unknown;
   groupUpdate?: unknown;
+  mentions?: unknown;
+  linkPreview?: unknown;
+  forwarded?: boolean;
+  viewOnce?: boolean;
   expiresAfterSeconds?: number;
   expiresAtMs?: number;
 }
@@ -1868,9 +1872,11 @@ impl WasmChatClient {
         created_at_ms: String,
         reply_to: Option<String>,
         expires_after_seconds: Option<u32>,
+        extras: JsValue,
     ) -> std::result::Result<JsValue, JsValue> {
         let conversation_id = uuid::Uuid::parse_str(&conversation_id)
             .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
+        let extras = parse_extras(extras)?;
         let entry = self
             .mls_client()
             .create_expiring_text_reply_application_message(
@@ -1882,6 +1888,7 @@ impl WasmChatClient {
                 &text,
                 reply_to.as_deref(),
                 expires_after_seconds,
+                &extras,
                 parse_i64_string("MLS message clock", &created_at_ms)?,
             )
             .await
@@ -1901,9 +1908,11 @@ impl WasmChatClient {
         descriptor: JsValue,
         created_at_ms: String,
         expires_after_seconds: Option<u32>,
+        extras: JsValue,
     ) -> std::result::Result<JsValue, JsValue> {
         let conversation_id = uuid::Uuid::parse_str(&conversation_id)
             .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
+        let extras = parse_extras(extras)?;
         let descriptor: ChatAttachmentDescriptorV1 =
             from_transport(descriptor).map_err(chat_error)?;
         let entry = self
@@ -1916,6 +1925,7 @@ impl WasmChatClient {
                 &sent_at,
                 descriptor,
                 expires_after_seconds,
+                &extras,
                 parse_i64_string("MLS message clock", &created_at_ms)?,
             )
             .await
@@ -2336,7 +2346,9 @@ impl WasmChatClient {
         text: String,
         reply_to: Option<String>,
         expires_after_seconds: Option<u32>,
+        extras: JsValue,
     ) -> std::result::Result<JsValue, JsValue> {
+        let extras = parse_extras(extras)?;
         let mut rng = OsRng.unwrap_err();
         let seq = self
             .engine
@@ -2346,6 +2358,7 @@ impl WasmChatClient {
             .map_err(chat_error)?;
         let mut content = ChatContent::text_with_id(&send_id, sent_at, seq, text)
             .with_reply_to(reply_to.as_deref())
+            .and_then(|content| content.with_extras(&extras))
             .map_err(|error| js_error(&error))?;
         if let Some(seconds) = expires_after_seconds {
             content = content
@@ -2368,9 +2381,11 @@ impl WasmChatClient {
         sent_at: String,
         descriptor: JsValue,
         expires_after_seconds: Option<u32>,
+        extras: JsValue,
     ) -> std::result::Result<JsValue, JsValue> {
         let descriptor: ChatAttachmentDescriptorV1 =
             from_transport(descriptor).map_err(chat_error)?;
+        let extras = parse_extras(extras)?;
         let mut rng = OsRng.unwrap_err();
         let seq = self
             .engine
@@ -2379,6 +2394,7 @@ impl WasmChatClient {
             .await
             .map_err(chat_error)?;
         let mut content = ChatContent::attachment_with_id(&send_id, sent_at, seq, descriptor)
+            .and_then(|content| content.with_extras(&extras))
             .map_err(|error| js_error(&error))?;
         if let Some(seconds) = expires_after_seconds {
             content = content
@@ -3128,6 +3144,14 @@ struct ContentView {
     delete_for_me: Option<kutup_chat_proto::DeleteForMeBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     group_update: Option<kutup_chat_proto::GroupUpdateBody>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    mentions: Vec<kutup_chat_proto::MentionV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    link_preview: Option<kutup_chat_proto::LinkPreviewV1>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    forwarded: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    view_once: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_after_seconds: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3147,6 +3171,7 @@ impl From<ChatContent> for ContentView {
         let read_position = content.as_read_position();
         let delete_for_me = content.as_delete_for_me();
         let group_update = content.as_group_update();
+        let extras = content.extras().unwrap_or_default();
         let expires_after_seconds = content.disappearing_after_seconds().ok().flatten();
         Self {
             version: content.v,
@@ -3167,6 +3192,10 @@ impl From<ChatContent> for ContentView {
             read_position,
             delete_for_me,
             group_update,
+            mentions: extras.mentions,
+            link_preview: extras.link_preview,
+            forwarded: extras.forwarded,
+            view_once: extras.view_once,
             expires_after_seconds,
             expires_at_ms: None,
         }
@@ -3412,6 +3441,16 @@ fn parse_i64_string(label: &str, value: &str) -> std::result::Result<i64, JsValu
         )));
     }
     Ok(parsed)
+}
+
+/// Optional extras of a visible message; absent means none.
+fn parse_extras(
+    value: JsValue,
+) -> std::result::Result<kutup_chat_proto::VisibleMessageExtrasV1, JsValue> {
+    if value.is_null() || value.is_undefined() {
+        return Ok(Default::default());
+    }
+    from_transport(value).map_err(chat_error)
 }
 
 fn from_transport<T: DeserializeOwned>(value: JsValue) -> Result<T> {
