@@ -1162,10 +1162,21 @@ export class MlsConversationService {
     }
   }
 
+  /**
+   * The frame key of a group call in this group's current epoch (and the
+   * epoch): only current members can derive it (docs/chat-calls.md).
+   */
+  async callKey(conversationId: string, callId: string): Promise<{ epoch: number; key: Uint8Array }> {
+    const conversation = await this.requireActiveConversation(conversationId)
+    const groupId = decodeCanonicalBase64(conversation.request.genesis.mlsGroupId, 16, 255)
+    const result = await this.withCryptoLock(() => this.client.exportMlsCallKey(groupId, callId))
+    return { epoch: Number(result.epoch), key: Uint8Array.from(result.key) }
+  }
+
   /** A poll, a vote in one, or its end, in this group. */
   async sendPollContent(
     conversationId: string,
-    kind: 'poll' | 'pollVote' | 'pollTerminate',
+    kind: 'poll' | 'pollVote' | 'pollTerminate' | 'groupCall',
     body: unknown,
     expiresAfterSeconds?: number,
   ): Promise<{ delivered: boolean; deduplicated: boolean; attempts: number }> {

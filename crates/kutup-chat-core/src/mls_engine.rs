@@ -482,6 +482,33 @@ pub struct MlsClient {
 }
 
 impl MlsClient {
+    /// The frame key for a group call in the current epoch: an MLS exporter
+    /// secret bound to the call, so only the group's current members can
+    /// derive it and a removal changes it (docs/chat-calls.md).
+    pub async fn export_call_key(
+        &self,
+        mls_group_id: &[u8],
+        call_id: Uuid,
+    ) -> Result<(u64, Vec<u8>)> {
+        validate_group_id(mls_group_id)?;
+        let (provider, metadata) = self.load_provider().await?;
+        active_conversation_for_group(&metadata, mls_group_id)?;
+        let group = MlsGroup::load(provider.storage(), &GroupId::from_slice(mls_group_id))
+            .map_err(|error| mls_error("load MLS group", error))?
+            .ok_or_else(|| {
+                ChatError::MissingKeyMaterial("MLS group state is unavailable".into())
+            })?;
+        let key = group
+            .export_secret(
+                provider.crypto(),
+                "kutup group call frame key v1",
+                call_id.as_bytes(),
+                32,
+            )
+            .map_err(|error| ChatError::Trust(format!("MLS call key export failed: {error:?}")))?;
+        Ok((group.epoch().as_u64(), key))
+    }
+
     async fn load_provider(&self) -> Result<(KutupMlsProvider, SnapshotMetadata)> {
         let bytes =
             self.db.load_mls_state().await?.ok_or_else(|| {

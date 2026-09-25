@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@kutup/ui/components/button'
 import { cn } from '@kutup/ui/lib/cn'
-import { useChat } from '../../app/chatStore'
+import { getChatState, useChat } from '../../app/chatStore'
 import { Avatar } from '../../components/Avatar'
 import { formatDuration } from '../../lib/callText'
 import { personName } from '../../lib/names'
@@ -12,7 +12,9 @@ import { startRingtone } from '../../lib/ringtone'
 import { useNow } from '../../lib/useNow'
 import { getAlwaysRelayCalls, getNotifications } from '../../state/prefs'
 import { CallController, type CallState } from './callController'
-import { callController, setCallController, useCall } from './callStore'
+import { callController, setCallController, setGroupCallController, useCall } from './callStore'
+import { GroupCallController } from './groupCallController'
+import { GroupCallScreen } from './GroupCallScreen'
 
 /**
  * The chat's call controller and, while a call rings or runs, the call
@@ -24,14 +26,23 @@ export function CallHost() {
   useEffect(() => {
     if (!service || !address) return
     const controller = new CallController(service, address, () => ({ alwaysRelay: getAlwaysRelayCalls() }))
+    const group = new GroupCallController(service, address, () => getChatState().snapshot.groups)
     setCallController(controller)
+    setGroupCallController(group)
     return () => {
       setCallController(null)
+      setGroupCallController(null)
       controller.dispose()
+      group.dispose()
     }
   }, [service, address])
   const call = useCall()
-  return call ? <CallScreen call={call} /> : null
+  return (
+    <>
+      {call ? <CallScreen call={call} /> : null}
+      <GroupCallScreen />
+    </>
+  )
 }
 
 function CallScreen({ call }: { call: CallState }) {

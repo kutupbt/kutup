@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import type { CallController, CallState } from './callController'
+import type { GroupCallController, GroupCallState } from './groupCallController'
 
 // The chat's one call controller, set while the chat is open, so any
 // component (the conversation header, the call screen) can reach it.
@@ -30,5 +31,36 @@ export function useCall(): CallState | null {
       return () => listeners.delete(listener)
     },
     () => controller?.current ?? null,
+  )
+}
+
+// The group call controller, alike.
+
+let groupController: GroupCallController | null = null
+const groupListeners = new Set<() => void>()
+let groupUnsubscribe: (() => void) | null = null
+
+function notifyGroup(): void {
+  for (const listener of groupListeners) listener()
+}
+
+export function setGroupCallController(next: GroupCallController | null): void {
+  groupUnsubscribe?.()
+  groupUnsubscribe = next ? next.subscribe(notifyGroup) : null
+  groupController = next
+  notifyGroup()
+}
+
+export function groupCallController(): GroupCallController | null {
+  return groupController
+}
+
+export function useGroupCall(): GroupCallState | null {
+  return useSyncExternalStore(
+    (listener) => {
+      groupListeners.add(listener)
+      return () => groupListeners.delete(listener)
+    },
+    () => groupController?.current ?? null,
   )
 }

@@ -1549,6 +1549,7 @@ impl Session {
                     Some(false) => Err(format!("invalid Chat {}", body.content.kind)),
                     _ => Ok(()),
                 })
+                .and_then(|_| refuse_group_only(&body.content))
         }) {
             self.store.discard();
             return Err(ChatError::Content(error));
@@ -1656,6 +1657,7 @@ impl Session {
                         Some(false) => Err(format!("invalid Chat {}", content.kind)),
                         _ => Ok(()),
                     })
+                    .and_then(|_| refuse_group_only(content))
                 {
                     self.store.discard();
                     return Err(ChatError::Content(error));
@@ -4474,4 +4476,12 @@ mod sealed_tests {
             Some("sealed hello".into())
         );
     }
+}
+
+/// Group calls exist only in MLS groups; a Direct copy is refused.
+fn refuse_group_only(content: &ChatContent) -> std::result::Result<(), String> {
+    if content.kind == kutup_chat_proto::content::kind::GROUP_CALL {
+        return Err("a group call is not Direct content".into());
+    }
+    Ok(())
 }

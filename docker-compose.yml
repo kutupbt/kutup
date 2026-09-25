@@ -112,6 +112,9 @@ services:
       CHAT_STUN_URLS: ${CHAT_STUN_URLS:-}
       CHAT_TURN_URLS: ${CHAT_TURN_URLS:-}
       CHAT_TURN_SECRET: ${CHAT_TURN_SECRET:-}
+      CHAT_SFU_URL: ${CHAT_SFU_URL:-}
+      CHAT_SFU_API_KEY: ${CHAT_SFU_API_KEY:-}
+      CHAT_SFU_API_SECRET: ${CHAT_SFU_API_SECRET:-}
       # Per-IP/account rate limits + per-account login lockout (blank → server defaults).
       RATE_LIMIT_LOGIN_PER_MIN: ${RATE_LIMIT_LOGIN_PER_MIN:-}
       RATE_LIMIT_PREFLIGHT_PER_MIN: ${RATE_LIMIT_PREFLIGHT_PER_MIN:-}
@@ -177,6 +180,23 @@ services:
         --denied-peer-ip=192.168.0.0-192.168.255.255
         --denied-peer-ip=127.0.0.0-127.255.255.255
         --denied-peer-ip=169.254.0.0-169.254.255.255
+
+  # SFU for group calls (optional: `docker compose --profile sfu up`). Frames
+  # arrive end-to-end encrypted; put port 7880 behind the TLS proxy as
+  # CHAT_SFU_URL (wss://) and open UDP 50000-60000 and TCP 7881.
+  livekit:
+    image: livekit/livekit-server:v1.13
+    profiles: ["sfu"]
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      SFU_KEY: ${CHAT_SFU_API_KEY:-}
+      SFU_SECRET: ${CHAT_SFU_API_SECRET:-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        [ -n "$$SFU_KEY" ] && [ -n "$$SFU_SECRET" ] || { echo 'set CHAT_SFU_API_KEY and CHAT_SFU_API_SECRET' >&2; exit 1; };
+        LIVEKIT_KEYS="$$SFU_KEY: $$SFU_SECRET" exec /livekit-server --port 7880 --rtc.tcp_port 7881 --rtc.port_range_start 50000 --rtc.port_range_end 60000 --rtc.use_external_ip
 
 volumes:
   postgres_data:

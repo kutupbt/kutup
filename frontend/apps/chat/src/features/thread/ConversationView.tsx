@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { canonicalAccountAddress, withHomeServer } from '@kutup/chat-core/identity'
 import { downloadChatMediaToCacheV1, openCachedChatMediaV1 } from '@kutup/chat-core/media'
-import type { ChatAttachmentDescriptorV1, ChatCallMedia, ConversationId } from '@kutup/chat-core/types'
+import type { ChatAttachmentDescriptorV1, ChatCallMedia, ChatGroupCall, ConversationId } from '@kutup/chat-core/types'
 import { freshAccessToken } from '@kutup/session/client'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
@@ -24,7 +24,7 @@ import { DISAPPEARING_PRESETS, disappearingLabel } from '../../lib/disappearing'
 import { chatErrorMessage } from '../../lib/errors'
 import { callLogText } from '../../lib/callText'
 import { groupUpdateSentences } from '../../lib/groupUpdate'
-import { callController, useCall } from '../calls/callStore'
+import { callController, groupCallController, useCall, useGroupCall } from '../calls/callStore'
 import { personName } from '../../lib/names'
 import { formatDayHeader } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
@@ -70,6 +70,31 @@ export function ConversationView({ conversation }: { conversation: ConversationI
   const [highlight, setHighlight] = useState<string | null>(focus)
   const [details, setDetails] = useState(false)
   const call = useCall()
+  const groupCall = useGroupCall()
+  const inAnyCall = call !== null || groupCall !== null
+  async function joinGroupCall(target: ChatGroupCall, withVideo: boolean) {
+    const controller = groupCallController()
+    if (!controller || conversation.kind !== 'group') return
+    try {
+      await controller.join(conversation.groupId, target, withVideo)
+    } catch (error) {
+      toast.error(error instanceof DOMException && error.name === 'NotAllowedError'
+        ? t('chat.calls.noDevices')
+        : t('chat.calls.joinFailed'))
+    }
+  }
+  async function startGroupCall(media: ChatCallMedia) {
+    const controller = groupCallController()
+    const host = chat.capabilities?.serverName
+    if (!controller || conversation.kind !== 'group' || !host) return
+    try {
+      await controller.start(conversation.groupId, media, host)
+    } catch (error) {
+      toast.error(error instanceof DOMException && error.name === 'NotAllowedError'
+        ? t('chat.calls.noDevices')
+        : t('chat.calls.startFailed'))
+    }
+  }
   async function placeCall(media: ChatCallMedia) {
     const controller = callController()
     const peer = conversation.kind === 'direct' ? conversation.address : null
@@ -250,6 +275,21 @@ export function ConversationView({ conversation }: { conversation: ConversationI
             </DropdownMenuContent>
           </DropdownMenu>
         ) : null}
+        {model.groupCall ? (
+          <Button variant="default" size="sm" onClick={() => void joinGroupCall(model.groupCall!, false)} disabled={inAnyCall} data-testid="chat-group-call-join">
+            <Phone />
+            {t('chat.calls.join')}
+          </Button>
+        ) : model.canStartGroupCall ? (
+          <>
+            <Button variant="ghost" size="icon" onClick={() => void startGroupCall('audio')} disabled={inAnyCall} aria-label={t('chat.calls.groupVoice')} title={t('chat.calls.groupVoice')} data-testid="chat-group-call-voice">
+              <Phone />
+            </Button>
+            <Button variant="ghost" size="icon" onClick={() => void startGroupCall('video')} disabled={inAnyCall} aria-label={t('chat.calls.groupVideo')} title={t('chat.calls.groupVideo')} data-testid="chat-group-call-video">
+              <Video />
+            </Button>
+          </>
+        ) : null}
         {model.canCall ? (
           <>
             <Button variant="ghost" size="icon" onClick={() => void placeCall('audio')} disabled={call !== null} aria-label={t('chat.calls.voice')} title={t('chat.calls.voice')} data-testid="chat-call-voice">
@@ -344,6 +384,25 @@ export function ConversationView({ conversation }: { conversation: ConversationI
                 {model.canCall ? (
                   <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => void placeCall(log.media)}>
                     {t('chat.calls.callBack')}
+                  </Button>
+                ) : null}
+              </div>
+            )
+          }
+          if (row.kind === 'notice' && row.view.groupCall) {
+            const started = row.view.groupCall
+            const live = model.groupCall?.callId === started.callId
+            return (
+              <div key={row.key} className="mx-auto flex max-w-sm items-center justify-center gap-2 px-4 py-2.5 text-center text-xs text-muted-foreground" data-testid="chat-group-call-notice">
+                {started.media === 'video' ? <Video className="size-4 shrink-0" aria-hidden /> : <Phone className="size-4 shrink-0" aria-hidden />}
+                <span>
+                  {row.view.outgoing
+                    ? t('chat.calls.groupStarted_you')
+                    : t('chat.calls.groupStarted', { name: nameOf(row.view) })}
+                </span>
+                {live && !inAnyCall ? (
+                  <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => void joinGroupCall(started, false)}>
+                    {t('chat.calls.join')}
                   </Button>
                 ) : null}
               </div>

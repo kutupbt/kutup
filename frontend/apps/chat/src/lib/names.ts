@@ -48,6 +48,9 @@ export function messagePreview(
     return groupUpdateSentences(entry.content.groupUpdate, notice.self, notice.nameOf, t)[0] ?? ''
   }
   if (entry.content.callLog) return callLogText(entry.content.callLog, t)
+  if (entry.content.groupCall) {
+    return entry.content.groupCall.event === 'started' ? t('chat.calls.groupStartedPreview') : t('chat.calls.groupEndedPreview')
+  }
   if (mutation?.deleted) {
     return entry.direction === 'outgoing' ? t('chat.mutations.youDeleted') : t('chat.mutations.deleted')
   }

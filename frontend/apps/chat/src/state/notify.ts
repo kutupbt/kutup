@@ -46,7 +46,9 @@ export function noticesFor(
       notices.push({ kind: 'reaction', key, entry, sender, emoji: reaction.emoji, target })
       continue
     }
-    if (!isVisibleChatMessage(entry, context.nowMs)) continue
+    // "Alice started a group call" notifies like a message.
+    const callStart = entry.content.groupCall?.event === 'started'
+    if (!callStart && !isVisibleChatMessage(entry, context.nowMs)) continue
     if (entry.timestampMs <= (context.readThrough[key] ?? 0)) continue
     const mention = entry.content.mentions?.some((item) => item.member === context.selfAddress) ?? false
     if (muted && !mention) continue

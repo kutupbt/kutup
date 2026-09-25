@@ -6,6 +6,7 @@
 //! groups (auth, files, collab, federation, …) are added in `build_router` as each
 //! handler slice lands.
 
+mod calls;
 mod chat_federation;
 mod chat_hub;
 mod chat_media_federation;
@@ -33,7 +34,6 @@ mod storage;
 mod storage_probe;
 mod telemetry;
 mod totp;
-mod calls;
 mod version_retention;
 mod web_push;
 
@@ -760,6 +760,10 @@ fn build_router(state: AppState) -> Router {
         .route("/api/chat/link-preview", post(chat_link_preview::fetch))
         .route("/api/chat/call-servers", get(calls::call_servers))
         .route(
+            "/api/chat/group-calls/token",
+            post(chat_mls::group_call_token).route_layer(DefaultBodyLimit::max(4 * 1024)),
+        )
+        .route(
             "/api/chat/push-subscription",
             put(web_push::put_subscription)
                 .delete(web_push::delete_subscription)
@@ -911,6 +915,12 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/chat/mls/anonymous/messages",
             post(chat_mls::federated_submit_anonymous_message)
                 .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/group-calls/token",
+            post(chat_mls::federated_group_call_token)
+                .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(

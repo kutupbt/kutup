@@ -2,9 +2,10 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { mlsGroupInvitationReadiness, type MlsGroupInvitationReadiness } from '@kutup/chat-core/group-readiness'
 import { canonicalAccountAddress, conversationKey, directAddress } from '@kutup/chat-core/identity'
-import type { ContactRecord, ConversationId, LocalMlsConversationRecord, PeerChatProfile } from '@kutup/chat-core/types'
+import type { ChatGroupCall, ContactRecord, ConversationId, LocalMlsConversationRecord, PeerChatProfile } from '@kutup/chat-core/types'
 import { useChat } from '../../app/chatStore'
 import { conversationTitle } from '../../lib/names'
+import { activeGroupCall } from '../calls/groupCallController'
 import { activeTimers, groupIdOf, threadView, type MessageView } from '../../state/views'
 
 /** Why nothing can be written here (the composer's place shows it). */
@@ -38,6 +39,10 @@ export interface ConversationModel {
   canSetTimer: boolean
   canSendTyping: boolean
   canCall: boolean
+  /** The group call in progress here, if any. */
+  groupCall: ChatGroupCall | null
+  /** This account can start a group call here (its server hosts them). */
+  canStartGroupCall: boolean
   canEditGroupInfo: boolean
 }
 
@@ -46,7 +51,7 @@ const noReadiness: MlsGroupInvitationReadiness = { pending: [], refused: [], blo
 /** Everything a conversation's screen needs, derived from the chat state. */
 export function useConversationModel(conversation: ConversationId, now: number): ConversationModel {
   const { t } = useTranslation()
-  const { snapshot, self } = useChat()
+  const { snapshot, self, capabilities } = useChat()
   const selfAddress = self!.address
 
   return useMemo(() => {
@@ -99,6 +104,16 @@ export function useConversationModel(conversation: ConversationId, now: number):
         !readOnly && !note && (conversation.kind === 'group' || contact?.state === 'accepted' || contact?.state === 'pendingOutgoing'),
       // Signal rings only for accepted contacts; group calls come later.
       canCall: !readOnly && !note && conversation.kind === 'direct' && contact?.state === 'accepted',
+      groupCall: group
+        ? activeGroupCall(
+            snapshot.history.flatMap((entry) =>
+              entry.content.groupCall && conversationKey(entry.conversation) === key
+                ? [{ call: entry.content.groupCall, atMs: entry.timestampMs }]
+                : []),
+            now,
+          )
+        : null,
+      canStartGroupCall: group !== null && !readOnly && capabilities?.groupCalls === true,
     }
-  }, [conversation, snapshot, selfAddress, now, t])
+  }, [conversation, snapshot, selfAddress, now, t, capabilities])
 }

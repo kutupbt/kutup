@@ -821,7 +821,20 @@
       "noDevices": "Kutup can't use your microphone or camera. Allow them in the browser to call.",
       "startFailed": "The call couldn't start.",
       "alwaysRelay": "Always relay calls",
-      "alwaysRelayDescription": "Send call audio and video through your server's relay, so the other person can't see your IP address. Calls may sound a little worse."
+      "alwaysRelayDescription": "Send call audio and video through your server's relay, so the other person can't see your IP address. Calls may sound a little worse.",
+      "groupVoice": "Start a group voice call",
+      "groupVideo": "Start a group video call",
+      "join": "Join call",
+      "joinFailed": "Couldn't join the call.",
+      "groupStarted": "{{name}} started a group call",
+      "groupStarted_you": "You started a group call",
+      "groupStartedPreview": "Group call started",
+      "groupEndedPreview": "Group call ended",
+      "unknownParticipant": "Someone in the group",
+      "inCall_one": "{{count}} in the call",
+      "inCall_other": "{{count}} in the call",
+      "groupScreen": "Group call in {{name}}",
+      "leave": "Leave call"
     }
   },
   "boot": {

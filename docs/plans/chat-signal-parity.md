@@ -58,7 +58,9 @@ Next, in order:
 9. **Calls.** 1:1 voice and video (done, [`chat-calls.md`](../chat-calls.md)):
    WebRTC with signals over the Direct session, coturn shared-secret TURN,
    "always relay", call history, ringing across devices and tabs. Group
-   calls through an SFU with end-to-end encrypted frames remain.
+   calls (done) through the starter's LiveKit SFU, frames encrypted with an
+   MLS-epoch exporter key, participants known to the SFU only by HMAC tags,
+   tokens across servers over federation.
 10. **Smaller things.** Persistent drafts, failed-send retry,
     typing-indicator setting, default disappearing timer for new chats,
     keyboard shortcuts, chat export.

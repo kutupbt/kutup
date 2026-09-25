@@ -15,6 +15,7 @@ mod control_store;
 mod conversation_store;
 mod delivery_store;
 mod federation_control;
+pub(crate) mod group_calls;
 mod identified_packages;
 mod invitation_feedback;
 mod invitation_routes;
@@ -46,6 +47,9 @@ pub(crate) use control_routes::{
     collect_ordering_votes, commit_control_block, create_conversation,
 };
 use federation_control::{replicate_genesis, request_remote_ordering_vote};
+pub(crate) use group_calls::{
+    federated_token as federated_group_call_token, hosts_group_calls, token as group_call_token,
+};
 pub(crate) use identified_packages::{
     federated_get_identified_key_packages, get_identified_key_packages,
 };

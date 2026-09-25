@@ -17,6 +17,8 @@ export interface ChatContentView {
   call?: ChatCallSignal
   /** A call in the timeline, written by this device. */
   callLog?: ChatCallLog
+  /** A group call started or ended (MLS only). */
+  groupCall?: ChatGroupCall
   disappearingTimer?: ChatDisappearingTimerV1
   /** Same-account controls: only ever in Note to Self, from this account. */
   conversationState?: ChatConversationStateV1
@@ -348,6 +350,19 @@ export interface ChatCallLog {
   durationSeconds?: number
 }
 
+/** A group call's announcement to the group (docs/chat-calls.md). */
+export interface ChatGroupCall {
+  callId: string
+  event: 'started' | 'ended'
+  /** The server whose SFU hosts the room. */
+  host: string
+  /** 32 lowercase hex characters: the capability to join. */
+  roomId: string
+  media: ChatCallMedia
+  /** Standard base64 of 32 bytes; keys the participant tags. */
+  secret: string
+}
+
 /** A call signal received from `peer`'s device `senderDeviceId`. */
 export interface ChatCallEvent {
   /** Canonical address of the other person. */
@@ -438,6 +453,8 @@ export interface ChatCapabilities {
   mlsGroups?: boolean
   /** The server fetches public pages for the sender's link previews. */
   linkPreviews?: boolean
+  /** This server's SFU hosts group calls, so accounts here can start them. */
+  groupCalls?: boolean
   /** VAPID key for Web Push wake-ups (base64url), when the server sends them. */
   webPushPublicKey?: string
   /** Present only after immutable media works locally, federated, and in the browser. */
@@ -1553,11 +1570,12 @@ export interface WasmChatClientHandle {
     incarnation: string,
     mlsGroupId: Uint8Array,
     sentAt: string,
-    kind: 'poll' | 'pollVote' | 'pollTerminate',
+    kind: 'poll' | 'pollVote' | 'pollTerminate' | 'groupCall',
     body: unknown,
     createdAtMs: string,
     expiresAfterSeconds?: number,
   ): Promise<MlsOutboxEntry>
+  exportMlsCallKey(mlsGroupId: Uint8Array, callId: string): Promise<{ epoch: string; key: number[] }>
   createMlsDisappearingTimer(
     sendId: string,
     conversationId: string,

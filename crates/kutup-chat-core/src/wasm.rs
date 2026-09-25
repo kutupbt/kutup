@@ -1975,6 +1975,31 @@ impl WasmChatClient {
         to_output(&entry)
     }
 
+    /// The frame key of a group call in the group's current epoch.
+    #[wasm_bindgen(js_name = exportMlsCallKey)]
+    pub async fn export_mls_call_key(
+        &self,
+        mls_group_id: Vec<u8>,
+        call_id: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let call_id = uuid::Uuid::parse_str(&call_id)
+            .map_err(|_| js_error("group call id must be a UUID"))?;
+        let (epoch, key) = self
+            .mls_client()
+            .export_call_key(&mls_group_id, call_id)
+            .await
+            .map_err(chat_error)?;
+        #[derive(Serialize)]
+        struct CallKey {
+            epoch: String,
+            key: Vec<u8>,
+        }
+        to_output(&CallKey {
+            epoch: epoch.to_string(),
+            key,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = createMlsReactionMessage)]
     pub async fn create_mls_reaction_message(
@@ -3288,6 +3313,8 @@ struct ContentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     call_log: Option<kutup_chat_proto::CallLogBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    group_call: Option<kutup_chat_proto::GroupCallBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     disappearing_timer: Option<kutup_chat_proto::DisappearingTimerBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     conversation_state: Option<kutup_chat_proto::ConversationStateBody>,
@@ -3335,6 +3362,7 @@ impl From<ChatContent> for ContentView {
         let typing = content.as_typing();
         let call = content.as_call();
         let call_log = content.as_call_log();
+        let group_call = content.as_group_call();
         let disappearing_timer = content.as_disappearing_timer();
         let conversation_state = content.as_conversation_state();
         let read_position = content.as_read_position();
@@ -3364,6 +3392,7 @@ impl From<ChatContent> for ContentView {
             typing,
             call,
             call_log,
+            group_call,
             disappearing_timer,
             conversation_state,
             read_position,
@@ -3766,7 +3795,13 @@ fn build_poll_content(
             seq,
             &serde_json::from_value(body.clone()).map_err(|_| decode("poll end"))?,
         )?,
-        _ => return Err("unknown Chat poll content".into()),
+        kutup_chat_proto::content::kind::GROUP_CALL => ChatContent::group_call_with_id(
+            send_id,
+            sent_at,
+            seq,
+            &serde_json::from_value(body.clone()).map_err(|_| decode("group call"))?,
+        )?,
+        _ => return Err("unknown Chat structured content".into()),
     };
     match expires_after_seconds {
         Some(seconds) if kind == kutup_chat_proto::content::kind::POLL => {

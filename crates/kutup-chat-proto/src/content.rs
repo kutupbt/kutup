@@ -87,6 +87,9 @@ pub mod kind {
     /// A call in the timeline ("Missed voice call"), written by each device
     /// for itself; never sent, and refused if it ever arrives. [IMPL]
     pub const CALL_LOG: &str = "callLog";
+    /// A group call started or ended (MLS only); the start shows in the
+    /// timeline with a way to join. [IMPL]
+    pub const GROUP_CALL: &str = "groupCall";
     /// Session-control notice (e.g. explicit reset). [RSV]
     pub const SESSION_CONTROL: &str = "sessionControl";
 }

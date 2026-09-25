@@ -1388,6 +1388,16 @@ With `CHAT_TURN_URLS` and `CHAT_TURN_SECRET` set, the TURN entry carries a
 password `base64(HMAC-SHA1(secret, username))`); `relay` is then true. 60
 per minute per account.
 
+### POST /api/chat/group-calls/token
+
+`{ "host", "roomId", "participantId" }` (room and tag: 32 lowercase hex each)
+→ `{ "url", "token" }`: the SFU's WebSocket URL and a 6-hour LiveKit token
+for that room ([`chat-calls.md`](chat-calls.md) "Group calls"). The host
+mints it; another host is asked over signed federation
+(`POST /api/fed/chat/group-calls/token`). `404` when the host has no SFU,
+`429` over 30 per minute per account (300 per origin server), `502` when
+the host cannot be reached.
+
 ### PUT /api/chat/push-subscription
 
 `{ "deviceId": N, "endpoint": "https://…" }` → `204`: wake this chat device

@@ -321,7 +321,8 @@ receive path (Direct, sync transcript, MLS):
 batch, hang-up, busy) and is ephemeral like `typing`: never history, never
 a linked-device transcript, dropped from the outbox after 60 s, suppressed
 from people not accepted, refused in Note to Self and in MLS. `callLog` is a
-local-only record of a finished call, like `groupUpdate`. See
+local-only record of a finished call, like `groupUpdate`. `groupCall`
+(`GroupCallBody`) announces a group call starting or ending, MLS only. See
 [`chat-calls.md`](chat-calls.md).
 
 ### Polls

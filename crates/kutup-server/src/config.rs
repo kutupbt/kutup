@@ -81,6 +81,13 @@ pub struct Config {
     /// (`CHAT_TURN_SECRET`). Without both, calls connect only directly.
     pub chat_turn_urls: String,
     pub chat_turn_secret: String,
+    /// The LiveKit SFU for group calls this server hosts: the WebSocket URL
+    /// browsers connect to (`CHAT_SFU_URL`) and its API key and secret
+    /// (`CHAT_SFU_API_KEY`, `CHAT_SFU_API_SECRET`). Without them, accounts
+    /// here can join group calls other servers host but not start one.
+    pub chat_sfu_url: String,
+    pub chat_sfu_api_key: String,
+    pub chat_sfu_api_secret: String,
     /// Complete authenticated sealed-sender service policy JSON. It contains
     /// public roots and root-signed online certificates, never an offline root.
     pub chat_sealed_sender_policy: String,
@@ -267,6 +274,9 @@ impl Config {
             chat_stun_urls: get_env("CHAT_STUN_URLS", ""),
             chat_turn_urls: get_env("CHAT_TURN_URLS", ""),
             chat_turn_secret: get_env("CHAT_TURN_SECRET", ""),
+            chat_sfu_url: get_env("CHAT_SFU_URL", ""),
+            chat_sfu_api_key: get_env("CHAT_SFU_API_KEY", ""),
+            chat_sfu_api_secret: get_env("CHAT_SFU_API_SECRET", ""),
             chat_sealed_sender_policy: get_env("CHAT_SEALED_SENDER_POLICY", ""),
             chat_sealed_sender_online_private_key: get_env(
                 "CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY",

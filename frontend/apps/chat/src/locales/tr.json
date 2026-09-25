@@ -821,7 +821,20 @@
       "noDevices": "Kutup mikrofonunuzu ya da kameranızı kullanamıyor. Arama yapmak için tarayıcıda izin verin.",
       "startFailed": "Arama başlatılamadı.",
       "alwaysRelay": "Aramaları her zaman aktar",
-      "alwaysRelayDescription": "Arama sesini ve görüntüsünü sunucunuzun aktarıcısı üzerinden gönderin; böylece karşı taraf IP adresinizi göremez. Arama kalitesi biraz düşebilir."
+      "alwaysRelayDescription": "Arama sesini ve görüntüsünü sunucunuzun aktarıcısı üzerinden gönderin; böylece karşı taraf IP adresinizi göremez. Arama kalitesi biraz düşebilir.",
+      "groupVoice": "Grup sesli araması başlat",
+      "groupVideo": "Grup görüntülü araması başlat",
+      "join": "Aramaya katıl",
+      "joinFailed": "Aramaya katılınamadı.",
+      "groupStarted": "{{name}} bir grup araması başlattı",
+      "groupStarted_you": "Bir grup araması başlattınız",
+      "groupStartedPreview": "Grup araması başladı",
+      "groupEndedPreview": "Grup araması bitti",
+      "unknownParticipant": "Gruptan biri",
+      "inCall_one": "Aramada {{count}} kişi",
+      "inCall_other": "Aramada {{count}} kişi",
+      "groupScreen": "{{name}} grup araması",
+      "leave": "Aramadan ayrıl"
     }
   },
   "boot": {

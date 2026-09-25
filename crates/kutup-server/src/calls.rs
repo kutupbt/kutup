@@ -107,7 +107,8 @@ pub async fn call_servers(
     let mut expires_at = None;
     if relay {
         let until = time::OffsetDateTime::now_utc().unix_timestamp() + CREDENTIAL_TTL_SECONDS;
-        let (username, credential) = turn_credential(&config.chat_turn_secret, &auth.user_id, until);
+        let (username, credential) =
+            turn_credential(&config.chat_turn_secret, &auth.user_id, until);
         ice_servers.push(IceServer {
             urls: turn,
             username: Some(username),
@@ -137,8 +138,14 @@ mod tests {
         mac.update(username.as_bytes());
         assert_eq!(password, STANDARD.encode(mac.finalize().into_bytes()));
         // Stable per account, different across accounts.
-        assert_eq!(turn_credential("north-secret", "user-1", 1_700_000_000).0, username);
-        assert_ne!(turn_credential("north-secret", "user-2", 1_700_000_000).0, username);
+        assert_eq!(
+            turn_credential("north-secret", "user-1", 1_700_000_000).0,
+            username
+        );
+        assert_ne!(
+            turn_credential("north-secret", "user-2", 1_700_000_000).0,
+            username
+        );
     }
 
     #[test]

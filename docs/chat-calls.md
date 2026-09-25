@@ -1,9 +1,13 @@
 # Kutup Chat calls
 
-One-to-one voice and video calls, as Signal has them. Media goes directly
-between the two browsers (WebRTC). Everything that sets a call up travels
-end-to-end encrypted through the existing Direct (libsignal) session. Group
-calls are separate work (see the parity plan).
+Voice and video calls, as Signal has them:
+
+- **One-to-one calls:** media goes directly between the two browsers
+  (WebRTC). Everything that sets a call up travels end-to-end encrypted
+  through the existing Direct (libsignal) session.
+- **Group calls:** media goes through the SFU of the server that started the
+  call, with frames end-to-end encrypted under a key only the group's MLS
+  members can derive. See "Group calls" below.
 
 ## Signaling
 
@@ -79,6 +83,57 @@ of `answered`, `missed`, `declined`, `unanswered`, `busy` or `failed`.
   preview.
 - **Backup:** the continuous backup keeps them.
 
+## Group calls
+
+A group call runs on the LiveKit SFU of the server of whoever starts it (its
+host; `CHAT_SFU_URL`, `CHAT_SFU_API_KEY`, `CHAT_SFU_API_SECRET`). Accounts of
+a server without an SFU can join calls others host but not start one (the
+capability `chat.groupCalls`).
+
+**Starting and ending:** starting a call sends one `groupCall` message
+(`GroupCallBody`) to the group over MLS. It carries:
+- `callId`;
+- `event` (`started` / `ended`);
+- `host`;
+- `media`;
+- a `roomId` of 128 random bits;
+- a 32-byte `secret`.
+
+The start shows in the timeline ("Alice started a group call") with Join,
+and the header offers Join while the call is on. The last participant to
+leave sends `ended`. A start nobody ended (a crash) stops showing after 12
+hours. `groupCall` is refused as Direct content.
+
+**Joining:**
+- A member asks its own server for an SFU token
+  (`POST /api/chat/group-calls/token` with host, room and participant tag).
+- If the host is another server, the request goes over signed federation
+  (`POST /api/fed/chat/group-calls/token`).
+- The host mints a 6-hour LiveKit token for that one room (join, publish,
+  subscribe; never room admin).
+- The room id is the capability: only the group's members know it.
+
+**Frame encryption:**
+- Browsers encrypt media frames before they leave (insertable streams,
+  livekit-client's E2EE worker). The SFU forwards frames it cannot read.
+- The key is an MLS exporter secret of the group's current epoch, labelled
+  `kutup group call frame key v1` with the call id as context. Only the
+  current members can derive it.
+- A membership change advances the epoch and changes the key. Each epoch's
+  key sits at key index `epoch mod 16`, so frames from a member one step
+  behind still decrypt while the Commit reaches everyone.
+- Participants check for a new epoch every 3 s, and at once when a frame
+  fails to decrypt.
+
+**Who is who:**
+- The SFU sees each participant only as a tag: the first 12 bytes of
+  `HMAC-SHA256(secret, address)` in hex, plus 4 random bytes per join.
+- Members compute the tags of the group's roster to name the tiles. The SFU
+  cannot, without the secret.
+
+**Group calls in the timeline:** the start notice, and the list preview
+("Group call started" / "Group call ended").
+
 ## ICE servers
 
 `GET /api/chat/call-servers` returns what `RTCPeerConnection` needs:
@@ -101,6 +156,17 @@ other person never learns this browser's IP address. It is shown only when a
 relay is available.
 
 ## What servers learn
+
+For group calls, the host's SFU sees:
+- the room id;
+- how many participants there are, their network addresses and tags;
+- when each joins and leaves;
+- the sizes and timing of the encrypted frames.
+
+It never sees who the participants are, the group, or the media. Other
+servers see only the federated token request (room id and tag) from their
+accounts.
+
 
 - **Kutup servers:** they carry the signals as ordinary encrypted Direct
   traffic, so they see only message timing and sizes.

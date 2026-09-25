@@ -163,8 +163,7 @@ pub struct CallLogBody {
 
 impl CallLogBody {
     pub fn validate(&self) -> Result<(), String> {
-        if self.call_id.is_nil() || !(0..=crate::MAX_SAFE_CLOCK_MS).contains(&self.started_at_ms)
-        {
+        if self.call_id.is_nil() || !(0..=crate::MAX_SAFE_CLOCK_MS).contains(&self.started_at_ms) {
             return Err("a call record needs an id and a time".into());
         }
         match (self.outcome, self.duration_seconds) {
@@ -175,6 +174,79 @@ impl CallLogBody {
             (_, None) => Ok(()),
             (_, Some(_)) => Err("only an answered call has a duration".into()),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GroupCallEventV1 {
+    Started,
+    Ended,
+}
+
+/// A group call starting or ending, sent to the group over MLS. The room on
+/// `host`'s SFU is joined with a token from that server; `room_id` is the
+/// capability, known only to the group's members. Media frames are
+/// encrypted with a key derived from the MLS epoch (docs/chat-calls.md).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupCallBody {
+    pub call_id: Uuid,
+    pub event: GroupCallEventV1,
+    pub host: String,
+    /// 32 lowercase hex characters (128 random bits).
+    pub room_id: String,
+    pub media: CallMediaV1,
+    /// Standard base64 of 32 random bytes, known only to the group: it keys
+    /// the participant tags, so the SFU cannot tell who is in the call.
+    pub secret: String,
+}
+
+impl GroupCallBody {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.call_id.is_nil() {
+            return Err("a group call needs an id".into());
+        }
+        validate_room_id(&self.room_id)?;
+        crate::mls::decode_canonical_base64("groupCallSecret", &self.secret, 32, 32)?;
+        kutup_federation_proto::validate_server_name(&self.host)
+            .map_err(|error| format!("group call host: {error}"))
+    }
+}
+
+/// A group call room id: 32 lowercase hex characters.
+pub fn validate_room_id(room_id: &str) -> Result<(), String> {
+    if room_id.len() != 32
+        || !room_id
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err("a group call room id is 32 lowercase hex characters".into());
+    }
+    Ok(())
+}
+
+impl crate::ChatContent {
+    pub fn group_call_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        body: &GroupCallBody,
+    ) -> Result<Self, String> {
+        body.validate()?;
+        Self::structured(
+            crate::content::kind::GROUP_CALL,
+            message_id,
+            sent_at,
+            seq,
+            body,
+        )
+    }
+
+    pub fn as_group_call(&self) -> Option<GroupCallBody> {
+        let body: GroupCallBody = self.structured_body(crate::content::kind::GROUP_CALL)?;
+        body.validate().ok()?;
+        Some(body)
     }
 }
 
@@ -220,6 +292,32 @@ mod tests {
         let mut bad_device = signal(CallSignalKindV1::Busy);
         bad_device.caller_device_id = 0;
         assert!(bad_device.validate().is_err());
+    }
+
+    #[test]
+    fn group_calls_name_a_room_on_a_host() {
+        let body = GroupCallBody {
+            call_id: Uuid::from_u128(4),
+            event: GroupCallEventV1::Started,
+            host: "a.test".into(),
+            room_id: "0123456789abcdef0123456789abcdef".into(),
+            media: CallMediaV1::Video,
+            secret: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [3u8; 32]),
+        };
+        let content = crate::ChatContent::group_call_with_id("m", "t", 1, &body).unwrap();
+        assert_eq!(content.as_group_call(), Some(body.clone()));
+        assert!(GroupCallBody {
+            room_id: "0123456789ABCDEF0123456789ABCDEF".into(),
+            ..body.clone()
+        }
+        .validate()
+        .is_err());
+        assert!(GroupCallBody {
+            host: "https://a.test".into(),
+            ..body
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]

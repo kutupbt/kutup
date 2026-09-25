@@ -46,8 +46,9 @@ pub use backup::{
     MAX_CHAT_BACKUP_PAGE_SEGMENTS, MAX_CHAT_BACKUP_SEGMENT_CIPHERTEXT_BYTES,
 };
 pub use calls::{
-    CallLogBody, CallMediaV1, CallOutcomeV1, CallSignalKindV1, CallSignalV1, HangupReasonV1,
-    IceCandidateV1, MAX_CALL_ICE_CANDIDATES, MAX_CALL_SDP_BYTES,
+    validate_room_id, CallLogBody, CallMediaV1, CallOutcomeV1, CallSignalKindV1, CallSignalV1,
+    GroupCallBody, GroupCallEventV1, HangupReasonV1, IceCandidateV1, MAX_CALL_ICE_CANDIDATES,
+    MAX_CALL_SDP_BYTES,
 };
 pub use content::{
     ChatContent, ContactControlBody, ContactState, ConversationStateBody, DeleteForMeBody,
@@ -892,6 +893,9 @@ pub struct ChatCapabilities {
     /// browsers subscribe to wake-up pushes with, when the server sends them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_push_public_key: Option<String>,
+    /// This server hosts group calls on its SFU (accounts can start them).
+    #[serde(default)]
+    pub group_calls: bool,
     /// Immutable E2EE attachment upload, local/federated durable delivery,
     /// encrypted ledger and browser download are complete. Omitted until the
     /// entire Phase 6 path passes its gates.
@@ -926,6 +930,7 @@ impl Default for ChatCapabilities {
             mls_groups: false,
             link_previews: false,
             web_push_public_key: None,
+            group_calls: false,
             media: None,
             backup: None,
             sealed_sender_policy: None,

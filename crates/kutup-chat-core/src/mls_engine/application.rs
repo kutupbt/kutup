@@ -123,7 +123,10 @@ impl MlsClient {
             .disappearing_after_seconds()
             .map_err(ChatError::Content)?;
         content.extras().map_err(ChatError::Content)?;
-        if content.poll_content_is_valid() == Some(false) {
+        if content.poll_content_is_valid() == Some(false)
+            || (content.kind == kutup_chat_proto::content::kind::GROUP_CALL
+                && content.as_group_call().is_none())
+        {
             return Err(ChatError::Content(format!("invalid MLS {}", content.kind)));
         }
         if content.kind == kutup_chat_proto::content::kind::DISAPPEARING_TIMER

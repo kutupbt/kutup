@@ -27,6 +27,7 @@ export function isVisibleChatMessage(message: ChatHistoryEntry, nowMs: number): 
   if (message.content.reaction || message.content.mutation || message.content.receipt
       || message.content.disappearingTimer || message.content.groupUpdate
       || message.content.pollVote || message.content.pollTerminate
+      || message.content.groupCall || message.content.callLog
       || isAccountControl(message)) return false
   const expiresAt = disappearingMessageExpiresAt(message)
   return expiresAt === undefined || nowMs < expiresAt

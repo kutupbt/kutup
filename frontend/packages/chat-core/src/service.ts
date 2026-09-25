@@ -27,6 +27,7 @@ import type {
   ChatCallLog,
   ChatCallServers,
   ChatCallSignal,
+  ChatGroupCall,
   GroupJoinRequest,
   InviteLinkCrypto,
   MlsGroupInfo,
@@ -703,6 +704,27 @@ export class ChatService {
     if (cached && (!cached.expiresAt || cached.expiresAt * 1000 - Date.now() > 60 * 60 * 1000)) return cached
     const response = await api.get<ChatCallServers>('/chat/call-servers')
     this.cachedCallServers = response.data
+    return response.data
+  }
+
+  /** Announce a group call starting or ending to the group. */
+  async sendGroupCall(groupId: string, body: ChatGroupCall): Promise<void> {
+    await this.withMlsWorkflow(() => this.requireMls().sendPollContent(groupId, 'groupCall', body))
+    this.notifyPeers()
+  }
+
+  /** A group call's frame key in the group's current epoch. */
+  async groupCallKey(groupId: string, callId: string): Promise<{ epoch: number; key: Uint8Array }> {
+    return this.requireMls().callKey(groupId, callId)
+  }
+
+  /** An SFU token for a group call's room, from its host (through this server). */
+  async groupCallToken(host: string, roomId: string, participantId: string): Promise<{ url: string; token: string }> {
+    const response = await api.post<{ url: string; token: string }>('/chat/group-calls/token', {
+      host,
+      roomId,
+      participantId,
+    })
     return response.data
   }
 

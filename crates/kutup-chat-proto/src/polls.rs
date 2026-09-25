@@ -90,7 +90,7 @@ fn validate_target(target: &str) -> Result<(), String> {
 }
 
 impl ChatContent {
-    fn structured<T: Serialize>(
+    pub(crate) fn structured<T: Serialize>(
         kind: &str,
         message_id: impl Into<String>,
         sent_at: impl Into<String>,
@@ -111,7 +111,7 @@ impl ChatContent {
         })
     }
 
-    fn structured_body<T: serde::de::DeserializeOwned>(&self, kind: &str) -> Option<T> {
+    pub(crate) fn structured_body<T: serde::de::DeserializeOwned>(&self, kind: &str) -> Option<T> {
         if self.kind != kind || self.v != Self::VERSION || self.message_id.is_none() {
             return None;
         }

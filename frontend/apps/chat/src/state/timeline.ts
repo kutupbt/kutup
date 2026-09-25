@@ -24,7 +24,7 @@ export type TimelineRow =
     }
 
 function isNotice(view: MessageView): boolean {
-  return view.timerChange !== null || view.groupUpdate !== null || view.callLog !== null || view.pollEnded !== null
+  return view.timerChange !== null || view.groupUpdate !== null || view.callLog !== null || view.groupCall !== null || view.pollEnded !== null
 }
 
 function joins(older: MessageView, newer: MessageView): boolean {
