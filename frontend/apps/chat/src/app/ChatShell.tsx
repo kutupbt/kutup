@@ -17,6 +17,7 @@ import { useNow } from '../lib/useNow'
 import { isMuted } from '../state/accountState'
 import { useAccountState, useReadThrough } from '../state/useAccountState'
 import { unreadCounts } from '../state/views'
+import { ChatNotifier } from './ChatNotifier'
 import { closeChat, useChat } from './chatStore'
 
 /**
@@ -98,6 +99,7 @@ export function ChatShell() {
       <Outlet />
       <NewChatDialog open={newChat} onOpenChange={setNewChat} />
       <JoinGroupHost />
+      <ChatNotifier unread={unread} />
     </AppShell>
   )
 }

@@ -5,6 +5,7 @@ import { cn } from '@kutup/ui/lib/cn'
 import { ConnectionBanner } from '../features/list/ConnectionBanner'
 import { ConversationList } from '../features/list/ConversationList'
 import { GroupInvitations } from '../features/list/GroupInvitations'
+import { NotificationPrompt } from '../features/list/NotificationPrompt'
 import { parseConversationKey } from '../features/list/paths'
 import { SearchResults } from '../features/list/SearchResults'
 import { ConversationView } from '../features/thread/ConversationView'
@@ -37,6 +38,7 @@ export function ChatsPage() {
             <SearchResults query={query} />
           ) : (
             <>
+              <NotificationPrompt />
               <GroupInvitations />
               <ConversationList selectedKey={conversation ? selectedKey : null} />
             </>

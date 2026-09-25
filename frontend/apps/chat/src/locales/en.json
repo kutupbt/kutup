@@ -534,7 +534,8 @@
       "privacy": "Privacy",
       "devices": "Devices",
       "backup": "History backup",
-      "storage": "Storage"
+      "storage": "Storage",
+      "notifications": "Notifications"
     },
     "storage": {
       "clear": "Clear",
@@ -736,6 +737,44 @@
       },
       "bannerRequests_one": "{{count}} person wants to join",
       "bannerRequests_other": "{{count}} people want to join"
+    },
+    "notifications": {
+      "appName": "Kutup Chat",
+      "newMessage": "New message",
+      "newMessageFrom": "New message from {{name}}",
+      "reacted": "{{name}} reacted {{emoji}} to: {{preview}}",
+      "reactedHidden": "{{name}} reacted to your message",
+      "viewOnce": "View-once media",
+      "many_one": "{{count}} new message",
+      "many_other": "{{count}} new messages",
+      "invited_one": "You were invited to a group",
+      "invited_other": "You were invited to {{count}} groups",
+      "joinRequest": "{{name}} wants to join",
+      "joinRequestHidden": "Someone wants to join a group",
+      "settingsDescription": "Notifications while Chat is open in this browser.",
+      "allowTitle": "Allow notifications",
+      "allowDescription": "Your browser asks once whether Kutup may show notifications.",
+      "allow": "Allow notifications",
+      "blocked": "This browser blocks notifications from Kutup. Allow them in the site settings to see them.",
+      "unsupported": "This browser can't show notifications.",
+      "show": "Show notifications",
+      "showDescription": "For new messages, reactions to your messages, group invitations and requests to join your groups. Muted chats only notify when you're mentioned.",
+      "contentTitle": "Show in notifications",
+      "content": {
+        "all": "Name and message",
+        "allHint": "Who wrote and what they wrote.",
+        "name": "Name only",
+        "nameHint": "Who wrote, without the message.",
+        "none": "No name or message",
+        "noneHint": "Only that something new arrived."
+      },
+      "sound": "Play a sound",
+      "soundDescription": "Also while Chat has focus, for messages in other chats.",
+      "sendTest": "Send a test notification",
+      "test": "Notifications work.",
+      "prompt": "Get notified about new messages while Chat is open in this browser.",
+      "turnOn": "Turn on",
+      "notNow": "Not now"
     }
   },
   "boot": {

@@ -534,7 +534,8 @@
       "privacy": "Gizlilik",
       "devices": "Cihazlar",
       "backup": "Geçmiş yedeği",
-      "storage": "Depolama"
+      "storage": "Depolama",
+      "notifications": "Bildirimler"
     },
     "storage": {
       "clear": "Temizle",
@@ -736,6 +737,44 @@
       },
       "bannerRequests_one": "{{count}} kişi katılmak istiyor",
       "bannerRequests_other": "{{count}} kişi katılmak istiyor"
+    },
+    "notifications": {
+      "appName": "Kutup Sohbet",
+      "newMessage": "Yeni mesaj",
+      "newMessageFrom": "{{name}} adlı kişiden yeni mesaj",
+      "reacted": "{{name}} {{emoji}} tepkisi verdi: {{preview}}",
+      "reactedHidden": "{{name}} mesajınıza tepki verdi",
+      "viewOnce": "Tek görümlük medya",
+      "many_one": "{{count}} yeni mesaj",
+      "many_other": "{{count}} yeni mesaj",
+      "invited_one": "Bir gruba davet edildiniz",
+      "invited_other": "{{count}} gruba davet edildiniz",
+      "joinRequest": "{{name}} katılmak istiyor",
+      "joinRequestHidden": "Biri bir gruba katılmak istiyor",
+      "settingsDescription": "Sohbet bu tarayıcıda açıkken gösterilen bildirimler.",
+      "allowTitle": "Bildirimlere izin verin",
+      "allowDescription": "Tarayıcınız, Kutup'un bildirim gösterip gösteremeyeceğini bir kez sorar.",
+      "allow": "Bildirimlere izin ver",
+      "blocked": "Bu tarayıcı Kutup bildirimlerini engelliyor. Görmek için site ayarlarından izin verin.",
+      "unsupported": "Bu tarayıcı bildirim gösteremiyor.",
+      "show": "Bildirimleri göster",
+      "showDescription": "Yeni mesajlar, mesajlarınıza verilen tepkiler, grup davetleri ve gruplarınıza katılma istekleri için. Sessize alınmış sohbetler yalnızca sizden bahsedildiğinde bildirir.",
+      "contentTitle": "Bildirimlerde göster",
+      "content": {
+        "all": "Ad ve mesaj",
+        "allHint": "Kimin ne yazdığı.",
+        "name": "Yalnızca ad",
+        "nameHint": "Mesaj olmadan, kimin yazdığı.",
+        "none": "Ad ya da mesaj yok",
+        "noneHint": "Yalnızca yeni bir şey geldiği."
+      },
+      "sound": "Ses çal",
+      "soundDescription": "Sohbet odaktayken de, başka sohbetlerdeki mesajlar için.",
+      "sendTest": "Deneme bildirimi gönder",
+      "test": "Bildirimler çalışıyor.",
+      "prompt": "Sohbet bu tarayıcıda açıkken yeni mesajlardan haberdar olun.",
+      "turnOn": "Aç",
+      "notNow": "Şimdi değil"
     }
   },
   "boot": {

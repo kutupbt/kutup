@@ -1,10 +1,11 @@
-import { Eye, HardDrive, MonitorSmartphone, ShieldCheck, UserRound } from 'lucide-react'
+import { Bell, Eye, HardDrive, MonitorSmartphone, ShieldCheck, UserRound } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { NavLink, Navigate, useParams } from 'react-router-dom'
 import { cn } from '@kutup/ui/lib/cn'
 import { useChat } from '../../app/chatStore'
 import { BackupSettings, StorageSettings } from './BackupSettings'
 import { DevicesSettings } from './DevicesSettings'
+import { NotificationSettings } from './NotificationSettings'
 import { PrivacySettings } from './PrivacySettings'
 import { ProfileSettings } from './ProfileSettings'
 
@@ -19,6 +20,7 @@ export function SettingsPage() {
   const { capabilities } = useChat()
   const sections = [
     { id: 'profile', label: t('chat.settings.profile'), icon: <UserRound /> },
+    { id: 'notifications', label: t('chat.settings.notifications'), icon: <Bell /> },
     { id: 'privacy', label: t('chat.settings.privacy'), icon: <Eye /> },
     { id: 'devices', label: t('chat.settings.devices'), icon: <MonitorSmartphone /> },
     ...(capabilities?.backup?.alwaysEnabled ? [{ id: 'backup', label: t('chat.settings.backup'), icon: <ShieldCheck /> }] : []),
@@ -52,6 +54,7 @@ export function SettingsPage() {
       </nav>
       <div className="min-w-0 flex-1">
         {section === 'profile' ? <ProfileSettings /> : null}
+        {section === 'notifications' ? <NotificationSettings /> : null}
         {section === 'privacy' ? <PrivacySettings /> : null}
         {section === 'devices' ? <DevicesSettings /> : null}
         {section === 'backup' ? <BackupSettings /> : null}
