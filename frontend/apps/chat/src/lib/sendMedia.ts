@@ -17,6 +17,7 @@ export async function uploadAndSend(
   file: File,
   options: {
     durationMs?: number
+    withoutPreview?: boolean
     timerSeconds?: number
     extras?: ChatMessageExtras
     onProgress?: (sent: number, total: number) => void

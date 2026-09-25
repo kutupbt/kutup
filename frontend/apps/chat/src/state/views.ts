@@ -14,6 +14,7 @@ import {
 } from '@kutup/chat-core/reactions'
 import type {
   ChatGroupUpdate,
+  ChatViewOnceOpenedV1,
   ChatHistoryEntry,
   ContactRecord,
   ConversationId,
@@ -304,6 +305,8 @@ export interface MessageView {
   timerChange: { seconds?: number } | null
   /** A group change (renamed, member added…) shown as a notice. */
   groupUpdate: ChatGroupUpdate | null
+  /** A view-once photo or video already opened: only "Viewed" is left. */
+  viewedOnce: { video: boolean } | null
 }
 
 /** A group change notice: only the engine writes these, into group history. */
@@ -319,13 +322,31 @@ export function threadView(
   nowMs: number,
 ): MessageView[] {
   const inThread = history.filter((m) => conversationKey(m.conversation) === key)
-  const shown = inThread.filter((m) => m.content.disappearingTimer || isGroupNotice(m) || isVisibleChatMessage(m, nowMs))
+  // Opened view-once media, from this account's own controls.
+  const opened = new Map<string, ChatViewOnceOpenedV1>()
+  for (const message of history) {
+    const body = message.content.viewOnceOpened
+    if (
+      body &&
+      message.direction === 'outgoing' &&
+      message.conversation.kind === 'direct' &&
+      directAddress(message.conversation) === selfAddress &&
+      conversationKey(body.conversation) === key
+    ) {
+      opened.set(body.messageId, body)
+    }
+  }
+  const shown = inThread.filter(
+    (m) =>
+      (m.content.disappearingTimer || isGroupNotice(m) || isVisibleChatMessage(m, nowMs)) &&
+      !(m.content.messageId && opened.has(m.content.messageId)),
+  )
   const byId = new Map(shown.map((m) => [messageIdOf(m), m]))
   const mutations = foldMutations(inThread, selfAddress)
   const targetIds = new Set(shown.flatMap((m) => (m.content.messageId ? [m.content.messageId] : [])))
   const reactions = foldReactions(inThread, key, targetIds, selfAddress)
   const receipts = foldReceipts(inThread, selfAddress)
-  return shown.map((entry) => {
+  const views = shown.map((entry): MessageView => {
     const id = messageIdOf(entry)
     const replyTo = entry.content.replyTo ? (byId.get(entry.content.replyTo) ?? null) : null
     return {
@@ -340,8 +361,37 @@ export function threadView(
       receipt: receipts.get(id) ?? null,
       timerChange: entry.content.disappearingTimer ? { seconds: entry.content.disappearingTimer.durationSeconds } : null,
       groupUpdate: isGroupNotice(entry) ? entry.content.groupUpdate! : null,
+      viewedOnce: null,
     }
   })
+  if (opened.size === 0) return views
+  const placeholders = [...opened.values()].map((body): MessageView => {
+    const outgoing = body.sender === selfAddress
+    return {
+      entry: {
+        id: `viewed:${body.messageId}`,
+        conversation: body.conversation,
+        peer: body.sender,
+        direction: outgoing ? 'outgoing' : 'incoming',
+        timestampMs: body.timestampMs,
+        delivered: true,
+        deduplicated: false,
+        content: { version: 1, kind: 'viewOnceViewed', sentAt: '', seq: '0', body: null },
+      },
+      id: body.messageId,
+      author: body.sender,
+      outgoing,
+      mutation: null,
+      replyTo: null,
+      replyToMutation: null,
+      reactions: [],
+      receipt: null,
+      timerChange: null,
+      groupUpdate: null,
+      viewedOnce: { video: body.video },
+    }
+  })
+  return [...views, ...placeholders].sort((a, b) => a.entry.timestampMs - b.entry.timestampMs)
 }
 
 /** The disappearing-messages timer in force in each conversation, in seconds. */

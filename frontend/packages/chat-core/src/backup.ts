@@ -1295,7 +1295,8 @@ function isReplaceableControl(record: BackupDisplayRecord): boolean {
 
 function isEligible(entry: ChatHistoryEntry, now: number): boolean {
   const kind = entry.content.kind.toLowerCase().replaceAll('_', '')
-  if (kind === 'typing' || kind.includes('viewonce')) return false
+  // View-once media never enters the backup (it is meant to be seen once).
+  if (kind === 'typing' || kind.includes('viewonce') || entry.content.viewOnce) return false
   return !entry.content.expiresAtMs || entry.content.expiresAtMs > now + 24 * 60 * 60 * 1000
 }
 

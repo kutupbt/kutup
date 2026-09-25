@@ -608,6 +608,17 @@
       "settingDescription": "Bir bağlantı yazdığınızda sunucunuz önizleme için sayfayı getirir (mesajınızı değil, yalnızca bağlantıyı görür). Önizleme şifreli gönderilir; yazdığınız kişiler siteye hiç bağlanmaz.",
       "loading": "{{host}} önizlemesi alınıyor…",
       "remove": "Bağlantı önizlemesini kaldır"
+    },
+    "viewOnce": {
+      "photo": "Fotoğraf",
+      "video": "Video",
+      "viewerHint": "Kapattığınızda cihazlarınızdan silinir.",
+      "on": "Bir kez görüntüleme: sonraki fotoğraf veya video için açık",
+      "off": "Sonraki fotoğrafı veya videoyu bir kez görüntülenecek şekilde gönder",
+      "sentPhoto": "Bir kez görüntülenecek fotoğraf",
+      "sentVideo": "Bir kez görüntülenecek video",
+      "viewedPhoto": "Görüntülenen fotoğraf",
+      "viewedVideo": "Görüntülenen video"
     }
   },
   "boot": {

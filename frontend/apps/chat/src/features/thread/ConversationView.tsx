@@ -32,6 +32,7 @@ import { ConversationMenuItems } from '../list/ConversationMenu'
 import { DROPDOWN_PARTS } from '../list/menuParts'
 import { useListActions } from '../list/useListActions'
 import { AttachmentBody } from '../media/AttachmentBody'
+import { ViewedOnce, ViewOnceBody } from '../media/ViewOnceBody'
 import { Composer } from './Composer'
 import { DeleteMessageDialog } from './DeleteMessageDialog'
 import { ForwardDialog } from './ForwardDialog'
@@ -301,7 +302,29 @@ export function ConversationView({ conversation }: { conversation: ConversationI
               selfName={chat.snapshot.profile?.displayName}
               onVisible={() => startExpiry(view)}
               attachment={
-                view.entry.content.attachment ? (
+                view.viewedOnce ? (
+                  <ViewedOnce video={view.viewedOnce.video} />
+                ) : view.entry.content.attachment && view.entry.content.viewOnce ? (
+                  <ViewOnceBody
+                    attachment={view.entry.content.attachment}
+                    outgoing={own}
+                    accepted={model.contact?.state !== 'pendingIncoming' && model.contact?.state !== 'blocked'}
+                    onViewed={() => {
+                      const messageId = view.entry.content.messageId
+                      if (!messageId) return
+                      void service
+                        .markViewOnceOpened({
+                          conversation,
+                          messageId,
+                          sender: view.author,
+                          timestampMs: view.entry.timestampMs,
+                          video: view.entry.content.attachment?.mediaClass === 'video',
+                        })
+                        .then(() => refreshChat())
+                        .catch((error: unknown) => console.warn('chat: view-once not recorded', error))
+                    }}
+                  />
+                ) : view.entry.content.attachment ? (
                   <AttachmentBody
                     attachment={view.entry.content.attachment}
                     outgoing={own}
@@ -322,7 +345,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
                   writable && own && view.entry.content.messageId && view.entry.content.text && !view.entry.content.attachment
                     ? () => { setReplyingTo(null); setEditing(view) }
                     : undefined,
-                onDelete: view.entry.content.messageId ? () => setDeleting(view) : undefined,
+                onDelete: view.entry.content.messageId && !view.viewedOnce ? () => setDeleting(view) : undefined,
                 // Voice notes and view-once media stay where they were sent.
                 onForward:
                   !view.mutation?.deleted &&

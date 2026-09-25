@@ -54,6 +54,9 @@ pub mod kind {
     /// Same-account linked-device removal of messages from this account's
     /// own history only ("delete for me"). [IMPL]
     pub const DELETE_FOR_ME: &str = "deleteForMe";
+    /// Same-account linked-device record that a view-once photo or video was
+    /// opened: it is removed on every device and a "Viewed" stands in. [IMPL]
+    pub const VIEW_ONCE_OPENED: &str = "viewOnceOpened";
     /// Set/remove one bounded emoji reaction per account on a stable logical message. [IMPL]
     pub const REACTION: &str = "reaction";
     /// Edit or irreversibly tombstone one stable logical message. [IMPL]
@@ -580,6 +583,22 @@ impl ChatContent {
         Some(body)
     }
 
+    pub fn view_once_opened_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        body: ViewOnceOpenedBody,
+    ) -> Result<Self, String> {
+        body.validate()?;
+        Self::account_control(kind::VIEW_ONCE_OPENED, message_id, sent_at, seq, &body)
+    }
+
+    pub fn as_view_once_opened(&self) -> Option<ViewOnceOpenedBody> {
+        let body: ViewOnceOpenedBody = self.as_account_control(kind::VIEW_ONCE_OPENED)?;
+        body.validate().ok()?;
+        Some(body)
+    }
+
     /// True for the same-account controls ([`kind::CONVERSATION_STATE`],
     /// [`kind::READ_POSITION`], [`kind::DELETE_FOR_ME`],
     /// [`kind::DISAPPEARING_EXPIRY_START`]): accepted only from another
@@ -590,6 +609,7 @@ impl ChatContent {
             kind::CONVERSATION_STATE
                 | kind::READ_POSITION
                 | kind::DELETE_FOR_ME
+                | kind::VIEW_ONCE_OPENED
                 | kind::DISAPPEARING_EXPIRY_START
         )
     }
@@ -601,6 +621,7 @@ impl ChatContent {
             kind::CONVERSATION_STATE => Some(self.as_conversation_state().is_some()),
             kind::READ_POSITION => Some(self.as_read_position().is_some()),
             kind::DELETE_FOR_ME => Some(self.as_delete_for_me().is_some()),
+            kind::VIEW_ONCE_OPENED => Some(self.as_view_once_opened().is_some()),
             kind::DISAPPEARING_EXPIRY_START => Some(self.as_disappearing_expiry_start().is_some()),
             _ => None,
         }
@@ -710,6 +731,7 @@ impl ChatContent {
                     | kind::CONVERSATION_STATE
                     | kind::READ_POSITION
                     | kind::DELETE_FOR_ME
+                    | kind::VIEW_ONCE_OPENED
                     | kind::REACTION
                     | kind::MESSAGE_MUTATION
                     | kind::ATTACHMENT
@@ -1010,6 +1032,39 @@ pub enum GroupUpdateChange {
 pub struct GroupUpdateBody {
     pub actor: String,
     pub changes: Vec<GroupUpdateChange>,
+}
+
+/// A view-once photo or video was opened on one of this account's devices.
+/// Like a delete-for-me of `message_id`, plus what the "Viewed" placeholder
+/// shows in its place: who sent it, when (the opening device's clock), and
+/// whether it was a photo or a video.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ViewOnceOpenedBody {
+    pub conversation: ConversationId,
+    pub message_id: String,
+    /// Canonical address of the sender.
+    pub sender: String,
+    pub timestamp_ms: i64,
+    pub video: bool,
+}
+
+impl ViewOnceOpenedBody {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_control_conversation(&self.conversation, "view-once")?;
+        validate_message_id(&self.message_id, "view-once message")?;
+        let sender: crate::AccountAddress = self
+            .sender
+            .parse()
+            .map_err(|_| "Chat view-once sender is invalid".to_string())?;
+        if sender.server.is_none() || sender.canonical() != self.sender {
+            return Err("Chat view-once sender must be canonical".into());
+        }
+        if self.timestamp_ms <= 0 || self.timestamp_ms > MAX_SAFE_CLOCK_MS {
+            return Err("Chat view-once clock is out of range".into());
+        }
+        Ok(())
+    }
 }
 
 /// Remove these messages from this account's history on every one of its

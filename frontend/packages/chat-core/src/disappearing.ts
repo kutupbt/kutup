@@ -34,7 +34,7 @@ export function isVisibleChatMessage(message: ChatHistoryEntry, nowMs: number): 
 /** This account's own list state, read positions and deletions: never shown. */
 export function isAccountControl(message: ChatHistoryEntry): boolean {
   const kind = message.content.kind
-  return kind === 'conversationState' || kind === 'readPosition' || kind === 'deleteForMe'
+  return kind === 'conversationState' || kind === 'readPosition' || kind === 'deleteForMe' || kind === 'viewOnceOpened'
 }
 
 export function disappearingMessageExpiresAt(message: ChatHistoryEntry): number | undefined {

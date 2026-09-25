@@ -8,6 +8,7 @@ import type { ChatLinkPreviewV1, ChatMessageExtras } from '@kutup/chat-core/type
 import { ComposerLinkPreview } from '../linkPreview/LinkPreviewCard'
 import { buildLinkPreview, firstPreviewableLink } from '../../lib/linkPreview'
 import { useVoiceRecorder } from '../media/useVoiceRecorder'
+import { ViewOnceIcon } from '../media/ViewOnceBody'
 import { Avatar } from '../../components/Avatar'
 import { insertMention, mentionQuery, resolveMentions, type MentionPick } from '../../lib/mentions'
 import { messagePreview } from '../../lib/names'
@@ -42,7 +43,10 @@ export interface ComposerProps {
   linkPreviews?: boolean
   edit: (messageId: string, text: string) => Promise<void>
   /** Absent when files cannot be sent here. */
-  sendFile?: (file: File, options?: { durationMs?: number }) => Promise<void>
+  sendFile?: (
+    file: File,
+    options?: { durationMs?: number; withoutPreview?: boolean; extras?: ChatMessageExtras },
+  ) => Promise<void>
   mediaLimit: number
   /** Group messages have a size limit (UTF-8 bytes). */
   maxTextBytes?: number
@@ -66,6 +70,8 @@ export function Composer(props: ComposerProps) {
     { status: 'loading'; url: string } | { status: 'ready'; url: string; preview: ChatLinkPreviewV1 } | null
   >(null)
   const dismissed = useRef(new Set<string>())
+  /** The next photos or videos go as view-once (Signal's "1" switch). */
+  const [viewOnce, setViewOnce] = useState(false)
   const [busy, setBusy] = useState(false)
   const box = useRef<HTMLTextAreaElement>(null)
   const files = useRef<HTMLInputElement>(null)
@@ -254,7 +260,11 @@ export function Composer(props: ComposerProps) {
     if (!sendFile || chosen.length === 0) return
     setBusy(true)
     try {
-      for (const file of chosen) await sendFile(file)
+      for (const file of chosen) {
+        const media = file.type.startsWith('image/') || file.type.startsWith('video/')
+        await sendFile(file, viewOnce && media ? { withoutPreview: true, extras: { viewOnce: true } } : undefined)
+      }
+      setViewOnce(false)
     } catch {
       // Said already.
     } finally {
@@ -372,6 +382,20 @@ export function Composer(props: ComposerProps) {
             </Button>
             <Button type="button" variant="ghost" size="icon" className="size-9 shrink-0 rounded-full md:hidden" disabled={busy} onClick={() => camera.current?.click()} aria-label={t('chat.attachments.capture')} data-testid="chat-capture-button">
               <Camera />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={cn('size-9 shrink-0 rounded-full', viewOnce && 'bg-accent text-primary')}
+              disabled={busy}
+              onClick={() => setViewOnce((on) => !on)}
+              aria-pressed={viewOnce}
+              aria-label={viewOnce ? t('chat.viewOnce.on') : t('chat.viewOnce.off')}
+              title={viewOnce ? t('chat.viewOnce.on') : t('chat.viewOnce.off')}
+              data-testid="chat-view-once-toggle"
+            >
+              <ViewOnceIcon />
             </Button>
           </>
         ) : null}

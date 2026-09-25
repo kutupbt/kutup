@@ -15,6 +15,7 @@ import type {
   ChatTypingEvent,
   ChatAccountControl,
   ChatMessageExtras,
+  ChatViewOnceOpenedV1,
   ChatConversationStateV1,
   PeerChatProfile,
   ReceiveReport,
@@ -665,6 +666,14 @@ export class ChatService {
     }
     // The purge that removes them runs with every history read, which the
     // update notice triggers.
+  }
+
+  /**
+   * A view-once photo or video was opened (and its viewer closed): remove it
+   * on all of this account's devices, leaving "Viewed" in its place.
+   */
+  async markViewOnceOpened(opened: ChatViewOnceOpenedV1): Promise<void> {
+    await this.sendAccountControl({ kind: 'viewOnceOpened', body: opened })
   }
 
   private async sendAccountControl(control: ChatAccountControl): Promise<void> {

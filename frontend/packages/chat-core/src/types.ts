@@ -18,6 +18,7 @@ export interface ChatContentView {
   conversationState?: ChatConversationStateV1
   readPosition?: ChatReadPositionV1
   deleteForMe?: ChatDeleteForMeV1
+  viewOnceOpened?: ChatViewOnceOpenedV1
   /** A group change, written by this device's engine from an applied Commit. */
   groupUpdate?: ChatGroupUpdate
   mentions?: ChatMentionV1[]
@@ -99,6 +100,16 @@ export interface ChatGroupUpdate {
   changes: ChatGroupUpdateChange[]
 }
 
+/** A view-once photo or video was opened on one of this account's devices. */
+export interface ChatViewOnceOpenedV1 {
+  conversation: ConversationId
+  messageId: string
+  /** Canonical address of its sender. */
+  sender: string
+  timestampMs: number
+  video: boolean
+}
+
 export interface ChatDeleteForMeV1 {
   conversation: ConversationId
   messageIds: string[]
@@ -108,6 +119,7 @@ export type ChatAccountControl =
   | { kind: 'conversationState'; body: ChatConversationStateV1 }
   | { kind: 'readPosition'; body: ChatReadPositionV1 }
   | { kind: 'deleteForMe'; body: ChatDeleteForMeV1 }
+  | { kind: 'viewOnceOpened'; body: ChatViewOnceOpenedV1 }
 
 export interface ChatReactionV1 {
   targetMessageId: string

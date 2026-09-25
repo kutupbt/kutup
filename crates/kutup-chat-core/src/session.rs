@@ -3319,6 +3319,12 @@ fn collect_account_controls(
             for message_id in delete.message_ids {
                 controls.deleted.insert((key.clone(), message_id));
             }
+        } else if let Some(opened) = content.as_view_once_opened() {
+            // Opened once: gone like a delete-for-me; the control itself
+            // stays as the "Viewed" placeholder.
+            controls
+                .deleted
+                .insert((opened.conversation.key(), opened.message_id));
         } else if let Some(state) = content.as_conversation_state() {
             keep_newest(
                 &mut states,
@@ -3907,6 +3913,30 @@ mod sealed_tests {
         let again = block_on(session.purge_expired_history(2)).unwrap();
         assert_eq!(again.expired_messages, 0);
         assert_eq!(block_on(db.list_sent_messages()).unwrap().len(), 4);
+
+        // A view-once opened on another device: gone here too, the control
+        // staying as the "Viewed" placeholder.
+        let opened = ChatContent::view_once_opened_with_id(
+            control_id(7),
+            t,
+            16,
+            kutup_chat_proto::ViewOnceOpenedBody {
+                conversation: bob.clone(),
+                message_id: KEPT.into(),
+                sender: "bob@b.test".into(),
+                timestamp_ms: 101,
+                video: false,
+            },
+        )
+        .unwrap();
+        let (id, message) = note(7, opened);
+        let mut pending = Pending::default();
+        pending.sent_messages.insert(id, message);
+        block_on(db.apply(&pending)).unwrap();
+        let report = block_on(session.purge_expired_history(3)).unwrap();
+        assert_eq!(report.expired_messages, 1);
+        assert!(block_on(db.list_messages()).unwrap().is_empty());
+        assert_eq!(block_on(db.list_sent_messages()).unwrap().len(), 5);
     }
 
     #[test]

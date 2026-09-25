@@ -48,6 +48,11 @@ export interface UploadChatMediaOptions {
   width?: number
   height?: number
   durationMs?: number
+  /**
+   * Leave the thumbnail out (view-once media: the picture must not stay
+   * visible in the message).
+   */
+  withoutPreview?: boolean
   onProgress?: (plainSent: number, plainTotal: number) => void
   signal?: AbortSignal
 }
@@ -145,12 +150,14 @@ export async function uploadChatMediaV1(
   // Preview failure is deliberately non-fatal. The generator returns a
   // generic-card result for unsupported or hostile input and throws only for
   // caller cancellation or invalid programmer-supplied limits.
-  const previewPromise = generatePreviewPayloadV1(
-    options.file,
-    CHAT_PREVIEW_PROFILE_V1,
-    CHAT_PREVIEW_GENERATION_LIMITS_V1,
-    options.signal,
-  ).catch(() => null)
+  const previewPromise = options.withoutPreview
+    ? Promise.resolve(null)
+    : generatePreviewPayloadV1(
+        options.file,
+        CHAT_PREVIEW_PROFILE_V1,
+        CHAT_PREVIEW_GENERATION_LIMITS_V1,
+        options.signal,
+      ).catch(() => null)
   const sodium = await getSodium()
   const attachmentId = crypto.randomUUID()
   const attachmentKey = sodium.randombytes_buf(32)

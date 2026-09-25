@@ -83,6 +83,7 @@ export function useConversationActions(conversation: ConversationId, timerSecond
       file: File,
       options: {
         durationMs?: number
+        withoutPreview?: boolean
         extras?: ChatMessageExtras
         onProgress?: (sent: number, total: number) => void
         signal?: AbortSignal

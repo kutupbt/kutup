@@ -88,6 +88,7 @@ export interface KutupChatContentView {
   conversationState?: unknown;
   readPosition?: unknown;
   deleteForMe?: unknown;
+  viewOnceOpened?: unknown;
   groupUpdate?: unknown;
   mentions?: unknown;
   linkPreview?: unknown;
@@ -2591,6 +2592,14 @@ impl WasmChatClient {
                 seq,
                 from_transport(body).map_err(chat_error)?,
             ),
+            kutup_chat_proto::content::kind::VIEW_ONCE_OPENED => {
+                ChatContent::view_once_opened_with_id(
+                    &send_id,
+                    sent_at,
+                    seq,
+                    from_transport(body).map_err(chat_error)?,
+                )
+            }
             _ => return Err(js_error("unknown same-account control")),
         }
         .map_err(|error| js_error(&error))?;
@@ -3151,6 +3160,8 @@ struct ContentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     delete_for_me: Option<kutup_chat_proto::DeleteForMeBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    view_once_opened: Option<kutup_chat_proto::ViewOnceOpenedBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     group_update: Option<kutup_chat_proto::GroupUpdateBody>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     mentions: Vec<kutup_chat_proto::MentionV1>,
@@ -3178,6 +3189,7 @@ impl From<ChatContent> for ContentView {
         let conversation_state = content.as_conversation_state();
         let read_position = content.as_read_position();
         let delete_for_me = content.as_delete_for_me();
+        let view_once_opened = content.as_view_once_opened();
         let group_update = content.as_group_update();
         let extras = content.extras().unwrap_or_default();
         let expires_after_seconds = content.disappearing_after_seconds().ok().flatten();
@@ -3199,6 +3211,7 @@ impl From<ChatContent> for ContentView {
             conversation_state,
             read_position,
             delete_for_me,
+            view_once_opened,
             group_update,
             mentions: extras.mentions,
             link_preview: extras.link_preview,

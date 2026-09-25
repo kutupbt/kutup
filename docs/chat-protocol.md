@@ -312,7 +312,7 @@ receive path (Direct, sync transcript, MLS):
 | `mentions` | text | 1–64 ordered, non-overlapping `{start, length, member}` ranges in UTF-16 units of the text; `member` a canonical address. Readers show "@" and the member's current name. |
 | `linkPreview` | text | `{url, title, description?, image?}`: an `https://` URL that appears in the text, title ≤ 300 and description ≤ 1000 characters, an optional JPEG/PNG/WebP image ≤ 24 KiB inline. Made by the sender; recipients never contact the site. |
 | `forwarded` | text, attachment | `true` or absent. A forwarded attachment is a new upload, since the original is on its sender's server. |
-| `viewOnce` | photo or video attachment | `true` or absent. |
+| `viewOnce` | photo or video attachment | `true` or absent. Sent without a thumbnail; never enters the backup; the recipient opens it once, and closing the viewer sends `viewOnceOpened` to their own devices. Like Signal's, this is a courtesy against casual re-viewing, not protection from a screenshot or a modified client. |
 
 ### Account state across devices
 
@@ -326,8 +326,9 @@ same-account controls on the Note-to-Self linked-device path, next to
 | `conversationState` | conversation, `revision`, `sourceDeviceId`, `updatedAtMs`, `pinned`, `archived`, `mutedUntilMs` (2^53−1 = until unmuted), `markedUnread` | whole record; highest `(revision, sourceDeviceId)` wins |
 | `readPosition` | conversation, `throughMessageId`, `readThroughMs` | furthest wins; the anchor message places it on each device, `readThroughMs` (the reading device's clock) when the anchor is missing |
 | `deleteForMe` | conversation, 1–64 `messageIds` | union; the named messages (and reactions, edits, receipts to them) are purged like expired ones, also when a copy arrives later |
+| `viewOnceOpened` | conversation, `messageId`, `sender`, `timestampMs`, `video` | like `deleteForMe` for that message; the control stays as the "Viewed photo/video" placeholder |
 
-All three are rejected unless they arrive as a transcript from another device
+All four are rejected unless they arrive as a transcript from another device
 of the same account addressed to Note to Self, are rejected as MLS
 application content, and a device sends them only to its own Note to Self
 (`conversationState` must name the sending device). They stay in the local
