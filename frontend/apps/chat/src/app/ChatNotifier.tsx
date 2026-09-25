@@ -6,8 +6,9 @@ import { groupTitle, messagePreview, personName } from '../lib/names'
 import { notificationsAllowed } from '../lib/notificationPermission'
 import { playNotificationSound } from '../lib/notificationSound'
 import { NotifyTabs } from '../lib/notifyTabs'
+import { enableWebPush, pushWords, webPushSupported } from '../lib/webPush'
 import { noticesFor, type Notice } from '../state/notify'
-import { getNotificationContent, getNotifications, getNotificationSound } from '../state/prefs'
+import { getNotificationContent, getNotifications, getNotificationSound, getWebPush } from '../state/prefs'
 import { useAccountState, useReadThrough } from '../state/useAccountState'
 import { useChat } from './chatStore'
 
@@ -45,6 +46,18 @@ export function ChatNotifier({ unread }: { unread: number }) {
       setTabs(null)
     }
   }, [address])
+
+  // Keep this device's wake-up subscription current (a new server key, a
+  // new language for the service worker's words, a lost server record).
+  const service = chat.service
+  const pushKey = chat.capabilities?.webPushPublicKey
+  const language = t('chat.notifications.pushBody')
+  useEffect(() => {
+    if (!service || !pushKey || !getWebPush() || !webPushSupported() || !notificationsAllowed()) return
+    enableWebPush(service, pushKey, pushWords(t)).catch((error: unknown) =>
+      console.warn('chat: could not renew Web Push', error))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [service, pushKey, language])
 
   useEffect(() => {
     document.title = unread > 0 ? `(${unread}) ${baseTitle.current}` : baseTitle.current

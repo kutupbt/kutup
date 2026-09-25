@@ -1821,6 +1821,7 @@ pub async fn deliver_messages(
     tx.commit().await?;
 
     for (user, device, envelope) in stored {
+        crate::web_push::wake_if_offline(&state, user, device);
         let message = ChatWsServerMessage::Envelope { envelope };
         if let Ok(text) = serde_json::to_string(&message) {
             for connection in state.chat_hub.connections(user, device) {

@@ -883,6 +883,10 @@ pub struct ChatCapabilities {
     /// link previews.
     #[serde(default)]
     pub link_previews: bool,
+    /// The VAPID application server key (base64url, uncompressed P-256)
+    /// browsers subscribe to wake-up pushes with, when the server sends them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_push_public_key: Option<String>,
     /// Immutable E2EE attachment upload, local/federated durable delivery,
     /// encrypted ledger and browser download are complete. Omitted until the
     /// entire Phase 6 path passes its gates.
@@ -916,6 +920,7 @@ impl Default for ChatCapabilities {
             sealed_sender: false,
             mls_groups: false,
             link_previews: false,
+            web_push_public_key: None,
             media: None,
             backup: None,
             sealed_sender_policy: None,

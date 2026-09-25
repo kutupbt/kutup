@@ -14,6 +14,7 @@ import { NewChatDialog } from '../features/list/NewChatDialog'
 import { ChatSearchBox } from '../features/list/ChatSearchBox'
 import { BackupIndicator } from '../features/settings/BackupIndicator'
 import { useNow } from '../lib/useNow'
+import { disableWebPush } from '../lib/webPush'
 import { isMuted } from '../state/accountState'
 import { useAccountState, useReadThrough } from '../state/useAccountState'
 import { unreadCounts } from '../state/views'
@@ -90,8 +91,14 @@ export function ChatShell() {
           email={session.email}
           settingsHref={appUrl('account', '/settings/account')}
           onSignOut={() => {
-            closeChat()
-            void signOut().then(() => window.location.assign(appUrl('account', '/login')))
+            // A signed-out browser is not woken for this account any more.
+            void disableWebPush(chat.service)
+              .catch(() => undefined)
+              .then(() => {
+                closeChat()
+                return signOut()
+              })
+              .then(() => window.location.assign(appUrl('account', '/login')))
           }}
         />
       }

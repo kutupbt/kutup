@@ -1,16 +1,22 @@
 import { Bell, BellOff } from 'lucide-react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { Button } from '@kutup/ui/components/button'
 import { cn } from '@kutup/ui/lib/cn'
+import { useChat } from '../../app/chatStore'
 import { requestNotificationPermission, useNotificationPermission } from '../../lib/notificationPermission'
 import { playNotificationSound } from '../../lib/notificationSound'
+import { disableWebPush, enableWebPush, pushWords, webPushSupported } from '../../lib/webPush'
 import {
   setNotificationContent,
   setNotifications,
   setNotificationSound,
+  setWebPush,
   useNotificationContent,
   useNotificationSound,
   useNotifications,
+  useWebPush,
   type NotificationContent,
 } from '../../state/prefs'
 import { SettingsSection } from './SettingsPage'
@@ -28,6 +34,28 @@ export function NotificationSettings() {
   const enabled = useNotifications()
   const sound = useNotificationSound()
   const content = useNotificationContent()
+  const webPush = useWebPush()
+  const { service, capabilities } = useChat()
+  const [pushBusy, setPushBusy] = useState(false)
+  const pushKey = capabilities?.webPushPublicKey
+
+  async function changeWebPush(on: boolean) {
+    if (!service || pushBusy) return
+    setPushBusy(true)
+    try {
+      if (on && pushKey) {
+        await enableWebPush(service, pushKey, pushWords(t))
+      } else {
+        await disableWebPush(service)
+      }
+      setWebPush(on)
+    } catch (error) {
+      console.warn('chat: Web Push change failed', error)
+      toast.error(on ? t('chat.notifications.pushFailed') : t('chat.errors.unavailable'))
+    } finally {
+      setPushBusy(false)
+    }
+  }
 
   function test() {
     if (sound) playNotificationSound()
@@ -102,6 +130,17 @@ export function NotificationSettings() {
           testId="chat-notifications-sound"
         />
 
+        {pushKey && webPushSupported() ? (
+          <Toggle
+            checked={webPush}
+            onChange={(on) => void changeWebPush(on)}
+            disabled={pushBusy || (!webPush && permission !== 'granted')}
+            title={t('chat.notifications.push')}
+            description={t('chat.notifications.pushDescription')}
+            testId="chat-web-push-toggle"
+          />
+        ) : null}
+
         <Button variant="outline" size="sm" disabled={!enabled} onClick={test} data-testid="chat-notifications-test">
           {t('chat.notifications.sendTest')}
         </Button>
@@ -109,3 +148,4 @@ export function NotificationSettings() {
     </SettingsSection>
   )
 }
+

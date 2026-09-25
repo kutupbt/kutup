@@ -774,7 +774,11 @@
       "test": "Bildirimler çalışıyor.",
       "prompt": "Sohbet bu tarayıcıda açıkken yeni mesajlardan haberdar olun.",
       "turnOn": "Aç",
-      "notNow": "Şimdi değil"
+      "notNow": "Şimdi değil",
+      "push": "Sohbet kapalıyken bildir",
+      "pushDescription": "Tarayıcınızın bildirim hizmeti (Google, Mozilla ya da Apple'ın) yeni bir şey geldiğinde bu tarayıcıyı uyandırır. Yalnızca ne zaman olduğunu öğrenir; sunucu mesajlarınızı okuyamadığı için bildirim kimden ya da ne geldiğini söyleyemez.",
+      "pushBody": "Yeni mesajlarınız olabilir.",
+      "pushFailed": "Bu tarayıcı anlık bildirimlere abone olamadı."
     }
   },
   "boot": {

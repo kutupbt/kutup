@@ -70,6 +70,14 @@ CHAT_MEDIA_MAX_PLAINTEXT_BYTES=2147483648
 # preview, never their messages. Set to false to turn previews off.
 CHAT_LINK_PREVIEWS=true
 
+# Web Push: wake Chat devices whose browser is closed. Pushes are empty (the
+# server cannot read messages); the server sends them only to the push
+# services listed (exact hosts, or .suffix for subdomains). The VAPID key is
+# made once and kept in the database. Subject: a mailto: or https: contact.
+CHAT_WEB_PUSH=true
+# CHAT_WEB_PUSH_HOSTS=fcm.googleapis.com,updates.push.services.mozilla.com,.push.apple.com,.notify.windows.com
+# CHAT_WEB_PUSH_SUBJECT=mailto:admin@example.com
+
 # Optional contacts-only sealed sender. The policy contains public offline roots
 # and root-signed online certificates; the normal server receives only the
 # active online private key.

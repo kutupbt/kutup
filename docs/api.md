@@ -1379,6 +1379,19 @@ non-public or non-https URL, `422` when the site gives nothing usable. The
 browser parses the page (`DOMParser`) and resizes the image; the preview then
 travels end-to-end encrypted in the message.
 
+### PUT /api/chat/push-subscription
+
+`{ "deviceId": N, "endpoint": "https://…" }` → `204`: wake this chat device
+through the browser's push subscription while it has no live socket
+([`chat-notifications.md`](chat-notifications.md)). Only endpoints of the
+push services in `CHAT_WEB_PUSH_HOSTS` (https, port 443); `400` otherwise,
+`404` when Web Push is off (`/api/auth/settings` → `chat.webPushPublicKey`
+is then absent) or the device is not the caller's.
+
+### DELETE /api/chat/push-subscription?deviceId=N
+
+`204`: stop waking the device.
+
 ### POST /api/chat/invite-links
 
 One operation on a group link's mailbox ([`chat-invite-links.md`](chat-invite-links.md)):

@@ -34,6 +34,7 @@ mod storage_probe;
 mod telemetry;
 mod totp;
 mod version_retention;
+mod web_push;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -97,6 +98,8 @@ pub struct AppState {
     /// Live SeaweedFS capacity probe for the admin dashboard; `None` disables it (the admin
     /// stats then fall back to `config.storage_total_bytes`).
     pub storage_probe: Option<Arc<storage_probe::StorageProbe>>,
+    /// Web Push wake-ups for closed browsers; `None` when `CHAT_WEB_PUSH=false`.
+    pub(crate) web_push: Option<Arc<web_push::WebPush>>,
 }
 
 #[tokio::main]
@@ -275,6 +278,28 @@ async fn main() -> anyhow::Result<()> {
     // Live SeaweedFS capacity probe (admin dashboard) — None when SEAWEEDFS_MASTER_URL is empty.
     let storage_probe =
         storage_probe::StorageProbe::new(&config.seaweedfs_master_url).map(Arc::new);
+    let web_push = if config.chat_web_push {
+        let subject = if config.chat_web_push_subject.is_empty() {
+            if config.server_url.starts_with("https://") {
+                config.server_url.clone()
+            } else {
+                format!("mailto:postmaster@{}", config.chat_server_name)
+            }
+        } else {
+            config.chat_web_push_subject.clone()
+        };
+        Some(
+            web_push::WebPush::start(
+                pool.clone(),
+                chat_hub.clone(),
+                &config.chat_web_push_hosts,
+                subject,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     let state = AppState {
         pool,
         config: Arc::new(config),
@@ -285,6 +310,7 @@ async fn main() -> anyhow::Result<()> {
         sealed_sender,
         mls_ordering,
         storage_probe,
+        web_push,
     };
     if let Some(federation) = state.federation.as_ref() {
         federation.spawn_maintenance();
@@ -731,6 +757,12 @@ fn build_router(state: AppState) -> Router {
         .route("/api/chat/messages/ack", post(chat::ack_messages))
         .route("/api/chat/ws-ticket", post(chat::create_ws_ticket))
         .route("/api/chat/link-preview", post(chat_link_preview::fetch))
+        .route(
+            "/api/chat/push-subscription",
+            put(web_push::put_subscription)
+                .delete(web_push::delete_subscription)
+                .route_layer(DefaultBodyLimit::max(8 * 1024)),
+        )
         .route(
             "/api/chat/invite-links",
             post(chat_mls::call_invite_link).route_layer(DefaultBodyLimit::max(128 * 1024)),

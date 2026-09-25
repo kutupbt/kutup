@@ -81,3 +81,9 @@ export const useNotificationContent = notificationContent.use
 const notificationPromptDismissed = booleanPref('kutup:chat:notification-prompt-dismissed', false)
 export const setNotificationPromptDismissed = notificationPromptDismissed.set
 export const useNotificationPromptDismissed = notificationPromptDismissed.use
+
+/** Wake this device through Web Push while Chat is closed; off unless turned on. */
+const webPush = booleanPref('kutup:chat:web-push', false)
+export const getWebPush = webPush.get
+export const setWebPush = webPush.set
+export const useWebPush = webPush.use

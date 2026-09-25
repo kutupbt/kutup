@@ -125,6 +125,7 @@ async fn notify_mls_mailbox_targets(state: &AppState, targets: Vec<(Uuid, i32)>)
         return;
     };
     for (user_id, device_id) in targets {
+        crate::web_push::wake_if_offline(state, user_id, device_id);
         for connection in state.chat_hub.connections(user_id, device_id) {
             connection.write(ChatWsOut::Text(text.clone())).await;
         }

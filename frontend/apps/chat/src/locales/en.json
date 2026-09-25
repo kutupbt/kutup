@@ -774,7 +774,11 @@
       "test": "Notifications work.",
       "prompt": "Get notified about new messages while Chat is open in this browser.",
       "turnOn": "Turn on",
-      "notNow": "Not now"
+      "notNow": "Not now",
+      "push": "Notify me when Chat is closed",
+      "pushDescription": "Your browser's push service (from Google, Mozilla or Apple) wakes this browser when something arrives. It only learns when; the notification can't say who or what, since the server can't read your messages.",
+      "pushBody": "You may have new messages.",
+      "pushFailed": "This browser couldn't subscribe to push notifications."
     }
   },
   "boot": {

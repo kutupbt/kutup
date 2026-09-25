@@ -50,8 +50,11 @@ Next, in order:
    sealed mailbox on the host server holds the preview and requests;
    administrators approve, or their clients add people when approval is
    off; the requester's client accepts the invitation by itself.
-8. **Notifications.** In-tab notifications with per-chat and global
-   settings, then Web Push with a service worker.
+8. **Notifications** (done, [`chat-notifications.md`](../chat-notifications.md)):
+   in-tab notifications (one tab notifies; what they show; sound; muted
+   chats only for mentions; unread count in the title), and opt-in Web Push
+   wake-ups for closed browsers. Pushes are empty, since the server cannot
+   read messages, so they say only that something may be new.
 9. **Calls.** 1:1 voice and video over WebRTC with TURN, then group calls
    through an SFU; end-to-end encrypted media frames.
 10. **Smaller things.** Persistent drafts, failed-send retry,

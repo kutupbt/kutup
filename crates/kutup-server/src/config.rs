@@ -64,6 +64,16 @@ pub struct Config {
     /// (`CHAT_LINK_PREVIEWS`, default on). The server then sees the links
     /// its users preview, never their messages.
     pub chat_link_previews: bool,
+    /// Wake Chat devices whose browser is closed through Web Push
+    /// (`CHAT_WEB_PUSH`, default on). Pushes are empty: the server cannot
+    /// say what arrived.
+    pub chat_web_push: bool,
+    /// Push services the server sends to (`CHAT_WEB_PUSH_HOSTS`): exact
+    /// hosts, or `.suffix` for a domain's subdomains.
+    pub chat_web_push_hosts: String,
+    /// The VAPID contact (`CHAT_WEB_PUSH_SUBJECT`): a `mailto:` or `https:`
+    /// URL push services may use to reach the operator.
+    pub chat_web_push_subject: String,
     /// Complete authenticated sealed-sender service policy JSON. It contains
     /// public roots and root-signed online certificates, never an offline root.
     pub chat_sealed_sender_policy: String,
@@ -241,6 +251,12 @@ impl Config {
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
             federation_test_allow_private: get_env_bool("FEDERATION_TEST_ALLOW_PRIVATE", false),
             chat_link_previews: get_env_bool("CHAT_LINK_PREVIEWS", true),
+            chat_web_push: get_env_bool("CHAT_WEB_PUSH", true),
+            chat_web_push_hosts: get_env(
+                "CHAT_WEB_PUSH_HOSTS",
+                crate::web_push::DEFAULT_PUSH_HOSTS,
+            ),
+            chat_web_push_subject: get_env("CHAT_WEB_PUSH_SUBJECT", ""),
             chat_sealed_sender_policy: get_env("CHAT_SEALED_SENDER_POLICY", ""),
             chat_sealed_sender_online_private_key: get_env(
                 "CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY",

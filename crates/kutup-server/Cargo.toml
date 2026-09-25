@@ -33,6 +33,8 @@ uuid.workspace = true
 time.workspace = true
 utoipa.workspace = true
 jsonwebtoken.workspace = true
+# VAPID signatures (ES256) for Web Push wake-ups.
+p256 = { workspace = true, features = ["ecdsa"] }
 bcrypt.workspace = true
 totp-rs.workspace = true
 url.workspace = true

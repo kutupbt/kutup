@@ -373,6 +373,8 @@ export interface ChatCapabilities {
   mlsGroups?: boolean
   /** The server fetches public pages for the sender's link previews. */
   linkPreviews?: boolean
+  /** VAPID key for Web Push wake-ups (base64url), when the server sends them. */
+  webPushPublicKey?: string
   /** Present only after immutable media works locally, federated, and in the browser. */
   media?: {
     protocolVersion: number

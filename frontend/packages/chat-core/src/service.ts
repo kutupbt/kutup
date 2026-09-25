@@ -1094,6 +1094,15 @@ export class ChatService {
     this.notifyPeers()
   }
 
+  /**
+   * Wake this device through a browser push subscription while Chat is
+   * closed (`null` stops it). The push carries nothing: see docs/chat-notifications.md.
+   */
+  async setPushSubscription(endpoint: string | null): Promise<void> {
+    if (endpoint) await api.put('/chat/push-subscription', { deviceId: this.deviceId, endpoint })
+    else await api.delete('/chat/push-subscription', { params: { deviceId: this.deviceId } })
+  }
+
   /** Turn a group's link on or off, reset it, or change whether joining needs approval. */
   async changeInviteLink(conversationId: string, change: InviteLinkChange): Promise<void> {
     await this.withMlsWorkflow(() => this.requireInvites().change(conversationId, change))

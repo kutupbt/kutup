@@ -2181,6 +2181,7 @@ fn sealed_device_list_mismatch(
 
 pub(crate) async fn push_sealed(state: &AppState, stored: Vec<(Uuid, i32, DeliveredEnvelope)>) {
     for (user, device, envelope) in stored {
+        crate::web_push::wake_if_offline(state, user, device);
         let message = ChatWsServerMessage::Envelope { envelope };
         if let Ok(text) = serde_json::to_string(&message) {
             for connection in state.chat_hub.connections(user, device) {
@@ -2339,6 +2340,10 @@ async fn deliver_messages(
     tx.commit().await?;
 
     for (user, device, envelope) in stored {
+        // Not for this account's own transcripts and notes to self.
+        if recipient_id != sender_id {
+            crate::web_push::wake_if_offline(state, user, device);
+        }
         let msg = ChatWsServerMessage::Envelope { envelope };
         if let Ok(text) = serde_json::to_string(&msg) {
             for conn in state.chat_hub.connections(user, device) {

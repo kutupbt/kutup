@@ -321,6 +321,10 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         sealed_sender: sealed_sender_policy.is_some(),
         mls_groups,
         link_previews: state.config.chat_link_previews,
+        web_push_public_key: state
+            .web_push
+            .as_ref()
+            .map(|push| push.public_key().to_owned()),
         media: Some(
             kutup_chat_proto::ChatMediaCapabilitiesV1::v1(
                 state.config.chat_media_max_plaintext_bytes,
