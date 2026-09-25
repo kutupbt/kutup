@@ -802,6 +802,21 @@ pub enum ChatWsServerMessage {
     /// The socket carries no archive metadata; clients fetch authenticated
     /// opaque relay state over REST.
     HistoryTransferAvailable { transfer_id: String },
+    /// The answer to a client [`ChatWsClientMessage::Ping`].
+    Pong,
+}
+
+/// Messages a client may send up the chat WebSocket (JSON text frames).
+/// Everything else a client does goes over REST.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum ChatWsClientMessage {
+    /// A liveness probe: the server answers [`ChatWsServerMessage::Pong`].
+    /// Browsers cannot send WebSocket ping frames, and a connection that died
+    /// without a close (sleep, a network change) is otherwise noticed only
+    /// when the operating system gives up on it.
+    Ping,
 }
 
 /// [ADD] The `chat` block of `GET /api/auth/settings` — how a client

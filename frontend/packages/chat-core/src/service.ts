@@ -49,6 +49,15 @@ import {
 type UpdateListener = () => void
 type TypingListener = (event: ChatTypingEvent) => void
 
+/**
+ * `connecting` covers both the first connection and reconnecting after a
+ * drop; `offline` is the browser saying it has no network.
+ */
+export type ChatConnectionStatus = 'connected' | 'connecting' | 'offline'
+
+const PING_INTERVAL_MS = 25_000
+const PONG_TIMEOUT_MS = 10_000
+
 export type ChatServiceErrorCode = 'browserUnsupported' | 'serverUnsupported'
 
 export class ChatServiceError extends Error {
@@ -95,6 +104,10 @@ export class ChatService {
   private socket: WebSocket | null = null
   private socketRetry: ReturnType<typeof setTimeout> | null = null
   private retryAttempt = 0
+  private heartbeat: ReturnType<typeof setInterval> | null = null
+  private pongDeadline: ReturnType<typeof setTimeout> | null = null
+  private connection: ChatConnectionStatus = 'connecting'
+  private readonly connectionListeners = new Set<(status: ChatConnectionStatus) => void>()
   private disposed = false
   private reconcilePromise: Promise<ReceiveReport> | null = null
   private reconcileAgain = false
@@ -132,6 +145,7 @@ export class ChatService {
       else this.emitUpdate()
     }
     window.addEventListener('online', this.handleOnline)
+    window.addEventListener('offline', this.handleOffline)
     document.addEventListener('visibilitychange', this.handleVisibilityChange)
   }
 
@@ -216,6 +230,31 @@ export class ChatService {
   subscribe(listener: UpdateListener): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  /**
+   * Whether this tab's socket to the server is up. Messages sent while it is
+   * down wait in the outbox; the thread catches up when it returns.
+   */
+  connectionStatus(): ChatConnectionStatus {
+    return this.connection
+  }
+
+  /** Try the socket again now instead of waiting out the backoff. */
+  reconnect(): void {
+    if (this.disposed) return
+    if (this.socketRetry) {
+      clearTimeout(this.socketRetry)
+      this.socketRetry = null
+    }
+    this.retryAttempt = 0
+    void this.reconcile()
+    void this.connectSocket()
+  }
+
+  subscribeConnection(listener: (status: ChatConnectionStatus) => void): () => void {
+    this.connectionListeners.add(listener)
+    return () => this.connectionListeners.delete(listener)
   }
 
   subscribeTyping(listener: TypingListener): () => void {
@@ -959,12 +998,15 @@ export class ChatService {
     if (this.disposed) return
     this.disposed = true
     if (this.socketRetry) clearTimeout(this.socketRetry)
+    this.stopHeartbeat()
     this.socket?.close()
     window.removeEventListener('online', this.handleOnline)
+    window.removeEventListener('offline', this.handleOffline)
     document.removeEventListener('visibilitychange', this.handleVisibilityChange)
     this.channel.close()
     this.listeners.clear()
     this.typingListeners.clear()
+    this.connectionListeners.clear()
     this.attachmentExpiryListeners.clear()
     this.attachmentLedger?.dispose()
     this.backupUnsubscribe?.()
@@ -1147,9 +1189,45 @@ export class ChatService {
     for (const listener of this.typingListeners) listener(event)
   }
 
-  private readonly handleOnline = (): void => {
+  private readonly handleOnline = (): void => this.wentOnline()
+
+  private readonly handleOffline = (): void => this.wentOffline()
+
+  private wentOnline(): void {
     this.backup?.online()
     void this.initializeMls().then(() => this.reconcile())
+    this.reconnect()
+  }
+
+  private wentOffline(): void {
+    this.setConnection('offline')
+    // The socket may linger half-open; drop it so the reconnect starts clean.
+    this.socket?.close()
+  }
+
+  private setConnection(status: ChatConnectionStatus): void {
+    if (this.disposed || this.connection === status) return
+    this.connection = status
+    for (const listener of this.connectionListeners) listener(status)
+  }
+
+  private startHeartbeat(socket: WebSocket): void {
+    this.stopHeartbeat()
+    this.heartbeat = setInterval(() => {
+      if (socket.readyState !== WebSocket.OPEN || this.pongDeadline) return
+      socket.send(JSON.stringify({ type: 'ping' }))
+      this.pongDeadline = setTimeout(() => {
+        this.pongDeadline = null
+        socket.close()
+      }, PONG_TIMEOUT_MS)
+    }, PING_INTERVAL_MS)
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeat) clearInterval(this.heartbeat)
+    if (this.pongDeadline) clearTimeout(this.pongDeadline)
+    this.heartbeat = null
+    this.pongDeadline = null
   }
 
   private readonly handleVisibilityChange = (): void => {
@@ -1159,6 +1237,8 @@ export class ChatService {
 
   private async connectSocket(): Promise<void> {
     if (this.disposed || this.socket?.readyState === WebSocket.OPEN) return
+    if (this.socket?.readyState === WebSocket.CONNECTING) return
+    this.setConnection(navigator.onLine === false ? 'offline' : 'connecting')
     try {
       const response = await api.post<{ ticket: string }>('/chat/ws-ticket', null, {
         params: { deviceId: this.deviceId },
@@ -1172,18 +1252,29 @@ export class ChatService {
       this.socket = socket
       socket.onopen = () => {
         this.retryAttempt = 0
+        this.setConnection('connected')
+        this.startHeartbeat(socket)
         void this.maintainPrekeys()
         void this.initializeMls().then(() => this.reconcile())
       }
-      socket.onmessage = () => {
+      socket.onmessage = (event: MessageEvent<unknown>) => {
+        if (isPong(event.data)) {
+          if (this.pongDeadline) clearTimeout(this.pongDeadline)
+          this.pongDeadline = null
+          return
+        }
         void this.reconcile()
       }
       socket.onerror = () => socket.close()
       socket.onclose = () => {
-        if (this.socket === socket) this.socket = null
+        if (this.socket !== socket) return
+        this.socket = null
+        this.stopHeartbeat()
+        this.setConnection(navigator.onLine === false ? 'offline' : 'connecting')
         this.scheduleSocketRetry()
       }
     } catch {
+      this.setConnection(navigator.onLine === false ? 'offline' : 'connecting')
       this.scheduleSocketRetry()
     }
   }
@@ -1196,6 +1287,15 @@ export class ChatService {
       void this.reconcile()
       void this.connectSocket()
     }, delay)
+  }
+}
+
+function isPong(data: unknown): boolean {
+  if (typeof data !== 'string' || data.length > 64) return false
+  try {
+    return (JSON.parse(data) as { type?: unknown }).type === 'pong'
+  } catch {
+    return false
   }
 }
 

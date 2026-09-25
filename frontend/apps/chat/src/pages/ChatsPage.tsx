@@ -2,6 +2,7 @@ import { LockKeyhole } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { cn } from '@kutup/ui/lib/cn'
+import { ConnectionBanner } from '../features/list/ConnectionBanner'
 import { ConversationList } from '../features/list/ConversationList'
 import { GroupInvitations } from '../features/list/GroupInvitations'
 import { parseConversationKey } from '../features/list/paths'
@@ -30,6 +31,7 @@ export function ChatsPage() {
           conversation && 'hidden md:flex',
         )}
       >
+        <ConnectionBanner />
         <div className="min-h-0 flex-1 overflow-y-auto">
           {query ? (
             <SearchResults query={query} />
@@ -41,9 +43,17 @@ export function ChatsPage() {
           )}
         </div>
       </section>
-      <section className={cn('min-w-0 flex-1', !conversation && 'hidden md:block')}>
+      <section className={cn('flex min-w-0 flex-1 flex-col', !conversation && 'hidden md:flex')}>
         {conversation ? (
-          <ConversationView key={selectedKey} conversation={conversation} />
+          <>
+            {/* On a phone the list, and its notice, is hidden behind the thread. */}
+            <div className="md:hidden">
+              <ConnectionBanner />
+            </div>
+            <div className="min-h-0 flex-1">
+              <ConversationView key={selectedKey} conversation={conversation} />
+            </div>
+          </>
         ) : selectedKey ? (
           <p className="p-8 text-center text-sm text-muted-foreground">{t('chat.thread.notFound')}</p>
         ) : (

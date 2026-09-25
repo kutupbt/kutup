@@ -1369,7 +1369,7 @@ Mint a random, one-time browser WebSocket ticket bound to the authenticated user
 
 ### GET /api/chat/ws?ticket=…
 
-WebSocket. Browsers use the one-time ticket; native clients instead send `Authorization: Bearer …` with `?deviceId=N`. Reusable JWT query parameters are rejected. Server → client JSON frames: `{ "type": "drainMailbox" }` once on connect (fetch the backlog over REST), then `{ "type": "envelope", "envelope": {…} }` per newly arrived message. Acks stay on REST — the mailbox is the source of truth.
+WebSocket. Browsers use the one-time ticket; native clients instead send `Authorization: Bearer …` with `?deviceId=N`. Reusable JWT query parameters are rejected. Server → client JSON frames: `{ "type": "drainMailbox" }` once on connect (fetch the backlog over REST), then `{ "type": "envelope", "envelope": {…} }` per newly arrived message. Acks stay on REST — the mailbox is the source of truth. The only client → server frame is `{ "type": "ping" }`, answered by `{ "type": "pong" }`: browsers cannot send protocol pings, so the web client probes every 25 s and reconnects when no answer arrives within 10 s.
 
 ---
 

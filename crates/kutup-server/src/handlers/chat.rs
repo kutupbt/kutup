@@ -30,11 +30,11 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use kutup_chat_proto::{
     capability_hash, constant_time_capability_hash_eq, AccountAddress, AccountManifestDeviceV1,
     AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1, AckRequest,
-    AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsServerMessage, ChatWsTicketResponse,
-    DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, DirectChatSuiteId, EcPreKey,
-    EnvelopeType, KemPreKey, MailboxPage, OutgoingEnvelope, OwnChatProfileResponse,
-    PreKeyCountResponse, ProfileEnvelopeContextV1, ProfileEnvelopePurpose, ProfileSuiteId,
-    PutChatProfileRequest, RegisterChatDeviceRequest, RegisterChatDeviceResponse,
+    AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsClientMessage, ChatWsServerMessage,
+    ChatWsTicketResponse, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle,
+    DirectChatSuiteId, EcPreKey, EnvelopeType, KemPreKey, MailboxPage, OutgoingEnvelope,
+    OwnChatProfileResponse, PreKeyCountResponse, ProfileEnvelopeContextV1, ProfileEnvelopePurpose,
+    ProfileSuiteId, PutChatProfileRequest, RegisterChatDeviceRequest, RegisterChatDeviceResponse,
     RenameChatDeviceRequest, ReplenishKeysRequest, SealedDeliveryResponseV1,
     SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1, SendMessagesRequest,
     UserPreKeyBundlesResponse,
@@ -2673,14 +2673,21 @@ async fn handle_connection(state: AppState, socket: WebSocket, user_id: Uuid, de
         conn.write(ChatWsOut::Text(text)).await;
     }
 
-    // Read loop — the client sends nothing meaningful today (acks are REST); we only
-    // watch for disconnect and honour forced close.
+    // Read loop — acks are REST; the client only sends liveness pings. We
+    // answer those, watch for disconnect and honour forced close.
     loop {
         tokio::select! {
             _ = conn.close.notified() => break,
             msg = stream.next() => match msg {
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                Some(Ok(_)) => {} // ping/pong handled by axum; other frames ignored
+                Some(Ok(Message::Text(text))) => {
+                    if let Ok(ChatWsClientMessage::Ping) = serde_json::from_str(&text) {
+                        if let Ok(pong) = serde_json::to_string(&ChatWsServerMessage::Pong) {
+                            conn.write(ChatWsOut::Text(pong)).await;
+                        }
+                    }
+                }
+                Some(Ok(_)) => {} // protocol ping/pong handled by axum; other frames ignored
             },
         }
     }

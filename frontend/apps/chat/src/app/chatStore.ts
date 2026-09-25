@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react'
 import type { ChatBackupView } from '@kutup/chat-core/backup'
 import { fetchChatCapabilities, isSupportedChat } from '@kutup/chat-core/capabilities'
 import { canonicalAccountAddress, conversationKey, withHomeServer } from '@kutup/chat-core/identity'
-import { ChatService, ChatServiceError } from '@kutup/chat-core/service'
+import { ChatService, ChatServiceError, type ChatConnectionStatus } from '@kutup/chat-core/service'
 import type {
   AccountAddress,
   ChatCapabilities,
@@ -57,6 +57,8 @@ export interface ChatState {
   stale: boolean
   /** Who is typing where: conversation key → sender → until (ms). */
   typing: ReadonlyMap<string, ReadonlyMap<string, number>>
+  /** This tab's link to the server. */
+  connection: ChatConnectionStatus
 }
 
 const TYPING_TTL_MS = 6_000
@@ -85,6 +87,7 @@ const initial: ChatState = {
   loaded: false,
   stale: false,
   typing: new Map(),
+  connection: 'connecting',
 }
 
 let state: ChatState = initial
@@ -242,6 +245,7 @@ export function openChat(session: Session): void {
     const unsubscribers = [
       service.subscribe(() => void reload(service, mlsGroups)),
       service.subscribeTyping(onTyping),
+      service.subscribeConnection((connection) => set({ connection })),
       service.subscribeAttachmentExpiry(async (ids) => {
         await Promise.all(ids.map((id) => mediaCache.removeObject('chat', id)))
       }),
@@ -258,6 +262,7 @@ export function openChat(session: Session): void {
       capabilities,
       self: { account, address: canonicalAccountAddress(account) },
       mediaCache,
+      connection: service.connectionStatus(),
     })
     await reload(service, mlsGroups)
   })()

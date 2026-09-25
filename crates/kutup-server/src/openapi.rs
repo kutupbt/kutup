@@ -206,6 +206,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         kutup_chat_proto::MailboxPage,
         kutup_chat_proto::AckRequest,
         kutup_chat_proto::ChatWsServerMessage,
+        kutup_chat_proto::ChatWsClientMessage,
         kutup_chat_proto::ChatWsTicketResponse,
         kutup_chat_proto::ChatBackupCapabilitiesV1,
         kutup_chat_proto::ChatBackupSignerAuthorizationV1,

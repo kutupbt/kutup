@@ -480,6 +480,12 @@
       "clearTitle": "Clear stored media for {{name}}?",
       "clearDescription": "The messages stay, but files not saved elsewhere may no longer open.",
       "empty": "No chat attachments stored yet."
+    },
+    "connection": {
+      "offline": "You're offline",
+      "connecting": "Reconnecting…",
+      "queued": "New messages will appear once you're connected. Messages you send will go out then.",
+      "retry": "Retry"
     }
   },
   "boot": {

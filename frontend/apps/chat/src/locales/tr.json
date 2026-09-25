@@ -480,6 +480,12 @@
       "clearTitle": "{{name}} için saklanan medya temizlensin mi?",
       "clearDescription": "Mesajlar kalır, ama başka yere kaydedilmemiş dosyalar artık açılmayabilir.",
       "empty": "Henüz saklanan sohbet eki yok."
+    },
+    "connection": {
+      "offline": "Çevrimdışısınız",
+      "connecting": "Yeniden bağlanılıyor…",
+      "queued": "Yeni iletiler bağlantı kurulunca görünecek. Gönderdiğiniz iletiler de o zaman iletilecek.",
+      "retry": "Yeniden dene"
     }
   },
   "boot": {
