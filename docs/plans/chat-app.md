@@ -75,7 +75,7 @@ apps/chat/src/
 No protocol or server changes, with one fix in `chat-core`: a socket hint
 that arrived while a mailbox drain was running was folded into it, so a
 message landing just after that drain read the mailbox waited for the next
-hint; the service now drains once more. Things chat-core cannot yet provide
-(group names, leaving a group, a connection indicator) are in
-docs/roadmap.md rather than faked. Unread counts are kept per device (a read
-mark in local storage, starting at "all read" on a device's first open).
+hint; the service now drains once more. Things chat-core could not yet provide
+(group names, leaving a group) are in
+docs/roadmap.md rather than faked. Signal parity beyond this app's first
+version is tracked in docs/plans/chat-signal-parity.md.

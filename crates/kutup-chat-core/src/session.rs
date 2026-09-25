@@ -1531,13 +1531,19 @@ impl Session {
         let mut profile_key_updated: Option<String> = None;
         let mut suppressed = false;
         let synced_message = if let Some(transcript) = transcript {
-            if transcript.content.kind == kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
-                && transcript.content.as_disappearing_expiry_start().is_none()
+            if ChatContent::is_account_control_kind(&transcript.content.kind)
+                && (transcript.peer != self.user()
+                    || transcript.content.account_control_is_valid() != Some(true)
+                    || transcript
+                        .content
+                        .as_conversation_state()
+                        .is_some_and(|state| state.source_device_id != sender_device_id))
             {
                 self.store.discard();
-                return Err(ChatError::Content(
-                    "invalid authenticated disappearing expiry start".into(),
-                ));
+                return Err(ChatError::Content(format!(
+                    "invalid authenticated {}",
+                    transcript.content.kind
+                )));
             }
             if let Some(control) = transcript.content.as_contact_control() {
                 if transcript.peer != self.user()
@@ -1611,9 +1617,9 @@ impl Session {
             let is_disappearing_timer = parsed
                 .as_ref()
                 .is_some_and(|content| content.as_disappearing_timer().is_some());
-            let is_disappearing_expiry_start = parsed.as_ref().is_some_and(|content| {
-                content.kind == kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
-            });
+            let is_account_control = parsed
+                .as_ref()
+                .is_some_and(|content| ChatContent::is_account_control_kind(&content.kind));
             if let Some(content) = parsed.as_ref() {
                 if let Err(error) = content.disappearing_after_seconds() {
                     self.store.discard();
@@ -1639,10 +1645,10 @@ impl Session {
                     "invalid encrypted disappearing-message timer".into(),
                 ));
             }
-            if is_disappearing_expiry_start {
+            if is_account_control {
                 self.store.discard();
                 return Err(ChatError::Content(
-                    "disappearing expiry starts are accepted only from an authenticated linked-device transcript"
+                    "same-account controls are accepted only from an authenticated linked-device transcript"
                         .into(),
                 ));
             }
@@ -1920,6 +1926,7 @@ impl Session {
         let mls = self.store.db().list_mls_messages().await?;
         let imported = self.store.db().list_imported_history().await?;
         let starts = collect_disappearing_expiry_starts(&outgoing, &imported, self.user())?;
+        let controls = collect_account_controls(&outgoing, &imported, self.user());
         let mut expired_ids = std::collections::BTreeSet::new();
         let mut attachment_ids = std::collections::BTreeSet::new();
         let mut expired_messages = 0u32;
@@ -1933,7 +1940,9 @@ impl Session {
                 message.received_at,
                 &starts,
                 now_ms,
-            )? {
+            )?
+            .or_else(|| controls.deleted_content(&message.content, &conversation))
+            {
                 self.store.delete_message(&message.id);
                 collect_expired(expired, &mut expired_ids, &mut attachment_ids);
                 expired_messages = expired_messages.saturating_add(1);
@@ -1948,10 +1957,14 @@ impl Session {
                 message.created_at,
                 &starts,
                 now_ms,
-            )? {
+            )?
+            .or_else(|| controls.deleted_content(&message.content, &conversation))
+            {
                 self.store.delete_sent_message(&message.send_id);
                 collect_expired(expired, &mut expired_ids, &mut attachment_ids);
                 expired_messages = expired_messages.saturating_add(1);
+            } else if message.peer == self.user() && controls.is_superseded(&message.content) {
+                self.store.delete_sent_message(&message.send_id);
             }
         }
         for message in &mls {
@@ -1965,7 +1978,9 @@ impl Session {
                 message.timestamp_ms,
                 &starts,
                 now_ms,
-            )? {
+            )?
+            .or_else(|| controls.deleted_content(&message.content, &conversation))
+            {
                 self.store.delete_mls_message(&message.record_id);
                 collect_expired(expired, &mut expired_ids, &mut attachment_ids);
                 expired_messages = expired_messages.saturating_add(1);
@@ -1979,11 +1994,19 @@ impl Session {
                 message.timestamp_ms,
                 &starts,
                 now_ms,
-            )? {
+            )?
+            .or_else(|| controls.deleted_content(&message.content, &message.conversation))
+            {
                 self.store
                     .delete_imported_history(&message.transfer_id, &message.source_record_id);
                 collect_expired(expired, &mut expired_ids, &mut attachment_ids);
                 expired_messages = expired_messages.saturating_add(1);
+            } else if message.outgoing
+                && message.sender == self.user()
+                && controls.is_superseded(&message.content)
+            {
+                self.store
+                    .delete_imported_history(&message.transfer_id, &message.source_record_id);
             }
         }
 
@@ -3199,6 +3222,126 @@ struct ExpiredContent {
     attachment_id: Option<String>,
 }
 
+/// What this account's same-account controls say about its history:
+/// messages deleted for me (by conversation), and the list-state and
+/// read-position records a newer one replaces.
+#[derive(Default)]
+struct AccountControls {
+    deleted: std::collections::BTreeSet<(String, String)>,
+    /// Control message ids no longer needed.
+    superseded: std::collections::BTreeSet<String>,
+}
+
+impl AccountControls {
+    fn deleted_content(
+        &self,
+        bytes: &[u8],
+        conversation: &kutup_chat_proto::ConversationId,
+    ) -> Option<ExpiredContent> {
+        if self.deleted.is_empty() {
+            return None;
+        }
+        let content = serde_json::from_slice::<ChatContent>(bytes).ok()?;
+        let message_id = content.message_id.clone()?;
+        if !self.deleted.contains(&(conversation.key(), message_id)) {
+            return None;
+        }
+        Some(ExpiredContent {
+            message_id: content.message_id.clone(),
+            attachment_id: content
+                .as_attachment()
+                .map(|attachment| attachment.attachment_id),
+        })
+    }
+
+    fn is_superseded(&self, bytes: &[u8]) -> bool {
+        !self.superseded.is_empty()
+            && serde_json::from_slice::<ChatContent>(bytes)
+                .ok()
+                .and_then(|content| content.message_id)
+                .is_some_and(|message_id| self.superseded.contains(&message_id))
+    }
+}
+
+/// Reads this account's Note to Self controls (sent here or synced from
+/// another device, live or restored). Only the newest conversation state
+/// (by revision, then device) and the furthest read position (by the
+/// reading device's clock) per conversation are kept; delete-for-me
+/// controls are all kept so a copy arriving late is removed too.
+fn collect_account_controls(
+    outgoing: &[SentMessage],
+    imported: &[crate::ImportedHistoryRecordV1],
+    local_account: &str,
+) -> AccountControls {
+    let mut controls = AccountControls::default();
+    let mut states = std::collections::BTreeMap::<String, ((u32, u32), String)>::new();
+    let mut positions = std::collections::BTreeMap::<String, ((i64, String), String)>::new();
+    let own = outgoing
+        .iter()
+        .filter(|message| message.peer == local_account)
+        .map(|message| message.content.as_slice())
+        .chain(
+            imported
+                .iter()
+                .filter(|message| message.outgoing && message.sender == local_account)
+                .map(|message| message.content.as_slice()),
+        );
+    for bytes in own {
+        let Ok(content) = serde_json::from_slice::<ChatContent>(bytes) else {
+            continue;
+        };
+        let Some(control_id) = content.message_id.clone() else {
+            continue;
+        };
+        if let Some(delete) = content.as_delete_for_me() {
+            let key = delete.conversation.key();
+            for message_id in delete.message_ids {
+                controls.deleted.insert((key.clone(), message_id));
+            }
+        } else if let Some(state) = content.as_conversation_state() {
+            keep_newest(
+                &mut states,
+                state.conversation.key(),
+                state.order(),
+                control_id,
+                &mut controls.superseded,
+            );
+        } else if let Some(position) = content.as_read_position() {
+            let order = (position.read_through_ms, control_id.clone());
+            keep_newest(
+                &mut positions,
+                position.conversation.key(),
+                order,
+                control_id,
+                &mut controls.superseded,
+            );
+        }
+    }
+    controls
+}
+
+fn keep_newest<O: Ord>(
+    newest: &mut std::collections::BTreeMap<String, (O, String)>,
+    conversation: String,
+    order: O,
+    control_id: String,
+    superseded: &mut std::collections::BTreeSet<String>,
+) {
+    match newest.get_mut(&conversation) {
+        Some(current) if current.0 >= order => {
+            if current.1 != control_id {
+                superseded.insert(control_id);
+            }
+        }
+        Some(current) => {
+            superseded.insert(std::mem::replace(current, (order, control_id)).1);
+        }
+        None => {
+            newest.insert(conversation, (order, control_id));
+        }
+    }
+}
+
 pub(crate) type DisappearingExpiryStarts = std::collections::BTreeMap<(String, String), i64>;
 
 fn collect_disappearing_expiry_starts(
@@ -3544,6 +3687,205 @@ mod sealed_tests {
                 .0
                 .is_none()
         );
+    }
+
+    #[test]
+    fn account_controls_delete_for_me_and_prune_superseded_state() {
+        use kutup_chat_proto::{ConversationStateBody, DeleteForMeBody, ReadPositionBody};
+        let mut rng = OsRng.unwrap_err();
+        let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
+        let mut session = block_on(Session::generate(
+            db.clone(),
+            "alice@a.test",
+            1,
+            1,
+            &mut rng,
+        ))
+        .unwrap();
+        block_on(session.complete_registration(1)).unwrap();
+
+        const KEPT: &str = "11111111-1111-4111-8111-111111111111";
+        const GONE: &str = "22222222-2222-4222-8222-222222222222";
+        const GROUP_GONE: &str = "33333333-3333-4333-8333-333333333333";
+        const GROUP: &str = "44444444-4444-4444-8444-444444444444";
+        let bob = direct_conversation("bob@b.test").unwrap();
+        let group = kutup_chat_proto::ConversationId::Group {
+            group_id: GROUP.into(),
+        };
+        let text = |id: &str, seq| {
+            serde_json::to_vec(&ChatContent::text_with_id(
+                id,
+                "2026-09-25T00:00:00Z",
+                seq,
+                "hi",
+            ))
+            .unwrap()
+        };
+        let control_id = |n: u32| format!("aaaaaaaa-aaaa-4aaa-8aaa-{n:012}");
+        let mut pending = Pending::default();
+        for (id, seq) in [(KEPT, 1), (GONE, 2)] {
+            pending.messages.push(InboxMessage {
+                id: format!("mailbox-{seq}"),
+                peer: "bob@b.test".into(),
+                sender_device_id: 1,
+                cursor: seq,
+                content: text(id, seq),
+                received_at: 100 + seq as i64,
+            });
+        }
+        let reaction = ChatContent::reaction_with_id(
+            "55555555-5555-4555-8555-555555555555",
+            "2026-09-25T00:00:00Z",
+            3,
+            GONE,
+            "👍",
+            true,
+        )
+        .unwrap();
+        pending.messages.push(InboxMessage {
+            id: "mailbox-3".into(),
+            peer: "bob@b.test".into(),
+            sender_device_id: 1,
+            cursor: 3,
+            content: serde_json::to_vec(&reaction).unwrap(),
+            received_at: 103,
+        });
+        pending.mls_messages.insert(
+            "in:mls-1".into(),
+            crate::MlsHistoryMessage {
+                record_id: "in:mls-1".into(),
+                message_id: GROUP_GONE.into(),
+                conversation_id: *uuid::Uuid::parse_str(GROUP).unwrap().as_bytes(),
+                incarnation: 1,
+                mls_group_id: vec![5; 16],
+                epoch: 1,
+                sender: "dave@d.test".into(),
+                sender_device_id: 1,
+                outgoing: false,
+                cursor: Some(2),
+                transport_digest: [6; 32],
+                content: text(GROUP_GONE, 4),
+                timestamp_ms: 400,
+                delivered: true,
+                deduplicated: false,
+            },
+        );
+        let note = |n: u32, content: ChatContent| {
+            let send_id = control_id(n);
+            (
+                send_id.clone(),
+                SentMessage {
+                    send_id,
+                    peer: "alice@a.test".into(),
+                    sender_device_id: 2,
+                    content: serde_json::to_vec(&content).unwrap(),
+                    created_at: 500 + i64::from(n),
+                    delivered_at: None,
+                    delivered: true,
+                    deduplicated: false,
+                },
+            )
+        };
+        let state = |revision, pinned| ConversationStateBody {
+            conversation: bob.clone(),
+            revision,
+            source_device_id: 2,
+            updated_at_ms: 1_000,
+            pinned,
+            archived: false,
+            muted_until_ms: None,
+            marked_unread: false,
+        };
+        let position = |through: &str, at| ReadPositionBody {
+            conversation: bob.clone(),
+            through_message_id: through.into(),
+            read_through_ms: at,
+        };
+        let t = "2026-09-25T00:00:00Z";
+        for (n, content) in [
+            (
+                1,
+                ChatContent::conversation_state_with_id(control_id(1), t, 10, state(2, true))
+                    .unwrap(),
+            ),
+            (
+                2,
+                ChatContent::conversation_state_with_id(control_id(2), t, 11, state(1, false))
+                    .unwrap(),
+            ),
+            (
+                3,
+                ChatContent::read_position_with_id(control_id(3), t, 12, position(GONE, 102))
+                    .unwrap(),
+            ),
+            (
+                4,
+                ChatContent::read_position_with_id(control_id(4), t, 13, position(KEPT, 101))
+                    .unwrap(),
+            ),
+            (
+                5,
+                ChatContent::delete_for_me_with_id(
+                    control_id(5),
+                    t,
+                    14,
+                    DeleteForMeBody {
+                        conversation: bob.clone(),
+                        message_ids: vec![GONE.into()],
+                    },
+                )
+                .unwrap(),
+            ),
+            (
+                6,
+                ChatContent::delete_for_me_with_id(
+                    control_id(6),
+                    t,
+                    15,
+                    DeleteForMeBody {
+                        conversation: group.clone(),
+                        message_ids: vec![GROUP_GONE.into()],
+                    },
+                )
+                .unwrap(),
+            ),
+        ] {
+            let (id, message) = note(n, content);
+            pending.sent_messages.insert(id, message);
+        }
+        block_on(db.apply(&pending)).unwrap();
+
+        let report = block_on(session.purge_expired_history(1)).unwrap();
+        assert_eq!(report.expired_messages, 2);
+
+        let incoming: Vec<_> = block_on(db.list_messages())
+            .unwrap()
+            .into_iter()
+            .map(|message| message.id)
+            .collect();
+        assert_eq!(
+            incoming,
+            vec!["mailbox-1".to_string()],
+            "the deleted message and the reaction to it are gone"
+        );
+        assert!(block_on(db.list_mls_messages()).unwrap().is_empty());
+        let mut kept: Vec<_> = block_on(db.list_sent_messages())
+            .unwrap()
+            .into_iter()
+            .map(|message| message.send_id)
+            .collect();
+        kept.sort();
+        // The newer state (revision 2), the further read position and both
+        // delete-for-me controls stay; the superseded two go.
+        assert_eq!(
+            kept,
+            vec![control_id(1), control_id(3), control_id(5), control_id(6)]
+        );
+
+        // Idempotent: a second pass removes nothing more.
+        let again = block_on(session.purge_expired_history(2)).unwrap();
+        assert_eq!(again.expired_messages, 0);
+        assert_eq!(block_on(db.list_sent_messages()).unwrap().len(), 4);
     }
 
     #[test]

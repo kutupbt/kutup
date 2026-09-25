@@ -800,6 +800,10 @@ export class ChatBackupCoordinator {
     const current = new Set<string>()
     const mutations: BackupDisplayRecord[] = []
     const replacements: StoredRecord[] = []
+    // Removed content (a deletion, an expiry) should leave the base soon; a
+    // superseded list-state or read-position record can wait for routine
+    // compaction.
+    let removesContent = false
     for (const entry of history) {
       const recordId = await canonicalRecordId(entry.id)
       current.add(recordId)
@@ -807,6 +811,7 @@ export class ChatBackupCoordinator {
       const eligible = isEligible(entry, this.runtime.clock.now())
       if (!eligible) {
         if (previous && !previous.record.tombstone) {
+          if (!isReplaceableControl(previous.record)) removesContent = true
           const tombstone = { ...previous.record, mutationSequence: previous.record.mutationSequence + 1,
             content: undefined, tombstone: true }
           mutations.push(tombstone)
@@ -849,6 +854,7 @@ export class ChatBackupCoordinator {
     }
     for (const previous of stored) {
       if (!previous.local || current.has(previous.id) || previous.record.tombstone) continue
+      if (!isReplaceableControl(previous.record)) removesContent = true
       const tombstone: BackupDisplayRecord = {
         ...previous.record,
         mutationSequence: previous.record.mutationSequence + 1,
@@ -865,7 +871,7 @@ export class ChatBackupCoordinator {
       await this.refreshView()
       return
     }
-    if (mutations.some(record => record.tombstone)) this.compactionRequested = true
+    if (removesContent) this.compactionRequested = true
     const chunks = splitRecords(mutations)
     const wasm = await getCryptoWasm()
     let sequence = localState.deviceSequence
@@ -1092,10 +1098,13 @@ export class ChatBackupCoordinator {
         await this.compactIfNeededOnce()
         return
       } catch (error) {
-        if (transportStatus(error) !== 409 || attempt === 2) throw error
+        if (transportStatus(error) !== 409) throw error
         // A competing device won the compare-and-swap. Authenticate and pin
         // that winner, then rebuild from its exact base plus tail.
         await this.refreshServerStatus(this.mediaViewState())
+        // Still losing to another device: its base covers ours, and this one
+        // stays requested for the next cycle.
+        if (attempt === 2) return
       }
     }
   }
@@ -1278,6 +1287,12 @@ export class ChatBackupCoordinator {
   }
 }
 
+/** A record a newer one of its kind replaces (conversation state, read position). */
+function isReplaceableControl(record: BackupDisplayRecord): boolean {
+  const kind = record.content?.kind
+  return kind === 'conversationState' || kind === 'readPosition'
+}
+
 function isEligible(entry: ChatHistoryEntry, now: number): boolean {
   const kind = entry.content.kind.toLowerCase().replaceAll('_', '')
   if (kind === 'typing' || kind.includes('viewonce')) return false
@@ -1316,13 +1331,19 @@ function applyRecords(
     // mutationSequence is local to the device that emitted the segment. It is
     // therefore validated independently for every (record, source-device)
     // chain. A first post-compaction mutation may continue the sequence stored
-    // in the base; a new independent chain must begin at one.
+    // in the base; a new independent chain must begin at one. A device may
+    // also start its chain by deleting a record it learned from another
+    // device (both prune the same superseded control, or remove the same
+    // deleted-for-me message): its tombstone continues the sequence it saw,
+    // which another device's tombstone may already have passed. A tombstone
+    // only ever removes, and always wins the reduction below.
     const sourceSequences = sources.get(record.recordId) ?? new Map<number, number>()
     const previousSourceSequence = sourceSequences.get(sourceDeviceId)
     const validSequence = previousSourceSequence === undefined
       ? record.mutationSequence === 1
         || (current !== undefined
           && record.mutationSequence === current.mutationSequence + 1)
+        || (current !== undefined && record.tombstone)
       : record.mutationSequence === previousSourceSequence + 1
     if (!validSequence) {
       throw new Error('Chat backup record mutation sequence is invalid')

@@ -14,9 +14,51 @@ export interface ChatContentView {
   receipt?: ChatReceiptV1
   typing?: ChatTypingV1
   disappearingTimer?: ChatDisappearingTimerV1
+  /** Same-account controls: only ever in Note to Self, from this account. */
+  conversationState?: ChatConversationStateV1
+  readPosition?: ChatReadPositionV1
+  deleteForMe?: ChatDeleteForMeV1
   expiresAfterSeconds?: number
   expiresAtMs?: number
 }
+
+/** "Muted until turned back on", as in Signal Desktop. */
+export const MUTED_FOREVER_MS = Number.MAX_SAFE_INTEGER
+
+/**
+ * One conversation's list state on this account, replaced as a whole; the
+ * record with the highest `(revision, sourceDeviceId)` wins on every device.
+ */
+export interface ChatConversationStateV1 {
+  conversation: ConversationId
+  revision: number
+  sourceDeviceId: number
+  updatedAtMs: number
+  pinned: boolean
+  archived: boolean
+  mutedUntilMs?: number
+  markedUnread: boolean
+}
+
+/**
+ * Read up to and including `throughMessageId`; `readThroughMs` is the
+ * reading device's time for that message, used when the message is not here.
+ */
+export interface ChatReadPositionV1 {
+  conversation: ConversationId
+  throughMessageId: string
+  readThroughMs: number
+}
+
+export interface ChatDeleteForMeV1 {
+  conversation: ConversationId
+  messageIds: string[]
+}
+
+export type ChatAccountControl =
+  | { kind: 'conversationState'; body: ChatConversationStateV1 }
+  | { kind: 'readPosition'; body: ChatReadPositionV1 }
+  | { kind: 'deleteForMe'; body: ChatDeleteForMeV1 }
 
 export interface ChatReactionV1 {
   targetMessageId: string
@@ -1391,6 +1433,12 @@ export interface WasmChatClientHandle {
     peer: string,
     sentAt: string,
     durationSeconds?: number,
+  ): Promise<SendSummary>
+  sendAccountControl(
+    sendId: string,
+    sentAt: string,
+    kind: ChatAccountControl['kind'],
+    body: ChatAccountControl['body'],
   ): Promise<SendSummary>
   startDisappearingExpiry(
     sendId: string,

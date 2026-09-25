@@ -1300,3 +1300,83 @@ fn pending_profile_key_is_withheld_until_its_ciphertext_is_published() {
     );
     assert!(received.profile_key.is_some());
 }
+
+fn list_state(source_device_id: u32) -> kutup_chat_proto::ConversationStateBody {
+    kutup_chat_proto::ConversationStateBody {
+        conversation: kutup_chat_proto::ConversationId::direct("bob@example.test".parse().unwrap()),
+        revision: 1,
+        source_device_id,
+        updated_at_ms: 1_000,
+        pinned: true,
+        archived: false,
+        muted_until_ms: None,
+        marked_unread: false,
+    }
+}
+
+#[test]
+fn conversation_state_syncs_to_a_linked_device_as_hidden_note_to_self_history() {
+    let mut rng = test_rng();
+    let alice1 = device("alice", 1, &mut rng);
+    let alice2 = device("alice", 2, &mut rng);
+    let bundles = vec![bundle_of(&alice1, 1), bundle_of(&alice2, 2)];
+    let server = Rc::new(MockServer::default());
+    server.script_sync(vec![bundles]);
+    server.set_sync_active(vec![(1, reg_id(&alice1)), (2, reg_id(&alice2))]);
+
+    let id = "0b0f6a8e-35f5-4a8e-9f5a-0a8f3c2d1e4b";
+    let content =
+        ChatContent::conversation_state_with_id(id, "2026-09-25T10:00:00Z", 1, list_state(1))
+            .unwrap();
+    let mut first = Engine::new_for_development(alice1, server.clone());
+    assert!(
+        block_on(first.send(id, "alice", &content, &mut rng))
+            .unwrap()
+            .delivered
+    );
+
+    let mut second = Engine::new_for_development(alice2, server.clone());
+    let report = block_on(second.receive(&mut rng)).unwrap();
+    assert!(report.messages.is_empty());
+    let history = block_on(second.session().sent_history()).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].peer, "alice");
+    let synced = serde_json::from_slice::<ChatContent>(&history[0].content).unwrap();
+    assert_eq!(synced.as_conversation_state(), Some(list_state(1)));
+}
+
+#[test]
+fn same_account_controls_go_only_to_note_to_self_from_their_named_device() {
+    let mut rng = test_rng();
+    let alice = device("alice", 1, &mut rng);
+    let server = Rc::new(MockServer::default());
+    let mut engine = Engine::new_for_development(alice, server);
+
+    let id = "6c1d7e2f-9a3b-4c5d-8e7f-1a2b3c4d5e6f";
+    let to_bob = ChatContent::conversation_state_with_id(id, "t", 1, list_state(1)).unwrap();
+    assert!(matches!(
+        block_on(engine.send(id, "bob", &to_bob, &mut rng)),
+        Err(ChatError::Invalid(message)) if message.contains("same-account control")
+    ));
+    let other_device = ChatContent::conversation_state_with_id(id, "t", 1, list_state(7)).unwrap();
+    assert!(matches!(
+        block_on(engine.send(id, "alice", &other_device, &mut rng)),
+        Err(ChatError::Invalid(message)) if message.contains("name this device")
+    ));
+    let delete = ChatContent::delete_for_me_with_id(
+        id,
+        "t",
+        1,
+        kutup_chat_proto::DeleteForMeBody {
+            conversation: kutup_chat_proto::ConversationId::direct(
+                "bob@example.test".parse().unwrap(),
+            ),
+            message_ids: vec!["0b0f6a8e-35f5-4a8e-9f5a-0a8f3c2d1e4b".into()],
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        block_on(engine.send(id, "bob", &delete, &mut rng)),
+        Err(ChatError::Invalid(_))
+    ));
+}

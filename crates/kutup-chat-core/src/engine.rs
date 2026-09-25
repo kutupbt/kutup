@@ -1268,19 +1268,28 @@ impl Engine {
                 "disappearing-message timers require an established conversation".into(),
             ));
         }
-        if let Some(start) = content.as_disappearing_expiry_start() {
+        if ChatContent::is_account_control_kind(&content.kind) {
             if peer_user != self.session.user() {
-                return Err(ChatError::Invalid(
-                    "disappearing expiry starts are same-account controls".into(),
-                ));
+                return Err(ChatError::Invalid(format!(
+                    "{} is a same-account control and goes only to Note to Self",
+                    content.kind
+                )));
             }
-            self.session
-                .validate_disappearing_expiry_start(&start, crate::clock::unix_millis())
-                .await?;
-        } else if content.kind == kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START {
-            return Err(ChatError::Invalid(
-                "disappearing expiry start is invalid".into(),
-            ));
+            if content.account_control_is_valid() != Some(true) {
+                return Err(ChatError::Invalid(format!("{} is invalid", content.kind)));
+            }
+            if let Some(start) = content.as_disappearing_expiry_start() {
+                self.session
+                    .validate_disappearing_expiry_start(&start, crate::clock::unix_millis())
+                    .await?;
+            }
+            if let Some(state) = content.as_conversation_state() {
+                if state.source_device_id != self.session.device_id() {
+                    return Err(ChatError::Invalid(
+                        "conversation state must name this device as its source".into(),
+                    ));
+                }
+            }
         }
         if content
             .message_id

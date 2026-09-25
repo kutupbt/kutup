@@ -83,8 +83,3 @@ function subscribe(listener: () => void): () => void {
 export function useReadMarks(): Readonly<ReadMarks> {
   return useSyncExternalStore(subscribe, () => marks)
 }
-
-/** The read mark of `key` now (0 when never opened). */
-export function getReadMark(key: string): number {
-  return marks[key] ?? 0
-}

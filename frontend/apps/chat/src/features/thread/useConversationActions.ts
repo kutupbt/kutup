@@ -56,6 +56,16 @@ export function useConversationActions(conversation: ConversationId, timerSecond
     [run, after, service, conversation],
   )
 
+  /** Gone from this account's devices only. */
+  const deleteForMe = useCallback(
+    (messageId: string) =>
+      run(async () => {
+        await service!.deleteForMe(conversation, [messageId])
+        await refreshChat()
+      }),
+    [run, service, conversation],
+  )
+
   const react = useCallback(
     (messageId: string, emoji: ChatReactionEmoji, active: boolean) =>
       run(async () => after(await service!.sendReaction(conversation, messageId, emoji, active))),
@@ -91,5 +101,5 @@ export function useConversationActions(conversation: ConversationId, timerSecond
     [run, after, service, capabilities, conversation, timerSeconds, t, i18n.language],
   )
 
-  return { send, edit, remove, react, setTimer, sendFile }
+  return { send, edit, remove, deleteForMe, react, setTimer, sendFile }
 }

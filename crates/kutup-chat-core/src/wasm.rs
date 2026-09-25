@@ -85,6 +85,9 @@ export interface KutupChatContentView {
   receipt?: unknown;
   typing?: unknown;
   disappearingTimer?: unknown;
+  conversationState?: unknown;
+  readPosition?: unknown;
+  deleteForMe?: unknown;
   expiresAfterSeconds?: number;
   expiresAtMs?: number;
 }
@@ -2480,6 +2483,56 @@ impl WasmChatClient {
         to_output(&SendSummaryView::from(summary))
     }
 
+    /// Sends a same-account control (`conversationState`, `readPosition` or
+    /// `deleteForMe`) to this account's other devices through Note to Self.
+    #[wasm_bindgen(js_name = sendAccountControl)]
+    pub async fn send_account_control(
+        &mut self,
+        send_id: String,
+        sent_at: String,
+        kind: String,
+        body: JsValue,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let seq = self
+            .engine
+            .session()
+            .next_sent_seq()
+            .await
+            .map_err(chat_error)?;
+        let content = match kind.as_str() {
+            kutup_chat_proto::content::kind::CONVERSATION_STATE => {
+                ChatContent::conversation_state_with_id(
+                    &send_id,
+                    sent_at,
+                    seq,
+                    from_transport(body).map_err(chat_error)?,
+                )
+            }
+            kutup_chat_proto::content::kind::READ_POSITION => ChatContent::read_position_with_id(
+                &send_id,
+                sent_at,
+                seq,
+                from_transport(body).map_err(chat_error)?,
+            ),
+            kutup_chat_proto::content::kind::DELETE_FOR_ME => ChatContent::delete_for_me_with_id(
+                &send_id,
+                sent_at,
+                seq,
+                from_transport(body).map_err(chat_error)?,
+            ),
+            _ => return Err(js_error("unknown same-account control")),
+        }
+        .map_err(|error| js_error(&error))?;
+        let local_account = self.engine.session().user().to_owned();
+        let summary = self
+            .engine
+            .send(&send_id, &local_account, &content, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&SendSummaryView::from(summary))
+    }
+
     #[wasm_bindgen(js_name = startDisappearingExpiry)]
     pub async fn start_disappearing_expiry(
         &mut self,
@@ -3014,6 +3067,12 @@ struct ContentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     disappearing_timer: Option<kutup_chat_proto::DisappearingTimerBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    conversation_state: Option<kutup_chat_proto::ConversationStateBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    read_position: Option<kutup_chat_proto::ReadPositionBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delete_for_me: Option<kutup_chat_proto::DeleteForMeBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     expires_after_seconds: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_at_ms: Option<i64>,
@@ -3028,6 +3087,9 @@ impl From<ChatContent> for ContentView {
         let receipt = content.as_receipt();
         let typing = content.as_typing();
         let disappearing_timer = content.as_disappearing_timer();
+        let conversation_state = content.as_conversation_state();
+        let read_position = content.as_read_position();
+        let delete_for_me = content.as_delete_for_me();
         let expires_after_seconds = content.disappearing_after_seconds().ok().flatten();
         Self {
             version: content.v,
@@ -3044,6 +3106,9 @@ impl From<ChatContent> for ContentView {
             receipt,
             typing,
             disappearing_timer,
+            conversation_state,
+            read_position,
+            delete_for_me,
             expires_after_seconds,
             expires_at_ms: None,
         }

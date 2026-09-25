@@ -299,6 +299,32 @@ external backups or a user copying plaintext before expiry, and the UI must not
 claim otherwise. Saved-to-Drive copies are new recipient-owned objects and do
 not expire with the Chat message.
 
+### Account state across devices
+
+Signal keeps pinned, archived and muted chats in a storage service and syncs
+reads with sync messages. Kutup carries the same state as three more hidden
+same-account controls on the Note-to-Self linked-device path, next to
+`contactControl` and `disappearingExpiryStart`:
+
+| Kind | Body | Merge |
+| --- | --- | --- |
+| `conversationState` | conversation, `revision`, `sourceDeviceId`, `updatedAtMs`, `pinned`, `archived`, `mutedUntilMs` (2^53−1 = until unmuted), `markedUnread` | whole record; highest `(revision, sourceDeviceId)` wins |
+| `readPosition` | conversation, `throughMessageId`, `readThroughMs` | furthest wins; the anchor message places it on each device, `readThroughMs` (the reading device's clock) when the anchor is missing |
+| `deleteForMe` | conversation, 1–64 `messageIds` | union; the named messages (and reactions, edits, receipts to them) are purged like expired ones, also when a copy arrives later |
+
+All three are rejected unless they arrive as a transcript from another device
+of the same account addressed to Note to Self, are rejected as MLS
+application content, and a device sends them only to its own Note to Self
+(`conversationState` must name the sending device). They stay in the local
+history, hidden from every view, so the continuous backup restores them to a
+replacement browser. The purge keeps only the newest `conversationState` and
+the furthest `readPosition` per conversation, so the history holds one of
+each; `deleteForMe` controls are kept so a late copy is still removed.
+
+A chat archived before a newer incoming message counts as unarchived unless
+it is muted, as in Signal; nothing is written for that. The server sees only
+ordinary Note-to-Self sync traffic.
+
 ### Local search contract
 
 Chat search is a client-only operation over decrypted history already present

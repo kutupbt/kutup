@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { disappearingMessageExpiresAt, isVisibleChatMessage } from '@kutup/chat-core/disappearing'
 import { conversationKey, directAddress } from '@kutup/chat-core/identity'
-import type { ConversationId } from '@kutup/chat-core/types'
+import type { ChatHistoryEntry, ConversationId } from '@kutup/chat-core/types'
 import { useNow } from '../lib/useNow'
+import { parseConversationKey } from '../features/list/paths'
+import { nextListState } from '../state/accountState'
 import { useViewedConversation } from '../state/openConversation'
 import { useReadReceipts } from '../state/prefs'
 import { markRead, startFreshMarks } from '../state/readState'
+import { useAccountState } from '../state/useAccountState'
 import { refreshChat, useChat } from './chatStore'
 
 const RECEIPT_BATCH = 64
@@ -19,7 +22,9 @@ const RECEIPT_BATCH = 64
  *   receipt spends one-time key packages for every member device, so
  *   automatic delivery receipts would double that). A receipt is attempted
  *   once: the engine owns it from then on.
- * - The read mark of the conversation being looked at (unread counts).
+ * - The read mark of the conversation being looked at (unread counts), and
+ *   its read position on this account's other devices: the newest incoming
+ *   message read, sent once per new message; "marked unread" is cleared.
  * - Expiry: when a disappearing message's time is up, the history is
  *   reloaded, which purges it.
  */
@@ -29,6 +34,8 @@ export function ChatJobs() {
   const readReceipts = useReadReceipts()
   const now = useNow(1_000)
   const attempted = useRef(new Set<string>())
+  const synced = useRef(new Set<string>())
+  const account = useAccountState()
   const purging = useRef(false)
   const { service, self, snapshot } = chat
 
@@ -114,6 +121,53 @@ export function ChatJobs() {
     }
     if (newest) markRead(viewed, newest)
   }, [viewed, snapshot.history])
+
+  // The same, for this account's other devices.
+  useEffect(() => {
+    if (!service || !viewed) return
+    let anchor: ChatHistoryEntry | null = null
+    const nowMs = Date.now()
+    for (const message of snapshot.history) {
+      if (
+        message.direction === 'incoming' &&
+        message.content.messageId &&
+        conversationKey(message.conversation) === viewed &&
+        isVisibleChatMessage(message, nowMs)
+      ) {
+        anchor = message
+      }
+    }
+    const list = account.lists.get(viewed)
+    const work: Array<() => Promise<void>> = []
+    if (anchor && anchor.timestampMs > (account.readThrough.get(viewed) ?? 0)) {
+      const flight = `read:${anchor.content.messageId}`
+      if (!synced.current.has(flight)) {
+        synced.current.add(flight)
+        const { conversation, timestampMs } = anchor
+        const id = anchor.content.messageId!
+        work.push(() => service.markReadThrough(conversation, id, timestampMs))
+      }
+    }
+    if (list?.markedUnread) {
+      const flight = `unread:${viewed}:${list.revision}`
+      const conversation = parseConversationKey(viewed)
+      if (conversation && !synced.current.has(flight)) {
+        synced.current.add(flight)
+        work.push(() => service.setConversationState(nextListState(conversation, list, { markedUnread: false })))
+      }
+    }
+    if (work.length === 0) return
+    void (async () => {
+      for (const task of work) {
+        try {
+          await task()
+        } catch (error) {
+          console.warn('chat: read position not synced', error)
+        }
+      }
+      await refreshChat()
+    })()
+  }, [service, viewed, snapshot.history, account])
 
   // Expired messages leave as soon as their time is up.
   useEffect(() => {

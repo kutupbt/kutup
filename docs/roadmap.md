@@ -432,8 +432,6 @@ provides. Not built, because the protocol layer has no support yet:
   their id; MLS group metadata has no name field.
 - **Leaving a group** — there is no leave operation (an owner can close a
   group; an administrator can remove members).
-- **Read position across devices** — unread counts and the unread marker use
-  a per-device read mark; read receipts are separate and optional.
 
 ### Files workspace follow-up
 

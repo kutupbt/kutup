@@ -1,5 +1,5 @@
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
-import { Check, Circle } from 'lucide-react'
+import { Check, ChevronRight, Circle } from 'lucide-react'
 import { forwardRef, type ComponentPropsWithoutRef, type ElementRef } from 'react'
 import { cn } from '../lib/cn'
 
@@ -101,5 +101,49 @@ export const DropdownMenuRadioItem = forwardRef<
       </span>
       {children}
     </DropdownMenuPrimitive.RadioItem>
+  )
+})
+
+/** A nested menu ("Mute" → durations). */
+export const DropdownMenuSub = DropdownMenuPrimitive.Sub
+
+export const DropdownMenuSubTrigger = forwardRef<
+  ElementRef<typeof DropdownMenuPrimitive.SubTrigger>,
+  ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubTrigger>
+>(function DropdownMenuSubTrigger({ className, children, ...props }, ref) {
+  return (
+    <DropdownMenuPrimitive.SubTrigger
+      ref={ref}
+      className={cn(
+        'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none',
+        'focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent',
+        'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+        '[&_svg]:size-4 [&_svg]:shrink-0',
+        className,
+      )}
+      {...props}
+    >
+      {children}
+      <ChevronRight className="ml-auto" aria-hidden />
+    </DropdownMenuPrimitive.SubTrigger>
+  )
+})
+
+export const DropdownMenuSubContent = forwardRef<
+  ElementRef<typeof DropdownMenuPrimitive.SubContent>,
+  ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent>
+>(function DropdownMenuSubContent({ className, ...props }, ref) {
+  return (
+    <DropdownMenuPrimitive.Portal>
+      <DropdownMenuPrimitive.SubContent
+        ref={ref}
+        className={cn(
+          'z-50 min-w-40 overflow-hidden rounded-md border border-border bg-popover p-1',
+          'text-popover-foreground shadow-md',
+          className,
+        )}
+        {...props}
+      />
+    </DropdownMenuPrimitive.Portal>
   )
 })

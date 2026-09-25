@@ -13,7 +13,8 @@ import { NewChatDialog } from '../features/list/NewChatDialog'
 import { ChatSearchBox } from '../features/list/ChatSearchBox'
 import { BackupIndicator } from '../features/settings/BackupIndicator'
 import { useNow } from '../lib/useNow'
-import { useReadMarks } from '../state/readState'
+import { isMuted } from '../state/accountState'
+import { useAccountState, useReadThrough } from '../state/useAccountState'
 import { unreadCounts } from '../state/views'
 import { closeChat, useChat } from './chatStore'
 
@@ -26,14 +27,20 @@ export function ChatShell() {
   const { t } = useTranslation()
   const session = useRequiredSession()
   const chat = useChat()
-  const marks = useReadMarks()
+  const readThrough = useReadThrough()
+  const { lists } = useAccountState()
   const now = useNow(60_000)
   const [newChat, setNewChat] = useState(false)
+  // Muted chats stay out of the count; a chat marked unread counts one.
   const unread = useMemo(() => {
+    const counts = unreadCounts(chat.snapshot.history, readThrough, now)
     let total = 0
-    for (const count of unreadCounts(chat.snapshot.history, marks, now).values()) total += count
+    for (const [key, count] of counts) if (!isMuted(lists.get(key), now)) total += count
+    for (const [key, state] of lists) {
+      if (state.markedUnread && !counts.get(key) && !isMuted(state, now)) total += 1
+    }
     return total
-  }, [chat.snapshot.history, marks, now])
+  }, [chat.snapshot.history, readThrough, lists, now])
 
   return (
     <AppShell

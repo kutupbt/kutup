@@ -13,6 +13,8 @@ import type {
   InboundAttention,
   ChatProfile,
   ChatTypingEvent,
+  ChatAccountControl,
+  ChatConversationStateV1,
   PeerChatProfile,
   ReceiveReport,
   SendSummary,
@@ -54,6 +56,9 @@ type TypingListener = (event: ChatTypingEvent) => void
  * drop; `offline` is the browser saying it has no network.
  */
 export type ChatConnectionStatus = 'connected' | 'connecting' | 'offline'
+
+/** The protocol's limit on messages per delete-for-me control. */
+const DELETE_FOR_ME_BATCH = 64
 
 const PING_INTERVAL_MS = 25_000
 const PONG_TIMEOUT_MS = 10_000
@@ -614,6 +619,53 @@ export class ChatService {
     ))
     this.notifyPeers()
     return summary
+  }
+
+  /**
+   * Pin, archive, mute or mark a conversation unread on all of this
+   * account's devices. `revision` must be one more than the current
+   * record's (0 when there is none).
+   */
+  async setConversationState(
+    state: Omit<ChatConversationStateV1, 'sourceDeviceId' | 'updatedAtMs'>,
+  ): Promise<void> {
+    await this.sendAccountControl({
+      kind: 'conversationState',
+      body: { ...state, sourceDeviceId: this.deviceId, updatedAtMs: Date.now() },
+    })
+  }
+
+  /** Tell this account's other devices how far a conversation has been read. */
+  async markReadThrough(conversation: ConversationId, throughMessageId: string, readThroughMs: number): Promise<void> {
+    await this.sendAccountControl({
+      kind: 'readPosition',
+      body: { conversation, throughMessageId, readThroughMs },
+    })
+  }
+
+  /**
+   * Remove messages from this account's history on all its devices; the
+   * other people in the conversation keep theirs.
+   */
+  async deleteForMe(conversation: ConversationId, messageIds: readonly string[]): Promise<void> {
+    for (let start = 0; start < messageIds.length; start += DELETE_FOR_ME_BATCH) {
+      await this.sendAccountControl({
+        kind: 'deleteForMe',
+        body: { conversation, messageIds: messageIds.slice(start, start + DELETE_FOR_ME_BATCH) },
+      })
+    }
+    // The purge that removes them runs with every history read, which the
+    // update notice triggers.
+  }
+
+  private async sendAccountControl(control: ChatAccountControl): Promise<void> {
+    await this.withLock(() => this.client.sendAccountControl(
+      crypto.randomUUID(),
+      new Date().toISOString(),
+      control.kind,
+      control.body,
+    ))
+    this.notifyPeers()
   }
 
   async startDisappearingExpiry(

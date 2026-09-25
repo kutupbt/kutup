@@ -25,9 +25,15 @@ export function reduceDisappearingTimers(
 
 export function isVisibleChatMessage(message: ChatHistoryEntry, nowMs: number): boolean {
   if (message.content.reaction || message.content.mutation || message.content.receipt
-      || message.content.disappearingTimer) return false
+      || message.content.disappearingTimer || isAccountControl(message)) return false
   const expiresAt = disappearingMessageExpiresAt(message)
   return expiresAt === undefined || nowMs < expiresAt
+}
+
+/** This account's own list state, read positions and deletions: never shown. */
+export function isAccountControl(message: ChatHistoryEntry): boolean {
+  const kind = message.content.kind
+  return kind === 'conversationState' || kind === 'readPosition' || kind === 'deleteForMe'
 }
 
 export function disappearingMessageExpiresAt(message: ChatHistoryEntry): number | undefined {

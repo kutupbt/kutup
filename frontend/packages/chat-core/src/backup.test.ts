@@ -299,6 +299,75 @@ describe('ChatBackupCoordinator durable retry', () => {
     expect(history[0].delivered).toBe(true)
   })
 
+  it('accepts a second device deleting a record another device already deleted', async () => {
+    // Both of an account's devices prune the same superseded control (or
+    // purge the same deleted-for-me message): each emits a tombstone, the
+    // second one first seeing the record at the first device's sequence.
+    const transport = new ScriptedTransport()
+    const sourceDatabase = `backup-double-delete-source:${crypto.randomUUID()}`
+    const restoredDatabase = `backup-double-delete-restored:${crypto.randomUUID()}`
+    databaseNames.push(sourceDatabase, restoredDatabase)
+    let history = [historyEntry()]
+    const source = await open(transport, sourceDatabase, async () => history)
+    await source.settled()
+    history = []
+    await source.flushNow()
+    await source.settled()
+    source.dispose()
+    openCoordinators.splice(openCoordinators.indexOf(source), 1)
+    expect(transport.appendRequests).toHaveLength(2)
+
+    const tombstone = transport.appendRequests[1]
+    await transport.appendSegment({
+      ...structuredClone(tombstone),
+      operationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      sourceDeviceId: 10,
+      deviceSequence: 1,
+      previousSegmentDigest: zeroDigest,
+    })
+
+    const restored = await open(transport, restoredDatabase, async () => [])
+    await restored.settled()
+    expect(await restored.restoredHistoryAsync()).toHaveLength(0)
+  })
+
+  it('waits for routine compaction when only superseded controls were removed', async () => {
+    const transport = new ScriptedTransport()
+    const database = `backup-control-prune:${crypto.randomUUID()}`
+    databaseNames.push(database)
+    const control = {
+      ...historyEntry(),
+      content: { ...historyEntry().content, kind: 'readPosition', text: undefined, body: {} },
+    }
+    let history: ChatHistoryEntry[] = [historyEntry(), control]
+    const coordinator = await open(transport, database, async () => history)
+    await coordinator.settled()
+    const basesBefore = transport.stagedBase
+    history = [historyEntry()]
+    await coordinator.flushNow()
+    await coordinator.settled()
+    // The tombstone was appended, but no new base was staged for it.
+    expect(transport.appendRequests.length).toBeGreaterThan(1)
+    expect(transport.stagedBase).toBe(basesBefore)
+  })
+
+  it('leaves compaction for the next cycle when another device keeps winning', async () => {
+    const transport = new ScriptedTransport()
+    const database = `backup-compaction-lost:${crypto.randomUUID()}`
+    databaseNames.push(database)
+    let stages = 0
+    transport.stageBase = async () => {
+      stages += 1
+      throw Object.assign(new Error('stale base'), { response: { status: 409 } })
+    }
+    let history = [historyEntry()]
+    const coordinator = await open(transport, database, async () => history)
+    await coordinator.settled()
+    history = []
+    await expect(coordinator.flushNow()).resolves.toBeUndefined()
+    expect(stages).toBe(3)
+  })
+
   it('rejects an exact duplicate record repeated by the same device chain', async () => {
     const transport = new ScriptedTransport()
     const sourceDatabase = `backup-duplicate-source:${crypto.randomUUID()}`

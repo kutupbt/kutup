@@ -1,4 +1,5 @@
 import * as ContextMenuPrimitive from '@radix-ui/react-context-menu'
+import { ChevronRight } from 'lucide-react'
 import { forwardRef, type ComponentPropsWithoutRef, type ElementRef } from 'react'
 import { cn } from '../lib/cn'
 
@@ -64,3 +65,47 @@ export function ContextMenuLabel({
     />
   )
 }
+
+/** A nested menu ("Mute" → durations). */
+export const ContextMenuSub = ContextMenuPrimitive.Sub
+
+export const ContextMenuSubTrigger = forwardRef<
+  ElementRef<typeof ContextMenuPrimitive.SubTrigger>,
+  ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubTrigger>
+>(function ContextMenuSubTrigger({ className, children, ...props }, ref) {
+  return (
+    <ContextMenuPrimitive.SubTrigger
+      ref={ref}
+      className={cn(
+        'relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none',
+        'focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent',
+        'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+        '[&_svg]:size-4 [&_svg]:shrink-0',
+        className,
+      )}
+      {...props}
+    >
+      {children}
+      <ChevronRight className="ml-auto" aria-hidden />
+    </ContextMenuPrimitive.SubTrigger>
+  )
+})
+
+export const ContextMenuSubContent = forwardRef<
+  ElementRef<typeof ContextMenuPrimitive.SubContent>,
+  ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubContent>
+>(function ContextMenuSubContent({ className, ...props }, ref) {
+  return (
+    <ContextMenuPrimitive.Portal>
+      <ContextMenuPrimitive.SubContent
+        ref={ref}
+        className={cn(
+          'z-50 min-w-40 overflow-hidden rounded-md border border-border bg-popover p-1',
+          'text-popover-foreground shadow-md',
+          className,
+        )}
+        {...props}
+      />
+    </ContextMenuPrimitive.Portal>
+  )
+})

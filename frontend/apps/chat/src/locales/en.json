@@ -241,15 +241,18 @@
     },
     "mutations": {
       "edit": "Edit message",
-      "delete": "Delete message",
+      "delete": "Delete",
       "editing": "Editing message",
       "cancelEdit": "Cancel edit",
       "edited": "edited",
-      "confirmDelete": "Delete this message for everyone? This cannot be undone.",
       "save": "Save edit",
       "youDeleted": "You deleted this message",
       "deleted": "This message was deleted",
-      "deleteTitle": "Delete for everyone?"
+      "deleteTitle": "Delete message?",
+      "deleteForMe": "Delete for me",
+      "deleteForEveryone": "Delete for everyone",
+      "deleteChoice": "Delete it from your devices only, or for everyone in this chat.",
+      "deleteForMeOnly": "It will be deleted from all your devices. The others in this chat keep their copies."
     },
     "profile": {
       "title": "Chat profile",
@@ -323,7 +326,32 @@
       "newGroup": "New group",
       "byAuthor": "{{author}}: {{text}}",
       "unread_one": "{{count}} unread message",
-      "unread_other": "{{count}} unread messages"
+      "unread_other": "{{count}} unread messages",
+      "pin": "Pin chat",
+      "unpin": "Unpin chat",
+      "pinned": "Pinned",
+      "pinLimit": "You can pin up to {{count}} chats.",
+      "markRead": "Mark as read",
+      "markUnread": "Mark as unread",
+      "markedUnread": "Marked unread",
+      "mute": "Mute notifications",
+      "unmute": "Unmute",
+      "muted": "Muted",
+      "mutePresets": {
+        "hour": "For 1 hour",
+        "eightHours": "For 8 hours",
+        "day": "For 1 day",
+        "week": "For 1 week",
+        "always": "Always"
+      },
+      "archive": "Archive",
+      "unarchive": "Unarchive",
+      "archived": "Archived chats",
+      "backToChats": "Back to chats",
+      "delete": "Delete",
+      "deleteTitle": "Delete this chat?",
+      "deleteDescription": "Its messages will be deleted from all your devices. The other people in it keep their copies.",
+      "actions": "Chat options for {{name}}"
     },
     "preview": {
       "photo": "Photo",
@@ -341,7 +369,8 @@
       "empty": "No messages yet. Messages you send are end-to-end encrypted.",
       "notFound": "This conversation address is not valid.",
       "unread_one": "{{count}} unread message",
-      "unread_other": "{{count}} unread messages"
+      "unread_other": "{{count}} unread messages",
+      "more": "More options"
     },
     "search": {
       "label": "Search chats and messages",

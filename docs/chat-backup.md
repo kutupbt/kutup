@@ -151,7 +151,12 @@ Restore alone does not acknowledge a mailbox message, emit a delivery/read
 receipt, or advance a mailbox cursor. New and overlapping live messages
 deduplicate against stable backup record IDs. Deletes and expiry tombstones are
 irreversible in reduction, so an older edit, reaction, or message cannot
-resurrect removed content.
+resurrect removed content. Each record's mutation sequence is checked per
+device chain: a chain starts at one or continues the sequence already seen,
+and may also start with a tombstone at any sequence, because two devices of
+the account can remove the same record (a delete-for-me, a superseded
+conversation-state or read-position control) without seeing each other's
+tombstone first.
 
 ## Protected media
 

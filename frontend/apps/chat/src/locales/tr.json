@@ -241,15 +241,18 @@
     },
     "mutations": {
       "edit": "Mesajı düzenle",
-      "delete": "Mesajı sil",
+      "delete": "Sil",
       "editing": "Mesaj düzenleniyor",
       "cancelEdit": "Düzenlemeyi iptal et",
       "edited": "düzenlendi",
-      "confirmDelete": "Bu mesaj herkes için silinsin mi? Bu işlem geri alınamaz.",
       "save": "Düzenlemeyi kaydet",
       "youDeleted": "Bu mesajı sildin",
       "deleted": "Bu mesaj silindi",
-      "deleteTitle": "Herkes için silinsin mi?"
+      "deleteTitle": "Mesaj silinsin mi?",
+      "deleteForMe": "Benden sil",
+      "deleteForEveryone": "Herkesten sil",
+      "deleteChoice": "Yalnızca sizin cihazlarınızdan mı, yoksa bu sohbetteki herkesten mi silinsin?",
+      "deleteForMeOnly": "Tüm cihazlarınızdan silinecek. Bu sohbetteki diğerlerinin kopyaları kalır."
     },
     "profile": {
       "title": "Sohbet profili",
@@ -323,7 +326,32 @@
       "newGroup": "Yeni grup",
       "byAuthor": "{{author}}: {{text}}",
       "unread_one": "{{count}} okunmamış mesaj",
-      "unread_other": "{{count}} okunmamış mesaj"
+      "unread_other": "{{count}} okunmamış mesaj",
+      "pin": "Sohbeti sabitle",
+      "unpin": "Sabitlemeyi kaldır",
+      "pinned": "Sabitlendi",
+      "pinLimit": "En fazla {{count}} sohbet sabitleyebilirsiniz.",
+      "markRead": "Okundu olarak işaretle",
+      "markUnread": "Okunmadı olarak işaretle",
+      "markedUnread": "Okunmadı olarak işaretlendi",
+      "mute": "Bildirimleri sessize al",
+      "unmute": "Sesi aç",
+      "muted": "Sessizde",
+      "mutePresets": {
+        "hour": "1 saat",
+        "eightHours": "8 saat",
+        "day": "1 gün",
+        "week": "1 hafta",
+        "always": "Her zaman"
+      },
+      "archive": "Arşivle",
+      "unarchive": "Arşivden çıkar",
+      "archived": "Arşivlenmiş sohbetler",
+      "backToChats": "Sohbetlere dön",
+      "delete": "Sil",
+      "deleteTitle": "Bu sohbet silinsin mi?",
+      "deleteDescription": "Mesajları tüm cihazlarınızdan silinecek. Sohbetteki diğer kişilerin kopyaları kalır.",
+      "actions": "{{name}} için sohbet seçenekleri"
     },
     "preview": {
       "photo": "Fotoğraf",
@@ -341,7 +369,8 @@
       "empty": "Henüz mesaj yok. Gönderdiğin mesajlar uçtan uca şifrelenir.",
       "notFound": "Bu sohbet adresi geçerli değil.",
       "unread_one": "{{count}} okunmamış mesaj",
-      "unread_other": "{{count}} okunmamış mesaj"
+      "unread_other": "{{count}} okunmamış mesaj",
+      "more": "Diğer seçenekler"
     },
     "search": {
       "label": "Sohbetlerde ve mesajlarda ara",
@@ -484,7 +513,7 @@
     "connection": {
       "offline": "Çevrimdışısınız",
       "connecting": "Yeniden bağlanılıyor…",
-      "queued": "Yeni iletiler bağlantı kurulunca görünecek. Gönderdiğiniz iletiler de o zaman iletilecek.",
+      "queued": "Yeni mesajlar bağlantı kurulunca görünecek. Gönderdiğiniz mesajlar da o zaman gönderilecek.",
       "retry": "Yeniden dene"
     }
   },

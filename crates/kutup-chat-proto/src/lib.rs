@@ -42,9 +42,10 @@ pub use backup::{
     MAX_CHAT_BACKUP_PAGE_SEGMENTS, MAX_CHAT_BACKUP_SEGMENT_CIPHERTEXT_BYTES,
 };
 pub use content::{
-    ChatContent, ContactControlBody, ContactState, DisappearingExpiryStartBody,
-    DisappearingTimerBody, MessageMutationBody, MessageMutationOperation, ReactionBody,
-    ReceiptBody, ReceiptState, SentTranscriptBody, TextBody, TypingBody,
+    ChatContent, ContactControlBody, ContactState, ConversationStateBody, DeleteForMeBody,
+    DisappearingExpiryStartBody, DisappearingTimerBody, MessageMutationBody,
+    MessageMutationOperation, ReactionBody, ReadPositionBody, ReceiptBody, ReceiptState,
+    SentTranscriptBody, TextBody, TypingBody, MAX_SAFE_CLOCK_MS,
 };
 pub use federation::{
     FederatedChatTransaction, FederationDeliveryError, FederationDeliveryRejection,

@@ -188,7 +188,8 @@ export function MessageBubble({
         ) : null}
       </div>
 
-      {!deleted ? <HoverActions view={view} text={text} actions={actions} /> : null}
+      {/* A deleted message can still be removed from here, as in Signal. */}
+      <HoverActions view={view} text={deleted ? undefined : text} actions={deleted ? { onJump: actions.onJump, onDelete: actions.onDelete } : actions} />
     </div>
   )
 }

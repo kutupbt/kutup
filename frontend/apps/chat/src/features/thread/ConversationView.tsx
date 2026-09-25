@@ -1,7 +1,7 @@
-import { ArrowLeft, Check, Info, Loader2, Timer } from 'lucide-react'
+import { ArrowLeft, Check, Info, Loader2, MoreVertical, Timer } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import type { ConversationId } from '@kutup/chat-core/types'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
@@ -21,12 +21,16 @@ import { personName } from '../../lib/names'
 import { formatDayHeader } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
 import { setOpenConversation } from '../../state/openConversation'
-import { getReadMark } from '../../state/readState'
+import { useReadThrough } from '../../state/useAccountState'
 import { timelineRows } from '../../state/timeline'
 import type { MessageView } from '../../state/views'
 import { DetailsPanel } from '../details/DetailsPanel'
+import { ConversationMenuItems } from '../list/ConversationMenu'
+import { DROPDOWN_PARTS } from '../list/menuParts'
+import { useListActions } from '../list/useListActions'
 import { AttachmentBody } from '../media/AttachmentBody'
 import { Composer } from './Composer'
+import { DeleteMessageDialog } from './DeleteMessageDialog'
 import { ConversationBar } from './ConversationBar'
 import { MessageBubble } from './MessageBubble'
 import { MessageScroller } from './MessageScroller'
@@ -54,8 +58,12 @@ export function ConversationView({ conversation }: { conversation: ConversationI
   const [editing, setEditing] = useState<MessageView | null>(null)
   const [deleting, setDeleting] = useState<MessageView | null>(null)
   const [timerBusy, setTimerBusy] = useState(false)
+  const [deletingChat, setDeletingChat] = useState(false)
+  const listActions = useListActions()
+  const navigate = useNavigate()
   // The read mark as it was on opening: where "unread messages" goes.
-  const [unread] = useState(() => ({ after: getReadMark(model.key), openedAt: Date.now() }))
+  const readThrough = useReadThrough()
+  const [unread] = useState(() => ({ after: readThrough[model.key] ?? 0, openedAt: Date.now() }))
   const expiryStarted = useRef(new Set<string>())
 
   useEffect(() => {
@@ -189,6 +197,23 @@ export function ConversationView({ conversation }: { conversation: ConversationI
         <Button variant="ghost" size="icon" onClick={() => setDetails(true)} aria-label={t('chat.details.open')} data-testid={model.group ? 'chat-group-members' : undefined}>
           <Info />
         </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" aria-label={t('chat.thread.more')} data-testid="chat-thread-menu">
+              <MoreVertical />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <ConversationMenuItems
+              parts={DROPDOWN_PARTS}
+              conversation={conversation}
+              last={model.views.at(-1)?.entry ?? null}
+              unread={false}
+              onDelete={() => setDeletingChat(true)}
+              onMarkUnread={() => void navigate('/')}
+            />
+          </DropdownMenuContent>
+        </DropdownMenu>
       </header>
 
       <MessageScroller
@@ -272,7 +297,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
                   writable && own && view.entry.content.messageId && view.entry.content.text && !view.entry.content.attachment
                     ? () => { setReplyingTo(null); setEditing(view) }
                     : undefined,
-                onDelete: writable && own && view.entry.content.messageId ? () => setDeleting(view) : undefined,
+                onDelete: view.entry.content.messageId ? () => setDeleting(view) : undefined,
               }}
             />
           )
@@ -330,19 +355,38 @@ export function ConversationView({ conversation }: { conversation: ConversationI
 
       <DetailsPanel open={details} onClose={() => setDetails(false)} model={model} />
 
-      <ConfirmDestructive
+      <DeleteMessageDialog
         open={deleting !== null}
         onOpenChange={(open) => !open && setDeleting(null)}
-        title={t('chat.mutations.deleteTitle')}
-        description={t('chat.mutations.confirmDelete')}
-        submit={t('chat.mutations.delete')}
-        errorFallback={t('chat.errors.unavailable')}
-        onConfirm={() => {
+        forEveryone={deleting !== null && deleting.outgoing && writable && !deleting.mutation?.deleted}
+        onDeleteForMe={() => {
+          const target = deleting
+          setDeleting(null)
+          if (!target) return
+          if (editing?.id === target.id) setEditing(null)
+          if (replyingTo?.id === target.id) setReplyingTo(null)
+          void actions.deleteForMe(target.id).catch(() => undefined)
+        }}
+        onDeleteForEveryone={() => {
           const target = deleting
           setDeleting(null)
           if (!target) return
           if (editing?.id === target.id) setEditing(null)
           void actions.remove(target.id).catch(() => undefined)
+        }}
+      />
+
+      <ConfirmDestructive
+        open={deletingChat}
+        onOpenChange={setDeletingChat}
+        title={t('chat.list.deleteTitle')}
+        description={t('chat.list.deleteDescription')}
+        submit={t('chat.list.delete')}
+        errorFallback={t('chat.errors.unavailable')}
+        onConfirm={() => {
+          setDeletingChat(false)
+          void navigate('/')
+          void listActions.deleteChat(conversation)
         }}
       />
     </div>
