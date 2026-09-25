@@ -1365,6 +1365,20 @@ Drain the device's mailbox, oldest first (max 500/page): `{ "envelopes": [{ "id"
 
 `{ "ids": ["<uuid>", …] }` → deletes processed envelopes; returns `{ "acked": n }`.
 
+### POST /api/chat/link-preview
+
+Fetch one public page or image for a link preview the caller is building
+(`{ "url": "https://…", "kind": "page" | "image" }` → `{ finalUrl,
+contentType, body }`, body standard base64). Only `https` on port 443 whose
+every resolved address is public; the connection is pinned to the checked
+address; at most three redirects, each checked again; pages are cut at
+512 KiB and must be HTML, images must be JPEG/PNG/WebP/GIF of at most 2 MiB;
+8 s total. 30 per minute per account. `404` when `CHAT_LINK_PREVIEWS=false`
+(then `/api/auth/settings` → `chat.linkPreviews` is false), `400` for a
+non-public or non-https URL, `422` when the site gives nothing usable. The
+browser parses the page (`DOMParser`) and resizes the image; the preview then
+travels end-to-end encrypted in the message.
+
 ### POST /api/chat/ws-ticket?deviceId=N
 
 Mint a random, one-time browser WebSocket ticket bound to the authenticated user and chat device. The ticket expires in 60 seconds and is returned as `{ "ticket", "expiresAt" }`.

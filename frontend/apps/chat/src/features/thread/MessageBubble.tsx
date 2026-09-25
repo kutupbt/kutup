@@ -17,6 +17,7 @@ import { messagePreview } from '../../lib/names'
 import { formatClock } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
 import type { MessageView } from '../../state/views'
+import { LinkPreviewCard } from '../linkPreview/LinkPreviewCard'
 import { MessageText } from './MessageText'
 
 export interface BubbleActions {
@@ -169,14 +170,17 @@ export function MessageBubble({
           ) : entry.content.attachment ? (
             attachment
           ) : (
-            <MessageText
-              text={text ?? t('chat.newerClient')}
-              outgoing={outgoing}
-              // An edit replaces the text its mentions were ranges of.
-              mentions={edited ? undefined : entry.content.mentions}
-              nameOf={(address) => (address === selfAddress ? selfName : profiles.get(address)?.displayName) || address}
-              selfAddress={selfAddress}
-            />
+            <>
+              {entry.content.linkPreview && !edited ? <LinkPreviewCard preview={entry.content.linkPreview} outgoing={outgoing} /> : null}
+              <MessageText
+                text={text ?? t('chat.newerClient')}
+                outgoing={outgoing}
+                // An edit replaces the text its mentions were ranges of.
+                mentions={edited ? undefined : entry.content.mentions}
+                nameOf={(address) => (address === selfAddress ? selfName : profiles.get(address)?.displayName) || address}
+                selfAddress={selfAddress}
+              />
+            </>
           )}
 
           {showMeta ? (

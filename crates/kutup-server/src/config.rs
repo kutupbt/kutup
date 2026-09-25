@@ -60,6 +60,10 @@ pub struct Config {
     pub federation_next_signing_key: String,
     /// Test-only HTTP/private-network escape hatch for the v2 stack.
     pub federation_test_allow_private: bool,
+    /// Fetch pages for Chat link previews on behalf of this server's users
+    /// (`CHAT_LINK_PREVIEWS`, default on). The server then sees the links
+    /// its users preview, never their messages.
+    pub chat_link_previews: bool,
     /// Complete authenticated sealed-sender service policy JSON. It contains
     /// public roots and root-signed online certificates, never an offline root.
     pub chat_sealed_sender_policy: String,
@@ -236,6 +240,7 @@ impl Config {
             federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
             federation_test_allow_private: get_env_bool("FEDERATION_TEST_ALLOW_PRIVATE", false),
+            chat_link_previews: get_env_bool("CHAT_LINK_PREVIEWS", true),
             chat_sealed_sender_policy: get_env("CHAT_SEALED_SENDER_POLICY", ""),
             chat_sealed_sender_online_private_key: get_env(
                 "CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY",

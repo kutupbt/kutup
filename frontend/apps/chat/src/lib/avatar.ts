@@ -37,7 +37,37 @@ export async function normalizeAvatar(
   throw new Error('avatar could not be normalized')
 }
 
-function loadImage(file: File): Promise<HTMLImageElement> {
+/**
+ * An image scaled down to fit `maxSide` (aspect kept), re-encoded as WebP
+ * under `maxBytes`: a link preview's picture, small enough to travel inside
+ * the message.
+ */
+export async function fitImage(
+  file: Blob,
+  limits: { maxSide: number; maxBytes: number },
+): Promise<{ base64: string; contentType: 'image/webp' }> {
+  const image = await loadImage(file)
+  const { naturalWidth: width, naturalHeight: height } = image
+  if (width < 1 || height < 1) throw new Error('empty image')
+  for (const scale of [1, 0.75, 0.5, 0.35]) {
+    const ratio = Math.min(1, limits.maxSide / Math.max(width, height)) * scale
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(width * ratio))
+    canvas.height = Math.max(1, Math.round(height * ratio))
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('image canvas is unavailable')
+    context.drawImage(image, 0, 0, canvas.width, canvas.height)
+    for (const quality of [0.8, 0.65, 0.5]) {
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/webp', quality))
+      if (blob && blob.type === 'image/webp' && blob.size <= limits.maxBytes) {
+        return { base64: toBase64(new Uint8Array(await blob.arrayBuffer())), contentType: 'image/webp' }
+      }
+    }
+  }
+  throw new Error('image could not be made small enough')
+}
+
+function loadImage(file: Blob): Promise<HTMLImageElement> {
   const url = URL.createObjectURL(file)
   return new Promise((resolve, reject) => {
     const image = new Image()

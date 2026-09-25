@@ -602,6 +602,12 @@
       "sent_one": "Forwarded to {{count}} chat",
       "sent_other": "Forwarded to {{count}} chats",
       "partial": "Forwarded to {{sent}} of {{total}} chats; the rest failed."
+    },
+    "linkPreviews": {
+      "setting": "Generate link previews",
+      "settingDescription": "When you type a link, your server fetches the page to build a preview (it sees the link, not your message). The preview is sent encrypted; the people you write to never contact the site.",
+      "loading": "Getting a preview of {{host}}…",
+      "remove": "Remove link preview"
     }
   },
   "boot": {

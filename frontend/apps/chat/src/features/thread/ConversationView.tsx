@@ -23,6 +23,7 @@ import { personName } from '../../lib/names'
 import { formatDayHeader } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
 import { setOpenConversation } from '../../state/openConversation'
+import { useLinkPreviews } from '../../state/prefs'
 import { useReadThrough } from '../../state/useAccountState'
 import { timelineRows } from '../../state/timeline'
 import type { MessageView } from '../../state/views'
@@ -63,6 +64,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
   const [timerBusy, setTimerBusy] = useState(false)
   const [deletingChat, setDeletingChat] = useState(false)
   const [forwarding, setForwarding] = useState<MessageView | null>(null)
+  const linkPreviewsOn = useLinkPreviews()
   const listActions = useListActions()
   const navigate = useNavigate()
   // The read mark as it was on opening: where "unread messages" goes.
@@ -367,6 +369,7 @@ export function ConversationView({ conversation }: { conversation: ConversationI
           }}
           send={actions.send}
           members={conversation.kind === 'group' ? members : undefined}
+          linkPreviews={linkPreviewsOn && chat.capabilities?.linkPreviews === true}
           edit={actions.edit}
           sendFile={
             // Media to another person travels by sealed delivery (its key

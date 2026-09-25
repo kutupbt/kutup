@@ -321,6 +321,8 @@ export interface ChatCapabilities {
   sealedSender: boolean
   /** Complete browser + local + federated MLS group path is available. */
   mlsGroups?: boolean
+  /** The server fetches public pages for the sender's link previews. */
+  linkPreviews?: boolean
   /** Present only after immutable media works locally, federated, and in the browser. */
   media?: {
     protocolVersion: number

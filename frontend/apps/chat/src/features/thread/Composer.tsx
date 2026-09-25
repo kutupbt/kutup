@@ -4,7 +4,9 @@ import { useTranslation } from 'react-i18next'
 import { formatVoiceNoteElapsed } from '@kutup/chat-core/voice-note'
 import { Button } from '@kutup/ui/components/button'
 import { cn } from '@kutup/ui/lib/cn'
-import type { ChatMessageExtras } from '@kutup/chat-core/types'
+import type { ChatLinkPreviewV1, ChatMessageExtras } from '@kutup/chat-core/types'
+import { ComposerLinkPreview } from '../linkPreview/LinkPreviewCard'
+import { buildLinkPreview, firstPreviewableLink } from '../../lib/linkPreview'
 import { useVoiceRecorder } from '../media/useVoiceRecorder'
 import { Avatar } from '../../components/Avatar'
 import { insertMention, mentionQuery, resolveMentions, type MentionPick } from '../../lib/mentions'
@@ -36,6 +38,8 @@ export interface ComposerProps {
   send: (text: string, replyTo?: string, extras?: ChatMessageExtras) => Promise<void>
   /** A group's other members, for @mentions. */
   members?: readonly MentionCandidate[]
+  /** Build previews of links in the text (server offers it, setting on). */
+  linkPreviews?: boolean
   edit: (messageId: string, text: string) => Promise<void>
   /** Absent when files cannot be sent here. */
   sendFile?: (file: File, options?: { durationMs?: number }) => Promise<void>
@@ -58,6 +62,10 @@ export function Composer(props: ComposerProps) {
   const [picks, setPicks] = useState<MentionPick[]>(() => drafts.get(conversationKey)?.picks ?? [])
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null)
   const [highlighted, setHighlighted] = useState(0)
+  const [preview, setPreview] = useState<
+    { status: 'loading'; url: string } | { status: 'ready'; url: string; preview: ChatLinkPreviewV1 } | null
+  >(null)
+  const dismissed = useRef(new Set<string>())
   const [busy, setBusy] = useState(false)
   const box = useRef<HTMLTextAreaElement>(null)
   const files = useRef<HTMLInputElement>(null)
@@ -117,6 +125,31 @@ export function Composer(props: ComposerProps) {
     if (replyingTo) box.current?.focus()
   }, [replyingTo])
 
+  // A link in the text gets a preview, fetched once typing pauses.
+  const link = props.linkPreviews && !editing ? firstPreviewableLink(text) : null
+  useEffect(() => {
+    if (!link || dismissed.current.has(link)) {
+      setPreview(null)
+      return
+    }
+    if (preview?.url === link) return
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      setPreview({ status: 'loading', url: link })
+      buildLinkPreview(link, controller.signal)
+        .then((built) => setPreview(built ? { status: 'ready', url: link, preview: built } : null))
+        .catch(() => {
+          if (!controller.signal.aborted) setPreview(null)
+        })
+    }, 600)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+    // Refetch only when the link changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [link])
+
   // Grow with the text up to about six lines, then scroll.
   useLayoutEffect(() => {
     const element = box.current
@@ -139,14 +172,23 @@ export function Composer(props: ComposerProps) {
         setText('')
       } else {
         const mentions = resolveMentions(trimmed, picks)
+        const linkPreview = preview?.status === 'ready' && trimmed.includes(preview.url) ? preview.preview : undefined
+        const extras: ChatMessageExtras = {
+          ...(mentions.length > 0 ? { mentions } : {}),
+          ...(linkPreview ? { linkPreview } : {}),
+        }
+        const sentPreview = preview
         setText('')
         setPicks([])
+        setPreview(null)
         try {
-          await props.send(trimmed, replyingTo?.id, mentions.length > 0 ? { mentions } : undefined)
+          await props.send(trimmed, replyingTo?.id, Object.keys(extras).length > 0 ? extras : undefined)
           props.onCancelReply()
+          dismissed.current.clear()
         } catch (error) {
           setText(trimmed)
           setPicks(picks)
+          setPreview(sentPreview)
           throw error
         }
       }
@@ -275,6 +317,16 @@ export function Composer(props: ComposerProps) {
             <X />
           </Button>
         </div>
+      ) : null}
+
+      {preview && !editing ? (
+        <ComposerLinkPreview
+          state={preview}
+          onDismiss={() => {
+            dismissed.current.add(preview.url)
+            setPreview(null)
+          }}
+        />
       ) : null}
 
       {matches.length > 0 ? (

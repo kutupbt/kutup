@@ -320,6 +320,7 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         federation: federation_enabled,
         sealed_sender: sealed_sender_policy.is_some(),
         mls_groups,
+        link_previews: state.config.chat_link_previews,
         media: Some(
             kutup_chat_proto::ChatMediaCapabilitiesV1::v1(
                 state.config.chat_media_max_plaintext_bytes,

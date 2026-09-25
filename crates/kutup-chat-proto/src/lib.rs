@@ -865,6 +865,10 @@ pub struct ChatCapabilities {
     /// application delivery are complete on the local and federated paths.
     #[serde(default)]
     pub mls_groups: bool,
+    /// `POST /api/chat/link-preview` fetches public pages for the sender's
+    /// link previews.
+    #[serde(default)]
+    pub link_previews: bool,
     /// Immutable E2EE attachment upload, local/federated durable delivery,
     /// encrypted ledger and browser download are complete. Omitted until the
     /// entire Phase 6 path passes its gates.
@@ -897,6 +901,7 @@ impl Default for ChatCapabilities {
             profiles: true,
             sealed_sender: false,
             mls_groups: false,
+            link_previews: false,
             media: None,
             backup: None,
             sealed_sender_policy: None,

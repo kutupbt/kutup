@@ -4,6 +4,7 @@ pub mod admin;
 pub mod auth;
 pub mod chat;
 pub mod chat_backup;
+pub mod chat_link_preview;
 pub mod chat_media;
 pub mod collab;
 pub mod collections;

@@ -415,9 +415,9 @@ fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
 
     use handlers::{
-        admin, auth, chat, chat_media, collab, collections, devices, drive_move, file_assets,
-        file_thumbnails, file_versions, files, folder_access, sessions as session_routes, shares,
-        trash, tus,
+        admin, auth, chat, chat_link_preview, chat_media, collab, collections, devices, drive_move,
+        file_assets, file_thumbnails, file_versions, files, folder_access,
+        sessions as session_routes, shares, trash, tus,
     };
 
     Router::new()
@@ -730,6 +730,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/chat/messages", get(chat::drain_mailbox))
         .route("/api/chat/messages/ack", post(chat::ack_messages))
         .route("/api/chat/ws-ticket", post(chat::create_ws_ticket))
+        .route("/api/chat/link-preview", post(chat_link_preview::fetch))
         .route("/api/chat/ws", get(chat::ws))
         // Chat-media uses the same storage client and tus multipart semantics,
         // but a separate typed object namespace and quota reference model.

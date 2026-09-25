@@ -65,6 +65,11 @@ CHAT_SERVER_NAME=kutup.example.com
 CHAT_MAX_ACTIVE_DEVICES=10
 CHAT_MEDIA_MAX_PLAINTEXT_BYTES=2147483648
 
+# Link previews: the server fetches public https pages (port 443, public
+# addresses only) for the sender's previews. It then sees the links its users
+# preview, never their messages. Set to false to turn previews off.
+CHAT_LINK_PREVIEWS=true
+
 # Optional contacts-only sealed sender. The policy contains public offline roots
 # and root-signed online certificates; the normal server receives only the
 # active online private key.

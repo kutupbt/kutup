@@ -602,6 +602,12 @@
       "sent_one": "{{count}} sohbete iletildi",
       "sent_other": "{{count}} sohbete iletildi",
       "partial": "{{total}} sohbetten {{sent}} tanesine iletildi; kalanlar başarısız oldu."
+    },
+    "linkPreviews": {
+      "setting": "Bağlantı önizlemeleri oluştur",
+      "settingDescription": "Bir bağlantı yazdığınızda sunucunuz önizleme için sayfayı getirir (mesajınızı değil, yalnızca bağlantıyı görür). Önizleme şifreli gönderilir; yazdığınız kişiler siteye hiç bağlanmaz.",
+      "loading": "{{host}} önizlemesi alınıyor…",
+      "remove": "Bağlantı önizlemesini kaldır"
     }
   },
   "boot": {
