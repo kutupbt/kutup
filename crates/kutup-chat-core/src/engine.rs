@@ -422,11 +422,13 @@ impl Engine {
             .ok_or_else(|| ChatError::Db("local profile disappeared after initialization".into()))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_profile<R: Rng + CryptoRng>(
         &mut self,
         display_name: &str,
         avatar: Option<Vec<u8>>,
         avatar_content_type: Option<String>,
+        about: Option<String>,
         wrapping_key: &[u8; 32],
         sent_at: &str,
         rng: &mut R,
@@ -443,6 +445,7 @@ impl Engine {
                 display_name,
                 avatar,
                 avatar_content_type,
+                about,
                 source_device_id: self.session.device_id(),
                 wrapping_key,
                 canonical_recipient: &canonical_self,
@@ -2237,6 +2240,7 @@ mod tests {
             display_name: "Alice".into(),
             avatar: None,
             avatar_content_type: None,
+            about: None,
             revision: 9,
             source_device_id: 1,
             pending_upload: None,

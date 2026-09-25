@@ -1,3 +1,4 @@
+import { PROFILE_ABOUT_MAX_CHARS } from '@kutup/chat-core/types'
 import { Camera, Copy, Loader2, Trash2 } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
@@ -23,6 +24,7 @@ export function ProfileSettings() {
   const { service, snapshot, self } = useChat()
   const profile = snapshot.profile
   const [name, setName] = useState(profile?.displayName ?? '')
+  const [about, setAbout] = useState(profile?.about ?? '')
   const [avatar, setAvatar] = useState<{ base64?: string; contentType?: string }>({
     base64: profile?.avatar,
     contentType: profile?.avatarContentType,
@@ -34,8 +36,9 @@ export function ProfileSettings() {
   // Another device (or tab) saved a new profile: show it.
   useEffect(() => {
     setName(profile?.displayName ?? '')
+    setAbout(profile?.about ?? '')
     setAvatar({ base64: profile?.avatar, contentType: profile?.avatarContentType })
-  }, [profile?.revision, profile?.displayName, profile?.avatar, profile?.avatarContentType])
+  }, [profile?.revision, profile?.displayName, profile?.about, profile?.avatar, profile?.avatarContentType])
 
   async function choose(chosen: File | undefined) {
     if (!chosen) return
@@ -56,7 +59,7 @@ export function ProfileSettings() {
     if (!service || !name.trim() || saving || processing) return
     setSaving(true)
     try {
-      await service.setProfile(name.trim(), avatar.base64, avatar.contentType)
+      await service.setProfile(name.trim(), avatar.base64, avatar.contentType, about)
       await refreshChat()
       toast.success(t('chat.profile.saved'))
     } catch (error) {
@@ -66,8 +69,11 @@ export function ProfileSettings() {
     }
   }
 
+  const aboutTooLong = [...about.trim()].length > PROFILE_ABOUT_MAX_CHARS
   const changed =
-    name.trim() !== (profile?.displayName ?? '') || avatar.base64 !== profile?.avatar
+    name.trim() !== (profile?.displayName ?? '') ||
+    about.trim() !== (profile?.about ?? '') ||
+    avatar.base64 !== profile?.avatar
   const address = self!.address
 
   return (
@@ -94,8 +100,23 @@ export function ProfileSettings() {
           <Field label={t('chat.profile.displayName')}>
             {(props) => <Input {...props} value={name} onChange={(e) => setName(e.target.value)} maxLength={80} required autoComplete="name" />}
           </Field>
+          <Field
+            label={t('chat.profile.about')}
+            description={t('chat.profile.aboutHint', { count: [...about.trim()].length, max: PROFILE_ABOUT_MAX_CHARS })}
+            error={aboutTooLong ? t('chat.profile.aboutTooLong', { count: PROFILE_ABOUT_MAX_CHARS }) : undefined}
+          >
+            {(props) => (
+              <Input
+                {...props}
+                value={about}
+                onChange={(e) => setAbout(e.target.value.replace(/[\r\n]+/gu, ' '))}
+                placeholder={t('chat.profile.aboutPlaceholder')}
+                data-testid="chat-profile-about"
+              />
+            )}
+          </Field>
           <p className="text-xs text-muted-foreground">{t('chat.profile.visibility')}</p>
-          <Button type="submit" disabled={!name.trim() || !changed || saving || processing}>
+          <Button type="submit" disabled={!name.trim() || !changed || aboutTooLong || saving || processing}>
             {saving ? <Loader2 className="animate-spin" /> : null}
             {t('common.save')}
           </Button>

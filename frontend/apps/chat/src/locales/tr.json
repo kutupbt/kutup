@@ -263,7 +263,11 @@
       "avatarHint": "PNG, JPEG veya WebP. Görsel bu cihazda kırpılır ve yeniden boyutlandırılır.",
       "visibility": "Signal'da olduğu gibi Kutup da bu profili yalnızca mesaj gönderdiğiniz veya kabul ettiğiniz kişilerle paylaşır. Birini engellemek, gelecekteki değişiklikleri alamaması için profil anahtarınızı yeniler.",
       "saved": "Şifreli sohbet profili güncellendi",
-      "avatarError": "Bu görsel profil fotoğrafı olarak kullanılamadı."
+      "avatarError": "Bu görsel profil fotoğrafı olarak kullanılamadı.",
+      "about": "Hakkında",
+      "aboutHint": "{{count}}/{{max}} · sohbet ettiğiniz kişilere gösterilir",
+      "aboutTooLong": "En fazla {{count}} karakter.",
+      "aboutPlaceholder": "Kendiniz hakkında birkaç kelime"
     },
     "reactions": {
       "add": "Tepki ekle",

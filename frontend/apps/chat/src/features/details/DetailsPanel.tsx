@@ -81,6 +81,9 @@ function DetailsBody({ model }: { model: ConversationModel }) {
         {model.address && !model.note && model.profile?.displayName ? (
           <p className="break-all text-sm text-muted-foreground">{model.address}</p>
         ) : null}
+        {!model.note && model.profile?.about ? (
+          <p className="max-w-full break-words text-sm" data-testid="chat-contact-about">{model.profile.about}</p>
+        ) : null}
         {model.note ? <p className="text-sm text-muted-foreground">{t('chat.noteToSelfDescription')}</p> : null}
         {model.group ? <p className="text-sm text-muted-foreground">{t('chat.group.members', { count: model.group.currentRoster.length })}</p> : null}
         {info?.description ? (

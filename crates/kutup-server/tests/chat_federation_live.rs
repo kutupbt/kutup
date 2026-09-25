@@ -85,6 +85,7 @@ fn publish_direct_delivery_capability(
             kutup_chat_proto::PROFILE_NAME_PADDED_LENGTHS[0] + 16,
         ),
         avatar: None,
+        about: None,
         wrapped_key: opaque_profile_envelope(
             account,
             &version,

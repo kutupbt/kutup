@@ -1802,21 +1802,23 @@ impl Session {
         // Keep already decrypted presentation data while the new version is
         // fetched. Revision zero forces refresh; an offline rotation should
         // not make a known contact's name/avatar flicker away.
-        let (display_name, avatar, avatar_content_type) = current
+        let (display_name, avatar, avatar_content_type, about) = current
             .map(|profile| {
                 (
                     profile.display_name,
                     profile.avatar,
                     profile.avatar_content_type,
+                    profile.about,
                 )
             })
-            .unwrap_or((None, None, None));
+            .unwrap_or((None, None, None, None));
         self.store.stage_peer_profile(PeerProfile {
             peer: peer.to_string(),
             key,
             display_name,
             avatar,
             avatar_content_type,
+            about,
             revision: 0,
             source_device_id: 0,
         });

@@ -364,7 +364,9 @@ client relationship state. First-contact/request traffic stays identified.
 `ProfileSuiteId = 1` fixes `ProfileEnvelopeV1`: XChaCha20-Poly1305 with
 HKDF-SHA256 purpose subkeys and a canonical header binding profile owner,
 profile-key-derived version, revision, source device and field purpose. Display
-names retain the fixed 53/257-byte Signal-style padding buckets. The random
+names retain the fixed 53/257-byte Signal-style padding buckets. The optional
+"about" line (purpose 4, one line of at most 140 characters) uses Signal's
+128/254/512-byte buckets. The random
 profile key is distributed only inside E2EE messages together with the exact
 numeric profile suite; a missing or unknown suite never authorizes a profile
 fetch. From that key the client derives:

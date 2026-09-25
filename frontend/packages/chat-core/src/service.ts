@@ -379,9 +379,10 @@ export class ChatService {
     displayName: string,
     avatar?: string,
     avatarContentType?: string,
+    about?: string,
   ): Promise<ChatProfile> {
     const profile = await this.withLock(() =>
-      this.client.setProfile(displayName, avatar, avatarContentType),
+      this.client.setProfile(displayName, avatar, avatarContentType, about?.trim() || undefined),
     )
     this.notifyPeers()
     return profile

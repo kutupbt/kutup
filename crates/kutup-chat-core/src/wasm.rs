@@ -2815,6 +2815,7 @@ impl WasmChatClient {
         display_name: String,
         avatar: Option<String>,
         avatar_content_type: Option<String>,
+        about: Option<String>,
     ) -> std::result::Result<JsValue, JsValue> {
         let avatar = avatar
             .map(|value| STANDARD.decode(value).map_err(ChatError::from))
@@ -2827,6 +2828,7 @@ impl WasmChatClient {
                 &display_name,
                 avatar,
                 avatar_content_type,
+                about,
                 &self.profile_wrapping_key,
                 &now_rfc3339(),
                 &mut rng,
@@ -3003,6 +3005,8 @@ struct ProfileView {
     avatar: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     avatar_content_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    about: Option<String>,
     revision: String,
 }
 
@@ -3012,6 +3016,7 @@ impl From<crate::LocalProfile> for ProfileView {
             display_name: profile.display_name,
             avatar: profile.avatar.map(|bytes| STANDARD.encode(bytes)),
             avatar_content_type: profile.avatar_content_type,
+            about: profile.about,
             revision: profile.revision.to_string(),
         }
     }
@@ -3026,6 +3031,8 @@ struct PeerProfileView {
     avatar: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     avatar_content_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    about: Option<String>,
     revision: String,
 }
 
@@ -3036,6 +3043,7 @@ impl PeerProfileView {
             display_name: profile.display_name?,
             avatar: profile.avatar.map(|bytes| STANDARD.encode(bytes)),
             avatar_content_type: profile.avatar_content_type,
+            about: profile.about,
             revision: profile.revision.to_string(),
         })
     }

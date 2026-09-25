@@ -276,8 +276,12 @@ export interface ChatProfile {
   displayName: string
   avatar?: string
   avatarContentType?: string
+  /** Signal's "about" line: one line, at most 140 characters. */
+  about?: string
   revision: string
 }
+
+export const PROFILE_ABOUT_MAX_CHARS = 140
 
 export interface PeerChatProfile extends ChatProfile {
   peer: string
@@ -1456,6 +1460,7 @@ export interface WasmChatClientHandle {
     displayName: string,
     avatar?: string,
     avatarContentType?: string,
+    about?: string,
   ): Promise<ChatProfile>
   acceptContact(peer: string): Promise<ContactRecord>
   rejectContact(peer: string): Promise<ContactRecord>

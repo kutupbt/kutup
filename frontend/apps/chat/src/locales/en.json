@@ -263,7 +263,11 @@
       "avatarHint": "PNG, JPEG, or WebP. The image is cropped and resized on this device.",
       "visibility": "Like Signal, Kutup shares this profile only with people you message or accept. Blocking someone rotates your profile key so they cannot fetch future changes.",
       "saved": "Encrypted chat profile updated",
-      "avatarError": "That image could not be used as a profile photo."
+      "avatarError": "That image could not be used as a profile photo.",
+      "about": "About",
+      "aboutHint": "{{count}}/{{max}} · shown to people you chat with",
+      "aboutTooLong": "At most {{count}} characters.",
+      "aboutPlaceholder": "A few words about yourself"
     },
     "reactions": {
       "add": "Add reaction",

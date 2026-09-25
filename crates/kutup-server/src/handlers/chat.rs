@@ -108,13 +108,23 @@ const WS_TICKET_TTL_SECONDS: i64 = 60;
 const MAX_PREKEY_BATCH: usize = 100;
 pub(crate) const PROFILE_ACCESS_KEY_HEADER: &str = "x-kutup-profile-access-key";
 const PROFILE_ACCESS_KEY_BYTES: usize = 16;
-type PublicProfileRow = (i16, String, i64, i32, String, Option<String>, Vec<u8>);
+type PublicProfileRow = (
+    i16,
+    String,
+    i64,
+    i32,
+    String,
+    Option<String>,
+    Option<String>,
+    Vec<u8>,
+);
 type OwnProfileRow = (
     i16,
     String,
     i64,
     i32,
     String,
+    Option<String>,
     Option<String>,
     String,
     Vec<u8>,
@@ -233,6 +243,9 @@ fn validate_profile(
     if let Some(avatar) = profile.avatar.as_deref() {
         validate_profile_envelope(avatar, ProfileEnvelopePurpose::Avatar, profile)?;
     }
+    if let Some(about) = profile.about.as_deref() {
+        validate_profile_envelope(about, ProfileEnvelopePurpose::About, profile)?;
+    }
     validate_profile_envelope(
         &profile.wrapped_key,
         ProfileEnvelopePurpose::WrappedProfileKey,
@@ -306,6 +319,16 @@ fn validate_public_profile_envelopes(profile: &ChatProfileResponse) -> AppResult
         validate_profile_envelope_context(
             avatar,
             ProfileEnvelopePurpose::Avatar,
+            &profile.account,
+            &profile.version,
+            profile.revision,
+            profile.source_device_id,
+        )?;
+    }
+    if let Some(about) = profile.about.as_deref() {
+        validate_profile_envelope_context(
+            about,
+            ProfileEnvelopePurpose::About,
             &profile.account,
             &profile.version,
             profile.revision,
@@ -902,14 +925,16 @@ pub async fn put_profile(
     sqlx::query(
         "INSERT INTO chat_profiles
              (user_id, suite, version, revision, source_device_id, name_ciphertext,
-              avatar_ciphertext, wrapped_key, access_key_verifier, is_current)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true)
+              avatar_ciphertext, wrapped_key, access_key_verifier, is_current,
+              about_ciphertext)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10)
          ON CONFLICT (user_id, version) DO UPDATE SET
              suite = EXCLUDED.suite,
              revision = EXCLUDED.revision,
              source_device_id = EXCLUDED.source_device_id,
              name_ciphertext = EXCLUDED.name_ciphertext,
              avatar_ciphertext = EXCLUDED.avatar_ciphertext,
+             about_ciphertext = EXCLUDED.about_ciphertext,
              wrapped_key = EXCLUDED.wrapped_key,
              access_key_verifier = EXCLUDED.access_key_verifier,
              is_current = true,
@@ -924,6 +949,7 @@ pub async fn put_profile(
     .bind(&profile.avatar)
     .bind(&profile.wrapped_key)
     .bind(verifier)
+    .bind(&profile.about)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
@@ -1049,7 +1075,7 @@ pub(crate) async fn load_public_profile(
 ) -> AppResult<Option<ChatProfileResponse>> {
     let row: Option<PublicProfileRow> = sqlx::query_as(
         "SELECT p.suite, p.version, p.revision, p.source_device_id, p.name_ciphertext,
-                p.avatar_ciphertext, p.access_key_verifier
+                p.avatar_ciphertext, p.about_ciphertext, p.access_key_verifier
          FROM chat_profiles p
          JOIN users u ON u.id = p.user_id
          WHERE u.username = $1 AND u.is_active = true AND p.version = $2",
@@ -1058,7 +1084,8 @@ pub(crate) async fn load_public_profile(
     .bind(version)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((suite, version, revision, source_device_id, name, avatar, verifier)) = row else {
+    let Some((suite, version, revision, source_device_id, name, avatar, about, verifier)) = row
+    else {
         return Ok(None);
     };
     let presented = Sha256::digest(access_key);
@@ -1075,6 +1102,7 @@ pub(crate) async fn load_public_profile(
         source_device_id: source_device_id as u32,
         name,
         avatar,
+        about,
     };
     validate_public_profile_envelopes(&response)?;
     Ok(Some(response))
@@ -1089,7 +1117,7 @@ async fn load_own_profile_in(
     let suffix = if lock { " FOR UPDATE" } else { "" };
     let sql = format!(
         "SELECT p.suite, p.version, p.revision, p.source_device_id, p.name_ciphertext,
-                p.avatar_ciphertext, p.wrapped_key, p.access_key_verifier,
+                p.avatar_ciphertext, p.about_ciphertext, p.wrapped_key, p.access_key_verifier,
                 c.capability_hash
          FROM chat_profiles p
          JOIN chat_delivery_capabilities c ON c.user_id = p.user_id
@@ -1108,6 +1136,7 @@ async fn load_own_profile_in(
             source_device_id,
             name,
             avatar,
+            about,
             wrapped_key,
             verifier,
             delivery_verifier,
@@ -1120,6 +1149,7 @@ async fn load_own_profile_in(
                 source_device_id: source_device_id as u32,
                 name,
                 avatar,
+                about,
                 wrapped_key,
                 access_key_verifier: hex::encode(verifier),
                 delivery_capability_verifier: hex::encode(delivery_verifier),
@@ -1131,6 +1161,9 @@ async fn load_own_profile_in(
             )?;
             if let Some(avatar) = profile.avatar.as_deref() {
                 validate_profile_envelope(avatar, ProfileEnvelopePurpose::Avatar, &profile)?;
+            }
+            if let Some(about) = profile.about.as_deref() {
+                validate_profile_envelope(about, ProfileEnvelopePurpose::About, &profile)?;
             }
             validate_profile_envelope(
                 &profile.wrapped_key,
@@ -2728,6 +2761,7 @@ mod tests {
                 kutup_chat_proto::PROFILE_NAME_PADDED_LENGTHS[0] + 16,
             ),
             avatar: None,
+            about: None,
             wrapped_key: opaque_profile_envelope(
                 ProfileEnvelopePurpose::WrappedProfileKey,
                 32 + 16,

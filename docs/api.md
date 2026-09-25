@@ -1314,7 +1314,9 @@ response includes the wrapped profile-key envelope; peer responses omit it.
 
 ### PUT /api/chat/profile
 
-Publish a new opaque encrypted display-name/avatar profile. The server sees
+Publish a new opaque encrypted profile: display name, optional avatar and
+optional `about` (Signal's one-line "about", ≤ 140 characters, padded to
+128/254/512 bytes before encryption). The server sees
 only ciphertext, a profile-key-derived version, an access-key verifier, a
 master-key-wrapped profile key, revision, and source device. Revision plus
 source-device ordering resolves concurrent linked-device writes; exact replay

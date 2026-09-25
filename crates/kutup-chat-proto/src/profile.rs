@@ -19,6 +19,10 @@ const LENGTH_BYTES: usize = 4;
 const TAG_BYTES: usize = 16;
 const MAX_ACCOUNT_BYTES: usize = 286;
 pub const PROFILE_NAME_PADDED_LENGTHS: [usize; 2] = [53, 257];
+/// Signal's padding buckets for the profile "about" text.
+pub const PROFILE_ABOUT_PADDED_LENGTHS: [usize; 3] = [128, 254, 512];
+/// Characters in "about", as Signal allows.
+pub const MAX_PROFILE_ABOUT_CHARS: usize = 140;
 pub const MAX_PROFILE_AVATAR_BYTES: usize = 512 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +62,7 @@ pub enum ProfileEnvelopePurpose {
     DisplayName = 1,
     Avatar = 2,
     WrappedProfileKey = 3,
+    About = 4,
 }
 
 impl ProfileEnvelopePurpose {
@@ -74,6 +79,9 @@ impl ProfileEnvelopePurpose {
                 (2 + TAG_BYTES..=MAX_PROFILE_AVATAR_BYTES + 1 + TAG_BYTES).contains(&len)
             }
             Self::WrappedProfileKey => len == 32 + TAG_BYTES,
+            Self::About => PROFILE_ABOUT_PADDED_LENGTHS
+                .iter()
+                .any(|plain| len == plain + TAG_BYTES),
         };
         if valid {
             Ok(())
@@ -94,6 +102,7 @@ impl TryFrom<u8> for ProfileEnvelopePurpose {
             1 => Ok(Self::DisplayName),
             2 => Ok(Self::Avatar),
             3 => Ok(Self::WrappedProfileKey),
+            4 => Ok(Self::About),
             _ => Err(format!("unknown encrypted profile purpose {value}")),
         }
     }
@@ -276,6 +285,9 @@ pub struct PutChatProfileRequest {
     /// Separately encrypted avatar envelope. Absence removes the avatar.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar: Option<String>,
+    /// Separately encrypted "about" envelope. Absence removes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
     /// Profile-key envelope under an account-master-key-derived wrapping key.
     pub wrapped_key: String,
     pub access_key_verifier: String,
@@ -296,6 +308,8 @@ pub struct ChatProfileResponse {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
 }
 
 impl From<&PutChatProfileRequest> for ChatProfileResponse {
@@ -308,6 +322,7 @@ impl From<&PutChatProfileRequest> for ChatProfileResponse {
             source_device_id: profile.source_device_id,
             name: profile.name.clone(),
             avatar: profile.avatar.clone(),
+            about: profile.about.clone(),
         }
     }
 }
@@ -326,6 +341,7 @@ mod tests {
             source_device_id: 2,
             name: "bmFtZQ==".into(),
             avatar: None,
+            about: None,
             wrapped_key: "d3JhcHBlZA==".into(),
             access_key_verifier: "02".repeat(32),
             delivery_capability_verifier: "03".repeat(32),

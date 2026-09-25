@@ -532,6 +532,9 @@ pub struct LocalProfile {
     pub avatar: Option<Vec<u8>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar_content_type: Option<String>,
+    /// Signal's "about" line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
     pub revision: u64,
     pub source_device_id: u32,
     /// Exact encrypted upload retained for idempotent retry.
@@ -554,6 +557,8 @@ pub struct PeerProfile {
     pub avatar: Option<Vec<u8>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar_content_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
     #[serde(default)]
     pub revision: u64,
     #[serde(default)]
