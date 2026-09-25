@@ -765,6 +765,67 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_sticker_is_a_small_webp_or_png_photo_and_a_saved_one_is_inline() {
+        use crate::{ChatContent, StickerMarkV1, StickerSavedBody, VisibleMessageExtrasV1};
+        let id = "0b0f6a8e-35f5-4a8e-9f5a-0a8f3c2d1e4b";
+        let sticker = VisibleMessageExtrasV1 {
+            sticker: Some(StickerMarkV1 {
+                emoji: "🐱".into()
+            }),
+            ..Default::default()
+        };
+        let webp = ChatAttachmentDescriptorV1 {
+            mime_type: "image/webp".into(),
+            filename: "sticker.webp".into(),
+            ..descriptor()
+        };
+        let content = ChatContent::attachment_with_id(id, "t", 1, webp.clone())
+            .unwrap()
+            .with_extras(&sticker)
+            .unwrap();
+        assert_eq!(content.extras().unwrap(), sticker);
+        // A JPEG, a big image or a view-once one is not a sticker.
+        assert!(ChatContent::attachment_with_id(id, "t", 1, descriptor())
+            .unwrap()
+            .with_extras(&sticker)
+            .is_err());
+        assert!(ChatContent::attachment_with_id(
+            id,
+            "t",
+            1,
+            ChatAttachmentDescriptorV1 {
+                plaintext_bytes: 600 * 1024,
+                ..webp.clone()
+            }
+        )
+        .map(|content| content.with_extras(&sticker).is_err())
+        .unwrap_or(true));
+        let both = VisibleMessageExtrasV1 {
+            view_once: true,
+            ..sticker.clone()
+        };
+        assert!(ChatContent::attachment_with_id(id, "t", 1, webp)
+            .unwrap()
+            .with_extras(&both)
+            .is_err());
+
+        let saved = StickerSavedBody {
+            sticker_id: id.into(),
+            emoji: "🐱".into(),
+            content_type: "image/webp".into(),
+            data: base64::engine::general_purpose::STANDARD.encode([9u8; 100]),
+        };
+        let control = ChatContent::sticker_saved_with_id(id, "t", 2, saved.clone()).unwrap();
+        assert_eq!(control.as_sticker_saved(), Some(saved.clone()));
+        assert!(ChatContent::is_account_control_kind(&control.kind));
+        let big = StickerSavedBody {
+            data: base64::engine::general_purpose::STANDARD.encode(vec![0u8; 48 * 1024 + 1]),
+            ..saved
+        };
+        assert!(ChatContent::sticker_saved_with_id(id, "t", 2, big).is_err());
+    }
+
     fn ledger_entry() -> ChatAttachmentLedgerEntryV1 {
         ChatAttachmentLedgerEntryV1 {
             version: 1,

@@ -4,7 +4,8 @@ import { useTranslation } from 'react-i18next'
 import { formatVoiceNoteElapsed } from '@kutup/chat-core/voice-note'
 import { Button } from '@kutup/ui/components/button'
 import { cn } from '@kutup/ui/lib/cn'
-import type { ChatLinkPreviewV1, ChatMessageExtras } from '@kutup/chat-core/types'
+import type { ChatLinkPreviewV1, ChatMessageExtras, ChatStickerV1 } from '@kutup/chat-core/types'
+import { StickerPicker } from '../stickers/StickerPicker'
 import { ComposerLinkPreview } from '../linkPreview/LinkPreviewCard'
 import { buildLinkPreview, firstPreviewableLink } from '../../lib/linkPreview'
 import { useVoiceRecorder } from '../media/useVoiceRecorder'
@@ -43,6 +44,8 @@ export interface ComposerProps {
   linkPreviews?: boolean
   /** Open "New poll". */
   onCreatePoll?: () => void
+  /** Send one of this account's stickers (absent where media cannot go). */
+  onSendSticker?: (sticker: ChatStickerV1) => void
   edit: (messageId: string, text: string) => Promise<void>
   /** Absent when files cannot be sent here. */
   sendFile?: (
@@ -401,6 +404,7 @@ export function Composer(props: ComposerProps) {
             </Button>
           </>
         ) : null}
+        {props.onSendSticker && !editing ? <StickerPicker onSend={props.onSendSticker} disabled={busy} /> : null}
         {props.onCreatePoll && !editing ? (
           <Button
             type="button"

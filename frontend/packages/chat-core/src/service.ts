@@ -16,6 +16,7 @@ import type {
   ChatAccountControl,
   ChatMessageExtras,
   ChatPollV1,
+  ChatStickerV1,
   ChatViewOnceOpenedV1,
   ChatConversationStateV1,
   PeerChatProfile,
@@ -711,6 +712,17 @@ export class ChatService {
    */
   async markViewOnceOpened(opened: ChatViewOnceOpenedV1): Promise<void> {
     await this.sendAccountControl({ kind: 'viewOnceOpened', body: opened })
+  }
+
+  /** Add a sticker to this account's collection (on all of its devices). */
+  async saveSticker(sticker: Omit<ChatStickerV1, 'stickerId'>): Promise<string> {
+    const stickerId = crypto.randomUUID()
+    await this.sendAccountControl({ kind: 'stickerSaved', body: { stickerId, ...sticker } })
+    return stickerId
+  }
+
+  async removeSticker(stickerId: string): Promise<void> {
+    await this.sendAccountControl({ kind: 'stickerRemoved', body: { stickerId } })
   }
 
   private async sendAccountControl(control: ChatAccountControl): Promise<void> {

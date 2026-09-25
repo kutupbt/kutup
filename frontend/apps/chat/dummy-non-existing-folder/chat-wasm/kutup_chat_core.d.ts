@@ -50,6 +50,21 @@ export interface KutupChatContentView {
     receipt?: unknown;
     typing?: unknown;
     disappearingTimer?: unknown;
+    conversationState?: unknown;
+    readPosition?: unknown;
+    deleteForMe?: unknown;
+    viewOnceOpened?: unknown;
+    stickerSaved?: unknown;
+    stickerRemoved?: unknown;
+    sticker?: unknown;
+    groupUpdate?: unknown;
+    poll?: unknown;
+    pollVote?: unknown;
+    pollTerminate?: unknown;
+    mentions?: unknown;
+    linkPreview?: unknown;
+    forwarded?: boolean;
+    viewOnce?: boolean;
     expiresAfterSeconds?: number;
     expiresAtMs?: number;
 }
@@ -127,15 +142,19 @@ export class WasmChatClient {
     contacts(): Promise<any>;
     createAnonymousMlsSubmission(recipient: any, send_id: string, capability: Uint8Array, devices: any, mls_ciphertext: Uint8Array): Promise<any>;
     createMlsApplicationMessage(send_id: string, conversation_id: string, incarnation: string, mls_group_id: Uint8Array, plaintext: Uint8Array, created_at_ms: string): Promise<any>;
-    createMlsAttachmentMessage(send_id: string, conversation_id: string, incarnation: string, mls_group_id: Uint8Array, sent_at: string, descriptor: any, created_at_ms: string, expires_after_seconds?: number | null): Promise<any>;
+    createMlsAttachmentMessage(send_id: string, conversation_id: string, incarnation: string, mls_group_id: Uint8Array, sent_at: string, descriptor: any, created_at_ms: string, expires_after_seconds: number | null | undefined, extras: any): Promise<any>;
     createMlsDisappearingTimer(send_id: string, conversation_id: string, incarnation: string, mls_group_id: Uint8Array, sent_at: string, created_at_ms: string, duration_seconds?: number | null): Promise<any>;
     createMlsInvitationAcceptanceMessage(mls_group_id: Uint8Array, invited_epoch: string, accepted_at_seconds: string): Promise<any>;
     createMlsMessageMutation(send_id: string, conversation_id: string, incarnation: string, mls_group_id: Uint8Array, sent_at: string, target_message_id: string, operation: string, replacement_text: string | null | undefined, created_at_ms: string): Promise<any>;
     createMlsOwnerApprovalRequestMessage(mls_group_id: Uint8Array): Promise<any>;
     createMlsOwnerCandidateMessage(mls_group_id: Uint8Array, now_seconds: string): Promise<any>;
+    /**
+     * A poll, a vote in one, or its end, in a group.
+     */
+    createMlsPollContent(send_id: string, conversation_id: string, incarnation: string, mls_group_id: Uint8Array, sent_at: string, kind: string, body: any, created_at_ms: string, expires_after_seconds?: number | null): Promise<any>;
     createMlsReactionMessage(send_id: string, conversation_id: string, incarnation: string, mls_group_id: Uint8Array, sent_at: string, target_message_id: string, emoji: string, active: boolean, created_at_ms: string): Promise<any>;
     createMlsReceiptMessage(send_id: string, conversation_id: string, incarnation: string, mls_group_id: Uint8Array, sent_at: string, message_ids: string[], state: string, created_at_ms: string): Promise<any>;
-    createMlsTextMessage(send_id: string, conversation_id: string, incarnation: string, mls_group_id: Uint8Array, sent_at: string, text: string, created_at_ms: string, reply_to?: string | null, expires_after_seconds?: number | null): Promise<any>;
+    createMlsTextMessage(send_id: string, conversation_id: string, incarnation: string, mls_group_id: Uint8Array, sent_at: string, text: string, created_at_ms: string, reply_to: string | null | undefined, expires_after_seconds: number | null | undefined, extras: any): Promise<any>;
     createMlsTypingMessage(send_id: string, conversation_id: string, incarnation: string, mls_group_id: Uint8Array, sent_at: string, active: boolean, created_at_ms: string): Promise<any>;
     decryptMlsApplicationMessage(mls_group_id: Uint8Array, ciphertext: Uint8Array, expected_sender: any): Promise<any>;
     deriveMlsDeliveryCapability(mls_group_id: Uint8Array, conversation_id: string, incarnation: string, recipient: any): Promise<any>;
@@ -198,7 +217,12 @@ export class WasmChatClient {
     prepareMlsClose(mls_group_id: Uint8Array, proposal_id: string, now_seconds: string): Promise<any>;
     prepareMlsCryptographicPolicyChange(mls_group_id: Uint8Array, proposal_id: string, next_policy: any, now_seconds: string): Promise<any>;
     prepareMlsDeviceSync(mls_group_id: Uint8Array, proposal_id: string, additions: any, removed_device_ids: any, now_seconds: string): Promise<any>;
-    prepareMlsGroupGenesis(conversation_id: string, mls_group_id: Uint8Array, creator: any, authority_policies: any, created_at_seconds: string): Promise<any>;
+    prepareMlsGroupGenesis(conversation_id: string, mls_group_id: Uint8Array, creator: any, authority_policies: any, created_at_seconds: string, group_info: any): Promise<any>;
+    /**
+     * Stage a change of the group's name, description or picture; it is
+     * then published like a membership change.
+     */
+    prepareMlsGroupInfoChange(mls_group_id: Uint8Array, proposal_id: string, group_info: any, now_seconds: string): Promise<any>;
     prepareMlsGroupRecovery(mls_group_id: Uint8Array, new_mls_group_id: Uint8Array, proposal_id: string, authority_policies: any, additions: any, created_at_seconds: string): Promise<any>;
     prepareMlsMembershipChange(mls_group_id: Uint8Array, proposal_id: string, next_roster: any, additions: any, now_seconds: string): Promise<any>;
     prepareMlsOwnerChange(mls_group_id: Uint8Array, proposal_id: string, next_roster: any, next_owner_set: any, now_seconds: string): Promise<any>;
@@ -218,19 +242,33 @@ export class WasmChatClient {
     rejectContact(peer: string): Promise<any>;
     rejectMlsOwnerApprovalRequest(mls_group_id: Uint8Array): Promise<void>;
     rejectPendingMlsCommit(mls_group_id: Uint8Array, commit_hash: string): Promise<void>;
+    /**
+     * Ask to leave the group; `null` when this device already left.
+     */
+    requestMlsLeave(mls_group_id: Uint8Array, now_seconds: string): Promise<any>;
     resolveDeadLetter(id: string): Promise<void>;
     resolveMlsSenderClaim(claimed_sender: any): Promise<any>;
     resolveMlsWelcomeClaims(claimed_members: any): Promise<any>;
     revokeManifestDevice(device_id: number): Promise<any>;
     safetyNumber(peer: string): Promise<any>;
-    sendAttachment(send_id: string, peer: string, sent_at: string, descriptor: any, expires_after_seconds?: number | null): Promise<any>;
+    /**
+     * Sends a same-account control (`conversationState`, `readPosition` or
+     * `deleteForMe`) to this account's other devices through Note to Self.
+     */
+    sendAccountControl(send_id: string, sent_at: string, kind: string, body: any): Promise<any>;
+    sendAttachment(send_id: string, peer: string, sent_at: string, descriptor: any, expires_after_seconds: number | null | undefined, extras: any): Promise<any>;
     sendDisappearingTimer(send_id: string, peer: string, sent_at: string, duration_seconds?: number | null): Promise<any>;
     sendMessageMutation(send_id: string, peer: string, sent_at: string, target_message_id: string, operation: string, replacement_text?: string | null): Promise<any>;
+    /**
+     * A poll, a vote in one, or its end (`kind` = `poll` | `pollVote` |
+     * `pollTerminate`), in a Direct chat or Note to Self.
+     */
+    sendPollContent(send_id: string, peer: string, sent_at: string, kind: string, body: any, expires_after_seconds?: number | null): Promise<any>;
     sendReaction(send_id: string, peer: string, sent_at: string, target_message_id: string, emoji: string, active: boolean): Promise<any>;
     sendReceipt(send_id: string, peer: string, sent_at: string, message_ids: string[], state: string): Promise<any>;
-    sendText(send_id: string, peer: string, sent_at: string, text: string, reply_to?: string | null, expires_after_seconds?: number | null): Promise<any>;
+    sendText(send_id: string, peer: string, sent_at: string, text: string, reply_to: string | null | undefined, expires_after_seconds: number | null | undefined, extras: any): Promise<any>;
     sendTyping(send_id: string, peer: string, sent_at: string, active: boolean): Promise<any>;
-    setProfile(display_name: string, avatar?: string | null, avatar_content_type?: string | null): Promise<any>;
+    setProfile(display_name: string, avatar?: string | null, avatar_content_type?: string | null, about?: string | null): Promise<any>;
     signMlsControlProposal(mls_group_id: Uint8Array, conversation_id: string, incarnation: string, proposal_id: string, base_epoch: string, action_type: number, encrypted_payload: Uint8Array, created_at_seconds: string): Promise<any>;
     stageMlsApplicationDelivery(send_id: string, recipient: any, capability: Uint8Array, packages: any, now_seconds: string): Promise<any>;
     startDisappearingExpiry(send_id: string, sent_at: string, conversation: any, target_message_id: string, started_at_ms: string): Promise<any>;
@@ -258,15 +296,16 @@ export interface InitOutput {
     readonly wasmchatclient_contacts: (a: number) => any;
     readonly wasmchatclient_createAnonymousMlsSubmission: (a: number, b: any, c: number, d: number, e: number, f: number, g: any, h: number, i: number) => any;
     readonly wasmchatclient_createMlsApplicationMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => any;
-    readonly wasmchatclient_createMlsAttachmentMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: any, m: number, n: number, o: number) => any;
+    readonly wasmchatclient_createMlsAttachmentMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: any, m: number, n: number, o: number, p: any) => any;
     readonly wasmchatclient_createMlsDisappearingTimer: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => any;
     readonly wasmchatclient_createMlsInvitationAcceptanceMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => any;
     readonly wasmchatclient_createMlsMessageMutation: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number) => any;
     readonly wasmchatclient_createMlsOwnerApprovalRequestMessage: (a: number, b: number, c: number) => any;
     readonly wasmchatclient_createMlsOwnerCandidateMessage: (a: number, b: number, c: number, d: number, e: number) => any;
+    readonly wasmchatclient_createMlsPollContent: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: any, o: number, p: number, q: number) => any;
     readonly wasmchatclient_createMlsReactionMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => any;
     readonly wasmchatclient_createMlsReceiptMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => any;
-    readonly wasmchatclient_createMlsTextMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => any;
+    readonly wasmchatclient_createMlsTextMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: any) => any;
     readonly wasmchatclient_createMlsTypingMessage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => any;
     readonly wasmchatclient_decryptMlsApplicationMessage: (a: number, b: number, c: number, d: number, e: number, f: any) => any;
     readonly wasmchatclient_deriveMlsDeliveryCapability: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any) => any;
@@ -326,7 +365,8 @@ export interface InitOutput {
     readonly wasmchatclient_prepareMlsClose: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => any;
     readonly wasmchatclient_prepareMlsCryptographicPolicyChange: (a: number, b: number, c: number, d: number, e: number, f: any, g: number, h: number) => any;
     readonly wasmchatclient_prepareMlsDeviceSync: (a: number, b: number, c: number, d: number, e: number, f: any, g: any, h: number, i: number) => any;
-    readonly wasmchatclient_prepareMlsGroupGenesis: (a: number, b: number, c: number, d: number, e: number, f: any, g: any, h: number, i: number) => any;
+    readonly wasmchatclient_prepareMlsGroupGenesis: (a: number, b: number, c: number, d: number, e: number, f: any, g: any, h: number, i: number, j: any) => any;
+    readonly wasmchatclient_prepareMlsGroupInfoChange: (a: number, b: number, c: number, d: number, e: number, f: any, g: number, h: number) => any;
     readonly wasmchatclient_prepareMlsGroupRecovery: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any, i: any, j: number, k: number) => any;
     readonly wasmchatclient_prepareMlsMembershipChange: (a: number, b: number, c: number, d: number, e: number, f: any, g: any, h: number, i: number) => any;
     readonly wasmchatclient_prepareMlsOwnerChange: (a: number, b: number, c: number, d: number, e: number, f: any, g: any, h: number, i: number) => any;
@@ -341,19 +381,22 @@ export interface InitOutput {
     readonly wasmchatclient_rejectContact: (a: number, b: number, c: number) => any;
     readonly wasmchatclient_rejectMlsOwnerApprovalRequest: (a: number, b: number, c: number) => any;
     readonly wasmchatclient_rejectPendingMlsCommit: (a: number, b: number, c: number, d: number, e: number) => any;
+    readonly wasmchatclient_requestMlsLeave: (a: number, b: number, c: number, d: number, e: number) => any;
     readonly wasmchatclient_resolveDeadLetter: (a: number, b: number, c: number) => any;
     readonly wasmchatclient_resolveMlsSenderClaim: (a: number, b: any) => any;
     readonly wasmchatclient_resolveMlsWelcomeClaims: (a: number, b: any) => any;
     readonly wasmchatclient_revokeManifestDevice: (a: number, b: number) => any;
     readonly wasmchatclient_safetyNumber: (a: number, b: number, c: number) => any;
-    readonly wasmchatclient_sendAttachment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any, i: number) => any;
+    readonly wasmchatclient_sendAccountControl: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any) => any;
+    readonly wasmchatclient_sendAttachment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any, i: number, j: any) => any;
     readonly wasmchatclient_sendDisappearingTimer: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
     readonly wasmchatclient_sendMessageMutation: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => any;
+    readonly wasmchatclient_sendPollContent: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: any, k: number) => any;
     readonly wasmchatclient_sendReaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => any;
     readonly wasmchatclient_sendReceipt: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => any;
-    readonly wasmchatclient_sendText: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => any;
+    readonly wasmchatclient_sendText: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: any) => any;
     readonly wasmchatclient_sendTyping: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
-    readonly wasmchatclient_setProfile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => any;
+    readonly wasmchatclient_setProfile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => any;
     readonly wasmchatclient_signMlsControlProposal: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => any;
     readonly wasmchatclient_stageMlsApplicationDelivery: (a: number, b: number, c: number, d: any, e: number, f: number, g: any, h: number, i: number) => any;
     readonly wasmchatclient_startDisappearingExpiry: (a: number, b: number, c: number, d: number, e: number, f: any, g: number, h: number, i: number, j: number) => any;

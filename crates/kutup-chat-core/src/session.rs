@@ -3307,6 +3307,9 @@ fn collect_account_controls(
 ) -> AccountControls {
     let mut controls = AccountControls::default();
     let mut states = std::collections::BTreeMap::<String, ((u32, u32), String)>::new();
+    // Stickers: the newest save of each, and which were removed.
+    let mut stickers = std::collections::BTreeMap::<String, ((String, String), String)>::new();
+    let mut removed_stickers = std::collections::BTreeSet::<String>::new();
     let mut positions = std::collections::BTreeMap::<String, ((i64, String), String)>::new();
     let own = outgoing
         .iter()
@@ -3344,6 +3347,17 @@ fn collect_account_controls(
                 control_id,
                 &mut controls.superseded,
             );
+        } else if let Some(saved) = content.as_sticker_saved() {
+            let order = (content.sent_at.clone(), control_id.clone());
+            keep_newest(
+                &mut stickers,
+                saved.sticker_id,
+                order,
+                control_id,
+                &mut controls.superseded,
+            );
+        } else if let Some(removed) = content.as_sticker_removed() {
+            removed_stickers.insert(removed.sticker_id);
         } else if let Some(position) = content.as_read_position() {
             let order = (position.read_through_ms, control_id.clone());
             keep_newest(
@@ -3353,6 +3367,13 @@ fn collect_account_controls(
                 control_id,
                 &mut controls.superseded,
             );
+        }
+    }
+    // A removed sticker's image goes; the small removal stays, so a save
+    // that arrives late cannot bring it back.
+    for (sticker_id, (_, control_id)) in stickers {
+        if removed_stickers.contains(&sticker_id) {
+            controls.superseded.insert(control_id);
         }
     }
     controls

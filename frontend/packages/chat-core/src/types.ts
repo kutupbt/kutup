@@ -19,6 +19,10 @@ export interface ChatContentView {
   readPosition?: ChatReadPositionV1
   deleteForMe?: ChatDeleteForMeV1
   viewOnceOpened?: ChatViewOnceOpenedV1
+  stickerSaved?: ChatStickerV1
+  stickerRemoved?: { stickerId: string }
+  /** The image attachment is a sticker. */
+  sticker?: { emoji?: string }
   poll?: ChatPollV1
   pollVote?: ChatPollVoteV1
   pollTerminate?: { targetMessageId: string }
@@ -83,7 +87,19 @@ export interface ChatMessageExtras {
   forwarded?: boolean
   /** Attachments (photo or video) only. */
   viewOnce?: boolean
+  /** A WebP or PNG image of at most 512 KiB sent as a sticker. */
+  sticker?: { emoji?: string }
 }
+
+/** A sticker in this account's collection (image inline: WebP/PNG ≤ 48 KiB). */
+export interface ChatStickerV1 {
+  stickerId: string
+  emoji?: string
+  contentType: 'image/webp' | 'image/png'
+  data: string
+}
+
+export const STICKER_IMAGE_MAX_BYTES = 48 * 1024
 
 export const LINK_PREVIEW_IMAGE_MAX_BYTES = 24 * 1024
 
@@ -138,6 +154,8 @@ export type ChatAccountControl =
   | { kind: 'readPosition'; body: ChatReadPositionV1 }
   | { kind: 'deleteForMe'; body: ChatDeleteForMeV1 }
   | { kind: 'viewOnceOpened'; body: ChatViewOnceOpenedV1 }
+  | { kind: 'stickerSaved'; body: ChatStickerV1 }
+  | { kind: 'stickerRemoved'; body: { stickerId: string } }
 
 export interface ChatReactionV1 {
   targetMessageId: string

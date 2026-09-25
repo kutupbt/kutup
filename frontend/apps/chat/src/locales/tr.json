@@ -362,7 +362,8 @@
       "video": "Video",
       "voice": "Sesli mesaj",
       "timer": "Kaybolan mesajlar değişti",
-      "poll": "Anket: {{question}}"
+      "poll": "Anket: {{question}}",
+      "sticker": "Çıkartma {{emoji}}"
     },
     "time": {
       "now": "şimdi",
@@ -641,6 +642,18 @@
       "end": "Anketi bitir",
       "endedNotice": "{{name}} “{{question}}” anketini bitirdi",
       "endedNotice_you": "“{{question}}” anketini bitirdiniz"
+    },
+    "stickers": {
+      "open": "Çıkartmalar",
+      "title": "Çıkartmalarım",
+      "add": "Ekle",
+      "empty": "Henüz çıkartma yok. Bir resimden ekleyin ya da size gönderileni kaydedin.",
+      "send": "Çıkartma gönder",
+      "sendEmoji": "{{emoji}} çıkartmasını gönder",
+      "remove": "Çıkartmayı kaldır",
+      "save": "Çıkartmayı kaydet",
+      "saved": "Çıkartma kaydedildi",
+      "tooBig": "Bu resim çıkartma için yeterince küçültülemiyor."
     }
   },
   "boot": {

@@ -1,9 +1,12 @@
 import { ArrowLeft, BarChart3, Check, Info, Loader2, MoreVertical, Timer, Users } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { canonicalAccountAddress } from '@kutup/chat-core/identity'
-import type { ConversationId } from '@kutup/chat-core/types'
+import { downloadChatMediaToCacheV1, openCachedChatMediaV1 } from '@kutup/chat-core/media'
+import type { ChatAttachmentDescriptorV1, ConversationId } from '@kutup/chat-core/types'
+import { freshAccessToken } from '@kutup/session/client'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import {
@@ -18,6 +21,7 @@ import { cn } from '@kutup/ui/lib/cn'
 import { refreshChat, useChat } from '../../app/chatStore'
 import { Avatar } from '../../components/Avatar'
 import { DISAPPEARING_PRESETS, disappearingLabel } from '../../lib/disappearing'
+import { chatErrorMessage } from '../../lib/errors'
 import { groupUpdateSentences } from '../../lib/groupUpdate'
 import { personName } from '../../lib/names'
 import { formatDayHeader } from '../../lib/time'
@@ -34,6 +38,8 @@ import { useListActions } from '../list/useListActions'
 import { AttachmentBody } from '../media/AttachmentBody'
 import { ViewedOnce, ViewOnceBody } from '../media/ViewOnceBody'
 import { NewPollDialog } from '../polls/NewPollDialog'
+import { StickerBody } from '../stickers/StickerBody'
+import { stickerFromImage } from '../../lib/stickers'
 import { PollBody } from '../polls/PollBody'
 import { Composer } from './Composer'
 import { DeleteMessageDialog } from './DeleteMessageDialog'
@@ -68,6 +74,20 @@ export function ConversationView({ conversation }: { conversation: ConversationI
   const [deletingChat, setDeletingChat] = useState(false)
   const [forwarding, setForwarding] = useState<MessageView | null>(null)
   const [newPoll, setNewPoll] = useState(false)
+
+  /** "Save sticker": add a received sticker to this account's collection. */
+  async function saveSticker(attachment: ChatAttachmentDescriptorV1) {
+    try {
+      if (!chat.mediaCache) throw new Error('media cache unavailable')
+      await downloadChatMediaToCacheV1(chat.mediaCache, attachment, await freshAccessToken())
+      const opened = await openCachedChatMediaV1(chat.mediaCache, attachment)
+      await service.saveSticker(await stickerFromImage(opened.blob))
+      await refreshChat()
+      toast.success(t('chat.stickers.saved'))
+    } catch (error) {
+      toast.error(chatErrorMessage(error, t))
+    }
+  }
   const linkPreviewsOn = useLinkPreviews()
   const listActions = useListActions()
   const navigate = useNavigate()
@@ -315,7 +335,12 @@ export function ConversationView({ conversation }: { conversation: ConversationI
               selfName={chat.snapshot.profile?.displayName}
               onVisible={() => startExpiry(view)}
               attachment={
-                view.poll ? (
+                view.entry.content.sticker && view.entry.content.attachment ? (
+                  <StickerBody
+                    attachment={view.entry.content.attachment}
+                    accepted={model.contact?.state !== 'pendingIncoming' && model.contact?.state !== 'blocked'}
+                  />
+                ) : view.poll ? (
                   <PollBody
                     state={view.poll}
                     selfAddress={self.address}
@@ -370,6 +395,10 @@ export function ConversationView({ conversation }: { conversation: ConversationI
                     : undefined,
                 onDelete: view.entry.content.messageId && !view.viewedOnce ? () => setDeleting(view) : undefined,
                 // Voice notes and view-once media stay where they were sent.
+                onSaveSticker:
+                  view.entry.content.sticker && view.entry.content.attachment && !own
+                    ? () => void saveSticker(view.entry.content.attachment!)
+                    : undefined,
                 onForward:
                   !view.mutation?.deleted &&
                   !view.entry.content.viewOnce &&
@@ -417,6 +446,17 @@ export function ConversationView({ conversation }: { conversation: ConversationI
           members={conversation.kind === 'group' ? members : undefined}
           linkPreviews={linkPreviewsOn && chat.capabilities?.linkPreviews === true}
           onCreatePoll={model.note ? undefined : () => setNewPoll(true)}
+          onSendSticker={
+            model.canSendMedia && chat.capabilities?.media && (conversation.kind === 'group' || model.note || chat.capabilities.sealedSender)
+              ? (sticker) => {
+                  const bytes = Uint8Array.from(atob(sticker.data), (c) => c.charCodeAt(0))
+                  const file = new File([bytes], sticker.contentType === 'image/png' ? 'sticker.png' : 'sticker.webp', { type: sticker.contentType })
+                  void actions
+                    .sendFile(file, { extras: { sticker: sticker.emoji ? { emoji: sticker.emoji } : {} } })
+                    .catch(() => undefined)
+                }
+              : undefined
+          }
           edit={actions.edit}
           sendFile={
             // Media to another person travels by sealed delivery (its key

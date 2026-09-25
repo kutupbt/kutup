@@ -14,6 +14,7 @@ const MENTIONS_FIELD: &str = "mentions";
 const LINK_PREVIEW_FIELD: &str = "linkPreview";
 const FORWARDED_FIELD: &str = "forwarded";
 const VIEW_ONCE_FIELD: &str = "viewOnce";
+const STICKER_FIELD: &str = "sticker";
 
 /// One mention in a text: `length` UTF-16 code units from `start` (the
 /// units JavaScript strings index by, as Signal's body ranges) stand for
@@ -63,6 +64,17 @@ pub struct VisibleMessageExtrasV1 {
     /// A photo or video the recipient can open once.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub view_once: bool,
+    /// The image is a sticker: shown large, without a bubble.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sticker: Option<StickerMarkV1>,
+}
+
+/// A sticker's mark on its image attachment: the emoji it stands for.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StickerMarkV1 {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub emoji: String,
 }
 
 impl VisibleMessageExtrasV1 {
@@ -98,6 +110,21 @@ impl VisibleMessageExtrasV1 {
                 .ok_or("a link preview belongs to a text message")?
                 .text;
             validate_preview(preview, &text)?;
+        }
+        if let Some(sticker) = &self.sticker {
+            let attachment = content
+                .as_attachment()
+                .ok_or("a sticker is an image attachment")?;
+            if attachment.media_class != crate::ChatMediaClassV1::Photo
+                || !matches!(attachment.mime_type.as_str(), "image/webp" | "image/png")
+                || attachment.plaintext_bytes > 512 * 1024
+                || self.view_once
+            {
+                return Err("a sticker is a WebP or PNG image of at most 512 KiB".into());
+            }
+            if sticker.emoji.chars().count() > 8 || sticker.emoji.chars().any(char::is_control) {
+                return Err("a sticker emoji is at most 8 characters".into());
+            }
         }
         if self.view_once {
             let attachment = content
@@ -194,6 +221,9 @@ impl ChatContent {
             self.extra
                 .insert(VIEW_ONCE_FIELD.into(), serde_json::Value::Bool(true));
         }
+        if let Some(sticker) = &extras.sticker {
+            self.extra.insert(STICKER_FIELD.into(), to_json(sticker)?);
+        }
         Ok(self)
     }
 
@@ -212,6 +242,12 @@ impl ChatContent {
             extras.link_preview = Some(
                 serde_json::from_value(value.clone())
                     .map_err(|_| "Chat link preview is malformed".to_string())?,
+            );
+        }
+        if let Some(value) = self.extra.get(STICKER_FIELD) {
+            extras.sticker = Some(
+                serde_json::from_value(value.clone())
+                    .map_err(|_| "Chat sticker mark is malformed".to_string())?,
             );
         }
         for (field, flag) in [

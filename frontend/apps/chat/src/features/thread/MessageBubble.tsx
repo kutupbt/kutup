@@ -1,4 +1,4 @@
-import { Check, CheckCheck, Copy, Forward, MoreHorizontal, Pencil, Reply, SmilePlus, Timer, Trash2 } from 'lucide-react'
+import { Check, CheckCheck, Copy, Forward, MoreHorizontal, Pencil, Reply, SmilePlus, Sticker as StickerIcon, Timer, Trash2 } from 'lucide-react'
 import { useEffect, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -26,6 +26,8 @@ export interface BubbleActions {
   onEdit?: () => void
   onDelete?: () => void
   onForward?: () => void
+  /** Add a received sticker to your own. */
+  onSaveSticker?: () => void
   /** Scroll to the message a reply quotes. */
   onJump?: (messageId: string) => void
 }
@@ -121,9 +123,12 @@ export function MessageBubble({
             'relative min-w-0 max-w-full rounded-[18px] px-3 py-2 text-sm leading-5 transition-shadow',
             deleted
               ? 'border border-border bg-transparent text-muted-foreground'
-              : outgoing
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-muted text-foreground',
+              : entry.content.sticker
+                ? // A sticker stands on its own, as in Signal.
+                  'bg-transparent p-0 text-foreground'
+                : outgoing
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-foreground',
             corners,
             highlighted && 'ring-2 ring-ring ring-offset-2 ring-offset-background',
           )}
@@ -326,7 +331,7 @@ function HoverActions({ view, text, actions }: { view: MessageView; text: string
   const { t } = useTranslation()
   const mine = view.reactions.find((r) => r.reactedBySelf)?.emoji
   const reveal = 'opacity-70 md:opacity-0 md:transition-opacity md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100 data-[state=open]:opacity-100'
-  const hasMore = Boolean(actions.onEdit || actions.onDelete || actions.onForward || text)
+  const hasMore = Boolean(actions.onEdit || actions.onDelete || actions.onForward || actions.onSaveSticker || text)
   if (!actions.onReact && !actions.onReply && !hasMore) return null
   return (
     <div className="flex shrink-0 items-center gap-0.5 self-center">
@@ -379,6 +384,12 @@ function HoverActions({ view, text, actions }: { view: MessageView; text: string
               >
                 <Copy />
                 {t('chat.message.copy')}
+              </DropdownMenuItem>
+            ) : null}
+            {actions.onSaveSticker ? (
+              <DropdownMenuItem onSelect={actions.onSaveSticker} data-testid="chat-save-sticker">
+                <StickerIcon />
+                {t('chat.stickers.save')}
               </DropdownMenuItem>
             ) : null}
             {actions.onForward ? (

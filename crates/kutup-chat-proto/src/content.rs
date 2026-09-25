@@ -57,6 +57,10 @@ pub mod kind {
     /// Same-account linked-device record that a view-once photo or video was
     /// opened: it is removed on every device and a "Viewed" stands in. [IMPL]
     pub const VIEW_ONCE_OPENED: &str = "viewOnceOpened";
+    /// Same-account linked-device sticker collection: one sticker saved
+    /// (its small image inline) or removed. [IMPL]
+    pub const STICKER_SAVED: &str = "stickerSaved";
+    pub const STICKER_REMOVED: &str = "stickerRemoved";
     /// Set/remove one bounded emoji reaction per account on a stable logical message. [IMPL]
     pub const REACTION: &str = "reaction";
     /// A poll: question and options (visible). [IMPL]
@@ -611,6 +615,38 @@ impl ChatContent {
         Some(body)
     }
 
+    pub fn sticker_saved_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        body: StickerSavedBody,
+    ) -> Result<Self, String> {
+        body.validate()?;
+        Self::account_control(kind::STICKER_SAVED, message_id, sent_at, seq, &body)
+    }
+
+    pub fn as_sticker_saved(&self) -> Option<StickerSavedBody> {
+        let body: StickerSavedBody = self.as_account_control(kind::STICKER_SAVED)?;
+        body.validate().ok()?;
+        Some(body)
+    }
+
+    pub fn sticker_removed_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        body: StickerRemovedBody,
+    ) -> Result<Self, String> {
+        validate_message_id(&body.sticker_id, "sticker")?;
+        Self::account_control(kind::STICKER_REMOVED, message_id, sent_at, seq, &body)
+    }
+
+    pub fn as_sticker_removed(&self) -> Option<StickerRemovedBody> {
+        let body: StickerRemovedBody = self.as_account_control(kind::STICKER_REMOVED)?;
+        validate_message_id(&body.sticker_id, "sticker").ok()?;
+        Some(body)
+    }
+
     /// True for the same-account controls ([`kind::CONVERSATION_STATE`],
     /// [`kind::READ_POSITION`], [`kind::DELETE_FOR_ME`],
     /// [`kind::DISAPPEARING_EXPIRY_START`]): accepted only from another
@@ -622,6 +658,8 @@ impl ChatContent {
                 | kind::READ_POSITION
                 | kind::DELETE_FOR_ME
                 | kind::VIEW_ONCE_OPENED
+                | kind::STICKER_SAVED
+                | kind::STICKER_REMOVED
                 | kind::DISAPPEARING_EXPIRY_START
         )
     }
@@ -634,6 +672,8 @@ impl ChatContent {
             kind::READ_POSITION => Some(self.as_read_position().is_some()),
             kind::DELETE_FOR_ME => Some(self.as_delete_for_me().is_some()),
             kind::VIEW_ONCE_OPENED => Some(self.as_view_once_opened().is_some()),
+            kind::STICKER_SAVED => Some(self.as_sticker_saved().is_some()),
+            kind::STICKER_REMOVED => Some(self.as_sticker_removed().is_some()),
             kind::DISAPPEARING_EXPIRY_START => Some(self.as_disappearing_expiry_start().is_some()),
             _ => None,
         }
@@ -744,6 +784,8 @@ impl ChatContent {
                     | kind::READ_POSITION
                     | kind::DELETE_FOR_ME
                     | kind::VIEW_ONCE_OPENED
+                    | kind::STICKER_SAVED
+                    | kind::STICKER_REMOVED
                     | kind::REACTION
                     | kind::POLL
                     | kind::POLL_VOTE
@@ -1047,6 +1089,51 @@ pub enum GroupUpdateChange {
 pub struct GroupUpdateBody {
     pub actor: String,
     pub changes: Vec<GroupUpdateChange>,
+}
+
+/// A sticker in this account's collection: its id, the emoji it stands for,
+/// and the image (WebP or PNG, at most 48 KiB, inline so it syncs and is
+/// backed up with the account's other state).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StickerSavedBody {
+    pub sticker_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub emoji: String,
+    pub content_type: String,
+    /// Standard base64.
+    pub data: String,
+}
+
+impl StickerSavedBody {
+    pub const MAX_IMAGE_BYTES: usize = 48 * 1024;
+
+    pub fn validate(&self) -> Result<(), String> {
+        use base64::Engine as _;
+        validate_message_id(&self.sticker_id, "sticker")?;
+        if self.emoji.chars().count() > 8 || self.emoji.chars().any(char::is_control) {
+            return Err("a Chat sticker emoji is at most 8 characters".into());
+        }
+        if !matches!(self.content_type.as_str(), "image/webp" | "image/png") {
+            return Err("a Chat sticker is a WebP or PNG image".into());
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&self.data)
+            .map_err(|_| "a Chat sticker image must be base64".to_string())?;
+        if bytes.is_empty()
+            || bytes.len() > Self::MAX_IMAGE_BYTES
+            || base64::engine::general_purpose::STANDARD.encode(&bytes) != self.data
+        {
+            return Err("a Chat sticker image is at most 48 KiB of canonical base64".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StickerRemovedBody {
+    pub sticker_id: String,
 }
 
 /// A view-once photo or video was opened on one of this account's devices.

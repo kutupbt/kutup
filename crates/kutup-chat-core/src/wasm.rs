@@ -89,6 +89,9 @@ export interface KutupChatContentView {
   readPosition?: unknown;
   deleteForMe?: unknown;
   viewOnceOpened?: unknown;
+  stickerSaved?: unknown;
+  stickerRemoved?: unknown;
+  sticker?: unknown;
   groupUpdate?: unknown;
   poll?: unknown;
   pollVote?: unknown;
@@ -2661,6 +2664,20 @@ impl WasmChatClient {
                 seq,
                 from_transport(body).map_err(chat_error)?,
             ),
+            kutup_chat_proto::content::kind::STICKER_SAVED => ChatContent::sticker_saved_with_id(
+                &send_id,
+                sent_at,
+                seq,
+                from_transport(body).map_err(chat_error)?,
+            ),
+            kutup_chat_proto::content::kind::STICKER_REMOVED => {
+                ChatContent::sticker_removed_with_id(
+                    &send_id,
+                    sent_at,
+                    seq,
+                    from_transport(body).map_err(chat_error)?,
+                )
+            }
             kutup_chat_proto::content::kind::VIEW_ONCE_OPENED => {
                 ChatContent::view_once_opened_with_id(
                     &send_id,
@@ -3231,6 +3248,12 @@ struct ContentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     view_once_opened: Option<kutup_chat_proto::ViewOnceOpenedBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    sticker_saved: Option<kutup_chat_proto::StickerSavedBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sticker_removed: Option<kutup_chat_proto::StickerRemovedBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sticker: Option<kutup_chat_proto::StickerMarkV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     group_update: Option<kutup_chat_proto::GroupUpdateBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     poll: Option<kutup_chat_proto::PollBody>,
@@ -3265,6 +3288,8 @@ impl From<ChatContent> for ContentView {
         let read_position = content.as_read_position();
         let delete_for_me = content.as_delete_for_me();
         let view_once_opened = content.as_view_once_opened();
+        let sticker_saved = content.as_sticker_saved();
+        let sticker_removed = content.as_sticker_removed();
         let group_update = content.as_group_update();
         let extras = content.extras().unwrap_or_default();
         let poll = content.as_poll();
@@ -3290,6 +3315,9 @@ impl From<ChatContent> for ContentView {
             read_position,
             delete_for_me,
             view_once_opened,
+            sticker_saved,
+            sticker_removed,
+            sticker: extras.sticker.clone(),
             group_update,
             poll,
             poll_vote,

@@ -41,9 +41,10 @@ Done:
 
 Next, in order:
 
-6. **Message features.** Done: mentions, forwarding, profile "about", link
-   previews (fetched by the sender's server), view-once media, polls.
-   Remaining: stickers.
+6. **Message features** (done): mentions, forwarding, profile "about", link
+   previews (fetched by the sender's server), view-once media, polls, and
+   personal stickers (made from any picture, synced with `stickerSaved` /
+   `stickerRemoved`; Signal's sticker packs are not carried over).
 7. **Invite links.** A join capability carried in the link fragment,
    optional administrator approval.
 8. **Notifications.** In-tab notifications with per-chat and global

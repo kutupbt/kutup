@@ -52,6 +52,7 @@ export function messagePreview(
   const text = mutation?.editedText ?? entry.content.text
   if (text) return text
   const attachment = entry.content.attachment
+  if (attachment && entry.content.sticker) return t('chat.preview.sticker', { emoji: entry.content.sticker.emoji ?? '' }).trim()
   if (attachment) {
     if (attachment.durationMs !== undefined && attachment.mediaClass === 'audio') return t('chat.preview.voice')
     if (attachment.mediaClass === 'photo') return attachment.caption || t('chat.preview.photo')

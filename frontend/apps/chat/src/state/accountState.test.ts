@@ -83,6 +83,22 @@ describe('foldAccountState', () => {
     ]
     expect(foldAccountState(unknownAnchor, SELF).readThrough.get(BOB)).toBe(250)
   })
+
+  it('lists saved stickers newest first, without removed ones', () => {
+    const saved = (stickerId: string): Partial<ChatContentView> => ({
+      kind: 'stickerSaved',
+      stickerSaved: { stickerId, contentType: 'image/webp', data: 'AA==' },
+    })
+    const history = [
+      entry(note, 'outgoing', 1, saved('s1')),
+      entry(note, 'outgoing', 2, saved('s2')),
+      entry(note, 'outgoing', 3, saved('s3')),
+      entry(note, 'outgoing', 4, { kind: 'stickerRemoved', stickerRemoved: { stickerId: 's2' } }),
+      entry(note, 'outgoing', 5, saved('s1')),
+      entry(bob, 'incoming', 6, saved('s4')),
+    ]
+    expect(foldAccountState(history, SELF).stickers.map((sticker) => sticker.stickerId)).toEqual(['s1', 's3'])
+  })
 })
 
 describe('list state rules', () => {

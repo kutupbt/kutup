@@ -47,9 +47,12 @@ pub use content::{
     ChatContent, ContactControlBody, ContactState, ConversationStateBody, DeleteForMeBody,
     DisappearingExpiryStartBody, DisappearingTimerBody, GroupUpdateBody, GroupUpdateChange,
     MessageMutationBody, MessageMutationOperation, ReactionBody, ReadPositionBody, ReceiptBody,
-    ReceiptState, SentTranscriptBody, TextBody, TypingBody, ViewOnceOpenedBody, MAX_SAFE_CLOCK_MS,
+    ReceiptState, SentTranscriptBody, StickerRemovedBody, StickerSavedBody, TextBody, TypingBody,
+    ViewOnceOpenedBody, MAX_SAFE_CLOCK_MS,
 };
-pub use extras::{LinkPreviewImageV1, LinkPreviewV1, MentionV1, VisibleMessageExtrasV1};
+pub use extras::{
+    LinkPreviewImageV1, LinkPreviewV1, MentionV1, StickerMarkV1, VisibleMessageExtrasV1,
+};
 pub use federation::{
     FederatedChatTransaction, FederationDeliveryError, FederationDeliveryRejection,
     FederationDeliveryResponse, FEDERATED_CHAT_FEATURE,

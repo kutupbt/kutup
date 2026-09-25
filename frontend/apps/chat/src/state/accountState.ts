@@ -1,5 +1,5 @@
 import { conversationKey, directAddress } from '@kutup/chat-core/identity'
-import type { ChatConversationStateV1, ChatHistoryEntry, ConversationId } from '@kutup/chat-core/types'
+import type { ChatConversationStateV1, ChatHistoryEntry, ChatStickerV1, ConversationId } from '@kutup/chat-core/types'
 import { messageIdOf } from './views'
 
 // What this account's devices told each other about its conversations
@@ -32,6 +32,8 @@ export const DEFAULT_LIST_STATE: ListState = {
 export interface AccountState {
   /** Per conversation key. */
   lists: Map<string, ListState>
+  /** This account's stickers, newest first. */
+  stickers: ChatStickerV1[]
   /** Per conversation key: read up to this time (on this device's clock). */
   readThrough: Map<string, number>
 }
@@ -50,6 +52,8 @@ function newer(a: ChatConversationStateV1, b: ChatConversationStateV1): boolean 
 
 export function foldAccountState(history: readonly ChatHistoryEntry[], selfAddress: string): AccountState {
   const states = new Map<string, ChatConversationStateV1>()
+  const saved = new Map<string, ChatStickerV1>()
+  const removed = new Set<string>()
   const positions: Array<{ key: string; anchor: string; fallback: number }> = []
   const localTime = new Map<string, number>()
   for (const message of history) {
@@ -61,6 +65,12 @@ export function foldAccountState(history: readonly ChatHistoryEntry[], selfAddre
       const current = states.get(key)
       if (!current || newer(state, current)) states.set(key, state)
     }
+    if (message.content.stickerSaved) {
+      // Later saves of the same sticker replace it; history is oldest first.
+      saved.delete(message.content.stickerSaved.stickerId)
+      saved.set(message.content.stickerSaved.stickerId, message.content.stickerSaved)
+    }
+    if (message.content.stickerRemoved) removed.add(message.content.stickerRemoved.stickerId)
     const position = message.content.readPosition
     if (position) {
       positions.push({
@@ -88,7 +98,8 @@ export function foldAccountState(history: readonly ChatHistoryEntry[], selfAddre
     const at = localTime.get(position.anchor) ?? position.fallback
     readThrough.set(position.key, Math.max(readThrough.get(position.key) ?? 0, at))
   }
-  return { lists, readThrough }
+  const stickers = [...saved.values()].filter((sticker) => !removed.has(sticker.stickerId)).reverse()
+  return { lists, readThrough, stickers }
 }
 
 export function isMuted(state: ListState | undefined, nowMs: number): boolean {

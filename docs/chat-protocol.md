@@ -313,6 +313,7 @@ receive path (Direct, sync transcript, MLS):
 | `linkPreview` | text | `{url, title, description?, image?}`: an `https://` URL that appears in the text, title ≤ 300 and description ≤ 1000 characters, an optional JPEG/PNG/WebP image ≤ 24 KiB inline. Made by the sender; recipients never contact the site. |
 | `forwarded` | text, attachment | `true` or absent. A forwarded attachment is a new upload, since the original is on its sender's server. |
 | `viewOnce` | photo or video attachment | `true` or absent. Sent without a thumbnail; never enters the backup; the recipient opens it once, and closing the viewer sends `viewOnceOpened` to their own devices. Like Signal's, this is a courtesy against casual re-viewing, not protection from a screenshot or a modified client. |
+| `sticker` | photo attachment | `{emoji?}`: the attachment is a WebP or PNG of at most 512 KiB, not view-once. Readers draw it without a bubble and may save it to their own stickers. |
 
 ### Polls
 
@@ -334,7 +335,7 @@ and ends are purged with their poll.
 ### Account state across devices
 
 Signal keeps pinned, archived and muted chats in a storage service and syncs
-reads with sync messages. Kutup carries the same state as three more hidden
+reads with sync messages. Kutup carries the same state as more hidden
 same-account controls on the Note-to-Self linked-device path, next to
 `contactControl` and `disappearingExpiryStart`:
 
@@ -344,15 +345,18 @@ same-account controls on the Note-to-Self linked-device path, next to
 | `readPosition` | conversation, `throughMessageId`, `readThroughMs` | furthest wins; the anchor message places it on each device, `readThroughMs` (the reading device's clock) when the anchor is missing |
 | `deleteForMe` | conversation, 1–64 `messageIds` | union; the named messages (and reactions, edits, receipts to them) are purged like expired ones, also when a copy arrives later |
 | `viewOnceOpened` | conversation, `messageId`, `sender`, `timestampMs`, `video` | like `deleteForMe` for that message; the control stays as the "Viewed photo/video" placeholder |
+| `stickerSaved` | `stickerId`, `emoji?`, `contentType` (WebP or PNG), `data` (base64, ≤ 48 KiB) | the account's stickers, newest first; a later save of the same id replaces it |
+| `stickerRemoved` | `stickerId` | removes that sticker; the purge then drops both records |
 
-All four are rejected unless they arrive as a transcript from another device
+All six are rejected unless they arrive as a transcript from another device
 of the same account addressed to Note to Self, are rejected as MLS
 application content, and a device sends them only to its own Note to Self
 (`conversationState` must name the sending device). They stay in the local
 history, hidden from every view, so the continuous backup restores them to a
 replacement browser. The purge keeps only the newest `conversationState` and
 the furthest `readPosition` per conversation, so the history holds one of
-each; `deleteForMe` controls are kept so a late copy is still removed.
+each; `deleteForMe` controls are kept so a late copy is still removed, and a
+`stickerSaved` is dropped once a later `stickerRemoved` names it.
 
 A chat archived before a newer incoming message counts as unarchived unless
 it is muted, as in Signal; nothing is written for that. The server sees only

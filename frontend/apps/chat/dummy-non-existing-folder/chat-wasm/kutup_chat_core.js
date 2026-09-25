@@ -214,10 +214,11 @@ export class WasmChatClient {
      * @param {string} sent_at
      * @param {any} descriptor
      * @param {string} created_at_ms
-     * @param {number | null} [expires_after_seconds]
+     * @param {number | null | undefined} expires_after_seconds
+     * @param {any} extras
      * @returns {Promise<any>}
      */
-    createMlsAttachmentMessage(send_id, conversation_id, incarnation, mls_group_id, sent_at, descriptor, created_at_ms, expires_after_seconds) {
+    createMlsAttachmentMessage(send_id, conversation_id, incarnation, mls_group_id, sent_at, descriptor, created_at_ms, expires_after_seconds, extras) {
         const ptr0 = passStringToWasm0(send_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(conversation_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -230,7 +231,7 @@ export class WasmChatClient {
         const len4 = WASM_VECTOR_LEN;
         const ptr5 = passStringToWasm0(created_at_ms, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len5 = WASM_VECTOR_LEN;
-        const ret = wasm.wasmchatclient_createMlsAttachmentMessage(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, descriptor, ptr5, len5, isLikeNone(expires_after_seconds) ? Number.MAX_SAFE_INTEGER : (expires_after_seconds) >>> 0);
+        const ret = wasm.wasmchatclient_createMlsAttachmentMessage(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, descriptor, ptr5, len5, isLikeNone(expires_after_seconds) ? Number.MAX_SAFE_INTEGER : (expires_after_seconds) >>> 0, extras);
         return ret;
     }
     /**
@@ -333,6 +334,37 @@ export class WasmChatClient {
         return ret;
     }
     /**
+     * A poll, a vote in one, or its end, in a group.
+     * @param {string} send_id
+     * @param {string} conversation_id
+     * @param {string} incarnation
+     * @param {Uint8Array} mls_group_id
+     * @param {string} sent_at
+     * @param {string} kind
+     * @param {any} body
+     * @param {string} created_at_ms
+     * @param {number | null} [expires_after_seconds]
+     * @returns {Promise<any>}
+     */
+    createMlsPollContent(send_id, conversation_id, incarnation, mls_group_id, sent_at, kind, body, created_at_ms, expires_after_seconds) {
+        const ptr0 = passStringToWasm0(send_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(conversation_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(incarnation, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passArray8ToWasm0(mls_group_id, wasm.__wbindgen_malloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ptr4 = passStringToWasm0(sent_at, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len4 = WASM_VECTOR_LEN;
+        const ptr5 = passStringToWasm0(kind, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len5 = WASM_VECTOR_LEN;
+        const ptr6 = passStringToWasm0(created_at_ms, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len6 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmchatclient_createMlsPollContent(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, body, ptr6, len6, isLikeNone(expires_after_seconds) ? Number.MAX_SAFE_INTEGER : (expires_after_seconds) >>> 0);
+        return ret;
+    }
+    /**
      * @param {string} send_id
      * @param {string} conversation_id
      * @param {string} incarnation
@@ -403,11 +435,12 @@ export class WasmChatClient {
      * @param {string} sent_at
      * @param {string} text
      * @param {string} created_at_ms
-     * @param {string | null} [reply_to]
-     * @param {number | null} [expires_after_seconds]
+     * @param {string | null | undefined} reply_to
+     * @param {number | null | undefined} expires_after_seconds
+     * @param {any} extras
      * @returns {Promise<any>}
      */
-    createMlsTextMessage(send_id, conversation_id, incarnation, mls_group_id, sent_at, text, created_at_ms, reply_to, expires_after_seconds) {
+    createMlsTextMessage(send_id, conversation_id, incarnation, mls_group_id, sent_at, text, created_at_ms, reply_to, expires_after_seconds, extras) {
         const ptr0 = passStringToWasm0(send_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(conversation_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -424,7 +457,7 @@ export class WasmChatClient {
         const len6 = WASM_VECTOR_LEN;
         var ptr7 = isLikeNone(reply_to) ? 0 : passStringToWasm0(reply_to, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         var len7 = WASM_VECTOR_LEN;
-        const ret = wasm.wasmchatclient_createMlsTextMessage(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, isLikeNone(expires_after_seconds) ? Number.MAX_SAFE_INTEGER : (expires_after_seconds) >>> 0);
+        const ret = wasm.wasmchatclient_createMlsTextMessage(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, isLikeNone(expires_after_seconds) ? Number.MAX_SAFE_INTEGER : (expires_after_seconds) >>> 0, extras);
         return ret;
     }
     /**
@@ -1130,16 +1163,36 @@ export class WasmChatClient {
      * @param {any} creator
      * @param {any} authority_policies
      * @param {string} created_at_seconds
+     * @param {any} group_info
      * @returns {Promise<any>}
      */
-    prepareMlsGroupGenesis(conversation_id, mls_group_id, creator, authority_policies, created_at_seconds) {
+    prepareMlsGroupGenesis(conversation_id, mls_group_id, creator, authority_policies, created_at_seconds, group_info) {
         const ptr0 = passStringToWasm0(conversation_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passArray8ToWasm0(mls_group_id, wasm.__wbindgen_malloc);
         const len1 = WASM_VECTOR_LEN;
         const ptr2 = passStringToWasm0(created_at_seconds, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.wasmchatclient_prepareMlsGroupGenesis(this.__wbg_ptr, ptr0, len0, ptr1, len1, creator, authority_policies, ptr2, len2);
+        const ret = wasm.wasmchatclient_prepareMlsGroupGenesis(this.__wbg_ptr, ptr0, len0, ptr1, len1, creator, authority_policies, ptr2, len2, group_info);
+        return ret;
+    }
+    /**
+     * Stage a change of the group's name, description or picture; it is
+     * then published like a membership change.
+     * @param {Uint8Array} mls_group_id
+     * @param {string} proposal_id
+     * @param {any} group_info
+     * @param {string} now_seconds
+     * @returns {Promise<any>}
+     */
+    prepareMlsGroupInfoChange(mls_group_id, proposal_id, group_info, now_seconds) {
+        const ptr0 = passArray8ToWasm0(mls_group_id, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(proposal_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(now_seconds, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmchatclient_prepareMlsGroupInfoChange(this.__wbg_ptr, ptr0, len0, ptr1, len1, group_info, ptr2, len2);
         return ret;
     }
     /**
@@ -1308,6 +1361,20 @@ export class WasmChatClient {
         return ret;
     }
     /**
+     * Ask to leave the group; `null` when this device already left.
+     * @param {Uint8Array} mls_group_id
+     * @param {string} now_seconds
+     * @returns {Promise<any>}
+     */
+    requestMlsLeave(mls_group_id, now_seconds) {
+        const ptr0 = passArray8ToWasm0(mls_group_id, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(now_seconds, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmchatclient_requestMlsLeave(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+        return ret;
+    }
+    /**
      * @param {string} id
      * @returns {Promise<void>}
      */
@@ -1352,21 +1419,41 @@ export class WasmChatClient {
         return ret;
     }
     /**
+     * Sends a same-account control (`conversationState`, `readPosition` or
+     * `deleteForMe`) to this account's other devices through Note to Self.
+     * @param {string} send_id
+     * @param {string} sent_at
+     * @param {string} kind
+     * @param {any} body
+     * @returns {Promise<any>}
+     */
+    sendAccountControl(send_id, sent_at, kind, body) {
+        const ptr0 = passStringToWasm0(send_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(sent_at, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(kind, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmchatclient_sendAccountControl(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, body);
+        return ret;
+    }
+    /**
      * @param {string} send_id
      * @param {string} peer
      * @param {string} sent_at
      * @param {any} descriptor
-     * @param {number | null} [expires_after_seconds]
+     * @param {number | null | undefined} expires_after_seconds
+     * @param {any} extras
      * @returns {Promise<any>}
      */
-    sendAttachment(send_id, peer, sent_at, descriptor, expires_after_seconds) {
+    sendAttachment(send_id, peer, sent_at, descriptor, expires_after_seconds, extras) {
         const ptr0 = passStringToWasm0(send_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(peer, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
         const ptr2 = passStringToWasm0(sent_at, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len2 = WASM_VECTOR_LEN;
-        const ret = wasm.wasmchatclient_sendAttachment(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, descriptor, isLikeNone(expires_after_seconds) ? Number.MAX_SAFE_INTEGER : (expires_after_seconds) >>> 0);
+        const ret = wasm.wasmchatclient_sendAttachment(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, descriptor, isLikeNone(expires_after_seconds) ? Number.MAX_SAFE_INTEGER : (expires_after_seconds) >>> 0, extras);
         return ret;
     }
     /**
@@ -1409,6 +1496,29 @@ export class WasmChatClient {
         var ptr5 = isLikeNone(replacement_text) ? 0 : passStringToWasm0(replacement_text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         var len5 = WASM_VECTOR_LEN;
         const ret = wasm.wasmchatclient_sendMessageMutation(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5);
+        return ret;
+    }
+    /**
+     * A poll, a vote in one, or its end (`kind` = `poll` | `pollVote` |
+     * `pollTerminate`), in a Direct chat or Note to Self.
+     * @param {string} send_id
+     * @param {string} peer
+     * @param {string} sent_at
+     * @param {string} kind
+     * @param {any} body
+     * @param {number | null} [expires_after_seconds]
+     * @returns {Promise<any>}
+     */
+    sendPollContent(send_id, peer, sent_at, kind, body, expires_after_seconds) {
+        const ptr0 = passStringToWasm0(send_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(peer, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(sent_at, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(kind, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmchatclient_sendPollContent(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, body, isLikeNone(expires_after_seconds) ? Number.MAX_SAFE_INTEGER : (expires_after_seconds) >>> 0);
         return ret;
     }
     /**
@@ -1461,11 +1571,12 @@ export class WasmChatClient {
      * @param {string} peer
      * @param {string} sent_at
      * @param {string} text
-     * @param {string | null} [reply_to]
-     * @param {number | null} [expires_after_seconds]
+     * @param {string | null | undefined} reply_to
+     * @param {number | null | undefined} expires_after_seconds
+     * @param {any} extras
      * @returns {Promise<any>}
      */
-    sendText(send_id, peer, sent_at, text, reply_to, expires_after_seconds) {
+    sendText(send_id, peer, sent_at, text, reply_to, expires_after_seconds, extras) {
         const ptr0 = passStringToWasm0(send_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(peer, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -1476,7 +1587,7 @@ export class WasmChatClient {
         const len3 = WASM_VECTOR_LEN;
         var ptr4 = isLikeNone(reply_to) ? 0 : passStringToWasm0(reply_to, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         var len4 = WASM_VECTOR_LEN;
-        const ret = wasm.wasmchatclient_sendText(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, isLikeNone(expires_after_seconds) ? Number.MAX_SAFE_INTEGER : (expires_after_seconds) >>> 0);
+        const ret = wasm.wasmchatclient_sendText(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, isLikeNone(expires_after_seconds) ? Number.MAX_SAFE_INTEGER : (expires_after_seconds) >>> 0, extras);
         return ret;
     }
     /**
@@ -1500,16 +1611,19 @@ export class WasmChatClient {
      * @param {string} display_name
      * @param {string | null} [avatar]
      * @param {string | null} [avatar_content_type]
+     * @param {string | null} [about]
      * @returns {Promise<any>}
      */
-    setProfile(display_name, avatar, avatar_content_type) {
+    setProfile(display_name, avatar, avatar_content_type, about) {
         const ptr0 = passStringToWasm0(display_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         var ptr1 = isLikeNone(avatar) ? 0 : passStringToWasm0(avatar, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         var len1 = WASM_VECTOR_LEN;
         var ptr2 = isLikeNone(avatar_content_type) ? 0 : passStringToWasm0(avatar_content_type, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         var len2 = WASM_VECTOR_LEN;
-        const ret = wasm.wasmchatclient_setProfile(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2);
+        var ptr3 = isLikeNone(about) ? 0 : passStringToWasm0(about, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len3 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmchatclient_setProfile(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
         return ret;
     }
     /**
@@ -2305,17 +2419,17 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 1871, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 1969, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_1008b6a7b07acaf3___convert__closures_____invoke___wasm_bindgen_1008b6a7b07acaf3___JsValue__core_f0fd674eaa06beef___result__Result_____wasm_bindgen_1008b6a7b07acaf3___JsError___true_);
             return ret;
         },
         __wbindgen_cast_0000000000000002: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("Event")], shim_idx: 1508, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("Event")], shim_idx: 1571, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_1008b6a7b07acaf3___convert__closures_____invoke___web_sys_7ae9755e021dbdc3___features__gen_Event__Event______true_);
             return ret;
         },
         __wbindgen_cast_0000000000000003: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("IDBVersionChangeEvent")], shim_idx: 1099, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("IDBVersionChangeEvent")], shim_idx: 803, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_1008b6a7b07acaf3___convert__closures_____invoke___web_sys_7ae9755e021dbdc3___features__gen_IdbVersionChangeEvent__IdbVersionChangeEvent______true_);
             return ret;
         },

@@ -362,7 +362,8 @@
       "video": "Video",
       "voice": "Voice message",
       "timer": "Disappearing messages changed",
-      "poll": "Poll: {{question}}"
+      "poll": "Poll: {{question}}",
+      "sticker": "Sticker {{emoji}}"
     },
     "time": {
       "now": "now",
@@ -641,6 +642,18 @@
       "end": "End poll",
       "endedNotice": "{{name}} ended the poll “{{question}}”",
       "endedNotice_you": "You ended the poll “{{question}}”"
+    },
+    "stickers": {
+      "open": "Stickers",
+      "title": "My stickers",
+      "add": "Add",
+      "empty": "No stickers yet. Add one from a picture, or save one someone sent you.",
+      "send": "Send sticker",
+      "sendEmoji": "Send sticker {{emoji}}",
+      "remove": "Remove sticker",
+      "save": "Save sticker",
+      "saved": "Sticker saved",
+      "tooBig": "That picture can't be made small enough for a sticker."
     }
   },
   "boot": {
