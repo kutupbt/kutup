@@ -42,6 +42,8 @@ function kutupWasm(modules: WasmModule[]): Plugin {
       })
     },
     closeBundle() {
+      // Vitest runs this hook too, with a placeholder outDir: only builds copy.
+      if (process.env.VITEST) return
       for (const dir of dirs) {
         const src = path.join(WASM_ROOT, dir)
         if (!existsSync(src)) {
