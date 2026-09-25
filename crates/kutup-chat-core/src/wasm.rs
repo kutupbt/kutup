@@ -3544,6 +3544,113 @@ impl From<InboundEnvelope> for InboundEnvelopeView {
     }
 }
 
+/// Group invite links (docs/chat-invite-links.md): the link's secret stays
+/// in the browser; these derive and seal what its host keeps.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InviteLinkKeysOutput {
+    link_id: String,
+    manage_token: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InviteLinkFragmentOutput {
+    secret: String,
+    host: String,
+}
+
+fn invite_link_input(
+    link: JsValue,
+) -> std::result::Result<kutup_chat_proto::MlsGroupInviteLinkV1, JsValue> {
+    from_transport(link).map_err(chat_error)
+}
+
+#[wasm_bindgen(js_name = inviteLinkNew)]
+pub fn invite_link_new(
+    host: String,
+    approval_required: bool,
+) -> std::result::Result<JsValue, JsValue> {
+    let link = kutup_chat_proto::MlsGroupInviteLinkV1 {
+        secret: crate::invite_link::new_invite_link_secret(),
+        host,
+        approval_required,
+    };
+    link.validate().map_err(|error| js_error(&error))?;
+    to_output(&link)
+}
+
+#[wasm_bindgen(js_name = inviteLinkKeys)]
+pub fn invite_link_keys(link: JsValue) -> std::result::Result<JsValue, JsValue> {
+    let keys = crate::invite_link::InviteLinkKeys::for_link(&invite_link_input(link)?)
+        .map_err(chat_error)?;
+    to_output(&InviteLinkKeysOutput {
+        link_id: keys.link_id.clone(),
+        manage_token: keys.manage_token.clone(),
+    })
+}
+
+#[wasm_bindgen(js_name = inviteLinkFragment)]
+pub fn invite_link_fragment_js(link: JsValue) -> std::result::Result<String, JsValue> {
+    crate::invite_link::invite_link_fragment(&invite_link_input(link)?).map_err(chat_error)
+}
+
+#[wasm_bindgen(js_name = inviteLinkParse)]
+pub fn invite_link_parse(fragment: String) -> std::result::Result<JsValue, JsValue> {
+    let (secret, host) =
+        crate::invite_link::parse_invite_link_fragment(&fragment).map_err(chat_error)?;
+    to_output(&InviteLinkFragmentOutput { secret, host })
+}
+
+#[wasm_bindgen(js_name = inviteLinkSealPreview)]
+pub fn invite_link_seal_preview(
+    link: JsValue,
+    preview: JsValue,
+) -> std::result::Result<String, JsValue> {
+    let keys = crate::invite_link::InviteLinkKeys::for_link(&invite_link_input(link)?)
+        .map_err(chat_error)?;
+    let preview: kutup_chat_proto::InviteLinkPreviewV1 =
+        from_transport(preview).map_err(chat_error)?;
+    keys.seal_preview(&preview).map_err(chat_error)
+}
+
+#[wasm_bindgen(js_name = inviteLinkOpenPreview)]
+pub fn invite_link_open_preview(
+    link: JsValue,
+    sealed: String,
+) -> std::result::Result<JsValue, JsValue> {
+    let keys = crate::invite_link::InviteLinkKeys::for_link(&invite_link_input(link)?)
+        .map_err(chat_error)?;
+    to_output(&keys.open_preview(&sealed).map_err(chat_error)?)
+}
+
+#[wasm_bindgen(js_name = inviteLinkSealRequest)]
+pub fn invite_link_seal_request(
+    link: JsValue,
+    request: JsValue,
+) -> std::result::Result<String, JsValue> {
+    let keys = crate::invite_link::InviteLinkKeys::for_link(&invite_link_input(link)?)
+        .map_err(chat_error)?;
+    let request: kutup_chat_proto::InviteJoinRequestV1 =
+        from_transport(request).map_err(chat_error)?;
+    keys.seal_request(&request).map_err(chat_error)
+}
+
+#[wasm_bindgen(js_name = inviteLinkOpenRequest)]
+pub fn invite_link_open_request(
+    link: JsValue,
+    sealed: String,
+) -> std::result::Result<JsValue, JsValue> {
+    let keys = crate::invite_link::InviteLinkKeys::for_link(&invite_link_input(link)?)
+        .map_err(chat_error)?;
+    to_output(&keys.open_request(&sealed).map_err(chat_error)?)
+}
+
+#[wasm_bindgen(js_name = inviteStatusToken)]
+pub fn invite_status_token() -> String {
+    crate::invite_link::new_invite_status_token()
+}
+
 fn to_transport<T: Serialize + ?Sized>(value: &T) -> Result<JsValue> {
     serde_wasm_bindgen::to_value(value)
         .map_err(|error| ChatError::Transport(format!("encode transport request: {error}")))

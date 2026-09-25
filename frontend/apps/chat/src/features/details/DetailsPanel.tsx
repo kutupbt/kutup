@@ -33,7 +33,9 @@ export function DetailsPanel({ open, onClose, model }: { open: boolean; onClose:
   useEffect(() => {
     if (!open) return
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !document.querySelector('[role="dialog"], [role="menu"]')) onClose()
+      // An Escape that closes a dialog or menu over the panel is theirs.
+      const inLayer = event.target instanceof Element && event.target.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')
+      if (event.key === 'Escape' && !inLayer && !document.querySelector('[role="dialog"], [role="menu"]')) onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

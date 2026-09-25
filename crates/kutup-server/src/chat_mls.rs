@@ -18,6 +18,7 @@ mod federation_control;
 mod identified_packages;
 mod invitation_feedback;
 mod invitation_routes;
+pub(crate) mod invite_links;
 mod mailbox_routes;
 mod membership;
 mod package_routes;
@@ -52,6 +53,10 @@ pub(crate) use invitation_feedback::{
     federated_record_invitation_feedback, list_invitation_feedback,
 };
 pub(crate) use invitation_routes::{list_invitations, respond_invitation};
+pub(crate) use invite_links::{
+    call as call_invite_link, federated_call as federated_call_invite_link,
+    sweep as sweep_invite_links,
+};
 pub(crate) use mailbox_routes::{ack as ack_mailbox, drain as drain_mailbox};
 use membership::prepare_membership_finalization;
 pub(crate) use membership::stage_membership_delivery;

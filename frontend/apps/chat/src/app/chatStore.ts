@@ -8,8 +8,10 @@ import type {
   ChatCapabilities,
   ChatProfile,
   ChatTypingEvent,
+  GroupJoinRequest,
   InboundAttention,
   MlsInvitationFeedback,
+  OwnJoinRequest,
   PendingMlsInvitation,
   PendingMlsOwnerApprovalRequest,
 } from '@kutup/chat-core/types'
@@ -40,6 +42,10 @@ export interface ChatSnapshot extends ChatData {
   invitations: PendingMlsInvitation[]
   invitationFeedback: MlsInvitationFeedback[]
   ownerApprovals: PendingMlsOwnerApprovalRequest[]
+  /** People asking to join groups this account administers. */
+  joinRequests: GroupJoinRequest[]
+  /** This account's own requests through group links. */
+  ownJoinRequests: OwnJoinRequest[]
   backup: ChatBackupView | null
 }
 
@@ -73,6 +79,8 @@ const emptySnapshot: ChatSnapshot = {
   invitations: [],
   invitationFeedback: [],
   ownerApprovals: [],
+  joinRequests: [],
+  ownJoinRequests: [],
   backup: null,
 }
 
@@ -148,6 +156,8 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
         invitations,
         invitationFeedback,
         ownerApprovals,
+        joinRequests: service.groupJoinRequests(),
+        ownJoinRequests: service.ownJoinRequests(),
         backup: service.backupStatus(),
       },
       loaded: true,

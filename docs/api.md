@@ -1379,6 +1379,17 @@ non-public or non-https URL, `422` when the site gives nothing usable. The
 browser parses the page (`DOMParser`) and resizes the image; the preview then
 travels end-to-end encrypted in the message.
 
+### POST /api/chat/invite-links
+
+One operation on a group link's mailbox ([`chat-invite-links.md`](chat-invite-links.md)):
+`{ "host": "<domain>", "operation": { "op": "put" | "delete" | "preview" |
+"request" | "requests" | "decide" | "status" | "cancel", … } }` →
+`{ "result": "done" | "preview" | "requested" | "requests" | "status", … }`.
+The server carries it out when it is the host, and otherwise forwards it
+over signed federation. `404` when groups are off here or the link or request
+no longer exists, `403` for a token that does not match, `429` over the rate
+or waiting-request limits, `502` when the host cannot be reached.
+
 ### POST /api/chat/ws-ticket?deviceId=N
 
 Mint a random, one-time browser WebSocket ticket bound to the authenticated user and chat device. The ticket expires in 60 seconds and is returned as `{ "ticket", "expiresAt" }`.
@@ -1458,6 +1469,13 @@ safety. Mailbox rows, the stored idempotent response, and the sequence
 high-water mark commit atomically. Exact replay returns the stored response;
 device mismatch or sequence gap returns typed `409` data so the origin can
 refresh/re-encrypt or replay the missing retained transaction.
+
+### POST /api/fed/chat/invite-links
+
+One signed `InviteLinkOperationV1` for a group link this server hosts, from
+an account of the origin server; answered like `POST /api/chat/invite-links`
+in a signed response. The authenticated origin is recorded as a request's
+server.
 
 ---
 

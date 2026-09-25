@@ -1709,6 +1709,11 @@ fn group_info_enforces_signal_limits() {
             content_type: "image/webp".into(),
             data: base64::engine::general_purpose::STANDARD.encode([7u8; 100]),
         }),
+        invite_link: Some(MlsGroupInviteLinkV1 {
+            secret: base64::engine::general_purpose::STANDARD.encode([9u8; 32]),
+            host: "a.test".into(),
+            approval_required: true,
+        }),
     };
     valid.validate().unwrap();
     let too_big =
@@ -1753,11 +1758,31 @@ fn group_info_enforces_signal_limits() {
             }),
             ..valid.clone()
         },
+        MlsGroupInfoV1 {
+            invite_link: Some(MlsGroupInviteLinkV1 {
+                secret: base64::engine::general_purpose::STANDARD.encode([9u8; 16]),
+                host: "a.test".into(),
+                approval_required: false,
+            }),
+            ..valid.clone()
+        },
+        MlsGroupInfoV1 {
+            invite_link: Some(MlsGroupInviteLinkV1 {
+                secret: base64::engine::general_purpose::STANDARD.encode([9u8; 32]),
+                host: "https://a.test".into(),
+                approval_required: false,
+            }),
+            ..valid.clone()
+        },
     ] {
         assert!(invalid.validate().is_err(), "{invalid:?}");
     }
     assert!(valid.same_content(&MlsGroupInfoV1 {
         sequence: 5,
+        ..valid.clone()
+    }));
+    assert!(!valid.same_content(&MlsGroupInfoV1 {
+        invite_link: None,
         ..valid.clone()
     }));
 }

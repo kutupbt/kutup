@@ -19,6 +19,7 @@ mod db;
 mod engine;
 mod error;
 mod history_transfer;
+mod invite_link;
 mod keys;
 mod manifest;
 mod mls_engine;
@@ -54,6 +55,10 @@ pub use history_transfer::{
     seal_history_transfer_frame, verify_history_archive, verify_history_transfer_acceptance,
     verify_history_transfer_request, HistoryTransferEphemeralSecret, PreparedHistoryArchiveV1,
     PreparedHistoryTransferAcceptance, PreparedHistoryTransferRequest, VerifiedHistoryArchiveV1,
+};
+pub use invite_link::{
+    invite_link_fragment, new_invite_link_secret, new_invite_status_token,
+    parse_invite_link_fragment, InviteLinkKeys,
 };
 pub use kutup_chat_proto::{
     AccountAddress, ChatAttachmentDescriptorV1, ChatContent, ContactControlBody, ContactState,

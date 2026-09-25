@@ -21,6 +21,8 @@ const UPLOADS_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 const UPLOADS_STALE_AFTER_SECS: i64 = 24 * 3600;
 const TRASH_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 const CHAT_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
+/// A group link's mailbox nobody has read for this long is abandoned.
+const INVITE_LINK_IDLE_DAYS: i32 = 90;
 
 #[derive(Clone, Copy)]
 pub struct ChatMaintenancePolicy {
@@ -93,6 +95,7 @@ pub struct ChatSweepResult {
     pub federation_transaction_rows: u64,
     pub devices: u64,
     pub ws_tickets: u64,
+    pub invite_link_rows: u64,
 }
 
 /// Bound offline-ciphertext and idempotency storage and retire abandoned chat
@@ -194,6 +197,10 @@ pub async fn chat_maintenance_once(
             Err(error) => tracing::warn!("chat maintenance: device expiry failed: {error}"),
         }
     }
+    match crate::chat_mls::sweep_invite_links(pool, INVITE_LINK_IDLE_DAYS).await {
+        Ok(rows) => result.invite_link_rows = rows,
+        Err(error) => tracing::warn!("chat maintenance: invite link cleanup failed: {error}"),
+    }
     if result != ChatSweepResult::default() {
         tracing::info!(
             mailbox_rows = result.mailbox_rows,
@@ -203,6 +210,7 @@ pub async fn chat_maintenance_once(
             federation_transaction_rows = result.federation_transaction_rows,
             devices = result.devices,
             ws_tickets = result.ws_tickets,
+            invite_link_rows = result.invite_link_rows,
             "chat maintenance complete"
         );
     }

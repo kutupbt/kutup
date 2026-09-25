@@ -45,6 +45,7 @@ gates and sanitized-artifact rules.
 | Unified Drive/Chat federation | [`federation-protocol.md`](federation-protocol.md) | Federation sections in the Drive and Chat threat models |
 | Direct Chat and Note to Self | [`chat-protocol.md`](chat-protocol.md) | [`chat-security-threat-model.md`](chat-security-threat-model.md) |
 | Private MLS groups | [`chat-mls.md`](chat-mls.md) | [`chat-security-threat-model.md`](chat-security-threat-model.md) |
+| Group invite links | [`chat-invite-links.md`](chat-invite-links.md) | [`chat-invite-links.md`](chat-invite-links.md) "What servers learn" |
 | Chat media | [`chat-media.md`](chat-media.md) | [`chat-media-security-threat-model.md`](chat-media-security-threat-model.md) |
 | Continuous Chat recovery | [`chat-backup.md`](chat-backup.md) | [`chat-backup-security-threat-model.md`](chat-backup-security-threat-model.md) |
 | Crypto ownership and upgrades | [`cryptographic-dependencies.md`](cryptographic-dependencies.md), [`crypto-agility.md`](crypto-agility.md) | Purpose-specific threat models above |

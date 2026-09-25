@@ -731,6 +731,10 @@ fn build_router(state: AppState) -> Router {
         .route("/api/chat/messages/ack", post(chat::ack_messages))
         .route("/api/chat/ws-ticket", post(chat::create_ws_ticket))
         .route("/api/chat/link-preview", post(chat_link_preview::fetch))
+        .route(
+            "/api/chat/invite-links",
+            post(chat_mls::call_invite_link).route_layer(DefaultBodyLimit::max(128 * 1024)),
+        )
         .route("/api/chat/ws", get(chat::ws))
         // Chat-media uses the same storage client and tus multipart semantics,
         // but a separate typed object namespace and quota reference model.
@@ -873,6 +877,12 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/chat/mls/anonymous/messages",
             post(chat_mls::federated_submit_anonymous_message)
                 .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/invite-links",
+            post(chat_mls::federated_call_invite_link)
+                .route_layer(DefaultBodyLimit::max(128 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(

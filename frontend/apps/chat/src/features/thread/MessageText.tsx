@@ -1,5 +1,7 @@
 import type { ChatMentionV1 } from '@kutup/chat-core/types'
+import { inviteFragmentFromUrl } from '@kutup/chat-core/invite-links'
 import { cn } from '@kutup/ui/lib/cn'
+import { openJoinLink } from '../../lib/joinLink'
 import { splitMentions } from '../../lib/mentions'
 import { linkify } from './linkify'
 
@@ -50,6 +52,13 @@ export function MessageText({
                 href={piece.href}
                 target="_blank"
                 rel="noopener noreferrer nofollow"
+                onClick={(event) => {
+                  // A group link opens here, whichever server's app it names.
+                  if (inviteFragmentFromUrl(piece.href)) {
+                    event.preventDefault()
+                    openJoinLink(piece.href)
+                  }
+                }}
                 className={cn('underline underline-offset-2', outgoing ? 'decoration-primary-foreground/60' : 'text-primary')}
               >
                 {piece.value}

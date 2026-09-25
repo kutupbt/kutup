@@ -22,6 +22,7 @@ import type {
   MlsConversationMember,
   MlsGroupAuthorizationPolicy,
   MlsGroupInfo,
+  MlsGroupInviteLink,
   MlsGroupCryptographicPolicy,
   MlsIncarnationRecovery,
   MlsInvitationFeedback,
@@ -677,7 +678,10 @@ export class MlsConversationService {
    */
   async setGroupInfo(
     conversationId: string,
-    info: Omit<MlsGroupInfo, 'sequence'>,
+    info: Omit<MlsGroupInfo, 'sequence' | 'inviteLink'> & {
+      /** A new link, or `null` to turn it off; left out, the link stays as it is. */
+      inviteLink?: MlsGroupInviteLink | null
+    },
   ): Promise<FinalizedMlsMembershipChange> {
     const conversation = await this.requireActiveConversation(conversationId)
     const groupId = decodeCanonicalBase64(
@@ -685,11 +689,15 @@ export class MlsConversationService {
       16,
       255,
     )
+    const inviteLink = info.inviteLink === undefined
+      ? conversation.currentGroupInfo?.inviteLink
+      : info.inviteLink ?? undefined
     const next: MlsGroupInfo = {
       sequence: (conversation.currentGroupInfo?.sequence ?? 0) + 1,
       name: info.name.trim(),
       ...(info.description?.trim() ? { description: info.description.trim() } : {}),
       ...(info.avatar ? { avatar: info.avatar } : {}),
+      ...(inviteLink ? { inviteLink } : {}),
     }
     const prepared = await this.withCryptoLock(() =>
       this.client.prepareMlsGroupInfoChange(

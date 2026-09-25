@@ -1080,6 +1080,17 @@ pub enum GroupUpdateChange {
     EditorsChanged {
         administrators_only: bool,
     },
+    #[serde(rename_all = "camelCase")]
+    InviteLinkEnabled {
+        approval_required: bool,
+    },
+    InviteLinkDisabled,
+    /// A new link replaced the old one, which no longer works.
+    InviteLinkReset,
+    #[serde(rename_all = "camelCase")]
+    InviteLinkApprovalChanged {
+        approval_required: bool,
+    },
     Closed,
 }
 

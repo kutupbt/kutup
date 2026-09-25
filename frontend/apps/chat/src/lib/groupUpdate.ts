@@ -54,6 +54,13 @@ export function groupUpdateSentences(
           actor,
           who: change.administratorsOnly ? t('chat.groupUpdates.administrators') : t('chat.groupUpdates.allMembers'),
         })
+      case 'inviteLinkEnabled':
+        return t(`chat.groupUpdates.inviteLinkEnabled_${change.approvalRequired ? 'approval' : 'open'}${you}`, { actor })
+      case 'inviteLinkApprovalChanged':
+        return t(`chat.groupUpdates.inviteLinkApproval_${change.approvalRequired ? 'on' : 'off'}${you}`, { actor })
+      case 'inviteLinkDisabled':
+      case 'inviteLinkReset':
+        return t(`chat.groupUpdates.${change.type}${you}`, { actor })
       case 'closed':
         return t(`chat.groupUpdates.closed${you}`, { actor })
     }

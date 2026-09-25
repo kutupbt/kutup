@@ -111,6 +111,8 @@ export type ChatGroupUpdateChange =
   | { type: 'memberAdded' | 'memberRemoved' | 'memberLeft'; member: string }
   | { type: 'adminGranted' | 'adminRevoked' | 'ownerAdded' | 'ownerRemoved'; member: string }
   | { type: 'sendersChanged' | 'editorsChanged'; administratorsOnly: boolean }
+  | { type: 'inviteLinkEnabled' | 'inviteLinkApprovalChanged'; approvalRequired: boolean }
+  | { type: 'inviteLinkDisabled' | 'inviteLinkReset' }
   | { type: 'closed' }
 
 export interface ChatGroupUpdate {
@@ -554,6 +556,95 @@ export interface MlsGroupInfo {
   description?: string
   /** JPEG, PNG or WebP, at most 48 KiB, as standard base64. */
   avatar?: { contentType: 'image/jpeg' | 'image/png' | 'image/webp'; data: string }
+  /** The group link, while it is on; only administrators change it. */
+  inviteLink?: MlsGroupInviteLink
+}
+
+/** A group link (docs/chat-invite-links.md). */
+export interface MlsGroupInviteLink {
+  /** Standard base64 of 32 random bytes. */
+  secret: string
+  /** The server that keeps the link's mailbox. */
+  host: string
+  approvalRequired: boolean
+}
+
+/** What a link shows before joining; sealed so only link holders read it. */
+export interface InviteLinkPreview {
+  conversationId: string
+  name: string
+  description?: string
+  avatar?: MlsGroupInfo['avatar']
+  memberCount: number
+  approvalRequired: boolean
+}
+
+export interface InviteJoinRequest {
+  requester: AccountAddress
+  createdAtMs: number
+}
+
+export type InviteRequestStatus = 'pending' | 'approved' | 'denied'
+
+export type InviteLinkOperation =
+  | { op: 'put'; linkId: string; manageToken: string; preview: string }
+  | { op: 'delete'; linkId: string; manageToken: string }
+  | { op: 'preview'; linkId: string }
+  | { op: 'request'; linkId: string; request: string; statusToken: string }
+  | { op: 'requests'; linkId: string; manageToken: string }
+  | { op: 'decide'; linkId: string; manageToken: string; requestId: string; approve: boolean }
+  | { op: 'status'; linkId: string; requestId: string; statusToken: string }
+  | { op: 'cancel'; linkId: string; requestId: string; statusToken: string }
+
+export interface InviteLinkRequestEntry {
+  requestId: string
+  /** The server the request came through: the requester's own. */
+  originDomain: string
+  request: string
+  status: InviteRequestStatus
+  createdAtMs: number
+}
+
+export type InviteLinkResult =
+  | { result: 'done' }
+  | { result: 'preview'; preview: string }
+  | { result: 'requested'; requestId: string }
+  | { result: 'requests'; requests: InviteLinkRequestEntry[] }
+  | { result: 'status'; status: InviteRequestStatus }
+
+/** The link functions of the chat WASM module. */
+export interface InviteLinkCrypto {
+  inviteLinkNew(host: string, approvalRequired: boolean): MlsGroupInviteLink
+  inviteLinkKeys(link: MlsGroupInviteLink): { linkId: string; manageToken: string }
+  inviteLinkFragment(link: MlsGroupInviteLink): string
+  inviteLinkParse(fragment: string): { secret: string; host: string }
+  inviteLinkSealPreview(link: MlsGroupInviteLink, preview: InviteLinkPreview): string
+  inviteLinkOpenPreview(link: MlsGroupInviteLink, sealed: string): InviteLinkPreview
+  inviteLinkSealRequest(link: MlsGroupInviteLink, request: InviteJoinRequest): string
+  inviteLinkOpenRequest(link: MlsGroupInviteLink, sealed: string): InviteJoinRequest
+  inviteStatusToken(): string
+}
+
+/** Someone waiting for an administrator to let them in (administrators see these). */
+export interface GroupJoinRequest {
+  conversationId: string
+  /** Canonical address. */
+  requester: string
+  createdAtMs: number
+}
+
+/** A request this account made through a group link. */
+export interface OwnJoinRequest {
+  linkId: string
+  host: string
+  secret: string
+  requestId: string
+  statusToken: string
+  conversationId: string
+  groupName: string
+  requestedAtMs: number
+  /** `gone`: the link was turned off or reset before anyone decided. */
+  status: 'pending' | 'denied' | 'gone'
 }
 
 export const MLS_GROUP_NAME_MAX_CHARS = 32
@@ -1086,6 +1177,7 @@ export interface ChatTransportPort {
   respondMlsInvitation(
     request: MlsInvitationDecision,
   ): Promise<MlsInvitationDecisionResponse>
+  callInviteLink(host: string, operation: InviteLinkOperation): Promise<InviteLinkResult>
   drainMlsMailbox(
     deviceId: number,
     after?: string,
@@ -1626,7 +1718,7 @@ export interface SafetyNumberV1 {
   quarantineReason?: string
 }
 
-export interface ChatWasmModule {
+export interface ChatWasmModule extends InviteLinkCrypto {
   default(input?: unknown): Promise<unknown>
   WasmChatClient: {
     open(

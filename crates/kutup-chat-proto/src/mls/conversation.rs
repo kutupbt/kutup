@@ -733,6 +733,48 @@ pub struct MlsGroupAvatarV1 {
     pub data: String,
 }
 
+/// The group's invite link: whoever holds `secret` can see the group's
+/// name and picture and ask to join through `host`, the server that keeps
+/// the link's mailbox (see docs/chat-invite-links.md). Only administrators
+/// turn it on, off, reset it or change `approval_required`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MlsGroupInviteLinkV1 {
+    /// Standard base64 of 32 random bytes.
+    pub secret: String,
+    pub host: String,
+    /// An administrator approves each request; otherwise an administrator's
+    /// client adds whoever asks.
+    pub approval_required: bool,
+}
+
+impl MlsGroupInviteLinkV1 {
+    pub const SECRET_BYTES: usize = 32;
+
+    pub fn validate(&self) -> Result<(), String> {
+        decode_canonical_base64(
+            "inviteLinkSecret",
+            &self.secret,
+            Self::SECRET_BYTES,
+            Self::SECRET_BYTES,
+        )?;
+        kutup_federation_proto::validate_server_name(&self.host)
+            .map_err(|error| format!("invite link host: {error}"))
+    }
+
+    pub fn secret_bytes(&self) -> Result<[u8; 32], String> {
+        decode_canonical_base64(
+            "inviteLinkSecret",
+            &self.secret,
+            Self::SECRET_BYTES,
+            Self::SECRET_BYTES,
+        )?
+        .try_into()
+        .map_err(|_| "invite link secret must be 32 bytes".to_string())
+    }
+}
+
 /// The group's name, description and picture, as Signal shows them. Only
 /// members see it: it lives in the MLS-encrypted private control state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -746,6 +788,8 @@ pub struct MlsGroupInfoV1 {
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar: Option<MlsGroupAvatarV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invite_link: Option<MlsGroupInviteLinkV1>,
 }
 
 impl MlsGroupInfoV1 {
@@ -783,14 +827,18 @@ impl MlsGroupInfoV1 {
             }
             decode_canonical_base64("groupAvatar", &avatar.data, 1, Self::MAX_AVATAR_BYTES)?;
         }
+        if let Some(link) = &self.invite_link {
+            link.validate()?;
+        }
         Ok(())
     }
 
-    /// Everything but the sequence differs from `other`.
+    /// Nothing but the sequence differs from `other`.
     pub fn same_content(&self, other: &Self) -> bool {
         self.name == other.name
             && self.description == other.description
             && self.avatar == other.avatar
+            && self.invite_link == other.invite_link
     }
 }
 

@@ -1,4 +1,5 @@
 import type { TFunction } from 'i18next'
+import { InviteLinkError } from '@kutup/chat-core/invite-links'
 import { MlsSendError } from '@kutup/chat-core/mls-service'
 import { ChatServiceError } from '@kutup/chat-core/service'
 
@@ -10,6 +11,7 @@ import { ChatServiceError } from '@kutup/chat-core/service'
  */
 export function chatErrorMessage(error: unknown, t: TFunction): string {
   if (error instanceof ChatServiceError) return t(`chat.errors.${error.code}`)
+  if (error instanceof InviteLinkError) return t(`chat.groupLink.errors.${error.kind}`)
   if (error instanceof MlsSendError) {
     console.warn('chat: group send failed at', error.stage, error.cause)
     return t('chat.errors.groupSend')

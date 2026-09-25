@@ -155,6 +155,17 @@ impl MlsClient {
                     "this group lets only administrators change its information".into(),
                 ));
             }
+            let current_link = conversation
+                .current_group_info
+                .as_ref()
+                .and_then(|current| current.invite_link.as_ref());
+            if current_link != info.invite_link.as_ref()
+                && !local_member.is_some_and(|member| member.is_admin)
+            {
+                return Err(ChatError::Trust(
+                    "only administrators change the group link".into(),
+                ));
+            }
             let expected_sequence = conversation
                 .current_group_info
                 .as_ref()

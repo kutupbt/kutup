@@ -9,6 +9,7 @@ import { ChatGate } from './app/ChatGate'
 import { ChatJobs } from './app/ChatJobs'
 import { ChatShell } from './app/ChatShell'
 import { SettingsPage } from './features/settings/SettingsPage'
+import { JoinLinkRoute } from './features/groupLink/JoinLinkRoute'
 import { NotFoundPage } from './NotFoundPage'
 import { ChatsPage } from './pages/ChatsPage'
 
@@ -32,6 +33,7 @@ export function App() {
               <Route element={<ChatShell />}>
                 <Route index element={<ChatsPage />} />
                 <Route path="/c/:key" element={<ChatsPage />} />
+                <Route path="/join" element={<JoinLinkRoute />} />
                 <Route path="/settings" element={<Navigate to="/settings/profile" replace />} />
                 <Route path="/settings/:section" element={<SettingsPage />} />
                 <Route path="*" element={<NotFoundPage />} />

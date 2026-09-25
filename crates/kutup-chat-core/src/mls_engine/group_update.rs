@@ -117,6 +117,26 @@ pub(super) fn group_update_changes(
         }
     }
 
+    let link =
+        |info: &Option<MlsGroupInfoV1>| info.as_ref().and_then(|info| info.invite_link.clone());
+    match (link(before), link(after)) {
+        (None, Some(link)) => changes.push(GroupUpdateChange::InviteLinkEnabled {
+            approval_required: link.approval_required,
+        }),
+        (Some(_), None) => changes.push(GroupUpdateChange::InviteLinkDisabled),
+        (Some(old), Some(new)) => {
+            if old.secret != new.secret || old.host != new.host {
+                changes.push(GroupUpdateChange::InviteLinkReset);
+            }
+            if old.approval_required != new.approval_required {
+                changes.push(GroupUpdateChange::InviteLinkApprovalChanged {
+                    approval_required: new.approval_required,
+                });
+            }
+        }
+        (None, None) => {}
+    }
+
     let (before_policy, after_policy) = (previous.policy, next.policy);
     if before_policy.application_senders != after_policy.application_senders {
         changes.push(GroupUpdateChange::SendersChanged {
@@ -289,6 +309,7 @@ mod tests {
             name: name.into(),
             description: description.into(),
             avatar: None,
+            invite_link: None,
         })
     }
 
@@ -353,5 +374,50 @@ mod tests {
             ]
         );
         assert!(group_update_changes(&before, &before, &BTreeSet::new()).is_empty());
+    }
+
+    #[test]
+    fn describes_group_link_changes() {
+        let policy = MlsGroupAuthorizationPolicyV1::members_default();
+        let roster = vec![member("ali@a.test", true, Some("o1"))];
+        let with = |secret: u8, approval_required: bool| {
+            info("Hikers", "").map(|info| MlsGroupInfoV1 {
+                invite_link: Some(kutup_chat_proto::MlsGroupInviteLinkV1 {
+                    secret: BASE64.encode([secret; 32]),
+                    host: "a.test".into(),
+                    approval_required,
+                }),
+                ..info
+            })
+        };
+        let changes = |before: &Option<MlsGroupInfoV1>, after: &Option<MlsGroupInfoV1>| {
+            let facts = |info| GroupFacts {
+                roster: &roster,
+                info,
+                policy: &policy,
+                closed: false,
+            };
+            group_update_changes(&facts(before), &facts(after), &BTreeSet::new())
+        };
+        let off = info("Hikers", "");
+        assert_eq!(
+            changes(&off, &with(1, true)),
+            vec![GroupUpdateChange::InviteLinkEnabled {
+                approval_required: true
+            }]
+        );
+        assert_eq!(
+            changes(&with(1, true), &with(2, false)),
+            vec![
+                GroupUpdateChange::InviteLinkReset,
+                GroupUpdateChange::InviteLinkApprovalChanged {
+                    approval_required: false
+                },
+            ]
+        );
+        assert_eq!(
+            changes(&with(1, true), &off),
+            vec![GroupUpdateChange::InviteLinkDisabled]
+        );
     }
 }

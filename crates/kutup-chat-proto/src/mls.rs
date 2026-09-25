@@ -96,7 +96,7 @@ fn validate_x25519_public_key(name: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn decode_canonical_base64(
+pub(crate) fn decode_canonical_base64(
     name: &str,
     value: &str,
     minimum: usize,

@@ -76,6 +76,7 @@ fn info(sequence: u64, name: &str) -> MlsGroupInfoV1 {
         name: name.into(),
         description: String::new(),
         avatar: None,
+        invite_link: None,
     }
 }
 
@@ -286,6 +287,7 @@ fn group_information_is_named_at_creation_changed_by_its_editors_and_delivered()
                 content_type: "image/png".into(),
                 data: BASE64.encode([1u8; 64]),
             }),
+            invite_link: None,
         };
         // Not the next sequence, or no actual change: refused.
         assert!(alice
@@ -483,7 +485,23 @@ fn group_information_is_named_at_creation_changed_by_its_editors_and_delivered()
             )
             .await
             .unwrap();
-        assert_eq!(applied.conversation.current_group_info, Some(bobs));
+        assert_eq!(applied.conversation.current_group_info, Some(bobs.clone()));
+
+        // Editing is open to members, but the group link stays with administrators.
+        let with_link = MlsGroupInfoV1 {
+            sequence: 4,
+            invite_link: Some(kutup_chat_proto::MlsGroupInviteLinkV1 {
+                secret: BASE64.encode([5u8; 32]),
+                host: "beta.example".into(),
+                approval_required: false,
+            }),
+            ..bobs
+        };
+        assert!(matches!(
+            bob.prepare_group_info_change(group_id, Uuid::from_u128(0x98), with_link, now + 5)
+                .await,
+            Err(ChatError::Trust(message)) if message.contains("group link")
+        ));
     });
 }
 

@@ -175,12 +175,18 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::chat_backup::download_media,
         crate::handlers::chat_backup::reconcile_media,
         crate::chat_mls::policy::get_policy_history,
+        crate::chat_mls::invite_links::call,
         // --- chat federation (signed server-to-server directory foundation) ---
         crate::chat_federation::get_user_bundles,
         crate::chat_federation::get_user_profile,
         crate::chat_federation::deliver_messages,
     ),
     components(schemas(
+        kutup_chat_proto::InviteLinkCallV1,
+        kutup_chat_proto::InviteLinkOperationV1,
+        kutup_chat_proto::InviteLinkResultV1,
+        kutup_chat_proto::InviteLinkRequestEntryV1,
+        kutup_chat_proto::InviteRequestStatusV1,
         kutup_chat_proto::DirectChatSuiteId,
         kutup_chat_proto::EnvelopeType,
         kutup_chat_proto::EcPreKey,

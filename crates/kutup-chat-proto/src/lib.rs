@@ -22,6 +22,7 @@ mod extras;
 pub mod federation;
 mod history_transfer;
 mod identity;
+mod invite_link;
 mod media;
 mod mls;
 mod polls;
@@ -67,6 +68,11 @@ pub use history_transfer::{
     MAX_CHAT_HISTORY_TRANSFER_RECORDS,
 };
 pub use identity::{AccountAddress, AddressError, ConversationId};
+pub use invite_link::{
+    InviteJoinRequestV1, InviteLinkCallV1, InviteLinkOperationV1, InviteLinkPreviewV1,
+    InviteLinkRequestEntryV1, InviteLinkResultV1, InviteRequestStatusV1, INVITE_LINK_TOKEN_BYTES,
+    MAX_INVITE_PREVIEW_SEALED_BYTES, MAX_INVITE_REQUEST_SEALED_BYTES, MAX_PENDING_INVITE_REQUESTS,
+};
 pub use media::{
     ChatAttachmentDescriptorV1, ChatAttachmentLedgerDiffPageV1, ChatAttachmentLedgerEntryV1,
     ChatAttachmentLedgerPutReceiptV1, ChatAttachmentLedgerPutRequestV1,
@@ -95,7 +101,7 @@ pub use mls::{
     MlsControlSigner, MlsConversationDeviceV1, MlsConversationGenesisV1, MlsConversationKindV1,
     MlsConversationMemberV1, MlsDeliveryCapabilityKindV1, MlsFinalizedControlBlockV1,
     MlsGroupAuthorizationPolicyV1, MlsGroupAvatarV1, MlsGroupControlBodyV1,
-    MlsGroupCryptographicPolicyV1, MlsGroupInfoEditorsV1, MlsGroupInfoV1,
+    MlsGroupCryptographicPolicyV1, MlsGroupInfoEditorsV1, MlsGroupInfoV1, MlsGroupInviteLinkV1,
     MlsIncarnationRecoveryPlanV1, MlsIncarnationRecoveryV1, MlsInvitationAcceptanceV1,
     MlsInvitationFeedbackDecisionV1, MlsInvitationFeedbackV1, MlsKeyPackageBundleV1,
     MlsKeyPackageCountResponseV1, MlsKeyPackageV1, MlsLeaveRequestV1, MlsMailboxDeliveryKindV1,

@@ -197,6 +197,12 @@ applies the ordered Commit (the sender leaf is authenticated first). Ordering
 authorities see that a group-information change happened, when, and from
 which pseudonymous proposer, never its content.
 
+The group information also carries the group link while it is on
+(`inviteLink`: secret, host, whether requests need approval). Changing it
+takes an administrator whatever the editing policy, checked the same way
+when the ordered Commit is applied; see
+[`chat-invite-links.md`](chat-invite-links.md).
+
 ### Conversation closure
 
 Closing a conversation is an owner-governed terminal transition for one exact

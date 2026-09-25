@@ -1,4 +1,4 @@
-import { ArrowLeft, BarChart3, Check, Info, Loader2, MoreVertical, Timer, Users } from 'lucide-react'
+import { ArrowLeft, BarChart3, Check, Info, Loader2, MoreVertical, Timer, UserPlus, Users } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -67,6 +67,9 @@ export function ConversationView({ conversation }: { conversation: ConversationI
   const focus = params.get('focus')
   const [highlight, setHighlight] = useState<string | null>(focus)
   const [details, setDetails] = useState(false)
+  const joinRequests = model.group
+    ? chat.snapshot.joinRequests.filter((request) => request.conversationId === model.group!.request.genesis.conversationId).length
+    : 0
   const [replyingTo, setReplyingTo] = useState<MessageView | null>(null)
   const [editing, setEditing] = useState<MessageView | null>(null)
   const [deleting, setDeleting] = useState<MessageView | null>(null)
@@ -253,6 +256,17 @@ export function ConversationView({ conversation }: { conversation: ConversationI
           </DropdownMenuContent>
         </DropdownMenu>
       </header>
+      {joinRequests > 0 ? (
+        <button
+          type="button"
+          onClick={() => setDetails(true)}
+          className="flex w-full items-center justify-center gap-2 border-b border-border bg-accent/50 px-4 py-2 text-sm hover:bg-accent"
+          data-testid="chat-join-requests-banner"
+        >
+          <UserPlus className="size-4" aria-hidden />
+          {t('chat.groupLink.bannerRequests', { count: joinRequests })}
+        </button>
+      ) : null}
 
       <MessageScroller
         conversationKey={model.key}

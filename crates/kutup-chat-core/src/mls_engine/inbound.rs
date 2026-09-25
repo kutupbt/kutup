@@ -388,6 +388,15 @@ impl MlsClient {
                         "inbound MLS group information is not the next contiguous change".into(),
                     ));
                 }
+                let current_link = conversation
+                    .current_group_info
+                    .as_ref()
+                    .and_then(|info| info.invite_link.as_ref());
+                if current_link != next.invite_link.as_ref() && !sender_member.is_admin {
+                    return Err(ChatError::Trust(
+                        "only administrators change the group link".into(),
+                    ));
+                }
             }
             _ if private_control.group_info != conversation.current_group_info => {
                 return Err(ChatError::Trust(

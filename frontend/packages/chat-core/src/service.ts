@@ -23,7 +23,11 @@ import type {
   ReceiveReport,
   SendSummary,
   LocalMlsConversationRecord,
+  GroupJoinRequest,
+  InviteLinkCrypto,
   MlsGroupInfo,
+  MlsGroupInviteLink,
+  OwnJoinRequest,
   MlsInvitationFeedback,
   MlsAuthorityPolicyInspection,
   PendingMlsOwnerApprovalRequest,
@@ -40,6 +44,12 @@ import {
   withHomeServer,
 } from './identity'
 import { MlsConversationService } from './mls-service'
+import {
+  INVITE_LINK_POLL_MS,
+  InviteLinkService,
+  type InviteLinkChange,
+  type InviteLinkLookup,
+} from './invite-links'
 import { chatMediaCacheBindingV1, deliverChatMediaV1 } from './media'
 import { privateCiphertextCacheForAccountV1 } from '@kutup/files/mediaCache'
 import { ChatAttachmentLedger } from './attachment-ledger'
@@ -122,6 +132,8 @@ export class ChatService {
   private reconcilePromise: Promise<ReceiveReport> | null = null
   private reconcileAgain = false
   private readonly mls: MlsConversationService | null
+  private readonly invites: InviteLinkService | null
+  private inviteTimer: ReturnType<typeof setInterval> | null = null
   private backup: ChatBackupCoordinator | null = null
   private backupUnsubscribe: (() => void) | null = null
 
@@ -133,6 +145,7 @@ export class ChatService {
     private readonly transport: ApiChatTransport,
     private readonly username: string,
     private readonly attachmentLedger: ChatAttachmentLedger | null,
+    inviteCrypto: InviteLinkCrypto,
   ) {
     this.client = client
     this.deviceId = client.deviceId
@@ -146,6 +159,15 @@ export class ChatService {
           operation => this.withLock(operation),
           this.deviceId,
           { username, server: capabilities.serverName! },
+        )
+      : null
+    this.invites = this.mls
+      ? new InviteLinkService(
+          this.mls,
+          transport,
+          inviteCrypto,
+          { username, server: capabilities.serverName! },
+          localStorageOrNull(),
         )
       : null
     this.channel = new BroadcastChannel(channelName)
@@ -204,6 +226,7 @@ export class ChatService {
       transport,
       options.username,
       attachmentLedger,
+      wasm,
     )
     try {
       if (capabilities.backup?.alwaysEnabled) {
@@ -230,6 +253,7 @@ export class ChatService {
       await service.reconcile()
       void service.maintainPrekeys()
       void service.connectSocket()
+      service.startInviteLinks()
       return service
     } catch (error) {
       service.dispose()
@@ -1062,9 +1086,92 @@ export class ChatService {
   }
 
   /** Rename the group, or change its description or picture. */
-  async setGroupInfo(conversationId: string, info: Omit<MlsGroupInfo, 'sequence'>): Promise<void> {
+  async setGroupInfo(
+    conversationId: string,
+    info: Omit<MlsGroupInfo, 'sequence' | 'inviteLink'>,
+  ): Promise<void> {
     await this.withMlsWorkflow(() => this.requireMls().setGroupInfo(conversationId, info))
     this.notifyPeers()
+  }
+
+  /** Turn a group's link on or off, reset it, or change whether joining needs approval. */
+  async changeInviteLink(conversationId: string, change: InviteLinkChange): Promise<void> {
+    await this.withMlsWorkflow(() => this.requireInvites().change(conversationId, change))
+    this.notifyPeers()
+  }
+
+  /** The URL to share for a group's link. */
+  inviteLinkUrl(link: MlsGroupInviteLink): string {
+    return this.requireInvites().url(link, window.location.origin)
+  }
+
+  /** People waiting for an administrator of this account's groups (no network). */
+  groupJoinRequests(): GroupJoinRequest[] {
+    return this.invites?.joinRequests() ?? []
+  }
+
+  /** Look for new requests now (opening a group's details). */
+  async refreshGroupJoinRequests(): Promise<void> {
+    if (!this.invites) return
+    const changed = await this.withMlsWorkflow(() => this.invites!.reconcileRequests(true))
+    if (changed) this.emitUpdate()
+  }
+
+  async decideGroupJoinRequest(
+    conversationId: string,
+    requester: string,
+    approve: boolean,
+  ): Promise<void> {
+    await this.withMlsWorkflow(() =>
+      this.requireInvites().decide(conversationId, requester, approve))
+    this.notifyPeers()
+  }
+
+  /** What a group link leads to; throws an {@link InviteLinkError} when nowhere. */
+  async lookUpInviteLink(url: string): Promise<InviteLinkLookup> {
+    return this.requireInvites().lookUp(url)
+  }
+
+  async requestToJoin(lookup: InviteLinkLookup): Promise<OwnJoinRequest> {
+    const request = await this.requireInvites().requestToJoin(lookup)
+    this.notifyPeers()
+    // An administrator may add at once when no approval is needed.
+    setTimeout(() => void this.reconcileInviteLinks(true), 5_000)
+    return request
+  }
+
+  ownJoinRequests(): OwnJoinRequest[] {
+    return this.invites?.ownRequests() ?? []
+  }
+
+  async cancelJoinRequest(linkId: string): Promise<void> {
+    await this.requireInvites().cancel(linkId)
+    this.notifyPeers()
+  }
+
+  private startInviteLinks(): void {
+    if (!this.invites || this.inviteTimer) return
+    void this.reconcileInviteLinks()
+    this.inviteTimer = setInterval(() => void this.reconcileInviteLinks(), INVITE_LINK_POLL_MS)
+  }
+
+  private async reconcileInviteLinks(force = false): Promise<void> {
+    if (!this.invites || this.disposed) return
+    try {
+      const changed = await this.withMlsWorkflow(async () => {
+        const requests = await this.invites!.reconcileRequests(force)
+        const own = await this.invites!.reconcileOwnRequests(force)
+        return requests || own
+      })
+      if (changed) this.notifyPeers()
+    } catch (error) {
+      console.warn('chat: group link check failed', error)
+    }
+  }
+
+  private requireInvites(): InviteLinkService {
+    if (!this.invites) throw new Error('MLS groups are not enabled by this server')
+    return this.invites
   }
 
   /** Who may change the group's information; false when it waits for other owners. */
@@ -1142,6 +1249,7 @@ export class ChatService {
     if (this.disposed) return
     this.disposed = true
     if (this.socketRetry) clearTimeout(this.socketRetry)
+    if (this.inviteTimer) clearInterval(this.inviteTimer)
     this.stopHeartbeat()
     this.socket?.close()
     window.removeEventListener('online', this.handleOnline)
@@ -1521,4 +1629,12 @@ function requireMlsManifestDeviceIds(value: unknown): number[] {
     throw new Error('signed device manifest has no MLS-capable device')
   }
   return mlsIds.sort((left, right) => left - right)
+}
+
+function localStorageOrNull(): Storage | null {
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
 }

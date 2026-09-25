@@ -45,8 +45,11 @@ Next, in order:
    previews (fetched by the sender's server), view-once media, polls, and
    personal stickers (made from any picture, synced with `stickerSaved` /
    `stickerRemoved`; Signal's sticker packs are not carried over).
-7. **Invite links.** A join capability carried in the link fragment,
-   optional administrator approval.
+7. **Invite links** (done, [`chat-invite-links.md`](../chat-invite-links.md)):
+   the secret rides in the group information and the link fragment; a
+   sealed mailbox on the host server holds the preview and requests;
+   administrators approve, or their clients add people when approval is
+   off; the requester's client accepts the invitation by itself.
 8. **Notifications.** In-tab notifications with per-chat and global
    settings, then Web Push with a service worker.
 9. **Calls.** 1:1 voice and video over WebRTC with TURN, then group calls

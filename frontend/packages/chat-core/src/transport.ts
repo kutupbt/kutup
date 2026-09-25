@@ -4,6 +4,8 @@ import { apiBase } from '@kutup/session/apiBase'
 import type {
   ChatDevice,
   ChatTransportPort,
+  InviteLinkOperation,
+  InviteLinkResult,
   MlsInvitationDecision,
   MlsInvitationDecisionResponse,
   MlsInvitationFeedback,
@@ -276,6 +278,12 @@ export class ApiChatTransport implements ChatTransportPort {
     request: MlsInvitationDecision,
   ): Promise<MlsInvitationDecisionResponse> {
     return api.post('/chat/mls/invitations', request).then((response) => response.data)
+  }
+
+  async callInviteLink(host: string, operation: InviteLinkOperation): Promise<InviteLinkResult> {
+    return api
+      .post<InviteLinkResult>('/chat/invite-links', { host, operation })
+      .then((response) => response.data)
   }
 
   async drainMlsMailbox(

@@ -1,13 +1,15 @@
-import { NotebookPen, Users } from 'lucide-react'
+import { Link2, NotebookPen, Users } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { parseAccountAddress, withHomeServer } from '@kutup/chat-core/identity'
+import { inviteFragmentFromUrl } from '@kutup/chat-core/invite-links'
 import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { useChat } from '../../app/chatStore'
+import { openJoinLink } from '../../lib/joinLink'
 import { NewGroupDialog } from './NewGroupDialog'
 import { pathForAddress } from './paths'
 
@@ -32,6 +34,11 @@ export function NewChatDialog({ open, onOpenChange }: { open: boolean; onOpenCha
 
   function start(event: FormEvent) {
     event.preventDefault()
+    if (chat.capabilities?.mlsGroups && inviteFragmentFromUrl(value)) {
+      close()
+      openJoinLink(value.trim())
+      return
+    }
     const parsed = parseAccountAddress(value)
     if (!parsed) {
       setError(t('chat.errors.invalidAddress'))
@@ -91,6 +98,20 @@ export function NewChatDialog({ open, onOpenChange }: { open: boolean; onOpenCha
                 >
                   <Users />
                   {t('chat.group.new')}
+                </Button>
+              ) : null}
+              {chat.capabilities?.mlsGroups ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    close()
+                    openJoinLink('')
+                  }}
+                  data-testid="chat-join-with-link"
+                >
+                  <Link2 />
+                  {t('chat.groupLink.joinWithLink')}
                 </Button>
               ) : null}
             </span>

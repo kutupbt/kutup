@@ -21,6 +21,7 @@ import { personName } from '../../lib/names'
 import { groupIdOf } from '../../state/views'
 import type { ConversationModel } from '../thread/useConversationModel'
 import { Section } from './DetailsPanel'
+import { GroupLinkSection } from '../groupLink/GroupLinkSection'
 import { MlsGroupSecurityDetails } from './MlsGroupSecurityDetails'
 
 /** Owner-governance proposal kinds (`proposal.actionType`). */
@@ -104,6 +105,8 @@ export function GroupDetails({ model, group }: { model: ConversationModel; group
           () => (approve ? service!.approveGroupOwnerGovernance(groupId) : service!.rejectGroupOwnerGovernance(groupId)),
           approve ? t('chat.group.approval.approved') : t('chat.group.approval.rejected'),
         )} /> : null}
+
+      {!closed && !left ? <GroupLinkSection group={group} canManage={canManage} /> : null}
 
       <Section title={t('chat.group.membersTitle', { count: group.currentRoster.length })}>
         <p className="mb-3 text-xs text-muted-foreground">{t('chat.group.rolesExplanation')}</p>
